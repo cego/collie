@@ -3,7 +3,17 @@ import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
-import { Config, Effect, FileSystem, Option, Schema, type Scope, flow, Result } from "effect";
+import {
+  Config,
+  Duration,
+  Effect,
+  FileSystem,
+  Option,
+  Schema,
+  type Scope,
+  flow,
+  Result,
+} from "effect";
 import { act, bridgeCommand, openBridge } from "../desktop/src/bun/machine";
 import { questionnaire, questionnaireView, stepped } from "../desktop/src/shared/questionnaire";
 import { readEnv, type PluginEnv } from "../src/env";
@@ -31,7 +41,8 @@ const Board = Schema.Struct({ tasks: Schema.Array(TaskView) });
 const PICKS = [{ label: "Postgres (Recommended)" }, { label: "SQLite" }, { label: "JSONL" }];
 
 const GRACE_MS = 3_000;
-const SETTLED = "14 seconds";
+const TICK_MS = 500;
+const SETTLED = Duration.millis(GRACE_MS + 4 * TICK_MS);
 
 type Client = Effect.Success<ReturnType<typeof connect>>;
 
@@ -105,6 +116,7 @@ const atQuestion = <A, E>(
           COLLIE_STATE_DIR: world.state,
           COLLIE_USER_DIR: world.config,
           COLLIE_HOST_SUPERSEDE_GRACE_MS: String(GRACE_MS),
+          COLLIE_BOARD_TICK: `${TICK_MS} millis`,
         };
         yield* Effect.acquireRelease(
           Effect.sync(() => {
