@@ -25,10 +25,24 @@ const Ran = Schema.Struct({
   verification: Schema.Struct({ exit: Schema.Finite }),
 });
 
+const Reported = Schema.fromJsonString(
+  Schema.Struct({
+    cmd: Schema.Literal("reported"),
+    params: Schema.Struct({ terminal: Schema.String, state: Schema.String }),
+  }),
+);
+const reportedBy = (log: string, terminal: string) =>
+  Arr.flatMap(Str.split(log, "\n"), (line) =>
+    Option.match(Schema.decodeOption(Reported)(line), {
+      onNone: () => [],
+      onSome: (one) => (one.params.terminal === terminal ? [one.params.state] : []),
+    }),
+  );
+
 test("a verify waits while the Machine is short, pausing only its own agent's budget; nothing a human frees memory with waits, and nothing running is stopped", () =>
   proves(
     "collie-verify-memory-",
-    (world) =>
+    (world, core) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const outputs = `${world.home}/outputs.json`;
@@ -88,6 +102,14 @@ test("a verify waits while the Machine is short, pausing only its own agent's bu
           () => launchOf(world.state, runId, "build"),
           (one) => one !== undefined,
         ))!;
+        yield* until(
+          () =>
+            fs.readFileString(core.logPath).pipe(
+              Effect.orElseSucceed(() => ""),
+              Effect.map((log) => reportedBy(log, launched.agent)),
+            ),
+          (states) => Arr.contains(states, "working") && states.at(-1) === "idle",
+        );
         const agent = Option.getOrUndefined(
           Arr.findFirst(yield* registeredAt(world.state), (entry) => entry.runId === runId),
         )!.agent;
