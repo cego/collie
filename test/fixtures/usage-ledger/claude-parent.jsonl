@@ -1,0 +1,2 @@
+{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":"Build the ticket."},"uuid":"pu1","timestamp":"2026-11-17T10:00:00.000Z","sessionId":"par"}
+{"parentUuid":null,"isSidechain":false,"message":{"model":"claude-opus-5-5","id":"P1","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":10,"cache_creation_input_tokens":100,"cache_read_input_tokens":0,"output_tokens":20}},"requestId":"req_P1","type":"assistant","uuid":"a_P1","timestamp":"2026-11-17T10:00:01.000Z","sessionId":"par"}

@@ -627,6 +627,46 @@ for (const name of ["gitlab", "github"] as const) {
         }),
       ));
 
+    test("lists the issues closed since a moment, with when each closed, and none still open or closed before", () =>
+      runEffect(
+        Effect.gen(function* () {
+          const issue = (number: number, state: "open" | "closed", closedAt = "") => ({
+            project: PROJECT[name],
+            number,
+            title: `Issue ${number}`,
+            body: "Evidence",
+            state,
+            closedAt,
+          });
+          const fake = fakeForge(
+            name,
+            model(name, {
+              issues: [
+                issue(1, "open"),
+                issue(2, "closed", "2026-11-10T09:00:00.000Z"),
+                issue(3, "closed", "2026-11-17T15:00:00.000Z"),
+              ],
+            }),
+          );
+          expect(
+            yield* forge
+              .issues(PROJECT[name], "/w", fake.run, { closedSince: "2026-11-17T12:00:00.000Z" })
+              .pipe(Effect.provide(fake.layer)),
+          ).toEqual({
+            ok: true,
+            issues: [
+              {
+                number: 3,
+                title: "Issue 3",
+                body: "Evidence",
+                url: `https://${PROJECT[name]}/${name === "gitlab" ? "-/issues" : "issues"}/3`,
+                closedAt: "2026-11-17T15:00:00.000Z",
+              },
+            ],
+          });
+        }),
+      ));
+
     test("lists open issues beyond the first page", () =>
       runEffect(
         Effect.gen(function* () {

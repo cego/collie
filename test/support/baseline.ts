@@ -14,7 +14,7 @@ import { hostRecords, hostRunRecords, launchesAt, overHost } from "./records";
 
 import * as Arr from "effect/Array";
 import { RunRecords } from "../../src/run-records";
-import { nowIso } from "../../src/time";
+import { isoAt, nowIso } from "../../src/time";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
@@ -151,7 +151,10 @@ import { registerAgent, scopeFor } from "../../src/registry";
 import { deliveriesOf, SENT_STATES } from "../../src/steering";
 import { fixtures, until } from "./host";
 import { BUILD } from "../../src/host";
-import { readMetrics } from "../../src/metrics";
+import { metricsOf, readMetrics } from "../../src/metrics";
+import { usageOf } from "../../src/usage-ledger-model";
+import { readUsage } from "../../src/usage-ledger";
+import type { CompactionPorts } from "../../src/compaction";
 import { PARK_CAUSES, ParkCause } from "../../src/park-cause";
 import { recheckPark } from "../../src/park-recheck";
 import { GOLDEN, matchGolden } from "../../tools/prompt-golden";
@@ -341,11 +344,15 @@ const forgetJournal = (runs: ReadonlyArray<string>, journal: string) =>
     yield* sql`DELETE FROM collie_run_lines WHERE journal = ${journal} AND run IN ${sql.in(runs)}`;
   }).pipe(Effect.orDie);
 
-const session = <A, E>(run: Effect.Effect<A, E, SessionServices>, override?: HostOverride) =>
+const session = <A, E>(
+  run: Effect.Effect<A, E, SessionServices>,
+  override?: HostOverride,
+  agents?: Partial<AgentHost>,
+) =>
   Clock.clockWith((clock) =>
     run.pipe(
       Effect.provide(
-        agentsLayer(hostOf()).pipe(
+        agentsLayer({ ...hostOf(), ...agents }).pipe(
           Layer.provideMerge(children),
           Layer.provideMerge(
             override === undefined
@@ -4093,6 +4100,7 @@ const ran = (options: {
   readonly input: Readonly<Record<string, Schema.Json>>;
   readonly options?: Readonly<Record<string, string>>;
   readonly host?: HostOverride;
+  readonly agents?: Partial<AgentHost>;
   readonly task?: string;
 }) =>
   session(
@@ -4111,6 +4119,7 @@ const ran = (options: {
       return yield* made.workflow.execute(payload).pipe(Effect.result, Effect.provide(made.layer));
     }),
     options.host,
+    options.agents,
   );
 
 scenario(
@@ -5242,6 +5251,90 @@ scenario(
           ["01-first.md", "done"],
           ["02-second.md", "done"],
         ]);
+      }),
+    ),
+  120_000,
+);
+
+/**
+ * A Claude that needs no compacting and, each time its records are read, has made one more
+ * request of 1 input, 10 cache read, 100 cache creation and 1,000 output tokens.
+ */
+const transcribing = (): CompactionPorts => {
+  const made = new Map<string, number>();
+  return {
+    claude: {
+      gate: Effect.void,
+      install: () => Effect.succeed({ args: [] }),
+      usage: () => Effect.succeed(null),
+      request: () => Effect.succeed(null),
+      poll: () => Effect.succeed({ kind: "success" as const }),
+      records: (ctx) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const n = (made.get(ctx.agent) ?? 0) + 1;
+          made.set(ctx.agent, n);
+          const file = `${ctx.dir}/transcript.jsonl`;
+          const line = asJson({
+            type: "assistant",
+            sessionId: ctx.agent,
+            timestamp: isoAt(yield* Clock.currentTimeMillis),
+            message: {
+              id: `${ctx.agent}-${n}`,
+              role: "assistant",
+              usage: {
+                input_tokens: 1,
+                cache_read_input_tokens: 10,
+                cache_creation_input_tokens: 100,
+                output_tokens: 1000,
+              },
+            },
+          });
+          yield* fs.writeFileString(file, `${line}\n`, { flag: "a" }).pipe(Effect.orDie);
+          return [{ path: file, format: "claude" as const, parent: null }];
+        }),
+    },
+  };
+};
+
+scenario(
+  "implement's metrics count each ticket's slice and the review round, with tokens per step and per agent session",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const plan = yield* planOf([
+          { file: "01-first.md", title: "the first one", checks: "unit" },
+          { file: "02-second.md", title: "the second one", checks: "unit" },
+        ]);
+        yield* approve("r-tokens", ["unit"]);
+        yield* rig.queueOutputs([BUILT, BUILT, CLEAN_SYNTHESIS, OPENED]);
+        yield* ran({
+          entry: shipped("implement"),
+          runId: "r-tokens",
+          input: { plan, ...FINISH },
+          agents: { compactAtTokens: 1_000_000, ports: transcribing() },
+        });
+        yield* bin.restore();
+
+        const lines = yield* readMetrics(evidenceDir(dir, "r-tokens"));
+        expect(metricsOf(lines, "2026-01-01T00:00:00.000Z").slices).toEqual({ done: 2, total: 2 });
+        const usage = usageOf(yield* readUsage(evidenceDir(dir, "r-tokens")), lines);
+        expect(Arr.map(usage.rounds, (one) => one.round)).toEqual(["review#1"]);
+        expect(Arr.map(usage.sessions, (one) => one.agent)).toEqual([
+          "r-tokens-build-r1",
+          "r-tokens-review-1-r1",
+        ]);
+        expect(Arr.map(usage.steps, (one) => one.step)).toContain("review-1");
+        expect(Arr.map(usage.steps, (one) => one.step)).toContain("02-second.md");
+        // Every request is counted once under a step and once under a session.
+        const output = (rows: ReadonlyArray<{ readonly output: number | null }>) =>
+          Arr.reduce(rows, 0, (sum, one) => sum + (one.output ?? 0));
+        expect(output(usage.steps)).toBe(usage.totals.output ?? -1);
+        expect(output(usage.sessions)).toBe(usage.totals.output ?? -1);
+        expect(usage.totals.output).toBeGreaterThan(0);
       }),
     ),
   120_000,
@@ -22143,6 +22236,9 @@ let windowRuns: Array<{
   questions?: ReadonlyArray<{ name: string; answer: string | null }>;
 }> = [];
 let openIssues: Issue[] = [];
+let closedIssues: Issue[] = [];
+let openRequests: Issue[] = [];
+let tags: Array<{ tag: string; at: string }> = [];
 let filed: Array<{ title: string; body: string }> = [];
 let commented: Array<{ number: number; body: string }> = [];
 let refusing = new Set<string>();
@@ -22193,7 +22289,7 @@ const improving: HostOverride = Layer.effect(Host)(
             measures: measuresOf([]),
           };
         }),
-      issues: (_, numbers) => {
+      issues: (_, which) => {
         if (forgeUnavailable)
           return Effect.fail(new WorkflowError({ reason: "no forge login on this Machine" }));
         if (unlisted && filed.length > 0)
@@ -22205,10 +22301,16 @@ const improving: HostOverride = Layer.effect(Host)(
           url: `https://forge.example/project/issues/${101 + at}`,
         }));
         const all = [...openIssues, ...filedIssues];
-        if (numbers !== undefined)
-          return Effect.succeed(Arr.filter(all, ({ number }) => numbers.includes(number)));
+        if (which !== undefined && "closedSince" in which)
+          return Effect.succeed(
+            Arr.filter(closedIssues, ({ closedAt }) => (closedAt ?? "") >= which.closedSince),
+          );
+        if (which !== undefined)
+          return Effect.succeed(Arr.filter(all, ({ number }) => which.includes(number)));
         return Effect.succeed(lagging ? openIssues : all);
       },
+      requests: () => Effect.succeed(openRequests),
+      releases: () => Effect.succeed(tags),
       fileIssue: ({ title, body }) =>
         refusing.has(title)
           ? Effect.fail(new WorkflowError({ reason: "it names another checkout" }))
@@ -22247,6 +22349,9 @@ const freshDay = () => {
     { runId: "r-b", parent: null },
   ];
   openIssues = [];
+  closedIssues = [];
+  openRequests = [];
+  tags = [];
   filed = [];
   commented = [];
   refusing = new Set();
@@ -22499,6 +22604,61 @@ scenario(
         expect(prompt).toContain("r-other");
         expect(prompt).toContain("`defect` is one more");
         expect(Arr.map(filed, ({ title }) => title)).toEqual(["Project host-crash"]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "self-improve comments a released fix's before and after on its closed issue, and leaves out an unreleased fix and one an open merge request carries",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        freshDay();
+        windowRuns = [
+          { runId: "r-a", parent: null, created: hoursAgo(20) },
+          { runId: "r-b", parent: null, created: hoursAgo(2) },
+        ];
+        tags = [
+          { tag: "1.0.21", at: hoursAgo(10) },
+          { tag: "1.0.20", at: hoursAgo(24 * 30) },
+        ];
+        const closed = (number: number, key: string, closedAt: string) => ({
+          ...issueNumbered(number),
+          body: markerOf(key),
+          closedAt,
+        });
+        closedIssues = [closed(7, "slow-boot", hoursAgo(12)), closed(8, "lost-log", hoursAgo(5))];
+        openRequests = [
+          {
+            number: 3,
+            title: "Fix flaky CI",
+            body: markerOf("flaky-ci"),
+            url: "https://forge.example/project/merge_requests/3",
+          },
+        ];
+        yield* rig.queueOutputs([
+          triaged([
+            finding({ key: "slow-boot" }),
+            finding({ key: "lost-log" }),
+            finding({ key: "flaky-ci" }),
+          ]),
+        ]);
+
+        yield* improved("r-fixed", { runs: "checkout", improvements: 0 });
+
+        expect(filed).toEqual([]);
+        const line = "slow-boot: 1/1 Runs before 1.0.21, 1/1 after";
+        expect(Arr.map(commented, ({ number }) => number)).toEqual([7]);
+        expect(commented[0]?.body).toContain(line);
+        const summary = yield* readText(`${runDir(dir, "r-fixed")}/summary.md`);
+        expect(summary).toContain(`- ${line}`);
+        expect(summary).toContain(
+          "- Project lost-log: fixed on master since 1.0.21, not yet released",
+        );
+        expect(summary).toContain(
+          "- Project flaky-ci: being fixed by https://forge.example/project/merge_requests/3",
+        );
       }),
     ),
   120_000,

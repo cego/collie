@@ -19,7 +19,7 @@ import type { AgentInfo, Herdr, HerdrError } from "./herdr";
 import { launchDir, readLaunches, stemOf, withRelaunchLock, type Launched } from "./launches";
 import { reason } from "./naming";
 
-export interface EndDeps extends Pick<CompactionDeps, "ports" | "stateDir" | "log"> {
+export interface EndDeps extends Pick<CompactionDeps, "ports" | "stateDir" | "log" | "account"> {
   readonly herdr: Pick<Herdr, "agentList" | "terminalKill">;
   readonly stopMs?: number;
 }
@@ -134,6 +134,9 @@ const ending = Effect.fnUntraced(function* (
         } satisfies Ended)
       : ({ _tag: "Closed", ended: false } satisfies Ended);
 
+  // Read before the stop, while a harness that answers only alive can name its records,
+  // and again once Quiet, for what it did after.
+  if (deps.account !== undefined) yield* deps.account(launched.agent);
   const reached = yield* stopAgent(deps, launched.agent, deps.stopMs ?? STOP_WAIT_MS).pipe(
     Effect.result,
   );
@@ -151,6 +154,7 @@ const ending = Effect.fnUntraced(function* (
       reason: notStopped(launched.agent, reached.success, reached.success.target),
     } satisfies Ended;
 
+  if (deps.account !== undefined) yield* deps.account(launched.agent);
   // Ended on purpose, so nothing starts it again.
   const runId = launched.runId;
   if (runId !== undefined)
