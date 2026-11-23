@@ -264,7 +264,7 @@ test("a rerun records its test as the branch's own where the branch adds its fil
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const git = (...args: string[]) => exec(["git", ...args], { cwd: rig.projectDir });
+      const git = (...args: Array<string>) => exec(["git", ...args], { cwd: rig.projectDir });
       yield* fs.makeDirectory(`${rig.projectDir}/test`, { recursive: true });
       yield* fs.writeFileString(`${rig.projectDir}/${NESTED.file}`, "// on the default branch\n");
       yield* git("add", "-A");

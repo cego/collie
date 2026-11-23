@@ -9,7 +9,7 @@ const ROOT = `${import.meta.dir}/..`;
 
 function resolve(from: string, link: string) {
   const parts = Str.split(`${Arr.join(Str.split(from, "/").slice(0, -1), "/")}/${link}`, "/");
-  const out: string[] = [];
+  const out: Array<string> = [];
   for (const part of parts) {
     if (part === "." || part === "") continue;
     if (part === ".." && out.length > 0 && out.at(-1) !== "..") out.pop();
@@ -50,7 +50,7 @@ test("every link between the repository's documents resolves, anchors included",
       );
       expect(files).toContain("AGENTS.md");
 
-      const broken: string[] = [];
+      const broken: Array<string> = [];
       for (const file of files) {
         const text = yield* fs.readFileString(`${ROOT}/${file}`);
         for (const [, link] of pipe(text, Str.matchAll(/\]\(([^)\s]+)\)/g))) {
@@ -91,7 +91,7 @@ test("every plain-text ADR reference names an ADR that exists", () =>
       );
       expect(files).toContain("src/engine.ts");
 
-      const dangling: string[] = [];
+      const dangling: Array<string> = [];
       for (const file of files) {
         const text = yield* fs.readFileString(`${ROOT}/${file}`);
         for (const [mention, number, slug] of pipe(

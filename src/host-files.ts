@@ -205,7 +205,7 @@ const searched = (
     const handle = yield* spawner.spawn(
       ChildProcess.make(cmd, args, { cwd, stdout: "pipe", stderr: "ignore", extendEnv: true }),
     );
-    const lines: string[] = [];
+    const lines: Array<string> = [];
     let seen = 0;
     const done = yield* handle.stdout.pipe(
       Stream.decodeText(),

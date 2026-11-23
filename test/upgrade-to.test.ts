@@ -13,7 +13,7 @@ let rig: Rig;
 let origin: string;
 let clone: string;
 
-const git = (cwd: string, ...args: string[]) =>
+const git = (cwd: string, ...args: Array<string>) =>
   exec(["git", ...args], {
     cwd,
     env: {
@@ -81,7 +81,7 @@ const LD_SO_NOISE = Arr.map(
     `ERROR: ld.so: object '${lib}' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.`,
 );
 
-const noisy = (cmd: string, args: string[], cwd: string) =>
+const noisy = (cmd: string, args: Array<string>, cwd: string) =>
   shell(
     "sh",
     ["-c", `printf '%s\\n' "$0" "$1" >&2; shift; exec "$@"`, ...LD_SO_NOISE, cmd, ...args],

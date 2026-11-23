@@ -180,7 +180,7 @@ export const pickFlow = Effect.fn("Flows.pickFlow")(function* (
       subtitle: `[${entry.layer}] ${entry.path}`,
     });
   }
-  const items: PickItem[] = [...offered.values()].sort((a, b) =>
+  const items: Array<PickItem> = [...offered.values()].sort((a, b) =>
     pipe_(a.id, Str.localeCompare(b.id)),
   );
 
@@ -451,9 +451,9 @@ export const forkFlow = Effect.fn("Flows.forkFlow")(function* (
   const defs = yield* loadDefinitions(layerList);
   const sources = new Map<
     string,
-    { kind: DefinitionKind; path: string; steps: string[]; body: string }
+    { kind: DefinitionKind; path: string; steps: Array<string>; body: string }
   >();
-  const items: PickItem[] = [];
+  const items: Array<PickItem> = [];
 
   for (const persona of [...defs.personas.values()].sort((a, b) =>
     pipe_(a.name, Str.localeCompare(b.name)),
@@ -479,7 +479,7 @@ export const forkFlow = Effect.fn("Flows.forkFlow")(function* (
   });
   if (!chosen) return 0;
 
-  const targets: PickItem[] = [
+  const targets: Array<PickItem> = [
     { id: "user", title: "my layer", subtitle: layerList.user.dir },
     { id: "project", title: "this project", subtitle: layerList.project.dir },
   ];
@@ -539,7 +539,7 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (
   const runs = Arr.filter(yield* listRuns(env), (run) => !settled(run));
   if (runs.length === 0) return yield* bail(prompts, "No runs are still going to pick back up.");
 
-  const items: PickItem[] = Arr.map(runs, (run) => ({
+  const items: Array<PickItem> = Arr.map(runs, (run) => ({
     id: run.id,
     title: runTitle(run),
     subtitle: `${run.state} · ${pipe_(run.created, Str.slice(0, 16), Str.replace("T", " "))}`,

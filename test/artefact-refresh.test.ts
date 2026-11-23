@@ -59,7 +59,7 @@ test("refresh coalesces sources, limits work, times out and rotates past failing
           pending: false,
           stale: true,
         });
-        const visited: string[] = [];
+        const visited: Array<string> = [];
         const many = Array.from({ length: 12 }, (_, i) => ({
           key: `job-${Str.padStart(2, "0")(String(i))}`,
           observed: -30_000,

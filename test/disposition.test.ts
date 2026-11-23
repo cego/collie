@@ -11,7 +11,7 @@ import { runEffect, suiteEnv } from "./support/effect";
 import { hostRecords } from "./support/records";
 
 const root = new URL("../", import.meta.url).pathname;
-const join = (...parts: string[]) => pipe(Arr.join(parts, "/"), Str.replaceAll(/\/+/g, "/"));
+const join = (...parts: Array<string>) => pipe(Arr.join(parts, "/"), Str.replaceAll(/\/+/g, "/"));
 
 const Envelope = Schema.fromJsonString(
   Schema.Struct({
@@ -22,7 +22,7 @@ const Envelope = Schema.fromJsonString(
 );
 const parseEnvelope = Schema.decodeUnknownEffect(Envelope);
 
-const cli = Effect.fn("test.cli")(function* (args: string[], env: Record<string, string>) {
+const cli = Effect.fn("test.cli")(function* (args: Array<string>, env: Record<string, string>) {
   const suite = yield* suiteEnv;
   const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
   const command = Option.isSome(binary)

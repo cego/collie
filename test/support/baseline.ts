@@ -188,7 +188,7 @@ const noGitlabMrs = (bin: FakeBin) =>
     login: "tester",
     mrs: [],
   });
-let started: ChildAsk[] = [];
+let started: Array<ChildAsk> = [];
 let failing = new Set<string>();
 let childWaits = new Map<string, Deferred.Deferred<void>>();
 let admittedChildren = new Set<string>();
@@ -3078,7 +3078,7 @@ for (const name of ["gitlab", "github"] as const) {
               Str.endsWith(name === "gitlab" ? "/approve" : "/reviews")(one.url) &&
               one.method === "POST",
           );
-        const expected: Schema.Json[] = [
+        const expected: Array<Schema.Json> = [
           name === "gitlab" ? { sha: REVIEW_HEAD } : { event: "APPROVE", commit_id: REVIEW_HEAD },
         ];
         expect(Arr.map(approvals(), (one) => one.body)).toEqual(expected);
@@ -6421,7 +6421,7 @@ scenario(
 
 const withOrigin = () =>
   Effect.gen(function* () {
-    const git = (cwd: string, ...args: string[]) =>
+    const git = (cwd: string, ...args: Array<string>) =>
       exec(["git", ...args], { cwd }).pipe(
         Effect.map((done) => {
           expect(done.exitCode, done.stderr).toBe(0);
@@ -10227,7 +10227,7 @@ scenario(
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
         yield* noGitlabMrs(bin);
         yield* repository();
-        const git = (...args: string[]) =>
+        const git = (...args: Array<string>) =>
           exec(["git", ...args], { cwd: rig.projectDir }).pipe(
             Effect.map((done) => Str.trim(done.stdout)),
           );
@@ -10662,7 +10662,7 @@ scenario(
           detail: "it breaks",
         });
         const round = (title: string) => {
-          const returned: Schema.Json[] = [
+          const returned: Array<Schema.Json> = [
             { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [blocker(title)] },
             { verdict: "clean", fixed: [{ title, file: "src/a.ts" }], checks: [{ name: "unit" }] },
           ];
@@ -10736,7 +10736,7 @@ scenario(
           detail: "it breaks",
         });
         const round = (title: string) => {
-          const returned: Schema.Json[] = [
+          const returned: Array<Schema.Json> = [
             { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [found(title)] },
             { verdict: "clean", fixed: [{ title, file: "src/a.ts" }], checks: [{ name: "unit" }] },
           ];
@@ -10816,7 +10816,7 @@ scenario(
           detail: "it breaks",
         });
         const round = (title: string) => {
-          const outputs: Schema.Json[] = [
+          const outputs: Array<Schema.Json> = [
             { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [blocker(title)] },
             { verdict: "clean", fixed: [{ title, file: "src/a.ts" }], checks: [{ name: "unit" }] },
           ];
@@ -12237,7 +12237,7 @@ scenario("a plan directory with no outcome kind is told only its checks have to 
   ),
 );
 
-const claimed: string[] = [];
+const claimed: Array<string> = [];
 const helleAnswers: (claim: "held" | "none", production: "deployed" | "read") => HostOverride = (
   claim,
   production,
@@ -13488,7 +13488,7 @@ const runLog = (runId: string) =>
     Effect.orElseSucceed(() => ""),
   );
 
-const checkedBy = (runId: string, name: string, executable = "true", argv: string[] = []) =>
+const checkedBy = (runId: string, name: string, executable = "true", argv: Array<string> = []) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) =>
       fs
@@ -20516,7 +20516,7 @@ for (const name of ["gitlab", "github"] as const) {
     readonly racing?: Record<string, string>;
     readonly handedOver?: Deferred.Deferred<void>;
     readonly declared?: ReadonlyArray<string>;
-    readonly events?: string[];
+    readonly events?: Array<string>;
     unresolved?: string;
   }
   const busyHost: (helle: BusyHelle) => HostOverride = (helle) =>
@@ -20883,7 +20883,7 @@ for (const name of ["gitlab", "github"] as const) {
           const { bin, staged, unstaged } = yield* busyStage(DANNS);
           claimed.length = 0;
           const runId = `r-busy-again-finish-${name}`;
-          const events: string[] = [];
+          const events: Array<string> = [];
           const helle: BusyHelle = { ...dann(), events };
           yield* rig.queueOutputs([
             BUSY_ASSESSED,
@@ -20919,7 +20919,7 @@ for (const name of ["gitlab", "github"] as const) {
           const { bin, staged, unstaged } = yield* busyStage(DANNS);
           claimed.length = 0;
           const runId = `r-busy-refresh-without-${name}`;
-          const events: string[] = [];
+          const events: Array<string> = [];
           const helle: BusyHelle = { ...dann(), events };
           yield* rig.queueOutputs([
             BUSY_ASSESSED,
@@ -21112,7 +21112,7 @@ let windowRuns: Array<{
   merged?: boolean;
   questions?: ReadonlyArray<{ name: string; answer: string | null }>;
 }> = [];
-let openIssues: Issue[] = [];
+let openIssues: Array<Issue> = [];
 let filed: Array<{ title: string; body: string }> = [];
 let commented: Array<{ number: number; body: string }> = [];
 let refusing = new Set<string>();
@@ -22051,7 +22051,7 @@ type Driving = Parameters<Parameters<typeof driven>[1]>[0];
 
 const answeringProgress = (run: Driving, answers: ReadonlyArray<string> = []) =>
   Effect.gen(function* () {
-    const given: string[] = [];
+    const given: Array<string> = [];
     for (;;) {
       const [status, open] = yield* Effect.all([
         run.status,
@@ -23308,7 +23308,7 @@ for (const pass of ["cycle 1", "final"])
             cleanedUp(),
             asTold("true", "dropped"),
           ]);
-          const calls: string[] = [];
+          const calls: Array<string> = [];
           const host: HostOverride = Layer.effect(Host)(
             Effect.gen(function* () {
               const original = yield* Host;
@@ -24647,7 +24647,7 @@ export const SHARES = 12;
 // WARNING: Hashing each name means adding one moves no other share.
 export const split = (names: ReadonlyArray<string>, of: number) => {
   const shares = Array.from({ length: of }, () => {
-    const returned: string[] = [];
+    const returned: Array<string> = [];
     return returned;
   });
   for (const name of names) shares[Bun.hash.crc32(name) % of]!.push(name);

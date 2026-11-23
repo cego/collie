@@ -76,8 +76,8 @@ export interface Finding {
 
 export interface ReviewOutput {
   verdict: "clean" | "findings";
-  findings: Finding[];
-  disputed: Finding[];
+  findings: Array<Finding>;
+  disputed: Array<Finding>;
   scope_met?: boolean;
   behavior_preserved?: boolean;
   supported?: boolean;
@@ -89,8 +89,8 @@ export interface ReviewOutput {
 export interface Synthesis extends ReviewOutput {
   summary: string;
   public_summary?: string;
-  dropped: Finding[];
-  fixed: Fixed[];
+  dropped: Array<Finding>;
+  fixed: Array<Fixed>;
 }
 
 export interface Fixed {
@@ -391,31 +391,31 @@ export function parseReviewOutput(text: string, where: string) {
 
 export function parseFindings(raw: YamlValue | undefined, where: string) {
   if (raw === undefined || raw === null) {
-    const returned: Parsed<Finding[]> = { ok: true, value: [] };
+    const returned: Parsed<Array<Finding>> = { ok: true, value: [] };
     return returned;
   }
   if (!Arr.isArray<typeof raw>(raw)) {
-    const returned: Parsed<Finding[]> = { ok: false, error: `${where}: expected an array` };
+    const returned: Parsed<Array<Finding>> = { ok: false, error: `${where}: expected an array` };
     return returned;
   }
-  const out: Finding[] = [];
+  const out: Array<Finding> = [];
   for (const [index, item] of raw.entries()) {
     if (!isYamlMap(item)) {
-      const returned: Parsed<Finding[]> = {
+      const returned: Parsed<Array<Finding>> = {
         ok: false,
         error: `${where}[${index}]: expected an object`,
       };
       return returned;
     }
     if (!isString(item.title) || Str.trim(item.title) === "") {
-      const returned: Parsed<Finding[]> = {
+      const returned: Parsed<Array<Finding>> = {
         ok: false,
         error: `${where}[${index}]: title is required`,
       };
       return returned;
     }
     if (!isString(item.severity) || Str.trim(item.severity) === "") {
-      const returned: Parsed<Finding[]> = {
+      const returned: Parsed<Array<Finding>> = {
         ok: false,
         error: `${where}[${index}]: severity is required`,
       };
@@ -424,7 +424,7 @@ export function parseFindings(raw: YamlValue | undefined, where: string) {
     const finding: Finding = { severity: item.severity, title: item.title };
     if (item.id !== undefined) {
       if (!isString(item.id) || Str.trim(item.id) === "") {
-        const returned: Parsed<Finding[]> = {
+        const returned: Parsed<Array<Finding>> = {
           ok: false,
           error: `${where}[${index}].id is required and must not be blank`,
         };
@@ -439,7 +439,7 @@ export function parseFindings(raw: YamlValue | undefined, where: string) {
         item.status !== "disputed" &&
         item.status !== "obsolete"
       ) {
-        const returned: Parsed<Finding[]> = {
+        const returned: Parsed<Array<Finding>> = {
           ok: false,
           error: `${where}[${index}].status must be open, fixed, disputed or obsolete`,
         };
@@ -454,7 +454,7 @@ export function parseFindings(raw: YamlValue | undefined, where: string) {
     if (isString(item.detail)) finding.detail = item.detail;
     if (item.internal !== undefined) {
       if (!isBoolean(item.internal)) {
-        const returned: Parsed<Finding[]> = {
+        const returned: Parsed<Array<Finding>> = {
           ok: false,
           error: `${where}[${index}]: internal must be a boolean`,
         };
@@ -466,7 +466,7 @@ export function parseFindings(raw: YamlValue | undefined, where: string) {
     if (isString(item.reason)) finding.reason = item.reason;
     out.push(finding);
   }
-  const returned: Parsed<Finding[]> = { ok: true, value: out };
+  const returned: Parsed<Array<Finding>> = { ok: true, value: out };
   return returned;
 }
 
@@ -540,21 +540,27 @@ export function parseSynthesis(text: string, where: string) {
 
 export function parseFixed(value: YamlValue | undefined, where: string) {
   if (value === undefined || value === null) {
-    const returned: Parsed<Fixed[]> = { ok: true, value: [] };
+    const returned: Parsed<Array<Fixed>> = { ok: true, value: [] };
     return returned;
   }
   if (!Arr.isArray<typeof value>(value)) {
-    const returned: Parsed<Fixed[]> = { ok: false, error: `${where}: expected a list` };
+    const returned: Parsed<Array<Fixed>> = { ok: false, error: `${where}: expected a list` };
     return returned;
   }
-  const out: Fixed[] = [];
+  const out: Array<Fixed> = [];
   for (const [i, item] of value.entries()) {
     if (!isYamlMap(item)) {
-      const returned: Parsed<Fixed[]> = { ok: false, error: `${where}[${i}]: expected an object` };
+      const returned: Parsed<Array<Fixed>> = {
+        ok: false,
+        error: `${where}[${i}]: expected an object`,
+      };
       return returned;
     }
     if (!isString(item.title) || Str.trim(item.title) === "") {
-      const returned: Parsed<Fixed[]> = { ok: false, error: `${where}[${i}]: title is required` };
+      const returned: Parsed<Array<Fixed>> = {
+        ok: false,
+        error: `${where}[${i}]: title is required`,
+      };
       return returned;
     }
     const entry: Fixed = { title: Str.trim(item.title) };
@@ -562,7 +568,7 @@ export function parseFixed(value: YamlValue | undefined, where: string) {
     if (isString(item.note)) entry.note = item.note;
     out.push(entry);
   }
-  const returned: Parsed<Fixed[]> = { ok: true, value: out };
+  const returned: Parsed<Array<Fixed>> = { ok: true, value: out };
   return returned;
 }
 
@@ -575,10 +581,10 @@ export interface Check {
 // WARNING: fixed entries are objects, not sentences, so the engine can match each to a finding.
 export interface FixOutput {
   verdict: "clean" | "findings";
-  findings: Finding[];
-  fixed: Fixed[];
-  disputed: Finding[];
-  checks: Check[];
+  findings: Array<Finding>;
+  fixed: Array<Fixed>;
+  disputed: Array<Finding>;
+  checks: Array<Check>;
 }
 
 export function parseFixOutput(raw: YamlValue, where: string) {
@@ -635,28 +641,34 @@ export function parseFixOutput(raw: YamlValue, where: string) {
 
 function parseChecks(value: YamlValue | undefined, where: string) {
   if (value === undefined || value === null) {
-    const returned: Parsed<Check[]> = { ok: true, value: [] };
+    const returned: Parsed<Array<Check>> = { ok: true, value: [] };
     return returned;
   }
   if (!Arr.isArray<typeof value>(value)) {
-    const returned: Parsed<Check[]> = { ok: false, error: `${where}: expected a list` };
+    const returned: Parsed<Array<Check>> = { ok: false, error: `${where}: expected a list` };
     return returned;
   }
-  const out: Check[] = [];
+  const out: Array<Check> = [];
   for (const [i, item] of value.entries()) {
     if (!isYamlMap(item)) {
-      const returned: Parsed<Check[]> = { ok: false, error: `${where}[${i}]: expected an object` };
+      const returned: Parsed<Array<Check>> = {
+        ok: false,
+        error: `${where}[${i}]: expected an object`,
+      };
       return returned;
     }
     if (!isString(item.name) || Str.trim(item.name) === "") {
-      const returned: Parsed<Check[]> = { ok: false, error: `${where}[${i}]: name is required` };
+      const returned: Parsed<Array<Check>> = {
+        ok: false,
+        error: `${where}[${i}]: name is required`,
+      };
       return returned;
     }
     const check: Check = { name: Str.trim(item.name) };
     if (isString(item.note)) check.note = item.note;
     out.push(check);
   }
-  const returned: Parsed<Check[]> = { ok: true, value: out };
+  const returned: Parsed<Array<Check>> = { ok: true, value: out };
   return returned;
 }
 
@@ -707,18 +719,18 @@ export function blockingKeys(findings: ReadonlyArray<Finding>) {
 }
 
 export type Rally =
-  | { readonly go: "clean"; readonly remaining: Finding[] }
+  | { readonly go: "clean"; readonly remaining: Array<Finding> }
   | {
       readonly go: "fix";
-      readonly live: Finding[];
-      readonly blocking: Finding[];
+      readonly live: Array<Finding>;
+      readonly blocking: Array<Finding>;
       readonly keys: ReadonlyArray<string>;
     }
   | {
       readonly go: "halt";
       readonly halt: Halt;
       readonly reason: string;
-      readonly outstanding: Finding[];
+      readonly outstanding: Array<Finding>;
     };
 
 // WARNING: the same blocking set twice is no progress, since a third attempt would raise it again.
@@ -772,15 +784,15 @@ export function settleRound(round: {
 }
 
 export type FinalFix =
-  | { ok: true; attestation: string; outstanding: Finding[] }
+  | { ok: true; attestation: string; outstanding: Array<Finding> }
   | {
       ok: false;
       halt: "dispute_unresolved";
       attestation: string;
-      reasons: string[];
-      outstanding: Finding[];
+      reasons: Array<string>;
+      outstanding: Array<Finding>;
     }
-  | { ok: false; halt: "fix_unverified"; reasons: string[]; outstanding: Finding[] };
+  | { ok: false; halt: "fix_unverified"; reasons: Array<string>; outstanding: Array<Finding> };
 
 export interface FixReport {
   readonly verdict: "clean" | "findings";
@@ -834,8 +846,8 @@ export function settleFinalFix(
     const reason = disputed.get(findingKey(f))?.reason;
     return `disputed blocking finding: ${oneLine(f)}${reason ? `: ${reason}` : ""}`;
   };
-  const disputes: string[] = [];
-  const unverified: string[] = [];
+  const disputes: Array<string> = [];
+  const unverified: Array<string> = [];
   const ownBlocking = Arr.filter(fix.findings, isBlocking);
   const ownMinor = Arr.filter(fix.findings, (f) => !isBlocking(f));
   if (fix.verdict !== "clean" && fix.findings.length === 0)
@@ -870,8 +882,8 @@ export function settleFinalFix(
   const standing = Arr.filter(fix.disputed, (d) => isBlocking(d) && !raised.has(findingKey(d)));
   for (const d of standing) disputes.push(disputeLine(d));
   if (fix.checks.length === 0) unverified.push("no checks reported");
-  const verifiedHere: string[] = [];
-  const leftToGate: string[] = [];
+  const verifiedHere: Array<string> = [];
+  const leftToGate: Array<string> = [];
   for (const check of fix.checks) {
     const proof = checkProof(evidence, check.name);
     const gap = checkGap(check.name, proof, evidence);
@@ -982,9 +994,9 @@ function reviewBullet(finding: Finding) {
 }
 
 export interface Split {
-  live: Finding[];
-  settled: Finding[];
-  rebutted: Finding[];
+  live: Array<Finding>;
+  settled: Array<Finding>;
+  rebutted: Array<Finding>;
 }
 
 type Disposed = {

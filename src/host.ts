@@ -3675,7 +3675,7 @@ const frontDoorHandlers = (
                   return yield* new HostRefused({
                     reason: `Run "${runId}" has no Intent to amend.`,
                   });
-                const propagated: string[] = [];
+                const propagated: Array<string> = [];
                 if (spread && next !== null)
                   for (const child of Arr.filter(
                     yield* registry.views(null),

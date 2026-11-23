@@ -855,7 +855,7 @@ interface LoadedPi {
   readonly on: (event: string, handler: SessionStart) => void;
 }
 
-const refusingPi: (registered: Registered[], started: SessionStart[]) => LoadedPi = (
+const refusingPi: (registered: Array<Registered>, started: Array<SessionStart>) => LoadedPi = (
   registered,
   started,
 ) => ({
@@ -874,8 +874,8 @@ test("Collie's extension registers its server and the human's, survives one Pi r
       const turn = yield* opened(driver, "pi-extension");
       const { servers } = inspectedOf(yield* turn("inspect"));
       Bun.env.COLLIE_CHAT_MCP_SERVERS = servers;
-      const registered: Registered[] = [];
-      const started: SessionStart[] = [];
+      const registered: Array<Registered> = [];
+      const started: Array<SessionStart> = [];
       const extension = yield* Effect.promise(() => import(`${context.dir}/pi-collie.ts`));
       extension.default(refusingPi(registered, started));
       expect(Bun.env.COLLIE_CHAT_MCP_SERVERS).toBeUndefined();
@@ -887,7 +887,7 @@ test("Collie's extension registers its server and the human's, survives one Pi r
         ["linear-server", piServers(configured).given["linear-server"]!],
         ["docs", piServers(configured).given["docs"]!],
       ]);
-      const notices: string[] = [];
+      const notices: Array<string> = [];
       for (const handler of started)
         handler({ type: "session_start" }, { ui: { notify: (message) => notices.push(message) } });
       expect(notices).toEqual([

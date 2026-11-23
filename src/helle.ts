@@ -121,7 +121,7 @@ export const releaseClaim = (creds: HelleCredentials, slug: string) =>
 export type Resolution =
   | { _tag: "Project"; slug: string }
   | { _tag: "None" }
-  | { _tag: "Ambiguous"; slugs: string[] };
+  | { _tag: "Ambiguous"; slugs: Array<string> };
 
 const answersTo = (project: HelleProject, name: string) =>
   Arr.some(
@@ -131,7 +131,7 @@ const answersTo = (project: HelleProject, name: string) =>
 
 // WARNING: Group case is Helle's own typing and never decides a match.
 export function resolveProject(
-  projects: readonly HelleProject[],
+  projects: ReadonlyArray<HelleProject>,
   repositoryPath: string | null,
   repoName: string,
 ) {
@@ -167,16 +167,16 @@ export function resolveProject(
 }
 
 export type Needed =
-  | { _tag: "Projects"; slugs: string[] }
+  | { _tag: "Projects"; slugs: Array<string> }
   | { _tag: "None"; why: string }
   | { _tag: "Unresolved"; why: string };
 
 export interface Deploys {
   repositoryPath: string | null;
   repoName: string;
-  applications: readonly string[];
-  jobs: readonly string[];
-  declared: readonly string[] | null;
+  applications: ReadonlyArray<string>;
+  jobs: ReadonlyArray<string>;
+  declared: ReadonlyArray<string> | null;
 }
 
 // WARNING: The first path segment is the forge's host, which no Helle group names.
@@ -187,7 +187,7 @@ const groupOf = (repositoryPath: string | null) =>
     ),
   ) ?? null;
 
-const inGroupOf = (projects: readonly HelleProject[], repositoryPath: string | null) => {
+const inGroupOf = (projects: ReadonlyArray<HelleProject>, repositoryPath: string | null) => {
   const group = groupOf(repositoryPath);
   return (name: string) =>
     Arr.filter(
@@ -203,17 +203,17 @@ const inGroupOf = (projects: readonly HelleProject[], repositoryPath: string | n
 
 const partsOf = (job: string) => Str.split(job, /[:/\s]+/);
 
-const twice = (name: string, found: readonly HelleProject[]) =>
+const twice = (name: string, found: ReadonlyArray<HelleProject>) =>
   `${name} names ${found.length} Helle projects: ${Arr.join(
     Arr.map(found, (p) => p.slug),
     ", ",
   )}`;
 
 // WARNING: Anything it cannot settle is Unresolved, never an empty set.
-export function resolveProjects(projects: readonly HelleProject[], release: Deploys) {
+export function resolveProjects(projects: ReadonlyArray<HelleProject>, release: Deploys) {
   if (release.declared !== null) {
     const slugs = new Set<string>();
-    const unknown: string[] = [];
+    const unknown: Array<string> = [];
     for (const entry of release.declared) {
       const found = Arr.filter(projects, (p) => answersTo(p, entry));
       if (found.length > 1) {
@@ -318,11 +318,11 @@ export interface HelleWhere {
   repositoryPath: string | null;
   repoName: string;
   deploys: Pick<Deploys, "applications" | "jobs"> | null;
-  declared: readonly string[] | null;
+  declared: ReadonlyArray<string> | null;
 }
 
 const neededOf = Effect.fn("Helle.neededOf")(function* (
-  projects: readonly HelleProject[],
+  projects: ReadonlyArray<HelleProject>,
   where: HelleWhere,
 ) {
   if (where.deploys !== null || where.declared !== null)
@@ -368,7 +368,7 @@ export const helleHolders = Effect.fn("Helle.holders")(function* (where: HelleWh
     return returned;
   }
   const me = yield* helleMe(creds);
-  const read: { slug: string; holder: string | null }[] = [];
+  const read: Array<{ slug: string; holder: string | null }> = [];
   for (const slug of needed.slugs)
     read.push({ slug, holder: holderOf(yield* helleProject(creds, slug), me.user_id) });
   const applications = where.deploys?.applications ?? [];
@@ -401,7 +401,7 @@ export const helleHolders = Effect.fn("Helle.holders")(function* (where: HelleWh
 
 export interface HelleGate<E, R> extends HelleWhere {
   free?: boolean;
-  claimed: readonly HelleClaim[];
+  claimed: ReadonlyArray<HelleClaim>;
   record: (claim: HelleClaim) => Effect.Effect<void, E, R>;
   forget: (slug: string) => Effect.Effect<void, E, R>;
   out: (line: string) => Effect.Effect<void, E, R>;
@@ -412,7 +412,7 @@ export interface HelleGate<E, R> extends HelleWhere {
 }
 
 export type Held =
-  | { _tag: "Held"; slugs: string[]; left?: { slug: string; holder: string }[] }
+  | { _tag: "Held"; slugs: Array<string>; left?: Array<{ slug: string; holder: string }> }
   | { _tag: "None"; why: string }
   | { _tag: "Unresolved"; why: string };
 
@@ -459,8 +459,8 @@ const gateOf = Effect.fn("Helle.waitForHelle")(function* <E, R>(gate: HelleGate<
   });
 
   if (gate.free) {
-    const slugs: string[] = [];
-    const left: { slug: string; holder: string }[] = [];
+    const slugs: Array<string> = [];
+    const left: Array<{ slug: string; holder: string }> = [];
     for (const slug of needed.slugs) {
       const holder = holderOf(yield* helleProject(creds, slug), me.user_id);
       if (holder !== null) {
@@ -517,7 +517,7 @@ const gateOf = Effect.fn("Helle.waitForHelle")(function* <E, R>(gate: HelleGate<
 
   // WARNING: Give back a claim on a later project before waiting for an earlier one.
   while (true) {
-    const positions: (number | null)[] = [];
+    const positions: Array<number | null> = [];
     for (const slug of needed.slugs)
       positions.push(positionOf(yield* helleProject(creds, slug), me.user_id));
     const from = Option.getOrElse(

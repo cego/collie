@@ -139,7 +139,7 @@ export const takeTarget = Effect.fn("CiJob.takeTarget")(function* <R>(
   run: Runner<R>,
 ) {
   const forge = forgeOf(ref);
-  const failed: string[] = [];
+  const failed: Array<string> = [];
   let newest: string | null = null;
   for (const job of jobs) {
     const read = yield* forge.job(ref, job, cwd, run);

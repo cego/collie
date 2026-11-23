@@ -260,7 +260,7 @@ export interface Confirmed {
 
 // WARNING: reconcile may answer only an unsettled start: settling one that never ran records a human's word about nothing.
 function unsettled(lines: ReadonlyArray<ProposalLine>, id: string) {
-  const indices: number[] = [];
+  const indices: Array<number> = [];
   for (const line of lines) {
     if (line.kind !== "step" || line.proposal !== id || line.state !== "started") continue;
     const answered = Arr.some(

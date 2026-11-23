@@ -17,7 +17,7 @@ test("test:live runs every file that holds a test against an installed harness",
       const script = (yield* Schema.decodeEffect(Scripts)(
         yield* fs.readFileString(`${root}/package.json`),
       )).scripts["test:live"];
-      const holding: string[] = [];
+      const holding: Array<string> = [];
       for (const name of yield* fs.readDirectory(`${root}/test`)) {
         if (!pipe(name, Str.endsWith(".test.ts"))) continue;
         const text = yield* fs.readFileString(`${root}/test/${name}`);

@@ -22,7 +22,7 @@ export const refusal = Effect.fnUntraced(function* (
 const parentOf = (pid: number) => Effect.map(processOf(pid), (one) => one?.parent ?? 0);
 
 const ancestorsOf = Effect.fnUntraced(function* (pid: number) {
-  const found: number[] = [];
+  const found: Array<number> = [];
   for (let at = yield* parentOf(pid); at > 1; at = yield* parentOf(at)) found.push(at);
   return found;
 });

@@ -35,7 +35,7 @@ test("a free lock runs at once and says nothing", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "suite-lock-" });
-      const said: string[] = [];
+      const said: Array<string> = [];
       const got = yield* inTurn(`${dir}/suite.lock`, Effect.succeed(7), (line) =>
         Effect.sync(() => void said.push(line)),
       );
@@ -55,7 +55,7 @@ test("a held lock names its holder once, then the wait as it grows, and falls qu
       const start = yield* processStartTime(holder.pid);
       yield* fs.writeFileString(lock, `${asClaim({ pid: holder.pid, start })}\n`);
 
-      const said: string[] = [];
+      const said: Array<string> = [];
       const say = (line: string) =>
         Effect.gen(function* () {
           said.push(line);
@@ -93,7 +93,7 @@ const heldLock = Effect.gen(function* () {
 test("a run naming an existing path or --changed is targeted, anything else is the whole suite", () =>
   runEffect(
     Effect.gen(function* () {
-      const targeted = (...args: string[]) => isTargeted(args);
+      const targeted = (...args: Array<string>) => isTargeted(args);
       expect(yield* targeted("test/suite-lock.test.ts")).toBe(true);
       expect(yield* targeted("test/support")).toBe(true);
       expect(yield* targeted("--changed")).toBe(true);
@@ -115,7 +115,7 @@ test("a targeted run of a few files is small, and one naming a directory or more
   runEffect(
     Effect.gen(function* () {
       const budget = budgetOf(24);
-      const kind = (...args: string[]) => kindOf(args, budget);
+      const kind = (...args: Array<string>) => kindOf(args, budget);
       const five = [
         "test/budget.test.ts",
         "test/suite-lock.test.ts",
@@ -140,7 +140,7 @@ test("a targeted run goes ahead at once while a suite holds the old lock, and a 
       const { lock, holder } = yield* heldLock;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "suite-budget-" });
       const budget = budgetOf(24);
-      const said: string[] = [];
+      const said: Array<string> = [];
       const say = (line: string) => Effect.sync(() => void said.push(line));
       const ran = (what: string) => () => Effect.succeed(what);
 

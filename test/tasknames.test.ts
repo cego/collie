@@ -20,7 +20,7 @@ import { runEffect } from "./support/effect";
 
 const nothing: LiveNames = { workspaces: [], tabs: [], panes: [] };
 
-const live = (workspaces: string[], tabs: string[] = [], panes: string[] = []) => ({
+const live = (workspaces: Array<string>, tabs: Array<string> = [], panes: Array<string> = []) => ({
   workspaces,
   tabs,
   panes,

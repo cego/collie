@@ -38,10 +38,10 @@ interface Line {
 interface Fake {
   session: string;
   directory: string;
-  messages: Line[];
+  messages: Array<Line>;
   onSummarize: (fake: Fake) => void;
   summarizeStatus: number;
-  calls: string[];
+  calls: Array<string>;
 }
 let fake: Fake;
 
@@ -54,7 +54,7 @@ let server: FakeServer;
 type Answer =
   | boolean
   | { id: string; directory: string }
-  | { info: Line }[]
+  | Array<{ info: Line }>
   | { _tag: string; message?: string };
 
 const json = (value: Answer, status = 200) => Response.json(value, { status });

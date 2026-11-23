@@ -56,7 +56,7 @@ const alive: AgentInfo = {
 };
 
 function fake() {
-  const calls: string[] = [];
+  const calls: Array<string> = [];
   return {
     calls,
     deps: {

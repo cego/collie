@@ -29,7 +29,7 @@ const ROOT = "dk.cego.collie.desktop/stable";
 const serveRelease = (signature: string | null, tar: Uint8Array = TAR, version = "0.34.0") =>
   Effect.acquireRelease(
     Effect.sync(() => {
-      const asked: string[] = [];
+      const asked: Array<string> = [];
       const files = new Map<string, string | Uint8Array>([
         [
           "stable-linux-x64-update.json",

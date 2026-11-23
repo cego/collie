@@ -24,11 +24,11 @@ import { herdDir, type Delivery } from "./steering";
 const CARDS = 5;
 export interface Live {
   run: string | null;
-  cards: Card[];
-  drift: DriftReport[];
-  deliveries: Delivery[];
-  proposals: ProposalRecord[];
-  pending: DriftReport[];
+  cards: Array<Card>;
+  drift: Array<DriftReport>;
+  deliveries: Array<Delivery>;
+  proposals: Array<ProposalRecord>;
+  pending: Array<DriftReport>;
   news: { readonly waiting: number; readonly uncertain: number };
 }
 
@@ -108,7 +108,7 @@ export const liveFor = Effect.fn("Live.for")(function* (opts: {
   const lines = key === null ? [] : yield* opts.ledgers.proposals(key);
   const overridden = opts.runs.length === 0 ? new Set<string>() : yield* opts.ledgers.overridden;
 
-  const cardsOf = new Map<string, Card[]>();
+  const cardsOf = new Map<string, Array<Card>>();
   const marks: Record<string, RunMarks> = {};
   for (const run of opts.runs) {
     const cards = yield* readCards(run.dir);
@@ -134,7 +134,7 @@ export const liveFor = Effect.fn("Live.for")(function* (opts: {
     const herdWide = pendingHerdWide(lines, now);
     const one = opts.run;
     if (one === null) {
-      const cards: Card[] = [];
+      const cards: Array<Card> = [];
       for (const run of opts.runs) cards.push(...(cardsOf.get(run.id) ?? []));
       live = {
         news,

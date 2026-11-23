@@ -10,7 +10,7 @@ interface Handler {
 let handlers: Promise<ReadonlyArray<Handler>> | undefined;
 const solid = () =>
   (handlers ??= import("@opentui/solid/bun-plugin").then(({ default: real }) => {
-    const found: Handler[] = [];
+    const found: Array<Handler> = [];
     const recorder = {
       onLoad: ({ filter }: { filter: RegExp }, load: OnLoadCallback) => {
         found.push({ filter, load });

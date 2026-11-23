@@ -118,8 +118,8 @@ const decoded = (text: string) => {
 
 // WARNING: file managers name files as file:// URIs, which only the main process can read.
 export const uriListPaths = (text: string) => {
-  const paths: string[] = [];
-  const refused: string[] = [];
+  const paths: Array<string> = [];
+  const refused: Array<string> = [];
   for (const line of Arr.map(Str.split(text, /\r?\n/), (one) => Str.trim(one))) {
     if (line === "" || pipe(line, Str.startsWith("#"))) continue;
     const url = URL.parse(line);

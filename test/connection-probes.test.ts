@@ -25,7 +25,7 @@ test("GitLab is read on the host Collie works against, never glab's default, and
       )(
         parseYaml(yield* fs.readFileString(`${import.meta.dir}/fixtures/connections/glab.yml`)),
       ).pipe(Effect.orDie);
-      const asked: string[] = [];
+      const asked: Array<string> = [];
       const run: Runner = (cmd, args) =>
         Effect.sync(() => {
           const said = Arr.join(args, " ");
@@ -88,7 +88,7 @@ test("GitHub names the active gh account, distinguishes absent from invalid, and
         const stderr = yield* fs.readFileString(
           `${import.meta.dir}/fixtures/connections/gh-auth-${fixture}.txt`,
         );
-        const asked: string[] = [];
+        const asked: Array<string> = [];
         const found = yield* probeGithub(rig.pluginEnv(), (cmd, args) => {
           asked.push(Arr.join([cmd, ...args], " "));
           return Effect.succeed({ code, stdout: "", stderr });

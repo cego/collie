@@ -21,12 +21,12 @@ const UNCONFIRMED =
   "vm-mk did not confirm the answer to r-1 within 30 s, 3 times. It may still land; Try again sends the same request, which vm-mk takes at most once.";
 
 const logged = () => {
-  const lines: Attempted[] = [];
+  const lines: Array<Attempted> = [];
   return { lines, log: (line: Attempted) => Effect.sync(() => void lines.push(line)) };
 };
 
 const answering = (replies: ReadonlyArray<ReturnType<Door["answer"]>>) => {
-  const requests: string[] = [];
+  const requests: Array<string> = [];
   const fake: Partial<Door> = {
     // WARNING: an Answer never asks to discard the reply.
     answer: ((payload: Parameters<Door["answer"]>[0]) =>

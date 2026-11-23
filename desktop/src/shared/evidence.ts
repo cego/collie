@@ -44,7 +44,7 @@ const byName = (a: EvidenceFile, b: EvidenceFile) => pipe(a.name, Str.localeComp
 
 export const sortEvidence = (files: ReadonlyArray<EvidenceFile>) => {
   const pairs = new Map<string, { before?: EvidenceFile; after?: EvidenceFile }>();
-  const shots: GalleryItem[] = [];
+  const shots: Array<GalleryItem> = [];
   const alone = (file: EvidenceFile) => shots.push({ key: file.name, alone: file });
   const kind = (file: EvidenceFile) =>
     Option.getOrUndefined(

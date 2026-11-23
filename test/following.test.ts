@@ -152,7 +152,7 @@ test("a follower hears each of a Task's merge requests as it opens, merges or cl
     disposition: null,
     waitsOn: [],
   });
-  const look = (...mrs: TaskMr[]) => ({ view: view(), progress: progress({ mrs }) });
+  const look = (...mrs: Array<TaskMr>) => ({ view: view(), progress: progress({ mrs }) });
   const app = entry("app", 12, "open");
   const api = entry("api", 7, "open");
 

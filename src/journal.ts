@@ -5,14 +5,14 @@ import { Effect, FileSystem, Option, Path, Schema } from "effect";
 import { addressOf, RunRecords } from "./run-records";
 
 export interface Journal<A> {
-  readonly lines: A[];
+  readonly lines: Array<A>;
   readonly corrupt: number;
 }
 
 const textsOf = (raw: string) => Arr.filter(Str.split(raw, "\n"), (text) => Str.trim(text) !== "");
 
 const tally = <A>(decoded: ReadonlyArray<Option.Option<A>>) => {
-  const lines: A[] = [];
+  const lines: Array<A> = [];
   let corrupt = 0;
   for (const [at, one] of decoded.entries()) {
     if (one._tag === "Some") lines.push(one.value);

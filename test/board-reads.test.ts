@@ -160,7 +160,7 @@ test("a board build touches no file or directory an older build kept a Run's rec
             finished: id === "r1" ? null : "2026-09-13T09:00:00Z",
           }),
         );
-      const touched: string[] = [];
+      const touched: Array<string> = [];
       const noted =
         <A extends ReadonlyArray<unknown>, B>(use: (path: string, ...rest: A) => B) =>
         (path: string, ...rest: A) => {
@@ -232,7 +232,7 @@ test("a board build reads what each verification says of its Step, never the ver
         by: "collie",
         step: "build",
       });
-      const whole: string[] = [];
+      const whole: Array<string> = [];
       yield* buildBoard({
         env: readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" }),
         runs: [run],

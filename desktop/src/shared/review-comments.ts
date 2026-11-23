@@ -79,7 +79,7 @@ export const diffAnchor: (
   const end = (range.endSide ?? side) === side ? range.end : range.start;
   const first = Math.min(range.start, end);
   const last = Math.max(range.start, end);
-  const lines: string[] = [];
+  const lines: Array<string> = [];
   for (let line = first; line <= last; line++) lines.push(...textAt(file, line, side));
   return { _tag: "Diff", path, side, first, last, lines };
 };

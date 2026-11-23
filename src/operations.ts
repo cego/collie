@@ -398,10 +398,10 @@ const humansIn = Effect.fn("operations.humansIn")(function* (
   live: Effect.Effect<ReadonlyArray<string> | null, never, PlatformServices>,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
-  const git = (...args: string[]) => run("git", args, root);
+  const git = (...args: Array<string>) => run("git", args, root);
   const said = (result: { code: number; stdout: string }) =>
     result.code === 0 ? Str.trim(result.stdout) : null;
-  const found: string[] = [];
+  const found: Array<string> = [];
 
   const status = said(yield* git("status", "--porcelain"));
   if (status !== "") found.push("changed or untracked files");
@@ -642,7 +642,7 @@ export const clearOverride = Effect.fn("operations.clearOverride")(function* (
   by: string,
   voice: Voice = {},
 ) {
-  const live: AgentInfo[] = yield* herdr.agentList().pipe(Effect.orElseSucceed(() => []));
+  const live: Array<AgentInfo> = yield* herdr.agentList().pipe(Effect.orElseSucceed(() => []));
   const terminalId =
     Option.getOrUndefined(Arr.findFirst(live, (a) => a.name === agent))?.terminalId ?? null;
   if (terminalId === null)
@@ -926,7 +926,7 @@ export const herdFacts = Effect.fn("operations.herdFacts")(function* (env: Plugi
   const runs = yield* listRuns(env);
   const registered = yield* everyRegistered;
   const listed = runs.slice(0, HERD_LINES);
-  const lines: string[] = [];
+  const lines: Array<string> = [];
   for (const item of listed) {
     const said = [
       `- run ${item.id}: ${item.workflow}, ${item.state}`,
@@ -977,7 +977,7 @@ export const answerAction: (run: string, choiceId: string, answer: string) => st
   answer,
 ) => actionText({ kind: "answer", run, choiceId, answer });
 
-export const choiceLines: (run: string, asked: Asked) => string[] = (run, asked) => [
+export const choiceLines: (run: string, asked: Asked) => Array<string> = (run, asked) => [
   `Waiting on the Choice "${asked.name}": ${asked.prompt}`,
   asked.options.length === 0
     ? "It has no options: it is answered in words."

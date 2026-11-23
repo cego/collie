@@ -335,7 +335,7 @@ test.skipIf(process.getuid?.() === 0)(
 const branched = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const repo = yield* fs.makeTempDirectoryScoped({ prefix: "collie-diff-" });
-  const git = (...args: string[]) =>
+  const git = (...args: Array<string>) =>
     exec(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd: repo }).pipe(
       Effect.flatMap((done) =>
         done.exitCode === 0

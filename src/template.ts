@@ -7,7 +7,7 @@ import { stringifyJson } from "./json";
 
 export interface Rendered {
   text: string;
-  missing: string[];
+  missing: Array<string>;
 }
 
 export interface RenderOptions {
@@ -32,7 +32,7 @@ export function mentionedSkills(text: string) {
 const MENTION = /the `([A-Za-z0-9_-]+)` skill \((?:read|not installed)/g;
 
 export function skillsIn(text: string) {
-  const names: string[] = [];
+  const names: Array<string> = [];
   for (const [, name] of pipe(text, Str.matchAll(SKILL)))
     if (name && !names.includes(name)) names.push(name);
   return names;
@@ -43,7 +43,7 @@ const EXPRESSION = /\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g;
 const BRACES = /\{\{[^}]*\}\}/g;
 
 export function expressionsIn(text: string) {
-  const names: string[] = [];
+  const names: Array<string> = [];
   for (const [, name] of pipe(text, Str.replaceAll(SKILL, ""), Str.matchAll(EXPRESSION)))
     if (name && !names.includes(name)) names.push(name);
   return names;
@@ -66,7 +66,7 @@ export function malformedIn(text: string) {
 const NOT_GIVEN = "not given";
 
 export function renderTemplate(text: string, input: YamlMap, opts: RenderOptions = {}) {
-  const missing: string[] = [];
+  const missing: Array<string> = [];
   // WARNING: skills first, so {{skill:x}} is never mistaken for missing input.
   // oxlint-disable-next-line effecttsgo/prefer-effect-string -- This replacement depends on each match; Effect String accepts only string replacements.
   const withSkills = text.replaceAll(SKILL, (all, name: string) =>
@@ -85,7 +85,7 @@ export function renderTemplate(text: string, input: YamlMap, opts: RenderOptions
   return { text: out, missing };
 }
 
-function lookup(input: YamlMap, path: string[]) {
+function lookup(input: YamlMap, path: Array<string>) {
   let node: YamlValue = input;
   for (const key of path) {
     if (!isYamlMap(node)) return undefined;

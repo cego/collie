@@ -44,7 +44,7 @@ const program = Effect.gen(function* () {
   );
   const onBranch = yield* fs.readDirectory(`${root}/${ADR_DIR}`);
 
-  const byNumber = new Map<string, string[]>();
+  const byNumber = new Map<string, Array<string>>();
   for (const name of onBase) {
     const number = numberOf(name);
     if (number !== undefined) byNumber.set(number, [...(byNumber.get(number) ?? []), name]);

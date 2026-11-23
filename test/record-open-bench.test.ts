@@ -173,7 +173,7 @@ describe("the record-open benchmark's guards", () => {
           lock,
           encodeClaim({ pid: holder.pid, start: yield* processStartTime(holder.pid) }),
         );
-        const said: string[] = [];
+        const said: Array<string> = [];
         let sampled = false;
         const sampling = yield* Effect.forkScoped(
           measuring(
@@ -212,7 +212,7 @@ test("inside a Measurement, on a Machine without /proc, the host's lock is the b
         lock,
         encodeClaim({ pid: process.ppid, start: yield* processStartTime(process.ppid) }),
       );
-      const said: string[] = [];
+      const said: Array<string> = [];
       let sampled = false;
       const sampling = yield* Effect.forkScoped(
         measuring(

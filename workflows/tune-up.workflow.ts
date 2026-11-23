@@ -948,7 +948,7 @@ const archivedResults = (got: Archived) =>
       `${archive}/plan.json`,
       yield* Schema.encodeEffect(Schema.fromJsonString(Planned.fields.plan))(plan),
     );
-    const lines: string[] = [];
+    const lines: Array<string> = [];
     for (const one of measured)
       lines.push(yield* Schema.encodeEffect(Schema.fromJsonString(MeasurementSchema))(one));
     yield* fs.writeFileString(`${archive}/measurements.jsonl`, Arr.join([...lines, ""], "\n"));
@@ -1232,7 +1232,7 @@ export default defineWorkflow({
         });
 
       let plans = 0;
-      const reasons: string[] = [];
+      const reasons: Array<string> = [];
       const recordPlan = (plan: Plan, reason: string) =>
         Effect.gen(function* () {
           plans += 1;
@@ -1281,7 +1281,7 @@ export default defineWorkflow({
           reason: `${cwd} has no merge base with its default branch to measure against`,
         });
 
-      const calibrations: Measurement[] = [];
+      const calibrations: Array<Measurement> = [];
       const tried = new Set<string>([yield* experimentOf(plan)]);
       let counted = written;
       let ending: string | null = null;
@@ -1428,7 +1428,7 @@ export default defineWorkflow({
       }
       yield* host.record(runId, ending);
 
-      const cycled: Cycled[] = [];
+      const cycled: Array<Cycled> = [];
       const keptCommits: Array<string> = [];
       const findings = (name: string, ending: string) =>
         Activity.make({
@@ -1453,7 +1453,7 @@ export default defineWorkflow({
             ),
           ),
         });
-      const handed: External[] = [...found.external];
+      const handed: Array<External> = [...found.external];
       const recorded = (name: string, line: string) =>
         Activity.make({ name, success: Schema.Void, execute: host.record(runId, line) });
       const settle = (key: string, one: External) =>
@@ -1627,7 +1627,7 @@ export default defineWorkflow({
           success: Schema.Array(text),
           error: WorkflowError,
           execute: Effect.gen(function* () {
-            const failing: string[] = [];
+            const failing: Array<string> = [];
             for (const spec of owedLocally(yield* host.approved(runId))) {
               const ran = yield* host.verify({ runId, name: spec.name, cwd, pass: "gate" });
               if (ran.result !== "pass") failing.push(spec.name);
@@ -1884,7 +1884,7 @@ export default defineWorkflow({
             error: WorkflowError,
             execute: Effect.gen(function* () {
               const fs = yield* FileSystem.FileSystem;
-              const left: string[] = [];
+              const left: Array<string> = [];
               for (const one of plan.harness.paths)
                 if (yield* fs.exists(`${cwd}/${one}`).pipe(Effect.orElseSucceed(() => false)))
                   left.push(one);

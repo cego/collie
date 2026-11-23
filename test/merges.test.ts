@@ -47,7 +47,7 @@ const GITLAB = "gitlab.cego.dk/mk/collie";
 
 const latest = new Map<"gitlab" | "github", { readonly run: Runner; readonly fetch: FetchLike }>();
 
-function forge(name: "gitlab" | "github", over: Partial<ForgeModel>, log: string[] = []) {
+function forge(name: "gitlab" | "github", over: Partial<ForgeModel>, log: Array<string> = []) {
   const fake = fakeForge(name, {
     installed: true,
     loggedIn: [name === "gitlab" ? "gitlab.cego.dk" : "github.com"],
@@ -85,7 +85,7 @@ const mr65: (over: Partial<FakeMr>) => FakeMr = (over) => ({
   ...over,
 });
 
-const gitlab = (state: FakeMr["state"], log: string[] = []) =>
+const gitlab = (state: FakeMr["state"], log: Array<string> = []) =>
   forge("gitlab", { mrs: [mr65({ state })] }, log);
 
 const mrUrl = (iid: string) => `https://gitlab.cego.dk/mk/collie/-/merge_requests/${iid}`;
@@ -400,7 +400,7 @@ test("what an earlier host kept under a label is not taken for the merge request
     Effect.gen(function* () {
       const { stateDir, board: boardOf } = yield* seeded();
       yield* storedAnswers(stateDir, new Map([["mk/collie!65", "in-prod"]]));
-      const log: string[] = [];
+      const log: Array<string> = [];
       yield* settleMerges({
         stateDir,
         cwd: "/project",
@@ -485,7 +485,7 @@ test("a closed merge request is news, not a verdict, and a fresh answer is not a
     Effect.gen(function* () {
       const { stateDir, run, board: boardOf } = yield* seeded();
       const views = yield* boardOf({ mrStates: new Map() });
-      const log: string[] = [];
+      const log: Array<string> = [];
       const checked = new Map<string, number>();
       const states = new Map();
       const now = epochMs("2026-09-17T10:00:00Z");
@@ -527,7 +527,7 @@ test("a closed merge request is news, not a verdict, and a fresh answer is not a
     }),
   ));
 
-function deployed(live: { stage: string; prod: string | null }, log: string[] = []) {
+function deployed(live: { stage: string; prod: string | null }, log: Array<string> = []) {
   const merged = "35ae2cea5e5848602729dbc0e8a87ed0d9049c46";
   return forge(
     "gitlab",
@@ -551,7 +551,7 @@ test("a merged card follows its deploy jobs: on stage, then in production, then 
       const states = new Map();
       const checked = new Map<string, number>();
       let now = epochMs("2026-09-17T10:00:00Z");
-      const settle = (gitlab: Runner, log: string[] = []) =>
+      const settle = (gitlab: Runner, log: Array<string> = []) =>
         Effect.gen(function* () {
           const current = yield* boardOf({ mrStates: states, now });
           yield* settleMerges({
@@ -586,7 +586,7 @@ test("a merged card follows its deploy jobs: on stage, then in production, then 
       expect(Arr.map(yield* readDispositions(run.dir), (line) => line.kind)).toEqual(["merged"]);
 
       now += 6 * 60_000;
-      const log: string[] = [];
+      const log: Array<string> = [];
       yield* settle(deployed({ stage: "child", prod: "child" }, log), log);
       expect(log).toEqual([]);
     }),
@@ -597,7 +597,7 @@ test("what is working or still owed is asked about, and what was abandoned is no
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-merges-" });
-      const log: string[] = [];
+      const log: Array<string> = [];
       const merged = (iid: string) => mr65({ iid, state: "merged" });
       yield* settleMerges({
         stateDir,
@@ -719,7 +719,7 @@ test("a follow-up's merge request is still asked about after its predecessor was
   runWithForge(
     Effect.gen(function* () {
       const { round } = yield* supersededChain();
-      const log: string[] = [];
+      const log: Array<string> = [];
       const card = yield* round(gitlab("open", log), epochMs("2026-09-17T10:00:00Z"));
       expect(Arr.filter(log, (call) => /[ /]65\b/.test(call))).not.toEqual([]);
       expect(card.mrState).toBe("open");
@@ -814,7 +814,7 @@ test("a stored answer with no read time settles nothing until the watch has aske
       expect(before!.mrState).toBeNull();
       expect(before!.landed).toBe(false);
 
-      const log: string[] = [];
+      const log: Array<string> = [];
       yield* watch(stateDir, gitlab("open", log), [before!], now);
       expect(Arr.filter(log, (call) => /[ /]65\b/.test(call))).not.toEqual([]);
       const [after] = yield* board({ now });
@@ -839,7 +839,7 @@ test("stored answers keep their read time and head across a restart, and an old 
       const [stale] = yield* board({ now: later });
       expect(stale!.sentence).toContain("GitLab last answered 11 minutes ago.");
 
-      const log: string[] = [];
+      const log: Array<string> = [];
       yield* watch(stateDir, gitlab("open", log), [stale!], later);
       expect(Arr.filter(log, (call) => /[ /]65\b/.test(call))).not.toEqual([]);
       expect((yield* readForge(stateDir)).get(`${GITLAB}!65`)?.read).toBe(
@@ -937,7 +937,7 @@ const onBranch = Effect.fn("merges.onBranch")(function* (
     finished: "2026-10-15T08:30:00Z",
     ...over.run,
   });
-  const log: string[] = [];
+  const log: Array<string> = [];
   const runner = forge(name, { origin: REPO[name].origin, mrs, ...over.model }, log);
   const recorded = new Map<string, string>();
   const checked = new Map<string, number>();
@@ -1649,7 +1649,7 @@ test("a card whose Run ended is still followed while its Reopened agent works or
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-merges-" });
-      const log: string[] = [];
+      const log: Array<string> = [];
       const reopened = (status: string) => ({ delivery: "d1", agent: "a1", told: null, status });
       yield* settleMerges({
         stateDir,
@@ -1981,7 +1981,7 @@ test("a merged pull request is followed to stage, then production, then asked no
       const states = new Map();
       const checked = new Map<string, number>();
       let now = epochMs("2026-09-17T10:00:00Z");
-      const deployedTo = (prod: string, log: string[] = []) =>
+      const deployedTo = (prod: string, log: Array<string> = []) =>
         forge(
           "github",
           {
@@ -2022,7 +2022,7 @@ test("a merged pull request is followed to stage, then production, then asked no
         "Merged as cego/collie#30. In production.",
       );
       now += 6 * 60_000;
-      const log: string[] = [];
+      const log: Array<string> = [];
       yield* settle(deployedTo(HEAD, log));
       expect(log).toEqual([]);
     }),
@@ -2337,7 +2337,7 @@ test("a single-repository fan-out's merge request is not watched once its Repo r
         ref: "",
         note: null,
       });
-      const log: string[] = [];
+      const log: Array<string> = [];
       yield* settleMerges({
         stateDir,
         cwd: "/project",

@@ -22,7 +22,7 @@ const window: (usedPercent: number, over?: Partial<UsageWindow>) => UsageWindow 
 });
 const reading: (
   subscription: UsageReading["subscription"],
-  windows: UsageWindow[],
+  windows: Array<UsageWindow>,
 ) => UsageReading = (subscription, windows) => ({
   subscription,
   account: "a",

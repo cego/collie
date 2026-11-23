@@ -355,7 +355,7 @@ export const sweepSshControls = Effect.fn("desktop.sweepSshControls")(function* 
     }),
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const gone: string[] = [];
+  const gone: Array<string> = [];
   for (const name of yield* fs.readDirectory(tmp).pipe(Effect.orElseSucceed(() => []))) {
     const pid = Number(/^collie-ssh-(\d+)-/.exec(name)?.[1] ?? 0);
     if (pid <= 0 || (yield* alive(pid))) continue;

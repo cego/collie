@@ -140,7 +140,7 @@ export const mergeConnections = (
     readonly connections: ReadonlyArray<Connection>;
   }>,
 ) => {
-  const groups = new Map<ConnectionId, FlockConnection["machines"][number][]>();
+  const groups = new Map<ConnectionId, Array<FlockConnection["machines"][number]>>();
   for (const { machine, connections } of machines)
     for (const { id, reading } of connections) {
       const group = groups.get(id) ?? [];

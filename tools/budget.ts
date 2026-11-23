@@ -55,7 +55,7 @@ export const admission: (
   const holds = Arr.filter(classOf, (one) => one.state === "held");
   let free = share - Arr.reduce(holds, 0, (sum, one) => sum + one.workers);
   // WARNING: an earlier waiter that fits now is admitted on its own look, so its workers are not free.
-  const ahead: Entry[] = [];
+  const ahead: Array<Entry> = [];
   for (const one of Arr.sortWith(
     Arr.filter(classOf, (it) => it.state === "waiting" && it.seq < request.seq),
     (entry: Entry) => entry.seq,

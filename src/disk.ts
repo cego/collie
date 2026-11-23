@@ -23,7 +23,7 @@ export const readDisk = Effect.fn("Disk.read")(function* (
   run: Runner<ChildProcessSpawner.ChildProcessSpawner> = shell,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const present: string[] = [];
+  const present: Array<string> = [];
   for (const dir of dirs)
     if (yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => false))) present.push(dir);
   if (present.length === 0) return [];

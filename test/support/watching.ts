@@ -47,7 +47,7 @@ export const ROOT = new URL("../../", import.meta.url).pathname;
 export const watching = (rig: Rig, slack?: typeof slackApi) => {
   const env = () => rig.pluginEnv({ COLLIE_ROOT: ROOT });
   const dir = () => env().stateDir;
-  const toasts: string[] = [];
+  const toasts: Array<string> = [];
 
   const gitlab = (model: ForgeModel, name: "gitlab" | "github" = "gitlab") =>
     Effect.gen(function* () {

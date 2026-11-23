@@ -33,7 +33,7 @@ import { until } from "./support/host";
 
 let repo: string;
 
-const git = (args: string[], cwd = repo) =>
+const git = (args: Array<string>, cwd = repo) =>
   exec(["git", ...args], { cwd }).pipe(Effect.map((done) => done.exitCode));
 
 const inRepository: typeof runEffect = (effect) =>
@@ -632,7 +632,7 @@ test("a fingerprint leaves the index and the working tree as they were", () =>
       yield* fs.writeFileString(path.join(repo, "tracked.txt"), "staged then edited\n");
       yield* fs.writeFileString(path.join(repo, "second.txt"), "unstaged\n");
       yield* fs.writeFileString(path.join(repo, "untracked.txt"), "u\n");
-      const out = (args: string[]) =>
+      const out = (args: Array<string>) =>
         exec(["git", ...args], { cwd: repo }).pipe(Effect.map((done) => done.stdout));
       const state = () =>
         Effect.all([

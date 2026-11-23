@@ -63,7 +63,7 @@ let rig: Rig;
 let dir: string;
 const runEffect = <A, E>(effect: Parameters<typeof runShared<A, E>>[0]) =>
   runShared(effect.pipe(overHost(() => dir)));
-let toasts: string[];
+let toasts: Array<string>;
 
 beforeEach(() =>
   runEffect(
@@ -626,7 +626,7 @@ test("rules that passed and semantic constraints judged with nothing open are al
   expect(alignment(intent, [], judged).aligned).toBe("true");
 });
 
-const judgementsAtFinish = (intent: { constraints: Constraint[]; goal: string }) =>
+const judgementsAtFinish = (intent: { constraints: Array<Constraint>; goal: string }) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     yield* repository();
@@ -666,7 +666,7 @@ test("a branch past the cap is judged once, at the finish, and each boundary say
       const fs = yield* FileSystem.FileSystem;
       yield* repository();
       yield* fs.makeDirectory(`${dir}/src`, { recursive: true });
-      const files: string[] = [];
+      const files: Array<string> = [];
       for (let n = 0; n <= MAX_FILES; n += 1) {
         files.push(`src/f${n}.ts`);
         yield* fs.writeFileString(`${dir}/src/f${n}.ts`, `${n}\n`);
@@ -724,7 +724,7 @@ const watchedAt: (runId: string, held?: boolean, worktree?: string | null) => Wa
   cwdOf: () => Effect.succeed(dir),
 });
 
-const recipient: (sent: string[]) => Correcting = (sent) => ({
+const recipient: (sent: Array<string>) => Correcting = (sent) => ({
   agent: { agent: "r1-build", harness: "claude", terminalId: "term-1" },
   send: (correction) => Effect.sync(() => sent.push(correction.text)).pipe(Effect.as(true)),
 });
@@ -749,7 +749,7 @@ test("drift the Intent lets Collie correct goes to the agent, and is submitted, 
       yield* repository();
       yield* intended("r1", [SRC_ONLY], { auto_correct: true, exclusive_steering: true });
       yield* fs.writeFileString(`${dir}/notes.txt`, "somewhere it should not be\n");
-      const sent: string[] = [];
+      const sent: Array<string> = [];
       const done = yield* checkDrift(
         watchedAt("r1"),
         "build collected",
@@ -808,7 +808,7 @@ test("a held Run is not corrected, and one whose bound is spent is given up on a
       const fs = yield* FileSystem.FileSystem;
       yield* repository();
       yield* fs.writeFileString(`${dir}/notes.txt`, "somewhere it should not be\n");
-      const sent: string[] = [];
+      const sent: Array<string> = [];
 
       yield* intended("r1", [SRC_ONLY], { auto_correct: true, exclusive_steering: true });
       const held = yield* checkDrift(
@@ -1051,7 +1051,7 @@ test("a card on a branch with no commit yet names no branch and no head", () =>
 
 const R1_ONLY: Constraint = { ...SMALL, id: "r1-only", text: "touch only the docs" };
 
-const git = (args: string[], cwd = dir) => exec(["git", ...args], { cwd });
+const git = (args: Array<string>, cwd = dir) => exec(["git", ...args], { cwd });
 
 const cardedWork = (runId: string, files: Readonly<Record<string, string>>) =>
   Effect.gen(function* () {

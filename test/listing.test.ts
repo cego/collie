@@ -17,7 +17,7 @@ import { hostRunRecords } from "./support/records";
 let rig: Rig;
 let dir: string;
 let plan: string;
-let toasts: string[];
+let toasts: Array<string>;
 
 beforeEach(() =>
   runEffect(

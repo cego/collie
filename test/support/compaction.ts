@@ -2,7 +2,7 @@ import { Effect } from "effect";
 import type { Channel, SubmitOutcome } from "../../src/dispatcher";
 
 export function fakeChannel(
-  prompted: string[],
+  prompted: Array<string>,
   outcome: SubmitOutcome = { ok: true, id: "compaction-1" },
 ) {
   const returned: Channel = {

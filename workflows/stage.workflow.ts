@@ -66,7 +66,8 @@ const stepsOf = (markdown: string) => {
 export const STAGE_ON = { gitlab: stepsOf(onGitlab), github: stepsOf(onGithub) };
 
 const naming =
-  (clears: (url: string, jobs: string) => string[]) => (url: string, jobs: ReadonlyArray<string>) =>
+  (clears: (url: string, jobs: string) => Array<string>) =>
+  (url: string, jobs: ReadonlyArray<string>) =>
     fitting(clears(url, quoted(jobs)), clears(url, `the ${jobs.length} stage jobs its task names`));
 
 export const STAGE_CLEARS = {

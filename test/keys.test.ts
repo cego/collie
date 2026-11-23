@@ -4,7 +4,7 @@ import { keyboard, tokenizeKeys } from "../src/keys";
 import { runEffect } from "./support/effect";
 
 class FakeInput {
-  readonly rawModes: boolean[] = [];
+  readonly rawModes: Array<boolean> = [];
   resumed = 0;
   paused = 0;
   listener: ((buffer: Buffer) => void) | null = null;

@@ -57,8 +57,8 @@ class UnreadableCore extends Herdr {
 
 let rig: Rig;
 let bin: FakeBin;
-let recorded: RunFacts[];
-let registered: AgentEntry[];
+let recorded: Array<RunFacts>;
+let registered: Array<AgentEntry>;
 let listedCheckouts: Array<{ path: string; branch: string }>;
 let releasedAs: string | null;
 let releases: number;
@@ -66,7 +66,7 @@ let liveAs: string | null;
 let claims: Array<{ path: string; locked: boolean }>;
 let settling: Settling;
 
-const join = (...parts: string[]) => pipe_(Arr.join(parts, "/"), Str.replaceAll(/\/+/g, "/"));
+const join = (...parts: Array<string>) => pipe_(Arr.join(parts, "/"), Str.replaceAll(/\/+/g, "/"));
 
 const readLines = Effect.fn("worktreeTest.readLines")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
@@ -185,7 +185,7 @@ const fakeGitAnswering = (
   );
 };
 
-const gitAnswers = (branch = "add-picker", remoteBranches: string[] = []) => ({
+const gitAnswers = (branch = "add-picker", remoteBranches: Array<string> = []) => ({
   "remote get-url origin": "git@gitlab.example.com:acme/app.git",
   fetch: "",
   "symbolic-ref --short refs/remotes/origin/HEAD": "origin/master",
@@ -201,7 +201,7 @@ const gitAnswers = (branch = "add-picker", remoteBranches: string[] = []) => ({
   "check-ref-format": "",
 });
 
-const fakeGit = (branch = "add-picker", remoteBranches: string[] = []) =>
+const fakeGit = (branch = "add-picker", remoteBranches: Array<string> = []) =>
   fakeGitAnswering(gitAnswers(branch, remoteBranches));
 
 const porcelain = (checkouts: ReadonlyArray<{ path: string; branch: string }>) =>
@@ -214,7 +214,7 @@ const fakeGitWithCheckouts = (
   checkouts: ReadonlyArray<{ path: string; branch: string }>,
   opts: {
     branch?: string;
-    remoteBranches?: string[];
+    remoteBranches?: Array<string>;
     refusals?: Record<string, string>;
     scripts?: Record<string, string>;
   } = {},
@@ -1300,7 +1300,7 @@ test("a review of a pull request is fixed on its head branch, read through gh", 
 
 const MR_42 = "https://gitlab.example.com/acme/app/-/merge_requests/42";
 
-const gitlabMrs = (mr: Partial<FakeMr> = {}, ...others: FakeMr[]) =>
+const gitlabMrs = (mr: Partial<FakeMr> = {}, ...others: Array<FakeMr>) =>
   forgeOnPath(bin, "gitlab", {
     installed: true,
     loggedIn: ["gitlab.example.com"],
@@ -2385,7 +2385,7 @@ test("a Renovate Run takes over the checkout an ended Run of the repository left
     }),
   ));
 
-const realGit = (cwd: string, ...args: string[]) =>
+const realGit = (cwd: string, ...args: Array<string>) =>
   Effect.flatMap(shell("git", args, cwd), (ran) =>
     ran.code === 0 ? Effect.void : Effect.die(`git ${Arr.join(args, " ")}: ${ran.stderr}`),
   );
@@ -3845,7 +3845,7 @@ const cachedCheckout = Effect.fn("worktreeTest.cachedCheckout")(function* (
   const fs = yield* FileSystem.FileSystem;
   const repo = `${rig.root}/repos/${name}`;
   const checkout = `${rig.root}/checkouts/${name}`;
-  const git = (cwd: string, ...args: string[]) =>
+  const git = (cwd: string, ...args: Array<string>) =>
     shell("git", ["-c", "user.name=t", "-c", "user.email=t@example.test", ...args], cwd);
   yield* fs.makeDirectory(`${repo}/crate`, { recursive: true });
   yield* git(repo, "init", "-q");
@@ -3912,7 +3912,7 @@ test("a Run that comes to work in the checkout between judging and removing keep
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const { checkout, cache, run } = yield* cachedCheckout("late");
-      const runs: RunFacts[] = [run];
+      const runs: Array<RunFacts> = [run];
       const sweeper = buildCachesSweeper(Effect.succeed(runs));
 
       const judged = yield* sweeper.judge;

@@ -610,7 +610,7 @@ export const carryOut = Effect.fn("runActions.carryOut")(function* (
   if ("refused" in judged)
     return yield* new ProposalRefused({ refused: judged.refused, detail: judged.detail });
 
-  const results: StepResult[] = [];
+  const results: Array<StepResult> = [];
   const expectedVersions = { ...judged.proposal.intent_versions };
   // WARNING: a later action on a failed Run was asked assuming the failure did not happen; the others are independent.
   const failedRuns = new Set<string>();

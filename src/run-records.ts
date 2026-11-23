@@ -291,7 +291,7 @@ export const runRecordsLayer = Layer.effect(RunRecords)(
       rows: ReadonlyArray<R>,
       value: (row: R) => A,
     ) => {
-      const byRun = new Map<string, A[]>();
+      const byRun = new Map<string, Array<A>>();
       for (const row of rows) {
         const list = byRun.get(row.run);
         if (list === undefined) byRun.set(row.run, [value(row)]);

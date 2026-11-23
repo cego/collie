@@ -1,4 +1,4 @@
-const has = (env: Record<string, string | undefined>, ...names: string[]) =>
+const has = (env: Record<string, string | undefined>, ...names: Array<string>) =>
   names.every((name) => (env[name] ?? "") !== ""); // oxlint-disable-line effecttsgo/prefer-effect-array
 
 export const macSigning = (env: Record<string, string | undefined>) => {

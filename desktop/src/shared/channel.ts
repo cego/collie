@@ -19,7 +19,7 @@ export type ToMain = RpcMessage.FromClientEncoded | Hello;
 export type ToView = RpcMessage.FromServerEncoded;
 
 export const heldUntilListened = <In>() => {
-  const held: In[] = [];
+  const held: Array<In> = [];
   let receive: (frame: In) => void = (frame) => void held.push(frame);
   return {
     receive: (frame: In) => receive(frame),

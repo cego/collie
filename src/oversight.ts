@@ -162,7 +162,7 @@ export const writeCard = Effect.fn("Oversight.writeCard")(function* (
   const verifications = yield* readVerifications(at.evidenceDir).pipe(
     Effect.orElseSucceed(() => []),
   );
-  const missing: string[] = [];
+  const missing: Array<string> = [];
   for (const constraint of intent?.constraints ?? []) {
     const rule = constraint.rule;
     if (rule?.kind === "command_exit" && !Arr.some(verifications, (one) => one.name === rule.name))
@@ -433,7 +433,7 @@ const correctDrift = Effect.fn("Oversight.correctDrift")(function* (
     ),
     nowProven: capabilities?.now.status === "proven",
   });
-  const sent: string[] = [];
+  const sent: Array<string> = [];
   for (const { report, mode } of decided) {
     const constraint = Option.getOrUndefined(
       Arr.findFirst(intent.constraints, (one) => one.id === report.constraint),
@@ -458,7 +458,7 @@ const correctDrift = Effect.fn("Oversight.correctDrift")(function* (
     yield* said(at, `correction sent for ${report.constraint} (${mode})`);
     sent.push(report.constraint);
   }
-  const escalated: string[] = [];
+  const escalated: Array<string> = [];
   for (const report of open) {
     if (report.resolution === "escalated") continue;
     if ((sentSoFar[report.constraint] ?? 0) < intent.authority.max_corrections_per_constraint)
@@ -611,7 +611,7 @@ const versionVector = Effect.fn("Oversight.versionVector")(function* (
   at: Watched,
   family: ReadonlyArray<string>,
 ) {
-  const targets: CrossRunTarget[] = [];
+  const targets: Array<CrossRunTarget> = [];
   for (const id of new Set(family)) {
     const dir = at.dirOf(id);
     const cwd = yield* at.cwdOf(id);
@@ -910,7 +910,7 @@ export const cardCheckpoints = Effect.fn("Oversight.cardCheckpoints")(function* 
   const done = Arr.filter(found, (one) => one.checkpoint.status === "done");
   if (done.length === 0) return [];
   const carded = new Set(yield* records.lines(run, CARDED));
-  const written: Card[] = [];
+  const written: Array<Card> = [];
   for (const { file, checkpoint } of done) {
     const key = `${file}@${checkpoint.at}`;
     if (carded.has(key)) continue;

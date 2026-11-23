@@ -75,7 +75,7 @@ export const contentHash = Effect.fn("Definitions.contentHash")(function* (text:
 
 export interface Definitions {
   personas: Map<string, PersonaDef>;
-  errors: string[];
+  errors: Array<string>;
 }
 
 export const skillDirs = Effect.fn("Definitions.skillDirs")(function* (env: {
@@ -148,10 +148,10 @@ export const personaHoles = (body: string) => [
 ];
 
 export const loadDefinitions = Effect.fn("Definitions.loadDefinitions")(function* (
-  layers: Layer[] | { readonly all: Layer[] },
+  layers: Array<Layer> | { readonly all: Array<Layer> },
 ) {
   const personas = new Map<string, PersonaDef>();
-  const errors: string[] = [];
+  const errors: Array<string> = [];
 
   for (const layer of Arr.isArray(layers) ? layers : layers.all) {
     yield* loadLayer(personas, layer, "personas", parsePersona, mergePersona, errors);
@@ -175,7 +175,7 @@ const loadLayer = Effect.fn("Definitions.loadLayer")(function* <
     FileSystem.FileSystem | Path.Path
   >,
   merge: (parent: T, child: T) => T,
-  errors: string[],
+  errors: Array<string>,
 ) {
   const pathSvc = yield* Path.Path;
   const parsed = new Map<string, T>();
@@ -191,7 +191,7 @@ const loadLayer = Effect.fn("Definitions.loadLayer")(function* <
   const settled = new Set<string>();
   const resolve: (
     name: string,
-    chain: string[],
+    chain: Array<string>,
   ) => Effect.Effect<
     void,
     PlatformError.PlatformError,
@@ -249,7 +249,7 @@ function mergePersona(parent: PersonaDef, child: PersonaDef) {
   };
 }
 
-function pick<T, K extends keyof T>(from: T, keys: K[]) {
+function pick<T, K extends keyof T>(from: T, keys: Array<K>) {
   const out: Partial<T> = {};
   for (const key of keys) if (from[key] !== undefined) out[key] = from[key];
   return out;
@@ -278,9 +278,9 @@ export interface BodySections {
 export function bodySections(body: string) {
   const sections = new Map<string, string>();
   const lines = Str.split(body, "\n");
-  const preamble: string[] = [];
+  const preamble: Array<string> = [];
   let current: string | null = null;
-  let buf: string[] = [];
+  let buf: Array<string> = [];
   const flush = () => {
     if (current !== null) sections.set(current, Str.trim(Arr.join(buf, "\n")));
     buf = [];

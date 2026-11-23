@@ -97,7 +97,7 @@ const readAnswers = flow(
   Result.getOrThrow,
 );
 
-const git = (cwd: string, ...args: string[]) =>
+const git = (cwd: string, ...args: Array<string>) =>
   Effect.promise(() =>
     Bun.$`git -c user.name=probe -c user.email=probe@example.invalid ${args}`.cwd(cwd).quiet(),
   );

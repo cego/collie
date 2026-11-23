@@ -12,7 +12,7 @@ import { FORGE_HOST, PROJECT, fakeForge, type ForgeModel } from "./support/forge
 const REF = { project: PROJECT.gitlab, iid: "30" };
 const PIPELINE = `https://${PROJECT.gitlab}/-/pipelines/7`;
 
-const git = (cwd: string, ...args: string[]) =>
+const git = (cwd: string, ...args: Array<string>) =>
   Effect.gen(function* () {
     const ran = yield* exec(["git", ...args], { cwd });
     if (ran.exitCode !== 0) throw new Error(`git ${Arr.join(args, " ")}: ${ran.stderr}`);

@@ -19,7 +19,7 @@ export const readWhole = Effect.fn("Carried.readWhole")(function* (
   enough: (part: Uint8Array) => boolean = () => false,
   most = Number.POSITIVE_INFINITY,
 ) {
-  const parts: Uint8Array[] = [];
+  const parts: Array<Uint8Array> = [];
   let first: HostFile | null = null;
   let offset = 0;
   for (;;) {
@@ -85,7 +85,7 @@ export const carriedPaths = Effect.fn("Carried.paths")(function* (
       reason: `${machine.name}'s Collie does not take files; upgrade Collie on ${machine.name}. Nothing was done there.`,
     });
   const fs = yield* FileSystem.FileSystem;
-  const paths: string[] = [];
+  const paths: Array<string> = [];
   for (const one of named) {
     const colon = Option.getOrElse(pipe_(one, Str.indexOf(":")), () => -1);
     const on =
@@ -150,7 +150,7 @@ export const placeStaged = Effect.fn("Carried.place")(function* (
       });
     copies.push({ name, bytes: bytes.value });
   }
-  const paths: string[] = [];
+  const paths: Array<string> = [];
   for (const { name, bytes } of copies)
     paths.push(
       yield* uploaded(held, machine, name, bytes).pipe(

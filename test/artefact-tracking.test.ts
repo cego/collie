@@ -26,7 +26,7 @@ test("explicit refresh bounds discovery and rotates registered sources", () =>
       expect((yield* catalogue.reconcile(run)).items).toHaveLength(8);
       expect((yield* catalogue.reconcile(run)).items).toHaveLength(16);
       expect((yield* catalogue.reconcile(run)).items).toHaveLength(24);
-      const tracked: Artefact[] = [];
+      const tracked: Array<Artefact> = [];
       for (let n = 0; n < 24; n++) {
         const path = `${dir}/tracked-${n}.txt`;
         yield* fs.writeFileString(path, "first");

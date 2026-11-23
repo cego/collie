@@ -466,14 +466,14 @@ function stagingEnvironments<R>(
       ok: false as const,
       reason: `GitLab could not read ${ref.project}'s stage environments: ${reason}`,
     });
-    const names: string[] = [];
+    const names: Array<string> = [];
     for (let page = 1; ; page++) {
       const listed = yield* api.rest(Environments, `environments?per_page=100&page=${page}`);
       if (!listed.ok) return unread(listed.reason);
       for (const env of listed.value) if (env.tier === "staging") names.push(env.name);
       if (listed.value.length < 100) break;
     }
-    const environments: StagingEnvironment[] = [];
+    const environments: Array<StagingEnvironment> = [];
     const builtFrom = new Map<string, boolean>();
     for (const name of names) {
       let live: string | null = null;
@@ -1075,7 +1075,7 @@ function readReview(ref: MrRef, cwd: string) {
     // WARNING: names bound to a release come from the same snapshot as its required approvals.
     const approvers =
       state.ok && rules.length > 0 ? Arr.dedupe(Arr.flatMap(rules, (rule) => rule.by)) : listed;
-    const comments: ForgeComment[] = [];
+    const comments: Array<ForgeComment> = [];
     const resolved = new Set<string>();
     const web = mr.value.web_url ?? mrWords(ref).url ?? "";
     for (let page = 1; ; page++) {

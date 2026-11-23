@@ -7,7 +7,7 @@ import { runEffect } from "./support/effect";
 import { claudeTrust } from "../src/trust";
 import { isYamlMap, YamlMapSchema, type YamlMap } from "../src/yaml";
 
-const join = (...parts: string[]) => pipe_(Arr.join(parts, "/"), Str.replaceAll(/\/+/g, "/"));
+const join = (...parts: Array<string>) => pipe_(Arr.join(parts, "/"), Str.replaceAll(/\/+/g, "/"));
 
 interface TrustRig {
   root: string;

@@ -207,7 +207,7 @@ export const staging = <R1, R2>(options: {
   const { runId, cwd } = options;
   let reached: ReadonlyArray<string> = [];
   let undiscovered = false;
-  const heads: string[] = [];
+  const heads: Array<string> = [];
   const played = new Set<string>();
   return {
     put: (name: string, head: string, only: ReadonlyArray<string> = options.jobs) =>

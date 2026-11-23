@@ -13,7 +13,7 @@ function versionsAnswering(
   answers: Array<{ code: number; stdout: string }>,
   settled: Effect.Effect<void> = Effect.void,
 ) {
-  const asked: unknown[][] = [];
+  const asked: Array<Array<unknown>> = [];
   const spawner = ChildProcessSpawner.make((command) =>
     Effect.sync(() => {
       if (command._tag === "StandardCommand") asked.push([command.command, ...command.args]);

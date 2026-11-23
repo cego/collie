@@ -72,7 +72,7 @@ test.each(["merged", "abandoned"] as const)(
           }),
         );
         yield* recordDisposition(run.dir, { at, by: "human", kind, ref: mr, note: null });
-        const commands: string[] = [];
+        const commands: Array<string> = [];
         const spawner = ChildProcessSpawner.make((command) => {
           commands.push(command._tag === "StandardCommand" ? command.command : "pipeline");
           return Effect.die(new Error("drawing settled work must not start a command"));
@@ -176,7 +176,7 @@ test("stamping a card's age or record keeps its derivation until source facts ch
       const { dir, env, runs: initial } = yield* planners(3, "2026-10-30T09:30:00Z");
       let runs = initial;
       const model = yield* makeRunModel(dir, "installation");
-      const derived: string[] = [];
+      const derived: Array<string> = [];
       const cards: KeptCards = { revision: model.inputsAt, kept: new Map() };
       const build = (kept?: KeptCards) =>
         buildBoard({

@@ -1294,7 +1294,7 @@ export const rememberChecks = Effect.fn("lifecycle.rememberChecks")(function* (
   const intent = yield* readIntent(runDir(env.stateDir, runId));
   if (intent === null) return err("invalid_state", `Run ${runId} has no Intent`);
   const fs = yield* FileSystem.FileSystem;
-  const present: string[] = [];
+  const present: Array<string> = [];
   for (const dir of options.checkouts)
     if (yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => false))) present.push(dir);
   if (present.length === 0)

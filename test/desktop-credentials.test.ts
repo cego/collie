@@ -42,7 +42,7 @@ const executable = (path: string, text: string) =>
     yield* fs.chmod(path, 0o755);
   });
 
-const machineIn: (home: string, bin: string, forwarded?: number[]) => ShellRoute = (
+const machineIn: (home: string, bin: string, forwarded?: Array<number>) => ShellRoute = (
   home,
   bin,
   forwarded = [],
@@ -230,8 +230,8 @@ test("onboarding gives the runner Desktop's secrets on stdin, and forwards and o
         ),
         (one) => Effect.promise(() => one.stop(true)),
       );
-      const forwarded: number[] = [];
-      const opened: string[] = [];
+      const forwarded: Array<number> = [];
+      const opened: Array<string> = [];
       const last = yield* onboardThrough(
         machineIn(home, dir, forwarded),
         {
@@ -288,8 +288,8 @@ test("the Claude login finishes by approving in this computer's browser through 
       const home = `${dir}/home`;
       yield* fs.makeDirectory(home);
       yield* fakeClaude(dir);
-      const forwarded: number[] = [];
-      const runs: OnboardRun[] = [];
+      const forwarded: Array<number> = [];
+      const runs: Array<OnboardRun> = [];
       const codes = yield* Queue.unbounded<string>();
       const browser = (url: string) => {
         const callback = new URL(new URL(url).searchParams.get("redirect_uri")!);
@@ -407,8 +407,8 @@ const givenIn = (
   skipped: ReadonlyArray<string> = [],
 ) =>
   Effect.gen(function* () {
-    const gave: string[] = [];
-    const told: MachineGiven[] = [];
+    const gave: Array<string> = [];
+    const told: Array<MachineGiven> = [];
     const giver = (credential: Credential) => (route: ShellRoute, text: string) =>
       Effect.sync(() => {
         gave.push(`${route.machine.name} ${credential} ${text}`);

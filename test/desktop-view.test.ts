@@ -841,7 +841,7 @@ test("the summary says which credentials Desktop has none of to give, and blames
 });
 
 test("a Machine's settings sync and its credentials are kept on its row, and dropped with it", () => {
-  const items: FlockItem[] = [
+  const items: Array<FlockItem> = [
     routed(vm),
     { _tag: "Synced", part: "settings", machine: vm, failed: "host refused" },
     { _tag: "Synced", part: "definitions", machine: vm, failed: "no such operation" },

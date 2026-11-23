@@ -155,7 +155,7 @@ export const envFileProblems = Effect.fn("Profile.envFileProblems")(function* (
   home: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const problems: string[] = [];
+  const problems: Array<string> = [];
   for (const value of Rec.values(env)) {
     if (isLiteral(value)) continue;
     const path = expand(value.file, home);

@@ -81,8 +81,8 @@ describe("nudging the chat's edge with the keys", () => {
 describe("keeping the chat's width", () => {
   const control = (saved?: number) => {
     const view = { chosen: { value: saved }, dragging: { value: null } };
-    const saves: (number | undefined)[] = [];
-    const pending: (() => void)[] = [];
+    const saves: Array<number | undefined> = [];
+    const pending: Array<() => void> = [];
     const kept = chatWidthControl(view, (width) => {
       saves.push(width);
       const { promise, resolve } = Promise.withResolvers<void>();

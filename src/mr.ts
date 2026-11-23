@@ -27,7 +27,7 @@ export type RunnerEnv = Record<string, string | Redacted.Redacted<string>>;
 
 export type Runner<R = never> = (
   cmd: string,
-  args: string[],
+  args: Array<string>,
   cwd: string,
   env?: RunnerEnv,
 ) => Effect.Effect<Ran, never, R>;
@@ -194,7 +194,7 @@ export function projectFromRemote(url: string) {
 }
 
 // WARNING: a command that cannot start exits 127 with why on stderr; it never throws, so no glab is an answer.
-export function shell(cmd: string, args: string[], cwd: string, env?: RunnerEnv) {
+export function shell(cmd: string, args: Array<string>, cwd: string, env?: RunnerEnv) {
   const returned: Effect.Effect<Ran, never, ChildProcessSpawner.ChildProcessSpawner> = Effect.gen(
     function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -342,8 +342,8 @@ export function resolveAssignee<R>(
 }
 
 export function linearIssues<R>(opts: { cwd: string } & Settled, run: Runner<R>) {
-  const returned: Effect.Effect<string[], never, R> = Effect.gen(function* () {
-    const found: string[] = [];
+  const returned: Effect.Effect<Array<string>, never, R> = Effect.gen(function* () {
+    const found: Array<string> = [];
     const add = (id: string) => {
       const up = Str.toUpperCase(id);
       if (!found.includes(up)) found.push(up);
@@ -360,7 +360,7 @@ export function linearIssues<R>(opts: { cwd: string } & Settled, run: Runner<R>)
 }
 
 function matchAll(text: string) {
-  const returned: string[] = Arr.map([...pipe_(text, Str.matchAll(LINEAR_ID))], (m) => m[1]!);
+  const returned: Array<string> = Arr.map([...pipe_(text, Str.matchAll(LINEAR_ID))], (m) => m[1]!);
   return returned;
 }
 

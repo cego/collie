@@ -413,7 +413,7 @@ interface Marked {
 
 const markedBy = (installation: string) =>
   Effect.gen(function* () {
-    const found = new Map<string, Marked[]>();
+    const found = new Map<string, Array<Marked>>();
     for (const { pid, started, bound } of yield* boundProcesses([CHECK_INSTALLATION, CHECK_ID])) {
       const id = bound[CHECK_ID];
       if (pid === process.pid || bound[CHECK_INSTALLATION] !== installation || id === undefined)
@@ -926,7 +926,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     );
 
   const handOver = Effect.sync(() => {
-    const handed: string[] = [];
+    const handed: Array<string> = [];
     for (const entry of collecting.values()) {
       if (!entry.supervised || entry.ended || entry.settled) continue;
       entry.handed = true;
@@ -937,7 +937,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
 
   const endAll = Effect.gen(function* () {
     stopping = true;
-    const ended: CheckOf[] = [];
+    const ended: Array<CheckOf> = [];
     for (const entry of [...own(), ...spawning.values()]) {
       if (entry.ended || entry.settled) continue;
       entry.ended = true;

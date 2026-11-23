@@ -74,7 +74,7 @@ export interface Followed {
 const ciSaid = (ci: ForgeChecks) => (ci.state === "failed" ? `failed: ${ci.name}` : ci.state);
 
 export function followEvents(before: Followed, after: Followed) {
-  const events: FollowEvent[] = [];
+  const events: Array<FollowEvent> = [];
   if (after.progress !== null) {
     const was = new Map(Arr.map(before.progress?.steps ?? [], (step) => [step.operation, step]));
     const agents = new Set(Arr.map(before.progress?.steps ?? [], (step) => step.agent));

@@ -17,7 +17,7 @@ import { blockedAtItsPrompt, collie, proves } from "../support/world";
 
 const printed = Effect.gen(function* () {
   const env = yield* currentEnv.pipe(Effect.orDie);
-  const written: string[] = [];
+  const written: Array<string> = [];
   const write = process.stdout.write.bind(process.stdout);
   // WARNING: the board writes one string and reads nothing back, so the overload that takes an encoding or a callback is never the one reached here.
   // WARNING: the board writes one string and reads nothing back, so the encoding and callback overload is never reached.

@@ -949,7 +949,7 @@ const endedOnClock = (look: (at: number, alive: { now: boolean }) => Effect.Effe
     const start = clock.currentTimeMillisUnsafe();
     const pid = 987_654;
     const alive = { now: true };
-    const said: string[] = [];
+    const said: Array<string> = [];
     const at = () => clock.currentTimeMillisUnsafe() - start;
     const proc = fakeProc(fs, pid, {
       stat: () => statLine(pid, "start"),
@@ -1115,7 +1115,7 @@ test.skipIf(process.platform !== "linux")(
     runEffect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const events: string[] = [];
+        const events: Array<string> = [];
         const { notes, checks } = yield* worldWith({
           kill: (_target, name) => void events.push(`kill ${name}`),
         });
@@ -1153,7 +1153,7 @@ test.skipIf(process.platform !== "linux")(
       Effect.gen(function* () {
         const { root, notes, checks } = yield* worldWith({ kill: () => {} });
         const leader = yield* survivingLeftover(notes);
-        const said: string[] = [];
+        const said: Array<string> = [];
 
         const refused = yield* collect(
           `${root}/evidence`,

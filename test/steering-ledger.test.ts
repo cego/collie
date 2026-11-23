@@ -251,7 +251,7 @@ test("a Run is under override while an incarnation it was delivered through last
 test("a delivery written tells the Run model which Run it moved", () =>
   runEffect(
     Effect.gen(function* () {
-      const moved: string[] = [];
+      const moved: Array<string> = [];
       yield* appendLine(delivery({ run: "r7" })).pipe(
         Effect.provide(recordsAt(stateDir)),
         Effect.provideService(StoreWrites, (runs) => moved.push(...runs)),
@@ -278,7 +278,7 @@ test("a delivery written moves whatever follows the ledgers, as the board does",
   ));
 
 test("a reservation nobody settled becomes unknown, not a guess in either direction", () => {
-  const lines: LedgerLine[] = [delivery()];
+  const lines: Array<LedgerLine> = [delivery()];
   const tooSoon = settleStaleReservations(lines, epochMs("2026-09-09T10:00:30Z"), 60_000, "t");
   expect(tooSoon).toHaveLength(0);
 
@@ -336,7 +336,7 @@ test("an explicit reconciliation works from automation and stops an unknown bloc
 
 test("an override lasts until it is explicitly cleared", () => {
   expect(overrideActive([delivery()])).toBe(false);
-  const flagged: LedgerLine[] = [
+  const flagged: Array<LedgerLine> = [
     delivery(),
     { kind: "manual_override", at: "t1", incarnation: "term-1", by: "hook:UserPromptSubmit" },
   ];
@@ -354,7 +354,7 @@ test("the call record counts every call, settles the abandoned, and refuses none
   const at = (minute: number) => `2026-09-09T10:${pipe_(String(minute), Str.padStart(2, "0"))}:00Z`;
 
   // WARNING: Usage is data: a record of failed calls never refuses the next one.
-  const call: (id: string, when: string) => BudgetLine[] = (id, when) => [
+  const call: (id: string, when: string) => Array<BudgetLine> = (id, when) => [
     { kind: "reserve", id, run: "r1", at: when, max_seconds: 120, max_output_bytes: 1 },
     { kind: "settle", id, at: when, outcome: "failed", seconds: 1, bytes: 0 },
   ];
@@ -373,7 +373,7 @@ test("the call record counts every call, settles the abandoned, and refuses none
   ]);
 
   // WARNING: A reservation nobody settled counts as a failure: the record must not say fewer calls were made.
-  const abandoned: BudgetLine[] = [
+  const abandoned: Array<BudgetLine> = [
     { kind: "reserve", id: "gone", run: "r1", at: at(0), max_seconds: 120, max_output_bytes: 1 },
   ];
   const after = planReservation(abandoned, { id: "next", run: "r1", at: at(30) }, limits);

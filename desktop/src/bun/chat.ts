@@ -142,16 +142,16 @@ const contentOf = Effect.fnUntraced(function* (
   ids: ReadonlyArray<string>,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const files: Staged[] = [];
+  const files: Array<Staged> = [];
   for (const id of ids) {
     const held = yield* describeAttachment(dir, id).pipe(Effect.orElseSucceed(() => null));
     if (held === null)
       return `Desktop no longer has ${Str.split(id, "/").at(-1)}; attach it again.`;
     files.push(held);
   }
-  const images: ContentBlock[] = [];
-  const documents: ContentBlock[] = [];
-  const texts: ContentBlock[] = [];
+  const images: Array<ContentBlock> = [];
+  const documents: Array<ContentBlock> = [];
+  const texts: Array<ContentBlock> = [];
   let budget = INLINE_BUDGET;
   const fits = (data: string) => {
     if (data.length > budget) return false;

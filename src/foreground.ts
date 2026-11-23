@@ -45,7 +45,7 @@ export const waitingForIO: ForegroundApi["wait"] = (effect) =>
 // WARNING: wrap the file system before any host component captures it.
 export const foregroundFileSystem = (fs: FileSystem.FileSystem) => {
   const operation =
-    <Self, Args extends unknown[], A, E, R>(
+    <Self, Args extends Array<unknown>, A, E, R>(
       self: Self,
       method: (this: Self, ...args: Args) => Effect.Effect<A, E, R>,
     ) =>

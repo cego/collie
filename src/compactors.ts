@@ -176,7 +176,7 @@ const readEvents = Effect.fn("Compactors.readEvents")(function* (dir: string) {
     .pipe(Effect.map((text) => Arr.filter(Str.split(text, "\n"), (line) => Str.trim(line) !== "")));
   const bound = boundSession(lines);
   if (bound === undefined) return [];
-  const events: TelemetryEvent[] = [];
+  const events: Array<TelemetryEvent> = [];
   for (const line of lines) {
     const decoded = decodeEvent(line);
     if (decoded._tag === "Some" && decoded.value.session === bound) events.push(decoded.value);
@@ -1207,7 +1207,7 @@ const stopCodex = (
       return refused(`pid ${target.pid} started at ${server.started}, not ${target.started}`);
 
     let turns: Stopped["turns"] = null;
-    let session: ProcessInfo[] = [];
+    let session: Array<ProcessInfo> = [];
     const noted = [...target.noted];
     let inspected = false;
     let submitted = 0;

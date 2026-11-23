@@ -32,7 +32,7 @@ export const integrateDefault = (
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const git = (...args: string[]) => run("git", args, cwd);
+    const git = (...args: Array<string>) => run("git", args, cwd);
     const none = { branch: "", ref: "", sha: "", files: [], reason: "" };
     const branch = yield* defaultBase(run, cwd);
     if (branch === null)

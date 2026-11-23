@@ -164,7 +164,7 @@ export function inspectFor(options: {
   readonly base: string;
   readonly mr: string | null;
 }) {
-  const entries: Card["inspect"][number][] = [];
+  const entries: Array<Card["inspect"][number]> = [];
   if (options.worktree !== null)
     entries.push({
       what: "what changed",

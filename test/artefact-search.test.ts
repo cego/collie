@@ -104,7 +104,7 @@ test("interruption during a source read retries that source after restart withou
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const notified: string[] = [];
+      const notified: Array<string> = [];
       const hostOn = Layer.build(recordsAt(rig.stateDir)).pipe(
         Effect.map((built) => Context.get(built, Artefacts)),
         Effect.provideService(StoreWrites, (runs) => notified.push(...runs)),

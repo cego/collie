@@ -19,7 +19,7 @@ const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 const KEY = publicKey.export({ type: "spki", format: "pem" }).toString();
 const ASSET = `collie-${ownPlatform()}`;
 
-const git = (cwd: string, ...args: string[]) =>
+const git = (cwd: string, ...args: Array<string>) =>
   exec(["git", ...args], {
     cwd,
     env: {

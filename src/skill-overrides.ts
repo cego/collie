@@ -31,7 +31,7 @@ export const quietSkills = Effect.fn("SkillOverrides.quiet")(function* (
   const path = yield* Path.Path;
   const claudeDir = path.resolve(where.cwd, where.claudeDir);
   const read = (file: string) => fs.readFileString(file).pipe(Effect.option);
-  const projects: string[] = [];
+  const projects: Array<string> = [];
   const settingsDirs = [claudeDir];
   let inRepository = false;
   for (let dir = path.resolve(where.cwd); ; dir = path.dirname(dir)) {
@@ -66,7 +66,7 @@ export const quietSkills = Effect.fn("SkillOverrides.quiet")(function* (
     if (Option.isSome(settings))
       for (const name of Rec.keys(settings.value.skillOverrides ?? {})) decided.add(name);
   }
-  const candidates: string[] = [];
+  const candidates: Array<string> = [];
   for (const base of [claudeDir, ...projects]) {
     for (const kind of ["skills", "commands"]) {
       const isCommand = kind === "commands";

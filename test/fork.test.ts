@@ -12,7 +12,7 @@ import { contentHash, isStale, layers, loadDefinitions } from "../src/definition
 import { Rig } from "./support/recorder";
 import { installBaseline } from "./support/engine";
 
-const join = (...parts: string[]) => pipe(Arr.join(parts, "/"), Str.replaceAll(/\/+/g, "/"));
+const join = (...parts: Array<string>) => pipe(Arr.join(parts, "/"), Str.replaceAll(/\/+/g, "/"));
 const readText = Effect.fn("test.readText")(function* (path: string) {
   const fs = yield* FileSystem.FileSystem;
   return yield* fs.readFileString(path);

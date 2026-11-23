@@ -40,7 +40,7 @@ test("local answers preserve native answer content, offers and Flow after mutati
         expect(local).toContain("look-again");
         expect(local).toContain("### Flow");
 
-        const children: string[] = [];
+        const children: Array<string> = [];
         for (const name of ["older", "newer"]) {
           const child = yield* client.start({
             project: world.project,

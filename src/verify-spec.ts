@@ -52,7 +52,7 @@ export const updateApproved = (
   }).pipe(Effect.flatMap(decodeOrNone));
 
 export function givenVerifications(values: ReadonlyArray<string>) {
-  const specs: VerifySpec[] = [];
+  const specs: Array<VerifySpec> = [];
   for (const value of values) {
     const decoded = decodeGiven(value);
     if (decoded._tag === "Failure") {
@@ -126,7 +126,7 @@ export const approvedFrom = Effect.fn("VerifySpec.approvedFrom")(function* (laye
       return yield* new ApprovedUnreadable({ file, why: String(decoded.failure) });
     return Arr.map(decoded.success, (spec) => ({ ...spec, argv: [...spec.argv] }));
   }
-  const none: VerifySpec[] = [];
+  const none: Array<VerifySpec> = [];
   return none;
 });
 

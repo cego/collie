@@ -25,7 +25,7 @@ export const armTripwire = Effect.fn("Tripwire.arm")(function* (dir: string) {
     )
     .pipe(Effect.orDie);
   const socketPath = `${dir}/herdr.sock`;
-  const used: string[] = [];
+  const used: Array<string> = [];
   const listener = Bun.listen({
     unix: socketPath,
     socket: {

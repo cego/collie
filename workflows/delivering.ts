@@ -728,7 +728,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         name: `ci-proof.${ciFixes}`,
         success: Schema.Struct({ failed: Schema.Array(CiFailed), tree: Tree }),
         execute: Effect.gen(function* () {
-          const unproved: string[] = [];
+          const unproved: Array<string> = [];
           const failed: Array<typeof CiFailed.Type> = [];
           for (const spec of leftToCi) {
             const job = spec.ci ?? "";

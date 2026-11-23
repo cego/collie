@@ -49,7 +49,7 @@ export function offersFrom(
   facts: ActionFacts,
   options: OfferOptions = {},
 ) {
-  const offers: Offer[] = [];
+  const offers: Array<Offer> = [];
   for (const one of declared) {
     const refused = options.refused?.get(one.id);
     if (
@@ -167,7 +167,7 @@ const met = (need: Need, facts: ActionFacts) => {
 };
 
 export function declaredIn(offers: ReadonlyArray<OfferDef>) {
-  const returned: Declared[] = Arr.map(offers, (one) => ({
+  const returned: Array<Declared> = Arr.map(offers, (one) => ({
     id: one.id,
     title: one.title,
     workflow: one.workflow,

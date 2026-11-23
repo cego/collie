@@ -65,7 +65,7 @@ const mount = Effect.fn("board.mount")(function* (
   asking: Ask | null = null,
 ) {
   const [state, setState] = createSignal<AppState>(initial);
-  const commands: Command[] = [];
+  const commands: Array<Command> = [];
   const answers: Array<string | null> = [];
   const [pending] = createSignal<Pending | null>(
     asking === null ? null : { ask: asking, answer: (value) => answers.push(value) },
@@ -861,7 +861,7 @@ test("the keyboard selects each named Offer on its owning Change", () =>
           ],
         }),
       );
-      const expected: Extract<Command, { _tag: "InvokeOffer" }>[] = [];
+      const expected: Array<Extract<Command, { _tag: "InvokeOffer" }>> = [];
       for (const [label, runId, offer, direction, enabled] of [
         ["Stage app!12", "r-app", "stage", "down", true],
         ["Release api!7", "r-api", "release", "up", true],

@@ -561,10 +561,10 @@ export default defineWorkflow({
       });
       const whole = tickets.length < 2;
       const built = new Set<string>();
-      const handed: Handed[] = [];
-      const assumed: string[] = [];
-      const afterMerged: string[] = [];
-      const answeredFor: Answered[] = [];
+      const handed: Array<Handed> = [];
+      const assumed: Array<string> = [];
+      const afterMerged: Array<string> = [];
+      const answeredFor: Array<Answered> = [];
       let build: typeof Built.Type | null = null;
       let rallied: Rallied | null = null;
       // WARNING: an empty Input is one left out, so an empty recovery is new work.
@@ -1212,7 +1212,7 @@ const buildEach = (fan: {
           return returned;
         },
       );
-    const built: string[] = [];
+    const built: Array<string> = [];
     const keys = fan.waves.flat();
     for (const [at, wave] of fan.waves.entries()) {
       const running = [];
@@ -1281,10 +1281,10 @@ const renderCriteria = (criteria: ReadonlyArray<string>) =>
         "\n",
       );
 
-const boundTo: (wording: ReadonlyArray<string>, given: ReadonlyArray<Criterion>) => Criterion[] = (
-  wording,
-  given,
-) =>
+const boundTo: (
+  wording: ReadonlyArray<string>,
+  given: ReadonlyArray<Criterion>,
+) => Array<Criterion> = (wording, given) =>
   Arr.flatMap(given, (answer) => {
     const criterion = Option.getOrUndefined(
       Arr.findFirst(wording, (one) => answerFor(one, [answer]) !== undefined),

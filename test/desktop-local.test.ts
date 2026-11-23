@@ -155,7 +155,7 @@ test("Desktop sees Local's board through a bridge it started, a Run appears on i
 test("Desktop's main process never reaches Collie's own host client", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const reached: string[] = [];
+      const reached: Array<string> = [];
       const built = yield* Effect.promise(() =>
         Bun.build({
           entrypoints: [`${root}desktop/src/bun/index.ts`],
@@ -201,7 +201,7 @@ interface Fake {
 const fakeRoute: (
   name: string,
   board: Stream.Stream<BoardMessage>,
-  closed?: string[],
+  closed?: Array<string>,
 ) => Route<Fake> = (name, board, closed = []) => ({
   machine: { profile: `p-${name}`, name, target: `mk@${name}` },
   open: () =>
@@ -218,8 +218,8 @@ const toldOf = (item: FlockItem) =>
 test("a later paired link takes an installation already shown through SSH", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const closed: string[] = [];
-      const told: string[] = [];
+      const closed: Array<string> = [];
+      const told: Array<string> = [];
       const doors = new Map<string, Fake>();
       const later = yield* Deferred.make<void>();
       const ssh = fakeRoute(
@@ -256,8 +256,8 @@ test("a later paired link takes an installation already shown through SSH", () =
 test("a working link displaces a configured link that fell back to SSH", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const closed: string[] = [];
-      const told: string[] = [];
+      const closed: Array<string> = [];
+      const told: Array<string> = [];
       const doors = new Map<string, Fake>();
       const later = yield* Deferred.make<void>();
       const first = fakeRoute(
@@ -309,7 +309,7 @@ test("a link owner that reconnects through SSH yields to another working link", 
       Effect.gen(function* () {
         const dropped = yield* Deferred.make<void>();
         const arrived = yield* Deferred.make<void>();
-        const told: string[] = [];
+        const told: Array<string> = [];
         const doors = new Map<string, Fake>();
         let opens = 0;
         const primary: Route<Fake> = {
@@ -367,11 +367,11 @@ const until = (what: () => boolean) =>
 test("a Machine reached by two routes is shown through the first, and the other's bridge closes at once", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const closed: string[] = [];
+      const closed: Array<string> = [];
       const preferredAnswers = yield* Deferred.make<void>();
       const after = (go: Deferred.Deferred<void>, message: BoardMessage) =>
         Stream.fromEffect(Deferred.await(go).pipe(Effect.as(message)));
-      const told: string[] = [];
+      const told: Array<string> = [];
       const doors = new Map<string, Fake>();
       yield* flockStream(
         [
@@ -408,8 +408,8 @@ test("a Machine reached by two routes is shown through the first, and the other'
 test("a route that comes up to a Machine already shown merges into it and closes", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const closed: string[] = [];
-      const told: string[] = [];
+      const closed: Array<string> = [];
+      const told: Array<string> = [];
       const doors = new Map<string, Fake>();
       const shown = yield* Deferred.make<void>();
       const later = Stream.fromEffect(Deferred.await(shown).pipe(Effect.as(snapshot("vm"))));
@@ -436,7 +436,7 @@ test("a route that cannot be opened says why and tries again by itself", () =>
   Effect.runPromise(
     Effect.gen(function* () {
       let tries = 0;
-      const told: FlockItem[] = [];
+      const told: Array<FlockItem> = [];
       const flaky: Route<Fake> = {
         machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
         collie: () => Effect.die("not asked"),
@@ -550,8 +550,8 @@ test("an older release is upgraded once through its route while its board stays 
   Effect.runPromise(
     Effect.gen(function* () {
       let build = "0.30.2";
-      const asked: string[][] = [];
-      const told: string[] = [];
+      const asked: Array<Array<string>> = [];
+      const told: Array<string> = [];
       const upgradeMayFinish = yield* Deferred.make<void>();
       const old: Route<Fake> = {
         machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
@@ -605,7 +605,7 @@ test("a board a newer collie serves that this Desktop cannot read asks for a new
   Effect.runPromise(
     Effect.gen(function* () {
       let opened = 0;
-      const told: FlockItem[] = [];
+      const told: Array<FlockItem> = [];
       const newer: Route<Fake> = {
         machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
         open: () =>
@@ -640,7 +640,7 @@ test("a board a newer collie serves that this Desktop cannot read asks for a new
 test("a Machine that cannot be upgraded says why in its own words, and is shown as it is", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const told: string[] = [];
+      const told: Array<string> = [];
       const stuck: Route<Fake> = {
         machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
         open: () =>
@@ -677,8 +677,8 @@ test("a Machine out of reach when Desktop starts is upgraded once it connects", 
     Effect.gen(function* () {
       let reachable = false;
       let build = "0.30.2";
-      const asked: string[][] = [];
-      const told: string[] = [];
+      const asked: Array<Array<string>> = [];
+      const told: Array<string> = [];
       const late: Route<Fake> = {
         machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
         open: () =>
@@ -721,7 +721,7 @@ test("a Machine out of reach when Desktop starts is upgraded once it connects", 
 test("a failed upgrade is tried again when the Machine next connects, and only once per connection", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const told: string[] = [];
+      const told: Array<string> = [];
       let connections = 0;
       let asked = 0;
       const drops: Array<Deferred.Deferred<void>> = [];
@@ -823,7 +823,7 @@ test("Sync now on a Machine behind on its version reopens its route, which asks 
     Effect.gen(function* () {
       let connections = 0;
       let asked = 0;
-      const told: string[] = [];
+      const told: Array<string> = [];
       const behind: Route<Fake> = {
         machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
         open: () =>
@@ -879,7 +879,7 @@ test("Sync now while a Machine's upgrade runs leaves the upgrade to finish", () 
     Effect.gen(function* () {
       let connections = 0;
       let asked = 0;
-      const told: string[] = [];
+      const told: Array<string> = [];
       const upgraded = yield* Deferred.make<void>();
       const behind: Route<Fake> = {
         machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
@@ -920,7 +920,7 @@ test("Sync now while a Machine's upgrade runs leaves the upgrade to finish", () 
 test("Sync now on a Machine behind on settings, definitions or credentials syncs and gives, and says what came of each", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const did: string[] = [];
+      const did: Array<string> = [];
       const steps = (failed: string | null, definitions: string | null = null) => ({
         reopen: Effect.sync(() => void did.push("reopen")),
         sync: Effect.sync(() => void did.push("sync")).pipe(Effect.as(failed)),
@@ -980,7 +980,7 @@ test("Sync now on a Machine behind on settings, definitions or credentials syncs
 test("a toast a Machine's host sends is shown once as an OS notification that names its Run", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const shown: unknown[] = [];
+      const shown: Array<unknown> = [];
       const drained = yield* Deferred.make<void>();
       const toast: Toasted = {
         runId: "run-7",

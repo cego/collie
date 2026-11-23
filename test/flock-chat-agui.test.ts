@@ -10,7 +10,7 @@ import toolTurn from "./fixtures/flock-chat-tool-turn.json";
 
 const eventsOf = (messages: ReadonlyArray<SdkMessage>) => {
   let state = startState("session-1");
-  const events: AguiEvent[] = [];
+  const events: Array<AguiEvent> = [];
   for (const message of messages) {
     const [next, said] = step(state, message);
     state = next;

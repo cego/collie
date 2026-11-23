@@ -6,8 +6,8 @@ import { shell } from "./mr";
 // WARNING: Decides by content, not ancestry: copies under other SHAs count.
 export const harnessLacking = (cwd: string, at: string, commits: ReadonlyArray<string>) =>
   Effect.gen(function* () {
-    const git = (...args: string[]) => shell("git", args, cwd);
-    const touched: string[] = [];
+    const git = (...args: Array<string>) => shell("git", args, cwd);
+    const touched: Array<string> = [];
     let held = 0;
     for (const [index, commit] of commits.entries()) {
       const files = yield* git(

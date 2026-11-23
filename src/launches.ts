@@ -162,7 +162,7 @@ export const launchesLayer = Layer.effect(Launches)(
               SELECT run, record FROM collie_launches WHERE run IN ${sql.in(runs)} ${inOrder}
             `.pipe(
               Effect.map((rows) => {
-                const byRun = new Map<string, Launched[]>();
+                const byRun = new Map<string, Array<Launched>>();
                 for (const row of rows)
                   for (const one of decoded([row]))
                     byRun.set(row.run, [...(byRun.get(row.run) ?? []), one]);
@@ -177,7 +177,7 @@ export const launchesLayer = Layer.effect(Launches)(
               SELECT run, record FROM collie_launches WHERE run IN ${sql.in(runs)} ${inOrder}
             `.pipe(
               Effect.map((rows) => {
-                const byRun = new Map<string, string[]>();
+                const byRun = new Map<string, Array<string>>();
                 for (const row of rows)
                   byRun.set(row.run, [...(byRun.get(row.run) ?? []), row.record]);
                 return byRun;

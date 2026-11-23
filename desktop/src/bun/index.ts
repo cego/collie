@@ -401,7 +401,7 @@ const main = Effect.gen(function* () {
   const [enabled, unlisted] = Result.match(listed, {
     onSuccess: (machines) => [machines, []] as const,
     onFailure: (reason) => {
-      const returned: readonly [[], FlockItem[]] = [
+      const returned: readonly [[], Array<FlockItem>] = [
         [],
         [
           {

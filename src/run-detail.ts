@@ -78,7 +78,7 @@ export const runDiff = Effect.fn("RunDetail.runDiff")(function* (at: {
   const status = new Map<string, DiffFile["status"]>();
   for (let next = 0; next + 1 < named.length; next += 2)
     status.set(named[next + 1]!, statusOf(named[next]!));
-  const files: DiffFile[] = Arr.map(
+  const files: Array<DiffFile> = Arr.map(
     fields((yield* git(root, ["diff", "-z", "--no-renames", "--numstat", ...range])).stdout),
     (field) => {
       const [added, removed = "-", ...rest] = Str.split(field, "\t");

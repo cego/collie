@@ -86,7 +86,7 @@ export const deliveryChoices = (
       ),
     ),
   );
-  const offered: DeliveryChoice[] =
+  const offered: Array<DeliveryChoice> =
     protocol === null || protocol < ADDRESSED_DELIVERY
       ? Arr.reverse(byName)
       : [

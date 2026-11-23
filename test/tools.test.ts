@@ -1089,7 +1089,7 @@ test("collie_do settles a proposal the human said yes to in chat", () =>
     Effect.gen(function* () {
       const run = yield* aRun("add a picker");
       const file = KEY;
-      const pending = (interpretation: string, actions: Action[]) =>
+      const pending = (interpretation: string, actions: Array<Action>) =>
         recordProposal(file, {
           interpretation,
           targets: [{ run: run.id }],

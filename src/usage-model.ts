@@ -142,7 +142,7 @@ export function usedPhrase(used: Used) {
 }
 
 export function usagePhrase(readings: ReadonlyArray<UsageReading>, now: number) {
-  const parts: string[] = [];
+  const parts: Array<string> = [];
   let warn = false;
   for (const reading of readings) {
     const used = busiestWindow(reading, now);

@@ -16,7 +16,7 @@ const warnedAsking = <E>(
   ask: (client: RpcClient.RpcClient<RpcGroup.Rpcs<typeof Probe>>) => Effect.Effect<unknown, E>,
 ) =>
   Effect.gen(function* () {
-    const warned: string[] = [];
+    const warned: Array<string> = [];
     const logger = Logger.make(({ logLevel, message }) => {
       if (logLevel === "Warn") warned.push(String(message));
     });

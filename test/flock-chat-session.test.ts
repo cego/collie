@@ -23,7 +23,7 @@ const machines = [
   { name: "mk-pc", local: true },
   { name: "vm-mk", local: false },
 ];
-const asked: string[] = [];
+const asked: Array<string> = [];
 const options = sessionOptions({
   cwd: "/state/collie-desktop",
   session: { resume: "5c1e6c8e-0000-4000-8000-000000000000" },

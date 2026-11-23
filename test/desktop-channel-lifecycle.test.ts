@@ -88,7 +88,7 @@ for (const [channel, mode] of [
   test(`a ${channel}-only ${mode} failure replaces the channels while the board stays live`, () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        const pids: number[] = [];
+        const pids: Array<number> = [];
         const doors = new DoorMap<Doors>();
         const items = yield* Queue.unbounded<FlockItem>();
         let generation = 0;
@@ -138,7 +138,7 @@ test("failed channel renewals close each generation before capped backoff, and s
     Effect.gen(function* () {
       const failed = yield* Deferred.make<never, { state: "unreachable"; reason: string }>();
       const items = yield* Queue.unbounded<FlockItem>();
-      const times: number[] = [];
+      const times: Array<number> = [];
       let active = 0;
       let peak = 0;
       const route: Route<BoardSource> = {

@@ -70,7 +70,7 @@ const textOf = (
 
 const humanMessage = (content: Parameters<typeof textOf>[0]) => {
   if (isString(content)) {
-    const parts: Part[] = content === "" ? [] : [{ type: "text", content }];
+    const parts: Array<Part> = content === "" ? [] : [{ type: "text", content }];
     return { parts, about: null };
   }
   const texts = Arr.flatMap(content, (part) =>
@@ -88,7 +88,7 @@ const humanMessage = (content: Parameters<typeof textOf>[0]) => {
   );
   const words = Arr.join(at < 0 ? own : own.slice(0, at), "\n");
   const files = at < 0 ? [] : (fromListing(own[at]!) ?? []);
-  const parts: Part[] = [
+  const parts: Array<Part> = [
     ...(words === "" ? [] : [{ type: "text" as const, content: words }]),
     ...Arr.map(files, attachmentPart),
   ];
@@ -99,7 +99,7 @@ export const transcriptOf = (entries: ReadonlyArray<unknown>) => {
   const messages: Array<{
     id: string;
     role: ChatMessage["role"];
-    parts: Part[];
+    parts: Array<Part>;
     metadata?: { about: About };
   }> = [];
   for (const entry of Arr.flatMap(
@@ -133,7 +133,7 @@ export const transcriptOf = (entries: ReadonlyArray<unknown>) => {
       continue;
     }
     const parts = Arr.flatMap(entry.message.content, (block) => {
-      const returned: Part[] =
+      const returned: Array<Part> =
         "text" in block
           ? [{ type: "text", content: block.text }]
           : "thinking" in block

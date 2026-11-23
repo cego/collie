@@ -65,7 +65,7 @@ const fakeUpdater = (
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const calls: string[] = [];
+    const calls: Array<string> = [];
     const preparedOf = (version: string) => {
       const hash = version === "0.33.0" ? "abc" : `h${version}`;
       return {
@@ -167,7 +167,7 @@ const told = <A, E, R>(
   during: Effect.Effect<A, E, R>,
 ) =>
   Effect.gen(function* () {
-    const said: UpdateNews[] = [];
+    const said: Array<UpdateNews> = [];
     yield* updates.news.pipe(
       Stream.runForEach((news) => Effect.sync(() => said.push(news))),
       Effect.forkScoped,
@@ -177,7 +177,7 @@ const told = <A, E, R>(
   });
 
 const upstreamUpdater = (dir: string) => {
-  const calls: string[] = [];
+  const calls: Array<string> = [];
   const checked = { error: "", updateAvailable: true, version: "0.33.0" };
   const downloaded = { error: "" };
   const history: Array<{ message: string }> = [];

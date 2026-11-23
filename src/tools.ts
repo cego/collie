@@ -424,7 +424,7 @@ const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: J
   const requestId =
     decoded.success.request_id ?? (yield* (yield* SecureRandom.SecureRandom).uuidV4());
   const door: Door = yield* toolDoor(env);
-  const said: string[] =
+  const said: Array<string> =
     selected.on === null
       ? []
       : [`On the board's selection, "${selected.on.name}" (${selected.on.run}):`];

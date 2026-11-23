@@ -65,7 +65,7 @@ const manifest = await runEffect(
       rmSync(live, { recursive: true, force: true });
       yield* enterWorld;
       yield* Effect.addFinalizer(() => stopHost(world.state));
-      const git = (argv: string[]) => {
+      const git = (argv: Array<string>) => {
         const result = Bun.spawnSync(["git", ...argv], { cwd: world.project, env: Bun.env });
         if (result.exitCode !== 0) throw new Error(result.stderr.toString());
       };

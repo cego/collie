@@ -767,7 +767,7 @@ test("the last fix's check is proved by the latest record of the check's command
     disputed: [],
     checks: [{ name: "unit" }],
   };
-  const settled = (verifications: Verification[]) =>
+  const settled = (verifications: Array<Verification>) =>
     settleFinalFix([BLOCKER], fix, { verifications, final: FINAL, commands: [unit] }).ok;
   expect(settled([record({ name: "mine" })])).toBe(true);
   expect(settled([record({ name: "mine", expect: "fail", exit: 1 })])).toBe(false);

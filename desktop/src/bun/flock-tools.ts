@@ -842,8 +842,8 @@ export const heardNews = Effect.fn("FlockTools.heardNews")(function* (flock: Flo
       ),
     { concurrency: "unbounded" },
   );
-  const heard: Heard[] = [];
-  const unread: string[] = [];
+  const heard: Array<Heard> = [];
+  const unread: Array<string> = [];
   for (const { machine, exit } of told)
     if (Exit.isSuccess(exit)) heard.push(...exit.value);
     else {
@@ -1032,7 +1032,7 @@ const carryOut = Effect.fn("FlockTools.do")(function* (flock: FlockChat, input: 
   });
   if (actions.length === 0) return "collie_do needs an action. Ask which one they meant.";
   const known = yield* boards(flock);
-  const said: string[] = [];
+  const said: Array<string> = [];
   const request = decoded.success.request_id ?? (yield* newRequest);
   let unconfirmed = false;
   for (const [index, action] of actions.entries()) {
@@ -1204,7 +1204,7 @@ const propose = Effect.fn("FlockTools.propose")(
       input,
     ).pipe(Effect.orDie);
     const known = yield* boards(flock);
-    const placed: Localized[] = [];
+    const placed: Array<Localized> = [];
     for (const action of actions) {
       const one = yield* placeOne(action, known, flock);
       if (Result.isFailure(one)) return one.failure;
@@ -1458,7 +1458,7 @@ const helle = (flock: FlockChat, asked: { claim?: string; release?: string }) =>
     const creds = flock.helle === undefined ? null : yield* flock.helle;
     if (creds === null)
       return `Desktop holds no Helle token. To give it one, ${HELLE_TOKEN_STEPS}, and paste it in Desktop's Helle step.`;
-    const done: string[] = [];
+    const done: Array<string> = [];
     if (asked.release !== undefined) {
       yield* releaseClaim(creds, asked.release);
       done.push(`Released ${asked.release} in Helle.`);

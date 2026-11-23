@@ -182,7 +182,7 @@ test("a launch file the first host cannot read fails its import, and the next ho
 test("a launch written tells the Run model which Run moved", () =>
   runEffect(
     Effect.gen(function* () {
-      const moved: string[] = [];
+      const moved: Array<string> = [];
       yield* Effect.gen(function* () {
         yield* recordLaunch(launch());
         yield* orderLaunch(launch());

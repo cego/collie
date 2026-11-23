@@ -791,7 +791,7 @@ export default defineWorkflow({
                 return givenAt(start.head, at);
               }),
             });
-      const tagMerges: string[] = [];
+      const tagMerges: Array<string> = [];
       if (tagOnly) {
         for (const target of asked.together ?? [mr]) {
           const other = readMrRef(target);
@@ -959,7 +959,7 @@ export default defineWorkflow({
             success: Checked,
             execute: Effect.gen(function* () {
               const checks = yield* host.approved(runId);
-              const failed: string[] = [];
+              const failed: Array<string> = [];
               let conflicting = false;
               let target: TargetRed | undefined;
               for (const spec of Arr.filter(checks, (one) => one.ci === undefined)) {

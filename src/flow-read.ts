@@ -192,8 +192,8 @@ export const flowInputsFor = Effect.fn("Flow.inputs")(function* (
   const installation = Str.trim(
     yield* fs.readFileString(`${env.stateDir}/installation`).pipe(Effect.orElseSucceed(() => "")),
   );
-  const children = new Map<string, RunFacts[]>();
-  const requested = new Map<string, RunFacts[]>();
+  const children = new Map<string, Array<RunFacts>>();
+  const requested = new Map<string, Array<RunFacts>>();
   for (const run of all) {
     if (run.parent !== null) {
       const rows = children.get(run.parent) ?? [];
@@ -258,14 +258,14 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
     };
   });
 
-  const lanes: FlowLane[] = [];
+  const lanes: Array<FlowLane> = [];
   for (const run of task.leaderOnly === true ? [task.leader] : rows) {
     const repos = task.repoRunsOf.get(run.id) ?? [];
     const own = Arr.filter(
       inputs.children.get(run.id) ?? [],
       (one) => !inTask.has(one.id) && !repos.includes(one),
     );
-    const children: ChildFact[] = [];
+    const children: Array<ChildFact> = [];
     for (const child of own)
       children.push({
         id: child.id,
@@ -333,7 +333,7 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
         });
       }
     }
-    const nodes: FlowNode[] = Arr.map(ownLane.nodes, (node) => {
+    const nodes: Array<FlowNode> = Arr.map(ownLane.nodes, (node) => {
       const own = Arr.filter(links, (one) => one.step === node.id);
       const mr = mrRefOf(task.mrOf(run) ?? task.mr);
       return {

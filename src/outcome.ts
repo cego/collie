@@ -89,7 +89,7 @@ function textSearch(executable: string, argv: ReadonlyArray<string>) {
 }
 
 function shellWords(script: string) {
-  const words: string[] = [];
+  const words: Array<string> = [];
   let word = "";
   let started = false;
   let quote = "";
@@ -310,7 +310,7 @@ export const noCheckNamed =
 // WARNING: an empty set is a gap, not a pass, or this gate would say yes to anything.
 function approvedSetGaps(got: Collected) {
   if (got.approved.length === 0) return [noCheckNamed];
-  const gaps: string[] = [];
+  const gaps: Array<string> = [];
   for (const spec of owedLocally(got.approved)) {
     const { state, runs, last } = runsOf(got, spec.name);
     if (state === "passed") continue;
@@ -589,7 +589,7 @@ function finalMeasurementGaps(got: Collected) {
     return [`the \`final\` Measurement ${proving.id} has no verdict: it ended ${result._tag}`];
   const verdictOf = (metric: string) =>
     Option.getOrUndefined(Arr.findFirst(result.verdicts, (one) => one.metric === metric));
-  const gaps: string[] = [];
+  const gaps: Array<string> = [];
   for (const metric of proving.plan.metrics) {
     const judged = verdictOf(metric.name);
     const verdict = judged?.verdict ?? "no verdict";

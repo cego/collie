@@ -186,14 +186,14 @@ const draft = {
 
 function fake(
   options: {
-    agents?: AgentInfo[];
+    agents?: Array<AgentInfo>;
     fail?: HerdrError;
     failing?: number;
     saw?: "observed" | "unobserved";
     onPrompt?: Effect.Effect<void, never, PlatformServices>;
   } = {},
 ) {
-  const calls: string[] = [];
+  const calls: Array<string> = [];
   return {
     calls,
     deps: {
@@ -253,7 +253,7 @@ test("the record is written before core is called, and settled after", () =>
     Effect.gen(function* () {
       const records = yield* Effect.context<Records>();
       // WARNING: Read inside the fake send: the only moment that tells "reserved before the call" from "both written after". It must be synchronous.
-      let atSendTime: string[] = [];
+      let atSendTime: Array<string> = [];
       const h = fake({
         onPrompt: Effect.gen(function* () {
           atSendTime = Arr.map(

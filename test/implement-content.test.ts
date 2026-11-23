@@ -78,7 +78,7 @@ test("no shipped content or prompt text Collie types spells out `collie verify -
       );
       expect(typed.length).toBeGreaterThan(0);
       const examples = "src/commands/verify.ts";
-      const spelled: string[] = [];
+      const spelled: Array<string> = [];
       for (const file of typed)
         if (
           file !== examples &&

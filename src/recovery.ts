@@ -125,7 +125,7 @@ export const takePushed = Effect.fn("Recovery.takePushed")(function* (cwd: strin
   const tree = yield* treeOf(cwd);
   if (tree.dirty || tree.branch === null || tree.branch === "HEAD")
     return "Recovery needs a clean checkout on its branch.";
-  const git = (...args: string[]) => shell("git", args, cwd);
+  const git = (...args: Array<string>) => shell("git", args, cwd);
   const read = yield* git("ls-remote", "--exit-code", "origin", `refs/heads/${tree.branch}`);
   if (read.code !== 0) return "The pushed branch cannot be read.";
   const head = Str.split(Str.trim(read.stdout), /\s/)[0] ?? "";
@@ -163,7 +163,7 @@ export const recoveryFrom = Effect.fn("Recovery.from")(
       options.risks,
     );
     if (current === null) return build;
-    const git = (...args: string[]) => shell("git", args, options.cwd);
+    const git = (...args: Array<string>) => shell("git", args, options.cwd);
     const pushed = yield* git(
       "ls-remote",
       "--exit-code",
@@ -402,8 +402,8 @@ export const sourceEvidence = Effect.fn("Recovery.sourceEvidence")(function* (op
         sameAsked(one, red) &&
         sameTree(one.start, red.start),
     );
-  const pending: Verification[] = [];
-  const fixed: Verification[] = [];
+  const pending: Array<Verification> = [];
+  const fixed: Array<Verification> = [];
   const beforeFix = new Set<string>();
   for (const one of recorded) {
     if (

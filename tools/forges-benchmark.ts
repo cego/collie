@@ -25,7 +25,7 @@ const { values } = parseArgs({
 const reads = Number(values.reads);
 const reading = values.read === "details" ? "details" : "job";
 
-const run = (cmd: string, args: string[]) => shell(cmd, args, process.cwd());
+const run = (cmd: string, args: Array<string>) => shell(cmd, args, process.cwd());
 const decoded = <S extends Schema.Decoder<unknown>>(schema: S, text: string) =>
   Option.getOrUndefined(Schema.decodeOption(Schema.fromJsonString(schema))(text));
 
@@ -134,9 +134,9 @@ interface Measured {
 }
 
 const forgesProgram = Effect.gen(function* () {
-  const rows: string[] = [];
-  const medians: { cli: number; library: number }[] = [];
-  const measured: Measured[] = [
+  const rows: Array<string> = [];
+  const medians: Array<{ cli: number; library: number }> = [];
+  const measured: Array<Measured> = [
     { url: values.github, name: values["github-job"], job: githubCli, details: githubDetailsCli },
     { url: values.gitlab, name: values["gitlab-job"], job: gitlabCli, details: gitlabDetailsCli },
   ];
@@ -154,8 +154,8 @@ const forgesProgram = Effect.gen(function* () {
         : Effect.flatMap(forge.details(ref, process.cwd(), shell), (panel) =>
             panel._tag === "Details" ? Effect.void : Effect.die(panel.reason),
           );
-    const cliTimes: number[] = [];
-    const libraryTimes: number[] = [];
+    const cliTimes: Array<number> = [];
+    const libraryTimes: Array<number> = [];
     for (let n = 0; n < reads; n++) {
       cliTimes.push(yield* timed(cli));
       libraryTimes.push(yield* timed(library));
@@ -164,7 +164,7 @@ const forgesProgram = Effect.gen(function* () {
     for (const [transport, times] of [
       [forge.cli, cliTimes],
       ["forges", libraryTimes],
-    ] satisfies [string, number[]][])
+    ] satisfies Array<[string, Array<number>]>)
       rows.push(
         `| ${forge.display} | ${url} | ${transport} | ${reads} | ${quantile(times, 0.5).toFixed(0)} ms | ${quantile(times, 0.9).toFixed(0)} ms |`,
       );

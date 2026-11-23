@@ -119,7 +119,7 @@ test("a Task file the first host cannot read fails its import, and the next host
 test("a Task written or removed tells the Run model which Task moved", () =>
   runEffect(
     Effect.gen(function* () {
-      const moved: string[] = [];
+      const moved: Array<string> = [];
       yield* Effect.gen(function* () {
         yield* writeTask(task());
         yield* removeTask("task-1");
@@ -148,7 +148,7 @@ test("a Task written moves whatever follows the Tasks, as the board does", () =>
 test("a Task held is held until its holder is done, and only that Task", () =>
   runEffect(
     Effect.gen(function* () {
-      const order: string[] = [];
+      const order: Array<string> = [];
       const holding = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       const first = yield* withTaskLock(

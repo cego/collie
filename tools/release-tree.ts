@@ -15,7 +15,7 @@ export const RELEASE_TREE = [
 export const releaseFiles = Effect.fn("release.files")(function* (root: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const files: string[] = [];
+  const files: Array<string> = [];
   for (const entry of RELEASE_TREE) {
     const at = path.join(root, entry);
     if ((yield* fs.stat(at)).type === "File") {

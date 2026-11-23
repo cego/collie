@@ -18,7 +18,7 @@ let rig: Rig;
 let collieDir: string;
 let tree: string;
 let runner: string;
-let prepared: string[];
+let prepared: Array<string>;
 let served: ReturnType<typeof Bun.serve>;
 let latest: string;
 let published: Map<string, Uint8Array | string>;
@@ -92,7 +92,7 @@ echo '{"ok":true,"data":{"root":"'"$COLLIE_DIR"'/release","checkout":false,"rele
   published.set(`/download/${version}/${ASSET}.sig`, signRelease(bytes, signedBy));
 };
 
-const run = (cmd: string, args: string[], cwd: string) => {
+const run = (cmd: string, args: Array<string>, cwd: string) => {
   if (cmd === "git") return Effect.succeed<Ran>({ code: 128, stdout: "", stderr: "not a git" });
   if (cmd !== "sh") return shell(cmd, args, cwd);
   return Effect.sync(() => {
@@ -228,7 +228,7 @@ test("placements at once take turns, so the release is wholly one of them", () =
           Schema.Struct({ files: Schema.Record(Schema.String, Schema.String) }),
         ),
       )(yield* read(`${collieDir}/release/placed.json`));
-      const placed: string[] = [];
+      const placed: Array<string> = [];
       for (const name of yield* fs.readDirectory(`${collieDir}/release`, { recursive: true })) {
         const file = (yield* fs.stat(`${collieDir}/release/${name}`)).type === "File";
         if (file && name !== "placed.json") placed.push(name);

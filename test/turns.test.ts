@@ -194,7 +194,7 @@ test.each(["toasts", "measure"] as const)(
               }),
             );
             const handlers = timingFirstValues({ toasts: () => source, measure: () => source });
-            const seen: string[] = [];
+            const seen: Array<string> = [];
             const following = yield* handlers[name]().pipe(
               Stream.tap((value) => Effect.sync(() => seen.push(value))),
               Stream.runDrain,

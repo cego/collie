@@ -49,7 +49,7 @@ const fakeHost = (name: string, answer: Effect.Effect<CleanupReport, HostRefused
   });
 
 const logged = () => {
-  const lines: Attempted[] = [];
+  const lines: Array<Attempted> = [];
   return { lines, log: (line: Attempted) => Effect.sync(() => void lines.push(line)) };
 };
 

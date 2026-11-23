@@ -58,7 +58,7 @@ export const branchChange = Effect.fn("OwnTests.branchChange")(function* (
   cwd: string,
   branch: string,
 ) {
-  const git = (...args: string[]) => shell("git", args, cwd);
+  const git = (...args: Array<string>) => shell("git", args, cwd);
   const remote = yield* git("merge-base", "HEAD", `origin/${branch}`);
   const merged = remote.code === 0 ? remote : yield* git("merge-base", "HEAD", branch);
   const base = Str.trim(merged.stdout);

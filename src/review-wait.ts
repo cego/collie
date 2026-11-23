@@ -177,7 +177,7 @@ export function settleAnswers(round: {
   readonly open: ReadonlyArray<string>;
 }) {
   const replies: Array<SettledAnswers["replies"][number]> = [];
-  const carried: OpenComment[] = [];
+  const carried: Array<OpenComment> = [];
   for (const comment of Arr.filter(round.given, (one) => round.open.includes(one.id))) {
     const answer = Option.getOrUndefined(
       Arr.findFirst(round.answers, (one) => one.id === comment.id),

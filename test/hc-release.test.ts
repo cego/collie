@@ -12,7 +12,7 @@ const ARCHIVE = new TextEncoder().encode("the hc archive for linux-x86_64");
 const OTHER = new TextEncoder().encode("something else entirely");
 
 let served: ReturnType<typeof Bun.serve>;
-let fetched: string[];
+let fetched: Array<string>;
 
 beforeEach(() => {
   fetched = [];

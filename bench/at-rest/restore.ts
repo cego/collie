@@ -8,7 +8,7 @@ import { stringifyJson, parseJson } from "../../src/json";
 
 const root = new URL("../../", import.meta.url).pathname;
 
-const run = (argv: string[]) => {
+const run = (argv: Array<string>) => {
   const result = Bun.spawnSync(argv, { cwd: root, stdio: ["ignore", "inherit", "inherit"] });
   if (result.exitCode !== 0) throw new Error(`${argv[0]} exited ${result.exitCode}`);
 };

@@ -501,8 +501,8 @@ export const serversOfRun = Effect.fn("Compaction.serversOfRun")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const servers: string[] = [];
-  const unread: string[] = [];
+  const servers: Array<string> = [];
+  const unread: Array<string> = [];
   const root = path.join(stateDir, CONTROL_DIR);
   const names = yield* fs.readDirectory(root).pipe(
     Effect.map((found) => found),
@@ -557,7 +557,7 @@ export const unlistedServers = Effect.fn("Compaction.unlistedServers")(function*
     if (agents._tag === "Failure") return null;
     for (const agent of agents.success) listed.add(agent.name);
   }
-  const found: ControlRecord[] = [];
+  const found: Array<ControlRecord> = [];
   const root = path.join(stateDir, CONTROL_DIR);
   for (const name of yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []))) {
     if (listed.has(name)) continue;

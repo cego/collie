@@ -732,7 +732,7 @@ const listensOn = (pid: number, tables = ["/proc/net/tcp", "/proc/net/tcp6"]) =>
       const inode = /^socket:\[(\d+)\]$/.exec(target)?.[1];
       if (inode !== undefined) sockets.add(inode);
     }
-    const ports: number[] = [];
+    const ports: Array<number> = [];
     for (const table of tables) {
       for (const row of yield* procTable(table)) {
         // WARNING: in /proc/net/tcp the state 0A means LISTEN.

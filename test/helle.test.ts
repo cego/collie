@@ -41,21 +41,21 @@ const ME = "6b9ba520-user";
 const OTHER = "2dd236ac-other";
 
 interface Fake {
-  projects: {
+  projects: Array<{
     slug: string;
     group?: string;
-    shorthand?: string[] | null;
+    shorthand?: Array<string> | null;
     holder?: { user_id: string; display_name: string };
-    queue: { user_id: string }[];
-  }[];
+    queue: Array<{ user_id: string }>;
+  }>;
   listStatus: number;
   meStatus: number;
-  claims: {
+  claims: Array<{
     position: number;
     already_queued: boolean;
     taken?: { user_id: string; display_name: string };
-  }[];
-  calls: string[];
+  }>;
+  calls: Array<string>;
 }
 let fake: Fake;
 let server: { base: string; stop: () => void };
@@ -121,7 +121,7 @@ const envFile = Effect.fn("test.envFile")(function* (token = "token-abc") {
   return file;
 });
 
-const project = (slug: string, group?: string, shorthand?: string[]) => {
+const project = (slug: string, group?: string, shorthand?: Array<string>) => {
   const named: HelleProject = { slug, group: group ?? null };
   return shorthand === undefined ? named : { ...named, shorthand };
 };
@@ -412,15 +412,15 @@ function gate(opts: {
   file: string;
   repositoryPath?: string | null;
   repoName?: string;
-  deploys?: { applications: string[]; jobs: string[] } | null;
+  deploys?: { applications: Array<string>; jobs: Array<string> } | null;
   free?: boolean;
-  claimed?: HelleClaim[];
+  claimed?: Array<HelleClaim>;
   answer?: string | null;
-  lines: string[];
-  recorded: (HelleClaim | null)[];
-  queued?: number[];
-  ended?: string[];
-  forgotten?: string[];
+  lines: Array<string>;
+  recorded: Array<HelleClaim | null>;
+  queued?: Array<number>;
+  ended?: Array<string>;
+  forgotten?: Array<string>;
 }) {
   return waitForHelle({
     home: "/nowhere",
@@ -449,9 +449,9 @@ test("a repository with no Helle project needs none, and nothing is claimed", ()
   runEffect(
     Effect.gen(function* () {
       fake.projects = [{ slug: "spilnu", group: "spilnu/frontend", queue: [] }];
-      const lines: string[] = [];
-      const recorded: (HelleClaim | null)[] = [];
-      const ended: string[] = [];
+      const lines: Array<string> = [];
+      const recorded: Array<HelleClaim | null> = [];
+      const ended: Array<string> = [];
       const held = yield* gate({
         file: yield* envFile(),
         repositoryPath: "gitlab.cego.dk/cego/collie",
@@ -501,10 +501,10 @@ test("the gate claims, reports the queue as it moves, and returns once it is the
           },
         ];
         fake.claims = [{ position: 2, already_queued: false }];
-        const lines: string[] = [];
-        const recorded: (HelleClaim | null)[] = [];
-        const queued: number[] = [];
-        const ended: string[] = [];
+        const lines: Array<string> = [];
+        const recorded: Array<HelleClaim | null> = [];
+        const queued: Array<number> = [];
+        const ended: Array<string> = [];
         const fiber = yield* Effect.forkScoped(
           gate({ file: yield* envFile(), lines, recorded, queued, ended }),
         );
@@ -547,8 +547,8 @@ test("a gate interrupted in the queue is not told its wait ended", () =>
           },
         ];
         fake.claims = [{ position: 2, already_queued: false }];
-        const queued: number[] = [];
-        const ended: string[] = [];
+        const queued: Array<number> = [];
+        const ended: Array<string> = [];
         const fiber = yield* Effect.forkScoped(
           gate({ file: yield* envFile(), lines: [], recorded: [], queued, ended }),
         );
@@ -569,8 +569,8 @@ test("a monorepo's release holds every application's project before it answers",
         { slug: "happytiger", group: "spilnu/frontend", queue: [] },
         { slug: "playground", group: "spilnu/frontend", queue: [] },
       ];
-      const lines: string[] = [];
-      const recorded: (HelleClaim | null)[] = [];
+      const lines: Array<string> = [];
+      const recorded: Array<HelleClaim | null> = [];
       const held = yield* gate({
         file: yield* envFile(),
         repositoryPath: "gitlab.cego.dk/spilnu/frontend/monorepo",
@@ -614,8 +614,8 @@ test("the gate claims, holds and gives back a project named by its shorthand thr
   runEffect(
     Effect.gen(function* () {
       fake.projects = [{ slug: "spilnu", group: "spilnu/frontend", shorthand: ["sn"], queue: [] }];
-      const lines: string[] = [];
-      const recorded: (HelleClaim | null)[] = [];
+      const lines: Array<string> = [];
+      const recorded: Array<HelleClaim | null> = [];
       const held = yield* gate({
         file: yield* envFile(),
         repositoryPath: "gitlab.cego.dk/spilnu/frontend/monorepo",
@@ -649,7 +649,7 @@ test("someone else's claim on one project keeps the gate waiting, and the next i
           { slug: "spilnu", group: "spilnu/frontend", queue: [] },
         ];
         fake.claims = [{ position: 1, already_queued: false }];
-        const lines: string[] = [];
+        const lines: Array<string> = [];
         const fiber = yield* Effect.forkScoped(
           gate({
             file: yield* envFile(),
@@ -765,7 +765,7 @@ test("what is free: only the free projects are claimed, in Helle's order, and no
   runEffect(
     Effect.gen(function* () {
       fake.projects = busyFrontend().slice(0, 2);
-      const recorded: (HelleClaim | null)[] = [];
+      const recorded: Array<HelleClaim | null> = [];
       const held = yield* gate({
         file: yield* envFile(),
         ...monorepo,
@@ -792,7 +792,7 @@ test("what is free: a project someone took before the claim came back queued is 
     Effect.gen(function* () {
       fake.projects = busyFrontend().slice(1, 2);
       fake.claims = [{ position: 1, already_queued: false, taken: DANN }];
-      const forgotten: string[] = [];
+      const forgotten: Array<string> = [];
       const held = yield* gate({
         file: yield* envFile(),
         ...monorepo,
@@ -821,7 +821,7 @@ test("what is free: a project the operator already holds counts as free once the
     Effect.gen(function* () {
       fake.projects = busyFrontend();
       fake.claims = [{ position: 0, already_queued: true }];
-      const recorded: (HelleClaim | null)[] = [];
+      const recorded: Array<HelleClaim | null> = [];
       const held = yield* gate({
         file: yield* envFile(),
         ...monorepo,
@@ -859,9 +859,9 @@ test("a claim lost while the gate waited for the next gives the later ones back 
           { position: 1, already_queued: false },
           { position: 1, already_queued: false },
         ];
-        const lines: string[] = [];
-        const recorded: (HelleClaim | null)[] = [];
-        const forgotten: string[] = [];
+        const lines: Array<string> = [];
+        const recorded: Array<HelleClaim | null> = [];
+        const forgotten: Array<string> = [];
         const fiber = yield* Effect.forkScoped(
           gate({
             file: yield* envFile(),
@@ -914,7 +914,11 @@ test("a claim lost while the gate waited for the next gives the later ones back 
   ));
 
 const sharedHelle = Effect.fn("test.sharedHelle")(function* (
-  projects: { slug: string; holder?: { user_id: string }; queue: { user_id: string }[] }[],
+  projects: Array<{
+    slug: string;
+    holder?: { user_id: string };
+    queue: Array<{ user_id: string }>;
+  }>,
 ) {
   const helle = Bun.serve({
     port: 0,
@@ -949,8 +953,8 @@ const sharedHelle = Effect.fn("test.sharedHelle")(function* (
   });
   yield* Effect.addFinalizer(() => Effect.sync(() => void helle.stop(true)));
   const url = `http://127.0.0.1:${helle.port}`;
-  const lines: string[] = [];
-  const release = (user: string, claimed: HelleClaim[], ask: () => string | null) =>
+  const lines: Array<string> = [];
+  const release = (user: string, claimed: Array<HelleClaim>, ask: () => string | null) =>
     Effect.gen(function* () {
       return yield* waitForHelle({
         home: "/nowhere",
@@ -1022,7 +1026,7 @@ test("a later project the operator already holds is taken over and given back be
           { slug: "alpha", holder: { user_id: "A" }, queue: [] },
           { slug: "beta", holder: { user_id: "B" }, queue: [] },
         ]);
-        const asked: string[] = [];
+        const asked: Array<string> = [];
         const yes = (user: string) => () => (asked.push(user), "yes");
 
         const b = yield* Effect.forkScoped(release("B", [], yes("B")));
@@ -1098,8 +1102,8 @@ test("a claim that was already the operator's is adopted only when they say so",
         },
       ];
       fake.claims = [{ position: 0, already_queued: true }];
-      const lines: string[] = [];
-      const recorded: (HelleClaim | null)[] = [];
+      const lines: Array<string> = [];
+      const recorded: Array<HelleClaim | null> = [];
       const held = yield* gate({ file: yield* envFile(), answer: "yes", lines, recorded });
 
       expect(held).toEqual({ _tag: "Held", slugs: ["spilnu"] });
@@ -1119,7 +1123,7 @@ test("a claim that was already the operator's is not taken over when they refuse
         },
       ];
       fake.claims = [{ position: 0, already_queued: true }];
-      const recorded: (HelleClaim | null)[] = [];
+      const recorded: Array<HelleClaim | null> = [];
       const result = yield* gate({
         file: yield* envFile(),
         answer: "no",
@@ -1145,8 +1149,8 @@ test("a resumed Run does not ask again, and waits rather than assuming it holds 
           },
         ];
         fake.claims = [{ position: 1, already_queued: true }];
-        const lines: string[] = [];
-        const recorded: (HelleClaim | null)[] = [];
+        const lines: Array<string> = [];
+        const recorded: Array<HelleClaim | null> = [];
         const fiber = yield* Effect.forkScoped(
           waitForHelle({
             home: "/nowhere",
@@ -1191,7 +1195,7 @@ test("a resumed Run granted the claim while it was down is told its wait ended",
         },
       ];
       fake.claims = [{ position: 0, already_queued: true }];
-      const ended: string[] = [];
+      const ended: Array<string> = [];
       const held = yield* gate({
         file: yield* envFile(),
         claimed: [{ slug: "spilnu", claim: "mine" }],
@@ -1252,7 +1256,7 @@ test("adopting a claim stops the Run that held it and its children, waits them o
           );
       const held = (runId: string) =>
         fs.exists(`${dir}/runs/${runId}/helle.json`).pipe(Effect.orElseSucceed(() => false));
-      const said: string[] = [];
+      const said: Array<string> = [];
       const host = (over: {
         readonly children?: ReadonlyArray<string>;
         readonly stopsAfter?: number;

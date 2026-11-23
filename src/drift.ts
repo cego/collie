@@ -153,7 +153,7 @@ function violation(
 }
 
 export function checkRules(intent: Intent, facts: RuleFacts, at_: string) {
-  const found: DriftReport[] = [];
+  const found: Array<DriftReport> = [];
   for (const constraint of intent.constraints) {
     if (constraint.kind !== "rule" || constraint.rule === undefined) continue;
     const evidence = breachOf(constraint.rule, facts);
@@ -189,7 +189,7 @@ function breachOf(rule: RuleSpec, facts: RuleFacts) {
 function refsOf(rule: Exclude<RuleSpec, { kind: "protected_paths" }>, facts: RuleFacts) {
   switch (rule.kind) {
     case "branch_is":
-      const returned: Ref[] | null =
+      const returned: Array<Ref> | null =
         facts.branch === rule.name
           ? null
           : [{ kind: "git", excerpt: `on ${facts.branch ?? "no branch"}, not ${rule.name}` }];
@@ -197,35 +197,37 @@ function refsOf(rule: Exclude<RuleSpec, { kind: "protected_paths" }>, facts: Rul
     case "mr_target": {
       const target = facts.mrTarget;
       if (target === null) {
-        const returned: Ref[] | null = [{ kind: "record", excerpt: "no merge request recorded" }];
+        const returned: Array<Ref> | null = [
+          { kind: "record", excerpt: "no merge request recorded" },
+        ];
         return returned;
       }
       if (target.project !== rule.project) {
-        const returned: Ref[] | null = [
+        const returned: Array<Ref> | null = [
           { kind: "record", excerpt: `targets ${target.project}, not ${rule.project}` },
         ];
         return returned;
       }
       if (rule.iid !== undefined && target.iid !== rule.iid) {
-        const returned: Ref[] | null = [
+        const returned: Array<Ref> | null = [
           { kind: "record", excerpt: `is !${target.iid ?? "?"}, not !${rule.iid}` },
         ];
         return returned;
       }
-      const returned: Ref[] | null = null;
+      const returned: Array<Ref> | null = null;
       return returned;
     }
     case "output_field": {
       const output = facts.outputs[rule.step];
       if (output === undefined) {
-        const returned: Ref[] | null = [
+        const returned: Array<Ref> | null = [
           { kind: "output", path: rule.step, excerpt: "no Output recorded" },
         ];
         return returned;
       }
       const value = output[rule.path] ?? "";
       const holds = rule.op === "eq" ? value === rule.value : value !== rule.value;
-      const returned: Ref[] | null = holds
+      const returned: Array<Ref> | null = holds
         ? null
         : [
             {
@@ -240,12 +242,12 @@ function refsOf(rule: Exclude<RuleSpec, { kind: "protected_paths" }>, facts: Rul
       const verification = facts.verifications[rule.name];
       // WARNING: nobody ran it is not the same as it passed; a missing verification is a violation.
       if (verification === undefined) {
-        const returned: Ref[] | null = [
+        const returned: Array<Ref> | null = [
           { kind: "verification", path: rule.name, excerpt: "no verification of that name" },
         ];
         return returned;
       }
-      const returned: Ref[] | null =
+      const returned: Array<Ref> | null =
         verification.exit === rule.expect
           ? null
           : [
@@ -276,7 +278,7 @@ export interface EvidenceBlock {
 export class TreeUnread extends Data.TaggedError("TreeUnread")<{ reason: string }> {}
 
 // WARNING: a failing git diff is not an unchanged tree; it must never read as empty.
-export const gitOutput = Effect.fn("Drift.gitOutput")(function* (args: string[], cwd: string) {
+export const gitOutput = Effect.fn("Drift.gitOutput")(function* (args: Array<string>, cwd: string) {
   const ran = yield* shell("git", args, cwd);
   if (ran.code === 0) return ran.stdout;
   return yield* new TreeUnread({
@@ -319,9 +321,9 @@ export const evidenceFor = Effect.fn("Drift.evidenceFor")(function* (
 });
 
 export function splitDiff(diff: string) {
-  const blocks: EvidenceBlock[] = [];
+  const blocks: Array<EvidenceBlock> = [];
   let path: string | null = null;
-  let lines: string[] = [];
+  let lines: Array<string> = [];
   const flush = () => {
     if (path === null) return;
     if (looksSecret(path)) blocks.push({ path, diff: "<redacted>", truncated: false });
@@ -399,7 +401,7 @@ export function newReports(found: ReadonlyArray<DriftReport>, existing: Readonly
       report,
     ]),
   );
-  const fresh: DriftReport[] = [];
+  const fresh: Array<DriftReport> = [];
   for (const report of found) {
     const key = findingKey(report.constraint, report.evidence);
     const open = known.get(key);
@@ -712,7 +714,7 @@ export function decideCorrections(
   // WARNING: on a harness that hides external submissions, correcting needs exclusive steering.
   if (!ctx.attributable && !authority.exclusive_steering) return [];
 
-  const corrections: Correction[] = [];
+  const corrections: Array<Correction> = [];
   for (const report of open) {
     if (report.intent_version !== intent.version) continue;
     if (ctx.inFlight.has(report.constraint)) continue;

@@ -69,7 +69,7 @@ const agents = (entries: ReadonlyArray<AgentEntry>) => Arr.map(entries, (one) =>
 test("a registration tells the Run model the Runs of the agents it registered and dropped", () =>
   runEffect(
     Effect.gen(function* () {
-      const moved: string[] = [];
+      const moved: Array<string> = [];
       yield* Effect.gen(function* () {
         yield* registerAgent(here, entry({ agent: "impl-gone", paneId: "1-8", runId: "r0" }));
         moved.length = 0;

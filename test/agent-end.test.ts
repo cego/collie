@@ -25,7 +25,10 @@ beforeEach(() =>
 );
 afterEach(() => runEffect(rig.close()));
 
-const served: (state: Stopped["state"], stops: string[]) => CompactionPorts = (state, stops) => ({
+const served: (state: Stopped["state"], stops: Array<string>) => CompactionPorts = (
+  state,
+  stops,
+) => ({
   served: {
     gate: Effect.void,
     install: () => Effect.succeed({ args: [] }),
@@ -79,7 +82,7 @@ const arranged = (agent: string) =>
   });
 
 const depsOf = (over: Partial<EndDeps> = {}) => {
-  const lines: string[] = [];
+  const lines: Array<string> = [];
   const deps: EndDeps = {
     herdr: new Herdr(rig.pluginEnv()),
     ports: {},
@@ -121,7 +124,7 @@ test("a Codex agent that does not become Quiet keeps its terminal, in ADR-0059's
     Effect.gen(function* () {
       const terminalId = yield* arranged("impl");
       yield* serverFor("impl");
-      const stops: string[] = [];
+      const stops: Array<string> = [];
       const { deps, lines } = depsOf({ ports: served("acknowledged", stops) });
       const ended = yield* endAgent(
         deps,
@@ -144,7 +147,7 @@ test("an agent whose launch recorded no terminal is unprovable, and left running
     Effect.gen(function* () {
       yield* arranged("impl");
       yield* serverFor("impl");
-      const stops: string[] = [];
+      const stops: Array<string> = [];
       const { deps } = depsOf({ ports: served("quiet", stops) });
       const ended = yield* endAgent(deps, { agent: "impl" }, "its Run was stopped", "close");
       expect(ended).toEqual({
@@ -161,7 +164,7 @@ test("a managed agent's work becomes Quiet before its core terminal ends", () =>
     Effect.gen(function* () {
       const terminalId = yield* arranged("impl");
       yield* serverFor("impl");
-      const stops: string[] = [];
+      const stops: Array<string> = [];
       const herdr = new Herdr(rig.pluginEnv());
       const { deps, lines } = depsOf({
         ports: served("quiet", stops),
@@ -208,7 +211,7 @@ test("another process under the agent's name is left alone, without a word", () 
       const terminalId = "previous-terminal";
 
       yield* serverFor("impl");
-      const stops: string[] = [];
+      const stops: Array<string> = [];
       const { deps, lines } = depsOf({ ports: served("quiet", stops) });
       const ended = yield* endAgent(
         deps,
@@ -229,7 +232,7 @@ test("where the caller ends the terminals, none closes while one agent of severa
       const terminalId = yield* arranged("impl");
       const reviewTerminal = yield* arranged("review");
       yield* serverFor("review");
-      const stops: string[] = [];
+      const stops: Array<string> = [];
       const { deps, lines } = depsOf({ ports: served("acknowledged", stops) });
       const quiet = yield* endAgent(
         deps,

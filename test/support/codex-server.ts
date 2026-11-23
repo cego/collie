@@ -134,7 +134,7 @@ const main = Effect.gen(function* () {
     ),
   );
   yield* record({ pid: process.pid, argv: Arr.drop(process.argv, 2), env: Rec.fromEntries(env) });
-  const turns = new Map<string, Turn[]>();
+  const turns = new Map<string, Array<Turn>>();
   const running = () =>
     Arr.filter(Arr.flatten([...turns.values()]), (turn) => turn.status === "inProgress");
   let draining = false;

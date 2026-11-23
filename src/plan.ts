@@ -29,10 +29,10 @@ export function checksIn(text: string) {
       ),
     ) ?? "";
   if (line === "" || /^none\b/i.test(line)) {
-    const returned: string[] = [];
+    const returned: Array<string> = [];
     return returned;
   }
-  const returned: string[] = Arr.filter(
+  const returned: Array<string> = Arr.filter(
     Arr.map(Str.split(line, ","), (part) =>
       Str.trim(pipe_(Str.trim(part), Str.replaceAll(/^`|`$/g, ""))),
     ),
@@ -66,8 +66,8 @@ function sectionOf(lines: ReadonlyArray<string>, heading: RegExp) {
 }
 
 function itemsIn(lines: ReadonlyArray<string>, item: RegExp) {
-  const items: string[][] = [];
-  let open: string[] | null = null;
+  const items: Array<Array<string>> = [];
+  let open: Array<string> | null = null;
   let fenced = false;
   for (const line of lines) {
     if (/^\s*(```|~~~)/.test(line)) fenced = !fenced;
@@ -84,7 +84,7 @@ function itemsIn(lines: ReadonlyArray<string>, item: RegExp) {
       open.push(Str.trim(line));
     else open = null;
   }
-  const returned: string[] = Arr.map(items, (parts) => Arr.join(parts, " "));
+  const returned: Array<string> = Arr.map(items, (parts) => Arr.join(parts, " "));
   return returned;
 }
 
@@ -92,19 +92,19 @@ export function criteriaIn(text: string) {
   const lines = Str.split(text, "\n");
   const section = sectionOf(lines, ACCEPTANCE);
   if (section !== null) {
-    const returned: string[] = itemsIn(section, CHECKBOX);
+    const returned: Array<string> = itemsIn(section, CHECKBOX);
     return returned;
   }
   const afterMerge = sectionOf(lines, AFTER_MERGE);
   if (afterMerge === null) {
-    const returned: string[] = itemsIn(lines, CHECKBOX);
+    const returned: Array<string> = itemsIn(lines, CHECKBOX);
     return returned;
   }
   const at = Option.getOrElse(
     Arr.findFirstIndex(lines, (line) => AFTER_MERGE.test(line)),
     () => -1,
   );
-  const returned: string[] = itemsIn(
+  const returned: Array<string> = itemsIn(
     [...lines.slice(0, at), ...lines.slice(at + 1 + afterMerge.length)],
     CHECKBOX,
   );
@@ -112,7 +112,7 @@ export function criteriaIn(text: string) {
 }
 
 export function afterMergeIn(text: string) {
-  const returned: string[] = itemsIn(
+  const returned: Array<string> = itemsIn(
     sectionOf(Str.split(text, "\n"), AFTER_MERGE) ?? [],
     LIST_ITEM,
   );
@@ -276,7 +276,7 @@ function refuse(kind: PlanRefusal["kind"], message: string) {
   return returned;
 }
 
-function indexBy(index: Map<string, string[]>, key: string, file: string) {
+function indexBy(index: Map<string, Array<string>>, key: string, file: string) {
   const files = index.get(key);
   if (files) files.push(file);
   else index.set(key, [file]);
@@ -293,7 +293,7 @@ export function readPlanRepos(
   tickets: ReadonlyArray<{ file: string; text: string }>,
   checkouts: ReadonlySet<string>,
 ) {
-  const parsed: Ticket[] = Arr.map(tickets, (ticket) => {
+  const parsed: Array<Ticket> = Arr.map(tickets, (ticket) => {
     const written =
       Option.getOrUndefined(
         Option.flatMap(Option.fromNullishOr(REPO_LINE.exec(ticket.text)), (present__) =>
@@ -361,7 +361,7 @@ export function readPlanRepos(
   }
 
   // WARNING: checked before the single-repository shortcut, so one plan is never judged differently as one repo or two.
-  const claiming = new Map<string, string[]>();
+  const claiming = new Map<string, Array<string>>();
   for (const ticket of parsed) indexBy(claiming, ticket.id, ticket.file);
   const twice = Arr.filter([...claiming.values()], (files) => files.length > 1);
   if (twice.length > 0) {
@@ -455,7 +455,7 @@ export function readPlanRepos(
   const named = (ticket: Placed) =>
     `${ticket.file} (${ticket.change === null ? ticket.repo : `${ticket.repo}, Change: ${ticket.change}`})`;
   const firstOf = new Map<string, Placed>();
-  const clashing: string[] = [];
+  const clashing: Array<string> = [];
   for (const ticket of placed) {
     const first = firstOf.get(keyOf(ticket));
     if (first === undefined) firstOf.set(keyOf(ticket), ticket);
@@ -470,7 +470,7 @@ export function readPlanRepos(
     );
     return outcome;
   }
-  const ticketsOf = new Map<string, string[]>();
+  const ticketsOf = new Map<string, Array<string>>();
   const changeOf = new Map<string, { path: string; change?: string }>();
   const keyOfId = new Map<string, string>();
   for (const ticket of placed) {
@@ -486,7 +486,7 @@ export function readPlanRepos(
 
   // WARNING: only edges between Changes: an edge inside one is the implementer's ordering.
   const blockers = new Map<string, Set<string>>(Arr.map(keys, (key) => [key, new Set<string>()]));
-  const interleaving = new Map<string, string[]>();
+  const interleaving = new Map<string, Array<string>>();
   for (const ticket of placed) {
     const key = keyOf(ticket);
     for (const id of ticket.blockedBy ?? []) {
@@ -499,7 +499,7 @@ export function readPlanRepos(
     }
   }
 
-  const waves: string[][] = [];
+  const waves: Array<Array<string>> = [];
   const settled = new Set<string>();
   while (settled.size < keys.length) {
     const left = Arr.filter(keys, (key) => !settled.has(key));
@@ -630,7 +630,7 @@ export function orderedTickets(
       (changeLineOf(ticket.text) ?? "") === change
     );
   });
-  const slices: Slice[] = Arr.map(mine, (ticket) => ({
+  const slices: Array<Slice> = Arr.map(mine, (ticket) => ({
     file: ticket.file,
     number: ticketId(ticket.file),
     title: titleOf(ticket.file, ticket.text),
@@ -652,7 +652,7 @@ export function orderedTickets(
 
   const here = new Set(Arr.map(slices, (slice) => slice.number));
   const done = new Set<string>();
-  const out: Slice[] = [];
+  const out: Array<Slice> = [];
   let left = slices;
   while (left.length > 0) {
     const ready = Arr.filter(left, (slice) =>
@@ -665,7 +665,7 @@ export function orderedTickets(
     }
     left = Arr.filter(left, (slice) => !done.has(slice.number));
   }
-  const returned: Slice[] = out;
+  const returned: Array<Slice> = out;
   return returned;
 }
 

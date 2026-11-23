@@ -112,7 +112,7 @@ export const step: (
   const known = decodeKnown(message);
   if (Option.isNone(known)) return [state, []];
   const read = known.value;
-  const begun: AguiEvent[] = [];
+  const begun: Array<AguiEvent> = [];
   let now = state;
   // WARNING: a turn begins with the model's first word, or ends without one.
   if (now.run === null) {
@@ -159,7 +159,7 @@ export const step: (
           const block = event.content_block;
           const id = block.type === "tool_use" ? block.id : `${now.message}:${event.index}`;
           const blocks = new Map(now.blocks).set(event.index, { kind: block.type, id });
-          const opened: AguiEvent[] =
+          const opened: Array<AguiEvent> =
             block.type === "tool_use"
               ? [
                   {
@@ -194,7 +194,7 @@ export const step: (
           if (open === undefined) return [now, begun];
           const blocks = new Map(now.blocks);
           blocks.delete(event.index);
-          const closed: AguiEvent[] =
+          const closed: Array<AguiEvent> =
             open.kind === "text"
               ? [{ type: "TEXT_MESSAGE_END", messageId: open.id }]
               : open.kind === "thinking"

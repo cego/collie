@@ -54,7 +54,7 @@ const scratch = Effect.flatMap(FileSystem.FileSystem, (fs) =>
 const releases = (files: Record<string, Uint8Array | string>) =>
   Effect.acquireRelease(
     Effect.sync(() => {
-      const asked: string[] = [];
+      const asked: Array<string> = [];
       const server = Bun.serve({
         port: 0,
         fetch: (request) => {
@@ -156,7 +156,7 @@ test("onboarding puts the verified runner on the Machine and streams its steps, 
         [`/0.40.0/collie-${platform}.sig`]: signRelease(bytes, key.privateKey),
       });
       const route = { ...localRoute([], "pc"), sh: localSh(home) };
-      const runs: OnboardRun[] = [];
+      const runs: Array<OnboardRun> = [];
       const last = yield* onboardThrough(
         route,
         { version: "0.40.0", releases: served.base, runners: `${dir}/runners`, key: key.publicKey },
@@ -270,8 +270,8 @@ const BINARY = new Uint8Array([
 const paired: (
   home: string,
   sh?: ShellRoute["sh"],
-) => ShellRoute & { readonly carried: Uint8Array[] } = (home, sh = localSh(home)) => {
-  const carried: Uint8Array[] = [];
+) => ShellRoute & { readonly carried: Array<Uint8Array> } = (home, sh = localSh(home)) => {
+  const carried: Array<Uint8Array> = [];
   return {
     ...localRoute([], "vm-mk"),
     sh,
@@ -402,8 +402,8 @@ const until = (what: () => boolean) =>
 test("a route added while Desktop runs shows its Machine, one removed stops, and a woken one tries again at once", () =>
   run(
     Effect.gen(function* () {
-      const told: string[] = [];
-      const closed: string[] = [];
+      const told: Array<string> = [];
+      const closed: Array<string> = [];
       let installed = false;
       const route = (name: string) => ({
         machine: { profile: `p-${name}`, name, target: `mk@${name}` },
@@ -479,7 +479,7 @@ test.each([
   (_, slower) =>
     run(
       Effect.gen(function* () {
-        const told: string[] = [];
+        const told: Array<string> = [];
         const route = (name: string) => ({
           machine: { profile: `p-${name}`, name, target: `mk@${name}` },
           open: () =>
@@ -538,7 +538,7 @@ test("a removed Machine leaves the board, its routes and what onboarding left of
     reason: null,
     at: 1,
   };
-  const items: FlockItem[] = [
+  const items: Array<FlockItem> = [
     { _tag: "Routed", machine: { profile: "local", name: "pc" } },
     { _tag: "Routed", machine },
     { machine: { ...machine, installation: "vm-1" }, message: snapshot("vm-1") },
@@ -625,7 +625,7 @@ test("a Machine's row says what doctor finds of it, over what its last onboardin
         },
       ]);
       const onboarded: OnboardRun = { steps: [], ready: true, reason: null, at: 1 };
-      const items: FlockItem[] = [
+      const items: Array<FlockItem> = [
         { _tag: "Routed", machine },
         { _tag: "Onboarding", job: "j-1", machine, run: onboarded },
         { _tag: "Doctored", machine, run: doctored },
@@ -667,7 +667,7 @@ test("Helle and the Linear MCP count toward onboarded though doctor passes them,
         at: 0,
       });
       const row = (run: OnboardRun) => {
-        const items: FlockItem[] = [
+        const items: Array<FlockItem> = [
           { _tag: "Routed", machine },
           { _tag: "Onboarding", job: "j-1", machine, run },
           { _tag: "Doctored", machine, run: doctored },
@@ -709,7 +709,7 @@ test("a Linear login onboarding left unfinished keeps the row short, though doct
           reason: null,
           at: 0,
         };
-        const items: FlockItem[] = [
+        const items: Array<FlockItem> = [
           { _tag: "Routed", machine },
           { _tag: "Onboarding", job: "j-1", machine, run },
           { _tag: "Doctored", machine, run: doctored },

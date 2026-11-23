@@ -583,7 +583,7 @@ test("an agent whose turn does not stop is kept with the reason, and tried again
           attempt: null,
         }),
       );
-      const stops: string[] = [];
+      const stops: Array<string> = [];
       const ports: CompactionPorts = {
         served: {
           gate: Effect.void,

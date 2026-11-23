@@ -60,8 +60,8 @@ export interface AppState {
   density: Density;
   newer?: string | null;
   note: string | null;
-  history: RunRow[] | null;
-  definitions: { workflows: DefinitionRow[]; errors: string[] } | null;
+  history: Array<RunRow> | null;
+  definitions: { workflows: Array<DefinitionRow>; errors: Array<string> } | null;
   settings: SettingsView | null;
   detail: RunDetail | null;
   artefacts?: ArtefactCollection | null;
@@ -309,7 +309,7 @@ function agentRow(a: AgentRow, connector: string, marks?: Marks) {
   return returned;
 }
 
-function doingLine(a: AgentRow, ...rest: string[]) {
+function doingLine(a: AgentRow, ...rest: Array<string>) {
   return Arr.join(
     Arr.filter([a.status, a.now ?? "", ...rest], (part) => part !== ""),
     " · ",
@@ -321,7 +321,7 @@ function orphanRow(a: AgentRow, connector: string, marks?: Marks) {
 }
 
 function agentGroup(
-  agents: readonly AgentRow[],
+  agents: ReadonlyArray<AgentRow>,
   row: (a: AgentRow, connector: string, marks?: Marks) => Row,
   marks?: Marks,
 ) {
@@ -402,13 +402,13 @@ function settingRow(
 
 // WARNING: a finished Run keeps its agents: a hand-off outlives the Run it was started for.
 export function rowsOf(board: WorkspaceView, marks?: Marks) {
-  const rows: Row[] = [];
+  const rows: Array<Row> = [];
   const onBoard = [...board.active, ...board.recent];
   const byId = new Map(Arr.map(onBoard, (r) => [r.id, r]));
   const agentsOf = (run: RunRow) => Arr.filter(board.agents, (a) => a.run === run.id);
   const childrenOf = (run: RunRow) =>
     Arr.flatMap(run.children, (id) => Arr.ensure(byId.get(id) ?? []));
-  const under: (run: RunRow, kind: "active" | "recent", depth?: number) => Row[] = (
+  const under: (run: RunRow, kind: "active" | "recent", depth?: number) => Array<Row> = (
     run: RunRow,
     kind: "active" | "recent",
     depth = 0,
@@ -439,13 +439,13 @@ export function rowsOf(board: WorkspaceView, marks?: Marks) {
 }
 
 export function wideRows(wide: WideView, marks?: Marks) {
-  const rows: Row[] = [];
+  const rows: Array<Row> = [];
   for (const [at, group] of wide.groups.entries()) {
     if (at > 0) rows.push(spacer(`gap:${group.workspaceId ?? ELSEWHERE}`));
     const away = group.workspaceId === null;
     const inGroup = [...group.active, ...group.recent];
     const byId = new Map(Arr.map(inGroup, (r) => [r.id, r]));
-    const under: (run: RunRow, kind: "active" | "recent", depth?: number) => Row[] = (
+    const under: (run: RunRow, kind: "active" | "recent", depth?: number) => Array<Row> = (
       run: RunRow,
       kind: "active" | "recent",
       depth = 1,
@@ -494,7 +494,7 @@ export function wideRows(wide: WideView, marks?: Marks) {
   return keyedInOrder([...rows, ...quietRow(wide)]);
 }
 
-function keyedInOrder(rows: readonly Row[]) {
+function keyedInOrder(rows: ReadonlyArray<Row>) {
   let digit = 0;
   return Arr.map(rows, (row) => {
     if (row.kind !== "agent") return row;
@@ -537,10 +537,10 @@ function groupRow(group: WideGroup, marks?: Marks) {
 
 function quietRow(wide: WideView) {
   if (wide.quiet.length === 0) {
-    const returned: Row[] = [];
+    const returned: Array<Row> = [];
     return returned;
   }
-  const returned: Row[] = [
+  const returned: Array<Row> = [
     spacer("gap:quiet"),
     {
       ...BLANK,
@@ -560,13 +560,13 @@ function headerRow(title: string) {
   return returned;
 }
 
-export function needsYouStatus(rows: readonly Row[], selected: string | null) {
+export function needsYouStatus(rows: ReadonlyArray<Row>, selected: string | null) {
   const waiting = Arr.filter(rows, (row) => row.needsYou);
   if (waiting.length === 0 || Arr.some(waiting, (row) => row.id === selected)) return null;
   return `${waiting.length} run(s) need you`;
 }
 
-export function selectableRows(rows: readonly Row[]) {
+export function selectableRows(rows: ReadonlyArray<Row>) {
   return Arr.filter(rows, (row) => row.kind !== "header");
 }
 
@@ -594,7 +594,7 @@ function everyRow(state: RunRowsState) {
   return state.wide ? wideRows(state.wide, state.marks) : rowsOf(state.board, state.marks);
 }
 
-function onlyRun(rows: readonly Row[], runId: string) {
+function onlyRun(rows: ReadonlyArray<Row>, runId: string) {
   const at = Option.getOrElse(
     Arr.findFirstIndex(rows, (row) => row.kind !== "agent" && row.runId === runId),
     () => -1,
@@ -664,8 +664,8 @@ export function emptyStateOf(view: ViewName) {
 
 export function clampSelection(
   selected: string | null,
-  before: readonly Row[],
-  after: readonly Row[],
+  before: ReadonlyArray<Row>,
+  after: ReadonlyArray<Row>,
 ) {
   if (after.length === 0) return null;
   if (selected !== null && Arr.some(after, (r) => r.id === selected)) return selected;
@@ -688,15 +688,15 @@ export interface Action {
 // WARNING: start, fix and review act on this workspace's checkout, so they are offered on a local board only.
 export function actionsFor(row: Row | null, filter: Filter) {
   if (!row) {
-    const returned: Action[] = [];
+    const returned: Array<Action> = [];
     return returned;
   }
   if (row.kind === "group") {
-    const returned: Action[] = [];
+    const returned: Array<Action> = [];
     return returned;
   }
   if (row.kind === "agent") {
-    const returned: Action[] =
+    const returned: Array<Action> =
       row.key && row.agent
         ? [{ key: row.key, label: "focus", command: { _tag: "FocusAgent", agent: row.agent } }]
         : [];
@@ -705,16 +705,16 @@ export function actionsFor(row: Row | null, filter: Filter) {
   if (row.kind === "definition") {
     const definition = row.definition;
     if (!definition) {
-      const returned: Action[] = [];
+      const returned: Array<Action> = [];
       return returned;
     }
-    const returned: Action[] = [
+    const returned: Array<Action> = [
       { key: "\r", label: "run", command: { _tag: "RunWorkflow", workflow: definition.name } },
     ];
     return returned;
   }
   if (row.kind === "setting") {
-    const returned: Action[] = row.setting?.writable
+    const returned: Array<Action> = row.setting?.writable
       ? [
           {
             key: "\r",
@@ -732,10 +732,10 @@ export function actionsFor(row: Row | null, filter: Filter) {
 
   const runId = row.runId;
   if (runId === null) {
-    const returned: Action[] = [];
+    const returned: Array<Action> = [];
     return returned;
   }
-  const actions: Action[] = [{ key: "l", label: "log", command: { _tag: "OpenLog", runId } }];
+  const actions: Array<Action> = [{ key: "l", label: "log", command: { _tag: "OpenLog", runId } }];
   if (row.kind === "active") {
     actions.push({ key: "k", label: "stop", command: { _tag: "StopRun", runId } });
   } else if (sessionLocal(filter)) {
@@ -753,7 +753,7 @@ export function actionsFor(row: Row | null, filter: Filter) {
       });
     }
   }
-  const returned: Action[] = actions;
+  const returned: Array<Action> = actions;
   return returned;
 }
 
@@ -787,14 +787,14 @@ export function pasteInto(value: string, bytes: Uint8Array) {
   return value + pipe(PASTED.decode(bytes), Str.replaceAll(/\p{C}/gu, ""));
 }
 
-export function optionWindow<T>(items: readonly T[], at: number, room: number) {
+export function optionWindow<T>(items: ReadonlyArray<T>, at: number, room: number) {
   if (items.length <= room) return { shown: items, hidden: 0 };
   const end = Math.min(items.length, Math.max(room, at + 1));
   return { shown: items.slice(end - room, end), hidden: items.length - room };
 }
 
 export interface Windowed<T> {
-  shown: readonly T[];
+  shown: ReadonlyArray<T>;
   hidden: number;
 }
 
@@ -810,7 +810,7 @@ export const mrChoices = (command: Extract<Command, { readonly _tag: "ChooseMr" 
     command.copy ? one.url !== null : readMrRef(one.target) !== null,
   );
   const shown = usable.length > 9 ? usable.slice(0, 8) : usable;
-  const more: MenuItem[] =
+  const more: Array<MenuItem> =
     usable.length > 9
       ? [
           {
@@ -981,7 +981,7 @@ export function menuFor(view: TaskView) {
         ]
       : [],
   );
-  const returned: MenuItem[] = [
+  const returned: Array<MenuItem> = [
     { key: "enter", label: "Open record", command: { _tag: "OpenRecord", id: view.id } },
     ...Arr.map(actions, (action) => itemFor(view, action, false)),
     ...(mrs.length < 2
@@ -1094,7 +1094,7 @@ export interface KeyContext {
   query: string;
   scrollable: boolean;
   row: Row | null;
-  rows: readonly Row[];
+  rows: ReadonlyArray<Row>;
   cutShort: boolean;
   mrs: ReadonlyArray<MrChoice>;
 }
@@ -1121,7 +1121,7 @@ function takesText(on: Keyboarding) {
   return on._tag === "Choice" && on.choice.kind === "ask";
 }
 
-export function nextQuestionId(rows: readonly Row[], selected: string | null) {
+export function nextQuestionId(rows: ReadonlyArray<Row>, selected: string | null) {
   const list = selectableRows(rows);
   const at = Option.getOrElse(
     Arr.findFirstIndex(list, (row) => row.id === selected),
@@ -1300,12 +1300,12 @@ function subsequence(needle: string, hay: string) {
   return needle.length === 0;
 }
 
-export function filterItems<T>(items: readonly T[], query: string, hay: (item: T) => string) {
+export function filterItems<T>(items: ReadonlyArray<T>, query: string, hay: (item: T) => string) {
   const needle = Str.toLowerCase(Str.trim(query));
   if (needle === "") return [...items];
-  const prefix: T[] = [];
-  const anywhere: T[] = [];
-  const fuzzy: T[] = [];
+  const prefix: Array<T> = [];
+  const anywhere: Array<T> = [];
+  const fuzzy: Array<T> = [];
   for (const item of items) {
     const straw = Str.toLowerCase(hay(item));
     if (pipe(straw, Str.startsWith(needle))) prefix.push(item);
@@ -1315,7 +1315,7 @@ export function filterItems<T>(items: readonly T[], query: string, hay: (item: T
   return [...prefix, ...anywhere, ...fuzzy];
 }
 
-export function matching(rows: readonly Row[], query: string) {
+export function matching(rows: ReadonlyArray<Row>, query: string) {
   if (Str.trim(query) === "") return [...rows];
   const looked = Arr.filter(rows, (row) => row.kind !== "header");
   const hit = new Set(Arr.map(filterItems(looked, query, rowHay), (row) => row.id));
@@ -1328,7 +1328,7 @@ export function matching(rows: readonly Row[], query: string) {
   );
 }
 
-function underAMatch(rows: readonly Row[], at: number, hit: ReadonlySet<string>) {
+function underAMatch(rows: ReadonlyArray<Row>, at: number, hit: ReadonlySet<string>) {
   let depth = rows[at]!.depth;
   for (let above = at - 1; above >= 0 && depth > 0; above--) {
     const over = rows[above]!;
@@ -1342,7 +1342,7 @@ function underAMatch(rows: readonly Row[], at: number, hit: ReadonlySet<string>)
 const opensAGroup = (row: Row) =>
   row.kind === "active" || row.kind === "recent" || row.kind === "header" || row.kind === "group";
 
-function groupHasAMatch(rows: readonly Row[], at: number, hit: ReadonlySet<string>) {
+function groupHasAMatch(rows: ReadonlyArray<Row>, at: number, hit: ReadonlySet<string>) {
   const opener = rows[at]!;
   const nested = (under: Row) =>
     under.kind === "agent" ||

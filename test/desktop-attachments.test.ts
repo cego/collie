@@ -77,7 +77,7 @@ test("an image's size is read from its header, and null where the header says no
     ...le24(2999),
     ...le24(1999),
   ];
-  const of = (bytes: number[]) => imageSize(new Uint8Array(bytes));
+  const of = (bytes: Array<number>) => imageSize(new Uint8Array(bytes));
   expect(of(png)).toEqual({ width: 2560, height: 1600 });
   expect(of(gif)).toEqual({ width: 640, height: 480 });
   expect(of(jpeg)).toEqual({ width: 4000, height: 3000 });

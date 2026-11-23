@@ -250,7 +250,7 @@ test("clearing rechecks never answer Decisions, release Holds or Stops, or resum
         });
         expect(off.envelope).toMatchObject({ ok: true });
         const client = yield* connect(world.state).pipe(Effect.orDie);
-        const ids: string[] = [];
+        const ids: Array<string> = [];
         for (const kind of ["hold", "stop", "decision", "superseded", "free"]) {
           const file = `${world.home}/${kind}`;
           if (kind === "decision" || kind === "superseded")

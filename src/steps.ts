@@ -77,7 +77,7 @@ export const encodeStepLine = (line: StepLine) => encodeLine(line);
 
 export const readStepLines = Effect.fn("Steps.read")(function* (runDir: string) {
   const texts = yield* RunRecords.use((records) => records.lines(runOfDir(runDir), STEPS_FILE));
-  const lines: StepLine[] = [];
+  const lines: Array<StepLine> = [];
   // WARNING: read a line at a time, so a long Run is read in the scheduler's turns.
   for (const text of texts) {
     const read = yield* Effect.sync(() => decodeLine(text));

@@ -312,7 +312,7 @@ test("the first host imports when each Run last did work, less what was written 
 test("a write names its Run to the Run model once it is committed", () =>
   runEffect(
     Effect.gen(function* () {
-      const moved: string[] = [];
+      const moved: Array<string> = [];
       yield* Effect.gen(function* () {
         const one = yield* RunRecords;
         yield* one.append("run-a", "steps.jsonl", ["1"]);

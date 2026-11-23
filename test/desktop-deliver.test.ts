@@ -22,7 +22,7 @@ const Calls = RpcGroup.make(
 
 const sent = (action: DesktopAction, result: ActionResult, request = "send-1") =>
   Effect.gen(function* () {
-    const decoded: unknown[] = [];
+    const decoded: Array<unknown> = [];
     const said = yield* Effect.gen(function* () {
       const desktop = yield* RpcTest.makeClient(Calls);
       // WARNING: Desktop's `act` and `invoke` are the only calls these actions make.

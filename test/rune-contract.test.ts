@@ -352,7 +352,7 @@ describe.skipIf(cargo === null)("DesktopRpcs between the main process and the Ru
             item,
           ],
         ] as const;
-        const sent: Frame[] = [];
+        const sent: Array<Frame> = [];
         const tags = new Map<number, DesktopRpc>();
         for (const [index, [tag, payload, success]] of parts.entries()) {
           const rpc = DesktopRpcs.requests.get(tag)!;

@@ -142,8 +142,8 @@ export function structuredFrom<A, I>(raw: string, schema: Schema.Codec<A, I, nev
   const envelope = parse(raw);
   if (envelope._tag === "None") return { error: "the CLI did not print JSON" };
 
-  const seen: unknown[] = [];
-  const queue: unknown[] = [envelope.value];
+  const seen: Array<unknown> = [];
+  const queue: Array<unknown> = [envelope.value];
   while (queue.length > 0) {
     const node = queue.shift();
     if (seen.includes(node)) continue;

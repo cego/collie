@@ -73,7 +73,7 @@ const desktop = Effect.gen(function* () {
         giveSlackUser([route], text).pipe(Effect.map((all) => all[0]!.failed)),
     },
   });
-  const opened: URL[] = [];
+  const opened: Array<URL> = [];
   const browser = {
     answer: (authorize: URL) => {
       const returned: Array<[string, string]> = [

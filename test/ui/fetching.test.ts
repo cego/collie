@@ -27,7 +27,7 @@ import { appendDrift } from "../../src/drift";
 import { stringifyJson } from "../../src/json";
 
 let rig: Rig;
-let runs: RunFacts[] = [];
+let runs: Array<RunFacts> = [];
 
 function effectTest(
   name: string,
@@ -60,8 +60,8 @@ const MR_JSON = stringifyJson({
 });
 
 function glab() {
-  const calls: string[][] = [];
-  const run = (cmd: string, args: string[]) => {
+  const calls: Array<Array<string>> = [];
+  const run = (cmd: string, args: Array<string>) => {
     calls.push([cmd, ...args]);
     if (cmd !== "glab") return Effect.succeed({ code: 1, stdout: "" });
     if (args[0] === "--version") return Effect.succeed({ code: 0, stdout: "glab 1.40" });
@@ -134,7 +134,7 @@ const made = Effect.fn("fetching.made")(function* (over: Partial<RunFacts>) {
 
 const seedMany = Effect.fn("fetching.seedMany")(function* (count: number) {
   const env = rig.pluginEnv();
-  const ids: string[] = [];
+  const ids: Array<string> = [];
   for (let n = 1; n <= count; n++) {
     const run = yield* made({
       workflow: "review",

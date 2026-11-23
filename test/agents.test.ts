@@ -1226,7 +1226,7 @@ test("an agent that goes while it is collected past its budget is started again,
 const managedCodex = Effect.gen(function* () {
   const children = yield* Effect.acquireRelease(
     Effect.sync(() => {
-      const returned: Bun.Subprocess[] = [];
+      const returned: Array<Bun.Subprocess> = [];
       return returned;
     }),
     (children) =>
@@ -5549,7 +5549,7 @@ test("auto in the config is passed as auto", () =>
 test("a Codex agent checks help for hook trust without receiving a Claude auto-compact window", () =>
   runEffect(
     Effect.gen(function* () {
-      const asked: string[] = [];
+      const asked: Array<string> = [];
       yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
       yield* session(started("r1"), {
         harness: "codex",
@@ -6623,7 +6623,7 @@ const listing = enveloped({
 
 const listingBody = listing.toLayer((payload) =>
   Effect.gen(function* () {
-    const notes: string[] = [];
+    const notes: Array<string> = [];
     for (const item of Str.split(payload.input.items, ",")) {
       const done = yield* agentWork({
         operation: item,
@@ -6923,7 +6923,7 @@ test("a steer nothing shows taken is reported sent and not observed, and a role 
     }),
   ));
 
-const fullContext: (asked: string[], tokens?: number | null) => CompactionPorts = (
+const fullContext: (asked: Array<string>, tokens?: number | null) => CompactionPorts = (
   asked,
   tokens = 1_000_000,
 ) => ({
@@ -6943,7 +6943,7 @@ test("a reused agent is compacted before its next piece of work, and a new one i
         { verdict: "clean", note: "first" },
         { verdict: "clean", note: "second" },
       ]);
-      const asked: string[] = [];
+      const asked: Array<string> = [];
       const result = yield* listing.execute({ runId: "r1", input: ITEMS }).pipe(
         Effect.result,
         Effect.provide(
@@ -6983,7 +6983,7 @@ const compactionsAtDefault = (tokens: number) =>
       { verdict: "clean", note: "first" },
       { verdict: "clean", note: "second" },
     ]);
-    const asked: string[] = [];
+    const asked: Array<string> = [];
     yield* listing.execute({ runId: "r1", input: ITEMS }).pipe(
       Effect.provide(
         listingBody.pipe(
@@ -7020,8 +7020,8 @@ test("by default a reused agent under 150,000 tokens is not compacted", () =>
 
 interface SlowCompaction {
   ended: CompactionOutcome | null;
-  readonly asked: string[];
-  readonly pollSent: boolean[];
+  readonly asked: Array<string>;
+  readonly pollSent: Array<boolean>;
 }
 
 const slowCompaction = () => {
@@ -7248,7 +7248,7 @@ test("a boundary whose context cannot be sampled records no context line, never 
   ));
 
 class Watched extends Herdr {
-  readonly seen: string[] = [];
+  readonly seen: Array<string> = [];
   private prompted = false;
   constructor(private readonly held: AgentStatus) {
     super(rig.pluginEnv());
@@ -7880,7 +7880,7 @@ test("a step pointer the harness took is recorded as Collie's, with its delivery
 
 class TextLost extends Herdr {
   lost = true;
-  readonly typed: string[] = [];
+  readonly typed: Array<string> = [];
   override agentPrompt(target: string, text: string) {
     if (!this.lost) return super.agentPrompt(target, text);
     this.typed.push(text);
@@ -8766,7 +8766,7 @@ test("a profile's environment is what the harness starts with, and a file-held v
         DEPLOY_TOKEN: secret,
       });
 
-      const leaked: string[] = [];
+      const leaked: Array<string> = [];
       for (const path of yield* fs.readDirectory(rig.root, { recursive: true })) {
         const at = `${rig.root}/${path}`;
         if (at === `${rig.root}/secrets/token` || at === rig.logPath) continue;

@@ -422,13 +422,15 @@ const machine = (name: string, held: ReadonlyArray<SharedSetting>, meanwhile = E
   return { name, door, asked };
 };
 
-const syncer = (flock: SubscriptionRef.SubscriptionRef<FlockSettings>, ...machines: Machine[]) =>
-  syncerTelling(flock, () => Effect.void, ...machines);
+const syncer = (
+  flock: SubscriptionRef.SubscriptionRef<FlockSettings>,
+  ...machines: Array<Machine>
+) => syncerTelling(flock, () => Effect.void, ...machines);
 
 const syncerTelling = (
   flock: SubscriptionRef.SubscriptionRef<FlockSettings>,
   told: (machine: Machine, failed: string | null) => Effect.Effect<void>,
-  ...machines: Machine[]
+  ...machines: Array<Machine>
 ) =>
   flockSync({
     flock,
@@ -644,7 +646,7 @@ const defined = (path: string, base64: string | null, hour: number) => ({
 const definitionsSyncer = (
   flock: SubscriptionRef.SubscriptionRef<FlockDefinitions>,
   told: (machine: Definer, failed: string | null) => Effect.Effect<void>,
-  ...machines: Definer[]
+  ...machines: Array<Definer>
 ) =>
   definitionsSync({
     flock,

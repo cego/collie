@@ -15,7 +15,7 @@ export const viewMismatches = (
   expected: ReadonlyArray<ViewCheck>,
 ) => {
   const byId = new Map(Arr.map(actual, (view) => [view.runId, view] as const));
-  const wrong: string[] = actual.length === byId.size ? [] : ["duplicate Run ids"];
+  const wrong: Array<string> = actual.length === byId.size ? [] : ["duplicate Run ids"];
   for (const wanted of expected) {
     const found = byId.get(wanted.runId);
     if (

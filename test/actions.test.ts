@@ -123,8 +123,8 @@ test("the card's primary button asks for what its offer takes, as the offer menu
         const project = yield* projectOf(world);
         const client = yield* connect(world.state).pipe(Effect.orDie);
         const runId = yield* finished(client, project).pipe(Effect.orDie);
-        const asked: string[] = [];
-        const choices: string[][] = [];
+        const asked: Array<string> = [];
+        const choices: Array<Array<string>> = [];
         const answers = ["the diff"];
         const prompts: FlowPrompts = {
           menu: (items) => {

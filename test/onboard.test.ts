@@ -19,7 +19,7 @@ let root: string;
 let carried: { tree: string; runner: string };
 let bin: FakeBin;
 
-const git = (cwd: string, ...args: string[]) =>
+const git = (cwd: string, ...args: Array<string>) =>
   exec(["git", ...args], {
     cwd,
     env: {
@@ -97,7 +97,7 @@ const glab = (status: string, rest = "") =>
 
 const onboarded = (overrides: Record<string, string> = {}, options: Partial<OnboardOptions> = {}) =>
   Effect.gen(function* () {
-    const events: OnboardEvent[] = [];
+    const events: Array<OnboardEvent> = [];
     const env = readEnv({
       HOME: home,
       PATH: `${home}/stubs:/usr/bin:/bin`,
@@ -115,10 +115,10 @@ const onboarded = (overrides: Record<string, string> = {}, options: Partial<Onbo
     return { result, events };
   });
 
-const results = (events: OnboardEvent[]) =>
+const results = (events: Array<OnboardEvent>) =>
   Arr.flatMap(events, (event) => (event.event === "result" ? [event] : []));
 
-const statusOf = (events: OnboardEvent[], step: string) =>
+const statusOf = (events: Array<OnboardEvent>, step: string) =>
   Option.getOrUndefined(Arr.findFirst(results(events), (event) => event.step === step))?.status;
 
 beforeEach(() =>
@@ -354,7 +354,7 @@ test("a development checkout gets the checks, and nothing installed or moved", (
 test("onboarded means doctor is ready", () =>
   runEffect(
     Effect.gen(function* () {
-      const events: OnboardEvent[] = [];
+      const events: Array<OnboardEvent> = [];
       const env = readEnv({
         HOME: home,
         PATH: `${home}/stubs:/usr/bin:/bin`,

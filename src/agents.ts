@@ -336,7 +336,7 @@ export interface Questions {
 export const agentQuestionName = (operation: string, n: number) => `ask-${operation}-${n}`;
 
 const bySender = (answerers: ReadonlyArray<Asker | undefined>) => {
-  const groups = new Map<string, { by: Asker | undefined; at: number[] }>();
+  const groups = new Map<string, { by: Asker | undefined; at: Array<number> }>();
   for (const [at, by] of answerers.entries()) {
     const key = Arr.join(
       Arr.map([by?.origin, by?.from?.run, by?.from?.agent, by?.said], (part) =>
@@ -3821,8 +3821,8 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
   const halt = (runId: string, why = "its Run was stopped") =>
     under(
       Effect.gen(function* () {
-        const stopped: string[] = [];
-        const left: string[] = [];
+        const stopped: Array<string> = [];
+        const left: Array<string> = [];
         const launchedBefore = new Set(Arr.map(yield* launchesOf(runId), (one) => one.agent));
         const found = yield* serversOfRun(host.env.stateDir, `${dirFor(runId)}/agents.log`).pipe(
           Effect.catch((cause) =>
@@ -3879,7 +3879,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       }),
     );
 
-  const reported = (runId: string, stopped: string[], left: string[]) =>
+  const reported = (runId: string, stopped: Array<string>, left: Array<string>) =>
     Effect.gen(function* () {
       if (stopped.length > 0) yield* log(runId, `stopped ${Arr.join(stopped, ", ")}`);
       if (left.length > 0) yield* log(runId, `not stopped: ${Arr.join(left, "; ")}`);

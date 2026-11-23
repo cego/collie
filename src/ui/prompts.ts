@@ -5,7 +5,7 @@ import { createSignal, type Accessor } from "solid-js";
 import type { InputPrompts, PickItem } from "../inputs";
 
 export type Ask =
-  | { _tag: "Menu"; header: string; footer: string; items: readonly PickItem[] }
+  | { _tag: "Menu"; header: string; footer: string; items: ReadonlyArray<PickItem> }
   | { _tag: "Question"; header: string; footer: string; initial: string };
 
 export interface Pending {

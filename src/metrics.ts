@@ -146,7 +146,7 @@ export const noteContext = (runDir: string, at: string, agent: string, tokens: n
   appendMetric(runDir, { at, kind: "context", subject: agent, value: tokens, note: "" });
 
 export const readMetrics = Effect.fn("Metrics.read")(function* (runDir: string) {
-  const none: Metric[] = [];
+  const none: Array<Metric> = [];
   return yield* readRunJournal(metricsPath(runDir), MetricJson).pipe(
     Effect.orElseSucceed(() => none),
   );
@@ -169,7 +169,7 @@ export interface FailureLike {
 // WARNING: Never a halt: a repeat is an obstacle sentence, not evidence the work cannot be done.
 export function repeatedFailure(records: ReadonlyArray<FailureLike>, n: number) {
   if (n < 2) return null;
-  const byName = new Map<string, FailureLike[]>();
+  const byName = new Map<string, Array<FailureLike>>();
   for (const record of records) {
     const kept = byName.get(record.name) ?? [];
     kept.push(record);
@@ -211,8 +211,8 @@ export function metricsOf(lines: ReadonlyArray<Metric>, createdAt: string) {
   const slices = { done: 0, total: 0 };
   let rework = 0;
   let peak: { agent: string; tokens: number } | null = null;
-  const halts: string[] = [];
-  const obstacles: string[] = [];
+  const halts: Array<string> = [];
+  const obstacles: Array<string> = [];
 
   for (const line of lines) {
     switch (line.kind) {

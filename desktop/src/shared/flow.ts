@@ -227,7 +227,7 @@ export const inspectorOf = (
   const all = [...parent.runs, ...(parent.links ?? [])];
   const node =
     Option.getOrUndefined(Arr.findFirst(all, (one) => one.id === selection.item)) ?? parent;
-  const lines: string[] = [];
+  const lines: Array<string> = [];
   if (node.agent != null) lines.push(`Agent ${node.agent}`);
   if (node.ranOn !== null)
     lines.push(
@@ -257,7 +257,7 @@ export const inspectorOf = (
     (value) => value,
     (one, other) => Num.sign(one - other),
   );
-  const entries: FlowEntry[] = Arr.map(waves, (wave) => ({
+  const entries: Array<FlowEntry> = Arr.map(waves, (wave) => ({
     title: `Wave ${wave}`,
     nodes: Arr.filter(all, (one) => one.wave === wave),
     folded: false,

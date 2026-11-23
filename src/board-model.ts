@@ -288,7 +288,7 @@ export interface ReleaseFacts {
 }
 
 export function readyToRelease(facts: ReleaseFacts) {
-  const missing: MissingFact[] = [];
+  const missing: Array<MissingFact> = [];
   const lack = (fact: MissingFact["fact"], said: string, settling = false) =>
     missing.push({ fact, said, settling });
   if (!facts.succeeded) lack("succeeded", "the leading Run has not succeeded");
@@ -2206,7 +2206,7 @@ export function flowActions(
     };
   const offered = (node: FlowRun, lane: FlowLane, facts: FlowActionFacts) => {
     let primary: FlowAction | null = null;
-    const actions: FlowAction[] = [];
+    const actions: Array<FlowAction> = [];
     const live = node.agent != null && Arr.some(view.agents, (one) => one.name === node.agent);
     const proposal = node.proposal ?? facts.proposal ?? undefined;
     if (node.link !== undefined) {
@@ -2296,7 +2296,7 @@ export function flowActions(
       lane.run === view.run
         ? isSettled(view.state)
         : !["running", "suspended"].includes(lane.execution);
-    const actions: FlowLaneAction[] = [];
+    const actions: Array<FlowLaneAction> = [];
     if (!settled) actions.push(facts.held ? "release" : "hold", "stop");
     if (facts.canResume) actions.push("resume");
     if (lane.run === view.run && view.state === "done") actions.push("follow-up");
@@ -2407,7 +2407,7 @@ export function disposeLabel(action: DisposeAction) {
 }
 
 export function cardActions(view: TaskView) {
-  const actions: CardAction[] = [{ kind: "go-to-tab" }];
+  const actions: Array<CardAction> = [{ kind: "go-to-tab" }];
   if (!isSettled(view.state)) actions.push({ kind: "steer" }, { kind: "attach" });
   const several = severalOf(view);
   const mr = mrRefOf(view.mr);
@@ -2495,7 +2495,7 @@ export function dispositionActions(view: TaskView) {
         (kind) => disposeEach(one, kind),
       ),
     );
-  const kinds: DispositionKind[] = ["merged", "abandoned"];
+  const kinds: Array<DispositionKind> = ["merged", "abandoned"];
   if (view.mrState === "closed") kinds.push("superseded");
   return Arr.map(kinds, (kind) => dispose(view, kind));
 }
@@ -2538,11 +2538,11 @@ export function sortBoard(views: ReadonlyArray<TaskView>) {
 export const WAIT_FOLD_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface Sections {
-  needs: TaskView[];
-  ready: TaskView[];
-  working: TaskView[];
-  waiting: TaskView[];
-  finished: TaskView[];
+  needs: Array<TaskView>;
+  ready: Array<TaskView>;
+  working: Array<TaskView>;
+  waiting: Array<TaskView>;
+  finished: Array<TaskView>;
 }
 
 // WARNING: work ready to release is never folded, however long it has waited.

@@ -103,7 +103,7 @@ test("two Tasks share one reading of the installation and step duration index", 
         yield* madeRun(dir, { id: "first", task: "task-a", state: "running" }),
         yield* madeRun(dir, { id: "second", task: "task-b", state: "running" }),
       ];
-      const reads: string[] = [];
+      const reads: Array<string> = [];
       const records = yield* RunRecords;
       let sampled = 0;
       const views = yield* buildBoard({

@@ -66,7 +66,7 @@ export const narrativeReports = (
           .readFileString(path.resolve(run.dir, "../../installation"))
           .pipe(Effect.orElseSucceed(() => "")),
       );
-      const sources: Source[] = [];
+      const sources: Array<Source> = [];
       const episodes = new Map<string, Source>();
       const metrics = yield* readMetrics(run.evidence);
       for (const [index, line] of metrics.entries()) {

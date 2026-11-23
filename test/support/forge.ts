@@ -428,7 +428,7 @@ function mergeAnswer(forge: MrForge, mr: FakeMr, args: ReadonlyArray<string>) {
 }
 
 function discussionsOf(mr: FakeMr) {
-  const threads = new Map<string, FakeComment[]>();
+  const threads = new Map<string, Array<FakeComment>>();
   for (const comment of mr.comments ?? []) {
     const id = comment.thread ?? `note-${comment.id}`;
     threads.set(id, [...(threads.get(id) ?? []), comment]);
@@ -692,7 +692,7 @@ function issueApi(forge: MrForge, model: ForgeModel, route: string, args: Readon
     return answer;
   }
   const query = new URLSearchParams(Str.split(route, "?")[1]);
-  const issues: Schema.Json[] = Arr.map(
+  const issues: Array<Schema.Json> = Arr.map(
     Arr.filter(
       model.issues ?? [],
       (one) =>
@@ -2860,10 +2860,10 @@ export const runOnPath = <A, E>(
 ) => runEffect(effect.pipe(Effect.provide(Layer.fresh(forgeHttpOnPath))));
 
 export function fakeForge(forge: MrForge, start: ForgeModel) {
-  const calls: string[] = [];
+  const calls: Array<string> = [];
   const environments: Array<RunnerEnv | undefined> = [];
-  const requests: FakeRequest[] = [];
-  const aborted: string[] = [];
+  const requests: Array<FakeRequest> = [];
+  const aborted: Array<string> = [];
   let model = start;
   const run: Runner = (cmd, args, _cwd, env) =>
     Effect.map(Clock.currentTimeMillis, (now) => {
@@ -2961,7 +2961,7 @@ export const forgeOnPath = Effect.fn("forge.onPath")(function* (
     ),
   );
   yield* bin.add(CLI[forge], line);
-  const requests: FakeRequest[] = [];
+  const requests: Array<FakeRequest> = [];
   const face = httpFace(
     forge,
     {

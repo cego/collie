@@ -47,7 +47,7 @@ const human: Actor = { origin: "cli-tty", requestId: "req-1" };
 const board: Actor = { origin: "board", requestId: "req-2" };
 const driver: Actor = { origin: "driver", requestId: "d-1" };
 
-const actions: Action[] = [
+const actions: Array<Action> = [
   { kind: "deliver", run: "r1", agent: "impl-1", text: "stay in src", mode: "boundary" },
   { kind: "hold", run: "r1" },
 ];
@@ -109,7 +109,7 @@ test("a card-bound proposal carries the revision it was asked about", () =>
 
 test("the hash is of the payload, so a changed action is a different proposal", () => {
   expect(contentHash(targets, actions)).toBe(contentHash(targets, actions));
-  const reworded: Action[] = [
+  const reworded: Array<Action> = [
     { kind: "deliver", run: "r1", agent: "impl-1", text: "stay in SRC", mode: "boundary" },
     { kind: "hold", run: "r1" },
   ];

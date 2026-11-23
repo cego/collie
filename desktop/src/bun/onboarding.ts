@@ -332,16 +332,16 @@ export const doctorOn = (route: Pick<Route, "collie">, gitlabHost?: string) =>
           const steps = Arr.flatMap(checks, ({ name, ok, detail, fix, warn }) => {
             const byDefault = DEFAULT_STEPS.get(name);
             if (byDefault !== undefined && (!ok || warn === true || fix !== "")) {
-              const returned: OnboardStep[] = [
+              const returned: Array<OnboardStep> = [
                 { step: byDefault, title: name, status: "needs_human", detail, command: fix },
               ];
               return returned;
             }
             if (ok) {
-              const returned: OnboardStep[] = [];
+              const returned: Array<OnboardStep> = [];
               return returned;
             }
-            const returned: OnboardStep[] = [
+            const returned: Array<OnboardStep> = [
               {
                 step: pipe_(name, Str.replaceAll(" ", "-")),
                 title: name,

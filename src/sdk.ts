@@ -564,7 +564,7 @@ const isPanel = (seats: Seat | ReadonlyArray<Seat>): seats is ReadonlyArray<Seat
  * The panel this workflow's definition seats for a role: every seat it names, or one that
  * prefers nothing of its own where it names none. Work given a seat sits at it.
  */
-export const panelOf: (role: string) => Effect.Effect<readonly [Seat, ...Seat[]]> = (role) =>
+export const panelOf: (role: string) => Effect.Effect<readonly [Seat, ...Array<Seat>]> = (role) =>
   Effect.gen(function* () {
     const given = (yield* WorkflowAgents)?.roles?.[role];
     const [first = {}, ...rest] = given === undefined ? [] : isPanel(given) ? given : [given];
@@ -2158,7 +2158,7 @@ const readMetadata = Schema.decodeUnknownResult(DeclaredMetadata, { errors: "all
  * author's runs and long before a Run, a worktree or an agent exists.
  */
 export function checkEntry(entry: WorkflowEntry) {
-  const problems: string[] = [];
+  const problems: Array<string> = [];
   if (!IDENTITY.test(entry.id)) {
     problems.push(`workflow id "${entry.id}" is not an identity: lower case, digits and dashes`);
   }
@@ -2206,7 +2206,7 @@ export function checkEntry(entry: WorkflowEntry) {
 }
 
 function hintProblems(hints: Readonly<Record<string, InputStrategy>>, fields: ReadonlySet<string>) {
-  const problems: string[] = [];
+  const problems: Array<string> = [];
   for (const [field, strategy] of Rec.toEntries(hints)) {
     if (!fields.has(field)) problems.push(`hint for "${field}", which is not an input`);
     if (!KNOWN_STRATEGIES.has(strategy)) {
@@ -2221,7 +2221,7 @@ function hintProblems(hints: Readonly<Record<string, InputStrategy>>, fields: Re
 
 function outcomeProblems(outcome: OutcomeContract | undefined) {
   if (!outcome) return [];
-  const problems: string[] = [];
+  const problems: Array<string> = [];
   if (outcome.fixed !== undefined && outcome.selectable !== undefined) {
     problems.push("an outcome is either fixed or selectable, not both");
   }
@@ -2239,7 +2239,7 @@ function outcomeProblems(outcome: OutcomeContract | undefined) {
 }
 
 function offerProblems(metadata: WorkflowMetadata | undefined, workflow: string) {
-  const problems: string[] = [];
+  const problems: Array<string> = [];
   const seen = new Set<string>();
   for (const offer of [...(metadata?.actions ?? []), ...(metadata?.followUps ?? [])]) {
     for (const id of offer.connections ?? []) {

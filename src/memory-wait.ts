@@ -38,7 +38,7 @@ const waitsOf = (runId: string) =>
   Effect.gen(function* () {
     const rows = yield* RunRecords.use((records) => records.controlsOf(MEMORY_WAIT, runId));
     const now = yield* Clock.currentTimeMillis;
-    const waits: MemoryWait[] = [];
+    const waits: Array<MemoryWait> = [];
     for (const row of rows) {
       const decoded = Schema.decodeOption(MemoryWaitJson)(row.data);
       if (Option.isSome(decoded) && now - decoded.value.read <= 3 * decoded.value.every)

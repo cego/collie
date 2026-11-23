@@ -240,7 +240,7 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
   const path = yield* Path.Path;
   const root = env.pluginRoot;
   const search = env.raw["PATH"] ?? "";
-  const checks: Check[] = [];
+  const checks: Array<Check> = [];
 
   checks.push(
     { name: "hc", ...(yield* hcInstalled(env, search, run)) },
@@ -280,7 +280,7 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
       : failed("the operator skill is not installed", `sh ${root}/prepare.sh`)),
   });
 
-  const absent: string[] = [];
+  const absent: Array<string> = [];
   for (const harness of needs.harnesses) {
     const kind = HARNESSES[harness]?.kind ?? harness;
     if ((yield* onPath(search, kind)) === null) absent.push(kind);
@@ -558,7 +558,7 @@ export const doctorOn = Effect.fn("Doctor.doctorOn")(function* (
   return report([...("data" in said.value ? said.value.data : said.value.error.details).checks]);
 });
 
-function render(checks: Check[]) {
+function render(checks: Array<Check>) {
   return Arr.join(
     Arr.flatMap(checks, (check) => [
       `  ${check.ok ? (check.warn ? "!" : "✓") : "✗"} ${pipe(check.name, Str.padEnd(16))}${check.detail}`,
@@ -568,7 +568,7 @@ function render(checks: Check[]) {
   );
 }
 
-function report(checks: Check[]) {
+function report(checks: Array<Check>) {
   const failed = Arr.filter(checks, (check) => !check.ok);
   if (failed.length === 0) {
     return {

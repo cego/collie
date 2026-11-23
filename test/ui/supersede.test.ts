@@ -54,8 +54,8 @@ test("a newer focus interrupts the read in flight, and the newer one lands", () 
   runEffect(
     Effect.scoped(
       Effect.gen(function* () {
-        const started: string[] = [];
-        const interrupted: string[] = [];
+        const started: Array<string> = [];
+        const interrupted: Array<string> = [];
         const held = yield* Deferred.make<void>();
 
         const driven = yield* driveBridge({
@@ -339,7 +339,7 @@ test("a command that takes its time does not stall the next keypress", () =>
   runEffect(
     Effect.scoped(
       Effect.gen(function* () {
-        const acted: Command[] = [];
+        const acted: Array<Command> = [];
         const slow = yield* Deferred.make<void>();
 
         const driven = yield* driveBridge({
@@ -372,7 +372,7 @@ test("a Refresh asked for twice is read twice, because a repeat is the whole poi
   runEffect(
     Effect.scoped(
       Effect.gen(function* () {
-        const nonces: number[] = [];
+        const nonces: Array<number> = [];
 
         const driven = yield* driveBridge({
           filter: { kind: "workspace", id: "w1" } as const,
@@ -466,7 +466,7 @@ test("the board opens on the scope from config, and g is what changes it after",
   runEffect(
     Effect.scoped(
       Effect.gen(function* () {
-        const scopes: string[] = [];
+        const scopes: Array<string> = [];
 
         const driven = yield* driveBridge({
           filter: { kind: "all" } as const,

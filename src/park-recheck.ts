@@ -143,7 +143,7 @@ export const recheckPark = (
       case "target-red": {
         const latest = yield* lastCiTargets(stateDir, view.runId);
         if (latest.size === 0) return reply(false, "no parked CI job recorded");
-        const passed: string[] = [];
+        const passed: Array<string> = [];
         for (const target of latest.values()) {
           const ref = mrRefOf(target.mr);
           if (ref === null) return reply(false, `job ${target.job} has no merge request`);

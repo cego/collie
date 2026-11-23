@@ -215,7 +215,7 @@ test("one revision reads each source once and the next revision reads an edited 
       yield* fs.makeDirectory(linked);
       yield* fs.writeFileString(`${linked}/note.md`, "Before");
       yield* fs.symlink(linked, `${dir}/linked-notes`);
-      const reads: string[] = [];
+      const reads: Array<string> = [];
       const counted: FileSystem.FileSystem = {
         ...fs,
         readFileString: (file, encoding) =>

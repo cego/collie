@@ -9,7 +9,7 @@ import { refusal } from "../kept-records";
 test("a successful toast retry clears the original sent drafts and preserves later edits", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const sent: Draft[] = [
+      const sent: Array<Draft> = [
         { id: "a", anchor: { _tag: "Plan", file: "SPEC.md", quote: "one" }, text: "first" },
         { id: "b", anchor: { _tag: "Plan", file: "SPEC.md", quote: "two" }, text: "second" },
       ];
@@ -19,7 +19,7 @@ test("a successful toast retry clears the original sent drafts and preserves lat
         action: DesktopAction;
         request: string | undefined;
       }> = [];
-      const notices: ActionNotice[] = [];
+      const notices: Array<ActionNotice> = [];
       const run = actionRunner(
         ({ payload }) => {
           calls.push(payload);
@@ -56,7 +56,7 @@ test("a failure on the view's own channel offers Try again under the request the
   Effect.runPromise(
     Effect.gen(function* () {
       const requests: Array<string | undefined> = [];
-      const notices: ActionNotice[] = [];
+      const notices: Array<ActionNotice> = [];
       const run = actionRunner(
         ({ payload }) => {
           requests.push(payload.request);
@@ -80,7 +80,7 @@ test("every try, Try again's too, says when it starts and how it ended", () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const tries: Array<boolean | null> = [];
-      const notices: ActionNotice[] = [];
+      const notices: Array<ActionNotice> = [];
       let calls = 0;
       const run = actionRunner(
         () =>
@@ -104,7 +104,7 @@ test("Try again asks again why not to send, so a record gone stale since is refu
   Effect.runPromise(
     Effect.gen(function* () {
       const sent: Array<string | undefined> = [];
-      const notices: ActionNotice[] = [];
+      const notices: Array<ActionNotice> = [];
       const run = actionRunner(
         ({ payload }) => {
           sent.push(payload.unsent);

@@ -157,7 +157,7 @@ test("a remote whose path would leave verify/ has no remembered file", () => {
 });
 
 test("an Intent's authority is the set; the seed is only for a Run with no Intent", () => {
-  const intent = (specs: VerifySpec[]) => ({
+  const intent = (specs: Array<VerifySpec>) => ({
     authority: { ...DEFAULT_AUTHORITY, run_verification: specs },
   });
   expect(approvedFor([TESTS], null)).toEqual([TESTS]);

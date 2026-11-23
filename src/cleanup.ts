@@ -195,8 +195,8 @@ const timedJudging = <A, E, R, F, Q>(
 export const judge = <E = never, R = never>(sweepers: Sweepers<E, R>) =>
   timedJudging("listing", sweepers, (sweepers, judgeOf) =>
     Effect.gen(function* () {
-      const remove: CleanupItem[] = [];
-      const keep: CleanupKept[] = [];
+      const remove: Array<CleanupItem> = [];
+      const keep: Array<CleanupKept> = [];
       for (const sweeper of sweepers) {
         const judged = yield* judgeOf(sweeper);
         remove.push(...judged.remove);
@@ -241,8 +241,8 @@ export const sweep = <E = never, R = never>(
     Effect.gen(function* () {
       const path = yield* Path.Path;
       const journal = path.join(stateDir, JOURNAL);
-      const removed: CleanupItem[] = [];
-      const keep: CleanupKept[] = [];
+      const removed: Array<CleanupItem> = [];
+      const keep: Array<CleanupKept> = [];
       for (const sweeper of sweepers) {
         const judged = yield* judgeOf(sweeper);
         const retried = new Set(Arr.map(judged.retry ?? [], (item) => item.target));
@@ -320,8 +320,8 @@ export const generationsSweeper: (dir: string) => Sweeper = (dir) => {
     judge: Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
-      const remove: CleanupItem[] = [];
-      const keep: CleanupKept[] = [];
+      const remove: Array<CleanupItem> = [];
+      const keep: Array<CleanupKept> = [];
       for (const name of names) {
         const target = `${dir}/${name}`;
         const unused = yield* unusedFor(target);
@@ -453,8 +453,8 @@ export const worktreesSweeper: (opts: {
     judge: Effect.gen(function* () {
       const settling = opts.settling === undefined ? undefined : yield* opts.settling;
       const round = yield* judgeWorktrees({ ...opts, settling, dryRun: true });
-      const remove: CleanupItem[] = [];
-      const keep: CleanupKept[] = [];
+      const remove: Array<CleanupItem> = [];
+      const keep: Array<CleanupKept> = [];
       if (round.busy)
         keep.push({ kind, target: opts.stateDir, reason: "another sweep is judging worktrees" });
       for (const one of round.judged) {
@@ -609,8 +609,8 @@ export const stateSweeper: (stateDir: string, rows: ReadonlySet<string>) => Swee
   return {
     kind,
     judge: Effect.gen(function* () {
-      const remove: CleanupItem[] = [];
-      const keep: CleanupKept[] = [];
+      const remove: Array<CleanupItem> = [];
+      const keep: Array<CleanupKept> = [];
       for (const target of yield* entries) {
         const judged = yield* verdict(target);
         if (judged === null) continue;
@@ -642,7 +642,7 @@ export const uploadsSweeper: (stateDir: string) => Sweeper = (stateDir) => {
     kind,
     judge: Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const remove: CleanupItem[] = [];
+      const remove: Array<CleanupItem> = [];
       for (const name of yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []))) {
         if (!/^[0-9a-f]{64}$/.test(name)) continue;
         const target = `${root}/${name}`;
@@ -694,9 +694,9 @@ export const compactionSweeper: (
       const fs = yield* FileSystem.FileSystem;
       const names = yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []));
       const live = yield* listed;
-      const remove: CleanupItem[] = [];
-      const keep: CleanupKept[] = [];
-      const retry: CleanupItem[] = [];
+      const remove: Array<CleanupItem> = [];
+      const keep: Array<CleanupKept> = [];
+      const retry: Array<CleanupItem> = [];
       for (const name of names) {
         const target = `${root}/${name}`;
         if (live === null) keep.push({ kind, target, reason: "could not ask core what is live" });
@@ -832,8 +832,8 @@ export const tasksSweeper: (opts: {
   return {
     kind,
     judge: Effect.gen(function* () {
-      const remove: CleanupItem[] = [];
-      const keep: CleanupKept[] = [];
+      const remove: Array<CleanupItem> = [];
+      const keep: Array<CleanupKept> = [];
       for (const task of opts.tasks) {
         const judged = yield* closing(task);
         if (judged === null) continue;
@@ -1019,8 +1019,8 @@ export const idleAgentsSweeper: (opts: {
     judge: Effect.gen(function* () {
       const found = yield* candidates;
       if (opts.idleCloseMs <= 0) return { remove: [], keep: [] };
-      const remove: CleanupItem[] = [];
-      const keep: CleanupKept[] = [];
+      const remove: Array<CleanupItem> = [];
+      const keep: Array<CleanupKept> = [];
       for (const one of found) {
         const target = targetOf(one.launched.agent, one.run.id);
         const judged = yield* verdict(one);
@@ -1120,8 +1120,8 @@ export const renovateClonesSweeper: (stateDir: string, runs: ReadonlyArray<RunFa
     judge: Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const names = yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []));
-      const remove: CleanupItem[] = [];
-      const keep: CleanupKept[] = [];
+      const remove: Array<CleanupItem> = [];
+      const keep: Array<CleanupKept> = [];
       for (const name of names) {
         const target = `${root}/${name}`;
         const judged = yield* verdict(target);
@@ -1169,8 +1169,8 @@ export const measurementTreesSweeper: (
       const fs = yield* FileSystem.FileSystem;
       const holder = yield* lockHolder(lock);
       const measuring = holder !== null && (yield* holderLives(holder));
-      const remove: CleanupItem[] = [];
-      const keep: CleanupKept[] = [];
+      const remove: Array<CleanupItem> = [];
+      const keep: Array<CleanupKept> = [];
       for (const run of yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => [])))
         for (const tree of yield* fs
           .readDirectory(`${root}/${run}`)
@@ -1245,7 +1245,7 @@ export const buildCachesSweeper: (
         checkout,
       );
       if (listed.code !== 0) return [];
-      const caches: string[] = [];
+      const caches: Array<string> = [];
       for (const entry of Str.split(listed.stdout, "\0"))
         if (pipe(entry, Str.endsWith("/"))) {
           const dir = `${checkout}/${pipe(entry, Str.slice(0, -1))}`;
@@ -1271,8 +1271,8 @@ export const buildCachesSweeper: (
   return {
     kind,
     judge: Effect.gen(function* () {
-      const remove: CleanupItem[] = [];
-      const keep: CleanupKept[] = [];
+      const remove: Array<CleanupItem> = [];
+      const keep: Array<CleanupKept> = [];
       for (const checkout of yield* checkouts)
         for (const target of yield* cachesIn(checkout.path)) {
           const judged = reasonOf(checkout.live);
@@ -1388,8 +1388,8 @@ export const retentionSweeper: (opts: {
   return {
     kind,
     judge: Effect.gen(function* () {
-      const remove: CleanupItem[] = [];
-      const keep: CleanupKept[] = [];
+      const remove: Array<CleanupItem> = [];
+      const keep: Array<CleanupKept> = [];
       const facts = yield* opts.facts;
       const open = yield* Effect.cached(openNow);
       for (const task of facts.tasks) {

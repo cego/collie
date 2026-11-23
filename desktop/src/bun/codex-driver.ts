@@ -283,7 +283,7 @@ const codexEvents = (thread: string) => {
   const reasons = new Set<string>();
   const tools = new Set<string>();
   const runId = () => `${thread}:${turn}`;
-  const startTool: (item: Item) => AguiEvent[] = (item) => {
+  const startTool: (item: Item) => Array<AguiEvent> = (item) => {
     const tool = toolOf(item);
     if (tool === undefined || tools.has(item.id)) return [];
     tools.add(item.id);
@@ -319,7 +319,7 @@ const codexEvents = (thread: string) => {
                     },
                   ])),
               { type: "TEXT_MESSAGE_CONTENT", messageId: itemId, delta },
-            ] satisfies AguiEvent[],
+            ] satisfies Array<AguiEvent>,
         });
       case "item/reasoning/summaryTextDelta":
         return Option.match(decodeDelta(params), {
@@ -338,7 +338,7 @@ const codexEvents = (thread: string) => {
                     },
                   ])),
               { type: "REASONING_MESSAGE_CONTENT", messageId: itemId, delta },
-            ] satisfies AguiEvent[],
+            ] satisfies Array<AguiEvent>,
         });
       case "item/started":
         return Option.match(decodeItem(params), {
@@ -772,7 +772,7 @@ export const codexDriver: (
       read((server) =>
         Effect.gen(function* () {
           const threadId = yield* threadOf(id);
-          const items: Item[] = [];
+          const items: Array<Item> = [];
           let cursor: string | null = null;
           do {
             const page: Effect.Success<ReturnType<typeof decodeItems>> = yield* server

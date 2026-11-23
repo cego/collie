@@ -128,7 +128,7 @@ export const gitlabChecks = Effect.fn("Doctor.gitlabChecks")(function* (
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
   const root = env.pluginRoot;
-  const checks: Check[] = [];
+  const checks: Array<Check> = [];
   const glabDir = yield* onPath(search, "glab");
   const host = yield* gitlabHostOf(env);
   const [auth, everyHost] = glabDir

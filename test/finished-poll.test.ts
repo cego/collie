@@ -324,7 +324,7 @@ test("a listing keeps every Run, finished ones included, in the store's order", 
           created_at: "2026-10-15T00:00:00.000Z",
         });
         const quiet = yield* loaded("quiet");
-        const runs: string[] = [];
+        const runs: Array<string> = [];
         for (const [at, task] of [null, "task-1", null, "task-1"].entries()) {
           const run = yield* started(quiet, `r${at}`, {}, task);
           yield* settled(run.runId, "complete");

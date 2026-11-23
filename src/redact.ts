@@ -38,11 +38,11 @@ export type Given =
 
 export interface ScrubbedText {
   readonly text: string;
-  readonly removed: string[];
+  readonly removed: Array<string>;
 }
 
 export function scrub(text: string) {
-  const removed: string[] = [];
+  const removed: Array<string> = [];
   let out = text;
   for (const [looksLike, replacement, kind] of SECRETS)
     // oxlint-disable-next-line effecttsgo/prefer-effect-string -- This replacement depends on each match; Effect String accepts only string replacements.
@@ -56,7 +56,7 @@ export function scrub(text: string) {
 export const redact = (text: string) => scrub(text).text;
 
 export function scrubJson<A extends Given>(value: A) {
-  const removed: string[] = [];
+  const removed: Array<string> = [];
   const walk: (one: Given) => Given = (one) => {
     if (isString(one)) {
       const done = scrub(one);

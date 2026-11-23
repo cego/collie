@@ -4,7 +4,7 @@ import { pipe as pipe_ } from "effect/Function";
 import { Effect, Queue } from "effect";
 
 export function tokenizeKeys(chunk: string) {
-  const out: string[] = [];
+  const out: Array<string> = [];
   let i = 0;
   while (i < chunk.length) {
     if (chunk[i] === "\u001b") {

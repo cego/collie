@@ -481,7 +481,7 @@ const QUESTION: TaskView["decision"] = {
   options: [],
 };
 
-const SENTENCES: Array<[string, TaskView[], { text: string; urgent: boolean }]> = [
+const SENTENCES: Array<[string, Array<TaskView>, { text: string; urgent: boolean }]> = [
   ["an empty board", [], { text: "Nothing needs you. 0 working.", urgent: false }],
   [
     "nothing waiting",
@@ -3766,7 +3766,7 @@ const checked: (name: string, head: string, result?: "pass" | "fail") => Verific
 const checkout = Effect.fn("board.checkout")(function* (branch: string) {
   const fs = yield* FileSystem.FileSystem;
   const repo = yield* fs.makeTempDirectoryScoped({ prefix: "collie-board-repo-" });
-  const git = (...args: string[]) =>
+  const git = (...args: Array<string>) =>
     Effect.promise(() => Bun.$`git ${args}`.cwd(repo).quiet().text());
   yield* git("init", "-q", "-b", branch);
   yield* git(
@@ -4483,7 +4483,7 @@ test("following a check hands on each line while the check is still running", ()
       yield* fs.makeDirectory(`${run.evidence}/checks`, { recursive: true });
       yield* fs.writeFileString(log, "");
       yield* marking(run, { log });
-      const said: string[] = [];
+      const said: Array<string> = [];
       const following = yield* Effect.forkChild(
         followLog(run, log, (text) => Effect.sync(() => void said.push(text))),
       );
@@ -4618,7 +4618,7 @@ const stepsRecorded = Effect.fn("board.stepsRecorded")(function* (
   const now = yield* DateTime.now;
   const ago = (ms: number) => DateTime.formatIso(DateTime.subtract(now, { milliseconds: ms }));
   const minutes = 60_000;
-  const lines: StepLine[] = [
+  const lines: Array<StepLine> = [
     { kind: "forecast", steps: path, at: ago((entered.length + 1) * 4 * minutes) },
   ];
   Arr.forEach(entered, ({ step, left }, at) => {
@@ -5415,7 +5415,7 @@ test.each([false, true])("a fan-out's Repo runs appear once, by Wave (item calls
         );
       }
       const fan = declared("fan", { kind: "workflow" });
-      const startedIn: StepLine[] = items
+      const startedIn: Array<StepLine> = items
         ? [
             { kind: "forecast", steps: [fan], at: "2026-09-14T10:00:00.000Z" },
             {

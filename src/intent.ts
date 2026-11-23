@@ -261,7 +261,7 @@ export function propagate(parent: Intent, child: Intent) {
     Arr.filter(parent.constraints, (c) => !ownIds.has(c.id)),
     (c) => ({ ...c, source: "parent" as const }),
   );
-  const conflicts: string[] = [];
+  const conflicts: Array<string> = [];
   for (const c of parent.constraints)
     if (ownIds.has(c.id)) conflicts.push(`constraint ${c.id}: the child's own entry is kept`);
   const goal = child.goal ?? parent.goal;
@@ -296,7 +296,7 @@ export function extractRequirements(text: string, file: string) {
   const lines = Str.split(text, "\n");
   const constraints: Array<Omit<Constraint, "since">> = [];
   let heading: string | null = null;
-  let bullet: { indent: number; parts: string[]; line: number } | null = null;
+  let bullet: { indent: number; parts: Array<string>; line: number } | null = null;
   const flush = () => {
     if (bullet === null || heading === null) return;
     const body = Arr.join(bullet.parts, " ");
@@ -347,7 +347,7 @@ function firstParagraphUnder(lines: ReadonlyArray<string>, heading: RegExp) {
     () => -1,
   );
   if (start < 0) return null;
-  const paragraph: string[] = [];
+  const paragraph: Array<string> = [];
   for (const line of lines.slice(start + 1)) {
     if (HEADING.test(line) || (Str.trim(line) === "" && paragraph.length > 0)) break;
     if (Str.trim(line) !== "") paragraph.push(Str.trim(line));
@@ -432,7 +432,7 @@ export function parseConstraint(text: string, severity: "block" | "warn") {
   return "error" in rule ? rule : { ...base, kind: "rule" as const, rule };
 }
 
-function parseRule(kind: string, args: string[]) {
+function parseRule(kind: string, args: Array<string>) {
   const wrong = (spelling: string) => ({
     error: `rule:${kind} is spelled rule:${kind}:${spelling}`,
   });

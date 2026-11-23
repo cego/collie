@@ -226,7 +226,7 @@ const MODULE = new URL("../src/board-model.ts", import.meta.url).pathname;
 const RUNTIME_ONLY = /^(bun(:|$)|node:|@effect\/platform-bun|@opentui\/)/;
 
 const bundled = Effect.gen(function* () {
-  const reached: string[] = [];
+  const reached: Array<string> = [];
   const built = yield* Effect.promise(() =>
     Bun.build({
       entrypoints: [MODULE],

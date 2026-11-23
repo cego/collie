@@ -64,14 +64,14 @@ export interface RunRow {
 export interface WorkspaceView {
   repo: string;
   cwd: string;
-  worktrees: string[];
+  worktrees: Array<string>;
   behind: number | null;
   newer?: string | null;
   now: number;
-  agents: AgentRow[];
+  agents: Array<AgentRow>;
   extraAgents: number;
-  active: RunRow[];
-  recent: RunRow[];
+  active: Array<RunRow>;
+  recent: Array<RunRow>;
 }
 
 export interface WideGroup {
@@ -81,14 +81,14 @@ export interface WideGroup {
   running: number;
   needsYou: number;
   summary: string;
-  active: RunRow[];
-  recent: RunRow[];
-  agents: AgentRow[];
+  active: Array<RunRow>;
+  recent: Array<RunRow>;
+  agents: Array<AgentRow>;
 }
 
 export interface WideView {
-  groups: WideGroup[];
-  quiet: string[];
+  groups: Array<WideGroup>;
+  quiet: Array<string>;
   now: number;
 }
 
@@ -174,7 +174,7 @@ const deliveredOf = Effect.fn("deliveredOf")(function* (run: RunFacts) {
 });
 
 function recentDetail(run: RunFacts) {
-  const parts: string[] = [run.state];
+  const parts: Array<string> = [run.state];
   if (run.state !== "succeeded" && run.note !== null) parts.push(run.note);
   if (run.mr !== null) parts.push(run.mr);
   return Arr.join(parts, " · ");
@@ -204,12 +204,12 @@ const touchedAt = (run: RunFacts) =>
 export const buildView = Effect.fn("buildView")(function* (
   opts: SessionKey & {
     stateDir: string;
-    alive: AgentInfo[];
+    alive: Array<AgentInfo>;
     runs: ReadonlyArray<RunFacts>;
     tasks: ReadonlyArray<TaskRecord>;
     registered: ReadonlyArray<AgentEntry>;
     now?: number;
-    worktrees?: string[];
+    worktrees?: Array<string>;
     pluginRoot?: string;
     releases?: string;
     quietMs?: number;
@@ -229,7 +229,7 @@ export const buildView = Effect.fn("buildView")(function* (
     belongs(workspaceOf(r, tasks), opts, agentsHere(r), opts.grouped ?? false),
   );
 
-  const rows: AgentRow[] = [];
+  const rows: Array<AgentRow> = [];
   for (const run of runs) {
     for (const entry of agentsHere(run)) {
       if (Arr.some(rows, (r) => r.agent === entry.agent)) continue;
@@ -252,7 +252,7 @@ export const buildView = Effect.fn("buildView")(function* (
   const fixable = new Set<string>();
   for (const r of runs) if (yield* fixableRun(r)) fixable.add(r.id);
 
-  const active: RunRow[] = [];
+  const active: Array<RunRow> = [];
   for (const r of Arr.filter(runs, (r) => !settled(r))) {
     // WARNING: herdr's blocked is a permission prompt that nothing else records.
     const blocked = Arr.some(rows, (row) => row.run === r.id && row.status === "blocked");
@@ -273,7 +273,7 @@ export const buildView = Effect.fn("buildView")(function* (
     });
   }
 
-  const recent: RunRow[] = [];
+  const recent: Array<RunRow> = [];
   for (const r of Arr.filter(runs, settled).slice(0, RECENT)) {
     recent.push({
       id: r.id,
@@ -315,7 +315,7 @@ export function commitsBehind(behind: number) {
   return `${behind} commit${behind === 1 ? "" : "s"} behind`;
 }
 
-function section(name: string, rows: string[], empty: string) {
+function section(name: string, rows: Array<string>, empty: string) {
   return ["", name, ...(rows.length > 0 ? rows : [`  (${empty})`])];
 }
 
@@ -339,7 +339,7 @@ function askingRows(choice: PendingChoice, asking: Asking) {
 }
 
 function liveLines(live: Live) {
-  const lines: Line[] = [
+  const lines: Array<Line> = [
     ...newsLines(live.news),
     ...Arr.flatMap(live.cards, cardLines),
     ...Arr.flatMap(live.drift, (report) => driftLines(report)),

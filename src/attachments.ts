@@ -105,7 +105,7 @@ export const listAttachments = Effect.fn("attachments.list")(function* (dir: str
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
-  const found: Attachment[] = [];
+  const found: Array<Attachment> = [];
   for (const name of Arr.sortWith(
     names,
     (value) => value,
@@ -125,7 +125,7 @@ export const mediaTypeOf = (file: string) =>
 export const attachedLine = (path: string) => `Attached: ${path}`;
 
 export const typedPaths = (typed: string) => {
-  const paths: string[] = [];
+  const paths: Array<string> = [];
   let word: string | null = null;
   let quote: "'" | '"' | null = null;
   for (let at = 0; at < typed.length; at++) {

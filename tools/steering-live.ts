@@ -107,7 +107,7 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
     );
   });
 
-  const rows: Row[] = [];
+  const rows: Array<Row> = [];
 
   const nowId = "live-now-1";
   const sent = yield* deliver(nowId, "now");

@@ -161,8 +161,8 @@ test("the TUI board asks again for what a field cannot take, and takes Merge onl
         const project = yield* projectOf(world);
         const client = yield* connect(world.state).pipe(Effect.orDie);
         const runId = yield* finished(client, project).pipe(Effect.orDie);
-        const asked: string[] = [];
-        const headers: string[] = [];
+        const asked: Array<string> = [];
+        const headers: Array<string> = [];
         const answers = ["maybe", "false", "true"];
         const picks = ["cancel", "take"];
         const prompts: FlowPrompts = {
@@ -207,7 +207,7 @@ test("the TUI preserves an empty enum choice, distinguishes unset, and cancels w
           ["(empty)", { mr: MR, then: "" }, 2],
           ["Not set", { mr: MR }, 3],
         ] as const) {
-          const choices: string[][] = [];
+          const choices: Array<Array<string>> = [];
           const prompts: FlowPrompts = {
             menu: (items) => {
               choices.push(Arr.map(items, (one) => one.title));

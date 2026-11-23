@@ -102,9 +102,9 @@ test("the sweep judges from the model as from disk, reading only the files of Ru
       const fs = yield* FileSystem.FileSystem;
       const dir = rig.stateDir;
       const now = yield* Clock.currentTimeMillis;
-      const tasks: TaskRecord[] = [];
-      const runs: RunFacts[] = [];
-      const views: TaskView[] = [];
+      const tasks: Array<TaskRecord> = [];
+      const runs: Array<RunFacts> = [];
+      const views: Array<TaskView> = [];
       for (const n of Arr.range(1, RUNS)) {
         const record: TaskRecord = {
           id: `task-${n}`,

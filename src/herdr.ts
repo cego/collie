@@ -243,7 +243,7 @@ export class Herdr {
   }
 
   agentList() {
-    const returned: HerdrEffect<AgentInfo[]> = this.onCore((socket) =>
+    const returned: HerdrEffect<Array<AgentInfo>> = this.onCore((socket) =>
       coreCall(socket, "terminal.list", {}).pipe(
         Effect.map((listed) => Arr.map(Arr.filter(listed.terminals, isAgentTerminal), coreAgent)),
       ),

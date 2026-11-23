@@ -1619,7 +1619,7 @@ test("a host on a development checkout names its build, and one on a release doe
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const checkout = yield* fs.makeTempDirectoryScoped({ prefix: "collie-host-checkout-" });
-      const git = (...args: string[]) =>
+      const git = (...args: Array<string>) =>
         exec(["git", "-C", checkout, ...args], {
           env: {
             PATH: "/usr/bin:/bin",

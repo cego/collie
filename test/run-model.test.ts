@@ -72,7 +72,7 @@ test("a change to one Run re-reads only that Run's files, and the board still eq
           return run;
         }),
       );
-      const reads: string[] = [];
+      const reads: Array<string> = [];
       const logged = (path: string) => Effect.sync(() => reads.push(path));
       const model = yield* makeRunModel(dir, "installation").pipe(
         Effect.provideService(FileSystem.FileSystem, {

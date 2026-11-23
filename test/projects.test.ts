@@ -159,7 +159,7 @@ test("interleaved remote branch fetches place each checkout on its own fetched c
         { cwd: rig.projectDir },
       );
       yield* exec(["git", "remote", "add", "origin", remote], { cwd: rig.projectDir });
-      const heads: string[] = [];
+      const heads: Array<string> = [];
       for (const branch of ["first-topic", "second-topic"]) {
         yield* exec(["git", "switch", "-qc", branch], { cwd: rig.projectDir });
         yield* exec(

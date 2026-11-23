@@ -57,8 +57,8 @@ const item: (key: string, significance: Significance) => Item = (key, significan
 
 const machine: (
   items: ReadonlyArray<Item>,
-  read: string[],
-  declared?: Declaration[],
+  read: Array<string>,
+  declared?: Array<Declaration>,
 ) => ChatMachine = (items, read, declared = []) => {
   const door: Partial<ChatDoor> = {
     declare: (payload) => Effect.sync(() => void declared.push(payload)),
@@ -85,19 +85,19 @@ interface ScriptedDrivers {
 
 interface Seen {
   flock?: FlockChat;
-  readonly transcripts: Map<string, unknown[]>;
-  readonly prompts: string[];
-  readonly contents: unknown[];
-  readonly context: string[];
-  readonly refusals: string[];
-  readonly interrupts: string[];
+  readonly transcripts: Map<string, Array<unknown>>;
+  readonly prompts: Array<string>;
+  readonly contents: Array<unknown>;
+  readonly context: Array<string>;
+  readonly refusals: Array<string>;
+  readonly interrupts: Array<string>;
   readonly sessions: Array<{
     readonly model: string;
     readonly resume?: string;
     readonly sessionId?: string;
   }>;
-  readonly servers: string[][];
-  readonly efforts: string[];
+  readonly servers: Array<Array<string>>;
+  readonly efforts: Array<string>;
 }
 
 const SAID = { type: "stream_event", parent_tool_use_id: null };
@@ -232,7 +232,7 @@ const fakeDriver = (
   listed: ReadonlyArray<{ readonly session: string; readonly title: string; readonly at: number }>,
   transcripts: Readonly<Record<string, ReadonlyArray<ChatMessage>>> = {},
 ) => {
-  const opened: string[] = [];
+  const opened: Array<string> = [];
   const driver: ChatDriver = {
     installed: true,
     open: (id) =>
@@ -275,14 +275,14 @@ const withChat = <A, E>(
     readonly proactive: boolean;
     readonly holds?: (text: string) => boolean;
     readonly rule?: string;
-    readonly declared?: Declaration[];
+    readonly declared?: Array<Declaration>;
     readonly failedStarts?: number;
     readonly settings?: { current: DesktopSettings };
     readonly pi?: (context: DriverContext) => ChatDriver;
     readonly drivers?: ScriptedDrivers;
     readonly gate?: Deferred.Deferred<void>;
     readonly savedFile?: string;
-    readonly transcripts?: ReadonlyArray<readonly [string, unknown[]]>;
+    readonly transcripts?: ReadonlyArray<readonly [string, Array<unknown>]>;
     readonly retold?: Stream.Stream<unknown>;
     readonly readers?: Readonly<Record<string, Effect.Effect<ReadonlyArray<ListedModel>, string>>>;
   },
@@ -290,7 +290,7 @@ const withChat = <A, E>(
   body: (chat: {
     readonly conversation: Effect.Success<ReturnType<typeof openFlockChat>>;
     readonly seen: Seen;
-    readonly read: string[];
+    readonly read: Array<string>;
     readonly dir: string;
   }) => Effect.Effect<
     A,
@@ -315,7 +315,7 @@ const withChat = <A, E>(
         efforts: [],
         transcripts: new Map(opts.transcripts),
       };
-      const read: string[] = [];
+      const read: Array<string> = [];
       if (opts.savedFile !== undefined)
         yield* fs.writeFileString(`${dir}/flock-chat.json`, opts.savedFile);
       const settings = opts.settings ?? { current: { proactive: opts.proactive } };
@@ -564,7 +564,7 @@ const staged = (
   });
 
 test("a message with an image hands the SDK the words, Desktop's listing and the scaled image, and says only the words", () => {
-  const declared: Declaration[] = [];
+  const declared: Array<Declaration> = [];
   return withChat(
     { items: [item("r1:ended", "routine")], proactive: false, declared },
     answered,
@@ -1237,7 +1237,7 @@ test("the account says a turn is under way only while one is, Desktop's own or t
     answered,
     ({ conversation, seen }) =>
       Effect.gen(function* () {
-        const told: boolean[] = [];
+        const told: Array<boolean> = [];
         yield* conversation.choices.pipe(
           Stream.runForEach(({ turning }) =>
             Effect.sync(() => {
@@ -1331,7 +1331,7 @@ test("the account is told again when Desktop retells it, with each harness's lis
     answered,
     ({ conversation }) =>
       Effect.gen(function* () {
-        const told: ChatChoices[] = [];
+        const told: Array<ChatChoices> = [];
         yield* conversation.choices.pipe(
           Stream.runForEach((choices) => Effect.sync(() => void told.push(choices))),
           Effect.forkChild,
@@ -1388,7 +1388,7 @@ test("windows start the set harness's read, choosing another starts its read, an
     ({ conversation, seen }) =>
       Effect.gen(function* () {
         expect(reads).toEqual({ claude: 0, pi: 0 });
-        const told: ChatChoices[] = [];
+        const told: Array<ChatChoices> = [];
         yield* conversation.choices.pipe(
           Stream.runForEach((choices) =>
             Effect.sync(() => {

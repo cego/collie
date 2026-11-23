@@ -20,7 +20,7 @@ let cloneA: string;
 let cloneB: string;
 let first: string;
 
-const git = (cwd: string, ...args: string[]) =>
+const git = (cwd: string, ...args: Array<string>) =>
   exec(["git", "-c", "user.name=Test", "-c", "user.email=test@example.test", ...args], {
     cwd,
   }).pipe(
@@ -30,7 +30,7 @@ const git = (cwd: string, ...args: string[]) =>
     }),
   );
 
-const gitCode = (cwd: string, ...args: string[]) =>
+const gitCode = (cwd: string, ...args: Array<string>) =>
   exec(["git", ...args], { cwd }).pipe(Effect.map((ran) => ran.exitCode));
 
 beforeEach(() =>

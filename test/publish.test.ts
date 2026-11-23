@@ -18,7 +18,7 @@ test.each(["github", "gitlab"] as const)(
       (world) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
-          const git = (args: string[]) => exec(["git", ...args], { cwd: world.project });
+          const git = (args: Array<string>) => exec(["git", ...args], { cwd: world.project });
           for (const args of [
             ["init", "-b", "main"],
             ["config", "user.name", "Tester"],

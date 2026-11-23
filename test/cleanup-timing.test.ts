@@ -13,7 +13,7 @@ const judgedIn = (kind: string, took: Duration.Input) => ({
 
 const warnedOver = <A, E, R>(effect: Effect.Effect<A, E, R>, passes: Duration.Input) =>
   Effect.gen(function* () {
-    const warned: string[] = [];
+    const warned: Array<string> = [];
     const logger = Logger.make(({ logLevel, message }) => {
       if (logLevel === "Warn") warned.push(String(message));
     });

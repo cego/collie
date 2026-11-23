@@ -146,7 +146,7 @@ const byDurationDescending = ([, a]: readonly [string, number], [, b]: readonly 
   Num.Order(b, a);
 
 export const averageTimings = (records: ReadonlyArray<Readonly<Record<string, number>>>) => {
-  const seen = new Map<string, number[]>();
+  const seen = new Map<string, Array<number>>();
   for (const files of records)
     for (const [file, duration] of Rec.toEntries(files))
       seen.set(file, [...(seen.get(file) ?? []), duration]);

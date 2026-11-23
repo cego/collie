@@ -367,14 +367,14 @@ export const rollbackRunRecords = Effect.fn("RecordsImport.rollback")(function* 
   if (latest === undefined || latest.migration_id < RUN_RECORDS_MIGRATION_ID) return false;
   if (latest.migration_id > RUN_RECORDS_MIGRATION_ID)
     return yield* new LaterMigration({ migration: `${latest.migration_id}_${latest.name}` });
-  const written = new Map<string, string[]>();
+  const written = new Map<string, Array<string>>();
   const write = Effect.fnUntraced(function* (run: string, file: string, text: string) {
     yield* fs.makeDirectory(path.dirname(file), { recursive: true });
     yield* fs.writeFileString(`${file}.rollback`, text);
     yield* fs.rename(`${file}.rollback`, file);
     written.set(run, [...(written.get(run) ?? []), file]);
   });
-  const journals = new Map<string, { run: string; lines: string[] }>();
+  const journals = new Map<string, { run: string; lines: Array<string> }>();
   for (const row of yield* sql<{ run: string; journal: string; line: string }>`
     SELECT run, journal, line FROM collie_run_lines ORDER BY run, journal, seq
   `) {
@@ -399,7 +399,7 @@ export const rollbackRunRecords = Effect.fn("RecordsImport.rollback")(function* 
   const controls = yield* sql<{ control: string; run: string; key: string; data: string }>`
     SELECT control, run, key, data FROM collie_controls ORDER BY control, run, key
   `;
-  const notified = new Map<string, string[]>();
+  const notified = new Map<string, Array<string>>();
   for (const row of controls)
     if (row.control === NOTIFIED)
       notified.set(row.run, [...(notified.get(row.run) ?? []), row.key]);

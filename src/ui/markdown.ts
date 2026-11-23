@@ -32,7 +32,7 @@ const CLEARS = new Map([
 ]);
 
 export function ansiText(ansi: string) {
-  const chunks: TextChunk[] = [];
+  const chunks: Array<TextChunk> = [];
   let fg: RGBA | undefined;
   let attributes = 0;
   // oxlint-disable-next-line no-control-regex -- ANSI SGR sequences begin with the ESC control byte.

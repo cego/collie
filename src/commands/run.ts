@@ -1371,7 +1371,7 @@ const holdTask = Effect.fn("run.holdTask")(function* (
   const task = Option.getOrNull(Arr.findFirst(yield* hostTasks(env), (one) => one.id === id));
   if (task === null) return err("task_not_found", `Task "${id}" was not found.`, { task: id });
   const runs = Arr.filter((yield* runViews(env, task.id)).runs, (view) => !isSettled(view));
-  const held: string[] = [];
+  const held: Array<string> = [];
   const door = yield* cliDoor(env);
   for (const view of runs) {
     const done = yield* controlRun(env, {

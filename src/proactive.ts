@@ -59,11 +59,11 @@ export function holding(
 function reopenedOf(run: RunFacts, done: ReadonlyMap<string, Reopened>) {
   const finished = done.get(run.id);
   if (finished === undefined) {
-    const returned: Event[] = [];
+    const returned: Array<Event> = [];
     return returned;
   }
   const told = finished.told === null ? "" : ` (“${finished.told}”)`;
-  const returned: Event[] = [
+  const returned: Array<Event> = [
     {
       run: run.id,
       key: `${run.id}:reopened:${finished.delivery}`,
@@ -77,7 +77,7 @@ function reopenedOf(run: RunFacts, done: ReadonlyMap<string, Reopened>) {
 export const disputesIn = Effect.fn("Proactive.disputesIn")(function* (
   runs: ReadonlyArray<Pick<RunFacts, "id" | "dir">>,
 ) {
-  const out: Event[] = [];
+  const out: Array<Event> = [];
   for (const run of runs)
     for (const reply of yield* readReplies(run.dir).pipe(Effect.orElseSucceed(() => [])))
       if (reply.kind === "disputed")
@@ -96,7 +96,7 @@ function causesOf(
   ready: ReadonlyMap<string, { at: string; sentence: string }>,
 ) {
   const about = runTitle(run);
-  const out: Event[] = Arr.map(run.asking, (asked) => ({
+  const out: Array<Event> = Arr.map(run.asking, (asked) => ({
     run: run.id,
     key: `${run.id}:asking:${asked.name}`,
     significance: "decision",

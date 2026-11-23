@@ -426,8 +426,8 @@ export const stopDraft = (
   queue: ReadonlyArray<Pick<QueuedMessage, "content">>,
   draft: ChatDraft,
 ) => {
-  const words: string[] = [];
-  const files: Attached[] = [];
+  const words: Array<string> = [];
+  const files: Array<Attached> = [];
   let about = draft.about;
   for (const { content } of queue) {
     const said = isString(content) ? content : content.content;

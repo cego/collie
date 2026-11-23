@@ -850,7 +850,7 @@ function makeStore(stateDir: string | undefined) {
           ? Effect.succeed(new Map())
           : decisionsOfRuns(runs).pipe(
               Effect.map((rows) => {
-                const byRun = new Map<string, DecisionRow[]>();
+                const byRun = new Map<string, Array<DecisionRow>>();
                 for (const row of rows) byRun.set(row.run, [...(byRun.get(row.run) ?? []), row]);
                 return byRun;
               }),
@@ -1065,7 +1065,7 @@ function makeStore(stateDir: string | undefined) {
           runs,
           sql.withTransaction(
             Effect.gen(function* () {
-              const gone: string[] = [];
+              const gone: Array<string> = [];
               for (const run of runs) {
                 const row = (yield* byRun(run).pipe(Effect.orDie))[0];
                 if (row === undefined || row.accepted === null) continue;

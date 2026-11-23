@@ -28,7 +28,7 @@ export const piTools = (file: string) =>
     return returned;
   }).pipe(
     Effect.map((loaded) => {
-      const tools: PiTool[] = [];
+      const tools: Array<PiTool> = [];
       loaded.default({
         registerTool: (tool) => {
           tools.push(tool);

@@ -123,7 +123,7 @@ const chatOtherThan = Effect.fn("live.chatOtherThan")(function* (
 
 const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
   const fs = yield* FileSystem.FileSystem;
-  const rows: Row[] = [];
+  const rows: Array<Row> = [];
   const say = (check: string, result: Result, note: string) => rows.push({ check, result, note });
 
   const temporary = (prefix: string) =>

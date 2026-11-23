@@ -31,7 +31,7 @@ const timed = <A, E, R>(wait: (ask: Effect.Effect<number>) => Effect.Effect<A, E
     const clock = yield* TestClock.make();
     const fast: Clock.Clock = { ...clock, sleep: (duration) => clock.adjust(duration) };
     const start = clock.currentTimeMillisUnsafe();
-    const asked: number[] = [];
+    const asked: Array<number> = [];
     const ask = Effect.sync(() => {
       const at = clock.currentTimeMillisUnsafe() - start;
       asked.push(at);
@@ -363,7 +363,7 @@ const handOver = (
 test("a hand-over looks at each Run it stopped every interval, against one deadline for all", () =>
   runEffect(
     Effect.gen(function* () {
-      const looks: string[] = [];
+      const looks: Array<string> = [];
       const { result } = yield* handOver(
         (runId, at) => Effect.succeed(runId === "r-old" && at >= 500),
         looks,
@@ -494,7 +494,7 @@ test("a compaction waits for room before it is asked for, and a stop in that wai
   runEffect(
     Effect.gen(function* () {
       const stateDir = yield* controlled(null);
-      const said: string[] = [];
+      const said: Array<string> = [];
       const due = yield* atBoundary(
         {
           ...deps(

@@ -170,14 +170,14 @@ test("the agent shown is the board's entry for it, kept once it leaves, and none
   expect(shownAgent([review], undefined, review)).toBeNull();
 });
 
-const switching = (log: string[]) =>
+const switching = (log: Array<string>) =>
   switches(() => {
     log.push("let go");
     return Effect.runPromise(Effect.sleep("1 millis"));
   });
 
 test("a switch opens only after the pane shown is let go, and only the newest of those waiting", () => {
-  const log: string[] = [];
+  const log: Array<string> = [];
   const tab = switching(log);
   return Effect.runPromise(
     Effect.promise(() =>
@@ -187,7 +187,7 @@ test("a switch opens only after the pane shown is let go, and only the newest of
 });
 
 test("a switch still waiting when the tab closes never opens", () => {
-  const log: string[] = [];
+  const log: Array<string> = [];
   const tab = switching(log);
   return Effect.runPromise(
     Effect.promise(() => Promise.all([tab.to(() => log.push("review-1")), tab.stop()])).pipe(
@@ -196,7 +196,7 @@ test("a switch still waiting when the tab closes never opens", () => {
   );
 });
 
-const launched = (...agents: string[]) => Arr.map(agents, (agent) => ({ agent }));
+const launched = (...agents: Array<string>) => Arr.map(agents, (agent) => ({ agent }));
 
 test.each([
   {

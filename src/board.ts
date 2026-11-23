@@ -124,7 +124,7 @@ export interface PendingChoice {
   step: string;
   header: string;
   footer: string;
-  items: readonly PickItem[];
+  items: ReadonlyArray<PickItem>;
 }
 
 export const LANDED_STATES: ReadonlySet<MrState> = new Set(["merged", "on-stage", "in-prod"]);
@@ -674,11 +674,11 @@ function basename(path: string) {
   return Str.split(pipe(path, Str.replace(/\/+$/, "")), "/").at(-1) ?? path;
 }
 
-const groupedRegistered = new WeakMap<ReadonlyArray<AgentEntry>, Map<string, AgentEntry[]>>();
+const groupedRegistered = new WeakMap<ReadonlyArray<AgentEntry>, Map<string, Array<AgentEntry>>>();
 const registeredByRun = (registered: ReadonlyArray<AgentEntry>) => {
   const kept = groupedRegistered.get(registered);
   if (kept !== undefined) return kept;
-  const byRun = new Map<string, AgentEntry[]>();
+  const byRun = new Map<string, Array<AgentEntry>>();
   for (const entry of registered) {
     const known = byRun.get(entry.runId);
     if (known === undefined) byRun.set(entry.runId, [entry]);
@@ -836,17 +836,17 @@ function mrsOf(
   waves: ReadonlyArray<{ readonly run: string | null; readonly wave: number }>,
 ) {
   const waveOf = new Map(Arr.map(waves, (one) => [one.run, one.wave]));
-  const byId = new Map<string, { id: string; mr: string; runs: RunFacts[] }>();
+  const byId = new Map<string, { id: string; mr: string; runs: Array<RunFacts> }>();
   for (const { run, mr, id } of carried) {
     const known = byId.get(id);
     if (known === undefined) byId.set(id, { id, mr, runs: [run] });
     else known.runs.push(run);
   }
-  const least = (entry: { runs: RunFacts[] }, of: (run: RunFacts) => number) =>
+  const least = (entry: { runs: Array<RunFacts> }, of: (run: RunFacts) => number) =>
     Math.min(...Arr.map(entry.runs, of));
-  const wave = (entry: { runs: RunFacts[] }) =>
+  const wave = (entry: { runs: Array<RunFacts> }) =>
     least(entry, (run) => waveOf.get(run.id) ?? Infinity);
-  const seen = (entry: { runs: RunFacts[] }) => least(entry, (run) => epochMs(run.created));
+  const seen = (entry: { runs: Array<RunFacts> }) => least(entry, (run) => epochMs(run.created));
   return Arr.map(
     [...byId.values()].sort((a, b) => wave(a) - wave(b) || seen(a) - seen(b)),
     (entry) => ({
@@ -1086,11 +1086,11 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
 
   const present = new Map(Arr.map(all, (run) => [run.id, run.task]));
   const runsById = new Map(Arr.map(all, (run) => [run.id, run]));
-  const repoRunsOf = new Map<string, RunFacts[]>();
+  const repoRunsOf = new Map<string, Array<RunFacts>>();
   for (const run of all)
     if (run.repo !== null && run.parent !== null && present.get(run.parent) === run.task)
       repoRunsOf.set(run.parent, [...(repoRunsOf.get(run.parent) ?? []), run]);
-  const groups = new Map<string, RunFacts[]>();
+  const groups = new Map<string, Array<RunFacts>>();
   for (const run of all) {
     if (run.parent !== null && repoRunsOf.get(run.parent)?.includes(run)) continue;
     const key = run.task ?? run.id;
@@ -1134,7 +1134,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           new Set(live.keys()),
         );
         const cards = opts.only === undefined ? opts.cards : undefined;
-        const carried: { run: RunFacts; id: string | null; mr: string | null }[] = [];
+        const carried: Array<{ run: RunFacts; id: string | null; mr: string | null }> = [];
         for (const run of everyRun) {
           const mr = mrOf(run);
           carried.push({ run, id: mr === null ? null : yield* mrIdOf(run), mr });
@@ -1260,7 +1260,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
             (one) => branchKey(one.run),
           ),
         );
-        const branches = new Map<string, string[]>();
+        const branches = new Map<string, Array<string>>();
         for (const one of carried) {
           const key = branchKey(one.run);
           if (

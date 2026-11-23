@@ -235,7 +235,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
     "Checking for git, curl and openssl",
     Effect.gen(function* () {
       const named = env.raw["COLLIE_OPENSSL"];
-      const missing: string[] = [];
+      const missing: Array<string> = [];
       for (const tool of named ? ["git", "curl"] : ["git", "curl", "openssl"]) {
         if ((yield* onPath(search, tool)) === null) missing.push(tool);
       }

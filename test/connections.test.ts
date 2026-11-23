@@ -44,7 +44,7 @@ test("Helle's registry entry keeps the token owner's account and the existing ab
     Effect.gen(function* () {
       const rig = yield* Effect.acquireRelease(Rig.make(), (rig) => rig.close().pipe(Effect.orDie));
       const fs = yield* FileSystem.FileSystem;
-      const requests: string[] = [];
+      const requests: Array<string> = [];
       const server = yield* Effect.acquireRelease(
         Effect.sync(() =>
           Bun.serve({

@@ -76,7 +76,7 @@ beforeEach(() =>
 afterEach(() => runEffect(rig.close()));
 
 const gitRepo = Effect.fn("test.gitRepo")(function* (at: string) {
-  const git = (...args: string[]) =>
+  const git = (...args: Array<string>) =>
     exec(["git", ...args], {
       cwd: at,
       env: {
@@ -231,9 +231,9 @@ appendFileSync(${asJson(imports)}, "loaded\\n");
 export default defineWorkflow({ id: "cost", title, run: () => Effect.void });
 `,
       );
-      const copies: string[] = [];
-      const reads: string[] = [];
-      const listings: string[] = [];
+      const copies: Array<string> = [];
+      const reads: Array<string> = [];
+      const listings: Array<string> = [];
       const counted: FileSystem.FileSystem = {
         ...fs,
         copy: (from, to, options) =>
@@ -1332,7 +1332,7 @@ test("self-improve started on a checkout works in a fresh worktree detached at o
     Effect.gen(function* () {
       const roaming = `${rig.root}/.collie/worktrees/project/roaming`;
       const fs = yield* FileSystem.FileSystem;
-      const git = (cwd: string, ...args: string[]) =>
+      const git = (cwd: string, ...args: Array<string>) =>
         exec(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd });
       const origin = `${rig.root}/origin.git`;
       const elsewhere = `${rig.root}/elsewhere`;
@@ -1427,7 +1427,7 @@ const logOf = (runId: string) =>
     Effect.orElseSucceed(() => ""),
   );
 
-const committing = (cwd: string, ...args: string[]) =>
+const committing = (cwd: string, ...args: Array<string>) =>
   exec(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd });
 
 const withOrigin = Effect.gen(function* () {
@@ -1603,7 +1603,7 @@ test("two roaming starts at once past a kept checkout: one works, the other is r
           );
           const worked = Arr.map(Arr.filter(both, Result.isSuccess), (one) => one.success.runId);
           const refused = Arr.map(Arr.filter(both, Result.isFailure), refusedWith);
-          const places: string[] = [];
+          const places: Array<string> = [];
           for (const runId of worked) {
             const view = yield* until(
               () => registry.view(runId),
@@ -1858,7 +1858,7 @@ test("a roaming start is refused an ended Run's checkout where moving it would o
     Effect.gen(function* () {
       const roaming = `${rig.root}/.collie/worktrees/project/roaming`;
       const fs = yield* FileSystem.FileSystem;
-      const git = (...args: string[]) =>
+      const git = (...args: Array<string>) =>
         exec(["git", ...args], {
           cwd: rig.projectDir,
           env: {
@@ -2419,7 +2419,7 @@ test("a fresh start about a branch an open Task works is that Task's; one about 
             `${fixtures}/targeted.workflow.ts`,
             `${fixtures}/hello.workflow.ts`,
           ]);
-          const ids: string[] = [];
+          const ids: Array<string> = [];
           for (const [generation, ask] of [
             [builds!, { request: "r1", text: { work: "Add a picker" }, taskLabel: "Project | P" }],
             [
@@ -2782,7 +2782,7 @@ test("forgetting a Run removes its row, its launches and what the engine kept of
           const store = yield* Store;
           const sql = yield* SqlClient.SqlClient;
           const [hello] = yield* loaded(registry, [`${fixtures}/hello.workflow.ts`]);
-          const ids: string[] = [];
+          const ids: Array<string> = [];
           for (const request of ["r1", "r2"]) {
             const started = yield* start(hello!, { request, text: { name: "you" } });
             if (started._tag === "Failure") return yield* Effect.die(started.failure);
@@ -2950,7 +2950,7 @@ test("a host whose recovery stalls on the engine still serves before that hand-o
 
 const REVIEWED = "branch:master...feature";
 
-const git = (...args: string[]) =>
+const git = (...args: Array<string>) =>
   exec(["git", ...args], { cwd: rig.projectDir }).pipe(Effect.map((ran) => Str.trim(ran.stdout)));
 
 const cutsOf = () =>

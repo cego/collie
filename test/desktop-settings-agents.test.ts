@@ -158,7 +158,7 @@ test("a native-default model offers its reported efforts and preserves the confi
 });
 
 test("native defaults merge each Machine's capabilities and use reported efforts when no default is identified", () => {
-  const entry = (model: string, efforts: string[], isDefault = false) => ({
+  const entry = (model: string, efforts: Array<string>, isDefault = false) => ({
     model,
     label: model,
     description: null,

@@ -479,7 +479,7 @@ const gitWorktrees = Effect.fn("worktree.gitWorktrees")(function* (
 ) {
   const listed = yield* run("git", ["worktree", "list", "--porcelain"], cwd);
   if (listed.code !== 0) return null;
-  const checkouts: Listed[] = [];
+  const checkouts: Array<Listed> = [];
   for (const block of Str.split(listed.stdout, /\n\s*\n/)) {
     const at = Option.getOrUndefined(
       Option.flatMap(Option.fromNullishOr(/^worktree (.+)$/m.exec(block)), (present_____) =>
@@ -551,7 +551,7 @@ const freeSlot = Effect.fn("worktree.freeSlot")(function* (opts: {
   listing: { readonly checkouts: ReadonlyArray<{ readonly path: string }> };
   recordedBy?: RecordedBy | undefined;
 }) {
-  const passed: string[] = [];
+  const passed: Array<string> = [];
   for (const slot of [opts.first, `${opts.first}-2`, `${opts.first}-3`]) {
     // WARNING: git lists a checkout whose directory is gone and refuses to add another there.
     const taken =
@@ -1462,7 +1462,7 @@ const prune = Effect.fn("worktree.prune")(function* (
     const entry = state[worktree.path];
     return fresh || !entry || entry.removed || now - entry.checked_at >= RECHECK_MS;
   });
-  const judged: Judged[] = [];
+  const judged: Array<Judged> = [];
   if (due.length === 0) return { lines: yield* conclude(round), judged };
 
   // WARNING: a core that will not answer is no proof nothing is live: judge nothing, write nothing.
@@ -1540,7 +1540,7 @@ const conclude = Effect.fn("worktree.conclude")(function* (opts: {
 });
 
 function reported(state: PruneState, now: number, repo?: string) {
-  const returned: string[] = Arr.map(
+  const returned: Array<string> = Arr.map(
     Arr.filter(
       Rec.values(state),
       (entry) =>
@@ -1642,8 +1642,8 @@ const sweep = Effect.fn("worktree.sweep")(function* (opts: PruneOptions) {
     opts.settling ?? NOTHING_SETTLING,
     checking,
   );
-  const lines: string[] = [];
-  const judged: Judged[] = [];
+  const lines: Array<string> = [];
+  const judged: Array<Judged> = [];
   const listed = new Set<string>();
   for (const cwd of new Set([opts.cwd, ...recorded.mine.keys()])) {
     const own = cwd === opts.cwd;

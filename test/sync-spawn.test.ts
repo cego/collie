@@ -9,7 +9,7 @@ test("nothing the suite runs spawns a process synchronously", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const offenders: string[] = [];
+      const offenders: Array<string> = [];
       for (const dir of ["src", "test"]) {
         for (const name of yield* fs.readDirectory(`${root}${dir}`, { recursive: true })) {
           if (!/\.tsx?$/.test(name)) continue;

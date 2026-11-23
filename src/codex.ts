@@ -222,8 +222,8 @@ export const boundThread = Effect.fn("Codex.boundThread")(function* (
     yield* client.call("thread/loaded/list", {}),
   );
   if (loaded.data.length === 0) return null;
-  const mine: string[] = [];
-  const elsewhere: string[] = [];
+  const mine: Array<string> = [];
+  const elsewhere: Array<string> = [];
   for (const threadId of loaded.data) {
     const read = yield* decoded(
       "thread/read",
@@ -346,7 +346,7 @@ export const agentThreads = Effect.fn("Codex.agentThreads")(function* (
     LoadedList,
     yield* client.call("thread/loaded/list", {}),
   );
-  const threads: LoadedThread[] = [];
+  const threads: Array<LoadedThread> = [];
   for (const threadId of loaded.data) {
     const { thread } = yield* decoded(
       "thread/read",

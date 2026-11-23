@@ -42,7 +42,7 @@ export type WorkSourceCandidate = Candidate;
 
 export interface InputPrompts<E = never, R = never> {
   menu(
-    items: PickItem[],
+    items: Array<PickItem>,
     opts: { header: string; footer?: string },
   ): Effect.Effect<PickItem | null, E, R>;
   ask(question: string): Effect.Effect<string | null, E, R>;
@@ -65,7 +65,7 @@ export interface Resolution {
   question: string;
   label?: string;
   kind?: CandidateKind;
-  candidates?: Candidate[];
+  candidates?: Array<Candidate>;
   base?: string;
   project?: string;
 }
@@ -182,7 +182,7 @@ function ticketFromBranch(run: NonNullable<InferContext["run"]>, cwd: string) {
 
 export function inferInputs(inputs: Record<string, InputStrategy>, ctx: InferContext) {
   const returned: Effect.Effect<
-    Resolution[],
+    Array<Resolution>,
     PlatformError,
     FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | ForgeHttp
   > = Effect.forEach(Rec.toEntries(inputs), ([name, strategy]) => inferInput(name, strategy, ctx));
@@ -221,13 +221,13 @@ export function planDirs(
   task?: string | null,
 ) {
   const returned: Effect.Effect<
-    WorkSourceCandidate[],
+    Array<WorkSourceCandidate>,
     PlatformError,
     FileSystem.FileSystem | Path.Path
   > = Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const found: WorkSourceCandidate[] = [];
+    const found: Array<WorkSourceCandidate> = [];
     for (const run of finishedHere(runs, cwd, task)) {
       if (found.length >= limit) break;
       const dir = path.join(run.dir, "plan");
@@ -250,35 +250,38 @@ export function reviewedTargets(
   limit: number,
   task?: string | null,
 ) {
-  const returned: Effect.Effect<Candidate[], PlatformError, FileSystem.FileSystem | Path.Path> =
-    Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      const found: Candidate[] = [];
-      const seen = new Set<string>();
-      for (const run of finishedHere(runs, cwd, task)) {
-        if (found.length >= limit) break;
-        const target = diffTargetOf(run.settled)?.value;
-        const kind = targetKind(target ?? "");
-        if (!target || kind === "") continue;
-        if (seen.has(target)) continue;
-        seen.add(target);
-        const open = yield* openFindingsIn(run.dir);
-        const when = ago(run.finished ?? run.created, now);
-        found.push({
-          kind,
-          value: target,
-          source: open > 0 ? `reviewed ${when} · ${open} finding(s) open` : `reviewed ${when}`,
-          label: targetLabel(run.workflow, run.task ?? run.id, target),
-        });
-      }
-      return found;
-    });
+  const returned: Effect.Effect<
+    Array<Candidate>,
+    PlatformError,
+    FileSystem.FileSystem | Path.Path
+  > = Effect.gen(function* () {
+    const now = yield* Clock.currentTimeMillis;
+    const found: Array<Candidate> = [];
+    const seen = new Set<string>();
+    for (const run of finishedHere(runs, cwd, task)) {
+      if (found.length >= limit) break;
+      const target = diffTargetOf(run.settled)?.value;
+      const kind = targetKind(target ?? "");
+      if (!target || kind === "") continue;
+      if (seen.has(target)) continue;
+      seen.add(target);
+      const open = yield* openFindingsIn(run.dir);
+      const when = ago(run.finished ?? run.created, now);
+      found.push({
+        kind,
+        value: target,
+        source: open > 0 ? `reviewed ${when} · ${open} finding(s) open` : `reviewed ${when}`,
+        label: targetLabel(run.workflow, run.task ?? run.id, target),
+      });
+    }
+    return found;
+  });
   return returned;
 }
 
 export function workSourceCandidates(ctx: InferContext) {
   const returned: Effect.Effect<
-    WorkSourceCandidate[],
+    Array<WorkSourceCandidate>,
     PlatformError,
     FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
   > = Effect.gen(function* () {
@@ -294,12 +297,12 @@ export function workSourceCandidates(ctx: InferContext) {
 
 export function targetCandidates(ctx: InferContext) {
   const returned: Effect.Effect<
-    Candidate[],
+    Array<Candidate>,
     PlatformError,
     FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | ForgeHttp
   > = Effect.gen(function* () {
     const run = ctx.run ?? shell;
-    const out: Candidate[] = [];
+    const out: Array<Candidate> = [];
     const inRepo = (yield* run("git", ["rev-parse", "--git-dir"], ctx.cwd)).code === 0;
     const project = inRepo ? yield* projectHere(ctx.cwd, run) : null;
 
@@ -369,7 +372,7 @@ function myOpenMrs(
   project: string | null,
 ) {
   const answer: Effect.Effect<
-    Candidate[],
+    Array<Candidate>,
     never,
     ChildProcessSpawner.ChildProcessSpawner | ForgeHttp
   > = Effect.map(forge.mine(project, cwd, run), (mine) =>
@@ -574,7 +577,7 @@ function resolveFromMenu<E, R>(r: Resolution, prompts: InputPrompts<E, R>, spec:
   const returned: Effect.Effect<boolean, PlatformError | E, FileSystem.FileSystem | Path.Path | R> =
     Effect.gen(function* () {
       const candidates = r.candidates ?? [];
-      const items: PickItem[] = Arr.map(candidates, (c, i) => ({
+      const items: Array<PickItem> = Arr.map(candidates, (c, i) => ({
         id: String(i),
         title: c.label ?? c.value,
         subtitle: `${c.kind} · ${c.source}`,
@@ -652,7 +655,7 @@ function textLabel(text: string) {
   return label || "work";
 }
 
-export function inputValues(resolutions: Resolution[]) {
+export function inputValues(resolutions: Array<Resolution>) {
   const values: Record<string, string> = {};
   for (const r of resolutions) {
     values[r.name] = r.value;
@@ -663,7 +666,7 @@ export function inputValues(resolutions: Resolution[]) {
 
 export function confirmLine(
   workflow: string,
-  resolutions: Resolution[],
+  resolutions: Array<Resolution>,
   branch?: { name: string | null; source: string | null } | null,
 ) {
   const parts = Arr.map(resolutions, (r) => {

@@ -49,7 +49,7 @@ const arranged = (days: number) =>
     return view({ id: "task-1", state: "done", landed: true, ended: now - days * DAY_MS });
   });
 
-const forgotten: string[][] = [];
+const forgotten: Array<Array<string>> = [];
 const sweeper = (
   views: ReadonlyArray<TaskView>,
   runs: ReadonlyArray<RunFacts> = [runFacts({ id: "r1", task: "task-1", state: "succeeded" })],

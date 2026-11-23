@@ -72,7 +72,7 @@ const drained = Effect.fn("probe.drained")(function* (
   return { stdout: got.value[0], stderr: got.value[1] };
 });
 
-const one = Effect.fn("probe.one")(function* (schema: string, extra: string[] = []) {
+const one = Effect.fn("probe.one")(function* (schema: string, extra: Array<string> = []) {
   const started = yield* Clock.currentTimeMillis;
   const argv = [...argvFor(LIMITS, schema, `${repo}prompts/steward.md`), ...extra];
   const proc = Bun.spawn(["claude", ...argv], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
@@ -104,7 +104,7 @@ const asEvent = Schema.decodeUnknownOption(Event);
 const STRUCTURED_OUTPUT = "StructuredOutput";
 
 export function leaks(transcript: string) {
-  const found: string[] = [];
+  const found: Array<string> = [];
   for (const line of Str.split(transcript, "\n")) {
     const parsed = parseLine(line);
     if (parsed._tag === "None") continue;
@@ -144,7 +144,7 @@ const probe = Effect.fn("probe.run")(function* (calls: number) {
   yield* Effect.log(`saved the envelope to ${fixture}`);
 
   const decoded = (raw: string) => !("error" in structuredFrom(raw, JudgementSchema));
-  const latencies: number[] = [first.ms];
+  const latencies: Array<number> = [first.ms];
   let good = decoded(first.stdout) ? 1 : 0;
   for (let i = 1; i < calls; i++) {
     const next = yield* one(schema);

@@ -385,7 +385,7 @@ const regressionPair = (before: Partial<Verification>, after: Partial<Verificati
     },
   );
 
-const reproducedThenFixed = (reproducedAs: string[], fixedAs: string[]) =>
+const reproducedThenFixed = (reproducedAs: Array<string>, fixedAs: Array<string>) =>
   regressionPair(
     { executable: reproducedAs[0], argv: reproducedAs.slice(1) },
     { executable: fixedAs[0], argv: fixedAs.slice(1) },
@@ -732,7 +732,7 @@ test("a reviewer is told a check left to CI is proved by its job, and the job's 
 
 test("every kind has a rule, so a new one cannot be added without one", () => {
   const empty = collected({ approved: [], verifications: [] });
-  const silent: Outcome[] = [];
+  const silent: Array<Outcome> = [];
   for (const kind of KINDS) {
     if (evidenceGaps(kind, empty).length === 0) silent.push(kind);
   }
@@ -771,7 +771,7 @@ test("a promised check is proved by a pass of its command under any name, and ne
   const tests = { name: "tests", executable: "/usr/bin/bun", argv: ["test"], cwd: "/repo" };
   const agents = (over: Partial<Verification> = {}) =>
     record({ name: "mine", by: "agent", executable: "/usr/bin/bun", argv: ["test"], ...over });
-  const gaps = (verifications: Verification[]) =>
+  const gaps = (verifications: Array<Verification>) =>
     checkGaps(
       "feature",
       collected({
@@ -791,7 +791,7 @@ test("a promised check is proved by a pass of its command under any name, and ne
 
 const searched = (name: string, over: Partial<Verification> = {}) =>
   record({ name, by: "agent", executable: "/usr/bin/rg", argv: ["foo", "src"], ...over });
-const promising = (verifications: Verification[]) =>
+const promising = (verifications: Array<Verification>) =>
   collected({
     verifications: [record({ name: "tests" }), ...verifications],
     tickets: [{ file: "01-a.md", checks: ["proves-a"] }],

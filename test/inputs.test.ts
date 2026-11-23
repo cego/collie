@@ -28,9 +28,9 @@ import { FakeBin } from "./support/bin";
 
 let rig: Rig;
 let bin: FakeBin;
-let planned: RunFacts[];
+let planned: Array<RunFacts>;
 
-const join = (...parts: string[]) => pipe(Arr.join(parts, "/"), Str.replaceAll(/\/+/g, "/"));
+const join = (...parts: Array<string>) => pipe(Arr.join(parts, "/"), Str.replaceAll(/\/+/g, "/"));
 const mkdir = (path: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.makeDirectory(path, { recursive: true }));
 const writeFile = (path: string, text: string) =>
@@ -383,7 +383,7 @@ test("the menu resolves a work-source to a candidate", () =>
       const plan = yield* makePlanRun("newest-goal", rig.projectDir, "2026-08-27T09:00:00.000Z");
       const resolved = yield* inferInput("plan", "work-source", withState());
 
-      const asked: string[] = [];
+      const asked: Array<string> = [];
       const ok = yield* resolveCandidates(resolved, {
         menu: (items, opts) => {
           asked.push(opts.header);
@@ -409,7 +409,7 @@ test("the menu always offers Type it…, and classifies what comes back", () =>
       yield* bin.add("git", `echo add-picker`);
       const resolved = yield* inferInput("plan", "work-source", withState());
 
-      const titles: string[] = [];
+      const titles: Array<string> = [];
       const ok = yield* resolveCandidates(resolved, {
         menu: (items) => {
           titles.push(...Arr.map(items, (i) => i.title));
@@ -737,7 +737,7 @@ test("the target menu always shows, and Type it… classifies what comes back", 
       yield* bin.add("git", gitOn("add-picker"));
       const resolved = yield* inferInput("target", "diff-target", ctx());
 
-      const titles: string[] = [];
+      const titles: Array<string> = [];
       const ok = yield* resolveCandidates(resolved, {
         menu: (items, opts) => {
           titles.push(...Arr.map(items, (i) => i.title));

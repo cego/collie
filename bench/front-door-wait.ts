@@ -39,8 +39,8 @@ await runEffect(
       );
       yield* fs.writeFileString(recordMarksFile, "");
       yield* Console.error("sampling 20 verify and read answers");
-      const verify: number[] = [];
-      const read: number[] = [];
+      const verify: Array<number> = [];
+      const read: Array<number> = [];
       for (let at = 0; at < 20; at++) {
         const began = yield* Clock.currentTimeNanos;
         let first = true;

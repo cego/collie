@@ -22,8 +22,8 @@ const terminalStdin = Effect.acquireRelease(
     const own = new Map(
       Arr.map(names, (name) => [name, Object.getOwnPropertyDescriptor(stdin, name)]),
     );
-    const rawModes: boolean[] = [];
-    let listener: ((...args: unknown[]) => void) | null = null;
+    const rawModes: Array<boolean> = [];
+    let listener: ((...args: Array<unknown>) => void) | null = null;
     const on = stdin.on.bind(stdin);
     const off = stdin.off.bind(stdin);
     Object.defineProperties(stdin, {
@@ -37,7 +37,7 @@ const terminalStdin = Effect.acquireRelease(
         writable: true,
       },
       on: {
-        value: (event: string, handler: (...args: unknown[]) => void) => {
+        value: (event: string, handler: (...args: Array<unknown>) => void) => {
           if (event === "data") listener = handler;
           else on(event, handler);
           return stdin;
@@ -46,7 +46,7 @@ const terminalStdin = Effect.acquireRelease(
         writable: true,
       },
       off: {
-        value: (event: string, handler: (...args: unknown[]) => void) => {
+        value: (event: string, handler: (...args: Array<unknown>) => void) => {
           if (event === "data") {
             if (listener === handler) listener = null;
           } else off(event, handler);
@@ -74,7 +74,7 @@ const terminalStdin = Effect.acquireRelease(
 
 const capturedStdout = Effect.acquireRelease(
   Effect.sync(() => {
-    const written: string[] = [];
+    const written: Array<string> = [];
     const write = process.stdout.write.bind(process.stdout);
     // WARNING: the board writes strings and reads nothing back, so the overload that takes an encoding or a callback is never the one reached here.
     process.stdout.write = ((chunk: string) => {

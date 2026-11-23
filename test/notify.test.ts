@@ -47,7 +47,7 @@ test("a kind turned off in settings is not sent, and everything else is", () => 
 
 let rig: Rig;
 let dir: string;
-let toasts: string[];
+let toasts: Array<string>;
 
 beforeEach(() =>
   runEffect(

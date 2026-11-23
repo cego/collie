@@ -47,7 +47,7 @@ const until = Effect.fn("stop.until")(function* (what: string, ready: () => bool
   return yield* new Cause.TimeoutError(`${what} never happened`);
 });
 
-function held(acted: Command[], graceMs = 80) {
+function held(acted: Array<Command>, graceMs = 80) {
   return {
     filter: { kind: "workspace", id: "w1" } as const,
     origin: "w1",
@@ -66,7 +66,7 @@ test("a stop is marked on the board and nothing is sent until the grace is up", 
   runEffect(
     Effect.scoped(
       Effect.gen(function* () {
-        const acted: Command[] = [];
+        const acted: Array<Command> = [];
         const driven = yield* driveBridge(held(acted));
 
         driven.dispatch({ _tag: "StopRun", runId: "run:a" });
@@ -85,7 +85,7 @@ test("undo inside the grace sends nothing at all", () =>
   runEffect(
     Effect.scoped(
       Effect.gen(function* () {
-        const acted: Command[] = [];
+        const acted: Array<Command> = [];
         const driven = yield* driveBridge(held(acted));
 
         driven.dispatch({ _tag: "StopRun", runId: "run:a" });
@@ -103,7 +103,7 @@ test("stopping three at once holds all three, and undo takes back all three", ()
   runEffect(
     Effect.scoped(
       Effect.gen(function* () {
-        const acted: Command[] = [];
+        const acted: Array<Command> = [];
         const driven = yield* driveBridge(held(acted));
 
         for (const runId of ["run:a", "run:b", "run:c"])
@@ -123,7 +123,7 @@ test("three stops nobody took back are three stops", () =>
   runEffect(
     Effect.scoped(
       Effect.gen(function* () {
-        const acted: Command[] = [];
+        const acted: Array<Command> = [];
         const driven = yield* driveBridge(held(acted));
 
         for (const runId of ["run:a", "run:b", "run:c"])

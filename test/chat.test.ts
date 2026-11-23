@@ -381,7 +381,7 @@ const launchedChat = (opts: {
       yield* fs.writeFileString(`${env.userDir}/settings-set.json`, opts.settingsSet);
     if (opts.recorded !== undefined)
       yield* writeChat(yield* chatPath(env.stateDir, KEY), opts.recorded);
-    const lines: string[] = [];
+    const lines: Array<string> = [];
     const ensured = yield* startChat(
       new Herdr(env),
       env,

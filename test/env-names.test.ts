@@ -24,7 +24,7 @@ const hostedAt = (names: (dir: string) => Record<string, string>) =>
       ["named", named],
       ["default", `${home}/${DEFAULT}`],
     ] as const;
-    const hosted: string[] = [];
+    const hosted: Array<string> = [];
     for (const [name, dir] of where) {
       if (yield* fs.exists(socketOf(dir))) hosted.push(name);
       if (yield* fs.exists(dir)) yield* stopHost(dir);

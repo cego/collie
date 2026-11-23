@@ -26,7 +26,7 @@ const inDir = <A, E>(body: (dir: string) => Effect.Effect<A, E, FileSystem.FileS
   );
 
 const machine = (files = true, refuse?: string) => {
-  const sent: Uploaded[] = [];
+  const sent: Array<Uploaded> = [];
   return {
     sent,
     machine: {

@@ -21,7 +21,7 @@ import { stringifyJson } from "../../src/json";
 
 let rig: Rig;
 let bin: FakeBin;
-let runs: RunFacts[] = [];
+let runs: Array<RunFacts> = [];
 
 function effectTest(
   name: string,

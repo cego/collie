@@ -94,11 +94,11 @@ export interface McpLaunch {
 export interface HarnessAdapter extends HarnessModels {
   id: string;
   kind: string;
-  modelArgs(model: string): string[];
+  modelArgs(model: string): Array<string>;
   // WARNING: Takes a path, not the text: herdr rejects agent arguments it cannot encode for the shell.
-  personaArgs?(personaFile: string): string[];
-  dirArgs?(dir: string): string[];
-  effortArgs?(effort: string): string[];
+  personaArgs?(personaFile: string): Array<string>;
+  dirArgs?(dir: string): Array<string>;
+  effortArgs?(effort: string): Array<string>;
   permissionArgs?: {
     readonly auto?: ReadonlyArray<string>;
     readonly bypass?: ReadonlyArray<string>;
@@ -107,7 +107,7 @@ export interface HarnessAdapter extends HarnessModels {
   autoCompactFlag?: string;
   trust?(home: string, backupDir: string): Trust;
   mcp(launch: McpLaunch): {
-    readonly args: string[];
+    readonly args: Array<string>;
     readonly env: Readonly<Record<string, string>>;
   };
   // WARNING: Only for starting a skill: nothing expands a slash command in a prompt, so mention one with skillMention.

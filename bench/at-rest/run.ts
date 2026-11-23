@@ -109,7 +109,7 @@ const hostPid = () => {
 };
 
 const mismatchesOf = (views: ReadonlyArray<RunView>, manifest: Manifest) => {
-  const expected: ViewCheck[] = [
+  const expected: Array<ViewCheck> = [
     ...manifest.settled.map((runId) => ({
       runId,
       status: "complete",
@@ -148,7 +148,7 @@ const mismatchesOf = (views: ReadonlyArray<RunView>, manifest: Manifest) => {
   );
 };
 
-const doorProbe = (into: number[], errors: string[]) =>
+const doorProbe = (into: Array<number>, errors: Array<string>) =>
   Effect.scoped(
     Effect.gen(function* () {
       const client = yield* connect(world.state);
@@ -166,7 +166,7 @@ interface RecordFrame {
   text: string;
   added: number | null;
 }
-const holdRecord = (runId: string, into: RecordFrame[], errors: string[]) =>
+const holdRecord = (runId: string, into: Array<RecordFrame>, errors: Array<string>) =>
   Effect.gen(function* () {
     const door = yield* frontDoor(socketOf(world.state));
     const ready = yield* Deferred.make<void>();
@@ -193,7 +193,7 @@ const holdRecord = (runId: string, into: RecordFrame[], errors: string[]) =>
 const sample = (manifest: Manifest) =>
   Effect.gen(function* () {
     const numbers: Record<string, number> = {};
-    const errors: string[] = [];
+    const errors: Array<string> = [];
     const before = performance.now();
     const client = yield* connect(world.state);
     yield* Effect.sync(() => {
@@ -231,7 +231,7 @@ const sample = (manifest: Manifest) =>
     );
     yield* Deferred.await(boardReady).pipe(Effect.timeout("3 minutes"));
     numbers.board_ready_ms = Math.round(performance.now() - boardBegan);
-    const settledFrames: RecordFrame[] = [];
+    const settledFrames: Array<RecordFrame> = [];
     numbers.record_open_ms = yield* holdRecord(manifest.settled[0]!, settledFrames, errors);
     yield* Effect.forkScoped(
       Stream.runDrain(client.watch({ runId: manifest.asking[0]! })).pipe(
@@ -257,7 +257,7 @@ const sample = (manifest: Manifest) =>
     numbers.host_rss_kb = statusKb(host, "VmRSS");
     Object.assign(numbers, yield* hostHeap(host));
 
-    const listed: number[] = [];
+    const listed: Array<number> = [];
     let views: ReadonlyArray<RunView> = [];
     for (let at = 0; at < LISTINGS; at++) {
       const began = performance.now();
@@ -272,7 +272,7 @@ const sample = (manifest: Manifest) =>
     numbers.mismatches = wrong.length;
     for (const one of wrong.slice(0, 5)) yield* say(`mismatch: ${one}`);
 
-    const readTimes: number[] = [];
+    const readTimes: Array<number> = [];
     for (let at = 0; at < 10; at++) {
       const began = performance.now();
       const read = yield* client.read({ tool: "collie_run", input: { run: manifest.settled[0]! } });
@@ -335,7 +335,7 @@ const sample = (manifest: Manifest) =>
     return numbers;
   });
 
-const activeWindow = (client: HostClient, host: number, errors: string[]) =>
+const activeWindow = (client: HostClient, host: number, errors: Array<string>) =>
   Effect.gen(function* () {
     const random = yield* SecureRandom.SecureRandom;
     const start = (
@@ -346,13 +346,13 @@ const activeWindow = (client: HostClient, host: number, errors: string[]) =>
       Effect.flatMap(random.uuidV4(), (request) =>
         client.start({ project: world.project, id, request, input, options }),
       ).pipe(Effect.map(({ runId }) => runId));
-    const doorLag: number[] = [];
+    const doorLag: Array<number> = [];
     const probe = yield* Effect.forkScoped(doorProbe(doorLag, errors));
     const from = usage(host);
     const began = performance.now();
 
     const writing = yield* start("bench-active", {}, { workspace: world.project, branch: "bench" });
-    const frames: RecordFrame[] = [];
+    const frames: Array<RecordFrame> = [];
     const activeOpen = yield* holdRecord(writing, frames, errors);
 
     const reportStarted = performance.now();
@@ -406,7 +406,7 @@ const activeWindow = (client: HostClient, host: number, errors: string[]) =>
     const reportMs = yield* Fiber.join(reportFiber);
     yield* Effect.sleep(LATE.record_ms);
     const db = new Database(`${world.state}/host.db`, { readonly: true });
-    let wakeLag: number[];
+    let wakeLag: Array<number>;
     try {
       wakeLag = wakers.map((run) => {
         const seen = woke.get(run);

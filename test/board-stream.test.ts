@@ -556,7 +556,7 @@ test("a build waits as long as the last one took, and at most 5 s, before it sta
       Effect.gen(function* () {
         const changed = yield* Queue.unbounded<void>();
         const took = ["2 seconds", "8 seconds", "1 second"] as const;
-        const starts: number[] = [];
+        const starts: Array<number> = [];
         const build = Effect.gen(function* () {
           starts.push(yield* Clock.currentTimeMillis);
           yield* Effect.sleep(took[starts.length - 1] ?? "0 millis");
@@ -592,7 +592,7 @@ test("a build waits as long as the last one took, and at most 5 s, before it sta
 
 const warnedDuring = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
-    const warned: string[] = [];
+    const warned: Array<string> = [];
     const logger = Logger.make(({ logLevel, message }) => {
       if (logLevel === "Warn") warned.push(String(message));
     });

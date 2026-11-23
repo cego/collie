@@ -191,7 +191,7 @@ export const deliveriesLayer = Layer.effect(Deliveries)(
           SELECT line FROM collie_deliveries WHERE ledger = ${incarnationKey(incarnation)} ORDER BY seq
         `.pipe(
           Effect.map((rows) => {
-            const lines: LedgerLine[] = [];
+            const lines: Array<LedgerLine> = [];
             let corrupt = 0;
             for (const row of rows) {
               const line = decodeLedgerLine(row.line);
@@ -215,7 +215,7 @@ export const deliveriesLayer = Layer.effect(Deliveries)(
               ORDER BY newest.run, newest.first
             `.pipe(
               Effect.map((rows) => {
-                const byRun = new Map<string, string[]>();
+                const byRun = new Map<string, Array<string>>();
                 for (const row of rows)
                   byRun.set(row.run, [...(byRun.get(row.run) ?? []), row.line]);
                 return byRun;
@@ -352,7 +352,7 @@ export function settleStaleReservations(
   submitTimeoutMs: number,
   at: string,
 ) {
-  const settled: Delivery[] = [];
+  const settled: Array<Delivery> = [];
   for (const delivery of newestById(lines).values()) {
     if (delivery.state !== "reserved") continue;
     const reservedAt = epochMs(delivery.at);
@@ -364,7 +364,7 @@ export function settleStaleReservations(
       note: "reserved and never settled (crash or lost result)",
     });
   }
-  const returned: Delivery[] = settled;
+  const returned: Array<Delivery> = settled;
   return returned;
 }
 
@@ -495,18 +495,18 @@ export interface CallLimits {
 // WARNING: a call that took the model down still happened and still counts.
 function staleSettlements(lines: ReadonlyArray<BudgetLine>, nowMs: number, at: string) {
   const settled = new Set(Arr.flatMap(lines, (l) => (l.kind === "settle" ? [l.id] : [])));
-  const answer: BudgetLine[] = Arr.flatMap(lines, (line) => {
+  const answer: Array<BudgetLine> = Arr.flatMap(lines, (line) => {
     if (line.kind !== "reserve" || settled.has(line.id)) {
-      const returned: BudgetLine[] = [];
+      const returned: Array<BudgetLine> = [];
       return returned;
     }
     const startedAt = epochMs(line.at);
     if (Number.isNaN(startedAt) || nowMs - startedAt < 2 * line.max_seconds * 1000) {
-      const returned: BudgetLine[] = [];
+      const returned: Array<BudgetLine> = [];
       return returned;
     }
     {
-      const returned: BudgetLine[] = [
+      const returned: Array<BudgetLine> = [
         { kind: "settle", id: line.id, at, outcome: "failed", seconds: 0, bytes: 0 },
       ];
       return returned;

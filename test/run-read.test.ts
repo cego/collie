@@ -133,7 +133,7 @@ test("a search of a Run's diff answers each matching line with its neighbours, a
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const repo = yield* fs.makeTempDirectoryScoped({ prefix: "collie-read-diff-" });
-        const git = (...args: string[]) =>
+        const git = (...args: Array<string>) =>
           exec(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd: repo });
         yield* git("init", "-q", "-b", "main");
         yield* fs.writeFileString(`${repo}/base.txt`, "base\n");

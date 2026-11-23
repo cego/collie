@@ -20,7 +20,7 @@ const transport = (respond: (url: string) => Response) =>
 test("desktop updates follow Collie's release redirect and GitHub's asset CDN", () =>
   runEffect(
     Effect.gen(function* () {
-      const seen: string[] = [];
+      const seen: Array<string> = [];
       const client = transport((url) => {
         seen.push(url);
         if (url === ASSET) return Response.redirect(TAGGED);
@@ -39,7 +39,7 @@ test("desktop updates follow Collie's release redirect and GitHub's asset CDN", 
 test("an update URL cannot request another origin, repository or protocol", () =>
   runEffect(
     Effect.gen(function* () {
-      const seen: string[] = [];
+      const seen: Array<string> = [];
       const client = transport((url) => {
         seen.push(url);
         return new Response("unexpected");
@@ -76,7 +76,7 @@ test("every redirect is validated and a redirect loop is bounded", () =>
         "https://evil.test/asset",
         "https://github.com/other/repo/asset",
       ]) {
-        const seen: string[] = [];
+        const seen: Array<string> = [];
         const client = transport((url) => {
           seen.push(url);
           return Response.redirect(destination);

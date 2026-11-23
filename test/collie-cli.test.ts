@@ -23,7 +23,7 @@ import { callTool } from "../src/tools";
 import { readEnv } from "../src/env";
 
 const root = new URL("../", import.meta.url).pathname;
-const join = (...parts: string[]) => pipe_(Arr.join(parts, "/"), Str.replaceAll(/\/+/g, "/"));
+const join = (...parts: Array<string>) => pipe_(Arr.join(parts, "/"), Str.replaceAll(/\/+/g, "/"));
 
 const CliEnvelope = Schema.fromJsonString(
   Schema.Struct({
@@ -40,7 +40,7 @@ const CliEnvelope = Schema.fromJsonString(
 );
 
 const cli = Effect.fn("test.cli")(function* (
-  args: string[],
+  args: Array<string>,
   extraEnv: Record<string, string> = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -449,7 +449,7 @@ test("a missing diff target is told what inference would pick in the checkout na
       const tree = yield* projectsTree();
       const named = join(tree.dir, "named");
       yield* fs.makeDirectory(named, { recursive: true });
-      const git = (...args: string[]) =>
+      const git = (...args: Array<string>) =>
         exec(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd: named });
       yield* git("init", "-q", "-b", "main");
       yield* git("commit", "-q", "--allow-empty", "-m", "base");
@@ -488,7 +488,7 @@ test("a missing diff target is told what inference would pick in the checkout na
 
 const documentedStarts = Effect.fn("test.documentedStarts")(function* () {
   const fs = yield* FileSystem.FileSystem;
-  const lines: string[] = [];
+  const lines: Array<string> = [];
   for (const file of ["README.md", "docs/cli.md"]) {
     const text = yield* fs.readFileString(join(root, file));
     for (const line of Str.split(text, "\n")) {

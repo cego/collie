@@ -107,7 +107,7 @@ export const piEvents = (thread: string) => {
   let message = 0;
   let error: string | undefined;
   let command = false;
-  let reported: string[] = [];
+  let reported: Array<string> = [];
   const tools = new Set<string>();
   let usage: TurnCost["usage"] = {
     input_tokens: 0,
@@ -118,7 +118,7 @@ export const piEvents = (thread: string) => {
   const runId = () => `${thread}:${turn}`;
   const messageId = (index: number) => `${thread}:${message}:${index}`;
   const tool = (id: string, name: string, args?: Schema.Json) => {
-    const events: AguiEvent[] = [];
+    const events: Array<AguiEvent> = [];
     if (!tools.has(id)) {
       tools.add(id);
       events.push({

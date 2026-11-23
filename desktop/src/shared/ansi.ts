@@ -41,7 +41,7 @@ const CLEARS = new Map<number, ReadonlyArray<string>>([
 
 export const ansiSpans = (output: string) => {
   const text = pipe(output, Str.replaceAll(OTHER, ""));
-  const spans: AnsiSpan[] = [];
+  const spans: Array<AnsiSpan> = [];
   let style: AnsiSpan["style"] = {};
   const set = (key: string, value: string) => (style = { ...style, [key]: value });
   const clear = (keys: ReadonlyArray<string>) =>
@@ -82,7 +82,7 @@ export const ansiSpans = (output: string) => {
 };
 
 export const ansiLines = (text: string) => {
-  const lines: AnsiSpan[][] = [[]];
+  const lines: Array<Array<AnsiSpan>> = [[]];
   for (const span of ansiSpans(text))
     Arr.forEach(Str.split(span.text, "\n"), (part, at) => {
       if (at > 0) lines.push([]);

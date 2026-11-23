@@ -16,7 +16,7 @@ const withoutComments = (text: string) =>
 
 function nameDispatch(source: string) {
   const text = withoutComments(source);
-  const found: string[] = [];
+  const found: Array<string> = [];
   const compared = new RegExp(
     String.raw`([\w.?()\[\]]+)\s*[!=]==?\s*"(${SHIPPED})"|"(${SHIPPED})"\s*[!=]==?\s*([\w.?()\[\]]+)`,
     "g",

@@ -82,7 +82,7 @@ test("multipart peer registration retains bytes and presentation after checkout/
           });
           for (const [index, [, expected]] of fixtures.entries()) {
             const receipt = registered[index]!;
-            const parts: Uint8Array[] = [];
+            const parts: Array<Uint8Array> = [];
             for (let offset = 0; offset < expected.length; offset += PART_BYTES) {
               const part = yield* peer.artefactRead({
                 runId,

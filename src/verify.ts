@@ -71,7 +71,7 @@ type Services =
   | ChildProcessSpawner.ChildProcessSpawner
   | RunRecords;
 
-const git = (args: string[], cwd: string) => shell("git", args, cwd);
+const git = (args: Array<string>, cwd: string) => shell("git", args, cwd);
 
 // WARNING: untracked content counts on purpose, or a pass could rest on a file nobody committed.
 export const fingerprint = (cwd: string) =>
@@ -162,7 +162,7 @@ export const treeOf: (cwd: string) => Effect.Effect<
 });
 
 const changedSubmodules = (entries: string) => {
-  const found: string[] = [];
+  const found: Array<string> = [];
   let original = false;
   for (const record of Str.split(entries, "\0")) {
     // WARNING: a rename's original path is the record after it.
@@ -184,7 +184,7 @@ const changedSubmodules = (entries: string) => {
 };
 
 const unstagedPaths = (entries: string) => {
-  const found: string[] = [];
+  const found: Array<string> = [];
   let original = false;
   for (const record of Str.split(entries, "\0")) {
     if (original) {

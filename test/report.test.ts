@@ -586,7 +586,7 @@ test("Output reminders are counted with the recoveries they made and the median 
 test("a reminder outcome update counts the same reminder once", () => {
   const pending = { ...reminded("still-absent", 0), recoveryId: "review.remind-1" };
   const recovered = { ...pending, outcome: "output-written" as const, value: 40_000 };
-  const report = (metrics: Metric[]) =>
+  const report = (metrics: Array<Metric>) =>
     reportOf([view({ runId: "a" })], new Map(), null, new Map([["a", { records: null, metrics }]]));
   expect(report([pending]).measures.recoveries.byCause).toMatchObject([
     { count: 1, recovered: 0, toRecover: null },

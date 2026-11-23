@@ -46,7 +46,7 @@ beforeEach(() =>
 afterEach(() => runEffect(rig.close()));
 
 function runner(table: Record<string, { code?: number; stdout?: string }>) {
-  return (cmd: string, args: string[]) =>
+  return (cmd: string, args: Array<string>) =>
     Effect.succeed(
       (() => {
         const key = `${cmd} ${Arr.join(args, " ")}`;
@@ -68,8 +68,8 @@ test("a host's forge is GitHub on github.com, GitLab on the Flock's GitLab or a 
 test("settled commit and Run references do not inspect a checkout to find a merge request", () =>
   runEffect(
     Effect.gen(function* () {
-      const calls: string[] = [];
-      const run = (command: string, args: string[]) => {
+      const calls: Array<string> = [];
+      const run = (command: string, args: Array<string>) => {
         calls.push(`${command} ${Arr.join(args, " ")}`);
         return Effect.succeed({ code: 1, stdout: "" });
       };
@@ -384,8 +384,8 @@ const MR_JSON = stringifyJson({
 });
 
 function recorder(table: Record<string, { code?: number; stdout?: string }>) {
-  const calls: string[][] = [];
-  const run = (cmd: string, args: string[]) => {
+  const calls: Array<Array<string>> = [];
+  const run = (cmd: string, args: Array<string>) => {
     calls.push([cmd, ...args]);
     const key = `${cmd} ${Arr.join(args, " ")}`;
     const hit = table[key] ?? table[`${cmd} ${args[0]}`];

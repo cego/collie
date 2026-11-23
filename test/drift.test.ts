@@ -327,7 +327,7 @@ test("evidence is the actual diff, from the actual tree", () =>
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const repo = yield* fs.makeTempDirectoryScoped({ prefix: "hw-drift-repo-" });
-      const git = (args: string[]) => exec(["git", ...args], { cwd: repo });
+      const git = (args: Array<string>) => exec(["git", ...args], { cwd: repo });
       yield* git(["init", "-q"]);
       yield* git(["config", "user.email", "t@example.com"]);
       yield* git(["config", "user.name", "t"]);
@@ -414,7 +414,7 @@ const committed = Effect.fn("DriftTest.committed")(function* (
   files: Readonly<Record<string, string>>,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const git = (args: string[]) =>
+  const git = (args: Array<string>) =>
     exec(["git", "-c", "user.email=t@example.com", "-c", "user.name=t", ...args], { cwd: dir });
   const base = Str.trim((yield* git(["rev-parse", "HEAD"])).stdout);
   for (const [name, text] of Rec.toEntries(files))

@@ -128,7 +128,7 @@ test.skipIf(process.platform !== "linux").each([
           pathOrDescriptor: cmdline,
           description: "cmdline read failed",
         });
-        const absentAtRead: boolean[] = [];
+        const absentAtRead: Array<boolean> = [];
         const raced: FileSystem.FileSystem = {
           ...fs,
           readDirectory: (path, options) =>
@@ -183,7 +183,7 @@ test.skipIf(process.platform !== "linux")(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const spawned: string[] = [];
+        const spawned: Array<string> = [];
         const spawner = ChildProcessSpawner.make((command) =>
           Effect.sync(() => {
             if (command._tag === "StandardCommand") spawned.push(command.command);

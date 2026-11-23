@@ -705,7 +705,7 @@ const reviewRequests: (
   cwd: string,
 ) => Effect.Effect<Answered<ReadonlyArray<ReviewRequest>>, never, ForgeHttp> = (login, cwd) =>
   Effect.gen(function* () {
-    const requests: ReviewRequest[] = [];
+    const requests: Array<ReviewRequest> = [];
     for (let page = 1; ; page++) {
       const listed = yield* requestAs(
         Searched,
@@ -891,7 +891,7 @@ function readReview(ref: MrRef, cwd: string) {
       const returned: CommentKind = user?.type === "Bot" ? "bot" : "person";
       return returned;
     };
-    const comments: ForgeComment[] = [
+    const comments: Array<ForgeComment> = [
       ...Arr.map(issueComments.value, (one) => ({
         id: String(one.id),
         url: one.html_url,
@@ -1388,7 +1388,7 @@ function stagingEnvironments<R>(
         }
       }
     }
-    const names: string[] = [];
+    const names: Array<string> = [];
     for (let page = 1; ; page++) {
       const named = yield* rest(
         EnvironmentPage,
@@ -1399,7 +1399,7 @@ function stagingEnvironments<R>(
       for (const { name } of named.value.environments) if (isStaging(name)) names.push(name);
       if (named.value.environments.length < 100) break;
     }
-    const environments: StagingEnvironment[] = [];
+    const environments: Array<StagingEnvironment> = [];
     for (const name of names) {
       const all = yield* pagesAs(
         Deployment,

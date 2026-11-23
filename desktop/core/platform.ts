@@ -87,7 +87,7 @@ export const Utils = {
   clipboardReadText: () => "",
   clipboardWriteText: (_text: string) => {},
   clipboardAvailableFormats: () => {
-    const returned: string[] = [];
+    const returned: Array<string> = [];
     return returned;
   },
   openFileDialog: (_options: { canChooseDirectory: boolean; allowsMultipleSelection: boolean }) =>

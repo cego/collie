@@ -2779,7 +2779,7 @@ export function declaredByModule(metadata: WorkflowMetadata | undefined) {
       (offer.when === "always" || (offer.when === "succeeded") === facts.succeeded) &&
       (offer.eligible?.(facts) ?? true),
   }));
-  const returned: Declared[] = [...actions, ...followUps];
+  const returned: Array<Declared> = [...actions, ...followUps];
   return returned;
 }
 
@@ -3728,7 +3728,7 @@ export const handOverClaim = Effect.fn("Engine.handOverClaim")(function* (option
   readonly patience?: { readonly everyMs: number; readonly forMs: number };
 }) {
   const patience = options.patience ?? { everyMs: 250, forMs: 60_000 };
-  const handed: string[] = [];
+  const handed: Array<string> = [];
   for (const runId of options.runs) {
     if (runId === options.to) continue;
     const file = claimPath(options.dir, runId);
@@ -3755,7 +3755,7 @@ export const handOverClaim = Effect.fn("Engine.handOverClaim")(function* (option
           message: `the claim on ${options.slug} is ${runId}'s, and ${one} is still running a step its stop has not reached; resume ${options.to} once ${one} has stopped`,
         });
     }
-    const late: string[] = [];
+    const late: Array<string> = [];
     for (const one of tree.runs) late.push(...(yield* options.halt(one)).left);
     if (late.length > 0) return yield* refused(late);
     yield* updateClaims(file, (now) => Arr.filter(now, (one) => one.slug !== options.slug)).pipe(
@@ -3792,7 +3792,7 @@ const passAsked: (asked: Parameters<Sdk.HostApi["verify"]>[0]) => CheckPass = (a
 
 const defaultMergeBase = (cwd: string) =>
   Effect.gen(function* () {
-    const git = (...args: string[]) => runShell("git", args, cwd);
+    const git = (...args: Array<string>) => runShell("git", args, cwd);
     const branch = yield* defaultBase(runShell, cwd);
     if (branch === null) return { found: false, why: "no default branch" } as const;
     const remote = yield* git("merge-base", "HEAD", `origin/${branch}`);
@@ -3813,7 +3813,7 @@ const localHead = (target: string, cwd: string) =>
 
 const localChanges = (cwd: string, previous: string, head: string, base: string) =>
   Effect.gen(function* () {
-    const git = (...args: string[]) => runShell("git", args, cwd);
+    const git = (...args: Array<string>) => runShell("git", args, cwd);
     const range = `${previous}..${head}`;
     const commits = yield* git(
       "log",
@@ -3871,7 +3871,7 @@ const atDefaultBase = <A, R>(
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const git = (...args: string[]) => runShell("git", args, cwd);
+    const git = (...args: Array<string>) => runShell("git", args, cwd);
     const refuse = (why: string) =>
       new WorkflowError({ reason: `not compared at the default branch: ${why}` });
     if (Str.trim((yield* git("status", "--porcelain")).stdout) !== "") {
@@ -4102,7 +4102,7 @@ export const hostLayer: (options: {
         ).pipe(notifying.withPermits(1), Effect.ignore);
       const lineageOf = lineageIn(store);
       const recoveryLineage = Effect.fnUntraced(function* (runId: string) {
-        const lineage: string[] = [];
+        const lineage: Array<string> = [];
         let from = runId;
         while (from !== "" && !lineage.includes(from)) {
           lineage.unshift(from);
@@ -5482,7 +5482,7 @@ export const hostLayer: (options: {
                   where: `commit ${Str.trim(parts[i]!)} ${parts[i + 1]}`,
                   text: parts[i + 2]!,
                 });
-              const refused: string[] = [];
+              const refused: Array<string> = [];
               for (const one of texts) {
                 const reason = yield* publicRefusal(one.text, Effect.succeed(here.project));
                 if (reason !== null) refused.push(`${one.where}: ${reason}`);
@@ -5728,7 +5728,7 @@ export const hostLayer: (options: {
         nothingToLand: (runId, cwd) =>
           under(
             Effect.gen(function* () {
-              const git = (...args: string[]) => runShell("git", args, cwd);
+              const git = (...args: Array<string>) => runShell("git", args, cwd);
               const found = yield* defaultMergeBase(cwd);
               if (!found.found) return null;
               const ahead = yield* git("rev-list", "--count", `${found.base}..HEAD`);
@@ -7588,7 +7588,7 @@ const makeRegistry: (
     const { entry, source } = prepared ?? (yield* stageEntry(route.entry));
     const registration = entry.make(route.name);
     const pending: Array<{ row: RunRow; parked: Option.Option<string> }> = [];
-    const held: string[] = [];
+    const held: Array<string> = [];
     if (recovered !== undefined) {
       for (const row of yield* store.runs) {
         if (row.generation !== route.name || unplaced(row)) continue;
@@ -7935,7 +7935,7 @@ const makeRegistry: (
             if (latest === undefined) return null;
             const real = (dir: string) => fs.realPath(dir).pipe(Effect.orElseSucceed(() => dir));
             const here = yield* real(at);
-            const users: string[] = [];
+            const users: Array<string> = [];
             for (const row of others) {
               const cwd = yield* real(workingPlace(row).cwd);
               if (cwd === here || pipe(cwd, Str.startsWith(`${here}/`))) users.push(row.run);
@@ -8361,7 +8361,7 @@ const makeRegistry: (
         onNone: () => [],
         onSome: (asked) => asked.attachments ?? [],
       });
-      const inherited: string[] = [];
+      const inherited: Array<string> = [];
       for (const from of (yield* lineageIn(store)(row.run)).slice(1))
         for (const one of yield* listAttachments(attachmentsDir(runDir(dir, from))))
           inherited.push(one.path);
@@ -8391,7 +8391,7 @@ const makeRegistry: (
   // WARNING: the engine keeps one completion, so every recorded answer may be handed again.
   const reconcileAnswers = (reached: (run: string) => boolean = () => true) =>
     Effect.gen(function* () {
-      const woken: string[] = [];
+      const woken: Array<string> = [];
       for (const row of yield* store.runs) {
         if (!reached(row.run)) continue;
         const generation = live.get(row.generation);
@@ -8643,7 +8643,7 @@ const makeRegistry: (
   });
 
   const controlsOf = Effect.fn("Engine.controlsOf")(function* (runId: string) {
-    const set: string[] = [];
+    const set: Array<string> = [];
     for (const control of [HOLD, STOP])
       if ((yield* runRecords.control(control, runId)) !== null) set.push(control);
     return set;
@@ -9182,7 +9182,7 @@ const makeRegistry: (
     const live = yield* unended(runs);
     if (live !== null) return live;
     const agents = yield* Agents;
-    const left: string[] = [];
+    const left: Array<string> = [];
     for (const runId of runs) left.push(...(yield* agents.halt(runId)).left);
     return left.length === 0 ? null : `its agents did not all close (${Arr.join(left, "; ")})`;
   }, Effect.provideContext(hostServices));
@@ -9217,7 +9217,7 @@ const makeRegistry: (
     }
     yield* store.announce;
     // WARNING: a hold needs no wake, since a held run reads it at the next boundary; every other control needs one.
-    const woken: string[] = [];
+    const woken: Array<string> = [];
     if (!(control === HOLD && set)) {
       for (const one of runs) {
         if (recovered?.has(one) && !stopped.has(one)) continue;
@@ -9236,7 +9236,7 @@ const makeRegistry: (
     const { runs } = yield* applyControl(runId, STOP, true, undefined, alone);
     for (const one of runs) yield* forgetWatch(one);
     const agents = yield* Agents;
-    const left: string[] = [];
+    const left: Array<string> = [];
     for (const one of runs) left.push(...(yield* agents.halt(one, reason)).left);
     return { runs, left };
   });
@@ -9697,7 +9697,7 @@ const makeRegistry: (
   const recover = (reach?: ReadonlySet<string>) =>
     Effect.gen(function* () {
       const recovered = new Set<string>();
-      const released: string[] = [];
+      const released: Array<string> = [];
       const reached = (run: string) => reach === undefined || reach.has(run);
       const rows = yield* store.runs;
       const used =
@@ -9798,7 +9798,7 @@ const makeRegistry: (
       ),
     forgetClaim: (slug: string) =>
       Effect.gen(function* () {
-        const dropped: string[] = [];
+        const dropped: Array<string> = [];
         for (const { run } of yield* store.runs) {
           const file = claimPath(dir, run);
           if (!Arr.some(yield* recordedClaims(file), (one) => one.slug === slug)) continue;
@@ -10605,7 +10605,7 @@ export const provisionToolchain: (
     new ToolchainError({ code: "toolchain_unavailable", message });
   yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.orDie);
   yield* fs.writeFileString(`${dir}/${SDK_FILE}`, SDK_DECLARATIONS).pipe(Effect.orDie);
-  const unmerged: string[] = [];
+  const unmerged: Array<string> = [];
   for (const [name, merge] of [
     ["package.json", mergedPackage],
     ["tsconfig.json", (read: Readonly<Record<string, Schema.Json>>) => mergedCompiler(dir, read)],

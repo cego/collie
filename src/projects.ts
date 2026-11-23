@@ -39,7 +39,7 @@ const SKIPPED = "node_modules";
 export const checkoutsUnder = Effect.fn("Projects.checkoutsUnder")(function* (root: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const found: string[] = [];
+  const found: Array<string> = [];
   const isDirectory = (dir: string) =>
     fs.stat(dir).pipe(
       Effect.result,

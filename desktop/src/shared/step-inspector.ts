@@ -74,7 +74,7 @@ export interface InspectorTab {
   readonly label: string;
 }
 export const inspectorParts = (node: FlowRun, live: boolean, logs: number, proofs: number) => {
-  const parts: InspectorTab[] = [];
+  const parts: Array<InspectorTab> = [];
   if (live) parts.push({ value: "terminal", label: "Terminal" });
   if (node.log != null) parts.push({ value: "log", label: `Log · ${logs}` });
   if (proofs > 0) parts.push({ value: "evidence", label: `Evidence · ${proofs}` });

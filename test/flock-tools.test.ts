@@ -46,7 +46,7 @@ interface Asked {
 const machine = (
   name: string,
   tasks: ReadonlyArray<TaskView>,
-  asked: Asked[],
+  asked: Array<Asked>,
   protocol = PROTOCOL,
   files = true,
 ) => {
@@ -331,7 +331,7 @@ const savedRule = () => saved;
 let chat: DesktopSettings = { proactive: true };
 let flockSettings: FlockSettings = NO_FLOCK_SETTINGS;
 
-const flockOf = (asked: Asked[]) => ({
+const flockOf = (asked: Array<Asked>) => ({
   machines: () => [
     machine("mk-pc", [task({ id: "t-a", run: "r-1", runs: ["r-1"] })], asked),
     machine(
@@ -408,7 +408,7 @@ const flockOf = (asked: Asked[]) => ({
   uploaded: new Map(),
 });
 
-const call = (asked: Asked[], name: string, input: JsonObject) =>
+const call = (asked: Array<Asked>, name: string, input: JsonObject) =>
   callFlockTool(flockOf(asked), name, input).pipe(Effect.provide(platformLayer));
 
 test("collie_herd is every Machine's board, each Run named by its Machine", () =>
@@ -424,7 +424,7 @@ test("collie_herd is every Machine's board, each Run named by its Machine", () =
 test("Flock material reads and receipts keep the selected revision on the qualified Run", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const read = yield* call(asked, "collie_artefacts", {
         run: "vm-mk:r-2",
         id: "a1",
@@ -455,7 +455,7 @@ test("Flock material reads and receipts keep the selected revision on the qualif
 test("Flock chat searches every connected Machine once, by installation, and names one it is not connected to", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const searched: Array<{ installation: string; query: string | undefined }> = [];
       const item = (installation: string, id: string, detectedAt: string) => ({
         installation,
@@ -564,7 +564,7 @@ test("chat registers a path on the Run's Machine as tracked, one from this compu
       const fs = yield* FileSystem.FileSystem;
       const here = `${yield* fs.makeTempDirectoryScoped()}/local.md`;
       yield* fs.writeFileString(here, "# Here");
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const said = yield* call(asked, "collie_do", {
         actions: [
           { kind: "artefact_register", run: "vm-mk:r-2", path: "vm-mk:/srv/report.md" },
@@ -612,7 +612,7 @@ test("chat registers a path on the Run's Machine as tracked, one from this compu
 test("chat metadata updates preserve an omitted snapshot choice and forward an explicit false", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       yield* call(asked, "collie_do", {
         actions: [
           { kind: "artefact_register", run: "vm-mk:r-2", id: "kept", title: "Renamed" },
@@ -628,7 +628,7 @@ test("chat metadata updates preserve an omitted snapshot choice and forward an e
 test("a bare id only one Machine has acts there, under its own id, in the human's words", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const said = yield* call(asked, "collie_do", { actions: [{ kind: "stop", run: "r-2" }] });
       expect(said).toBe("stop: applied");
       expect(Arr.map(asked, ({ machine, op }) => `${machine} ${op}`)).toEqual([
@@ -647,7 +647,7 @@ test("a bare id only one Machine has acts there, under its own id, in the human'
 test("an id two Machines have is refused with both candidates, and nothing is done", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const said = yield* call(asked, "collie_do", { actions: [{ kind: "stop", run: "r-1" }] });
       expect(said).toContain("mk-pc:r-1");
       expect(said).toContain("vm-mk:r-1");
@@ -658,7 +658,7 @@ test("an id two Machines have is refused with both candidates, and nothing is do
 test("a Run named with its Machine goes to that Machine", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       yield* call(asked, "collie_hold", { run: "mk-pc:r-1", reason: "lunch" });
       expect(Arr.map(asked, ({ machine, op }) => `${machine} ${op}`)).toEqual([
         "mk-pc declare",
@@ -676,7 +676,7 @@ test("a Run named with its Machine goes to that Machine", () =>
 test("a disposition's ref naming a Run on the Machine it goes to reaches that host by the bare id", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       yield* call(asked, "collie_do", {
         actions: [
           {
@@ -698,7 +698,7 @@ test("a disposition's ref naming a Run on the Machine it goes to reaches that ho
 test("a proposal's actions go to the one Machine they name, with their own ids", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const said = yield* call(asked, "collie_propose", {
         interpretation: "release it",
         actions: [{ kind: "release", run: "vm-mk:r-1" }],
@@ -721,7 +721,7 @@ test("a proposal's actions go to the one Machine they name, with their own ids",
 test("the Flock lists each Machine's Schedules and pauses a remote one by its qualified name", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const listed = yield* call(asked, "collie_schedules", {});
       expect(listed).toContain("vm-mk:daily");
       expect(listed).toContain("mk-pc:nightly");
@@ -747,7 +747,7 @@ test("the Flock lists each Machine's Schedules and pauses a remote one by its qu
 test("a Schedule add names its Machine, and an unnamed or conflicting target changes nothing", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const add = {
         kind: "schedule_add",
         name: "daily",
@@ -799,7 +799,7 @@ test("a Schedule add names its Machine, and an unnamed or conflicting target cha
 test("a cleanup goes to the Machine it names, and naming none of several changes nothing", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       for (const kind of ["cleanup", "home_cleanup"]) {
         asked.length = 0;
         const proposing = (action: JsonObject) =>
@@ -837,7 +837,7 @@ test("a cleanup goes to the Machine it names, and naming none of several changes
 test("Connections are read per Machine through the Flock chat, and an explicit Machine limits the read", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const every = yield* call(asked, "collie_connections", {});
       expect(every).toContain("## mk-pc");
       expect(every).toContain("gitlab    ok · mk");
@@ -861,7 +861,7 @@ test("Connections are read per Machine through the Flock chat, and an explicit M
 test("which models a Machine can run is asked of that Machine alone", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const every = yield* call(asked, "collie_models", {});
       const [, pc, vm] = Str.split(every, /^## /m);
       expect(pc).toStartWith("mk-pc");
@@ -889,7 +889,7 @@ test("which models a Machine can run is asked of that Machine alone", () =>
 test("a Machine whose Schedules cannot be read is named, with no empty list claimed", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const live = machine("vm-mk", [], asked);
       const flock = {
         ...flockOf(asked),
@@ -926,7 +926,7 @@ test("input a tool does not take is refused in the tool's own terms", () =>
 test("News is read from every Herd on every Machine, and only what was handed over is settled", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const said = yield* call(asked, "collie_news", {});
       expect(said).toContain("[consequential] mk-pc:r-1");
       expect(said).toContain("[consequential] vm-mk:r-1");
@@ -943,7 +943,7 @@ test("News is read from every Herd on every Machine, and only what was handed ov
 test("a Machine nobody has is said to be no Machine, and nothing is done", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const said = yield* call(asked, "collie_hold", { run: "vm-typo:r-2" });
       expect(said).toContain('No Machine "vm-typo"');
       expect(said).toContain("mk-pc, vm-mk");
@@ -954,7 +954,7 @@ test("a Machine nobody has is said to be no Machine, and nothing is done", () =>
 test("a Machine whose host is older than the Flock chat is written to by nothing, and says why", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const flock = {
         machines: () => [machine("old-pc", [task({ id: "t-a", run: "r-1" })], asked, 1)],
         conversation: "flock@mk-pc",
@@ -987,7 +987,7 @@ test("a Machine whose host is older than the Flock chat is written to by nothing
 test("a Machine that stops answering costs a look for News its time, and the others still speak", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const wedged = machine("vm-mk", [], asked);
       const flock = {
         machines: () => [
@@ -1019,7 +1019,7 @@ test("a Machine that stops answering costs a look for News its time, and the oth
     }).pipe(Effect.provide([platformLayer, TestClock.layer()])),
   ));
 
-const withUnread = (asked: Asked[], board: ChatBoard) => ({
+const withUnread = (asked: Array<Asked>, board: ChatBoard) => ({
   machines: () => [
     machine("mk-pc", [task({ id: "t-a", run: "r-1", runs: ["r-1"] })], asked),
     unread("vm-mk", board),
@@ -1062,7 +1062,7 @@ for (const [board, why] of UNREAD)
     Effect.runPromise(
       Effect.gen(function* () {
         yield* TestClock.adjust("90 seconds");
-        const asked: Asked[] = [];
+        const asked: Array<Asked> = [];
         const flock = withUnread(asked, board);
         const herd = yield* callFlockTool(flock, "collie_herd", {});
         expect(herd).toContain("run mk-pc:r-1:");
@@ -1086,7 +1086,7 @@ for (const [board, why] of UNREAD)
 test("startup read tools: workspaces use an open chat door while the first board is still connecting", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const board: ChatBoard = { _tag: "Connecting", since: 0 };
       const vm: ChatMachine = { ...machine("vm-mk", [], asked), board };
       const flock = { ...withUnread(asked, board), machines: () => [vm] };
@@ -1111,7 +1111,7 @@ test("startup read tools: workspaces use an open chat door while the first board
 test("startup read tools: explicitly qualified receipts use the connecting Machine without enabling writes", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const board: ChatBoard = { _tag: "Connecting", since: 0 };
       const vm: ChatMachine = { ...machine("vm-mk", [], asked), board };
       const local = machine(
@@ -1143,7 +1143,7 @@ test("startup read tools: explicitly qualified receipts use the connecting Machi
 test("a live Machine whose chat channel is not open yet is still a Machine, and says so", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const { door: _, ...doorless } = machine("vm-mk", [], asked);
       const said = yield* callFlockTool(
         { ...withUnread(asked, doorless.board), machines: () => [doorless] },
@@ -1159,7 +1159,7 @@ test("a live Machine whose chat channel is not open yet is still a Machine, and 
 test("a live Machine's board is read before its chat channel opens", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const { door: _, ...doorless } = machine(
         "vm-mk",
         [task({ id: "t-b", run: "r-2", runs: ["r-2"], name: "Fix board bugs" })],
@@ -1177,7 +1177,7 @@ test("a live Machine's board is read before its chat channel opens", () =>
 test("a Repo run is reached on its Machine by its bare id", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const fan = task({
         id: "t-fan",
         run: "r-fan",
@@ -1198,7 +1198,7 @@ test("a Repo run is reached on its Machine by its bare id", () =>
 test("a live Machine is read from the board Desktop follows, with no board of its host's", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const herd = yield* call(asked, "collie_herd", {});
       expect(herd).toContain("run vm-mk:r-2: Fix board bugs");
       const workspaces = yield* call(asked, "collie_workspaces", {});
@@ -1214,7 +1214,7 @@ const textOf = (content: ReadonlyArray<ToolContent>) =>
     "\n",
   );
 
-const callFile = (asked: Asked[], name: string, input: JsonObject, files = true) =>
+const callFile = (asked: Array<Asked>, name: string, input: JsonObject, files = true) =>
   callFileTool(
     {
       ...flockOf(asked),
@@ -1227,7 +1227,7 @@ const callFile = (asked: Asked[], name: string, input: JsonObject, files = true)
 test("startup read tools: files can be read through the open door while writes still await the first board", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const board: ChatBoard = { _tag: "Connecting", since: 0 };
       const vm: ChatMachine = { ...machine("vm-mk", [], asked), board };
       const flock = { ...withUnread(asked, board), machines: () => [vm] };
@@ -1253,7 +1253,7 @@ test("startup read tools: files can be read through the open door while writes s
 test("collie_read reaches the named Machine's host with the bare path, and answers numbered lines", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const read = yield* callFile(asked, "collie_read", {
         file_path: "vm-mk:/var/log/app.log",
         offset: 2,
@@ -1289,7 +1289,7 @@ test("collie_read of an image is the image, and of another binary its name, size
 test("collie_read takes 8 MB of a text file with no newlines, and shows 2000 characters of its line", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const read = yield* callFile(asked, "collie_read", { file_path: "vm-mk:/tmp/bundle.js" });
       expect(textOf(read).length).toBeLessThan(2100);
       expect(Arr.filter(asked, ({ op }) => op === "readFile")).toHaveLength(3);
@@ -1299,7 +1299,7 @@ test("collie_read takes 8 MB of a text file with no newlines, and shows 2000 cha
 test("a file tool on a Machine without them is told to upgrade, and a bare path to name one", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const old = yield* callFile(
         asked,
         "collie_glob",
@@ -1316,7 +1316,7 @@ test("a file tool on a Machine without them is told to upgrade, and a bare path 
 test("collie_write and collie_edit go to the Machine's host in the human's words, under a request", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       yield* callFile(asked, "collie_edit", {
         file_path: "vm-mk:/etc/app.ini",
         old_string: "a=1",
@@ -1347,7 +1347,7 @@ test("collie_write and collie_edit go to the Machine's host in the human's words
     }),
   ));
 
-const reads = (asked: Asked[]) =>
+const reads = (asked: Array<Asked>) =>
   Arr.map(
     Arr.filter(asked, ({ op }) => op === "read"),
     ({ machine, payload }) => ({ machine, payload }),
@@ -1356,7 +1356,7 @@ const reads = (asked: Asked[]) =>
 test("a Run named on a Machine is read by that Machine's host, under its own id, and headed with its name", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const said = yield* call(asked, "collie_run", { run: "vm-mk:r-2" });
       expect(reads(asked)).toEqual([
         { machine: "vm-mk", payload: { tool: "collie_run", input: { run: "r-2" } } },
@@ -1368,13 +1368,13 @@ test("a Run named on a Machine is read by that Machine's host, under its own id,
 test("a bare id only one Machine has is read there", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const said = yield* call(asked, "collie_receipts", { run: "r-2" });
       expect(reads(asked)).toEqual([
         { machine: "vm-mk", payload: { tool: "collie_receipts", input: { run: "r-2" } } },
       ]);
       expect(said).toStartWith("## vm-mk");
-      const both: Asked[] = [];
+      const both: Array<Asked> = [];
       expect(yield* call(both, "collie_run", { run: "r-1" })).toContain(
         "is on more than one Machine",
       );
@@ -1385,7 +1385,7 @@ test("a bare id only one Machine has is read there", () =>
 test("where work can start is every Machine's own answer, a section each, and a naming rule with no example path", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const said = yield* call(asked, "collie_workspaces", {});
       expect(Arr.map(reads(asked), ({ machine }) => machine).sort()).toEqual(["mk-pc", "vm-mk"]);
       expect(said).toContain("## mk-pc\n\ncollie_workspaces answered by mk-pc");
@@ -1398,7 +1398,7 @@ test("where work can start is every Machine's own answer, a section each, and a 
 test("a broken chat transport is reported truthfully, a slow host times out, and the rest still answer", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const old = machine("vm-mk", [], asked);
       const slow = machine("vm-slow", [], asked);
       const flock = {
@@ -1683,7 +1683,7 @@ test("a start that names no Machine while several are reachable is still refused
   Effect.runPromise(
     Effect.gen(function* () {
       saved = "Everything is on the vm";
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const said = yield* call(asked, "collie_do", {
         actions: [{ kind: "start", workflow: "plan", inputs: {} }],
       });
@@ -1693,7 +1693,7 @@ test("a start that names no Machine while several are reachable is still refused
     }),
   ));
 
-const carrying = (asked: Asked[], dir: string, files: { readonly vm?: boolean } = {}) => ({
+const carrying = (asked: Array<Asked>, dir: string, files: { readonly vm?: boolean } = {}) => ({
   ...flockOf(asked),
   machines: () => [
     machine("mk-pc", [], asked),
@@ -1738,7 +1738,7 @@ const shotSha = new Bun.CryptoHasher("sha256").update("PNG!").digest("hex");
 test("a start carries the turn's files, uploaded to its Machine once and handed over as paths there", () =>
   withShot((dir) =>
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const flock = carrying(asked, dir);
       const said = yield* callFlockTool(flock, "collie_do", start()).pipe(
         Effect.provide(platformLayer),
@@ -1777,7 +1777,7 @@ test("a start carries the turn's files, uploaded to its Machine once and handed 
 test("an offer taken on a Run named with its Machine goes to that Machine's host with the bare id and the turn's files", () =>
   withShot((dir) =>
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       yield* callFlockTool(carrying(asked, dir), "collie_do", {
         actions: [{ kind: "take_offer", run: "vm-mk:r-2", offer: "release" }],
       }).pipe(Effect.provide(platformLayer));
@@ -1805,7 +1805,7 @@ test("a file over 100 MB, here or on another Machine, is refused before it is re
       const fs = yield* FileSystem.FileSystem;
       yield* fs.writeFileString(`${dir}/huge.bin`, "");
       yield* fs.truncate(`${dir}/huge.bin`, ATTACHMENT_BYTES + 1);
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const flock = carrying(asked, dir);
       const here = yield* callFlockTool(
         flock,
@@ -1841,7 +1841,7 @@ test("a file over 100 MB, here or on another Machine, is refused before it is re
 test("[] carries no files, and a file already on the start's Machine goes as its own path", () =>
   withShot((dir) =>
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const flock = carrying(asked, dir);
       yield* callFlockTool(flock, "collie_do", start({ attachments: [] })).pipe(
         Effect.provide(platformLayer),
@@ -1867,7 +1867,7 @@ test("[] carries no files, and a file already on the start's Machine goes as its
 test("a turn of Desktop's own carries no files", () =>
   withShot((dir) =>
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const flock = {
         ...carrying(asked, dir),
         said: () => undefined,
@@ -1886,7 +1886,7 @@ test("a turn of Desktop's own carries no files", () =>
 test("a start carrying files to a Machine whose Collie predates them is refused, and nothing starts", () =>
   withShot((dir) =>
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const said = yield* callFlockTool(
         carrying(asked, dir, { vm: false }),
         "collie_do",
@@ -1900,7 +1900,7 @@ test("a start carrying files to a Machine whose Collie predates them is refused,
 test("a Machine whose Collie has no such operation is told to upgrade, and the rest still answer", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const old = machine("vm-mk", [], asked);
       const flock = {
         machines: () => [
@@ -1933,7 +1933,7 @@ test("a Machine whose Collie has no such operation is told to upgrade, and the r
 test("the Flock chat moves a Schedule between two Machines through the shared sequence", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const said = yield* call(asked, "collie_move_schedule", {
         schedule: "vm-mk:daily",
         to: "mk-pc",
@@ -1962,7 +1962,7 @@ test("the Flock chat moves a Schedule between two Machines through the shared se
 test("a Flock chat move to a Machine it cannot reach is refused, and nothing is changed", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const said = yield* callFlockTool(
         {
           ...flockOf(asked),
@@ -1982,7 +1982,7 @@ test("a Flock chat move to a Machine it cannot reach is refused, and nothing is 
 test("a deliver to a Machine whose board speaks an older protocol is refused before anything is sent", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const flock = {
         ...flockOf(asked),
         machines: () => [
@@ -2007,7 +2007,7 @@ test("a deliver to a Machine whose board speaks an older protocol is refused bef
 
 const holding = (
   name: string,
-  asked: Asked[],
+  asked: Array<Asked>,
   runs: ReadonlyArray<string>,
   answer?: ChatDoor["progress"],
 ) => {
@@ -2021,7 +2021,7 @@ const holding = (
   return { ...reached, door: { ...reached.door, progress } };
 };
 
-const flockOn = (asked: Asked[], machines: ReadonlyArray<ChatMachine>) => ({
+const flockOn = (asked: Array<Asked>, machines: ReadonlyArray<ChatMachine>) => ({
   ...flockOf(asked),
   machines: () => machines,
 });
@@ -2029,7 +2029,7 @@ const flockOn = (asked: Asked[], machines: ReadonlyArray<ChatMachine>) => ({
 test("a bare id no board lists yet is read on the one Machine whose host has it", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const flock = flockOn(asked, [
         holding("mk-pc", asked, []),
         holding("vm-mk", asked, ["r-new"]),
@@ -2040,7 +2040,7 @@ test("a bare id no board lists yet is read on the one Machine whose host has it"
       expect(reads(asked)).toEqual([
         { machine: "vm-mk", payload: { tool: "collie_run", input: { run: "r-new" } } },
       ]);
-      const nowhere: Asked[] = [];
+      const nowhere: Array<Asked> = [];
       const none = flockOn(nowhere, [holding("mk-pc", nowhere, []), holding("vm-mk", nowhere, [])]);
       expect(yield* callFlockTool(none, "collie_run", { run: "r-new" })).toBe(
         'No Run "r-new" on any Machine. Nothing was done; collie_herd lists them as <machine>:<id>.',
@@ -2056,7 +2056,7 @@ for (const [why, answer, said] of [
   test(`a Machine whose host ${why} when asked about a bare id is unread, and nothing is done`, () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        const asked: Asked[] = [];
+        const asked: Array<Asked> = [];
         const flock = flockOn(asked, [
           holding("mk-pc", asked, [], answer),
           holding("vm-mk", asked, ["r-new"]),
@@ -2078,7 +2078,7 @@ for (const [why, answer, said] of [
 test("a hold and a run-scoped action on a bare id no board lists go to the Machine whose host has it", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const flock = flockOn(asked, [
         holding("mk-pc", asked, []),
         holding("vm-mk", asked, ["r-new"]),
@@ -2100,7 +2100,7 @@ test("a hold and a run-scoped action on a bare id no board lists go to the Machi
 test("an answer its Machine never confirms is said as not confirmed, and nothing after it is sent", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const silent = machine("vm-mk", [task({ id: "t-b", run: "r-2", runs: ["r-2"] })], asked);
       const flock = flockOn(asked, [
         {
@@ -2133,7 +2133,7 @@ test("an answer its Machine never confirms is said as not confirmed, and nothing
   ));
 
 const keeping = () => {
-  const lines: Attempted[] = [];
+  const lines: Array<Attempted> = [];
   return { lines, log: (line: Attempted) => Effect.sync(() => void lines.push(line)) };
 };
 
@@ -2141,9 +2141,9 @@ for (const kind of ["start", "deliver"] as const)
   test(`a disconnected ${kind} is unknown, is not replayed, and an explicit retry keeps its identity`, () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        const asked: Asked[] = [];
+        const asked: Array<Asked> = [];
         const live = machine("vm-mk", [task({ id: "t-b", run: "r-2", runs: ["r-2"] })], asked);
-        const submitted: string[] = [];
+        const submitted: Array<string> = [];
         const accepted = new Set<string>();
         let outcomes = 0;
         let disconnected = true;
@@ -2202,7 +2202,7 @@ for (const kind of ["start", "deliver"] as const)
 test("a host that never takes the chat's declaration ends the write as not confirmed, logged each try", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const { lines, log } = keeping();
       const mute = machine("vm-mk", [task({ id: "t-b", run: "r-2", runs: ["r-2"] })], asked);
       const flock = {
@@ -2230,9 +2230,9 @@ test("a host that never takes the chat's declaration ends the write as not confi
 test("a disconnected proposal returns its retry id without submitting a second write", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const live = machine("vm-mk", [], asked);
-      const submitted: string[] = [];
+      const submitted: Array<string> = [];
       const flock = flockOn(asked, [
         {
           ...live,
@@ -2271,7 +2271,7 @@ test("a disconnected proposal returns its retry id without submitting a second w
 test("a chat write refused before it is sent is logged as not sent, with Desktop's reason", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const { lines, log } = keeping();
       const flock = {
         ...flockOn(asked, [
@@ -2308,7 +2308,7 @@ test("a chat write refused before it is sent is logged as not sent, with Desktop
 test("a refusal that quotes what the chat sent is logged without it", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const { lines, log } = keeping();
       const quoting = machine("vm-mk", [task({ id: "t-b", run: "r-2", runs: ["r-2"] })], asked);
       const flock = {
@@ -2344,7 +2344,7 @@ test("a refusal that quotes what the chat sent is logged without it", () =>
 test("a confirmation whose proposed action fails is logged with its kinds and states only", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const asked: Asked[] = [];
+      const asked: Array<Asked> = [];
       const { lines, log } = keeping();
       const proposing = machine(
         "vm-mk",
@@ -2395,7 +2395,7 @@ test("a confirmation whose proposed action fails is logged with its kinds and st
     }).pipe(Effect.provide(platformLayer)),
   ));
 
-const standInHelle = (projects: ReadonlyArray<HelleProject>, calls: string[]) =>
+const standInHelle = (projects: ReadonlyArray<HelleProject>, calls: Array<string>) =>
   Bun.serve({
     port: 0,
     fetch: (request) => {
@@ -2414,7 +2414,7 @@ const standInHelle = (projects: ReadonlyArray<HelleProject>, calls: string[]) =>
 
 const askHelle = (token: string | null, input: JsonObject) =>
   Effect.gen(function* () {
-    const calls: string[] = [];
+    const calls: Array<string> = [];
     const server = yield* Effect.acquireRelease(
       Effect.sync(() =>
         standInHelle(

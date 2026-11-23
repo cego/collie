@@ -56,7 +56,7 @@ export const publicationCheckouts = Effect.fn("Issues.publicationCheckouts")(fun
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const checkouts = new Set<string>();
-  const aliases: DirectoryAlias[] = [];
+  const aliases: Array<DirectoryAlias> = [];
   const unseen = (error: PlatformError) =>
     error.reason._tag === "NotFound" || error.reason._tag === "PermissionDenied"
       ? Effect.succeed(null)
@@ -80,7 +80,7 @@ export const publicationCheckouts = Effect.fn("Issues.publicationCheckouts")(fun
       if (fromRoot === ".." || pipe_(fromRoot, Str.startsWith(`..${path.sep}`))) return [];
       if (left === 0 || (walked.get(canonical) ?? -1) >= left) return [];
       walked.set(canonical, left);
-      const directories: string[] = [];
+      const directories: Array<string> = [];
       for (const name of yield* fs.readDirectory(canonical)) {
         if (SKIPPED.has(name)) continue;
         const child = path.join(canonical, name);

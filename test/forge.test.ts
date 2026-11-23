@@ -202,7 +202,7 @@ for (const name of ["gitlab", "github"] as const) {
     if (name === "github")
       test("reports a still-active approval and its review id when a racing push cannot be dismissed", () => {
         const fake = fakeForge(name, model(name));
-        const dismissals: string[] = [];
+        const dismissals: Array<string> = [];
         const layer = forgeHttpTest(fake.run, (url, init) => {
           if (Str.endsWith("/dismissals")(url)) {
             dismissals.push(url);
@@ -1121,7 +1121,7 @@ for (const name of ["gitlab", "github"] as const) {
     test("passes shell characters in creation arguments literally", () =>
       runEffect(
         Effect.gen(function* () {
-          const calls: string[][] = [];
+          const calls: Array<Array<string>> = [];
           const run: Runner = (_cmd, args) => {
             calls.push(args);
             return Effect.succeed({

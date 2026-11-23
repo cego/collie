@@ -30,7 +30,7 @@ export const githubChecks = Effect.fn("Doctor.githubChecks")(function* (
           "install gh — https://cli.github.com",
         ),
       },
-    ] satisfies Check[];
+    ] satisfies Array<Check>;
   const auth = yield* answered(run("gh", ["auth", "status", "--hostname", HOST], env.pluginRoot));
   return [
     {
@@ -47,5 +47,5 @@ export const githubChecks = Effect.fn("Doctor.githubChecks")(function* (
               `gh auth login --hostname ${HOST}`,
             )),
     },
-  ] satisfies Check[];
+  ] satisfies Array<Check>;
 });

@@ -157,7 +157,7 @@ test("aligned: true is the strong claim, and every way of not knowing is unverif
     why: expect.stringContaining("truncated"),
   });
 
-  const skipped: DriftLine[] = [
+  const skipped: Array<DriftLine> = [
     { kind: "skipped", at: "t", run: "r1", reason: "budget_exhausted" },
   ];
   expect(alignment(intent, skipped, judged)).toMatchObject({
@@ -187,10 +187,10 @@ test("a Run with no goal and no semantic constraints can still be aligned", () =
 });
 
 test("a Driver says it is standing once per pending, not once per boundary", () => {
-  const pending: ElectionLine[] = [{ kind: "pending", since: "t1", runs: ["r1"] }];
+  const pending: Array<ElectionLine> = [{ kind: "pending", since: "t1", runs: ["r1"] }];
   expect(alreadyStood([], "r1")).toBe(false);
   expect(alreadyStood(pending, "r1")).toBe(false);
-  const stood: ElectionLine[] = [
+  const stood: Array<ElectionLine> = [
     ...pending,
     { kind: "candidate", at: "t2", by: "boundary", run: "r1" },
   ];
@@ -203,19 +203,19 @@ test("a Driver says it is standing once per pending, not once per boundary", () 
 });
 
 test("a pending evaluation is cleared by a Judgement that covers it, and by nothing less", () => {
-  const owed: ElectionLine[] = [{ kind: "pending", since: "t1", runs: ["r1", "r2"] }];
-  const partial: ElectionLine[] = [
+  const owed: Array<ElectionLine> = [{ kind: "pending", since: "t1", runs: ["r1", "r2"] }];
+  const partial: Array<ElectionLine> = [
     ...owed,
     { kind: "evaluated", at: "t2", by: "r3", runs: ["r1"] },
   ];
   expect(pendingEvaluation(partial)).toMatchObject({ since: "t1" });
-  const covered: ElectionLine[] = [
+  const covered: Array<ElectionLine> = [
     ...owed,
     { kind: "evaluated", at: "t2", by: "r3", runs: ["r1", "r2", "r3"] },
   ];
   expect(pendingEvaluation(covered)).toBeNull();
   expect(shouldStand(covered, false)).toBe(false);
-  const earlier: ElectionLine[] = [
+  const earlier: Array<ElectionLine> = [
     { kind: "evaluated", at: "t0", by: "r3", runs: ["r1", "r2"] },
     ...owed,
   ];
@@ -223,7 +223,7 @@ test("a pending evaluation is cleared by a Judgement that covers it, and by noth
 });
 
 test("a snapshot is stale only when a loser wrote dirty after it was taken", () => {
-  const lines: ElectionLine[] = [
+  const lines: Array<ElectionLine> = [
     { kind: "dirty", at: "2026-01-01T00:00:01.000Z", by: "boundary", run: "r2" },
     { kind: "candidate", at: "2026-01-01T00:00:03.000Z", by: "boundary", run: "r3" },
   ];
@@ -232,12 +232,12 @@ test("a snapshot is stale only when a loser wrote dirty after it was taken", () 
 });
 
 test("the wake rule makes every Driver a candidate, not only the ones with siblings", () => {
-  const nobody: ElectionLine[] = [];
+  const nobody: Array<ElectionLine> = [];
   expect(shouldStand(nobody, false)).toBe(false);
   expect(shouldStand(nobody, true)).toBe(true);
 
   // WARNING: A pending evaluation is everybody's; without this it waits for a Driver with a parent, which may never run again.
-  const stuck: ElectionLine[] = [{ kind: "pending", since: "t1", runs: ["r1"] }];
+  const stuck: Array<ElectionLine> = [{ kind: "pending", since: "t1", runs: ["r1"] }];
   expect(shouldStand(stuck, false)).toBe(true);
   expect(pendingEvaluation(stuck)).toMatchObject({ runs: ["r1"] });
   expect(pendingEvaluation(nobody)).toBeNull();

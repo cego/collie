@@ -15,7 +15,7 @@ const text = (bytes: Uint8Array) =>
   pipe_(new TextDecoder().decode(bytes), Str.replace(/\0.*$/s, ""));
 
 const unreadable = (tar: Uint8Array) => {
-  const found: string[] = [];
+  const found: Array<string> = [];
   for (let at = 0; at + BLOCK <= tar.length;) {
     const header = tar.subarray(at, at + BLOCK);
     if (header.every((byte) => byte === 0)) break;

@@ -224,7 +224,7 @@ export const listRuns = Effect.fn("Runs.list")(function* (env: PluginEnv) {
   return newestFirst(Arr.map(live.runs, (view) => factsOfView(env.stateDir, view)));
 });
 
-export const newestFirst: (runs: ReadonlyArray<RunFacts>) => RunFacts[] = (runs) =>
+export const newestFirst: (runs: ReadonlyArray<RunFacts>) => Array<RunFacts> = (runs) =>
   [...runs].sort((a, b) => pipe_(b.created, Str.localeCompare(a.created)));
 
 export const findRun: (

@@ -215,26 +215,29 @@ export function measuresOf(
   }>,
 ) {
   const rounds: Array<{ runId: string; reached: number; cap: number }> = [];
-  const dispositions: Record<"merged" | "superseded" | "abandoned", string[]> = {
+  const dispositions: Record<"merged" | "superseded" | "abandoned", Array<string>> = {
     merged: [],
     superseded: [],
     abandoned: [],
   };
   const steering: Array<Measures["steering"]["runs"][number]> = [];
-  const byOrigin: Record<Origin, string[]> = { human: [], chat: [], agent: [], host: [] };
+  const byOrigin: Record<Origin, Array<string>> = { human: [], chat: [], agent: [], host: [] };
   const verifications: Array<Measures["verifications"]["runs"][number]> = [];
-  const repeated: string[] = [];
-  const executableOnly: string[] = [];
-  const reasons = new Map<string, string[]>();
-  const causes = new Map<ParkCause, { runs: string[]; waits: number[]; humanResumes: number }>();
-  const collectExpiries: string[] = [];
+  const repeated: Array<string> = [];
+  const executableOnly: Array<string> = [];
+  const reasons = new Map<string, Array<string>>();
+  const causes = new Map<
+    ParkCause,
+    { runs: Array<string>; waits: Array<number>; humanResumes: number }
+  >();
+  const collectExpiries: Array<string> = [];
   const recoveries = new Map<
     string,
     {
       cause: ParkCause;
       action: RecoveryAction;
-      runs: string[];
-      waits: number[];
+      runs: Array<string>;
+      waits: Array<number>;
       falseRecoveries: number;
       escalations: number;
       healMs: number;
@@ -384,7 +387,7 @@ export function measuresOf(
 
   const disposed =
     dispositions.merged.length + dispositions.superseded.length + dispositions.abandoned.length;
-  const share = (of: string[]) => (disposed === 0 ? null : of.length / disposed);
+  const share = (of: Array<string>) => (disposed === 0 ? null : of.length / disposed);
   const atCap = Arr.map(
     Arr.filter(rounds, (one) => one.reached >= one.cap),
     (one) => one.runId,

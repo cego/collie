@@ -79,7 +79,7 @@ interface Control {
 }
 
 const controls = () => {
-  const focused: string[] = [];
+  const focused: Array<string> = [];
   const control = (name: string) => ({
     name,
     isConnected: true,

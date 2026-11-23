@@ -208,7 +208,7 @@ export const reviewPass = (ask: ReviewAsk) =>
           return report;
         }
         const before = ask.ledger;
-        const findings: Finding[] = [];
+        const findings: Array<Finding> = [];
         const ids = new Set<string>();
         const reserved = new Set(Arr.map([...before, ...report.findings], (one) => one.id));
         let next = 1;
@@ -440,7 +440,7 @@ export const rally = (ask: {
     const agents = yield* Agents;
     const runId = (yield* Run).id;
     const { prefix } = ask;
-    let disputed: Finding[] = [];
+    let disputed: Array<Finding> = [];
     let seen: { readonly at: number; readonly keys: ReadonlyArray<string> } | null = null;
     const delta =
       ask.resume === undefined && (yield* host.place(runId)).features?.review_delta === true;

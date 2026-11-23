@@ -24,7 +24,7 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
   readonly branch?: string;
   readonly run: Runner<R>;
 }) {
-  const git = (args: string[]) => opts.run("git", args, opts.cwd);
+  const git = (args: Array<string>) => opts.run("git", args, opts.cwd);
   const refused: (why: string) => FastForward = (why) => ({ _tag: "Refused", why });
   if (opts.branch !== undefined) {
     const branch = yield* git(["symbolic-ref", "--quiet", "--short", "HEAD"]);
@@ -78,9 +78,9 @@ export const carried = Effect.fn("Releasing.carried")(function* <R>(opts: {
   readonly commits: ReadonlyArray<string>;
   readonly run: Runner<R>;
 }) {
-  const git = (args: string[]) => opts.run("git", args, opts.cwd);
+  const git = (args: Array<string>) => opts.run("git", args, opts.cwd);
   if (opts.commits.length > 0) yield* git(["fetch", "--quiet", "origin"]);
-  const carries: string[] = [];
+  const carries: Array<string> = [];
   for (const commit of opts.commits)
     if ((yield* git(["merge-base", "--is-ancestor", commit, opts.head])).code === 0)
       carries.push(commit);
@@ -261,11 +261,11 @@ const unsettled = (
 
 const gitOf =
   <R>(opts: { readonly cwd: string; readonly run: Runner<R> }) =>
-  (args: string[]) =>
+  (args: Array<string>) =>
     opts.run("git", args, opts.cwd);
 
 const carries = <R>(
-  git: (args: string[]) => Effect.Effect<Ran, never, R>,
+  git: (args: Array<string>) => Effect.Effect<Ran, never, R>,
   sha: string,
   ancestor: string,
 ) =>
@@ -276,7 +276,7 @@ const carries = <R>(
   });
 
 const tagOn = <R>(
-  git: (args: string[]) => Effect.Effect<Ran, never, R>,
+  git: (args: Array<string>) => Effect.Effect<Ran, never, R>,
   tag: string,
   merged: string,
 ) =>
@@ -417,7 +417,7 @@ export const readTag = Effect.fn("Releasing.readTag")(function* <R>(opts: {
   const settled = unsettled(read.jobs, opts.production, on);
   if (settled !== null) return unproved(settled);
   if (opts.production.length === 0) return unproved(`no production job ${on} was named`);
-  const production: JobLink[] = [];
+  const production: Array<JobLink> = [];
   for (const name of opts.production) {
     const job = jobNamed(name);
     if (job === undefined) return unproved(`\`${name}\` is not a job ${on}`);
@@ -454,7 +454,7 @@ export const readProduction = Effect.fn("Releasing.readProduction")(function* <R
   const on = `on ${opts.tag}'s pipeline at ${opts.pipeline}`;
   const settled = unsettled(read.jobs, opts.jobs, on);
   if (settled !== null) return unproved(settled);
-  const jobs: JobLink[] = [];
+  const jobs: Array<JobLink> = [];
   for (const name of opts.jobs) {
     const job = Option.getOrUndefined(Arr.findFirst(read.jobs, (one) => one.name === name));
     if (job === undefined) return unproved(`\`${name}\` is no longer a job ${on}`);
@@ -485,7 +485,7 @@ export const readStage = Effect.fn("Releasing.readStage")(function* <R>(opts: {
   if (opts.jobs.length === 0)
     return failed("no stage job of the merge request's pipeline was named");
   const on = `on the merge request's pipeline at ${short(opts.head)}`;
-  const jobs: JobLink[] = [];
+  const jobs: Array<JobLink> = [];
   let unpassed: string | null = null;
   let moved: string | null = null;
   let commit = opts.head;
@@ -520,7 +520,7 @@ export const readStage = Effect.fn("Releasing.readStage")(function* <R>(opts: {
       `stage does not carry ${short(opts.head)}: no stage environment has a deployment of ${short(commit)} by ${named(opts.jobs)}`,
       environments,
     );
-  const uncarried: string[] = [];
+  const uncarried: Array<string> = [];
   for (const env of reached) {
     if (env.live === opts.head || env.live === commit) continue;
     const staged = env.live === null ? false : yield* carries(gitOf(opts), env.live, opts.head);
@@ -570,13 +570,13 @@ export const readRollback = Effect.fn("Releasing.readRollback")(function* <R>(op
   const production = yield* deployedOn(opts.ref, "production", opts.cwd, opts.run);
   if (!production.ok) return unshown(`production could not be read: ${production.reason}`);
   if (production.sha === null) return unshown("production has no successful deployment");
-  const why: string[] = [];
+  const why: Array<string> = [];
   for (const { where, live } of lives) {
     if (live === null) {
       why.push(`stage has no successful deployment${where}`);
       continue;
     }
-    const still: string[] = [];
+    const still: Array<string> = [];
     for (const head of opts.off) {
       const carried = yield* carries(git, live, head);
       if (carried === null) return unshown(`stage's ${short(live)}${where} could not be compared`);

@@ -9,7 +9,7 @@ export const handoffsIn = Effect.fn("Handoffs.in")(function* (runDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const dir = handoffsDir(runDir);
-  const kept: EvidenceFile[] = [];
+  const kept: Array<EvidenceFile> = [];
   for (const name of (yield* fs
     .readDirectory(dir, { recursive: true })
     .pipe(Effect.orElseSucceed(() => []))).sort((a, b) => pipe_(a, Str.localeCompare(b)))) {

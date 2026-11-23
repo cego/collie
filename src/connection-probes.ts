@@ -106,12 +106,12 @@ export const probeLinearMcp = Effect.fn("Connections.probeLinearMcp")(function* 
   );
   const jsonc = (text: string) => decodeMcpConfig(Bun.JSONC.parse(text));
   const toml = (text: string) => decodeMcpConfig(Bun.TOML.parse(text));
-  const places: {
+  const places: Array<{
     file: string;
     harness: string;
     parse: (text: string) => McpConfig;
     servers: (config: McpConfig) => Servers | undefined;
-  }[] = [
+  }> = [
     {
       file: path.join(configDir, ".claude.json"),
       harness: "Claude Code",
@@ -169,7 +169,7 @@ export const probeLinearMcp = Effect.fn("Connections.probeLinearMcp")(function* 
       }),
     ),
   ];
-  const seen: string[] = [];
+  const seen: Array<string> = [];
   let broken: Probe | undefined;
   for (const place of places) {
     if (!(yield* fs.exists(place.file))) continue;

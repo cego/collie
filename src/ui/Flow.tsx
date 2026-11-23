@@ -38,7 +38,7 @@ function Menu(props: { pending: Pending }) {
   const [query, setQuery] = createSignal("");
   const [at, setAt] = createSignal(0);
 
-  const items = createMemo<readonly PickItem[]>(() => {
+  const items = createMemo<ReadonlyArray<PickItem>>(() => {
     const ask = props.pending.ask;
     const all = ask._tag === "Menu" ? ask.items : [];
     return filterItems(all, query(), itemHay);

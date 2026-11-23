@@ -385,10 +385,10 @@ function leaves(node: CommandNode, path: ReadonlyArray<string> = []) {
   const here = [...path, node.name];
   const children = Arr.flatMap(node.subcommands ?? [], (group) => group.commands ?? []);
   if (children.length === 0) {
-    const returned: string[] = [Arr.join(here.slice(1), " ")];
+    const returned: Array<string> = [Arr.join(here.slice(1), " ")];
     return returned;
   }
-  const returned: string[] = Arr.flatMap(children, (child) => leaves(child, here));
+  const returned: Array<string> = Arr.flatMap(children, (child) => leaves(child, here));
   return returned;
 }
 

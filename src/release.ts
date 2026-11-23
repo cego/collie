@@ -37,7 +37,7 @@ export const installation = Effect.fn("release.installation")(function* (
   version: string,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner> = shell,
 ) {
-  const git = (...args: string[]) => run("git", args, root);
+  const git = (...args: Array<string>) => run("git", args, root);
   if (!(yield* isCheckout(root, run))) return RELEASED;
   if (yield* atCollieDir(root, collieDir)) return RELEASED;
   const sha = Str.trim((yield* git("rev-parse", "--short", "HEAD")).stdout);
@@ -80,7 +80,7 @@ const filesUnder = Effect.fn("release.filesUnder")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const names = yield* fs.readDirectory(dir, { recursive: true });
-  const files: string[] = [];
+  const files: Array<string> = [];
   for (const name of names) {
     if ((yield* fs.stat(path.join(dir, name))).type === "File") files.push(name);
   }
@@ -118,7 +118,7 @@ export const placeRelease = Effect.fn("release.place")(function* (
     yield* Schema.encodeEffect(Placed)({ version, files }).pipe(Effect.orDie),
   );
 
-  const kept: string[] = [];
+  const kept: Array<string> = [];
   if (yield* fs.exists(current)) {
     const recorded = yield* fs.readFileString(path.join(current, RECORD)).pipe(
       Effect.flatMap(Schema.decodeUnknownEffect(Placed)),

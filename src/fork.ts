@@ -118,7 +118,7 @@ function copied(text: string, hash: string, source: string, target: string) {
 
 function stub(name: string, parent: string, kind: DefinitionKind, opts: ForkOptions) {
   const head = ["---", `name: ${yamlScalar(name)}`, `extends: ${yamlScalar(parent)}`];
-  const body: string[] = [];
+  const body: Array<string> = [];
   if (kind === "workflows" && opts.step) {
     head.push(
       "steps:",

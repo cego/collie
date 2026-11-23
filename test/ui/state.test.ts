@@ -241,7 +241,7 @@ function group(label: string, over: Partial<WideGroup> = {}) {
   };
 }
 
-function wideView(groups: WideGroup[], quiet: string[] = []) {
+function wideView(groups: Array<WideGroup>, quiet: Array<string> = []) {
   return { groups, quiet, now: NOW };
 }
 
@@ -651,7 +651,7 @@ test("a filter keeps a matching agent under the run it works for", () => {
     ["active", "Implement · r2"],
   ]);
   // WARNING: the order is the board's, not the match rank, or a pick list would lift an agent above its own run.
-  const order = (kept: Row[]) => Arr.map(kept, (r) => rows.indexOf(r));
+  const order = (kept: Array<Row>) => Arr.map(kept, (r) => rows.indexOf(r));
   expect(order(matching(rows, "Planner"))).toEqual([2, 3]);
   expect(order(matching(rows, "r"))).toEqual([0, 1, 2, 3]);
   expect(matching(rows, "")).toEqual(rows);

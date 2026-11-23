@@ -31,7 +31,7 @@ function appState(over: Partial<AppState> = {}) {
 
 const mount = Effect.fn("shell.mount")(function* (initial: AppState) {
   const [state, setState] = createSignal<AppState>(initial);
-  const commands: Command[] = [];
+  const commands: Array<Command> = [];
   const t = yield* Effect.promise(() =>
     testRender(() => <App state={state} dispatch={(c) => commands.push(c)} />, {
       width: 100,
@@ -56,7 +56,7 @@ const mount = Effect.fn("shell.mount")(function* (initial: AppState) {
 test("the render-error screen can do the one thing it offers, and gives the mouse back", () =>
   runEffect(
     Effect.gen(function* () {
-      const quits: number[] = [];
+      const quits: Array<number> = [];
       const t = yield* Effect.promise(() =>
         testRender(
           () => (

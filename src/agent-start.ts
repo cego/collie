@@ -67,7 +67,7 @@ export const agentStartRefusal = Effect.fn("AgentStart.refusal")(function* (
   const checkoutNamed = checkout.named !== null;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const missing: Array<{ name: string; meaning: string; facts: string[] }> = [];
+  const missing: Array<{ name: string; meaning: string; facts: Array<string> }> = [];
   if (!checkoutNamed) {
     const root = yield* projectsRoot(env).pipe(Effect.orElseSucceed(() => null));
     const checkouts = root === null ? [] : yield* checkoutsUnder(root.path);
@@ -80,7 +80,7 @@ export const agentStartRefusal = Effect.fn("AgentStart.refusal")(function* (
   for (const field of entry.inputs) {
     if (field.strategy === "internal") continue;
     if (given.text[field.name] !== undefined || given.json[field.name] !== undefined) continue;
-    const facts: string[] = [];
+    const facts: Array<string> = [];
     if (checkoutNamed && field.strategy === "diff-target") {
       const inferred = yield* inferInput(field.name, "diff-target", {
         cwd: checkout.named ?? env.cwd,

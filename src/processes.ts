@@ -116,7 +116,7 @@ export const startedOf = Effect.fn("Processes.startedOf")(function* (pid: number
 export const sessionOf = Effect.fn("Processes.sessionOf")(function* (root: number) {
   if (yield* readsSessions) {
     const fs = yield* FileSystem.FileSystem;
-    const found: ProcessInfo[] = [];
+    const found: Array<ProcessInfo> = [];
     for (const name of yield* fs.readDirectory(PROC)) {
       const pid = Number(name);
       if (!Number.isInteger(pid) || pid === root) continue;

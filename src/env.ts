@@ -26,7 +26,7 @@ export interface PluginEnv {
   pairs?: boolean;
 }
 
-function first(env: Record<string, string | undefined>, ...keys: string[]) {
+function first(env: Record<string, string | undefined>, ...keys: Array<string>) {
   for (const k of keys) {
     const v = env[k];
     if (v !== undefined && v !== "") return v;

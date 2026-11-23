@@ -276,7 +276,7 @@ test("a development checkout on either side neither upgrades nor is upgraded", (
         { own: { build: "1.2.0" }, far: { build: "1.1.0", development: "1.1.0+checkout" } },
       ];
       for (const { own, far } of builds) {
-        const calls: string[] = [];
+        const calls: Array<string> = [];
         const client: Effect.Success<ReturnType<Link["connect"]>> = {
           identity: Effect.succeed(far),
           shell: ({ script }) =>

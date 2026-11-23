@@ -74,9 +74,9 @@ export const buildHistory = Effect.fn("Views.buildHistory")(function* (opts: {
 }) {
   const runs = Arr.filter(opts.runs, (r) => r.project === opts.cwd && settled(r)).slice(0, HISTORY);
 
-  const rows: RunRow[] = [];
+  const rows: Array<RunRow> = [];
   for (const run of runs) {
-    const parts: string[] = [run.state];
+    const parts: Array<string> = [run.state];
     const open = yield* openFindingsIn(run.dir);
     if (open > 0) parts.push(`${open} finding(s) open`);
     const duration = ranFor(run);
@@ -109,8 +109,8 @@ export interface DefinitionRow {
   title: string;
   layer: string;
   path: string;
-  inputs: string[];
-  problems: string[];
+  inputs: Array<string>;
+  problems: Array<string>;
 }
 
 // WARNING: a module that fails validation keeps its row: errors are collected per row, not aborting the view.
@@ -121,7 +121,7 @@ export const buildWorkflows = Effect.fn("Views.buildWorkflows")(function* (env: 
     checkModule({ layer: one.layer, path: one.path }),
   );
   const problemsOf = new Map(Arr.map(checked, (one) => [one.path, one.problems]));
-  const workflows: DefinitionRow[] = Arr.map(described, (one) => ({
+  const workflows: Array<DefinitionRow> = Arr.map(described, (one) => ({
     name: one.id,
     title: one.title,
     layer: one.layer,
@@ -217,7 +217,7 @@ const buildPlan = Effect.fn("Views.buildPlan")(function* (
     yield* fs.readDirectory(issues).pipe(Effect.orElseSucceed(() => [])),
     (name) => pipe(name, Str.endsWith(".md")),
   ).sort();
-  const tickets: PlanTicket[] = [];
+  const tickets: Array<PlanTicket> = [];
   for (const file of files) {
     const text = yield* capped(path.join(issues, file), OUTPUT_CAP);
     const ticket = planTicket(file, text?.text ?? "");

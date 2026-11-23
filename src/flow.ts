@@ -97,7 +97,7 @@ interface StepRun {
   readonly log: number | null;
   left: string | null;
   failed: { readonly at: string; readonly why: string } | null;
-  attempts: FlowAttempt[];
+  attempts: Array<FlowAttempt>;
 }
 
 const going = (state: RunState) => state === "running" || state === "waiting";
@@ -361,7 +361,7 @@ export function laneOf(facts: LaneFacts) {
     Option.getOrUndefined(Arr.findLast(forecasts, (one) => one.at <= at)) ?? null;
   const latest = forecasts.at(-1) ?? null;
 
-  const callsOf = new Map<string, StepRun[]>();
+  const callsOf = new Map<string, Array<StepRun>>();
   for (const one of runs.values())
     callsOf.set(one.meta.id, [...(callsOf.get(one.meta.id) ?? []), one]);
   const stepNode: (id: string) => FlowNode = (id) => {
@@ -737,7 +737,7 @@ const heldUp = (nodes: ReadonlyArray<FlowNode>) => {
   );
 };
 
-function withWait(nodes: FlowNode[], wait: LaneWait | null) {
+function withWait(nodes: Array<FlowNode>, wait: LaneWait | null) {
   if (wait === null) return;
   const at = heldUp(nodes);
   const node = nodes[at];
@@ -753,7 +753,7 @@ function withWait(nodes: FlowNode[], wait: LaneWait | null) {
   };
 }
 
-function withReadiness(nodes: FlowNode[], readiness: string | null) {
+function withReadiness(nodes: Array<FlowNode>, readiness: string | null) {
   if (readiness === null) return;
   const at = Option.getOrElse(
     Arr.findLastIndex(nodes, (node) => node.produces === "merge-request" && node.state === "done"),

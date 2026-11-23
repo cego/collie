@@ -122,7 +122,7 @@ test("a workflow skips its optional service step when absent and continues, and 
     ({ world }) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const calls: string[] = [];
+        const calls: Array<string> = [];
         const server = yield* Effect.acquireRelease(
           Effect.sync(() =>
             Bun.serve({

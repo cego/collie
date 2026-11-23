@@ -29,7 +29,7 @@ test("startup read connection: the identity-checked door is available before the
     Effect.gen(function* () {
       const subscribed = yield* Deferred.make<void>();
       const mayArrive = yield* Deferred.make<void>();
-      const told: FlockItem[] = [];
+      const told: Array<FlockItem> = [];
       const doors = new Map<string, Opening>();
       const readDoors = new Map<string, Opening>();
       let closed = 0;

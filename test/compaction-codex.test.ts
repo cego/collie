@@ -21,15 +21,15 @@ let dir: string;
 const codex = COMPACTION_PORTS.codex!;
 
 interface Fake {
-  threads: string[];
-  ephemeral: string[];
+  threads: Array<string>;
+  ephemeral: Array<string>;
   parents: Record<string, string>;
   cwd: string;
   usage: number | null;
-  compactions: { id: string; turnId: string }[];
-  turns: { id: string; status: string; error?: { message: string } }[];
+  compactions: Array<{ id: string; turnId: string }>;
+  turns: Array<{ id: string; status: string; error?: { message: string } }>;
   onCompact: (fake: Fake) => void;
-  calls: string[];
+  calls: Array<string>;
 }
 let fake: Fake;
 interface FakeServer {

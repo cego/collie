@@ -83,8 +83,8 @@ export const sortOut = (
   open: ReadonlyArray<OpenIssue>,
   defects: boolean,
 ) => {
-  const kept: Finding[] = [];
-  const leftOut: LeftOut[] = [];
+  const kept: Array<Finding> = [];
+  const leftOut: Array<LeftOut> = [];
   for (const finding of findings) {
     const runs = new Set(Arr.filter(finding.runs, (run) => window.has(run)));
     if (Arr.some(kept, (one) => one.key === finding.key))
@@ -160,7 +160,7 @@ export const restartsOf = (
 ) => {
   const at = (iso: string) => DateTime.toEpochMillis(DateTime.makeUnsafe(iso));
   const seen = new Set<string>();
-  const restarts: Starting[] = [];
+  const restarts: Array<Starting> = [];
   for (const { created, ended } of Arr.sortWith(
     earlier,
     (value) => value,
@@ -263,7 +263,7 @@ const slug = (text: string) =>
 export const repeatedAnswers = (runs: ReadonlyArray<AskingRun>) => {
   const classes = new Map<
     string,
-    { workflow: string; name: string; answers: string[]; runs: string[] }
+    { workflow: string; name: string; answers: Array<string>; runs: Array<string> }
   >();
   for (const run of runs)
     for (const { name, answer } of run.questions) {

@@ -101,7 +101,7 @@ export const boardMessages = <R>(options: {
             ] as const;
           }),
         );
-        const out: BoardMessage[] = [];
+        const out: Array<BoardMessage> = [];
         for (const view of views) {
           if (told?.get(view.id)?.text !== now.get(view.id)!.text)
             out.push({ _tag: "Upsert", seq: ++seq, task: view });

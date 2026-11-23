@@ -112,7 +112,7 @@ const run = Effect.fn("HcProbe.run")(function* (
 
 const fingerprint = Effect.fn("HcProbe.fingerprint")(function* (dirs: ReadonlyArray<string>) {
   const fs = yield* FileSystem.FileSystem;
-  const lines: string[] = [];
+  const lines: Array<string> = [];
   for (const dir of dirs) {
     if (!(yield* fs.exists(dir))) {
       lines.push(`${dir} absent`);
@@ -130,7 +130,7 @@ const runningFrom = Effect.fn("HcProbe.runningFrom")(function* (binary: string) 
   const fs = yield* FileSystem.FileSystem;
   if (!(yield* fs.exists("/proc/self/exe"))) return [];
   const pids = Arr.filter(yield* fs.readDirectory("/proc"), (name) => /^\d+$/.test(name));
-  const running: string[] = [];
+  const running: Array<string> = [];
   for (const pid of pids) {
     const exe = yield* fs.readLink(`/proc/${pid}/exe`).pipe(Effect.orElseSucceed(() => ""));
     if (exe === binary || exe === `${binary} (deleted)`) running.push(pid);
@@ -184,7 +184,7 @@ const plain = Effect.fn("HcProbe.plain")(function* (socket: string, cwd: string)
   yield* untilRead(api, echo.address, "ready");
   yield* api.call("terminal.send", { terminal: echo.address, text: "hello" });
 
-  const notes: HcNote[] = [];
+  const notes: Array<HcNote> = [];
   yield* within(
     `${echo.address} to finish`,
     Effect.gen(function* () {
@@ -317,7 +317,7 @@ const harness = Effect.fn("HcProbe.harness")(function* (socket: string, cwd: str
     no_parent: true,
     env: { TERM: "xterm-256color", COLORTERM: "truecolor" },
   });
-  const words: string[] = [];
+  const words: Array<string> = [];
   const statusOf = () => snapshot.terminals.get(agent.address)?.status?.state ?? null;
   const screen = api
     .call("terminal.read", { terminal: agent.address })
@@ -401,7 +401,7 @@ const piQuestion = Effect.fn("HcProbe.piQuestion")(function* (socket: string, di
     no_parent: true,
     env: { TERM: "xterm-256color", COLORTERM: "truecolor" },
   });
-  const words: string[] = [];
+  const words: Array<string> = [];
   const statusOf = () => snapshot.terminals.get(agent.address)?.status?.state ?? null;
   const screen = api
     .call("terminal.read", { terminal: agent.address })
@@ -531,7 +531,7 @@ const opencode = Effect.fn("HcProbe.opencode")(function* (
       return { name, address: started.address, sessionFile, first };
     }),
   );
-  const words = new Map<string, string[]>(Arr.map(agents, (one) => [one.address, []]));
+  const words = new Map<string, Array<string>>(Arr.map(agents, (one) => [one.address, []]));
   const screen = (address: string) =>
     api.call("terminal.read", { terminal: address }).pipe(Effect.map((read) => read.text));
   const until = <E>(what: string, done: () => Effect.Effect<boolean, E>) =>
@@ -697,7 +697,7 @@ const resume = Effect.fn("HcProbe.resume")(function* (
         env,
       });
       yield* Console.error(`${name}: started ${Arr.join(argv, " ")}`);
-      const words: string[] = [];
+      const words: Array<string> = [];
       const screen = api
         .call("terminal.read", { terminal: terminal.address })
         .pipe(Effect.map((read) => read.text));

@@ -45,7 +45,7 @@ export const outputsOf = Effect.fn("RunRecord.outputs")(function* (state: string
   const path = yield* Path.Path;
   const dir = runDir(state, run);
   const root = yield* fs.realPath(dir).pipe(Effect.orElseSucceed(() => dir));
-  const files: string[] = [];
+  const files: Array<string> = [];
   const walk: (at: string, depth: number) => Effect.Effect<void, never, FileSystem.FileSystem> = (
     at,
     depth,

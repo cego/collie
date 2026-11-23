@@ -620,7 +620,7 @@ for (const forge of ["github", "gitlab"] as const) {
             const generation = yield* registry.load(
               new URL("./fixtures/workflows/issues.workflow.ts", import.meta.url).pathname,
             );
-            const results: unknown[] = [];
+            const results: Array<unknown> = [];
             for (const operation of ["file", "comment", "list"]) {
               const run = yield* registry.start({
                 generation,

@@ -12,9 +12,9 @@ export const DEFAULT_MODEL = "default";
 
 export interface HarnessModels {
   defaultModel?: string;
-  models: string[];
+  models: Array<string>;
   modelPattern?: RegExp;
-  efforts?: string[];
+  efforts?: Array<string>;
 }
 
 interface ModelCatalogue {
@@ -60,7 +60,7 @@ export function knownModel(
 
 export function modelHint(harness: HarnessModels, extra: ReadonlyArray<string> = []) {
   const known = [DEFAULT_MODEL, ...harness.models, ...extra];
-  const parts: string[] = [];
+  const parts: Array<string> = [];
   if (known.length > 0) parts.push(Arr.join(known, ", "));
   if (harness.modelPattern) parts.push(`or anything matching ${harness.modelPattern.source}`);
   return Arr.join(parts, " ");
@@ -423,7 +423,7 @@ export function resolveWithRoom(
     }
     candidates.push({ choice: next.choice, upTo: entry.upTo });
   }
-  const skipped: string[] = [];
+  const skipped: Array<string> = [];
   for (const text of chain) {
     const entry = chainEntry(text);
     const harness = entry.harness ?? "";
@@ -469,7 +469,7 @@ export function resolveWithRoom(
     if (next.ok) candidates.push({ choice: next.choice });
     else skipped.push(`fallback ${text} skipped: ${next.problem}`);
   }
-  const whys: string[] = [];
+  const whys: Array<string> = [];
   let first: string | null = null;
   for (const { choice, upTo } of candidates) {
     const judged = room(pinned(choice), upTo);

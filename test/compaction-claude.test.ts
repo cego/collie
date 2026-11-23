@@ -32,7 +32,7 @@ let path: Path.Path;
 let dir: string;
 
 const claude = COMPACTION_PORTS.claude!;
-const prompted: string[] = [];
+const prompted: Array<string> = [];
 
 const ctx = () => ({
   agent: "build-r1",
@@ -528,7 +528,7 @@ test("the status-line reader decodes again only the agents whose telemetry chang
       yield* recordClaudeEvent(review, limited(fiveHour(40)));
 
       const fs = yield* FileSystem.FileSystem;
-      const decoded: string[] = [];
+      const decoded: Array<string> = [];
       const counting: FileSystem.FileSystem = {
         ...fs,
         readFileString: (file, encoding) => {
@@ -701,7 +701,7 @@ const lostCompletion = (transcript: (askedIso: string) => string) =>
       control,
       pre("s-1", "manual", "Keep the work in progress. (collie:req-1)"),
     );
-    const said: string[] = [];
+    const said: Array<string> = [];
     const deps: CompactionDeps = {
       ports: COMPACTION_PORTS,
       stateDir: rig.stateDir,

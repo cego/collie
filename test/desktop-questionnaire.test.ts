@@ -160,7 +160,7 @@ describe("order and selection", () => {
       ],
       checked: ["pg"],
     },
-  ] satisfies ReadonlyArray<{ rule: string; events: Event[]; checked: string[] }>)(
+  ] satisfies ReadonlyArray<{ rule: string; events: Array<Event>; checked: Array<string> }>)(
     "$rule",
     ({ events, checked: expected }) => {
       expect(checked(choice(), events)).toEqual(expected);
@@ -221,7 +221,7 @@ describe("submit", () => {
   ] satisfies ReadonlyArray<{
     rule: string;
     question: Question;
-    events: Event[];
+    events: Array<Event>;
     submit: boolean;
   }>)("$rule", ({ question, events, submit }) => {
     expect(viewAfter(question, events).submit).toBe(submit);
@@ -277,7 +277,7 @@ describe("submit", () => {
   ] satisfies ReadonlyArray<{
     rule: string;
     question: Question;
-    events: Event[];
+    events: Array<Event>;
     request: string;
     does: Does | null;
   }>)("$rule", ({ question, events, request, does }) => {
@@ -346,7 +346,7 @@ describe("the request an answer goes under", () => {
       ],
       request: "q-2",
     },
-  ] satisfies ReadonlyArray<{ rule: string; events: Event[]; request: string }>)(
+  ] satisfies ReadonlyArray<{ rule: string; events: Array<Event>; request: string }>)(
     "$rule",
     ({ events, request }) => {
       expect(requestOf(events)).toBe(request);
@@ -390,13 +390,15 @@ describe("keyboard", () => {
       checked: [],
       focus: 0,
     },
-  ] satisfies ReadonlyArray<{ rule: string; events: Event[]; checked: string[]; focus: number }>)(
-    "$rule",
-    ({ events, checked: expected, focus }) => {
-      expect(checked(choice(), events)).toEqual(expected);
-      expect(viewAfter(choice(), events).focus).toBe(focus);
-    },
-  );
+  ] satisfies ReadonlyArray<{
+    rule: string;
+    events: Array<Event>;
+    checked: Array<string>;
+    focus: number;
+  }>)("$rule", ({ events, checked: expected, focus }) => {
+    expect(checked(choice(), events)).toEqual(expected);
+    expect(viewAfter(choice(), events).focus).toBe(focus);
+  });
 
   test("arrows pass over Hold the Run where it is shown disabled", () => {
     expect(checked(HELD, [key("ArrowDown"), key("ArrowDown")])).toEqual(["go"]);
@@ -441,14 +443,14 @@ describe("keyboard", () => {
     { rule: "Esc closes", events: [key("Escape")], does: { kind: "close" } },
   ] satisfies ReadonlyArray<{
     rule: string;
-    events: Event[];
+    events: Array<Event>;
     does: Does | null;
     question?: Question;
   }>)("$rule", ({ events, does, question }) => {
     expect(run(question ?? choice(), events).does).toEqual(does);
   });
 
-  const sentPg: Event[] = [
+  const sentPg: Array<Event> = [
     { kind: "pick", id: "pg" },
     { kind: "submit", request: "q-1" },
   ];
@@ -465,7 +467,7 @@ describe("keyboard", () => {
         { kind: "seen", question: null },
       ],
     },
-  ] satisfies ReadonlyArray<{ rule: string; events: Event[] }>)(
+  ] satisfies ReadonlyArray<{ rule: string; events: Array<Event> }>)(
     "no key moves the selection $rule",
     ({ events }) => {
       for (const name of ["ArrowDown", "ArrowUp", "Home", "End"])
@@ -480,7 +482,7 @@ describe("keyboard", () => {
   );
 
   test("Esc keeps the selection and the draft", () => {
-    const events: Event[] = [
+    const events: Array<Event> = [
       key("ArrowDown"),
       { kind: "draft", text: "use a schema" },
       key("Escape"),
@@ -531,7 +533,7 @@ describe("steering", () => {
   ] satisfies ReadonlyArray<{
     rule: string;
     question: Question;
-    events: Event[];
+    events: Array<Event>;
     steer: {
       shown: boolean;
       disabled: boolean;
@@ -707,7 +709,7 @@ describe("status", () => {
   ] satisfies ReadonlyArray<{
     rule: string;
     question: Question;
-    events: Event[];
+    events: Array<Event>;
     status: string | null;
   }>)("$rule", ({ question, events, status }) => {
     expect(viewAfter(question, events).status).toBe(status);
@@ -878,21 +880,21 @@ describe("status", () => {
   ] satisfies ReadonlyArray<{
     rule: string;
     question: Question;
-    events: Event[];
+    events: Array<Event>;
     status: string | null;
   }>)("$rule", ({ question, events, status }) => {
     expect(viewAfter(question, events).status).toBe(status);
   });
 
-  const answers: Event[] = [
+  const answers: Array<Event> = [
     { kind: "pick", id: "go" },
     { kind: "submit", request: "r" },
   ];
-  const holds: Event[] = [
+  const holds: Array<Event> = [
     { kind: "pick", id: HOLD },
     { kind: "submit", request: "r" },
   ];
-  const steers: Event[] = [
+  const steers: Array<Event> = [
     { kind: "draft", text: "use a schema" },
     { kind: "steer", request: "r" },
   ];
@@ -929,7 +931,7 @@ describe("status", () => {
       { reply: "a connection failure", event: dropped, status: "connection renewed" },
     ] as const;
   const retried: Event = { kind: "trying", request: "r" };
-  const outlived: Array<{ rule: string; events: Event[]; status: string }> = Arr.flatMap(
+  const outlived: Array<{ rule: string; events: Array<Event>; status: string }> = Arr.flatMap(
     kinds,
     ({ kind, sends, confirmed: says }) => [
       ...Arr.flatMap(replies(says), ({ reply, event, status }) => [
@@ -1002,7 +1004,7 @@ describe("status", () => {
       events: [gone, { kind: "seen", question: TWO }],
       status: null,
     },
-  ] satisfies ReadonlyArray<{ rule: string; events: Event[]; status: string | null }>)(
+  ] satisfies ReadonlyArray<{ rule: string; events: Array<Event>; status: string | null }>)(
     "$rule",
     ({ events, status }) => {
       expect(viewAfter(TWO, events).status).toBe(status);
@@ -1016,7 +1018,7 @@ describe("status", () => {
   });
 
   test("a question off the board takes nothing more once its send settles", () => {
-    const events: Event[] = [
+    const events: Array<Event> = [
       { kind: "pick", id: "pg" },
       { kind: "submit", request: "q-1" },
       { kind: "seen", question: null },
@@ -1028,7 +1030,7 @@ describe("status", () => {
   });
 
   test("a refusal keeps the selection visible and sends nothing again", () => {
-    const events: Event[] = [
+    const events: Array<Event> = [
       { kind: "pick", id: "pg" },
       { kind: "submit", request: "q-1" },
       { kind: "replied", request: "q-1", ok: false, refused: true, reason: "superseded" },
@@ -1038,7 +1040,7 @@ describe("status", () => {
   });
 
   test("held, the question can still be answered", () => {
-    const events: Event[] = [
+    const events: Array<Event> = [
       { kind: "pick", id: HOLD },
       { kind: "submit", request: "q-1" },
       { kind: "replied", request: "q-1", ok: true, fresh: true },

@@ -20,7 +20,7 @@ let dir: string;
 
 const pi = COMPACTION_PORTS.pi!;
 
-const prompted: string[] = [];
+const prompted: Array<string> = [];
 const ctx = () => ({
   agent: "reuse-run-two-r1",
   run: "reuse-run-two",

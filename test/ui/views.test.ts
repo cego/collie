@@ -32,7 +32,7 @@ const encodeFindings = flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Array(FindingSchema))),
   Result.getOrThrow,
 );
-let runs: RunFacts[] = [];
+let runs: Array<RunFacts> = [];
 
 function effectTest(
   name: string,
