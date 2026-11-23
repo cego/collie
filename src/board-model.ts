@@ -21,7 +21,7 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 import { IntentSeedSchema } from "./intent-model";
 import { ScheduleChange, ScheduleChanged, ScheduleListing } from "./schedule-model";
 import { Park } from "./park-cause";
-import { VerifyEvent, Pass, VerificationSchema } from "./verify-model";
+import { VerifyEvent, Pass, PrepareSchema, VerificationSchema } from "./verify-model";
 import { MeasureEvent } from "./measurement-model";
 
 export { PASSES, Pass } from "./verify-model";
@@ -1889,6 +1889,9 @@ export const FrontDoorRpcs = RpcGroup.make(
       cwd: Schema.optionalKey(Schema.String),
       expect: Schema.Literals(["pass", "fail"]),
       again: Schema.optionalKey(Schema.Boolean),
+      /** Run in a detached checkout of the start tree, after `prepare` there. */
+      isolated: Schema.optionalKey(Schema.Boolean),
+      prepare: Schema.optionalKey(PrepareSchema),
     },
     success: VerifyEvent,
     error: HostRefused,

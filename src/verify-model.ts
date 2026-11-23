@@ -42,6 +42,21 @@ export const MovedPathSchema = Schema.Struct({
 });
 export type MovedPath = typeof MovedPathSchema.Type;
 
+/** What an isolated check runs first in its checkout, such as an install of what its tree ignores. */
+export const PrepareSchema = Schema.Struct({
+  executable: Schema.String,
+  argv: Schema.Array(Schema.String),
+});
+export type Prepare = typeof PrepareSchema.Type;
+
+/** Where an isolated check ran: a detached checkout of its start tree, after its prepare. */
+export const IsolatedSchema = Schema.Struct({
+  checkout: Schema.String,
+  prepare: Schema.optionalKey(
+    Schema.Struct({ ...PrepareSchema.fields, exit: Schema.Int, seconds: Schema.Finite }),
+  ),
+});
+
 export const VerificationSchema = Schema.Struct({
   id: Schema.String,
   run: Schema.String,
@@ -76,8 +91,22 @@ export const VerificationSchema = Schema.Struct({
   /** Why Collie ran it; absent on an agent's and on records written before passes were. */
   pass: Schema.optionalKey(Pass),
   round: Schema.optionalKey(Schema.Int),
+  /** Each request one run answered, where identical ones asked while it ran; absent where one did. */
+  answered: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        by: Schema.Literals(["agent", "collie"]),
+        pass: Schema.optionalKey(Pass),
+        round: Schema.optionalKey(Schema.Int),
+      }),
+    ),
+  ),
   /** Where both streams were written as they arrived, up to `LOG_BYTES`. */
   log: Schema.optionalKey(Schema.String),
+  /** Run isolated: its record still proves its start tree, the Worktree's at the start. */
+  isolated: Schema.optionalKey(IsolatedSchema),
+  /** Where it failed before its command ran. */
+  stage: Schema.optionalKey(Schema.Literals(["prepare"])),
   /** What it ran with outside the tree; absent before environments were, and never reused. */
   environment: Schema.optionalKey(Schema.String),
   /** The tests a failing check's output names, where it could be read whole (ADR-0034). */
@@ -162,3 +191,11 @@ export const VerifyEvent = Schema.Union([
     ran: Schema.optionalKey(Schema.Boolean),
   }),
 ]);
+
+/** How to verify while editing, where a run in the Worktree moved under source edits; "" otherwise. */
+export const isolatedHint = (record: Verification): string =>
+  record.result === "unstable" &&
+  record.isolated === undefined &&
+  Arr.some(record.moved ?? [], (one) => one.class !== "lockfile")
+    ? "to verify while you edit, run it in an isolated checkout of this tree: collie verify --isolated [--prepare <command>] -- <command>"
+    : "";

@@ -41,6 +41,7 @@ import { harnessLacking } from "./harness-held";
 import { machineMemory } from "./memory";
 import { waitForMemory } from "./memory-wait";
 import { shell } from "./mr";
+import { baseTree as detachedTree, baseTreesDir } from "./base-tree";
 import { machineName } from "./peers";
 import { nowIso } from "./time";
 import {
@@ -82,9 +83,6 @@ const MEASURING = "measure: ";
 export const measurementsDir = (stateDir: string) => `${stateDir}/measurements`;
 /** Held for a whole Measurement, so one runs on a Machine at a time. */
 export const machineLockOf = (stateDir: string) => `${measurementsDir(stateDir)}/machine.lock`;
-/** Every base tree a Run's Measurements were taken on, Cleanup's to remove. */
-export const baseTreesDir = (stateDir: string, runId: string) =>
-  `${measurementsDir(stateDir)}/trees/${runId}`;
 const journalOf = (evidence: string) => runJournal(evidence, "measurements.jsonl");
 
 export const readMeasurements = (evidence: string) =>
@@ -178,10 +176,7 @@ const outsideHarness = (
     return [...outside].sort();
   });
 
-/**
- * A detached worktree at `commit` with the harness commits applied: the base tree, or a
- * candidate's scratch tree. Kept for the Run's later Measurements and removed by Cleanup.
- */
+/** A base tree, or a candidate's scratch tree, kept for the Run's later Measurements. */
 const baseTree = (
   stateDir: string,
   runId: string,
@@ -189,50 +184,9 @@ const baseTree = (
   commit: string,
   harness: ReadonlyArray<string>,
 ) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const dir = `${baseTreesDir(stateDir, runId)}/${digestOf(Arr.join([commit, ...harness], "\n"))}`;
-    const complete = Effect.gen(function* () {
-      if (!(yield* fs.exists(dir))) return false;
-      const above = yield* git(["rev-list", "--count", `${commit}..HEAD`], dir);
-      const on = yield* git(["merge-base", "--is-ancestor", commit, "HEAD"], dir);
-      const changed = yield* git(["status", "--porcelain", "--untracked-files=no"], dir);
-      return (
-        above.code === 0 &&
-        Number(Str.trim(above.stdout)) === harness.length &&
-        on.code === 0 &&
-        changed.code === 0 &&
-        Str.trim(changed.stdout) === ""
-      );
-    }).pipe(Effect.orElseSucceed(() => false));
-    if (yield* complete) return dir;
-    yield* fs.remove(dir, { recursive: true, force: true }).pipe(Effect.ignore);
-    yield* git(["worktree", "prune"], repository);
-    yield* fs.makeDirectory(baseTreesDir(stateDir, runId), { recursive: true }).pipe(Effect.orDie);
-    const added = yield* git(["worktree", "add", "--detach", dir, commit], repository);
-    if (added.code !== 0)
-      return yield* new MeasureRefused({
-        why: `the base tree could not be made at ${commit}: ${Option.getOrUndefined(Option.map(Option.fromNullishOr(added.stderr), (present) => Str.trim(present))) ?? ""}`,
-      });
-    if (harness.length === 0) return dir;
-    const picked = yield* git(
-      [
-        "-c",
-        "user.name=Collie",
-        "-c",
-        "user.email=collie@localhost",
-        "cherry-pick",
-        "--keep-redundant-commits",
-        ...harness,
-      ],
-      dir,
-    );
-    if (picked.code === 0) return dir;
-    yield* git(["worktree", "remove", "--force", dir], repository);
-    return yield* new MeasureRefused({
-      why: `the harness commits do not apply on ${commit}: ${Option.getOrUndefined(Option.map(Option.fromNullishOr(picked.stderr), (present_) => Str.trim(present_))) ?? Str.trim(picked.stdout)}`,
-    });
-  });
+  detachedTree(baseTreesDir(stateDir, runId), repository, commit, { harness }).pipe(
+    Effect.mapError((refused) => new MeasureRefused({ why: refused.why })),
+  );
 
 type Ended =
   | {

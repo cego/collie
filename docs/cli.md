@@ -1885,6 +1885,7 @@ Like metrics, the report is data: no number in it is a threshold, and it refuses
 collie verify -- bun test
 collie --json verify --run <run-id> -- bun test
 collie verify --name typecheck --cwd <path> -- bun run typecheck
+collie verify --isolated --prepare 'bun install' -- bun test
 ```
 
 From a Run's agent pane, `--run` can be left out: the Run is the one whose agent the pane
@@ -1908,6 +1909,32 @@ as `added`, `modified`, `deleted` or `type-changed`, and classed `tracked` (in t
 `untracked`, or `lockfile` (a dependency lockfile such as `bun.lock`, either way). The
 answer and a check's gap name the first five and how many more, with the verification id
 that lists them all, and the Run's verification metric counts them by class.
+Where a run in the checkout itself is `unstable` and a moved path is source, `tracked` or
+`untracked`, the answer adds how to verify while editing: `collie verify --isolated`.
+
+`--isolated` runs the command in a detached checkout of the tree it starts on, so edits
+made in the checkout meanwhile cannot move it. That start tree already holds the untracked
+files git is not ignoring, so untracked source is in the isolated checkout, and ignored
+files such as `node_modules` are not. `--prepare '<command>'` runs first in that checkout,
+such as an install of what the tree ignores. Its words are split on spaces, with no shell,
+and it implies `--isolated`. The checkout is made under the Run's state as a Measurement's
+base tree is (`git worktree add --detach`, of a commit of exactly that tree), and reused
+while it is clean. Requests answered by one run share a checkout; any other gets its own,
+so the same command asked from another directory never shares one. An executable inside the repository,
+such as `./check.sh`, runs from the checkout, and the record names it by its path in the
+checkout asked. Cleanup removes it once the Run has ended.
+The record names the checkout and the prepare's command, exit status and seconds as
+`isolated`. A failing prepare records the check `fail` at `stage: "prepare"`, with the
+prepare's exit status and output, and never runs the command; that is never a pass, even
+under `--expect fail`. The record proves the start tree, as every record does: its
+directory is the one asked, its `start` is that checkout's tree at the start, and the gate
+relies on it on that tree like any other. The isolated checkout's own trees are still
+compared, so a command or a prepare that writes a file git does not ignore into it is
+`unstable`. A tree too large to fingerprint, unmeasured, outside git or with changed
+submodules cannot run isolated, and the verify is refused saying why. A Check runs
+isolated where its `verify.json` entry says `"isolated": true`, after its
+`"prepare": { "executable": …, "argv": [ … ] }` where it names one. Nothing is isolated
+unless asked.
 
 While a Check Collie runs itself collects proof on a checkout, the host holds deliveries to
 that Run's agents working there, for the human's steer and an agent's message alike: a steer
@@ -1930,13 +1957,15 @@ Command displays preserve argument boundaries: `echo 'a b'` reads differently fr
 `echo a b`. Control characters appear as escapes, so displayed commands containing them
 are for reading; the recorded argv retains the original values.
 
-| Flag       | What it does                                                                                                                                                         |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--run`    | The run this is a verification of, and whose tree is snapshotted. Defaults to the Run whose agent this pane is.                                                      |
-| `--cwd`    | Where to run it. Must be inside the run's checkout, including one it was given later — a review's fix moves it to the reviewed branch's; defaults to it.             |
-| `--name`   | What to call it on a card. By default the script it runs (`bun run typecheck` is `typecheck`), else the tool and its subcommand (`bun test`), else the tool (`tsc`). |
-| `--expect` | What a pass looks like: `pass` (default), or `fail` for a reproduction.                                                                                              |
-| `--again`  | Run it even where this tree already has a record of it, to look for a flake. Never runs one of the Run's checks.                                                     |
+| Flag         | What it does                                                                                                                                                         |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--run`      | The run this is a verification of, and whose tree is snapshotted. Defaults to the Run whose agent this pane is.                                                      |
+| `--cwd`      | Where to run it. Must be inside the run's checkout, including one it was given later — a review's fix moves it to the reviewed branch's; defaults to it.             |
+| `--name`     | What to call it on a card. By default the script it runs (`bun run typecheck` is `typecheck`), else the tool and its subcommand (`bun test`), else the tool (`tsc`). |
+| `--expect`   | What a pass looks like: `pass` (default), or `fail` for a reproduction.                                                                                              |
+| `--again`    | Run it even where this tree already has a record of it, to look for a flake. Never runs one of the Run's checks.                                                     |
+| `--isolated` | Run it in a detached checkout of the tree it starts on, so edits made meanwhile cannot move it. Its record still proves that tree.                                   |
+| `--prepare`  | A command run first in that checkout, split on spaces with no shell, such as `bun install`. Implies `--isolated`.                                                    |
 
 Every record carries the **environment** it ran in: a digest of the executable's real path
 and content, the `node` and `bun` that `PATH` resolves to, again by path and content, and
@@ -1946,7 +1975,10 @@ checkout: the entries of the `node_modules` of every directory holding a tracked
 Installing, removing or replacing a package makes an earlier record stale, and the command
 runs again. A gate relies on an earlier pass only where this
 matches, so an upgraded toolchain is a fresh run. A record from before environments were
-recorded has none, and is never relied on.
+recorded has none, and is never relied on. A record run isolated names, instead of what is
+installed in the checkout, that it ran isolated and the prepare it ran after, since that
+prepare is what installed its dependencies. So an isolated record answers an isolated check
+with the same prepare, and never one run in the checkout itself.
 
 A command that is exactly one of the Run's checks — the executable as resolved, its
 arguments and its directory — is never run by `collie verify`: only the gate runs a Run's
@@ -1957,8 +1989,9 @@ record: it says `not run again: verification <id> of "<check>" passed on this tr
 `failed`) and names the record's log, exits with the record's exit code, and its `--json`
 envelope is `{ "verification": <that record>, "ran": false }`. Where the tree has none, it
 refuses with `invalid_state`, naming the gate: Collie runs that check itself, on the final
-tree. `--expect fail` makes no exception, and a human's `collie verify --run` is answered as
-an agent's is.
+tree. The refusal says why no record answers, and the Run's log gets
+`check: <name> not answered: <reason>`. `--expect fail` makes no exception, and a human's
+`collie verify --run` is answered as an agent's is.
 
 A command that is not one of the Run's checks is answered the same way where this tree
 already has a record of it: the latest record of the same executable as resolved, arguments,
@@ -1966,9 +1999,35 @@ directory, `--name` and `--expect`, collected by this host in the same environme
 passed or failed. It says `not run again: verification <id> of "<name>" passed on this tree`
 (or `failed`), names the record's log and adds `--again runs it anyway`; the Run's log gets
 `verify: <name> answered by verification <id>`. An `unstable` latest record, or a gate's
-rerun of one failed test, answers nothing, and the command runs. `--again` runs it whatever
+rerun of one failed test, answers nothing, and the command runs. A command that runs
+because no record answers first prints `running it: <reason>`, and the Run's log gets
+`verify: <name> runs: <reason>`. `--again` runs it whatever
 is recorded; a Check is unaffected and is still answered or refused, `--again` or not.
 A command that runs has `"ran": true` in its envelope; no script name is special.
+
+The reason is exactly one of these, checked in this order:
+
+- `no record of this command on this Run`;
+- `the command differs from verification <id>'s`: the latest record under that name ran
+  another command, as after its approved command was replaced;
+- `the tree differs from verification <id>'s`: the latest record of the command is on
+  another tree;
+- `verification <id> on this tree is unstable or expected red`;
+- `the environment differs from verification <id>'s`;
+- `verification <id> was collected before this host started`. A pass counts only if this
+  host collected it, because a restart is when a human may have repaired something outside
+  the tree, so a restarted host runs the check again, and this line says why.
+
+The gate says the same in the Run's log, `<pass>: <check> runs: <reason>`, before it runs a
+check it could not rely on.
+
+Identical requests made while one is running share it: the same Run, executable as
+resolved, arguments, directory, tree fingerprint, environment and `--expect`. The later
+request prints `"<name>" is already running on this tree: waiting on it`, starts no
+process, and gets the same record, whose `answered` lists each request it answered. A
+request that differs in any of these runs its own process. Where the tree cannot be
+measured or the environment read, nothing is shared. Where the run waited on is ended, as by
+a stop of the Run that asked first, the waiting request runs the command itself.
 
 While the Machine is [Short of memory](using.md#short-of-memory), the host holds the
 command before it runs, reading again every 15 seconds: `collie verify` first prints
@@ -2012,7 +2071,8 @@ Run from a Run's agent pane — the pane `--run` defaults from — `collie verif
 stream the command's output. It answers when the command ends with:
 
 - the result and exit status, and for an `unstable` result why: the tree it ran on moved,
-  from which fingerprint to which, or could not be measured;
+  from which fingerprint to which, or could not be measured, and where source moved, how to
+  verify while editing with `--isolated`;
 - `failed`, each failed test bun's output names as `<file> > <name>`, the first 50, and
   `more`, how many others;
 - the record's `tail`, the last 4 KB of each stream;
@@ -2076,6 +2136,20 @@ the run unproved, naming the check, the job and the commit.
   }
 ]
 ```
+
+An entry may run **before review** with `"before_review": true`. Before each review round
+opens — in `implement`'s rallies, and after each fix the review workflow's "Fix findings" runs —
+Collie runs every such check on the builder's tree, as `host.verify` runs any check, recorded in
+the Run's verifications like any other. A failure goes back to the builder as a fix naming the
+check and the `collie run read <run> verification:<id>` that shows its output, and no reviewer
+starts on that tree; the check runs again on the fixed tree, and the round opens once every
+marked check passes. Still failing after 4 such fixes, the rally stops with
+`before_review_failed`, naming the check. The gate does not run a marked check again on a tree
+that has not moved since it passed: it takes that pass, through the same lookup that answers
+any check on an unmoved tree. A check left to CI cannot be marked, and an entry with both `ci`
+and `before_review` is refused with that reason, from a file, `--verify` or
+`set_verification` alike. Whether a Run runs marked checks before review is fixed when it
+starts; a Run started on an earlier release runs none.
 
 The base is the ref a checkout for the run is cut from: the remote branch it works on, else
 the remote's default branch, else the local one. It is read the same way for a run that has

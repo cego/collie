@@ -10,7 +10,9 @@ import { memoryWaitOf } from "../src/memory-wait";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
-import { recordsAt } from "./support/records";
+import { recordsAt, runFacts } from "./support/records";
+import { baseTreesDir } from "../src/base-tree";
+import { measurementTreesSweeper, sweep } from "../src/cleanup";
 import { RunRecords } from "../src/run-records";
 
 let rig: Rig;
@@ -251,5 +253,38 @@ test("a gate answered from an agent's pass on the same tree does not wait for me
       );
       expect(got.ran.id).toBe(got.earlier.id);
       expect(yield* waitingFor()).toBeNull();
+    }),
+  ));
+
+test("the gate relies on an agent's isolated pass on its unmoved start tree, and the checkout goes once the Run ends", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* updateApproved(evidenceDir(dir, runId), () => [
+        { name: "unit", executable: tool, argv: [], cwd: ".", isolated: true },
+      ]).pipe(Effect.provide(recordsAt(dir)));
+      const got = yield* gate(
+        collect(evidenceDir(dir, runId), {
+          run: runId,
+          name: "mine",
+          executable: tool,
+          argv: [],
+          cwd: rig.projectDir,
+          by: "agent",
+          isolated: { checkouts: baseTreesDir(dir, runId) },
+        }).pipe(Effect.orDie),
+      );
+      const checkout = got.earlier.isolated?.checkout;
+      expect(checkout).toBeDefined();
+      expect(got.ran.id).toBe(got.earlier.id);
+      expect(yield* journal()).toHaveLength(1);
+      expect(yield* fs.exists(checkout!)).toBe(true);
+
+      yield* sweep(
+        [measurementTreesSweeper(dir, [runFacts({ id: runId, state: "succeeded" })])],
+        dir,
+        "host",
+      );
+      expect(yield* fs.exists(checkout!)).toBe(false);
     }),
   ));

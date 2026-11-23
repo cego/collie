@@ -131,6 +131,7 @@ import type { UsageReading } from "./usage-model";
 import { currentEnv } from "./env";
 import { waitForMemory } from "./memory-wait";
 import { measure, readMeasurements } from "./measurement";
+import { baseTreesDir } from "./base-tree";
 import { finalMeasurementLine, type Measurement } from "./measurement-model";
 import { PROJECTS_ROOT_OPTION, projectsRoot, repositoryCheckout } from "./projects";
 import { gitDirOf, publicationCheckouts, throughAliases, remoteOf } from "./issue-privacy";
@@ -364,6 +365,7 @@ import { CurrentStep, appendStepLine, readStepLines, type StepLine, type StepNot
 import { classifyGivenSet, classifyGivenTarget, classifyWorkSource, defaultBase } from "./inputs";
 import type { PlatformServices } from "./platform";
 import {
+  markRefused,
   updateApproved,
   approvedFrom,
   approvedIn,
@@ -381,9 +383,12 @@ import {
   contentOf,
   ranCommand,
   readVerifications,
+  missSaid,
   recordFor,
   recordedFor,
+  type Isolation,
   reliedFor,
+  type Reuse,
   rerunTest,
   resolveExecutable,
   runApproved,
@@ -588,7 +593,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     /** This Run, then the Runs it was started from or builds a plan of, and so on: whose agents it may ask. */
     readonly lineage: ReadonlyArray<string>;
     /** What its workflow does, fixed when it started; absent from an older host. */
-    readonly features?: { readonly review_delta?: boolean };
+    readonly features?: { readonly review_delta?: boolean; readonly before_review?: boolean };
     /** What a Claude agent's auto mode is told this Run authorises: the branch it made, and who started it. */
     readonly authority: {
       readonly created: {
@@ -946,6 +951,12 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly cwd: string;
     /** The merge request pipeline job that proves it: nobody runs it locally. */
     readonly ci?: string;
+    /** Run in a detached checkout of its start tree, so edits in the Worktree cannot move it. */
+    readonly isolated?: boolean;
+    /** Run first in that checkout, recorded with the check. */
+    readonly prepare?: { readonly executable: string; readonly argv: ReadonlyArray<string> };
+    /** Run on the builder's tree before a review round opens; never with \`ci\`. */
+    readonly before_review?: boolean;
   }
 
   /** The reviewed branch's checkout, or why there is none. */
@@ -3874,12 +3885,14 @@ export class Reliance extends Context.Service<
     readonly relied: (
       runId: string,
       command: Pick<Verification, "executable" | "argv" | "cwd">,
-    ) => Effect.Effect<{ readonly check: string; readonly record: Verification | null } | null>;
-    /** The record that answers a command that is none of the Run's Checks, or null where it runs. */
+    ) => Effect.Effect<({ readonly check: string } & Reuse) | null>;
+    /** The record that answers a command that is none of the Run's Checks, or why it runs. */
     readonly recorded: (
       runId: string,
-      command: Pick<Verification, "name" | "executable" | "argv" | "cwd" | "expect">,
-    ) => Effect.Effect<Verification | null>;
+      command: Pick<Verification, "name" | "executable" | "argv" | "cwd" | "expect"> & {
+        readonly isolated?: Isolation;
+      },
+    ) => Effect.Effect<Reuse>;
   }
 >()("collie/Reliance") {}
 
@@ -4356,13 +4369,23 @@ export const hostLayer = (options: {
       /** A pass this host collected that answers for this check now, said in the Run log. */
       const relyOn = (runId: string, run: CheckRun, spec: VerifySpec, recorded: CheckPass) =>
         Effect.gen(function* () {
-          const kept = yield* reliedFor(evidenceDir(dir, runId), run, spec, hostStarted);
-          if (kept !== null)
-            yield* appendLog(
-              runDir(dir, runId),
-              `${recorded.pass}: ${spec.name} relies on verification ${kept.id}`,
-            ).pipe(Effect.orDie);
-          return kept;
+          const { record, miss } = yield* reliedFor(
+            evidenceDir(dir, runId),
+            run,
+            spec,
+            hostStarted,
+          );
+          const said =
+            record !== null
+              ? `relies on verification ${record.id}`
+              : miss === null
+                ? null
+                : `runs: ${missSaid(miss)}`;
+          if (said !== null)
+            yield* appendLog(runDir(dir, runId), `${recorded.pass}: ${spec.name} ${said}`).pipe(
+              Effect.orDie,
+            );
+          return record;
         });
       /** Runs one approved command for a Run, under the pass it was asked for (ADR-0042). */
       const check = (asked: Parameters<Sdk.HostApi["verify"]>[0], recorded: CheckPass) =>
@@ -4453,7 +4476,7 @@ export const hostLayer = (options: {
                   rerun === undefined
                     ? runApproved(
                         journal,
-                        { ...own, cwd: asked.cwd },
+                        { ...own, cwd: asked.cwd, checkouts: baseTreesDir(dir, asked.runId) },
                         approved,
                         spec,
                         asked.expect ?? "pass",
@@ -6729,35 +6752,38 @@ export const hostLayer = (options: {
             if (executable === null) return null;
             for (const spec of yield* approvedOf(dir, runId)) {
               if (!ranCommand({ ...command, executable }, yield* commandOf(own, spec))) continue;
-              const record = yield* recordFor(evidenceDir(dir, runId), own, spec, hostStarted);
-              if (record !== null)
-                yield* appendLog(
-                  runDir(dir, runId),
-                  `check: ${spec.name} answered by verification ${record.id}`,
-                ).pipe(Effect.orDie);
-              return { check: spec.name, record };
+              const found = yield* recordFor(evidenceDir(dir, runId), own, spec, hostStarted);
+              yield* appendLog(
+                runDir(dir, runId),
+                found.record === null
+                  ? `check: ${spec.name} not answered: ${missSaid(found.miss)}`
+                  : `check: ${spec.name} answered by verification ${found.record.id}`,
+              ).pipe(Effect.orDie);
+              return { check: spec.name, ...found };
             }
             return null;
           }),
         ).pipe(Effect.orElseSucceed(() => null));
+      const missed: Reuse = { record: null, miss: { reason: "none" } };
       const recorded: Reliance["Service"]["recorded"] = (runId, command) =>
         under(
           Effect.gen(function* () {
             const executable = yield* resolveExecutable(command.executable, command.cwd);
-            if (executable === null) return null;
-            const record = yield* recordedFor(
+            if (executable === null) return missed;
+            const found = yield* recordedFor(
               evidenceDir(dir, runId),
               { ...command, executable },
               hostStarted,
             );
-            if (record !== null)
-              yield* appendLog(
-                runDir(dir, runId),
-                `verify: ${command.name} answered by verification ${record.id}`,
-              ).pipe(Effect.orDie);
-            return record;
+            yield* appendLog(
+              runDir(dir, runId),
+              found.record === null
+                ? `verify: ${command.name} runs: ${missSaid(found.miss)}`
+                : `verify: ${command.name} answered by verification ${found.record.id}`,
+            ).pipe(Effect.orDie);
+            return found;
           }),
-        ).pipe(Effect.orElseSucceed(() => null));
+        ).pipe(Effect.orElseSucceed(() => missed));
       return Context.make(Host, host).pipe(
         Context.add(Notifier, Notifier.of({ notify })),
         Context.add(Oversight, oversight),
@@ -11153,6 +11179,11 @@ const makeRegistry: (
       }
       // Resolved as the gate resolves it, so a check that could never run is refused now.
       if (options.command !== null) {
+        const refused = markRefused(options.command);
+        if (refused !== undefined)
+          return yield* new HostRefused({
+            reason: `${REFUSED_INPUT}: check "${options.name}": ${refused}`,
+          });
         const own = yield* treeOf(row, options.runId, dir);
         const at =
           options.command.cwd === "worktree"
