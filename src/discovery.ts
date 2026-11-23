@@ -152,6 +152,8 @@ type Claim =
  */
 const claimsIn = Effect.fn("Discovery.claimsIn")(function* (root: Root) {
   const revision = yield* revisionIn(root.dir);
+  const last = keptClaims.get(root.dir);
+  if (last?.revision === revision && (yield* RevisionRows)?.synced === true) return last.claims;
   const claims: Array<Claim> = [];
   for (const path of yield* entryFiles(root.dir)) {
     const read = yield* loadEntry(path, revision).pipe(Effect.result);
@@ -179,8 +181,15 @@ const claimsIn = Effect.fn("Discovery.claimsIn")(function* (root: Root) {
           },
     );
   }
+  keptClaims.set(root.dir, { revision, claims });
   return claims;
 });
+
+/** Each layer's last read, which a listing reuses until its content revision moves. */
+const keptClaims = new Map<
+  string,
+  { readonly revision: string; readonly claims: ReadonlyArray<Claim> }
+>();
 
 /** What one module declares it takes, in the order a front door should ask for it. */
 export const declaredBy = (entry: WorkflowEntry): ReadonlyArray<Declared> =>

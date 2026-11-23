@@ -11,8 +11,14 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
-import { discover, searchPath, type Catalogued, type EntryLayer } from "../src/discovery";
-import { ModuleRevisions, RevisionRows, onSyncedRevisions } from "../src/module-revisions";
+import {
+  discover,
+  searchPath,
+  type Catalogued,
+  type EntryLayer,
+  type Root,
+} from "../src/discovery";
+import { RevisionRows, onSyncedRevisions, type ModuleRevisionsApi } from "../src/module-revisions";
 import { revisionOf } from "../src/engine";
 import { runEffect } from "./support/effect";
 
@@ -334,5 +340,183 @@ test("a module still hinting gitlab-repository loads, its Input read as reposito
           ),
         ),
       ).toEqual([["repository", "repository"]]);
+    }).pipe(Effect.scoped),
+  ));
+
+/**
+ * `discover` as a host runs it: revisions kept in rows, and every path it touches through
+ * the file system noted, which is how staging an entry and hashing a tree both reach a file.
+ */
+const hosted = Effect.fn("DiscoveryTest.hosted")(function* (roots: ReadonlyArray<Root>) {
+  const fs = yield* FileSystem.FileSystem;
+  const revisions = new Map<string, string>();
+  const rows: ModuleRevisionsApi = {
+    all: Effect.succeed(revisions),
+    of: (dir) => Effect.sync(() => revisions.get(dir) ?? null),
+    put: (dir, revision) => Effect.sync(() => void revisions.set(dir, revision)),
+  };
+  const touched: Array<string> = [];
+  const noted = <A>(path: string, read: A) => {
+    touched.push(path);
+    return read;
+  };
+  const counted: FileSystem.FileSystem = {
+    ...fs,
+    exists: (path) => noted(path, fs.exists(path)),
+    readDirectory: (path, options) => noted(path, fs.readDirectory(path, options)),
+    readFileString: (path, encoding) => noted(path, fs.readFileString(path, encoding)),
+  };
+  const asHost = (read: Effect.Effect<Catalogued, never, FileSystem.FileSystem>) =>
+    read.pipe(
+      Effect.provideService(FileSystem.FileSystem, counted),
+      Effect.provideService(RevisionRows, { rows, synced: false }),
+    );
+  return {
+    revisions,
+    /** Paths under any layer touched since the last call. */
+    layerReads: () => {
+      const seen = Arr.filter(touched, (path) =>
+        Arr.some(roots, (root) => pipe_(path, Str.includes(root.dir))),
+      );
+      touched.length = 0;
+      return seen;
+    },
+    /** As a start, an offer taken or `collie workflow check` reads. */
+    fresh: asHost(discover(roots)),
+    /** As a listing reads. */
+    synced: asHost(onSyncedRevisions(discover(roots))),
+  };
+});
+
+test("a listing of layers whose revisions have not moved reads none of their files, and says what a fresh read says", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const where = yield* layers("collie-discovery-kept-");
+      yield* where.save("user", "plain.workflow.ts", entry("plain"));
+      yield* where.save("user", "broken.workflow.ts", "export const id = ;\n");
+      const host = yield* hosted(where.roots);
+
+      const read = yield* host.fresh;
+      expect(host.layerReads()).not.toEqual([]);
+      expect(yield* host.synced).toEqual(read);
+      expect(yield* host.synced).toEqual(read);
+      expect(host.layerReads()).toEqual([]);
+    }).pipe(Effect.scoped),
+  ));
+
+test("an entry or helper edit a start reads is what the next listing says", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const where = yield* layers("collie-discovery-kept-edit-");
+      yield* where.save(
+        "user",
+        "proof.workflow.ts",
+        `import { title } from "./named.ts";\n${entry("proof", "@title")}`,
+      );
+      yield* where.save("user", "named.ts", 'export const title = "Before";\n');
+      const host = yield* hosted(where.roots);
+      yield* host.fresh;
+
+      yield* where.save("user", "named.ts", 'export const title = "After";\n');
+      // A listing reads the kept revision, which nothing has moved yet.
+      expect((yield* host.synced).entries[0]?.title).toBe("Before");
+      expect((yield* host.fresh).entries[0]?.title).toBe("After");
+      host.layerReads();
+      expect((yield* host.synced).entries[0]?.title).toBe("After");
+      expect(host.layerReads()).toEqual([]);
+
+      yield* where.save(
+        "user",
+        "proof.workflow.ts",
+        `import { title } from "./named.ts";\n${entry("proof", "Retitled")}`,
+      );
+      yield* host.fresh;
+      expect((yield* host.synced).entries[0]?.title).toBe("Retitled");
+    }).pipe(Effect.scoped),
+  ));
+
+test("a fault is kept while its file is, and a fixed file clears it at the next revision sync", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const where = yield* layers("collie-discovery-kept-fault-");
+      yield* where.save("user", "proof.workflow.ts", "export const id = ;\n");
+      const host = yield* hosted(where.roots);
+      yield* host.fresh;
+      host.layerReads();
+
+      for (const _ of [1, 2]) {
+        const listed = yield* host.synced;
+        expect(listed.entries).toEqual([]);
+        expect(Arr.map(listed.problems, (one) => one.id)).toEqual(["proof"]);
+      }
+      expect(host.layerReads()).toEqual([]);
+
+      yield* where.save("user", "proof.workflow.ts", entry("proof"));
+      // What the backstop does for an edit made outside Collie.
+      host.revisions.set(where.dirOf("user"), yield* revisionOf(where.dirOf("user")));
+      const fixed = yield* host.synced;
+      expect(Arr.map(fixed.entries, (one) => one.id)).toEqual(["proof"]);
+      expect(fixed.problems).toEqual([]);
+    }).pipe(Effect.scoped),
+  ));
+
+test("the nearest claim, a broken override and two claims in one layer decide as before when the claims are kept", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const where = yield* layers("collie-discovery-kept-order-");
+      const broken = yield* where.save("project", "proof.workflow.ts", "export const id = ;\n");
+      yield* where.save("user", "proof.workflow.ts", entry("proof", "Mine"));
+      yield* where.save("user", "plain.workflow.ts", entry("plain", "Mine"));
+      const first = yield* where.save("user", "copy.workflow.ts", entry("twice"));
+      const second = yield* where.save("user", "twice.workflow.ts", entry("twice"));
+      yield* where.save("shipped", "plain.workflow.ts", entry("plain", "Theirs"));
+      yield* where.save("shipped", "twice.workflow.ts", entry("twice"));
+      const host = yield* hosted(where.roots);
+      yield* host.fresh;
+      host.layerReads();
+
+      const listed = yield* host.synced;
+      expect(host.layerReads()).toEqual([]);
+      expect(Arr.map(listed.entries, (one) => [one.id, one.layer, one.title])).toEqual([
+        ["plain", "user", "Mine"],
+      ]);
+      expect(Arr.map(listed.problems, (one) => [one.id, one.layer, one.path])).toEqual([
+        ["proof", "project", broken],
+        ["twice", "user", first],
+        ["twice", "user", second],
+      ]);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a layer the host has no revision for is read once, then kept", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const where = yield* layers("collie-discovery-kept-new-");
+      yield* where.save("project", "plain.workflow.ts", entry("plain"));
+      const host = yield* hosted(where.roots);
+
+      const read = yield* host.synced;
+      expect(Arr.map(read.entries, (one) => one.id)).toEqual(["plain"]);
+      expect(host.layerReads()).not.toEqual([]);
+      expect(yield* host.synced).toEqual(read);
+      expect(host.layerReads()).toEqual([]);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a read that is not a listing, as `collie workflow check` takes, imports every entry again", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const where = yield* layers("collie-discovery-kept-check-");
+      const plain = yield* where.save("user", "plain.workflow.ts", entry("plain"));
+      const host = yield* hosted(where.roots);
+      yield* host.fresh;
+      host.layerReads();
+
+      yield* host.fresh;
+      // Hashing reads the file too; only an import looks for its staged generation.
+      const staged = Arr.filter(host.layerReads(), (path) =>
+        pipe_(path, Str.includes("/generations/")),
+      );
+      expect(Arr.some(staged, (path) => pipe_(path, Str.endsWith(plain)))).toBe(true);
     }).pipe(Effect.scoped),
   ));
