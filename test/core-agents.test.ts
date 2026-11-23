@@ -325,8 +325,9 @@ test("an OpenCode agent on core is launched with its reporter and its first prom
       const content = env.OPENCODE_CONFIG_CONTENT;
       expect(content.theme).toBe("night");
       expect(content.mcp.collie).toEqual({ type: "local", enabled: true });
-      expect(content.plugin).toHaveLength(2);
+      expect(content.plugin).toHaveLength(3);
       expect(content.plugin[0]).toBe("their-plugin");
+      expect(content.plugin[2]).toEndWith(".usage.js");
       yield* fs.remove(sessionFile);
       const reporter = yield* Effect.promise(
         (): Promise<OpenCodePlugin> =>

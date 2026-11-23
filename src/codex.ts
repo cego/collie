@@ -420,6 +420,10 @@ export interface LoadedThread {
   readonly transcript: string | null;
   /** In-progress turns, by id. */
   readonly running: ReadonlyArray<string>;
+  /** For a sub-agent's thread, the thread that spawned it; null for the agent's own. */
+  readonly parent: string | null;
+  /** The cheap thread a TUI keeps for itself. */
+  readonly ephemeral: boolean;
 }
 
 /**
@@ -451,6 +455,8 @@ export const agentThreads = Effect.fn("Codex.agentThreads")(function* (
     threads.push({
       id: threadId,
       transcript: thread.path ?? null,
+      parent: thread.parentThreadId ?? null,
+      ephemeral: thread.ephemeral === true,
       running: yield* runningTurns(client, threadId).pipe(
         Effect.catchIf(
           (cause) => (idle && unmaterialized(threadId, cause)) || (unlistable && unlisted(cause)),

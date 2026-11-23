@@ -183,6 +183,14 @@ export const noteReminder = (
     build: line.build,
   });
 
+/** A ticket's slice as it stands: started, then done. */
+export const noteSlice = (runDir: string, at: string, ticket: string, status: string) =>
+  appendMetric(runDir, { at, kind: "slice", subject: ticket, value: 0, note: status });
+
+/** A review round starting, its number as the rally counts it. */
+export const noteRound = (runDir: string, at: string, round: string, n: number) =>
+  appendMetric(runDir, { at, kind: "round", subject: round, value: n, note: "" });
+
 /** One context sample the harness reported at a work boundary. */
 export const noteContext = (runDir: string, at: string, agent: string, tokens: number) =>
   appendMetric(runDir, { at, kind: "context", subject: agent, value: tokens, note: "" });
@@ -271,7 +279,7 @@ export function metricsOf(lines: ReadonlyArray<Metric>, createdAt: string): Metr
   const created = epochMs(createdAt);
   const first = Option.getOrUndefined(Arr.findFirst(lines, (line) => line.kind === "verification"));
   const verifications = { pass: 0, fail: 0, unstable: 0, byCollie: 0 };
-  const slices = { done: 0, total: 0 };
+  const slices = new Map<string, string>();
   let rework = 0;
   let peak: { agent: string; tokens: number } | null = null;
   const halts: string[] = [];
@@ -286,11 +294,11 @@ export function metricsOf(lines: ReadonlyArray<Metric>, createdAt: string): Metr
         if (line.value === 1) verifications.byCollie += 1;
         break;
       case "slice":
-        slices.total += 1;
-        if (line.note === "done") slices.done += 1;
+        slices.set(line.subject, line.note);
         break;
       case "round":
-        rework += 1;
+        // A round past the first reviews a fix.
+        if (line.value > 1) rework += 1;
         break;
       case "context":
         if (peak === null || line.value > peak.tokens)
@@ -313,7 +321,10 @@ export function metricsOf(lines: ReadonlyArray<Metric>, createdAt: string): Metr
     timeToFirstEvidence:
       first && Number.isFinite(created) ? Math.max(0, (epochMs(first.at) - created) / 1000) : null,
     verifications,
-    slices,
+    slices: {
+      done: Arr.filter([...slices.values()], (status) => status === "done").length,
+      total: slices.size,
+    },
     rework,
     peakContext: peak,
     halts,

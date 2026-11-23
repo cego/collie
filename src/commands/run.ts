@@ -45,6 +45,7 @@ import {
   steerRun,
   moduleFor,
   runViews,
+  usageFor,
   flockArtefacts,
   asksArtefactRun,
   flockRunPage,
@@ -85,6 +86,9 @@ import { PROJECTS_ROOT_OPTION, projectsRoot } from "../projects";
 import { currentReports } from "../drift";
 import { newest } from "../cards";
 import { metricsOf } from "../metrics";
+import { compareRuns } from "../trial-compare";
+import { trialLines } from "../trial-model";
+import { usageLines } from "../usage-ledger-model";
 import { requestedByLine, ranOn, type RunAgent, type RunProgress } from "../board-model";
 import {
   followEvents,
@@ -625,16 +629,49 @@ const runShow = Command.make(
   Command.withDescription("Show one Run: its state, its Inputs, and any question it is waiting on"),
 );
 
+const trialFlag = (name: string, description: string) =>
+  Flag.String(name).pipe(Flag.withDescription(description), Flag.atLeast(0));
+
 const runMetrics = Command.make(
   "metrics",
   {
-    runId: runIdArg,
+    runId: runIdArg.pipe(Argument.optional),
+    compare: trialFlag(
+      "compare",
+      "A Run of the first set, as <run> or <run>=<case>, repeatable; Runs sharing a case are its repeats",
+    ),
+    against: trialFlag("against", "A Run of the second set, as --compare takes one, repeatable"),
+    audit: trialFlag(
+      "audit",
+      "<run>=<review-run>: the review Run of that Run's final tree, whose blocking findings escaped it",
+    ),
+    plant: trialFlag(
+      "plant",
+      "<case>=<file>:<line>: a regression planted in that case, caught where a reviewer names it",
+    ),
   },
-  ({ runId }) =>
+  ({ runId: given, compare, against, audit, plant }) =>
     Effect.gen(function* () {
       const global = yield* root;
       yield* attempt(
         Effect.gen(function* () {
+          if (compare.length > 0 || against.length > 0) {
+            const resolved = yield* context(global, false);
+            if (resolved._tag === "ContextFailure") return resolved.result;
+            const compared = yield* compareRuns(resolved.env, { compare, against, audit, plant });
+            if (!compared.ok) return compared;
+            return {
+              ok: true,
+              data: compared.value,
+              human: Arr.join(trialLines(compared.value), "\n"),
+            };
+          }
+          if (Option.isNone(given))
+            return err(
+              "invalid_input",
+              "Name a Run, or two sets of them with --compare and --against",
+            );
+          const runId = given.value;
           const resolved = yield* resolveCommandRun(global, runId);
           if (resolved._tag === "RunFailure") return resolved.result;
           const facts = runFacts(resolved);
@@ -643,11 +680,14 @@ const runMetrics = Command.make(
           );
           if (!records.ok) return records;
           const metrics = metricsOf(records.value, facts.created);
+          const spent = yield* usageFor(resolved.env, runId);
+          if (!spent.ok) return spent;
+          const usage = spent.value;
           const said = (value: number | null) =>
             value === null ? "not yet" : `${Math.round(value)}s`;
           return {
             ok: true,
-            data: { metrics, outcome: facts.outcome },
+            data: { metrics, usage, outcome: facts.outcome },
             human: Arr.join(
               [
                 `${facts.id}\t${facts.workflow}\t${facts.outcome}`,
@@ -658,6 +698,7 @@ const runMetrics = Command.make(
                 metrics.peakContext === null
                   ? "context: nothing sampled"
                   : `context: ${metrics.peakContext.tokens} tokens at most, on ${metrics.peakContext.agent}`,
+                ...usageLines(usage),
               ],
               "\n",
             ),
@@ -668,7 +709,7 @@ const runMetrics = Command.make(
     }),
 ).pipe(
   Command.withDescription(
-    "What a Run actually did: evidence, slices, rework and context — not pane activity",
+    "What a Run actually did: evidence, slices, rounds, rework, context and tokens — not pane activity; or two sets of Runs compared per case and per accepted change",
   ),
 );
 
