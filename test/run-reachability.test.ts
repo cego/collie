@@ -14,6 +14,7 @@ import { RunView } from "../src/engine";
 import { BUILD, socketOf } from "../src/host";
 import { relayOf } from "../src/peers";
 import { RunMetrics } from "../src/run-record";
+import { UsageEntry } from "../src/usage-ledger-model";
 import { recordAudit } from "../src/audit";
 import { recordsAt } from "../src/records";
 import { TaskSchema } from "../src/task";
@@ -61,6 +62,14 @@ const Asked = RpcGroup.make(
   Rpc.make("runMetrics", {
     payload: { runId: Schema.String },
     success: RunMetrics,
+  }),
+  Rpc.make("runs", {
+    payload: { task: Schema.NullOr(Schema.String) },
+    success: Schema.Array(RunView),
+  }),
+  Rpc.make("runUsage", {
+    payload: { runId: Schema.String },
+    success: Schema.Array(UsageEntry),
   }),
   Rpc.make("agentRun", {
     payload: { agent: Schema.String },
@@ -142,6 +151,8 @@ const hostOf = (
             progress: () => Effect.succeed(null),
             watch: ({ runId }) => Stream.make(find(runId)),
             runMetrics: () => Effect.succeed([]),
+            runs: () => Effect.succeed(views),
+            runUsage: () => Effect.succeed([]),
             agentRun: ({ agent }) => Effect.succeed(agents[agent] ?? null),
             tasks: () => Effect.succeed(tasks),
             runFile: ({ runId, ref }) =>

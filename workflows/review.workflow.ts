@@ -47,6 +47,7 @@ import * as Activity from "effect/workflow/Activity";
 import {
   DEFAULT_BASE,
   FIX_PROMPT,
+  checkedBeforeReview,
   HEAD_MOVED,
   followUp,
   MR_ENDED,
@@ -1018,9 +1019,9 @@ export default defineWorkflow({
           continue;
         }
         const forge = yield* host.mr({ cwd: reviewed.cwd });
-        const fixed = yield* fixingStep(
+        const fixWith = (fixOperation: string, findings: string) =>
           agentWork({
-            operation,
+            operation: fixOperation,
             role: "implementer",
             pushes: true,
             clears: [
@@ -1033,11 +1034,14 @@ export default defineWorkflow({
               branch: reviewed.branch,
               iteration: String(rallied),
               max_iterations: String(ROUNDS),
-              findings: formatFindings(split.live),
+              findings,
               disputed: formatFindings(disputed),
             },
             output: FixOutputSchema,
-          }),
+          });
+        const fixed = yield* fixingStep(
+          // What the rally is fixing: a dispute raised again with no rebuttal is not work.
+          fixWith(operation, formatFindings(split.live)),
           { round: fixes },
         );
         yield* host.record(
@@ -1054,6 +1058,17 @@ export default defineWorkflow({
             (one) => !Arr.some(disputed, (old) => sameFinding(old, one)),
           ),
         ];
+        const unopened = yield* checkedBeforeReview({
+          name: `${operation}-before-review`,
+          cwd: reviewed.cwd,
+          fix: fixWith,
+        });
+        if (unopened !== null) {
+          fixing = false;
+          settled = unopened.halted;
+          yield* host.record(run.id, `rally settled after review ${reviews}: ${settled}`);
+          continue;
+        }
         synthesis = yield* reviewedAgain(
           (reviews += 1),
           agents.outputFor(run.id, operation),

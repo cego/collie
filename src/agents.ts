@@ -3,6 +3,11 @@ import * as Cause from "effect/Cause";
 // WARNING: launch is external and no Activity is exactly-once, so replay reconciles by the derived agent name rather than launching again (ADR-0020).
 import { Foreground } from "./foreground";
 import { ParkCause } from "./park-cause";
+import { rememberNotQuiet, rememberStaleHandOver } from "./park-recheck";
+import { HandOver, atDispatch, buildHandOver, planRevision, renderHandOver } from "./hand-over";
+import type { AtDispatch, CheckoutNow, HandOverGiven, HandOverState } from "./hand-over";
+import { readIntent } from "./intent";
+import { appendRunJournal, readRunJournal, runJournal } from "./journal";
 import * as Struct from "effect/Struct";
 import * as Num from "effect/Number";
 import * as Arr from "effect/Array";
@@ -75,6 +80,7 @@ import {
 import type { CompactionDeps, CompactionPorts, ControlRecord } from "./compaction";
 import {
   COMPACTION_PORTS,
+  OPENCODE_USAGE,
   atLeast,
   installedVersion,
   questionsSince,
@@ -89,7 +95,7 @@ import {
 } from "./compactors";
 import type { AskedCall, AgentQuestion } from "./compactors";
 import { RECOMMENDED_MARKER, questionRepair, shortfallOf, solutionsOf } from "./question-standard";
-import { UNPROVABLE, endAgent } from "./agent-end";
+import { UNPROVABLE, endAgent, rootOf } from "./agent-end";
 import type { EndDeps } from "./agent-end";
 import { boundThread, withCodex } from "./codex";
 import { kindForRole } from "./cards";
@@ -125,6 +131,7 @@ import {
   installedHelp,
   isPermissionMode,
   opencodeReporter,
+  opencodeUsage,
   permissionsAsWritten,
   personaPrefix,
   ceilingIn,
@@ -153,7 +160,7 @@ import { gate } from "./steering-caps";
 import { actorOf } from "./audit";
 import { keepQueued, readQueue } from "./delivery-queue";
 import type { Queued } from "./delivery-queue";
-import { verifyingOf } from "./verify";
+import { treeOf, verifyingOf } from "./verify";
 import type { Verifying } from "./verify";
 import { agentName, launchedAs, legacyAgentName, reason, unsafePathComponent } from "./naming";
 import { machineName } from "./peers";
@@ -162,6 +169,8 @@ import { askRouteTo } from "./handoff";
 import { epochMs, nowIso } from "./time";
 import { noteContext, noteReminder } from "./metrics";
 import type { RecoveryOutcome } from "./metrics";
+import { recordUsage } from "./usage-ledger";
+import { REMINDER_OPENING, REPAIR_OPENING } from "./usage-ledger-model";
 import manifest from "../package.json";
 import {
   appliesTo,
@@ -325,6 +334,17 @@ export class AgentParked extends Schema.TaggedError<
   cause: Schema.optionalKey(ParkCause),
 }) {}
 
+/** An incarnation with the process at its pane's root, where one could be named at its start. */
+type Rooted = Incarnation & { readonly root?: Launched["root"] };
+
+const rooted = (incarnation: Incarnation | undefined, root: Launched["root"]): Rooted | undefined =>
+  incarnation === undefined
+    ? undefined
+    : root === undefined
+      ? incarnation
+      : { ...incarnation, root };
+
+/** The Run's own questions, which a collection puts an agent's question on. */
 export interface Questions {
   readonly ask: (question: DecisionSpec, asker: string) => Effect.Effect<void>;
   readonly asked: Effect.Effect<ReadonlyArray<AskedQuestion>>;
@@ -364,6 +384,26 @@ export interface AgentsApi {
   readonly skills: (names: ReadonlyArray<string>) => Effect.Effect<ReadonlyMap<string, string>>;
   readonly outputSubmit: Effect.Effect<"file" | "tool">;
   readonly attachments: (runId: string) => Effect.Effect<ReadonlyArray<Attachment>>;
+  /** The Run's next hand-over revision, built from host state and kept beside every earlier one. */
+  readonly handOver: (
+    about: Omit<
+      HandOverState,
+      "revision" | "goal" | "constraints" | "plan" | "checkout" | "reports"
+    > & { readonly cwd: string },
+  ) => Effect.Effect<HandOver>;
+  /** What of the checkout a hand-over is held to at dispatch. */
+  readonly atCheckout: (cwd: string, plan: string | null) => Effect.Effect<AtDispatch>;
+  /** Keeps what a stale hand-over's park rechecks. */
+  readonly handOverStale: (
+    runId: string,
+    seen: Omit<AtDispatch, "dirty"> & { readonly cwd: string; readonly dir: string | null },
+  ) => Effect.Effect<void>;
+  /**
+   * What an agent is told about asking for a decision its work does not cover: the pane
+   * of whoever is live in that role in this Run's lineage — `Place.lineage` — and
+   * otherwise to decide and record it under `assumptions` in its Output. A role, not a bare route: who may be asked is the
+   * workflow's own declaration.
+   */
   readonly askRoute: (role: string, lineage: ReadonlyArray<string>) => Effect.Effect<string>;
   readonly pollMs: number;
   readonly collectMs: number;
@@ -381,7 +421,18 @@ export interface AgentsApi {
   >;
   readonly ranOut: (launched: Launched) => Effect.Effect<RanOut>;
   readonly stopped: (launched: Launched, since?: number) => Effect.Effect<string | null>;
-  readonly retire: (launched: Launched, line: string) => Effect.Effect<void, AgentParked>;
+  /**
+   * Closes this one agent's pane, with `line` in the Run's log; parks unless it is gone.
+   * `ended` says why another agent takes its work: `ran out` where none is given.
+   */
+  readonly retire: (
+    launched: Launched,
+    line: string,
+    ended?: string,
+  ) => Effect.Effect<void, AgentParked>;
+  /** The latest launch of the agent this Run's work names `agent`; null where it has none. */
+  readonly lastLaunch: (runId: string, agent: string) => Effect.Effect<Launched | null>;
+  /** A line in the Run's log. */
   readonly say: (runId: string, line: string) => Effect.Effect<void>;
   readonly stepMessage: (ask: AgentAsk) => { readonly typed: string; readonly prompt: string };
   readonly launch: (
@@ -401,7 +452,14 @@ export interface AgentsApi {
     readonly text: string;
   }) => Effect.Effect<Steered | null, AgentParked>;
   readonly halt: (runId: string, why?: string) => Effect.Effect<Halted>;
-  // WARNING: an Output equal to `unless` means the agent has not rewritten its file, which is not an answer.
+  /** Reads each of this Run's agents' usage into its ledger once more, as the Run settles. */
+  readonly account: (runId: string, heal: boolean) => Effect.Effect<void>;
+  /**
+   * What the agent wrote, or null where it has written nothing in the time allowed.
+   * `unless` is an Output already known to be unusable: the same text again is the agent
+   * not having rewritten the file, which is not an answer to having been asked to.
+   */
+  /** Runs `waiting` with this agent on the list of those collected from, as `collect` does. */
   readonly collectedDuring: <A, E, R>(
     launched: Launched,
     waiting: Effect.Effect<A, E, R>,
@@ -532,6 +590,13 @@ interface Doing<Output extends OutputContract> {
   readonly claudeSubagents?: ClaudeSubagents;
   readonly permissions?: PermissionMode;
   readonly seat?: Seat;
+  /** What only the workflow knows of this work, for a hand-over to an agent taking it over. */
+  readonly handOver?: HandOverGiven;
+  /**
+   * The agent whose work this continues, where `agent` has not yet run in this Run: it is
+   * ended and found Quiet first, and `agent` is first handed the host's hand-over.
+   */
+  readonly takesOver?: { readonly agent: string; readonly why: string };
 }
 
 // WARNING: suspending inside the Activity leaves it unrecorded, so a resume asks the forge again; once it has said no, a replay does not.
@@ -990,12 +1055,109 @@ export const agentWork: <
         }
         return launched;
       });
-    let current = yield* Activity.make({
-      name: `${work.operation}.launch`,
-      success: Launched,
-      error: AgentUncertain,
-      execute: launching(ask),
-    });
+    const handOverFrom = (outgoing: Launched, transcript: string | null) =>
+      Effect.gen(function* () {
+        const evidence = yield* host.evidence(runId, work.cwd);
+        return yield* agents.handOver({
+          run: runId,
+          step: work.operation,
+          agent: outgoing.agent,
+          incarnation: outgoing.sequence ?? 1,
+          cwd: work.cwd,
+          given: given.handOver ?? {},
+          base: evidence.mergeBase ?? null,
+          verifications: evidence.verifications,
+          checks: Arr.map(yield* host.approved(runId), (one) => one.name),
+          asked: yield* host.asked(runId),
+          transcript,
+        });
+      });
+    const plan = given.handOver?.plan ?? null;
+    /** The prompt carrying `handed`, rebuilt once where the checkout moved; parks where it moves again. */
+    const dispatching = (
+      handed: HandOver,
+      rebuild: Effect.Effect<HandOver>,
+      successor: string,
+      why: string,
+    ) =>
+      Effect.gen(function* () {
+        const dispatched = yield* atDispatch(handed, agents.atCheckout(work.cwd, plan), rebuild);
+        if (dispatched === null) {
+          const seen = yield* agents.atCheckout(work.cwd, plan);
+          yield* agents.handOverStale(runId, {
+            head: seen.head,
+            plan: seen.plan,
+            cwd: work.cwd,
+            dir: plan,
+          });
+          yield* host.parked(
+            runId,
+            `${successor}'s hand-over was rebuilt once and the checkout moved again (head ${seen.head}, plan revision ${seen.plan ?? "none"}): no agent takes the work from a stale picture. This Run goes on once the checkout holds still`,
+            "hand-over-stale",
+          );
+          return yield* Workflow.suspend(yield* WorkflowEngine.WorkflowInstance);
+        }
+        return renderPrompt({ ...parts, handover: renderHandOver(dispatched, why) }).text;
+      });
+    const takingOver = given.takesOver;
+    const predecessor =
+      takingOver === undefined || work.agent === undefined
+        ? null
+        : yield* Activity.make({
+            name: `${work.operation}.take-over`,
+            success: Schema.NullOr(Launched),
+            execute: Effect.gen(function* () {
+              if ((yield* agents.lastLaunch(runId, work.agent!)) !== null) {
+                return null;
+              }
+              return yield* agents.lastLaunch(runId, takingOver.agent);
+            }),
+          });
+    let current: Launched;
+    if (predecessor === null || takingOver === undefined) {
+      current = yield* Activity.make({
+        name: `${work.operation}.launch`,
+        success: Launched,
+        error: AgentUncertain,
+        execute: launching(ask),
+      });
+    } else {
+      const handed = yield* Activity.make({
+        name: `${work.operation}.take-over.hand-over`,
+        success: HandOver,
+        execute: handOverFrom(predecessor, null),
+      });
+      yield* Activity.make({
+        name: `${work.operation}.take-over.close`,
+        error: AgentUncertain,
+        execute: parkedWhenStuck(
+          agents.retire(
+            predecessor,
+            `${work.operation}: ${predecessor.agent} ${takingOver.why}; ${work.agent} takes its work over`,
+            takingOver.why,
+          ),
+          host,
+          work.runId,
+        ),
+      });
+      current = yield* Activity.make({
+        name: `${work.operation}.launch`,
+        success: Launched,
+        error: AgentUncertain,
+        execute: Effect.gen(function* () {
+          if (yield* host.stopRequested(runId)) {
+            return yield* Workflow.suspend(yield* WorkflowEngine.WorkflowInstance);
+          }
+          ask.prompt = yield* dispatching(
+            handed,
+            handOverFrom(predecessor, null),
+            work.agent ?? work.operation,
+            `it ${takingOver.why}`,
+          );
+          return yield* launching(ask);
+        }),
+      });
+    }
     let currentAsk: AgentAsk = ask;
     let collected = yield* reminding(
       work.operation,
@@ -1061,16 +1223,21 @@ export const agentWork: <
       }
       const sequence = (current.sequence ?? 1) + 1;
       const successor = agentName(runId, work.agent ?? work.operation, null, sequence);
+      const handOverNow = handOverFrom(current, out.transcript);
+      const handed = yield* Activity.make({
+        name: `${work.operation}.fallback-${n}.hand-over`,
+        success: HandOver,
+        execute: handOverNow,
+      });
+      const ranOutWhy = `its subscription ran out (${out.why}) on ${said(on)}`;
       const nextAsk: Types.Mutable<AgentAsk> = {
         ...currentAsk,
         harness: next.harness,
         model: next.model,
         effort: next.effort,
         sequence,
-        prompt: renderPrompt({
-          ...parts,
-          handover: handover({ on, why: out.why, transcript: out.transcript }),
-        }).text,
+        prompt: renderPrompt({ ...parts, handover: renderHandOver(handed, ranOutWhy) }).text,
+        // The chain's first agent, which is what a later ask for this agent may still name.
         from: currentAsk.from ?? on,
         why: out.why,
       };
@@ -1109,6 +1276,7 @@ export const agentWork: <
             yield* host.parked(runId, null);
             return CollectedBeforeFallback.make({ text: late });
           }
+          nextAsk.prompt = yield* dispatching(handed, handOverNow, successor, ranOutWhy);
           return yield* launching(nextAsk);
         }),
       });
@@ -1479,18 +1647,6 @@ function renderPrompt(parts: PromptParts) {
   return { text, unfilled };
 }
 
-export function handover(ranOut: {
-  readonly on: AgentChoice;
-  readonly why: string;
-  readonly transcript: string | null;
-}) {
-  const where =
-    ranOut.transcript === null
-      ? ""
-      : ` Its conversation is at ${ranOut.transcript}; read it if you need what it was told or decided.`;
-  return `Another agent (${said(ranOut.on)}) started this work and stopped because its subscription ran out (${ranOut.why}). Whatever it changed is in the checkout: read \`git status\` and \`git diff\` before you start, and carry on rather than start over.${where}`;
-}
-
 function attachmentsSection(attachments: ReadonlyArray<Attachment>) {
   if (attachments.length === 0) {
     return "";
@@ -1547,6 +1703,8 @@ export interface AgentHost {
   readonly ports?: CompactionPorts;
   readonly help?: typeof installedHelp;
   readonly self?: ReadonlyArray<string>;
+  /** The checkout as Git has it; `git status` where left out. */
+  readonly checkout?: (cwd: string) => Effect.Effect<CheckoutNow>;
 }
 
 type AgentServices = FileSystem.FileSystem | Path.Path | PlatformServices | ForgeHttp | Records;
@@ -1781,6 +1939,16 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       const plugins = isJsonArray(settings.plugin) ? settings.plugin : [];
       return { ...settings, plugin: [...plugins, `file://${reporter}`] };
     });
+  /** OpenCode's settings with Collie's usage plugin after every other. */
+  const withUsage = (ask: AgentAsk, agent: string, settings: JsonObject) =>
+    Effect.gen(function* () {
+      const plugin = `${dirFor(ask.runId)}/${stemOf(ask)}.usage.js`;
+      const into = `${yield* controlDir(host.env.stateDir, agent)}/${OPENCODE_USAGE}`;
+      yield* write(plugin, opencodeUsage(into));
+      const plugins = isJsonArray(settings.plugin) ? settings.plugin : [];
+      return { ...settings, plugin: [...plugins, `file://${plugin}`] };
+    });
+  /** The launch record with the session its harness opened, once `read` names it. */
   const withSession = (
     launched: Launched,
     read: Effect.Effect<string | null, never, AgentServices>,
@@ -2148,6 +2316,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             }),
           ),
       };
+      yield* recordUsage(ledgerDeps(host), { run: launched.runId, agent: launched.agent });
       const due = yield* atBoundary(
         compaction,
         { agent: launched.agent, run: launched.runId, step: launched.operation },
@@ -2412,10 +2581,12 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             host.env.raw.OPENCODE_CONFIG_CONTENT,
           )
         : undefined;
-    const settings =
+    const reported =
       adapter.id === "opencode"
         ? yield* withReporter(ask, operators ?? {}, session?.resumed === true ? session.id : null)
         : operators;
+    const settings =
+      adapter.id === "opencode" ? yield* withUsage(ask, agent, reported ?? {}) : reported;
     const mcp = adapter.mcp({
       command,
       env: serverEnv,
@@ -2529,7 +2700,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           return undefined;
         }
         yield* registerAgent(scopeFor(ask.cwd), found.entry, alive);
-        return found.entry.incarnation;
+        return rooted(found.entry.incarnation, yield* rootOf(host.herdr, terminal));
       }),
     );
   });
@@ -2672,10 +2843,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           return yield* launch(ask, fresh, note);
         }
         const replayed = yield* wasOrdered(ask);
-        const landedOn = (
-          incarnation: Incarnation | undefined,
-          chosen: AgentSession | null = null,
-        ) =>
+        const landedOn = (incarnation: Rooted | undefined, chosen: AgentSession | null = null) =>
           Effect.gen(function* () {
             const landed: Types.Mutable<Launched> = {
               agent,
@@ -2711,19 +2879,20 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               if (incarnation.agentSession !== null) {
                 landed.agentSession = incarnation.agentSession;
               }
+              if (incarnation.root !== undefined) {
+                landed.root = incarnation.root;
+              }
             }
             if (chosen !== null) {
               landed.agentSession = chosen;
             }
             return landed;
           });
+        // Stopped while it waited for memory: nothing started, and the caller sees the stop.
         if (memory === "stopped") {
           return yield* landedOn(undefined);
         }
-        const recorded = (
-          incarnation: Incarnation | undefined,
-          chosen: AgentSession | null = null,
-        ) =>
+        const recorded = (incarnation: Rooted | undefined, chosen: AgentSession | null = null) =>
           Effect.gen(function* () {
             const landed = yield* landedOn(incarnation, chosen);
             yield* recordLaunch(landed);
@@ -2766,7 +2935,12 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
                   listedAt,
                 });
               }
-              return yield* recorded({ terminalId: live.terminalId, agentSession: null });
+              return yield* recorded(
+                rooted(
+                  { terminalId: live.terminalId, agentSession: null },
+                  yield* rootOf(host.herdr, live.paneId),
+                ),
+              );
             })
           : yield* Effect.uninterruptible(
               start(
@@ -3374,11 +3548,13 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         const asking = questions === undefined ? null : yield* questionsOf(launched, questions);
         const unasked =
           asking === null ? Effect.succeed(true) : Effect.map(asking(null), (open) => !open);
+        const statusNow = Effect.suspend(() => host.herdr.agentStatus(launched.agent)).pipe(
+          Effect.orElseSucceed(() => null),
+        );
+        const settled = Effect.map(statusNow, (status) => status !== null && isSettled(status));
         let working = turnBegun.delete(launched.agent);
         for (;;) {
-          const status = yield* host.herdr
-            .agentStatus(launched.agent)
-            .pipe(Effect.orElseSucceed(() => null));
+          const status = yield* statusNow;
           working ||= status === "working";
           if (
             working &&
@@ -3388,7 +3564,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             (yield* unasked) &&
             (yield* may) &&
             !(yield* holdsBudgetOf(launched.runId, launched.agent)) &&
-            (openQuestions.get(launched.agent)?.size ?? 0) === 0
+            (openQuestions.get(launched.agent)?.size ?? 0) === 0 &&
+            // `unasked` can wait out a delivery of answers, which starts a turn.
+            (yield* settled)
           ) {
             return;
           }
@@ -4066,15 +4244,15 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     stopMs: host.stopMs,
   });
 
-  const retire = (launched: Launched, line: string) =>
+  const retire = (launched: Launched, line: string, done = "ran out") =>
     under(
       Effect.gen(function* () {
         const parked = (why: string) =>
           new AgentParked({
             operation: launched.operation,
-            reason: `${launched.agent} ran out and must stop before another agent takes its work, but ${why}. Close it and resume.`,
+            reason: `${launched.agent} ${done} and must stop before another agent takes its work, but ${why}. Close it and resume.`,
           });
-        const ended = yield* endAgent(endsOf(launched.runId), launched, "it ran out", "close").pipe(
+        const ended = yield* endAgent(endsOf(launched.runId), launched, `it ${done}`, "close").pipe(
           Effect.mapError((failure) =>
             failure._tag === "AgentsUnlisted"
               ? parked(
@@ -4089,12 +4267,18 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           return yield* parked(`it ${UNPROVABLE}`);
         }
         if (ended._tag === "NotQuiet") {
-          return yield* ended.locked === undefined
-            ? new AgentParked({
-                operation: launched.operation,
-                reason: `${ended.reason}. It ran out, and no agent takes its work until it has stopped; resume once it has`,
-              })
-            : parked(`it could not be stopped (${ended.locked})`);
+          if (ended.locked !== undefined) {
+            return yield* parked(`it could not be stopped (${ended.locked})`);
+          }
+          yield* rememberNotQuiet(`${host.dir}/runs/${launched.runId}`, {
+            agent: launched.agent,
+            left: ended.left ?? [],
+          });
+          return yield* new AgentParked({
+            operation: launched.operation,
+            reason: `${ended.reason}. It ${done}, and no agent takes its work until it has stopped; this Run goes on once it has`,
+            cause: "predecessor-not-quiet",
+          });
         }
         yield* log(launched.runId, line);
       }),
@@ -4367,8 +4551,50 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       ),
     );
 
+  const checkoutOf = (cwd: string) =>
+    host.checkout?.(cwd) ??
+    under(
+      Effect.map(treeOf(cwd), ({ head_sha, branch, dirty }) => ({ head: head_sha, branch, dirty })),
+    );
+  const planOf = (plan: string | null | undefined) =>
+    plan == null
+      ? Effect.succeed(null)
+      : under(planRevision(plan)).pipe(Effect.orElseSucceed(() => null));
+  const handOverJournal = (runId: string) =>
+    runJournal(`${host.dir}/runs/${runId}`, "hand-overs.jsonl");
+  const HandOverJson = Schema.fromJsonString(HandOver);
+
   return {
     outputFor,
+    handOver: (about) =>
+      under(
+        Effect.gen(function* () {
+          const at = handOverJournal(about.run);
+          const earlier = yield* readRunJournal(at, HandOverJson).pipe(
+            Effect.orElseSucceed(() => []),
+          );
+          const intent = yield* readIntent(`${host.dir}/runs/${about.run}`).pipe(
+            Effect.orElseSucceed(() => null),
+          );
+          const record = buildHandOver({
+            ...about,
+            revision: earlier.length + 1,
+            goal: intent?.goal ?? null,
+            constraints: Arr.map(intent?.constraints ?? [], (one) => one.text),
+            plan: yield* planOf(about.given.plan),
+            checkout: yield* checkoutOf(about.cwd),
+            reports: `${host.dir}/runs/${about.run}/handoffs`,
+          });
+          yield* appendRunJournal(at, HandOverJson, record);
+          return record;
+        }),
+      ).pipe(Effect.orDie),
+    atCheckout: (cwd, plan) =>
+      Effect.all({ now: checkoutOf(cwd), plan: planOf(plan) }).pipe(
+        Effect.map(({ now, plan }) => ({ head: now.head, plan, dirty: now.dirty })),
+      ),
+    handOverStale: (runId, seen) =>
+      under(rememberStaleHandOver(`${host.dir}/runs/${runId}`, seen)).pipe(Effect.orDie),
     stepMessage: (ask) => {
       const prompt = promptFile(ask);
       const text = stepText(adapterFor(ask.harness ?? host.harness), ask, prompt);
@@ -4523,9 +4749,24 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         }).pipe(Effect.orDie),
       ),
     retire,
+    lastLaunch: (runId, agent) =>
+      under(
+        Effect.map(launchesOf(runId), (launches) =>
+          Option.getOrNull(Arr.findLast(launches, (one) => launchedAs(one, agent))),
+        ),
+      ),
     say: (runId, line) => under(log(runId, line)),
     handOff,
     halt,
+    account: (runId, heal) =>
+      under(
+        Effect.gen(function* () {
+          const agents = Arr.dedupe(Arr.map(yield* launchesOf(runId), (one) => one.agent));
+          for (const agent of agents) {
+            yield* recordUsage(ledgerDeps(host), { run: runId, agent, heal });
+          }
+        }).pipe(Effect.ignore),
+      ),
     collect: (...args: Parameters<typeof collect>) =>
       Effect.tap(collect(...args), (text) =>
         text === null
@@ -4812,13 +5053,25 @@ const roleBody = (role: string) => `You are the ${role}.`;
 const OUTPUT_REMINDERS = 2;
 
 const reminderText: (output: string) => string = (output) =>
-  `Your turn ended without writing your Output. A chat message is not the Output: write ${output}, the JSON the contract described and nothing else.\nOUTPUT_PATH: ${output}`;
+  `${REMINDER_OPENING} A chat message is not the Output: write ${output}, the JSON the contract described and nothing else.\nOUTPUT_PATH: ${output}`;
 
+/**
+ * One Output the agent could not write correctly, handed back to that same agent with the
+ * reason. It is still in its pane holding the work; starting the work again would throw a
+ * whole round away over a write.
+ */
 export const repairText: (output: string, problem: string) => string = (output, problem) =>
-  `Your Output file is not usable: ${problem}\n\nWrite ${output} again — the JSON the contract described, nothing else. Do not redo the work, do not explain, do not write anything outside that file. It is the only thing missing.\nOUTPUT_PATH: ${output}`;
+  `${REPAIR_OPENING} ${problem}\n\nWrite ${output} again — the JSON the contract described, nothing else. Do not redo the work, do not explain, do not write anything outside that file. It is the only thing missing.\nOUTPUT_PATH: ${output}`;
+
+const ledgerDeps = (host: AgentHost) => ({
+  dir: host.dir,
+  stateDir: host.env.stateDir,
+  ports: host.ports ?? COMPACTION_PORTS,
+});
 
 const compactionDeps: (host: AgentHost, runId: string) => CompactionDeps = (host, runId) => ({
   ports: host.ports ?? COMPACTION_PORTS,
+  account: (agent) => recordUsage(ledgerDeps(host), { run: runId, agent }),
   stateDir: host.env.stateDir,
   configured: host.compactAtTokens,
   herdr: host.herdr,

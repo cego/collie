@@ -56,7 +56,8 @@ export type MergeAnswer =
       readonly at: string;
     }
   | { readonly _tag: "HeadMoved"; readonly head: string }
-  | { readonly _tag: "Refused"; readonly reason: string };
+  | { readonly _tag: "Refused"; readonly reason: string }
+  | { readonly _tag: "Transient"; readonly reason: string };
 
 export function judgeComments(
   comments: ReadonlyArray<ForgeComment>,

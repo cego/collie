@@ -1,6 +1,7 @@
 import { Herdr } from "../src/herdr";
 import * as Order from "effect/Order";
 import { recordsAt } from "./support/records";
+import { MR_STATES_FILE, MergeRequests } from "../src/merge-requests";
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
@@ -14,7 +15,7 @@ import type { ForgeHttp } from "../src/forge/http";
 import { recordAudit } from "../src/audit";
 import { buildBoard } from "../src/board";
 import { sectionOf } from "../src/board-model";
-import type { MrState, TaskView } from "../src/board-model";
+import type { MrState, OfferView, TaskView } from "../src/board-model";
 import { readDispositions, recordDisposition } from "../src/disposition";
 import {
   MERGE_POLL_MS,
@@ -803,11 +804,13 @@ test("a stored answer with no read time settles nothing until the watch has aske
   runWithForge(
     Effect.gen(function* () {
       const { stateDir, board } = yield* seeded();
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.makeDirectory(`${stateDir}/board`, { recursive: true });
-      yield* fs.writeFileString(
-        `${stateDir}/board/mr-states.json`,
-        `{"${GITLAB}!65":{"state":"merged","checks":{"state":"passed","at":"${HEAD}"},"head":"${HEAD}"}}\n`,
+      yield* (yield* MergeRequests).merge(
+        new Map([
+          [
+            `${GITLAB}!65`,
+            { state: "merged", checks: { state: "passed", at: HEAD }, head: HEAD } as const,
+          ],
+        ]),
       );
       const now = epochMs("2026-09-17T10:00:00Z");
       const [before] = yield* board({ now });
@@ -1739,6 +1742,16 @@ const cardAfter = Effect.fn("merges.cardAfter")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-forge-" });
+  // WARNING: Each state directory has its own host.db, as each host does: the forge's answers are rows in it.
+  return yield* cardIn(stateDir, mr, run, passedAt).pipe(Effect.provide(recordsAt(stateDir)));
+});
+
+const cardIn = Effect.fn("merges.cardIn")(function* (
+  stateDir: string,
+  mr: string,
+  run: Runner,
+  passedAt?: string,
+) {
   const env = readEnv({ COLLIE_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
   const made = yield* madeRun(stateDir, {
     state: "succeeded",
@@ -1749,7 +1762,9 @@ const cardAfter = Effect.fn("merges.cardAfter")(function* (
     yield* appendVerification(made.evidence, collieRan(made.id, passedAt));
   }
   const now = epochMs("2026-09-17T10:00:00Z");
-  const views = yield* buildBoard({ env, runs: [made], now });
+  // WARNING: What it offers is the host's to say, and no host runs here.
+  const offers = () => Effect.succeed<ReadonlyArray<OfferView>>([]);
+  const views = yield* buildBoard({ env, runs: [made], now, offers });
   yield* settleMerges({
     stateDir,
     cwd: "/project",
@@ -1764,8 +1779,8 @@ const cardAfter = Effect.fn("merges.cardAfter")(function* (
     panels: new Map(),
     making: new Set(),
   });
-  const [card] = yield* buildBoard({ env, runs: [made], now });
-  return { card: card!, run: made, stateDir };
+  const [card] = yield* buildBoard({ env, runs: [made], now, offers });
+  return { card: card!, run: made, stateDir, recorded: yield* readDispositions(made.dir) };
 });
 
 test("a GitLab pipeline that failed, is running or passed is what the card's checks say", () =>
@@ -1858,8 +1873,7 @@ test("a draft, and what the forge says of merging, reach the card's readiness", 
 test("a merged GitHub pull request lands its card, by github's word", () =>
   runWithForge(
     Effect.gen(function* () {
-      const { card, run } = yield* cardAfter(PR, github("merged", []));
-      const recorded = yield* readDispositions(run.dir);
+      const { card, recorded } = yield* cardAfter(PR, github("merged", []));
       expect(Arr.map(recorded, (line) => [line.by, line.kind, line.ref])).toEqual([
         ["github", "merged", "github.com/cego/collie#30"],
       ]);
@@ -1887,12 +1901,18 @@ test("a board file in the old shape still reads, as never asked: it has no read 
       const { stateDir, board: boardOf } = yield* seeded();
       const fs = yield* FileSystem.FileSystem;
       yield* fs.makeDirectory(`${stateDir}/board`, { recursive: true });
-      yield* fs.writeFileString(`${stateDir}/board/mr-states.json`, `{"${GITLAB}!65":"open"}\n`);
-      expect(yield* readMrStates(stateDir)).toEqual(new Map());
-      expect(yield* readForge(stateDir)).toEqual(new Map());
-      const [card] = yield* boardOf({ now: epochMs("2026-09-17T10:00:00Z") });
-      expect(card!.mrState).toBeNull();
-      expect(card!.checks).toEqual({ state: "unchecked" });
+      yield* fs.writeFileString(`${stateDir}/${MR_STATES_FILE}`, `{"${GITLAB}!65":"open"}\n`);
+      // WARNING: An older host's file is read once, into the database a newer host opens over it.
+      yield* Effect.gen(function* () {
+        expect(yield* (yield* MergeRequests).entries).toEqual(
+          new Map([[`${GITLAB}!65`, { state: "open" }]]),
+        );
+        expect(yield* readMrStates(stateDir)).toEqual(new Map());
+        expect(yield* readForge(stateDir)).toEqual(new Map());
+        const [card] = yield* boardOf({ now: epochMs("2026-09-17T10:00:00Z") });
+        expect(card!.mrState).toBeNull();
+        expect(card!.checks).toEqual({ state: "unchecked" });
+      }).pipe(Effect.provide(recordsAt(stateDir)));
     }),
   ));
 

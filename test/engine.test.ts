@@ -406,6 +406,7 @@ test("the provisioned toolchain typechecks every module against the declarations
         "offered",
         "planned",
         "measured",
+        "isolated",
         "landing",
         // WARNING: The shipped workflows are held to the same declarations as an author's, or the contract is two contracts.
         "plan",

@@ -17,6 +17,7 @@ import { FakeBin } from "./support/bin";
 import { exec } from "./support/command";
 import { forgeOnPath, serveForges } from "./support/forge";
 import { until } from "./support/host";
+import { tellHost } from "../src/tell-host";
 import { collie, proves } from "./support/world";
 import type { World } from "./support/world";
 
@@ -59,7 +60,7 @@ const elsewhere = (world: World, statement: string, params: ReadonlyArray<string
     expect(ran.stderr).toBe("");
   });
 
-test("each change made outside the host reaches the board through its own event, and equals a board read from disk", () =>
+test("each change made outside the host reaches the board once the host is told of it, and equals a board read from disk", () =>
   proves(
     "collie-run-model-host-",
     (world, core) =>
@@ -165,6 +166,8 @@ test("each change made outside the host reaches the board through its own event,
         };
 
         const client = yield* connect(world.state).pipe(Effect.orDie);
+        // WARNING: nothing is watched; a write the host did not make reaches it when it is told.
+        const told = (path: string) => tellHost(world.state, [path]);
         const spawning = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>();
         const fromDisk = Effect.gen(function* () {
           const views = yield* client.runs({ task: null }).pipe(Effect.orDie);
@@ -227,6 +230,7 @@ test("each change made outside the host reaches the board through its own event,
           }),
           store,
         ]);
+        yield* told(`${world.state}/runs/${store}`);
         yield* arrival(mark, changed);
         yield* equalsDisk;
 
@@ -241,6 +245,7 @@ test("each change made outside the host reaches the board through its own event,
           encodeJson({ cwd: repo, branch: "mk/ship", workspace: null, worktree: null }),
           checkout,
         ]);
+        yield* told(`${world.state}/runs/${checkout}`);
         const record: Verification = {
           id: `v-test-${head}`,
           run: checkout,
@@ -265,6 +270,8 @@ test("each change made outside the host reaches the board through its own event,
         });
         mark = seen.length;
         yield* git("commit", "-q", "--allow-empty", "-m", "two");
+        // WARNING: an agent's turn ending tells the host, which has the git syncer read its branch.
+        yield* told(`${world.state}/runs/${checkout}`);
         yield* arrival(mark, (tasks) => {
           const card = cardOf(tasks, checkout);
           return card._tag === "Some" && card.value.checks?.state === "unchecked";
@@ -290,6 +297,7 @@ test("each change made outside the host reaches the board through its own event,
           `${world.install}/user/workflows/notes.md`,
           `${runDir}/plan/issues/01-next.md`,
         ]);
+        yield* told(`${runDir}/plan/issues/01-next.md`);
         yield* arrival(mark, changed);
         yield* equalsDisk;
 
@@ -297,12 +305,14 @@ test("each change made outside the host reaches the board through its own event,
         mark = seen.length;
         changed = changedFrom(files);
         yield* exec(["mv", runDir, kept]);
+        yield* told(runDir);
         yield* arrival(mark, changed);
         yield* equalsDisk;
 
         mark = seen.length;
         changed = changedFrom(files);
         yield* exec(["cp", "-r", kept, runDir]);
+        yield* told(runDir);
         yield* arrival(mark, changed);
         yield* equalsDisk;
       }).pipe(Effect.provide(recordsAt(world.state))),

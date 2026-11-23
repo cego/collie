@@ -35,6 +35,12 @@ import { sweep, sweeping } from "./cleanup";
 import type { Sweeper } from "./cleanup";
 import { keepDiffs } from "./run-detail";
 import { Artefacts } from "./artefacts";
+import { ModuleRevisions } from "./module-revisions";
+import { Branches, branchKey, readBranch } from "./branches";
+import type { Branch } from "./branches";
+import { ConnectionRows } from "./connection-rows";
+import { connectionOnMachine } from "./connections";
+import { revisionOf } from "./engine";
 
 const escalatedDrift = Effect.fn("SideJobs.escalatedDrift")(function* (
   runs: ReadonlyArray<RunFacts>,
@@ -145,6 +151,95 @@ const LOOK_EVERY = "5 seconds";
 // WARNING: a forge is asked about a merge request every 5 minutes whatever this is.
 const MERGES_EVERY = "10 seconds";
 const SWEEP_EVERY = "10 minutes";
+/**
+ * How often what the host keeps is read again for a change made outside Collie, which
+ * nothing else tells it of (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs).
+ */
+export const BACKSTOP_EVERY = "5 minutes";
+const BACKSTOP_MS = 5 * 60_000;
+/**
+ * The Connection syncer: each Connection a listing asked for and none read yet, at once; every
+ * one kept, on the backstop poll. A listing's offers read only these rows.
+ */
+export const connectionSync = (env: PluginEnv) =>
+  every(
+    GIT_SYNC_EVERY,
+    Effect.gen(function* () {
+      const rows = yield* ConnectionRows;
+      const now = yield* Clock.currentTimeMillis;
+      for (const at of yield* rows.wanted) {
+        if (at.read === 0 || now - at.read >= BACKSTOP_MS)
+          yield* rows.put(at, yield* connectionOnMachine({ ...env, cwd: at.cwd }, at.id), now);
+      }
+    }),
+  );
+
+/** How often the git syncer looks for cards that moved, whose branches it reads again. */
+const GIT_SYNC_EVERY = "2 seconds";
+/** A git round slower than this is logged, so a stuck checkout is visible. */
+const GIT_SLOW_MS = 5000;
+
+/**
+ * The git syncer: the branch of each Run on a card that moved, which a turn, a Step's end, a
+ * publish or a push does, read again; every live card's on the backstop poll. A card's
+ * derivation reads only what this kept (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs).
+ */
+export const gitSync = <E, R>(
+  board: Effect.Effect<
+    { readonly runs: ReadonlyArray<RunFacts>; readonly views: ReadonlyArray<TaskView> },
+    E,
+    R
+  >,
+  recover: (runId: string) => Effect.Effect<void> = () => Effect.void,
+) => {
+  /** Each card's revision when its branches were last read. */
+  const seen = new Map<string, string>();
+  let backstopAt = Number.NEGATIVE_INFINITY;
+  return every(
+    GIT_SYNC_EVERY,
+    Effect.gen(function* () {
+      const { runs, views } = yield* board;
+      const start = yield* Clock.currentTimeMillis;
+      const backstop = start - backstopAt >= BACKSTOP_MS;
+      if (backstop) {
+        backstopAt = start;
+      }
+      const byId = new Map(Arr.map(runs, (run) => [run.id, run] as const));
+      const due = new Map<string, RunFacts>();
+      const moved = new Set<string>();
+      for (const view of views) {
+        const at = `${view.revision?.epoch ?? ""}:${view.revision?.seq ?? ""}`;
+        if (!backstop && seen.get(view.id) === at) {
+          continue;
+        }
+        seen.set(view.id, at);
+        for (const id of view.runs) {
+          const run = byId.get(id);
+          if (run === undefined) {
+            continue;
+          }
+          due.set(branchKey(run.cwd, run.branch), run);
+          moved.add(run.id);
+        }
+      }
+      if (due.size === 0) {
+        return;
+      }
+      const read = new Map<string, Branch>();
+      for (const [key, run] of due) {
+        read.set(key, yield* readBranch(run));
+      }
+      yield* (yield* Branches).put(read);
+      for (const run of moved) {
+        yield* recover(run);
+      }
+      const took = (yield* Clock.currentTimeMillis) - start;
+      if (took >= GIT_SLOW_MS) {
+        yield* Effect.logWarning(`git sync read ${due.size} branches in ${took} ms`);
+      }
+    }),
+  );
+};
 
 export const sweepEvery = <E, R>(
   stateDir: string,
@@ -237,6 +332,7 @@ export const mergeWatch = <E, R>(opts: {
   readonly stop: (runId: string, reason: string) => Effect.Effect<void>;
   readonly watches: Watches;
   readonly requested: Requested;
+  readonly nudged?: Set<string>;
 }) => {
   const checked = new Map<string, number>();
   const states = new Map<string, MrState>();
@@ -260,6 +356,7 @@ export const mergeWatch = <E, R>(opts: {
         states,
         panels: opts.panels,
         making: landingNow,
+        nudged: opts.nudged,
       });
       yield* settleWatches({
         panels: opts.panels,
@@ -292,6 +389,10 @@ export const sideJobs = <E, R>(opts: {
   readonly watches: Watches;
   readonly requested: Requested;
   readonly sweepers: Effect.Effect<ReadonlyArray<Sweeper>, E, R>;
+  /** Merge requests a Run just pushed to, which the merge watch reads on its next round. */
+  readonly nudged?: Set<string>;
+  /** Reads from git what a follow-up of a Run would enter at. */
+  readonly recover?: (runId: string) => Effect.Effect<void>;
 }) => {
   const { env, herdr } = opts;
   const kept = new Set<string>();
@@ -321,6 +422,17 @@ export const sideJobs = <E, R>(opts: {
           }),
         ),
         sweepEvery(env.stateDir, opts.sweepers),
+        gitSync(opts.board, opts.recover),
+        connectionSync(env),
+        every(
+          BACKSTOP_EVERY,
+          Effect.gen(function* () {
+            const revisions = yield* ModuleRevisions;
+            for (const dir of (yield* revisions.all).keys()) {
+              yield* revisions.put(dir, yield* revisionOf(dir));
+            }
+          }),
+        ),
         keepTerminals(env, herdr),
       ],
       { concurrency: "unbounded", discard: true },

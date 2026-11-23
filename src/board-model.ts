@@ -18,7 +18,7 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 import { IntentSeedSchema } from "./intent-model";
 import { ScheduleChange, ScheduleChanged, ScheduleListing } from "./schedule-model";
 import { Park } from "./park-cause";
-import { VerifyEvent, Pass, VerificationSchema } from "./verify-model";
+import { VerifyEvent, Pass, PrepareSchema, VerificationSchema } from "./verify-model";
 import { MeasureEvent } from "./measurement-model";
 
 export { PASSES, Pass } from "./verify-model";
@@ -194,6 +194,10 @@ export type Proposal = typeof Proposal.Type;
 export const Decision = Schema.Union([Question, Proposal]);
 export type Decision = typeof Decision.Type;
 
+/** A card agent's status once core no longer has it. */
+export const ENDED_AGENT = "ended";
+
+/** One live agent of the Task, as a card counts them and a search matches them. */
 export const BoardAgent = Schema.Struct({
   name: Schema.String,
   role: Schema.optionalKey(Schema.String),
@@ -450,6 +454,13 @@ export const TaskView = Schema.Struct({
   at: Schema.Finite,
   flow: Schema.optionalKey(FlowStrip),
   revision: Schema.optionalKey(RunRevision),
+  /**
+   * False while this host has not yet confirmed a card the previous host derived; absent once it
+   * has, and from an older host.
+   */
+  confirmed: Schema.optionalKey(Schema.Boolean),
+  /** When an unconfirmed card was derived, in epoch milliseconds. */
+  asOf: Schema.optionalKey(Schema.Finite),
 });
 export type TaskView = typeof TaskView.Type;
 
@@ -1354,6 +1365,12 @@ export const FrontDoorRpcs = RpcGroup.make(
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
   Rpc.make("board", { success: BoardMessage, stream: true }),
+  /**
+   * A process other than the host wrote these paths, which nothing watches: a helper (status
+   * line, hook, compactor) or a CLI command, so the host reads them again.
+   */
+  Rpc.make("wrote", { payload: { paths: Schema.Array(Schema.String) } }),
+  /** Each toast raised while subscribed; one raised with nobody subscribed is dropped. */
   Rpc.make("toasts", { success: Toasted, stream: true }),
   // WARNING: a channel that never declares is stamped cli, never a human.
   Rpc.make("declare", {
@@ -1518,6 +1535,9 @@ export const FrontDoorRpcs = RpcGroup.make(
       cwd: Schema.optionalKey(Schema.String),
       expect: Schema.Literals(["pass", "fail"]),
       again: Schema.optionalKey(Schema.Boolean),
+      /** Run in a detached checkout of the start tree, after `prepare` there. */
+      isolated: Schema.optionalKey(Schema.Boolean),
+      prepare: Schema.optionalKey(PrepareSchema),
     },
     success: VerifyEvent,
     error: HostRefused,
@@ -2268,7 +2288,9 @@ export function flowActions(
   const offered = (node: FlowRun, lane: FlowLane, facts: FlowActionFacts) => {
     let primary: FlowAction | null = null;
     const actions: Array<FlowAction> = [];
-    const live = node.agent != null && Arr.some(view.agents, (one) => one.name === node.agent);
+    const live =
+      node.agent != null &&
+      Arr.some(view.agents, (one) => one.name === node.agent && one.status !== ENDED_AGENT);
     const proposal = node.proposal ?? facts.proposal ?? undefined;
     if (node.link !== undefined) {
       if (node.link.run !== null) {

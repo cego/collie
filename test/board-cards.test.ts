@@ -216,6 +216,60 @@ test("stamping a card's age or record keeps its derivation until source facts ch
     }).pipe(Effect.provide(TestClock.layer())),
   ));
 
+test("a card another host derived is confirmed by content, without deriving it, until its facts move", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      const { dir, env, runs: initial } = yield* planners(5, "2026-10-30T07:30:00Z");
+      let runs = initial;
+      const derived: Array<string> = [];
+      const build = (cards: KeptCards, model: Effect.Success<ReturnType<typeof makeRunModel>>) =>
+        model.observe(runs).pipe(
+          Effect.andThen(
+            buildBoard({
+              env,
+              runs,
+              registered: [],
+              offers: (run) => Effect.sync(() => (derived.push(run), [])),
+              cards,
+            }),
+          ),
+          Effect.provideService(FileSystem.FileSystem, model.reading),
+        );
+      const before = yield* makeRunModel(dir, "installation");
+      const left: KeptCards = {
+        revision: before.inputsAt,
+        content: before.content,
+        kept: new Map(),
+      };
+      const shown = yield* build(left, before);
+      expect(derived.length).toBe(5);
+      derived.length = 0;
+
+      // The next host: another epoch, every card as the last one left it.
+      const after = yield* makeRunModel(dir, "installation");
+      const kept = new Map(
+        Arr.map([...left.kept], ([task, card]) => [
+          task,
+          {
+            key: "",
+            digest: card.digest,
+            due: card.due,
+            view: card.view,
+            unconfirmed: true as const,
+          },
+        ]),
+      );
+      const cards: KeptCards = { revision: after.inputsAt, content: after.content, kept };
+      expect(yield* build(cards, after)).toEqual(shown);
+      expect(derived).toEqual([]);
+
+      runs = [{ ...runs[0], summary: "New engine facts" }, ...runs.slice(1)];
+      yield* build(cards, after);
+      expect(derived).toEqual([runs[0].id]);
+    }).pipe(Effect.provide(TestClock.layer())),
+  ));
+
 test("a kept card says the time as one derived now does, hours on", () =>
   runEffect(
     Effect.gen(function* () {

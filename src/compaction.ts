@@ -1,3 +1,11 @@
+// Compaction between pieces of work: one absolute threshold, one policy, and the
+// per-agent controls a harness's official interface installs when Collie launches it.
+//
+// The policy lives here once because every work-dispatch path shares it — a Workflow's
+// next step, a fix round, a hand-off from another Run — and a threshold repeated per
+// harness is a threshold that disagrees with itself.
+
+import type { Source } from "./usage-ledger-model";
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -156,6 +164,15 @@ export interface CompactionPort {
   readonly gate: Effect.Effect<void, PortError, PortServices>;
   install(ctx: LaunchContext): Effect.Effect<Installed, PortError, PortServices>;
   usage(ctx: AgentContext): Effect.Effect<number | null, PortError, PortServices>;
+  /** Where the harness keeps each request this agent and its sub-agents made, for the usage ledger. */
+  readonly records?: (
+    ctx: AgentContext,
+  ) => Effect.Effect<ReadonlyArray<Source>, PortError, PortServices>;
+  /**
+   * Submits a native compaction request. Acknowledgement only, never completion — and
+   * `unobserved` where the channel it went through could not confirm even that much.
+   * `null` from an adapter whose channel has no such notion.
+   */
   request(
     ctx: AgentContext,
     requestId: string,
@@ -300,6 +317,8 @@ export interface CompactionDeps {
     at: { readonly agent: string; readonly run: string; readonly step: string },
     tokens: number,
   ) => Effect.Effect<void, PortError, PortServices | Records>;
+  /** Reads this agent's usage into its Run's ledger; never fails. */
+  account?: (agent: string) => Effect.Effect<void, never, PortServices | Records>;
   waitMs: number;
   pollMs: number;
   room?: (cwd: string) => Effect.Effect<"free" | "waited" | "stopped">;
@@ -877,6 +896,21 @@ const sendsNothing: (agent: string) => Channel = (agent) => ({
     }),
 });
 
+/** An agent's context for a read, from its control record. */
+export const readingContext = (record: ControlRecord, run: string): AgentContext => ({
+  agent: record.agent,
+  run,
+  harness: record.harness,
+  cwd: record.cwd,
+  dir: record.dir,
+  endpoint: record.endpoint,
+  channel: sendsNothing(record.agent),
+});
+
+/**
+ * One more look at an attempt past its budget. `null` while it is still unresolved; an attempt no longer recorded, as a
+ * deleted control directory leaves it, is over.
+ */
 export const pollCompaction = Effect.fn("Compaction.pollCompaction")(function* (
   deps: CompactionDeps,
   agent: string,

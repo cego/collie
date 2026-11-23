@@ -1,4 +1,28 @@
-// WARNING: the bridge's actor is stamped here, not worked out from the process: a model in a pane inherits its terminal and would read as a human.
+// What native chat may ask Collie, and nothing else.
+//
+// These are the model's whole reach. There is no "run this command" here and no route to
+// a record: a conversation held in Claude or Pi reads the Herd through the same shared
+// operations the board draws itself from, so the two cannot tell different stories — and
+// a model that decided to be creative has nowhere to put it.
+//
+// Most of them only read. The rest write, and say so with `Tool.Readonly` rather than
+// letting a client assume. Every write here carries out what the human asked for in this
+// conversation, at once — chat may do what they could do on the board themselves, because
+// sending them to the UI for it is chat obstructing the person it serves (ADR-0011).
+// `collie_hold` holds; `collie_do` takes the board's own actions and decisions, with the
+// open card standing in for a Run nobody named; `collie_propose` takes the whole closed
+// action set — Intent amendments, forks, defaults, upgrades — with a request id that makes
+// a retry return the first receipt. The evaluator's proposals wait on the board for
+// whoever settles them, and what no tool here does, chat runs through the CLI as the
+// human would (AGENTS.md, invariant 1).
+//
+// The bridge's actor is stamped by this entrypoint rather than worked out from the process
+// — a model inside a harness's pane inherits that pane's terminal, and the CLI's "a TTY
+// means a person" shortcut would read it as human. Attribution, never a gate.
+
+import { readMetrics } from "./metrics";
+import { readUsage } from "./usage-ledger";
+import { descendantsOf, usageLines, usageOf, withChildren } from "./usage-ledger-model";
 import * as Rec from "effect/Record";
 import { withArtefacts } from "./artefact-client";
 import * as Arr from "effect/Array";
@@ -72,6 +96,8 @@ import { machineHerd } from "./steering";
 import { loadDefinitions, layers } from "./definitions";
 import { chatHarnessOf, chatPath, heardVoice, pushable, readChat, whyUnavailable } from "./chat";
 import { doctor } from "./doctor";
+import { compareRuns } from "./trial-compare";
+import { trialLines } from "./trial-model";
 import { savedReaches, standingDirectionOn } from "./config";
 import { reachOf } from "./reach";
 import type { Reach } from "./reach";
@@ -237,52 +263,65 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (
         ),
       ),
     collie_run: (input) =>
-      input.list === true
-        ? answer(runListFacts(env, input))
-        : input.ref !== undefined
-          ? input.run === undefined
-            ? Effect.succeed(
-                refused(
-                  "collie_run",
-                  "ref reads one Run's reference, so it takes run",
-                  TAKES.collie_run,
-                ),
-              )
-            : answer(refLines(env, "collie_run", input.run, input.ref, input))
-          : Arr.some(LINE_FIELDS, (key) => input[key] !== undefined)
-            ? Effect.succeed(
-                refused(
-                  "collie_run",
-                  "start, count and search read a reference, which takes ref",
-                  TAKES.collie_run,
-                ),
-              )
-            : Arr.some(LIST_FILTERS, (key) => input[key] !== undefined)
+      input.compare !== undefined || input.against !== undefined
+        ? answer(
+            compareRuns(env, {
+              compare: input.compare ?? [],
+              against: input.against ?? [],
+              audit: input.audit ?? [],
+              plant: input.plant ?? [],
+            }).pipe(
+              Effect.map((compared) =>
+                compared.ok ? Arr.join(trialLines(compared.value), "\n") : compared.error.message,
+              ),
+            ),
+          )
+        : input.list === true
+          ? answer(runListFacts(env, input))
+          : input.ref !== undefined
+            ? input.run === undefined
               ? Effect.succeed(
                   refused(
                     "collie_run",
-                    `${Arr.join(
-                      Arr.filter(LIST_FILTERS, (key) => input[key] !== undefined),
-                      ", ",
-                    )} only filter a listing, which takes "list": true`,
+                    "ref reads one Run's reference, so it takes run",
                     TAKES.collie_run,
                   ),
                 )
-              : answer(
-                  onSelectedRun(
-                    env,
-                    selected,
-                    input,
+              : answer(refLines(env, "collie_run", input.run, input.ref, input))
+            : Arr.some(LINE_FIELDS, (key) => input[key] !== undefined)
+              ? Effect.succeed(
+                  refused(
                     "collie_run",
-                    (run) =>
-                      said(
-                        runAnswer(env, run, reads).pipe(
-                          Effect.provide(recordsReadLayer(env.stateDir)),
-                        ),
-                      ),
-                    reads?.related ?? reads?.runs,
+                    "start, count and search read a reference, which takes ref",
+                    TAKES.collie_run,
                   ),
-                ),
+                )
+              : Arr.some(LIST_FILTERS, (key) => input[key] !== undefined)
+                ? Effect.succeed(
+                    refused(
+                      "collie_run",
+                      `${Arr.join(
+                        Arr.filter(LIST_FILTERS, (key) => input[key] !== undefined),
+                        ", ",
+                      )} only filter a listing, which takes "list": true`,
+                      TAKES.collie_run,
+                    ),
+                  )
+                : answer(
+                    onSelectedRun(
+                      env,
+                      selected,
+                      input,
+                      "collie_run",
+                      (run) =>
+                        said(
+                          runAnswer(env, run, reads).pipe(
+                            Effect.provide(recordsReadLayer(env.stateDir)),
+                          ),
+                        ),
+                      reads?.related ?? reads?.runs,
+                    ),
+                  ),
     collie_workspaces: () => answer(workspaceFacts(env)),
     collie_receipts: (input) =>
       answer(
@@ -640,12 +679,33 @@ const runAnswer = Effect.fn("Tools.runAnswer")(function* (
           "```",
         ];
   const movement = yield* branchMovement(run);
+  const spentIn = (evidence: string) =>
+    Effect.gen(function* () {
+      return usageOf(yield* readUsage(evidence), yield* readMetrics(evidence));
+    });
+  const children = yield* Effect.forEach(
+    descendantsOf(
+      Arr.map(runs, (one) => ({ runId: one.id, parent: one.parent })),
+      run.id,
+    ),
+    (child) =>
+      Effect.gen(function* () {
+        const found = Arr.findFirst(runs, (one) => one.id === child);
+        return {
+          runId: child,
+          usage: Option.isNone(found) ? null : yield* spentIn(found.value.evidence),
+        };
+      }),
+  );
+  const spent = withChildren(yield* spentIn(run.evidence), children);
+  const usage = ["", "### Usage", "", ...usageLines(spent)];
   return Arr.join(
     [
       ...running,
       facts,
       ...(movement === null ? [] : [movement]),
       ...done,
+      ...usage,
       ...offered,
       ...ready,
       ...flow,

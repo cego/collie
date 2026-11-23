@@ -1367,6 +1367,7 @@ const endLeftovers = Effect.fn("worktree.endLeftovers")(function* (
       "caller",
       opts.agents,
     ).pipe(Effect.orElseSucceed(() => null));
+    // Proved this Run's incarnation only: no agent takes a removed checkout's work over.
     const killed =
       ended?._tag === "Closed" &&
       (yield* herdr.terminalKill(agent.paneId).pipe(

@@ -13,7 +13,8 @@ import type { AgentHost } from "../src/agents";
 import { Children, Host } from "../src/sdk";
 import { evidenceDir, foundationLayer, loadEntry } from "../src/engine";
 import { fixtures } from "./support/host";
-import { collect } from "../src/verify";
+import { collect, readVerifications } from "../src/verify";
+import type { Verification } from "../src/verify";
 import { Store } from "../src/store";
 import { RunRecords } from "../src/run-records";
 
@@ -413,3 +414,200 @@ test("round 1 and the final review of the integrated tree read the whole change 
       }
     }),
   ));
+
+/** The shipped rally given an implement ticket's ledger, which starts empty. */
+const ledgerRally = (runId: string) =>
+  Effect.gen(function* () {
+    const base = Str.trim(
+      (yield* exec(["git", "rev-parse", "HEAD"], { cwd: rig.projectDir })).stdout,
+    );
+    const entry = yield* loadEntry(`${fixtures}/ledger-rally.workflow.ts`);
+    const made = entry.make(`ledger-rally@${runId}`);
+    // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Loaded workflows erase the author-declared error schema; this test inspects the captured result.
+    const result = yield* made.workflow
+      .execute({ runId, input: { cwd: rig.projectDir, base } })
+      .pipe(Effect.provide(made.layer), Effect.result);
+    const fs = yield* FileSystem.FileSystem;
+    return {
+      result,
+      second: yield* fs
+        .readFileString(`${dir}/agents/${runId}/review-2-1.prompt.md`)
+        .pipe(Effect.orElseSucceed(() => "")),
+    };
+  }).pipe(
+    Effect.provide(
+      agentsLayer(hostOf()).pipe(
+        Layer.provideMerge(
+          Layer.succeed(Children)(Children.of({ start: nothing, result: nothing })),
+        ),
+        Layer.provideMerge(foundationLayer({ dir, userDir: rig.userDir })),
+      ),
+    ),
+    Effect.scoped,
+    Effect.orDie,
+  );
+
+const fixedEmptyList = {
+  verdict: "clean",
+  fixed: [{ title: "empty list", file: "src/thing.ts" }],
+  checks: [],
+};
+
+test("an implement ticket's first review gives its finding the Run's first id, and the next round keeps that id with its new status", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([
+        { verdict: "findings", summary: "a blocker", findings: [blocker("empty list")] },
+        fixedEmptyList,
+        {
+          verdict: "clean",
+          summary: "fixed",
+          findings: [{ ...blocker("empty list"), status: "fixed" }],
+        },
+      ]);
+      const ran = yield* ledgerRally("r-ledger");
+      expect(ran.second).toContain('"id": "r-ledger-F1"');
+      expect(ran.second).toContain('"status": "open"');
+      expect(said(ran.result)).toBe('[{"id":"r-ledger-F1","status":"fixed","title":"empty list"}]');
+    }),
+  ));
+
+test("a later round's review that leaves out an earlier finding fails the Run, naming the finding whose status it must return", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([
+        { verdict: "findings", summary: "a blocker", findings: [blocker("empty list")] },
+        fixedEmptyList,
+        { verdict: "clean", summary: "nothing left" },
+      ]);
+      const ran = yield* ledgerRally("r-omit");
+      expect(ran.result._tag === "Failure" && String(ran.result.failure)).toContain(
+        "review omitted earlier finding r-omit-F1; return its status",
+      );
+    }),
+  ));
+
+/** The shipped rally on a Run started with `static` marked to run before review, then `after`. */
+const staticRally = <A>(
+  runId: string,
+  fixes: boolean,
+  after: (ran: {
+    readonly said: string;
+    readonly asked: (operation: string) => Effect.Effect<boolean>;
+    readonly prompt: (operation: string) => Effect.Effect<string>;
+    readonly records: () => Effect.Effect<ReadonlyArray<Verification>, never, RunRecords>;
+    readonly gate: () => Effect.Effect<Verification>;
+  }) => Effect.Effect<A, never, RunRecords>,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    yield* (yield* Store).admit({
+      request: `req-${runId}`,
+      run: runId,
+      workflow: "static-rally",
+      project: rig.projectDir,
+      input: {},
+      provenance: {},
+      options: {},
+      generation: "static-rally@1",
+      execution: `execution-${runId}`,
+      task: null,
+      parent: null,
+    });
+    yield* fs.makeDirectory(evidenceDir(dir, runId), { recursive: true });
+    yield* updateApproved(evidenceDir(dir, runId), () => [
+      {
+        name: "static",
+        executable: "test",
+        argv: ["-f", "lint-ok"],
+        cwd: ".",
+        before_review: true,
+      },
+    ]);
+    yield* RunRecords.use((records) =>
+      records.put(runId, "features.json", `{"before_review":true}`),
+    );
+    const entry = yield* loadEntry(`${fixtures}/static-rally.workflow.ts`);
+    const made = entry.make(`static-rally@${runId}`);
+    // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Loaded workflows erase the author-declared error schema; this test inspects the captured result.
+    const result = yield* made.workflow
+      .execute({ runId, input: { cwd: rig.projectDir, fixes } })
+      .pipe(Effect.provide(made.layer), Effect.result);
+    const host = yield* Host;
+    const agentFile = (operation: string) => `${dir}/agents/${runId}/${operation}.prompt.md`;
+    return yield* after({
+      said: said(result),
+      asked: (operation) => fs.exists(agentFile(operation)).pipe(Effect.orDie),
+      prompt: (operation) => fs.readFileString(agentFile(operation)).pipe(Effect.orDie),
+      records: () => readVerifications(evidenceDir(dir, runId)).pipe(Effect.orDie),
+      gate: () =>
+        host
+          .verify({ runId, name: "static", cwd: rig.projectDir, pass: "gate" })
+          .pipe(Effect.orDie),
+    });
+  }).pipe(
+    Effect.provide(
+      agentsLayer(hostOf()).pipe(
+        Layer.provideMerge(
+          Layer.succeed(Children)(Children.of({ start: nothing, result: nothing })),
+        ),
+        Layer.provideMerge(foundationLayer({ dir, userDir: rig.userDir })),
+      ),
+    ),
+    Effect.scoped,
+    Effect.orDie,
+  );
+
+/** A fix that changed nothing, which also reads as a clean review. */
+const NOT_FIXED = {
+  verdict: "clean",
+  summary: "nothing changed",
+  findings: [],
+  fixed: [],
+  checks: [],
+};
+
+test(
+  "a check marked to run before review that fails on the builder's tree goes back to the builder by name, and no reviewer starts",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([NOT_FIXED, NOT_FIXED, NOT_FIXED, NOT_FIXED]);
+        yield* staticRally("r-static-fails", false, (ran) =>
+          Effect.gen(function* () {
+            const [failed] = yield* ran.records();
+            expect(ran.said).toContain("before_review_failed");
+            expect(ran.said).toContain(`"static"`);
+            const fix = yield* ran.prompt("before-review-1-fix-1");
+            expect(fix).toContain(`check "static" failed before review`);
+            expect(fix).toContain(`verification:${failed!.id}`);
+            expect(yield* ran.asked("review-1")).toBe(false);
+          }),
+        );
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "a check marked to run before review that passes opens the round, and the gate on the unmoved tree takes its record",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(`${rig.projectDir}/lint-ok`, "already\n");
+        yield* rig.queueOutputs([NOT_FIXED]);
+        yield* staticRally("r-static-passes", false, (ran) =>
+          Effect.gen(function* () {
+            expect(ran.said).toBe("settled");
+            expect(yield* ran.asked("review-1")).toBe(true);
+            const [passed, ...others] = yield* ran.records();
+            expect([passed?.result, others]).toEqual(["pass", []]);
+            expect((yield* ran.gate()).id).toBe(passed!.id);
+            expect(yield* ran.records()).toHaveLength(1);
+          }),
+        );
+      }),
+    ),
+  60_000,
+);

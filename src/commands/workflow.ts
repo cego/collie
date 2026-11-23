@@ -11,6 +11,7 @@ import { loadEntry } from "../engine";
 import { isWorkflowId } from "../sdk";
 import { err } from "../operations";
 import { attempt, mutation } from "../envelope";
+import { tellHost } from "../tell-host";
 import {
   UnknownJson,
   context,
@@ -168,6 +169,10 @@ const workflowCheck = Command.make(
             (one) => checkModule({ layer: one.layer, path: one.path }),
             { concurrency: 4 },
           );
+          // The host keeps each layer's revision for its listings, and reads them again now.
+          yield* tellHost(resolved.env.stateDir, [
+            ...new Set(Arr.map([...saved.entries, ...saved.problems], (one) => one.path)),
+          ]);
           const bad = Arr.filter(modules, (item) => item.problems.length > 0).length;
           const report = Arr.join(
             Arr.filter(
@@ -295,7 +300,11 @@ const workflowCreate = Command.make(
         if (refused) {
           return refused;
         }
-        return asWritten(yield* createEntry({ dir: moduleDir(env, layer), id: workflow }), "Wrote");
+        const written = yield* createEntry({ dir: moduleDir(env, layer), id: workflow });
+        if (written.ok) {
+          yield* tellHost(env.stateDir, [written.path]);
+        }
+        return asWritten(written, "Wrote");
       }),
     ),
 ).pipe(
@@ -332,7 +341,9 @@ const workflowFork = Command.make(
                 ),
               );
               if (module) {
-                return yield* forkModule(base.env, { from: module, id: name, layer });
+                const forked = yield* forkModule(base.env, { from: module, id: name, layer });
+                yield* tellHost(base.env.stateDir, [moduleDir(base.env, layer)]);
+                return forked;
               }
               return err("workflow_not_found", `Workflow "${workflow}" was not found.`, {
                 workflow,

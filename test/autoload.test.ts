@@ -6,6 +6,7 @@ import type { Scope } from "effect";
 import { Config, ConfigProvider, Effect, FileSystem, Option, Schema, flow, Result } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { connect } from "../src/host";
+import { tellHost } from "../src/tell-host";
 import { runEffect } from "./support/effect";
 import { events, stopHost, until } from "./support/host";
 
@@ -237,9 +238,15 @@ test("an edited entry, helper and prompt reach the next run while the one going 
       );
       yield* write(`${world.user}/notes.md`, PROMPT);
 
-      expect(
-        (yield* client.discover({ project: project.root }).pipe(Effect.orDie)).entries[0]?.title,
-      ).toBe("Edited while a run was waiting");
+      const listed = () =>
+        Effect.map(
+          client.discover({ project: project.root }).pipe(Effect.orDie),
+          (found) => found.entries[0]?.title,
+        );
+      // WARNING: a listing reads the revision the host keeps until it is told of the edit.
+      expect(yield* listed()).toBe("A workflow that waits for a decision");
+      yield* tellHost(world.state, [`${world.user}/proof.workflow.ts`]);
+      expect(yield* listed()).toBe("Edited while a run was waiting");
 
       const after = yield* client
         .start({ project: project.root, id: "proof", request: "after", input: { note: "new" } })
@@ -306,6 +313,7 @@ test("an override that cannot be read names its own file, and the entry beside i
       ).toEqual({ status: "complete", value: "plain:fine" });
 
       yield* fs.remove(broken).pipe(Effect.orDie);
+      yield* tellHost(world.state, [broken]);
       const repaired = yield* client.discover({ project: project.root }).pipe(Effect.orDie);
       expect(repaired.problems).toEqual([]);
       expect(Arr.map(repaired.entries, (entry) => [entry.id, entry.layer])).toEqual([

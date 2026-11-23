@@ -11,6 +11,7 @@ import type { SettingValue } from "./settings";
 import { reportOf, resultText } from "./report";
 import type { Recorded } from "./report";
 import { metricsOf } from "./metrics";
+import { descendantsOf, usageOf, withChildren } from "./usage-ledger-model";
 import type { OutcomeRecords } from "./outcomes";
 import {
   Cause,
@@ -29,6 +30,7 @@ import type { Scope } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
 import type { PluginEnv } from "./env";
+import type { Prepare } from "./verify-model";
 import { savedModules } from "./discovery";
 import type { Fault, Found } from "./discovery";
 import { LAUNCH_DOORS, reachKey, reachOf } from "./reach";
@@ -2262,6 +2264,8 @@ export const verifyRun = Effect.fn("Lifecycle.verifyRun")(function* (
     cwd?: string;
     expect: "pass" | "fail";
     again?: boolean;
+    isolated?: boolean;
+    prepare?: Prepare;
   },
   door: Door,
 ) {
@@ -2302,6 +2306,50 @@ export const measureRun = Effect.fn("Lifecycle.measureRun")(function* (
   return { ok: true as const, events: client.measure(request) };
 });
 
+/**
+ * What a Run spent, with every Run started under it, each read from the host that has it.
+ * A child whose records cannot be read is listed as unreadable.
+ */
+export const usageFor = Effect.fn("Usage.for")(function* (
+  env: PluginEnv,
+  runId: string,
+  door?: Door,
+) {
+  const read = (id: string) =>
+    asksRun(
+      env,
+      id,
+      (client) =>
+        Effect.all({
+          entries: client.runUsage({ runId: id }),
+          lines: client.runMetrics({ runId: id }),
+        }),
+      door,
+    );
+  const own = yield* read(runId);
+  if (!own.ok) {
+    return own;
+  }
+  const views = (yield* runViews(env, null)).runs;
+  const children = yield* Effect.forEach(descendantsOf(views, runId), (child) =>
+    read(child).pipe(
+      Effect.map((got) => ({
+        runId: child,
+        usage: got.ok ? usageOf(got.value.entries, got.value.lines) : null,
+      })),
+    ),
+  );
+  return {
+    ok: true as const,
+    value: withChildren(usageOf(own.value.entries, own.value.lines), children),
+  };
+});
+
+/**
+ * The report over every Run this Machine's host has, for whichever door asks: a Run
+ * whose metrics cannot be read fails it, and one whose records cannot be read is
+ * measured without them.
+ */
 export const reportFor = Effect.fn("Report.for")(function* (env: PluginEnv, since: string | null) {
   const hosted = yield* runViews(env, null);
   const metrics = new Map<string, Metrics>();

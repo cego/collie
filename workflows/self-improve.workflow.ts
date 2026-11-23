@@ -1,5 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
+import * as Rec from "effect/Record";
 import { pipe as pipe_ } from "effect/Function";
 import {
   Children,
@@ -23,9 +24,12 @@ import {
   QuestionMeasures,
   Triage,
   chosen,
+  commentOf,
   goalOf,
   keysIn,
   markerOf,
+  namedIn,
+  releasedFix,
   questionLines,
   questionMeasures,
   repeatedAnswers,
@@ -34,7 +38,7 @@ import {
   summaryOf,
   targetOf,
 } from "./retrospective";
-import type { Outcome } from "./retrospective";
+import type { FixEffect, Outcome } from "./retrospective";
 
 const content = contentOf(markdown);
 const triage = content.template("triage", {
@@ -72,6 +76,7 @@ const Window = Schema.Struct({
   // WARNING: a completed window predating these measures stays frozen when its Run resumes.
   questions: Schema.optionalKey(QuestionMeasures),
   repeated: Schema.optionalKey(Schema.Array(Finding)),
+  created: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
 });
 
 const Scope = Schema.Literals(["checkout", "machine"]).annotate({
@@ -87,6 +92,29 @@ const Opened = Schema.Array(
     url: Schema.String,
     keys: Schema.Array(Schema.String),
   }),
+);
+
+const MatchingSchema = Schema.Struct({
+  closed: Schema.Array(
+    Schema.Struct({
+      number: Schema.Int,
+      title: Schema.String,
+      url: Schema.String,
+      keys: Schema.Array(Schema.String),
+      closedAt: Schema.String,
+    }),
+  ),
+  releases: Schema.Array(Schema.Struct({ tag: Schema.String, at: Schema.String })),
+  underway: Schema.Array(
+    Schema.Struct({
+      by: Schema.String,
+      keys: Schema.Array(Schema.String),
+      issues: Schema.Array(Schema.Int),
+    }),
+  ),
+});
+const IntentGoal = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ goal: Schema.optionalKey(Schema.String) })),
 );
 
 const OutcomeSchema = Schema.Union([
@@ -193,6 +221,9 @@ export default defineWorkflow({
               since,
               machine: hostname(),
               runs: [...ids],
+              created: Rec.fromEntries(
+                Arr.map(kept, ({ runId, created }) => [runId, created] as const),
+              ),
               questions: questionMeasures(kept),
               repeated: repeatedAnswers(kept),
               report:
@@ -349,17 +380,104 @@ export default defineWorkflow({
         return `Retrospective kept in ${file}; no issues filed: ${issues.refused}`;
       }
 
+      const findings = [...(window.repeated ?? []), ...triaged.findings];
+      const matching =
+        findings.length === 0
+          ? { closed: [], releases: [], underway: [] }
+          : yield* Activity.make({
+              name: "matching",
+              success: MatchingSchema,
+              error: WorkflowError,
+              execute: Effect.gen(function* () {
+                const fs = yield* FileSystem.FileSystem;
+                const releases = yield* host.releases(run.id).pipe(Effect.orElseSucceed(() => []));
+                const base = Arr.findFirst(releases, ({ at }) => at < window.since).pipe(
+                  Option.orElse(() => Arr.last(releases)),
+                  Option.getOrUndefined,
+                );
+                const closed =
+                  base === undefined
+                    ? []
+                    : yield* host.issues(run.id, { closedSince: base.at }).pipe(
+                        Effect.map(
+                          Arr.flatMap(({ number, title, url, body, closedAt }) =>
+                            closedAt === undefined
+                              ? []
+                              : [{ number, title, url, keys: keysIn(body), closedAt }],
+                          ),
+                        ),
+                        Effect.orElseSucceed(() => []),
+                      );
+                const keys = Arr.map(findings, ({ key }) => key);
+                const numbers = Arr.flatMap(findings, (finding) =>
+                  Arr.filter(
+                    [finding.issue, targetOf(finding, open)?.number ?? null],
+                    (one): one is number => one !== null,
+                  ),
+                );
+                const since = DateTime.formatIso(
+                  DateTime.subtractDuration(yield* DateTime.now, LOOKBACK),
+                );
+                const active = Arr.filter(
+                  (yield* host.report(since).pipe(Effect.orElseSucceed(() => ({ runs: [] })))).runs,
+                  ({ runId, parent, status }) =>
+                    runId !== run.id &&
+                    parent !== run.id &&
+                    (status === "pending" || status === "suspended"),
+                );
+                const runs = yield* Effect.forEach(active, ({ runId }) =>
+                  Effect.gen(function* () {
+                    const { dir } = yield* host.place(runId);
+                    const goal = yield* fs.readFileString(`${dir}/intent.json`).pipe(
+                      Effect.map((text) => Option.getOrUndefined(IntentGoal(text))?.goal ?? ""),
+                      Effect.orElseSucceed(() => ""),
+                    );
+                    const plan = yield* fs.readDirectory(`${dir}/plan`, { recursive: true }).pipe(
+                      Effect.flatMap((names) =>
+                        Effect.forEach(Arr.filter(names, Str.endsWith(".md")), (name) =>
+                          fs.readFileString(`${dir}/plan/${name}`),
+                        ),
+                      ),
+                      Effect.orElseSucceed(() => []),
+                    );
+                    return {
+                      by: runId,
+                      ...namedIn(Arr.join([goal, ...plan], "\n"), keys, numbers),
+                    };
+                  }),
+                );
+                const requests = yield* host.requests(run.id).pipe(Effect.orElseSucceed(() => []));
+                return {
+                  closed,
+                  releases,
+                  underway: Arr.filter(
+                    [
+                      ...runs,
+                      ...Arr.map(requests, ({ url, body }) => ({
+                        by: url,
+                        keys: keysIn(body),
+                        issues: [],
+                      })),
+                    ],
+                    (one) => one.keys.length > 0 || one.issues.length > 0,
+                  ),
+                };
+              }),
+            });
       const sorted = sortOut(
-        [...(window.repeated ?? []), ...triaged.findings],
+        findings,
         new Set(window.runs),
         open,
         input.runs === "machine",
+        matching,
       );
       const acted: Array<{ finding: Finding; outcome: Outcome }> = [];
+      const effects: Array<FixEffect> = [];
       yield* filing(
         Effect.gen(function* () {
           for (const finding of sorted.kept.slice(0, MAX_FINDINGS)) {
-            const target = targetOf(finding, open);
+            const fix = releasedFix(finding, matching, window.created ?? {});
+            const target = targetOf(finding, open) ?? fix?.issue ?? null;
             const outcome = yield* Activity.make({
               name: `finding.${finding.key}`,
               success: OutcomeSchema,
@@ -387,7 +505,12 @@ export default defineWorkflow({
                     .commentIssue({
                       runId: run.id,
                       number: target.number,
-                      body: `Seen again in ${Arr.join(finding.runs, ", ")} on ${window.machine}, by self-improve Run ${run.id}.\n\n${markerOf(finding.key)}`,
+                      body: commentOf({
+                        finding,
+                        runId: run.id,
+                        machine: window.machine,
+                        effect: fix?.effect ?? null,
+                      }),
                     })
                     .pipe(
                       Effect.as<Outcome>({
@@ -403,6 +526,9 @@ export default defineWorkflow({
               ),
             });
             acted.push({ finding, outcome });
+            if (fix !== null) {
+              effects.push(fix.effect);
+            }
           }
         }),
       );
@@ -514,6 +640,7 @@ export default defineWorkflow({
                   acted,
                   improvements,
                   leftOut: [...triaged.left_out, ...sorted.leftOut],
+                  effects,
                 }),
               ),
             ),

@@ -991,7 +991,14 @@ test.each(["major", "minor"] as const)(
               () => host.watchOf(parent.runId, TARGET),
               (row) => row?.name === "follow-1" || row?.name === "approve-1",
             );
-            const offered = yield* registry.offers(parent.runId);
+            // WARNING: A listing offers Improve only once the forge syncer has read the merge request.
+            yield* host.mergeWatched;
+            const offered = yield* until(
+              () => registry.offers(parent.runId),
+              (offers) =>
+                Option.getOrUndefined(Arr.findFirst(offers, (one) => one.id === "improve"))
+                  ?.unavailable === null,
+            );
             expect(
               Option.getOrUndefined(Arr.findFirst(offered, (one) => one.id === "improve"))
                 ?.unavailable,
@@ -1041,6 +1048,80 @@ test.each(["major", "minor"] as const)(
       }),
     ),
 );
+
+test("a listing never asks the forge about a review's merge request, and taking Improve reads it afresh", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      yield* repository;
+      yield* git(["checkout", "-q", "-b", "feature"]);
+      const head = yield* pushed("Task work");
+      const forge = yield* host.gitlab(model(head));
+      yield* rig.queueOutputs([review([F1])]);
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          yield* writeTask({
+            id: "task-human",
+            workspace: null,
+            label: "The human's work",
+            cwd: rig.projectDir,
+            created_at: "2026-11-12T09:00:00Z",
+          });
+          const registry = yield* Registry;
+          yield* registry.start({
+            generation: yield* registry.load(`${fixtures}/placed.workflow.ts`),
+            request: "building",
+            project: rig.projectDir,
+            input: { work: "keep feature", ending: "succeed" },
+            task: "task-human",
+            options: { branch: "feature" },
+          });
+          yield* configured(false);
+          yield* registry.load(`${ROOT}workflows/review-improve.workflow.ts`);
+          const parent = yield* registry.start({
+            generation: yield* registry.load(yield* entryOf("review")),
+            request: "review-task",
+            project: rig.projectDir,
+            input: { target: TARGET },
+            task: "task-human",
+          });
+          yield* until(
+            () => asked(parent.runId),
+            (rows) => rows.length > 0,
+          );
+          const reads = () =>
+            Arr.filter(forge.requests(), (one) =>
+              Str.includes("/merge_requests/7/approvals")(one.url),
+            ).length;
+          const improve = (offered: ReadonlyArray<{ id: string; unavailable: string | null }>) =>
+            Option.getOrUndefined(Arr.findFirst(offered, (one) => one.id === "improve"));
+          // WARNING: Before the syncer has read it, the card is drawn and its offers wait.
+          const before = reads();
+          expect(improve(yield* registry.offers(parent.runId))?.unavailable).toContain(
+            "still being read from its forge",
+          );
+          expect(reads()).toBe(before);
+          yield* host.mergeWatched;
+          yield* until(
+            () => Effect.map(registry.offers(parent.runId), improve),
+            (offer) => offer?.unavailable === null,
+          );
+          const synced = reads();
+          for (const _ of Arr.range(1, 3)) {
+            yield* registry.offers(parent.runId);
+          }
+          expect(reads()).toBe(synced);
+          yield* registry.invoke({
+            runId: parent.runId,
+            offer: "improve",
+            input: {},
+            request: "improve-fresh",
+          });
+          expect(reads()).toBeGreaterThan(synced);
+        }),
+      );
+    }),
+  ));
 
 test("Improve's second hand-off to a live implementer waits for its own push", () =>
   host.runEffect(

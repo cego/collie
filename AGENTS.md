@@ -72,6 +72,10 @@ here are in [`src/README.md`](src/README.md).
   [`docs/using.md`](docs/using.md#usage), `src/usage-model.ts`, `src/usage.ts`, `src/commands/usage.ts`,
   `resolveWithRoom` in `src/harness.ts`, `choose` in `src/agents.ts`, `test/usage-model.test.ts`,
   `test/usage.test.ts`, `test/fallback.test.ts`.
+- **A Run's token ledger, trials** → [`docs/cli.md`](docs/cli.md#metrics),
+  `src/usage-ledger-model.ts`, `src/usage-ledger.ts`, `usageFor` in `src/lifecycle.ts`,
+  `src/trial-model.ts`, `src/trial.ts`, `src/trial-compare.ts`, `test/usage-ledger.test.ts`,
+  `test/metrics.test.ts`.
 - **Harness catalogue**, `collie models` →
   [ADR-draft-settings-read-what-harnesses-report](docs/adr/draft-settings-read-what-harnesses-report.md),
   [`docs/cli.md`](docs/cli.md#models), `src/catalogue-model.ts`, `src/catalogue.ts`,

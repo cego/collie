@@ -2,11 +2,13 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
-import { Effect, Schema, flow, Result } from "effect";
-import type { Thread } from "forges";
+import { DateTime, Effect, Schema, flow, Result } from "effect";
+import { epochMs } from "../time";
+import type { RepoRef, Thread, ThreadRef } from "forges";
 import { ForgeHttp, pagesAs, request, requestAs } from "./http";
 import type { ForgeLogin } from "./http";
 import { Issue } from "./issues";
+import type { IssueQuery } from "./issues";
 import { mrWords } from "../board-model";
 import type { MrRef } from "../board-model";
 
@@ -21,16 +23,18 @@ const threadRepo = (login: ForgeLogin, project: string) => {
   };
 };
 
-const issueOf = (thread: Thread) =>
-  flow(
-    Schema.decodeUnknownResult(Issue),
-    Result.getOrThrow,
-  )({
+const issueOf = (thread: Thread) => {
+  const issue = {
     number: Number(thread.ref.number),
     title: thread.title,
     body: thread.body ?? "",
     url: thread.url,
-  });
+  };
+  return flow(
+    Schema.decodeUnknownResult(Issue),
+    Result.getOrThrow,
+  )(thread.closedAt === undefined ? issue : { ...issue, closedAt: thread.closedAt.toISOString() });
+};
 
 export const viewerLogin = (login: ForgeLogin, cwd: string) =>
   Effect.gen(function* () {
@@ -43,29 +47,56 @@ export const viewerLogin = (login: ForgeLogin, cwd: string) =>
     return me.ok && Str.trim(me.value) !== "" ? me.value : null;
   });
 
-export const listIssues = (
-  login: ForgeLogin,
-  project: string,
-  cwd: string,
-  numbers?: ReadonlyArray<number>,
-) =>
+export const listIssues = (login: ForgeLogin, project: string, cwd: string, which?: IssueQuery) =>
   Effect.gen(function* () {
     const http = yield* ForgeHttp;
     const listed = yield* http.ask(login, cwd, (provider, signal) =>
-      (numbers === undefined
-        ? Array.fromAsync(
-            provider.threads.list(threadRepo(login, project), {
-              kind: "issue",
-              state: "open",
-              perPage: 100,
-              signal,
-            }),
-          )
-        : Promise.all(
-            Arr.map(numbers, (number) =>
+      (which !== undefined && !("closedSince" in which)
+        ? Promise.all(
+            Arr.map(which, (number) =>
               provider.threads.get(threadRef(login, project, String(number), "issue"), { signal }),
             ),
           )
+        : Array.fromAsync(
+            provider.threads.list(threadRepo(login, project), {
+              kind: "issue",
+              ...(which === undefined
+                ? { state: "open" }
+                : {
+                    state: "closed",
+                    since: DateTime.toDateUtc(DateTime.makeUnsafe(which.closedSince)),
+                  }),
+              perPage: 100,
+              signal,
+            }),
+          ).then((threads) =>
+            // `since` is when an issue was last updated, which is at or after it closed.
+            which === undefined
+              ? threads
+              : Arr.filter(
+                  threads,
+                  (one) =>
+                    one.closedAt !== undefined &&
+                    one.closedAt.getTime() >= epochMs(which.closedSince),
+                ),
+          )
+      ).then((threads) => Arr.map(threads, issueOf)),
+    );
+    return listed.ok ? { ok: true as const, issues: listed.value } : listed;
+  });
+
+/** The open merge requests, as issues: their number, title, description and url. */
+export const listRequests = (login: ForgeLogin, project: string, cwd: string) =>
+  Effect.gen(function* () {
+    const http = yield* ForgeHttp;
+    const listed = yield* http.ask(login, cwd, (provider, signal) =>
+      Array.fromAsync(
+        provider.threads.list(threadRepo(login, project), {
+          kind: "pull_request",
+          state: "open",
+          perPage: 100,
+          signal,
+        }),
       ).then((threads) => Arr.map(threads, issueOf)),
     );
     return listed.ok ? { ok: true as const, issues: listed.value } : listed;

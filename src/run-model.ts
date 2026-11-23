@@ -14,10 +14,7 @@ import {
 } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as PlatformError from "effect/PlatformError";
-import type { ChildProcessSpawner } from "effect/process";
 import type { TaskView } from "./board-model";
-import { readBranchHead } from "./board";
-import { shell } from "./mr";
 import type { RunFacts } from "./runs";
 import { StoreWrites, TaskWrites } from "./store-writes";
 import { workSourceOf } from "./strategies";
@@ -107,8 +104,6 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   link?: ModelLink,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const scope = yield* Effect.scope;
-  const spawning = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>();
   const epoch =
     link?.epoch ?? `${installation}.${yield* (yield* SecureRandom.SecureRandom).uuidV4()}`;
   let seq = 0;
@@ -140,10 +135,14 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     return at;
   };
   const touchFacts = (run: string) => touch(run, true);
+  /** Each write through the host, to a file or a row, and each read it was told to make again. */
+  const changes = yield* PubSub.sliding<void>(1);
+  /** The Runs whose rows were written. */
   const wrote = (runs: ReadonlyArray<string>) => {
     for (const run of runs) {
       touchFacts(run);
     }
+    PubSub.publishUnsafe(changes, undefined);
   };
   // WARNING: a Task's records are its Runs' as much as its own rows, so both are invalidated.
   const wroteTasks = (tasks: ReadonlyArray<string>) => {
@@ -152,6 +151,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
         touchFacts(run);
       }
     }
+    PubSub.publishUnsafe(changes, undefined);
   };
   const heard = (run: string, at: number, facts: boolean) => {
     if (at > (revisions.get(run) ?? 0)) {
@@ -226,6 +226,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     Effect.sync(() => {
       link?.invalidated(path);
       drop(path, touchFacts);
+      PubSub.publishUnsafe(changes, undefined);
     });
   const forget = (path: string) => Effect.sync(() => drop(path, () => {}));
   const disable = Effect.sync(() => {
@@ -379,6 +380,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
       for (const run of facts.keys()) {
         if (!present.has(run)) {
           facts.delete(run);
+          hashes.delete(run);
           last.delete(run);
           revisions.delete(run);
           factual.delete(run);
@@ -408,6 +410,26 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
           ...Arr.map(runs, (run) => Math.max(factual.get(run) ?? 0, facts.get(run)?.revision ?? 0)),
         )
       : next();
+
+  const hashes = new Map<string, { readonly text: string; readonly hash: string }>();
+  /** The Runs' facts by content, not by revision: what a later host can compare. */
+  const content = (runs: ReadonlyArray<string>) =>
+    Arr.join(
+      Arr.map(runs, (run) => {
+        const text = facts.get(run)?.text;
+        if (text === undefined) {
+          return "";
+        }
+        const known = hashes.get(run);
+        if (known?.text === text) {
+          return known.hash;
+        }
+        const hash = Bun.hash(text).toString(36);
+        hashes.set(run, { text, hash });
+        return hash;
+      }),
+      ",",
+    );
 
   const records = new Map<string, { readonly text: string; readonly seq: number }>();
   // WARNING: a record that moved while none of its Runs did moves its own Run, as an agent's or merge request's does.
@@ -450,95 +472,6 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   };
   const unfinished = (run: string, step: string) => finishes.delete(`${run}\0${step}`);
 
-  const heads = new Map<string, string | null>();
-  const readers = new Map<string, Set<string>>();
-  // WARNING: a head read in a checkout stands until it moves only once every watch there is in place.
-  const watching = new Set<string>();
-  // WARNING: replay 1: the first build may read a head before the board subscribes to its changes.
-  const moves = yield* PubSub.unbounded<void>({ replay: 1 });
-  const checkouts = new Map<string, number>();
-  const moved = (cwd: string) => {
-    checkouts.set(cwd, (checkouts.get(cwd) ?? 0) + 1);
-    for (const key of heads.keys()) {
-      if (Str.startsWith(`${cwd}\0`)(key)) {
-        heads.delete(key);
-      }
-    }
-    for (const run of readers.get(cwd) ?? []) {
-      const revision = touch(run);
-      const observed = facts.get(run);
-      if (observed !== undefined) {
-        facts.set(run, { ...observed, revision });
-      }
-    }
-    PubSub.publishUnsafe(moves, undefined);
-  };
-  const watchCheckout = (cwd: string) =>
-    Effect.gen(function* () {
-      const said = yield* shell(
-        "git",
-        ["rev-parse", "--absolute-git-dir", "--git-common-dir"],
-        cwd,
-      );
-      const [own, common] = Str.split(Str.trim(said.stdout), "\n");
-      if (said.code !== 0 || own === undefined || common === undefined) {
-        return;
-      }
-      const shared = Str.startsWith("/")(common) ? common : `${cwd}/${common}`;
-      let ready = 0;
-      const onReady = () => {
-        if (++ready === 3) {
-          watching.add(cwd);
-          // WARNING: a commit between the first head read and watch registration produced no event.
-          moved(cwd);
-        }
-      };
-      yield* Stream.mergeAll(
-        [
-          fs.watch(own, { onReady }),
-          fs.watch(shared, { onReady }),
-          fs.watch(`${shared}/refs`, { recursive: true, onReady }),
-        ],
-        { concurrency: "unbounded" },
-      ).pipe(Stream.runForEach(() => Effect.sync(() => moved(cwd))));
-    }).pipe(
-      Effect.ignore,
-      Effect.ensuring(
-        Effect.sync(() => {
-          readers.delete(cwd);
-          watching.delete(cwd);
-        }),
-      ),
-      Effect.provideContext(spawning),
-    );
-  const watch = (run: RunFacts) =>
-    Effect.gen(function* () {
-      const watched = readers.get(run.cwd);
-      if (watched === undefined) {
-        readers.set(run.cwd, new Set([run.id]));
-        yield* Effect.forkIn(watchCheckout(run.cwd), scope);
-      } else {
-        watched.add(run.id);
-      }
-    });
-  const checkout = (run: RunFacts) => Effect.map(watch(run), () => checkouts.get(run.cwd) ?? 0);
-  const head = (run: RunFacts) =>
-    Effect.gen(function* () {
-      const key = `${run.cwd}\0${run.branch}`;
-      yield* watch(run);
-      if (heads.has(key)) {
-        return heads.get(key) ?? null;
-      }
-      const watched = watching.has(run.cwd);
-      const at = checkouts.get(run.cwd) ?? 0;
-      const read = yield* readBranchHead(run).pipe(Effect.orElseSucceed(() => null));
-      // WARNING: a checkout that moved during its head read keeps no head, or the board never shows the move.
-      if (watched && (checkouts.get(run.cwd) ?? 0) === at) {
-        heads.set(key, read);
-      }
-      return read;
-    }).pipe(Effect.provideContext(spawning));
-
   return {
     epoch,
     reading,
@@ -557,16 +490,16 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     revision,
     factsAt,
     inputsAt,
+    content,
     highest,
     stamp,
     stampRecord,
     finishedAt,
     unfinished,
     planned,
-    head,
-    checkout,
-    moved: Stream.fromPubSub(moves),
     indexes: () => indexes,
+    /** Each time a write through the host, or a read it was told to make again, moved a Run. */
+    changed: Stream.fromPubSub(changes),
   };
 });
 

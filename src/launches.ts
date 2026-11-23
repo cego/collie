@@ -56,6 +56,8 @@ export const Launched = Schema.Struct({
   // WARNING: Core's id for the process: the name alone is reused by the next one.
   terminalId: Schema.optionalKey(Schema.String),
   agentSession: Schema.optionalKey(AgentSession),
+  /** The process at its pane's root when it started, whose session is the pane's processes. */
+  root: Schema.optionalKey(Schema.Struct({ pid: Schema.Finite, started: Schema.String })),
   step: Schema.optionalKey(LaunchedIn),
   // WARNING: Fixed at launch: its tool server cannot change afterwards.
   outputSubmit: Schema.optionalKey(Schema.Literals(["file", "tool"])),

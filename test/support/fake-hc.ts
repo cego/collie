@@ -16,6 +16,12 @@ const Request = Schema.Struct({
   method: Schema.String,
   params: Schema.optionalKey(Schema.JsonObject),
 });
+const hangUp = (pid: number) => {
+  try {
+    process.kill(pid, "SIGHUP");
+  } catch {}
+};
+
 const decodeRequest = Schema.decodeUnknownOption(Schema.fromJsonString(Request));
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Json));
 
@@ -32,6 +38,9 @@ export interface FakeHc {
   readonly stallNextSend: () => void;
   readonly reportedOnly: (names: ReadonlyArray<string>) => void;
   readonly startBlocked: () => void;
+  /** The next terminal's program is the process `pid`, hung up when the terminal is killed. */
+  readonly runsAs: (pid: number) => void;
+  /** The terminal named `name` prints `text` to each viewer attached to it. */
   readonly print: (name: string, text: string) => Effect.Effect<void>;
   readonly exit: (name: string, code: number) => Effect.Effect<void>;
   readonly lose: Effect.Effect<void>;
@@ -92,7 +101,8 @@ interface Terminal {
   readonly argv: Schema.Json;
   readonly cwd: string;
   foregroundCwd: string;
-  readonly pid: number;
+  /** None unless a test names a real process: a made-up pid may be another's. */
+  readonly pid: number | null;
   state: "live" | "finished";
   status: string | null;
   turn: number;
@@ -114,7 +124,7 @@ const view: (terminal: Terminal) => Schema.JsonObject = (terminal) => ({
   pid: terminal.state === "live" ? terminal.pid : null,
   foreground:
     terminal.state === "live"
-      ? { pid: terminal.pid, name: "sh", argv: [], cwd: terminal.foregroundCwd }
+      ? { pid: terminal.pid ?? 0, name: "sh", argv: [], cwd: terminal.foregroundCwd }
       : null,
   status: terminal.status === null ? null : { state: terminal.status },
   turn: terminal.turn,
@@ -151,6 +161,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
   let stall = false;
   const onlyReported = new Set<string>();
   let blocked = false;
+  let runsAs: number | null = null;
   const unstartable = new Set<string>();
   let bare = false;
   const typed = new Map<string, string>();
@@ -405,7 +416,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
             argv: params.argv ?? [],
             cwd: text(params.cwd) ?? "/",
             foregroundCwd: text(params.cwd) ?? "/",
-            pid: 1000 + made,
+            pid: runsAs,
             state: "live",
             status: null,
             turn: 0,
@@ -441,6 +452,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
             yield* setStatus(terminal, blocked ? "blocked" : "idle");
           }
           blocked = false;
+          runsAs = null;
           return { result: view(terminal) };
         }
         case "terminal.list":
@@ -496,6 +508,9 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
             return notFound(params);
           }
           found.state = "finished";
+          if (found.pid !== null) {
+            hangUp(found.pid);
+          }
           yield* emit(found.address, "finished", { reason: "killed" });
           return { result: view(found) };
         }
@@ -775,6 +790,9 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
     },
     startBlocked: () => {
       blocked = true;
+    },
+    runsAs: (pid) => {
+      runsAs = pid;
     },
     print: (name, text) =>
       Effect.suspend(() => {

@@ -13,6 +13,9 @@ import { parkText } from "./park-cause";
 import type { ParkCause } from "./park-cause";
 import { readStepLines } from "./steps";
 import { isSettledDelivery, newestById, readLedger } from "./steering";
+import { keptFor, readControl } from "./compaction";
+import { stillRunning } from "./processes";
+import { planRevision } from "./hand-over";
 
 const CiTarget = Schema.fromJsonString(
   Schema.Struct({
@@ -47,6 +50,34 @@ export const rememberFailedCi = (dir: string, target: typeof FailedCi.Type) =>
     }
     yield* appendRunJournal(failedCiJournal(dir), FailedCi, target);
   });
+
+const NotQuiet = Schema.fromJsonString(
+  Schema.Struct({
+    agent: Schema.String,
+    left: Schema.Array(Schema.Struct({ pid: Schema.Finite, started: Schema.String })),
+  }),
+);
+
+const notQuietJournal = (dir: string) => runJournal(dir, "not-quiet.jsonl");
+
+/** The predecessor a `predecessor-not-quiet` park waits on, and what of its pane was left. */
+export const rememberNotQuiet = (dir: string, predecessor: typeof NotQuiet.Type) =>
+  appendRunJournal(notQuietJournal(dir), NotQuiet, predecessor);
+
+const StaleHandOver = Schema.fromJsonString(
+  Schema.Struct({
+    cwd: Schema.String,
+    head: Schema.String,
+    dir: Schema.NullOr(Schema.String),
+    plan: Schema.NullOr(Schema.String),
+  }),
+);
+
+const staleHandOverJournal = (dir: string) => runJournal(dir, "hand-over-stale.jsonl");
+
+/** The checkout a `hand-over-stale` park last saw, which its recheck waits to see hold still. */
+export const rememberStaleHandOver = (dir: string, seen: typeof StaleHandOver.Type) =>
+  appendRunJournal(staleHandOverJournal(dir), StaleHandOver, seen);
 
 const UnsettledDelivery = Schema.fromJsonString(
   Schema.Struct({ terminal: Schema.String, delivery: Schema.String }),
@@ -246,6 +277,52 @@ export const recheckPark = (
           shell,
         );
         return read.ok ? reply(true, "forge answered") : reply(false, read.reason, true);
+      }
+      case "predecessor-not-quiet": {
+        const last = (yield* readRunJournal(
+          notQuietJournal(`${stateDir}/runs/${view.runId}`),
+          NotQuiet,
+        ).pipe(Effect.orElseSucceed(() => []))).at(-1);
+        if (last === undefined) {
+          return reply(false, "no predecessor recorded");
+        }
+        for (const one of last.left) {
+          if (yield* stillRunning(one))
+            return reply(false, `${last.agent}'s pid ${one.pid} is still running`);
+        }
+        const kept = yield* readControl(stateDir, last.agent).pipe(
+          Effect.flatMap((record) => (record === null ? Effect.succeed(null) : keptFor(record))),
+          Effect.result,
+        );
+        if (kept._tag === "Failure") {
+          return reply(false, String(kept.failure), true);
+        }
+        return kept.success === null
+          ? reply(true, `${last.agent} is Quiet`)
+          : reply(false, `${last.agent}: ${kept.success}`);
+      }
+      case "hand-over-stale": {
+        const dir = `${stateDir}/runs/${view.runId}`;
+        const last = (yield* readRunJournal(staleHandOverJournal(dir), StaleHandOver).pipe(
+          Effect.orElseSucceed(() => []),
+        )).at(-1);
+        if (last === undefined) {
+          return reply(false, "no checkout recorded");
+        }
+        const head = yield* shell("git", ["rev-parse", "HEAD"], last.cwd);
+        const now = {
+          ...last,
+          head: head.code === 0 ? Str.trim(head.stdout) : "",
+          plan:
+            last.dir === null
+              ? null
+              : yield* planRevision(last.dir).pipe(Effect.orElseSucceed(() => null)),
+        };
+        if (now.head === last.head && now.plan === last.plan) {
+          return reply(true, `the checkout held still at ${now.head}`);
+        }
+        yield* rememberStaleHandOver(dir, now);
+        return reply(false, `the checkout moved to ${now.head} since it was last read`);
       }
       case "delivery-unsettled": {
         const held = yield* lastUnsettled(`${stateDir}/runs/${view.runId}`);

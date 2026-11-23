@@ -1013,7 +1013,9 @@ for Output. An unresolved delivery stays uncertain.
 
 A park whose cause rechecks can resume automatically. The host checks for the named CI job
 at the parked head, an answering forge, core listing its agents as a launch asks it to, a
-clean Collie checkout, or a delivery that has settled. `delivery-unsettled` is set when an
+clean Collie checkout, a delivery that has settled, or, for `predecessor-not-quiet`, that
+nothing the agent a Fallback replaces left is still running, or, for `hand-over-stale`, that
+the checkout's head and plan revision held still since they were last read. `delivery-unsettled` is set when an
 Output reminder is held behind an earlier copy of itself whose fate nobody knows: the host
 first settles that copy as sent where the agent's own submit record shows it landed, and
 checks once more after a poll, and only then parks. It never gets a Heal. Rechecks start
@@ -1698,15 +1700,96 @@ collie --json run metrics <run-id>
 
 What a Run actually did, from its own journal: time to the first collected verification,
 how many passed, failed or were unstable and how many Collie ran itself, how many slices
-landed, how much rework (fix rounds and halts), and the largest context sample any of its
-agents reported. Plus the outcome it is being held to, what the evidence gate found
-missing, and the obstacle where there is one.
+landed (each ticket once, by its name), how much rework (review rounds past the first, and
+halts), and the largest context sample any of its agents reported. Plus the outcome it is
+being held to, what the evidence gate found missing, and the obstacle where there is one.
+
+`usage` is the Run's token ledger, read from each agent's own harness records — Claude's
+transcript and its sub-agents' beside it, Codex's thread events, Pi's session, and what
+Collie's plugin writes for OpenCode. It is read whenever the host reads a context sample,
+again when an agent is ended, and once more as the Run settles; a request read twice is
+counted once, at its largest figures.
+
+| Field          | What it says                                                                                                                                                                                                                                                                 |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `totals`       | `requests`, and the tokens in each category: `input` (uncached), `cacheRead`, `cacheCreation`, `output`, and `reasoning`, which is part of `output`, not added to it.                                                                                                        |
+| `recovery`     | The same, for recovery: a Heal's sessions, one whose first prompt was an Output repair, and each request an agent made in a step after Collie sent it an Output repair or reminder.                                                                                          |
+| `steps[]`      | The same per `step`: the work the agent was given last before each request.                                                                                                                                                                                                  |
+| `heads[]`      | The same per `head`: the newest commit of the agent's checkout made by the time of the request.                                                                                                                                                                              |
+| `sessions[]`   | Per `agent` and harness `session`, with its `harness`, `model`, `effort` and `recovery`: the same categories, `initialContext` and `peakContext` (all a request was sent), `compactions`, `toolResultChars`, `reminders` and `repairs`, its `startup` and its `subagents[]`. |
+| `rounds[]`     | Each review `round`, when it started (`at`), and the `context` of the Run's last request before it, whichever of its agents made it.                                                                                                                                         |
+| `children[]`   | Each Run this one started, and those started under them, by `runId`: the same categories, from its own ledger. One whose records could not be read is `unreadable`.                                                                                                          |
+| `withChildren` | `totals` with every child Run's added: what the Run cost, its child Runs included, as a `self-improve` Run's Improvements are; unavailable where a child Run is unreadable.                                                                                                  |
+
+A category a harness does not report is `null`, never `0`: Codex may report no cache
+creation, and a Claude transcript may name no reasoning. A total is `null` where any
+request it adds up did not report that category, so a Run whose agents ran on different
+harnesses shows `null` rather than one harness's part. Only a Run with no requests at all
+has every total `null`; one that spent nothing on recovery shows `0` in `recovery` for each category its `totals` knows. `startup` is a session's start-up
+context in characters, by part: `system`, `persona`, `project`, `tools` and `skills`. Each
+is `null` where the harness's records do not show it; today Codex shows its system prompt,
+its tool list and its project instructions, every harness has the persona Collie gave it,
+and none shows its skills. An agent with no controls — `compact_at_tokens` 0 and nothing to
+ask — has no records to read and no ledger.
 
 Terminal activity is not on this list, on purpose. A changing pane says an agent is alive;
 it does not say anything was produced. The pane clock is liveness; this is progress.
 
 Nothing here is a limit. Counts, tokens, costs and timings are recorded and shown; none of
 them refuses anything, and there is no quota to exceed.
+
+### Comparing two sets of Runs
+
+```sh
+collie --json run metrics --compare <run>=<case> … --against <run>=<case> … \
+  [--audit <run>=<review-run> …] [--plant <case>=<file>:<line> …]
+```
+
+Two sets of Runs side by side, matched by case, so a change is judged on what it cost and
+how good its work was together. `collie_run` takes the same as `compare`, `against`,
+`audit` and `plant` lists. It reads only what the Runs' hosts recorded, so it works on
+finished Runs and after a host restart.
+
+- **Cases and repeats.** Each `--compare` and `--against` names one Run, with its case
+  after `=`. Runs of one set sharing a case are its repeats: each figure is given per Run,
+  and as the case's `median` and `range` (`min` and `max`). Runs with no case are matched
+  in the order given, as cases `#1`, `#2`, ….
+- **Audits.** `--audit <run>=<review-run>` names the independent review of that Run's
+  final tree, started after it ended: the shipped `review` workflow, with the same
+  reviewer, model and effort for every Run. Its final review's blocking findings are the
+  Run's escaped defects.
+- **Planted regressions.** `--plant <case>=<file>:<line>` names a regression planted in
+  that case. A Run caught it where one of its own reviewers raised a finding at that file
+  and line.
+
+Each Run's `figures`:
+
+| Figure                    | What it is                                                                                                                                                                                                                                                                           |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `<phase>.<category>`      | Tokens per category (`output`, `cacheRead`, `cacheCreation`, `input`, `reasoning`) for each phase: `startup` (each session's first request), `work` (the rest), `recovery` (as `recovery` above) and their `total`; a phase with no requests is `0`, or `null` where the `total` is. |
+| `sessions`, `compactions` | Agent sessions, and the compactions in them.                                                                                                                                                                                                                                         |
+| `peakContext`             | The most any one request was sent.                                                                                                                                                                                                                                                   |
+| `accepted`                | 1 where the Run's final review by its own reviewers carried nothing blocking and every required Check passed on its final tree; else 0. No merge request is needed, so a trial in a checkout with no forge is judged the same.                                                       |
+| `checksPassed`            | 1 where every required Check passed on the Run's final tree, 0 where one did not, `null` where the Run never finished.                                                                                                                                                               |
+| `defectsFound`            | Blocking findings the Run's own reviewers raised, each counted once however many rounds it stood. Findings the builder reported are not counted.                                                                                                                                     |
+| `escapedDefects`          | Blocking findings of the final review of the Run's audit; `null` with no audit.                                                                                                                                                                                                      |
+| `reopenedFindings`        | Findings a review marked fixed and a later one marked open again.                                                                                                                                                                                                                    |
+| `plantedCaught`           | 1 or 0 where the case names a planted regression; `null` where it names none.                                                                                                                                                                                                        |
+| `interventions`           | Answers, steers, follow-ups, deliveries, resumes and holds on the Run, from its audit trail, by anyone outside it: a human, chat, or another Run's agent such as a trial's operator. The Run's own agents and Collie's hosts are not.                                                |
+| `wallMs`                  | From the Run's start to its finish; `null` where it has not finished.                                                                                                                                                                                                                |
+
+Each set adds its Runs' figures up (`peakContext` is the largest), and gives each token
+figure per accepted change: the figure divided by the set's accepted Runs. A set with none
+says `"no accepted change"` and gives no per-change figure. A figure unavailable for any
+Run is unavailable for its case and its set, never counted as `0`.
+
+Each case's `direction` says whether the `--against` set is `"no worse"` or `"worse"` than
+the `--compare` set, on the medians, for the measures whose better direction does not
+depend on what changed: `accepted`, `checksPassed` and `plantedCaught` (more is better),
+and `escapedDefects`, `reopenedFindings` and `interventions` (fewer is better). Where
+either side is unavailable it says `"unavailable"`. `defectsFound` has no direction: fewer
+may mean a better builder or a weaker reviewer, so a decision rule that reads it names its
+direction itself. The comparison states no percentage and no verdict.
 
 **Obstacles.** Where one command fails several times in a row the same way — same exit,
 same last line — Collie says so: on the record, in `run show`, and in the next prompt, so
@@ -1804,6 +1887,7 @@ Like metrics, the report is data: no number in it is a threshold, and it refuses
 collie verify -- bun test
 collie --json verify --run <run-id> -- bun test
 collie verify --name typecheck --cwd <path> -- bun run typecheck
+collie verify --isolated --prepare 'bun install' -- bun test
 ```
 
 From a Run's agent pane, `--run` can be left out: the Run is the one whose agent the pane
@@ -1827,6 +1911,32 @@ as `added`, `modified`, `deleted` or `type-changed`, and classed `tracked` (in t
 `untracked`, or `lockfile` (a dependency lockfile such as `bun.lock`, either way). The
 answer and a check's gap name the first five and how many more, with the verification id
 that lists them all, and the Run's verification metric counts them by class.
+Where a run in the checkout itself is `unstable` and a moved path is source, `tracked` or
+`untracked`, the answer adds how to verify while editing: `collie verify --isolated`.
+
+`--isolated` runs the command in a detached checkout of the tree it starts on, so edits
+made in the checkout meanwhile cannot move it. That start tree already holds the untracked
+files git is not ignoring, so untracked source is in the isolated checkout, and ignored
+files such as `node_modules` are not. `--prepare '<command>'` runs first in that checkout,
+such as an install of what the tree ignores. Its words are split on spaces, with no shell,
+and it implies `--isolated`. The checkout is made under the Run's state as a Measurement's
+base tree is (`git worktree add --detach`, of a commit of exactly that tree), and reused
+while it is clean. Requests answered by one run share a checkout; any other gets its own,
+so the same command asked from another directory never shares one. An executable inside the repository,
+such as `./check.sh`, runs from the checkout, and the record names it by its path in the
+checkout asked. Cleanup removes it once the Run has ended.
+The record names the checkout and the prepare's command, exit status and seconds as
+`isolated`. A failing prepare records the check `fail` at `stage: "prepare"`, with the
+prepare's exit status and output, and never runs the command; that is never a pass, even
+under `--expect fail`. The record proves the start tree, as every record does: its
+directory is the one asked, its `start` is that checkout's tree at the start, and the gate
+relies on it on that tree like any other. The isolated checkout's own trees are still
+compared, so a command or a prepare that writes a file git does not ignore into it is
+`unstable`. A tree too large to fingerprint, unmeasured, outside git or with changed
+submodules cannot run isolated, and the verify is refused saying why. A Check runs
+isolated where its `verify.json` entry says `"isolated": true`, after its
+`"prepare": { "executable": …, "argv": [ … ] }` where it names one. Nothing is isolated
+unless asked.
 
 While a Check Collie runs itself collects proof on a checkout, the host holds deliveries to
 that Run's agents working there, for the human's steer and an agent's message alike: a steer
@@ -1849,13 +1959,15 @@ Command displays preserve argument boundaries: `echo 'a b'` reads differently fr
 `echo a b`. Control characters appear as escapes, so displayed commands containing them
 are for reading; the recorded argv retains the original values.
 
-| Flag       | What it does                                                                                                                                                         |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--run`    | The run this is a verification of, and whose tree is snapshotted. Defaults to the Run whose agent this pane is.                                                      |
-| `--cwd`    | Where to run it. Must be inside the run's checkout, including one it was given later — a review's fix moves it to the reviewed branch's; defaults to it.             |
-| `--name`   | What to call it on a card. By default the script it runs (`bun run typecheck` is `typecheck`), else the tool and its subcommand (`bun test`), else the tool (`tsc`). |
-| `--expect` | What a pass looks like: `pass` (default), or `fail` for a reproduction.                                                                                              |
-| `--again`  | Run it even where this tree already has a record of it, to look for a flake. Never runs one of the Run's checks.                                                     |
+| Flag         | What it does                                                                                                                                                         |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--run`      | The run this is a verification of, and whose tree is snapshotted. Defaults to the Run whose agent this pane is.                                                      |
+| `--cwd`      | Where to run it. Must be inside the run's checkout, including one it was given later — a review's fix moves it to the reviewed branch's; defaults to it.             |
+| `--name`     | What to call it on a card. By default the script it runs (`bun run typecheck` is `typecheck`), else the tool and its subcommand (`bun test`), else the tool (`tsc`). |
+| `--expect`   | What a pass looks like: `pass` (default), or `fail` for a reproduction.                                                                                              |
+| `--again`    | Run it even where this tree already has a record of it, to look for a flake. Never runs one of the Run's checks.                                                     |
+| `--isolated` | Run it in a detached checkout of the tree it starts on, so edits made meanwhile cannot move it. Its record still proves that tree.                                   |
+| `--prepare`  | A command run first in that checkout, split on spaces with no shell, such as `bun install`. Implies `--isolated`.                                                    |
 
 Every record carries the **environment** it ran in: a digest of the executable's real path
 and content, the `node` and `bun` that `PATH` resolves to, again by path and content, and
@@ -1865,7 +1977,10 @@ checkout: the entries of the `node_modules` of every directory holding a tracked
 Installing, removing or replacing a package makes an earlier record stale, and the command
 runs again. A gate relies on an earlier pass only where this
 matches, so an upgraded toolchain is a fresh run. A record from before environments were
-recorded has none, and is never relied on.
+recorded has none, and is never relied on. A record run isolated names, instead of what is
+installed in the checkout, that it ran isolated and the prepare it ran after, since that
+prepare is what installed its dependencies. So an isolated record answers an isolated check
+with the same prepare, and never one run in the checkout itself.
 
 A command that is exactly one of the Run's checks — the executable as resolved, its
 arguments and its directory — is never run by `collie verify`: only the gate runs a Run's
@@ -1876,8 +1991,9 @@ record: it says `not run again: verification <id> of "<check>" passed on this tr
 `failed`) and names the record's log, exits with the record's exit code, and its `--json`
 envelope is `{ "verification": <that record>, "ran": false }`. Where the tree has none, it
 refuses with `invalid_state`, naming the gate: Collie runs that check itself, on the final
-tree. `--expect fail` makes no exception, and a human's `collie verify --run` is answered as
-an agent's is.
+tree. The refusal says why no record answers, and the Run's log gets
+`check: <name> not answered: <reason>`. `--expect fail` makes no exception, and a human's
+`collie verify --run` is answered as an agent's is.
 
 A command that is not one of the Run's checks is answered the same way where this tree
 already has a record of it: the latest record of the same executable as resolved, arguments,
@@ -1885,9 +2001,35 @@ directory, `--name` and `--expect`, collected by this host in the same environme
 passed or failed. It says `not run again: verification <id> of "<name>" passed on this tree`
 (or `failed`), names the record's log and adds `--again runs it anyway`; the Run's log gets
 `verify: <name> answered by verification <id>`. An `unstable` latest record, or a gate's
-rerun of one failed test, answers nothing, and the command runs. `--again` runs it whatever
+rerun of one failed test, answers nothing, and the command runs. A command that runs
+because no record answers first prints `running it: <reason>`, and the Run's log gets
+`verify: <name> runs: <reason>`. `--again` runs it whatever
 is recorded; a Check is unaffected and is still answered or refused, `--again` or not.
 A command that runs has `"ran": true` in its envelope; no script name is special.
+
+The reason is exactly one of these, checked in this order:
+
+- `no record of this command on this Run`;
+- `the command differs from verification <id>'s`: the latest record under that name ran
+  another command, as after its approved command was replaced;
+- `the tree differs from verification <id>'s`: the latest record of the command is on
+  another tree;
+- `verification <id> on this tree is unstable or expected red`;
+- `the environment differs from verification <id>'s`;
+- `verification <id> was collected before this host started`. A pass counts only if this
+  host collected it, because a restart is when a human may have repaired something outside
+  the tree, so a restarted host runs the check again, and this line says why.
+
+The gate says the same in the Run's log, `<pass>: <check> runs: <reason>`, before it runs a
+check it could not rely on.
+
+Identical requests made while one is running share it: the same Run, executable as
+resolved, arguments, directory, tree fingerprint, environment and `--expect`. The later
+request prints `"<name>" is already running on this tree: waiting on it`, starts no
+process, and gets the same record, whose `answered` lists each request it answered. A
+request that differs in any of these runs its own process. Where the tree cannot be
+measured or the environment read, nothing is shared. Where the run waited on is ended, as by
+a stop of the Run that asked first, the waiting request runs the command itself.
 
 While the Machine is [Short of memory](using.md#short-of-memory), the host holds the
 command before it runs, reading again every 15 seconds: `collie verify` first prints
@@ -1931,7 +2073,8 @@ Run from a Run's agent pane — the pane `--run` defaults from — `collie verif
 stream the command's output. It answers when the command ends with:
 
 - the result and exit status, and for an `unstable` result why: the tree it ran on moved,
-  from which fingerprint to which, or could not be measured;
+  from which fingerprint to which, or could not be measured, and where source moved, how to
+  verify while editing with `--isolated`;
 - `failed`, each failed test bun's output names as `<file> > <name>`, the first 50, and
   `more`, how many others;
 - the record's `tail`, the last 4 KB of each stream;
@@ -1995,6 +2138,20 @@ the run unproved, naming the check, the job and the commit.
   }
 ]
 ```
+
+An entry may run **before review** with `"before_review": true`. Before each review round
+opens — in `implement`'s rallies, and after each fix the review workflow's "Fix findings" runs —
+Collie runs every such check on the builder's tree, as `host.verify` runs any check, recorded in
+the Run's verifications like any other. A failure goes back to the builder as a fix naming the
+check and the `collie run read <run> verification:<id>` that shows its output, and no reviewer
+starts on that tree; the check runs again on the fixed tree, and the round opens once every
+marked check passes. Still failing after 4 such fixes, the rally stops with
+`before_review_failed`, naming the check. The gate does not run a marked check again on a tree
+that has not moved since it passed: it takes that pass, through the same lookup that answers
+any check on an unmoved tree. A check left to CI cannot be marked, and an entry with both `ci`
+and `before_review` is refused with that reason, from a file, `--verify` or
+`set_verification` alike. Whether a Run runs marked checks before review is fixed when it
+starts; a Run started on an earlier release runs none.
 
 The base is the ref a checkout for the run is cut from: the remote branch it works on, else
 the remote's default branch, else the local one. It is read the same way for a run that has

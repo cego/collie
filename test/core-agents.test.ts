@@ -28,6 +28,8 @@ import { focusPane, liveHerds } from "../src/herds";
 import { connect } from "../src/hc";
 import { askWith, piTools } from "./support/pi";
 import { isString } from "../src/schema";
+import { startedOf } from "../src/processes";
+import { SURVIVES_HANGUP, paneTree } from "./support/pane-tree";
 
 let rig: Rig;
 let dir: string;
@@ -225,6 +227,31 @@ test("a Run on a core Machine launches, prompts, reads and stops its Claude agen
     }),
   ));
 
+test("an agent started on core records the process its terminal runs, as its pane's root", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const core = yield* rig.startCore();
+      yield* quietConfig;
+      yield* rig.queueOutputs([{ verdict: "clean" }]);
+      const { shell } = yield* paneTree(SURVIVES_HANGUP);
+      const started = yield* startedOf(shell);
+      core.runsAs(shell);
+      const result = yield* session(
+        Effect.gen(function* () {
+          const done = yield* work.execute({ runId: "r1", input: {} }).pipe(Effect.result);
+          yield* (yield* Agents).halt("r1");
+          return done;
+        }),
+        coreOnly(core),
+      );
+      expect(result._tag === "Success" && result.success).toEqual({ verdict: "clean" });
+      expect((yield* launchedAt(dir, "r1", "review")).root).toEqual({
+        pid: shell,
+        started: started!,
+      });
+    }).pipe(Effect.scoped),
+  ));
+
 test("an agent on core is started with Collie's own names for its root and state directory, and no Herdr 1 name", () =>
   runEffect(
     Effect.gen(function* () {
@@ -289,8 +316,9 @@ test("an OpenCode agent on core is launched with its reporter and its first prom
       const content = env.OPENCODE_CONFIG_CONTENT;
       expect(content.theme).toBe("night");
       expect(content.mcp.collie).toEqual({ type: "local", enabled: true });
-      expect(content.plugin).toHaveLength(2);
+      expect(content.plugin).toHaveLength(3);
       expect(content.plugin[0]).toBe("their-plugin");
+      expect(content.plugin[2]).toEndWith(".usage.js");
       yield* fs.remove(sessionFile);
       const reporter = yield* Effect.promise(() => {
         const returned: Promise<OpenCodePlugin> = import(

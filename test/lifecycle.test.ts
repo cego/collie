@@ -4,6 +4,7 @@ import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import type { Scope } from "effect";
 import { Deferred, Effect, Fiber, FileSystem, Option, Schema, Stream } from "effect";
+import { VerificationSchema } from "../src/verify-model";
 import type { PlatformServices } from "../src/platform";
 import { writeConfigValue } from "../src/config";
 import { currentEnv } from "../src/env";
@@ -976,6 +977,91 @@ test("collie verify of a Run's Check with no record on this tree is refused, nam
         yield* stopHost(world.state);
       }),
     ["proved.workflow.ts"],
+  ));
+
+test("collie verify of a Run's Check whose last record was on another tree is refused, saying the tree differs from that record", () =>
+  provesWith(
+    "collie-lifecycle-verify-moved-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { counter, runs } = yield* counted(world);
+        const command = ["sh", "-c", `echo ran >> ${counter}`];
+        const runId = yield* checkedRun(world, "checked", command);
+        const verify = () => collie(world, ["verify", "--run", runId, "--", ...command]);
+        const gate = yield* Schema.decodeUnknownEffect(Answer)(
+          (yield* verify()).envelope.data,
+        ).pipe(Effect.orDie);
+
+        yield* fs.writeFileString(`${world.project}/moved.txt`, "moved\n");
+        const refused = yield* verify();
+        expect(refused.envelope.error?.code).toBe("invalid_state");
+        expect(refused.envelope.error?.message).toContain(
+          `the tree differs from verification ${gate.verification.id}'s`,
+        );
+        expect(refused.envelope.error?.message).toContain("gate");
+        expect(yield* runs).toBe(1);
+        yield* stopHost(world.state);
+      }),
+    ["checked.workflow.ts"],
+  ));
+
+test("collie verify of a command whose last record was on another tree says it ran because the tree differed", () =>
+  provesWith(
+    "collie-lifecycle-verify-reran-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const runId = yield* checkedRun(world, "checked", ["true"]);
+        const verify = () => collie(world, ["verify", "--run", runId, "--", "sh", "-c", "true"]);
+        const first = yield* Schema.decodeUnknownEffect(Answer)(
+          (yield* verify()).envelope.data,
+        ).pipe(Effect.orDie);
+
+        yield* fs.writeFileString(`${world.project}/moved.txt`, "moved\n");
+        const again = yield* verify();
+        expect(again.envelope.data).toMatchObject({ ran: true });
+        expect(again.stderr).toContain(
+          `running it: the tree differs from verification ${first.verification.id}'s`,
+        );
+        yield* stopHost(world.state);
+      }),
+    ["checked.workflow.ts"],
+  ));
+
+test("collie verify --isolated --prepare runs the prepare and the command in a checkout of the Run's tree", () =>
+  provesWith(
+    "collie-lifecycle-verify-isolated-",
+    (world) =>
+      Effect.gen(function* () {
+        const runId = yield* checkedRun(world, "checked", ["true"]);
+        const ran = yield* collie(world, [
+          "verify",
+          "--run",
+          runId,
+          "--isolated",
+          "--prepare",
+          "sh -c true",
+          "--",
+          "sh",
+          "-c",
+          "pwd",
+        ]);
+        const { verification } = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({ verification: VerificationSchema }),
+        )(ran.envelope.data).pipe(Effect.orDie);
+        expect(verification.result).toBe("pass");
+        expect(verification.cwd).toBe(world.project);
+        expect(verification.isolated?.prepare).toMatchObject({
+          executable: "sh",
+          argv: ["-c", "true"],
+          exit: 0,
+        });
+        expect(verification.tail.stdout).toContain(verification.isolated?.checkout ?? "-");
+        expect(verification.isolated?.checkout).not.toBe(world.project);
+        yield* stopHost(world.state);
+      }),
+    ["checked.workflow.ts"],
   ));
 
 const mrUrl = (repo: string, iid: number) =>

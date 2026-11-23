@@ -382,6 +382,10 @@ export const levelPeer = Effect.fn("Peers.level")(function* (link: Link, peer: P
   );
 }, Effect.scoped);
 
+/** What this host's peers module answers. */
+/** How often what peers share is offered again, for an edit nothing told the host of. */
+const USER_DIR_BACKSTOP = "5 minutes";
+
 export interface Peers {
   readonly invite: (asker: {
     readonly installation: string;
@@ -394,6 +398,8 @@ export interface Peers {
   readonly list: Effect.Effect<ReadonlyArray<PeerView>>;
   readonly wake: (name: string) => Effect.Effect<void>;
   readonly live: (installation: string) => Effect.Effect<boolean>;
+  /** Something under the user directory was written: what peers share is offered now. */
+  readonly userDirMoved: Effect.Effect<void>;
 }
 
 export const RelayAnswer = Schema.Struct({
@@ -1193,26 +1199,6 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
   );
   yield* pairing.withPermits(1)(settle);
   yield* fs.makeDirectory(link.userDir, { recursive: true });
-  yield* Effect.forkIn(
-    fs.watch(link.userDir).pipe(
-      Stream.filter(
-        (event) =>
-          pipe(event.path, Str.endsWith("config.json")) ||
-          pipe(event.path, Str.endsWith("settings-set.json")),
-      ),
-      Stream.runForEach(() =>
-        Effect.forEach(
-          Arr.filter(peers, (peer) => standings.get(peer.installation)?.state === "live"),
-          syncSettings,
-          { discard: true },
-        ),
-      ),
-      Effect.catch((cause) =>
-        Effect.logWarning(`could not watch shared settings: ${reason(cause)}`),
-      ),
-    ),
-    scope,
-  );
   const definitionKinds = ["workflows", "personas"];
   const syncHeldDefinitions = Effect.gen(function* () {
     const live = Arr.filter(peers, (peer) => standings.get(peer.installation)?.state === "live");
@@ -1226,31 +1212,32 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
       { discard: true },
     );
   });
-  yield* Effect.forkIn(
-    Effect.gen(function* () {
-      if (!(yield* fs.exists(link.userDir))) {
-        return yield* Effect.sleep("10 seconds");
-      }
-      for (const kind of definitionKinds) {
-        if (!(yield* fs.exists(`${link.userDir}/${kind}`))) {
-          yield* fs.makeDirectory(`${link.userDir}/${kind}`);
-        }
-      }
-      yield* definitionChanges(link.userDir, definitionKinds).pipe(
-        Stream.runForEach(() => syncHeldDefinitions),
-      );
-    }).pipe(
-      Effect.catch((cause) =>
-        Effect.logWarning(`could not watch shared definitions: ${reason(cause)}`).pipe(
-          Effect.andThen(Effect.sleep("10 seconds")),
-        ),
-      ),
-      Effect.forever,
+  /**
+   * Settings and definitions offered to each live peer again. Nothing watches the user
+   * directory (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs): a write through
+   * the host, or one the host is told of, asks now, and the backstop poll catches an edit.
+   */
+  const userDirMoved = Effect.gen(function* () {
+    for (const kind of definitionKinds) {
+      if (!(yield* fs.exists(`${link.userDir}/${kind}`)))
+        yield* fs.makeDirectory(`${link.userDir}/${kind}`, { recursive: true });
+    }
+    yield* Effect.forEach(
+      Arr.filter(peers, (peer) => standings.get(peer.installation)?.state === "live"),
+      syncSettings,
+      { discard: true },
+    );
+    yield* syncHeldDefinitions;
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("could not offer shared settings and definitions", cause),
     ),
-    scope,
+    Effect.provideContext(services),
   );
+  yield* Effect.forkIn(userDirMoved.pipe(Effect.repeat(Schedule.spaced(USER_DIR_BACKSTOP))), scope);
 
   const peersModule: Peers = {
+    userDirMoved,
     invite: (asker) =>
       Effect.gen(function* () {
         yield* validateName(asker.name);
@@ -1456,34 +1443,3 @@ export const pairWith = Effect.fn("Peers.pairWith")(
       ),
     ),
 );
-
-// WARNING: the first change is a catch-up, so a save made before the watches are placed is still seen.
-export const definitionChanges = (userDir: string, kinds: ReadonlyArray<string>) =>
-  Stream.unwrap(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const watched = yield* Deferred.make<void>();
-      let ready = 0;
-      const onReady = () => {
-        if (++ready === kinds.length + 1) {
-          Deferred.doneUnsafe(watched, Exit.void);
-        }
-      };
-      return Stream.mergeAll(
-        [
-          ...Arr.map(kinds, (kind) =>
-            fs.watch(`${userDir}/${kind}`, { onReady }).pipe(Stream.as(false)),
-          ),
-          fs.watch(userDir, { onReady }).pipe(
-            Stream.filter((event) => kinds.includes(event.path)),
-            Stream.as(true),
-          ),
-          Stream.fromEffect(Effect.as(Deferred.await(watched), false)),
-        ],
-        { concurrency: "unbounded" },
-      ).pipe(
-        Stream.takeWhile((replaced) => !replaced),
-        Stream.map(() => undefined),
-      );
-    }),
-  );

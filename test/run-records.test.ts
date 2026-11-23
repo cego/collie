@@ -16,7 +16,7 @@ import {
 import { StoreWrites } from "../src/store-writes";
 import { runEffect } from "./support/effect";
 import { recordsAt } from "./support/records";
-import { rollbackAt } from "../src/records-import";
+import { LAST_PROJECTION_MIGRATION_ID, rollbackAt } from "../src/records-import";
 import { Store } from "../src/store";
 import { encodeStepLine, STEPS_FILE } from "../src/steps";
 
@@ -500,11 +500,11 @@ test("a rollback is refused while a later build's migration is recorded, and cha
       yield* records(RunRecords.use((one) => one.append("run-a", "steps.jsonl", ["{}"])));
       yield* Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        yield* sql`INSERT INTO collie_migrations (migration_id, name) VALUES (${RUN_RECORDS_MIGRATION_ID + 1}, 'later')`;
+        yield* sql`INSERT INTO collie_migrations (migration_id, name) VALUES (${LAST_PROJECTION_MIGRATION_ID + 1}, 'later')`;
       }).pipe(Effect.provide(SqliteClient.layer({ filename: `${stateDir}/host.db` })));
 
       expect(yield* rollbackAt(stateDir)).toEqual({
-        later: `${RUN_RECORDS_MIGRATION_ID + 1}_later`,
+        later: `${LAST_PROJECTION_MIGRATION_ID + 1}_later`,
       });
       expect(yield* fs.exists(`${stateDir}/runs/run-a/steps.jsonl`)).toBe(false);
       expect(yield* records(RunRecords.use((one) => one.lines("run-a", "steps.jsonl")))).toEqual([

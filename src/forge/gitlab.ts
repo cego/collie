@@ -50,6 +50,7 @@ import { loginReadiness, pagesAs, request, requestAs, requestText } from "./http
 import type { Answered, ForgeLogin } from "./http";
 import {
   listIssues,
+  listRequests,
   createIssue,
   commentIssue,
   postReview,
@@ -1314,6 +1315,23 @@ function reply(ref: MrRef, to: Pick<ForgeComment, "thread">, body: string, cwd: 
   });
 }
 
+/** A failed merge, as a merge at the same head may or may not clear it. */
+const unmerged: (
+  failed: Extract<Answered<unknown>, { ok: false }>,
+  reason: string,
+) => MergeAnswer = (failed, reason) => ({
+  _tag:
+    failed.transient === true ||
+    (failed.status === 422 && Str.includes("Branch cannot be merged")(failed.reason))
+      ? "Transient"
+      : "Refused",
+  reason,
+});
+
+/**
+ * GitLab's merge endpoint at `head`, never `glab mr merge`, whose `--auto-merge` defaults
+ * to on. No squash is passed, so the project's own setting stands.
+ */
 // WARNING: never `glab mr merge`, whose --auto-merge defaults on.
 function merge(ref: MrRef, head: string, cwd: string) {
   const returned: Effect.Effect<MergeAnswer, never, ForgeHttp> = Effect.gen(function* () {
@@ -1334,9 +1352,9 @@ function merge(ref: MrRef, head: string, cwd: string) {
       const merged = mr ?? Option.getOrNull(Schema.decodeUnknownOption(ReviewMr)(merging.value));
       return { _tag: "Merged", merged: merged === null ? "" : mergedSha(merged) };
     }
-    const refusal = `GitLab refused to merge ${where}: ${merging.reason}`;
+    const refusal = unmerged(merging, `GitLab refused to merge ${where}: ${merging.reason}`);
     if (mr === null) {
-      return { _tag: "Refused", reason: refusal };
+      return refusal;
     }
     if (mr.state === "merged") {
       return {
@@ -1350,7 +1368,7 @@ function merge(ref: MrRef, head: string, cwd: string) {
     if ((mr.sha ?? "") !== head) {
       return { _tag: "HeadMoved", head: mr.sha ?? "" };
     }
-    return { _tag: "Refused", reason: refusal };
+    return refusal;
   });
   return returned;
 }
@@ -1587,8 +1605,10 @@ export const gitlab: Forge = {
         cwd,
       );
     }),
-  issues: (project, cwd, _run, numbers) =>
-    listIssues(glabLoginTo(hostOf(project) ?? "gitlab.com"), project, cwd, numbers),
+  issues: (project, cwd, _run, which) =>
+    listIssues(glabLoginTo(hostOf(project) ?? "gitlab.com"), project, cwd, which),
+  requests: (project, cwd) =>
+    listRequests(glabLoginTo(hostOf(project) ?? "gitlab.com"), project, cwd),
   fileIssue: (project, title, body, cwd) =>
     createIssue(glabLoginTo(hostOf(project) ?? "gitlab.com"), project, title, body, cwd),
   commentIssue: (project, number, body, cwd) =>

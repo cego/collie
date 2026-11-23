@@ -10,6 +10,7 @@ import {
   Layer,
   PubSub,
   Queue,
+  Schema,
   Scope,
   Stream,
 } from "effect";
@@ -19,17 +20,18 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import * as SocketServer from "effect/socket/SocketServer";
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
-import { IdentityRpc, RunDetailRpc } from "./board-model";
+import { BoardMessage, IdentityRpc, RunDetailRpc, sortBoard } from "./board-model";
 import type { MrPanel, OfferView } from "./board-model";
+import { CardRows, cardRowsLayer } from "./card-rows";
 import { mrOf } from "./merges";
 import type { PluginEnv } from "./env";
 import { foregroundLayer } from "./foreground";
 import type { AgentInfo } from "./herdr";
 import { platformLayer } from "./platform";
 import type { PlatformServices } from "./platform";
-import { drawerWrites, recordFrames } from "./record";
+import { recordFrames } from "./record";
 import type { RecordSources } from "./record";
-import { recordsReadLayer } from "./records";
+import { hostDatabase, recordsReadLayer } from "./records";
 import { firstValueTimed } from "./first-value";
 import { markFirst } from "./record-marks";
 import { RunModel, runModelLayer } from "./run-model";
@@ -83,6 +85,8 @@ export type ToDoor =
       readonly offers: ReadonlyArray<readonly [string, ReadonlyArray<OfferView>]>;
     }
   | { readonly _tag: "Wrote" }
+  /** The engine serves the front door from now on: it has started its Runs. */
+  | { readonly _tag: "Serving" }
   | { readonly _tag: "Answer"; readonly ask: number; readonly value: unknown };
 
 export type FromDoor =
@@ -350,8 +354,14 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
       readonly frame: RpcMessage.FromServerEncoded;
     }>();
 
+    /** Until the engine serves, the door answers a board with the projection first. */
+    let engineServing = false;
     const told = (message: ToDoor) => {
       switch (message._tag) {
+        case "Serving":
+          return Effect.sync(() => {
+            engineServing = true;
+          });
         case "Response":
           return Queue.offer(engineFrames, message);
         case "Touched":
@@ -397,6 +407,21 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
     yield* Effect.forEach(early, told, { discard: true });
     yield* Queue.take(inbox).pipe(Effect.flatMap(told), Effect.forever, Effect.forkScoped);
     yield* Queue.take(engineFrames).pipe(
+      Effect.tap(({ conn, frame }) =>
+        Effect.sync(() => {
+          if (!("requestId" in frame)) {
+            return;
+          }
+          const waiting = boardsFirst.get(boardKey(conn, frame.requestId));
+          if (waiting === undefined) {
+            return;
+          }
+          waiting.answered = true;
+          if (frame._tag === "Exit" || waiting.swallow === 0) {
+            boardsFirst.delete(boardKey(conn, frame.requestId));
+          }
+        }),
+      ),
       Effect.flatMap(({ conn, frame }) => conns.get(conn)?.write(frame) ?? Effect.void),
       Effect.forever,
       Effect.forkScoped,
@@ -465,6 +490,80 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
         Effect.map((records) => Context.merge(bun, records)),
       ),
     );
+    /**
+     * The cards the last host left, as a first board, read over a connection of the door's own
+     * (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs): the engine answers a
+     * board only once it has started, which can take seconds. Null where none can be read.
+     */
+    const projection = yield* Effect.cached(
+      Effect.gen(function* () {
+        const context = yield* Layer.buildWithScope(
+          cardRowsLayer.pipe(
+            Layer.provide(Layer.orDie(hostDatabase(env.stateDir, { readonly: true }))),
+          ),
+          scope,
+        );
+        const rows = yield* Context.get(context, CardRows).all;
+        const tasks = sortBoard(
+          Arr.flatMap(rows, (row) =>
+            row.view === null ? [] : [{ ...row.view, confirmed: false, asOf: row.at }],
+          ),
+        );
+        if (tasks.length === 0) {
+          return null;
+        }
+        const head = {
+          _tag: "Snapshot" as const,
+          installation: identity.installation ?? "",
+          build: identity.build,
+          protocol: identity.protocol ?? 0,
+          files: true,
+          artefacts: true,
+          herds: [],
+          tasks,
+          seq: 0,
+        };
+        return yield* Schema.encodeEffect(BoardMessage)(
+          identity.development === undefined
+            ? head
+            : { ...head, development: identity.development },
+        );
+      }).pipe(
+        Effect.provideContext(bun),
+        Effect.catchCause(() => Effect.succeed(null)),
+      ),
+    );
+    /** Each board request the door answered first, by `conn:id`: the Acks of its own chunk. */
+    const boardsFirst = new Map<string, { swallow: number; answered: boolean }>();
+    const boardKey = (conn: number, id: string | number) => `${conn}:${id}`;
+    const boardAsked = yield* Queue.unbounded<{
+      readonly conn: number;
+      readonly id: string | number;
+    }>();
+    yield* Queue.take(boardAsked).pipe(
+      Effect.flatMap(({ conn, id }) =>
+        Effect.flatMap(projection, (snapshot) =>
+          Effect.suspend(() => {
+            const key = boardKey(conn, id);
+            const waiting = boardsFirst.get(key);
+            const to = conns.get(conn);
+            if (
+              snapshot === null ||
+              waiting === undefined ||
+              waiting.answered ||
+              to === undefined
+            ) {
+              boardsFirst.delete(key);
+              return Effect.void;
+            }
+            waiting.swallow++;
+            return to.write({ _tag: "Chunk", requestId: id, values: [snapshot] });
+          }),
+        ),
+      ),
+      Effect.forever,
+      Effect.forkScoped,
+    );
     const handlers = DoorRpcs.toLayer({
       identity: () => Effect.succeed(identity),
       runDetail: (key) =>
@@ -472,14 +571,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
           ? Stream.die("the door reads no record without the Run model")
           : Stream.unwrap(
               Effect.map(withRecords, (context) =>
-                recordFrames(
-                  sources,
-                  key,
-                  Stream.merge(
-                    changes,
-                    drawerWrites(env.stateDir, key.runId).pipe(Stream.provideContext(bun)),
-                  ),
-                ).pipe(
+                recordFrames(sources, key, changes).pipe(
                   markFirst("host:emit", key.runId),
                   (frames) =>
                     firstValueTimed(frames, (ms) =>
@@ -570,6 +662,22 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
       }
       if (mine || frame._tag === "Eof") {
         Queue.offerUnsafe(local, { conn, frame });
+      }
+      if (frame._tag === "Request" && frame.tag === "board" && !engineServing) {
+        boardsFirst.set(boardKey(conn, frame.id), { swallow: 0, answered: false });
+        Queue.offerUnsafe(boardAsked, { conn, id: frame.id });
+      }
+      // The client's Ack of the door's own chunk is not the engine's to hear.
+      if (frame._tag === "Ack") {
+        const key = boardKey(conn, frame.requestId);
+        const first = boardsFirst.get(key);
+        if (first !== undefined && first.swallow > 0) {
+          first.swallow--;
+          if (first.answered && first.swallow === 0) {
+            boardsFirst.delete(key);
+          }
+          return;
+        }
       }
       if (!mine) {
         port.post({ _tag: "Request", conn, frame });

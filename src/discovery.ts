@@ -6,6 +6,7 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Effect, FileSystem, Schema } from "effect";
 import { loadEntry, revisionOf } from "./engine";
+import { RevisionRows } from "./module-revisions";
 import { jsonSchemaFor } from "./sdk";
 import type { WorkflowEntry } from "./sdk";
 import { Declared, Fault, LAYERS } from "./definitions-model";
@@ -97,6 +98,26 @@ export const discover: (
   },
 );
 
+/**
+ * A directory's revision: the kept one on a synced read, else computed now and kept
+ * (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs).
+ */
+export const revisionIn = Effect.fn("Discovery.revisionIn")(function* (dir: string) {
+  const kept = yield* RevisionRows;
+  if (kept?.synced === true) {
+    const known = yield* kept.rows.of(dir);
+    if (known !== null) {
+      return known;
+    }
+  }
+  const revision = yield* revisionOf(dir);
+  if (kept !== null) {
+    yield* kept.rows.put(dir, revision);
+  }
+  return revision;
+});
+
+/** What one file in one layer says it is, or why it could not say. */
 type Claim =
   | { readonly kind: "entry"; readonly id: string; readonly path: string; readonly found: Found }
   | {
@@ -108,7 +129,11 @@ type Claim =
 
 // WARNING: a file that cannot be imported claims the id its name says; a typo inside it does not make it someone else's.
 const claimsIn = Effect.fn("Discovery.claimsIn")(function* (root: Root) {
-  const revision = yield* revisionOf(root.dir);
+  const revision = yield* revisionIn(root.dir);
+  const last = keptClaims.get(root.dir);
+  if (last?.revision === revision && (yield* RevisionRows)?.synced === true) {
+    return last.claims;
+  }
   const claims: Array<Claim> = [];
   for (const path of yield* entryFiles(root.dir)) {
     const read = yield* loadEntry(path, revision).pipe(Effect.result);
@@ -136,9 +161,17 @@ const claimsIn = Effect.fn("Discovery.claimsIn")(function* (root: Root) {
           },
     );
   }
+  keptClaims.set(root.dir, { revision, claims });
   return claims;
 });
 
+/** Each layer's last read, which a listing reuses until its content revision moves. */
+const keptClaims = new Map<
+  string,
+  { readonly revision: string; readonly claims: ReadonlyArray<Claim> }
+>();
+
+/** What one module declares it takes, in the order a front door should ask for it. */
 export const declaredBy = (entry: WorkflowEntry) =>
   Arr.map(Rec.toEntries(entry.input), ([name, field]) => {
     const drawn = jsonSchemaFor(field);

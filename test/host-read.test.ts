@@ -4,7 +4,7 @@ import * as Arr from "effect/Array";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Str from "effect/String";
 import { connect } from "../src/host";
-import { isSettled } from "../src/lifecycle";
+import { isSettled, usageFor } from "../src/lifecycle";
 import { toolNamed } from "../src/tools";
 import { until } from "./support/host";
 import { hosted, hostedRun } from "./support/hosted";
@@ -61,6 +61,27 @@ test("local answers preserve native answer content, offers and Flow after mutati
         );
         expect(yield* client.read({ tool: "collie_run", input: { run: runId } })).toBe(
           withChildren,
+        );
+
+        // WARNING: The grandchild sits in a Task of its own, as implement does under self-improve's plan.
+        const grandchild = yield* client.start({
+          project: world.project,
+          id: "hello",
+          parent: children[0]!,
+          taskLabel: "grandchild",
+          request: yield* (yield* SecureRandom.SecureRandom).uuidV4(),
+          input: { name: "grandchild" },
+        });
+        yield* until(
+          () => client.run({ runId: grandchild.runId }),
+          (view) => view !== null && isSettled(view),
+        );
+        const withGrandchild = yield* client.read({ tool: "collie_run", input: { run: runId } });
+        expect(withGrandchild).toContain(`child Run ${grandchild.runId}:`);
+        expect(withGrandchild).toBe(yield* toolNamed("collie_run")!.call(env, { run: runId }));
+        const metrics = yield* usageFor(env, runId);
+        expect(metrics.ok && Arr.map(metrics.value.children ?? [], (one) => one.runId)).toEqual(
+          expect.arrayContaining([...children, grandchild.runId]),
         );
 
         const waiting = yield* hostedRun(world, "control freshness");

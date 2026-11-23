@@ -32,7 +32,8 @@ yours, and the rest are another run's. Which ticket you are on is under **This s
 below; Collie hands them to you one at a time, in an order their `Blocked by` lines allow.
 
 Where a ticket's `**Checks:**` line names one of this run's checks above, it is not a
-command for you to run: the gate proves it on the final tree.
+command for you to run: the gate proves it on the final tree. Any other name on it is
+yours to record, exactly as written: `collie verify --name <that name> -- <the command>`.
 
 This run has a checkout of its own, on the branch it is building: Collie resolved the
 branch and opened the worktree before you started, so never create a branch or switch
@@ -269,6 +270,24 @@ That file must match this contract. Where a field carries a description, it is a
         "type": "string"
       },
       "description": "each decision you made that the spec did not settle, and why, one sentence each"
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "what you decided that the next agent should keep"
+    },
+    "rejected": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "approaches you tried or weighed and turned down, and why"
+    },
+    "next_action": {
+      "type": "string",
+      "description": "what you would do next, had you more turns"
     }
   },
   "required": [

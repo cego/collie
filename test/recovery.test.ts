@@ -12,7 +12,14 @@ import { readAudit } from "../src/audit";
 import { recordsReadLayer } from "../src/records";
 import { NOTIFIED, RunRecords } from "../src/run-records";
 import { FakeBin } from "./support/bin";
-import { FORGE_HOST, PROJECT, fakeForge, forgeOnPath, serveForges } from "./support/forge";
+import {
+  FORGE_HOST,
+  PROJECT,
+  fakeForge,
+  forgeHttpOnPath,
+  forgeOnPath,
+  serveForges,
+} from "./support/forge";
 import type { FakeMr } from "./support/forge";
 import { exec } from "./support/command";
 import { holderLives } from "../src/lock";
@@ -22,7 +29,14 @@ import { epochMs } from "../src/time";
 import { CommandLine } from "effect/process";
 import { pipe } from "effect/Function";
 import { runEffect } from "./support/effect";
-import { recheckPark, rememberFailedCi } from "../src/park-recheck";
+import {
+  recheckPark,
+  rememberFailedCi,
+  rememberNotQuiet,
+  rememberStaleHandOver,
+} from "../src/park-recheck";
+import { processOf, startedOf } from "../src/processes";
+import { SURVIVES_HANGUP, paneTree } from "./support/pane-tree";
 
 const idOf = flow(
   Schema.decodeUnknownEffect(Schema.Struct({ runId: Schema.String })),
@@ -1200,6 +1214,97 @@ test("a ci-failed park with no failed head recorded stays, saying so", () =>
       error: false,
       note: expect.stringContaining("no failed pipeline recorded"),
     }),
+  ));
+
+test("a predecessor-not-quiet park clears once nothing its predecessor left is running, and starts no agent", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "collie-not-quiet-" });
+      const { child: pid } = yield* paneTree(SURVIVES_HANGUP);
+      const started = yield* startedOf(pid);
+      yield* rememberNotQuiet(`${root}/runs/r1`, {
+        agent: "r1-build",
+        left: [{ pid, started: started! }],
+      });
+      const recheck = recheckPark(
+        {
+          runId: "r1",
+          cwd: root,
+          branch: null,
+          mr: null,
+          park: { cause: "predecessor-not-quiet", kind: "rechecks" },
+        },
+        root,
+        { agentList: () => Effect.die("a predecessor's recheck asks core nothing") },
+      );
+      expect(yield* recheck).toEqual({
+        cleared: false,
+        note: `r1-build's pid ${pid} is still running`,
+        error: false,
+      });
+      process.kill(pid, "SIGKILL");
+      while ((yield* processOf(pid)) !== null) {
+        yield* Effect.sleep(10);
+      }
+      expect(yield* recheck).toEqual({ cleared: true, note: "r1-build is Quiet", error: false });
+    }).pipe(Effect.scoped, Effect.provide(forgeHttpOnPath)),
+  ));
+
+test("a hand-over-stale park clears once the checkout holds still between two rechecks, and asks core nothing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "collie-stale-hand-over-" });
+      const repo = `${root}/repo`;
+      yield* fs.makeDirectory(repo);
+      const git = (...args: ReadonlyArray<string>) =>
+        Effect.promise(() => Bun.$`git ${args}`.cwd(repo).quiet().text());
+      const commit = Effect.gen(function* () {
+        yield* git(
+          "-c",
+          "user.email=t@t",
+          "-c",
+          "user.name=t",
+          "commit",
+          "-q",
+          "--allow-empty",
+          "-m",
+          "c",
+        );
+        return Str.trim(yield* git("rev-parse", "HEAD"));
+      });
+      yield* git("init", "-q", "-b", "work");
+      const parkedAt = yield* commit;
+      yield* rememberStaleHandOver(`${root}/runs/r1`, {
+        cwd: repo,
+        head: parkedAt,
+        dir: null,
+        plan: null,
+      });
+      const moved = yield* commit;
+      const recheck = recheckPark(
+        {
+          runId: "r1",
+          cwd: repo,
+          branch: null,
+          mr: null,
+          park: { cause: "hand-over-stale", kind: "rechecks" },
+        },
+        root,
+        { agentList: () => Effect.die("a stale hand-over's recheck asks core nothing") },
+      );
+      expect(yield* recheck).toEqual({
+        cleared: false,
+        note: `the checkout moved to ${moved} since it was last read`,
+        error: false,
+      });
+      expect(yield* recheck).toEqual({
+        cleared: true,
+        note: `the checkout held still at ${moved}`,
+        error: false,
+      });
+    }).pipe(Effect.scoped, Effect.provide(forgeHttpOnPath)),
   ));
 
 const MENDED = {

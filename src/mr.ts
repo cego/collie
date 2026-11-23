@@ -254,15 +254,14 @@ export function projectHere<R>(cwd: string, run: Runner<R>) {
   });
   return returned;
 }
+/**
+ * `mr`'s MR id, where a bare or hostless one is resolved against the checkout at `cwd`;
+ * null where it names no merge request a host can be told for.
+ */
 export function mrIdIn<R>(mr: string, cwd: string, run: Runner<R>) {
   const returned: Effect.Effect<string | null, never, R> = Effect.gen(function* () {
-    const id = mrId(mr);
-    if (id !== null) {
-      return id;
-    }
-    const said = Str.trim(mr);
-    if (readMrRef(said, { project: null }) === null && readMrRef(`mr:${said}`) === null) {
-      return null;
+    if (!needsProject(mr)) {
+      return mrId(mr);
     }
     const known = checkouts.get(cwd);
     const project = known ?? (yield* projectHere(cwd, run));
@@ -274,34 +273,43 @@ export function mrIdIn<R>(mr: string, cwd: string, run: Runner<R>) {
   return returned;
 }
 
+/** Whether `mr` is a bare or hostless reference, which only a checkout's project resolves. */
+const needsProject = (mr: string) => {
+  if (mrId(mr) !== null) return false;
+  const said = Str.trim(mr);
+  return readMrRef(said, { project: null }) !== null || readMrRef(`mr:${said}`) !== null;
+};
+
+/** `mrIdIn` with the checkout's project already read, as the git syncer keeps it. */
+export const mrIdWith = (mr: string, project: string | null): string | null =>
+  needsProject(mr) ? mrId(mr, { project }) : mrId(mr);
+
+// ponytail: a checkout's project for the process's life, read only for legacy references.
 const checkouts = new Map<string, string>();
 
 export type ForgeHere =
   | { readonly ok: true; readonly forge: Forge; readonly project: string }
   | { readonly ok: false; readonly reason: string };
 
+/** The forge of the checkout at `cwd`: its `origin`'s host, else `upstream`'s (ADR-0050 D2). */
 export function forgeHere<R>(cwd: string, run: Runner<R>, gitlabHost?: string) {
-  const answer: Effect.Effect<ForgeHere, never, R> = Effect.map(
-    projectHere(cwd, run),
-    (project) => {
-      if (project === null) {
-        const returned: ForgeHere = { ok: false, reason: "this repo has no remote" };
-        return returned;
-      }
-      const host = Str.split(project, "/")[0];
-      const name = forgeOfHost(host, gitlabHost);
-      {
-        const returned: ForgeHere =
-          name === null
-            ? { ok: false, reason: `${host} is neither GitHub nor GitLab` }
-            : { ok: true, forge: FORGES[name], project };
-        return returned;
-      }
-    },
+  const answer: Effect.Effect<ForgeHere, never, R> = Effect.map(projectHere(cwd, run), (project) =>
+    forgeOfProject(project, gitlabHost),
   );
   return answer;
 }
 
+/** `forgeHere` of a checkout whose project was already read, as the git syncer keeps it. */
+export const forgeOfProject = (project: string | null, gitlabHost?: string): ForgeHere => {
+  if (project === null) return { ok: false, reason: "this repo has no remote" };
+  const host = Str.split(project, "/")[0]!;
+  const name = forgeOfHost(host, gitlabHost);
+  return name === null
+    ? { ok: false, reason: `${host} is neither GitHub nor GitLab` }
+    : { ok: true, forge: FORGES[name], project };
+};
+
+/** Whether the forge shows production carrying `sha`: false where it cannot say. */
 export function productionCarries<R>(
   cwd: string,
   sha: string,

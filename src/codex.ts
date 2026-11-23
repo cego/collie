@@ -348,6 +348,10 @@ export interface LoadedThread {
   readonly id: string;
   readonly transcript: string | null;
   readonly running: ReadonlyArray<string>;
+  /** For a sub-agent's thread, the thread that spawned it; null for the agent's own. */
+  readonly parent: string | null;
+  /** The cheap thread a TUI keeps for itself. */
+  readonly ephemeral: boolean;
 }
 
 // WARNING: refused where an agent's own thread works in another directory; that server is not provably this agent's.
@@ -376,6 +380,8 @@ export const agentThreads = Effect.fn("Codex.agentThreads")(function* (
     threads.push({
       id: threadId,
       transcript: thread.path ?? null,
+      parent: thread.parentThreadId ?? null,
+      ephemeral: thread.ephemeral === true,
       running: yield* runningTurns(client, threadId).pipe(
         Effect.catchIf(
           (cause) => (idle && unmaterialized(threadId, cause)) || (unlistable && unlisted(cause)),

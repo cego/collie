@@ -34,7 +34,9 @@
 
 **Fallback chain** — The human's `fallbacks` setting: an ordered list of `harness` or `harness/model` entries, shared across the Flock. It is tried after whatever the work itself prefers, including a Workflow's own `otherwise`. It is empty by default. The **Flock chat** has a chain of its own, `chatFallbacks` in Desktop's Settings, for this computer only. It is tried after the chat's own harness and model, judged by the same rules.
 
-**Fallback** — Work moved to the next agent with room because its agent's Subscription is Exhausted. If that is known before the agent starts, the recorded choice is simply another agent. Mid-work, Collie stops the agent and, once it is **Quiet**, starts a new one on the same operation, with the same prompt and a hand-over. The hand-over says the checkout holds what was done and where the earlier transcript is. The new agent also takes the old one's place for later work. A Fallback is recorded with what it fell back from and why. In the **Flock chat** a Fallback keeps the conversation on another model of the same harness. On another harness it starts a new conversation, and Desktop's hand-over says where it came from and where the earlier transcript is.
+**Fallback** — Work moved to the next agent with room because its agent's Subscription is Exhausted. If that is known before the agent starts, the recorded choice is simply another agent. Mid-work, Collie stops the agent and, once it is **Quiet**, starts a new one on the same operation, with the same prompt and a **Hand-over**; one that is not Quiet parks the Run on `predecessor-not-quiet` until it is. The new agent also takes the old one's place for later work. A Fallback is recorded with what it fell back from and why. In the **Flock chat** a Fallback keeps the conversation on another model of the same harness. On another harness it starts a new conversation, and Desktop's hand-over says where it came from and where the earlier transcript is.
+
+**Hand-over** — What an agent taking over another's work reads first: one record the host builds, kept in the Run's records under a revision number, with every earlier revision kept too. The host fills in the Run, step and ticket; the outgoing agent and its **Incarnation**; the **Intent**'s goal and constraints; the plan revision, a digest of the plan directory; the branch, base and head, and whose any uncommitted work is; the ticket's criteria, each claimed met where the work's last Output answered it as met, beside the ids of the passing records at the head that answer names, or "claimed, unproved" where it names none; the Checks still owed; open findings by ledger id, and in a fix's hand-over the head they were reviewed at, so `git diff` from it shows what was done since; pending questions with their choice ids; and where the outgoing transcript and the Run's reports are. The outgoing agent adds only what its last Output said: its decisions, the approaches it rejected and its next action, absent where it wrote none, such as a Fallback mid-turn. When it goes out, its head, plan revision and whether there is uncommitted work are checked against the checkout: if any changed it is rebuilt once, and if it still does not match the Run parks on `hand-over-stale` and no agent starts. It goes out once per new agent, in that agent's first delivery, and it never repeats the progress the prompt carries. It is never proof: the gate reads the journal. A quota **Fallback** uses it.
 
 **Input** — A value a Workflow needs (plan directory, diff target, goal). Only the **Launch flow** infers one, for a human, from context (branch, cwd, earlier plan Runs, glab), and a Run records which of its Inputs were inferred and which were given. An agent's start — chat's Collie tools or `collie run start` — gives every Input explicitly, an optional one as an explicit empty, and a start missing one is refused with what would fill it.
 
@@ -341,7 +343,10 @@ before and after. A tree is its content: committing exactly the bytes a Verifica
 leaves it on the same tree, and changing any of them does not. A result whose snapshots
 differ is `unstable`, never `pass`, and names the paths that moved, each classed tracked,
 untracked or lockfile. While Collie collects one itself on a checkout, deliveries to the
-Run's agents working there are held until it ends. One recorded with `--expect fail` reproduces a failure
+Run's agents working there are held until it ends. One run **isolated** (`--isolated`, or
+`isolated: true` on a Check) runs in a detached checkout of the tree it starts on, after an
+optional recorded `prepare`, so edits in the Worktree cannot move it. Its record still
+proves that start tree, and a failed `prepare` records it failed at stage `prepare`. One recorded with `--expect fail` reproduces a failure
 and is never a pass: on the current tree it proves no Check, and on an earlier tree it is
 history, so the Check still owes a pass on the final tree. An agent's statement about tests
 is a **claim**, and is shown as one.
@@ -371,7 +376,11 @@ is (ADR-0059).
 **Quiet** — An incarnation that can no longer change anything. Every turn it was running
 has ended, as read back from the harness. The process that ran them is gone, and nothing it
 started is still running. `submitted` (an interrupt was sent) and `acknowledged` (the
-harness accepted it) are not Quiet. Only Quiet counts as stopped.
+harness accepted it) are not Quiet. Only Quiet counts as stopped. For a harness whose work
+runs in its pane (Claude, Pi, OpenCode), Quiet is no process of the pane's session left
+once the pane has closed; one left past a short grace gets one SIGTERM. Where no process of
+the pane can be named, as for an agent started before Collie recorded one, its end says
+Quiet was not confirmed and the close stands as the stop.
 
 **Conversation** — Scoped to one Herd (Native chat, in its Home) or to the Flock (the
 **Flock chat**, in Desktop). For a Herd, also the durable journal of human and Collie turns, plus the turns
@@ -481,7 +490,11 @@ needs you and says why. An unclassified park is `unknown`, never a guess. A park
 derived from the Run, its cause and the evidence that cause is about, so parking again on the
 same evidence after a restart, resume or hand-over is the same park. `delivery-unsettled` is a
 reminder held behind an earlier delivery nobody can settle; it rechecks and never heals.
-Counted per cause in `collie run report` (ADR-draft-a-run-recovers-where-it-parks).
+`predecessor-not-quiet` is an agent that had to stop before another took its work, and was not
+**Quiet** within the stop's wait: it rechecks that nothing it left is still running, and never
+starts a Heal. `hand-over-stale` is a **Hand-over** whose checkout moved again after it was
+rebuilt: it rechecks that the head and plan revision hold still between two readings, and never
+starts a Heal. Counted per cause in `collie run report` (ADR-draft-a-run-recovers-where-it-parks).
 
 **Recovery** — What the host does about a park, without being asked: an **Output reminder**
 to an agent whose turn ended without writing its Output, and a resume once a recheck shows the
@@ -581,8 +594,11 @@ for before it closes anything of a Task, and a checkout any Task still owes some
 is kept whatever a Run's line says. Only a landed Task folds into History a day after
 it ends; one that still owes a merge request stays on the board however old it is.
 
-**Merge watch** — The host's round, every 5 minutes, that asks each merge request's own
-forge what became of it and records `merged` as that forge's word when it merged. It asks
+**Merge watch** — The host's forge syncer: its round asks each merge request's own forge what
+became of it, every minute for one on a card and every 5 minutes for the rest, and at once
+after a Run publishes it, and records `merged` as that forge's word when it merged. What it
+reads is the only forge answer a card or a listing's offers see; taking an offer asks again
+(ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs). It asks
 about every merge request a Task owes, whatever its section, age or the Dispositions of
 its Runs, follows a merged one to production, and keeps asking about a closed one in case
 it is reopened. Only a merge request settled by `abandoned` is not asked about. Each answer
@@ -850,7 +866,14 @@ Run's end, `ci` for a check left to CI, read from the merge request's pipeline, 
 owes its pass here, as one that passed only earlier does; neither is a failure. Past that one `recheck`, a check is not run whole again on a tree it already
 failed on: after a gate fix that left the tree as it was, the records on that tree stand.
 A resume of a Run held unproved is the exception, because a repair can be outside the tree:
-each check still failing there runs whole once more (ADR-0034, amended 2026-10-19). The pass is the Workflow's declaration, never read off its
+each check still failing there runs whole once more (ADR-0034, amended 2026-10-19). A pass
+on this tree is relied on only if this host collected it: a restart is when something
+outside the tree may have been repaired, so a restarted host runs the check again. Where no
+record is relied on, the Run's log says why, with one reason: no record, another command,
+another tree, an unstable or expected-red record, another environment, or a record from
+before this host started. Identical requests for a check while it runs (same Run, command,
+directory, tree and environment) share its one process and one record, which says it
+answered each. The pass is the Workflow's declaration, never read off its
 id. While it runs, the card and chat say the check, the pass, how long it has run against
 how long it usually takes, and where its output is being written (ADR-0042).
 
@@ -871,7 +894,7 @@ failed attempts that named each, so a test that keeps flaking can be found.
 
 **Obstacle** — What is identifiably in a Run's way, in one sentence: a command failing several times in a row the same way. It is shown to the human and given to the next prompt so the approach can change. It stops nothing.
 
-**Slice** — One item of a list of work — a ticket's build — known by its name, never by where it sits. It has its own prompt and its own Output, runs on the list's one agent, and is handed only its ticket and a few lines of fact about the items before it — their commits and what they verified, never their transcripts. A replayed or resumed Run reuses the items already done and does only what is left.
+**Slice** — One item of a list of work — a ticket's build — known by its name, never by where it sits. It has its own prompt and its own Output, runs on the list's one agent (under `agent_sessions: ticket` or `round`, each later ticket on an agent of its own, given the **Hand-over**), and is handed only its ticket and a few lines of fact about the items before it — their commits and what they verified, never their transcripts. A replayed or resumed Run reuses the items already done and does only what is left. `run metrics` counts each Slice once, by its name, at its latest status, and the tokens its agent used on it under its name as the step.
 
 **Choice** — A question a Run asks the human with `ask`, from a closed set of options. Each option is a solution: an id, a title, a one-line detail, and whether it is the **Recommended solution**, which every front door lists first. What the answer does next — start another Workflow, prompt an agent, post a review, stop — is the Workflow's own code. An answer names a solution's id or its title; one outside the options, or a second answer to one already answered, is refused and starts nothing. A Workflow that recommends none, or more than one, is not stopped: the Choice is posted unmarked with a shortfall. One of fewer than three options also offers **Hold the Run**, which holds the Run with reason `held at question <name>` and answers nothing. Its **Steering entry** supersedes it rather than answering it, and it is asked again once that work ends (**Superseded question**) (ADR-draft-a-runs-question-is-a-questionnaire).
 

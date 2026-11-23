@@ -151,6 +151,10 @@ pub struct Task {
     pub flow: Option<Flow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<Revision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirmed: Option<bool>,
+    #[serde(rename = "asOf", default, skip_serializing_if = "Option::is_none")]
+    pub as_of: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -290,6 +294,10 @@ pub enum Cause {
     GateFixUnproved,
     #[serde(rename = "step-failed")]
     StepFailed,
+    #[serde(rename = "predecessor-not-quiet")]
+    PredecessorNotQuiet,
+    #[serde(rename = "hand-over-stale")]
+    HandOverStale,
     #[serde(rename = "unknown")]
     Unknown,
 }
@@ -3557,6 +3565,18 @@ pub struct VerifyItem {
     pub cwd: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ci: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolated: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prepare: Option<Prepare>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_review: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Prepare {
+    pub executable: String,
+    pub argv: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

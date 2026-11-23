@@ -149,6 +149,7 @@ const FakeIssue = Schema.Struct({
   title: Schema.String,
   body: Schema.String,
   state: Schema.Literals(["open", "closed"]),
+  closedAt: Schema.optionalKey(Schema.String),
 });
 type FakeIssue = typeof FakeIssue.Type;
 
@@ -269,6 +270,17 @@ export const ForgeModel = Schema.Struct({
   approved: Schema.optionalKey(Schema.Array(Schema.String)),
   refusesApproval: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.String])),
   refusesMerge: Schema.optionalKey(Schema.Boolean),
+  // WARNING: one failure per merge, in order; an `applied` one merges anyway.
+  mergeFailures: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        status: Schema.Finite,
+        message: Schema.String,
+        applied: Schema.optionalKey(Schema.Boolean),
+        comments: Schema.optionalKey(Schema.Array(FakeComment)),
+      }),
+    ),
+  ),
   defaultBranch: Schema.optionalKey(Schema.String),
   protectedBranches: Schema.optionalKey(
     Schema.Array(
@@ -354,6 +366,7 @@ interface Answer {
   };
   readonly enqueued?: { readonly mr: FakeMr; readonly head: string };
   readonly dequeued?: FakeMr;
+  readonly failedMerge?: FakeMr;
   readonly merged?: {
     readonly mr: FakeMr;
     readonly sha: string;
@@ -404,8 +417,15 @@ const HEAD_MOVED = {
   github: "Head branch was modified. Review and try the merge again. (HTTP 409)",
 } as const;
 
-function mergeAnswer(forge: MrForge, mr: FakeMr, args: ReadonlyArray<string>) {
+function mergeAnswer(forge: MrForge, model: ForgeModel, mr: FakeMr, args: ReadonlyArray<string>) {
   const sha = field(args, "sha") ?? "";
+  const merged = { mr, sha, method: field(args, "merge_method"), fields: fieldsOf(args) };
+  const failure = model.mergeFailures?.[0];
+  if (failure !== undefined) {
+    const failed: Answer = { ...refused(`${failure.status} ${failure.message}`), failedMerge: mr };
+    const returned: Answer = failure.applied === true ? { ...failed, merged } : failed;
+    return returned;
+  }
   if (mr.state !== "open") {
     const returned: Answer = refused(NOT_MERGEABLE[forge]);
     return returned;
@@ -424,7 +444,7 @@ function mergeAnswer(forge: MrForge, mr: FakeMr, args: ReadonlyArray<string>) {
         ? { state: "merged", merge_commit_sha: mergeCommitOf(mr) }
         : { merged: true, sha: mergeCommitOf(mr) },
     ),
-    merged: { mr, sha, method: field(args, "merge_method"), fields: fieldsOf(args) },
+    merged,
   };
   return returned;
 }
@@ -697,12 +717,16 @@ function issueApi(forge: MrForge, model: ForgeModel, route: string, args: Readon
     return answer;
   }
   const query = new URLSearchParams(Str.split(route, "?")[1]);
+  const closed = query.get("state") === "closed";
+  // WARNING: a closed issue's last update is its close.
+  const since = query.get(forge === "github" ? "since" : "updated_after");
   const issues: Array<Schema.Json> = Arr.map(
     Arr.filter(
       model.issues ?? [],
       (one) =>
         one.project === project &&
-        one.state === "open" &&
+        one.state === (closed ? "closed" : "open") &&
+        (since === null || (one.closedAt ?? "") >= since) &&
         !query.has("creator") &&
         !query.has("assignee"),
     ),
@@ -713,20 +737,22 @@ function issueApi(forge: MrForge, model: ForgeModel, route: string, args: Readon
               number: one.number,
               title: one.title,
               body: one.body,
-              state: "open",
+              state: one.state,
               html_url: `https://${project}/issues/${one.number}`,
+              closed_at: one.closedAt ?? null,
             }
           : {
               iid: one.number,
               title: one.title,
               description: one.body,
-              state: "opened",
+              state: one.state === "open" ? "opened" : "closed",
               web_url: `https://${project}/-/issues/${one.number}`,
+              closed_at: one.closedAt ?? null,
             };
       return returned;
     },
   );
-  if (forge === "github") {
+  if (forge === "github" && !closed) {
     issues.push(
       ...Arr.map(
         Arr.filter(
@@ -1511,7 +1537,9 @@ function glabOnMr(model: ForgeModel, mr: FakeMr, rest: string, args: ReadonlyArr
   }
   if (rest === "merge" && method === "PUT") {
     const returned: Answer =
-      model.refusesMerge === true ? refused(NOT_MERGEABLE.gitlab) : mergeAnswer("gitlab", mr, args);
+      model.refusesMerge === true
+        ? refused(NOT_MERGEABLE.gitlab)
+        : mergeAnswer("gitlab", model, mr, args);
     return returned;
   }
   const returned: Answer = no();
@@ -1602,7 +1630,7 @@ function ghOnPull(
     return returned;
   }
   if (kind === "pulls" && rest === "merge" && method === "PUT") {
-    const returned: Answer = mergeAnswer("github", pull, args);
+    const returned: Answer = mergeAnswer("github", model, pull, args);
     return returned;
   }
   const returned: Answer = no();
@@ -2649,6 +2677,20 @@ export function answer(
       ...after,
       enqueued: [...(after.enqueued ?? []), { key: keyOf(forge, mr), head }],
       mrs: Arr.map(after.mrs, (one) => (one === mr ? { ...one, queued: head } : one)),
+    };
+  }
+  if (said.failedMerge !== undefined) {
+    const mr = said.failedMerge;
+    const [failure, ...rest] = after.mergeFailures ?? [];
+    const comments = failure?.comments ?? [];
+    after = {
+      ...after,
+      mergeFailures: rest,
+      mrs: Arr.map(after.mrs, (one) =>
+        one === mr && comments.length > 0
+          ? { ...one, comments: [...(one.comments ?? []), ...comments] }
+          : one,
+      ),
     };
   }
   if (said.dequeued !== undefined) {

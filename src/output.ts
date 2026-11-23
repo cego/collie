@@ -10,6 +10,7 @@ import type { Measurement } from "./measurement-model";
 import type { CheckCommand, Snapshot, Verification } from "./verify";
 import { isYamlMap, YamlValueJsonSchema } from "./yaml";
 import type { YamlValue } from "./yaml";
+import { OutgoingFields } from "./hand-over";
 
 const said = (field: string) =>
   Schema.refine<Schema.String, string>((value): value is string => Str.trim(value) !== "", {
@@ -258,6 +259,7 @@ export const FixOutputSchema = Schema.Struct({
   fixed: optionalList(FixedSchema),
   disputed: optionalList(FindingSchema),
   checks: optionalList(CheckSchema),
+  ...OutgoingFields,
 }).pipe(listed());
 
 // WARNING: pushed false is a real answer, so the url is optional rather than the proof.

@@ -403,7 +403,29 @@ export class LaterMigration extends Data.TaggedError("LaterMigration")<{
   readonly migration: string;
 }> {}
 
-// WARNING: refused while a later migration is recorded: a re-upgrade runs only migrations after the latest.
+/**
+ * The migrations after the records' that keep the board's projection
+ * (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs): derived again by the next
+ * host, so a rollback drops them with the records.
+ */
+export const LAST_PROJECTION_MIGRATION_ID = 30;
+const PROJECTION_TABLES = [
+  "collie_cards",
+  "collie_merge_requests",
+  "collie_forge_logins",
+  "collie_module_revisions",
+  "collie_branches",
+  "collie_connections",
+];
+
+/**
+ * Undoes `RUN_RECORDS_MIGRATION` for a host that is not running: every Run's records,
+ * controls and the usual Step times are written back where an older build reads them, each Run's files dated by when
+ * it last did work, a legacy file the host has since removed is removed, and only then are
+ * the tables and the migration's record dropped, in one transaction, so a later upgrade
+ * imports the files again. The projection's tables go with them. Refused while a later migration is recorded, since a re-upgrade
+ * runs only migrations after the latest one recorded.
+ */
 export const rollbackRunRecords = Effect.fn("RecordsImport.rollback")(function* (stateDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -414,7 +436,7 @@ export const rollbackRunRecords = Effect.fn("RecordsImport.rollback")(function* 
   if (latest === undefined || latest.migration_id < RUN_RECORDS_MIGRATION_ID) {
     return false;
   }
-  if (latest.migration_id > RUN_RECORDS_MIGRATION_ID) {
+  if (latest.migration_id > LAST_PROJECTION_MIGRATION_ID) {
     return yield* new LaterMigration({ migration: `${latest.migration_id}_${latest.name}` });
   }
   const written = new Map<string, Array<string>>();
@@ -504,7 +526,10 @@ export const rollbackRunRecords = Effect.fn("RecordsImport.rollback")(function* 
     yield* sql`DROP TABLE collie_run_activity`;
     yield* sql`DROP TABLE collie_controls`;
     yield* sql`DROP TABLE collie_step_times`;
-    yield* sql`DELETE FROM collie_migrations WHERE migration_id = ${RUN_RECORDS_MIGRATION_ID}`;
+    for (const table of PROJECTION_TABLES) {
+      yield* sql`DROP TABLE IF EXISTS ${sql(table)}`;
+    }
+    yield* sql`DELETE FROM collie_migrations WHERE migration_id >= ${RUN_RECORDS_MIGRATION_ID}`;
   }).pipe(sql.withTransaction);
   return true;
 });

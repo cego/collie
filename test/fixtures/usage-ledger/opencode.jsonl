@@ -1,0 +1,8 @@
+{"type":"message","parent":null,"info":{"id":"m1","sessionID":"o1","role":"user","time":{"created":1794909600000}}}
+{"type":"part","parent":null,"role":"user","part":{"id":"pt1","sessionID":"o1","messageID":"m1","type":"text","text":"Build the ticket."}}
+{"type":"message","parent":null,"info":{"id":"m2","sessionID":"o1","role":"assistant","modelID":"gpt-6","time":{"created":1794909601000},"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}}}
+{"type":"message","parent":null,"info":{"id":"m2","sessionID":"o1","role":"assistant","modelID":"gpt-6","time":{"created":1794909601000},"tokens":{"input":200,"output":40,"reasoning":10,"cache":{"read":0,"write":800}}}}
+{"type":"part","parent":null,"role":"assistant","chars":10,"part":{"id":"pt2","sessionID":"o1","messageID":"m2","type":"tool","callID":"call1"}}
+{"type":"message","parent":null,"info":{"id":"m3","sessionID":"o1","role":"assistant","modelID":"gpt-6","time":{"created":1794909602000},"tokens":{"input":20,"output":60,"reasoning":0,"cache":{"read":1000,"write":100}}}}
+{"type":"message","parent":null,"info":{"id":"m3","sessionID":"o1","role":"assistant","modelID":"gpt-6","time":{"created":1794909602000},"tokens":{"input":20,"output":60,"reasoning":0,"cache":{"read":1000,"write":100}}}}
+{"type":"message","parent":null,"info":{"id":"m4","sessionID":"o1","role":"assistant","modelID":"gpt-6","time":{"created":1794910201000},"tokens":{"input":5,"output":10,"reasoning":4,"cache":{"read":1100,"write":0}}}}

@@ -36,6 +36,7 @@ import {
 } from "collie";
 import type {
   Finding,
+  HandOverGiven,
   Snapshot,
   SynthesisReport,
   Template,
@@ -44,6 +45,7 @@ import type {
 } from "collie";
 import { CommandLine } from "effect/process";
 import { Result } from "effect";
+import type * as Types from "effect/Types";
 import { Effect, FileSystem, Schema, Stream } from "effect";
 import { connection } from "./connections.ts";
 import { WorkflowInstance } from "effect/workflow/WorkflowEngine";
@@ -138,6 +140,8 @@ interface Fixing {
 }
 
 interface Opening {
+  readonly built?: string;
+  readonly ledger?: string;
   readonly evidence: string;
   readonly unreviewed: string;
   readonly unsettled: string;
@@ -174,6 +178,9 @@ export interface Delivery<I extends Told, O extends Opened> {
   readonly onto?: string | undefined;
   readonly agent: string;
   readonly role: string;
+  // WARNING: set only where `agent` has not yet run.
+  readonly takesOver?: { readonly agent: string; readonly why: string };
+  readonly handOver?: HandOverGiven;
   readonly input: I;
   readonly checksNow: Effect.Effect<string, never, Needs>;
   readonly prompts: {
@@ -191,6 +198,8 @@ export interface Delivery<I extends Told, O extends Opened> {
   }>;
   readonly roots: ReadonlyArray<string>;
   readonly rallied: Reviewed;
+  readonly built?: string;
+  readonly ledger?: string;
   readonly unsettled: ReadonlyArray<string>;
   readonly integrate: (operation: string) => Effect.Effect<unknown, WorkflowError, Needs>;
   readonly review: Effect.Effect<
@@ -232,6 +241,19 @@ const spawned = (granted: ReadonlyArray<VerifySpec>, verifications: ReadonlyArra
       ? spec
       : { ...spec, executable: ran.executable, argv: ran.argv, cwd: ran.cwd };
   });
+
+const deliveredBy = (ask: Pick<Delivery<Told, Opened>, "agent" | "takesOver" | "handOver">) => {
+  const on: Types.Mutable<Pick<Delivery<Told, Opened>, "agent" | "takesOver" | "handOver">> = {
+    agent: ask.agent,
+  };
+  if (ask.takesOver !== undefined) {
+    on.takesOver = ask.takesOver;
+  }
+  if (ask.handOver !== undefined) {
+    on.handOver = ask.handOver;
+  }
+  return on;
+};
 
 export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =>
   Effect.gen(function* () {
@@ -396,7 +418,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           }));
           const fixed = yield* agentWork({
             operation: `gate-fix-${at}`,
-            agent: ask.agent,
+            ...deliveredBy(ask),
             role: ask.role,
             pushes: true,
             instructions: ask.prompts.fix,
@@ -639,7 +661,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         });
         const opened = yield* agentWork({
           operation: attempt === 1 ? "mr" : `mr-${attempt}`,
-          agent: ask.agent,
+          ...deliveredBy(ask),
           role: ask.role,
           pushes: true,
           // WARNING: not merging: only a message of its own asks for that.
@@ -656,6 +678,8 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
             verify: renderApproved(spawned(checks, settledEvidence.verifications)),
             // WARNING: read after the gate settled, so the merge request cites the passing runs.
             evidence: renderEvidence(settledEvidence),
+            built: ask.built ?? "",
+            ledger: ask.ledger ?? "",
             unreviewed,
             unsettled: Arr.join(
               Arr.map(unsettled, (line) => `- ${line}`),
@@ -850,7 +874,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
       const fixed = yield* ciFix(
         agentWork({
           operation: `ci-fix-${at}`,
-          agent: ask.agent,
+          ...deliveredBy(ask),
           role: ask.role,
           pushes: true,
           instructions: ask.prompts.ciFix,

@@ -8,6 +8,7 @@ import {
   FindingSchema,
   FixOutputSchema,
   IntegrationSchema,
+  OutgoingFields,
   PrerequisiteStandingSchema,
   Agents,
   Children,
@@ -25,8 +26,10 @@ import {
   classifyWorkSource,
   contentOf,
   criteriaIn,
+  PlanOutputSchema,
   defineWorkflow,
   evidenceRoots,
+  findingsIn,
   formatFindings,
   identityProblem,
   isBlocking,
@@ -42,7 +45,15 @@ import {
   stepFailed,
   unmetCriteria,
 } from "collie";
-import type { Criterion, Finding, Handed, Integration, Slice } from "collie";
+import type {
+  Criterion,
+  Finding,
+  HandOverGiven,
+  Handed,
+  Integration,
+  Outgoing,
+  Slice,
+} from "collie";
 import { Deferred, Effect, Fiber, FileSystem, Path, Predicate, Schema } from "effect";
 import { WorkflowInstance } from "effect/workflow/WorkflowEngine";
 import type { WorkflowEngine } from "effect/workflow/WorkflowEngine";
@@ -73,12 +84,63 @@ const sectionOf = (section: string, input: typeof Implementing.Type) =>
     Str.replaceAll("{{run.dir}}", input.run.dir),
   );
 
+const inlinePlanRefusal = (
+  plan: string,
+  root: string,
+  source: { readonly kind: string; readonly value: string },
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const stated = source.kind === "text" ? criteriaIn(source.value) : [];
+    const read = yield* planReposOf(plan, root);
+    if (read.refusal !== null) {
+      return read.refusal.message;
+    }
+    const tickets = yield* orderedTicketsOf(plan);
+    if (tickets.length === 0) {
+      return `${plan}/issues/ holds no ticket`;
+    }
+    if (!isSingleRepo(read)) {
+      return "its tickets name more than this checkout: give every ticket **Repo:** .";
+    }
+    const owned = new Set(Arr.flatMap(tickets, (one) => one.criteria));
+    const unowned = Arr.dedupe(
+      Arr.filter(
+        [...criteriaIn(yield* fs.readFileString(`${plan}/SPEC.md`)), ...stated],
+        (one) => !owned.has(one),
+      ),
+    );
+    if (unowned.length > 0) {
+      return `these criteria of SPEC.md or the work you were given are no ticket's: ${Arr.join(unowned, "; ")}. Copy each, word for word, into the ticket that answers it`;
+    }
+    if (source.kind !== "review") {
+      return null;
+    }
+    const texts = yield* Effect.forEach(tickets, (one) =>
+      fs.readFileString(`${plan}/issues/${one.file}`),
+    );
+    const dropped = Arr.filter(
+      yield* findingsIn(source.value),
+      (one) =>
+        one.status !== "fixed" &&
+        one.status !== "obsolete" &&
+        !Arr.some(texts, Str.includes(one.title)),
+    );
+    return dropped.length === 0
+      ? null
+      : `these findings of the review are no ticket's: ${Arr.join(
+          Arr.map(dropped, (one) => one.title),
+          "; ",
+        )}. Name each, word for word, in the ticket that fixes it`;
+  }).pipe(Effect.catch((cause) => Effect.succeed(`${plan} cannot be read: ${cause.message}`)));
+
 const prompts = {
   build: content.template("build", {
     ...Implementing.fields,
     ticket: Schema.Struct({ file: text, title: text }),
     progress: text,
     session: Schema.Struct({ ask: text }),
+    handing: text,
     obstacle: text,
     criteria: text,
     measure: text,
@@ -105,8 +167,11 @@ const prompts = {
     findings: text,
   }),
   merge: content.template("merge", { ...Implementing.fields, conflict: text }),
+  plan: content.template("plan", { ...Implementing.fields, source: text, refusal: text }),
   mr: content.template("mr", {
     ...Implementing.fields,
+    built: text,
+    ledger: text,
     evidence: text,
     unreviewed: text,
     unsettled: text,
@@ -146,6 +211,7 @@ const Built = Schema.Struct({
   assumptions: Schema.optionalKey(Schema.Array(Schema.String)).annotate({
     description: "each decision you made that the spec did not settle, and why, one sentence each",
   }),
+  ...OutgoingFields,
 });
 
 const ChangeReading = Schema.Struct({
@@ -191,10 +257,12 @@ const Opened = Schema.Struct({
   pushed: Schema.Boolean,
 });
 
+const PLAN_TRIES = 2;
 const CRITERIA_TRIES = 2;
 const MERGE_TRIES = 2;
 
 const BUILDER = "build";
+const DELIVERER = "deliver";
 
 const RELEASE = "Release";
 const STAGE = "Stage";
@@ -211,6 +279,13 @@ const CRITERIA_OPTIONS = [
   { id: STOP, detail: "Ends the Run; no review starts." },
 ];
 
+const planning = step({
+  id: "plan",
+  title: "Plan",
+  description: "The implementer writes the work into the Run's plan before any of it is built.",
+  kind: "agent",
+  role: "implementer",
+});
 const building = step({
   id: "build",
   title: "Build",
@@ -481,7 +556,7 @@ export default defineWorkflow({
           for (let tries = 1; tries <= MERGE_TRIES && !settles(merged); tries++) {
             yield* agentWork({
               operation: tries === 1 ? operation : `${operation}-${tries}`,
-              agent: BUILDER,
+              ...onHolder(handing),
               role: "implementer",
               pushes: true,
               instructions: prompts.merge,
@@ -511,72 +586,26 @@ export default defineWorkflow({
       const restateKind = Effect.map(kindNow, (outcome) => {
         input = { ...input, inputs: { ...input.inputs, outcome } };
       });
+      const handing: Handing = {
+        plan: null,
+        ticket: null,
+        said: undefined,
+        sessions: place.features?.agent_sessions ?? "run",
+        agent: BUILDER,
+        last: "",
+        from: null,
+        fixes: new Map(),
+        proof: new Map(),
+      };
       const rallyAsk = {
         rounds: { n: 0 },
         cwd,
         proves: kindNow,
         risks: place.options.risks ?? "",
         integrate: integrated,
+        handing,
       };
 
-      // WARNING: each reading is recorded, so a replay is handed the list that was read.
-      let readings = 0;
-      const ticketsNow = Effect.gen(function* () {
-        readings += 1;
-        if (source.kind !== "plan-dir") {
-          return [];
-        }
-        const read = yield* Activity.make({
-          name: `tickets.${readings}`,
-          success: Schema.Array(SliceRecord),
-          execute: orderedTicketsOf(
-            source.value,
-            place.options.repo ?? "",
-            place.options.change ?? "",
-          ),
-        });
-        return Arr.map(read, (one) => ({
-          ...one,
-          criteria: one.criteria ?? [],
-          benchmark: one.benchmark ?? null,
-          prerequisites: one.prerequisites ?? [],
-        }));
-      });
-      let tickets: ReadonlyArray<Slice> = yield* ticketsNow;
-      // WARNING: read only after the build, which is what writes SPEC.md for any source but a plan.
-      let specReadings = 0;
-      const specNow = Effect.gen(function* () {
-        const plan = source.kind === "plan-dir" ? source.value : `${place.dir}/plan`;
-        for (;;) {
-          specReadings += 1;
-          const readable = yield* Activity.make({
-            name: `spec-readable.${specReadings}`,
-            success: Schema.Boolean,
-            execute: FileSystem.FileSystem.pipe(
-              Effect.flatMap((fs) => fs.readFileString(`${plan}/SPEC.md`)),
-              Effect.as(true),
-              Effect.orElseSucceed(() => false),
-            ),
-          });
-          if (readable) {
-            return plan;
-          }
-          if (source.kind !== "plan-dir") {
-            return "";
-          }
-          yield* building(
-            unbuilt(`spec-${specReadings}`, `${plan}/SPEC.md cannot be read, so no review starts`),
-          );
-        }
-      });
-      const whole = tickets.length < 2;
-      const built = new Set<string>();
-      const handed: Array<Handed> = [];
-      const assumed: Array<string> = [];
-      const afterMerged: Array<string> = [];
-      const answeredFor: Array<Answered> = [];
-      let build: typeof Built.Type | null = null;
-      let rallied: Rallied | null = null;
       // WARNING: an empty Input is one left out, so an empty recovery is new work.
       const recovers = asked.recovery === "" ? undefined : asked.recovery;
       const recovered = yield* Activity.make({
@@ -598,6 +627,118 @@ export default defineWorkflow({
       if (recovers !== undefined) {
         yield* host.record(runId, `Follow-up enters at ${recovery.entry}: ${recovery.reason}`);
       }
+      // WARNING: only a Run started under `inline_plan: on` plans a source that is not a plan first.
+      const planDir = `${place.dir}/plan`;
+      const planned =
+        place.features?.inline_plan === true &&
+        source.kind !== "plan-dir" &&
+        recovery.entry === "Build";
+      if (planned) {
+        yield* planning(
+          Effect.gen(function* () {
+            let refusal = "";
+            for (let attempt = 1; ; attempt++) {
+              const operation = attempt === 1 ? "plan" : `plan-${attempt}`;
+              yield* agentWork({
+                operation,
+                ...onHolder(handing),
+                role: "implementer",
+                instructions: prompts.plan,
+                input: { ...input, source: sectionOf(`plan.${source.kind}`, input), refusal },
+                output: PlanOutputSchema,
+              });
+              const refused = yield* Activity.make({
+                name: `${operation}.check`,
+                success: Schema.NullOr(Schema.String),
+                execute: inlinePlanRefusal(planDir, cwd, source),
+              });
+              if (refused === null) {
+                break;
+              }
+              if (attempt === PLAN_TRIES) {
+                return yield* new WorkflowError({
+                  reason: `the plan at ${planDir} cannot be built: ${refused}`,
+                });
+              }
+              refusal = `The plan you wrote cannot be built: ${pipe_(refused, Str.replace(/\.+$/, ""))}. Correct it in place.`;
+            }
+            input = { ...input, inputs: { ...input.inputs, plan: planDir, plan_kind: "plan-dir" } };
+          }),
+        );
+      }
+      const work = planned ? { kind: "plan-dir", value: planDir } : source;
+      handing.plan = work.kind === "plan-dir" ? work.value : null;
+
+      // WARNING: each reading is recorded, so a replay is handed the list that was read.
+      let readings = 0;
+      const ticketsNow = Effect.gen(function* () {
+        readings += 1;
+        if (work.kind !== "plan-dir") {
+          return [];
+        }
+        const read = yield* Activity.make({
+          name: `tickets.${readings}`,
+          success: Schema.Array(SliceRecord),
+          execute: orderedTicketsOf(
+            work.value,
+            place.options.repo ?? "",
+            place.options.change ?? "",
+          ),
+        });
+        return Arr.map(read, (one) => ({
+          ...one,
+          criteria: one.criteria ?? [],
+          benchmark: one.benchmark ?? null,
+          prerequisites: one.prerequisites ?? [],
+        }));
+      });
+      let tickets: ReadonlyArray<Slice> = yield* ticketsNow;
+      // WARNING: read only after the build, which is what writes SPEC.md for any source but a plan.
+      let specReadings = 0;
+      const specNow = Effect.gen(function* () {
+        const plan = work.kind === "plan-dir" ? work.value : `${place.dir}/plan`;
+        for (;;) {
+          specReadings += 1;
+          const readable = yield* Activity.make({
+            name: `spec-readable.${specReadings}`,
+            success: Schema.Boolean,
+            execute: FileSystem.FileSystem.pipe(
+              Effect.flatMap((fs) => fs.readFileString(`${plan}/SPEC.md`)),
+              Effect.as(true),
+              Effect.orElseSucceed(() => false),
+            ),
+          });
+          if (readable) {
+            return plan;
+          }
+          if (work.kind !== "plan-dir") {
+            return "";
+          }
+          yield* building(
+            unbuilt(`spec-${specReadings}`, `${plan}/SPEC.md cannot be read, so no review starts`),
+          );
+        }
+      });
+      const whole = tickets.length < 2;
+      const built = new Set<string>();
+      const handed: Array<Handed> = [];
+      const assumed: Array<string> = [];
+      const afterMerged: Array<string> = [];
+      const answeredFor: Array<Answered> = [];
+      let build: typeof Built.Type | null = null;
+      let rallied: Rallied | null = null;
+      const ledgered = place.features?.findings_ledger === true;
+      const ledger = new Map<string, Finding>();
+      const ledgering = (given: ReadonlyArray<Finding>) =>
+        ledgered ? { ledger: given, taken: [...ledger.keys()] } : {};
+      const kept = (done: Rallied) => {
+        for (const one of ledgered ? done.reviewed.findings : []) {
+          if (one.id !== undefined) {
+            ledger.set(one.id, one);
+          }
+        }
+        return done;
+      };
       let parentDir = "";
       if (recovery.entry !== "Build") {
         const parent = Str.split(recovers ?? "", "/").at(-1) ?? "";
@@ -676,7 +817,7 @@ export default defineWorkflow({
       const needing = (one: Slice) => ({
         runId,
         cwd,
-        ticket: `${source.value}/issues/${one.file}`,
+        ticket: `${work.value}/issues/${one.file}`,
       });
       let prerequisiteReads = 0;
       const landed = (one: Slice) =>
@@ -753,6 +894,9 @@ export default defineWorkflow({
           break;
         }
         rallied = null;
+        if (ticket !== null && built.size > 0 && handing.sessions !== "run") {
+          handTo(handing, `${BUILDER}-${pipe_(ticket.file, Str.replace(/\.md$/, ""))}`);
+        }
         let attempt = 0;
         const nextBuild = building(
           Effect.gen(function* () {
@@ -771,13 +915,19 @@ export default defineWorkflow({
             const session = yield* sessionNow;
             const given =
               ticket?.criteria ??
-              (source.kind === "text"
-                ? criteriaIn(source.value)
+              (work.kind === "text"
+                ? criteriaIn(work.value)
                 : Arr.flatMap(tickets, (one) => one.criteria));
             yield* restateKind;
+            handing.ticket = ticket?.file ?? null;
             build = yield* agentWork({
               operation,
-              agent: BUILDER,
+              ...onHolder(handing),
+              handOver: handOverOf(handing, {
+                criteria: given,
+                checks: ticket?.checks ?? [],
+                findings: [...ledger.values()],
+              }),
               role: "implementer",
               pushes: true,
               instructions: prompts.build,
@@ -787,17 +937,19 @@ export default defineWorkflow({
                 ticket: { file: ticket?.file ?? "", title: ticket?.title ?? "" },
                 progress: renderProgress(handed),
                 session,
+                handing:
+                  handing.sessions === "run" ? "" : `\n\n${content.sections.get("handing") ?? ""}`,
                 criteria:
-                  ticket === null && source.kind === "linear"
+                  ticket === null && work.kind === "linear"
                     ? "Every checkbox in the issue's description. Copy the description into the spec word for word, its checkboxes included, and answer each one."
                     : renderCriteria(given),
                 measure:
-                  source.kind !== "plan-dir"
+                  work.kind !== "plan-dir"
                     ? measuredBy("measure.own", `${place.dir}/plan/issues/NN-<slug>.benchmark.json`)
                     : ticket?.benchmark != null
-                      ? measuredBy("measure", benchmarkFile(source.value, ticket.benchmark))
+                      ? measuredBy("measure", benchmarkFile(work.value, ticket.benchmark))
                       : "",
-                source: sectionOf(`source.${source.kind}`, input),
+                source: sectionOf(`source.${work.kind}`, input),
                 proof: sectionOf(
                   content.sections.has(`outcome.${input.inputs.outcome}`)
                     ? `outcome.${input.inputs.outcome}`
@@ -811,10 +963,12 @@ export default defineWorkflow({
               },
               output: Built,
             });
+            handing.said = build;
+            handing.last = operation;
             let spec: ReadonlyArray<string> | null = given;
             for (let reading = 1; ; reading++) {
               spec =
-                ticket === null && source.kind === "linear"
+                ticket === null && work.kind === "linear"
                   ? yield* Activity.make({
                       name: `${operation}.criteria.spec-${reading}`,
                       success: Schema.NullOr(Schema.Array(Schema.String)),
@@ -835,7 +989,7 @@ export default defineWorkflow({
             }
             // WARNING: a plan's tickets are read again before each judgement; one that cannot be read keeps its last reading.
             let read: ReadonlyArray<{ file: string } & typeof TicketReading.Type> =
-              source.kind === "plan-dir"
+              work.kind === "plan-dir"
                 ? Arr.map(ticket === null ? tickets : [ticket], (one) => ({
                     file: one.file,
                     criteria: one.criteria,
@@ -854,7 +1008,7 @@ export default defineWorkflow({
                 execute: FileSystem.FileSystem.pipe(
                   Effect.flatMap((fs) =>
                     Effect.forEach(read, (one) =>
-                      fs.readFileString(`${source.value}/issues/${one.file}`).pipe(
+                      fs.readFileString(`${work.value}/issues/${one.file}`).pipe(
                         Effect.map((text) => ({
                           criteria: criteriaIn(text),
                           afterMerge: afterMergeIn(text),
@@ -872,6 +1026,7 @@ export default defineWorkflow({
             const assumptions = [...(build.assumptions ?? [])];
             const commits = [...(build.commits ?? [])];
             let criteria = spec;
+            handing.proof.set(item, { criteria, answers, checks: ticket?.checks ?? [] });
             let unmet: ReadonlyArray<Finding>;
             // WARNING: another hand-back on an unchanged tree cannot move a blocker, so a stall asks instead.
             let blockers: ReadonlyArray<Finding> = [];
@@ -943,7 +1098,13 @@ export default defineWorkflow({
               yield* restateKind;
               const answered = yield* agentWork({
                 operation: `${operation}.criteria-${turn}`,
-                agent: BUILDER,
+                ...onHolder(handing),
+                handOver: handOverOf(handing, {
+                  criteria,
+                  answers,
+                  checks: ticket?.checks ?? [],
+                  findings: [...ledger.values()],
+                }),
                 role: "implementer",
                 pushes: true,
                 instructions: prompts.criteria,
@@ -957,8 +1118,11 @@ export default defineWorkflow({
                 },
                 output: Built,
               });
+              handing.said = answered;
+              handing.last = `${operation}.criteria-${turn}`;
               const after = yield* treeAt(`${operation}.criteria-${turn}.after`);
               answers = [...answers, ...boundTo(criteria, answered.criteria ?? [])];
+              handing.proof.set(item, { criteria, answers, checks: ticket?.checks ?? [] });
               assumptions.push(...(answered.assumptions ?? []));
               commits.push(...(answered.commits ?? []));
               blockers = sameTree(after, before)
@@ -1027,17 +1191,20 @@ export default defineWorkflow({
         }
         const { done, blocking } = completed;
         if (blocking.length > 0) {
-          rallied = yield* builderRally({
-            ...rallyAsk,
-            plan: yield* specNow,
-            criteria: reviewerCriteria(answeredFor),
-            input,
-            build: {
-              item: done.item,
-              completed: Arr.map(handed, (one) => one.item),
-              findings: blocking,
-            },
-          });
+          rallied = kept(
+            yield* builderRally({
+              ...rallyAsk,
+              ...ledgering([]),
+              plan: yield* specNow,
+              criteria: reviewerCriteria(answeredFor),
+              input,
+              build: {
+                item: done.item,
+                completed: Arr.map(handed, (one) => one.item),
+                findings: blocking,
+              },
+            }),
+          );
           for (let attempt = 1; ; attempt++) {
             const unresolved = rallied.halted ?? Arr.join(rallied.unsettled, "; ");
             if (unresolved === "") {
@@ -1047,18 +1214,21 @@ export default defineWorkflow({
               unbuilt(`${done.item}.rally-${attempt}`, `${done.item}: ${unresolved}`),
               { round: rallyAsk.rounds.n },
             );
-            rallied = yield* builderRally({
-              ...rallyAsk,
-              plan: yield* specNow,
-              criteria: reviewerCriteria(answeredFor),
-              input,
-              build: {
-                item: done.item,
-                completed: Arr.map(handed, (one) => one.item),
-                findings: blocking,
-              },
-              resume: { attempt, previous: rallied },
-            });
+            rallied = kept(
+              yield* builderRally({
+                ...rallyAsk,
+                ...ledgering(rallied.reviewed.findings),
+                plan: yield* specNow,
+                criteria: reviewerCriteria(answeredFor),
+                input,
+                build: {
+                  item: done.item,
+                  completed: Arr.map(handed, (one) => one.item),
+                  findings: blocking,
+                },
+                resume: { attempt, previous: rallied },
+              }),
+            );
           }
         }
         tickets = yield* ticketsNow;
@@ -1067,18 +1237,31 @@ export default defineWorkflow({
         return yield* new WorkflowError({ reason: "nothing was built" });
       }
       input = { ...input, verify: yield* checksNow };
+      // WARNING: work that stayed on its first agent keeps it to the end.
+      const delivers = () => handing.sessions !== "run" && handing.agent !== BUILDER;
+      if (delivers() && handing.sessions === "ticket") {
+        handTo(handing, DELIVERER);
+      }
 
       if (rallied === null || rallied.unreviewed !== "") {
-        rallied = yield* builderRally({
-          ...rallyAsk,
-          plan: yield* specNow,
-          criteria: reviewerCriteria(answeredFor),
-          input,
-          obstacle:
-            recovery.entry === "Review"
-              ? `Recover the existing implementation. Review the whole requested outcome, including the current work source ${asked.plan} and any added requirements; an unbuilt requirement is a blocking finding for the builder. Previous head: ${recovery.previous || "unrecorded"}. Commits since that head:\n${recovery.commits || "(none or unavailable)"}\nThe original requirements and review associations this recovery weighed are in ${place.dir}/recovery-reviews.jsonl. Read its open findings at ${parentDir}/findings.json, and its spec at ${parentDir}/plan where present.`
-              : "",
-        });
+        rallied = kept(
+          yield* builderRally({
+            ...rallyAsk,
+            ...ledgering(
+              Arr.filter(
+                [...ledger.values()],
+                (one) => one.status === "open" || one.status === "disputed",
+              ),
+            ),
+            plan: yield* specNow,
+            criteria: reviewerCriteria(answeredFor),
+            input,
+            obstacle:
+              recovery.entry === "Review"
+                ? `Recover the existing implementation. Review the whole requested outcome, including the current work source ${asked.plan} and any added requirements; an unbuilt requirement is a blocking finding for the builder. Previous head: ${recovery.previous || "unrecorded"}. Commits since that head:\n${recovery.commits || "(none or unavailable)"}\nThe original requirements and review associations this recovery weighed are in ${place.dir}/recovery-reviews.jsonl. Read its open findings at ${parentDir}/findings.json, and its spec at ${parentDir}/plan where present.`
+                : "",
+          }),
+        );
       }
       for (let attempt = 1; ; attempt++) {
         const unresolved = rallied.halted ?? Arr.join(rallied.unsettled, "; ");
@@ -1086,13 +1269,16 @@ export default defineWorkflow({
           break;
         }
         yield* reviewRound(unbuilt(`rally-${attempt}`, unresolved), { round: rallyAsk.rounds.n });
-        rallied = yield* builderRally({
-          ...rallyAsk,
-          plan: yield* specNow,
-          criteria: reviewerCriteria(answeredFor),
-          input,
-          resume: { attempt, previous: rallied },
-        });
+        rallied = kept(
+          yield* builderRally({
+            ...rallyAsk,
+            ...ledgering(rallied.reviewed.findings),
+            plan: yield* specNow,
+            criteria: reviewerCriteria(answeredFor),
+            input,
+            resume: { attempt, previous: rallied },
+          }),
+        );
       }
 
       const onto =
@@ -1109,11 +1295,15 @@ export default defineWorkflow({
           execute: host.record(runId, renderAnswered(answeredFor)),
         });
       }
+      if (delivers()) {
+        handTo(handing, DELIVERER);
+      }
       const delivered = yield* deliver({
         cwd,
         source: { value: source.value, kind: source.kind },
         onto: onto ?? undefined,
-        agent: BUILDER,
+        ...onHolder(handing),
+        handOver: handOverOf(handing, { ...proofOf(handing), findings: [...ledger.values()] }),
         role: "implementer",
         input,
         checksNow,
@@ -1125,6 +1315,15 @@ export default defineWorkflow({
         tickets: Arr.map(tickets, (ticket) => ({ file: ticket.file, checks: ticket.checks })),
         roots: evidenceRoots(place.dir, cwd, source.value),
         rallied,
+        built: planned
+          ? Arr.join(
+              Arr.flatMap(handed, (one) =>
+                one.title === "" ? [] : [`- ${one.item} — ${one.title}`],
+              ),
+              "\n",
+            )
+          : "",
+        ledger: ledger.size === 0 ? "" : formatFindings([...ledger.values()]),
         unsettled: [...assumed, ...afterMerged],
         integrate: integrated,
         review: Effect.map(
@@ -1424,6 +1623,9 @@ const builderRally = (ask: {
   readonly criteria: string;
   readonly obstacle?: string;
   readonly resume?: { readonly attempt: number; readonly previous: Rallied };
+  readonly ledger?: ReadonlyArray<Finding>;
+  readonly taken?: ReadonlyArray<string>;
+  readonly handing: Handing;
   readonly integrate: (
     operation: string,
   ) => Effect.Effect<
@@ -1450,11 +1652,22 @@ const builderRally = (ask: {
         ask.build === undefined
           ? (ask.obstacle ?? "")
           : `Review the built part of this plan: ${Arr.join(ask.build.completed, ", ")}. Later tickets have not started and are outside this review, including its scope judgement. Check these findings reported by the implementer:\n${formatFindings(ask.build.findings)}`,
-      fix: ({ operation, at, proves, findings }) =>
+      fix: ({ operation, at, proves, findings, open, head }) =>
         Effect.gen(function* () {
-          return yield* agentWork({
+          if (ask.handing.sessions === "round") {
+            const item = ask.build === undefined ? "final" : ask.build.item;
+            const round = (ask.handing.fixes.get(item) ?? 0) + 1;
+            ask.handing.fixes.set(item, round);
+            handTo(ask.handing, `fix-${pipe_(item, Str.replace(/\.md$/, ""))}-${round}`);
+          }
+          const fixed = yield* agentWork({
             operation,
-            agent: BUILDER,
+            ...onHolder(ask.handing),
+            handOver: handOverOf(ask.handing, {
+              ...proofOf(ask.handing, ask.build?.item),
+              findings: open,
+              reviewed: head ?? "",
+            }),
             role: "implementer",
             pushes: true,
             instructions: prompts.fix,
@@ -1468,6 +1681,71 @@ const builderRally = (ask: {
             },
             output: FixOutputSchema,
           });
+          ask.handing.said = fixed;
+          ask.handing.last = operation;
+          return fixed;
         }),
     });
   });
+
+interface Handing {
+  plan: string | null;
+  ticket: string | null;
+  said: Outgoing | undefined;
+  readonly sessions: "run" | "ticket" | "round";
+  agent: string;
+  last: string;
+  from: TakeOver | null;
+  readonly fixes: Map<string, number>;
+  readonly proof: Map<string, Proof>;
+}
+
+type Proof = Required<Pick<HandOverGiven, "criteria" | "answers" | "checks">>;
+
+const proofOf: (handing: Handing, item?: string) => Proof = (handing, item) => {
+  const one = item === undefined ? undefined : handing.proof.get(item);
+  const all = item === undefined ? [...handing.proof.values()] : one === undefined ? [] : [one];
+  return {
+    criteria: Arr.flatMap(all, (one) => one.criteria),
+    answers: Arr.flatMap(all, (one) => one.answers),
+    checks: Arr.dedupe(Arr.flatMap(all, (one) => one.checks)),
+  };
+};
+
+const handTo = (handing: Handing, agent: string) => {
+  if (agent === handing.agent) {
+    return;
+  }
+  handing.from = {
+    agent: handing.agent,
+    why: handing.last === "" ? "had this work before" : `finished ${handing.last}`,
+  };
+  handing.agent = agent;
+};
+
+interface TakeOver {
+  readonly agent: string;
+  readonly why: string;
+}
+
+const onHolder: (handing: Handing) => { agent: string; takesOver?: TakeOver } = (handing) =>
+  handing.from === null
+    ? { agent: handing.agent }
+    : { agent: handing.agent, takesOver: handing.from };
+
+const handOverOf: (
+  handing: Handing,
+  about: Pick<HandOverGiven, "criteria" | "answers" | "checks" | "findings" | "reviewed">,
+) => HandOverGiven = (handing, about) => {
+  let given: HandOverGiven = about;
+  if (handing.plan !== null) {
+    given = { ...given, plan: handing.plan };
+  }
+  if (handing.ticket !== null) {
+    given = { ...given, ticket: handing.ticket };
+  }
+  if (handing.said !== undefined) {
+    given = { ...given, said: handing.said };
+  }
+  return given;
+};

@@ -16,6 +16,7 @@ import { factsOfView } from "../src/runs";
 import { stopHost, until } from "./support/host";
 import { collie, proves, save } from "./support/world";
 import type { World } from "./support/world";
+import { tellHost } from "../src/tell-host";
 
 const asText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
@@ -330,6 +331,8 @@ test("an offer the module no longer makes starts nothing, however recently it wa
           entry,
           pipe_(source, Str.replace(/actions: \[[\s\S]*?\],\n/, "actions: [],\n")),
         );
+        // WARNING: a listing reads the module's kept revision until the host is told, as `collie workflow check` tells it.
+        yield* tellHost(world.state, [entry]);
 
         expect(
           Arr.map(yield* client.offers({ runId }).pipe(Effect.orDie), (one) => one.id),

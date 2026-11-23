@@ -16,9 +16,11 @@ import {
   Path,
   Result,
   Schedule,
+  Order,
   Schema,
   flow,
 } from "effect";
+import type { Source } from "./usage-ledger-model";
 import { ChildProcess, ChildProcessSpawner, CommandLine } from "effect/process";
 import {
   agentThreads,
@@ -66,6 +68,7 @@ import {
 } from "./processes";
 import type { ProcessInfo } from "./processes";
 import { holderLives, hostLockOf, lockHolder, withLock } from "./lock";
+import { tellHost } from "./tell-host";
 import { carriedDelivery } from "./dispatcher";
 import { epochMs } from "./time";
 import { stringifyJson } from "./json";
@@ -558,6 +561,11 @@ const pi: CompactionPort = {
       return { args: ["-e", extension] };
     }),
   usage: (ctx) => latestUsage(ctx.dir),
+  records: (ctx) =>
+    transcriptsIn(ctx.dir).pipe(
+      Effect.map(Arr.map((path): Source => ({ path, format: "pi", parent: null }))),
+    ),
+  // The extension's `session_start` sample.
   ready: reported,
   // WARNING: the human's channel, so a refusal from herdr is a request that never left.
   request: (ctx, requestId) => submitCompaction(ctx, requestId, `/collie-compact ${requestId}`),
@@ -862,6 +870,8 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
     const line = encodeAskedCall(repairing ? { ...call, repair: "in-reply" } : call);
     yield* fs.makeDirectory(dir, { recursive: true });
     yield* fs.writeFileString(path.join(dir, QUESTIONS), `${line}\n`, { flag: "a" });
+    // Nothing watches: the host is told, so the question reaches the Run now.
+    yield* tellHost(path.dirname(path.dirname(dir)), [path.join(dir, QUESTIONS)]);
     return repairing ? deniedWith(questionRepair(questions)) : DENIED_QUESTION;
   }
   const transcript = payload.transcript_path;
@@ -1056,6 +1066,36 @@ export const transcriptOf = Effect.fn("Compactors.transcriptOf")(function* (
   );
 });
 
+/** Every conversation this agent's controls have named, on the session they are bound to. */
+const transcriptsIn = (dir: string) =>
+  readEvents(dir).pipe(
+    Effect.map((events) =>
+      Arr.dedupe(Arr.getSomes(Arr.map(events, (event) => Option.fromNullishOr(event.transcript)))),
+    ),
+  );
+
+/** Claude's transcript, and each sub-agent's file Claude keeps beside it. */
+const claudeRecords = Effect.fn("Compactors.claudeRecords")(function* (ctx: AgentContext) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const sources: Array<Source> = [];
+  for (const transcript of yield* transcriptsIn(ctx.dir)) {
+    sources.push({ path: transcript, format: "claude", parent: null });
+    const session = path.basename(transcript, ".jsonl");
+    const subagents = path.join(path.dirname(transcript), session, "subagents");
+    const names = yield* fs.readDirectory(subagents).pipe(Effect.orElseSucceed(() => []));
+    for (const name of Arr.sort(names, Order.String)) {
+      if (Str.endsWith(".jsonl")(name))
+        sources.push({ path: path.join(subagents, name), format: "claude", parent: session });
+    }
+  }
+  return sources;
+});
+
+/**
+ * Whether the transcript this agent's harness last named has a line `boundary` takes for a
+ * compaction, stamped at or after `since`: what settles a request whose completion was lost.
+ */
 const transcriptCompacted = Effect.fn("Compactors.transcriptCompacted")(function* (
   dir: string,
   since: number,
@@ -1103,6 +1143,8 @@ const claude: CompactionPort = {
       return { args: ["--settings", settings] };
     }),
   usage: (ctx) => latestUsage(ctx.dir),
+  records: claudeRecords,
+  // The status line is drawn with the REPL, so its first call is the prompt being there.
   ready: reported,
   request: (ctx, requestId) =>
     submitCompaction(ctx, requestId, `/compact ${claudeInstructions(requestId)}`),
@@ -1552,6 +1594,23 @@ export const codexPort: (server: string) => CompactionPort = (server) => ({
         }),
       );
     }),
+  // Each loaded thread's rollout: its own, and those of the sub-agents it spawned.
+  records: (ctx) =>
+    Effect.gen(function* () {
+      const url = yield* codexAt(ctx);
+      const threads = yield* withCodex(url, (client) => agentThreads(client, ctx.cwd));
+      return Arr.getSomes(
+        Arr.map(threads, (thread) =>
+          thread.transcript === null || thread.ephemeral
+            ? Option.none()
+            : Option.some<Source>({
+                path: thread.transcript,
+                format: "codex",
+                parent: thread.parent,
+              }),
+        ),
+      );
+    }),
   request: (ctx, requestId) =>
     Effect.gen(function* () {
       // WARNING: only startCompaction's failure may have reached the server; the steps before it are requests that never left.
@@ -1610,6 +1669,8 @@ export const codexPort: (server: string) => CompactionPort = (server) => ({
 
 // WARNING: Collie picks the port: --port 0 prints it nowhere readable, and serve + attach refuses --model and --auto.
 const OPENCODE_LOG = "server.log";
+/** Where Collie's usage plugin writes what OpenCode reports of each message, beside its controls. */
+export const OPENCODE_USAGE = "opencode-usage.jsonl";
 const OPENCODE_LISTENING = /http:\/\/127\.0\.0\.1:\d+/;
 const OPENCODE_START_MS = 30_000;
 
@@ -1683,6 +1744,12 @@ const opencode: CompactionPort = {
           Effect.as(true),
           Effect.orElseSucceed(() => false),
         ),
+  records: (ctx) =>
+    Path.Path.use((path) =>
+      Effect.succeed([
+        { path: path.join(ctx.dir, OPENCODE_USAGE), format: "opencode" as const, parent: null },
+      ]),
+    ),
   usage: (ctx) =>
     Effect.gen(function* () {
       const base = yield* opencodeAt(ctx);

@@ -120,7 +120,10 @@ export interface ReviewAsk {
   readonly proves: string;
   readonly previous: string;
   readonly ledger?: ReadonlyArray<Finding>;
+  // WARNING: a new finding never takes an id this Run already gave outside `ledger`.
+  readonly taken?: ReadonlyArray<string>;
   readonly head?: string;
+  readonly stamped?: string;
   readonly changes?: string;
   readonly delta?: string;
   readonly answered: string;
@@ -211,7 +214,10 @@ export const reviewPass = (ask: ReviewAsk) =>
         const before = ask.ledger;
         const findings: Array<Finding> = [];
         const ids = new Set<string>();
-        const reserved = new Set(Arr.map([...before, ...report.findings], (one) => one.id));
+        const reserved = new Set([
+          ...Arr.map([...before, ...report.findings], (one) => one.id),
+          ...(ask.taken ?? []),
+        ]);
         let next = 1;
         for (const finding of report.findings) {
           const earlier = Option.getOrUndefined(
@@ -238,7 +244,7 @@ export const reviewPass = (ask: ReviewAsk) =>
             ...finding,
             id: identity,
             status,
-            head: ask.head ?? "",
+            head: ask.head ?? ask.stamped ?? "",
             note: status === earlier?.status ? (earlier.note ?? "") : "",
           });
         }
@@ -247,7 +253,12 @@ export const reviewPass = (ask: ReviewAsk) =>
             continue;
           }
           if (Arr.some(report.fixed, (one) => findingKey(one) === findingKey(earlier))) {
-            findings.push({ ...earlier, status: "fixed", head: ask.head ?? "", note: "" });
+            findings.push({
+              ...earlier,
+              status: "fixed",
+              head: ask.head ?? ask.stamped ?? "",
+              note: "",
+            });
           } else {
             return yield* new WorkflowError({
               reason: `review omitted earlier finding ${earlier.id ?? earlier.title}; return its status`,
@@ -409,9 +420,72 @@ export const followUp = (ask: {
     );
   });
 
+const isResolved = (finding: Finding) =>
+  finding.status === "fixed" || finding.status === "obsolete";
+
 export const ROUNDS = 4;
 
 type Needs = Run | Agents | Host | WorkflowEngine | WorkflowInstance | FileSystem.FileSystem;
+
+type CheckedBeforeReview = (ask: {
+  readonly name: string;
+  readonly cwd: string;
+  readonly fix: (
+    operation: string,
+    findings: string,
+    open: ReadonlyArray<Finding>,
+  ) => Effect.Effect<unknown, WorkflowError, Needs>;
+}) => Effect.Effect<
+  { readonly halted: string; readonly failed: ReadonlyArray<Finding> } | null,
+  WorkflowError,
+  Needs
+>;
+
+// WARNING: a Run whose features do not say `before_review` started on an earlier release, and runs none.
+export const checkedBeforeReview: CheckedBeforeReview = (ask) =>
+  Effect.gen(function* () {
+    const host = yield* Host;
+    const runId = (yield* Run).id;
+    if ((yield* host.place(runId)).features?.before_review !== true) {
+      return null;
+    }
+    for (let attempt = 1; ; attempt++) {
+      const failed: ReadonlyArray<Finding> = yield* Activity.make({
+        name: `${ask.name}.${attempt}`,
+        success: Schema.Array(Schema.Struct({ severity: text, title: text, detail: text })),
+        execute: Effect.gen(function* () {
+          const marked = Arr.filter(
+            yield* host.approved(runId),
+            (spec) => spec.before_review === true,
+          );
+          const ran = yield* Effect.forEach(marked, (spec) =>
+            host.verify({ runId, name: spec.name, cwd: ask.cwd }),
+          );
+          return Arr.map(
+            Arr.filter(ran, (one) => one.result !== "pass"),
+            (one) => ({
+              severity: "blocker",
+              title: `check "${one.name}" failed before review`,
+              detail: `It was ${one.result} (exit ${one.exit}); read its output with \`collie run read ${runId} verification:${one.id}\`.`,
+            }),
+          );
+        }).pipe(Effect.orDie),
+      });
+      if (failed.length === 0) {
+        return null;
+      }
+      if (attempt > ROUNDS) {
+        return {
+          halted: `before_review_failed: ${Arr.join(
+            Arr.map(failed, (one) => one.title),
+            "; ",
+          )}, after ${ROUNDS} fixes`,
+          failed,
+        };
+      }
+      yield* ask.fix(`${ask.name}-fix-${attempt}`, formatFindings(failed), failed);
+    }
+  });
 
 const disputesOf = (findings: ReadonlyArray<Finding>) =>
   Arr.map(
@@ -436,6 +510,8 @@ export const rally = (ask: {
   readonly prefix: string;
   readonly obstacle: string;
   readonly resume?: { readonly previous: Rallied; readonly reviewers: string };
+  readonly ledger?: ReadonlyArray<Finding>;
+  readonly taken?: ReadonlyArray<string>;
   readonly integrate: (
     operation: string,
   ) => Effect.Effect<Integration & { readonly base: string }, WorkflowError, Needs>;
@@ -444,6 +520,9 @@ export const rally = (ask: {
     readonly at: number;
     readonly proves: string;
     readonly findings: string;
+    readonly open: ReadonlyArray<Finding>;
+    // WARNING: "" or absent where the round did not read its head.
+    readonly head?: string;
   }) => Effect.Effect<typeof FixOutputSchema.Type, WorkflowError, Needs>;
 }) =>
   Effect.gen(function* () {
@@ -456,27 +535,30 @@ export const rally = (ask: {
     const delta =
       ask.resume === undefined && (yield* host.place(runId)).features?.review_delta === true;
     let prior: { readonly head: string; readonly open: ReadonlyArray<Finding> } | null = null;
+    let ledger = ask.ledger;
 
     const repair = Effect.gen(function* () {
       const resumed = ask.resume;
       if (resumed === undefined) {
         return;
       }
+      const open = [
+        ...Arr.filter(
+          resumed.previous.reviewed.findings,
+          (one) =>
+            !Arr.some(
+              resumed.previous.disputes,
+              (dispute) => findingKey(dispute) === findingKey(one),
+            ),
+        ),
+        ...resumed.previous.disputes,
+      ];
       const fixed = yield* ask.fix({
         operation: `${prefix}fix`,
         at: 1,
         proves: yield* ask.proves,
-        findings: formatFindings([
-          ...Arr.filter(
-            resumed.previous.reviewed.findings,
-            (one) =>
-              !Arr.some(
-                resumed.previous.disputes,
-                (dispute) => findingKey(dispute) === findingKey(one),
-              ),
-          ),
-          ...resumed.previous.disputes,
-        ]),
+        findings: formatFindings(open),
+        open,
       });
       const settled = new Set(Arr.map([...fixed.fixed, ...fixed.disputed], findingKey));
       disputed = [
@@ -492,15 +574,37 @@ export const rally = (ask: {
           yield* repair;
           const merged = yield* ask.integrate(`${prefix}merge-${at}`);
           const proves = yield* ask.proves;
-          const head = delta
-            ? yield* Activity.make({
-                name: `${prefix}review-head-${at}`,
-                success: Schema.String,
-                execute: host.reviewedHead({ target: "", cwd: ask.cwd }),
-              })
-            : "";
+          const unopened = yield* checkedBeforeReview({
+            name: `${prefix}before-review-${at}`,
+            cwd: ask.cwd,
+            fix: (operation, findings, open) => ask.fix({ operation, at, proves, findings, open }),
+          });
+          if (unopened !== null) {
+            return {
+              halted: unopened.halted,
+              unreviewed: "",
+              unsettled: disputesOf(disputed),
+              disputes: Arr.filter(disputed, isBlocking),
+              reviewed: {
+                verdict: "findings" as const,
+                summary: unopened.halted,
+                findings: unopened.failed,
+                disputed: [],
+                dropped: [],
+                fixed: [],
+              },
+            };
+          }
+          const head =
+            delta || ledger !== undefined
+              ? yield* Activity.make({
+                  name: `${prefix}review-head-${at}`,
+                  success: Schema.String,
+                  execute: host.reviewedHead({ target: "", cwd: ask.cwd }),
+                })
+              : "";
           const given =
-            prior === null || head === ""
+            !delta || prior === null || head === ""
               ? ""
               : yield* followUp({
                   name: `${prefix}review-changes-${at}`,
@@ -525,6 +629,9 @@ export const rally = (ask: {
                   ? ""
                   : agents.outputFor(runId, `${prefix}fix-${at - 1}`),
             prefix,
+            ledger,
+            stamped: head,
+            taken: ask.taken,
             reviewers: ask.resume?.reviewers,
             obstacle: ask.obstacle,
             risks: ask.risks,
@@ -534,6 +641,10 @@ export const rally = (ask: {
             of: ask.resume === undefined ? ROUNDS : 1,
             disputed,
           });
+          if (ledger !== undefined) {
+            ledger = synthesis.findings;
+          }
+          const unresolved = Arr.filter(synthesis.findings, (one) => !isResolved(one));
           for (const conflict of conflictingDispositions(synthesis)) {
             yield* host.record(runId, `review ${at}: ${conflict}`);
           }
@@ -565,11 +676,11 @@ export const rally = (ask: {
           }
           if (round.go === "clean") {
             // WARNING: nothing blocking is not nothing found; what is left goes to the merge request unfixed.
-            if (synthesis.findings.length > 0) {
+            if (unresolved.length > 0) {
               yield* host.record(
                 runId,
-                `carried ${synthesis.findings.length} non-blocking finding(s) unfixed: ${Arr.join(
-                  Arr.map(synthesis.findings, (one) => one.title),
+                `carried ${unresolved.length} non-blocking finding(s) unfixed: ${Arr.join(
+                  Arr.map(unresolved, (one) => one.title),
                   "; ",
                 )}`,
               );
@@ -598,6 +709,8 @@ export const rally = (ask: {
             at,
             proves,
             findings: formatFindings(round.live),
+            open: round.live,
+            head,
           });
           const settledNow = new Set(Arr.map([...fixed.fixed, ...fixed.disputed], findingKey));
           disputed = [
@@ -608,7 +721,7 @@ export const rally = (ask: {
           if (head !== "") {
             prior = {
               head,
-              open: Arr.filter(synthesis.findings, (one) => !answered.has(findingKey(one))),
+              open: Arr.filter(unresolved, (one) => !answered.has(findingKey(one))),
             };
           }
 

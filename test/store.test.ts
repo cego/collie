@@ -124,6 +124,12 @@ test("reports are imported once on upgrade and remain authoritative after restar
         yield* sql`DROP TABLE collie_artefact_receipts`;
         yield* sql`DROP TABLE collie_artefact_revisions`;
         yield* sql`DROP TABLE collie_artefacts`;
+        yield* sql`DROP TABLE collie_cards`;
+        yield* sql`DROP TABLE collie_merge_requests`;
+        yield* sql`DROP TABLE collie_forge_logins`;
+        yield* sql`DROP TABLE collie_module_revisions`;
+        yield* sql`DROP TABLE collie_branches`;
+        yield* sql`DROP TABLE collie_connections`;
         yield* sql`DELETE FROM collie_migrations WHERE migration_id >= 19`;
       }).pipe(Effect.provide(opens(file)));
       const original = {
