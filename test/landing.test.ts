@@ -1,6 +1,7 @@
 // The host's merge: the landing attempt written before the forge is asked, its outcome after,
 // and an attempt an earlier host left settled on the forge's word.
 
+import { Herdr } from "../src/herdr";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -23,7 +24,7 @@ import {
   type FakeMr,
   type ForgeModel,
 } from "./support/forge";
-import { FakeHerdr, Rig } from "./support/recorder";
+import { Rig } from "./support/recorder";
 import * as Layer from "effect/Layer";
 
 const HEAD = "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b";
@@ -461,7 +462,7 @@ const withMachine = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
           agentsLayer({
             dir: rig.stateDir,
             env: rig.pluginEnv(),
-            herdr: new FakeHerdr(rig.pluginEnv()),
+            herdr: new Herdr(rig.pluginEnv()),
             harness: "claude",
             model: "opus",
             permissions: "auto",

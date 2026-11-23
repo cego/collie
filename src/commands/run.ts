@@ -7,6 +7,7 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import {
   Cause,
+  Data,
   Duration,
   Effect,
   FileSystem,
@@ -27,6 +28,7 @@ import { Argument, Command, Flag } from "effect/cli";
 import { err, type Failure } from "../operations";
 import { GIVEN, INFERRED } from "../engine";
 import { textOf } from "../runs";
+import { DEFAULT_LIMIT, LIST_STATES, listAsked, outputSummary } from "../run-list";
 import {
   asksRun,
   followCheckLog,
@@ -43,9 +45,10 @@ import {
   steerRun,
   moduleFor,
   runViews,
+  usageFor,
   flockArtefacts,
   asksArtefactRun,
-  flockRuns,
+  flockRunPage,
   isSettled,
   resumeRun,
   publishRun,
@@ -55,7 +58,6 @@ import {
   runShown,
   runProgress,
   reportFor,
-  hostTaskOf,
   hostTasks,
 } from "../lifecycle";
 import { unsafePathComponent } from "../naming";
@@ -84,6 +86,9 @@ import { PROJECTS_ROOT_OPTION, projectsRoot } from "../projects";
 import { currentReports } from "../drift";
 import { newest } from "../cards";
 import { metricsOf } from "../metrics";
+import { compareRuns } from "../trial-compare";
+import { trialLines } from "../trial-model";
+import { usageLines } from "../usage-ledger-model";
 import { requestedByLine, ranOn, type RunAgent, type RunProgress } from "../board-model";
 import {
   followEvents,
@@ -117,7 +122,6 @@ import {
   mutating,
   parseInput,
   locateRun,
-  outOfReach,
   runFacts,
   runScope,
   requestIdFlag,
@@ -127,6 +131,8 @@ import {
   selectedTask,
   type Global,
 } from "./shared";
+import { outOfReach, readRunLines } from "../run-read";
+import { DEFAULT_LINES } from "../text-lines";
 
 /**
  * What `--constraint` and `--severity` say together. Paired by position rather than by
@@ -150,50 +156,25 @@ function namedConstraints(texts: ReadonlyArray<string>, severities: ReadonlyArra
 }
 
 /**
- * Which Task this start belongs to. Fresh unless the caller said otherwise: neither the
- * Workflow's name nor the workspace this happens to be in continues anything, because a
+ * Which Task this start belongs to: fresh unless the caller named one, because a
  * continuation that was never asked for is how two pieces of work become one. The host
  * still gives a fresh start the open Task already working its branch.
- *
- * The programmatic front door never waits for a prompt. Outside a Task's workspace,
- * `--continue-task` is missing input and says which flag would supply it.
  */
 const chosenTask = Effect.fn("collie.chosenTask")(function* (
   env: PluginEnv,
   named: Option.Option<string>,
-  current: boolean,
-  here: boolean,
 ) {
-  const refuse = (error: Result) => ({ ok: false as const, error });
   const taken = (choice: TaskChoice) => ({ ok: true as const, choice });
-  if (here && (Option.isSome(named) || current))
-    return refuse(
-      err(
-        "invalid_input",
-        "--here keeps the Run in this workspace; it takes no --task or --continue-task.",
-      ),
-    );
-  if (here) return taken({ mode: "here" });
-  if (Option.isSome(named)) {
-    const task = Option.getOrNull(
-      Arr.findFirst(yield* hostTasks(env), (one) => one.id === named.value),
-    );
-    if (!task)
-      return refuse(
-        err("task_not_found", `Task "${named.value}" was not found.`, { task: named.value }),
-      );
-    return taken({ mode: "continue", task });
-  }
-  if (!current) return taken({ mode: "new" });
-  const kept = yield* hostTaskOf(env, env.workspaceId);
-  if (!kept)
-    return refuse(
-      err(
-        "needs_input",
-        "This workspace is not a task workspace; name the Task with --task, as `task list` prints it, or keep the Run here with --here.",
-      ),
-    );
-  return taken({ mode: "continue", task: kept });
+  if (Option.isNone(named)) return taken({ mode: "new" });
+  const task = Option.getOrNull(
+    Arr.findFirst(yield* hostTasks(env), (one) => one.id === named.value),
+  );
+  if (!task)
+    return {
+      ok: false as const,
+      error: err("task_not_found", `Task "${named.value}" was not found.`, { task: named.value }),
+    };
+  return taken({ mode: "continue", task });
 });
 
 /**
@@ -266,16 +247,6 @@ const runStart = Command.make(
       Flag.withDescription("Continue this Task instead of starting a new one, by its id"),
       Flag.optional,
     ),
-    continueTask: Flag.Boolean("continue-task").pipe(
-      Flag.withDescription("Continue the Task whose workspace this is; fails outside one"),
-      Flag.withDefault(false),
-    ),
-    here: Flag.Boolean("here").pipe(
-      Flag.withDescription(
-        "Keep the Run in this herdr workspace instead of opening one for its worktree",
-      ),
-      Flag.withDefault(false),
-    ),
     verify: Flag.String("verify").pipe(
       Flag.withDescription(
         'A check Collie may run to prove this Run, repeatable: one verify.json entry, {"name","executable","argv","cwd"}',
@@ -307,8 +278,6 @@ const runStart = Command.make(
     constraint,
     severity,
     task: taskId,
-    continueTask,
-    here,
     verify,
     harness,
     model,
@@ -338,7 +307,7 @@ const runStart = Command.make(
               // Which Task, before the Workflow is prepared: inference is task-local,
               // so a continuation sees its own Task's plans and a fresh start sees only
               // the Runs recorded before Tasks existed.
-              const task = yield* chosenTask(resolved.env, taskId, continueTask, here);
+              const task = yield* chosenTask(resolved.env, taskId);
               if (!task.ok) return task.error;
               // What an id runs is the module saved for this project.
               // A Machine named with --machine has its own modules, and says what it lacks.
@@ -432,37 +401,94 @@ const runStart = Command.make(
   ]),
 );
 
-const runList = Command.make("list", {}, () =>
-  Effect.gen(function* () {
-    const global = yield* root;
-    yield* attempt(
-      Effect.gen(function* () {
-        const resolved = yield* context(global, false);
-        if (resolved._tag === "ContextFailure") return resolved.result;
-        // Scoped to the Task whose workspace this is, where it is one: Runs belong to
-        // Tasks now, and a workspace that is not a Task's narrows nothing.
-        const task = yield* selectedTask(global);
-        const hosted = yield* flockRuns(resolved.env, task);
-        return {
-          ok: true,
-          data: { runs: hosted.runs, unreadable: hosted.unreadable, machines: hosted.machines },
-          human:
-            Arr.join(
+const runList = Command.make(
+  "list",
+  {
+    status: Flag.String("status").pipe(
+      Flag.withDescription(`Only Runs in this state, repeatable: ${Arr.join(LIST_STATES, ", ")}`),
+      Flag.atLeast(0),
+    ),
+    limit: Flag.String("limit").pipe(
+      Flag.withDescription(`At most this many Runs, newest first; ${DEFAULT_LIMIT} by default`),
+      Flag.optional,
+    ),
+    fields: Flag.String("fields").pipe(
+      Flag.withDescription(
+        "summary (the default) or full, each Run's whole view; full with no --limit is every Run",
+      ),
+      Flag.optional,
+    ),
+    after: Flag.String("after").pipe(
+      Flag.withDescription("The next page: a listing's `next` token, given alone"),
+      Flag.optional,
+    ),
+    since: Flag.String("since").pipe(
+      Flag.withDescription("Only Runs changed after a listing's `cursor`"),
+      Flag.optional,
+    ),
+  },
+  (flags) =>
+    Effect.gen(function* () {
+      const global = yield* root;
+      yield* attempt(
+        Effect.gen(function* () {
+          const resolved = yield* context(global, false);
+          if (resolved._tag === "ContextFailure") return resolved.result;
+          // Scoped to the Task whose workspace this is, where it is one: Runs belong to
+          // Tasks now, and a workspace that is not a Task's narrows nothing.
+          const read = listAsked(
+            {
+              status: flags.status,
+              limit: Option.getOrNull(flags.limit),
+              fields: Option.getOrNull(flags.fields),
+              after: Option.getOrNull(flags.after),
+              since: Option.getOrNull(flags.since),
+            },
+            yield* selectedTask(global),
+          );
+          if (!read.ok) return err("invalid_input", read.message);
+          const listed = yield* flockRunPage(resolved.env, read.asked);
+          if (!listed.ok) return listed;
+          return {
+            ok: true,
+            data: {
+              runs: Arr.map(listed.runs, ({ machine, summary, view }) => ({
+                ...(view ?? summary),
+                machine,
+              })),
+              complete: listed.complete,
+              next: listed.next,
+              cursor: listed.cursor,
+              omitted: listed.omitted,
+              unreadable: listed.unreadable,
+              machines: listed.machines,
+            },
+            human: Arr.join(
               [
                 ...Arr.map(
-                  hosted.runs,
-                  (view) => `${view.runId}\t${view.machine}\t${statusOf(view)}\t${view.workflow}`,
+                  listed.runs,
+                  ({ machine, summary }) =>
+                    `${summary.runId}\t${machine}\t${summary.state}\t${summary.workflow}${summary.blocker === null ? "" : `\t${summary.blocker}`}`,
                 ),
-                ...(hosted.unreadable === null ? [] : [`runs: ${hosted.unreadable}`]),
+                ...(listed.runs.length === 0 ? ["No runs found."] : []),
+                ...(listed.unreadable === null ? [] : [`runs: ${listed.unreadable}`]),
+                ...Arr.map(listed.machines, (one) => `${one.machine}: away, ${one.note}`),
+                ...(listed.next === null
+                  ? []
+                  : [`${listed.omitted} more not listed: collie run list --after ${listed.next}`]),
               ],
               "\n",
-            ) || "No runs found.",
-        };
-      }),
-      global.json,
-    );
-  }),
-).pipe(Command.withDescription("List Runs in the selected workspace, or everywhere without one"));
+            ),
+          };
+        }),
+        global.json,
+      );
+    }),
+).pipe(
+  Command.withDescription(
+    "List Runs in the selected workspace, or everywhere without one: a page of summaries, newest first",
+  ),
+);
 
 /** `run show`'s line for each agent: `  review  claude/opus xhigh`. */
 export const agentLines = (agents: ReadonlyArray<RunAgent>) =>
@@ -603,16 +629,49 @@ const runShow = Command.make(
   Command.withDescription("Show one Run: its state, its Inputs, and any question it is waiting on"),
 );
 
+const trialFlag = (name: string, description: string) =>
+  Flag.String(name).pipe(Flag.withDescription(description), Flag.atLeast(0));
+
 const runMetrics = Command.make(
   "metrics",
   {
-    runId: runIdArg,
+    runId: runIdArg.pipe(Argument.optional),
+    compare: trialFlag(
+      "compare",
+      "A Run of the first set, as <run> or <run>=<case>, repeatable; Runs sharing a case are its repeats",
+    ),
+    against: trialFlag("against", "A Run of the second set, as --compare takes one, repeatable"),
+    audit: trialFlag(
+      "audit",
+      "<run>=<review-run>: the review Run of that Run's final tree, whose blocking findings escaped it",
+    ),
+    plant: trialFlag(
+      "plant",
+      "<case>=<file>:<line>: a regression planted in that case, caught where a reviewer names it",
+    ),
   },
-  ({ runId }) =>
+  ({ runId: given, compare, against, audit, plant }) =>
     Effect.gen(function* () {
       const global = yield* root;
       yield* attempt(
         Effect.gen(function* () {
+          if (compare.length > 0 || against.length > 0) {
+            const resolved = yield* context(global, false);
+            if (resolved._tag === "ContextFailure") return resolved.result;
+            const compared = yield* compareRuns(resolved.env, { compare, against, audit, plant });
+            if (!compared.ok) return compared;
+            return {
+              ok: true,
+              data: compared.value,
+              human: Arr.join(trialLines(compared.value), "\n"),
+            };
+          }
+          if (Option.isNone(given))
+            return err(
+              "invalid_input",
+              "Name a Run, or two sets of them with --compare and --against",
+            );
+          const runId = given.value;
           const resolved = yield* resolveCommandRun(global, runId);
           if (resolved._tag === "RunFailure") return resolved.result;
           const facts = runFacts(resolved);
@@ -621,11 +680,14 @@ const runMetrics = Command.make(
           );
           if (!records.ok) return records;
           const metrics = metricsOf(records.value, facts.created);
+          const spent = yield* usageFor(resolved.env, runId);
+          if (!spent.ok) return spent;
+          const usage = spent.value;
           const said = (value: number | null) =>
             value === null ? "not yet" : `${Math.round(value)}s`;
           return {
             ok: true,
-            data: { metrics, outcome: facts.outcome },
+            data: { metrics, usage, outcome: facts.outcome },
             human: Arr.join(
               [
                 `${facts.id}\t${facts.workflow}\t${facts.outcome}`,
@@ -636,6 +698,7 @@ const runMetrics = Command.make(
                 metrics.peakContext === null
                   ? "context: nothing sampled"
                   : `context: ${metrics.peakContext.tokens} tokens at most, on ${metrics.peakContext.agent}`,
+                ...usageLines(usage),
               ],
               "\n",
             ),
@@ -646,7 +709,7 @@ const runMetrics = Command.make(
     }),
 ).pipe(
   Command.withDescription(
-    "What a Run actually did: evidence, slices, rework and context — not pane activity",
+    "What a Run actually did: evidence, slices, rounds, rework, context and tokens — not pane activity; or two sets of Runs compared per case and per accepted change",
   ),
 );
 
@@ -783,8 +846,16 @@ const runOutput = Command.make(
   "output",
   {
     runId: runIdArg,
+    full: Flag.Boolean("full").pipe(
+      Flag.withDescription("Each Output whole, as the Run wrote it, diffs included"),
+      Flag.withDefault(false),
+    ),
+    path: Flag.String("path").pipe(
+      Flag.withDescription("Only the Output at this path, as the summary's `read` names it"),
+      Flag.optional,
+    ),
   },
-  ({ runId }) =>
+  ({ runId, full, path }) =>
     Effect.gen(function* () {
       const global = yield* root;
       yield* attempt(
@@ -795,7 +866,36 @@ const runOutput = Command.make(
             client.runOutputs({ runId }),
           );
           if (!records.ok) return records;
-          const outputs = records.value;
+          const outputs = Option.match(path, {
+            onNone: () => records.value,
+            onSome: (one) => Arr.filter(records.value, (output) => output.path === one),
+          });
+          if (Option.isSome(path) && outputs.length === 0)
+            return err("invalid_input", `Run ${runId} has no Output at ${path.value}.`, {
+              path: path.value,
+            });
+          if (!full) {
+            const summaries = Arr.map(outputs, (output) => outputSummary(runId, output));
+            return {
+              ok: true,
+              data: { runId, outputs: summaries },
+              human:
+                Arr.join(
+                  Arr.map(summaries, (one) =>
+                    Arr.join(
+                      [
+                        `${one.path}${one.verdict === null ? "" : `  ${one.verdict}`}${one.findings === null ? "" : `, ${one.findings} finding(s)`}`,
+                        ...(one.error === undefined ? [] : [`  Error: ${one.error}`]),
+                        ...(one.summary === null ? [] : [`  ${one.summary}`]),
+                        `  ${one.read}`,
+                      ],
+                      "\n",
+                    ),
+                  ),
+                  "\n\n",
+                ) || "This Run has written no Outputs.",
+            };
+          }
           return {
             ok: true,
             data: { runId, outputs },
@@ -820,7 +920,82 @@ const runOutput = Command.make(
         global.json,
       );
     }),
-).pipe(Command.withDescription("Print every Output this Run has written"));
+).pipe(
+  Command.withDescription(
+    "Summarise each Output this Run has written, with where to read it; --full prints them whole",
+  ),
+);
+
+const runRead = Command.make(
+  "read",
+  {
+    runId: runIdArg,
+    ref: Argument.String("ref").pipe(
+      Argument.withDescription(
+        "What to read: log, review, diff:<path>, evidence:<name>, plan:<file>, verification:<id>, …",
+      ),
+    ),
+    start: Flag.Int("start").pipe(
+      Flag.withDescription("The first line, counted from 1; a search looks from here"),
+      Flag.withDefault(1),
+    ),
+    count: Flag.Int("count").pipe(
+      Flag.withDescription(`How many lines, or matches with --search (default ${DEFAULT_LINES})`),
+      Flag.withDefault(DEFAULT_LINES),
+    ),
+    search: Flag.String("search").pipe(
+      Flag.withDescription(
+        "A regular expression: the lines it matches, each with the line either side",
+      ),
+      Flag.optional,
+    ),
+  },
+  ({ runId, ref, start, count, search }) =>
+    Effect.gen(function* () {
+      const global = yield* root;
+      yield* attempt(
+        Effect.gen(function* () {
+          const resolved = yield* context(global, false);
+          if (resolved._tag === "ContextFailure") return resolved.result;
+          const read = yield* readRunLines(resolved.env, yield* runScope(global), runId, ref, {
+            start,
+            count,
+            search: Option.getOrNull(search),
+          });
+          if (!read.ok) return read;
+          const page = read.data;
+          const numbered = (line: number, mark: string, text: string) =>
+            `${pipe_(String(line), Str.padStart(6))}${mark} ${text}`;
+          return {
+            ok: true,
+            data: page,
+            human: Arr.join(
+              [
+                ...Arr.flatMap(page.lines, (one) =>
+                  one.before === undefined
+                    ? [numbered(one.line, " ", one.text)]
+                    : [
+                        ...(one.before === null ? [] : [numbered(one.line - 1, "-", one.before)]),
+                        numbered(one.line, ":", one.text),
+                        ...(one.after == null ? [] : [numbered(one.line + 1, "-", one.after)]),
+                      ],
+                ),
+                page.complete
+                  ? `Lines ${page.from}-${page.to} of ${page.total}: complete.`
+                  : `Lines ${page.from}-${page.to} of ${page.total}: not complete; read on with --start ${page.next}.`,
+              ],
+              "\n",
+            ),
+          };
+        }),
+        global.json,
+      );
+    }),
+).pipe(
+  Command.withDescription(
+    "Read a Run's log, diff, review, evidence, plan or verification by line range, or search it",
+  ),
+);
 
 type ParsedTimeout = { ok: true; ms: number | null } | { ok: false; error: Result };
 
@@ -849,7 +1024,13 @@ function parseUntil(value: Option.Option<string>): ParsedUntil {
 const runWait = Command.make(
   "wait",
   {
-    runId: runIdArg,
+    runIds: runIdArg.pipe(Argument.variadic({ min: 1 })),
+    all: Flag.Boolean("all").pipe(
+      Flag.withDescription(
+        "With several Runs, wait until every one has met the condition, not the first",
+      ),
+      Flag.withDefault(false),
+    ),
     follow: Flag.Boolean("follow").pipe(
       Flag.withDescription(
         "Print each change while waiting: status, steps, agents, parks, the merge request and CI",
@@ -867,16 +1048,18 @@ const runWait = Command.make(
       Flag.optional,
     ),
   },
-  ({ runId, follow, timeout, until }) =>
+  ({ runIds, all, follow, timeout, until }) =>
     Effect.gen(function* () {
       const global = yield* root;
       // `guarded`, not `attempt`: this command streams its own lines rather than
       // returning one result, but a defect must still end as one envelope like
       // everywhere else.
-      yield* guarded(waitFor(global, runId, follow, timeout, until), global.json);
+      yield* guarded(waitFor(global, runIds, follow, timeout, until, all), global.json);
     }),
 ).pipe(
-  Command.withDescription("Wait for a Run to finish, or to need attention, optionally following"),
+  Command.withDescription(
+    "Wait for Runs to finish, or to need attention: the first of them, or with --all every one",
+  ),
 );
 
 /**
@@ -984,7 +1167,7 @@ const waitForRun = Effect.fn("collie.waitForRun")(function* (
       ),
     ),
   );
-  if (failed !== null) return yield* printResult(failed, global.json);
+  if (failed !== null) return failed;
   // The status stream can end the race between two looks: what changed since is still said.
   if (asking) {
     const last = yield* runProgress(env, runId);
@@ -993,40 +1176,31 @@ const waitForRun = Effect.fn("collie.waitForRun")(function* (
   }
   const progress = yield* Ref.get(progressed);
   if ((yield* verdict) === "stuck")
-    return yield* printResult(
-      err(
-        "invalid_state",
-        `Run "${runId}" will not become ready by itself: ${Arr.join(
-          Arr.map(progress?.ready.missing ?? [], (one) => one.said),
-          "; ",
-        )}.`,
-        { run: runId },
-      ),
-      global.json,
+    return err(
+      "invalid_state",
+      `Run "${runId}" will not become ready by itself: ${Arr.join(
+        Arr.map(progress?.ready.missing ?? [], (one) => one.said),
+        "; ",
+      )}.`,
+      { run: runId },
     );
   // `--follow` has already said everything as it happened, as it does for a Run with a
   // Driver: one envelope after the stream would be the last line twice.
-  if (options.follow) return;
+  if (options.follow) return null;
   const view = yield* Ref.get(seen);
-  if (view === null)
-    return yield* printResult(
-      err("run_not_found", `Run "${runId}" was not found.`, { run: runId }),
-      global.json,
-    );
-  yield* printResult(
-    {
-      ok: true,
-      data: progress === null ? { run: view } : { run: view, ready: progress.ready },
-      human:
-        progress === null
-          ? `${view.runId}: ${statusOf(view)}`
-          : `${view.runId}: ${statusOf(view)}\n${Arr.join(
-              Arr.map(readyLines(progress.ready), (line) => `  ${line}`),
-              "\n",
-            )}`,
-    },
-    global.json,
-  );
+  if (view === null) return err("run_not_found", `Run "${runId}" was not found.`, { run: runId });
+  const waited: Result = {
+    ok: true,
+    data: progress === null ? { run: view } : { run: view, ready: progress.ready },
+    human:
+      progress === null
+        ? `${view.runId}: ${statusOf(view)}`
+        : `${view.runId}: ${statusOf(view)}\n${Arr.join(
+            Arr.map(readyLines(progress.ready), (line) => `  ${line}`),
+            "\n",
+          )}`,
+  };
+  return waited;
 });
 
 /** How often a wait asks for what the status stream does not carry. */
@@ -1035,10 +1209,11 @@ const PROGRESS_TRIES = 5;
 
 export const waitFor = Effect.fn("collie.waitFor")(function* (
   global: Global,
-  runId: string,
+  runIds: ReadonlyArray<string>,
   follow: boolean,
   timeout: Option.Option<string>,
   until: Option.Option<string> = Option.none(),
+  all = false,
 ) {
   const resolved = yield* context(global, false);
   if (resolved._tag === "ContextFailure") return yield* printResult(resolved.result, global.json);
@@ -1048,21 +1223,64 @@ export const waitFor = Effect.fn("collie.waitFor")(function* (
   const untilResult = parseUntil(until);
   if (!untilResult.ok) return yield* printResult(untilResult.error, global.json);
 
-  const shown = yield* runShown(resolved.env, runId);
-  if (!shown.ok) return yield* printResult(shown, global.json);
-  const refused = yield* outOfReach(
-    resolved.env,
-    shown.view,
-    shown.machine,
-    yield* runScope(global),
-  );
-  if (refused !== null) return yield* printResult(refused, global.json);
-  return yield* waitForRun(global, resolved.env, runId, {
-    follow,
-    ms,
-    until: untilResult.until,
-  });
+  const scope = yield* runScope(global);
+  for (const runId of runIds) {
+    const shown = yield* runShown(resolved.env, runId);
+    if (!shown.ok) return yield* printResult(shown, global.json);
+    const refused = yield* outOfReach(resolved.env, shown.view, shown.machine, scope);
+    if (refused !== null) return yield* printResult(refused, global.json);
+  }
+  const one = (runId: string, bound: number | null) =>
+    waitForRun(global, resolved.env, runId, { follow, ms: bound, until: untilResult.until });
+  const waited =
+    runIds.length === 1
+      ? yield* one(runIds[0]!, ms)
+      : yield* (
+          all
+            ? everyWaited(Arr.map(runIds, (id) => one(id, null)))
+            : Effect.raceAll(Arr.map(runIds, (id) => one(id, null)))
+        ).pipe(
+          (both) => (ms === null ? both : both.pipe(Effect.timeout(ms))),
+          Effect.catchTag("TimeoutError", () =>
+            Effect.succeed(err("timeout", `Timed out waiting for runs ${Arr.join(runIds, ", ")}.`)),
+          ),
+        );
+  if (waited !== null) yield* printResult(waited, global.json);
 });
+
+class WaitFailed extends Data.TaggedError("WaitFailed")<{ readonly result: Result }> {}
+
+/** Every Run's wait as one answer, ended by the first that fails. */
+const everyWaited = <E, R>(waits: ReadonlyArray<Effect.Effect<Result | null, E, R>>) =>
+  Effect.all(
+    Arr.map(waits, (wait) =>
+      wait.pipe(
+        Effect.filterOrFail(
+          (one) => one === null || one.ok,
+          (one) => new WaitFailed({ result: one! }),
+        ),
+      ),
+    ),
+    { concurrency: "unbounded" },
+  ).pipe(
+    Effect.map((results): Result | null => {
+      const done = Arr.flatMap(results, (one) => (one !== null && one.ok ? [one] : []));
+      return done.length === 0
+        ? null
+        : {
+            ok: true,
+            data: { runs: Arr.map(done, (one) => one.data) },
+            human: Arr.join(
+              Arr.map(done, (one) => one.human),
+              "\n",
+            ),
+          };
+    }),
+    Effect.catchIf(
+      (cause): cause is WaitFailed => cause instanceof WaitFailed,
+      (failed) => Effect.succeed(failed.result),
+    ),
+  );
 
 /**
  * One command against one Run. The host settles it, because the host is the only thing
@@ -1232,24 +1450,20 @@ const runStop = Command.make("stop", mutationFlags, ({ runId, requestId }) =>
   ),
 );
 
-const holdWorkspaceFlag = Flag.String("workspace").pipe(
-  Flag.withDescription("Hold every unfinished Run in this workspace instead of one Run"),
+const holdTaskFlag = Flag.String("task").pipe(
+  Flag.withDescription("Hold every unfinished Run of this Task, by its id, instead of one Run"),
   Flag.optional,
 );
 
-/**
- * Every Run of the Task this workspace belongs to, held. A workspace is where a Task is
- * worked, so "hold this workspace" is the Task's Runs and not whatever else is open in it.
- */
+/** Every unfinished Run of a Task, held. */
 const holdTask = Effect.fn("run.holdTask")(function* (
   env: PluginEnv,
-  workspace: string,
+  id: string,
   request: string,
   reason: string | undefined,
 ) {
-  const task = yield* hostTaskOf(env, workspace);
-  if (task === null)
-    return err("invalid_input", `Workspace "${workspace}" is not a Task's.`, { workspace });
+  const task = Option.getOrNull(Arr.findFirst(yield* hostTasks(env), (one) => one.id === id));
+  if (task === null) return err("task_not_found", `Task "${id}" was not found.`, { task: id });
   const runs = Arr.filter((yield* runViews(env, task.id)).runs, (view) => !isSettled(view));
   const held: string[] = [];
   const door = yield* cliDoor(env);
@@ -1266,7 +1480,7 @@ const holdTask = Effect.fn("run.holdTask")(function* (
   }
   return {
     ok: true as const,
-    data: { task: task.id, workspace, held },
+    data: { task: task.id, held },
     human: held.length === 0 ? "Nothing here is running." : `Held ${Arr.join(held, ", ")}.`,
   };
 });
@@ -1275,7 +1489,7 @@ const runHold = Command.make(
   "hold",
   {
     runId: runIdArg.pipe(Argument.optional),
-    workspace: holdWorkspaceFlag,
+    task: holdTaskFlag,
     before: Flag.String("before").pipe(Flag.optional),
     reason: Flag.String("reason").pipe(
       Flag.withDescription("Why, in your own words, which the board's drawer shows"),
@@ -1283,11 +1497,11 @@ const runHold = Command.make(
     ),
     requestId: requestIdFlag,
   },
-  ({ runId, workspace, reason, before, requestId }) =>
+  ({ runId, task, reason, before, requestId }) =>
     Effect.gen(function* () {
       const global = yield* root;
       const why = Option.getOrUndefined(reason);
-      const where = Option.getOrNull(workspace);
+      const where = Option.getOrNull(task);
       const id = Option.getOrNull(runId);
       yield* attempt(
         Effect.gen(function* () {
@@ -1296,14 +1510,14 @@ const runHold = Command.make(
           if (where !== null) {
             if (Option.isSome(before))
               return err("invalid_input", "--before names one Run's Step; give its Run id");
-            return yield* mutation(resolved.env, "run-hold-workspace", requestId, (request) =>
+            return yield* mutation(resolved.env, "run-hold-task", requestId, (request) =>
               holdTask(resolved.env, where, request, why),
             );
           }
           if (id === null) {
             return err(
               "invalid_input",
-              "`run hold` takes a Run's id, or `--workspace <id>` for every Run in one.",
+              "`run hold` takes a Run's id, or `--task <id>` for every Run of one.",
             );
           }
           return yield* mutation(resolved.env, "run-hold", requestId, (request) =>
@@ -1614,7 +1828,7 @@ const runAction = Command.make(
 
 /** Said to a human who reached for `--workspace` as though it moved the Run. */
 const RESUME_WORKSPACE =
-  "--workspace only chose where this command looked; it does not move a Run. The Run goes back to its Task's workspace, which is reopened on its checkout if herdr has closed it.";
+  "--workspace only chose where this command looked; it does not move a Run. The Run resumes in its own checkout.";
 
 const runResume = Command.make("resume", mutationFlags, ({ runId, requestId }) =>
   Effect.gen(function* () {
@@ -1968,7 +2182,7 @@ const intentRemember = Command.make(
 
 /** The Session's own defaults file, which is what every Run it starts begins with. */
 const defaultsFile = Effect.fn("run.defaultsFile")(function* (env: PluginEnv) {
-  return yield* defaultsPath(env.stateDir, scopeKey(scopeFor(env, env.cwd)));
+  return yield* defaultsPath(env.stateDir, scopeKey(scopeFor(env.cwd)));
 });
 
 function defaultsCommand(
@@ -2472,6 +2686,7 @@ export const run = Command.make("run").pipe(
     runAction,
     runIntent,
     runOutput,
+    runRead,
     runArtefacts,
     runArtefact,
   ]),

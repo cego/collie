@@ -37,8 +37,8 @@ import {
 } from "effect";
 import type { CheckEvidence, SynthesisSchema } from "./output";
 import type { FailedTest, Snapshot, Verification } from "./verify";
-import type { Issue, IssueRef } from "./forge/issues";
-export type { Issue, IssueRef } from "./forge/issues";
+import type { Issue, IssueQuery, IssueRef } from "./forge/issues";
+export type { Issue, IssueQuery, IssueRef } from "./forge/issues";
 import type { Report } from "./report";
 export type { Report } from "./report";
 export type { Produces, StepKind, StepMeta } from "./steps";
@@ -98,6 +98,7 @@ import type {
   TagRead,
 } from "./releasing";
 import type { Holders } from "./helle";
+import type { RunFeatures } from "./run-features";
 import { ConnectionId, type ConnectionReading } from "./connection-model";
 export { ConnectionId, ConnectionReading } from "./connection-model";
 
@@ -206,6 +207,7 @@ export {
   afterMergeAnswers,
   answerFor,
   blockingKeys,
+  conflictingDispositions,
   findingKey,
   sameFinding,
   formatFindings,
@@ -799,14 +801,21 @@ export interface HostApi {
   /** This Machine's Run report, for admissions at or after the ISO moment. */
   readonly report: (since: string) => Effect.Effect<Report, WorkflowError>;
   /**
-   * Open issues on the forge of this Run's checkout, or with `numbers` those issues read one
-   * by one. `on: "collie"` asks Collie's own repository instead, as do filing and commenting.
+   * Open issues on the forge of this Run's checkout; with numbers, those issues read one by
+   * one; with `closedSince`, those closed since then. `on: "collie"` asks Collie's own
+   * repository instead, as do filing and commenting.
    */
   readonly issues: (
     runId: string,
-    numbers?: ReadonlyArray<number>,
+    which?: IssueQuery,
     on?: "collie",
   ) => Effect.Effect<ReadonlyArray<Issue>, WorkflowError>;
+  /** Open merge requests on the forge of this Run's checkout, their descriptions as `body`. */
+  readonly requests: (runId: string) => Effect.Effect<ReadonlyArray<Issue>, WorkflowError>;
+  /** The tags of this Run's checkout, newest first by creator date, with when each was made. */
+  readonly releases: (
+    runId: string,
+  ) => Effect.Effect<ReadonlyArray<{ readonly tag: string; readonly at: string }>, WorkflowError>;
   /** Files redacted text on this Run's forge; another checkout's identity is refused. */
   readonly fileIssue: (options: {
     readonly runId: string;
@@ -1435,16 +1444,22 @@ export interface HostApi {
     readonly permalink?: string;
     readonly wanted: ReadonlyArray<string>;
   }) => Effect.Effect<string>;
-  /** Reads the target's head before review. Take it inside an Activity. */
+  /** Reads the target's head before review, else the checkout's HEAD. Take it inside an Activity. */
   readonly reviewedHead: (options: {
     readonly target: string;
     readonly cwd: string;
   }) => Effect.Effect<string>;
+  /**
+   * What changed from `previous` to `head`: a merge request's interdiff, else the checkout's
+   * commits and files since `previous`, with the command that shows their diff. A
+   * local `base`, the default branch merged in since, is left out of them.
+   */
   readonly reviewChanges: (options: {
     readonly target: string;
     readonly cwd: string;
     readonly previous: string;
     readonly head: string;
+    readonly base?: string;
   }) => Effect.Effect<string, WorkflowError>;
   /** Approves once per Run and attempt; an interrupted attempt returns an uncertain outcome. */
   readonly approveReview: (options: {
@@ -1473,6 +1488,8 @@ export interface Place {
   readonly workspace: string | null;
   /** This Run, then the Runs it was started from or builds a plan of, and so on: whose agents it may ask. */
   readonly lineage: ReadonlyArray<string>;
+  /** What its workflow does, fixed when it started; absent from an older host. */
+  readonly features?: RunFeatures;
   /** What a Claude agent's auto mode is told this Run authorises: the branch it made, and who started it. */
   readonly authority: RunAuthority;
 }

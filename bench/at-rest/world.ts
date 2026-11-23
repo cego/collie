@@ -3,7 +3,6 @@
 
 import { tmpdir } from "node:os";
 import { Effect, FileSystem } from "effect";
-import { writeFakeHerdrShim } from "../../test/support/fake-herdr-core";
 import { GIT_QUIET } from "../../test/support/git-quiet";
 import { testBunfig } from "../../test/support/packages";
 
@@ -31,13 +30,12 @@ export const enterWorld = Effect.gen(function* () {
   for (const dir of [world.user, world.state, world.home, world.project, world.bin])
     yield* fs.makeDirectory(dir, { recursive: true });
   yield* fs.writeFileString(`${world.home}/.bunfig.toml`, testBunfig);
-  // Never the user's claude, nor their herdr and its Machines.
+  // Never the user's claude.
   yield* fs.writeFileString(
     `${world.bin}/claude`,
     `#!/bin/sh\n[ "$1" = --help ] && echo "  --autocompact <auto|tokens>" && exit 0\nexit 1\n`,
     { mode: 0o755 },
   );
-  yield* writeFakeHerdrShim(`${world.bin}/herdr`);
   delete Bun.env.OTEL_EXPORTER_OTLP_ENDPOINT;
   delete Bun.env.HC_SESSION;
   delete Bun.env.XDG_CONFIG_HOME;
@@ -45,15 +43,12 @@ export const enterWorld = Effect.gen(function* () {
     ...GIT_QUIET,
     TMPDIR: live,
     HOME: world.home,
-    HERDR_PLUGIN_ROOT: world.install,
-    HERDR_PLUGIN_STATE_DIR: world.state,
-    HERDR_SOCKET_PATH: `${world.state}/herd.sock`,
+    COLLIE_ROOT: world.install,
+    COLLIE_STATE_DIR: world.state,
     COLLIE_USER_DIR: world.config,
     COLLIE_CWD: world.project,
     COLLIE_HOST: JSON.stringify([process.execPath, `${root}src/main.ts`]),
     COLLIE_HOST_WATCH_PID: String(process.pid),
-    HERDR_BIN_PATH: `${world.bin}/herdr`,
-    FAKE_HERDR_LOG: `${live}/herdr-calls.jsonl`,
     HC_SOCKET: `${live}/absent-core.sock`,
     COLLIE_RELEASES: "http://127.0.0.1:9",
     PATH: `${world.bin}:${Bun.env.PATH ?? ""}`,

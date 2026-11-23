@@ -1,7 +1,7 @@
 // `collie machine`: the Machines this one is paired with (ADR-0057). Pairing happens by
 // itself on first reach. `list`, `connect`, which opens the SSH connection a blocked link and
 // core ride, `add` and `forget` are what a human has a use for; `invite` is what pairing runs
-// on the other Machine over SSH. On a Machine set to herdr, forgetting follows herdr's list.
+// on the other Machine over SSH.
 
 import * as Arr from "effect/Array";
 import { Effect, Option } from "effect";
@@ -80,7 +80,7 @@ const list = Command.make("list", {}, () =>
 
 const said = (text: string) => Effect.sync(() => void process.stderr.write(text));
 const machineName = Argument.String("name").pipe(
-  Argument.withDescription("The Machine's name: core's on a Machine set to core, else herdr's"),
+  Argument.withDescription("The Machine's name, as core's machine list has it"),
 );
 
 const connect = Command.make(

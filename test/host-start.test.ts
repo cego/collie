@@ -15,7 +15,6 @@ import { startDetached } from "./support/command";
 import { runEffect, suiteEnv } from "./support/effect";
 import { until } from "./support/host";
 import { hostRunRecords } from "./support/records";
-import { writeFakeHerdrShim } from "./support/fake-herdr-core";
 
 const held = new URL("./fixtures/checks/held.sh", import.meta.url).pathname;
 
@@ -31,14 +30,11 @@ const hostThrough = (
     yield* fs.makeDirectory(state);
     if (installation !== undefined)
       yield* fs.writeFileString(`${state}/installation`, `${installation}\n`);
-    yield* writeFakeHerdrShim(`${root}/herdr`);
     const { COLLIE_PROC } = yield* suiteEnv;
     const env = {
       HOME: root,
       PATH: yield* Config.String("PATH"),
-      HERDR_BIN_PATH: `${root}/herdr`,
-      HERDR_SOCKET_PATH: `${root}/herdr.sock`,
-      HERDR_PLUGIN_STATE_DIR: state,
+      COLLIE_STATE_DIR: state,
       HC_SOCKET: "/nonexistent/collie-test/hc.sock",
       COLLIE_USER_DIR: `${root}/user`,
       COLLIE_RELEASES: "http://127.0.0.1:9",

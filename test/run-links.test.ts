@@ -56,10 +56,10 @@ const linksTo = (side: Side, requester: string, run: string) =>
     }),
   );
 
-/** How many of `run`'s reports `side`'s herdr was asked to show its agents. */
+/** How many of `run`'s reports `side`'s core was asked to give its agents. */
 const reportsTo = (side: Side, run: string) =>
   FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) => fs.readFileString(side.herdrLog)),
+    Effect.flatMap((fs) => fs.readFileString(side.coreLog)),
     Effect.orDie,
     Effect.map(
       (log) =>
@@ -72,18 +72,15 @@ const requesterOn = (side: Side) =>
     const fs = yield* FileSystem.FileSystem;
     const outputs = `${side.world.home}/outputs.json`;
     yield* fs.writeFileString(outputs, encode([{ verdict: "done" }, null]));
-    const started = yield* side.cli(
-      [
-        "run",
-        "start",
-        "stepped",
-        "--input",
-        "mode=declared",
-        "--input",
-        `gates=${side.world.home}/gates`,
-      ],
-      { FAKE_HERDR_OUTPUTS: outputs },
-    );
+    const started = yield* side.cli([
+      "run",
+      "start",
+      "stepped",
+      "--input",
+      "mode=declared",
+      "--input",
+      `gates=${side.world.home}/gates`,
+    ]);
     const { runId } = runIdOf(started.envelope.data);
     const host = yield* connect(side.world.state);
     yield* until(
@@ -150,7 +147,7 @@ test(
             const { runId: a, agent } = yield* requesterOn(first);
             const outputs = `${second.world.home}/outputs.json`;
             yield* fs.writeFileString(outputs, encode([null]));
-            yield* second.cli(["board"], { FAKE_HERDR_OUTPUTS: outputs });
+            yield* second.cli(["board"]);
             yield* first.lists([second]);
             const started = yield* first.cli(
               [
@@ -164,7 +161,7 @@ test(
                 "--input",
                 "goal=investigate",
               ],
-              { HERDR_PANE_ID: agent.paneId },
+              { COLLIE_AGENT: agent.agent },
             );
             const { runId: b } = runIdOf(started.envelope.data);
             const flow = yield* flowOf(first, a);
@@ -298,7 +295,7 @@ test(
                 "--input",
                 "goal=find the cause",
               ],
-              { HERDR_PANE_ID: agent.paneId },
+              { COLLIE_AGENT: agent.agent },
             );
             expect(failing.envelope).toMatchObject({ ok: true });
             const { runId: c } = runIdOf(failing.envelope.data);
@@ -359,7 +356,7 @@ test(
                 "--input",
                 "goal=work while the requester is away",
               ],
-              { HERDR_PANE_ID: agent.paneId },
+              { COLLIE_AGENT: agent.agent },
             );
             const { runId: d } = runIdOf(waiting.envelope.data);
             yield* until(
@@ -471,7 +468,7 @@ test(
             const { agent } = yield* requesterOn(first);
             const outputs = `${second.world.home}/outputs.json`;
             yield* fs.writeFileString(outputs, encode([null]));
-            yield* second.cli(["board"], { FAKE_HERDR_OUTPUTS: outputs });
+            yield* second.cli(["board"]);
             yield* first.lists([second]);
             const started = yield* first.cli(
               [
@@ -485,7 +482,7 @@ test(
                 "--input",
                 "goal=work while the requester is unpaired",
               ],
-              { HERDR_PANE_ID: agent.paneId },
+              { COLLIE_AGENT: agent.agent },
             );
             const { runId: d } = runIdOf(started.envelope.data);
             yield* until(
@@ -564,7 +561,7 @@ test(
                 "--input",
                 "goal=investigate",
               ],
-              { HERDR_PANE_ID: agent.paneId },
+              { COLLIE_AGENT: agent.agent },
             );
             const { runId: b } = runIdOf(started.envelope.data);
             const linked = Option.getOrUndefined(

@@ -1,13 +1,13 @@
 // What keeps the benchmark off the human's own host and out of another Measurement's way.
 
-import { Effect, FileSystem, Option, Path, pipe } from "effect";
+import { Effect, Option, Path, pipe } from "effect";
 import * as Str from "effect/String";
 import { ensureLockDir, lockHolder, withLock } from "../../src/lock";
 import { processOf } from "../../src/processes";
 
 /** The state directory a host uses when nothing names another. */
 export const userStateDir = (home: string, env: Readonly<Record<string, string | undefined>>) =>
-  env.HERDR_PLUGIN_STATE_DIR ?? `${home}/.local/state/herdr/plugins/cego.collie`;
+  env.COLLIE_STATE_DIR ?? `${home}/.local/state/herdr/plugins/cego.collie`;
 
 /** Why the benchmark may not run its host there, or null where it may. */
 export const refusal = Effect.fnUntraced(function* (

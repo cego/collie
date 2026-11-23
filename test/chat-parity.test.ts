@@ -133,7 +133,7 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   // Asked for by the human, carried out; wanted by Collie, proposed. `start` is in both
   // schemas for that reason, and the row names the human's side.
   ["run start", { route: "write", tool: "collie_do" }],
-  ["run list", { route: "read", tool: "collie_herd" }],
+  ["run list", { route: "read", tool: "collie_run", input: { list: true } }],
   ["run show", { route: "read", tool: "collie_run", input: { run: RUN } }],
   ["run artefacts", { route: "read", tool: "collie_artefacts", input: { run: RUN } }],
   ["run artefact show", { route: "read", tool: "collie_artefacts", input: { run: RUN, id: "a1" } }],
@@ -318,6 +318,7 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["settings list", { route: "shell" }],
   ["settings set", { route: "shell" }],
   ["run output", { route: "read", tool: "collie_run", input: { run: RUN } }],
+  ["run read", { route: "read", tool: "collie_run", input: { run: RUN, ref: "log" } }],
   ["steer", { route: "write", tool: "collie_do" }],
   ["confirm", { route: "write", tool: "collie_do" }],
   ["decline", { route: "write", tool: "collie_do" }],
@@ -450,7 +451,7 @@ test(
         const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-parity-" });
         // An empty PATH: the installation checks would otherwise run the operator's own
         // claude, glab and gh, each allowed twenty seconds to answer, on every call below.
-        const env = readEnv({ ...process.env, HERDR_PLUGIN_STATE_DIR: stateDir, PATH: "" });
+        const env = readEnv({ ...process.env, COLLIE_STATE_DIR: stateDir, PATH: "" });
         // The registry is filled by the module that owns each operation, so it has to be
         // asked rather than listed: a kind with no executor is refused at confirmation as
         // `executor_missing`, and a route to one would be control reduced to advice.
@@ -697,7 +698,7 @@ test("collie_run and collie_herd say what a running check's card says", () =>
       yield* records.setControl(VERIFYING, run.id, marker);
       const now = epochMs("2026-09-14T10:12:00Z");
       const [card] = yield* buildBoard({
-        env: readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" }),
+        env: readEnv({ COLLIE_STATE_DIR: stateDir, COLLIE_CWD: "/project" }),
         runs: [run],
         tasks: [],
         registered: [],
@@ -797,7 +798,7 @@ test("the card, collie_run and collie_herd say the same of a Run waiting for mem
         `MemTotal: ${62 * 1048576} kB\nMemAvailable: ${2 * 1048576} kB\n`,
       );
       const env = readEnv({
-        HERDR_PLUGIN_STATE_DIR: stateDir,
+        COLLIE_STATE_DIR: stateDir,
         COLLIE_CWD: "/project",
         COLLIE_PROC: proc,
       });
@@ -874,7 +875,7 @@ test("collie_run answers from related Runs without polling unrelated live execut
         launches: () => Effect.succeed([]),
       };
       const answer = yield* answerRead(
-        readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project", PATH: "" }),
+        readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project", PATH: "" }),
         "collie_run",
         { run: run.id },
         reads,

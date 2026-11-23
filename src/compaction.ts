@@ -5,6 +5,7 @@
 // next step, a fix round, a hand-off from another Run — and a threshold repeated per
 // harness is a threshold that disagrees with itself.
 
+import type { Source } from "./usage-ledger-model";
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -48,6 +49,9 @@ import {
  * the next piece of work into a context whose size nobody has established.
  */
 export const COMPACTION_WAIT_MS = 5 * 60 * 1000;
+
+/** How long after it was asked for an unresolved compaction is settled by `reconcile`. */
+export const RECONCILE_AFTER_MS = 2 * COMPACTION_WAIT_MS;
 
 /**
  * How long a stop waits for an agent to be Quiet: sized like upstream's own drain tests.
@@ -96,7 +100,7 @@ export class Unsubmitted extends Data.TaggedError("Unsubmitted")<{
 /**
  * What a harness's official interface establishes about one request. There is no
  * third member on purpose: an absent completion is not a failure, so an unresolved
- * request is `null` from `poll` and stays unresolved until the budget runs out.
+ * request is `null` from `poll` until the harness says, or `reconcile` settles it.
  */
 export type CompactionOutcome =
   | { readonly kind: "success" }
@@ -230,6 +234,10 @@ export interface CompactionPort {
   install(ctx: LaunchContext): Effect.Effect<Installed, PortError, PortServices>;
   /** The harness's own current-context total. `null` where no usable sample exists. */
   usage(ctx: AgentContext): Effect.Effect<number | null, PortError, PortServices>;
+  /** Where the harness keeps each request this agent and its sub-agents made, for the usage ledger. */
+  readonly records?: (
+    ctx: AgentContext,
+  ) => Effect.Effect<ReadonlyArray<Source>, PortError, PortServices>;
   /**
    * Submits a native compaction request. Acknowledgement only, never completion — and
    * `unobserved` where the channel it went through could not confirm even that much.
@@ -271,6 +279,15 @@ export interface CompactionPort {
     ctx: AgentContext,
     requestId: string,
   ): Effect.Effect<CompactionOutcome | null, PortError, PortServices | Records>;
+  /**
+   * Whether the harness's own record shows a compaction since `since`, for a request whose
+   * completion `poll` never saw once `RECONCILE_AFTER_MS` has passed. Absent where `poll`
+   * already reads the harness's own record.
+   */
+  readonly reconcile?: (
+    ctx: AgentContext,
+    since: number,
+  ) => Effect.Effect<CompactionOutcome, PortError, PortServices>;
 }
 
 export interface CompactionPorts {
@@ -307,6 +324,8 @@ const AttemptSchema = Schema.Struct({
   step: Schema.String,
   /** When the five-minute budget runs out, in epoch ms, so a resumed Run inherits it. */
   deadline: Schema.Finite,
+  /** When it was asked for, in epoch ms; absent from an attempt recorded before it was. */
+  asked: Schema.optionalKey(Schema.Finite),
 });
 const ControlSchema = Schema.Struct({
   agent: Schema.String,
@@ -430,8 +449,12 @@ export interface CompactionDeps {
     at: { readonly agent: string; readonly run: string; readonly step: string },
     tokens: number,
   ) => Effect.Effect<void, PortError, PortServices | Records>;
+  /** Reads this agent's usage into its Run's ledger; never fails. */
+  account?: (agent: string) => Effect.Effect<void, never, PortServices | Records>;
   waitMs: number;
   pollMs: number;
+  /** Waits, before a compaction is asked for, while the agent's Machine is short of disk. */
+  room?: (cwd: string) => Effect.Effect<"free" | "waited" | "stopped">;
   /** How long a stop may wait for Quiet; the fixed budget where left out. */
   stopMs?: number;
 }
@@ -799,7 +822,7 @@ export const awaitReady = Effect.fn("Compaction.awaitReady")(function* (
   const record = yield* readControl(deps.stateDir, agent);
   const ready = record === null ? undefined : deps.ports[record.harness]?.ready;
   if (record === null || ready === undefined) {
-    yield* deps.log(`${agent}: nothing of Collie's can say its harness is up; herdr's word stands`);
+    yield* deps.log(`${agent}: nothing of Collie's can say its harness is up; core's word stands`);
     return null;
   }
   const deadline = (yield* Clock.currentTimeMillis) + budgetMs;
@@ -864,7 +887,7 @@ export const putDownControl = Effect.fn("Compaction.putDownControl")(function* <
     Effect.gen(function* () {
       // A launch may have finished while we waited for its lock. The earlier list
       // cannot prove this agent is still absent.
-      if (yield* listed) return "herdr lists its agent again";
+      if (yield* listed) return "core lists its agent again";
       const record = yield* readControl(deps.stateDir, name);
       // A server an earlier stop already signalled is only looked at again, so no launch
       // waits out its budget.
@@ -989,12 +1012,18 @@ export const atBoundary = Effect.fn("Compaction.atBoundary")(function* <Submissi
     return DISPATCH;
   }
 
+  if (deps.room !== undefined && (yield* deps.room(record.cwd)) === "stopped")
+    return {
+      dispatch: false,
+      reason: `${at.agent}: the Run was stopped while its compaction waited for disk`,
+    } satisfies Boundary;
   const now = yield* Clock.currentTimeMillis;
   const attempt = {
     id: `${at.agent}-${now}`,
     run: at.run,
     step: at.step,
     deadline: now + deps.waitMs,
+    asked: now,
   };
   // Written before the request is sent, not after: a process that dies between the two
   // must leave the attempt visible, or the next boundary would read a stale high sample
@@ -1048,6 +1077,17 @@ const sendsNothing = (agent: string): Channel => ({
     }),
 });
 
+/** An agent's context for a read, from its control record. */
+export const readingContext = (record: ControlRecord, run: string): AgentContext => ({
+  agent: record.agent,
+  run,
+  harness: record.harness,
+  cwd: record.cwd,
+  dir: record.dir,
+  endpoint: record.endpoint,
+  channel: sendsNothing(record.agent),
+});
+
 /**
  * One more look at an attempt past its budget. `null` while it is still unresolved; an attempt no longer recorded, as a
  * deleted control directory leaves it, is over.
@@ -1088,13 +1128,27 @@ const resolved = Effect.fn("Compaction.resolved")(function* (
         .pipe(Effect.as(null)),
     ),
   );
-  if (outcome === null) return null;
+  const since = attempt.asked ?? attempt.deadline;
+  const settled =
+    outcome === null &&
+    port.reconcile !== undefined &&
+    (yield* Clock.currentTimeMillis) >= since + RECONCILE_AFTER_MS
+      ? yield* port.reconcile(ctx, since).pipe(
+          Effect.catch((cause) =>
+            Effect.succeed({
+              kind: "failure",
+              reason: `its own record could not be read (${reason(cause)})`,
+            } as const),
+          ),
+        )
+      : outcome;
+  if (settled === null) return null;
   yield* writeControl(deps.stateDir, { ...record, attempt: null });
-  if (outcome.kind === "success") {
+  if (settled.kind === "success") {
     yield* deps.log(`${ctx.agent}: native compaction ${attempt.id} completed`);
   } else {
     yield* deps.warn(
-      `  ⚠ ${ctx.agent}: native compaction failed (${outcome.reason}) — sending the work anyway`,
+      `  ⚠ ${ctx.agent}: native compaction failed (${settled.reason}) — sending the work anyway`,
     );
   }
   return DISPATCH;

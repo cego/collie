@@ -84,6 +84,14 @@ test("a child has no launcher LD_PRELOAD or ld.so errors", () =>
     }),
   ));
 
+test("a child inherits nothing of the retired Herdr runtime", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* setFor("HERDR_SOCKET_PATH", "/old/herdr.sock");
+      expect(childEnv().HERDR_SOCKET_PATH).toBeUndefined();
+    }),
+  ));
+
 test("Desktop keeps the launcher's environment after building a child's", () =>
   runEffect(
     Effect.gen(function* () {

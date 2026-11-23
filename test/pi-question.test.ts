@@ -100,7 +100,7 @@ test("chat's pi is given Collie's tools but no question tool: the human is alrea
         userDir: dir,
         home: dir,
         self: SELF,
-        serverEnv: { HERDR_PLUGIN_STATE_DIR: dir },
+        serverEnv: { COLLIE_STATE_DIR: dir },
         news: `${dir}/news.jsonl`,
         tools: Arr.map(TOOLS, (tool) => ({
           name: tool.name,

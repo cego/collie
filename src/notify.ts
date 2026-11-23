@@ -86,7 +86,7 @@ const HEADLINE = {
   "intent-changed": () => "was given a new Intent",
 } satisfies Record<NotificationKind, (subject?: string) => string>;
 
-/** One herdr session runs several checkouts, so the repo is part of every title. */
+/** One Herd runs several checkouts, so the repo is part of every title. */
 function repoOf(cwd: string): string {
   return Str.split(pipe(cwd, Str.replace(/\/+$/, "")), "/").pop() ?? cwd;
 }

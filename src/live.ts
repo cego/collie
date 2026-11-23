@@ -28,7 +28,7 @@ import {
   uncertain as uncertainNews,
 } from "./news";
 import { pendingFor, pendingHerdWide, type ProposalLine, type ProposalRecord } from "./proposals";
-import { herdOf, herdDir, type Delivery } from "./steering";
+import { herdDir, type Delivery } from "./steering";
 
 /** How many cards the region draws. Newest first, and a screen's worth is the point. */
 const CARDS = 5;
@@ -92,14 +92,6 @@ export const readPendingReports = Effect.fn("Live.readPendingReports")(function*
   return yield* readJournal(yield* pendingReportsPath(stateDir, herdKey, run), DriftJson);
 });
 
-/**
- * The Herd this state dir belongs to, or null when there is no herdr to ask. Null rather
- * than a failure: a board is worth drawing without the Herd-wide journals, and inventing
- * a key from a cwd is exactly what keys two sessions to one Herd.
- */
-const herdOrNull = (socketPath: string | null) =>
-  herdOf(socketPath).pipe(Effect.orElseSucceed(() => null));
-
 /** What a row's marks are read from: the Run, whether it is held, and its agents' harnesses. */
 export interface MarkedRun extends LiveRun {
   held: boolean;
@@ -152,7 +144,8 @@ type Client = FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner;
 
 export const liveFor = Effect.fn("Live.for")(function* (opts: {
   stateDir: string;
-  socketPath: string | null;
+  /** Null where the Herd cannot be named: a board is still drawn, without its journals. */
+  herd: string | null;
   ledgers: Ledgers;
   /** The Selection's Run, where one is selected. */
   run: LiveRun | null;
@@ -162,7 +155,7 @@ export const liveFor = Effect.fn("Live.for")(function* (opts: {
   region: boolean;
 }) {
   const now = yield* Clock.currentTimeMillis;
-  const key = yield* herdOrNull(opts.socketPath);
+  const key = opts.herd;
   const lines = key === null ? [] : yield* opts.ledgers.proposals(key);
   const overridden = opts.runs.length === 0 ? new Set<string>() : yield* opts.ledgers.overridden;
 

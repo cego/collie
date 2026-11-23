@@ -8,14 +8,11 @@ import type { ChildProcessSpawner } from "effect/process";
 import { Argument, Command, Flag } from "effect/cli";
 import { layers, loadDefinitions } from "../definitions";
 import { currentEnv, type PluginEnv } from "../env";
-import { Herdr, type WorkspaceInfo } from "../herdr";
 import { unsafePathComponent } from "../naming";
-import { err, resolveWorkspace, type Failure } from "../operations";
+import { err, workspaceNamed, type Failure, type NamedDirectory } from "../operations";
 import { evidenceDir, runDir, type Given, type RunView } from "../engine";
-import { asks, asksRun, hostTaskOf, hostTasks } from "../lifecycle";
-import { readAudit, type AuditLine } from "../audit";
-import { recordsReadLayer } from "../records";
-import { readIntent } from "../intent";
+import { asksRun, hostTaskOf } from "../lifecycle";
+import { outOfReach, type RunScope } from "../run-read";
 import { FrontDoor } from "../board-model";
 import { connect } from "../host";
 import { actorName } from "../proposals";
@@ -44,10 +41,7 @@ export type Global = {
   readonly machine: Option.Option<string>;
   readonly json: boolean;
 };
-export const selected = Effect.fn("collie.selected")(function* (global: Global) {
-  if (Option.isSome(global.workspace)) return global.workspace.value;
-  return (yield* currentEnv).workspaceId;
-});
+export const selected = (global: Global) => Effect.succeed(Option.getOrNull(global.workspace));
 
 /**
  * What a Run lookup is scoped to. Runs belong to Tasks, not to whichever workspace a
@@ -60,9 +54,6 @@ export const selectedTask = Effect.fn("collie.selectedTask")(function* (global: 
   return (yield* hostTaskOf(env, yield* selected(global)))?.id ?? null;
 });
 
-/** Whom a Run lookup is for, built once from the command line: the Task, and the calling agent's Run. */
-export type RunScope = { readonly task: string | null; readonly caller: string | null };
-
 export const runScope = Effect.fn("collie.runScope")(function* (global: Global) {
   const env = yield* currentEnv;
   const door = yield* cliDoor(env);
@@ -72,77 +63,15 @@ export const runScope = Effect.fn("collie.runScope")(function* (global: Global) 
   } satisfies RunScope;
 });
 
-const steered = (line: AuditLine, id: string) =>
-  (line.operation === "deliver" || line.operation === "steer") &&
-  pipe_(textOf(line.asked), Str.includes(id));
-
-const textOf = (asked: Schema.Json | undefined) =>
-  Option.match(Schema.decodeUnknownOption(Schema.Struct({ text: Schema.String }))(asked), {
-    onNone: () => "",
-    onSome: (said) => said.text,
-  });
-
-/** Whether `caller`'s Run started `view`, or its goal, inputs or a steer it received name it. */
-const callerReaches = Effect.fn("collie.callerReaches")(function* (
-  env: PluginEnv,
-  view: RunView,
-  caller: string | null,
-) {
-  if (caller === null) return false;
-  if (view.parent === caller || view.requestedBy?.run === caller) return true;
-  const trail = yield* readAudit(runDir(env.stateDir, caller)).pipe(
-    Effect.provide(recordsReadLayer(env.stateDir)),
-    Effect.orElseSucceed(() => []),
-  );
-  if (Arr.some(trail, (line) => steered(line, view.runId))) return true;
-  const intent = yield* readIntent(runDir(env.stateDir, caller)).pipe(
-    Effect.provide(recordsReadLayer(env.stateDir)),
-    Effect.orElseSucceed(() => null),
-  );
-  if (pipe_(intent?.goal ?? "", Str.includes(view.runId))) return true;
-  const own = yield* asks(env, (client) => client.run({ runId: caller }));
-  if (!own.ok || own.value === null) return false;
-  const inputs = yield* Schema.encodeEffect(UnknownJson)(own.value.input).pipe(
-    Effect.orElseSucceed(() => ""),
-  );
-  return pipe_(inputs, Str.includes(view.runId));
-});
-
-/** Why `view`, on `machine` (null for this one), is out of `scope`'s reach; null where it is not. */
-export const outOfReach = Effect.fn("collie.outOfReach")(
-  function* (env: PluginEnv, view: RunView, machine: string | null, scope: RunScope) {
-    // A Task is this Machine's, so a Run on another is never outside it.
-    if (machine !== null || scope.task === null || view.task === scope.task) return null;
-    if (yield* callerReaches(env, view, scope.caller)) return null;
-    const workspace =
-      view.task === null
-        ? null
-        : (Option.getOrUndefined(
-            Arr.findFirst(yield* hostTasks(env), (task) => task.id === view.task),
-          )?.workspace ?? null);
-    const where = view.task === null ? "in no task" : `in task "${view.task}"`;
-    const reach =
-      workspace === null ? "no workspace reaches it." : `\`--workspace ${workspace}\` reaches it.`;
-    return err(
-      "run_outside_task",
-      `Run "${view.runId}" is ${where}, not task "${scope.task}": ${reach}`,
-      { run: view.runId, task: view.task, workspace },
-    );
-  },
-  Effect.catchTag("HostUnread", (unread) =>
-    Effect.succeed<Failure>({ ok: false, error: unread.error }),
-  ),
-);
-
 export type ContextResolution =
   | {
       readonly _tag: "ResolvedContext";
       readonly env: PluginEnv;
-      readonly workspace: WorkspaceInfo | null;
+      readonly workspace: NamedDirectory | null;
     }
   | { readonly _tag: "ContextFailure"; readonly result: Failure };
 
-const resolvedContext = (env: PluginEnv, workspace: WorkspaceInfo | null): ContextResolution => ({
+const resolvedContext = (env: PluginEnv, workspace: NamedDirectory | null): ContextResolution => ({
   _tag: "ResolvedContext",
   env,
   workspace,
@@ -152,20 +81,6 @@ const contextFailure = (result: Failure): ContextResolution => ({
   _tag: "ContextFailure",
   result,
 });
-
-/**
- * Where a command scoped to a workspace works. An explicitly named directory wins. A
- * workspace named with `--workspace` roots it at that workspace's directory; one only
- * inherited from the pane the command was typed in does not, because the directory the
- * caller is standing in says more — the Home's pane rooted every command typed there in
- * its state directory.
- */
-export const contextCwd = (at: {
-  readonly explicit: string;
-  readonly named: boolean;
-  readonly workspace: string;
-  readonly caller: string;
-}) => at.explicit || (at.named ? at.workspace || at.caller : at.caller || at.workspace);
 
 export const context = Effect.fn("collie.context")(function* (
   global: Global,
@@ -178,33 +93,28 @@ export const context = Effect.fn("collie.context")(function* (
   const reach = Option.isSome(global.machine)
     ? { pairs: true, machine: global.machine.value }
     : { pairs: true };
-  const base = { ...baseEnv, workspaceId: id, ...reach };
+  const base = { ...baseEnv, ...reach };
   if (!id)
     return requireScope
       ? contextFailure(err("workspace_required", "This operation requires a workspace."))
       : resolvedContext(base, null);
   if (!resolveLive) return resolvedContext(base, null);
 
-  const lookup = yield* resolveWorkspace(new Herdr(base), base).pipe(
-    Effect.map((workspace) => ({ workspace, cause: "" })),
-    Effect.catch((cause) => Effect.succeed({ workspace: null, cause: String(cause) })),
-  );
+  const named = yield* workspaceNamed(base, id);
+  const lookup =
+    named === null
+      ? { workspace: null, cause: "" }
+      : "error" in named
+        ? { workspace: null, cause: named.error }
+        : { workspace: named.found, cause: "" };
   if (!lookup.workspace) {
     const details: YamlMap = { workspace: id };
     if (lookup.cause) details["cause"] = lookup.cause;
     return contextFailure(err("workspace_not_found", `Workspace "${id}" was not found.`, details));
   }
   return resolvedContext(
-    {
-      ...base,
-      workspaceId: id,
-      cwd: contextCwd({
-        explicit: base.cwdExplicit ? base.cwd : "",
-        named: Option.isSome(global.workspace),
-        workspace: lookup.workspace.cwd || base.context.workspace_cwd || "",
-        caller: base.cwd,
-      }),
-    },
+    // An explicitly named directory wins over the workspace's.
+    { ...base, cwd: base.cwdExplicit ? base.cwd : lookup.workspace.cwd || base.cwd },
     lookup.workspace,
   );
 });
@@ -341,13 +251,13 @@ export const root = Command.make("collie").pipe(
   Command.withSharedFlags({
     workspace: Flag.String("workspace").pipe(
       Flag.withDescription(
-        "Scope to this herdr workspace id, and root the run at that workspace's directory",
+        "Root the command at this directory or checkout under the Projects root",
       ),
       Flag.optional,
     ),
     machine: Flag.String("machine").pipe(
       Flag.withDescription(
-        "Reach this paired Machine, by herdr's name for it, for a command that names no Run",
+        "Reach this paired Machine, by core's name for it, for a command that names no Run",
       ),
       Flag.optional,
     ),
@@ -399,12 +309,10 @@ export function mutating(
  */
 export function cliOrigin(at: {
   readonly terminal: boolean;
-  readonly pane: string | null;
-  readonly agentPanes: ReadonlyArray<string> | null;
+  /** Whether this process runs in a terminal Collie launched as an agent. */
+  readonly agent: boolean;
 }): "cli" | "cli-tty" {
-  if (!at.terminal) return "cli";
-  if (at.pane === null) return "cli-tty";
-  return at.agentPanes !== null && !at.agentPanes.includes(at.pane) ? "cli-tty" : "cli";
+  return at.terminal && !at.agent ? "cli-tty" : "cli";
 }
 
 /**
@@ -415,33 +323,15 @@ export function cliOrigin(at: {
  */
 export const cliDoor = Effect.fn("Shared.cliDoor")(function* (env: PluginEnv) {
   const terminal = Boolean(process.stdin.isTTY || process.stdout.isTTY || process.stderr.isTTY);
-  const agents =
-    env.paneId === null
-      ? []
-      : yield* new Herdr(env).agentList().pipe(Effect.orElseSucceed(() => null));
-  // A core terminal has no herdr pane: its agent is the one Collie launched it as.
-  const named =
-    Option.getOrUndefined(
-      Option.map(Option.fromNullishOr(agents), (present) =>
-        Option.getOrUndefined(Arr.findFirst(present, (one) => one.paneId === env.paneId)),
-      ),
-    )?.name ?? env.raw.COLLIE_AGENT;
-  if (named !== undefined && named !== "") {
+  // Who it is comes from its launch: core names no agent of a process.
+  const named = env.raw.COLLIE_AGENT ?? "";
+  if (named !== "") {
     const run = yield* Effect.scoped(
       connect(env.stateDir).pipe(Effect.flatMap((client) => client.agentRun({ agent: named }))),
     ).pipe(Effect.orElseSucceed(() => null));
     if (run !== null) return { origin: "agent" as const, from: { run, agent: named } };
   }
-  return cliOrigin({
-    terminal,
-    pane: env.paneId,
-    agentPanes:
-      Option.getOrUndefined(
-        Option.map(Option.fromNullishOr(agents), (present_) =>
-          Arr.map(present_, (one) => one.paneId),
-        ),
-      ) ?? null,
-  });
+  return cliOrigin({ terminal, agent: named !== "" });
 });
 
 /** Who is asking, for an operation of this command's own. */

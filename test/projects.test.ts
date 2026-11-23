@@ -1,6 +1,7 @@
 // The Projects root and the checkouts under it: where a Run started from the Home is
 // rooted, and the one listing the router and an agent's refusal choose from.
 
+import { Herdr } from "../src/herdr";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -13,7 +14,7 @@ import { stopHost } from "./support/host";
 import { FakeBin } from "./support/bin";
 import { startCheckout } from "../src/agent-start";
 import { checkoutFor } from "../src/worktree";
-import { Rig, FakeHerdr } from "./support/recorder";
+import { Rig } from "./support/recorder";
 import { writeConfigValue } from "../src/config";
 import { checkoutsUnder, projectsRoot } from "../src/projects";
 
@@ -221,7 +222,7 @@ test(
           expect(one).not.toHaveProperty("error");
           if ("error" in one) continue;
           expect(one.branchBase).toBe(heads[index]!);
-          const checkout = yield* checkoutFor(new FakeHerdr(rig.pluginEnv()), {
+          const checkout = yield* checkoutFor(new Herdr(rig.pluginEnv()), {
             cwd: one.project,
             stateDir: rig.stateDir,
             name: `r-${index}`,

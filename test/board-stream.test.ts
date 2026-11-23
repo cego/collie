@@ -37,15 +37,13 @@ import {
 import { buildBoard } from "../src/board";
 import { boardMessages, shareBoard } from "../src/board-stream";
 import { recordDisposition } from "../src/disposition";
-import { currentEnv, readEnv } from "../src/env";
+import { readEnv } from "../src/env";
 import { readLogTail } from "../src/run-log";
-import { Herdr } from "../src/herdr";
 import { BUILD, boardWrites, connect, frontDoor, socketOf, timingFirstValues } from "../src/host";
 import { Foreground, makeForeground, servedNow } from "../src/foreground";
 import { drawerWrites } from "../src/record";
 import { makeRunModel } from "../src/run-model";
 import { handoffsIn } from "../src/handoffs";
-import { editState } from "./support/fake-herdr-core";
 import { followDetail } from "../src/run-detail";
 import { foundationLayer } from "../src/engine";
 import { Store } from "../src/store";
@@ -56,15 +54,6 @@ import { stopHost, until } from "./support/host";
 import { task } from "./support/task";
 import { madeRun, recordsAt } from "./support/records";
 import { collie, proves, type World } from "./support/world";
-
-const asSessions = Schemaflow(
-  Schema.encodeResult(
-    Schema.fromJsonString(
-      Schema.Array(Schema.Struct({ name: Schema.String, socket_path: Schema.String })),
-    ),
-  ),
-  Result.getOrThrow,
-);
 
 const firstSnapshot = (state: string) =>
   Effect.scoped(
@@ -210,7 +199,7 @@ test(
                 Arr.map(present.tasks, (one) => one.name),
               ),
             ),
-          ).toEqual(["Plain"]);
+          ).toEqual(["Hi"]);
           // `age` is reckoned when a board is built, and a tick may build one between the two.
           const ageless = (tasks: ReadonlyArray<TaskView> = []) =>
             Arr.map(tasks, (task) => ({ ...task, age: null }));
@@ -262,14 +251,14 @@ const readsOnlyOnTicks = (drawer: boolean) =>
           );
           yield* Deferred.await(opened);
         }
-        const log = `${(yield* Path.Path).dirname(world.state)}/herdr-calls.jsonl`;
+        const log = `${(yield* Path.Path).dirname(world.state)}/core-calls.jsonl`;
         const lists = Effect.map(
           Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(log)),
           (text) =>
-            Arr.filter(Str.split(text, "\n"), (line) => /"cmd":"(agent|pane) list"/.test(line))
-              .length,
+            Arr.filter(Str.split(text, "\n"), (line) => /"cmd":"terminal\.list"/.test(line)).length,
         ).pipe(Effect.orDie);
         const before = yield* lists;
+        expect(before).toBeGreaterThan(0);
         const since = yield* Clock.currentTimeMillis;
         for (const kind of [
           "merged",
@@ -299,13 +288,13 @@ const readsOnlyOnTicks = (drawer: boolean) =>
   );
 
 test(
-  "a write under the state directory rebuilds the board on herdr's last reading of its agents",
+  "a write under the state directory rebuilds the board on core's last reading of its agents",
   () => readsOnlyOnTicks(false),
   120_000,
 );
 
 test(
-  "a Run's open drawer follows the board's reading of herdr, and reads none of its own",
+  "a Run's open drawer follows the board's reading of core, and reads none of its own",
   () => readsOnlyOnTicks(true),
   120_000,
 );
@@ -314,19 +303,6 @@ const asJson = Schemaflow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
   Result.getOrThrow,
 );
-const Herd = Schema.fromJsonString(
-  Schema.StructWithRest(
-    Schema.Struct({
-      agents: Schema.Array(
-        Schema.StructWithRest(Schema.Struct({ name: Schema.String }), [
-          Schema.Record(Schema.String, Schema.Json),
-        ]),
-      ),
-    }),
-    [Schema.Record(Schema.String, Schema.Json)],
-  ),
-);
-
 /** The actions a Run's Flow offers on the node of the agent named `agent`. */
 const actionsOf = (flow: Flow | null | undefined, agent: string) =>
   Option.getOrUndefined(
@@ -348,20 +324,21 @@ const actionsOf = (flow: Flow | null | undefined, agent: string) =>
   );
 
 test(
-  "run show says whether a Run's agent is alive as herdr lists it now, and a drawer opened after it draws the same",
+  "run show says whether a Run's agent is alive as core lists it now, and a drawer opened after it draws the same",
   () =>
     proves(
       "collie-show-alive-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
-          const outputs = `${world.home}/outputs.json`;
-          yield* fs.writeFileString(outputs, asJson([{ verdict: "done" }]));
-          const started = yield* collie(
-            world,
-            ["run", "start", "attended", "--input", "work=the link"],
-            { FAKE_HERDR_OUTPUTS: outputs },
-          );
+          yield* fs.writeFileString(`${world.home}/outputs.json`, asJson([{ verdict: "done" }]));
+          const started = yield* collie(world, [
+            "run",
+            "start",
+            "attended",
+            "--input",
+            "work=the link",
+          ]);
           const { runId } = yield* Schema.decodeUnknownEffect(
             Schema.Struct({ runId: Schema.String }),
           )(started.envelope.data).pipe(Effect.orDie);
@@ -379,11 +356,7 @@ test(
           yield* until(shown, (actions) => actions?.includes("tell") === true);
           yield* until(drawn, (actions) => actions?.includes("tell") === true);
 
-          yield* editState(`${(yield* Path.Path).dirname(world.state)}/herdr-calls.jsonl`, (text) =>
-            Effect.map(Schema.decodeEffect(Herd)(text).pipe(Effect.orDie), (herd) =>
-              asJson({ ...herd, agents: Arr.filter(herd.agents, (one) => one.name !== agent) }),
-            ),
-          );
+          yield* core.exit(agent, 0);
 
           expect(yield* shown()).not.toContain("tell");
           expect(yield* drawn()).not.toContain("tell");
@@ -605,6 +578,8 @@ test("the latest board is read at once while a newer one builds, and the first i
         expect(Arr.map(yield* Fiber.join(first), (view) => view.id)).toEqual(["built-1"]);
 
         yield* Queue.offer(changed, undefined);
+        // The next build rests as long as the last one took, at most 5 s.
+        yield* TestClock.adjust("5 seconds");
         while (builds < 2) yield* Effect.yieldNow;
         const asked = yield* Clock.currentTimeMillis;
         const read = yield* Effect.forkChild(latest);
@@ -614,6 +589,48 @@ test("the latest board is read at once while a newer one builds, and the first i
         expect(Arr.map(yield* Fiber.join(read), (view) => view.id)).toEqual(["built-1"]);
         expect(yield* Clock.currentTimeMillis).toBe(asked);
         expect(builds).toBe(2);
+      }),
+    ).pipe(Effect.provide(TestClock.layer())),
+  ));
+
+test("a build waits as long as the last one took, and at most 5 s, before it starts", () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const changed = yield* Queue.unbounded<void>();
+        const took = ["2 seconds", "8 seconds", "1 second"] as const;
+        const starts: number[] = [];
+        const build = Effect.gen(function* () {
+          starts.push(yield* Clock.currentTimeMillis);
+          yield* Effect.sleep(took[starts.length - 1] ?? "0 millis");
+          return [one];
+        });
+        yield* shareBoard({ build, changed: Stream.fromQueue(changed) });
+        const settle = Effect.gen(function* () {
+          for (let turn = 0; turn < 100; turn++) yield* Effect.yieldNow;
+        });
+        yield* settle;
+        expect(starts).toEqual([0]);
+        // Moved during the first build, which took 2 s: the next starts 2 s after it.
+        yield* Queue.offer(changed, undefined);
+        yield* TestClock.adjust("2 seconds");
+        yield* settle;
+        yield* TestClock.adjust("1999 millis");
+        yield* settle;
+        expect(starts).toEqual([0]);
+        yield* TestClock.adjust("1 millis");
+        yield* settle;
+        expect(starts).toEqual([0, 4_000]);
+        // An 8 s build is followed by 5 s of rest, not 8.
+        yield* Queue.offer(changed, undefined);
+        yield* TestClock.adjust("8 seconds");
+        yield* settle;
+        yield* TestClock.adjust("4999 millis");
+        yield* settle;
+        expect(starts).toEqual([0, 4_000]);
+        yield* TestClock.adjust("1 millis");
+        yield* settle;
+        expect(starts).toEqual([0, 4_000, 17_000]);
       }),
     ).pipe(Effect.provide(TestClock.layer())),
   ));
@@ -794,87 +811,6 @@ test("a Run recorded in the store is on the board at once, with no tick and no f
       }).pipe(Effect.provide(foundationLayer({ dir })), Effect.scoped, Effect.orDie);
     }),
   ));
-
-test(
-  "an agent in a second herdr session reaches the board and makes its card Stalled",
-  () =>
-    proves(
-      "collie-board-sessions-",
-      (world) =>
-        Effect.gen(function* () {
-          const first = `${world.home}/first.sock`;
-          const second = `${world.home}/second.sock`;
-          // Two sessions, and the Run's agent is only in the second, at its own prompt.
-          // Started from a workspace in the second, so its Task is that session's.
-          const env = yield* currentEnv.pipe(Effect.orDie);
-          const workspace = yield* new Herdr(env)
-            .workspaceCreate({ cwd: world.project, label: "builds" })
-            .pipe(Effect.orDie);
-          const herdr = {
-            HERDR_SOCKET_PATH: second,
-            HERDR_WORKSPACE_ID: workspace.workspaceId,
-            FAKE_HERDR_SESSIONS: asSessions([
-              { name: "desk", socket_path: first },
-              { name: "builds", socket_path: second },
-            ]),
-            FAKE_HERDR_AGENTS_IN: second,
-            FAKE_HERDR_AGENT_STATUS: "blocked",
-          };
-          const started = yield* collie(
-            world,
-            [
-              "run",
-              "start",
-              "agent",
-              "--here",
-              "--input",
-              "target=worktree",
-              "--input",
-              `cwd=${world.project}`,
-              "--input",
-              "skip=false",
-            ],
-            herdr,
-          );
-          expect(started.envelope.ok).toBe(true);
-          const snapshot = yield* firstSnapshot(world.state).pipe(
-            Effect.repeat({
-              until: (read) => read?.tasks[0]?.state === "blocked",
-              schedule: Schedule.spaced("250 millis"),
-              times: 60,
-            }),
-          );
-          yield* stopHost(world.state);
-          // A host spawned from the first session reads the second, which it did not inherit.
-          const desk = yield* collie(world, ["board"], {
-            ...herdr,
-            HERDR_SOCKET_PATH: first,
-          });
-          expect(desk.envelope).toMatchObject({ ok: true });
-          const fromDesk = yield* firstSnapshot(world.state);
-          yield* stopHost(world.state);
-          expect(fromDesk?.tasks[0]?.state).toBe("blocked");
-          expect(
-            Option.getOrUndefined(
-              Option.map(Option.fromNullishOr(snapshot), (present___) =>
-                Arr.map(present___.herds, (herd) => herd.name),
-              ),
-            ),
-          ).toEqual(["desk", "builds"]);
-          const builds = Option.getOrUndefined(
-            Option.map(Option.fromNullishOr(snapshot), (present____) =>
-              Option.getOrUndefined(
-                Arr.findFirst(present____.herds, (herd) => herd.name === "builds"),
-              ),
-            ),
-          );
-          expect(snapshot?.tasks[0]?.herd).toBe(builds!.id);
-          expect(snapshot?.tasks[0]?.sentence).toMatch(/^Waiting for you in \S+'s pane\.$/);
-        }),
-      ["agent.workflow.ts", "notes.md"],
-    ),
-  120_000,
-);
 
 test("a reader that arrives after a change reads a board built after it, not the one before", () =>
   runEffect(
@@ -1085,7 +1021,7 @@ test("a client subscribed before a month-old card is read and pruned is told it 
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-board-pruned-" });
-      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" });
+      const env = readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" });
       const now = yield* Clock.currentTimeMillis;
       const monthAgo = DateTime.makeUnsafe(now - 30 * 86_400_000);
       const run = yield* madeRun(dir, {

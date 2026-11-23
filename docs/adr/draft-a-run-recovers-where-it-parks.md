@@ -93,20 +93,31 @@ As of `cego/collie@c3005804` (0.123.1), on vm-mk:
     a head other than the one that failed, a pipeline at that head that is no longer failed,
     or the merge request merged or closed. A Review wait's own poll and the Run's CI fix round
     can still clear it, so it never goes to a Heal. `herdr-unavailable` rechecks by listing
-    agents as a launch does, on whichever terminal backend the Machine is set to, so it clears
-    only when a launch's first call would succeed.
+    agents on core as a launch does, so it clears only when a launch's first call would succeed.
   - **`needs you`:** what the host cannot do about it alone, such as an Output still
     absent after two reminders, a failure that parks its Step for correcting (`step-failed`,
     [ADR-draft-a-fixable-failure-parks-its-step](draft-a-fixable-failure-parks-its-step.md)),
     or an `unknown` cause.
+  - **`delivery-unsettled`:** an Output reminder held behind an earlier copy of itself whose
+    fate nobody knows. Before parking, the host settles that copy as sent where the agent's
+    own submit record shows it landed, and so counts the reminder sent; it checks once more
+    after a poll. It rechecks the copy's state in its ledger, and never heals.
   - **`never heals`:** set on a cause only a person can act on, such as a missing login, a
     force-push, a human's dirty checkout, or a Review wait held by requested changes or a
     forge that will not merge (`review-blocked`), whose own poll leaves the park once that is
     repaired. That park goes straight to you, without a Heal (D7). It is also set on
-    `herdr-unavailable`: a Heal launches its agent through herdr too, so it cannot run while
-    herdr cannot list agents.
+    `herdr-unavailable`: a Heal launches its agent through core too, so it cannot run while
+    core cannot list agents.
 - **What it shows:** the cause, each recovery action taken, and that action's outcome. The
   Run's record shows them, and so do the card, `run show` and chat's reads.
+- **Its identity:** `<cause>-<hash>` of the Run, the cause and the evidence that cause is
+  about: what its recheck reads where it has one (the CI head and job, the failed check's
+  head and name, the unsettled delivery), and otherwise the Step it parked in, the
+  checkout's head and its sentence with times, ids and counts normalised away. It is kept
+  while the park lasts, whatever its sentence becomes, and derived again only when the Run
+  parks anew: after a restart, a resume or the engine's hand-over cleared the park, the same
+  evidence gives the same park. A park recorded before this keeps the Heals it had under its
+  old id.
 
 **D3. Diagnosis is read from facts first, and recovery never touches certain states.**
 
@@ -189,12 +200,15 @@ red target and escalated.)
 
 - **When:** a park's cause either needs you, or has spent its recheck budget. Before the host
   raises needs you, it starts one Heal for that park.
-  - The request id is `heal:<run>:<park>`, so a repeat is the same Heal.
+  - The request id is `heal:<run>:<park>`, so a repeat is the same Heal. A park gets a Heal
+    only when none is recorded for its identity, or when its last Heal's Output said
+    `diagnosis_complete: false`; that next Heal is `heal:<run>:<park>:<n>`. An Output without
+    `diagnosis_complete`, including every Heal recorded before it existed, reads as complete.
   - A cause can declare that it never heals, because only a person can act on it: a missing
     login, a force-pushed branch, a human's dirty checkout. Those go straight to you. So does
     `ci-failed` once its recheck budget is spent, since only the forge's next head or pipeline
     clears it, and so does `herdr-unavailable`, since a Heal cannot launch its agent while
-    herdr cannot list agents.
+    core cannot list agents.
 - **What a Heal is:** a Run of a shipped workflow, a module like any other (ADR-0026). It
   runs on the parked Run's Machine and in its Task's workspace.
 - **What it may read:** the parked Run's whole record, its agents' panes and transcripts, its
@@ -233,7 +247,7 @@ red target and escalated.)
     It is written for Collie as everyone runs it, not for this Machine. A local workaround
     is not a finding.
 - **Budget:**
-  - one Heal per park;
+  - one Heal per park, unless its Heal could not complete its diagnosis;
   - three per Run in total;
   - one running at a time per Machine;
   - none while the Machine is Short of memory.

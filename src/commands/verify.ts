@@ -1,10 +1,15 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
 import { Effect, Option, Schema, Stdio, Stream } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import { err } from "../operations";
 import { refusal, verifyRun } from "../lifecycle";
 import { FrontDoor, HostRefused } from "../board-model";
 import { type Echo } from "../verify";
+import { movedLine, type Verification } from "../verify-model";
 import { checkNameOf } from "../verify-spec";
+import { NAMED_FAILURES, failureReader } from "../bun-tests";
 import { printResult } from "../envelope";
 import { answering, cliDoor, root } from "./shared";
 
@@ -23,6 +28,56 @@ const echoed = Effect.fn("collie.verify.echoed")(function* () {
     stderr: to("stderr"),
   } satisfies Echo;
 });
+
+/** Where the whole log is read, as a reference `collie run read` takes. */
+const logRef = (record: Verification) => {
+  const under = `/evidence/${record.run}/`;
+  const log = record.log ?? "";
+  return Option.match(pipe(log, Str.indexOf(under)), {
+    onNone: () => `verification:${record.id}`,
+    onSome: (at) => `evidence:${pipe(log, Str.slice(at + under.length))}`,
+  });
+};
+
+const unstableWhy = (record: Verification) =>
+  (record.start.unmeasured ?? record.end.unmeasured)
+    ? `the tree could not be measured: ${record.start.unmeasured ?? record.end.unmeasured}`
+    : `the tree moved while it ran, from ${record.start.fingerprint} to ${record.end.fingerprint}`;
+
+/** What an agent is answered instead of the stream. */
+const bounded = (record: Verification, ran: boolean, failures: ReadonlyArray<string>) => {
+  const log = logRef(record);
+  const failed = failures.slice(0, NAMED_FAILURES);
+  const more = failures.length - failed.length;
+  const read = `The output was bounded to its last 4 KB per stream; read the rest with collie run read ${record.run} ${log} --start <line> --count <lines>, or --search <pattern>.`;
+  const tails = Arr.filter(
+    [
+      ["stdout", record.tail.stdout],
+      ["stderr", record.tail.stderr],
+    ] as const,
+    ([, text]) => text !== "",
+  );
+  return {
+    ok: true as const,
+    data: { verification: record, ran, failed, more, log, bounded: read },
+    human: Arr.join(
+      [
+        `${record.name}: ${record.result} (exit ${record.exit})${ran ? "" : `, not run again: verification ${record.id} on this tree`}`,
+        ...(record.result === "unstable" ? [`unstable: ${unstableWhy(record)}`] : []),
+        ...(failures.length === 0
+          ? []
+          : [
+              `Failed tests (${failures.length}):`,
+              ...Arr.map(failed, (name) => `  ${name}`),
+              ...(more > 0 ? [`  and ${more} more`] : []),
+            ]),
+        ...Arr.flatMap(tails, ([stream, text]) => [`Last of ${stream}:`, text]),
+        read,
+      ],
+      "\n",
+    ),
+  };
+};
 
 /**
  * A command whose result Collie watched, bound to the tree it ran on. Not a mutation:
@@ -102,16 +157,29 @@ export const verify = Command.make(
             door,
           );
           if (!opened.ok) return opened;
-          const echo = yield* echoed();
-          type Answered = { verification: import("../verify-model").Verification; ran: boolean };
+          const byAgent = !Schema.is(FrontDoor)(door);
+          const readers = { stdout: failureReader(), stderr: failureReader() };
+          const shown = yield* echoed();
+          const bounding: Echo = {
+            stdout: (text) => Effect.sync(() => readers.stdout.feed(text)),
+            stderr: (text) => Effect.sync(() => readers.stderr.feed(text)),
+          };
+          // Output before Started is the host's own word, such as a memory wait, and an agent sees it.
+          let started = false;
+          type Answered = { verification: Verification; ran: boolean };
           const answered = yield* Stream.runFoldEffect(
             opened.events,
             (): Answered | null => null,
             (last, event) =>
               event._tag === "Output"
-                ? echo[event.stream](event.text).pipe(Effect.as(last))
+                ? (byAgent && started ? bounding : shown)
+                    [event.stream](event.text)
+                    .pipe(Effect.as(last))
                 : event._tag === "Started"
-                  ? Effect.succeed(last)
+                  ? Effect.sync(() => {
+                      started = true;
+                      return last;
+                    })
                   : Effect.succeed({ verification: event.verification, ran: event.ran ?? true }),
           ).pipe(
             Effect.catch((cause) =>
@@ -127,11 +195,19 @@ export const verify = Command.make(
           if ("ok" in answered) return answered;
           const { verification: record, ran } = answered;
           process.exitCode = record.exit;
+          if (byAgent)
+            return bounded(
+              record,
+              ran,
+              ran
+                ? [...readers.stdout.names(), ...readers.stderr.names()]
+                : Arr.map(record.failed ?? [], (one) => `${one.file} > ${one.name}`),
+            );
           return {
             ok: true as const,
             data: { verification: record, ran },
             human: ran
-              ? `${record.name}: ${record.result} (exit ${record.exit})`
+              ? `${record.name}: ${record.result} (exit ${record.exit})${movedLine(record) === "" ? "" : `; moved under it: ${movedLine(record)}`}`
               : `${record.name}: ${record.result} (exit ${record.exit}), not run again: verification ${record.id} on this tree${record.log === undefined ? "" : `; its log is ${record.log}`}`,
           };
         }),

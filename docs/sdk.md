@@ -338,6 +338,19 @@ const verdict =
   and every issue with it is reported at once. Leave `output` out and the agent answers in
   plain text, which is what you are handed; a schema is how you opt into a structured,
   validated answer.
+- **An agent hands its Output in one of two ways.** It writes the file, or, under the
+  setting `output_submit: tool` (default `file`), it may submit it with the `collie_submit`
+  Collie tool instead. Both go through one decoder: a submit is decoded exactly as the file
+  is, and is answered at once with every issue, writing nothing, or with "accepted", which
+  writes the file the step is collecting. So collection, the reminders, the repairs and the
+  park below are the same either way, and a second submit of the same Output is collected
+  once. Under `tool` the prompt names the tool instead of the file's path and keeps the
+  whole contract, every field's description included; the reminders and repairs still name
+  the file, which stays valid. The tool is offered when an agent is launched, so an agent a
+  later step reuses is told the way it was launched with, whatever the setting is by then.
+  Pi has no Collie MCP server, so its agents reach the tool
+  through `collie tools call collie_submit`. An Output that decodes is never proof of the
+  work: the gate still reads the Run's journal ([proving it](#proving-it-rather-than-saying-so)).
 - **One unusable Output buys one repair**, sent back to the agent that wrote it, with the
   schema's own issues. A rewrite the schema still refuses is judged once the agent's turn
   has ended, so a file caught half rewritten is not the answer; one still unusable then parks
@@ -348,14 +361,14 @@ const verdict =
   A stop while the
   rewrite is awaited parks the wait, as it does the first; the resume starts an agent that
   went with the stop again on the work.
-- **A busy pane is waited out, then parked.** Where herdr answers that the agent's pane
+- **A busy agent is waited out, then parked.** Where core answers that the agent
   cannot take a prompt yet (`agent_blocked`: a dialog is up, or a question it asked is open
   on its Run), the prompt and its repair are
   tried again, under the same delivery, for up to ten minutes. Past that the Run is
   `suspended` rather than failed, `run show` says what held and for how long, and
   `collie run resume` hands the same prompt to the same agent.
 - **The Output budget is idle time.** The agent has two hours to write its Output, counted
-  only while herdr reports it `idle`, `done` or `unknown`, or cannot say. While it is
+  only while core reports it `idle`, `done` or `unknown`, or cannot say. While it is
   `working` or `blocked` the clock stops, so a long suite is never parked for being slow.
   It stops too while a question the agent asked is open on the Run
   ([`docs/cli.md`](cli.md#answering-holding-and-steering-one)), and while a `collie verify`
@@ -364,18 +377,19 @@ const verdict =
   is launched. Past the budget the Run parks as `idle-budget`, saying how many minutes it
   sat idle, and Collie keeps collecting. An Output written later clears the park and the step
   goes on, with no resume. An agent that has gone by the end of another idle budget is
-  started again. Gone is an agent herdr no longer lists, or one it still lists but refuses
-  as not active, as it does when the agent's process died with its Machine; that one's pane is closed first, so
-  the new agent can take its name. A stop still ends the wait.
-- **A turn that ends without the Output gets a reminder at once.** Where herdr reports the
+  started again. Gone is an agent core no longer lists, or one it still lists but refuses
+  as not active, as it does when the agent's process died with its Machine; that one's terminal is closed first, so
+  the new agent can take its name. An agent started under Herdr 1 is never started again: its
+  Run parks. A stop still ends the wait.
+- **A turn that ends without the Output gets a reminder at once.** Where core reports the
   agent `working` and then `idle` or `done` while its Output is still absent, Collie sends it
   a reminder naming the Output file and saying that a chat message is not the Output. Each
   agent launch gets at most two. If the turn after the second also ends without the Output,
   the Run parks as `output-absent`, saying when both reminders went, and Collie keeps
-  collecting. An agent herdr reports `blocked` is not reminded, and neither is one whose Run
+  collecting. An agent core reports `blocked` is not reminded, and neither is one whose Run
   has an open Decision, a Hold or a Stop; once those clear, an agent still idle without its
   Output is. The Output is never taken from the agent's chat. The idle budget stays the
-  backstop for an agent whose turn's end herdr cannot report.
+  backstop for an agent whose turn's end core cannot report.
 - **`cwd` is where the host placed the Run** unless you name another checkout.
 - **`role`** defaults to the operation's name. The role is injected as a persona, and where
   `personas/<role>.md` exists in the project, on this machine or in the installation, that
@@ -437,7 +451,7 @@ in a chat.
 A restart is safe in both directions. The launch is an Activity, so a replayed collection
 reattaches rather than starting a second agent; the repair is an Activity of its own, so a
 restart does not hand out another one. None of that makes an external launch exactly once —
-an agent already there by that name is reattached to, and a herdr that cannot say what it
+an agent already there by that name is reattached to, and a core that cannot say what it
 has stops the work with that as the reason rather than starting a second agent.
 [ADR-0020](adr/0020-an-agent-is-launched-once-and-its-output-is-decoded.md) is why.
 
@@ -696,6 +710,8 @@ const place = yield * host.place((yield * Run).id);
 //                   so on: whose agents `askRoute` and `handOffWork` may reach
 // place.authority — the branch this Run created, whether it roams, and the human door and
 //                   words that started it: what a Claude agent's auto mode is told
+// place.features  — what its workflow does, fixed when it started: `review_delta` where its
+//                   follow-up review rounds are given a delta; absent on a Run started earlier
 ```
 
 `place.cwd` is decided before your body runs. A workflow that
@@ -737,7 +753,8 @@ an earlier Run to compare against is doing it there, and this is where you read 
 `outcome` is the one that can change while the Run is live, with `run intent set-outcome`:
 read it again, inside an `Activity`, wherever the kind decides something.
 
-`host.reviewedHead({ target, cwd })` reads the head before review; journal it in an Activity.
+`host.reviewedHead({ target, cwd })` reads the head before review: a merge request's, a
+`branch:` target's head, or else the checkout's `HEAD`. Journal it in an Activity.
 Pass that head, the Run id, and the round to `host.post` alongside the file, target, and cwd.
 It ends the note with a hidden marker, `<!-- collie:<run> round <n> at <head> by <login> -->`,
 and reads that marker back before posting, so a replay sends no second note.
@@ -746,8 +763,11 @@ merge request, no CLI or login for its forge, or one assigned to whoever is runn
 whose findings are theirs to fix rather than to post to themselves.
 On success, its `signature` identifies the posted note for the findings ledger.
 
-`host.reviewChanges({ target, cwd, previous, head })` reads the interdiff from the previous
-reviewed head when the new head descends from it. Otherwise it reads the full diff.
+`host.reviewChanges({ target, cwd, previous, head, base })` reads a merge request's
+interdiff from the previous reviewed head when the new head descends from it, and otherwise
+its full diff. For any other target it lists the checkout's commits and files from
+`previous` to `head`, with the git command that shows their diff rather than the diff; a
+`base` (the default branch merged in since) is left out of that list.
 Journal it in an Activity with `error: WorkflowError`; an unreadable forge fails the read.
 
 `host.approveReview({ runId, attempt, target, cwd, head })` requests approval of that reviewed head, independently of posting.
@@ -1528,9 +1548,14 @@ rally converges, stands on a dispute and runs out of rounds where these decide.
 
 - **`remainingDisputes(disputed, review)`** — keep carried disputes unless the review
   explicitly confirms them `fixed` or withdraws them under `dropped` with a reason.
-  Matching uses file and title. A finding still in the review's `findings` or `disputed`
-  stays unresolved, even if also listed as resolved. A clean verdict or omission clears
-  nothing. Assign the returned list before splitting and settling the round.
+  Matching uses file and title. An echo in `findings` marked `fixed` or `obsolete` does not
+  hold it open. Raised again open (`open`, no status, or `disputed`) with the same line and
+  detail, it stays unresolved, even if also listed as resolved; with a changed line or
+  detail it is a new finding and the dispute still resolves. A clean verdict or omission
+  clears nothing. Assign the returned list before splitting and settling the round.
+- **`conflictingDispositions(review)`** — one line per finding the review both raises open
+  and withdraws or confirms fixed. The shipped rally records each in the Run's log as
+  `review <n>: conflicting dispositions of …`; the dispute stays for the human.
 - **`splitDisputed(findings, disputed)`** — what is still the implementer's. A finding the
   implementer already rejected with a reason stops driving the loop; a reviewer who answers
   that reason with a `rebuttal` puts it back.
@@ -1541,13 +1566,32 @@ rally converges, stands on a dispute and runs out of rounds where these decide.
 - **`settleFinalFix(live, fix, evidence)`** — the last round has no review after it, so the
   fix's own account is what is left. Every blocking finding needs a disposition, and every
   check it names needs a passing verification on the tree as it stands, or is left to the
-  gate, which runs the Run's Checks on the final tree. A fix that holds up
+  gate, which runs the Run's Checks on the final tree. The fix's own findings follow the
+  rule every round does: a blocking one halts it with `fix_unverified`, named, and a minor
+  one, under either verdict, is carried into `outstanding` and named in the `attestation`
+  the merge request is given. A fix that holds up
   but disputes a blocking finding comes back `dispute_unresolved`, with the same
   `attestation` a fix that stands carries, since the human reads both.
 
 The shipped workflows' rally is one such loop, `rally` in
 [`workflows/reviewing.ts`](../workflows/reviewing.ts): `implement` and `tune-up` both call
 it, each with its own fix. A module of your own can import it the same way.
+
+From round 2 on, `rally` tells each round's reviewers what the round before it reviewed,
+through `followUp`: that round's head, the commits and files changed since it as
+`host.reviewChanges` lists them for the checkout, leaving out what the default branch merged
+in between rounds brought, with the git command that shows them rather than the diff itself
+(or that the head has not moved), and the findings still open after the
+fix beside those disputed. The reviewer checks each of those findings against the change and
+reads the changed files in full, going further only where the change reaches into code it did
+not touch or the round's criteria require it. Round 1, and the review of the integrated tree
+that `implement` makes after its rallies, still read the whole change against its base. The
+review workflow's "Fix findings" on a local target is told the same; on a merge request its
+rounds are given the forge's interdiff, as before.
+
+Whether a Run's rounds are told this is fixed when the Run starts, as `Place.features`. A Run with
+no record started on an earlier release and keeps that release's rounds, so its replay meets
+no Activity it did not record.
 
 `ReviewOutputSchema`, `FixOutputSchema` and `SynthesisSchema` are the shapes those steps
 write. Hand one to `agentWork` and what comes back is its own type — the same contract the
@@ -1575,10 +1619,13 @@ passing record of it, collected on these exact bytes. A commit of the same bytes
 an edit since makes an earlier pass history — it is not that the result went off, it is that
 it is about another tree. `sameTree(one, other)` is that test for two snapshots, or two
 `{ fingerprint }`s: the same bytes at any commit, and never a tree too large to look at.
-A check the last fix names that passed only on an earlier tree, or one of the Run's Checks
-with no record yet, does not halt it: the attestation names it as left to the gate, and
+A check the last fix names that passed only on an earlier tree, one whose latest record is
+a reproduction recorded with `--expect fail` on an earlier tree, or one of the Run's Checks
+with no record yet, does not halt it: a stale expected-red record is history, and the check
+still owes a pass on the final tree. The attestation names it as left to the gate, and
 counts as verified on this tree only the checks that passed here or are left to CI. A
-check that failed or ran on a tree that moved under it still halts the fix, and so does a
+check that failed, that has an expected-red record on this tree, or that ran on a tree that
+moved under it still halts the fix, and so does a
 check that is not one of the Run's Checks and has no record, since the gate never runs it.
 
 `host.verify({ runId, name, cwd })` runs one of your Run's checks, in the directory the

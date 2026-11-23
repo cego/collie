@@ -54,8 +54,8 @@ const collie = Effect.fn("TypedTest.collie")(function* (world: World, args: Read
     env: {
       PATH: "/usr/bin:/bin",
       HOME: world.project,
-      HERDR_PLUGIN_ROOT: world.install,
-      HERDR_PLUGIN_STATE_DIR: world.state,
+      COLLIE_ROOT: world.install,
+      COLLIE_STATE_DIR: world.state,
       COLLIE_USER_DIR: `${world.install}/user`,
       COLLIE_CWD: world.project,
       COLLIE_HOST: asCommand(command),
@@ -121,8 +121,8 @@ const proves = <A, E>(
           ConfigProvider.layer(
             ConfigProvider.fromUnknown({
               COLLIE_HOST: asCommand(command),
-              HERDR_PLUGIN_ROOT: world.install,
-              HERDR_PLUGIN_STATE_DIR: world.state,
+              COLLIE_ROOT: world.install,
+              COLLIE_STATE_DIR: world.state,
               COLLIE_USER_DIR: `${world.install}/user`,
               COLLIE_CWD: world.project,
             }),

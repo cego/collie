@@ -111,7 +111,7 @@ Dispatcher:
 - the answers to an agent's questions, once they are answered on its Run;
 - a finished Run's report, to the agent that requested the Run;
 - a correction of drift ([below](#correcting-drift));
-- the end of a `collie verify` an agent asked for, in mode `boundary`, where herdr reports
+- the end of a `collie verify` an agent asked for, in mode `boundary`, where core reports
   that agent `idle` or `done` and Collie is still collecting its Output. It names the
   check, its result and exit status, the commit and the log. A working or blocked agent is
   sent nothing, nor is one Collie is not waiting on, nor anyone for a verify answered
@@ -120,39 +120,38 @@ Dispatcher:
 
 ## The states, and why they are kept apart
 
-| State          | What it means                                                                                                                                        |
-| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `reserved`     | Written **before** herdr was called. A crash here leaves this.                                                                                       |
-| `deferred`     | herdr answered that the pane cannot take a prompt yet, with a code that says it clears by itself. Nothing was delivered; the same id is tried again. |
-| `submitted`    | Sent: herdr typed it and pressed Enter. Not: the agent read it.                                                                                      |
-| `acknowledged` | The agent took a turn after it: herdr saw one start, or Claude's prompt-submit hook recorded the delivery's token.                                   |
+| State          | What it means                                                                                                                                           |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reserved`     | Written **before** core was called. A crash here leaves this.                                                                                           |
+| `deferred`     | Core answered that the terminal cannot take a prompt yet, with a code that says it clears by itself. Nothing was delivered; the same id is tried again. |
+| `submitted`    | Sent: core submitted it to the terminal. Not: the agent read it.                                                                                        |
+| `acknowledged` | The agent took a turn after it: core saw one start, or Claude's prompt-submit hook recorded the delivery's token.                                       |
 
 [PRODUCT.md](../PRODUCT.md) names three facts: a message sent, an instruction acknowledged
 and an outcome verified. Sent is `submitted`. Acknowledged is `acknowledged`, a turn taken
 after the delivery. Verified is not a delivery state at all: it is the drift judgement on
 the Run, whether the work came back where it was told (below). They are separate because
-they are separate facts. herdr types text into a pane and returns; that says the keystrokes
+they are separate facts. Core sends text into a terminal and returns; that says the keystrokes
 went somewhere. Collapsing them would let Collie report work as done on the strength of a
 send.
 
-`submitted` carries one qualification. herdr's own gate waits for a turn to start after
-the prompt; where that wait ran out, or the agent was already working, the delivery is
-still `submitted` — the text and the Enter were written — with the note `unobserved`,
+`submitted` carries one qualification. Core's `terminal.send` can report whether a turn
+started. Where no turn is confirmed, the delivery is still `submitted` with the note `unobserved`,
 and `run deliveries` shows the note beside the state. It is never rounded up to a turn
 nobody saw, and never rounded down to a failure: a prompt that arrived and one the agent
 ignored look the same from here, and the note is what tells a later reader that.
 
-The terminal states are `failed` (herdr refused) and `superseded` (a human reconciled it).
-`unknown` (herdr never answered, so nobody can say) blocks further deliveries about the
+The terminal states are `failed` (core refused) and `superseded` (a human reconciled it).
+`unknown` (core never answered, so nobody can say) blocks further deliveries about the
 same work until a human reconciles it, and Collie never retries out of it on its own.
 A step's prompt or repair left `unobserved` with nothing to show it was taken parks its
 Run the same way, and is reconciled the same way; `not-sent` has the resume send it again.
 
 `deferred` is the one refusal that is retried, because it is the one that proves the prompt
 was not delivered and says why the next try may land. Which refusals count is decided by
-herdr's code, recorded on the line as `code` — today only `agent_blocked`, an agent with a
+core's code, recorded on the line as `code` — today only `agent_blocked`, an agent with a
 dialog up — and never by its message. A step's prompt or repair to an agent whose question is
-open on a Run is refused by the Dispatcher itself with the same code, before herdr is asked,
+open on a Run is refused by the Dispatcher itself with the same code, before core is asked,
 so the answers reach the agent first. A step's prompt and its repair are tried again with
 a backoff from two seconds to thirty, each try reserved again under the same id, so every
 attempt is on the ledger and a second copy of the work stays blocked meanwhile. Ten minutes
@@ -197,18 +196,18 @@ Desktop defaults plan comments to the planner when one is live, including after 
 opinion. An explicit recipient selection takes precedence. Other comments default to the
 agent at work. Plan comments ask for revision without answering the Run's next-choice menu.
 
-A steer or correction that herdr did not see start a turn is confirmed as a step's prompt
-is: a turn starting once the agent has settled, Claude's prompt-submit receipt, or, with
-its token still in the prompt box of a settled agent, one Enter. It waits for that up to
-twenty seconds, since someone is waiting on the answer. The result carries `observed` and
-`how`; the CLI says `Delivered to <agent> (observed: <how>).`, or `Sent to <agent>, not
-observed.` with the `herdr agent focus` that shows its pane. It never says the agent was
-told when nothing was seen.
+A steer or correction that core did not see start a turn is confirmed as a step's prompt
+is: a turn starting once the agent has settled, or Claude's prompt-submit receipt. If
+`terminal.send` explicitly reports that no turn started, the adapter sends one Enter,
+never another copy of the text. Confirmation waits up to twenty seconds, since someone
+is waiting on the answer. The result carries `observed` and `how`; the CLI distinguishes
+an observed delivery from a message sent with no observed turn. `collie run focus <run>`
+locates the terminal, and Desktop's **Go to pane** opens it.
 
 ## Interrupts are never "stopped"
 
 An interrupt sends the harness's interrupt key and then the message. What can be observed
-is that herdr sent the keys, and that the agent's status left `working`. Neither is proof
+is that core sent the keys, and that the agent's status left `working`. Neither is proof
 the harness stopped, and no such proof exists at this boundary — so the log says
 `interrupt_requested`, the text after it is confirmed like any other delivery, and the word
 "stopped" appears in none of it.
@@ -314,13 +313,13 @@ target. Questions about the flock are the Home's
 [native chat](using.md#talking-to-collie-about-a-herd), which reads the Herd rather than
 paying for a model to be asked one here.
 
-The conversation is one per Herd — one herdr session, every workspace in it — and lives on
+The conversation is one per Herd — one core session, every terminal in it — and lives on
 disk, so closing the board loses nothing. Two things are done to a turn before it is
 written: values shaped like credentials are replaced by what kind of credential they were
 (a conversation about a failing deploy is exactly where one gets pasted), and paths that
 point outside the runs Collie knows about become `<external>`, because a path in a turn
 came from a model and the board offers to open what it renders. Worker terminal
-transcripts are never stored: what an agent is doing reaches the conversation as herdr's
+transcripts are never stored: what an agent is doing reaches the conversation as core's
 own status and title, and no further.
 
 It is trimmed on write to 500 turns and 30 days. There is no daemon to sweep with, and the

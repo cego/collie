@@ -1,0 +1,2 @@
+{"timestamp":"2026-11-17T10:00:00.000Z","type":"session_meta","payload":{"id":"x2","cwd":"/p"}}
+{"timestamp":"2026-11-17T10:00:01.000Z","type":"token_usage_record","payload":{"thread_id":"x2","response_id":"q1","usage":{"input_tokens":500,"cached_input_tokens":100,"output_tokens":300,"reasoning_output_tokens":200,"total_tokens":800}}}

@@ -160,14 +160,9 @@ export const OnboardStep = Schema.Struct({
 });
 export type OnboardStep = typeof OnboardStep.Type;
 
-/** A yes-or-no question herdr asks while it saves a Machine, and its own default. */
-export const HerdrQuestion = Schema.Struct({ text: Schema.String, yes: Schema.Boolean });
-export type HerdrQuestion = typeof HerdrQuestion.Type;
-
 /** One onboarding of a Machine so far: its steps, and whether it was ready once it ended. */
 export const OnboardRun = Schema.Struct({
   steps: Schema.Array(OnboardStep),
-  asked: Schema.NullOr(HerdrQuestion),
   /** Null while it runs. */
   ready: Schema.NullOr(Schema.Boolean),
   /** Why it ended short where no step says. */
@@ -343,32 +338,15 @@ export const WentToPane = Schema.Struct({
 });
 export type WentToPane = typeof WentToPane.Type;
 
-const Cell = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 const Positive = Schema.Int.check(Schema.isGreaterThan(0));
 
-/** What the human does in a pane's terminal, in herdr's controller's own words. */
+/** What the human does in a pane's terminal. */
 export const TerminalCommand = Schema.Union([
   Schema.Struct({ type: Schema.Literal("terminal.input"), text: Schema.String }),
   Schema.Struct({
     type: Schema.Literal("terminal.resize"),
     cols: Positive,
     rows: Positive,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("terminal.scroll"),
-    direction: Schema.Literals(["up", "down"]),
-    lines: Positive,
-    column: Cell,
-    row: Cell,
-    modifiers: Cell,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("terminal.mouse"),
-    action: Schema.Literals(["down", "up", "drag", "move"]),
-    button: Schema.Literals(["left", "right", "middle"]),
-    column: Cell,
-    row: Cell,
-    modifiers: Cell,
   }),
 ]);
 export type TerminalCommand = typeof TerminalCommand.Type;
@@ -451,15 +429,12 @@ export type DesktopSettingsChange = typeof DesktopSettingsChange.Type;
 export interface MachineToAdd {
   readonly target: string;
   readonly label: string;
-  readonly session: string;
 }
 
 /** What Add Machine sends, trimmed, once every field is filled. */
 export const machineToAdd = (typed: MachineToAdd): MachineToAdd | null => {
-  const [target, label, session] = Arr.map([typed.target, typed.label, typed.session], (one) =>
-    Str.trim(one),
-  );
-  return target && label && session ? { target, label, session } : null;
+  const [target, label] = Arr.map([typed.target, typed.label], (one) => Str.trim(one));
+  return target && label ? { target, label } : null;
 };
 
 /** A record as Desktop keeps it: `asOf` is when its host last confirmed it, while it has not since. */
@@ -535,14 +510,12 @@ export const DesktopRpcs = RpcGroup.make(
     success: Schema.String,
     error: ActionFailed,
   }),
-  /** Saves a Machine in herdr, then onboards it, under the job it answers with. */
+  /** Saves a Machine in core, then onboards it, under the job it answers with. */
   Rpc.make("addMachine", {
-    payload: { target: Schema.String, label: Schema.String, session: Schema.String },
+    payload: { target: Schema.String, label: Schema.String },
     success: Schema.String,
     error: ActionFailed,
   }),
-  /** The human's answer to the question herdr asks in a job. */
-  Rpc.make("answerHerdr", { payload: { job: Schema.String, yes: Schema.Boolean } }),
   /**
    * The Flock's settings, now and whenever they change. Asking syncs every connected
    * Machine, so an edit made on one since it connected is picked up.

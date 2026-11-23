@@ -34,6 +34,16 @@ When you build:
 - Write a criterion, summary or hand-off that says what the diff cannot: why, what was
   decided, what is left.
 
+When you read what Collie answers:
+
+- `collie verify` in your pane answers with the result and exit status, the failed tests it
+  can name (the first 50, then how many more), the last 4 KB of each stream and a reference
+  to the whole log, never the stream itself.
+- Read the rest by line, not whole: `collie run read <run> <ref> --start <line> --count <n>`,
+  or `--search <pattern>` for each matching line with the line either side. With `run` and
+  `ref`, `collie_run` and `collie_artefacts` read the same way. Each answer gives `total`,
+  `complete` and `next`, the `--start` that reads on.
+
 When you review or judge:
 
 - Raise each Tautology you find as a finding of its own, at the file and lines where it is,

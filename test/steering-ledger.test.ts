@@ -88,11 +88,10 @@ const delivery = (over: Partial<Delivery> = {}): Delivery => ({
 const live = (over: Partial<AgentInfo> = {}): AgentInfo => ({
   name: "impl-1",
   paneId: "1-9",
-  workspaceId: "w1",
   status: "idle",
-  title: null,
   terminalId: "term-1",
-  agentSession: null,
+  cwd: "/project",
+  foregroundCwd: null,
   ...over,
 });
 
@@ -106,7 +105,7 @@ const entry = (over: Partial<AgentEntry> = {}): AgentEntry => ({
   runId: "r1",
   workflow: "implement",
   at: "2026-09-09T09:00:00Z",
-  incarnation: { terminalId: "term-1", agentSession: null },
+  incarnation: { terminalId: "term-1", agentSession: null, backend: "core" },
   ...over,
 });
 
@@ -152,22 +151,6 @@ test("a second agent in the same role and pane is not the one that was registere
     reason: "incarnation_changed",
   });
   expect(verifyIncarnation(entry(), [])).toEqual({ ok: false, reason: "agent_gone" });
-});
-
-test("a recorded harness session must still match, and an unrecorded one is not required", () => {
-  const withSession = entry({
-    incarnation: { terminalId: "term-1", agentSession: { kind: "id", value: "s-1" } },
-  });
-  expect(
-    verifyIncarnation(withSession, [live({ agentSession: { kind: "id", value: "s-1" } })]),
-  ).toMatchObject({ ok: true });
-  expect(
-    verifyIncarnation(withSession, [live({ agentSession: { kind: "id", value: "s-2" } })]),
-  ).toEqual({ ok: false, reason: "incarnation_changed" });
-  // Recorded as null: herdr did not know one at registration, so it is not held to one.
-  expect(
-    verifyIncarnation(entry(), [live({ agentSession: { kind: "id", value: "s-9" } })]),
-  ).toMatchObject({ ok: true });
 });
 
 /** A ledger file as a host of an older build left it. */

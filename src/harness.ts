@@ -325,7 +325,60 @@ export const CollieStatus = async () => {
 };
 `;
 
-/** Args for `herdr agent start ... -- <args>`. */
+/**
+ * The OpenCode plugin that records, in `file`, what the server reports of each finished
+ * message, each completed tool call's output size and each prompt's opening, with the
+ * session a sub-agent's work belongs to: the usage ledger's record of an OpenCode agent.
+ */
+export const opencodeUsage = (file: string) => `import { appendFileSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+
+const file = ${JSON.stringify(file)};
+try {
+  mkdirSync(dirname(file), { recursive: true });
+} catch {}
+const parents = new Map();
+const roles = new Map();
+const write = (line) => {
+  try {
+    appendFileSync(file, JSON.stringify(line) + "\\n");
+  } catch {}
+};
+
+export const CollieUsage = async () => ({
+  event: async ({ event }) => {
+    const about = event.properties ?? {};
+    switch (event.type) {
+      case "session.created":
+      case "session.updated":
+        if (about.info?.parentID) parents.set(about.info.id, about.info.parentID);
+        break;
+      case "message.updated": {
+        const info = about.info;
+        if (!info) break;
+        roles.set(info.id, info.role);
+        if (info.role === "assistant" && info.time?.completed)
+          write({ type: "message", parent: parents.get(info.sessionID) ?? null, info });
+        break;
+      }
+      case "message.part.updated": {
+        const part = about.part;
+        if (!part) break;
+        const role = roles.get(part.messageID) ?? null;
+        const parent = parents.get(part.sessionID) ?? null;
+        const kept = { id: part.id, sessionID: part.sessionID, messageID: part.messageID, type: part.type, callID: part.callID };
+        if (part.type === "tool" && part.state?.status === "completed")
+          write({ type: "part", parent, role, chars: String(part.state.output ?? "").length, part: kept });
+        else if (part.type === "text" && role === "user")
+          write({ type: "part", parent, role, part: { ...kept, text: String(part.text ?? "").slice(0, 400) } });
+        break;
+      }
+    }
+  },
+});
+`;
+
+/** The harness argv an agent is started with in its core terminal. */
 export function startArgs(
   harness: HarnessAdapter,
   model: string,

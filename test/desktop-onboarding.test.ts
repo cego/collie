@@ -23,7 +23,6 @@ import type { BoardMessage, BoardSnapshot } from "../src/board-model";
 import { signRelease } from "../src/signing";
 import { flockStream, localRoute, type Route, type ShellRoute } from "../desktop/src/bun/machine";
 import {
-  addToHerdr,
   doctorOn,
   onboardThrough,
   platformOf,
@@ -135,84 +134,6 @@ test("an unsigned runner, or one signed by another key, is refused and never kep
         ),
       ).toContain("does not match its signature");
       expect(yield* fs.exists(`${dir}/0.40.0/collie-linux-x64`)).toBe(false);
-    }),
-  ));
-
-/** A `herdr` that asks what `machine add` asks, then logs its arguments and the answer. */
-const fakeHerdr = (dir: string, exit = 0) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const herdr = `${dir}/herdr`;
-    yield* fs.writeFileString(
-      herdr,
-      `#!/bin/sh
-echo "Connecting to $7..."
-printf 'Remote herdr is missing. Install it? [Y/n] '
-read install
-echo "This stops active remote pane processes."
-printf 'The remote server is incompatible. Stop and replace the running server now? [y/N] '
-read replace
-echo "$* install=$install replace=$replace" > '${dir}/herdr.log'
-exit ${exit}
-`,
-    );
-    yield* fs.chmod(herdr, 0o755);
-    return herdr;
-  });
-
-test("herdr's questions while it saves a Machine are asked of the human, each with herdr's own default", () =>
-  run(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const dir = yield* scratch;
-      const herdr = yield* fakeHerdr(dir);
-      const asked: Array<[string, boolean]> = [];
-      yield* addToHerdr(herdr, "mk@vm", "vm", "default", (text, yes) =>
-        Effect.sync(() => {
-          asked.push([text, yes]);
-          // Yes to installing herdr; replacing a server is left at herdr's No.
-          return yes;
-        }),
-      );
-      expect(asked).toEqual([
-        ["Connecting to mk@vm...\nRemote herdr is missing. Install it?", true],
-        [
-          "This stops active remote pane processes.\nThe remote server is incompatible. Stop and replace the running server now?",
-          false,
-        ],
-      ]);
-      expect(Str.trim(yield* fs.readFileString(`${dir}/herdr.log`))).toBe(
-        "machine add --label vm --remote-session default mk@vm install=y replace=n",
-      );
-    }),
-  ));
-
-test("a long stretch of herdr's output with no question in it is read in no time", () =>
-  run(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const dir = yield* scratch;
-      const herdr = `${dir}/herdr`;
-      yield* fs.writeFileString(
-        herdr,
-        `#!/bin/sh
-for i in $(seq 40); do echo "Installing herdr, step $i of 40"; done
-`,
-      );
-      yield* fs.chmod(herdr, 0o755);
-      yield* addToHerdr(herdr, "mk@vm", "vm", "default", () => Effect.succeed(false));
-    }),
-  ));
-
-test("herdr refusing to save a Machine is said in its own words", () =>
-  run(
-    Effect.gen(function* () {
-      const dir = yield* scratch;
-      const herdr = yield* fakeHerdr(dir, 1);
-      const failed = yield* addToHerdr(herdr, "mk@vm", "vm", "default", () =>
-        Effect.succeed(false),
-      ).pipe(Effect.flip);
-      expect(failed).toContain("replace the running server now?");
     }),
   ));
 
@@ -628,7 +549,7 @@ test("a removed Machine leaves the board, its routes and what onboarding left of
   const machine = { profile: "p-vm", name: "vm", target: "mk@vm" };
   const run: OnboardRun = {
     steps: [{ step: "system", title: "System", status: "needs_root", command: "sudo x" }],
-    asked: null,
+
     ready: false,
     reason: null,
     at: 1,
@@ -719,7 +640,7 @@ test("a Machine's row says what doctor finds of it, over what its last onboardin
           command: "claude auth login",
         },
       ]);
-      const onboarded: OnboardRun = { steps: [], asked: null, ready: true, reason: null, at: 1 };
+      const onboarded: OnboardRun = { steps: [], ready: true, reason: null, at: 1 };
       const items: FlockItem[] = [
         { _tag: "Routed", machine },
         { _tag: "Onboarding", job: "j-1", machine, run: onboarded },
@@ -756,7 +677,7 @@ test("Helle and the Linear MCP count toward onboarded though doctor passes them,
       ]);
       const onboarding = (status: OnboardStep["status"]): OnboardRun => ({
         steps: [{ step: "helle", title: "Helle's credentials", status }],
-        asked: null,
+
         ready: status === "skipped",
         reason: null,
         at: 0,
@@ -799,7 +720,7 @@ test("a Linear login onboarding left unfinished keeps the row short, though doct
       const row = (status: OnboardStep["status"]) => {
         const run: OnboardRun = {
           steps: [{ step: "linear", title: "The Linear MCP", status }],
-          asked: null,
+
           ready: status === "skipped",
           reason: null,
           at: 0,

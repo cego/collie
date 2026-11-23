@@ -175,25 +175,13 @@ export const journal = (
 };
 
 /**
- * The environment without what names a herdr pane, so a `collie verify` the reviewer runs
+ * The environment without what names a Run's agent, so a `collie verify` the reviewer runs
  * is refused rather than recorded on, and run in the checkout of, the Run the probe was
  * started from.
  */
 export const outsideAnyRun = (env: NodeJS.ProcessEnv) =>
   Rec.fromEntries(
-    Arr.filter(
-      Rec.toEntries(env),
-      ([name]) =>
-        ![
-          "HERDR_PANE_ID",
-          "HERDR_ACTIVE_PANE_ID",
-          "HERDR_TAB_ID",
-          "HERDR_ACTIVE_TAB_ID",
-          "HERDR_WORKSPACE_ID",
-          "HERDR_ACTIVE_WORKSPACE_ID",
-          "HERDR_PLUGIN_CONTEXT_JSON",
-        ].includes(name),
-    ),
+    Arr.filter(Rec.toEntries(env), ([name]) => !["COLLIE_RUN", "COLLIE_AGENT"].includes(name)),
   );
 
 /** One reviewer, launched as a review Run launches it, and the findings it wrote. */
@@ -240,7 +228,7 @@ const probe = Effect.fn("probe.run")(function* (runs: number, keep: boolean) {
   const { dir, work, trees } = yield* scratch(keep);
   const runDir = `${dir}/run`;
   const plan = `${dir}/plan`;
-  const env = readEnv({ ...process.env, HERDR_PLUGIN_ROOT: repo, COLLIE_CWD: work });
+  const env = readEnv({ ...process.env, COLLIE_ROOT: repo, COLLIE_CWD: work });
 
   const ticket = yield* fs.readFileString(`${plan}/issues/01-hours.md`);
   const fixed = readAnswers(

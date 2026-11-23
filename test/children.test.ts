@@ -398,7 +398,11 @@ test(
             () => events(world.state, runId),
             (log) => log.includes("held"),
           );
-          expect((yield* client.run({ runId }).pipe(Effect.orDie))?.status).toEqual({
+          const held = yield* until(
+            () => client.run({ runId }).pipe(Effect.orDie),
+            (view) => view?.status.status === "suspended",
+          );
+          expect(held?.status).toEqual({
             status: "suspended",
           });
           // Two replays later there are still two children, each having graded once.

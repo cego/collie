@@ -19,7 +19,7 @@ import {
   statusLineFor,
 } from "../src/statusline";
 import { selectionPath, writeSelection } from "../src/selection";
-import { herdOf } from "../src/steering";
+import { machineHerd } from "../src/steering";
 
 let home: string;
 let env: PluginEnv;
@@ -96,19 +96,19 @@ test("with no settings file at all, one is written that says only what Collie ne
     }),
   ));
 
-test("the line says what the board has selected, and says nothing outside a Herd", () =>
+test("the line says what the board has selected", () =>
   runEffect(
     Effect.gen(function* () {
       const herded = readEnv({
         ...process.env,
         HOME: home,
-        HERDR_PLUGIN_STATE_DIR: `${home}/state`,
-        HERDR_SOCKET_PATH: `${home}/herd.sock`,
+        COLLIE_STATE_DIR: `${home}/state`,
+        HC_SOCKET: `${home}/herd.sock`,
       });
 
       expect(yield* statusLineFor(herded)).toBe("board selection: none · whole herd");
 
-      const key = yield* herdOf(herded.socketPath);
+      const key = yield* machineHerd(herded);
       yield* writeSelection(yield* selectionPath(herded.stateDir, key), {
         task: "t1",
         run: "r1",
@@ -116,11 +116,6 @@ test("the line says what the board has selected, and says nothing outside a Herd
       });
 
       expect(yield* statusLineFor(herded)).toBe("board selection: Strapi prod seeder");
-
-      // No herdr, no board: a Claude Code the human opened somewhere else must not have
-      // Collie's words about a board it is nowhere near printed under its prompt.
-      const alone = readEnv({ ...process.env, HOME: home, HERDR_SOCKET_PATH: "" });
-      expect(yield* statusLineFor(alone)).toBe("");
     }),
   ));
 

@@ -7,16 +7,21 @@ import { FakeBin } from "./support/bin";
 import { exec } from "./support/command";
 import { runEffect, suiteEnv } from "./support/effect";
 import { forgeOnPath, serveForges } from "./support/forge";
-import { stopHost } from "./support/host";
+import { stopHost, until } from "./support/host";
+import { collie, proves } from "./support/world";
 import { installFakeSkills } from "./support/defs";
 import { testBunfig } from "./support/packages";
 import { readIntent, seedIntent, writeIntent } from "../src/intent";
 import { appendMetric } from "../src/metrics";
+import { appendUsage, recordFrom } from "../src/usage-ledger";
 import { hosted, settledRun } from "./support/hosted";
 import { evidenceDir } from "../src/engine";
 import { connect, frontDoor, socketOf } from "../src/host";
 import { recordsAt } from "./support/records";
-import { readAudit } from "../src/audit";
+import { readAudit, recordAudit } from "../src/audit";
+import { appendCard } from "../src/cards";
+import { recordLaunch } from "../src/launches";
+import type { Comparison } from "../src/trial-model";
 import { VerifySpecSchema } from "../src/verify-spec";
 import { callTool } from "../src/tools";
 import { readEnv } from "../src/env";
@@ -57,9 +62,9 @@ const cli = Effect.fn("test.cli")(function* (
   const proc = Bun.spawn([...command, ...args], {
     cwd: root,
     env: {
-      HERDR_PLUGIN_ROOT: root,
+      COLLIE_ROOT: root,
       COLLIE_USER_DIR: join(dir, "config"),
-      HERDR_PLUGIN_STATE_DIR: join(dir, "state"),
+      COLLIE_STATE_DIR: join(dir, "state"),
       HOME: dir,
       PWD: root,
       ...suite,
@@ -259,12 +264,10 @@ test("a command group named with no subcommand is invalid input, not success", (
     }),
   ));
 
-test("discovery is global when an inherited workspace id no longer resolves", () =>
+test("discovery ignores a workspace id Herdr 1 left in the environment", () =>
   runEffect(
     Effect.gen(function* () {
-      // A script that inherited HERDR_WORKSPACE_ID from a pane whose workspace has
-      // since closed. Discovery needs no workspace, so it answers rather than failing.
-      const stale = { HERDR_WORKSPACE_ID: "gone", HERDR_BIN_PATH: "/nonexistent/herdr" };
+      const stale = { HERDR_WORKSPACE_ID: "gone" };
       const listed = yield* cli(["--json", "workflow", "list"], stale);
       expect(yield* parseEnvelope(listed.stdout)).toMatchObject({ ok: true });
       expect(listed.exit).toBe(0);
@@ -768,19 +771,19 @@ test("upgrade is a command of its own, and says what it would do", () =>
     }),
   ));
 
-test("the version the CLI reports is the one the manifest declares", () =>
+test("the version the CLI reports is the one package.json declares", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      // herdr reads the manifest, `install.sh` builds the release URL from it, and a
-      // `--version` that disagreed with either would send someone to the wrong asset.
-      const manifest = yield* fs.readFileString(join(root, "herdr-plugin.toml"));
-      const declared = /^version = "(.+)"$/m.exec(manifest)?.[1];
+      // The installer and runner must agree about which release to fetch.
+      const manifest = yield* fs.readFileString(join(root, "package.json"));
+      const declared = yield* Schema.decodeEffect(
+        Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
+      )(manifest);
 
       const shown = yield* cli(["--version"]);
 
-      expect(declared).toBeDefined();
-      expect(Str.trim(shown.stdout)).toContain(declared!);
+      expect(Str.trim(shown.stdout)).toContain(declared.version);
     }),
   ));
 
@@ -790,8 +793,8 @@ test(
     hosted("collie-intent-", ({ world }) =>
       Effect.gen(function* () {
         const shared = {
-          HERDR_PLUGIN_ROOT: world.install,
-          HERDR_PLUGIN_STATE_DIR: world.state,
+          COLLIE_ROOT: world.install,
+          COLLIE_STATE_DIR: world.state,
           COLLIE_USER_DIR: world.config,
         };
 
@@ -857,7 +860,7 @@ test(
       Effect.gen(function* () {
         // One state directory the Run and the command both see: `cli` makes its own per
         // call, and a Run written into one of those would not be there for the next.
-        const env = { HERDR_PLUGIN_STATE_DIR: world.state };
+        const env = { COLLIE_STATE_DIR: world.state };
         const run = yield* settledRun(world, "hello", { outcome: "bug" });
 
         const empty = yield* cli(["--json", "run", "metrics", run.id], env);
@@ -894,12 +897,177 @@ test(
 );
 
 test(
+  "run metrics shows a token category the harness never reported as unavailable, not 0",
+  () =>
+    hosted("collie-usage-", ({ world }) =>
+      Effect.gen(function* () {
+        const env = { COLLIE_STATE_DIR: world.state };
+        const run = yield* settledRun(world, "hello");
+        yield* recordFrom(
+          { dir: world.state },
+          { run: run.id, agent: "build" },
+          { harness: "codex", cwd: world.home, dir: join(world.home, "controls") },
+          [
+            {
+              path: new URL("./fixtures/usage-ledger/codex-no-cache-write.jsonl", import.meta.url)
+                .pathname,
+              format: "codex",
+              parent: null,
+            },
+          ],
+        ).pipe(Effect.provide(recordsAt(world.state)));
+
+        const shown = yield* cli(["--json", "run", "metrics", run.id], env);
+        expect(shown.exit).toBe(0);
+        const envelope = yield* parseEnvelope(shown.stdout);
+        // SAFETY: `run metrics` puts the Run's usage in `data`; the assertion below fails
+        // on any other shape.
+        const data = envelope.data as {
+          usage: { totals: { cacheCreation: number | null; cacheRead: number | null } };
+        };
+        expect(data.usage.totals).toMatchObject({ cacheCreation: null, cacheRead: 100 });
+        const human = yield* cli(["run", "metrics", run.id], env);
+        expect(human.stdout).toContain("cache creation unavailable");
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "run metrics compares two sets of recorded Runs by case, reading each Run's reviews, interventions and usage from its host",
+  () =>
+    hosted("collie-trial-", ({ world }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const env = { COLLIE_STATE_DIR: world.state };
+        const recorded = (
+          run: { readonly id: string; readonly dir: string },
+          output: number,
+          findings: ReadonlyArray<{ readonly severity: string; readonly title: string }>,
+        ) =>
+          Effect.gen(function* () {
+            yield* appendUsage(evidenceDir(world.state, run.id), {
+              what: "request",
+              key: `${run.id}-m1`,
+              at: "2026-11-18T10:00:00.000Z",
+              agent: "build",
+              session: "s1",
+              parent: null,
+              step: "build",
+              harness: "claude",
+              model: null,
+              effort: null,
+              head: null,
+              input: 1,
+              cacheRead: 2,
+              cacheCreation: 3,
+              output,
+              reasoning: null,
+            });
+            const reviewed = join(world.state, `${run.id}-review.json`);
+            const listed = Arr.map(
+              findings,
+              (one) => `{"severity":"${one.severity}","title":"${one.title}"}`,
+            );
+            yield* fs.writeFileString(
+              reviewed,
+              `{"verdict":"findings","findings":[${Arr.join(listed, ",")}]}`,
+            );
+            yield* recordLaunch({
+              agent: `${run.id}-reviewer`,
+              output: reviewed,
+              reused: false,
+              runId: run.id,
+              operation: "review",
+              role: "reviewer",
+              workflow: "hello",
+              harness: "claude",
+            });
+            yield* appendCard(run.dir, {
+              id: `${run.id}-final`,
+              run: run.id,
+              kind: "final",
+              at: "2026-11-18T11:00:00.000Z",
+              step: "finish",
+              iteration: 1,
+              intent_version: 1,
+              revision: { branch: null, head_sha: "h", fingerprint: "f", dirty: false },
+              changes: { files: [], commits: [] },
+              requested: { goal: null, constraints: [] },
+              readiness: "claimed",
+              verifications: [],
+              claims: [],
+              missing: [],
+              inspect: [],
+              links: {},
+              drift: [],
+              deliveries: [],
+              narrative: null,
+              aligned: "unverified",
+              cross_run: "none",
+              significance: "routine",
+            });
+          }).pipe(Effect.provide(recordsAt(world.state)));
+        const first = yield* settledRun(world, "hello");
+        const second = yield* settledRun(world, "hello");
+        yield* recorded(first, 100, [{ severity: "major", title: "lost write" }]);
+        yield* recorded(second, 40, []);
+        yield* recordAudit(first.dir, {
+          operation: "steer",
+          request: "steer-1",
+          origin: "cli-tty",
+          result: Schema.Null,
+          value: null,
+        }).pipe(Effect.provide(recordsAt(world.state)));
+
+        const shown = yield* cli(
+          ["--json", "run", "metrics", "--compare", `${first.id}=x`, "--against", `${second.id}=x`],
+          env,
+        );
+        expect(shown.exit).toBe(0);
+        const envelope = yield* parseEnvelope(shown.stdout);
+        // SAFETY: `run metrics --compare` puts the comparison in `data`; the assertions below
+        // fail on any other shape.
+        const data = envelope.data as Comparison;
+        expect(Arr.map(data.cases, (one) => one.case)).toEqual(["x"]);
+        expect(data.cases[0]!.compare.runs[0]).toMatchObject({
+          runId: first.id,
+          figures: {
+            "total.output": 100,
+            "startup.cacheRead": 2,
+            defectsFound: 1,
+            accepted: 0,
+            interventions: 1,
+          },
+        });
+        expect(data.cases[0]!.against.runs[0]!.figures).toMatchObject({
+          defectsFound: 0,
+          accepted: 1,
+          interventions: 0,
+          escapedDefects: null,
+        });
+        expect(data.sets.compare.perAcceptedChange).toBe("no accepted change");
+        expect(data.sets.against.perAcceptedChange).toMatchObject({ "total.output": 40 });
+
+        const human = yield* cli(
+          ["run", "metrics", "--compare", first.id, "--against", second.id],
+          env,
+        );
+        expect(human.exit).toBe(0);
+        expect(human.stdout).toContain("per accepted change: no accepted change");
+        expect(human.stdout).not.toContain("%");
+      }),
+    ),
+  60_000,
+);
+
+test(
   "run intent remember keeps a Run's checks for its repository, and overwrites only when told",
   () =>
     hosted("collie-remember-", ({ world }) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const env = { HERDR_PLUGIN_STATE_DIR: world.state, COLLIE_USER_DIR: world.config };
+        const env = { COLLIE_STATE_DIR: world.state, COLLIE_USER_DIR: world.config };
         // A checkout of its own, as a worktree is, and gone once the Run has settled.
         const worktree = join(world.home, "worktree");
         yield* fs.makeDirectory(worktree, { recursive: true });
@@ -944,7 +1112,7 @@ test(
   () =>
     hosted("collie-report-", ({ world }) =>
       Effect.gen(function* () {
-        const env = { HERDR_PLUGIN_STATE_DIR: world.state };
+        const env = { COLLIE_STATE_DIR: world.state };
         yield* settledRun(world, "hello");
 
         const all = yield* cli(["--json", "run", "report"], env);
@@ -1011,7 +1179,7 @@ test(
         const state = yield* fs.makeTempDirectoryScoped({ prefix: "collie-state-" });
         yield* Effect.addFinalizer(() => Effect.ignore(stopHost(state)));
         // No PATH: this Machine has no Codex, and nothing here may reach a real endpoint.
-        const env = { CLAUDE_CONFIG_DIR: claudeDir, HERDR_PLUGIN_STATE_DIR: state };
+        const env = { CLAUDE_CONFIG_DIR: claudeDir, COLLIE_STATE_DIR: state };
 
         const read = yield* cli(["--json", "usage"], env);
         expect(read.exit).toBe(0);
@@ -1057,4 +1225,50 @@ test(
       }),
     ),
   60_000,
+);
+
+test(
+  "usage names where a Fallback would move a live agent's work",
+  () =>
+    proves(
+      "collie-usage-fallbacks-",
+      (world) =>
+        Effect.gen(function* () {
+          expect(
+            (yield* collie(world, ["settings", "set", "fallbacks", "codex"])).envelope.ok,
+          ).toBe(true);
+          const herdr = { FAKE_HERDR_AGENT_STATUS: "working" };
+          const started = yield* collie(
+            world,
+            [
+              "run",
+              "start",
+              "agent",
+              "--input",
+              "target=worktree",
+              "--input",
+              `cwd=${world.project}`,
+              "--input",
+              "skip=false",
+            ],
+            herdr,
+          );
+          expect(started.envelope).toMatchObject({ ok: true });
+          const read = yield* until(
+            () => collie(world, ["usage"], herdr),
+            (one) =>
+              Option.exists(
+                Schema.decodeUnknownOption(
+                  Schema.Struct({ fallbacks: Schema.Array(Schema.Unknown) }),
+                )(one.envelope.data),
+                (data) => data.fallbacks.length === 1,
+              ),
+          );
+          expect(read.envelope.data).toMatchObject({
+            fallbacks: [{ agent: expect.stringContaining("review"), next: "codex/default" }],
+          });
+        }),
+      ["agent.workflow.ts", "notes.md"],
+    ),
+  120_000,
 );

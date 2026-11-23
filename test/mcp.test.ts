@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { expect, test } from "bun:test";
 import {
   Cause,
@@ -7,6 +8,7 @@ import {
   Fiber,
   FileSystem,
   Option,
+  Order,
   Queue,
   Schema,
   Stream,
@@ -14,7 +16,7 @@ import {
   Result,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import manifest from "../herdr-plugin.toml";
+import manifest from "../package.json";
 import type { JsonObject } from "../src/schema";
 import { rebuiltAnswer } from "../src/mcp";
 import { connect } from "../src/host";
@@ -25,7 +27,7 @@ import { until } from "./support/host";
 import { twoMachines } from "./support/peers";
 import { TOOLS } from "../src/tools";
 import { runEffect, suiteEnv } from "./support/effect";
-import { registeredAt } from "./support/records";
+import { launchOf, registeredAt } from "./support/records";
 
 const encodeValue = flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
@@ -64,10 +66,9 @@ const openServer = Effect.fn("McpTest.open")(function* (
       cwd: root,
       env: {
         HOME: dir,
-        HERDR_PLUGIN_ROOT: root,
+        COLLIE_ROOT: root,
         COLLIE_USER_DIR: `${dir}/config`,
-        HERDR_PLUGIN_STATE_DIR: `${dir}/state`,
-        HERDR_SOCKET_PATH: `${dir}/no-herdr.sock`,
+        COLLIE_STATE_DIR: `${dir}/state`,
         COLLIE_CWD: dir,
         ...(yield* suiteEnv),
         ...launchEnv,
@@ -180,6 +181,120 @@ test(
   15_000,
 );
 
+test(
+  "the Collie server started for a reviewer under role_tools: role lists and accepts only the reviewer's tools",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const server = yield* openServer({ COLLIE_TOOLS_ROLE: "reviewer" });
+        const listed = yield* server.request("tools/list", {});
+        const names = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({ tools: Schema.Array(Schema.Struct({ name: Schema.String })) }),
+        )(listed.result);
+        expect(
+          Arr.sort(
+            Arr.map(names.tools, (tool) => tool.name),
+            Order.String,
+          ),
+        ).toEqual(["collie_artefacts", "collie_report", "collie_run"]);
+        const offered = yield* server.request("tools/call", {
+          name: "collie_run",
+          arguments: { run: "missing-run" },
+        });
+        expect(offered.result).toMatchObject({
+          content: [{ type: "text", text: expect.stringContaining("missing-run") }],
+        });
+        const unlisted = yield* server.request("tools/call", {
+          name: "collie_hold",
+          arguments: { run: "missing-run" },
+        });
+        expect(unlisted.result).toMatchObject({
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: expect.stringMatching(/^collie_hold is not among the reviewer's Collie tools/),
+            },
+          ],
+        });
+        yield* server.close;
+      }).pipe(Effect.scoped),
+    ),
+  15_000,
+);
+
+test(
+  "collie_submit decodes an agent's Output as the file does, and writes only an accepted one, once",
+  () =>
+    runEffect(
+      twoMachines(
+        "collie-mcp-submit-",
+        (first) =>
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const outputs = `${first.world.home}/outputs.json`;
+            yield* fs.writeFileString(outputs, encodeValue([null]));
+            const started = yield* first.cli(["run", "start", "attended", "--input", "work=MCP"], {
+              FAKE_HERDR_OUTPUTS: outputs,
+            });
+            const { runId } = yield* Schema.decodeUnknownEffect(
+              Schema.Struct({ runId: Schema.String }),
+            )(started.envelope.data).pipe(Effect.orDie);
+            const launch = yield* until(
+              () => launchOf(first.world.state, runId, "build"),
+              (one) => one !== undefined,
+            );
+            const server = yield* openServer({
+              ...first.env,
+              COLLIE_RUN: runId,
+              COLLIE_AGENT: launch!.agent,
+              COLLIE_OUTPUT_SUBMIT: "tool",
+            });
+            const submit = (output: JsonObject) =>
+              server.request("tools/call", { name: "collie_submit", arguments: { output } });
+
+            // The launch is journaled just before its step starts waiting for the Output.
+            const missing = yield* until(
+              () => submit({}),
+              (answer) => !Str.includes("No step of")(encodeValue(answer.result)),
+            );
+            expect(missing.result).toMatchObject({
+              content: [
+                { type: "text", text: expect.stringContaining('Missing key\n  at ["verdict"]') },
+              ],
+            });
+            expect(yield* fs.exists(launch!.output)).toBe(false);
+
+            expect((yield* submit({ verdict: "done" })).result).toMatchObject({
+              content: [{ type: "text", text: "accepted" }],
+            });
+            const host = yield* connect(first.world.state);
+            const asked = (
+              view: { readonly waiting?: ReadonlyArray<{ answer: unknown }> } | null,
+            ) => Arr.filter(view?.waiting ?? [], (one) => one.answer === null);
+            yield* until(
+              () => host.run({ runId }),
+              (view) => asked(view).length > 0,
+            );
+            expect(yield* fs.readFileString(launch!.output)).toBe(encodeValue({ verdict: "done" }));
+            const written = (yield* fs.stat(launch!.output)).ino;
+
+            expect((yield* submit({ verdict: "done" })).result).toMatchObject({
+              content: [{ type: "text", text: "accepted" }],
+            });
+            expect((yield* fs.stat(launch!.output)).ino).toEqual(written);
+            expect((yield* submit({ verdict: "changed" })).result).toMatchObject({
+              content: [{ type: "text", text: expect.stringContaining("already collected") }],
+            });
+            expect(yield* fs.readFileString(launch!.output)).toBe(encodeValue({ verdict: "done" }));
+            yield* server.close;
+          }),
+        ["attended.workflow.ts"],
+      ),
+    ),
+  180_000,
+);
+
 test("external interruption is not mistaken for clean MCP EOF", () =>
   runEffect(
     Effect.gen(function* () {
@@ -216,9 +331,7 @@ test(
             const fs = yield* FileSystem.FileSystem;
             const outputs = `${first.world.home}/outputs.json`;
             yield* fs.writeFileString(outputs, encodeValue([{ verdict: "done" }]));
-            const started = yield* first.cli(["run", "start", "attended", "--input", "work=MCP"], {
-              FAKE_HERDR_OUTPUTS: outputs,
-            });
+            const started = yield* first.cli(["run", "start", "attended", "--input", "work=MCP"]);
             const { runId } = yield* Schema.decodeUnknownEffect(
               Schema.Struct({ runId: Schema.String }),
             )(started.envelope.data).pipe(Effect.orDie);

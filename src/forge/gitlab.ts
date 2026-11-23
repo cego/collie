@@ -61,6 +61,7 @@ import {
 } from "./http";
 import {
   listIssues,
+  listRequests,
   createIssue,
   commentIssue,
   postReview,
@@ -1519,8 +1520,10 @@ export const gitlab: Forge = {
         cwd,
       );
     }),
-  issues: (project, cwd, _run, numbers) =>
-    listIssues(glabLoginTo(hostOf(project) ?? "gitlab.com"), project, cwd, numbers),
+  issues: (project, cwd, _run, which) =>
+    listIssues(glabLoginTo(hostOf(project) ?? "gitlab.com"), project, cwd, which),
+  requests: (project, cwd) =>
+    listRequests(glabLoginTo(hostOf(project) ?? "gitlab.com"), project, cwd),
   fileIssue: (project, title, body, cwd) =>
     createIssue(glabLoginTo(hostOf(project) ?? "gitlab.com"), project, title, body, cwd),
   commentIssue: (project, number, body, cwd) =>

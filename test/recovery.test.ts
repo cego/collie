@@ -3,8 +3,10 @@ import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Config, Effect, FileSystem, Schema, flow, Result } from "effect";
 import { connect, frontDoor, ownerOf, socketOf } from "../src/host";
-import { collie, proves } from "./support/world";
-import { until } from "./support/host";
+import { collie, proves, type World } from "./support/world";
+import { Database } from "bun:sqlite";
+import type { Metric } from "../src/metrics";
+import { stopHost, until } from "./support/host";
 import { readAudit } from "../src/audit";
 import { recordsReadLayer } from "../src/records";
 import { NOTIFIED, RunRecords } from "../src/run-records";
@@ -148,7 +150,6 @@ test(
           const extra = {
             PATH: `${bin.dir}:${yield* Config.String("PATH")}`,
             COLLIE_FORGE_API,
-            FAKE_HERDR_OUTPUTS: outputs,
             COLLIE_RECOVERY_EVERY: "100 millis",
           };
           expect(
@@ -185,19 +186,16 @@ test(
 );
 
 test(
-  "a herdr park stays parked while herdr cannot list its agents, though it lists its sessions, and resumes once it can",
+  "a core park stays parked while core cannot list its agents, though it answers, and resumes once it can",
   () =>
     proves(
-      "collie-recovery-herdr-",
-      (world) =>
+      "collie-recovery-core-",
+      (world, core) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
-          const down = `${world.home}/agents-down`;
-          yield* fs.writeFileString(down, "").pipe(Effect.orDie);
+          core.refuse("terminal.list", "server_not_running", "core cannot list its terminals");
           const on = yield* collie(world, ["settings", "set", "recovery.resume", "true"], {
             COLLIE_RECOVERY_EVERY: "100 millis",
-            FAKE_HERDR_SESSIONS: "[]",
-            FAKE_HERDR_AGENTS_DOWN: down,
           });
           expect(on.envelope).toMatchObject({ ok: true });
           const client = yield* connect(world.state).pipe(Effect.orDie);
@@ -218,7 +216,7 @@ test(
           );
           for (const line of rechecked(down5)) {
             expect(line.outcome).not.toBe("cleared");
-            expect(line.note).toContain("server_not_running");
+            expect(line.note).toContain("core cannot list its terminals");
           }
           expect(Arr.some(down5, (line) => line.action === "resumed")).toBe(false);
           expect(
@@ -228,7 +226,7 @@ test(
             ),
           ).toEqual([]);
           yield* fs.writeFileString(`${world.home}/fact`, "ready").pipe(Effect.orDie);
-          yield* fs.remove(down).pipe(Effect.orDie);
+          core.restore("terminal.list");
           yield* until(
             () => client.run({ runId }).pipe(Effect.orDie),
             (view) => view?.status.status === "complete",
@@ -255,19 +253,15 @@ test(
   () =>
     proves(
       "collie-recovery-human-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const outputs = `${world.home}/outputs.json`;
-          const status = `${world.home}/status`;
           yield* fs
             .writeFileString(outputs, asJson([{ verdict: "done" }, { verdict: "done" }]))
             .pipe(Effect.orDie);
-          yield* fs.writeFileString(status, "working").pipe(Effect.orDie);
           const off = yield* collie(world, ["settings", "set", "recovery.resume", "false"], {
             COLLIE_RECOVERY_EVERY: "100 millis",
-            FAKE_HERDR_OUTPUTS: outputs,
-            FAKE_HERDR_AGENT_STATUS_FILE: status,
             COLLIE_HOST_SUPERSEDE_GRACE_MS: "600000",
           });
           expect(off.envelope).toMatchObject({ ok: true });
@@ -296,6 +290,8 @@ test(
                 .pipe(Effect.orDie);
             if (kind === "superseded") {
               const [launch] = yield* client.launches({ run: runId }).pipe(Effect.orDie);
+              core.reportedOnly([launch!.agent]);
+              yield* core.report(launch!.agent, "working");
               const desktop = yield* frontDoor(socketOf(world.state)).pipe(Effect.orDie);
               yield* desktop.declare({ frontDoor: "desktop" }).pipe(Effect.orDie);
               yield* desktop
@@ -360,7 +356,7 @@ test(
   () =>
     proves(
       "collie-recovery-failing-",
-      (world) =>
+      (world, core) =>
         Effect.gen(function* () {
           yield* exec(
             ["git", "remote", "add", "origin", "https://gitlab.example.com/mk/project.git"],
@@ -378,7 +374,6 @@ test(
           };
           const forge = yield* forgeOnPath(bin, "gitlab", model);
           const COLLIE_FORGE_API = yield* serveForges(forge);
-          const socket = `${world.home}/herdr.sock`;
           const started = yield* collie(
             world,
             [
@@ -395,14 +390,17 @@ test(
             {
               PATH: `${bin.dir}:/usr/bin:/bin`,
               COLLIE_FORGE_API,
-              HERDR_SOCKET_PATH: socket,
+              HC_SOCKET: core.socketPath,
               COLLIE_RECOVERY_EVERY: "100 millis",
             },
           );
           expect(started.envelope).toMatchObject({ ok: true });
           const runId = yield* idOf(started.envelope.data);
           const client = yield* connect(world.state).pipe(Effect.orDie);
-          const file = yield* newsPath(world.state, yield* herdOf(socket).pipe(Effect.orDie));
+          const file = yield* newsPath(
+            world.state,
+            yield* herdOf(core.socketPath).pipe(Effect.orDie),
+          );
           const failed = yield* until(
             () => client.runMetrics({ runId }).pipe(Effect.orDie),
             (lines) =>
@@ -1212,7 +1210,7 @@ const failedCiRecheck = (now: Partial<FakeMr>, { recorded = true, unreadable = f
           park: { cause: "ci-failed", kind: "rechecks" },
         },
         root,
-        { agentList: () => Effect.die("CI rechecks must not ask herdr") },
+        { agentList: () => Effect.die("CI rechecks must not ask core") },
       ).pipe(Effect.provide(forge.layer));
     }),
   );
@@ -1253,3 +1251,241 @@ test("a ci-failed park with no failed head recorded stays, saying so", () =>
       note: expect.stringContaining("no failed pipeline recorded"),
     }),
   ));
+
+const MENDED = {
+  diagnosis: "Its agent ended its turn without writing its Output.",
+  actions: ["read its record"],
+  result: "escalate",
+  needs_person: "Only you can tell its agent what to write.",
+  finding: {
+    collie_defect: false,
+    key: "output-absent",
+    root_cause: "Its agent ended its turn without writing its Output.",
+    fix: "None.",
+    regression: "None.",
+  },
+};
+
+const metricsOf = (world: World, runId: string) =>
+  connect(world.state).pipe(
+    Effect.flatMap((client) => client.runMetrics({ runId })),
+    Effect.orDie,
+  );
+
+const parksIn = (lines: ReadonlyArray<Metric>) => Arr.filter(lines, (line) => line.kind === "halt");
+
+const healRunsIn = (lines: ReadonlyArray<Metric>) =>
+  new Set(Arr.flatMap(lines, (line) => (line.action === "healed" && line.heal ? [line.heal] : [])));
+
+/**
+ * A `parks-for` Run parked for output-absent whose first Heal, given `heals` in turn, was
+ * judged; then, after `again`, a restarted host resumes it and it parks a second time.
+ */
+const parkedAgain = (
+  world: World,
+  heals: ReadonlyArray<unknown>,
+  again: (runId: string) => Effect.Effect<void>,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const outputs = `${world.home}/outputs.json`;
+    yield* fs.writeFileString(outputs, asJson(heals)).pipe(Effect.orDie);
+    const env = { COLLIE_RECOVERY_EVERY: "100 millis", FAKE_HERDR_OUTPUTS: outputs };
+    const said = yield* collie(
+      world,
+      [
+        "run",
+        "start",
+        "parks-for",
+        "--input",
+        "causes=output-absent,output-absent",
+        "--input",
+        `entries=${world.home}/entries`,
+      ],
+      env,
+    );
+    const runId = yield* idOf(said.envelope.data);
+    yield* until(
+      () => metricsOf(world, runId),
+      (lines) =>
+        Arr.some(lines, (line) => line.action === "healed" && line.outcome === "escalated"),
+    );
+    yield* stopHost(world.state);
+    yield* again(runId);
+    expect((yield* collie(world, ["run", "resume", runId], env)).envelope).toMatchObject({
+      ok: true,
+    });
+    // Each entry parks twice, in other words the second time.
+    const parks = parksIn(
+      yield* until(
+        () => metricsOf(world, runId),
+        (lines) => parksIn(lines).length >= 3,
+      ),
+    );
+    return { runId, first: parks[0]!.park, again: parks[2]!.park };
+  });
+
+/** Long enough for a second Heal to be claimed and started, at the host's 100ms rounds. */
+const settle = Effect.sleep("3 seconds");
+
+test(
+  "a healed park resumed after a host restart parks again as itself, and its complete Heal starts no second one",
+  () =>
+    proves(
+      "collie-recovery-identity-",
+      (world) =>
+        Effect.gen(function* () {
+          const { runId, first, again } = yield* parkedAgain(
+            world,
+            [MENDED, MENDED],
+            () => Effect.void,
+          );
+          yield* settle;
+          expect(again).toBe(first);
+          expect(healRunsIn(yield* metricsOf(world, runId)).size).toBe(1);
+        }),
+      ["parks-for.workflow.ts", "mender.workflow.ts"],
+    ),
+  120_000,
+);
+
+test(
+  "a healed park handed over to the engine again parks again as itself, and starts no second Heal",
+  () =>
+    proves(
+      "collie-recovery-handover-",
+      (world) =>
+        Effect.gen(function* () {
+          const { runId, first, again } = yield* parkedAgain(world, [MENDED, MENDED], (run) =>
+            Effect.sync(() => {
+              const db = new Database(`${world.state}/host.db`);
+              db.run("UPDATE collie_runs SET accepted = NULL WHERE run = ?", [run]);
+              db.close();
+            }),
+          );
+          yield* settle;
+          expect(again).toBe(first);
+          expect(healRunsIn(yield* metricsOf(world, runId)).size).toBe(1);
+        }),
+      ["parks-for.workflow.ts", "mender.workflow.ts"],
+    ),
+  120_000,
+);
+
+test(
+  "a park whose Heal could not complete its diagnosis gets another Heal when it parks again as itself",
+  () =>
+    proves(
+      "collie-recovery-incomplete-",
+      (world) =>
+        Effect.gen(function* () {
+          const { runId, first, again } = yield* parkedAgain(
+            world,
+            [{ ...MENDED, diagnosis_complete: false }, MENDED],
+            () => Effect.void,
+          );
+          expect(again).toBe(first);
+          yield* until(
+            () => metricsOf(world, runId),
+            (lines) => healRunsIn(lines).size === 2,
+          );
+        }),
+      ["parks-for.workflow.ts", "mender.workflow.ts"],
+    ),
+  120_000,
+);
+
+test(
+  "a park entered again once its checkout's head moved is a new park, with a Heal of its own",
+  () =>
+    proves(
+      "collie-recovery-head-",
+      (world) =>
+        Effect.gen(function* () {
+          const { runId, first, again } = yield* parkedAgain(world, [MENDED, MENDED], () =>
+            exec(
+              [
+                "git",
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "moved",
+              ],
+              { cwd: world.project },
+            ).pipe(Effect.asVoid, Effect.orDie, Effect.scoped),
+          );
+          expect(again).not.toBe(first);
+          yield* until(
+            () => metricsOf(world, runId),
+            (lines) => healRunsIn(lines).size === 2,
+          );
+        }),
+      ["parks-for.workflow.ts", "mender.workflow.ts"],
+    ),
+  120_000,
+);
+
+/** The parks of a `parks-in-steps` Run through `steps`, resumed after its first. */
+const resumedThrough = (world: World, steps: string) =>
+  Effect.gen(function* () {
+    expect((yield* collie(world, ["settings", "set", "recovery.heal", "false"])).envelope.ok).toBe(
+      true,
+    );
+    const said = yield* collie(world, [
+      "run",
+      "start",
+      "parks-in-steps",
+      "--input",
+      "cause=step-failed",
+      "--input",
+      `steps=${steps}`,
+      "--input",
+      `entries=${world.home}/entries`,
+    ]);
+    const runId = yield* idOf(said.envelope.data);
+    yield* until(
+      () => metricsOf(world, runId),
+      (lines) => parksIn(lines).length >= 1,
+    );
+    expect((yield* collie(world, ["run", "resume", runId])).envelope.ok).toBe(true);
+    return parksIn(
+      yield* until(
+        () => metricsOf(world, runId),
+        (lines) => parksIn(lines).length >= 2,
+      ),
+    );
+  });
+
+test(
+  "a park entered again by a resume, in the same step, keeps its identity",
+  () =>
+    proves(
+      "collie-recovery-resumed-",
+      (world) =>
+        Effect.gen(function* () {
+          const parks = yield* resumedThrough(world, "a,a");
+          expect(parks[1]!.park).toBe(parks[0]!.park);
+        }),
+      ["parks-in-steps.workflow.ts"],
+    ),
+  120_000,
+);
+
+test(
+  "the same cause parked in two steps at one head is two parks",
+  () =>
+    proves(
+      "collie-recovery-steps-",
+      (world) =>
+        Effect.gen(function* () {
+          const parks = yield* resumedThrough(world, "a,b");
+          expect(parks[1]!.park).not.toBe(parks[0]!.park);
+        }),
+      ["parks-in-steps.workflow.ts"],
+    ),
+  120_000,
+);

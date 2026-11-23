@@ -16,9 +16,11 @@ import { RunView } from "../src/engine";
 import { BUILD, socketOf } from "../src/host";
 import { relayOf } from "../src/peers";
 import { RunMetrics } from "../src/run-record";
+import { UsageEntry } from "../src/usage-ledger-model";
 import { recordAudit } from "../src/audit";
 import { recordsAt } from "../src/records";
 import { TaskSchema, type TaskRecord } from "../src/task";
+import { RunFile } from "../src/board-model";
 import { seedIntent, writeIntent } from "../src/intent";
 import { exec } from "./support/command";
 import { runEffect, suiteEnv } from "./support/effect";
@@ -63,11 +65,28 @@ const Asked = RpcGroup.make(
     payload: { runId: Schema.String },
     success: RunMetrics,
   }),
+  Rpc.make("runs", {
+    payload: { task: Schema.NullOr(Schema.String) },
+    success: Schema.Array(RunView),
+  }),
+  Rpc.make("runUsage", {
+    payload: { runId: Schema.String },
+    success: Schema.Array(UsageEntry),
+  }),
   Rpc.make("agentRun", {
     payload: { agent: Schema.String },
     success: Schema.NullOr(Schema.String),
   }),
   Rpc.make("tasks", { success: Schema.Array(TaskSchema) }),
+  Rpc.make("runFile", {
+    payload: {
+      runId: Schema.String,
+      ref: Schema.String,
+      offset: Schema.optional(Schema.Int),
+      length: Schema.optional(Schema.Int),
+    },
+    success: RunFile,
+  }),
 );
 
 const view = (runId: string, task: string, more: Partial<RunView> = {}): RunView => ({
@@ -130,8 +149,17 @@ const hostOf = (
             progress: () => Effect.succeed(null),
             watch: ({ runId }) => Stream.make(find(runId)),
             runMetrics: () => Effect.succeed([]),
+            runs: () => Effect.succeed(views),
+            runUsage: () => Effect.succeed([]),
             agentRun: ({ agent }) => Effect.succeed(agents[agent] ?? null),
             tasks: () => Effect.succeed(tasks),
+            runFile: ({ runId, ref }) =>
+              Effect.succeed({
+                ref,
+                encoding: "utf8" as const,
+                content: `${runId} ${ref}\n`,
+                size: `${runId} ${ref}\n`.length,
+              }),
           }),
         ),
         Layer.provide(RpcServer.layerProtocolSocketServer),
@@ -197,6 +225,12 @@ const world = <A, E>(
       run: string,
       caller: string,
     ) => Effect.Effect<string, never, PlatformServices | Scope.Scope>;
+    readonly said: (
+      workspace: string | null,
+      args: ReadonlyArray<string>,
+      caller?: string,
+      more?: Readonly<Record<string, string>>,
+    ) => Effect.Effect<string, never, PlatformServices | Scope.Scope>;
   }) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
 ) =>
   runEffect(
@@ -216,21 +250,27 @@ const world = <A, E>(
         caller?: string,
         more: Readonly<Record<string, string>> = {},
       ) =>
-        exec([...command, "--json", ...args], {
-          cwd: ROOT,
-          env: {
-            PATH: path,
-            HOME: dir,
-            HERDR_PLUGIN_ROOT: ROOT,
-            HERDR_PLUGIN_STATE_DIR: state,
-            COLLIE_USER_DIR: `${dir}/config`,
-            HERDR_BIN_PATH: "/bin/false",
-            ...suite,
-            HERDR_WORKSPACE_ID: workspace ?? "",
-            COLLIE_RUN: caller ?? "",
-            ...more,
+        exec(
+          [
+            ...command,
+            "--json",
+            ...(workspace === null ? [] : ["--workspace", workspace]),
+            ...args,
+          ],
+          {
+            cwd: ROOT,
+            env: {
+              PATH: path,
+              HOME: dir,
+              COLLIE_ROOT: ROOT,
+              COLLIE_STATE_DIR: state,
+              COLLIE_USER_DIR: `${dir}/config`,
+              ...suite,
+              COLLIE_RUN: caller ?? "",
+              ...more,
+            },
           },
-        }).pipe(Effect.map((done) => done.stdout));
+        ).pipe(Effect.map((done) => done.stdout));
       const collie = (
         workspace: string | null,
         args: ReadonlyArray<string>,
@@ -247,7 +287,13 @@ const world = <A, E>(
           Effect.map((shown) => shown.data.run.runId),
           Effect.orDie,
         );
-      return yield* body({ state, collie, shownRun });
+      return yield* body({
+        state,
+        collie,
+        shownRun,
+        said: (workspace, args, caller, more) =>
+          said(workspace, args, caller, more).pipe(Effect.orDie),
+      });
     }).pipe(Effect.scoped),
   );
 
@@ -420,7 +466,7 @@ test(
 );
 
 test(
-  "an agent known by its pane or COLLIE_AGENT, with no COLLIE_RUN, reaches a Run its Run started and no other Task's",
+  "an agent known by COLLIE_AGENT, with no COLLIE_RUN, reaches a Run its Run started and no other Task's",
   () =>
     world(({ state, collie }) =>
       Effect.gen(function* () {
@@ -444,32 +490,18 @@ test(
           { "run-a-agent": "run-a" },
           Arr.map(["a", "b", "e"], task),
         );
-        const herdr = `${state}/herdr`;
-        yield* fs.writeFileString(
-          herdr,
-          `#!/bin/sh\necho '{"result":{"agents":[{"name":"run-a-agent","pane_id":"pane-a","agent_status":"idle"}]}}'\n`,
-        );
-        yield* fs.chmod(herdr, 0o755);
-        const shells = {
-          pane: { HERDR_BIN_PATH: herdr, HERDR_PANE_ID: "pane-a", COLLIE_AGENT: "" },
-          core: { HERDR_PANE_ID: "", COLLIE_AGENT: "run-a-agent" },
-        } as const;
-
         const answers = yield* Effect.all(
-          Arr.flatMap(["pane", "core"] as const, (shell) =>
-            Arr.flatMap([["run", "show"] as const, ["run", "wait"] as const], (door) =>
-              Arr.map(["run-b", "run-e"], (run) =>
-                collie("ws-a", [...door, run], undefined, shells[shell]).pipe(
-                  Effect.map((said) => ({ shell, door, run, said })),
-                ),
+          Arr.flatMap([["run", "show"] as const, ["run", "wait"] as const], (door) =>
+            Arr.map(["run-b", "run-e"], (run) =>
+              collie("ws-a", [...door, run], undefined, { COLLIE_AGENT: "run-a-agent" }).pipe(
+                Effect.map((said) => ({ door, run, said })),
               ),
             ),
           ),
           { concurrency: "unbounded" },
         );
-        for (const { shell, door, run, said } of answers)
-          expect({ shell, door, run, said }).toEqual({
-            shell,
+        for (const { door, run, said } of answers)
+          expect({ door, run, said }).toEqual({
             door,
             run,
             said:
@@ -484,6 +516,64 @@ test(
                   }
                 : { ok: true },
           });
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "an agent reads by line a Run its Run started, and one of another Task it neither started nor names is refused, at the CLI and in chat alike",
+  () =>
+    world(({ state, collie, said }) =>
+      Effect.gen(function* () {
+        yield* Effect.provide(Effect.void, recordsAt(state));
+        yield* hostOf(
+          socketOf(state),
+          state,
+          [
+            view("run-a", "task-a"),
+            view("run-b", "task-b", {
+              requestedBy: {
+                run: "run-a",
+                agent: "run-a-agent",
+                machine: { installation: "here", name: "here" },
+              },
+            }),
+            view("run-e", "task-e"),
+          ],
+          { "run-a-agent": "run-a" },
+          Arr.map(["a", "b", "e"], task),
+        );
+        const agent = { HERDR_PANE_ID: "", COLLIE_AGENT: "run-a-agent" };
+        const Read = Schema.fromJsonString(
+          Schema.Struct({ data: Schema.Struct({ lines: Schema.Array(Schema.Unknown) }) }),
+        );
+        const Called = Schema.fromJsonString(
+          Schema.Struct({ data: Schema.Struct({ text: Schema.String }) }),
+        );
+        const cli = (run: string) => collie("ws-a", ["run", "read", run, "log"], "run-a", agent);
+        const tool = (run: string) =>
+          said(
+            "ws-a",
+            ["tools", "call", "collie_run", "--input", `{"run":"${run}","ref":"log"}`],
+            "run-a",
+            agent,
+          ).pipe(
+            Effect.flatMap(Schema.decodeEffect(Called)),
+            Effect.map((called) => called.data.text),
+            Effect.orDie,
+          );
+
+        expect((yield* cli("run-e")).error?.code).toBe("run_outside_task");
+        expect(yield* tool("run-e")).toContain("run_outside_task");
+
+        expect((yield* cli("run-b")).ok).toBe(true);
+        const read = yield* said("ws-a", ["run", "read", "run-b", "log"], "run-a", agent).pipe(
+          Effect.flatMap(Schema.decodeEffect(Read)),
+          Effect.orDie,
+        );
+        expect(read.data.lines).toEqual([{ line: 1, text: "run-b log" }]);
+        expect(yield* tool("run-b")).toContain('"text":"run-b log"');
       }),
     ),
   60_000,

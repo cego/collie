@@ -548,6 +548,15 @@ pub fn header_sentence(tasks: &[&Task], now: Option<f64>) -> (String, bool) {
     )
 }
 
+/// Where a Fallback would move the card's work, its own Run's agent first.
+pub fn fallback_line(task: &Task) -> Option<String> {
+    let own = task.agents.iter().filter(|one| one.run == task.run);
+    let others = task.agents.iter().filter(|one| one.run != task.run);
+    own.chain(others)
+        .find_map(|one| one.fallback.as_ref())
+        .map(|fallback| format!("Falls back to {fallback}"))
+}
+
 /// How the board's alert says a route is not live.
 pub fn not_live_title(state: &LostState, name: &str) -> String {
     match state {

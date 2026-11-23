@@ -15,6 +15,7 @@ import {
   Cache,
   Cause,
   Clock,
+  Context,
   Data,
   Duration,
   Effect,
@@ -24,9 +25,11 @@ import {
   Path,
   Result,
   Schedule,
+  Order,
   Schema,
   flow,
 } from "effect";
+import type { Source } from "./usage-ledger-model";
 import { ChildProcess, ChildProcessSpawner, CommandLine } from "effect/process";
 import {
   agentThreads,
@@ -83,6 +86,7 @@ import {
 } from "./processes";
 import { holderLives, hostLockOf, lockHolder, withLock } from "./lock";
 import { carriedDelivery } from "./dispatcher";
+import { epochMs } from "./time";
 
 /**
  * A compaction request, through the Dispatcher's channel. `Unsubmitted` is reserved for
@@ -634,6 +638,10 @@ const pi: CompactionPort = {
       return { args: ["-e", extension] };
     }),
   usage: (ctx) => latestUsage(ctx.dir),
+  records: (ctx) =>
+    transcriptsIn(ctx.dir).pipe(
+      Effect.map(Arr.map((path): Source => ({ path, format: "pi", parent: null }))),
+    ),
   // The extension's `session_start` sample.
   ready: reported,
   // Through the human's channel, which is what a slash command is: the extension's
@@ -641,6 +649,9 @@ const pi: CompactionPort = {
   // The human's channel, so a refusal from herdr is a request that never left.
   request: (ctx, requestId) => submitCompaction(ctx, requestId, `/collie-compact ${requestId}`),
   poll: (ctx, requestId) => outcomeOf(ctx.dir, requestId),
+  // Its session file records each compaction as an entry of its own.
+  reconcile: (ctx, since) =>
+    transcriptCompacted(ctx.dir, since, (line) => line.type === "compaction"),
 };
 
 /**
@@ -861,30 +872,70 @@ export const takeHarnessQuestions = Effect.fn("Compactors.takeHarnessQuestions")
 });
 const decodeLimits = Schema.decodeUnknownOption(StatusLineLimits);
 
+/** The newest sample one agent's telemetry holds, from its lines. */
+const newestIn = (text: string): StatusSample | null => {
+  let newest: StatusSample | null = null;
+  for (const line of Str.split(text, "\n")) {
+    const event = Option.getOrNull(decodeEvent(line));
+    if (event?.limits && (newest === null || event.at > newest.at))
+      newest = { at: event.at, limits: event.limits };
+  }
+  return newest;
+};
+
 /**
- * The newest Subscription windows any Claude agent's status line reported on this
- * Machine, with when, or null where none has.
+ * A reader of the newest Subscription windows any Claude agent's status line reported on
+ * this Machine, with when, or null where none has. It decodes again only the agents whose
+ * telemetry changed since it last read, by size and modification time: a status line
+ * rewrites its file on every event, and most agents are idle between two reads.
  */
-export const newestRateLimits = Effect.fn("Compactors.newestRateLimits")(function* (
+export const rateLimitsReader = Effect.fn("Compactors.rateLimitsReader")(function* (
   stateDir: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const root = path.join(stateDir, CONTROL_DIR);
-  const agents = yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []));
-  let newest: StatusSample | null = null;
-  for (const agent of agents) {
-    const text = yield* fs
-      .readFileString(path.join(root, agent, TELEMETRY))
-      .pipe(Effect.orElseSucceed(() => ""));
-    for (const line of Str.split(text, "\n")) {
-      const event = Option.getOrNull(decodeEvent(line));
-      if (event?.limits && (newest === null || event.at > newest.at))
-        newest = { at: event.at, limits: event.limits };
+  const read = new Map<
+    string,
+    { readonly size: bigint; readonly mtime: number; readonly newest: StatusSample | null }
+  >();
+  const newestNow = Effect.gen(function* () {
+    const agents = yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []));
+    const present = new Set(agents);
+    for (const agent of read.keys()) if (!present.has(agent)) read.delete(agent);
+    let newest: StatusSample | null = null;
+    for (const agent of agents) {
+      const file = path.join(root, agent, TELEMETRY);
+      const info = yield* fs.stat(file).pipe(Effect.option);
+      if (Option.isNone(info)) {
+        read.delete(agent);
+        continue;
+      }
+      const size = BigInt(info.value.size);
+      const mtime = Option.match(info.value.mtime, {
+        onNone: () => -1,
+        onSome: (at) => at.getTime(),
+      });
+      let known = read.get(agent);
+      if (known === undefined || known.size !== size || known.mtime !== mtime) {
+        const text = yield* fs.readFileString(file).pipe(Effect.option);
+        // A failed read keeps the agent's last sample and is retried on the next read.
+        if (Option.isSome(text)) {
+          known = { size, mtime, newest: newestIn(text.value) };
+          read.set(agent, known);
+        }
+      }
+      const sample = known?.newest ?? null;
+      if (sample !== null && (newest === null || sample.at > newest.at)) newest = sample;
     }
-  }
-  return newest;
+    return newest;
+  });
+  return { newest: newestNow };
 });
+
+/** The newest status-line sample on this Machine, read once. */
+export const newestRateLimits = (stateDir: string) =>
+  Effect.flatMap(rateLimitsReader(stateDir), (reader) => reader.newest);
 
 /**
  * The token Collie puts in `/compact`'s own instructions and reads back out of the
@@ -1189,6 +1240,67 @@ export const transcriptOf = Effect.fn("Compactors.transcriptOf")(function* (
   );
 });
 
+/** Every conversation this agent's controls have named, on the session they are bound to. */
+const transcriptsIn = (dir: string) =>
+  readEvents(dir).pipe(
+    Effect.map((events) =>
+      Arr.dedupe(Arr.getSomes(Arr.map(events, (event) => Option.fromNullishOr(event.transcript)))),
+    ),
+  );
+
+/** Claude's transcript, and each sub-agent's file Claude keeps beside it. */
+const claudeRecords = Effect.fn("Compactors.claudeRecords")(function* (ctx: AgentContext) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const sources: Source[] = [];
+  for (const transcript of yield* transcriptsIn(ctx.dir)) {
+    sources.push({ path: transcript, format: "claude", parent: null });
+    const session = path.basename(transcript, ".jsonl");
+    const subagents = path.join(path.dirname(transcript), session, "subagents");
+    const names = yield* fs.readDirectory(subagents).pipe(Effect.orElseSucceed(() => []));
+    for (const name of Arr.sort(names, Order.String))
+      if (Str.endsWith(".jsonl")(name))
+        sources.push({ path: path.join(subagents, name), format: "claude", parent: session });
+  }
+  return sources;
+});
+
+/**
+ * Whether the transcript this agent's harness last named has a line `boundary` takes for a
+ * compaction, stamped at or after `since`: what settles a request whose completion was lost.
+ */
+const transcriptCompacted = Effect.fn("Compactors.transcriptCompacted")(function* (
+  dir: string,
+  since: number,
+  boundary: (line: { readonly type?: string; readonly subtype?: string }) => boolean,
+) {
+  const transcript = Option.getOrUndefined(
+    Arr.findLast(yield* readEvents(dir), (event) => event.transcript !== undefined),
+  )?.transcript;
+  if (transcript === undefined)
+    return { kind: "failure", reason: "it never said where its transcript is" } as const;
+  const text = yield* (yield* FileSystem.FileSystem).readFileString(transcript);
+  for (const line of Str.split(text, "\n")) {
+    const entry = Option.getOrUndefined(decodeTranscriptLine(line));
+    if (entry !== undefined && boundary(entry) && epochMs(entry.timestamp) >= since)
+      return { kind: "success" } as const;
+  }
+  return {
+    kind: "failure",
+    reason: "its transcript shows no compaction since it was asked for",
+  } as const;
+});
+
+const decodeTranscriptLine = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      type: Schema.optionalKey(Schema.String),
+      subtype: Schema.optionalKey(Schema.String),
+      timestamp: Schema.String,
+    }),
+  ),
+);
+
 const claude: CompactionPort = {
   gate: gateVersion("claude"),
   install: (ctx) =>
@@ -1202,6 +1314,7 @@ const claude: CompactionPort = {
       return { args: ["--settings", settings] };
     }),
   usage: (ctx) => latestUsage(ctx.dir),
+  records: claudeRecords,
   // The status line is drawn with the REPL, so its first call is the prompt being there.
   ready: reported,
   // The documented native command, through the human's channel. Its instructions are
@@ -1211,9 +1324,21 @@ const claude: CompactionPort = {
     submitCompaction(ctx, requestId, `/compact ${claudeInstructions(requestId)}`),
   // No documented compact-failed hook exists, so `poll` can only ever return success
   // or nothing: a missing PostCompact is an unresolved outcome, which the shared
-  // policy pauses on, and never a confirmed failure.
+  // policy pauses on until `reconcile` reads the transcript.
   poll: (ctx, requestId) => claudeOutcome(ctx.dir, requestId),
+  reconcile: (ctx, since) =>
+    transcriptCompacted(
+      ctx.dir,
+      since,
+      (line) => line.type === "system" && line.subtype === "compact_boundary",
+    ),
 };
+
+/** Replaces a started server's own budget; a fast-forwarded test clock gives it none. */
+export const ServerStartDeadline = Context.Reference<Duration.Duration | null>(
+  "collie/ServerStartDeadline",
+  { defaultValue: () => null },
+);
 
 /**
  * A local server of this agent's own, started through a shell and waited on until it
@@ -1275,7 +1400,8 @@ export const servedEndpoint = Effect.fn("Compactors.servedEndpoint")(function* (
     }),
   );
 
-  const deadline = (yield* Clock.currentTimeMillis) + opts.startMs;
+  const budget = (yield* ServerStartDeadline) ?? Duration.millis(opts.startMs);
+  const deadline = (yield* Clock.currentTimeMillis) + Duration.toMillis(budget);
   const said = yield* fs.readFileString(opts.log).pipe(
     Effect.map((log) => opts.listening.exec(log)),
     Effect.repeat({
@@ -1672,6 +1798,23 @@ export const codexPort = (server: string): CompactionPort => ({
         }),
       );
     }),
+  // Each loaded thread's rollout: its own, and those of the sub-agents it spawned.
+  records: (ctx) =>
+    Effect.gen(function* () {
+      const url = yield* codexAt(ctx);
+      const threads = yield* withCodex(url, (client) => agentThreads(client, ctx.cwd));
+      return Arr.getSomes(
+        Arr.map(threads, (thread) =>
+          thread.transcript === null || thread.ephemeral
+            ? Option.none()
+            : Option.some<Source>({
+                path: thread.transcript,
+                format: "codex",
+                parent: thread.parent,
+              }),
+        ),
+      );
+    }),
   request: (ctx, requestId) =>
     Effect.gen(function* () {
       // Connecting, binding the thread and listing what it already has all happen
@@ -1743,6 +1886,8 @@ export const codexPort = (server: string): CompactionPort => ({
  * that a launch fails loudly on; a launch that silently drops the model is not.
  */
 const OPENCODE_LOG = "server.log";
+/** Where Collie's usage plugin writes what OpenCode reports of each message, beside its controls. */
+export const OPENCODE_USAGE = "opencode-usage.jsonl";
 const OPENCODE_LISTENING = /http:\/\/127\.0\.0\.1:\d+/;
 const OPENCODE_START_MS = 30_000;
 
@@ -1835,6 +1980,12 @@ const opencode: CompactionPort = {
           Effect.as(true),
           Effect.orElseSucceed(() => false),
         ),
+  records: (ctx) =>
+    Path.Path.use((path) =>
+      Effect.succeed([
+        { path: path.join(ctx.dir, OPENCODE_USAGE), format: "opencode" as const, parent: null },
+      ]),
+    ),
   usage: (ctx) =>
     Effect.gen(function* () {
       const base = yield* opencodeAt(ctx);
