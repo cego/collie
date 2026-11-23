@@ -3047,6 +3047,7 @@ test(
             yield* Deferred.await(sawIdle);
             yield* spend(5_000);
             expect(yield* Deferred.isDone(cancelled)).toBe(false);
+            expect(yield* reminders).toEqual([]);
             yield* Deferred.succeed(release, undefined);
             yield* until(
               deliveredTo(dir, "r1").pipe(
@@ -3059,8 +3060,11 @@ test(
                 Effect.orDie,
               ),
             );
+            const texts = sentTexts(yield* rig.calls());
             expect(sent(yield* rig.calls(), ANSWERED)).toBe(1);
-            expect(yield* reminders).toEqual([]);
+            // The answered turn ends without Output, so a reminder may follow it, never precede it.
+            const answeredAt = Option.getOrThrow(Arr.findFirstIndex(texts, Str.includes(ANSWERED)));
+            expect(Arr.filter(Arr.take(texts, answeredAt), Str.includes(REMINDER))).toEqual([]);
           }),
           { herdr, collectMs: 120_000, pollMs: 1_000 },
         );
