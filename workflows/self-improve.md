@@ -62,9 +62,9 @@ What may reach this project's tracker, in a title, a body and an Improvement:
 
 A Collie fix counts as already fixed only where this Machine's release carries it:
 `git merge-base --is-ancestor <commit> {{release}}` succeeds in the checkout, after
-`git fetch origin tag {{release}}` where the tag is not there. A fix on the default branch
-that the release lacks leaves the finding a live recurrence, filed or commented on as any
-other.
+`git fetch origin tag {{release}}` where the tag is not there. Keep a finding the release
+lacks the fix for, with the key its issue carries: Collie leaves it out itself where the
+issue closed after the checkout's last release tag.
 
 Match each finding against every open issue below, whoever filed it, and set `issue` to
 the one it is about. An issue whose body carries `<!-- collie-finding: <key> -->` is

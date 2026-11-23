@@ -149,6 +149,8 @@ import { skillDirs, skillFile, type CheckoutKind, type InputStrategy } from "./d
 import { EXCLUSIVE_STRATEGIES } from "./strategies";
 import {
   appendMetric,
+  noteRound,
+  noteSlice,
   noteVerification,
   metricsOf,
   readMetrics,
@@ -340,7 +342,7 @@ import { ConnectionId, type ConnectionReading } from "./connection-model";
 import { StartedSchema, type RunAuthority, type Started } from "./automode";
 import { WorktreeRecordSchema, type WorktreeRecord } from "./run";
 import { isOpen, listTasks, newTask, readTask, taskOfWorkspace, writeTask } from "./task";
-import { nowIso, epochMs } from "./time";
+import { nowIso, epochMs, isoAt } from "./time";
 import {
   pauseBefore,
   reachPause,
@@ -1014,7 +1016,9 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly recordReview: (runId: string, scope: ReviewScope | null, base: string, review: SynthesisReport) => Effect.Effect<void>;
     readonly recovery: (runId: string, parent: string, source: string) => Effect.Effect<Recovery, WorkflowError>;
     readonly report: (since: string) => Effect.Effect<Report, WorkflowError>;
-    readonly issues: (runId: string, numbers?: ReadonlyArray<number>, on?: "collie") => Effect.Effect<ReadonlyArray<Issue>, WorkflowError>;
+    readonly issues: (runId: string, which?: ReadonlyArray<number> | { readonly closedSince: string }, on?: "collie") => Effect.Effect<ReadonlyArray<Issue>, WorkflowError>;
+    readonly requests: (runId: string) => Effect.Effect<ReadonlyArray<Issue>, WorkflowError>;
+    readonly releases: (runId: string) => Effect.Effect<ReadonlyArray<{ readonly tag: string; readonly at: string }>, WorkflowError>;
     readonly fileIssue: (options: { readonly runId: string; readonly title: string; readonly body: string; readonly on?: "collie" }) => Effect.Effect<IssueRef, WorkflowError>;
     readonly commentIssue: (options: { readonly runId: string; readonly number: number; readonly body: string; readonly on?: "collie" }) => Effect.Effect<void, WorkflowError>;
     readonly dir: string;
@@ -3102,6 +3106,16 @@ const ended = (runId: string, status: typeof RunStatus.Type) =>
       if (Option.isNone(records))
         return yield* Effect.die(`${runId} ended with no records to keep it`);
       yield* records.value.put(runId, TERMINAL, asJsonText(status));
+      // Requests its agents made after their last delivery are read nowhere else.
+      const agents = yield* Effect.serviceOption(Agents);
+      if (Option.isSome(agents)) {
+        const store = yield* Effect.serviceOption(Store);
+        const row = Option.isSome(store)
+          ? yield* store.value.run(runId).pipe(Effect.orElseSucceed(() => null))
+          : null;
+        const placing = Option.getOrUndefined(decodePlacing(row?.placing ?? ""));
+        yield* agents.value.account(runId, placing?.heals !== undefined);
+      }
     }
     const oversight = yield* Effect.serviceOption(Oversight);
     if (Option.isSome(oversight)) yield* oversight.value.finish(runId);
@@ -5011,13 +5025,49 @@ export const hostLayer = (options: {
           Effect.fail(
             new WorkflowError({ reason: "Run reporting requires the host's workflow registry" }),
           ),
-        issues: (runId, numbers, on) =>
+        issues: (runId, which, on) =>
           under(
             Effect.gen(function* () {
               const here = yield* issueCheckout(runId, on);
-              const listed = yield* here.forge.issues(here.project, here.cwd, runShell, numbers);
+              const listed = yield* here.forge.issues(here.project, here.cwd, runShell, which);
               if (!listed.ok) return yield* new WorkflowError({ reason: listed.reason });
               return listed.issues;
+            }),
+          ),
+        requests: (runId) =>
+          under(
+            Effect.gen(function* () {
+              const here = yield* issueCheckout(runId);
+              const listed = yield* here.forge.requests(here.project, here.cwd);
+              if (!listed.ok) return yield* new WorkflowError({ reason: listed.reason });
+              return listed.issues;
+            }),
+          ),
+        releases: (runId) =>
+          under(
+            Effect.gen(function* () {
+              const here = yield* issueCheckout(runId);
+              const listed = yield* runShell(
+                "git",
+                [
+                  "for-each-ref",
+                  "--sort=-creatordate",
+                  "--count=50",
+                  "--format=%(refname:short) %(creatordate:iso-strict)",
+                  "refs/tags",
+                ],
+                here.cwd,
+              );
+              if (listed.code !== 0)
+                return yield* new WorkflowError({ reason: Str.trim(listed.stderr ?? "") });
+              return Arr.getSomes(
+                Arr.map(Str.split(Str.trim(listed.stdout), "\n"), (line) => {
+                  const [tag, at] = Str.split(line, " ");
+                  return tag === undefined || tag === "" || at === undefined
+                    ? Option.none()
+                    : Option.some({ tag, at: isoAt(epochMs(at)) });
+                }),
+              );
             }),
           ),
         fileIssue: (asked) =>
@@ -5219,6 +5269,13 @@ export const hostLayer = (options: {
                 `── ${note.step.title}${place === null ? "" : ` · ${place}`} ──`,
               ).pipe(Effect.orDie);
               yield* noteStep(where, { ...note, log });
+              if (note.place !== null && "round" in note.place && note.step.produces === "review")
+                yield* noteRound(
+                  evidenceDir(dir, runId),
+                  yield* nowIso,
+                  note.key,
+                  note.place.round,
+                );
               const pause = yield* reachPause(where, note.step.id);
               if (pause !== null) {
                 yield* runRecords.setControl(
@@ -5241,7 +5298,11 @@ export const hostLayer = (options: {
           ),
         checkpoint: (runId, checkpoint) =>
           Effect.flatMap(nowIso, (at) =>
-            writeCheckpoint(runDir(dir, runId), { ...checkpoint, at }),
+            writeCheckpoint(runDir(dir, runId), { ...checkpoint, at }).pipe(
+              Effect.andThen(
+                noteSlice(evidenceDir(dir, runId), at, checkpoint.ticket, checkpoint.status),
+              ),
+            ),
           ).pipe(Effect.provideService(RunRecords, runRecords)),
         record: (runId, event) =>
           // A replay writes its records again, as it re-enters every step: the log is what
