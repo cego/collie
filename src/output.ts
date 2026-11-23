@@ -945,8 +945,8 @@ function severityOrder(findings: ReadonlyArray<Finding>) {
 export function renderReview(synthesis: typeof SynthesisSchema.Type) {
   const blocks = [Str.trim(synthesis.summary)];
   if (synthesis.fixed.length > 0) {
-    blocks.push("**Fixed since last review**");
     blocks.push(
+      "**Fixed since last review**",
       Arr.join(
         Arr.map(synthesis.fixed, (f) => {
           const at = f.file ? `\`${f.file}\` — ` : "";
@@ -968,8 +968,8 @@ export function renderReview(synthesis: typeof SynthesisSchema.Type) {
       const group = Arr.filter(synthesis.findings, (f) => f.severity === severity);
       blocks.push(
         `**${Str.toUpperCase(Option.getOrElse(Str.charAt(severity, 0), () => ""))}${pipe(severity, Str.slice(1))}**`,
+        Arr.join(Arr.map(group, reviewBullet), "\n"),
       );
-      blocks.push(Arr.join(Arr.map(group, reviewBullet), "\n"));
     }
   }
   return `${Arr.join(blocks, "\n\n")}\n`;

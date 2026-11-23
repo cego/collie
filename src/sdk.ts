@@ -2191,8 +2191,10 @@ export function checkEntry(entry: WorkflowEntry) {
         problems.push(`${entry.id}: Connection "${id}" is both needed and used`);
     }
   }
-  problems.push(...hintProblems(entry.metadata?.hints ?? {}, fields));
-  problems.push(...outcomeProblems(entry.metadata?.outcome));
+  problems.push(
+    ...hintProblems(entry.metadata?.hints ?? {}, fields),
+    ...outcomeProblems(entry.metadata?.outcome),
+  );
   const checkout: unknown = entry.metadata?.checkout;
   if (checkout !== undefined && !isDeclaredCheckout(checkout)) {
     problems.push(`checkout ${stringifyJson(checkout)} is not branch or roaming`);

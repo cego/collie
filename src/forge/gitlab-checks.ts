@@ -167,11 +167,13 @@ export const gitlabChecks = Effect.fn("Doctor.gitlabChecks")(function* (
     : undefined;
   if (known !== undefined || auth?.code === 0) {
     const ssh = (yield* onPath(search, "ssh")) !== null;
-    checks.push({ name: "gitlab token", ...(yield* tokenExpiry(host, root, run)) });
-    checks.push({
-      name: "git push",
-      ...(yield* pushCheck(known ?? { host, https: false }, env, ssh, run)),
-    });
+    checks.push(
+      { name: "gitlab token", ...(yield* tokenExpiry(host, root, run)) },
+      {
+        name: "git push",
+        ...(yield* pushCheck(known ?? { host, https: false }, env, ssh, run)),
+      },
+    );
   }
   const others = everyHost
     ? Arr.filter(glabHosts(whatItSaid(everyHost)), (one) => one.host !== host)

@@ -357,25 +357,27 @@ describe.skipIf(cargo === null)("DesktopRpcs between the main process and the Ru
         for (const [index, [tag, payload, success]] of parts.entries()) {
           const rpc = DesktopRpcs.requests.get(tag)!;
           tags.set(index, rpc);
-          sent.push({
-            _tag: "Request",
-            id: index,
-            tag,
-            payload: yield* encoder(rpc.payloadSchema)(payload),
-            headers: [],
-          });
-          sent.push({
-            _tag: "Exit",
-            requestId: index,
-            exit: yield* encoder(Rpc.exitSchema(rpc))(Exit.succeed(success)),
-          });
-          sent.push({
-            _tag: "Request",
-            id: index + 10,
-            tag,
-            payload: yield* encoder(rpc.payloadSchema)(payload),
-            headers: [],
-          });
+          sent.push(
+            {
+              _tag: "Request",
+              id: index,
+              tag,
+              payload: yield* encoder(rpc.payloadSchema)(payload),
+              headers: [],
+            },
+            {
+              _tag: "Exit",
+              requestId: index,
+              exit: yield* encoder(Rpc.exitSchema(rpc))(Exit.succeed(success)),
+            },
+            {
+              _tag: "Request",
+              id: index + 10,
+              tag,
+              payload: yield* encoder(rpc.payloadSchema)(payload),
+              headers: [],
+            },
+          );
           tags.set(index + 10, rpc);
           sent.push({
             _tag: "Exit",

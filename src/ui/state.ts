@@ -428,8 +428,7 @@ export function rowsOf(board: WorkspaceView, marks?: Marks) {
   }
   const orphans = Arr.filter(board.agents, (a) => !byId.has(a.run));
   if (orphans.length > 0) {
-    rows.push(headerRow("agents with no run here"));
-    rows.push(...agentGroup(orphans, orphanRow, marks));
+    rows.push(headerRow("agents with no run here"), ...agentGroup(orphans, orphanRow, marks));
   }
   return rows;
 }

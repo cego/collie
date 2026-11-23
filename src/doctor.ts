@@ -243,15 +243,14 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
     { name: "hc", ...(yield* hcInstalled(env, search, run)) },
     { name: "core", ...(yield* coreAnswers(env)) },
     { name: "herdr 1", ...(yield* onHerdrOne(env)) },
+    {
+      name: "runner",
+      // WARNING: the shim exec's this, so a bin without its executable bit is the same permission-denied failure as a shim without one.
+      ...((yield* runnable(path.join(root, "bin", "collie")))
+        ? passed(`${root}/bin/collie`)
+        : failed("not built", `sh ${root}/prepare.sh`)),
+    },
   );
-
-  checks.push({
-    name: "runner",
-    // WARNING: the shim exec's this, so a bin without its executable bit is the same permission-denied failure as a shim without one.
-    ...((yield* runnable(path.join(root, "bin", "collie")))
-      ? passed(`${root}/bin/collie`)
-      : failed("not built", `sh ${root}/prepare.sh`)),
-  });
 
   const shimDir = yield* onPath(search, "collie");
   const binDir = env.raw["COLLIE_BIN_DIR"] ?? path.join(env.home, ".local", "bin");
@@ -327,26 +326,30 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
   const checkout = gitDir !== null && (yield* isCheckout(root, run));
   const behind = checkout ? yield* refreshBehind(root, run) : null;
   const newest = checkout ? null : yield* newestRelease(releasesOf(env.raw));
-  checks.push({
-    name: "up to date",
-    ...(checkout
-      ? behind === null
-        ? passed("a checkout with no remote, so there is nothing to compare")
-        : behind === 0
-          ? passed("level with its remote")
-          : noted(`${behind} commit${behind === 1 ? "" : "s"} behind its remote`, "collie upgrade")
-      : isNewer(newest, manifest.version)
-        ? noted(`Collie ${newest} is out`, "collie upgrade")
-        : passed(
-            newest === null
-              ? "the newest release could not be read, so there is nothing to compare"
-              : `Collie ${manifest.version} is the newest release`,
-          )),
-  });
-
-  checks.push({ name: "workflows", ...(yield* overrides(env)) });
-  checks.push({ name: "personas", ...(yield* personas(env)) });
-  checks.push({ name: "projects root", ...(yield* projects(env)) });
+  checks.push(
+    {
+      name: "up to date",
+      ...(checkout
+        ? behind === null
+          ? passed("a checkout with no remote, so there is nothing to compare")
+          : behind === 0
+            ? passed("level with its remote")
+            : noted(
+                `${behind} commit${behind === 1 ? "" : "s"} behind its remote`,
+                "collie upgrade",
+              )
+        : isNewer(newest, manifest.version)
+          ? noted(`Collie ${newest} is out`, "collie upgrade")
+          : passed(
+              newest === null
+                ? "the newest release could not be read, so there is nothing to compare"
+                : `Collie ${manifest.version} is the newest release`,
+            )),
+    },
+    { name: "workflows", ...(yield* overrides(env)) },
+    { name: "personas", ...(yield* personas(env)) },
+    { name: "projects root", ...(yield* projects(env)) },
+  );
   if ((yield* peersOf(env.stateDir)).length > 0) {
     const links = yield* machineList(env);
     const views = links.ok ? links.value : [];
@@ -403,9 +406,11 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
             : passed("The paired listener has no recorded failure.")),
     });
   }
-  checks.push({ name: "disk", ...(yield* diskSpace(env, run)) });
-  checks.push({ name: "memory", ...(yield* memoryCheck(env, run)) });
-  checks.push({ name: "checks", ...(yield* leftoverChecks(env)) });
+  checks.push(
+    { name: "disk", ...(yield* diskSpace(env, run)) },
+    { name: "memory", ...(yield* memoryCheck(env, run)) },
+    { name: "checks", ...(yield* leftoverChecks(env)) },
+  );
 
   const herd = yield* herdOfHost(env.stateDir);
   if (herd !== undefined)
@@ -416,8 +421,10 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
         : passed(`the host works for the Herd at ${herd}`)),
     });
 
-  checks.push(...(yield* gitlabChecks(env, search, run)));
-  checks.push(...(yield* githubChecks(env, search, run)));
+  checks.push(
+    ...(yield* gitlabChecks(env, search, run)),
+    ...(yield* githubChecks(env, search, run)),
+  );
 
   for (const { id, reading } of yield* readConnections(
     Arr.filter(

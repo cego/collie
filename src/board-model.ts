@@ -2420,8 +2420,7 @@ export function cardActions(view: TaskView) {
   if (canResume(view.state)) actions.push({ kind: "resume" });
   if (view.state === "done") actions.push({ kind: "follow-up" });
   if (!isSettled(view.state)) {
-    actions.push({ kind: "hold", set: view.held === null });
-    actions.push({ kind: "stop" });
+    actions.push({ kind: "hold", set: view.held === null }, { kind: "stop" });
   }
   return actions;
 }

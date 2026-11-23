@@ -112,20 +112,22 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
   const nowId = "live-now-1";
   const sent = yield* deliver(nowId, "now");
   const nowAcked = sent.ok ? yield* acked(nowId, 120_000) : false;
-  rows.push({
-    capability: "now",
-    result: sent.ok && nowAcked ? "pass" : "fail",
-    note: sent.ok
-      ? nowAcked
-        ? "acknowledged within 120s"
-        : "no ack within 120s"
-      : "the delivery was not sent",
-  });
-  rows.push({
-    capability: "ack",
-    result: nowAcked ? "pass" : "fail",
-    note: nowAcked ? `wrote ${ackPath(runDir, nowId)}` : "no ack file appeared",
-  });
+  rows.push(
+    {
+      capability: "now",
+      result: sent.ok && nowAcked ? "pass" : "fail",
+      note: sent.ok
+        ? nowAcked
+          ? "acknowledged within 120s"
+          : "no ack within 120s"
+        : "the delivery was not sent",
+    },
+    {
+      capability: "ack",
+      result: nowAcked ? "pass" : "fail",
+      note: nowAcked ? `wrote ${ackPath(runDir, nowId)}` : "no ack file appeared",
+    },
+  );
 
   // WARNING: leaving working is what can be observed; it is not a claim that the harness stopped.
   const before = yield* herdr
