@@ -6044,6 +6044,8 @@ test("a replayed legacy quota incident permits one successor and a new unreadabl
         model: "default",
         fallbacks: Effect.succeed([]),
         collectMs: 3_600_000,
+        // WARNING: each usage read is a minute of TestClock, and every poll inside it costs real time.
+        pollMs: 2000,
       };
       yield* session(
         Effect.gen(function* () {
