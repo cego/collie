@@ -15,6 +15,7 @@ import {
   revisionOf,
   stageGeneration,
   clearGenerations,
+  typecheckEntries,
   typecheckEntry,
 } from "../src/engine";
 import { runEffect } from "./support/effect";
@@ -279,6 +280,42 @@ test("a typechecker that falls over is no typechecker, not a clean module", () =
       );
       expect(checked.code).toBe("toolchain_unavailable");
       expect(checked.message).toContain("could not initialise");
+    }).pipe(Effect.scoped),
+  ));
+
+test("one typecheck of a directory gives each entry the errors in it and in the helpers it imports", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-authoring-batch-" });
+      yield* fs.makeDirectory(`${dir}/node_modules`);
+      yield* fs.symlink(
+        new URL("../node_modules/typescript", import.meta.url).pathname,
+        `${dir}/node_modules/typescript`,
+      );
+      yield* fs.writeFileString(
+        `${dir}/tsconfig.json`,
+        '{"compilerOptions":{"strict":true,"noEmit":true,"types":[]}}',
+      );
+      yield* fs.writeFileString(`${dir}/helper.ts`, 'export const h: number = "x";\n');
+      yield* fs.writeFileString(`${dir}/deep.ts`, 'export { h } from "./helper";\n');
+      yield* fs.writeFileString(
+        `${dir}/uses.workflow.ts`,
+        'import { h } from "./deep";\nexport const id = h;\n',
+      );
+      yield* fs.writeFileString(`${dir}/own.workflow.ts`, "export const id: string = 1;\n");
+      yield* fs.writeFileString(`${dir}/clean.workflow.ts`, "export const id = 1;\n");
+      const found = yield* typecheckEntries({
+        dir,
+        files: Arr.map(["uses", "own", "clean"], (name) => `${dir}/${name}.workflow.ts`),
+      });
+      expect(found.get(`${dir}/uses.workflow.ts`)).toEqual([
+        expect.stringContaining("helper.ts(1,14): error TS2322"),
+      ]);
+      expect(found.get(`${dir}/own.workflow.ts`)).toEqual([
+        expect.stringContaining("own.workflow.ts(1,14): error TS2322"),
+      ]);
+      expect(found.get(`${dir}/clean.workflow.ts`)).toEqual([]);
     }).pipe(Effect.scoped),
   ));
 

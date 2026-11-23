@@ -1,7 +1,7 @@
 import * as Arr from "effect/Array";
 import { Effect, Option, Schema, flow, Result } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
-import { checkModule, createEntry, forkEntry, readModule } from "../authoring";
+import { checkModules, createEntry, forkEntry, readModule } from "../authoring";
 import type { Checked as ModuleCheck, Described, Written } from "../authoring";
 import { searchPath } from "../discovery";
 import type { Catalogued, EntryLayer, Found } from "../discovery";
@@ -161,13 +161,14 @@ const workflowCheck = Command.make(
           if (named !== null && !claimed.has(named)) {
             return err("workflow_not_found", `Workflow "${named}" was not found.`);
           }
-          const modules = yield* Effect.forEach(
-            Arr.filter(
-              [...saved.entries, ...saved.problems],
-              (one) => named === null || one.id === named,
+          const modules = yield* checkModules(
+            Arr.map(
+              Arr.filter(
+                [...saved.entries, ...saved.problems],
+                (one) => named === null || one.id === named,
+              ),
+              (one) => ({ layer: one.layer, path: one.path }),
             ),
-            (one) => checkModule({ layer: one.layer, path: one.path }),
-            { concurrency: 4 },
           );
           // WARNING: the host re-reads each layer's revision only when told.
           yield* tellHost(resolved.env.stateDir, [

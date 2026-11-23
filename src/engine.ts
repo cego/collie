@@ -11613,16 +11613,66 @@ export const refreshToolchain = Effect.fn("Engine.refreshToolchain")(function* (
   }
 });
 
-export const typecheckEntry: (options: {
+const DIAGNOSTIC = /\(\d+,\d+\): error /;
+
+const importersOf = (lines: ReadonlyArray<string>) => {
+  const importers = new Map<string, Set<string>>();
+  let file: string | null = null;
+  for (const line of lines) {
+    if (line === "" || DIAGNOSTIC.test(line)) {
+      continue;
+    }
+    if (!Str.startsWith(" ")(line)) {
+      file = line;
+      continue;
+    }
+    const importer = /^\s+Imported via .* from file '([^']+)'/.exec(line)?.[1];
+    if (file !== null && importer !== undefined) {
+      importers.set(file, (importers.get(file) ?? new Set()).add(importer));
+    }
+  }
+  return importers;
+};
+
+// WARNING: --explainFiles lists each file followed by indented reasons; what is left is what tsc said.
+const tscSaid = (lines: ReadonlyArray<string>) =>
+  Arr.filter(
+    lines,
+    (line, at) => !Str.startsWith(" ")(line) && !Str.startsWith(" ")(lines[at + 1] ?? ""),
+  );
+
+const reachingEntries = (
+  file: string,
+  entries: ReadonlySet<string>,
+  importers: ReadonlyMap<string, ReadonlySet<string>>,
+) => {
+  const seen = new Set([file]);
+  const queue = [file];
+  const reached = new Set<string>();
+  for (let at = queue.shift(); at !== undefined; at = queue.shift()) {
+    if (entries.has(at)) {
+      reached.add(at);
+    }
+    for (const next of importers.get(at) ?? []) {
+      if (!seen.has(next)) {
+        seen.add(next);
+        queue.push(next);
+      }
+    }
+  }
+  return reached;
+};
+
+export const typecheckEntries: (options: {
   readonly dir: string;
-  readonly file: string;
+  readonly files: ReadonlyArray<string>;
 }) => Effect.Effect<
-  ReadonlyArray<string>,
+  ReadonlyMap<string, ReadonlyArray<string>>,
   ToolchainError,
   FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
-> = Effect.fn("Engine.typecheckEntry")(function* (options: {
+> = Effect.fn("Engine.typecheckEntries")(function* (options: {
   readonly dir: string;
-  readonly file: string;
+  readonly files: ReadonlyArray<string>;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const compiler = `${options.dir}/node_modules/typescript/lib/tsc.js`;
@@ -11632,11 +11682,11 @@ export const typecheckEntry: (options: {
       message: `no typechecker in ${options.dir}; provision it while you have a network`,
     });
   }
-  const project = `${options.dir}/${CHECK_PROJECT}-${Bun.hash(options.file).toString(16)}.json`;
+  const project = `${options.dir}/${CHECK_PROJECT}-${Bun.hash(Arr.join(options.files, "\n")).toString(16)}.json`;
   yield* fs
     .writeFileString(
       project,
-      encodeCheckProject({ extends: "./tsconfig.json", files: [options.file] }),
+      encodeCheckProject({ extends: "./tsconfig.json", files: [...options.files] }),
     )
     .pipe(Effect.orDie);
   const unavailable = (message: string) =>
@@ -11646,22 +11696,52 @@ export const typecheckEntry: (options: {
     compiler,
     "--pretty",
     "false",
+    "--explainFiles",
     "-p",
     project,
   ]).pipe(Effect.mapError(unavailable), Effect.ensuring(fs.remove(project).pipe(Effect.ignore)));
+  const found = new Map(Arr.map(options.files, (file) => [file, Array<string>()] as const));
   if (ran.code === 0) {
-    return [];
+    return found;
   }
-  const diagnostics = Arr.filter(Str.split(ran.output, "\n"), (line) =>
-    /\(\d+,\d+\): error /.test(line),
-  );
+  const lines = Str.split(ran.output, "\n");
+  const diagnostics = Arr.filter(lines, (line) => DIAGNOSTIC.test(line));
   if (diagnostics.length === 0) {
     return yield* unavailable(
-      `the typechecker exited ${ran.code} without checking: ${Str.trim(ran.output)}`,
+      `the typechecker exited ${ran.code} without checking: ${Str.trim(Arr.join(tscSaid(lines), "\n"))}`,
     );
   }
-  return diagnostics;
+  // WARNING: tsc names files relative to the project's directory, so entries are matched by that name.
+  const named = new Map(
+    Arr.map(options.files, (file) => [
+      pipe(file, Str.startsWith(`${options.dir}/`))
+        ? pipe(file, Str.slice(options.dir.length + 1))
+        : file,
+      file,
+    ]),
+  );
+  const importers = importersOf(lines);
+  for (const line of diagnostics) {
+    const reached = reachingEntries(
+      pipe(line, Str.takeLeft(Option.getOrElse(Str.search(line, DIAGNOSTIC), () => 0))),
+      new Set(named.keys()),
+      importers,
+    );
+    // WARNING: a diagnostic no entry is seen to reach goes to every entry, so none is hidden.
+    const owners =
+      reached.size === 0 ? options.files : Arr.map([...reached], (one) => named.get(one)!);
+    for (const owner of owners) {
+      found.get(owner)?.push(line);
+    }
+  }
+  return found;
 });
+
+export const typecheckEntry = (options: { readonly dir: string; readonly file: string }) =>
+  Effect.map(
+    typecheckEntries({ dir: options.dir, files: [options.file] }),
+    (found) => found.get(options.file) ?? [],
+  );
 
 const runBun: (
   cwd: string,

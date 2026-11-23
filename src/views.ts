@@ -13,7 +13,7 @@ import { configValue, readConfig, readSettingsSet } from "./config";
 import { settingOf, SETTINGS } from "./settings";
 import { readIntent } from "./intent";
 import { savedModules } from "./discovery";
-import { checkModule, readModule } from "./authoring";
+import { checkModules, readModule } from "./authoring";
 import type { PluginEnv } from "./env";
 import { runTitle } from "./naming";
 import { REVIEW_FILE, findingsIn, openFindingsIn } from "./output";
@@ -127,8 +127,8 @@ export interface DefinitionRow {
 export const buildWorkflows = Effect.fn("Views.buildWorkflows")(function* (env: PluginEnv) {
   const saved = yield* savedModules(env);
   const described = yield* Effect.forEach(saved.entries, readModule);
-  const checked = yield* Effect.forEach(saved.entries, (one) =>
-    checkModule({ layer: one.layer, path: one.path }),
+  const checked = yield* checkModules(
+    Arr.map(saved.entries, (one) => ({ layer: one.layer, path: one.path })),
   );
   const problemsOf = new Map(Arr.map(checked, (one) => [one.path, one.problems]));
   const workflows: Array<DefinitionRow> = Arr.map(described, (one) => ({

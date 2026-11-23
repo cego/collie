@@ -16,7 +16,7 @@ import { reason } from "./naming";
 import { HOST_CONNECTION_USES } from "./connection-model";
 
 export { Described, Drawn } from "./definitions-model";
-import { loadEntry, provisionToolchain, refreshToolchain, typecheckEntry } from "./engine";
+import { loadEntry, provisionToolchain, refreshToolchain, typecheckEntries } from "./engine";
 import { RESERVED_INPUTS, describeMetadata, jsonSchemaFor } from "./sdk";
 import type { HostWorkflow, WorkflowEntry } from "./sdk";
 
@@ -133,43 +133,64 @@ export type Checked = {
   readonly toolchain: string | null;
 };
 
-export const checkModule: (
-  where: Where,
+export const checkModules: (
+  wheres: ReadonlyArray<Where>,
 ) => Effect.Effect<
-  Checked,
+  ReadonlyArray<Checked>,
   never,
   FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
-> = Effect.fn("Authoring.checkModule")(function* (where: Where) {
-  const dir = directoryOf(where.path);
-  const loaded = yield* loadEntry(where.path).pipe(Effect.result);
-  if (loaded._tag === "Failure") {
-    return {
-      id: stem(where.path),
+> = Effect.fn("Authoring.checkModules")(function* (wheres: ReadonlyArray<Where>) {
+  const loaded = yield* Effect.forEach(
+    wheres,
+    (where) => Effect.map(Effect.result(loadEntry(where.path)), (result) => ({ where, result })),
+    { concurrency: 4 },
+  );
+  const byDir = Arr.groupBy(
+    Arr.filter(loaded, (one) => one.result._tag === "Success"),
+    (one) => directoryOf(one.where.path),
+  );
+  const typed = yield* Effect.forEach(
+    Rec.toEntries(byDir),
+    ([dir, group]) =>
+      refreshToolchain(dir).pipe(
+        Effect.andThen(typecheckEntries({ dir, files: Arr.map(group, (one) => one.where.path) })),
+        Effect.result,
+        Effect.map((result) => [dir, result] as const),
+      ),
+    { concurrency: 4 },
+  );
+  const typedIn = new Map(typed);
+  return Arr.map(loaded, ({ where, result }) => {
+    if (result._tag === "Failure") {
+      const failed: Checked = {
+        id: stem(where.path),
+        layer: where.layer,
+        path: where.path,
+        problems: [result.failure.message],
+        limits: [],
+        toolchain: null,
+      };
+      return failed;
+    }
+    const described = describeModule(result.success, where);
+    const checked = typedIn.get(directoryOf(where.path))!;
+    const done: Checked = {
+      id: described.id,
       layer: where.layer,
       path: where.path,
-      problems: [loaded.failure.message],
-      limits: [],
-      toolchain: null,
+      problems: [
+        ...(described.broken === null ? [] : [described.broken]),
+        ...(checked._tag === "Success" ? (checked.success.get(where.path) ?? []) : []),
+      ],
+      limits: limitsOf(described),
+      toolchain: checked._tag === "Failure" ? checked.failure.message : null,
     };
-  }
-  const described = describeModule(loaded.success, where);
-  const typed = yield* refreshToolchain(dir).pipe(
-    Effect.andThen(typecheckEntry({ dir, file: where.path })),
-    Effect.result,
-  );
-  const unavailable = typed._tag === "Failure" ? typed.failure.message : null;
-  return {
-    id: described.id,
-    layer: where.layer,
-    path: where.path,
-    problems: [
-      ...(described.broken === null ? [] : [described.broken]),
-      ...(typed._tag === "Success" ? typed.success : []),
-    ],
-    limits: limitsOf(described),
-    toolchain: unavailable,
-  };
+    return done;
+  });
 });
+
+export const checkModule = (where: Where) =>
+  Effect.map(checkModules([where]), (checked) => checked[0]!);
 
 const limitsOf = (described: Described) => [
   ...Arr.flatMap(described.inputs, (input) =>
