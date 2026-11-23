@@ -35,6 +35,8 @@ const unfit = {
   "prefer-const": "off",
   // WARNING: it rewrites the prose "UTF-8" in a message assertion as an encoding id.
   "unicorn/text-encoding-identifier-case": "off",
+  // WARNING: it reads Effect.catch as a catch clause, and its fix renames shorthand properties.
+  "unicorn/catch-error-name": "off",
 } as const;
 
 const migrating = {
@@ -71,7 +73,6 @@ const migrating = {
   "typescript/no-unsafe-return": "off",
   "typescript/no-unsafe-type-assertion": "off",
   "typescript/switch-exhaustiveness-check": "off",
-  "unicorn/catch-error-name": "off",
   "unicorn/consistent-function-scoping": "off",
   "unicorn/numeric-separators-style": "off",
   "unicorn/prefer-at": "off",
