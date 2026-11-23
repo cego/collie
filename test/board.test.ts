@@ -157,7 +157,7 @@ test(
           const head = Str.trim((yield* exec(["git", "rev-parse", "HEAD"], { cwd })).stdout);
           yield* stopHost(world.state);
           yield* connect(world.state).pipe(Effect.orDie);
-          // A host just started first shows the card it was left, unconfirmed; its git sync moves it.
+          // A host just started shows the card it was left; its git sync's first round reads the push.
           const data = yield* until(
             () =>
               collie(world, ["board"]).pipe(
@@ -168,7 +168,6 @@ test(
                         Schema.Struct({
                           state: Schema.String,
                           drift: Schema.NullOr(Schema.String),
-                          confirmed: Schema.optionalKey(Schema.Boolean),
                         }),
                       ),
                     }),
@@ -176,7 +175,7 @@ test(
                 ),
                 Effect.orDie,
               ),
-            (data) => data.tasks[0]?.confirmed !== false,
+            (data) => data.tasks[0]?.drift != null,
           );
           expect(data.tasks[0]?.state).toBe("failed");
           expect(data.tasks[0]?.drift).toContain(`1 commit past ${ended}`);
