@@ -57,6 +57,11 @@ world as rows, and each write names what it moved through Reactivity:
   pushed branch moved past the finished record. It reads the branches of each card that moved
   (a turn, a Step's end, a publish or a push moves it) and every live card's on the 5-minute
   backstop. It also keeps what a follow-up would enter at, as the Run fact `synced-recovery`.
+  A board never reads git itself, wherever it is built: the host's listing, its first board, a
+  record's card, and the merge watch's and cleanup's own builds all read these rows
+  (cego/collie#537). A missing row means "not read yet": the card shows no branch movement, no
+  head and no project, and the build asks Git sync for that branch, which reads it on its next
+  round and moves the card the usual way.
 - **Module revisions** keep `collie_module_revisions`, one row per workflow layer directory.
   A listing reads the row. A Run's start, an offer taken, `collie workflow create`, `fork` and
   `check`, and the 5-minute backstop compute it and keep it. The revision also keys what
@@ -79,6 +84,16 @@ card's derivation runs with a process spawner and HTTP client that refuse.
 
 **D5. Sweepers read only this host's builds.** Cleanup's Task closing, worktree settling and idle
 agents read the boards this host derived, never the rows a previous host left.
+
+**D6. A Run's Offers are kept apart from its card** (cego/collie#537). A card is derived again
+whenever its key moves, and the key holds live agents, deliveries, checks and `since`, none of
+which an Offer reads. So the build's per-host keep holds each Run's Offers under a key of their
+own inputs: the Run's facts by content, when it last did work, its plan's tickets, its open
+findings and its latest disposition; the module revisions; its merge request's state and forge
+row, without when the forge was read; and the Connection readings kept for its checkout. A card
+derived again for any other reason reuses them, and a moved input asks the host again. Nothing
+expires on a clock. Offers of a Run that leaves the board are dropped. They stay in memory
+because they are resolved from a loaded module, and taking an Offer resolves it afresh.
 
 ## Consequences
 

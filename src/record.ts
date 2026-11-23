@@ -27,7 +27,7 @@ import type {
   RunDiff,
   RunRevision,
 } from "./board-model";
-import { SyncedBranches, taskCardOf } from "./board";
+import { taskCardOf } from "./board";
 import { Branches, branchKey } from "./branches";
 import type { PluginEnv } from "./env";
 import { timedFlow, timeless } from "./flow-timing";
@@ -107,13 +107,7 @@ const recordCard = (sources: RecordSources, runId: string) =>
         offers: sources.offers,
       },
       runId,
-    ).pipe(
-      Effect.provideServiceEffect(
-        SyncedBranches,
-        Branches.use((rows) => rows.all),
-      ),
-      Effect.orElseSucceed(() => null),
-    );
+    ).pipe(Effect.orElseSucceed(() => null));
     const found = card?.flow ?? null;
     const ids = Arr.map(runs, (one) => one.id);
     for (const lane of found?.lanes ?? [])

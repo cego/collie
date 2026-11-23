@@ -298,7 +298,7 @@ export function mrIdIn<R>(
 }
 
 /** Whether `mr` is a bare or hostless reference, which only a checkout's project resolves. */
-const needsProject = (mr: string) => {
+export const needsProject = (mr: string) => {
   if (mrId(mr) !== null) return false;
   const said = Str.trim(mr);
   return readMrRef(said, { project: null }) !== null || readMrRef(`mr:${said}`) !== null;
