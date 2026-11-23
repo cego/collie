@@ -323,13 +323,14 @@ export const ForgeModel = Schema.Struct({
   refusesApproval: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.String])),
   /** The forge refuses a merge, whatever it says of the merge request. */
   refusesMerge: Schema.optionalKey(Schema.Boolean),
-  /** What the next merges fail with, one each; `applied` merges anyway. */
+  /** What the next merges fail with, one each; `applied` merges anyway, `comments` arrive with it. */
   mergeFailures: Schema.optionalKey(
     Schema.Array(
       Schema.Struct({
         status: Schema.Finite,
         message: Schema.String,
         applied: Schema.optionalKey(Schema.Boolean),
+        comments: Schema.optionalKey(Schema.Array(FakeComment)),
       }),
     ),
   ),
@@ -433,7 +434,7 @@ interface Answer {
   };
   readonly enqueued?: { readonly mr: FakeMr; readonly head: string };
   readonly dequeued?: FakeMr;
-  readonly failedMerge?: true;
+  readonly failedMerge?: FakeMr;
   readonly merged?: {
     readonly mr: FakeMr;
     readonly sha: string;
@@ -498,7 +499,7 @@ function mergeAnswer(
   if (failure !== undefined)
     return {
       ...refused(`${failure.status} ${failure.message}`),
-      failedMerge: true,
+      failedMerge: mr,
       ...(failure.applied === true ? { merged } : {}),
     };
   if (mr.state !== "open") return refused(NOT_MERGEABLE[forge]);
@@ -2382,8 +2383,20 @@ export function answer(
       mrs: Arr.map(after.mrs, (one) => (one === mr ? { ...one, queued: head } : one)),
     };
   }
-  if (said.failedMerge === true)
-    after = { ...after, mergeFailures: (after.mergeFailures ?? []).slice(1) };
+  if (said.failedMerge !== undefined) {
+    const mr = said.failedMerge;
+    const [failure, ...rest] = after.mergeFailures ?? [];
+    const comments = failure?.comments ?? [];
+    after = {
+      ...after,
+      mergeFailures: rest,
+      mrs: Arr.map(after.mrs, (one) =>
+        one === mr && comments.length > 0
+          ? { ...one, comments: [...(one.comments ?? []), ...comments] }
+          : one,
+      ),
+    };
+  }
   if (said.dequeued !== undefined) {
     const mr = said.dequeued;
     after = {

@@ -337,6 +337,18 @@ const forgetJournal = (runs: ReadonlyArray<string>, journal: string) =>
     yield* sql`DELETE FROM collie_run_lines WHERE journal = ${journal} AND run IN ${sql.in(runs)}`;
   }).pipe(Effect.orDie);
 
+/** A clock whose waits of ten seconds or more, as between merge attempts, pass at once. */
+const quickWaits = Effect.map(Clock.Clock, (clock): Clock.Clock =>
+  Object.assign(Object.create(clock) as Clock.Clock, {
+    sleep: (duration: Duration.Duration) =>
+      clock.sleep(
+        Duration.isGreaterThanOrEqualTo(duration, Duration.seconds(10))
+          ? Duration.millis(1)
+          : duration,
+      ),
+  }),
+);
+
 const session = <A, E>(run: Effect.Effect<A, E, SessionServices>, override?: HostOverride) =>
   Clock.clockWith((clock) =>
     run.pipe(
@@ -16869,7 +16881,7 @@ for (const name of ["gitlab", "github"] as const) {
                     yield* run.answer("go-1", "Release");
                     return { status: yield* ended(run.status), asked: yield* run.asked };
                   }),
-              );
+              ).pipe(Effect.provideServiceEffect(Clock.Clock, quickWaits));
               const model = yield* forge.model();
               yield* bin.restore();
               expect(outcomeText(status)).toBe(`${mr} merged at ${merged}, released as v1.2.0`);
@@ -16919,7 +16931,7 @@ for (const name of ["gitlab", "github"] as const) {
                 yield* run.resume;
                 return { status: yield* ended(run.status), asked: yield* run.asked };
               }),
-          );
+          ).pipe(Effect.provideServiceEffect(Clock.Clock, quickWaits));
           const model = yield* forge.model();
           yield* bin.restore();
           expect(outcomeText(status)).toBe(`${mr} merged at ${merged}, released as v1.2.0`);
@@ -16928,6 +16940,55 @@ for (const name of ["gitlab", "github"] as const) {
           ).toHaveLength(1);
           expect(Arr.map(model.merges ?? [], (one) => one.sha)).toEqual([head]);
           expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
+        }),
+      ),
+    120_000,
+  );
+
+  scenario(
+    `release on ${name}: a last transient merge attempt whose re-read is no longer ready gives the claim back and asks a fresh go`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head } = yield* releasable(name);
+          const ready = yield* forge.model();
+          const late = { id: 91, author: "bob", at: "2026-10-20T11:00:00Z", body: "wait" };
+          const failed = { status: 502, message: "Server Error" };
+          yield* forge.set({
+            ...ready,
+            mergeFailures: [failed, failed, { ...failed, comments: [late] }],
+          });
+          claimed.length = 0;
+          const runId = `r-merge-unheld-${name}`;
+          yield* rig.queueOutputs([
+            PACKAGED,
+            { verdict: "clean", answers: [{ id: "91", answer: "disputed", note: "as meant" }] },
+          ]);
+          const status = yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                yield* goAsked(run.asked, "go-1");
+                yield* run.answer("go-1", "Release");
+                const { cause } = yield* until(
+                  () => Effect.all({ cause: parkedCause(runId), asked: run.asked }),
+                  ({ cause, asked }) =>
+                    cause !== "" || Arr.some(asked, (row) => row.decision === "go-2"),
+                );
+                expect(cause).toBe("");
+                expect(claimed).toEqual([`claim ${runId}`, `release ${runId}`]);
+                yield* run.answer("go-2", "Finish");
+                return yield* ended(run.status);
+              }),
+          ).pipe(Effect.provideServiceEffect(Clock.Clock, quickWaits));
+          const model = yield* forge.model();
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} was left open`);
+          expect(model.merges ?? []).toEqual([]);
+          expect(model.mergeFailures ?? []).toEqual([]);
+          expect(yield* runLog(runId)).toContain(
+            `go 1 no longer holds for ${pipe(head, Str.slice(0, 8))}: 1 unanswered comment(s)`,
+          );
         }),
       ),
     120_000,

@@ -1783,12 +1783,13 @@ export default defineWorkflow({
                   const outcome = yield* host.merge({ runId, cwd, head });
                   if (outcome._tag !== "Transient") return outcome;
                   const standing = yield* host.review({ runId, cwd, proved: head, seen: [] });
+                  if (standing._tag !== "Ready" && standing._tag !== "Unreadable")
+                    return Unheld.make({ standing });
                   if (standing._tag === "Unreadable" || attempt === MERGE_ATTEMPTS)
                     return yield* park(
                       `The forge could not merge ${mr} at ${short(head)} after ${attempt} attempt(s): ${standing._tag === "Unreadable" ? standing.reason : outcome.reason}`,
                       "forge-unavailable",
                     );
-                  if (standing._tag !== "Ready") return Unheld.make({ standing });
                   yield* Effect.sleep(MERGE_SPACING);
                 }
               }),
