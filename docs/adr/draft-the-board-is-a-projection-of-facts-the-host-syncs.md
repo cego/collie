@@ -57,6 +57,11 @@ world as rows, and each write names what it moved through Reactivity:
   pushed branch moved past the finished record. It reads the branches of each card that moved
   (a turn, a Step's end, a publish or a push moves it) and every live card's on the 5-minute
   backstop. It also keeps what a follow-up would enter at, as the Run fact `synced-recovery`.
+  A board never reads git itself, wherever it is built: the host's listing, its first board, a
+  record's card, and the merge watch's and cleanup's own builds all read these rows
+  (cego/collie#537). A missing row means "not read yet": the card shows no branch movement, no
+  head and no project, and the build asks Git sync for that branch, which reads it on its next
+  round and moves the card the usual way.
 - **Module revisions** keep `collie_module_revisions`, one row per workflow layer directory.
   A listing reads the row. A Run's start, an offer taken, `collie workflow create`, `fork` and
   `check`, and the 5-minute backstop compute it and keep it. The revision also keys what

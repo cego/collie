@@ -217,7 +217,6 @@ import { Herdr, isSettled, type AgentInfo } from "./herdr";
 import { taskOffers, type Offer } from "./offers";
 import {
   buildBoard,
-  SyncedBranches,
   type KeptCard,
   type KeptCards,
   LANDED_STATES,
@@ -1608,10 +1607,7 @@ const hostBoard = (dir: string) =>
               Effect.tap((offers) => Effect.sync(() => offered.set(runId, offers))),
             ),
           cards,
-        }).pipe(
-          Effect.provideService(SyncedBranches, yield* Branches.use((rows) => rows.all)),
-          (built) => (refused ? refusingOutside(built) : built),
-        );
+        }).pipe((built) => (refused ? refusingOutside(built) : built));
       }).pipe(
         (built) =>
           model === undefined

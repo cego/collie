@@ -30,11 +30,23 @@ const decodeBranch = Schema.decodeUnknownOption(BranchJson);
 /** A branch's key in the rows: its checkout and its name. */
 export const branchKey = (cwd: string, branch: string | null) => `${cwd}\0${branch ?? ""}`;
 
+/** What the git syncer reads a branch by. */
+export interface BranchRun {
+  readonly cwd: string;
+  readonly dir: string;
+  readonly branch: string | null;
+  readonly state: string;
+}
+
 export interface BranchesApi {
   /** Every row, by `branchKey`. */
   readonly all: Effect.Effect<ReadonlyMap<string, Branch>>;
   /** Writes what moved; a read that moves nothing invalidates nothing. */
   readonly put: (rows: ReadonlyMap<string, Branch>) => Effect.Effect<void>;
+  /** Asks the git syncer for a branch a card found no row of. */
+  readonly want: (run: BranchRun) => Effect.Effect<void>;
+  /** The branches asked for since the last call. */
+  readonly wanted: Effect.Effect<ReadonlyArray<BranchRun>>;
 }
 
 export class Branches extends Context.Service<Branches, BranchesApi>()("collie/Branches") {}
@@ -62,8 +74,15 @@ export const branchesLayer = Layer.effect(Branches)(
       ),
       Effect.orDie,
     );
+    let asked = new Map<string, BranchRun>();
     return {
       all,
+      want: (run) => Effect.sync(() => void asked.set(branchKey(run.cwd, run.branch), run)),
+      wanted: Effect.sync(() => {
+        const taken = [...asked.values()];
+        asked = new Map();
+        return taken;
+      }),
       put: (rows) =>
         Effect.gen(function* () {
           if (rows.size === 0) return;
@@ -92,12 +111,7 @@ export const branchesLayer = Layer.effect(Branches)(
 );
 
 /** What git says now of `run`'s branch in its checkout: the git syncer's one read. */
-export const readBranch = Effect.fn("Branches.read")(function* (run: {
-  readonly cwd: string;
-  readonly dir: string;
-  readonly branch: string | null;
-  readonly state: string;
-}) {
+export const readBranch = Effect.fn("Branches.read")(function* (run: BranchRun) {
   const project = yield* projectHere(run.cwd, shell);
   if (run.branch === null) return { head: null, project, movement: null } satisfies Branch;
   const read = yield* shell(

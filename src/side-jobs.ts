@@ -31,7 +31,7 @@ import { sweep, sweeping, type Sweeper } from "./cleanup";
 import { keepDiffs } from "./run-detail";
 import { Artefacts } from "./artefacts";
 import { ModuleRevisions } from "./module-revisions";
-import { Branches, branchKey, readBranch, type Branch } from "./branches";
+import { Branches, branchKey, readBranch, type Branch, type BranchRun } from "./branches";
 import { ConnectionRows } from "./connection-rows";
 import { connectionOnMachine } from "./connections";
 import { revisionOf } from "./engine";
@@ -167,7 +167,8 @@ const GIT_SLOW_MS = 5_000;
 
 /**
  * The git syncer: the branch of each Run on a card that moved, which a turn, a Step's end, a
- * publish or a push does, read again; every live card's on the backstop poll. A card's
+ * publish or a push does, read again, and each a build found no row of; every live card's on
+ * the backstop poll. A card's
  * derivation reads only what this kept (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs).
  */
 export const gitSync = <E, R>(
@@ -189,7 +190,10 @@ export const gitSync = <E, R>(
       const backstop = start - backstopAt >= BACKSTOP_MS;
       if (backstop) backstopAt = start;
       const byId = new Map(Arr.map(runs, (run) => [run.id, run] as const));
-      const due = new Map<string, RunFacts>();
+      const branches = yield* Branches;
+      const due = new Map<string, BranchRun>(
+        Arr.map(yield* branches.wanted, (run) => [branchKey(run.cwd, run.branch), run]),
+      );
       const moved = new Set<string>();
       for (const view of views) {
         const at = `${view.revision?.epoch ?? ""}:${view.revision?.seq ?? ""}`;
@@ -205,7 +209,7 @@ export const gitSync = <E, R>(
       if (due.size === 0) return;
       const read = new Map<string, Branch>();
       for (const [key, run] of due) read.set(key, yield* readBranch(run));
-      yield* (yield* Branches).put(read);
+      yield* branches.put(read);
       for (const run of moved) yield* recover(run);
       const took = (yield* Clock.currentTimeMillis) - start;
       if (took >= GIT_SLOW_MS)

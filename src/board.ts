@@ -57,8 +57,8 @@ import { awaitingLine } from "./awaiting";
 import { MERGE_POLL_MS, mrOf, readForge, readMrStates } from "./merges";
 import { filed, NOTHING_TO_LAND, type Recorded, settlementOf, standingOf } from "./standing";
 import { offersOf } from "./lifecycle";
-import { mrIdIn, mrIdWith, shell } from "./mr";
-import { branchKey, type Branch } from "./branches";
+import { mrIdWith, needsProject, shell } from "./mr";
+import { Branches, branchKey, type Branch, type BranchesApi } from "./branches";
 import type {
   Disposition,
   Flow,
@@ -73,7 +73,6 @@ import { flowInputsFor, taskFlowFor } from "./flow-read";
 import { machineName, peersOf } from "./peers";
 import { Deliveries, deliveriesAhead, deliveriesOf, SENT_STATES, toldIn } from "./steering";
 import { finishedOnRecord } from "./cards";
-import { branchMovement } from "./recovery";
 import { owedLocally } from "./check-proof";
 import {
   Answered,
@@ -730,27 +729,8 @@ export const readBranchHead = Effect.fn("Board.readBranchHead")(function* (run: 
   return read.code === 0 && sha !== "" ? sha : null;
 });
 
-/** The commit `run`'s branch is at, as the git syncer last read it where it keeps it. */
-const headOf = (run: RunFacts, now: number) =>
-  Effect.flatMap(syncedBranch(run), (row) =>
-    row === undefined ? branchHead(run, now) : Effect.succeed(row?.head ?? null),
-  );
-
-/** `readBranchHead`, read again only once `HEAD_FOR_MS` has passed. */
-const branchHead = Effect.fn("Board.branchHead")(function* (run: RunFacts, now: number) {
-  if (run.branch === null) return null;
-  const key = `${run.cwd}\0${run.branch}`;
-  const known = heads.get(key);
-  if (known !== undefined && now - known.at < HEAD_FOR_MS) return known.sha;
-  const head = yield* readBranchHead(run);
-  heads.set(key, { at: now, sha: head });
-  return head;
-});
-
-/** How long a branch head read stands, so a board refresh does not spawn git per card. */
-const HEAD_FOR_MS = 60_000;
-// ponytail: one entry per checkout and branch for the process's life; prune if that grows.
-const heads = new Map<string, { readonly at: number; readonly sha: string | null }>();
+/** The commit `run`'s branch is at, as the git syncer last read it. */
+const headOf = (run: RunFacts) => Effect.map(syncedBranch(run, true), (row) => row?.head ?? null);
 
 /** An absolute path, wherever one sits in a name, read as what it points at. */
 function withoutPaths(text: string): string {
@@ -969,27 +949,36 @@ const mrIdOf = (run: RunFacts) => {
 };
 
 /**
- * What the git syncer last read of each checkout and branch, by `branchKey`, where a host
- * keeps it (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs); null where git is
- * asked as a card is drawn, as a process with no host does.
+ * What the git syncer last read of each checkout and branch, by `branchKey`, as one build reads
+ * it: a build never asks git (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs).
  */
-export const SyncedBranches = Context.Reference<ReadonlyMap<string, Branch> | null>(
-  "collie/SyncedBranches",
-  { defaultValue: () => null },
-);
+class SyncedBranches extends Context.Service<
+  SyncedBranches,
+  { readonly rows: ReadonlyMap<string, Branch>; readonly want: BranchesApi["want"] }
+>()("collie/SyncedBranches") {}
 
-const syncedBranch = (run: RunFacts) =>
-  Effect.map(SyncedBranches, (rows) =>
-    rows === null ? undefined : (rows.get(branchKey(run.cwd, run.branch)) ?? null),
-  );
+/** Gives `effect` the git syncer's rows as they are now. */
+const withSyncedBranches = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const branches = yield* Branches;
+    return yield* Effect.provideService(effect, SyncedBranches, {
+      rows: yield* branches.all,
+      want: branches.want,
+    });
+  });
 
-/** `mr`'s MR id as read in `run`'s checkout. */
+/** `run`'s branch row, or null where none was read yet; `wanted` asks the git syncer for it. */
+const syncedBranch = (run: RunFacts, wanted = false) =>
+  Effect.gen(function* () {
+    const synced = yield* SyncedBranches;
+    const row = synced.rows.get(branchKey(run.cwd, run.branch));
+    if (row === undefined && wanted) yield* synced.want(run);
+    return row ?? null;
+  });
+
+/** `mr`'s MR id, a legacy reference resolved against the project the git syncer read. */
 const mrIdAt = (mr: string, run: RunFacts) =>
-  Effect.flatMap(syncedBranch(run), (row) =>
-    row === undefined
-      ? mrIdIn(mr, run.cwd, shell)
-      : Effect.succeed(mrIdWith(mr, row?.project ?? null)),
-  );
+  Effect.map(syncedBranch(run, needsProject(mr)), (row) => mrIdWith(mr, row?.project ?? null));
 
 /** A merge request of a Task, as its Runs carry it. */
 interface Carried {
@@ -1035,7 +1024,7 @@ function mrsOf(
 export const ownedMrs = Effect.fn("Board.ownedMrs")(function* (runs: ReadonlyArray<RunFacts>) {
   const carried = yield* Effect.forEach(newestFirst(runs), (run) =>
     Effect.map(mrIdOf(run), (id) => ({ run, id, mr: mrOf(run) })),
-  );
+  ).pipe(withSyncedBranches);
   const entries = mrsOf(
     Arr.flatMap(carried, ({ run, id, mr }) =>
       id === null || mr === null ? [] : [{ run, id, mr }],
@@ -1230,6 +1219,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: BoardOptions
   const runs = newestFirst(opts.runs ?? (yield* listRuns(opts.env)));
   const records = yield* RunRecords;
   return yield* drawBoard({ ...opts, runs }, records).pipe(
+    withSyncedBranches,
     Effect.provideService(
       RunRecords,
       readAhead(
@@ -1323,6 +1313,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
       for (const one of [run, ...(repoRunsOf.get(run.id) ?? [])]) cardOf.set(one.id, key);
 
   const flowInputs = yield* flowInputsFor(opts.env, all);
+  const synced = yield* SyncedBranches;
   // A card asks what its leader ordered last, and an ended leader's deliveries.
   const leaders = Arr.map([...groups.values()], leaderOf);
   const launches = yield* launchesAhead(
@@ -1387,7 +1378,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                 [...missingCheckouts],
                 cards.modules ?? "",
                 Arr.map(everyRun, (run) => cards.connections?.get(run.cwd) ?? ""),
-                yield* Effect.forEach(everyRun, syncedBranch),
+                yield* Effect.forEach(everyRun, (run) => syncedBranch(run)),
               ];
         const key = cards === undefined ? "" : cardKey([cards.revision(read), inputs]);
         const touched = yield* RunRecords.use((records) =>
@@ -1712,12 +1703,9 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           disposed: disposition !== null,
           asking: decision !== null,
         });
-        const synced = yield* syncedBranch(leader);
         const movement = landed
           ? null
-          : synced === undefined
-            ? yield* branchMovement(leader)
-            : (synced?.movement?.said ?? null);
+          : ((yield* syncedBranch(leader, true))?.movement?.said ?? null);
         /** A merge request's checks and readiness, read in the Run `merging`. */
         const judged = Effect.fnUntraced(function* (
           id: string | null,
@@ -1735,7 +1723,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                   Effect.provideService(RunRecords, whole),
                   Effect.orElseSucceed(() => []),
                 ),
-                head: forged?.head ?? (yield* opts.head?.(merging) ?? headOf(merging, now)),
+                head: forged?.head ?? (yield* opts.head?.(merging) ?? headOf(merging)),
                 approved: yield* Effect.forEach(
                   approvedFor(
                     yield* approvedIn(merging.evidence),
@@ -1980,7 +1968,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                   : (readiness.missing[0]?.said ?? null)
                 : null,
             mrOf,
-            mrIdOf,
+            mrIdOf: (run) => Effect.provideService(mrIdOf(run), SyncedBranches, synced),
           },
           flowInputs,
         );
