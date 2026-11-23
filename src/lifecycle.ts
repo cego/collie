@@ -904,7 +904,7 @@ export const followBoard = Effect.fn("Lifecycle.followBoard")(function* (
       Effect.sync(() => {
         const next = Cause.hasInterruptsOnly(cause)
           ? null
-          : Str.split(reason(Cause.squash(cause)), "\n")[0]!;
+          : Str.split(reason(Cause.squash(cause)), "\n")[0];
         if (lost !== next) {
           lost = next;
           changed?.();
@@ -1915,16 +1915,16 @@ export const actAsked: (
 ) => Effect.Effect<ReadonlyArray<ActionResult>, never, Client> = (env, options) =>
   (options.actions.length === 1 &&
   options.actions[0]!.kind === "start" &&
-  options.actions[0]!.machine !== undefined
+  options.actions[0].machine !== undefined
     ? asks(
-        { ...env, machine: options.actions[0]!.machine },
+        { ...env, machine: options.actions[0].machine },
         (client) => client.act({ actions: options.actions, request: options.request }),
         options.door,
       )
     : options.actions.length === 1 && "run" in options.actions[0]!
       ? asksRun(
           env,
-          options.actions[0]!.run,
+          options.actions[0].run,
           (client) => client.act({ actions: options.actions, request: options.request }),
           options.door,
         )

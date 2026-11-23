@@ -100,7 +100,7 @@ export const autoModeFacts = <R>(
       withoutCredentials(url) === own.created.origin &&
       (yield* sameRepository(session.cwd, own.created.checkout, run));
     const project = url === null ? null : projectFromRemote(url);
-    const forge = project === null ? null : forgeOfHost(Str.split(project, "/")[0]!, gitlabHost);
+    const forge = project === null ? null : forgeOfHost(Str.split(project, "/")[0], gitlabHost);
     const protects =
       created && project !== null && forge !== null
         ? yield* FORGES[forge].protects(project, branch, session.cwd, run)

@@ -51,7 +51,7 @@ const framesOf = (
     const door = yield* frontDoor(socketOf(world.state));
     // WARNING: the fields a base host's schema lacks are sent as they are, and what comes back is read as no more than `Sent` says.
     return door
-      .runDetail({ runId, tail: true, pages: 1, refreshMr: false, ...more } as never)
+      .runDetail({ runId, tail: true, pages: 1, refreshMr: false, ...more })
       .pipe(Stream.map((frame) => frame as Sent | null));
   });
 

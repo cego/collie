@@ -189,13 +189,13 @@ test("two projects run their own implementation of one id at the same time", () 
       }
       expect(
         yield* until(
-          () => client.status({ runId: started[0]!.runId }),
+          () => client.status({ runId: started[0].runId }),
           (status) => status.status === "complete",
         ),
       ).toEqual({ status: "complete", value: "note:a=ok" });
       expect(
         yield* until(
-          () => client.status({ runId: started[1]!.runId }),
+          () => client.status({ runId: started[1].runId }),
           (status) => status.status === "complete",
         ),
       ).toEqual({ status: "complete", value: "theirs:b=ok" });

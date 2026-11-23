@@ -358,7 +358,7 @@ const openCodeStore = (file: string, since: number | null) =>
             if (isJsonObject(part) && part["synthetic"] === true) continue;
             if (typed !== "" && !injected(typed)) said.push({ at: isoAt(row.at), text: typed });
           }
-          const first = parts[0]!;
+          const first = parts[0];
           return {
             ids: [first.session],
             cwd: first.directory,

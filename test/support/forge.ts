@@ -990,7 +990,7 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under) {
   }
   if (verb === "mr" && sub === "list" && flag(args, "--source-branch") !== undefined) {
     const repo = flag(args, "--repo");
-    if (repo !== undefined && !model.loggedIn.includes(Str.split(repo, "/")[0]!)) {
+    if (repo !== undefined && !model.loggedIn.includes(Str.split(repo, "/")[0])) {
       const returned: Answer = no();
       return returned;
     }

@@ -20,11 +20,10 @@ const printed = Effect.gen(function* () {
   const written: Array<string> = [];
   const write = process.stdout.write.bind(process.stdout);
   // WARNING: the board writes one string and reads nothing back, so the overload that takes an encoding or a callback is never the one reached here.
-  // WARNING: the board writes one string and reads nothing back, so the encoding and callback overload is never reached.
-  process.stdout.write = ((chunk: string) => {
+  process.stdout.write = (chunk: string) => {
     written.push(String(chunk));
     return true;
-  }) as typeof process.stdout.write;
+  };
   const code = yield* Effect.ensuring(
     workspaceFlow(new Herdr(env), env).pipe(Effect.provide(recordsAt(env.stateDir))),
     Effect.sync(() => {

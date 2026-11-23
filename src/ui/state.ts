@@ -512,7 +512,7 @@ function nested(row: Row, depth: number) {
   return { ...row, depth };
 }
 
-const unqualified = (row: Row) => ({ ...row, title: Str.split(row.title, " · ")[0]! });
+const unqualified = (row: Row) => ({ ...row, title: Str.split(row.title, " · ")[0] });
 
 // WARNING: no needsYou though counted: a workspace counted beside its own waiting run would read as two.
 function groupRow(group: WideGroup, marks?: Marks) {

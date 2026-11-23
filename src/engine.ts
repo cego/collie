@@ -320,7 +320,7 @@ import { launchesOf, readLaunches } from "./launches";
 import type { Launched } from "./launches";
 import { steerTarget } from "./steer-target";
 import { CurrentStep, appendStepLine, readStepLines } from "./steps";
-import type { StepLine, StepNote } from "./steps";
+import type { StepNote } from "./steps";
 import { classifyGivenSet, classifyGivenTarget, classifyWorkSource, defaultBase } from "./inputs";
 import type { PlatformServices } from "./platform";
 import { updateApproved, approvedFrom, approvedIn, PROJECT_FILE } from "./verify-spec";
@@ -2867,7 +2867,7 @@ const entryOf: (definition: WorkflowDefinition) => WorkflowEntry = (definition) 
     id: definition.id,
     title: definition.title,
     description: definition.description,
-    input: definition.input.fields as InputFields,
+    input: definition.input.fields,
     metadata: declared,
     agents: definition.agents,
     make: (name) => registrationOf(definition, name),
@@ -2886,8 +2886,7 @@ const readEnvelope = flow(
 
 const noteStep = (dir: string, note: StepNote) =>
   Effect.gen(function* () {
-    // WARNING: a note is a line without its time, which is added here.
-    yield* appendStepLine(dir, { ...note, at: yield* nowIso } as StepLine);
+    yield* appendStepLine(dir, { ...note, at: yield* nowIso });
   });
 
 const entryCauses = new Map<string, "restarted" | "resumed">();
@@ -5077,8 +5076,8 @@ export const hostLayer: (options: {
                         note: why,
                         cause,
                         build: manifest.version,
-                        park: info!.id,
-                        since: info!.since,
+                        park: info.id,
+                        since: info.since,
                       });
                     }),
                   );

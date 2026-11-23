@@ -490,12 +490,12 @@ test("an answer given before its Run waits on the question is handed over only o
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-engine-answer-" });
+      const success: HostCodec = Schema.String;
       const asking: HostWorkflow = Workflow.make("asking", {
         // WARNING: a struct of schemas with no services, as the host's own envelope is.
         payload: Schema.Struct({ runId: Schema.String }) as HostPayload,
         idempotencyKey: (payload) => String(payload["runId"]),
-        // WARNING: a string codec needs no services.
-        success: Schema.String as HostCodec,
+        success,
       });
       const payload = { runId: "r1" };
       const executionId = yield* asking.executionId(payload);

@@ -153,7 +153,7 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
     input: Readonly<Record<string, Schema.Json>>,
   ) {
     const registry = yield* Registry;
-    const generation: Generation = (yield* registry.load(entry))!;
+    const generation: Generation = yield* registry.load(entry);
     return yield* registry.start({
       generation,
       request,

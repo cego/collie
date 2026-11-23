@@ -534,7 +534,7 @@ const releaseEach = (members: ReadonlyArray<SetMember>) =>
                 yield* host.record(runId, said);
                 return { ...tagged, said };
               }),
-              DurableDeferred.make(`${repository[0]!.id}.tag-end`, {
+              DurableDeferred.make(`${repository[0].id}.tag-end`, {
                 success: Schema.NullOr(Schema.Struct({ ok: Schema.Boolean, said: text })),
               }),
             ),
@@ -686,7 +686,7 @@ export default defineWorkflow({
         });
 
       const tagOnly = asked.together !== undefined;
-      if (tagOnly && (asked.merge_only === true || asked.together!.length === 0))
+      if (tagOnly && (asked.merge_only === true || asked.together.length === 0))
         return yield* fail("A tag Run needs merged merge requests and cannot also be merge-only");
       const set = mrSet(asked.mr);
       const mergeAlone = asked.ship === "merge";

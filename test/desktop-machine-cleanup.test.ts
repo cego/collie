@@ -69,8 +69,7 @@ const reachedOver = (desktop: Partial<Door>) => ({
 });
 const cutOff = (closed: Deferred.Deferred<void>, how: "closed" | "broken") =>
   reachedOver({
-    // WARNING: answered as the client answers a call not asked to discard its reply.
-    cleanup: (() =>
+    cleanup: () =>
       Deferred.await(closed).pipe(
         Effect.andThen(
           how === "closed"
@@ -81,7 +80,7 @@ const cutOff = (closed: Deferred.Deferred<void>, how: "closed" | "broken") =>
                 }),
               ),
         ),
-      )) as Door["cleanup"],
+      ),
   });
 const doorsWith = (door: Reached) => {
   const doors = new DoorMap<Reached>();

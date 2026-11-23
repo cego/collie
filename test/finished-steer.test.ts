@@ -329,7 +329,7 @@ test("a chat that clears an override is recorded with the human's words", () =>
       const live = yield* coreHerdr().agentList().pipe(Effect.orDie);
       const terminal = Option.getOrUndefined(
         Arr.findFirst(live, (one) => one.name === agent.name),
-      )!.terminalId!;
+      )!.terminalId;
       yield* appendLine({
         kind: "manual_override",
         at: "2026-10-05T10:00:00.000Z",
@@ -527,7 +527,7 @@ test("a steer is typed plain within 3 lines and 700 characters, or kept as a fil
       expect(twoLines.lines[1]).toMatch(/^From the human, on the board, .+\.$/);
       expect(twoLines.note).toContain(AUTO_MODE);
 
-      const room = 700 - plain.lines[0]!.length - plain.lines[1]!.length - 2;
+      const room = 700 - plain.lines[0].length - plain.lines[1]!.length - 2;
       const fills = yield* steer(Str.repeat(room)("y"), board(3));
       expect(fills.kept).toBeNull();
       const over = yield* steer(Str.repeat(room + 1)("z"), board(4));

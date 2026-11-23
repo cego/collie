@@ -7836,7 +7836,7 @@ test("a harness whose readiness check fails parks the step saying why", () =>
         compactAtTokens: 1000,
         ports: {
           claude: {
-            ...claudeControls().claude!,
+            ...claudeControls().claude,
             ready: () =>
               Effect.fail(new Cause.UnknownError(undefined, "its endpoint has 3 threads on it")),
           },

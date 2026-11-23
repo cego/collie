@@ -309,10 +309,10 @@ export const reviewPass = (ask: ReviewAsk) =>
     if (seats.length === 1) {
       const [only] = seats;
       const alone: SynthesisReport = yield* agentWork({
-        operation: only!.operation,
-        agent: only!.agent,
+        operation: only.operation,
+        agent: only.agent,
         role: "reviewer",
-        seat: only!.seat,
+        seat: only.seat,
         instructions: REVIEW,
         input: { ...input, checks, criteria: ask.criteria ?? "" },
         output: SynthesisSchema,

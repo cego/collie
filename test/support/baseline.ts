@@ -14033,7 +14033,7 @@ scenario(
         for (const one of [first, second]) {
           const child = `${runId}-${one.invocation("release")}`;
           const enters = Arr.flatMap(yield* readStepLines(runDir(dir, child)), (line) =>
-            line.kind === "enter" ? [Str.split(line.key, "#")[0]!] : [],
+            line.kind === "enter" ? [Str.split(line.key, "#")[0]] : [],
           );
           expect(enters).toContain("merge");
           for (const step of ["tag", "stage", "production-go", "production"])
@@ -22159,7 +22159,7 @@ scenario(
         expect(measured[0]!.candidate.content).toBe(measured[0]!.base.content);
         expect(measured[0]!.base.commit).toBe(yield* revParse(`${commit}~1`));
         expect(Arr.map(measured, (one) => one.plan.samples)).toEqual([10, 12, 14]);
-        const report = yield* readText(Str.split(reasonOf(result), ": ")[0]!);
+        const report = yield* readText(Str.split(reasonOf(result), ": ")[0]);
         expect(report).toContain("no APM access from this Machine");
       }),
     ),
@@ -22358,7 +22358,7 @@ for (const [what, unusable] of [
           expect(log).toContain(
             "research https://gitlab.example.com/group/project/-/issues/7 ruled out an index on name",
           );
-          const report = yield* readText(Str.split(reasonOf(result), ": ")[0]!);
+          const report = yield* readText(Str.split(reasonOf(result), ": ")[0]);
           const lines = Str.split(report, "\n");
           const under = (opportunity: string) =>
             lines[
@@ -22816,7 +22816,7 @@ scenario(
         expect(log).toContain("cycle 1 reverted to");
         expect(log).toContain("bench.count no-change");
         expect(log).toContain("guardrail bench.size regression");
-        const report = yield* readText(Str.split(said(result), ": ")[0]!);
+        const report = yield* readText(Str.split(said(result), ": ")[0]);
         expect(report).toContain("## Cycles");
         expect(report).toContain("two consecutive Cycles were not kept");
       }),
@@ -22948,7 +22948,7 @@ scenario(
         expect(yield* runLog(runId)).toContain("cycle 1 reverted to");
         expect(yield* runLog(runId)).toContain("checks failed: unit");
         expect(yield* wasAsked(runId, "mr")).toBe(false);
-        expect(yield* readText(Str.split(said(result), ": ")[0]!)).toContain("checks failed: unit");
+        expect(yield* readText(Str.split(said(result), ": ")[0])).toContain("checks failed: unit");
       }),
     ),
 );
@@ -23217,7 +23217,7 @@ scenario(
         expect(said(result)).toContain("wall time 1 millis spent before Cycle 1");
         expect(yield* cyclePrompts(runId)).toEqual([]);
         expect(yield* wasAsked(runId, "mr")).toBe(false);
-        expect(yield* readText(Str.split(said(result), ": ")[0]!)).toContain(
+        expect(yield* readText(Str.split(said(result), ": ")[0])).toContain(
           "wall time 1 millis spent before Cycle 1",
         );
       }),
@@ -23490,7 +23490,7 @@ scenario(
         expect(verdictsOf(final!)).toEqual(["bench.count no-change", "bench.size no-change"]);
         expect(yield* checkoutTree()).toBe(final!.base.content);
         expect(said(result)).toContain("bench.count no-change, not a gain");
-        expect(yield* readText(Str.split(said(result), ": ")[0]!)).toContain(final!.id);
+        expect(yield* readText(Str.split(said(result), ": ")[0])).toContain(final!.id);
         yield* archivedFinal(runId, final!);
       }),
     ),

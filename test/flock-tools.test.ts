@@ -2190,7 +2190,7 @@ for (const kind of ["start", "deliver"] as const)
         expect(first).toContain("outcome is unknown");
         expect(first).toMatch(/^Request: \S+\n/);
         expect(submitted).toHaveLength(1);
-        const request_id = pipe_(Str.split(first, "\n")[0]!, Str.slice("Request: ".length));
+        const request_id = pipe_(Str.split(first, "\n")[0], Str.slice("Request: ".length));
         const retry = yield* callFlockTool(flock, "collie_do", { actions, request_id });
         expect(retry).toContain(`${kind}: applied`);
         expect(submitted).toEqual([`${request_id}-0`, `${request_id}-0`]);
@@ -2263,7 +2263,7 @@ test("a disconnected proposal returns its retry id without submitting a second w
       });
       expect(said).toContain("outcome is unknown");
       expect(said).toMatch(/^Request: \S+\n/);
-      expect(submitted).toEqual([pipe_(Str.split(said, "\n")[0]!, Str.slice("Request: ".length))]);
+      expect(submitted).toEqual([pipe_(Str.split(said, "\n")[0], Str.slice("Request: ".length))]);
     }).pipe(Effect.provide(platformLayer)),
   ));
 

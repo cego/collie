@@ -1170,7 +1170,7 @@ function retryJob(ref: MrRef, id: string, cwd: string) {
   );
 }
 
-const runOf = (id: string) => Str.split(id, "/")[0]!;
+const runOf = (id: string) => Str.split(id, "/")[0];
 
 const AttemptJob = Schema.Struct({
   run_id: Schema.Finite,

@@ -88,7 +88,7 @@ test("a link upgrade replaces the far host even while Local is a development che
           if (current.length !== 1) yield* releaseBinary(newer, BUILD);
           const older = `${second.world.home}/older-collie`;
           yield* releaseBinary(older, "0.0.1");
-          const bin = Str.split(second.env.PATH!, ":")[0]!;
+          const bin = Str.split(second.env.PATH!, ":")[0];
           yield* fs.writeFileString(
             `${bin}/collie`,
             `#!/bin/sh\nif [ "$1 $2 $3" = "--json upgrade --to" ]; then cp '${newer}' '${older}.new' && chmod +x '${older}.new' && mv '${older}.new' '${older}'; exit $?; fi\nexec env COLLIE_HOST='["${older}"]' '${older}' "$@"\n`,
@@ -140,7 +140,7 @@ test("Desktop pairs on the shared SSH connection its route opened after an older
           const fs = yield* FileSystem.FileSystem;
           yield* first.lists([second]);
           yield* first.cli(["machine", "list"]);
-          const bin = Str.split(second.env.PATH!, ":")[0]!;
+          const bin = Str.split(second.env.PATH!, ":")[0];
           const ready = `${second.world.home}/upgraded`;
           yield* fs.rename(`${bin}/collie`, `${bin}/collie-real`);
           yield* fs.writeFileString(
@@ -276,7 +276,7 @@ test("Desktop reads a paired board and runs commands and credentials over its li
             )?.actor,
           ).toMatchObject({ origin: "chat", from: { client: "desktop-test" } });
           expect((yield* route.collie(["--version"])).out).toContain("collie");
-          const bin = Str.split(second.env.PATH!, ":")[0]!;
+          const bin = Str.split(second.env.PATH!, ":")[0];
           yield* fs.rename(`${bin}/collie`, `${bin}/collie-real`);
           yield* fs.writeFileString(
             `${bin}/collie`,

@@ -57,8 +57,8 @@ test("every link between the repository's documents resolves, anchors included",
           if (pipe(link!, Str.startsWith("http")) || pipe(link!, Str.startsWith("mailto:")))
             continue;
           const [path, anchor] = Str.split(link!, "#");
-          if (path !== "" && !pipe(path!, Str.endsWith(".md"))) continue;
-          const target = path === "" ? file : resolve(file, path!);
+          if (path !== "" && !pipe(path, Str.endsWith(".md"))) continue;
+          const target = path === "" ? file : resolve(file, path);
           if (!files.includes(target)) {
             broken.push(`${file} -> ${link} (no such file)`);
             continue;

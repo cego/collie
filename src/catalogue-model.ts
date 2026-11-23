@@ -97,7 +97,7 @@ export const piEntries = (text: string) => {
   const [provider, model, thinking] = [column("provider"), column("model"), column("thinking")];
   if (provider < 0 || model < 0 || thinking < 0) return null;
   return Arr.map(
-    Arr.filter(rows, (row) => row.length === header!.length),
+    Arr.filter(rows, (row) => row.length === header.length),
     (row) =>
       entry(`${row[provider]}/${row[model]}`, row[model]!, {
         efforts: row[thinking] === "yes" ? (HARNESS_MODELS.pi?.efforts ?? []) : [],

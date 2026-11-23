@@ -206,7 +206,7 @@ test("interleaved remote branch fetches place each checkout on its own fetched c
       for (const [index, one] of placed.entries()) {
         expect(one).not.toHaveProperty("error");
         if ("error" in one) continue;
-        expect(one.branchBase).toBe(heads[index]!);
+        expect(one.branchBase).toBe(heads[index]);
         const checkout = yield* checkoutFor(new Herdr(rig.pluginEnv()), {
           cwd: one.project,
           stateDir: rig.stateDir,

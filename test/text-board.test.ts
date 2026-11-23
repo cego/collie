@@ -76,11 +76,10 @@ const capturedStdout = Effect.acquireRelease(
   Effect.sync(() => {
     const written: Array<string> = [];
     const write = process.stdout.write.bind(process.stdout);
-    // WARNING: the board writes strings and reads nothing back, so the overload that takes an encoding or a callback is never the one reached here.
-    process.stdout.write = ((chunk: string) => {
+    process.stdout.write = (chunk: string) => {
       written.push(String(chunk));
       return true;
-    }) as typeof process.stdout.write;
+    };
     return { written, restore: () => (process.stdout.write = write) };
   }),
   (captured) => Effect.sync(captured.restore),

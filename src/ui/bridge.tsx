@@ -143,7 +143,7 @@ export function driveBridge<E, R>(bridge: Bridge<E, R>) {
         Effect.map((value) => ({ ok: true as const, value })),
         Effect.catchCause((cause) =>
           Effect.sync(() => {
-            setState((previous) => ({ ...previous, note: Str.split(reason(cause), "\n")[0]! }));
+            setState((previous) => ({ ...previous, note: Str.split(reason(cause), "\n")[0] }));
             return { ok: false as const };
           }),
         ),

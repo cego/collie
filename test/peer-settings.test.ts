@@ -186,7 +186,7 @@ test("the newer paired release upgrades the older one, replaces its host and res
           const newer = current.length === 1 ? current[0]! : `${first.world.home}/newer-collie`;
           if (current.length !== 1) yield* releaseBinary(newer, BUILD);
           yield* releaseBinary(older, "0.0.1");
-          const bin = Str.split(first.env.PATH!, ":")[0]!;
+          const bin = Str.split(first.env.PATH!, ":")[0];
           const log = `${first.world.home}/upgrades`;
           yield* fs.writeFileString(
             `${bin}/collie`,

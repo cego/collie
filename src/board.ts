@@ -329,7 +329,7 @@ function verbOf(facts: Sentence) {
   if (facts.step === null) return "Starting";
   const id = facts.step.id;
   const kind = pipe(id, Str.slice(Option.getOrElse(pipe(id, Str.lastIndexOf(".")), () => -1) + 1));
-  return VERBS.get(kind) ?? VERBS.get(Str.split(kind, "-")[0]!) ?? "Working on it";
+  return VERBS.get(kind) ?? VERBS.get(Str.split(kind, "-")[0]) ?? "Working on it";
 }
 
 function roundOf(step: Sentence["step"]) {

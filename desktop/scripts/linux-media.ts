@@ -82,7 +82,7 @@ export const bundleLinuxMedia = Effect.fn("bundle.linuxMedia")(function* (
     );
   const packages = new Set<string>();
   for (const line of Str.split(Str.trim(owner.stdout), "\n"))
-    packages.add(Str.split(Str.split(line, ": ")[0]!, ":")[0]!);
+    packages.add(Str.split(Str.split(line, ": ")[0], ":")[0]);
   yield* fs.makeDirectory(`${bundle}/Resources/media-licenses`, { recursive: true });
   for (const name of packages)
     yield* fs.copyFile(

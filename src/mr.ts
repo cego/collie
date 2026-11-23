@@ -266,7 +266,7 @@ export function forgeHere<R>(cwd: string, run: Runner<R>, gitlabHost?: string) {
         const returned: ForgeHere = { ok: false, reason: "this repo has no remote" };
         return returned;
       }
-      const host = Str.split(project, "/")[0]!;
+      const host = Str.split(project, "/")[0];
       const name = forgeOfHost(host, gitlabHost);
       {
         const returned: ForgeHere =

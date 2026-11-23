@@ -314,7 +314,7 @@ export const fallbackList = (
   const entries = Arr.map(values, (value) => {
     const choice = chainEntry(value);
     const subscription = subscriptionOf({
-      harness: choice.harness!,
+      harness: choice.harness,
       model: choice.model ?? DEFAULT_MODEL,
     });
     return {

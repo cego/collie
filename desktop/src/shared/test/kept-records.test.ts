@@ -116,7 +116,7 @@ test("a kept record's frame sent without the Flow it already had keeps that Flow
   const head = record({ ...bare("head"), flow: mainFlow() });
   const later = withFlowKept(Option.some(head), record(bare("later")));
   expect(later.detail?.title).toBe("later");
-  expect(later.detail?.flow).toBe(head.detail!.flow);
+  expect(later.detail?.flow).toBe(head.detail.flow);
   expect(withFlowKept(Option.none(), record(bare("first"))).detail?.flow).toBeUndefined();
   const none: KeptRecord = { detail: null, asOf: null, bytes: 0 };
   expect(withFlowKept(Option.some(head), none)).toBe(none);

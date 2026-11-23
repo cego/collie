@@ -197,13 +197,13 @@ test("stamping a card's age or record keeps its derivation until source facts ch
       const later = model.stamp(yield* build(cards));
       expect(later[0]!.age).not.toBe(first[0]!.age);
       expect(later[0]!.revision!.seq).toBeGreaterThan(first[0]!.revision!.seq);
-      const id = runs[0]!.id;
+      const id = runs[0].id;
       model.stampRecord("record", id, [id], "first");
       model.stampRecord("record", id, [id], "second");
       yield* build(cards);
       expect(derived).toEqual([]);
 
-      runs = [{ ...runs[0]!, summary: "New engine facts" }, ...runs.slice(1)];
+      runs = [{ ...runs[0], summary: "New engine facts" }, ...runs.slice(1)];
       yield* model.observe(runs);
       yield* build(cards);
       expect(derived).toEqual([id]);

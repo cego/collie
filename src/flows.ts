@@ -768,7 +768,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
       // WARNING: an interrupt is re-raised, not handed to the text view, which would hang the closing pane.
       Effect.catchCauseIf(
         (cause) => !Cause.hasInterrupts(cause),
-        (cause) => Effect.succeed(Str.split(reason(cause), "\n")[0]!),
+        (cause) => Effect.succeed(Str.split(reason(cause), "\n")[0]),
       ),
     ));
   if (why === null) return 0;

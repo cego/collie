@@ -296,7 +296,7 @@ export const awayFrom = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       return Effect.fail(
         Str.includes("Unknown request tag")(said)
           ? new Away({ state: "unsupported", reason: UPGRADE })
-          : new Away({ state: "unreachable", reason: Str.split(Str.trim(said), "\n")[0]! }),
+          : new Away({ state: "unreachable", reason: Str.split(Str.trim(said), "\n")[0] }),
       );
     }),
   );

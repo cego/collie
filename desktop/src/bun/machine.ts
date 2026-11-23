@@ -345,7 +345,7 @@ export const openDoors = (
         Effect.catchCause((cause) =>
           Cause.hasInterruptsOnly(cause)
             ? Effect.interrupt
-            : Effect.fail(unreachable(Str.split(Cause.pretty(cause), "\n")[0]!)),
+            : Effect.fail(unreachable(Str.split(Cause.pretty(cause), "\n")[0])),
         ),
         Effect.timeoutOrElse({
           duration: "5 seconds",
@@ -1756,7 +1756,7 @@ export const usageOn = ({ profile, name }: KnownMachine, door: Pick<Door, "usage
         : defect._tag === "Success" &&
             pipe_(String(defect.success), Str.startsWith("Unknown request tag"))
           ? UPGRADE_SAID
-          : Str.split(Cause.pretty(cause), "\n")[0]!;
+          : Str.split(Cause.pretty(cause), "\n")[0];
       return Effect.succeed({ profile, name, readings: [], problem });
     }),
   );
@@ -1773,7 +1773,7 @@ export const cataloguesOn = (
     }),
     Effect.catchCause((cause) => {
       if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt;
-      const detail = Str.split(Cause.pretty(cause), "\n")[0]!;
+      const detail = Str.split(Cause.pretty(cause), "\n")[0];
       return Effect.succeed({
         profile,
         name,
@@ -1807,7 +1807,7 @@ export const machineOwnOn: (
         const failed = Cause.findErrorOption(cause);
         const problem = Option.isSome(failed)
           ? reasonOf(failed.value)
-          : Str.split(Cause.pretty(cause), "\n")[0]!;
+          : Str.split(Cause.pretty(cause), "\n")[0];
         return Effect.succeed({
           values: null,
           at,
@@ -1860,7 +1860,7 @@ export const schedulesOn = (
           ? read({ problem: SCHEDULES_UPGRADE_SAID })
           : read({
               unreachable: true,
-              problem: Str.split(Cause.pretty(cause), "\n")[0]!,
+              problem: Str.split(Cause.pretty(cause), "\n")[0],
             }),
       );
     }),
@@ -1901,7 +1901,7 @@ export const cleanupOn = (doors: DoorMap<Reached>, profile: string) =>
             defect._tag === "Success" &&
               pipe_(String(defect.success), Str.startsWith("Unknown request tag"))
               ? CLEANUP_UPGRADE_SAID
-              : Str.split(Cause.pretty(exit.cause), "\n")[0]!,
+              : Str.split(Cause.pretty(exit.cause), "\n")[0],
           );
         }),
       );

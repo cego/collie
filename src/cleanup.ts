@@ -764,7 +764,7 @@ export const runnersSweeper: (dir: string, running: string) => Sweeper = (dir, r
             ? null
             : "remove" in one
               ? { remove: one.remove! }
-              : { keep: one.keep! };
+              : { keep: one.keep };
         }),
       ),
   };

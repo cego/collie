@@ -211,22 +211,22 @@ test("a kept record is labelled while its door is gone, and current again once t
       const pull = yield* keeper.open("i-1", "r-1").pipe(Stream.toPull);
       yield* a.offer("r-1", frameAt("one", 4));
       const [current] = yield* pull;
-      expect(keptTitles([current!])).toEqual([{ title: "one", labelled: false }]);
-      expect(recordStanding(current!.asOf, null)).toBeNull();
+      expect(keptTitles([current])).toEqual([{ title: "one", labelled: false }]);
+      expect(recordStanding(current.asOf, null)).toBeNull();
 
       doors.delete("i-1");
       yield* a.close;
       const [lost] = yield* pull;
-      expect(keptTitles([lost!])).toEqual([{ title: "one", labelled: true }]);
-      const standing = recordStanding(lost!.asOf, null);
+      expect(keptTitles([lost])).toEqual([{ title: "one", labelled: true }]);
+      const standing = recordStanding(lost.asOf, null);
       expect(standing?.title).toBe("Reconnecting");
-      expect(standing?.asOf).toBe(lost!.asOf);
+      expect(standing?.asOf).toBe(lost.asOf);
 
       const b = yield* recordDoor(asked);
       doors.set("i-1", b.door);
       yield* b.offer("r-1", unchanged(4));
       const [again] = yield* pull;
-      expect(keptTitles([again!])).toEqual([{ title: "one", labelled: false }]);
+      expect(keptTitles([again])).toEqual([{ title: "one", labelled: false }]);
       expect(Arr.map(asked, ({ held }) => held?.seq)).toEqual([undefined, 4]);
     }).pipe(Effect.scoped),
   ));
@@ -253,9 +253,9 @@ test("a kept record whose Machine stays out of reach is labelled as its Machine 
       yield* a.close;
       const [lost] = yield* pull;
       const outOfReach = { icon: "i-lucide-unplug", title: "vm-mk is out of reach", reason: "" };
-      expect(recordStanding(lost!.asOf, outOfReach)).toEqual({
+      expect(recordStanding(lost.asOf, outOfReach)).toEqual({
         ...outOfReach,
-        asOf: lost!.asOf,
+        asOf: lost.asOf,
       });
       const waited = yield* pull.pipe(Effect.timeoutOption("200 millis"));
       expect(waited._tag).toBe("None");

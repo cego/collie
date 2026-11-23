@@ -30,9 +30,9 @@ test("a changed Step is new, and every other Step and lane is the one already dr
     if (now[at]!.id === "child") {
       expect(now[at]).not.toBe(was[at]);
       expect(now[at]!.said).toBe("still working");
-    } else expect(now[at]).toBe(was[at]!);
+    } else expect(now[at]).toBe(was[at]);
   for (let at = 0; at < kept.lanes.length; at++)
-    if (at !== BUILD) expect(kept.lanes[at]).toBe(before.lanes[at]!);
+    if (at !== BUILD) expect(kept.lanes[at]).toBe(before.lanes[at]);
 });
 
 test("a Step added, or a lane changed outside its Steps, is drawn as new", () => {

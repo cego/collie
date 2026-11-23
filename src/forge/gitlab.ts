@@ -1361,7 +1361,7 @@ function pipeline(url: string, cwd: string) {
 
 function clone<R>(project: string, into: string, cwd: string, run: Runner<R>) {
   return Effect.gen(function* () {
-    const host = hostOf(project) ?? Str.split(project, "/")[0]!;
+    const host = hostOf(project) ?? Str.split(project, "/")[0];
     const token = Str.trim(
       (yield* run("glab", ["config", "get", "token", "--host", host], cwd)).stdout,
     );
@@ -1402,7 +1402,7 @@ export const gitlab: Forge = {
   tagPipeline,
   clone,
   credentials: (project, into, run) => {
-    const host = hostOf(project) ?? Str.split(project, "/")[0]!;
+    const host = hostOf(project) ?? Str.split(project, "/")[0];
     return keepCredentialHelper(
       into,
       host,

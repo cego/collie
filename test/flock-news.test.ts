@@ -12,7 +12,7 @@ const item = (
   at: string,
 ) => ({
   key,
-  run: Str.split(key, ":")[0]!,
+  run: Str.split(key, ":")[0],
   text: `${key} happened.`,
   at,
   significance,

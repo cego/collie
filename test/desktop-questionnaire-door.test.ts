@@ -182,10 +182,10 @@ test("two Desktops racing on one question: one is answered, the other shows the 
         const refused = Arr.filter([one, other], (sent) => sent.failed !== null);
         expect(answered).toHaveLength(1);
         expect(refused).toHaveLength(1);
-        const reason = refused[0]!.failed!.reason;
+        const reason = refused[0]!.failed.reason;
         expect(reason).toContain('"pick" was already answered');
         expect(reason).toContain("by Desktop");
-        expect(refused[0]!.failed!.refused).toBe(true);
+        expect(refused[0]!.failed.refused).toBe(true);
         expect(questionnaireView(refused[0]!.state).status).toBe(reason);
         expect(
           Arr.filter(questionnaireView(refused[0]!.state).rows, (row) => row.checked),

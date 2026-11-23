@@ -29,7 +29,7 @@ export const qualifiedRuns = (ref: string) =>
   });
 
 export const refRuns = (ref: string, machine: string) => {
-  const names = new Set([machine, Str.split(machine, ".")[0]!]);
+  const names = new Set([machine, Str.split(machine, ".")[0]]);
   return Arr.flatMap(refWords(ref), (word) => {
     const colon = Option.getOrElse(Str.indexOf(":")(word), () => -1);
     if (colon < 0) return [word];

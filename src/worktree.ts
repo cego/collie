@@ -922,7 +922,7 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       from = path.join(opts.stateDir, "renovate-repositories", Bun.hash(repository).toString(16));
-      const host = Str.split(project, "/")[0]!;
+      const host = Str.split(project, "/")[0];
       const forge = forgeOfHost(host, opts.gitlabHost);
       if (forge === null) return { ...here, refused: `${host} is neither GitHub nor GitLab` };
       if (!(yield* fs.exists(path.join(from, ".git")))) {

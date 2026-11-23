@@ -186,7 +186,7 @@ afterEach(() => runEffect(rig.close()));
 test("the one thread on a one-agent endpoint is this agent's, checked against its cwd", () =>
   runEffect(
     Effect.gen(function* () {
-      const bound = yield* withCodex(ctx().endpoint!, (client) => boundThread(client, fake.cwd));
+      const bound = yield* withCodex(ctx().endpoint, (client) => boundThread(client, fake.cwd));
       expect(bound).toBe("thread-1");
     }),
   ));
@@ -215,7 +215,7 @@ test("the TUI's own ephemeral thread is not a second agent to choose between", (
       fake.threads = ["thread-1", "thread-helper"];
       fake.ephemeral = ["thread-helper"];
 
-      const bound = yield* withCodex(ctx().endpoint!, (client) => boundThread(client, fake.cwd));
+      const bound = yield* withCodex(ctx().endpoint, (client) => boundThread(client, fake.cwd));
       expect(bound).toBe("thread-1");
       expect(yield* codex.usage(ctx())).toBe(400_000);
     }),
@@ -227,7 +227,7 @@ test("the sub-agents an agent spawned are its own, not rival threads", () =>
       fake.threads = ["thread-1", "thread-review", "thread-spec"];
       fake.parents = { "thread-review": "thread-1", "thread-spec": "thread-1" };
 
-      const bound = yield* withCodex(ctx().endpoint!, (client) => boundThread(client, fake.cwd));
+      const bound = yield* withCodex(ctx().endpoint, (client) => boundThread(client, fake.cwd));
       expect(bound).toBe("thread-1");
       expect(yield* codex.ready!(ctx())).toBe(true);
     }),

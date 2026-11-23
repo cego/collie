@@ -102,7 +102,7 @@ test("a Flow-only read preserves the record's Flow without waiting for its attac
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const { dir, runs } = yield* stateOf(1);
-      const run = runs[0]!;
+      const run = runs[0];
       const clock = yield* TestClock.make();
       yield* Effect.gen(function* () {
         const before = yield* makeRunModel(dir, "installation");
@@ -136,7 +136,7 @@ test("a bare tick reads none of a record's files and sends nothing; a change sen
       const { dir, runs } = yield* stateOf(3);
       const reads: Array<string> = [];
       const model = yield* loggedModel(dir, reads);
-      const run = runs[0]!;
+      const run = runs[0];
       const poked = yield* Queue.unbounded<void>();
       const frames = yield* Queue.unbounded<Frame>();
       const builds = yield* Queue.unbounded<number>();
@@ -303,7 +303,7 @@ test("a write while a record's first parts are read is sent once they are", () =
       const fs = yield* FileSystem.FileSystem;
       const { dir, runs } = yield* stateOf(1);
       const model = yield* makeRunModel(dir, "installation");
-      const run = runs[0]!;
+      const run = runs[0];
       const writes = yield* PubSub.unbounded<void>();
       const reading = yield* Deferred.make<void>();
       const written = yield* Deferred.make<void>();

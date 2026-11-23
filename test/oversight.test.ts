@@ -877,7 +877,7 @@ test("a finishing Run runs what it was granted, and offers what is still blockin
         "src-only:open",
       ]);
       const key = yield* herdOf(herd.socketPath);
-      const proposed = yield* readProposals(key!).pipe(Effect.provide(recordsAt(dir)));
+      const proposed = yield* readProposals(key).pipe(Effect.provide(recordsAt(dir)));
       expect(
         Arr.map(proposed, (one) => (one.kind === "proposal" ? one.interpretation : one.kind)),
       ).toEqual(["r1 finished with 1 blocking constraint(s) still open"]);
@@ -936,7 +936,7 @@ test("a host that finds its Herd while a Run finishes offers that Run's blocking
       ).pipe(Effect.provideService(Clock.Clock, clock));
 
       const key = yield* herdOf(socketPath);
-      const proposed = yield* readProposals(key!).pipe(Effect.provide(recordsAt(dir)));
+      const proposed = yield* readProposals(key).pipe(Effect.provide(recordsAt(dir)));
       expect(
         Arr.map(proposed, (one) => (one.kind === "proposal" ? one.interpretation : one.kind)),
       ).toEqual(["r1 finished with 1 blocking constraint(s) still open"]);
@@ -948,7 +948,7 @@ test("a Run with relatives stands for the cross-run check, and one leaving unans
     Effect.gen(function* () {
       const socketPath = `${rig.root}/herd.sock`;
       const key = yield* herdOf(socketPath);
-      const elections = yield* electionsPath(dir, key!);
+      const elections = yield* electionsPath(dir, key);
       const said = () =>
         readElections(elections).pipe(
           Effect.map((lines) =>
@@ -1140,7 +1140,7 @@ const judgedAcross = (
   checkouts: Readonly<Record<string, string>> = {},
 ) =>
   Effect.gen(function* () {
-    const key = (yield* herdOf(`${rig.root}/herd.sock`))!;
+    const key = yield* herdOf(`${rig.root}/herd.sock`);
     yield* standForElection(
       {
         ...watchedAt("r1"),
@@ -1306,7 +1306,7 @@ test("when no related Run's work can be shown, the judge is not asked and nothin
         yield* intended("r1", [R1_ONLY]);
         yield* intended("r2", [SMALL]);
         const deps = yield* crossRunJudge([]);
-        const key = (yield* herdOf(`${rig.root}/herd.sock`))!;
+        const key = yield* herdOf(`${rig.root}/herd.sock`);
         yield* standForElection(
           { ...watchedAt("r1"), herd: key, family: ["r1", "r2"] },
           "finish",

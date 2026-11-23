@@ -52,7 +52,7 @@ const GitlabJobs = Schema.Array(Schema.Struct({ name: Schema.String }));
 
 const gitlabCli = Effect.fn("benchmark.gitlabCli")(function* (ref: MrRef, name: string) {
   const project = ref.project!;
-  const host = Str.split(project, "/")[0]!;
+  const host = Str.split(project, "/")[0];
   const path = encodeURIComponent(pipe_(project, Str.slice(host.length + 1)));
   yield* run("glab", ["--version"]);
   if ((yield* run("glab", ["auth", "status", "--hostname", host])).code !== 0)
@@ -107,7 +107,7 @@ const githubDetailsCli = Effect.fn("benchmark.githubDetailsCli")(function* (ref:
 
 const gitlabDetailsCli = Effect.fn("benchmark.gitlabDetailsCli")(function* (ref: MrRef) {
   const project = ref.project!;
-  const host = Str.split(project, "/")[0]!;
+  const host = Str.split(project, "/")[0];
   yield* run("glab", ["--version"]);
   if ((yield* run("glab", ["auth", "status", "--hostname", host])).code !== 0)
     return yield* Effect.die(`glab is not logged in to ${host}`);

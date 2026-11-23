@@ -602,7 +602,7 @@ export const answerWith = Effect.fn("Toolkit.answer")(function* <
 >(toolkit: Toolkit.WithHandler<Tools>, name: string, input: JsonObject) {
   if (!Rec.has(toolkit.tools, name)) return "";
   // WARNING: `handle` decodes it, which is what makes untrusted JSON a tool's parameters.
-  const results = yield* toolkit.handle(name, input as never, undefined, STRICT);
+  const results = yield* toolkit.handle(name, input, undefined, STRICT);
   const last = yield* Stream.runLast(results);
   if (Option.isNone(last)) return "";
   const result: unknown = last.value.result;

@@ -1773,7 +1773,7 @@ const answerAs = (as: Declaration, runId: string, decision: string, value: strin
     }),
   ).pipe(Effect.orDie);
 
-const waitingOnTheHuman = (receipts: string) => Str.split(receipts, "### Sent")[0]!;
+const waitingOnTheHuman = (receipts: string) => Str.split(receipts, "### Sent")[0];
 
 test("a Run waiting on a Choice says what it asks, every option, and how to answer it", () =>
   inWorld(
@@ -1854,7 +1854,7 @@ test("each answer says who gave it, the newest five are listed, and an unrecorde
       }).pipe(Effect.provide(recordsAt(stateDir)), Effect.orDie);
 
       const said = yield* call("collie_run", { run: run.id });
-      const answered = Str.split(Str.split(said, "### Answered\n\n")[1]!, "\n\n")[0]!;
+      const answered = Str.split(Str.split(said, "### Answered\n\n")[1]!, "\n\n")[0];
       expect(Str.split(answered, "\n")).toHaveLength(5);
       expect(answered).toContain('- "q6": yes — desktop on mk-laptop at ');
       expect(answered).toContain('- "q5": yes — cli at ');
@@ -1863,7 +1863,7 @@ test("each answer says who gave it, the newest five are listed, and an unrecorde
       expect(answered).toContain('- "q2": yes — who answered is not recorded');
       expect(answered).not.toContain('"q1"');
       const flow = yield* Schema.decodeEffect(Schema.fromJsonString(Flow))(
-        Str.split(Str.split(said, "```json\n")[1]!, "\n```")[0]!,
+        Str.split(Str.split(said, "```json\n")[1]!, "\n```")[0],
       );
       expect(Arr.map(flow.lanes[0]!.nodes, (node) => [node.id, node.state])).toEqual([
         ["q1", "done"],

@@ -58,10 +58,10 @@ export const cronWords = (cron: string) => {
   // WARNING: only common five-field shapes; anything else is shown as its expression.
   const [minute, hour, day, month, weekday, ...rest] = Str.split(Str.trim(cron), /\s+/);
   if (rest.length > 0 || weekday === undefined || day !== "*" || month !== "*") return null;
-  const step = /^\*\/(\d+)$/.exec(minute!)?.[1];
+  const step = /^\*\/(\d+)$/.exec(minute)?.[1];
   if (step !== undefined && hour === "*" && weekday === "*") return `every ${step} minutes`;
-  if (!NUMBER.test(minute!)) return null;
-  const mm = pipe(minute!, Str.padStart(2, "0"));
+  if (!NUMBER.test(minute)) return null;
+  const mm = pipe(minute, Str.padStart(2, "0"));
   if (hour === "*" && weekday === "*") return `every hour at :${mm}`;
   if (!NUMBER.test(hour!)) return null;
   const at = `at ${pipe(hour!, Str.padStart(2, "0"))}:${mm}`;

@@ -137,7 +137,7 @@ const settled = (runId: string, status: string) =>
 const loaded = (name: string) =>
   Registry.pipe(
     Effect.flatMap((registry) => registry.load(`${fixtures}/${name}.workflow.ts`)),
-    Effect.map((generation) => generation!),
+    Effect.map((generation) => generation),
   );
 
 const write = (path: string, text: string) =>

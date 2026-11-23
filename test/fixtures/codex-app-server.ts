@@ -26,7 +26,7 @@ const config = new Map<string, Schema.Json>();
 for (const [at, arg] of Bun.argv.entries())
   if (Bun.argv[at - 1] === "-c") {
     const [key, ...value] = Str.split(arg, "=");
-    config.set(key!, flow(Schema.decodeResult(Json), Result.getOrThrow)(Arr.join(value, "=")));
+    config.set(key, flow(Schema.decodeResult(Json), Result.getOrThrow)(Arr.join(value, "=")));
   }
 const server = "collie_desktop";
 
