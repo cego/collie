@@ -784,6 +784,8 @@ const dialListener = (
     ws.onerror = () => resume(Effect.succeed("refused"));
   });
 
+const TICKET_LIFE = "5 seconds";
+
 test("dial-back tickets are single-use, expire, belong to one installation, and a control link requires its secret", () =>
   runEffect(
     twoMachines(
@@ -856,12 +858,13 @@ test("dial-back tickets are single-use, expire, belong to one installation, and 
             ),
           );
           const expires = yield* Deferred.await(expired);
-          yield* Effect.sleep("10 seconds");
+          yield* Effect.sleep(TICKET_LIFE);
           expect(yield* dialListener(port, ca, headers, `/reverse?ticket=${expires}`)).toBe(
             "refused",
           );
         }),
       [],
+      { env: { COLLIE_PEER_TICKET_LIFE: TICKET_LIFE } },
     ),
   ));
 

@@ -59,6 +59,7 @@ export const twoMachines = <A, E>(
   modules: ReadonlyArray<string>,
   options: {
     readonly ports?: Readonly<Record<string, number>>;
+    readonly env?: Readonly<Record<string, string>>;
     readonly before?: (
       ports: Readonly<Record<string, string>>,
     ) => Effect.Effect<void, never, PlatformServices | Scope.Scope>;
@@ -126,6 +127,7 @@ export const twoMachines = <A, E>(
           COLLIE_HOST: asCommand(command),
           COLLIE_PEER_PORT: String(options.ports?.[name] ?? 0),
           ...suite,
+          ...options.env,
           HC_SOCKET: `${dir}/hc.sock`,
         };
         yield* fs.writeFileString(coreLog, "");
