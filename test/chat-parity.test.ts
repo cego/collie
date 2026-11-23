@@ -1,7 +1,17 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
-import { Effect, Fiber, FileSystem, Option, Schema, Stream, flow, Result } from "effect";
+import {
+  ConfigProvider,
+  Effect,
+  Fiber,
+  FileSystem,
+  Option,
+  Schema,
+  Stream,
+  flow,
+  Result,
+} from "effect";
 import { hostname } from "node:os";
 import { afterAll, expect, test } from "bun:test";
 import { app } from "../src/collie";
@@ -402,6 +412,9 @@ test("the operations are the command tree's, not a list somebody kept up to date
   expect(Arr.filter(found, (leaf) => !covered.has(leaf))).toEqual([]);
 });
 
+// WARNING: under bun test the default host command runs the test file, which takes seconds to fail per read.
+const noHostStarts = ConfigProvider.fromEnv({ env: { ...process.env, COLLIE_HOST: "/bin/false" } });
+
 test("every operation a human has, native chat has a route to", () =>
   runEffect(
     Effect.gen(function* () {
@@ -417,7 +430,9 @@ test("every operation a human has, native chat has a route to", () =>
         if (route.route === "read") {
           const tool = toolNamed(route.tool);
           expect([operation, tool !== null]).toEqual([operation, true]);
-          const answer = yield* tool!.call(env, route.input ?? {});
+          const answer = yield* tool!
+            .call(env, route.input ?? {})
+            .pipe(Effect.provideService(ConfigProvider.ConfigProvider, noHostStarts));
           expect([operation, answer.length > 0]).toEqual([operation, true]);
           expect([operation, pipe_(answer, Str.startsWith("Collie could not read that"))]).toEqual([
             operation,
