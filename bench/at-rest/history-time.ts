@@ -1,4 +1,4 @@
-/* oxlint-disable effecttsgo/node-builtin-import, effecttsgo/prefer-effect-array, effecttsgo/prefer-effect-string, effecttsgo/global-date, no-restricted-imports, no-restricted-globals -- offline rebasing of the benchmark's private history. */
+/* oxlint-disable effecttsgo/node-builtin-import, effecttsgo/prefer-effect-string, effecttsgo/global-date, no-restricted-globals -- offline rebasing of the benchmark's private history. */
 import { Database } from "bun:sqlite";
 import { readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
 

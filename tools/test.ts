@@ -1,6 +1,5 @@
 import * as Arr from "effect/Array";
 // WARNING: Effect has no CPU-count or shared system-temporary-directory service.
-// oxlint-disable-next-line effecttsgo/node-builtin-import -- Effect has no CPU-count or shared system-temporary-directory service.
 import { availableParallelism, tmpdir } from "node:os";
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import * as BunServices from "@effect/platform-bun/BunServices";
@@ -36,7 +35,6 @@ const args = Arr.drop(Bun.argv, 2);
 const say = Console.error;
 
 const suiteEnv = () => {
-  // oxlint-disable-next-line effecttsgo/process-env -- Replay the actual subprocess environment; Config exposes named settings, not this record.
   const { [LIVE_HARNESSES]: _, ...rest } = process.env;
   return rest;
 };

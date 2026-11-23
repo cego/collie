@@ -1,4 +1,4 @@
-/* oxlint-disable effecttsgo/node-builtin-import, effecttsgo/prefer-schema-over-json, no-restricted-imports -- offline preparation regression with a fake installer. */
+/* oxlint-disable effecttsgo/node-builtin-import -- offline preparation regression with a fake installer. */
 import { strictEqual } from "node:assert";
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { stringifyJson } from "../../src/json";

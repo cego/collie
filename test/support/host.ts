@@ -61,6 +61,7 @@ type HostReply = typeof HostReply.Type;
 
 export interface Host {
   readonly ask: (request: HostRequest) => Effect.Effect<HostReply>;
+  // WARNING: Tell without waiting: a host that is about to die never answers.
   readonly tell: (request: HostRequest) => Effect.Effect<void>;
   readonly child: ChildProcessSpawner.ChildProcessHandle;
   readonly until: (
@@ -170,6 +171,7 @@ export const openHost = Effect.fn("HostTest.open")(function* (
   };
   const child = yield* spawner.spawn(
     ChildProcess.make(executable, [...prefix, "host", "--dir", state], {
+      // WARNING: Outside the checkout on purpose: nothing here may resolve through its node_modules.
       cwd: world.project,
       env,
       extendEnv: false,
@@ -213,6 +215,7 @@ export const openHost = Effect.fn("HostTest.open")(function* (
           : client.control({ runId: target, control: name, set, request })
       ).pipe(Effect.result);
       if (done._tag === "Failure") return { ok: false, op, detail: sentenceOf(done.failure) };
+      // WARNING: A control over work no host runs is recorded as an intent, never a confirmation.
       return { ok: op !== "resume" || done.success.applied, op, detail: done.success.detail };
     });
 
@@ -247,6 +250,7 @@ export const openHost = Effect.fn("HostTest.open")(function* (
         }
 
         case "start": {
+          // WARNING: The request is the suite's run id, so a retried start is the same Run.
           const started = yield* client
             .start({
               project: world.project,
@@ -447,25 +451,26 @@ export const openHost = Effect.fn("HostTest.open")(function* (
   return returned;
 });
 
+// WARNING: A host outlives every client on purpose, so a suite must stop the host it started.
 export const stopHost = Effect.fn("HostTest.stopHost")(function* (dir: string) {
+  // WARNING: A host that lost the start race may still be booting, and takes the lock once its owner has gone.
   const stopped = new Map<number, LockHolder>();
   yield* until(
     () =>
-      ownerOf(dir).pipe(
-        Effect.tap((owner) =>
-          Effect.sync(() => {
-            if (owner === null || stopped.has(owner.pid)) return;
-            stopped.set(owner.pid, owner);
-            try {
-              process.kill(owner.pid, "SIGTERM");
-            } catch {}
-          }),
-        ),
-        Effect.flatMap((owner) =>
-          Effect.forEach([...stopped.values()], holderLives).pipe(
-            Effect.map((lives) => owner === null && Arr.every(lives, (live) => !live)),
+      Effect.zipWith(
+        ownerOf(dir).pipe(
+          Effect.tap((owner) =>
+            Effect.sync(() => {
+              if (owner === null || stopped.has(owner.pid)) return;
+              stopped.set(owner.pid, owner);
+              try {
+                process.kill(owner.pid, "SIGTERM");
+              } catch {}
+            }),
           ),
         ),
+        Effect.suspend(() => Effect.forEach([...stopped.values()], holderLives)),
+        (owner, lives) => owner === null && Arr.every(lives, (live) => !live),
       ),
     (gone) => gone,
   );

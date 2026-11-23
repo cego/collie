@@ -74,7 +74,7 @@ writeFileSync(
 );
 process.env.COLLIE_PROC = proc;
 
-// oxlint-disable-next-line anti-slop/no-unknown-parameters, anti-slop/no-unknown-returns -- Bun overloads have different argument/result types; the forwarding shim treats them as opaque.
+// oxlint-disable-next-line anti-slop/no-unknown-parameters, quality/no-unknown-returns -- Bun overloads have different argument/result types; the forwarding shim treats them as opaque.
 type Spawn = (first: unknown, options?: { env?: unknown }) => unknown;
 const inherit = <F extends typeof Bun.spawn | typeof Bun.spawnSync>(spawn: F) => {
   // WARNING: only Bun's spawn functions enter this adapter, with their original receiver-free arguments.

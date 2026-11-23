@@ -1627,7 +1627,13 @@ fake.
 types' freshness (`rune-types:check`) in parallel, then tests after all four pass. Keeping those phases separate avoids CPU contention with the subprocess-heavy tests.
 The individual scripts in `package.json` still work for focused feedback.
 
-Lint enables Effect's correctness, effect-native, and strict presets. Effect findings
+Lint is `oxlint.config.ts`: the `@cloudflare/oxlint-config` preset spread in first, which
+brings nkzw's rules and its anti-slop `quality/*` rules, then Effect's correctness,
+effect-native and strict presets and landmines' recommended rules. The preset turns off
+oxlint's default `correctness` category, so the default rules it does not list are kept by
+name at their old `warn`. The vendored anti-slop plugin in `tools/oxlint/anti-slop/` stays
+for the six rules the preset has no counterpart for. A TypeScript config needs Node.js
+22.18 or later to run oxlint; CI's Ubuntu image has it. Effect findings
 fail the check, including native collection helpers, synchronous schema decoders,
 untyped error channels, and resources started outside their Effect context. `lint:ts`
 uses `effect-tsgo oxlint` directly so lint cannot silently lose Effect rules when a

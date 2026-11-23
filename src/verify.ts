@@ -73,6 +73,7 @@ type Services =
 
 const git = (args: string[], cwd: string) => shell("git", args, cwd);
 
+// WARNING: untracked content counts on purpose, or a pass could rest on a file nobody committed.
 export const fingerprint = (cwd: string) =>
   Effect.map(treeOf(cwd), ({ head_sha, fingerprint, unmeasured }) =>
     unmeasured === undefined ? { head_sha, fingerprint } : { head_sha, fingerprint, unmeasured },
@@ -134,6 +135,7 @@ export const treeOf: (cwd: string) => Effect.Effect<
   const branch = !born || named === undefined ? null : named === "(detached)" ? "HEAD" : named;
   const dirty = entries !== "";
 
+  // WARNING: git status names paths from the repository root, not from cwd.
   const root = place?.root ?? cwd;
   let bytes = 0;
   for (const relative of unstagedPaths(entries)) {
@@ -163,6 +165,7 @@ const changedSubmodules = (entries: string) => {
   const found: string[] = [];
   let original = false;
   for (const record of Str.split(entries, "\0")) {
+    // WARNING: a rename's original path is the record after it.
     if (original) {
       original = false;
       continue;
@@ -244,8 +247,10 @@ const stageAndWrite = Effect.fn("Verify.stageAndWrite")(
         Effect.gen(function* () {
           const env = { GIT_INDEX_FILE: path.join(scratch, "index") };
           if (yield* fs.exists(index)) {
+            // WARNING: read the index's time before copying, or a write meanwhile dates the copy later.
             const written = (yield* fs.stat(index)).mtime;
             yield* fs.copyFile(index, env.GIT_INDEX_FILE);
+            // WARNING: git trusts a stat-matching entry unless the index is no newer than the file, so the copy keeps the index's own time.
             if (Option.isSome(written)) {
               const at = Math.floor(written.value.getTime() / 1000);
               yield* fs.utimes(env.GIT_INDEX_FILE, at, at);
@@ -274,6 +279,7 @@ const workingTree = (cwd: string, index: string) =>
     ),
   );
 
+// WARNING: an unmeasured tree never equals another, or every verification over the size cap would pass.
 export const sameTree = (
   one: Pick<Snapshot, "fingerprint">,
   other: Pick<Snapshot, "fingerprint">,
@@ -289,6 +295,7 @@ export function resultOf(
   expect: Verification["expect"] = "pass",
 ) {
   if (!sameTree(start, end)) return "unstable";
+  // WARNING: the exit code alone is never the verdict: an unstable tree says nothing about either expectation.
   return (exit === 0) === (expect === "pass") ? "pass" : "fail";
 }
 
@@ -369,6 +376,7 @@ const identityOf = (executable: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const real = yield* fs.realPath(executable);
+    // WARNING: ctime, not mtime: an extractor can set mtime back, as npm does.
     const info = yield* Effect.tryPromise(() => Bun.file(real).stat());
     const key = Arr.join(
       Arr.map([real, info.dev, info.ino, info.size, info.ctimeMs, info.mtimeMs], (part) =>
@@ -403,6 +411,7 @@ const identityLine = (name: string, at: string) =>
     }),
   );
 
+// WARNING: a file rewritten in place inside a package goes unseen: only entry identity is read.
 const installedAt = Effect.fn("Verify.installedAt")(function* (root: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -440,6 +449,7 @@ export const environmentOf = Effect.fn("Verify.environmentOf")(
   Effect.orElseSucceed(() => null),
 );
 
+// WARNING: no time limit: a verification is superseded by a changed tree, it never expires.
 export function staleAgainst(record: Verification, now: Snapshot) {
   return !sameTree(record.end, now);
 }
@@ -454,6 +464,7 @@ export const appendVerification = Effect.fn("Verify.append")(function* (
   yield* appendRunJournal(verificationsPath(runDir), VerificationJson, record);
 });
 
+// WARNING: set while Collie's own check runs, since its agents are idle then and a card would show a stale one.
 export const VERIFYING = "verifying";
 
 const VerifyingSchema = Schema.Struct({
@@ -500,6 +511,7 @@ export const readProofsOf = Effect.fn("Verify.readProofsOf")(function* (
 });
 const ProofJson = Schema.fromJsonString(ProofSchema);
 
+// WARNING: a command run outside the Run would attach its real result to the wrong tree.
 export const insideRun = Effect.fn("Verify.insideRun")(function* (
   cwd: string,
   run: { readonly cwd: string; readonly worktree: string | null },
@@ -523,6 +535,7 @@ export const resolveExecutable = Effect.fn("Verify.resolveExecutable")(function*
 ) {
   const path = yield* Path.Path;
   if (pipe(executable, Str.includes(path.sep))) return path.resolve(cwd, executable);
+  // WARNING: Bun.which, not `command -v`: command is a shell builtin, and no check runs through a shell.
   return Bun.which(executable, { PATH: Bun.env.PATH ?? "" });
 });
 
@@ -549,6 +562,7 @@ export interface Collected {
   readonly expect?: "pass" | "fail";
   readonly pass?: CheckPass;
   readonly log?: string;
+  // WARNING: a rerun passes only if it ran alone and passed; at the baseline, a test the base lacks passes.
   readonly test?: FailedTest;
   readonly own?: boolean;
 }
@@ -575,6 +589,7 @@ export const startCheck = Effect.fn("Verify.startCheck")(function* (
   let already = 0;
   if (what.log !== undefined) {
     yield* fs.makeDirectory(path.dirname(what.log), { recursive: true }).pipe(Effect.orDie);
+    // WARNING: never emptied: a check taken over from another host may already have written to it.
     yield* fs.writeFileString(what.log, "", { flag: "a" }).pipe(Effect.orDie);
   }
   const toLog = (chunk: string) => {
@@ -628,6 +643,7 @@ export const startCheck = Effect.fn("Verify.startCheck")(function* (
     const pid = yield* handle.pid;
     if (pid !== null) yield* echo.said(`"${what.name}" started, pid ${pid}`);
   }
+  // WARNING: only each stream's tail is kept, so a long-running check cannot grow memory.
   const drain = (stream: typeof handle.stdout, shown?: (text: string) => Effect.Effect<void>) =>
     stream.pipe(
       Stream.decodeText(),
@@ -735,10 +751,13 @@ const settleCheck = Effect.fn("Verify.settleCheck")(function* (
 export const collect = (runDir: string, what: Collected, echo?: Echo) =>
   startCheck(runDir, what, echo).pipe(
     Effect.flatMap((started) =>
-      Effect.flatMap(started.exit, (exit) =>
-        Effect.map(readCheck(started.id, what.name), (read) => [read, exit] as const),
+      Effect.zipWith(
+        started.exit,
+        readCheck(started.id, what.name),
+        (exit, read) => [read, exit] as const,
       ),
     ),
+    // WARNING: the Scope ends the command before the tree is read again.
     Effect.scoped,
     Effect.flatMap(([read, exit]) => settleCheck(read, exit)),
     Effect.withSpan("Verify.collect"),
@@ -763,6 +782,7 @@ export type CheckRun = {
   readonly worktree: string | null;
 };
 
+// WARNING: runs outside any agent's permission rules, and only for one of the Run's own checks.
 export const runApproved = Effect.fn("Verify.runApproved")(function* (
   runDir: string,
   run: CheckRun,

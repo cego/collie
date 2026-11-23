@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
 
-// oxlint-disable-next-line effecttsgo/node-builtin-import -- BunSocket exposes WebSocket, while this protocol needs a Unix socket's write-half close.
 import { connect } from "node:net";
 import * as Arr from "effect/Array";
 import * as Config from "effect/Config";
@@ -41,7 +40,6 @@ socket.on("connect", () => {
     Schema.encodeUnknownResult(CallJson)({
       argv: Arr.drop(process.argv, 2),
       cwd: process.cwd(),
-      // oxlint-disable-next-line effecttsgo/process-env -- Replay the caller's exact environment; Config provides named settings, not this record.
       env: process.env,
     }),
   );

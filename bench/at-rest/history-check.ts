@@ -1,4 +1,4 @@
-/* oxlint-disable effecttsgo/node-builtin-import, no-restricted-imports -- isolated snapshot checks. */
+/* oxlint-disable effecttsgo/node-builtin-import -- isolated snapshot checks. */
 import { Database } from "bun:sqlite";
 import { deepStrictEqual } from "node:assert";
 import {

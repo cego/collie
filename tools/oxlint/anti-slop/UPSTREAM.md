@@ -8,21 +8,19 @@
 
 ## Local policy retained
 
-- `.oxlintrc.json` keeps the existing plugin paths, ignores, severities, and enabled rules unchanged.
-- The locally added ignore for `tools/build.ts` remains unchanged.
-- Existing enabled rules remain enabled, including only `anti-slop-effect/no-service-constructor-imports` from the Effect plugin.
+`oxlint.config.ts` takes anti-slop's general rules from `@cloudflare/oxlint-config`'s
+`quality/*` plugin. This copy is wired only for the rules the preset has no counterpart for:
 
-## Pending rule approvals
+- `anti-slop/no-module-mocking`
+- `anti-slop/no-runtime-typeof`
+- `anti-slop/no-shape-in-symbol-names`
+- `anti-slop/no-unknown-parameters`
+- `anti-slop/require-safety-comment-for-type-assertion`, with the `WARNING` marker
+- `anti-slop-effect/no-service-constructor-imports`
 
-The following upstream implementations are vendored but not enabled:
-
-- `anti-slop/no-array-filter-map`
-- `anti-slop/no-reduce-accumulator-copy`
-- `anti-slop/require-readable-spacing`
-- `anti-slop-effect/no-manual-effect-error-tag`
-- `anti-slop-effect/no-manual-tag-comparison`
-- `anti-slop-effect/no-manual-tagged-construction`
-- `anti-slop-effect/prefer-effect-match`
+The Effect plugin's other vendored rules (`no-manual-effect-error-tag`,
+`no-manual-tag-comparison`, `no-manual-tagged-construction`, `prefer-effect-match`) and
+`anti-slop/require-readable-spacing` are not enabled.
 
 ## Verification evidence
 

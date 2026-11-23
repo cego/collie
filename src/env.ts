@@ -174,7 +174,6 @@ export const withoutHerdrOne = (env: Readonly<Record<string, string | undefined>
   Rec.filter(env, (_, name) => !pipe(name, Str.startsWith("HERDR_")));
 
 export const leaveLauncher = () => {
-  // oxlint-disable-next-line effecttsgo/process-env -- Children are given the process environment, not an Effect Config.
   const env = process.env;
   const kept = withoutLauncher(env);
   for (const name of Struct.keys(env)) if (!(name in kept)) delete env[name];

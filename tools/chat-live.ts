@@ -133,7 +133,6 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
   yield* writeConfigValue(userDir, "chat_harness", harness);
 
   const env = readEnv({
-    // oxlint-disable-next-line effecttsgo/process-env, effecttsgo/process-env-in-effect -- The probe replays the caller's complete environment into its disposable configuration.
     ...process.env,
     COLLIE_STATE_DIR: stateDir,
     COLLIE_USER_DIR: userDir,

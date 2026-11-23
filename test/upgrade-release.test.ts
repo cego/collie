@@ -196,19 +196,20 @@ test("placements at once take turns, so the release is wholly one of them", () =
       const other = `${rig.root}/other/release`;
       yield* fs.copy(tree, other);
       yield* write(`${other}/personas/extra.md`, "only in the other\n");
+      // WARNING: sized so the two placements overlap.
       for (let file = 0; file < 1500; file++) {
         yield* write(`${tree}/bulk/${file}.md`, `${file}\n`);
         yield* write(`${other}/other/${file}.md`, `${file}\n`);
       }
 
-      const both = yield* Effect.promise(() =>
-        Promise.all(
-          Arr.map(
-            [
-              [tree, "1.0.0"],
-              [other, "2.0.0"],
-            ],
-            ([from, version]) =>
+      const both = yield* Effect.forEach(
+        [
+          [tree, "1.0.0"],
+          [other, "2.0.0"],
+        ],
+        ([from, version]) =>
+          Effect.promise(
+            () =>
               Bun.spawn([
                 "bun",
                 `${import.meta.dir}/fixtures/place-release.ts`,
@@ -218,7 +219,7 @@ test("placements at once take turns, so the release is wholly one of them", () =
                 version!,
               ]).exited,
           ),
-        ),
+        { concurrency: "unbounded" },
       );
 
       expect(both).toEqual([0, 0]);

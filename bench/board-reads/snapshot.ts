@@ -1,4 +1,4 @@
-/* oxlint-disable effecttsgo/node-builtin-import, effecttsgo/global-console, no-restricted-globals -- copies a state directory for an offline benchmark, never writing to it. */
+/* oxlint-disable effecttsgo/node-builtin-import, effecttsgo/global-console -- copies a state directory for an offline benchmark, never writing to it. */
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 

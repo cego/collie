@@ -6,7 +6,6 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { createServer, isIP, type Server, type Socket } from "node:net";
 // oxlint-disable-next-line effecttsgo/node-builtin-import -- effect/crypto has no X.509 certificate inspection.
-// WARNING: effect/crypto cannot inspect X.509 certificates, so node:crypto is imported for it.
 import { X509Certificate } from "node:crypto";
 import { hostname, networkInterfaces } from "node:os";
 import type { ServerWebSocket } from "bun";

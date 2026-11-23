@@ -80,7 +80,6 @@ export const loopbackTools = Effect.fn("FlockTools.loopback")(function* (context
       Effect.andThen(
         Effect.sync(() => {
           // WARNING: the foreign MCP handler needs an AbortSignal for the human's pending click.
-          // oxlint-disable-next-line effecttsgo/abort-controller-in-effect
           turn = new AbortController();
         }),
       ),

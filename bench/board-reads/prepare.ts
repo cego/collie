@@ -1,4 +1,4 @@
-/* oxlint-disable effecttsgo/node-builtin-import, effecttsgo/global-console, no-restricted-globals -- prepares an offline benchmark's copy, never a host's live state. */
+/* oxlint-disable effecttsgo/node-builtin-import, effecttsgo/global-console -- prepares an offline benchmark's copy, never a host's live state. */
 // WARNING: opened once, so a tree that imports records has done so before any sample.
 import { chmodSync, cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 

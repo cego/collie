@@ -5138,7 +5138,6 @@ const spawnHost = Effect.fn("Host.spawn")(function* (
         {
           cwd: dir,
           // WARNING: A client started by Desktop may carry its launcher's LD_PRELOAD.
-          // oxlint-disable-next-line effecttsgo/process-env -- A client started by Desktop may carry its launcher's LD_PRELOAD.
           env: withoutLauncher(
             withoutHerdrOne({
               ...process.env,

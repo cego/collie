@@ -222,7 +222,8 @@ processes and servers at its edges and MSW for HTTP, never a mock, a stubbed glo
 spy that changes behaviour. No Playwright and no test that drives a built app or a browser — a
 behaviour of the view is covered by testing the logic it renders.
 
-`bun run lint` holds the code to [landmines](https://github.com/interfere-inc/landmines):
+`bun run lint` runs `oxlint.config.ts`, the `@cloudflare/oxlint-config` preset with Effect's
+rules, and holds the code to [landmines](https://github.com/interfere-inc/landmines):
 no prose comments (only directives, a one-line `// WARNING:` for a recurring footgun, which
 is also how a type assertion states its invariant, and TSDoc on the SDK in `src/sdk.ts`);
 no explicit return types: where a contract matters, a typed variable holds the function

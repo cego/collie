@@ -41,7 +41,6 @@ export const CHILD_CWD = homedir();
 export const childEnv = () => withoutLauncher(withoutHerdrOne(desktopEnv()), BIN);
 
 // WARNING: children inherit the process environment, not an Effect Config.
-// oxlint-disable-next-line effecttsgo/process-env -- Children inherit the process environment, not an Effect Config.
 const desktopEnv = () => process.env;
 
 // WARNING: Bun's own lookup uses the PATH it started with.

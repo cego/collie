@@ -1,4 +1,4 @@
-/* oxlint-disable effecttsgo/async-function, effecttsgo/global-console, effecttsgo/global-console-in-effect, effecttsgo/global-date, effecttsgo/global-date-in-effect, effecttsgo/node-builtin-import, effecttsgo/prefer-effect-array, effecttsgo/prefer-effect-record, effecttsgo/prefer-effect-string, effecttsgo/prefer-schema-over-json, no-restricted-globals, no-restricted-properties -- the benchmark's drivers speak to processes, files and /proc on their own terms, as record-open's do. */
+/* oxlint-disable effecttsgo/prefer-effect-string -- the benchmark's drivers speak to processes, files and /proc on their own terms, as record-open's do. */
 
 // WARNING: host.db keeps absolute paths, so each builder uses its own sample's paths.
 import { tmpdir } from "node:os";

@@ -1,4 +1,4 @@
-/* oxlint-disable effecttsgo/node-builtin-import, no-restricted-imports -- the benchmark reads its isolated host's files. */
+/* oxlint-disable effecttsgo/node-builtin-import -- the benchmark reads its isolated host's files. */
 import type { Database } from "bun:sqlite";
 import { readFileSync } from "node:fs";
 import { Effect } from "effect";

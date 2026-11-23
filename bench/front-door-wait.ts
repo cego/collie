@@ -1,4 +1,3 @@
-// oxlint-disable-next-line effecttsgo/node-builtin-import -- Shares record-open's isolated host world.
 import { homedir } from "node:os";
 import { Clock, Console, Effect, FileSystem, Schedule, Schema, Stream } from "effect";
 import * as Str from "effect/String";
@@ -23,7 +22,6 @@ await runEffect(
       const fs = yield* FileSystem.FileSystem;
       yield* fs.remove(live, { recursive: true, force: true });
       yield* enterWorld;
-      // oxlint-disable-next-line effecttsgo/process-env-in-effect -- Only the isolated host inherits this setting.
       delete Bun.env.OTEL_EXPORTER_OTLP_ENDPOINT;
       yield* Effect.addFinalizer(() =>
         stopHost(world.state).pipe(

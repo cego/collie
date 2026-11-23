@@ -1,4 +1,4 @@
-/* oxlint-disable effecttsgo/node-builtin-import, effecttsgo/global-console, no-restricted-globals, effecttsgo/prefer-effect-array, effecttsgo/prefer-schema-over-json -- an offline benchmark's driver, on its own copy of a state directory. */
+/* oxlint-disable effecttsgo/global-console, no-restricted-globals, effecttsgo/prefer-effect-array -- an offline benchmark's driver, on its own copy of a state directory. */
 import { Effect, ManagedRuntime } from "effect";
 import { buildBoard } from "../../src/board";
 import { readEnv } from "../../src/env";

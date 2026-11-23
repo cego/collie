@@ -68,7 +68,6 @@ if (import.meta.main)
       }
       const child = Bun.spawn(["bun", "run", "scenario", SCENARIO], {
         stdio: ["inherit", "inherit", "inherit"],
-        // oxlint-disable-next-line effecttsgo/process-env -- the scenario runs in this environment.
         env: { ...process.env, [WRITE]: mode === "--write" ? "1" : "" },
       });
       return yield* Effect.promise(() => child.exited);

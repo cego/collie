@@ -1,4 +1,4 @@
-/* oxlint-disable effecttsgo/node-builtin-import, effecttsgo/prefer-effect-array, effecttsgo/prefer-effect-string, no-restricted-imports -- relocates an offline benchmark fixture, never a host's live state. */
+/* oxlint-disable effecttsgo/node-builtin-import, effecttsgo/prefer-effect-string -- relocates an offline benchmark fixture, never a host's live state. */
 import { Database } from "bun:sqlite";
 import { readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
 
