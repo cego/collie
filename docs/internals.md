@@ -1632,7 +1632,12 @@ brings nkzw's rules and its anti-slop `quality/*` rules, then Effect's correctne
 effect-native and strict presets and landmines' recommended rules. The preset turns off
 oxlint's default `correctness` category, so the default rules it does not list are kept by
 name at their old `warn`. The vendored anti-slop plugin in `tools/oxlint/anti-slop/` stays
-for the six rules the preset has no counterpart for. A TypeScript config needs Node.js
+for the six rules the preset has no counterpart for. A preset rule the code cannot pass is
+kept off in one of two lists, both re-applied by a last override for every file: `unfit`
+holds the ones that misread Effect or Solid, each with its reason, and `migrating` the
+ones still to fix. Give a preset rule options under the name the preset uses: oxlint
+folds `@typescript-eslint/x` and `typescript/x` onto one rule, and the preset's plain
+entry wins over options set under the other name. A TypeScript config needs Node.js
 22.18 or later to run oxlint; CI's Ubuntu image has it. Effect findings
 fail the check, including native collection helpers, synchronous schema decoders,
 untyped error channels, and resources started outside their Effect context. `lint:ts`
