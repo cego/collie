@@ -117,7 +117,7 @@ import {
 import { autoModeBlock, autoModeFacts, type AutoModeBlock, type RunAuthority } from "./automode";
 import { shell } from "./mr";
 import type { ForgeHttp } from "./forge/http";
-import type { YamlMap } from "./yaml";
+import { parseDocument, type YamlMap } from "./yaml";
 import { RanOn } from "./board-model";
 import { humanOf, type Asker } from "./proposals";
 import { STOP, controlSet } from "./controls";
@@ -145,6 +145,7 @@ import {
   sessionArgs,
   type AgentChoice,
   type HarnessAdapter,
+  type Room,
   type StartSession,
   type PermissionMode,
   type Preferences,
@@ -163,6 +164,7 @@ import { isSuperseded, isUnanswered } from "./store";
 import { gate } from "./steering-caps";
 import { actorOf } from "./audit";
 import { keepQueued, readQueue, type Queued } from "./delivery-queue";
+import { verifyingOf, type Verifying } from "./verify";
 import { agentName, launchedAs, legacyAgentName, reason, unsafePathComponent } from "./naming";
 import { machineName } from "./peers";
 import type { MachineCatalogue } from "./harness-choice";
@@ -218,17 +220,23 @@ import {
   type RoleProfile,
 } from "./profile";
 import { isString, type JsonObject } from "./schema";
+import { awaitOutput, outputCollected } from "./output-submit";
 import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } from "./subagents";
 import { Collecting, collectingLayer, type CollectingApi } from "./collecting";
 import { holdsBudgetOf, waitForMemory } from "./memory-wait";
 import {
+  appendLine,
   causalKey,
   deliveriesAbout,
   deliveriesOf,
+  isSettledDelivery,
   isUnobserved,
+  newestById,
+  readLedger,
   SENT_STATES,
   toldLine,
 } from "./steering";
+import { rememberUnsettled } from "./park-recheck";
 import type { Records } from "./records";
 import { RELAUNCH, RunRecords } from "./run-records";
 import { malformedIn, mentionedSkills, renderTemplate, skillMention, skillsIn } from "./template";
@@ -274,10 +282,14 @@ export interface AgentAsk {
   /** What this work fell back from, and why, where it did. */
   readonly from?: AgentChoice;
   readonly why?: string;
+  /** Where a Fallback would move this work were its usage spent now. */
+  readonly next?: AgentChoice;
   /** Which agent of this work it is: past 1, one taking over from an agent that ran out. */
   readonly sequence?: number;
   /** The Step run this work is in, where it is in one. */
   readonly step?: At;
+  /** How it hands in its Output; left out, the `output_submit` setting decides. */
+  readonly outputSubmit?: "file" | "tool";
 }
 
 /**
@@ -289,6 +301,7 @@ export const AgentChoiceSchema = Schema.Struct({
   claudeSubagents: Schema.optionalKey(ClaudeSubagents),
   from: Schema.optionalKey(RanOn),
   why: Schema.optionalKey(Schema.String),
+  next: Schema.optionalKey(RanOn),
 });
 export type ChosenAgent = typeof AgentChoiceSchema.Type;
 
@@ -407,6 +420,8 @@ export interface AgentsApi {
    * path that is not there.
    */
   readonly skills: (names: ReadonlyArray<string>) => Effect.Effect<ReadonlyMap<string, string>>;
+  /** How the Settings say an agent hands in its Output, read at each step. */
+  readonly outputSubmit: Effect.Effect<"file" | "tool">;
   /** What this Run's `attachments/` holds now, which its next prompt lists. */
   readonly attachments: (runId: string) => Effect.Effect<ReadonlyArray<Attachment>>;
   /**
@@ -439,7 +454,9 @@ export interface AgentsApi {
   readonly choiceOf: (
     runId: string,
     agent: string,
-  ) => Effect.Effect<(ChosenAgent & { readonly sequence: number }) | null>;
+  ) => Effect.Effect<
+    (ChosenAgent & { readonly sequence: number; readonly outputSubmit: "file" | "tool" }) | null
+  >;
   /**
    * Once this agent has run out — its harness said so since it was given this work, or
    * its Subscription reads Exhausted for it — why. Never succeeds otherwise.
@@ -802,6 +819,9 @@ export const agentWork = <
     // Where each skill the instructions mention lives, so a mention is the path to read
     // rather than a name the agent has to go looking for.
     const skills = yield* agents.skills(skillsIn(work.instructions));
+    const held = work.agent === undefined ? null : yield* agents.choiceOf(runId, work.agent);
+    // A running agent keeps the tool server it was launched with.
+    const outputSubmit = held?.outputSubmit ?? (yield* agents.outputSubmit);
     const parts: PromptParts = {
       role,
       instructions: work.instructions,
@@ -811,6 +831,7 @@ export const agentWork = <
       output,
       contract: plain ? null : jsonSchemaFor(work.output),
       attachments: yield* agents.attachments(runId),
+      outputSubmit,
     };
     const prompt = renderPrompt(parts);
     if (prompt.unfilled.length > 0) {
@@ -822,7 +843,6 @@ export const agentWork = <
     // a conversation cannot become another agent: what is asked for here has to agree with
     // it, and what only defaults below that does not apply.
     const scopes = yield* AgentScopes;
-    const held = work.agent === undefined ? null : yield* agents.choiceOf(runId, work.agent);
     const requested = foldPreferences([...scopes, preferencesIn(given)]);
     if (held !== null && !agrees(held, requested)) {
       return yield* new WorkflowError({
@@ -876,9 +896,11 @@ export const agentWork = <
       effort: choice.effort,
       permissions: work.permissions ?? null,
       authority: place.authority,
+      outputSubmit,
     };
     if (choice.claudeSubagents !== undefined) ask.claudeSubagents = choice.claudeSubagents;
     fellBack(ask, choice.from, choice.why);
+    if (choice.next !== undefined) ask.next = choice.next;
     if (held !== null && held.sequence > 1) ask.sequence = held.sequence;
     const at = yield* CurrentStep;
     if (at !== null) ask.step = at;
@@ -970,6 +992,10 @@ export const agentWork = <
         ),
       );
     const usable = (text: string) => decodeOutput(work.output, text, plain).ok;
+    const problemIn = (text: string) => {
+      const read = decodeOutput(work.output, text, plain);
+      return read.ok ? null : read.problem;
+    };
     // Uninterruptible, so a stop racing a restart waits for it and finds its agent to stop.
     const reviving = (from: AgentAsk, unless?: string | null, onlyDeadServer = false) =>
       Effect.uninterruptible(
@@ -1011,6 +1037,7 @@ export const agentWork = <
       return !Arr.some(yield* host.asked(runId), (one) => one.answer === null);
     });
     const collecting = (on: Launched, from: AgentAsk, waiting?: string) => {
+      const awaited = awaitOutput(runId, on.agent, on.output, problemIn);
       // Collected throughout, so a verify ending between attempts is still told to it.
       const output = agents.collectedDuring(
         on,
@@ -1032,26 +1059,29 @@ export const agentWork = <
         Effect.andThen(Clock.currentTimeMillis),
         Effect.map((endedAt) => TurnEnded.make({ endedAt })),
       );
-      return stoppable(
-        parkedWhenStuck(
-          waiting === undefined
-            ? Effect.gen(function* () {
-                // Reconcile a crash before the incident was journaled, before idle reminders race it.
-                const incident = yield* agents.usageIncident(on);
-                if (incident !== null) return incident;
-                yield* reviving(from);
-                return yield* Effect.raceFirst(
-                  Effect.raceFirst(Effect.raceFirst(output, ended), agents.ranOut(on)),
-                  recovering(on, from),
-                );
-              })
-            : output,
+      return Effect.andThen(
+        awaited,
+        stoppable(
+          parkedWhenStuck(
+            waiting === undefined
+              ? Effect.gen(function* () {
+                  // Reconcile a crash before the incident was journaled, before idle reminders race it.
+                  const incident = yield* agents.usageIncident(on);
+                  if (incident !== null) return incident;
+                  yield* reviving(from);
+                  return yield* Effect.raceFirst(
+                    Effect.raceFirst(Effect.raceFirst(output, ended), agents.ranOut(on)),
+                    recovering(on, from),
+                  );
+                })
+              : output,
+            host,
+            work.runId,
+          ),
           host,
           work.runId,
+          agents.pollMs,
         ),
-        host,
-        work.runId,
-        agents.pollMs,
       );
     };
     let reminder: { on: Launched; ordinal: number; endedAt: number } | null = null;
@@ -1291,14 +1321,17 @@ export const agentWork = <
     }
     const read = decodeOutput(work.output, first, plain);
     if (read.ok) {
+      yield* outputCollected(runId, current.agent, first);
       yield* agents.usageWaiting(current, null);
       yield* recovered();
       return yield* carded(read.value);
     }
 
     // A harness that stopped is waited on past the budget, as its park says it is.
+    let latest = first;
     const recollecting = (unusable: string, since: number) =>
       Effect.gen(function* () {
+        yield* awaitOutput(runId, current.agent, current.output, problemIn);
         for (;;) {
           const text = yield* watching(
             agents.collect(current, unusable, questions, undefined, usable),
@@ -1367,6 +1400,7 @@ export const agentWork = <
             });
         if (again === null)
           return { ok: false as const, problem: `did not write ${output} again: ${problem}` };
+        latest = again;
         const repaired = decodeOutput(work.output, again, plain);
         return repaired.ok
           ? repaired
@@ -1387,9 +1421,11 @@ export const agentWork = <
           return yield* Workflow.suspend(yield* WorkflowEngine.WorkflowInstance);
         }),
       });
+      latest = now;
       const reread = decodeOutput(work.output, now, plain);
       repaired = reread.ok ? reread : yield* repairing(round + 1, now, reread.problem);
     }
+    yield* outputCollected(runId, current.agent, latest);
     yield* recovered();
     yield* agents.usageWaiting(current, null);
     return yield* carded(repaired.value);
@@ -1598,6 +1634,8 @@ export interface PromptParts {
   readonly attachments?: ReadonlyArray<Attachment>;
   /** What an agent taking over this work from one that ran out is told first. */
   readonly handover?: string;
+  /** Under `tool` the agent is told to hand its Output to `collie_submit`, not where to write it. */
+  readonly outputSubmit?: "file" | "tool";
 }
 
 /**
@@ -1631,7 +1669,9 @@ function renderPrompt(parts: PromptParts) {
         Str.trim(rendered.text),
         attachmentsSection(parts.attachments ?? []),
         parts.handover ?? "",
-        `When you are done, write your result ${parts.contract === null ? "as plain text" : "as JSON"} to the path below. Nothing else may go in that file.\nOUTPUT_PATH: ${parts.output}`,
+        parts.outputSubmit === "tool"
+          ? `When you are done, submit your result ${parts.contract === null ? "as plain text" : "as JSON"} with the collie_submit Collie tool, as its \`output\`. It answers "accepted", or with every problem it found and nothing kept: correct them and submit again.`
+          : `When you are done, write your result ${parts.contract === null ? "as plain text" : "as JSON"} to the path below. Nothing else may go in that file.\nOUTPUT_PATH: ${parts.output}`,
         parts.contract === null ? "" : contractSection(parts.contract),
       ],
       (part) => part !== "",
@@ -1868,21 +1908,17 @@ export const agentsLayer = (
 
 type Under = <A, E>(effect: Effect.Effect<A, E, AgentServices>) => Effect.Effect<A, E>;
 
-const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): AgentsApi => {
-  const dirFor = (runId: string) => launchDir(host.dir, runId);
-  const outputFor = (runId: string, operation: string) => `${dirFor(runId)}/${operation}.json`;
-  // A recovery already admitted finishes before its quota incident is published. Once
-  // published, no recovery may pass the incident check and start the spent agent again.
-  const recoveryGates = new Map<string, { gate: Semaphore.Semaphore; users: number }>();
-  const withRecoveryGate =
-    (runId: string) =>
+/** Runs one effect at a time per key; a key's gate is dropped once nobody holds or waits on it. */
+const keyedGate = () => {
+  const gates = new Map<string, { gate: Semaphore.Semaphore; users: number }>();
+  return (key: string) =>
     <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       Effect.acquireUseRelease(
         Effect.sync(() => {
-          let entry = recoveryGates.get(runId);
+          let entry = gates.get(key);
           if (entry === undefined) {
             entry = { gate: Semaphore.makeUnsafe(1), users: 0 };
-            recoveryGates.set(runId, entry);
+            gates.set(key, entry);
           }
           entry.users++;
           return entry;
@@ -1890,9 +1926,19 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         (entry) => entry.gate.withPermits(1)(effect),
         (entry) =>
           Effect.sync(() => {
-            if (--entry.users === 0) recoveryGates.delete(runId);
+            if (--entry.users === 0) gates.delete(key);
           }),
       );
+};
+
+const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): AgentsApi => {
+  const dirFor = (runId: string) => launchDir(host.dir, runId);
+  const outputFor = (runId: string, operation: string) => `${dirFor(runId)}/${operation}.json`;
+  // A recovery already admitted finishes before its quota incident is published. Once
+  // published, no recovery may pass the incident check and start the spent agent again.
+  const withRecoveryGate = keyedGate();
+  // A collect and an end-of-turn check read one agent's questions at once; one pass at a time.
+  const withQuestionPass = keyedGate();
   const usageWaitPath = (launched: Pick<AgentAsk, "runId" | "operation" | "sequence">) =>
     `${dirFor(launched.runId)}/${stemOf(launched)}.usage-wait`;
   const usageWaiting = (launched: Launched, incident: RanOut | null) =>
@@ -2068,6 +2114,44 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     });
 
   /**
+   * The Check Collie is collecting proof with on this agent's checkout, which its deliveries
+   * wait for; null for none. An agent whose own record puts it in another checkout is not held.
+   */
+  const fenceOf = (about: Pick<Launched, "runId" | "agent">) =>
+    Effect.gen(function* () {
+      const check = yield* under(verifyingOf(about.runId));
+      if (check === null || check.pass === "ci") return null;
+      const cwd = (yield* readControl(host.env.stateDir, about.agent).pipe(
+        Effect.orElseSucceed(() => null),
+      ))?.cwd;
+      if (check.checkout === undefined || cwd === undefined) return check;
+      const within = (inner: string, outer: string) =>
+        inner === outer || pipe(inner, Str.startsWith(`${outer}/`));
+      return within(cwd, check.checkout) || within(check.checkout, cwd) ? check : null;
+    });
+
+  const heldBehind = (check: Verifying) =>
+    `Held behind the Check "${check.name}" Collie started at ${check.started} on this agent's checkout, until it ends; the host delivers it then.`;
+
+  /** Waits while a Check collects proof on the agent's checkout, saying so once. */
+  const untilUnfenced = (about: Launched, what: string) =>
+    Effect.gen(function* () {
+      let said = false;
+      for (;;) {
+        const check = yield* fenceOf(about);
+        if (check === null) return;
+        if (!said) {
+          said = true;
+          yield* log(
+            about.runId,
+            `${about.agent}: its ${what} is ${Str.uncapitalize(heldBehind(check))}`,
+          );
+        }
+        yield* Effect.sleep(host.pollMs ?? DEFAULT_POLL_MS);
+      }
+    });
+
+  /**
    * The one sender: the first prompt, a repair and a human's own words all go out here.
    * A delivery the ledger already holds under the same claim is refused rather than sent
    * a second time, which is what makes a launch that may already have happened safe to
@@ -2096,6 +2180,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
   ) {
     const lost = yield* lostServer(compactionDeps(host, about.runId), about.agent);
     if (lost !== null) return { sent: false, why: lost, gone: true };
+    if (delivery.kind !== "steer") yield* untilUnfenced(about, delivery.kind);
     const through = delivery.herdr === undefined ? deps : { ...deps, herdr: delivery.herdr };
     const found = yield* entryFor(about, about.agent, null, through);
     if (found.entry === null)
@@ -2183,11 +2268,16 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         observed: outcome.held === "acknowledged" ? "taken when it was first sent" : null,
         pane,
       };
+    const terminal = entry.incarnation?.terminalId;
     return {
       sent: false,
       why: `${outcome.reason}: ${outcome.detail}`,
       refused: outcome.reason === "exhausted",
       gone: inactive(outcome.detail),
+      blockedBy:
+        outcome.reason === "blocked" && outcome.id != null && terminal !== undefined
+          ? { terminal, delivery: outcome.id }
+          : undefined,
     };
   });
 
@@ -2270,7 +2360,21 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       const found = yield* entryFor(launched, launched.agent, null);
       if (found.entry === null) return { dispatch: true as const };
       const entry = found.entry;
-      const compaction = compactionDeps(host, launched.runId);
+      const compaction: CompactionDeps = {
+        ...compactionDeps(host, launched.runId),
+        room: (cwd) =>
+          under(
+            waitForMemory({
+              env: host.env,
+              stateDir: host.dir,
+              runId: launched.runId,
+              what: `${launched.agent}'s compaction`,
+              checkout: cwd,
+              memory: false,
+              stopped: stoppedRun(launched.runId),
+            }),
+          ),
+      };
       const due = yield* atBoundary(
         compaction,
         { agent: launched.agent, run: launched.runId, step: launched.operation },
@@ -2471,9 +2575,12 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
     const personaBody = yield* personaOf(ask.persona ?? ask.role);
     yield* write(persona, `${personaBody}\n`);
     const { mcpConfig, piExtension } = yield* Effect.promise(() => import("./chat"));
-    const { TOOLS } = yield* Effect.promise(() => import("./tools"));
+    const { SUBMIT, TOOLS } = yield* Effect.promise(() => import("./tools"));
+    const { ROLE_TOOLS } = yield* Effect.promise(() => import("./toolkit"));
+    const byRole = config.role_tools === "role";
+    const roleTools = byRole ? ROLE_TOOLS.get(ask.role) : undefined;
     const command = host.self ?? selfCommand();
-    const serverEnv = {
+    const runEnv = {
       COLLIE_ROOT: host.env.pluginRoot,
       COLLIE_STATE_DIR: host.env.stateDir,
       COLLIE_USER_DIR: host.env.userDir,
@@ -2481,6 +2588,9 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       COLLIE_RUN: ask.runId,
       COLLIE_AGENT: agent,
     };
+    const roleEnv = roleTools === undefined ? runEnv : { ...runEnv, COLLIE_TOOLS_ROLE: ask.role };
+    const submits = (ask.outputSubmit ?? config.output_submit) === "tool";
+    const serverEnv = submits ? { ...roleEnv, COLLIE_OUTPUT_SUBMIT: "tool" } : roleEnv;
     const configFile = `${dirFor(ask.runId)}/${stemOf(ask)}.mcp.json`;
     const extension = `${dirFor(ask.runId)}/${stemOf(ask)}.tools.ts`;
     yield* write(configFile, mcpConfig(command, serverEnv));
@@ -2489,12 +2599,21 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         extension,
         piExtension(
           command,
-          Arr.map(TOOLS, (tool) => ({
-            name: tool.name,
-            label: tool.title,
-            description: tool.description,
-            parameters: tool.input,
-          })),
+          Arr.map(
+            Arr.filter(
+              submits ? [...TOOLS, SUBMIT] : TOOLS,
+              (tool) =>
+                tool === SUBMIT ||
+                roleTools === undefined ||
+                Arr.some(roleTools, (name) => name === tool.name),
+            ),
+            (tool) => ({
+              name: tool.name,
+              label: tool.title,
+              description: tool.description,
+              parameters: tool.input,
+            }),
+          ),
           serverEnv,
           "",
           "",
@@ -2586,7 +2705,12 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           ...settingsArgs,
           ...mcp.args,
         ];
-        const started = `permissions ${permissions}${forbidden ? `: ${adapter.id}'s managed settings forbid bypass` : ""}${window.passed === null ? "" : `, auto-compact window ${window.passed}`}`;
+        const tools = !byRole
+          ? ""
+          : roleTools === undefined
+            ? `, Collie tools: every tool, as the ${ask.role} has no list`
+            : `, Collie tools: the ${ask.role}'s ${roleTools.length}`;
+        const started = `permissions ${permissions}${forbidden ? `: ${adapter.id}'s managed settings forbid bypass` : ""}${window.passed === null ? "" : `, auto-compact window ${window.passed}`}${tools}`;
         const named = { [RUN_LABEL]: ask.runId, operation: ask.operation };
         const labels = ask.task === null ? named : { ...named, task: ask.task };
         const opened = session === null ? null : sessionArgs(adapter.id, session);
@@ -2743,6 +2867,7 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               stateDir: host.dir,
               runId: ask.runId,
               what: `${agent}'s launch`,
+              checkout: ask.cwd,
               stopped: stoppedRun(ask.runId),
             });
         // Listed again: what herdr had before the wait may have changed during it.
@@ -2769,8 +2894,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             if (ask.claudeSubagents !== undefined) landed.claudeSubagents = ask.claudeSubagents;
             if ((ask.sequence ?? 1) > 1) landed.sequence = ask.sequence;
             if (ask.step !== undefined) landed.step = ask.step;
+            if (ask.outputSubmit !== undefined) landed.outputSubmit = ask.outputSubmit;
             landed.at = yield* Clock.currentTimeMillis;
             fellBack(landed, ask.from, ask.why);
+            if (ask.next !== undefined) landed.next = ask.next;
             if (incarnation !== undefined) {
               landed.terminalId = incarnation.terminalId;
               if (incarnation.agentSession !== null) landed.agentSession = incarnation.agentSession;
@@ -3031,6 +3158,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
 
   /** Calls whose answers were sent, or refused for good, by agent and call. */
   const answeredCalls = new Set<string>();
+  /** Calls whose answers wait behind a Check, by agent and call, so that is logged once. */
+  const fencedCalls = new Set<string>();
 
   /**
    * Puts each question the agent asked since it was given this work, and before `until`,
@@ -3067,13 +3196,14 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               ids.has(`${call.id}${UNREPAIRED}`)
             )
               continue;
-            // Taken before the send, as a second reader of the same call may be polling.
-            answeredCalls.add(key);
             const sent = yield* deliver(launched, questionRepair(call.questions), {
               kind: "repair",
               ref: `question-${call.id}`,
               herdr: yield* herdr,
             });
+            // Taken once settled: a pass interrupted mid-send leaves it to the next, which
+            // the ledger answers as already sent where it went.
+            answeredCalls.add(key);
             if (sent.sent) continue;
             yield* log(
               launched.runId,
@@ -3138,6 +3268,18 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
               holds(false);
               continue;
             }
+            const fence = yield* fenceOf(launched);
+            if (fence !== null) {
+              if (!fencedCalls.has(key))
+                yield* log(
+                  launched.runId,
+                  `${launched.agent}: the answers to its question are ${Str.uncapitalize(heldBehind(fence))}`,
+                );
+              fencedCalls.add(key);
+              holds(true);
+              continue;
+            }
+            fencedCalls.delete(key);
             let sentAll = true;
             // The ledger refuses a second copy, so a replay sends nothing again.
             const label = (at: number) =>
@@ -3180,7 +3322,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             holds(!answeredCalls.has(key));
           }
           return open;
-        }).pipe(Effect.orElseSucceed(() => false));
+        }).pipe(
+          withQuestionPass(launched.agent),
+          Effect.orElseSucceed(() => false),
+        );
     });
 
   const tendQuestions = (
@@ -3212,7 +3357,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           .readDirectory(yield* controlDir(host.env.stateDir, ""))
           .pipe(Effect.orElseSucceed(() => []));
         yield* Effect.forEach(named, (agent) =>
-          takeHarnessQuestions(host.env.stateDir, ports, agent).pipe(Effect.ignore),
+          takeHarnessQuestions(host.env.stateDir, ports, agent).pipe(
+            withQuestionPass(agent),
+            Effect.ignore,
+          ),
         );
         const asking = yield* Effect.filter(named, (agent) =>
           Effect.map(
@@ -3418,6 +3566,32 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       }),
     );
 
+  /**
+   * Whether a delivery blocking a reminder is settled, settling it as sent where the agent's
+   * own submit record shows it landed.
+   */
+  const settledNow = (launched: Launched, held: { terminal: string; delivery: string }) =>
+    Effect.gen(function* () {
+      const lines = yield* readLedger(held.terminal);
+      const now = newestById(lines).get(held.delivery);
+      if (now === undefined || isSettledDelivery(now)) return true;
+      const dir = yield* controlDir(host.env.stateDir, launched.agent);
+      if (!(yield* submittedDelivery(dir, held.delivery).pipe(Effect.orElseSucceed(() => false))))
+        return false;
+      // As `confirmSubmitted` settles one its agent took.
+      yield* appendLine({
+        ...now,
+        at: yield* nowIso,
+        state: "acknowledged",
+        note: "taken: its submit hook recorded it",
+      });
+      yield* log(
+        launched.runId,
+        `${launched.agent}: ${held.delivery} had landed; settled it as sent`,
+      );
+      return true;
+    });
+
   const remind = (launched: Launched, ordinal: number) =>
     under(
       Effect.gen(function* () {
@@ -3425,20 +3599,40 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           kind: "repair",
           ref: `${stemOf(launched)}.remind-${ordinal}`,
         });
+        const held = sent.sent ? undefined : sent.blockedBy;
+        if (held !== undefined) {
+          const settled =
+            (yield* settledNow(launched, held)) ||
+            (yield* Effect.sleep(Duration.millis(host.pollMs ?? DEFAULT_POLL_MS)).pipe(
+              Effect.andThen(settledNow(launched, held)),
+            ));
+          if (!settled) {
+            yield* rememberUnsettled(`${host.dir}/runs/${launched.runId}`, held);
+            return yield* new AgentParked({
+              operation: launched.operation,
+              reason: `${launched.agent} could not be reminded to write ${launched.operation}.json: delivery ${held.delivery} has not settled. Collie rechecks it; \`collie run deliveries ${launched.runId} --reconcile ${held.delivery} --as sent|not-sent\` settles it now.`,
+              cause: "delivery-unsettled",
+            });
+          }
+        }
+        // A reminder is held only by an earlier copy of itself, so one that landed was sent.
+        const wasSent = sent.sent || held !== undefined;
         yield* log(
           launched.runId,
-          sent.sent
+          wasSent
             ? `${launched.agent}: ended its turn without ${launched.operation}.json, so was reminded to write it (${ordinal} of ${OUTPUT_REMINDERS})`
             : `${launched.agent}: ended its turn without ${launched.operation}.json, and could not be reminded to write it (${sent.why})`,
         );
-        if (sent.sent) yield* reminded(launched, ordinal, "still-absent", 0);
-        return sent.sent ? yield* nowIso : null;
+        if (wasSent) yield* reminded(launched, ordinal, "still-absent", 0);
+        return wasSent ? yield* nowIso : null;
       }).pipe(
-        Effect.catch((cause) =>
-          log(
-            launched.runId,
-            `${launched.agent}: could not be reminded to write ${launched.operation}.json (${reason(cause)})`,
-          ).pipe(Effect.as(null)),
+        Effect.catchIf(
+          (cause) => !isParked(cause),
+          (cause) =>
+            log(
+              launched.runId,
+              `${launched.agent}: could not be reminded to write ${launched.operation}.json (${reason(cause)})`,
+            ).pipe(Effect.as(null)),
         ),
       ),
     );
@@ -4178,6 +4372,17 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
         if (options.actor !== undefined && queued === undefined) {
           pending.actor = Struct.omit(actorOf(options.actor, options.request), ["requestId"]);
         }
+        // Held for humans and agents alike: a message landing mid-Check moves the tree it proves.
+        const fence = yield* fenceOf(launched);
+        if (fence !== null) {
+          yield* keepQueued(dirFor(options.runId), pending).pipe(Effect.orDie);
+          return {
+            agent: launched.agent,
+            delivered: false,
+            queued: true,
+            detail: heldBehind(fence),
+          };
+        }
         if (fallback) {
           const found = yield* entryFor(launched, launched.agent, null);
           if (found.entry === null)
@@ -4277,6 +4482,10 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
       return { typed: dispatch.marked(text, `${ask.runId}-${stemOf(ask)}-step-1`), prompt };
     },
     skills: (names) => under(skills(names)),
+    outputSubmit: under(readConfig(host.env.userDir)).pipe(
+      Effect.map((config) => (config.output_submit === "tool" ? "tool" : "file")),
+      Effect.orElseSucceed(() => "file" as const),
+    ),
     attachments: (runId) =>
       under(listAttachments(attachmentsDir(`${host.dir}/runs/${runId}`))).pipe(
         Effect.orElseSucceed(() => []),
@@ -4324,24 +4533,39 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           const now = yield* Clock.currentTimeMillis;
           const read = roomFor(readings, now);
           const out = Arr.map(spent, (one) => ({ ...one, on: pinned(one.on) }));
+          const fallbacks = yield* chain;
+          const catalogue = host.catalogue === undefined ? undefined : yield* host.catalogue;
+          const room: Room = (choice, upTo) => {
+            const judged = read(choice, upTo);
+            const ran = Option.getOrUndefined(
+              Arr.findFirst(
+                out,
+                (one) => sameUsage(one.on, choice) && !usageRecovered(one, readings, now),
+              ),
+            );
+            return judged.room && ran !== undefined ? { room: false, why: ran.why } : judged;
+          };
           const resolved = resolveWithRoom(
             [configured, ...layers],
-            yield* chain,
-            (choice, upTo) => {
-              const judged = read(choice, upTo);
-              const ran = Option.getOrUndefined(
-                Arr.findFirst(
-                  out,
-                  (one) => sameUsage(one.on, choice) && !usageRecovered(one, readings, now),
-                ),
-              );
-              return judged.room && ran !== undefined ? { room: false, why: ran.why } : judged;
-            },
+            fallbacks,
+            room,
             host.models,
-            host.catalogue === undefined ? undefined : yield* host.catalogue,
+            catalogue,
           );
           if (!resolved.ok) return yield* new WorkflowError({ reason: resolved.problem });
           const { choice, from, why, skipped } = resolved.chosen;
+          // The same resolution with this choice's usage spent: where a Fallback would go now.
+          const after = resolveWithRoom(
+            [configured, ...layers],
+            fallbacks,
+            (one, upTo) =>
+              sameUsage(pinned(one), pinned(choice))
+                ? { room: false, why: "spent" }
+                : room(one, upTo),
+            host.models,
+            catalogue,
+          );
+          const next = after.ok && after.chosen.from !== null ? after.chosen.choice : null;
           for (const line of skipped) yield* log(runId, `${operation}: ${line}`);
           // Chosen mid-work, the work's own line says what came of it.
           if (spent.length === 0 && from !== null) {
@@ -4354,6 +4578,8 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
           }
           const chosen: Types.Mutable<ChosenAgent> = { ...choice };
           fellBack(chosen, from, why);
+          if (next !== null)
+            chosen.next = { harness: next.harness, model: next.model, effort: next.effort };
           return chosen;
         }),
       ),
@@ -4369,14 +4595,18 @@ const makeAgents = (host: AgentHost, under: Under, collecting: CollectingApi): A
             Arr.some(agents, (one) => one.name === held.agent),
           );
           if (!alive || held.model === undefined) return null;
-          const running: Types.Mutable<ChosenAgent & { sequence: number }> = {
+          const running: Types.Mutable<
+            ChosenAgent & { sequence: number; outputSubmit: "file" | "tool" }
+          > = {
             harness: held.harness,
             model: held.model,
             effort: held.effort ?? null,
             sequence: held.sequence ?? 1,
+            outputSubmit: held.outputSubmit ?? "file",
           };
           if (held.claudeSubagents !== undefined) running.claudeSubagents = held.claudeSubagents;
           fellBack(running, held.from, held.why);
+          if (held.next !== undefined) running.next = held.next;
           return running;
         }),
       ),
@@ -4625,25 +4855,50 @@ const layeredPersona = Effect.fn("Agents.layeredPersona")(function* (
   env: PersonaEnv,
   role: string,
   dirs: ReadonlyArray<string>,
-) {
+  followed: ReadonlyArray<string> = [],
+): Effect.fn.Return<string | null, AgentParked, FileSystem.FileSystem | Path.Path> {
   const fs = yield* FileSystem.FileSystem;
-  for (const dir of dirs) {
+  for (const [at, dir] of dirs.entries()) {
     const file = `${dir}/personas/${role}.md`;
     if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) continue;
     const markdown = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
-    const body = bodySections(pipe(markdown, Str.replace(PERSONA_FRONT_MATTER, ""))).preamble;
-    if (Str.trim(body) === "") continue;
-    const unfilled = personaHoles(body);
-    if (unfilled.length > 0) {
-      return yield* new AgentParked({
-        operation: role,
-        reason: `the ${role} persona in ${file} names ${Arr.join(unfilled, ", ")}, and a persona is told nothing but {{skill:name}}: fix it, then resume this Run`,
-      });
+    const { preamble, sections } = bodySections(
+      pipe(markdown, Str.replace(PERSONA_FRONT_MATTER, "")),
+    );
+    if (Str.trim(preamble) === "") {
+      // A fork stub is the persona it extends, found from its own Layer down, then its own sections.
+      const parent = yield* Effect.try(() => parseDocument(markdown).data.extends).pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
+      if (isString(parent) && !followed.includes(file)) {
+        const from = parent === role ? at + 1 : at;
+        const inherited = yield* layeredPersona(env, parent, dirs.slice(from), [...followed, file]);
+        if (inherited === null || sections.size === 0) return inherited;
+        const added = Arr.map([...sections], ([name, text]) => `## ${name}\n\n${text}`);
+        return `${inherited}\n\n${yield* renderedPersona(env, role, file, Arr.join(added, "\n\n"))}`;
+      }
+      continue;
     }
-    const named = yield* installedSkills(env, skillsIn(body));
-    return renderTemplate(body, {}, { skill: skillMention(named) }).text;
+    return yield* renderedPersona(env, role, file, preamble);
   }
   return null;
+});
+
+const renderedPersona = Effect.fn("Agents.renderedPersona")(function* (
+  env: PersonaEnv,
+  role: string,
+  file: string,
+  body: string,
+) {
+  const unfilled = personaHoles(body);
+  if (unfilled.length > 0) {
+    return yield* new AgentParked({
+      operation: role,
+      reason: `the ${role} persona in ${file} names ${Arr.join(unfilled, ", ")}, and a persona is told nothing but {{skill:name}}: fix it, then resume this Run`,
+    });
+  }
+  const named = yield* installedSkills(env, skillsIn(body));
+  return renderTemplate(body, {}, { skill: skillMention(named) }).text;
 });
 
 /** What the role is stated as, in the persona and in the prompt alike. */

@@ -159,7 +159,7 @@ import { ForgeHttp, forgeHttpLayer } from "./forge/http";
 import { followRequest } from "./follow-through";
 import { EngineTouches, engineTouchesLayer, touching } from "./engine-touches";
 import { ciJob, sharedFailure, takeTarget } from "./ci-job";
-import { rememberFailedCi } from "./park-recheck";
+import { parkEvidence, rememberFailedCi } from "./park-recheck";
 import { land, LandingSchema, readLanding, takeOver } from "./landing";
 import {
   carried,
@@ -187,6 +187,7 @@ import { Woke, collieRunOf } from "./mr-watch-model";
 import { readingOf } from "./mr-watch";
 import {
   autoMergingHere,
+  branchTargetHead,
   whatItSaid,
   forgeHere,
   forgeOfProject,
@@ -208,6 +209,9 @@ import {
   healInFlight,
   parkOf,
   parkWithRecovery,
+  healNth,
+  healOwed,
+  parkIdentity,
   recoveryLine,
 } from "./park-cause";
 import { healOn, healRequest, healerFor, passedOver } from "./heal";
@@ -251,6 +255,7 @@ import { budgetPath, herdOf, humanSubmits, machineHerd } from "./steering";
 import { hostDatabase, recordsLayer, type Records } from "./records";
 import { ModuleRevisions, RevisionRows, onSyncedRevisions } from "./module-revisions";
 import { addressOf, RunRecords } from "./run-records";
+import { featuresOf, recordFeatures } from "./run-features";
 import { Steered } from "./delivery-queue";
 import type { JudgementDeps } from "./drift";
 import { finishedOnRecord, writeCheckpoint, type Card } from "./cards";
@@ -580,6 +585,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly workspace: string | null;
     /** This Run, then the Runs it was started from or builds a plan of, and so on: whose agents it may ask. */
     readonly lineage: ReadonlyArray<string>;
+    /** What its workflow does, fixed when it started; absent from an older host. */
+    readonly features?: { readonly review_delta?: boolean };
     /** What a Claude agent's auto mode is told this Run authorises: the branch it made, and who started it. */
     readonly authority: {
       readonly created: {
@@ -1083,16 +1090,22 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     }) => Effect.Effect<Posted>;
     readonly slackTarget: (link: string, target?: string) => Effect.Effect<string, WorkflowError>;
     readonly reviewSlack: (options: { readonly runId: string; readonly target: string; readonly cwd: string; readonly permalink?: string; readonly wanted: ReadonlyArray<string> }) => Effect.Effect<string>;
-    /** Reads the target's head before review. Take it inside an Activity. */
+    /** Reads the target's head before review, else the checkout's HEAD. Take it inside an Activity. */
     readonly reviewedHead: (options: {
       readonly target: string;
       readonly cwd: string;
     }) => Effect.Effect<string>;
+    /**
+     * What changed from \`previous\` to \`head\`: a merge request's interdiff, else the checkout's
+     * commits and files since \`previous\`, with the command that shows their diff. A
+     * local \`base\`, the default branch merged in since, is left out of them.
+     */
     readonly reviewChanges: (options: {
       readonly target: string;
       readonly cwd: string;
       readonly previous: string;
       readonly head: string;
+      readonly base?: string;
     }) => Effect.Effect<string, WorkflowError>;
     /** Approves once per Run and attempt; an interrupted attempt returns an uncertain outcome. */
     readonly approveReview: (options: {
@@ -2286,6 +2299,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly fixed: ReadonlyArray<Fixed>;
     },
   ): Finding[];
+  /** One line per finding a review both raises open and resolves. */
+  export function conflictingDispositions(review: {
+    readonly findings: ReadonlyArray<Finding>;
+    readonly disputed: ReadonlyArray<Finding>;
+    readonly dropped: ReadonlyArray<Finding>;
+    readonly fixed: ReadonlyArray<Fixed>;
+  }): string[];
   /** A finding the implementer already rejected stops driving the loop. */
   export function splitDisputed(
     findings: ReadonlyArray<Finding>,
@@ -2680,8 +2700,9 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export function endsWithoutPatchOf(options: Parameters<typeof evidenceGapsOf>[0]): boolean;
 
   /**
-   * A Check's proof on this tree: passed, failed, unstable, passed only on an earlier tree, or
-   * never run; for a check left to CI, waiting on its job or proved by it.
+   * A Check's proof on this tree: passed, failed, unstable, earlier (its latest record is on an
+   * earlier tree and no failure there, so it owes a pass here), or never run; for a check left
+   * to CI, waiting on its job or proved by it.
    */
   export interface CheckProof {
     readonly state: "passed" | "failed" | "unstable" | "earlier" | "never" | "waiting" | "proved";
@@ -3960,6 +3981,67 @@ const defaultMergeBase = (cwd: string) =>
     return { found: true, branch, base: Str.trim(merged.stdout) } as const;
   });
 
+/** A local target's head: a `branch:` target's head ref, else the checkout's HEAD; "" where unreadable. */
+const localHead = (target: string, cwd: string) =>
+  runShell(
+    "git",
+    ["rev-parse", "--verify", "--quiet", `${branchTargetHead(target) ?? "HEAD"}^{commit}`],
+    cwd,
+  ).pipe(
+    Effect.map((said) => (said.code === 0 ? Str.trim(said.stdout) : "")),
+    Effect.orElseSucceed(() => ""),
+  );
+
+/**
+ * The commits and files a checkout changed from `previous` to `head`, and how to read their
+ * diff, leaving out what came in from `base` where one is given.
+ */
+const localChanges = (cwd: string, previous: string, head: string, base: string) =>
+  Effect.gen(function* () {
+    const git = (...args: string[]) => runShell("git", args, cwd);
+    const range = `${previous}..${head}`;
+    const commits = yield* git(
+      "log",
+      "--no-merges",
+      "--format=- %h %s",
+      range,
+      ...(base === "" ? [] : ["--not", base]),
+    );
+    const files = yield* git("diff", "--name-status", previous, head);
+    const own = base === "" ? null : yield* git("diff", "--name-only", `${base}...${head}`);
+    const failed = Arr.filter(
+      [commits, files, ...(own === null ? [] : [own])],
+      (one) => one.code !== 0,
+    );
+    if (failed.length > 0)
+      return yield* new WorkflowError({
+        reason: `the changes from ${previous} to ${head} could not be read: ${Str.trim(
+          Arr.join(
+            Arr.map(failed, (one) => one.stderr ?? ""),
+            " ",
+          ),
+        )}`,
+      });
+    const lines = (text: string) => (Str.trim(text) === "" ? [] : Str.split(Str.trim(text), "\n"));
+    const owned = own === null ? null : new Set(lines(own.stdout));
+    const changed = Arr.filter(
+      Arr.map(lines(files.stdout), (one) => Str.split(one, "\t")),
+      (fields) => owned === null || owned.has(fields[fields.length - 1] ?? ""),
+    );
+    const listed = (all: ReadonlyArray<string>) =>
+      all.length === 0 ? "(none)" : Arr.join(all, "\n");
+    return Arr.join(
+      [
+        base === ""
+          ? `Changed since it, in full with \`git diff ${previous} ${head}\`.`
+          : `Changed since it, commit by commit with \`git log -p --no-merges ${range} --not ${base}\`.`,
+        `Commits:\n${listed(lines(commits.stdout))}`,
+        `Files:\n${listed(Arr.map(changed, (fields) => `- ${Arr.join(fields, " ")}`))}`,
+      ],
+      "\n\n",
+    );
+  });
+
 /** Whether the branch at `cwd` adds or changes `test` since it left the default branch. */
 const branchOwns = (cwd: string, test: FailedTest) =>
   Effect.gen(function* () {
@@ -4307,6 +4389,7 @@ export const hostLayer = (options: {
                 stateDir: dir,
                 runId: asked.runId,
                 what: `${recorded.pass}: ${spec.name}`,
+                checkout: asked.cwd,
                 stopped: set(STOP, asked.runId),
               });
               if (memory === "stopped")
@@ -4348,6 +4431,7 @@ export const hostLayer = (options: {
                     revision: head.code === 0 ? Str.trim(head.stdout) : "",
                     base,
                     started,
+                    checkout: asked.cwd,
                     log,
                   }),
                 );
@@ -4985,8 +5069,8 @@ export const hostLayer = (options: {
                   authority: authorityOf(null, undefined),
                 })),
               ),
-              lineageOf(runId),
-              (at, lineage) => ({ ...at, lineage }),
+              Effect.zip(lineageOf(runId), featuresOf(runId)),
+              (at, [lineage, features]) => ({ ...at, lineage, features }),
             ),
           ),
         reviewScope: (runId, source, outcome, risks) =>
@@ -5126,9 +5210,23 @@ export const hostLayer = (options: {
                   const before = Option.fromNullishOr(yield* runRecords.control(PARKED, runId));
                   const causeBefore = parkCauseOf(yield* runRecords.control(PARK_CAUSE, runId));
                   let info = yield* parkInfoOf(yield* runRecords.control(PARK_INFO, runId));
+                  // One recorded before identities were derived keeps the Heals it already had.
+                  const legacy =
+                    info?.cause === cause &&
+                    info.id !== undefined &&
+                    !Str.startsWith(`${cause}-`)(info.id)
+                      ? [info.id]
+                      : [];
                   if (Option.isNone(before) || causeBefore !== cause || info === null) {
-                    const since = yield* nowIso;
-                    info = { ...parkOf(cause), id: `${since}-${yield* Random.nextInt}`, since };
+                    const tree = yield* treeOf(yield* store.run(runId), runId, dir);
+                    const id = parkIdentity(
+                      runId,
+                      cause,
+                      yield* under(parkEvidence(dir, runId, tree.cwd, cause, why)).pipe(
+                        Effect.provideContext(bun),
+                      ),
+                    );
+                    info = { ...parkOf(cause), id, since: yield* nowIso };
                     yield* put(
                       PARK_INFO,
                       yield* Schema.encodeEffect(ParkJson)(info).pipe(Effect.orDie),
@@ -5148,10 +5246,7 @@ export const hostLayer = (options: {
                   const healing = Arr.findFirst(recoveries, healInFlight);
                   const claims =
                     park.kind !== "rechecks" &&
-                    !Arr.some(
-                      recoveries,
-                      (line) => line.action === "healed" && line.park === park.id,
-                    ) &&
+                    healOwed([park.id!, ...legacy], recoveries) &&
                     // A park its Heal caused again is that Heal's to settle.
                     !(healing._tag === "Some" && healing.value.cause === cause);
                   const passed = claims ? yield* passedOverHere(runId, cause, recoveries) : null;
@@ -5168,6 +5263,7 @@ export const hostLayer = (options: {
                         cause,
                         build: manifest.version,
                         park: info!.id,
+                        since: info!.since,
                       });
                     }),
                   );
@@ -5183,7 +5279,7 @@ export const hostLayer = (options: {
                       build: manifest.version,
                       action: "healed",
                       outcome: passed === null ? "claimed" : "skipped",
-                      recoveryId: healRequest(runId, park.id!),
+                      recoveryId: healRequest(runId, park.id!, healNth(park.id!, recoveries)),
                       park: park.id,
                       since: park.since,
                     }),
@@ -6297,7 +6393,7 @@ export const hostLayer = (options: {
           reviewForge(
             Effect.gen(function* () {
               const ref = parseMrTarget(asked.target);
-              if (ref === null) return "";
+              if (ref === null) return yield* localHead(asked.target, asked.cwd);
               const details = yield* forgeOf(ref).details(ref, asked.cwd, runShell);
               return details._tag === "Details" ? (details.head ?? "") : "";
             }),
@@ -6306,7 +6402,8 @@ export const hostLayer = (options: {
           reviewForge(
             Effect.gen(function* () {
               const ref = parseMrTarget(asked.target);
-              if (ref === null) return "";
+              if (ref === null)
+                return yield* localChanges(asked.cwd, asked.previous, asked.head, asked.base ?? "");
               const changes = yield* forgeOf(ref).reviewChanges(
                 ref,
                 asked.previous,
@@ -8756,6 +8853,7 @@ const makeRegistry: (
       Effect.provideContext(bun),
       Effect.ignore({ log: "Unhandled" }),
     );
+    if (claimed.fresh) yield* recordFeatures(claimed.row.run).pipe(Effect.provideContext(bun));
     if (claimed.row.accepted === null) yield* attachInto(claimed.row);
     // The parent hands its own children over, so the receipt is written here: a host
     // sweep dispatching one would give the engine a child with no parent to wake.
@@ -10396,6 +10494,7 @@ const makeRegistry: (
       seed: options.intent,
       parent: options.parent ? yield* store.run(options.parent) : null,
     }).pipe(Effect.provideContext(bun), Effect.ignore({ log: "Unhandled" }));
+    if (claimed.fresh) yield* recordFeatures(claimed.row.run).pipe(Effect.provideContext(bun));
     // A retry of work the engine already has is nothing more to do; one that crashed
     // before it heard is handed over now, under the identity it was admitted with.
     // A caller that executes the Run itself has the receipt first, as a parent does.

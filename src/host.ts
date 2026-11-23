@@ -1,4 +1,5 @@
 import { Artefacts } from "./artefacts";
+import { submitOutput } from "./output-submit";
 import { Artefact } from "./artefact-model";
 // The one local host per state directory: who owns it, how a client reaches it, and what
 // it answers.
@@ -71,6 +72,7 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import manifest from "../package.json";
 import { RunModel, runModelLayer, type RunModelApi } from "./run-model";
+import { RunPageAsked, RunSummary, pageOf, summaryOf } from "./run-list";
 import { recordsAt, type Records } from "./records";
 import { RUN_RECORDS, RunRecords } from "./run-records";
 import { controlOf, controlSet } from "./controls";
@@ -354,7 +356,15 @@ import {
   type RelayHeader,
 } from "./peers-model";
 import { latest, readDispositions } from "./disposition";
-import { Launched, LAUNCHES, operationsOf, readLaunches, runAgents } from "./launches";
+import {
+  fallbacksOf,
+  Launched,
+  LAUNCHES,
+  launchesOf,
+  operationsOf,
+  readLaunches,
+  runAgents,
+} from "./launches";
 import { factsOfView, newestFirst, settled, type RunFacts } from "./runs";
 import { Store } from "./store";
 import type { Woke } from "./mr-watch-model";
@@ -462,6 +472,16 @@ const RunShown = Schema.Struct({
   memory: Schema.optionalKey(Schema.NullOr(Schema.String)),
   /** The same Flow as its details carry. Absent from an older host. */
   flow: Schema.optionalKey(Schema.NullOr(Flow)),
+});
+
+export const RunPageAnswer = Schema.Struct({
+  /** This host's start, which a token from another start is refused by. */
+  epoch: Schema.String,
+  cursor: Schema.Finite,
+  runs: Schema.Array(RunSummary),
+  /** The same Runs whole, where they were asked for so. */
+  views: Schema.NullOr(Schema.Array(RunView)),
+  omitted: Schema.Int,
 });
 
 const Loaded = Schema.Struct({
@@ -592,6 +612,8 @@ export const HostRpcs = RpcGroup.make(
     payload: { task: Schema.NullOr(Schema.String) },
     success: Schema.Array(RunView),
   }),
+  /** A bounded page of this host's Runs, and where its changes have got to. */
+  Rpc.make("runPage", { payload: RunPageAsked, success: RunPageAnswer }),
   // The same run, again, whenever it changes — and current when the stream opens, so a
   // client that was away reads where the work is rather than what it missed.
   Rpc.make("watch", {
@@ -739,6 +761,7 @@ const HEALER_READS = new Set([
   "ownWords",
   "sharedDefinitions",
   "usage",
+  "fallbacks",
   "models",
   "connections",
   "slackChoices",
@@ -760,6 +783,7 @@ const HEALER_READS = new Set([
   "runDispositions",
   "runOutcomes",
   "runOutputs",
+  "submitOutput",
   "runChecks",
   "checkLog",
   "deliveries",
@@ -771,6 +795,7 @@ const HEALER_READS = new Set([
   "registered",
   "launches",
   "runs",
+  "runPage",
   "watch",
   "shown",
   "peers",
@@ -902,7 +927,10 @@ const handlers = (
       const registry = yield* Registry;
       const bun = yield* Effect.context<PlatformServices | Records>();
       const pid = yield* currentPid;
-      const { aliveNow } = yield* SharedBoard;
+      const { aliveNow, boards } = yield* SharedBoard;
+      const model = Option.getOrUndefined(yield* Effect.serviceOption(RunModel));
+      const epoch =
+        model?.epoch ?? `${installation}.${yield* (yield* SecureRandom.SecureRandom).uuidV4()}`;
       const sources = yield* recordSources({ panels: null, plans: new Map() });
       const recordingLinks = yield* Semaphore.make(1);
       // The installation this host belongs to, which the client that started it named.
@@ -1130,6 +1158,41 @@ const handlers = (
             ),
           ),
         runs: ({ task }) => registry.views(task),
+        runPage: (asked) =>
+          Effect.gen(function* () {
+            const built = yield* Stream.runHead(boards);
+            const all = Option.match(built, { onNone: () => [], onSome: (one) => one.runs });
+            const cards = Option.match(built, { onNone: () => [], onSome: (one) => one.views });
+            const ids = Arr.map(all, (run) => run.id);
+            const { page, omitted } = pageOf(
+              Arr.map(
+                Arr.filter(all, (run) => asked.task === null || run.task === asked.task),
+                (facts) => ({ facts, revision: model?.inputsAt([facts.id]) ?? 0 }),
+              ),
+              // Without a Run model nothing says what moved, so every Run has.
+              model === undefined ? { ...asked, since: null } : asked,
+            );
+            const cardOf = (run: string) =>
+              Option.getOrUndefined(Arr.findFirst(cards, (card) => card.runs.includes(run)));
+            const runs = yield* Effect.forEach(page, ({ facts }) =>
+              Effect.map(
+                facts.branch === null || model === undefined
+                  ? Effect.succeed(null)
+                  : model.head(facts),
+                (head) => summaryOf(facts, cardOf(facts.id), head),
+              ),
+            );
+            const views = asked.full
+              ? yield* Effect.map(registry.views(asked.task), (every) => {
+                  const byId = new Map(Arr.map(every, (view) => [view.runId, view]));
+                  return Arr.flatMap(page, ({ facts }) => {
+                    const view = byId.get(facts.id);
+                    return view === undefined ? [] : [view];
+                  });
+                })
+              : null;
+            return { epoch, cursor: model?.inputsAt(ids) ?? 0, runs, views, omitted };
+          }),
         watch: ({ runId }) => registry.watch(runId),
         recover: () => registry.recover,
         shown: ({ runId }) =>
@@ -3174,6 +3237,18 @@ const frontDoorHandlers = (
               return readings;
             }),
           ),
+        fallbacks: () =>
+          plainly(
+            Effect.gen(function* () {
+              const unfinished = Arr.filter(
+                yield* registry.views(null),
+                (view) => !settled(factsOfView(env.stateDir, view)),
+              );
+              const launches = yield* launchesOf(Arr.map(unfinished, (view) => view.runId));
+              const live = new Set(Arr.map(yield* shared.alive, (agent) => agent.name));
+              return fallbacksOf(Arr.flatten([...launches.values()]), live);
+            }),
+          ),
         models: () => harnesses.catalogues,
         connections: () => connectionsOnMachine(env),
         slackChoices: () => Effect.fail(new HostRefused({ reason: SLACK_BOT_RETIRED })),
@@ -3588,6 +3663,7 @@ const frontDoorHandlers = (
                       stateDir: env.stateDir,
                       runId,
                       what: `collie verify "${name}"`,
+                      checkout: where,
                       asker:
                         whoOf(client).origin === "agent" && from?.run === runId
                           ? (from.agent ?? null)
@@ -4379,6 +4455,22 @@ const frontDoorHandlers = (
             ),
             Effect.provideContext(bun),
           ),
+        submitOutput: ({ runId, output }, { client }) => {
+          const who = whoOf(client);
+          return who.origin === "agent" && who.from?.run === runId && who.from.agent !== undefined
+            ? submitOutput(runId, who.from.agent, output).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new HostRefused({
+                      reason: `Your Output could not be written: ${cause.message}`,
+                    }),
+                ),
+                Effect.provideContext(bun),
+              )
+            : Effect.fail(
+                new HostRefused({ reason: `Only an agent of ${runId} submits its Output.` }),
+              );
+        },
         artefactRegister: ({ runId, request, ...input }, { client }) =>
           known(runId).pipe(
             Effect.flatMap((view) =>

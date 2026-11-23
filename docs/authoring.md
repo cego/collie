@@ -153,6 +153,32 @@ content hash at the moment of the copy — so when the original moves on the pic
 the fork `(stale — the original has changed since this copy)`. A stale fork still works;
 the mark tells you a change has passed it by.
 
+A stub with nothing above its first `## Name` section is launched as the persona it extends,
+found from its own Layer down (from the Layer below, when it extends its own name), followed
+by the sections it names. That is how a trial swaps the shipped `reviewer` for
+`reviewer-single-pass`, which reviews a change in one pass over the same seven axes with
+one skill, `code-review-and-quality`, instead of two. No setting selects it: save
+`~/.collie/user/personas/reviewer.md` as
+
+```markdown
+---
+name: reviewer
+extends: reviewer-single-pass
+---
+```
+
+and every reviewer this user's Machines launch is the single pass, until the file is
+deleted. A project's `.collie/personas/reviewer.md` does the same for one project.
+
+`implementer-handback` is such a stub over `implementer`: it adds one `## Delegation`
+section, for a builder that hands work to sub-agents. It says what each sub-agent is given
+(one bounded task, file pointers, the criteria it owns and the files it may change) and the
+handback it returns (Changes, Proof, Unresolved, Decisions). It also tells the builder that
+a sub-agent's handback is not review. A trial selects it the same way, with
+`~/.collie/user/personas/implementer.md` saying `name: implementer` and
+`extends: implementer-handback`, and every implementer is then launched as the shipped
+`implementer` followed by that section.
+
 ## Persona frontmatter
 
 A persona is much smaller: instructions injected when an agent starts, harness-agnostic and

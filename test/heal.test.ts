@@ -19,7 +19,7 @@ import { connect, ownerOf, frontDoor, socketOf } from "../src/host";
 import { holderLives } from "../src/lock";
 import { readAudit } from "../src/audit";
 import { HealOutput, passedOver } from "../src/heal";
-import { parkOf, parkWithRecovery } from "../src/park-cause";
+import { healOwed, healNth, parkOf, parkWithRecovery } from "../src/park-cause";
 import { herdOf } from "../src/steering";
 import { newsPath, pending, read as readNews } from "../src/news";
 import { collie, proves, type World } from "./support/world";
@@ -480,7 +480,7 @@ test(
         Effect.gen(function* () {
           yield* queued(world, [{ writes: [], output: null, then: "working" }]);
           const { runId, client } = yield* started(world, "parks-for", {
-            causes: "unknown,unknown",
+            causes: "unknown,step-failed",
             entries: `${world.home}/entries`,
           });
           const heals = yield* until(
@@ -584,6 +584,37 @@ test("a ci-failed park whose three resumes ran out needs you and is still never 
   expect(
     passedOver({ cause: park.cause, isHeal: false, on: true, waitsOnYou: false, recoveries }),
   ).toBe("only what its recheck reads can clear its cause");
+});
+
+const healLine = (recoveryId: string, outcome: "claimed" | "started" | "skipped", at: string) => ({
+  at,
+  kind: "recovery" as const,
+  subject: "r",
+  value: 0,
+  note: "",
+  cause: "step-failed" as const,
+  action: "healed" as const,
+  outcome,
+  recoveryId,
+  park: "p",
+});
+
+test("a park whose only Heal was skipped before it started is still owed one, numbered after it", () => {
+  const recoveries = [
+    healLine("heal:r:p", "claimed", "2026-11-13T00:00:01Z"),
+    healLine("heal:r:p", "skipped", "2026-11-13T00:00:02Z"),
+  ];
+  expect(healOwed(["p"], recoveries)).toBe(true);
+  expect(healNth("p", recoveries)).toBe(2);
+});
+
+test("a park whose Heal started is not owed another, and its next one is the second", () => {
+  const recoveries = [
+    healLine("heal:r:p", "claimed", "2026-11-13T00:00:01Z"),
+    healLine("heal:r:p", "started", "2026-11-13T00:00:02Z"),
+  ];
+  expect(healOwed(["p"], recoveries)).toBe(false);
+  expect(healNth("p", recoveries)).toBe(2);
 });
 
 test("a herdr-unavailable park whose three resumes ran out needs you and is never healed", () => {
@@ -742,6 +773,16 @@ test(
     ),
   120_000,
 );
+
+test("a Heal's Output may say whether its diagnosis is complete, and only as a boolean", () => {
+  const resumed = { diagnosis: "It waits.", actions: [], result: "resumed", finding: FINDING };
+  const decoded = (said: { diagnosis_complete?: unknown }) =>
+    Schema.decodeUnknownOption(HealOutput)({ ...resumed, ...said });
+  expect(Option.getOrThrow(decoded({})).diagnosis_complete).toBeUndefined();
+  expect(Option.getOrThrow(decoded({ diagnosis_complete: true })).diagnosis_complete).toBe(true);
+  expect(Option.getOrThrow(decoded({ diagnosis_complete: false })).diagnosis_complete).toBe(false);
+  expect(Option.isNone(decoded({ diagnosis_complete: "no" }))).toBe(true);
+});
 
 test("a Heal's Output that escalates must say why a person is needed", () => {
   const escalated = {

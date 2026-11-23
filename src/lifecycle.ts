@@ -10,9 +10,11 @@
 
 import type { Launched } from "./launches";
 import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { awaitingLine } from "./awaiting";
+import { cursorToken, newerFirst, pageToken, restarted, type RunListAsked } from "./run-list";
 import { redactedField, withNotice } from "./redact";
 import type { SettingValue } from "./settings";
 import { reportOf, resultText, type Recorded } from "./report";
@@ -46,6 +48,7 @@ import {
   restartSaid,
   socketOf,
   type HostClient,
+  type RunPageAnswer,
   type HostUnavailable,
   type HostVersionMismatch,
 } from "./host";
@@ -752,38 +755,101 @@ export const runViews = (
     ),
   );
 
-export const flockRuns = Effect.fn("Lifecycle.flockRuns")(function* (
+/**
+ * One page of the flock's Runs, newest first: each Machine's own page merged, with the
+ * token for the next and the cursor for what changes after this. A token from a host
+ * that has started again since is refused with `stale_cursor`, never guessed across.
+ */
+export const flockRunPage = Effect.fn("Lifecycle.flockRunPage")(function* (
   env: PluginEnv,
-  task: string | null,
+  asked: RunListAsked,
 ) {
-  const local = yield* runViews(env, task);
-  const runs: Array<RunView & { readonly machine: string }> = Arr.map(local.runs, (view) => ({
-    ...view,
-    machine: env.machine ?? machineName(),
-  }));
+  const here = env.machine ?? machineName();
+  const pageAsked = (machine: string) => ({
+    task: machine === here ? asked.task : null,
+    states: asked.states,
+    limit: asked.limit,
+    full: asked.full,
+    after: asked.after,
+    since: asked.since === null ? null : (asked.since[machine]?.seq ?? null),
+  });
+  const answers: Array<{ readonly machine: string; readonly page: typeof RunPageAnswer.Type }> = [];
   const machines: Array<{
     readonly machine: string;
     readonly state: "away";
     readonly note: string;
   }> = [];
-  if (env.machine !== undefined) return { ...local, runs, machines };
-  for (const peer of yield* peersOf(env.stateDir)) {
-    const read = yield* Effect.scoped(
-      connectPeer(env.stateDir, peer.name, { as: "cli", client: machineName() }).pipe(
-        Effect.flatMap((client) => client.runs({ task: null })),
-        Effect.result,
-      ),
-    );
-    if (read._tag === "Success")
-      runs.push(...Arr.map(read.success, (view) => ({ ...view, machine: peer.name })));
-    else
-      machines.push({
-        machine: peer.name,
-        state: "away",
-        note: refusal(read.failure).error.message,
-      });
+  let unreadable: string | null = null;
+  if ((yield* anyRuns(env)) || env.machine !== undefined) {
+    const local = yield* asks(env, (client) => client.runPage(pageAsked(here)));
+    if (local.ok) answers.push({ machine: here, page: local.value });
+    else unreadable = local.error.message;
   }
-  return { ...local, runs, machines };
+  if (env.machine === undefined)
+    for (const peer of yield* peersOf(env.stateDir)) {
+      const read = yield* Effect.scoped(
+        connectPeer(env.stateDir, peer.name, { as: "cli", client: machineName() }).pipe(
+          Effect.flatMap((client) => client.runPage(pageAsked(peer.name))),
+          Effect.result,
+        ),
+      );
+      if (read._tag === "Success") answers.push({ machine: peer.name, page: read.success });
+      else
+        machines.push({
+          machine: peer.name,
+          state: "away",
+          note: refusal(read.failure).error.message,
+        });
+    }
+  const epochs = Rec.fromEntries(Arr.map(answers, ({ machine, page }) => [machine, page.epoch]));
+  const stale = restarted(
+    { ...asked.epochs, ...Rec.map(asked.since ?? {}, (mark) => mark.epoch) },
+    epochs,
+  );
+  if (stale.length > 0)
+    return err(
+      "stale_cursor",
+      `The host on ${Arr.join(stale, ", ")} has started again since that token was given; list again from the first page or a fresh cursor.`,
+      { machines: [...stale] },
+    );
+  const merged = Arr.flatMap(answers, ({ machine, page }) => {
+    const views = new Map(Arr.map(page.views ?? [], (view) => [view.runId, view]));
+    return Arr.map(page.runs, (summary) => ({
+      machine,
+      summary,
+      view: views.get(summary.runId) ?? null,
+    }));
+  }).sort((a, b) => newerFirst(a.summary, b.summary));
+  const taken = asked.limit === null ? merged : merged.slice(0, asked.limit);
+  const omitted =
+    merged.length - taken.length + Arr.reduce(answers, 0, (sum, { page }) => sum + page.omitted);
+  const last = taken.at(-1)?.summary;
+  const next =
+    omitted === 0 || last === undefined
+      ? null
+      : pageToken({
+          task: asked.task,
+          states: asked.states,
+          limit: asked.limit,
+          full: asked.full,
+          since: asked.since,
+          after: { created: last.created, runId: last.runId },
+          epochs: { ...asked.epochs, ...epochs },
+        });
+  return {
+    ok: true as const,
+    runs: taken,
+    omitted,
+    next,
+    complete: omitted === 0 && machines.length === 0 && unreadable === null,
+    cursor: cursorToken(
+      Rec.fromEntries(
+        Arr.map(answers, ({ machine, page }) => [machine, { epoch: page.epoch, seq: page.cursor }]),
+      ),
+    ),
+    machines,
+    unreadable,
+  };
 });
 
 /**
@@ -1816,6 +1882,10 @@ export const machineShell = (env: PluginEnv, script: string, request: string, do
 export const usageReadings = (env: PluginEnv, door: Door) =>
   asks(env, (client) => client.usage(), door);
 
+/** Where a Fallback would move each unfinished Run's work now. */
+export const usageFallbacks = (env: PluginEnv, door: Door) =>
+  asks(env, (client) => client.fallbacks(), door);
+
 /** What a cleanup sweep would remove now, and what is kept and why. */
 export const cleanupListing = (env: PluginEnv, door: Door) =>
   asks(env, (client) => client.cleanup(), door);
@@ -1826,7 +1896,7 @@ export const scheduleListing = (env: PluginEnv, door: Door) =>
 
 /**
  * The Schedules of the Machine `--machine` names, or of this Machine and every paired one,
- * with each peer that did not answer named as away, as `flockRuns` lists Runs.
+ * with each peer that did not answer named as away, as `flockRunPage` lists Runs.
  */
 export const flockSchedules = Effect.fn("Lifecycle.flockSchedules")(function* (
   env: PluginEnv,

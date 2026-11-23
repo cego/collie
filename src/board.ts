@@ -5,7 +5,15 @@
 // request has not been merged by anyone.
 
 import { readStageProof, type ShippingAction } from "./shipping";
-import { lastOrdered, Launches, launchesAhead } from "./launches";
+import {
+  fallbacksOf,
+  lastOrdered,
+  launchDir,
+  Launches,
+  launchesAhead,
+  launchesOf,
+} from "./launches";
+import { readQueue, type Queued } from "./delivery-queue";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -82,6 +90,7 @@ import {
   sectionOf,
   shippingLabel,
   sortBoard,
+  type AgentFallback,
   type BoardAgent,
   type BoardChild,
   type BoardOffer,
@@ -794,6 +803,7 @@ function agentsOf(
   runs: ReadonlyArray<RunFacts>,
   registered: ReadonlyArray<AgentEntry>,
   live: ReadonlyMap<string, AgentInfo>,
+  fallbacks: ReadonlyArray<AgentFallback>,
 ): BoardAgent[] {
   const byRun = registeredByRun(registered);
   const found = new Map<string, BoardAgent>();
@@ -801,12 +811,14 @@ function agentsOf(
     for (const entry of byRun.get(run.id) ?? []) {
       const agent = live.get(entry.agent);
       if (agent === undefined || found.has(agent.name)) continue;
+      const fallback = Arr.findFirst(fallbacks, (one) => one.agent === agent.name);
       found.set(agent.name, {
         name: agent.name,
         role: entry.role,
         status: agent.status,
         now: null,
         run: run.id,
+        ...(Option.isSome(fallback) && { fallback: fallback.value.next }),
       });
     }
   }
@@ -1320,6 +1332,10 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
               !(yield* fs.exists(run.worktree.path).pipe(Effect.orElseSucceed(() => true))),
           );
         const pending = Arr.flatMap(everyRun, (run) => pendingFor(proposals, run.id, now));
+        const fallbacks = fallbacksOf(
+          Arr.flatten([...(yield* launchesOf(Arr.map(everyRun, (run) => run.id))).values()]),
+          new Set(live.keys()),
+        );
         const cards = opts.only === undefined ? opts.cards : undefined;
         const carried: { run: RunFacts; id: string | null; mr: string | null }[] = [];
         for (const run of everyRun) {
@@ -1341,7 +1357,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                   checked.has(run.id),
                 ]),
                 tasks.get(runs[0]!.task ?? "") ?? null,
-                agentsOf(everyRun, registered, live),
+                agentsOf(everyRun, registered, live, fallbacks),
                 pending,
                 Arr.flatMap(carried, ({ id }) =>
                   id === null ? [] : [[mrStates.get(id) ?? null, forge.get(id) ?? null]],
@@ -1531,7 +1547,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           !(yield* unseenReport(leader))
         )
           return keep(null, Infinity);
-        const agents = agentsOf(everyRun, registered, live);
+        const agents = agentsOf(everyRun, registered, live, fallbacks);
         const waits = new Map(
           yield* Effect.forEach(everyRun, (run) =>
             Effect.map(runWaits(run, proposals, agents, now), (read) => [run.id, read] as const),
@@ -1550,6 +1566,15 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
         const at = Math.max(...Arr.map(working, (run) => touched.get(run.id) ?? 0));
         const checkOf = markers.has(leader.id) ? leader : (checking[0] ?? leader);
         const check = yield* runningCheck(checkOf, all, markers, now);
+        const heldMessages =
+          check === null
+            ? 0
+            : Arr.filter(
+                yield* readQueue(launchDir(stateDir, checkOf.id)).pipe(
+                  Effect.orElseSucceed((): ReadonlyArray<Queued> => []),
+                ),
+                (one) => one.result === null,
+              ).length;
         const memory =
           Arr.filter(
             Arr.map(everyRun, (run) => waitsOf(run).memory),
@@ -1988,7 +2013,12 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                 step: doing?.step ?? null,
                 // Never the pane's title: a terminal names its harness or file, not the work.
                 verb: doing?.verb ?? null,
-                checking: check?.sentence ?? null,
+                checking:
+                  check === null
+                    ? null
+                    : heldMessages === 0
+                      ? check.sentence
+                      : `${check.sentence} ${heldMessages === 1 ? "A message is" : `${heldMessages} messages are`} held behind it.`,
                 memory: memory === null ? null : waitLine(memory),
                 awaiting: awaiting === null ? null : awaitingLine(awaiting),
                 reopened: state === "active" ? toldNow : null,

@@ -12,7 +12,7 @@
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
-import { Clock, Effect, FileSystem, Option, Path, Result, Schema } from "effect";
+import { Clock, Effect, Option, Path, Result, Schema } from "effect";
 import { CommandLine, type ChildProcessSpawner } from "effect/process";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import { loadDefaults, worktreesDirectory } from "./config";
@@ -32,6 +32,7 @@ import { slackApi } from "./slack";
 import { projectsRoot } from "./projects";
 import { claudeSettingsPath, readStatusLine, STATUS_LINE_ARGS } from "./statusline";
 import { humanBytes } from "./bytes";
+import { diskSaid, lowOn, readDisk } from "./disk";
 import { collieCache } from "./cleanup";
 import {
   anyRuns,
@@ -526,10 +527,6 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
   return report(checks);
 });
 
-/** Below either is low: a share of the filesystem, or a size (ADR-0045 D7). */
-const LOW_SHARE = 0.1;
-const LOW_BYTES = 5 * 1024 ** 3;
-
 /**
  * Free space on each filesystem Collie writes to — the state directory, its cache, the
  * worktrees and the temporary directory — each filesystem once. Low is a warning, with what
@@ -539,43 +536,26 @@ const diskSpace = Effect.fn("Doctor.diskSpace")(function* (
   env: PluginEnv,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
-  const fs = yield* FileSystem.FileSystem;
-  const wanted = [
-    env.stateDir,
-    collieCache(),
-    yield* worktreesDirectory(env),
-    `${env.home}/.herdr/worktrees`,
-    tmpdir(),
-  ];
-  const dirs: string[] = [];
-  for (const dir of wanted)
-    if (yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => false))) dirs.push(dir);
-  const df = yield* run("df", ["-Pk", ...dirs], "/");
-  const mounts = new Map<string, { size: number; free: number }>();
-  for (const line of Str.split(df.stdout, "\n").slice(1)) {
-    const [, blocks, , available, , ...mount] = Str.split(Str.trim(line), /\s+/);
-    // A line of df's complaints, not a filesystem.
-    if (mount.length === 0 || !/^\d+$/.test(blocks ?? "") || !/^\d+$/.test(available ?? ""))
-      continue;
-    mounts.set(Arr.join(mount, " "), {
-      size: Number(blocks) * 1024,
-      free: Number(available) * 1024,
-    });
-  }
-  if (mounts.size === 0) return noted("could not read how much space is free", "df -h");
-  const low = Arr.filter(
-    [...mounts],
-    ([, one]) => one.free < LOW_BYTES || one.free < one.size * LOW_SHARE,
+  const mounts = yield* readDisk(
+    env,
+    [
+      env.stateDir,
+      collieCache(),
+      yield* worktreesDirectory(env),
+      `${env.home}/.herdr/worktrees`,
+      tmpdir(),
+    ],
+    run,
   );
-  const said = ([mount, one]: [string, { size: number; free: number }]) =>
-    `${mount} has ${humanBytes(one.free)} free (${Math.floor((one.free / one.size) * 100)}%)`;
-  if (low.length === 0) return passed(Arr.join(Arr.map([...mounts], said), "; "));
+  if (mounts.length === 0) return noted("could not read how much space is free", "df -h");
+  const low = Arr.filter(mounts, lowOn);
+  if (low.length === 0) return passed(Arr.join(Arr.map(mounts, diskSaid), "; "));
   const listing = (yield* anyRuns(env)) ? yield* cleanupListing(env, "cli") : null;
   const frees =
     listing !== null && listing.ok
       ? `; \`collie cleanup\` would free ${humanBytes(listing.value.bytes)}`
       : "";
-  return warned(`${Arr.join(Arr.map(low, said), "; ")}${frees}`, "collie cleanup --apply");
+  return warned(`${Arr.join(Arr.map(low, diskSaid), "; ")}${frees}`, "collie cleanup --apply");
 });
 
 /**

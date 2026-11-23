@@ -322,7 +322,9 @@ export function measuresOf(
             halts,
             (one) =>
               epochMs(one.at) >= epochMs(claim.at) &&
-              (line.park === undefined || one.park !== line.park),
+              (line.park === undefined ||
+                one.park !== line.park ||
+                (one.since !== undefined && one.since !== line.since)),
           ),
         );
         if (nextPark?.cause === cause) kept.falseRecoveries += 1;

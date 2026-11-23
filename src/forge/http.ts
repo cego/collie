@@ -10,6 +10,7 @@ import { ChildProcessSpawner } from "effect/process";
 import type { FetchLike, ForgeProvider, GitHubProvider } from "forges";
 import type { MrForge } from "../board-model";
 import { shell, type Runner } from "../mr";
+import { epochMs } from "../time";
 import type { Readiness } from "./forge";
 
 /**
@@ -81,6 +82,12 @@ const reasonOf = (
   if (error instanceof forges.ForgeNetworkError)
     return `${display} could not be reached: ${error.message}`;
   return `${display} could not be asked: ${error.message}`;
+};
+
+/** When a forge that said it was rate limited, in a reason `reasonOf` wrote, will answer again. */
+export const rateLimitedUntil = (reason: string): number | null => {
+  const until = /: rate limited, until (\S+Z)/.exec(reason)?.[1];
+  return until === undefined ? null : epochMs(until);
 };
 
 interface Sent<A> {

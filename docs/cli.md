@@ -181,9 +181,37 @@ pick one of:
 - Pass `--workspace <directory>`, a path or a checkout's name under the Projects root,
   which re-roots the run there.
 
-`collie run list` lists local and live peers' Runs with their `machine`. Its JSON includes
-`machines`, naming any peer that was away. A selected Task narrows local Runs to that
-Task; peer Runs stay visible. `--machine` lists only that Machine. See [Tasks](#tasks).
+`collie run list` lists local and live peers' Runs with their `machine`, newest first. Its
+JSON includes `machines`, naming any peer that was away. A selected Task narrows local Runs
+to that Task; peer Runs stay visible. `--machine` lists only that Machine. See
+[Tasks](#tasks).
+
+It answers one bounded page: the 50 newest Runs, each as a summary. A summary is the
+board's facts about the Run: `runId`, `machine`, `workflow`, `task`, `state`, `created`,
+`updated` (when its card last changed), `park` (the park cause, or null), `blocker` (the
+question it asks, or why it is parked or failed), `agent` (its agent on the board),
+`branch`, `head`, and `next` (what it waits for next: an answer, CI, a timer). The flags:
+
+- `--status <state>`, repeatable: `live`, `parked`, `needs-you`, `succeeded`, `failed` or
+  `stopped`.
+- `--limit <n>`: at most this many Runs; 50 by default.
+- `--fields summary|full`: `full` gives each Run's whole view, as `run show` reads it.
+- `--after <next>`: the page after the one that gave `next`, under the same filters. It
+  takes no other flag.
+- `--since <cursor>`: only the Runs changed after the answer that gave `cursor`.
+
+Every answer carries `complete` (true only when nothing was left out and no Machine was
+away), `omitted` (how many matching Runs it left out), `next` (the token for `--after`, or
+null on the last page) and `cursor` (the token for a later `--since`). A `cursor` given to
+`--after`, or a `next` given to `--since`, is refused with `invalid_input` naming the right
+flag. Each token carries its host's start, so one given before that host started again is
+refused with `stale_cursor`: list again from the first page or a fresh `cursor`. The text
+output ends with how many were left out and the command that continues.
+
+The whole listing of every Run, as `run list` gave it before it was bounded, is
+`collie --json run list --fields full`: `full` with no `--limit` returns every Run. Chat
+lists the same page with `collie_run` and `"list": true`, taking the same filters as
+`status`, `limit`, `fields`, `after` and `since`.
 
 ## Discover what is available
 
@@ -639,10 +667,36 @@ collie --json run wait <run-id> --timeout "10 minutes"
 collie --json run wait <run-id> --until attention
 collie --json run wait <run-id> --until ready
 collie --json run wait <run-id> --until needs-human
+collie --json run wait <run-id> <run-id> --until attention
+collie --json run wait <run-id> <run-id> --all
 collie --json run show <run-id>
-collie --json run list
+collie --json run list --status live
 collie --json run output <run-id>
+collie --json run output <run-id> --full --path <path>
+collie --json run read <run-id> log --start 100 --count 100
+collie --json run read <run-id> diff:src/app.ts --search 'TODO|FIXME'
 ```
+
+`run output` summarises each Output the Run wrote: its `path`, `step`, `verdict`,
+`summary`, number of `findings`, and `read`, the command that prints that Output whole.
+No body or diff is in the summary. `--full` prints every Output whole, as `run output`
+did before, and `--path` narrows either to one Output.
+
+`run read` reads one of a Run's references by line: `log`, `review`, `diff:<path>`,
+`evidence:<name>`, `plan:<file>`, `verification:<id>`, or the `log` reference
+`collie verify` answers an agent with. `--start` is the first line, counted from 1, and
+`--count` how many (200 by default). `--search <pattern>`, a regular expression, answers
+instead the matching lines from `--start` on, up to `--count` of them, each with the line
+before and after (`before`, `after`; `null` at either end). Every answer states `total`, the
+item's line count, `from` and `to`, the lines it covers, `complete`, true when nothing after
+`to` was left out, and `next`, the `--start` that reads on, or `null`. An item that is not
+text is refused as `invalid_input`; a registered artefact's bytes are read with
+`run artefact read`. A Run the caller's Task cannot reach is refused as `run_outside_task`
+by the same rule as `run show`. In chat and MCP, `collie_run` and `collie_artefacts` with
+`run` and `ref`, and `start`, `count` or `search`, answer the same, with the calling agent's
+Run's Task as the caller's Task; `collie_artefacts` with
+`id` and `revision` reads a text revision by line, and any other one, or one given an
+`offset`, as base64 parts as before.
 
 Without `--follow`, `run wait` prints one envelope when the run has ended — `complete` or
 `failed`. A stopped or held run is suspended rather than ended, so a plain wait waits
@@ -675,6 +729,15 @@ missing may still come by itself — it ends instead as `invalid_state`, naming 
 missing. `--until needs-human` returns at either: ready, or nothing will move without you.
 Both ask the host for the Run's readiness every two seconds; the envelope they return
 carries it as `data.ready`. A host that cannot say five times running, such as an older build, ends the wait as `operation_failed`. Any other value is `invalid_input`.
+
+Given several Runs, `run wait` returns when the first of them meets `--until`, with that
+Run's envelope as one Run's wait prints it: `data.run` names it and its state. With `--all`
+it returns once every one has, as `data.runs`, one `{ "run": … }` per Run in the order
+named; the first that ends as an error, such as `invalid_state` from `--until ready`, ends
+the wait with that error. Each Run is watched from the host's stream, as one is, and
+`--timeout` bounds the whole wait. There is no MCP tool that waits: a tool call blocked on a
+Run would outlast the harness's tool-call timeout, so an agent or chat waits with this
+command.
 
 Answer what the wait returned with `run answer <run-id> <option> --decision <name>` — see
 [Answer a question](#answer-a-question).
@@ -949,10 +1012,16 @@ Delivery reconciliation remains explicit: `not-sent` permits one resend, while `
 for Output. An unresolved delivery stays uncertain.
 
 A park whose cause rechecks can resume automatically. The host checks for the named CI job
-at the parked head, an answering forge, core listing its agents as a launch asks it to, or a
-clean Collie checkout. Rechecks start after one minute and double up to one hour. Host
-startup, a peer reconnecting, or a matching forge or pipeline update resets that wait to one
-minute. The resumed Step still runs its own gate.
+at the parked head, an answering forge, core listing its agents as a launch asks it to, a
+clean Collie checkout, or a delivery that has settled. `delivery-unsettled` is set when an
+Output reminder is held behind an earlier copy of itself whose fate nobody knows: the host
+first settles that copy as sent where the agent's own submit record shows it landed, and
+checks once more after a poll, and only then parks. It never gets a Heal. Rechecks start
+after one minute and double up to one hour. Host startup, a peer reconnecting, or a matching
+forge or pipeline update resets that wait to one minute. A forge that answered rate limited
+with a reset time, to a recheck or to the host's own read of the merge request, is not asked
+again until five seconds past that reset, whatever the backoff says. The resumed Step still
+runs its own gate.
 
 Automatic resumes use Actor `host` and request ids `recover:<run>:<park>:<n>`. A durable claim
 lets a restarted host finish the same request. They leave Decisions, Holds, Stops, and work
@@ -966,14 +1035,27 @@ rechecks are still recorded. Set it to `true` to turn it on again, its default. 
 recheck rounds in a row raise one News item, `recovery-failing:<machine>`, which clears
 after a successful round. A failed round resumes nothing.
 
+A park's identity, `<cause>-<hash>`, is derived from the Run, its cause and the evidence that
+cause is about: the head and job a CI cause rechecks, the delivery a `delivery-unsettled` park
+waits on, and for any other cause the Step it parked in, the checkout's head and its words
+with times, ids and counts left out. The park keeps it while it stays parked, however its
+words change. A Run that parks again on the same evidence, after a restart, a resume or a
+hand-over to the engine, is the same park; a changed cause or evidence is a new one. A park
+recorded before identities were derived is given one when it next parks, and keeps the
+Heals it already had.
+
 A park that would need you, a needs-you cause or a recheck cause past its three resumes,
-first gets one **Heal**: a Run of the workflow that declares `heals: true`, the shipped
-[`heal`](workflows.md#heal) unless a project forks it. The host starts it with Actor `host`,
-request id `heal:<run>:<park>` and the input `{ run, park }`, in the parked Run's Task, and
+first gets a **Heal**: a Run of the workflow that declares `heals: true`, the shipped
+[`heal`](workflows.md#heal) unless a project forks it. A park gets one when no Heal is
+recorded for its identity, a claimed Heal that was skipped before it started not counting, or
+when its last Heal said `diagnosis_complete: false`; a Heal
+whose Output does not say reads as complete. The host starts it with Actor `host`, request id
+`heal:<run>:<park>` (`heal:<run>:<park>:<n>` for the park's nth) and the input
+`{ run, park }`, in the parked Run's Task, and
 its record says which Run it heals. Its agent may read everything about the parked Run, and
 may only `deliver` or `steer` to the parked Run's agents and `resume` it; the host refuses
 every other operation from it, naming the Run it heals. It never answers a Decision, lifts
-a Hold, undoes a Stop, writes code or merges. One Heal per park and three per Run; one runs
+a Hold, undoes a Stop, writes code or merges. Three per Run; one runs
 at a time on a Machine and none while it is Short of memory. No Heal starts for a Run with
 a Decision, Hold or Stop, for a cause only a person can act on (`checkout-dirty-human`,
 `login-missing`, `branch-force-pushed`), for a park of a Heal, or with
@@ -1169,7 +1251,7 @@ through a generated extension; this is the third way in.
 | `collie_definitions`  | The Workflows and Personas there are; one resolved and checked, or one Persona's body                                                                                                                                                                                                                 |
 | `collie_installation` | What Collie needs, the defaults                                                                                                                                                                                                                                                                       |
 | `collie_connections`  | Each Machine's service logins, accounts, absent or broken states, and fixes; `machine` keeps one Machine                                                                                                                                                                                              |
-| `collie_news`         | What this conversation has not been told; reading it settles those items for it                                                                                                                                                                                                                       |
+| `collie_news`         | What this conversation has not been told; reading it settles those items for the caller alone                                                                                                                                                                                                         |
 | `collie_hold`         | Hold a run, or every unfinished run of a Task, until someone releases it                                                                                                                                                                                                                              |
 | `collie_do`           | Carry out, at once, a board action or decision on a named run the human asked for                                                                                                                                                                                                                     |
 | `collie_propose`      | Carry out the rest of what the human can ask for, with a request id that makes retries safe                                                                                                                                                                                                           |
@@ -1739,6 +1821,20 @@ to fingerprint at all, because two unmeasured trees are not one tree.
 A tree git cannot stage or write is unmeasured too. Collie tries once more before it says
 so, and the snapshot keeps git's message as `unmeasured`, so the record says why.
 
+An `unstable` result between two measured trees names what moved: the record's `moved`
+lists each path that differs between the start and end trees, from the repository root,
+as `added`, `modified`, `deleted` or `type-changed`, and classed `tracked` (in the index),
+`untracked`, or `lockfile` (a dependency lockfile such as `bun.lock`, either way). The
+answer and a check's gap name the first five and how many more, with the verification id
+that lists them all, and the Run's verification metric counts them by class.
+
+While a Check Collie runs itself collects proof on a checkout, the host holds deliveries to
+that Run's agents working there, for the human's steer and an agent's message alike: a steer
+is queued, its receipt says it is held behind that Check until it ends, and the card says
+how many are held. Collie's own step and repair, and the answers to an agent's question,
+wait the same way. A CI wait holds nothing.
+The hold ends with the Check, however it ends; a Check that crashes releases it.
+
 Reading the tree writes nothing in the checkout. Collie's status of a checkout runs with
 `GIT_OPTIONAL_LOCKS=0`, so it never holds `index.lock` and a commit made beside it is never
 refused for one. The tree is staged in a copy of the index that keeps the index's own
@@ -1828,6 +1924,24 @@ command ends, the host sends it a `boundary` delivery naming the check, its resu
 status, the commit and the log, which it keeps in the state directory's `evidence/<run>/verify/`.
 So an agent may end its turn waiting on a verify, and on nothing else in the background
 ([steering](steering.md#what-the-host-sends-on-its-own)).
+
+### What an agent gets back
+
+Run from a Run's agent pane — the pane `--run` defaults from — `collie verify` does not
+stream the command's output. It answers when the command ends with:
+
+- the result and exit status, and for an `unstable` result why: the tree it ran on moved,
+  from which fingerprint to which, or could not be measured;
+- `failed`, each failed test bun's output names as `<file> > <name>`, the first 50, and
+  `more`, how many others;
+- the record's `tail`, the last 4 KB of each stream;
+- `log`, the reference to the whole log (`evidence:verify/<file>.log`, else
+  `verification:<id>` where no log was kept);
+- `bounded`, a line saying the output was bounded and giving the `collie run read` that
+  reads the rest by range or `--search`.
+
+A failure is never left out: the result line, a non-zero exit and the failed tests always
+appear. Anywhere else, such as a human's terminal, the output streams as it runs.
 
 ### What Collie may run itself
 
@@ -2224,6 +2338,7 @@ human line and a failure prints `error.message`.
 | `machine_unreachable` | A paired Machine did not answer within its bound; `details` name the `machine` and what was `seen`, and `waits` is `ssh_connection` where its link waits on an SSH connection. |
 | `invalid_state`       | The run, or the installation, is not in a state where that makes sense — `upgrade --to` on a development checkout.                                                             |
 | `invalid_input`       | A flag or argument was wrong.                                                                                                                                                  |
+| `stale_cursor`        | A `run list` token was given by a host that has started again since; `details.machines` name it. List again from the first page, or take a fresh `cursor`.                     |
 | `operation_failed`    | Anything else, including a caught defect.                                                                                                                                      |
 
 ## Retrying safely

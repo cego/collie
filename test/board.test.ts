@@ -54,6 +54,8 @@ import { applyItem, EMPTY_FLOCK, flockCards } from "../desktop/src/shared/flock"
 import { recordAudit } from "../src/audit";
 import { recordDisposition } from "../src/disposition";
 import { readLogTail } from "../src/run-log";
+import { keepQueued } from "../src/delivery-queue";
+import { launchDir } from "../src/launches";
 import { markSeenSince, recordSeen } from "../src/seen";
 import {
   appendVerification,
@@ -1073,6 +1075,33 @@ test("a live agent is shown as the role it was registered as", () =>
     }),
   ));
 
+test("a live agent's card entry names where a Fallback would move its work", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { task: "task-1" });
+      yield* recordLaunch({
+        agent: "impl-1",
+        output: `${dir}/agents/${run.id}/build.json`,
+        reused: false,
+        runId: run.id,
+        operation: "build",
+        role: "implementer",
+        workflow: "implement",
+        harness: "claude",
+        model: "opus",
+        next: { harness: "codex", model: "gpt-5.5", effort: "high" },
+      });
+
+      const [view] = yield* board(env, [run], {
+        alive: [agent("impl-1", "working")],
+        registered: [registered("impl-1", run.id)],
+      });
+
+      expect(view!.agents[0]?.fallback).toBe("codex/gpt-5.5 high");
+    }),
+  ));
+
 test("a check Collie is running outranks what an idle agent last said", () =>
   runEffect(
     Effect.gen(function* () {
@@ -1240,6 +1269,41 @@ test("a stopped Run whose check still runs is working, and stopped once the chec
       yield* records.setControl(RUNNING_CHECK, "", null, "r-stopped@1-a");
       const [stopped] = yield* board(env, [run]);
       expect(stopped!.state).toBe("stopped");
+    }),
+  ));
+
+test("a card says how many messages are held behind the Check it is running", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { id: "r-held", task: "task-1" });
+      yield* (yield* RunRecords).setControl(
+        VERIFYING,
+        run.id,
+        encodeVerifying({
+          name: "unit",
+          executable: "bun",
+          argv: ["test"],
+          pass: "gate",
+          round: null,
+          revision: "",
+          base: null,
+          started: "2026-09-14T10:03:00Z",
+        }),
+      );
+      const [quiet] = yield* board(env, [run]);
+      expect(quiet!.sentence).toBe("Running unit on the branch, 2 min.");
+      for (const request of ["steer-1", "steer-2"])
+        yield* keepQueued(launchDir(dir, run.id), {
+          runId: run.id,
+          request,
+          text: "stay in src",
+          result: null,
+        });
+      const [held] = yield* board(env, [run]);
+      expect(held!.sentence).toBe(
+        "Running unit on the branch, 2 min. 2 messages are held behind it.",
+      );
     }),
   ));
 

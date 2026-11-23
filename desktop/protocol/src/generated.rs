@@ -276,6 +276,8 @@ pub enum Cause {
     ForgeUnavailable,
     #[serde(rename = "herdr-unavailable")]
     HerdrUnavailable,
+    #[serde(rename = "delivery-unsettled")]
+    DeliveryUnsettled,
     #[serde(rename = "checkout-dirty-collie")]
     CheckoutDirtyCollie,
     #[serde(rename = "checkout-dirty-human")]
@@ -431,6 +433,8 @@ pub struct Agent {
     pub status: String,
     pub now: Option<String>,
     pub run: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

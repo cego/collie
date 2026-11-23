@@ -848,6 +848,16 @@ fn card(
                 .max_lines(3)
                 .w_full(),
         );
+    if let Some(line) = super::model::fallback_line(task) {
+        card = card.child(
+            text(line)
+                .key("fallback")
+                .font(k.ty.ui)
+                .color(c.text_faint)
+                .max_lines(1)
+                .w_full(),
+        );
+    }
 
     // Its merge requests, where it has several or another Machine holds one too: each one's
     // line, then its actions on a row of their own that wraps on a narrow card.
