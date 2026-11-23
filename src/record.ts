@@ -27,7 +27,8 @@ import type {
   RunDiff,
   RunRevision,
 } from "./board-model";
-import { taskCardOf } from "./board";
+import { SyncedBranches, taskCardOf } from "./board";
+import { Branches, branchKey } from "./branches";
 import type { PluginEnv } from "./env";
 import { timedFlow, timeless } from "./flow-timing";
 import type { AgentInfo } from "./herdr";
@@ -74,7 +75,8 @@ type Needs =
   | Path.Path
   | ChildProcessSpawner.ChildProcessSpawner
   | Launches
-  | RunRecords;
+  | RunRecords
+  | Branches;
 
 /** A part of the record, and the fields it fills when it comes. */
 interface Part {
@@ -103,10 +105,15 @@ const recordCard = (sources: RecordSources, runId: string) =>
         tasks: Arr.filter(tasks, (task): task is TaskRecord => task !== null),
         alive: yield* sources.alive,
         offers: sources.offers,
-        head: model.head,
       },
       runId,
-    ).pipe(Effect.orElseSucceed(() => null));
+    ).pipe(
+      Effect.provideServiceEffect(
+        SyncedBranches,
+        Branches.use((rows) => rows.all),
+      ),
+      Effect.orElseSucceed(() => null),
+    );
     const found = card?.flow ?? null;
     const ids = Arr.map(runs, (one) => one.id);
     for (const lane of found?.lanes ?? [])
@@ -152,25 +159,6 @@ export const recordBase = (sources: RecordSources, runId: string, pages: number)
     };
   }).pipe(Effect.provideService(FileSystem.FileSystem, sources.model.reading));
 
-export const watched = (dir: string, failed: Effect.Effect<void> = Effect.void) =>
-  Stream.unwrap(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      return fs
-        .watch(dir, { recursive: true })
-        .pipe(Stream.catch(() => Stream.fromEffect(failed).pipe(Stream.drain)));
-    }),
-  );
-
-/** What a Run's open drawer lists and the board ignores: its handoffs' and evidence's sizes. */
-export const drawerWrites = (dir: string, runId: string) =>
-  Stream.merge(
-    watched(`${dir}/runs/${runId}`).pipe(
-      Stream.filter((event) => Str.startsWith("handoffs/")(event.path)),
-    ),
-    watched(`${dir}/evidence/${runId}`),
-  ).pipe(Stream.debounce("200 millis"));
-
 /** A Step in these states has finished: an act shown on it before is refused. */
 export const FINISHED_STEPS = new Set(["done", "failed", "stopped", "not-run"]);
 
@@ -202,7 +190,11 @@ export const recordFrames = (
 
       const diffAt = (run: RunFacts) =>
         Effect.gen(function* () {
-          const at = `${yield* model.checkout(run)}\0${run.state}\0${run.branch}\0${run.cwd}`;
+          // What the git syncer last read of the checkout: it reads again on a turn or a Step's end.
+          const branch = (yield* Branches.use((rows) => rows.all)).get(
+            branchKey(run.cwd, run.branch),
+          );
+          const at = `${branch?.head ?? ""}\0${run.state}\0${run.branch}\0${run.cwd}`;
           // A going Run's diff includes edits no git directory records, so it is read each time.
           if (kept?.at !== at || kept.diff?.live !== false)
             kept = {
@@ -214,7 +206,7 @@ export const recordFrames = (
           return kept.diff;
         });
       const context = yield* Effect.context<
-        Path.Path | ChildProcessSpawner.ChildProcessSpawner | Launches | RunRecords
+        Path.Path | ChildProcessSpawner.ChildProcessSpawner | Launches | RunRecords | Branches
       >();
       // A part that fails ends the stream, as a whole record that failed always has.
       const part = <E>(

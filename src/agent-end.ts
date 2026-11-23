@@ -169,13 +169,13 @@ const ending = Effect.fnUntraced(function* (
       reason: notStopped(launched.agent, reached.success, reached.success.target),
     } satisfies Ended;
 
-  if (deps.account !== undefined) yield* deps.account(launched.agent);
   // Only where its work is in its terminal, and this end ends it.
   const pane =
     reached.success === null && closes === "close"
       ? yield* paneProcesses(deps, launched.root, one?.paneId)
       : null;
 
+  if (deps.account !== undefined) yield* deps.account(launched.agent);
   // Ended on purpose, so nothing starts it again.
   const runId = launched.runId;
   if (runId !== undefined)
