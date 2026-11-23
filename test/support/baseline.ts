@@ -40,29 +40,18 @@ import { Rig } from "./recorder";
 import { exec } from "./command";
 import { fastForward, runEffect as runShared } from "./effect";
 import { FakeBin } from "./bin";
-import {
-  FORGE_HOST,
-  PROJECT,
-  forgeOnPath as modelOnPath,
-  serveForges,
-  type FakeJob,
-  type FakeComment,
-  type FakeMr,
-  type ForgeModel,
-} from "./forge";
-import { platformLayer, type PlatformServices } from "../../src/platform";
+import { FORGE_HOST, PROJECT, forgeOnPath as modelOnPath, serveForges } from "./forge";
+import type { FakeJob, FakeComment, FakeMr, ForgeModel } from "./forge";
+import { platformLayer } from "../../src/platform";
+import type { PlatformServices } from "../../src/platform";
 import { readLanding, takeOver, writeLanding } from "../../src/landing";
 import { shell } from "../../src/mr";
-import { forgeHttpLayer, type ForgeHttp } from "../../src/forge/http";
+import { forgeHttpLayer } from "../../src/forge/http";
+import type { ForgeHttp } from "../../src/forge/http";
 import { readCheckpoints } from "../../src/cards";
 import { buildBoard } from "../../src/board";
-import {
-  RecordedSolution,
-  mrLabel,
-  mrTarget,
-  type FlowLane,
-  type MrForge,
-} from "../../src/board-model";
+import { RecordedSolution, mrLabel, mrTarget } from "../../src/board-model";
+import type { FlowLane, MrForge } from "../../src/board-model";
 import { CONFLICTS } from "../../src/review-wait";
 import { laneFor } from "../../src/flow-read";
 import type { RunState } from "../../src/runs";
@@ -71,18 +60,10 @@ import { readReplies } from "../../src/replies";
 import { disputesIn } from "../../src/proactive";
 import { AwaitingJson, awaitingLine } from "../../src/awaiting";
 import { installFakeSkills } from "./defs";
-import { Agents, agentsLayer, type AgentHost } from "../../src/agents";
-import {
-  Children,
-  Host,
-  Run,
-  WorkflowError,
-  evidenceGapsOf,
-  type ActionFacts,
-  type ChildAsk,
-  type Claimed,
-  type Issue,
-} from "../../src/sdk";
+import { Agents, agentsLayer } from "../../src/agents";
+import type { AgentHost } from "../../src/agents";
+import { Children, Host, Run, WorkflowError, evidenceGapsOf } from "../../src/sdk";
+import type { ActionFacts, ChildAsk, Claimed, Issue } from "../../src/sdk";
 import { readStepLines } from "../../src/steps";
 import { measuresOf } from "../../src/outcomes";
 import { redact } from "../../src/redact";
@@ -93,13 +74,8 @@ import leakingReview from "../fixtures/public-text/mr-522-note-1839712.md" with 
 import { INTENT_FILE, IntentSchema, amend, seedIntent, writeIntent } from "../../src/intent";
 import selfImprove from "../../workflows/self-improve.workflow";
 import { invocationFor } from "../../workflows/staging";
-import {
-  type Finding,
-  type Improvement,
-  keysIn,
-  markerOf,
-  sortOut,
-} from "../../workflows/retrospective";
+import { keysIn, markerOf, sortOut } from "../../workflows/retrospective";
+import type { Finding, Improvement } from "../../workflows/retrospective";
 import type { RunStatus } from "../../src/engine";
 import {
   AWAITING,
@@ -134,8 +110,10 @@ import {
 } from "../../src/verify";
 import { inputsFor, offersFrom } from "../../src/offers";
 import { Store } from "../../src/store";
-import { readStageProof, type ShippingGo } from "../../src/shipping";
-import { recordsAt, type Records } from "../../src/records";
+import { readStageProof } from "../../src/shipping";
+import type { ShippingGo } from "../../src/shipping";
+import { recordsAt } from "../../src/records";
+import type { Records } from "../../src/records";
 import { registerAgent, scopeFor } from "../../src/registry";
 import { deliveriesOf, SENT_STATES } from "../../src/steering";
 import { fixtures, until } from "./host";

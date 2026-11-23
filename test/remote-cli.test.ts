@@ -20,7 +20,8 @@ import { encodeVerifying, readVerifications, VERIFYING } from "../src/verify";
 import { runEffect } from "./support/effect";
 import { exec } from "./support/command";
 import { until } from "./support/host";
-import { twoMachines, type Side } from "./support/peers";
+import { twoMachines } from "./support/peers";
+import type { Side } from "./support/peers";
 import { collieCommand } from "./support/world";
 
 const started = flow(

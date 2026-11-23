@@ -3,20 +3,12 @@ import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
-import {
-  Config,
-  Duration,
-  Effect,
-  FileSystem,
-  Option,
-  Schema,
-  type Scope,
-  flow,
-  Result,
-} from "effect";
+import { Config, Duration, Effect, FileSystem, Option, Schema, flow, Result } from "effect";
+import type { Scope } from "effect";
 import { act, bridgeCommand, openBridge } from "../desktop/src/bun/machine";
 import { questionnaire, questionnaireView, stepped } from "../desktop/src/shared/questionnaire";
-import { readEnv, type PluginEnv } from "../src/env";
+import { readEnv } from "../src/env";
+import type { PluginEnv } from "../src/env";
 import { Herdr } from "../src/herdr";
 import { resetExecutors } from "../src/executors";
 import { connect } from "../src/host";
@@ -25,14 +17,16 @@ import { SENT_STATES, appendLine } from "../src/steering";
 import { deliveredTo, hostRecords, recordsAt } from "./support/records";
 import { NOTIFIED, RunRecords } from "../src/run-records";
 import { TaskView } from "../src/board-model";
-import { read as readProposals, record as recordProposal, type Actor } from "../src/proposals";
+import { read as readProposals, record as recordProposal } from "../src/proposals";
+import type { Actor } from "../src/proposals";
 import { agentName } from "../src/naming";
 import { controlDir } from "../src/compaction";
 import { recordClaudeEvent } from "../src/compactors";
 import { epochMs, nowIso } from "../src/time";
 import { suiteEnv } from "./support/effect";
 import { root, stopHost, until } from "./support/host";
-import { collie, proves, type World } from "./support/world";
+import { collie, proves } from "./support/world";
+import type { World } from "./support/world";
 import type { FakeHc } from "./support/fake-hc";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);

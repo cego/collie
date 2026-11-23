@@ -27,10 +27,12 @@ import {
   recordSkipped,
   splitDiff,
   supersededBy,
-  type RuleFacts,
 } from "../src/drift";
-import { seedIntent, type Constraint, type Intent } from "../src/intent";
-import { EvaluatorUnavailable, type DriftReport } from "../src/evaluator";
+import type { RuleFacts } from "../src/drift";
+import { seedIntent } from "../src/intent";
+import type { Constraint, Intent } from "../src/intent";
+import { EvaluatorUnavailable } from "../src/evaluator";
+import type { DriftReport } from "../src/evaluator";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { readBudget } from "../src/steering";

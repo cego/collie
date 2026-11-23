@@ -4,13 +4,16 @@ import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
-import { platformLayer, type PlatformServices } from "../src/platform";
-import { Effect, FileSystem, Queue, type Scope } from "effect";
+import { platformLayer } from "../src/platform";
+import type { PlatformServices } from "../src/platform";
+import { Effect, FileSystem, Queue } from "effect";
+import type { Scope } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 import { signRelease } from "../src/signing";
 import { epochMs } from "../src/time";
-import { localRoute, type ShellRoute } from "../desktop/src/bun/machine";
+import { localRoute } from "../desktop/src/bun/machine";
+import type { ShellRoute } from "../desktop/src/bun/machine";
 import { onboardThrough, platformOf } from "../desktop/src/bun/onboarding";
 import {
   claudeLoginThrough,
@@ -19,10 +22,9 @@ import {
   gitlabToken,
   helleOwner,
   credentialsFile,
-  type Keyring,
-  type KeyringEntry,
   secretsFor,
 } from "../desktop/src/bun/credentials";
+import type { Keyring, KeyringEntry } from "../desktop/src/bun/credentials";
 import { fingerprint, givenCredentials } from "../desktop/src/bun/given";
 import type { Credential, MachineGiven, OnboardRun } from "../desktop/src/shared/flock";
 import { renewalDue } from "../src/gitlab-token";

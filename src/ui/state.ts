@@ -7,21 +7,17 @@ import type { PendingChoice } from "../board";
 import type { UsageReading } from "../usage-model";
 import type { PickItem } from "../inputs";
 import { GLYPH } from "../naming";
-import { markFor, marksOf, NO_MARKS, worstOf, type Marks } from "../lines";
+import { markFor, marksOf, NO_MARKS, worstOf } from "../lines";
+import type { Marks } from "../lines";
 import { agoShort } from "../time";
 import type { Mode } from "../flows";
 import type { DefinitionRow, SettingsView } from "../views";
-import { MAX_AGENTS, type AgentRow, type RunRow } from "../workspace";
+import { MAX_AGENTS } from "../workspace";
+import type { AgentRow, RunRow } from "../workspace";
 import type { WideGroup, WideView, WorkspaceView } from "../workspace";
 import type { Density } from "../settings";
-import {
-  type CardAction,
-  cardActions,
-  dispositionActions,
-  primaryAction,
-  type RunDetail,
-  type TaskView,
-} from "../board-model";
+import { cardActions, dispositionActions, primaryAction } from "../board-model";
+import type { CardAction, RunDetail, TaskView } from "../board-model";
 import { mrTarget } from "../mr";
 import { disposeLabel, mrUrlOf, openMrLabel, readMrRef } from "../board-model";
 import type { Live } from "../live";

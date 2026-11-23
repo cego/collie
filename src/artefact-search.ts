@@ -2,7 +2,8 @@
 import { Cause, Data, Effect, Option, Schema } from "effect";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import { Artefact, ArtefactKey, type ArtefactMatches, type ArtefactSearch } from "./artefact-model";
+import { Artefact, ArtefactKey } from "./artefact-model";
+import type { ArtefactMatches, ArtefactSearch } from "./artefact-model";
 import { HostRefused } from "./board-model";
 
 export class Away extends Data.TaggedError("Away")<{

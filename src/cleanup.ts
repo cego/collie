@@ -19,46 +19,29 @@ import type { Records } from "./records";
 import { STOP } from "./controls";
 import { RunRecords } from "./run-records";
 import { readEnv } from "./env";
-import {
-  FrontDoor,
-  mrLabel,
-  sectionOf,
-  Where,
-  type Section,
-  type TaskView,
-  type CleanupItem,
-  type CleanupKept,
-  CleanupReport,
-} from "./board-model";
-import { herdrFailureReason, type AgentInfo, type AgentStatus, type Herdr } from "./herdr";
-import { isOpen, readTask, removeTask, withTaskLock, writeTask, type TaskRecord } from "./task";
+import { FrontDoor, mrLabel, sectionOf, Where, CleanupReport } from "./board-model";
+import type { Section, TaskView, CleanupItem, CleanupKept } from "./board-model";
+import { herdrFailureReason } from "./herdr";
+import type { AgentInfo, AgentStatus, Herdr } from "./herdr";
+import { isOpen, readTask, removeTask, withTaskLock, writeTask } from "./task";
+import type { TaskRecord } from "./task";
 import { appendJournal, readJournal } from "./journal";
 import { mrIdIn, shell } from "./mr";
 import type { AgentEntry } from "./registry";
-import { settled, type RunFacts } from "./runs";
+import { settled } from "./runs";
+import type { RunFacts } from "./runs";
 import { epochMs, nowIso, took } from "./time";
-import {
-  isDestinationLock,
-  isTheOneMade,
-  judgeWorktrees,
-  onBranch,
-  PRUNE_FILE,
-  type Landed,
-  type Settling,
-} from "./worktree";
+import { isDestinationLock, isTheOneMade, judgeWorktrees, onBranch, PRUNE_FILE } from "./worktree";
+import type { Landed, Settling } from "./worktree";
 import { readForge, readMrStates } from "./merges";
 import { latest, readDispositions } from "./disposition";
 import { repositoryOf } from "./strategies";
 import { forgetDeliveries, LEDGER_FILE, newestById, readLedger } from "./steering";
 import { readQueue } from "./delivery-queue";
-import { desktopVerdicts, trimUsage, type DesktopOwn } from "./desktop";
-import {
-  CONTROL_DIR,
-  keptFor,
-  putDownControl,
-  readControl,
-  type CompactionPorts,
-} from "./compaction";
+import { desktopVerdicts, trimUsage } from "./desktop";
+import type { DesktopOwn } from "./desktop";
+import { CONTROL_DIR, keptFor, putDownControl, readControl } from "./compaction";
+import type { CompactionPorts } from "./compaction";
 import type { Launched } from "./launches";
 import { launchDir, launchesOf, readLaunches, stemOf } from "./launches";
 import { endAgent, runLog } from "./agent-end";

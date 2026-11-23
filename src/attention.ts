@@ -3,7 +3,8 @@ import * as Option from "effect/Option";
 import { Effect } from "effect";
 import { currentReports, openReports, readDrift } from "./drift";
 import { readCards } from "./cards";
-import { settled, type RunFacts } from "./runs";
+import { settled } from "./runs";
+import type { RunFacts } from "./runs";
 import type { Attention } from "./board-model";
 
 export const attentionFor = Effect.fn("attention.attentionFor")(function* (run: RunFacts) {

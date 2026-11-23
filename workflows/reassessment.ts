@@ -9,10 +9,8 @@ import {
   formatFindings,
   template,
   leaveReview,
-  type Finding,
-  type MrRead,
-  type SynthesisReport,
 } from "collie";
+import type { Finding, MrRead, SynthesisReport } from "collie";
 import { Effect, FileSystem, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import markdown from "./reassess.md" with { type: "text" };

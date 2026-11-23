@@ -5,7 +5,8 @@ import { Effect } from "effect";
 import { RunRecords } from "../src/run-records";
 import { Store } from "../src/store";
 import { stepTimesByWorkflow, usualStepTimes } from "../src/step-durations";
-import { encodeStepLine, STEPS_FILE, type StepLine } from "../src/steps";
+import { encodeStepLine, STEPS_FILE } from "../src/steps";
+import type { StepLine } from "../src/steps";
 import { memoryRecords, runEffect } from "./support/effect";
 
 const at = (minute: number) => `2026-10-01T00:${Str.padStart(2, "0")(String(minute))}:00.000Z`;

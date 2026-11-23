@@ -11,10 +11,8 @@ import {
   WorkflowError,
   ask,
   mrSet,
-  type ActionFacts,
-  type ChildAsk,
-  type JobLink,
 } from "collie";
+import type { ActionFacts, ChildAsk, JobLink } from "collie";
 import { Effect, Schema, Option } from "effect";
 import * as Activity from "effect/workflow/Activity";
 

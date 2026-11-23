@@ -2,14 +2,8 @@
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
-import {
-  type MrDetails,
-  type MrPanel,
-  type MrRef,
-  mrWords,
-  parseMrUrl,
-  readMrRef,
-} from "../../../src/board-model";
+import { mrWords, parseMrUrl, readMrRef } from "../../../src/board-model";
+import type { MrDetails, MrPanel, MrRef } from "../../../src/board-model";
 
 const capital = (text: string) => `${Str.toUpperCase(text[0]!)}${pipe(text, Str.slice(1))}`;
 

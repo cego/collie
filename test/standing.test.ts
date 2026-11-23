@@ -1,6 +1,7 @@
 // WARNING: Classification uses what a Run left behind, never its workflow's name; a renamed fork classifies the same.
 import { expect, test } from "bun:test";
-import { filed, standingOf, type WorkFacts } from "../src/standing";
+import { filed, standingOf } from "../src/standing";
+import type { WorkFacts } from "../src/standing";
 
 const facts = (over: Partial<WorkFacts> = {}) => ({
   settled: true,

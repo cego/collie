@@ -7,12 +7,11 @@ import {
   decideCorrections,
   pendingEvaluation,
   shouldStand,
-  type CorrectionContext,
-  type DriftLine,
-  type ElectionLine,
   staleSince,
 } from "../src/drift";
-import { DEFAULT_AUTHORITY, seedIntent, type Authority } from "../src/intent";
+import type { CorrectionContext, DriftLine, ElectionLine } from "../src/drift";
+import { DEFAULT_AUTHORITY, seedIntent } from "../src/intent";
+import type { Authority } from "../src/intent";
 import type { DriftReport } from "../src/evaluator";
 
 const report: (over?: Partial<DriftReport>) => DriftReport = (over = {}) => ({

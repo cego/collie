@@ -1,7 +1,8 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
-import { SELF, inputsFor, offersFrom, taskOffers, type Declared } from "../src/offers";
+import { SELF, inputsFor, offersFrom, taskOffers } from "../src/offers";
+import type { Declared } from "../src/offers";
 import type { ActionFacts } from "../src/sdk";
 import reviewWorkflow from "../workflows/review.workflow";
 import { declaredByModule } from "../src/engine";

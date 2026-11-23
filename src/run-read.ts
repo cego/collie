@@ -3,14 +3,19 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { Effect, Option, Schema } from "effect";
 import type { PluginEnv } from "./env";
-import { runDir, type RunView } from "./engine";
-import { asks, asksArtefactRun, asksRun, hostTasks, type Door } from "./lifecycle";
+import { runDir } from "./engine";
+import type { RunView } from "./engine";
+import { asks, asksArtefactRun, asksRun, hostTasks } from "./lifecycle";
+import type { Door } from "./lifecycle";
 import { withArtefacts } from "./artefact-client";
-import { readAudit, type AuditLine } from "./audit";
+import { readAudit } from "./audit";
+import type { AuditLine } from "./audit";
 import { recordsReadLayer } from "./records";
 import { readIntent } from "./intent";
-import { err, type Failure } from "./operations";
-import { linesOf, linesError, wholeText, type LinesAsked } from "./text-lines";
+import { err } from "./operations";
+import type { Failure } from "./operations";
+import { linesOf, linesError, wholeText } from "./text-lines";
+import type { LinesAsked } from "./text-lines";
 
 const UnknownJson = Schema.fromJsonString(Schema.Unknown);
 

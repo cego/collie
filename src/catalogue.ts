@@ -23,9 +23,8 @@ import {
   piEntries,
   tableEntries,
   withAdded,
-  type CatalogueEntry,
-  type HarnessCatalogue,
 } from "./catalogue-model";
+import type { CatalogueEntry, HarnessCatalogue } from "./catalogue-model";
 import { loadDefaults } from "./config";
 import { currentEnv } from "./env";
 import { reason } from "./naming";

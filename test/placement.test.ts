@@ -26,16 +26,10 @@ import { FORGE_HOST, forgeOnPath, serveForges, storedAnswers } from "./support/f
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
 import { fixtures, until } from "./support/host";
-import { agentsLayer, type AgentHost } from "../src/agents";
-import {
-  Registry,
-  evidenceDir,
-  foundationLayer,
-  registryLayer,
-  runDir,
-  type Generation,
-  type HostServices,
-} from "../src/engine";
+import { agentsLayer } from "../src/agents";
+import type { AgentHost } from "../src/agents";
+import { Registry, evidenceDir, foundationLayer, registryLayer, runDir } from "../src/engine";
+import type { Generation, HostServices } from "../src/engine";
 import { Store } from "../src/store";
 import { readLaunches, recordLaunch } from "../src/launches";
 import { sweep, tasksSweeper, worktreesSweeper } from "../src/cleanup";
@@ -45,7 +39,8 @@ import { factsOfView } from "../src/runs";
 import type * as MessageStorage from "effect/cluster/MessageStorage";
 import { SqlClient } from "effect/sql";
 import { approvedIn } from "../src/verify-spec";
-import { readTask, writeTask, type TaskRecord } from "../src/task";
+import { readTask, writeTask } from "../src/task";
+import type { TaskRecord } from "../src/task";
 import type { MrState } from "../src/board-model";
 import { HELLE_URL } from "../src/helle-url";
 import type { Call } from "./support/recorder";

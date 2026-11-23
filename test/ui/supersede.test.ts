@@ -5,7 +5,8 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Deferred, Effect, FileSystem, Queue, Stream } from "effect";
 import { Rig } from "../support/recorder";
 import { runEffect } from "../support/effect";
-import { driveBridge, type Focus } from "../../src/ui/bridge";
+import { driveBridge } from "../../src/ui/bridge";
+import type { Focus } from "../../src/ui/bridge";
 import type { AppState, Command } from "../../src/ui/state";
 import { epochMs } from "../../src/time";
 

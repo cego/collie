@@ -14,8 +14,8 @@ import {
   read,
   record,
   stepStarted,
-  type Actor,
 } from "../src/proposals";
+import type { Actor } from "../src/proposals";
 import { StoreWrites } from "../src/store-writes";
 import { runEffect } from "./support/effect";
 import { stopHost } from "./support/host";

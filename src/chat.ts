@@ -10,11 +10,13 @@ import { autoCompactWindowAsWritten, readConfig, standingDirectionOn } from "./c
 import { standingDirectionContext } from "./standing-direction";
 import { redact } from "./redact";
 import { NATIVE, newsPath } from "./news";
-import { selfCommand, type PluginEnv } from "./env";
+import { selfCommand } from "./env";
+import type { PluginEnv } from "./env";
 import { autoCompactWindowFor, HARNESSES, installedHelp } from "./harness";
 import type { Herdr } from "./herdr";
 import { reason } from "./naming";
-import { isString, type JsonObject } from "./schema";
+import { isString } from "./schema";
+import type { JsonObject } from "./schema";
 import type { AutoCompactWindow } from "./settings";
 import type { YamlMap } from "./yaml";
 import { herdDir, machineHerd } from "./steering";

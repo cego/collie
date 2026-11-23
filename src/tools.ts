@@ -40,15 +40,16 @@ import {
   showOffers,
   catalogueReadings,
   connectionReadings,
-  type Door,
   hostRunProposals,
   hostTasks,
   flockArtefacts,
   flockRunPage,
   asksArtefactRun,
 } from "./lifecycle";
+import type { Door } from "./lifecycle";
 import { listAsked } from "./run-list";
-import { readArtefactLines, readRunLines, type RunScope } from "./run-read";
+import { readArtefactLines, readRunLines } from "./run-read";
+import type { RunScope } from "./run-read";
 import { DEFAULT_LINES, linesError } from "./text-lines";
 import { modelsLines } from "./catalogue-model";
 import { connectionsLines } from "./connection-model";
@@ -57,11 +58,13 @@ import { cleanupLines } from "./cleanup";
 import { isOpen } from "./task";
 import { pendingFor } from "./proposals";
 import { statusLine } from "./disposition";
-import { ASKED_KINDS, Flow, type FLOCK_READS, type RunProgress } from "./board-model";
+import { ASKED_KINDS, Flow } from "./board-model";
+import type { FLOCK_READS, RunProgress } from "./board-model";
 import { asText as newsText, NATIVE } from "./news";
 import { reportLines } from "./report";
 import { epochMs } from "./time";
-import { findRun, listRuns, type RunFacts } from "./runs";
+import { findRun, listRuns } from "./runs";
+import type { RunFacts } from "./runs";
 import { progressReadyLines } from "./following";
 import { donePasses, markersOf, runningCheck } from "./checks";
 import { memoryWaitOf, waitLine } from "./memory-wait";
@@ -70,14 +73,17 @@ import { loadDefinitions, layers } from "./definitions";
 import { chatHarnessOf, chatPath, heardVoice, pushable, readChat, whyUnavailable } from "./chat";
 import { doctor } from "./doctor";
 import { savedReaches, standingDirectionOn } from "./config";
-import { reachOf, type Reach } from "./reach";
+import { reachOf } from "./reach";
+import type { Reach } from "./reach";
 import { standingDirectionContext } from "./standing-direction";
 import { defaultsPath, describeDefaults, EMPTY_DEFAULTS, readDefaults } from "./intent";
 import { scopeFor, scopeKey } from "./registry";
 import { readSelection, selectionPath } from "./selection";
-import { isString, type JsonObject } from "./schema";
+import { isString } from "./schema";
+import type { JsonObject } from "./schema";
 import { scheduleLines } from "./schedule-model";
-import { checkModule, readModule, type Checked as ModuleCheck, type Described } from "./authoring";
+import { checkModule, readModule } from "./authoring";
+import type { Checked as ModuleCheck, Described } from "./authoring";
 import { savedModules } from "./discovery";
 import type { DefinitionInput, HoldInput, RunInput, RunListInput } from "./toolkit";
 import {
@@ -92,13 +98,12 @@ import {
   refused,
   refusedActions,
   searchesArtefacts,
-  type Settle,
   SETTLE_KINDS,
   SubmitInput,
   SubmitTool,
   TAKES,
-  type ToolName,
 } from "./toolkit";
+import type { Settle, ToolName } from "./toolkit";
 
 // WARNING: a tool call cannot fail into the conversation: an unreadable record is an answer the model can act on.
 type ToolAnswer = Effect.Effect<

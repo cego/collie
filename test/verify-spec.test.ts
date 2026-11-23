@@ -15,7 +15,8 @@ import {
   PROJECT_FILE,
 } from "../src/verify-spec";
 import { DEFAULT_AUTHORITY, readIntent, seedIntent, writeIntent } from "../src/intent";
-import { VerifySpecSchema, type VerifySpec } from "../src/verify-spec";
+import { VerifySpecSchema } from "../src/verify-spec";
+import type { VerifySpec } from "../src/verify-spec";
 import { Schema } from "effect";
 
 const encodeSpecs = flow(

@@ -5,7 +5,8 @@ import * as Rec from "effect/Record";
 import * as Option from "effect/Option";
 import { DEFAULT_MODEL } from "./harness";
 import { mrWords, parseMrTarget } from "./board-model";
-import { diffTargetOf, type Settled } from "./strategies";
+import { diffTargetOf } from "./strategies";
+import type { Settled } from "./strategies";
 import { stringifyJson } from "./json";
 
 const MAX = 32;

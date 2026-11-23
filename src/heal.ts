@@ -3,8 +3,10 @@ import * as Option from "effect/Option";
 import { Effect, Schema } from "effect";
 import type { PluginEnv } from "./env";
 import { configValue, readConfig } from "./config";
-import { HealFinding, type Metric } from "./metrics";
-import { PARK_CAUSES, type ParkCause } from "./park-cause";
+import { HealFinding } from "./metrics";
+import type { Metric } from "./metrics";
+import { PARK_CAUSES } from "./park-cause";
+import type { ParkCause } from "./park-cause";
 import { LAYERS } from "./definitions-model";
 import { ProducerReport } from "./narrative-model";
 

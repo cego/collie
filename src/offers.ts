@@ -3,7 +3,8 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
 import type { ActionFacts, OfferGiven, Ships } from "./sdk";
-import { Schema, type Types } from "effect";
+import { Schema } from "effect";
+import type { Types } from "effect";
 import type { ConnectionId } from "./connection-model";
 
 export const SELF = "";

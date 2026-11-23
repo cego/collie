@@ -5,7 +5,8 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { runEffect } from "./support/effect";
 import { claudeTrust } from "../src/trust";
-import { isYamlMap, YamlMapSchema, type YamlMap } from "../src/yaml";
+import { isYamlMap, YamlMapSchema } from "../src/yaml";
+import type { YamlMap } from "../src/yaml";
 
 const join = (...parts: Array<string>) => pipe_(Arr.join(parts, "/"), Str.replaceAll(/\/+/g, "/"));
 

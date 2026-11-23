@@ -31,13 +31,15 @@ import type { CiJob, TakeTarget, TargetFailure } from "./ci-job";
 import type { ParkCause } from "./park-cause";
 import type { PipelineStart } from "./forge/forge";
 import type { ChildProcessSpawner } from "effect/process";
-import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
+import { WorkflowInstance } from "effect/workflow/WorkflowEngine";
+import type { WorkflowEngine } from "effect/workflow/WorkflowEngine";
 import * as Activity from "effect/workflow/Activity";
 import * as DurableDeferred from "effect/workflow/DurableDeferred";
 import * as Workflow from "effect/workflow/Workflow";
 import type { Agents } from "./agents";
 import type { RunAuthority } from "./automode";
-import { bodySections, INPUT_STRATEGIES, type InputStrategy } from "./definitions";
+import { bodySections, INPUT_STRATEGIES } from "./definitions";
+import type { InputStrategy } from "./definitions";
 import { exclusiveClashes, launchInputProblem } from "./strategies";
 import { expressionsIn, malformedIn } from "./template";
 import {
@@ -49,19 +51,13 @@ import {
   reviewGaps,
   isOutcome,
   refInside,
-  type Outcome,
 } from "./outcome";
+import type { Outcome } from "./outcome";
 import type { Source } from "./offers";
 import { ShippingGo } from "./shipping";
 export type { ShippingGo } from "./shipping";
-import {
-  CurrentStep,
-  runKey,
-  type Produces,
-  type StepKind,
-  type StepMeta,
-  type StepNote,
-} from "./steps";
+import { CurrentStep, runKey } from "./steps";
+import type { Produces, StepKind, StepMeta, StepNote } from "./steps";
 import type { Asker } from "./proposals";
 import type { UsageReading } from "./usage-model";
 import type { Recovery, ReviewScope } from "./recovery";
@@ -70,7 +66,8 @@ import type { Integration } from "./integrate";
 import type { BenchmarkPlan, Measurement } from "./measurement-model";
 import type { MergeOutcome, Takeover } from "./landing";
 import type { ReviewHead, ReviewStanding } from "./review-wait";
-import { Woke, type WatchCursor } from "./mr-watch-model";
+import { Woke } from "./mr-watch-model";
+import type { WatchCursor } from "./mr-watch-model";
 import type { PrerequisiteStanding } from "./prerequisites";
 import type {
   FastForward,
@@ -82,7 +79,8 @@ import type {
 } from "./releasing";
 import type { Holders } from "./helle";
 import type { RunFeatures } from "./run-features";
-import { ConnectionId, type ConnectionReading } from "./connection-model";
+import { ConnectionId } from "./connection-model";
+import type { ConnectionReading } from "./connection-model";
 export { ConnectionId, ConnectionReading } from "./connection-model";
 
 export { EXCLUSIVE_STRATEGIES } from "./strategies";
@@ -110,7 +108,8 @@ export {
   type MrRef,
 } from "./board-model";
 export type { WatchChange, WatchCursor, Woke } from "./mr-watch-model";
-import { AuthoredSolution, type Solution } from "./board-model";
+import { AuthoredSolution } from "./board-model";
+import type { Solution } from "./board-model";
 /** What merging the default branch into a Run's branch did (`HostApi.integrate`). */
 export { IntegrationSchema, type Integration } from "./integrate";
 /** A Measurement as the host recorded it (`HostApi.measure`), an infinite ratio kept as JSON. */

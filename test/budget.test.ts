@@ -9,7 +9,6 @@ import {
   admission,
   admitted,
   budgetOf,
-  type Entry,
   enqueue,
   entriesOf,
   HOLD_ENV,
@@ -18,6 +17,7 @@ import {
   processOf,
   startOnHold,
 } from "../tools/budget";
+import type { Entry } from "../tools/budget";
 import { runEffect } from "./support/effect";
 import { until } from "./support/host";
 import { stringifyJson } from "../src/json";

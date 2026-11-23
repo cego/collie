@@ -9,23 +9,19 @@ import { Deferred, Effect, Fiber, FileSystem, Layer, Result, Schema, flow, pipe 
 import type * as MessageStorage from "effect/cluster/MessageStorage";
 import type { SqlClient } from "effect/sql";
 import type { PlatformServices } from "../src/platform";
-import { Rig, type Call } from "./support/recorder";
+import { Rig } from "./support/recorder";
+import type { Call } from "./support/recorder";
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { fixtures } from "./support/host";
 import { TestClock } from "effect/testing";
-import { Agents, agentsLayer, type AgentHost, type RunNow } from "../src/agents";
+import { Agents, agentsLayer } from "../src/agents";
+import type { AgentHost, RunNow } from "../src/agents";
 import { endAgent } from "../src/agent-end";
 import { readControl } from "../src/compaction";
 import { processAbsent } from "../src/processes";
 import { launchDir, readLaunches, recordLaunch, stemOf } from "../src/launches";
-import {
-  PARK_CAUSE,
-  Registry,
-  foundationLayer,
-  registryLayer,
-  type Generation,
-  type HostServices,
-} from "../src/engine";
+import { PARK_CAUSE, Registry, foundationLayer, registryLayer } from "../src/engine";
+import type { Generation, HostServices } from "../src/engine";
 import type { Store } from "../src/store";
 import { agentName } from "../src/naming";
 import { deliveredTo, hostRecords, hostRunRecords, recordsAt } from "./support/records";

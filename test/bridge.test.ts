@@ -14,7 +14,8 @@ import { ownerOf } from "../src/host";
 import { actorName } from "../src/proposals";
 import { suiteEnv } from "./support/effect";
 import { root, stopHost } from "./support/host";
-import { proves, type World } from "./support/world";
+import { proves } from "./support/world";
+import type { World } from "./support/world";
 
 const READY = `${BRIDGE_READY}\n`;
 const asCommand = flow(

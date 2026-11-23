@@ -2,7 +2,8 @@ import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import type { ScheduleChange, ScheduleChanged, ScheduleEntry } from "../src/schedule-model";
-import { moveSchedule, type ScheduleDoor } from "../src/schedule-move";
+import { moveSchedule } from "../src/schedule-move";
+import type { ScheduleDoor } from "../src/schedule-move";
 
 const entry = (machine: string, over: Partial<ScheduleEntry> = {}) => ({
   machine: { installation: `i-${machine}`, hostname: machine },

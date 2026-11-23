@@ -4,7 +4,8 @@ import { Effect, Schema, SchemaRepresentation, Stream } from "effect";
 import { RunDetail } from "../src/board-model";
 import { frontDoor, socketOf } from "../src/host";
 import { stopHost } from "./support/host";
-import { collie, proves, type World } from "./support/world";
+import { collie, proves } from "./support/world";
+import type { World } from "./support/world";
 import frozenJson from "./fixtures/run-detail-base.json";
 
 // WARNING: master's wire schema before revisions, as an older client decodes it; this fixture is frozen.

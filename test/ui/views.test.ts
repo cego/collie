@@ -7,7 +7,8 @@ import type { PlatformServices } from "../../src/platform";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { PlatformError } from "effect";
 import { DateTime, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
-import { Rig, type RigError } from "../support/recorder";
+import { Rig } from "../support/recorder";
+import type { RigError } from "../support/recorder";
 import { installBaseline } from "../support/engine";
 import { installFakeSkills } from "../support/defs";
 import { runEffect } from "../support/effect";
@@ -17,8 +18,8 @@ import {
   buildSettings,
   buildWorkflows,
   planTicket,
-  type PlanCache,
 } from "../../src/views";
+import type { PlanCache } from "../../src/views";
 import { FINDINGS_FILE, FindingSchema, REVIEW_FILE } from "../../src/output";
 import type { RunFacts } from "../../src/runs";
 import { madeRun } from "../support/records";

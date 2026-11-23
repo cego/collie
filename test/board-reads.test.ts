@@ -13,8 +13,8 @@ import {
   NOTIFIED,
   parentOf,
   RunRecords,
-  type RunRecordsApi,
 } from "../src/run-records";
+import type { RunRecordsApi } from "../src/run-records";
 import { epochMs } from "../src/time";
 import { Launches } from "../src/launches";
 import { Deliveries } from "../src/steering";

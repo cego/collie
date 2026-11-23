@@ -5,12 +5,11 @@ import { Clock, Effect, FileSystem, Schema, Semaphore, Stream } from "effect";
 import {
   applyItem,
   EMPTY_FLOCK,
-  type FlockItem,
-  type FlockMachine,
   MachineOnboarding,
   MachineSaved,
   MachineOwnRead,
 } from "../shared/flock";
+import type { FlockItem, FlockMachine } from "../shared/flock";
 
 const SavedFile = Schema.fromJsonString(MachineSaved);
 const OnboardingFile = Schema.fromJsonString(MachineOnboarding);

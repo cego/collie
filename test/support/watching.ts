@@ -1,30 +1,17 @@
 import { Herdr } from "../../src/herdr";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import {
-  ConfigProvider,
-  Effect,
-  FileSystem,
-  Layer,
-  Result,
-  Schedule,
-  Schema,
-  flow,
-  type Scope,
-} from "effect";
+import { ConfigProvider, Effect, FileSystem, Layer, Result, Schedule, Schema, flow } from "effect";
+import type { Scope } from "effect";
 import type { PlatformServices } from "../../src/platform";
 import type { Rig } from "./recorder";
 import { fastForward, runEffect as runLive } from "./effect";
 import { FakeBin } from "./bin";
-import { forgeOnPath, serveForges, type ForgeModel } from "./forge";
+import { forgeOnPath, serveForges } from "./forge";
+import type { ForgeModel } from "./forge";
 import { agentsLayer } from "../../src/agents";
-import {
-  Registry,
-  foundationLayer,
-  registryLayer,
-  type Generation,
-  type HostServices,
-} from "../../src/engine";
+import { Registry, foundationLayer, registryLayer } from "../../src/engine";
+import type { Generation, HostServices } from "../../src/engine";
 import { Store } from "../../src/store";
 import { Host } from "../../src/sdk";
 import { buildBoard } from "../../src/board";

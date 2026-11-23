@@ -13,7 +13,8 @@ import { readVerifications } from "../src/verify";
 import { deliveredTo, hostRecords, recordsAt, registeredAt } from "./support/records";
 import { runEffect } from "./support/effect";
 import { stopHost, until } from "./support/host";
-import { type Side, twoMachines } from "./support/peers";
+import { twoMachines } from "./support/peers";
+import type { Side } from "./support/peers";
 import { parseJson } from "../src/json";
 
 const encodeValue = flow(

@@ -1,5 +1,6 @@
 // WARNING: Bun's terminal, not `script`: util-linux, BSD and macOS differ in flags and socket handling.
-import { type Cause, Effect, Queue, type Scope, Stream } from "effect";
+import { Effect, Queue, Stream } from "effect";
+import type { Cause, Scope } from "effect";
 
 export interface InTerminal {
   readonly output: Stream.Stream<Uint8Array>;

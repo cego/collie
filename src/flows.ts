@@ -13,7 +13,6 @@ import {
   Clock,
   Config,
   Console,
-  type Duration,
   Effect,
   FileSystem,
   Option,
@@ -23,21 +22,26 @@ import {
   Schema,
   Stream,
 } from "effect";
+import type { Duration } from "effect";
 import { EXCLUSIVE_STRATEGIES, strategyMeaning } from "./strategies";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { insideCheckout } from "./agent-start";
 import { placeableUnder, placedByUrl, routed, routerDeps } from "./route";
-import { offerChoices, offerFields, offerInput, StepResult, type RunDetail } from "./board-model";
+import { offerChoices, offerFields, offerInput, StepResult } from "./board-model";
+import type { RunDetail } from "./board-model";
 import { gitlabHostOf, loadDefaults, savedReach, setSetting } from "./config";
 import { reachOf, savedFirst } from "./reach";
 import { parseSetting, settingText } from "./settings";
 import { herdDir, machineHerd } from "./steering";
-import { liveFor, markedOf, type Ledgers } from "./live";
+import { liveFor, markedOf } from "./live";
+import type { Ledgers } from "./live";
 import { RunRecords } from "./run-records";
-import { isStale, layers, loadDefinitions, type Definitions, type Provenance } from "./definitions";
+import { isStale, layers, loadDefinitions } from "./definitions";
+import type { Definitions, Provenance } from "./definitions";
 import type { PluginEnv } from "./env";
 import type { Herdr } from "./herdr";
-import { inferInput, type InputPrompts, type PickItem } from "./inputs";
+import { inferInput } from "./inputs";
+import type { InputPrompts, PickItem } from "./inputs";
 import type { Found } from "./discovery";
 import {
   answerRun,
@@ -53,10 +57,8 @@ import {
   runDetailNow,
   asks,
   hostTasks,
-  type DetailKey,
   invokeOffer,
   launchProject,
-  type BoardRead,
   offersOf,
   resumeRun,
   savedModules,
@@ -67,21 +69,26 @@ import {
   hostProposals,
   hostRegistered,
 } from "./lifecycle";
+import type { DetailKey, BoardRead } from "./lifecycle";
 import type { UsageReading } from "./usage-model";
 import { keyboard } from "./keys";
-import { forkResolvedDefinition, type DefinitionKind } from "./fork";
+import { forkResolvedDefinition } from "./fork";
+import type { DefinitionKind } from "./fork";
 import { COLLIE_TAB, reason, runTitle } from "./naming";
-import { listRuns, settled, type RunFacts } from "./runs";
+import { listRuns, settled } from "./runs";
+import type { RunFacts } from "./runs";
 import type { AgentEntry } from "./registry";
 import { reportedWorktrees } from "./worktree";
-import { scopeFor, type RegistryScope } from "./registry";
+import { scopeFor } from "./registry";
+import type { RegistryScope } from "./registry";
 import type { CompactionSettings } from "./compaction";
 import { statusLine } from "./disposition";
 import { selectionPath, writeSelection } from "./selection";
 import type { TaskChoice, TaskRecord } from "./task";
 import { newRequestId } from "./operations";
 import { typedPaths } from "./attachments";
-import { answerFor, rereads, runIdOf, type AppState, type Command } from "./ui/state";
+import { answerFor, rereads, runIdOf } from "./ui/state";
+import type { AppState, Command } from "./ui/state";
 import type { Focus } from "./ui/bridge";
 import { buildHistory, buildSettings, buildWorkflows } from "./views";
 import { nowIso } from "./time";
@@ -90,15 +97,8 @@ import { forgeOf } from "./forge/forge";
 import { forgeHttpLayer } from "./forge/http";
 import { parseMrTarget, readMrRef } from "./board-model";
 import type { ChildProcessSpawner } from "effect/process";
-import {
-  agentForKey,
-  askingRun,
-  buildView,
-  renderWorkspace,
-  type Asking,
-  type RunRow,
-  type WorkspaceView,
-} from "./workspace";
+import { agentForKey, askingRun, buildView, renderWorkspace } from "./workspace";
+import type { Asking, RunRow, WorkspaceView } from "./workspace";
 
 const CarriedSteps = Schema.Struct({ results: Schema.Array(StepResult) });
 

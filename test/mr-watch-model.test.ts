@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { epochMs } from "../src/time";
-import { collieRunOf, judge, type MrReading, type WatchCursor } from "../src/mr-watch-model";
+import { collieRunOf, judge } from "../src/mr-watch-model";
+import type { MrReading, WatchCursor } from "../src/mr-watch-model";
 
 const H1 = "1111111111111111111111111111111111111111";
 const H2 = "2222222222222222222222222222222222222222";

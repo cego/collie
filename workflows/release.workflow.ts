@@ -32,13 +32,9 @@ import {
   stackOrder,
   step,
   stepFailed,
-  type ParkCause,
   waitsOnApproval,
-  type Finding,
-  type JobLink,
-  type OpenComment,
-  type ReviewStanding,
 } from "collie";
+import type { ParkCause, Finding, JobLink, OpenComment, ReviewStanding } from "collie";
 import { Effect, Option, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import * as DurableDeferred from "effect/workflow/DurableDeferred";
@@ -61,8 +57,8 @@ import {
   short,
   staging,
   startedWithOne,
-  type SetMember,
 } from "./staging.ts";
+import type { SetMember } from "./staging.ts";
 import onGitlab from "./release.gitlab.md" with { type: "text" };
 import onGithub from "./release.github.md" with { type: "text" };
 

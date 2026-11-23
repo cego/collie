@@ -1,7 +1,8 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
-import { type Node, parseMarkdown } from "comark";
+import { parseMarkdown } from "comark";
+import type { Node } from "comark";
 import { SAFE_PLUGINS } from "./markdown";
 
 export const planProgress = (tickets: ReadonlyArray<{ readonly done: boolean }>) =>

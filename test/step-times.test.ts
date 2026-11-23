@@ -17,7 +17,8 @@ import { Rig } from "./support/recorder";
 import { agentsLayer } from "../src/agents";
 import { Children, Host } from "../src/sdk";
 import { buildBoard } from "../src/board";
-import { sectionOf, type Flow } from "../src/board-model";
+import { sectionOf } from "../src/board-model";
+import type { Flow } from "../src/board-model";
 
 test("the host learns B from three completed Runs and keeps its usual time after their records go", () =>
   runEffect(

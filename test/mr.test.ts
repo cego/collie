@@ -5,14 +5,8 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
 import { forgeOfHost } from "../src/forge/forge";
-import {
-  fakeForge,
-  forgeHttpOver,
-  CLI,
-  FORGE_HOST,
-  PROJECT,
-  type ForgeModel,
-} from "./support/forge";
+import { fakeForge, forgeHttpOver, CLI, FORGE_HOST, PROJECT } from "./support/forge";
+import type { ForgeModel } from "./support/forge";
 import {
   autoMergingHere,
   forgeHere,

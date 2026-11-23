@@ -33,18 +33,21 @@ import {
   step,
   stepFailed,
   wholeRunsOwed,
-  type Finding,
-  type Snapshot,
-  type SynthesisReport,
-  type Template,
-  type Verification,
-  type VerifySpec,
+} from "collie";
+import type {
+  Finding,
+  Snapshot,
+  SynthesisReport,
+  Template,
+  Verification,
+  VerifySpec,
 } from "collie";
 import { CommandLine } from "effect/process";
 import { Result } from "effect";
 import { Effect, FileSystem, Schema, Stream } from "effect";
 import { connection } from "./connections.ts";
-import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
+import { WorkflowInstance } from "effect/workflow/WorkflowEngine";
+import type { WorkflowEngine } from "effect/workflow/WorkflowEngine";
 import * as Workflow from "effect/workflow/Workflow";
 import * as Activity from "effect/workflow/Activity";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";

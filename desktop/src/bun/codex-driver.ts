@@ -5,7 +5,6 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { hostname } from "node:os";
 import {
-  type Cause,
   Clock,
   Deferred,
   Effect,
@@ -19,11 +18,13 @@ import {
   flow,
   Result,
 } from "effect";
+import type { Cause } from "effect";
 import type { AguiEvent } from "../shared/agui";
 import { ends } from "../shared/agui";
 import { CodexModelList, codexEntries } from "../../../src/catalogue-model";
 import { CodexError } from "../../../src/codex";
-import { isNumber, isString, type JsonObject } from "../../../src/schema";
+import { isNumber, isString } from "../../../src/schema";
+import type { JsonObject } from "../../../src/schema";
 import { standingDirectionContext } from "../../../src/standing-direction";
 import type { ChatEndpoint } from "./chat-endpoint";
 import type { ListedModel } from "./claude-models";

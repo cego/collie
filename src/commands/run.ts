@@ -28,7 +28,8 @@ import { CommandLine } from "effect/process";
 import { redactedField, withNotice } from "../redact";
 import type { PlatformServices } from "../platform";
 import { Argument, Command, Flag } from "effect/cli";
-import { err, type Failure } from "../operations";
+import { err } from "../operations";
+import type { Failure } from "../operations";
 import { GIVEN, INFERRED } from "../engine";
 import { textOf } from "../runs";
 import { DEFAULT_LIMIT, LIST_STATES, listAsked, outputSummary } from "../run-list";
@@ -74,11 +75,8 @@ import {
   readDefaults,
   verificationGrant,
   writeDefaults,
-  type Change,
-  type Constraint,
-  type Defaults,
-  type Intent,
 } from "../intent";
+import type { Change, Constraint, Defaults, Intent } from "../intent";
 import { scopeFor, scopeKey } from "../registry";
 import type { TaskChoice } from "../task";
 import { runDeliveries } from "./steer";
@@ -88,31 +86,17 @@ import { PROJECTS_ROOT_OPTION, projectsRoot } from "../projects";
 import { currentReports } from "../drift";
 import { newest } from "../cards";
 import { metricsOf } from "../metrics";
-import { requestedByLine, ranOn, type RunAgent, type RunProgress } from "../board-model";
-import {
-  followEvents,
-  followLine,
-  readyLines,
-  reached,
-  UNTILS,
-  type Followed,
-  type Until,
-} from "../following";
+import { requestedByLine, ranOn } from "../board-model";
+import type { RunAgent, RunProgress } from "../board-model";
+import { followEvents, followLine, readyLines, reached, UNTILS } from "../following";
+import type { Followed, Until } from "../following";
 import { reportLines } from "../report";
 import { latest, statusLine } from "../disposition";
 import { replyLine } from "../replies";
 import { epochMs } from "../time";
 import type { PluginEnv } from "../env";
-import {
-  attempt,
-  guarded,
-  mutation,
-  ResultBoundary,
-  printResult,
-  say,
-  type CollieError,
-  type Result,
-} from "../envelope";
+import { attempt, guarded, mutation, ResultBoundary, printResult, say } from "../envelope";
+import type { CollieError, Result } from "../envelope";
 import {
   PrettyUnknownJson,
   UnknownJson,
@@ -128,8 +112,8 @@ import {
   root,
   selected,
   selectedTask,
-  type Global,
 } from "./shared";
+import type { Global } from "./shared";
 import { outOfReach, readRunLines } from "../run-read";
 import { DEFAULT_LINES } from "../text-lines";
 

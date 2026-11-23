@@ -25,7 +25,8 @@ import type { Scope } from "effect";
 import { KEPT_BYTES, SUPERVISE, checkFiles } from "./check-supervisor";
 import { boundProcesses, groupOf, startedOf, stillRunning } from "./processes";
 import { StepPlace } from "./steps";
-import { RUNNING_CHECK, RunRecords, type RunRecordsApi } from "./run-records";
+import { RUNNING_CHECK, RunRecords } from "./run-records";
+import type { RunRecordsApi } from "./run-records";
 import { epochMs, nowIso } from "./time";
 import { FailedTestSchema, VerificationSchema } from "./verify-model";
 

@@ -3,8 +3,10 @@ import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import { pipe } from "effect/Function";
 import { Duration, Effect, Result } from "effect";
-import { WorkflowError, type HostApi } from "./sdk";
-import { recoveriesIn, type HealFinding, type Metric, type Publication } from "./metrics";
+import { WorkflowError } from "./sdk";
+import type { HostApi } from "./sdk";
+import { recoveriesIn } from "./metrics";
+import type { HealFinding, Metric, Publication } from "./metrics";
 
 const KEY = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 // WARNING: Shared with self-improve's marker, so either finds the other's issues.

@@ -41,28 +41,18 @@ import {
   step,
   stepFailed,
   unmetCriteria,
-  type Criterion,
-  type Finding,
-  type Handed,
-  type Integration,
-  type Slice,
 } from "collie";
+import type { Criterion, Finding, Handed, Integration, Slice } from "collie";
 import { Deferred, Effect, Fiber, FileSystem, Path, Predicate, Schema } from "effect";
-import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
+import { WorkflowInstance } from "effect/workflow/WorkflowEngine";
+import type { WorkflowEngine } from "effect/workflow/WorkflowEngine";
 import * as Workflow from "effect/workflow/Workflow";
 import * as Activity from "effect/workflow/Activity";
 import { connection } from "./connections.ts";
 import markdown from "./implement.md" with { type: "text" };
 import { measuredBy } from "./measuring.ts";
-import {
-  IMPLEMENTER,
-  REVIEWER,
-  ROUNDS,
-  rally,
-  reviewPass,
-  reviewRound,
-  type Rallied,
-} from "./reviewing.ts";
+import { IMPLEMENTER, REVIEWER, ROUNDS, rally, reviewPass, reviewRound } from "./reviewing.ts";
+import type { Rallied } from "./reviewing.ts";
 import { Tree, deliver, gate, mergeRequest } from "./delivering.ts";
 
 const content = contentOf(markdown);

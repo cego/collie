@@ -4,7 +4,8 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { FrontDoor, RequestConflict, Where } from "./board-model";
-import { voiceOf, type Voice } from "./proposals";
+import { voiceOf } from "./proposals";
+import type { Voice } from "./proposals";
 import {
   appendJournal,
   appendRunJournal,

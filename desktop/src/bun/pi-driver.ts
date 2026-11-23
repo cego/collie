@@ -2,18 +2,8 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import { hostname } from "node:os";
-import {
-  type Cause,
-  Clock,
-  Effect,
-  FileSystem,
-  Option,
-  Queue,
-  Schema,
-  Stream,
-  flow,
-  Result,
-} from "effect";
+import { Clock, Effect, FileSystem, Option, Queue, Schema, Stream, flow, Result } from "effect";
+import type { Cause } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import type { AguiEvent } from "../shared/agui";
 import { ends } from "../shared/agui";
@@ -24,7 +14,8 @@ import { childEnv, which } from "./login-env";
 import { SESSION_STORES, SESSIONS_CLOSED, sessionStoreReached } from "../../../src/own-words";
 import { decodePiRecord, piEvents, piToolName } from "./pi-agui";
 import { piCommand, piPrompt, piReportedContext, piSessions } from "./pi-transcript";
-import { noticedContext, placementContext, systemPrompt, type UserMcpServers } from "./session";
+import { noticedContext, placementContext, systemPrompt } from "./session";
+import type { UserMcpServers } from "./session";
 import { PiServer, piConnections, piServers } from "./pi-servers";
 import { standingDirectionContext } from "../../../src/standing-direction";
 

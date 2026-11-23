@@ -9,11 +9,11 @@ import {
   isFull,
   resetPhrase,
   SUBSCRIPTIONS,
-  type Subscription,
   UsageReading,
   usedPhrase,
   WARN_PERCENT,
 } from "../../../src/usage-model";
+import type { Subscription } from "../../../src/usage-model";
 
 export const MachineUsage = Schema.Struct({
   profile: Schema.String,

@@ -6,10 +6,12 @@ import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import type { MrForge } from "../src/board-model";
-import { autoModeBlock, autoModeFacts, startedOf, type RunAuthority } from "../src/automode";
+import { autoModeBlock, autoModeFacts, startedOf } from "../src/automode";
+import type { RunAuthority } from "../src/automode";
 import type { Runner } from "../src/mr";
 import { runEffect } from "./support/effect";
-import { FORGE_HOST, fakeForge, type ForgeModel } from "./support/forge";
+import { FORGE_HOST, fakeForge } from "./support/forge";
+import type { ForgeModel } from "./support/forge";
 
 const ORIGIN = {
   gitlab: "git@gitlab.example.com:group/app.git",

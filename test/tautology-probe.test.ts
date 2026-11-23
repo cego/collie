@@ -4,7 +4,8 @@ import { pipe } from "effect/Function";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
-import { journal, outsideAnyRun, readKey, scored, type KeyItem } from "../tools/tautology-probe";
+import { journal, outsideAnyRun, readKey, scored } from "../tools/tautology-probe";
+import type { KeyItem } from "../tools/tautology-probe";
 import { runEffect } from "./support/effect";
 
 const restated: KeyItem = {

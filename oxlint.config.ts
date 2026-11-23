@@ -51,7 +51,6 @@ const migrating = {
   "no-unexpected-multiline": "off",
   "no-useless-assignment": "off",
   "preserve-caught-error": "off",
-  "import/consistent-type-specifier-style": "off",
   "import/no-namespace": "off",
   "oxc/bad-bitwise-operator": "off",
   "oxc/no-accumulating-spread": "off",

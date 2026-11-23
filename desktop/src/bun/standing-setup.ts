@@ -5,14 +5,10 @@ import { ownInventory, readOwnWords } from "../../../src/own-words";
 import type { OwnInventory, OwnWords } from "../../../src/own-words-model";
 import procedure from "../../../prompts/standing-direction-setup.md" with { type: "text" };
 import type { ActionFailed, DesktopSettingsChange, OnboardRun } from "../shared/flock";
-import {
-  declined,
-  type OfferFacts,
-  offersSetup,
-  type SetupChoice,
-  setupTurn,
-} from "../shared/standing-setup";
-import { type FlockConversation, refusal } from "./chat";
+import { declined, offersSetup, setupTurn } from "../shared/standing-setup";
+import type { OfferFacts, SetupChoice } from "../shared/standing-setup";
+import { refusal } from "./chat";
+import type { FlockConversation } from "./chat";
 
 export interface Place {
   readonly computer: string;

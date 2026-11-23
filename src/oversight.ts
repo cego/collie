@@ -8,7 +8,8 @@ import * as MutableRef from "effect/MutableRef";
 import { appendLogLine } from "./run-log";
 import { reportFields } from "./narrative-model";
 import type { ChildProcessSpawner } from "effect/process";
-import { appendCard, buildCard, inspectFor, readCards, readCheckpoints, type Card } from "./cards";
+import { appendCard, buildCard, inspectFor, readCards, readCheckpoints } from "./cards";
+import type { Card } from "./cards";
 import {
   EXTRA_PASSES,
   MAX_FILES,
@@ -41,23 +42,15 @@ import {
   shouldStand,
   splitDiff,
   staleSince,
-  type EvidenceBlock,
-  type JudgementDeps,
   gitOutput,
   merging,
   outputsIn,
-  type RuleFacts,
-  type ShownOutput,
 } from "./drift";
-import {
-  extractRequirements,
-  followPlan,
-  PLAN_AUTHOR,
-  readIntent,
-  updateIntent,
-  type Intent,
-} from "./intent";
-import { mrId, mrPath, parseMrUrl, type RunReply } from "./board-model";
+import type { EvidenceBlock, JudgementDeps, RuleFacts, ShownOutput } from "./drift";
+import { extractRequirements, followPlan, PLAN_AUTHOR, readIntent, updateIntent } from "./intent";
+import type { Intent } from "./intent";
+import { mrId, mrPath, parseMrUrl } from "./board-model";
+import type { RunReply } from "./board-model";
 import type { Ref } from "./evaluator";
 import { readReplies } from "./replies";
 import { reason } from "./naming";

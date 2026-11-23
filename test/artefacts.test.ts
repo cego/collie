@@ -7,7 +7,8 @@ import { hostRecords, registeredAt } from "./support/records";
 import { readAudit } from "../src/audit";
 import { collie, proves } from "./support/world";
 import { artefactsOn } from "../desktop/src/bun/machine";
-import { recordIn, type RunDetail } from "../src/board-model";
+import { recordIn } from "../src/board-model";
+import type { RunDetail } from "../src/board-model";
 
 test("the host discovers only Run collections and retains their selected revision", () =>
   proves(

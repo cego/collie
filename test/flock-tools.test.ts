@@ -6,29 +6,28 @@ import { expect, test } from "bun:test";
 import { platformLayer } from "../src/platform";
 import { Effect, Fiber, FileSystem, Schema, Stream } from "effect";
 import type { ArtefactSearch } from "../src/artefact-model";
-import { FlockArtefacts, type FlockSearch } from "../src/artefact-search";
+import { FlockArtefacts } from "../src/artefact-search";
+import type { FlockSearch } from "../src/artefact-search";
 import { searchMachines } from "../desktop/src/bun/machine";
 import { TestClock } from "effect/testing";
 import { RpcClientDefect, RpcClientError } from "effect/rpc/RpcClientError";
 import { ATTACHMENT_BYTES } from "../src/attachments";
 import type { HelleProject } from "../src/helle";
 import { epochMs } from "../src/time";
-import { type Declaration, PROTOCOL, type TaskView } from "../src/board-model";
+import { PROTOCOL } from "../src/board-model";
+import type { Declaration, TaskView } from "../src/board-model";
 import type { JsonObject } from "../src/schema";
-import { callFileTool, type ToolContent } from "../desktop/src/bun/file-tools";
-import {
-  callFlockTool,
-  type ChatDoor,
-  type ChatMachine,
-  type Reached,
-} from "../desktop/src/bun/flock-tools";
+import { callFileTool } from "../desktop/src/bun/file-tools";
+import type { ToolContent } from "../desktop/src/bun/file-tools";
+import { callFlockTool } from "../desktop/src/bun/flock-tools";
+import type { ChatDoor, ChatMachine, Reached } from "../desktop/src/bun/flock-tools";
 import type { ChatBoard, DesktopSettings } from "../desktop/src/shared/flock";
 import {
   editSettings,
-  type FlockSettings,
   NO_FLOCK_SETTINGS,
   standingDirectionOf,
 } from "../desktop/src/shared/flock-settings";
+import type { FlockSettings } from "../desktop/src/shared/flock-settings";
 import type { Attempted } from "../desktop/src/bun/sent";
 import { changeSettings } from "../desktop/src/bun/settings";
 import { tableOffer } from "../desktop/src/bun/chat-choices";

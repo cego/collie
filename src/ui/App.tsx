@@ -13,19 +13,18 @@ import {
   olderFinished,
   runRowId,
   viewRows,
-  type AppState,
-  type Command,
-  type Keypress,
-  type MenuItem,
-  type Row,
 } from "./state";
+import type { AppState, Command, Keypress, MenuItem, Row } from "./state";
 import { usagePhrase } from "../usage-model";
-import { headerSentence, sectionsOf, type Question, type TaskView } from "../board-model";
+import { headerSentence, sectionsOf } from "../board-model";
+import type { Question, TaskView } from "../board-model";
 import { truncated } from "../views";
 import { columnsFor, C } from "./sections";
-import { Board, Button, CardMenu, KeyHelp, type Batch, type Decide, type Where } from "./Board";
+import { Board, Button, CardMenu, KeyHelp } from "./Board";
+import type { Batch, Decide, Where } from "./Board";
 import { Pane } from "./Pane";
-import { Drawer, type Tab } from "./Drawer";
+import { Drawer } from "./Drawer";
+import type { Tab } from "./Drawer";
 import { ProposalPreview } from "./live";
 import { usePasteInto } from "./paste";
 import { Flow } from "./Flow";

@@ -6,7 +6,8 @@ import * as Option from "effect/Option";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
-import { readEnv, type PluginEnv } from "../src/env";
+import { readEnv } from "../src/env";
+import type { PluginEnv } from "../src/env";
 import {
   claudeSettingsPath,
   installStatusLine,

@@ -3,10 +3,12 @@ import * as Arr from "effect/Array";
 import { Data, Effect, FileSystem, Layer, Option } from "effect";
 import type { RunFacts } from "../../src/runs";
 import { readLaunches, runAgents } from "../../src/launches";
-import { recordsAt, recordsReadLayer, type Records } from "../../src/records";
+import { recordsAt, recordsReadLayer } from "../../src/records";
+import type { Records } from "../../src/records";
 import { everyRegistered } from "../../src/registry";
 import { deliveriesOf, readLedger } from "../../src/steering";
-import { RunRecords, type RunRecordsApi } from "../../src/run-records";
+import { RunRecords } from "../../src/run-records";
+import type { RunRecordsApi } from "../../src/run-records";
 import { platformLayer } from "../../src/platform";
 
 export function runFacts(over: Partial<RunFacts> = {}) {

@@ -7,7 +7,8 @@ import * as Option from "effect/Option";
 import type { PlatformServices } from "./platform";
 import { Effect, FileSystem, Path, Schema } from "effect";
 import type { PluginEnv } from "./env";
-import { askOnce, budgetedDeps, type BudgetedDeps, type TaskName } from "./evaluator";
+import { askOnce, budgetedDeps } from "./evaluator";
+import type { BudgetedDeps, TaskName } from "./evaluator";
 import { oneLine, taskWorkspaceLabel } from "./naming";
 import type { RunFacts } from "./runs";
 

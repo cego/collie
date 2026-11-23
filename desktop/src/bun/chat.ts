@@ -21,44 +21,43 @@ import {
 } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Base64 from "effect/encoding/Base64";
-import { type AguiEvent, ends } from "../shared/agui";
+import { ends } from "../shared/agui";
+import type { AguiEvent } from "../shared/agui";
 import { saidOf } from "../shared/said";
 import {
   IMAGE_BYTES,
   INLINE_BUDGET,
   listing,
   shownAs,
-  type Staged,
   TEXTUAL,
   showable,
 } from "../shared/attachments";
+import type { Staged } from "../shared/attachments";
 import { isString } from "../../../src/schema";
 import { describeAttachment, scaledCopy } from "./attachments";
-import {
-  type About,
-  aboutNote,
-  type Answers,
-  type ChatMessage,
-  type Conversations,
-  DESKTOP_SAID,
-  type DesktopTurn,
-  harnessName,
-  type HeldConversation,
+import { aboutNote, DESKTOP_SAID, harnessName } from "../shared/chat-view";
+import type {
+  About,
+  Answers,
+  ChatMessage,
+  Conversations,
+  DesktopTurn,
+  HeldConversation,
 } from "../shared/chat-view";
 import type { ChatChoices, Offer, Resolved } from "../shared/chat-choices";
 import { appendJournal } from "../../../src/journal";
 import { nowIso } from "../../../src/time";
-import { type ChatDriver, type ContentBlock, type DriverContext, TurnCost } from "./driver";
+import { TurnCost } from "./driver";
+import type { ChatDriver, ContentBlock, DriverContext } from "./driver";
 import {
   delivered,
-  type FlockBatch,
-  type FlockChat,
   flockBatch,
   flockNewsText,
   heardNews,
   newsKey,
   worthSpeaking,
 } from "./flock-tools";
+import type { FlockBatch, FlockChat } from "./flock-tools";
 import { actionsLog } from "./sent";
 
 const SessionFile = Schema.fromJsonString(

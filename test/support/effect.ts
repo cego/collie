@@ -1,5 +1,7 @@
-import { platformLayer, type PlatformServices } from "../../src/platform";
-import { recordsLayer, type Records } from "../../src/records";
+import { platformLayer } from "../../src/platform";
+import type { PlatformServices } from "../../src/platform";
+import { recordsLayer } from "../../src/records";
+import type { Records } from "../../src/records";
 import { storeLayer } from "../../src/store";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import * as Reactivity from "effect/reactivity/Reactivity";

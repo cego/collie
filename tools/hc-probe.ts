@@ -26,15 +26,8 @@ import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { PlatformError } from "effect/PlatformError";
-import {
-  applyNote,
-  connect,
-  Kind,
-  snapshotOf,
-  type HcConnection,
-  type HcNote,
-  type HcReply,
-} from "../src/hc";
+import { applyNote, connect, Kind, snapshotOf } from "../src/hc";
+import type { HcConnection, HcNote, HcReply } from "../src/hc";
 import { opencodeReporter, sessionArgs } from "../src/harness";
 import { claudeTrust } from "../src/trust";
 import { piExtension } from "../src/chat";

@@ -6,11 +6,13 @@ import { Clock, Effect, Path, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import type { AgentEntry } from "./registry";
 import type { RunFacts } from "./runs";
-import { newest, readCards, type Card } from "./cards";
+import { newest, readCards } from "./cards";
+import type { Card } from "./cards";
 import type { Marks, RunMarks } from "./lines";
 import { openReports, readDrift } from "./drift";
 import { capabilitiesOf } from "./steering-caps";
-import { DriftReportSchema, type DriftReport } from "./evaluator";
+import { DriftReportSchema } from "./evaluator";
+import type { DriftReport } from "./evaluator";
 import { readIntent } from "./intent";
 import { appendJournal, readJournal } from "./journal";
 import {
@@ -19,8 +21,10 @@ import {
   read as readNews,
   uncertain as uncertainNews,
 } from "./news";
-import { pendingFor, pendingHerdWide, type ProposalLine, type ProposalRecord } from "./proposals";
-import { herdDir, type Delivery } from "./steering";
+import { pendingFor, pendingHerdWide } from "./proposals";
+import type { ProposalLine, ProposalRecord } from "./proposals";
+import { herdDir } from "./steering";
+import type { Delivery } from "./steering";
 
 const CARDS = 5;
 export interface Live {

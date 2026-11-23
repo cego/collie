@@ -1,7 +1,8 @@
 import * as Arr from "effect/Array";
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { Command } from "./measurement-model";
-import { whatItSaid, type Runner } from "./mr";
+import { whatItSaid } from "./mr";
+import type { Runner } from "./mr";
 
 const decodeCommand = Schema.decodeUnknownEffect(Schema.fromJsonString(Command));
 

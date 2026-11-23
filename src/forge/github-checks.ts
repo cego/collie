@@ -1,9 +1,11 @@
 import { Effect } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { gitlabHostOf } from "../config";
-import { FETCH_LIMIT, answered, failed, onPath, passed, type Check } from "../doctor-check";
+import { FETCH_LIMIT, answered, failed, onPath, passed } from "../doctor-check";
+import type { Check } from "../doctor-check";
 import type { PluginEnv } from "../env";
-import { forgeHere, type Runner } from "../mr";
+import { forgeHere } from "../mr";
+import type { Runner } from "../mr";
 import { checkoutsUnder, projectsRoot } from "../projects";
 
 const HOST = "github.com";

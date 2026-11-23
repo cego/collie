@@ -1,5 +1,6 @@
 import * as Str from "effect/String";
-import { type Duration, Effect } from "effect";
+import { Effect } from "effect";
+import type { Duration } from "effect";
 import { spawned } from "./machine";
 import { CHILD_CWD } from "./login-env";
 

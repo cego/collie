@@ -8,23 +8,20 @@ import type { ChildProcessSpawner } from "effect/process";
 import { Stream } from "effect";
 // oxlint-disable-next-line effecttsgo/node-builtin-import -- Effect's file info has no ctime.
 import { lstat } from "node:fs/promises";
-import { CheckProcesses, type CheckOf } from "./check-processes";
+import { CheckProcesses } from "./check-processes";
+import type { CheckOf } from "./check-processes";
 import { logged } from "./check-supervisor";
 import type { VerifySpec } from "./intent";
 import { failedAlone, failedTests, ranAlone, rerunArgv } from "./bun-tests";
 import { appendRunJournal, readBriefsOf, readRunJournal, runJournal } from "./journal";
 import { RunRecords } from "./run-records";
-import { shell, type Ran } from "./mr";
+import { shell } from "./mr";
+import type { Ran } from "./mr";
 import { nowIso, epochMs } from "./time";
-import { CurrentStep, type StepPlace } from "./steps";
-import {
-  Pass,
-  ProofSchema,
-  VerificationSchema,
-  type FailedTest,
-  type MovedPath,
-  type Snapshot,
-} from "./verify-model";
+import { CurrentStep } from "./steps";
+import type { StepPlace } from "./steps";
+import { Pass, ProofSchema, VerificationSchema } from "./verify-model";
+import type { FailedTest, MovedPath, Snapshot } from "./verify-model";
 
 export const FINGERPRINT_MAX_BYTES = 50 * 1024 * 1024;
 

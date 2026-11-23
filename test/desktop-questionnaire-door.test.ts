@@ -6,21 +6,22 @@ import { Config, Effect, Exit, FileSystem, Option, Schema, Stream, flow, Result 
 import { readAudit } from "../src/audit";
 import type { Question } from "../src/board-model";
 import { runDir } from "../src/engine";
-import { act, bridgeCommand, type Door, openBridge } from "../desktop/src/bun/machine";
+import { act, bridgeCommand, openBridge } from "../desktop/src/bun/machine";
+import type { Door } from "../desktop/src/bun/machine";
 import type { Attempted } from "../desktop/src/bun/sent";
 import { failureOf } from "../desktop/src/shared/actions";
 import {
-  type Event,
   HOLD,
-  type Questionnaire,
   questionnaire,
   questionnaireView,
   stepped,
 } from "../desktop/src/shared/questionnaire";
+import type { Event, Questionnaire } from "../desktop/src/shared/questionnaire";
 import { suiteEnv } from "./support/effect";
 import { root, stopHost, until } from "./support/host";
 import { hostRecords } from "./support/records";
-import { collie, proves, type World } from "./support/world";
+import { collie, proves } from "./support/world";
+import type { World } from "./support/world";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 

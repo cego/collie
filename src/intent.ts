@@ -9,7 +9,8 @@ import { RunRecords, runOfDir } from "./run-records";
 import type { Voice } from "./proposals";
 import type { IntentSeedSchema, RuleSpecSchema } from "./intent-model";
 import { AuthoritySchema, ConstraintSchema, DefaultsSchema } from "./intent-model";
-import { VerifySpecSchema, type VerifySpec } from "./verify-spec";
+import { VerifySpecSchema } from "./verify-spec";
+import type { VerifySpec } from "./verify-spec";
 import { stringifyJson } from "./json";
 
 export { VerifySpecSchema, type VerifySpec };

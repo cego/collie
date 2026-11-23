@@ -1,8 +1,10 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import { type BrowserWindow, Screen } from "../../core/platform";
+import { Screen } from "../../core/platform";
+import type { BrowserWindow } from "../../core/platform";
 import { Effect, Queue, Stream } from "effect";
-import { type MonitorScale, monitorOf, zoomFor } from "../shared/scale";
+import { monitorOf, zoomFor } from "../shared/scale";
+import type { MonitorScale } from "../shared/scale";
 import { output } from "./machine";
 
 // WARNING: reads Hyprland only; GNOME and KDE need reading once Desktop runs there.

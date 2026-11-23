@@ -5,38 +5,25 @@ import { Effect, Fiber, Layer, Schema, Stream, flow, Result } from "effect";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcServer from "effect/rpc/RpcServer";
 import { foldFinished, headerSentence, primaryAction, sectionsOf } from "../src/board-model";
-import {
-  afterGesture,
-  type BoardState,
-  seenBy,
-  seenOnOpening,
-} from "../desktop/src/shared/board-clicks";
-import {
-  type Channel,
-  clientProtocol,
-  heldUntilListened,
-  serverProtocol,
-  type ToMain,
-  type ToView,
-} from "../desktop/src/shared/channel";
+import { afterGesture, seenBy, seenOnOpening } from "../desktop/src/shared/board-clicks";
+import type { BoardState } from "../desktop/src/shared/board-clicks";
+import { clientProtocol, heldUntilListened, serverProtocol } from "../desktop/src/shared/channel";
+import type { Channel, ToMain, ToView } from "../desktop/src/shared/channel";
 import {
   applyItem,
   chatBoards,
   DesktopRpcs,
   EMPTY_FLOCK,
-  type FlockItem,
   flockCards,
   flockOf,
-  type Machine,
   machineRows,
-  type MachineRow,
   nameAsShown,
   routeSaid,
   notLiveOf,
-  type MachineMessage,
   machineToAdd,
   unreadBecause,
 } from "../desktop/src/shared/flock";
+import type { FlockItem, Machine, MachineRow, MachineMessage } from "../desktop/src/shared/flock";
 import {
   buildOf,
   flockInSync,
@@ -45,7 +32,8 @@ import {
   syncable,
 } from "../desktop/src/shared/in-sync";
 import { agentRows } from "../desktop/src/shared/run-agents";
-import { type Column, columnOf } from "../desktop/src/shared/columns";
+import { columnOf } from "../desktop/src/shared/columns";
+import type { Column } from "../desktop/src/shared/columns";
 import { PeerView } from "../src/peers-model";
 import { epochMs } from "../src/time";
 import { task, taskMr } from "./support/task";

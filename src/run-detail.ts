@@ -3,14 +3,16 @@ import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
 import { Effect, FileSystem, Option, Path, Schema, Stream, flow, Result } from "effect";
 import * as Base64 from "effect/encoding/Base64";
-import { HostRefused, PART_BYTES, RunDiff, type DiffFile, type RunFile } from "./board-model";
+import { HostRefused, PART_BYTES, RunDiff } from "./board-model";
+import type { DiffFile, RunFile } from "./board-model";
 import { attachmentsDir } from "./attachments";
 import { handoffsDir } from "./handoffs";
 import { classifyWorkSource } from "./inputs";
 import { shell } from "./mr";
 import { forgeOfUrl } from "./forge/forge";
 import { REVIEW_FILE } from "./output";
-import { settled, type RunFacts } from "./runs";
+import { settled } from "./runs";
+import type { RunFacts } from "./runs";
 import { workSourceOf } from "./strategies";
 import { readVerifications } from "./verify";
 

@@ -4,10 +4,12 @@ import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { awaitingLine } from "./awaiting";
-import { cursorToken, newerFirst, pageToken, restarted, type RunListAsked } from "./run-list";
+import { cursorToken, newerFirst, pageToken, restarted } from "./run-list";
+import type { RunListAsked } from "./run-list";
 import { redactedField, withNotice } from "./redact";
 import type { SettingValue } from "./settings";
-import { reportOf, resultText, type Recorded } from "./report";
+import { reportOf, resultText } from "./report";
+import type { Recorded } from "./report";
 import { metricsOf } from "./metrics";
 import type { OutcomeRecords } from "./outcomes";
 import {
@@ -27,7 +29,8 @@ import type { Scope } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
 import type { PluginEnv } from "./env";
-import { savedModules, type Fault, type Found } from "./discovery";
+import { savedModules } from "./discovery";
+import type { Fault, Found } from "./discovery";
 import { LAUNCH_DOORS, reachKey, reachOf } from "./reach";
 import {
   connect,
@@ -37,76 +40,61 @@ import {
   restartHost,
   restartSaid,
   socketOf,
-  type HostClient,
-  type RunPageAnswer,
-  type HostUnavailable,
-  type HostVersionMismatch,
 } from "./host";
-import { Herdr, type HerdrError } from "./herdr";
+import type { HostClient, RunPageAnswer, HostUnavailable, HostVersionMismatch } from "./host";
+import { Herdr } from "./herdr";
+import type { HerdrError } from "./herdr";
 import { viaCommand } from "./ssh-argv";
 import { machineName, pairWith, peersOf } from "./peers";
-import {
-  artefactOwner,
-  awayFrom,
-  type FlockSearch,
-  searchDoorOf,
-  searchFlock,
-} from "./artefact-search";
+import { artefactOwner, awayFrom, searchDoorOf, searchFlock } from "./artefact-search";
+import type { FlockSearch } from "./artefact-search";
 import { openConnection } from "./ssh-connection";
-import { type HerdrMachine, MachineUnreachable, type RelayHeader } from "./peers-model";
+import { MachineUnreachable } from "./peers-model";
+import type { HerdrMachine, RelayHeader } from "./peers-model";
 import {
   sortBoard,
-  type BoardMessage,
-  type BoardSnapshot,
-  type RunDetail,
-  type Controlled,
   leftSaid,
   FrontDoor,
   HostRefused,
   recordIn,
-  type Disposition,
-  type Seen,
-  type ProposalCarried,
-  type ProposalRefused,
-  type RequestConflict,
-  type ActionResult,
-  type SteerOutcome,
-  type TaskView,
-  type NewsReceipt,
-  type Metrics,
   givenOfferInput,
   holdPath,
   holdReason,
   solutionTitle,
 } from "./board-model";
+import type {
+  BoardMessage,
+  BoardSnapshot,
+  RunDetail,
+  Controlled,
+  Disposition,
+  Seen,
+  ProposalCarried,
+  ProposalRefused,
+  RequestConflict,
+  ActionResult,
+  SteerOutcome,
+  TaskView,
+  NewsReceipt,
+  Metrics,
+} from "./board-model";
 import type { Action } from "./actions";
-import {
-  HOLD,
-  NEEDS_INPUT,
-  REFUSED_INPUT,
-  runDir,
-  terminalStatus,
-  type Given,
-  type OpenDecision,
-  type RunView,
-} from "./engine";
+import { HOLD, NEEDS_INPUT, REFUSED_INPUT, runDir, terminalStatus } from "./engine";
+import type { Given, OpenDecision, RunView } from "./engine";
 import type { OfferView, Declaration, StaleAct } from "./board-model";
-import {
-  err,
-  ExpectedError,
-  HostUnread,
-  newRequestId,
-  taskFor,
-  type Failure,
-  type OpResult,
-} from "./operations";
+import { err, ExpectedError, HostUnread, newRequestId, taskFor } from "./operations";
+import type { Failure, OpResult } from "./operations";
 import { nowIso } from "./time";
-import { voiceOf, type Asker, type ProposalLine } from "./proposals";
+import { voiceOf } from "./proposals";
+import type { Asker, ProposalLine } from "./proposals";
 import type { TaskChoice, TaskRecord } from "./task";
-import { encodeApprovedFile, rememberedFile, renderApproved, type VerifySpec } from "./verify-spec";
+import { encodeApprovedFile, rememberedFile, renderApproved } from "./verify-spec";
+import type { VerifySpec } from "./verify-spec";
 import { projectHere, shell } from "./mr";
-import { defaultsPath, readDefaults, readIntent, type Change, type IntentSeed } from "./intent";
-import { scopeFor, scopeKey, type AgentEntry } from "./registry";
+import { defaultsPath, readDefaults, readIntent } from "./intent";
+import type { Change, IntentSeed } from "./intent";
+import { scopeFor, scopeKey } from "./registry";
+import type { AgentEntry } from "./registry";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { reason } from "./naming";
 import { attachmentRefusal } from "./attachments";

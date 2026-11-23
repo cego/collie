@@ -28,32 +28,29 @@ import type * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as RpcServer from "effect/rpc/RpcServer";
 import Electrobun, { BrowserView, BrowserWindow, Utils, Updater } from "../../core/platform";
-import {
-  type Channel,
-  heldUntilListened,
-  serverProtocol,
-  type ToMain,
-  type ToView,
-} from "../shared/channel";
+import { heldUntilListened, serverProtocol } from "../shared/channel";
+import type { Channel, ToMain, ToView } from "../shared/channel";
 import type { Skippable } from "../shared/flock";
 import {
   ActionFailed,
   applyItem,
   chatBoards,
   CREDENTIALS,
-  type Credentials,
   DesktopRpcs,
-  type DesktopSettingsChange,
   EMPTY_FLOCK,
-  type FlockItem,
-  type KnownMachine,
   machineRows,
-  type MachineLinked,
-  type MachineSynced,
-  type MachineOwnRead,
-  type OnboardRun,
-  type OnboardStep,
-  type TerminalCommand,
+} from "../shared/flock";
+import type {
+  Credentials,
+  DesktopSettingsChange,
+  FlockItem,
+  KnownMachine,
+  MachineLinked,
+  MachineSynced,
+  MachineOwnRead,
+  OnboardRun,
+  OnboardStep,
+  TerminalCommand,
 } from "../shared/flock";
 import { RELEASE_PUBLIC_KEY } from "../../../src/signing";
 import { pruneDesktop, sweepSshControls } from "../../../src/desktop";
@@ -65,7 +62,8 @@ import { readAttachment, stageAttachment, stagePath } from "./attachments";
 import { placeStaged } from "./carried";
 import { actionsLog, reasonOf } from "./sent";
 import { setUp, setupInventory, setupOffer, thisComputer } from "./standing-setup";
-import { type FlockConversation, openFlockChat, refusal, untilStarted } from "./chat";
+import { openFlockChat, refusal, untilStarted } from "./chat";
+import type { FlockConversation } from "./chat";
 import { claudeCode, claudeModels } from "./claude";
 import { claudeDriver } from "./claude-driver";
 import { loopbackTools } from "./chat-endpoint";
@@ -73,8 +71,10 @@ import { piDriver } from "./pi-driver";
 import { codexDriver, readCodexModels } from "./codex-driver";
 import { readUserMcpServers } from "./session";
 import { CHILD_CWD, childEnv, localShell, takeLoginEnv, which } from "./login-env";
-import { type ChatMachine, chatDoor } from "./flock-tools";
-import { carryIntoFlock, heldSettings, type Offers } from "./settings";
+import { chatDoor } from "./flock-tools";
+import type { ChatMachine } from "./flock-tools";
+import { carryIntoFlock, heldSettings } from "./settings";
+import type { Offers } from "./settings";
 import { offerOf, offersOf, opensOn, readPiConfig, retelling } from "./chat-choices";
 import { harnessLists, listedIn } from "./harness-lists";
 import type { ListedModel } from "./claude-models";
@@ -92,9 +92,9 @@ import {
   DEFAULT_CHAT_HARNESS,
   editSetting,
   NO_FLOCK_SETTINGS,
-  type FlockSettings,
   standingDirectionOf,
 } from "../shared/flock-settings";
+import type { FlockSettings } from "../shared/flock-settings";
 import { nowIso } from "../../../src/time";
 import { changedLine } from "../../../src/schedule-model";
 import { SettingValue, settingText } from "../../../src/settings";
@@ -103,7 +103,6 @@ import { keepOwn } from "../shared/machine-own";
 import {
   actOn,
   DoorMap,
-  type Doors,
   doorTo,
   focusOn,
   offersOn,
@@ -126,16 +125,14 @@ import {
   endChildren,
   flockStream,
   forgetMachine,
-  type HerdrMachine,
   localRoute,
   linkRoute,
   pairedMachines,
-  type ShellRoute,
   remoteRoute,
   rosterOf,
-  type RouteChange,
   syncNow,
 } from "./machine";
+import type { Doors, HerdrMachine, ShellRoute, RouteChange } from "./machine";
 import { recordKeeper } from "./records";
 import { givenCredentials } from "./given";
 import { slackUserSession } from "./slack-user";

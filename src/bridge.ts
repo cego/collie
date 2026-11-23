@@ -2,7 +2,8 @@ import * as Str from "effect/String";
 import * as Struct from "effect/Struct";
 
 import { Config, Effect, Option } from "effect";
-import { BRIDGE_READY, type Declaration, type FrontDoor, type Where } from "./board-model";
+import { BRIDGE_READY } from "./board-model";
+import type { Declaration, FrontDoor, Where } from "./board-model";
 import { channelInto } from "./channel";
 import { currentEnv } from "./env";
 import { HostUnavailable, connect, peerChannel, socketOf } from "./host";

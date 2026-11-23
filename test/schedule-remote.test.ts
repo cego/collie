@@ -5,7 +5,8 @@ import { hostname } from "node:os";
 import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { runEffect } from "./support/effect";
 import { fixtures, stopHost } from "./support/host";
-import { twoMachines, type Side } from "./support/peers";
+import { twoMachines } from "./support/peers";
+import type { Side } from "./support/peers";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const Listed = Schema.Struct({

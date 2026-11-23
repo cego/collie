@@ -1,6 +1,7 @@
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { CLOSED, tipAfter, type StepTip, type TipEvent, type TipNext } from "../step-tip";
+import { CLOSED, tipAfter } from "../step-tip";
+import type { StepTip, TipEvent, TipNext } from "../step-tip";
 
 const after = (events: ReadonlyArray<TipEvent>, from: StepTip = CLOSED) => {
   const start: TipNext = { tip: from, wait: null };

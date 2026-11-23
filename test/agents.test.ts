@@ -26,7 +26,8 @@ import {
 } from "effect";
 import { TestClock } from "effect/testing";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
-import { Rig, type Call } from "./support/recorder";
+import { Rig } from "./support/recorder";
+import type { Call } from "./support/recorder";
 import { installBaseline } from "./support/engine";
 import { mentionedSkills } from "../src/template";
 import type { FakeHc } from "./support/fake-hc";
@@ -42,10 +43,8 @@ import {
   everyAgentText,
   personaText,
   promptFor,
-  type AgentHost,
-  type RanOut,
-  type RunNow,
 } from "../src/agents";
+import type { AgentHost, RanOut, RunNow } from "../src/agents";
 import { Children, Host, Run, WorkflowAgents, jsonSchemaFor, step, withAgents } from "../src/sdk";
 import { asRun, enveloped } from "./support/enveloped";
 import {
@@ -86,12 +85,14 @@ import {
   registeredAt,
 } from "./support/records";
 import { RELAUNCH, RunRecords } from "../src/run-records";
-import { Store, type DecisionRow } from "../src/store";
+import { Store } from "../src/store";
+import type { DecisionRow } from "../src/store";
 import type { AuditLine } from "../src/audit";
 import { readTask, withTaskLock, writeTask } from "../src/task";
 import { taskFor } from "../src/operations";
 import { everyRegistered, lineageAgent, registerAgent, scopeFor } from "../src/registry";
-import { Herdr, HerdrError, type AgentStatus } from "../src/herdr";
+import { Herdr, HerdrError } from "../src/herdr";
+import type { AgentStatus } from "../src/herdr";
 import { retitleGenericTasks } from "../src/tasknames";
 import { runFacts } from "./support/records";
 import { updateApproved } from "../src/verify-spec";
@@ -103,10 +104,8 @@ import {
   lostServer,
   readControl,
   withControlLock,
-  type AgentContext,
-  type CompactionOutcome,
-  type CompactionPorts,
 } from "../src/compaction";
+import type { AgentContext, CompactionOutcome, CompactionPorts } from "../src/compaction";
 import { COMPACTION_PORTS, questionsSince, recordClaudeEvent, writeEvent } from "../src/compactors";
 import { hostLockOf } from "../src/lock";
 import { claudeTrust } from "../src/trust";

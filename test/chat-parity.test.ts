@@ -5,7 +5,8 @@ import { Effect, Fiber, FileSystem, Option, Schema, Stream, flow, Result } from 
 import { hostname } from "node:os";
 import { afterAll, expect, test } from "bun:test";
 import { app } from "../src/collie";
-import { ActionSchema, type Action, type ActionKind } from "../src/actions";
+import { ActionSchema } from "../src/actions";
+import type { Action, ActionKind } from "../src/actions";
 import { registeredKinds, resetExecutors } from "../src/executors";
 import { registerRunExecutors } from "../src/operations";
 import { readEnv } from "../src/env";

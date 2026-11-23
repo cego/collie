@@ -22,8 +22,10 @@ import { diffOf } from "./run-detail";
 import { Foreground } from "./foreground";
 import type { RunModelApi } from "./run-model";
 import type { RunFacts } from "./runs";
-import { readTask, type TaskRecord } from "./task";
-import { buildRunDetail, tailOf, textsOf, type PlanCache } from "./views";
+import { readTask } from "./task";
+import type { TaskRecord } from "./task";
+import { buildRunDetail, tailOf, textsOf } from "./views";
+import type { PlanCache } from "./views";
 
 export interface RecordSources {
   readonly env: PluginEnv;

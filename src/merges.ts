@@ -14,15 +14,14 @@ import {
   mrRefOf,
   parseMrTarget,
   readMrRef,
-  type MrPanel,
-  type MrState,
-  type TaskView,
 } from "./board-model";
+import type { MrPanel, MrState, TaskView } from "./board-model";
 import { latest, readDispositions, recordDisposition } from "./disposition";
 import { forgeOf } from "./forge/forge";
 import type { ReviewRead } from "./forge/review";
 import { readLanding, settleLeft } from "./landing";
-import { forgeHere, mrIdIn, type Runner } from "./mr";
+import { forgeHere, mrIdIn } from "./mr";
+import type { Runner } from "./mr";
 import { runDir } from "./engine";
 import type { RunFacts } from "./runs";
 import { diffTargetOf } from "./strategies";

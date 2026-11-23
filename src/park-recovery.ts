@@ -6,9 +6,11 @@ import { Clock, Config, Duration, Effect, Schedule, Schema } from "effect";
 import type { RunView } from "./engine";
 import type { PluginEnv } from "./env";
 import { configValue, readConfig } from "./config";
-import { appendMetric, readMetrics, recoveriesIn, type Metric } from "./metrics";
+import { appendMetric, readMetrics, recoveriesIn } from "./metrics";
+import type { Metric } from "./metrics";
 import { recheckPark } from "./park-recheck";
-import { PARK_CAUSES, healInFlight, type ParkCause } from "./park-cause";
+import { PARK_CAUSES, healInFlight } from "./park-cause";
+import type { ParkCause } from "./park-cause";
 import type { Herdr } from "./herdr";
 import type { NotificationKind } from "./notify";
 import { HealOutput, healOn, healerFor } from "./heal";
@@ -24,13 +26,15 @@ import { liveHerds } from "./herds";
 import { append as appendNews, newsPath, supersede } from "./news";
 import { epochMs, isoAt, nowIso } from "./time";
 import { mrId } from "./board-model";
-import { readForge, type MrPanels } from "./merges";
+import { readForge } from "./merges";
+import type { MrPanels } from "./merges";
 import { rateLimitedUntil } from "./forge/http";
 import { isSetAside, isUnanswered } from "./store";
 import { readStepLines } from "./steps";
 import { Artefacts } from "./artefacts";
 import { factsOfView } from "./runs";
-import { reportFields, type ReportAddress } from "./narrative-model";
+import { reportFields } from "./narrative-model";
+import type { ReportAddress } from "./narrative-model";
 
 const RoundJson = Schema.fromJsonString(
   Schema.Struct({ at: Schema.String, failed: Schema.Boolean }),

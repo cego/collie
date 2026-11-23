@@ -6,7 +6,8 @@ import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { connect } from "../src/host";
 import { runEffect } from "./support/effect";
-import { events, fixtures, openHost, runDirOf, until, workspace, type Host } from "./support/host";
+import { events, fixtures, openHost, runDirOf, until, workspace } from "./support/host";
+import type { Host } from "./support/host";
 
 const suspended = (reply: { readonly status?: string }) => reply.status === "suspended";
 const complete = (reply: { readonly status?: string }) => reply.status === "complete";

@@ -7,7 +7,8 @@ import type { PlatformServices } from "../src/platform";
 import { Clock, DateTime, Deferred, Effect, Fiber, FileSystem } from "effect";
 import { TestClock } from "effect/testing";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { HerdrError, type AgentInfo } from "../src/herdr";
+import { HerdrError } from "../src/herdr";
+import type { AgentInfo } from "../src/herdr";
 import {
   dispatchOrder,
   interrupt,
@@ -21,7 +22,8 @@ import {
   fitDelivery,
   DELIVERY_TOKEN,
 } from "../src/dispatcher";
-import { appendLine, causalKey, readLedger, type Delivery } from "../src/steering";
+import { appendLine, causalKey, readLedger } from "../src/steering";
+import type { Delivery } from "../src/steering";
 import type { Records } from "../src/records";
 import { reason } from "../src/naming";
 import type { AgentEntry } from "../src/registry";

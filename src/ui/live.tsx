@@ -3,16 +3,8 @@ import { TextAttributes } from "@opentui/core";
 import type { Live } from "../live";
 import type { ProposalRecord } from "../proposals";
 
-import {
-  asText,
-  cardLines,
-  deliveryLine,
-  describeAction,
-  driftLines,
-  newsLines,
-  type Line,
-  type Tone,
-} from "../lines";
+import { asText, cardLines, deliveryLine, describeAction, driftLines, newsLines } from "../lines";
+import type { Line, Tone } from "../lines";
 
 const DIM = "#8a8a8a";
 const ACCENT = "#7aa2f7";

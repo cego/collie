@@ -3,9 +3,12 @@ import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Effect, Schema } from "effect";
-import { waitsOnOf, type MrRef } from "./board-model";
-import { forgeOf, forgeOfUrl, type DeployTier } from "./forge/forge";
-import { whatItSaid, type Ran, type Runner } from "./mr";
+import { waitsOnOf } from "./board-model";
+import type { MrRef } from "./board-model";
+import { forgeOf, forgeOfUrl } from "./forge/forge";
+import type { DeployTier } from "./forge/forge";
+import { whatItSaid } from "./mr";
+import type { Ran, Runner } from "./mr";
 import { appendLog } from "./oversight";
 
 const short = (sha: string) => pipe(sha, Str.slice(0, 8));

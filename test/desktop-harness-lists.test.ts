@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { Effect, Fiber, Result, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { offerOf, opensOn } from "../desktop/src/bun/chat-choices";
-import { harnessLists, listedIn, type HarnessList } from "../desktop/src/bun/harness-lists";
+import { harnessLists, listedIn } from "../desktop/src/bun/harness-lists";
+import type { HarnessList } from "../desktop/src/bun/harness-lists";
 import { changeSettings } from "../desktop/src/bun/settings";
 import { NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
 

@@ -1,11 +1,7 @@
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import {
-  questionMeasures,
-  repeatedAnswers,
-  summaryOf,
-  type AskingRun,
-} from "../workflows/retrospective";
+import { questionMeasures, repeatedAnswers, summaryOf } from "../workflows/retrospective";
+import type { AskingRun } from "../workflows/retrospective";
 
 const asking: (over: Partial<AskingRun> & { runId: string }) => AskingRun = (over) => ({
   workflow: "implement",

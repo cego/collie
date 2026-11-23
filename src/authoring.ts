@@ -5,17 +5,11 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Option from "effect/Option";
 import type { Schema } from "effect";
-import { Effect, FileSystem, Path, type PlatformError } from "effect";
+import { Effect, FileSystem, Path } from "effect";
+import type { PlatformError } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
-import {
-  ENTRY_SUFFIX,
-  declaredBy,
-  discover,
-  searchPath,
-  stem,
-  type EntryLayer,
-  type Found,
-} from "./discovery";
+import { ENTRY_SUFFIX, declaredBy, discover, searchPath, stem } from "./discovery";
+import type { EntryLayer, Found } from "./discovery";
 import { loadDefinitions, personaData } from "./definitions";
 import type { Described, HostDefinitions } from "./definitions-model";
 import { reason } from "./naming";
@@ -23,13 +17,8 @@ import { HOST_CONNECTION_USES } from "./connection-model";
 
 export { Described, Drawn } from "./definitions-model";
 import { loadEntry, provisionToolchain, refreshToolchain, typecheckEntry } from "./engine";
-import {
-  RESERVED_INPUTS,
-  describeMetadata,
-  jsonSchemaFor,
-  type HostWorkflow,
-  type WorkflowEntry,
-} from "./sdk";
+import { RESERVED_INPUTS, describeMetadata, jsonSchemaFor } from "./sdk";
+import type { HostWorkflow, WorkflowEntry } from "./sdk";
 
 export interface Where {
   readonly layer: EntryLayer;

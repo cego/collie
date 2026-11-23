@@ -12,7 +12,8 @@ import {
   writeFlockSettings,
 } from "../desktop/src/bun/flock-settings";
 import { editSetting, NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
-import { levelPeer, peersOf, runShell, type Link } from "../src/peers";
+import { levelPeer, peersOf, runShell } from "../src/peers";
+import type { Link } from "../src/peers";
 import { memoryRecords, runEffect } from "./support/effect";
 import { until } from "./support/host";
 import { releaseBinary, twoMachines } from "./support/peers";

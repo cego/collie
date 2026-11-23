@@ -3,7 +3,8 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
 import { FakeBin } from "./support/bin";
-import { linuxMemory, macMemory, shortOfMemory, type Memory } from "../src/memory";
+import { linuxMemory, macMemory, shortOfMemory } from "../src/memory";
+import type { Memory } from "../src/memory";
 import { shell } from "../src/mr";
 
 const GiB = 1024 ** 3;

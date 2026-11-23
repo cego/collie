@@ -3,7 +3,8 @@ import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Schema } from "effect";
-import { mrLabel, type Mergeability } from "./board-model";
+import { mrLabel } from "./board-model";
+import type { Mergeability } from "./board-model";
 import type { ReviewRead } from "./forge/review";
 
 export const OpenCommentSchema = Schema.Struct({

@@ -5,7 +5,8 @@ import { Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
 import * as Base64 from "effect/encoding/Base64";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { mediaTypeOf } from "./attachments";
-import { HostRefused, PART_BYTES, type HostFile } from "./board-model";
+import { HostRefused, PART_BYTES } from "./board-model";
+import type { HostFile } from "./board-model";
 import { SESSIONS_CLOSED } from "./own-words";
 
 export const FOUND_LIMIT = 100;

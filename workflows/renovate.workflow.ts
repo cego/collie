@@ -15,7 +15,8 @@ import {
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import * as Workflow from "effect/workflow/Workflow";
-import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
+import { WorkflowInstance } from "effect/workflow/WorkflowEngine";
+import type { WorkflowEngine } from "effect/workflow/WorkflowEngine";
 import onGitlab from "./renovate.gitlab.md" with { type: "text" };
 import onGithub from "./renovate.github.md" with { type: "text" };
 

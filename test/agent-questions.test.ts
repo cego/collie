@@ -18,7 +18,8 @@ import { piExtension } from "../src/chat";
 import { piQuestionTool } from "../src/compactors";
 import { askWith, piTools } from "./support/pi";
 import { stopHost, until } from "./support/host";
-import { collie, proves, type World } from "./support/world";
+import { collie, proves } from "./support/world";
+import type { World } from "./support/world";
 import type { FakeHc } from "./support/fake-hc";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);

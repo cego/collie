@@ -3,14 +3,12 @@ import * as Option from "effect/Option";
 import { describe, expect, test } from "bun:test";
 import type { Question } from "../src/board-model";
 import {
-  type Effect as Does,
-  type Event,
   HOLD,
-  type Stepped,
   questionnaire,
   questionnaireView,
   stepped,
 } from "../desktop/src/shared/questionnaire";
+import type { Effect as Does, Event, Stepped } from "../desktop/src/shared/questionnaire";
 
 const choice: (overrides?: Partial<Question>) => Question = (overrides = {}) => ({
   kind: "question",

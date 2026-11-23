@@ -8,7 +8,8 @@ import { PARKED, foundationLayer, runDir } from "../src/engine";
 import { RunRecords } from "../src/run-records";
 import { Store } from "../src/store";
 import { stopHost } from "./support/host";
-import { collie, proves, type World } from "./support/world";
+import { collie, proves } from "./support/world";
+import type { World } from "./support/world";
 
 const Page = Schema.Struct({
   runs: Schema.Array(Schema.Struct({ runId: Schema.String })),

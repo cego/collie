@@ -7,12 +7,15 @@ import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { recordDisposition } from "../src/disposition";
 import { currentEnv } from "../src/env";
-import { makeOffer, type FlowPrompts } from "../src/flows";
+import { makeOffer } from "../src/flows";
+import type { FlowPrompts } from "../src/flows";
 import { carryOutAsked, followUpField } from "../src/run-actions";
-import { connect, type HostClient } from "../src/host";
+import { connect } from "../src/host";
+import type { HostClient } from "../src/host";
 import { factsOfView } from "../src/runs";
 import { stopHost, until } from "./support/host";
-import { collie, proves, save, type World } from "./support/world";
+import { collie, proves, save } from "./support/world";
+import type { World } from "./support/world";
 
 const asText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 

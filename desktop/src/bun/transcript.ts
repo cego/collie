@@ -2,7 +2,8 @@ import * as Arr from "effect/Array";
 import { Option, Schema } from "effect";
 import { isString } from "../../../src/schema";
 import { attachmentPart, fromListing } from "../shared/attachments";
-import { type About, type ChatMessage, fromAboutNote } from "../shared/chat-view";
+import { fromAboutNote } from "../shared/chat-view";
+import type { About, ChatMessage } from "../shared/chat-view";
 import { stringifyJson } from "../../../src/json";
 
 const Text = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });

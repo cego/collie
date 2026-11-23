@@ -2,14 +2,21 @@ import { Context, Layer } from "effect";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
-import { launchesLayer, type Launches } from "./launches";
-import { deliveriesLayer, type Deliveries } from "./steering";
+import { launchesLayer } from "./launches";
+import type { Launches } from "./launches";
+import { deliveriesLayer } from "./steering";
+import type { Deliveries } from "./steering";
 import { storeLayer } from "./store";
-import { proposalsLayer, type Proposals } from "./proposals";
-import { registeredLayer, type Registered } from "./registry";
-import { tasksLayer, type Tasks } from "./task";
-import { artefactsLayer, type Artefacts } from "./artefacts";
-import { runRecordsLayer, type RunRecords } from "./run-records";
+import { proposalsLayer } from "./proposals";
+import type { Proposals } from "./proposals";
+import { registeredLayer } from "./registry";
+import type { Registered } from "./registry";
+import { tasksLayer } from "./task";
+import type { Tasks } from "./task";
+import { artefactsLayer } from "./artefacts";
+import type { Artefacts } from "./artefacts";
+import { runRecordsLayer } from "./run-records";
+import type { RunRecords } from "./run-records";
 
 export type Records =
   | Deliveries

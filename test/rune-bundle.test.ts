@@ -9,8 +9,8 @@ import {
   macSignings,
   notarizeArgs,
   packageInstaller,
-  type Os,
 } from "../desktop/scripts/bundle";
+import type { Os } from "../desktop/scripts/bundle";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 

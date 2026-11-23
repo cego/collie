@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { Schema, flow, Result } from "effect";
 import { AgentChoiceSchema } from "../src/agents";
-import { foldCeiling, type Preferences, resolveWithRoom } from "../src/harness";
+import { foldCeiling, resolveWithRoom } from "../src/harness";
+import type { Preferences } from "../src/harness";
 import { parseSetting } from "../src/settings";
 import { epochMs } from "../src/time";
-import { roomFor, type UsageReading, type UsageWindow } from "../src/usage-model";
+import { roomFor } from "../src/usage-model";
+import type { UsageReading, UsageWindow } from "../src/usage-model";
 
 const NOW = epochMs("2026-10-08T08:00:00Z");
 

@@ -6,17 +6,8 @@ import type { PluginEnv } from "./env";
 import { reason } from "./naming";
 import type { HerdrMachine } from "./peers-model";
 import { viaTarget } from "./ssh-argv";
-import {
-  applyNote,
-  connect as connectCore,
-  coreSocket,
-  snapshotOf,
-  type HcError,
-  type HcMachine,
-  type HcMethod,
-  type HcSnapshot,
-  type HcTerminal,
-} from "./hc";
+import { applyNote, connect as connectCore, coreSocket, snapshotOf } from "./hc";
+import type { HcError, HcMachine, HcMethod, HcSnapshot, HcTerminal } from "./hc";
 
 export type AgentStatus = "idle" | "working" | "blocked" | "done" | "unknown";
 

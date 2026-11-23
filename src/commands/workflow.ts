@@ -1,16 +1,10 @@
 import * as Arr from "effect/Array";
 import { Effect, Option, Schema, flow, Result } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
-import {
-  checkModule,
-  createEntry,
-  forkEntry,
-  readModule,
-  type Checked as ModuleCheck,
-  type Described,
-  type Written,
-} from "../authoring";
-import { searchPath, type Catalogued, type EntryLayer, type Found } from "../discovery";
+import { checkModule, createEntry, forkEntry, readModule } from "../authoring";
+import type { Checked as ModuleCheck, Described, Written } from "../authoring";
+import { searchPath } from "../discovery";
+import type { Catalogued, EntryLayer, Found } from "../discovery";
 import type { PluginEnv } from "../env";
 import { savedModules } from "../lifecycle";
 import { loadEntry } from "../engine";

@@ -3,7 +3,8 @@ import { Effect, FileSystem } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { loadDefaults } from "./config";
 import type { PluginEnv } from "./env";
-import { shell, type Runner } from "./mr";
+import { shell } from "./mr";
+import type { Runner } from "./mr";
 
 export type Memory =
   | {

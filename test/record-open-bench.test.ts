@@ -5,12 +5,8 @@ import * as Str from "effect/String";
 import type { Flow } from "../src/board-model";
 import { processStartTime } from "../src/lock";
 import { filledSinceStart, measuring, refusal } from "../bench/record-open/guards";
-import {
-  differences,
-  type Painted,
-  type PaintedNode,
-  paintedOf,
-} from "../bench/record-open/compare";
+import { differences, paintedOf } from "../bench/record-open/compare";
+import type { Painted, PaintedNode } from "../bench/record-open/compare";
 import { barFailures, summaryOf } from "../bench/record-open/stats";
 import { desktopSummary, nativeSummary } from "../bench/record-open/summarize";
 import { runEffect } from "./support/effect";

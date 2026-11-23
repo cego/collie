@@ -11,12 +11,14 @@ import { Herdr } from "../src/herdr";
 import { agentsIn, liveHerds } from "../src/herds";
 import { connect, frontDoor, socketOf } from "../src/host";
 import { factsOfView, newestFirst } from "../src/runs";
-import { appendVerification, type Verification } from "../src/verify";
+import { appendVerification } from "../src/verify";
+import type { Verification } from "../src/verify";
 import { FakeBin } from "./support/bin";
 import { exec } from "./support/command";
 import { forgeOnPath, serveForges } from "./support/forge";
 import { until } from "./support/host";
-import { collie, proves, type World } from "./support/world";
+import { collie, proves } from "./support/world";
+import type { World } from "./support/world";
 
 const encodeJson = flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),

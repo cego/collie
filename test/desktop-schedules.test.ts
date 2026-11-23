@@ -17,11 +17,11 @@ import {
 import { readAudit } from "../src/audit";
 import { FrontDoorRpcs } from "../src/board-model";
 import {
-  type MachineSchedules,
   machineSchedules,
   SCHEDULES_UPGRADE_SAID,
   scheduleAsk,
 } from "../desktop/src/shared/schedules";
+import type { MachineSchedules } from "../desktop/src/shared/schedules";
 import { DesktopRpcs } from "../desktop/src/shared/flock";
 import type { ScheduleEntry } from "../src/schedule-model";
 import { memoryRecords, suiteEnv } from "./support/effect";

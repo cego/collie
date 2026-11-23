@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { settledResizes, type Timers } from "../desktop/src/shared/terminal-size";
+import { settledResizes } from "../desktop/src/shared/terminal-size";
+import type { Timers } from "../desktop/src/shared/terminal-size";
 import { keyAction } from "../desktop/src/shared/terminal-input";
 
 const world = () => {

@@ -9,24 +9,20 @@ import {
   Stream,
   SubscriptionRef,
 } from "effect";
-import { createCliRenderer, type CliRenderer } from "@opentui/core";
+import { createCliRenderer } from "@opentui/core";
+import type { CliRenderer } from "@opentui/core";
 import { render, useKeyboard, useRenderer } from "@opentui/solid";
-import { createSignal, ErrorBoundary, onMount, Show, type Accessor } from "solid-js";
+import { createSignal, ErrorBoundary, onMount, Show } from "solid-js";
+import type { Accessor } from "solid-js";
 import { reason } from "../naming";
 import { isHostLog } from "../host-log";
 import type { InputPrompts } from "../inputs";
 import { App } from "./App";
 import { Flow } from "./Flow";
-import { signalPrompts, type Pending } from "./prompts";
-import {
-  changesFocusOnly,
-  retarget,
-  type AppState,
-  type Command,
-  type Filter,
-  type Focus,
-  type FocusCommand,
-} from "./state";
+import { signalPrompts } from "./prompts";
+import type { Pending } from "./prompts";
+import { changesFocusOnly, retarget } from "./state";
+import type { AppState, Command, Filter, Focus, FocusCommand } from "./state";
 import type { Selection } from "../selection";
 
 export type { Focus };

@@ -1,17 +1,8 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
-import {
-  movedLine,
-  passed,
-  ranCommand,
-  ranOneTest,
-  sameCommand,
-  staleAgainst,
-  type CheckCommand,
-  type Snapshot,
-  type Verification,
-} from "./verify";
+import { movedLine, passed, ranCommand, ranOneTest, sameCommand, staleAgainst } from "./verify";
+import type { CheckCommand, Snapshot, Verification } from "./verify";
 
 export interface Journal {
   readonly verifications: ReadonlyArray<Verification>;

@@ -30,10 +30,8 @@ import {
   renderEvidence,
   step,
   stepFailed,
-  type Integration,
-  type Measurement,
-  type SynthesisReport,
 } from "collie";
+import type { Integration, Measurement, SynthesisReport } from "collie";
 import {
   Array as Arr,
   Clock,

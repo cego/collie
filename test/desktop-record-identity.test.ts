@@ -1,13 +1,8 @@
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import type { Flow, TaskView } from "../src/board-model";
-import {
-  applyItem,
-  EMPTY_FLOCK,
-  flockCards,
-  type Flock,
-  type FlockItem,
-} from "../desktop/src/shared/flock";
+import { applyItem, EMPTY_FLOCK, flockCards } from "../desktop/src/shared/flock";
+import type { Flock, FlockItem } from "../desktop/src/shared/flock";
 import { linkedCards } from "../desktop/src/shared/flow";
 import { flowNode } from "./support/flow";
 import { task } from "./support/task";

@@ -7,7 +7,6 @@ import { inField } from "../desktop/src/shared/board-clicks";
 import {
   afterPaint,
   FOLLOWING_LOG,
-  type KeyFacts,
   keyAction,
   recordTiming,
   desktopTiming,
@@ -20,15 +19,14 @@ import {
   recordTabs,
   rememberScroll,
   scrollToRestore,
-  type SummaryFacts,
   summaryOf,
-  type TabFacts,
   tabBeside,
   tabShown,
   tabsKept,
   typedIn,
   videoPlays,
 } from "../desktop/src/shared/record";
+import type { KeyFacts, SummaryFacts, TabFacts } from "../desktop/src/shared/record";
 import { stringifyJson } from "../src/json";
 
 const everything: TabFacts = {

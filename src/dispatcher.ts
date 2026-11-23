@@ -5,8 +5,10 @@ import * as Option from "effect/Option";
 import type { PlatformServices } from "./platform";
 import type { FileSystem, Path } from "effect";
 import { Clock, Data, DateTime, Duration, Effect, Predicate, Result } from "effect";
-import { HerdrError, herdrFailureReason, isSettled, type Herdr, type Submission } from "./herdr";
-import { verifyIncarnation, type AgentEntry, type Incarnation } from "./registry";
+import { HerdrError, herdrFailureReason, isSettled } from "./herdr";
+import type { Herdr, Submission } from "./herdr";
+import { verifyIncarnation } from "./registry";
+import type { AgentEntry, Incarnation } from "./registry";
 import {
   appendLine,
   blocked,
@@ -19,11 +21,8 @@ import {
   readLedgerWhole,
   settleStaleReservations,
   textHash,
-  type Cause,
-  type Deliveries,
-  type Delivery,
-  type HumanDoor,
 } from "./steering";
+import type { Cause, Deliveries, Delivery, HumanDoor } from "./steering";
 import { gate, interruptKeys } from "./steering-caps";
 import { nowIso, took, epochMs } from "./time";
 import type { Asker } from "./proposals";

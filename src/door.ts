@@ -19,17 +19,21 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import * as SocketServer from "effect/socket/SocketServer";
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
-import { IdentityRpc, RunDetailRpc, type MrPanel, type OfferView } from "./board-model";
+import { IdentityRpc, RunDetailRpc } from "./board-model";
+import type { MrPanel, OfferView } from "./board-model";
 import { mrOf } from "./merges";
 import type { PluginEnv } from "./env";
 import { foregroundLayer } from "./foreground";
 import type { AgentInfo } from "./herdr";
-import { platformLayer, type PlatformServices } from "./platform";
-import { drawerWrites, recordFrames, type RecordSources } from "./record";
+import { platformLayer } from "./platform";
+import type { PlatformServices } from "./platform";
+import { drawerWrites, recordFrames } from "./record";
+import type { RecordSources } from "./record";
 import { recordsReadLayer } from "./records";
 import { firstValueTimed } from "./first-value";
 import { markFirst } from "./record-marks";
-import { RunModel, runModelLayer, type ModelLink } from "./run-model";
+import { RunModel, runModelLayer } from "./run-model";
+import type { ModelLink } from "./run-model";
 import type { RunFacts } from "./runs";
 
 export interface Listed {

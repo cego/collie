@@ -1,5 +1,6 @@
 // WARNING: read-only and derived: nothing infers what the files do not say; a finished Run with a merge request has not been merged by anyone.
-import { readStageProof, type ShippingAction } from "./shipping";
+import { readStageProof } from "./shipping";
+import type { ShippingAction } from "./shipping";
 import {
   fallbacksOf,
   lastOrdered,
@@ -16,7 +17,8 @@ import * as Rec from "effect/Record";
 import { Clock, Effect, FileSystem, Option, Result, Schema, flow } from "effect";
 import { lastAudit } from "./audit";
 import { planDirOf } from "./run-detail";
-import { readAhead, RunRecords, type RunRecordsApi } from "./run-records";
+import { readAhead, RunRecords } from "./run-records";
+import type { RunRecordsApi } from "./run-records";
 import { openReports, readDrift } from "./drift";
 import { describeAction } from "./lines";
 import type { PickItem } from "./inputs";
@@ -25,11 +27,15 @@ import { latest, readDispositions, refRuns } from "./disposition";
 import { readSeen, seenSince } from "./seen";
 import { runTitle } from "./naming";
 import { changeKey, planIssuesIn, planReposOf } from "./plan";
-import { everyProposal, pendingFor, type ProposalLine } from "./proposals";
-import { everyRegistered, type AgentEntry } from "./registry";
-import { listRuns, newestFirst, settled as ended, type RunFacts, type RunState } from "./runs";
+import { everyProposal, pendingFor } from "./proposals";
+import type { ProposalLine } from "./proposals";
+import { everyRegistered } from "./registry";
+import type { AgentEntry } from "./registry";
+import { listRuns, newestFirst, settled as ended } from "./runs";
+import type { RunFacts, RunState } from "./runs";
 import type { PluginEnv } from "./env";
-import { listTasks, type TaskRecord } from "./task";
+import { listTasks } from "./task";
+import type { TaskRecord } from "./task";
 import { ago, agoMs, agoShort, spanned, epochMs } from "./time";
 import {
   commandOf,
@@ -38,9 +44,8 @@ import {
   passed,
   readProofsOf,
   readVerifications,
-  type CheckCommand,
-  type Verification,
 } from "./verify";
+import type { CheckCommand, Verification } from "./verify";
 import { approvedFor, approvedIn } from "./verify-spec";
 import { readIntent } from "./intent";
 import { findingsIn, isBlocking } from "./output";
@@ -50,7 +55,8 @@ import { waitLine } from "./memory-wait";
 import { runWaits } from "./run-waits";
 import { awaitingLine } from "./awaiting";
 import { MERGE_POLL_MS, mrOf, readForge, readMrStates } from "./merges";
-import { filed, NOTHING_TO_LAND, type Recorded, settlementOf, standingOf } from "./standing";
+import { filed, NOTHING_TO_LAND, settlementOf, standingOf } from "./standing";
+import type { Recorded } from "./standing";
 import { offersOf } from "./lifecycle";
 import { mrIdIn, shell } from "./mr";
 import type {
@@ -84,19 +90,21 @@ import {
   sectionOf,
   shippingLabel,
   sortBoard,
-  type AgentFallback,
-  type BoardAgent,
-  type BoardOffer,
-  type Checks,
-  type Decision,
-  type MrState,
-  type Proposal,
-  type ReadyToRelease,
-  type Reopened,
-  type Section,
-  type StepState,
-  type TaskState,
-  type TaskView,
+} from "./board-model";
+import type {
+  AgentFallback,
+  BoardAgent,
+  BoardOffer,
+  Checks,
+  Decision,
+  MrState,
+  Proposal,
+  ReadyToRelease,
+  Reopened,
+  Section,
+  StepState,
+  TaskState,
+  TaskView,
 } from "./board-model";
 
 export const GLYPH_FOR: Readonly<Record<TaskState, string>> = {

@@ -19,10 +19,12 @@ import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { type CodexError, withCodex } from "./codex";
+import { withCodex } from "./codex";
+import type { CodexError } from "./codex";
 import { CONTROL_DIR, readControl } from "./compaction";
 import { rateLimitsReader } from "./compactors";
-import { currentEnv, type PluginEnv } from "./env";
+import { currentEnv } from "./env";
+import type { PluginEnv } from "./env";
 import { sha256Hex } from "./attachments";
 import { reason } from "./naming";
 import { epochMs } from "./time";
@@ -36,11 +38,8 @@ import {
   codexLogin,
   codexUsage,
   statusLineWindows,
-  type Login,
-  type StatusSample,
-  type Subscription,
-  type UsageReading,
 } from "./usage-model";
+import type { Login, StatusSample, Subscription, UsageReading } from "./usage-model";
 import { stringifyJson } from "./json";
 
 // WARNING: Claude's endpoint refuses callers who ask more often than this.

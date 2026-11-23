@@ -38,11 +38,8 @@ import {
   splitDisputed,
   step,
   targetKind,
-  type Finding,
-  type SynthesisReport,
-  type Woke,
-  type Answered,
 } from "collie";
+import type { Finding, SynthesisReport, Woke, Answered } from "collie";
 import { Effect, FileSystem, Schema } from "effect";
 import { connection } from "./connections.ts";
 import { reassess, repliesTo, formatReplies } from "./reassessment.ts";

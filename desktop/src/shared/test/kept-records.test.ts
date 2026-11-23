@@ -14,9 +14,9 @@ import {
   pointed,
   settled,
   sized,
-  type KeptSet,
   withFlowKept,
 } from "../kept-records";
+import type { KeptSet } from "../kept-records";
 
 const openAll = (keys: ReadonlyArray<string>, from: KeptSet = EMPTY_KEPT) =>
   Arr.reduce(keys, from, (set, key) => opened(closed(set), key));

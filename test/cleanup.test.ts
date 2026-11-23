@@ -27,7 +27,8 @@ import {
   hostCheckProcesses,
   runningChecks,
 } from "../src/check-processes";
-import { checksSweeper, generationsSweeper, sweepAsked, type Sweeper } from "../src/cleanup";
+import { checksSweeper, generationsSweeper, sweepAsked } from "../src/cleanup";
+import type { Sweeper } from "../src/cleanup";
 import { signalProcess } from "../src/lock";
 import { startedOf, stillRunning } from "../src/processes";
 import { sweepEvery } from "../src/side-jobs";
@@ -36,7 +37,8 @@ import { exec, startDetached } from "./support/command";
 import { fastForward, runEffect } from "./support/effect";
 import { fixtures, root, until } from "./support/host";
 import { hostRecords, recordsAt } from "./support/records";
-import { collie, proves, type World } from "./support/world";
+import { collie, proves } from "./support/world";
+import type { World } from "./support/world";
 
 const DAY_MS = 24 * 60 * 60_000;
 

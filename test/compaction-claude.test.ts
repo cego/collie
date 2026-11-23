@@ -24,7 +24,8 @@ import {
   submittedDelivery,
   VERIFIED_VERSIONS,
 } from "../src/compactors";
-import { pollCompaction, readControl, type CompactionDeps } from "../src/compaction";
+import { pollCompaction, readControl } from "../src/compaction";
+import type { CompactionDeps } from "../src/compaction";
 
 let rig: Rig;
 let fs: FileSystem.FileSystem;

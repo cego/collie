@@ -13,10 +13,10 @@ import {
   jsonSchemaFor,
   step,
   template,
-  type WorkflowEntry,
-  type WorkflowMetadata,
 } from "../src/sdk";
-import { REQUESTABLE, isOutcome, type Outcome } from "../src/outcome";
+import type { WorkflowEntry, WorkflowMetadata } from "../src/sdk";
+import { REQUESTABLE, isOutcome } from "../src/outcome";
+import type { Outcome } from "../src/outcome";
 import { loadEntry } from "../src/engine";
 import { runEffect } from "./support/effect";
 import { fixtures } from "./support/host";

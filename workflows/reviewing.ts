@@ -30,10 +30,8 @@ import {
   splitDisputed,
   step,
   targetKind,
-  type Finding,
-  type Integration,
-  type SynthesisReport,
 } from "collie";
+import type { Finding, Integration, SynthesisReport } from "collie";
 import { Effect, FileSystem, Option, Result, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import type { WorkflowEngine, WorkflowInstance } from "effect/workflow/WorkflowEngine";

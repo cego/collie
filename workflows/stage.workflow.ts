@@ -17,8 +17,8 @@ import {
   mrUrlOf,
   readMrRef,
   step,
-  type Holders,
 } from "collie";
+import type { Holders } from "collie";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import * as Workflow from "effect/workflow/Workflow";
@@ -38,8 +38,8 @@ import {
   short,
   staging,
   startedWithOne,
-  type SetMember,
 } from "./staging.ts";
+import type { SetMember } from "./staging.ts";
 import onGitlab from "./stage.gitlab.md" with { type: "text" };
 import onGithub from "./stage.github.md" with { type: "text" };
 

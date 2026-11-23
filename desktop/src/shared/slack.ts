@@ -1,5 +1,6 @@
 import * as Arr from "effect/Array";
-import { isDirectMessage, type SlackChannel } from "../../../src/slack";
+import { isDirectMessage } from "../../../src/slack";
+import type { SlackChannel } from "../../../src/slack";
 
 export const SLACK_CLIENT_ID = "2673706937.12461393591409";
 // WARNING: the port the shared app's settings name as its callback; changing it breaks sign-in.

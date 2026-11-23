@@ -1,12 +1,6 @@
 import * as Arr from "effect/Array";
-import {
-  mrId,
-  mrReadiness,
-  mrWords,
-  openMrLabel,
-  readMrRef,
-  type TaskView,
-} from "../../../src/board-model";
+import { mrId, mrReadiness, mrWords, openMrLabel, readMrRef } from "../../../src/board-model";
+import type { TaskView } from "../../../src/board-model";
 import type { FlockCards } from "./flock";
 
 export interface CardMr {

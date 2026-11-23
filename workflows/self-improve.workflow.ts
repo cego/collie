@@ -16,7 +16,6 @@ import { DateTime, Duration, Effect, FileSystem, Option, Result, Schema, flow } 
 import * as Activity from "effect/workflow/Activity";
 import markdown from "./self-improve.md" with { type: "text" };
 import {
-  type Outcome,
   Ended,
   FAILED_TO_START,
   Finding,
@@ -35,6 +34,7 @@ import {
   summaryOf,
   targetOf,
 } from "./retrospective";
+import type { Outcome } from "./retrospective";
 
 const content = contentOf(markdown);
 const triage = content.template("triage", {

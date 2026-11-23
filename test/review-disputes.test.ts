@@ -4,9 +4,8 @@ import {
   remainingDisputes,
   settleRound,
   splitDisputed,
-  type Finding,
-  type Fixed,
 } from "../src/output";
+import type { Finding, Fixed } from "../src/output";
 
 const dispute: Finding = {
   file: "src/worker.ts",

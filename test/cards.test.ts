@@ -15,9 +15,8 @@ import {
   readiness,
   significance,
   verificationOn,
-  type Card,
-  type SignificanceFacts,
 } from "../src/cards";
+import type { Card, SignificanceFacts } from "../src/cards";
 import type { Verification } from "../src/verify";
 import { RunRecords } from "../src/run-records";
 import { runEffect } from "./support/effect";

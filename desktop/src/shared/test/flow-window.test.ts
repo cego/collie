@@ -1,12 +1,6 @@
 import { expect, test } from "bun:test";
-import {
-  FIRST_STEPS,
-  LATER_STEPS,
-  firstWindow,
-  grownWindow,
-  wholeWindow,
-  type StepWindow,
-} from "../flow-window";
+import { FIRST_STEPS, LATER_STEPS, firstWindow, grownWindow, wholeWindow } from "../flow-window";
+import type { StepWindow } from "../flow-window";
 
 test("a Flow no larger than a first frame's Steps is drawn whole at once", () => {
   expect(firstWindow(40, 30)).toEqual({ from: 0, to: 40 });

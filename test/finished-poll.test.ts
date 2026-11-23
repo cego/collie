@@ -6,22 +6,16 @@ import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
 import type { Schema } from "effect";
-import { Effect, FileSystem, Layer, Queue, type Scope } from "effect";
+import { Effect, FileSystem, Layer, Queue } from "effect";
+import type { Scope } from "effect";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig } from "./support/recorder";
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
 import { fixtures, until } from "./support/host";
 import { agentsLayer } from "../src/agents";
-import {
-  HOLD,
-  Registry,
-  foundationLayer,
-  registryLayer,
-  runDir,
-  type Generation,
-  type HostServices,
-} from "../src/engine";
+import { HOLD, Registry, foundationLayer, registryLayer, runDir } from "../src/engine";
+import type { Generation, HostServices } from "../src/engine";
 import type { RunReport, RequestedBy } from "../src/board-model";
 import { Store } from "../src/store";
 import { writeTask } from "../src/task";

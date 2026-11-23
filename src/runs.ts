@@ -6,22 +6,19 @@ import { Effect, Option, Schema } from "effect";
 import type { FileSystem } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import type * as Types from "effect/Types";
-import {
-  boardOption,
-  holdPath,
-  type RequestedBy,
-  type RunReport,
-  type Solution,
-} from "./board-model";
+import { boardOption, holdPath } from "./board-model";
+import type { RequestedBy, RunReport, Solution } from "./board-model";
 import type { PluginEnv } from "./env";
 import type { Park } from "./park-cause";
 import { resultText, runView, runViews } from "./lifecycle";
-import { HOLD, STOP, evidenceDir, runDir, type RunView } from "./engine";
+import { HOLD, STOP, evidenceDir, runDir } from "./engine";
+import type { RunView } from "./engine";
 import { isSetAside, isUnanswered } from "./store";
 import type { Settled } from "./strategies";
 import type { WorktreeRecord } from "./run";
 import type { Landing } from "./landing";
-import { awaitingLine, type Awaiting } from "./awaiting";
+import { awaitingLine } from "./awaiting";
+import type { Awaiting } from "./awaiting";
 import type { AskedFact, Execution, UsageWait } from "./flow";
 import type { ShippingGo } from "./shipping";
 import type { NarrativeReport } from "./narrative-model";

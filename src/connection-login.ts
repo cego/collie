@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 import type { PluginEnv } from "./env";
-import { shell, type Runner } from "./mr";
+import { shell } from "./mr";
+import type { Runner } from "./mr";
 import type { ChildProcessSpawner } from "effect/process";
 import { glabLoginOn } from "./forge/gitlab-checks";
 import { ghLogin } from "./forge/github";

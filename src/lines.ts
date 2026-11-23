@@ -8,7 +8,8 @@ import { CommandLine } from "effect/process";
 import type { Card } from "./cards";
 import type { Delivery } from "./steering";
 import type { DriftReport, Ref } from "./evaluator";
-import { recipientOf, type Action } from "./actions";
+import { recipientOf } from "./actions";
+import type { Action } from "./actions";
 
 export type Tone = "plain" | "dim" | "bad" | "accent";
 

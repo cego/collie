@@ -9,8 +9,10 @@ import { runEffect } from "./support/effect";
 import { FakeBin } from "./support/bin";
 import { readEnv } from "../src/env";
 import { eventText } from "../src/commands/onboard";
-import { onboard, type OnboardEvent, type OnboardOptions } from "../src/onboard";
-import { err, type OpResult } from "../src/operations";
+import { onboard } from "../src/onboard";
+import type { OnboardEvent, OnboardOptions } from "../src/onboard";
+import { err } from "../src/operations";
+import type { OpResult } from "../src/operations";
 import { writeConfigValue } from "../src/config";
 import manifest from "../package.json";
 

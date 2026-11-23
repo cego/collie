@@ -12,9 +12,8 @@ import {
   objectiveOf,
   repositoryOf,
   workNamedIn,
-  type LiveNames,
-  type TaskContext,
 } from "../src/tasknames";
+import type { LiveNames, TaskContext } from "../src/tasknames";
 import { taskWorkspaceLabel } from "../src/naming";
 import { runEffect } from "./support/effect";
 

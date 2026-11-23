@@ -12,7 +12,8 @@ import { memoryWaitOf } from "../src/memory-wait";
 import { epochMs } from "../src/time";
 import { exec } from "./support/command";
 import { stopHost, until } from "./support/host";
-import { collie, proves, type World } from "./support/world";
+import { collie, proves } from "./support/world";
+import type { World } from "./support/world";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 type Plan = typeof BenchmarkPlan.Encoded;

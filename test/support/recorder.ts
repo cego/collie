@@ -4,8 +4,10 @@ import type { PlatformError } from "effect";
 import { Config, Effect, Exit, FileSystem, Path, Schema, Scope, flow, Result } from "effect";
 import { readEnv } from "../../src/env";
 import { connect } from "../../src/hc";
-import { SETUP, serveFakeHc, type FakeHc } from "./fake-hc";
-import { armTripwire, untripped, type Tripwire } from "./herdr-tripwire";
+import { SETUP, serveFakeHc } from "./fake-hc";
+import type { FakeHc } from "./fake-hc";
+import { armTripwire, untripped } from "./herdr-tripwire";
+import type { Tripwire } from "./herdr-tripwire";
 
 const encodeJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
 

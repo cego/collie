@@ -5,7 +5,8 @@ import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import type * as RpcMessage from "effect/rpc/RpcMessage";
 import * as RpcServer from "effect/rpc/RpcServer";
-import { engineEnd, type FromDoor, type ToDoor } from "../src/door";
+import { engineEnd } from "../src/door";
+import type { FromDoor, ToDoor } from "../src/door";
 import { runEffect } from "./support/effect";
 
 const Ping = Rpc.make("ping", { success: Schema.String });

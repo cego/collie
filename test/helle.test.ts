@@ -30,9 +30,8 @@ import {
   resolveProject,
   resolveProjects,
   waitForHelle,
-  type HelleClaim,
-  type HelleProject,
 } from "../src/helle";
+import type { HelleClaim, HelleProject } from "../src/helle";
 import { HELLE_URL } from "../src/helle-url";
 import { foundationLayer, handOverClaim } from "../src/engine";
 import { ClaimedSchema } from "../src/sdk";

@@ -2,7 +2,8 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { renderAnsi } from "@comark/ansi";
 import security from "comark/plugins/security";
-import { RGBA, StyledText, TextAttributes, type TextChunk } from "@opentui/core";
+import { RGBA, StyledText, TextAttributes } from "@opentui/core";
+import type { TextChunk } from "@opentui/core";
 import { C } from "./sections";
 
 const SANITISED = [security({ blockedTags: ["script", "style", "iframe", "object", "embed"] })];

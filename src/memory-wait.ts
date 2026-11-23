@@ -5,7 +5,8 @@ import { Clock, Config, Duration, Effect, FileSystem, Option, Random, Schema } f
 import type { PluginEnv } from "./env";
 import { diskSaid, lowOn, readDisk } from "./disk";
 import { launchDir } from "./launches";
-import { machineMemory, PRESSURE_SHORT, type Memory } from "./memory";
+import { machineMemory, PRESSURE_SHORT } from "./memory";
+import type { Memory } from "./memory";
 import { machineName } from "./peers";
 import { RunRecords } from "./run-records";
 import { took } from "./time";

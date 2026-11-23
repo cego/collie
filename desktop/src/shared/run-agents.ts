@@ -1,5 +1,6 @@
 import * as Arr from "effect/Array";
-import { ranOn, type RunAgent } from "../../../src/board-model";
+import { ranOn } from "../../../src/board-model";
+import type { RunAgent } from "../../../src/board-model";
 
 export interface AgentRow {
   // WARNING: unique within a Run, since an operation's agent can be launched more than once.

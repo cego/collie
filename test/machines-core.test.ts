@@ -9,7 +9,8 @@ import { addToCore, shOn } from "../desktop/src/bun/onboarding";
 import { connect } from "../src/hc";
 import { peersOf } from "../src/peers";
 import { runEffect } from "./support/effect";
-import { twoMachines, type Side } from "./support/peers";
+import { twoMachines } from "./support/peers";
+import type { Side } from "./support/peers";
 import { collieCommand } from "./support/world";
 
 const Logged = Schema.fromJsonString(

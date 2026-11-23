@@ -2,13 +2,8 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import { Effect, FileSystem, Path, Schema, SchemaGetter, Semaphore, flow, Result } from "effect";
-import {
-  CREDENTIALS,
-  type Credential,
-  type KnownMachine,
-  type MachineGiven,
-  type OnboardStep,
-} from "../shared/flock";
+import { CREDENTIALS } from "../shared/flock";
+import type { Credential, KnownMachine, MachineGiven, OnboardStep } from "../shared/flock";
 import type { Keyring, KeyringEntry } from "./credentials";
 import { sha256Hex } from "../../../src/attachments";
 import type { ShellRoute } from "./machine";

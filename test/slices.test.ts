@@ -2,7 +2,8 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
-import { identityProblem, renderProgress, type Handed } from "../src/slices";
+import { identityProblem, renderProgress } from "../src/slices";
+import type { Handed } from "../src/slices";
 
 const handed = (over: Partial<Handed>) => ({
   item: "01-api.md",

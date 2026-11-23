@@ -2,7 +2,6 @@ import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
 import { ConfigProvider, Effect, FileSystem } from "effect";
 import {
-  type AgentState,
   agentState,
   childEnv,
   localShell,
@@ -12,6 +11,7 @@ import {
   takesLoginAgent,
   which,
 } from "../desktop/src/bun/login-env";
+import type { AgentState } from "../desktop/src/bun/login-env";
 import { localRoute } from "../desktop/src/bun/machine";
 import { runEffect } from "./support/effect";
 

@@ -6,14 +6,12 @@ import * as Arr from "effect/Array";
 import { Effect, FileSystem, Path, Schema, Semaphore, SubscriptionRef, flow, Result } from "effect";
 import { DEFAULT_MODEL, HARNESS_MODELS, resolveChoice } from "../../../src/harness-choice";
 import { isString } from "../../../src/schema";
-import { effortsOf, type Offer } from "../shared/chat-choices";
-import { ActionFailed, DesktopSettings, type DesktopSettingsChange } from "../shared/flock";
-import {
-  CHAT_HARNESSES,
-  DEFAULT_CHAT_HARNESS,
-  editSetting,
-  type FlockSettings,
-} from "../shared/flock-settings";
+import { effortsOf } from "../shared/chat-choices";
+import type { Offer } from "../shared/chat-choices";
+import { ActionFailed, DesktopSettings } from "../shared/flock";
+import type { DesktopSettingsChange } from "../shared/flock";
+import { CHAT_HARNESSES, DEFAULT_CHAT_HARNESS, editSetting } from "../shared/flock-settings";
+import type { FlockSettings } from "../shared/flock-settings";
 import { readFlockSettings, writeFlockSettings } from "./flock-settings";
 
 const SettingsFile = Schema.fromJsonString(DesktopSettings);

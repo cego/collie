@@ -3,7 +3,8 @@ import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
-import { type Answers, DESKTOP_SAID } from "../shared/chat-view";
+import { DESKTOP_SAID } from "../shared/chat-view";
+import type { Answers } from "../shared/chat-view";
 import { homedir, hostname } from "node:os";
 /* oxlint-disable effecttsgo/node-builtin-import -- A hook answers at once, with no Effect services. */
 import { realpathSync } from "node:fs";
@@ -13,13 +14,10 @@ import { Option, Schema } from "effect";
 import { FILE_TOOLS } from "./file-tools";
 import { FLOCK_TOOLS } from "./flock-tools";
 import { childEnv } from "./login-env";
-import { type StandingDirection, standingDirectionContext } from "../../../src/standing-direction";
-import {
-  type SessionCall,
-  SESSION_STORES,
-  SESSIONS_CLOSED,
-  sessionStoreReached,
-} from "../../../src/own-words";
+import { standingDirectionContext } from "../../../src/standing-direction";
+import type { StandingDirection } from "../../../src/standing-direction";
+import { SESSION_STORES, SESSIONS_CLOSED, sessionStoreReached } from "../../../src/own-words";
+import type { SessionCall } from "../../../src/own-words";
 
 export const systemPrompt = (
   computer: string,

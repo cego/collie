@@ -16,7 +16,8 @@ import {
   Schema,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { budgetOf, type Budget, type Kind, startOnHold, STORE as store } from "./budget";
+import { budgetOf, startOnHold, STORE as store } from "./budget";
+import type { Budget, Kind } from "./budget";
 import {
   binDirectory,
   isTargeted,

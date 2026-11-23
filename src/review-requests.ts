@@ -1,9 +1,11 @@
 import * as Arr from "effect/Array";
-import { Effect, type Context } from "effect";
+import { Effect } from "effect";
+import type { Context } from "effect";
 import { recordAudit, readAudit } from "./audit";
 import { Started, mrId, mrRefOf } from "./board-model";
 import { savedModules } from "./discovery";
-import { runDir, type HostServices, type RegistryApi } from "./engine";
+import { runDir } from "./engine";
+import type { HostServices, RegistryApi } from "./engine";
 import type { PluginEnv } from "./env";
 import type { PlatformServices } from "./platform";
 import { followClaim, followingOn } from "./follow-through";

@@ -6,7 +6,8 @@ import { Command } from "effect/cli";
 import type { AgentFallback } from "../board-model";
 import { usageFallbacks, usageReadings } from "../lifecycle";
 import { agoMs, epochMs } from "../time";
-import { current, resetPhrase, type UsageReading } from "../usage-model";
+import { current, resetPhrase } from "../usage-model";
+import type { UsageReading } from "../usage-model";
 import { answering, cliDoor } from "./shared";
 
 export function usageLines(readings: ReadonlyArray<UsageReading>, now: number) {

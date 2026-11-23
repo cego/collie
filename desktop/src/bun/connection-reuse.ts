@@ -1,6 +1,7 @@
 import { Cause, Effect } from "effect";
 import type { ConnectionLogin, ConnectionReading } from "../../../src/connection-model";
-import { GITHUB_WEB_LOGIN, type Keyring } from "./credentials";
+import { GITHUB_WEB_LOGIN } from "./credentials";
+import type { Keyring } from "./credentials";
 import { workflowConnections } from "../shared/connections";
 import type { Door, ShellRoute } from "./machine";
 import { redact } from "../../../src/redact";

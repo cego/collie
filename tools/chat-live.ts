@@ -13,10 +13,11 @@ import {
   preferredHarness,
   pushable,
   readChat,
-  type ChatRecord,
 } from "../src/chat";
+import type { ChatRecord } from "../src/chat";
 import { writeConfigValue } from "../src/config";
-import { readEnv, type PluginEnv } from "../src/env";
+import { readEnv } from "../src/env";
+import type { PluginEnv } from "../src/env";
 import { connect } from "../src/hc";
 import { Herdr } from "../src/herdr";
 import { ownerOf } from "../src/host";

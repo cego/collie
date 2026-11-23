@@ -8,13 +8,8 @@ import type {
   ArtefactSearch,
   RegisterArtefact,
 } from "../../../src/artefact-model";
-import {
-  Away,
-  awayFrom,
-  type FlockSearch,
-  type SearchDoor,
-  searchFlock,
-} from "../../../src/artefact-search";
+import { Away, awayFrom, searchFlock } from "../../../src/artefact-search";
+import type { FlockSearch, SearchDoor } from "../../../src/artefact-search";
 import {
   Cause,
   Clock,
@@ -42,57 +37,56 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Socket from "effect/socket/Socket";
 import {
   BRIDGE_READY,
-  type BoardMessage,
-  type CleanupReport,
-  type BoardSnapshot,
   PROTOCOL,
   FrontDoorRpcs,
   IdentityRpc,
   HostRefused,
   leftSaid,
-  type ProposalRefused,
-  type RequestConflict,
-  type RunDetail,
-  type RunRevision,
-  type StaleAct,
-  type Toasted,
+} from "../../../src/board-model";
+import type {
+  BoardMessage,
+  CleanupReport,
+  BoardSnapshot,
+  ProposalRefused,
+  RequestConflict,
+  RunDetail,
+  RunRevision,
+  StaleAct,
+  Toasted,
 } from "../../../src/board-model";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
-import { HerdrMachine, type PeerView, PeerView as PeerSchema } from "../../../src/peers-model";
+import { HerdrMachine, PeerView as PeerSchema } from "../../../src/peers-model";
+import type { PeerView } from "../../../src/peers-model";
 import { MUX_BOUND, muxArgv, remoteCollie, riderArgv } from "../../../src/ssh-argv";
-import {
-  ActionFailed,
-  type Credential,
-  type DesktopAction,
-  type FlockItem,
-  type KnownMachine,
-  type MachineMerged,
-  type MachineMessage,
-  type MachineOwnRead,
-  type NotLive,
+import { ActionFailed } from "../shared/flock";
+import type {
+  Credential,
+  DesktopAction,
+  FlockItem,
+  KnownMachine,
+  MachineMerged,
+  MachineMessage,
+  MachineOwnRead,
+  NotLive,
 } from "../shared/flock";
-import { CREDENTIAL_SAID, type Lag } from "../shared/in-sync";
+import { CREDENTIAL_SAID } from "../shared/in-sync";
+import type { Lag } from "../shared/in-sync";
 import { UPGRADE_SAID } from "../shared/usage";
-import { type MachineSchedules, SCHEDULES_UPGRADE_SAID } from "../shared/schedules";
+import { SCHEDULES_UPGRADE_SAID } from "../shared/schedules";
+import type { MachineSchedules } from "../shared/schedules";
 import { CLEANUP_UPGRADE_SAID } from "../shared/machine-cleanup";
 import type { ScheduleChange } from "../../../src/schedule-model";
 import type { ActionSchema } from "../../../src/actions";
 import type { Mutable } from "effect/Types";
-import { moveSchedule, type ScheduleDoor } from "../../../src/schedule-move";
+import { moveSchedule } from "../../../src/schedule-move";
+import type { ScheduleDoor } from "../../../src/schedule-move";
 import { CHILD_CWD, childEnv } from "./login-env";
 import { backoff } from "../shared/retrying";
 import { addressOf } from "../shared/record-terminal";
 import { withNotice } from "../../../src/redact";
 import { markFirst } from "../../../src/record-marks";
-import {
-  type ActionsLog,
-  type Attempted,
-  confirmed,
-  reasonOf,
-  type Unconfirmed,
-  unlogged,
-  withheldOf,
-} from "./sent";
+import { confirmed, reasonOf, unlogged, withheldOf } from "./sent";
+import type { ActionsLog, Attempted, Unconfirmed } from "./sent";
 
 const children = new Set<Bun.Subprocess>();
 export const endChildren = () => {

@@ -6,8 +6,10 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Effect, FileSystem, Schema } from "effect";
 import { loadEntry, revisionOf } from "./engine";
-import { jsonSchemaFor, type WorkflowEntry } from "./sdk";
-import { Declared, Fault, LAYERS, type EntryLayer } from "./definitions-model";
+import { jsonSchemaFor } from "./sdk";
+import type { WorkflowEntry } from "./sdk";
+import { Declared, Fault, LAYERS } from "./definitions-model";
+import type { EntryLayer } from "./definitions-model";
 
 export { Declared, Fault, LAYERS, type EntryLayer } from "./definitions-model";
 

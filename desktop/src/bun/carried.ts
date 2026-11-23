@@ -5,9 +5,11 @@ import * as Arr from "effect/Array";
 import { Clock, Effect, FileSystem, Result } from "effect";
 import * as Base64 from "effect/encoding/Base64";
 import { ATTACHMENT_BYTES, sha256Hex } from "../../../src/attachments";
-import { HostRefused, type HostFile, PART_BYTES } from "../../../src/board-model";
+import { HostRefused, PART_BYTES } from "../../../src/board-model";
+import type { HostFile } from "../../../src/board-model";
 import { describeAttachment } from "./attachments";
-import { type ChatDoor, type FlockChat, reach, type Reached } from "./flock-tools";
+import { reach } from "./flock-tools";
+import type { ChatDoor, FlockChat, Reached } from "./flock-tools";
 import { reasonOf } from "./sent";
 
 const tooLarge = (path: string) =>

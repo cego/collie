@@ -7,18 +7,12 @@ import type { PlatformError } from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { YamlValue } from "./yaml";
 import { isString } from "./schema";
-import { targetKind, workSourceOf, type Settled } from "./strategies";
-import {
-  type MrDetails,
-  type MrForge,
-  type MrRef,
-  mrId,
-  mrPath,
-  mrTarget,
-  parseMrTarget,
-  readMrRef,
-} from "./board-model";
-import { FORGES, forgeOf, forgeOfHost, type Forge } from "./forge/forge";
+import { targetKind, workSourceOf } from "./strategies";
+import type { Settled } from "./strategies";
+import { mrId, mrPath, mrTarget, parseMrTarget, readMrRef } from "./board-model";
+import type { MrDetails, MrForge, MrRef } from "./board-model";
+import { FORGES, forgeOf, forgeOfHost } from "./forge/forge";
+import type { Forge } from "./forge/forge";
 import type { ForgeHttp } from "./forge/http";
 import type { MrReady, Posted } from "./sdk";
 import { waitingForIO } from "./foreground";

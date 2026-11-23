@@ -3,7 +3,8 @@ import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { platformLayer, type PlatformServices } from "../src/platform";
+import { platformLayer } from "../src/platform";
+import type { PlatformServices } from "../src/platform";
 import {
   Clock,
   Deferred,
@@ -11,13 +12,14 @@ import {
   FileSystem,
   Option,
   Schedule,
-  type Scope,
   Stream,
   SubscriptionRef,
 } from "effect";
+import type { Scope } from "effect";
 import type { BoardMessage, BoardSnapshot } from "../src/board-model";
 import { signRelease } from "../src/signing";
-import { flockStream, localRoute, type ShellRoute } from "../desktop/src/bun/machine";
+import { flockStream, localRoute } from "../desktop/src/bun/machine";
+import type { ShellRoute } from "../desktop/src/bun/machine";
 import {
   doctorOn,
   onboardThrough,
@@ -26,14 +28,8 @@ import {
   verifiedRunner,
 } from "../desktop/src/bun/onboarding";
 import { setupOffer } from "../desktop/src/bun/standing-setup";
-import {
-  applyItem,
-  EMPTY_FLOCK,
-  type FlockItem,
-  machineRows,
-  type OnboardRun,
-  type OnboardStep,
-} from "../desktop/src/shared/flock";
+import { applyItem, EMPTY_FLOCK, machineRows } from "../desktop/src/shared/flock";
+import type { FlockItem, OnboardRun, OnboardStep } from "../desktop/src/shared/flock";
 import { stringifyJson } from "../src/json";
 
 const pair = () => {

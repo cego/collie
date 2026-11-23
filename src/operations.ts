@@ -15,19 +15,24 @@ import type { ChildProcessSpawner } from "effect/process";
 import { nowIso } from "./time";
 import { attentionFor } from "./attention";
 import type { PluginEnv } from "./env";
-import { Answered, mrLabel, mrNounOf, ranOn, solutionTitle, type FrontDoor } from "./board-model";
-import { agentOfLaunch, type Launched } from "./launches";
+import { Answered, mrLabel, mrNounOf, ranOn, solutionTitle } from "./board-model";
+import type { FrontDoor } from "./board-model";
+import { agentOfLaunch } from "./launches";
+import type { Launched } from "./launches";
 import { hostLaunches } from "./lifecycle";
-import { readAudit, type AuditLine } from "./audit";
+import { readAudit } from "./audit";
+import type { AuditLine } from "./audit";
 import { readForge, readMrStates } from "./merges";
 import { findingsIn } from "./output";
 import { latest, readDispositions } from "./disposition";
 import { PLAN_DIR } from "./run-detail";
 import { tailed } from "./views";
-import { Herdr, type AgentInfo } from "./herdr";
+import { Herdr } from "./herdr";
+import type { AgentInfo } from "./herdr";
 import { carriedBefore, carryOutProposal } from "./run-actions";
 export { carryOutProposal, registerRunExecutors } from "./run-actions";
-import { mrIdIn, shell, whatItSaid, type Runner } from "./mr";
+import { mrIdIn, shell, whatItSaid } from "./mr";
+import type { Runner } from "./mr";
 import { ensureLockDir, withLock } from "./lock";
 import { checkoutsUnder, projectsRoot } from "./projects";
 import { newestRelease, ownPlatform, releasesOf, verifiedRunner } from "./releases";
@@ -38,16 +43,20 @@ import {
   releaseVersion,
   placeRelease,
   RELEASE_TAG,
-  type Carried,
 } from "./release";
+import type { Carried } from "./release";
 import { BUNDLED_HC, placeHc } from "./hc-install";
 import hcPin from "../hc-pin.json";
 import manifest from "../package.json";
-import { everyRegistered, type AgentEntry } from "./registry";
-import { listRuns, liveCheckouts, type Asked, type RunFacts } from "./runs";
+import { everyRegistered } from "./registry";
+import type { AgentEntry } from "./registry";
+import { listRuns, liveCheckouts } from "./runs";
+import type { Asked, RunFacts } from "./runs";
 import type { TaskChoice, TaskRecord } from "./task";
-import { freshTaskLabel, type StartAbout } from "./tasknames";
-import { readIntent, type Authority } from "./intent";
+import { freshTaskLabel } from "./tasknames";
+import type { StartAbout } from "./tasknames";
+import { readIntent } from "./intent";
+import type { Authority } from "./intent";
 import {
   appendLine,
   budgetPath,
@@ -56,27 +65,20 @@ import {
   reserve,
   settle as settleBudget,
 } from "./steering";
-import { append, conversationPath, tail, type NewTurn } from "./conversation";
-import {
-  evaluate,
-  validate,
-  type CallLimits as EvaluatorLimits,
-  type EvaluatorDeps,
-  type Validated,
-} from "./evaluator";
-import { ActionSchema, type Action } from "./actions";
-import {
-  actorName,
-  record as recordProposal,
-  type Recorded,
-  type Actor,
-  type Voice,
-} from "./proposals";
+import { append, conversationPath, tail } from "./conversation";
+import type { NewTurn } from "./conversation";
+import { evaluate, validate } from "./evaluator";
+import type { CallLimits as EvaluatorLimits, EvaluatorDeps, Validated } from "./evaluator";
+import { ActionSchema } from "./actions";
+import type { Action } from "./actions";
+import { actorName, record as recordProposal } from "./proposals";
+import type { Recorded, Actor, Voice } from "./proposals";
 import { openReports, readDrift } from "./drift";
 import { readCards } from "./cards";
 import { describeAction } from "./lines";
 import { MAX_DELIVERY_BYTES } from "./dispatcher";
-import { YamlMapSchema, type YamlMap } from "./yaml";
+import { YamlMapSchema } from "./yaml";
+import type { YamlMap } from "./yaml";
 
 const ErrorCode = Schema.Literals([
   "workspace_required",

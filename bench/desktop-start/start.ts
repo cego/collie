@@ -1,6 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import { type Duration, Effect, FileSystem, Option, Schedule, Schema } from "effect";
+import { Effect, FileSystem, Option, Schedule, Schema } from "effect";
+import type { Duration } from "effect";
 import { stringifyJson } from "../../src/json";
 
 interface Process {

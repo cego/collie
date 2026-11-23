@@ -7,20 +7,23 @@ import { Deferred, Effect, Fiber, FileSystem, Option, Schema, Stream } from "eff
 import type { PlatformServices } from "../src/platform";
 import { writeConfigValue } from "../src/config";
 import { currentEnv } from "../src/env";
-import { pickFlow, type FlowPrompts } from "../src/flows";
+import { pickFlow } from "../src/flows";
+import type { FlowPrompts } from "../src/flows";
 import { Herdr } from "../src/herdr";
 import { HostUnavailable, connect } from "../src/host";
 import { refusal, runView, runViews } from "../src/lifecycle";
 import { HostRefused } from "../src/board-model";
 import { MachineUnreachable } from "../src/peers-model";
-import { runDir, type RunView } from "../src/engine";
+import { runDir } from "../src/engine";
+import type { RunView } from "../src/engine";
 import { readAudit } from "../src/audit";
 import { readDispositions } from "../src/disposition";
 import { recordsReadLayer } from "../src/records";
 import { RunRecords } from "../src/run-records";
 import { hostRecords } from "./support/records";
 import { events, stopHost, until } from "./support/host";
-import { collie, proves as provesWith, save, type World } from "./support/world";
+import { collie, proves as provesWith, save } from "./support/world";
+import type { World } from "./support/world";
 
 const MODULE = ["proof.workflow.ts", "helper.ts", "notes.md"] as const;
 

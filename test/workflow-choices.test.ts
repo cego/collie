@@ -8,7 +8,8 @@ import { describeWaiting } from "../src/lifecycle";
 import { factsOfView } from "../src/runs";
 import { runWaits } from "../src/run-waits";
 import { until } from "./support/host";
-import { collie, proves, type World } from "./support/world";
+import { collie, proves } from "./support/world";
+import type { World } from "./support/world";
 import { overHost } from "./support/records";
 
 const decodeShown = flow(

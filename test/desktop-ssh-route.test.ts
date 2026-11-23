@@ -5,7 +5,8 @@ import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Scope, Exit } from "effect";
 import { riderArgv } from "../src/ssh-argv";
-import { bridgeCommand, linkRoute, remoteRoute, type ShellRoute } from "../desktop/src/bun/machine";
+import { bridgeCommand, linkRoute, remoteRoute } from "../desktop/src/bun/machine";
+import type { ShellRoute } from "../desktop/src/bun/machine";
 import { runEffect } from "./support/effect";
 import { freePort, silentMaster, writeFakeSsh, socketDir } from "./support/fake-ssh";
 

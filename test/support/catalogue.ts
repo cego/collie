@@ -3,12 +3,8 @@ import { Effect, Layer, Schema, flow, Result } from "effect";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import { FrontDoorRpcs } from "../../src/board-model";
-import {
-  sourcesOf,
-  type CatalogueSources,
-  type HarnessAdapters,
-  type HarnessCatalogues,
-} from "../../src/catalogue";
+import { sourcesOf } from "../../src/catalogue";
+import type { CatalogueSources, HarnessAdapters, HarnessCatalogues } from "../../src/catalogue";
 import { ClaudeModels, CodexModelList } from "../../src/catalogue-model";
 import { BUILD, HostRpcs, socketOf } from "../../src/host";
 import type { Connection } from "../../src/connection-model";

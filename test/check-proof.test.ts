@@ -3,9 +3,11 @@ import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { checkProof, owedLocally, owesNothingHere } from "../src/check-proof";
-import { evidenceGaps, type Collected } from "../src/outcome";
+import { evidenceGaps } from "../src/outcome";
+import type { Collected } from "../src/outcome";
 import { settleFinalFix } from "../src/output";
-import { TOO_LARGE, UNMEASURED, type CheckCommand, type Verification } from "../src/verify";
+import { TOO_LARGE, UNMEASURED } from "../src/verify";
+import type { CheckCommand, Verification } from "../src/verify";
 import type { VerifySpec } from "../src/verify-spec";
 import type { YamlValue } from "../src/yaml";
 

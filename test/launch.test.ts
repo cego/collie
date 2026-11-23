@@ -5,8 +5,10 @@ import type { Scope } from "effect";
 import { ConfigProvider, Effect, FileSystem, Schema } from "effect";
 import type { PlatformServices } from "../src/platform";
 import { savedReaches, writeConfigValue } from "../src/config";
-import { currentEnv, type PluginEnv } from "../src/env";
-import { pickFlow, type FlowPrompts } from "../src/flows";
+import { currentEnv } from "../src/env";
+import type { PluginEnv } from "../src/env";
+import { pickFlow } from "../src/flows";
+import type { FlowPrompts } from "../src/flows";
 import { Herdr } from "../src/herdr";
 import type { PickItem } from "../src/inputs";
 import { runViews } from "../src/lifecycle";
@@ -15,7 +17,8 @@ import { FakeBin } from "./support/bin";
 import { exec } from "./support/command";
 import { forgeOnPath, serveForges } from "./support/forge";
 import { stopHost } from "./support/host";
-import { collie, proves, type World } from "./support/world";
+import { collie, proves } from "./support/world";
+import type { World } from "./support/world";
 
 const MODULES = [
   "targeted.workflow.ts",

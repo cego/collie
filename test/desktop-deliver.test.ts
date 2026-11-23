@@ -6,9 +6,11 @@ import { Effect, Schema } from "effect";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcTest from "effect/rpc/RpcTest";
 import { act } from "../desktop/src/bun/machine";
-import { ActionFailed, type DesktopAction } from "../desktop/src/shared/flock";
+import { ActionFailed } from "../desktop/src/shared/flock";
+import type { DesktopAction } from "../desktop/src/shared/flock";
 import { ActionSchema } from "../src/actions";
-import { type ActionResult, FrontDoorRpcs } from "../src/board-model";
+import { FrontDoorRpcs } from "../src/board-model";
+import type { ActionResult } from "../src/board-model";
 
 const machine = { profile: "vm", name: "vm-mk" };
 

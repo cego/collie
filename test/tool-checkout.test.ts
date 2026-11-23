@@ -7,7 +7,8 @@ import { CleanupReport } from "../src/board-model";
 import { connect } from "../src/host";
 import { exec } from "./support/command";
 import { stopHost, until } from "./support/host";
-import { collie, proves, type World } from "./support/world";
+import { collie, proves } from "./support/world";
+import type { World } from "./support/world";
 
 const MODULES = ["provisions.workflow.ts", "placed.workflow.ts"] as const;
 const Listed = flow(Schema.decodeUnknownResult(CleanupReport), Result.getOrThrow);

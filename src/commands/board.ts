@@ -1,7 +1,8 @@
 import * as Arr from "effect/Array";
 import { Console, Effect } from "effect";
 import { Command, Flag } from "effect/cli";
-import { sectionOf, type TaskView } from "../board-model";
+import { sectionOf } from "../board-model";
+import type { TaskView } from "../board-model";
 import { boardSnapshot } from "../lifecycle";
 import { answering } from "./shared";
 

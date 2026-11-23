@@ -4,7 +4,8 @@ import { Effect, FileSystem, Path, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { installDependencies } from "./dependencies";
 import { defaultBase } from "./inputs";
-import { whatItSaid, type Runner } from "./mr";
+import { whatItSaid } from "./mr";
+import type { Runner } from "./mr";
 
 // WARNING: Unavailable also covers a failed install: the next integration installs again before it reports merged.
 export const IntegrationSchema = Schema.Struct({

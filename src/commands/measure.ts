@@ -3,7 +3,8 @@ import { Command, Flag } from "effect/cli";
 import { err } from "../operations";
 import { measureRun, refusal } from "../lifecycle";
 import { FrontDoor, HostRefused } from "../board-model";
-import { MeasurementJson, summaryOf, type Measurement } from "../measurement-model";
+import { MeasurementJson, summaryOf } from "../measurement-model";
+import type { Measurement } from "../measurement-model";
 import { answering, cliDoor } from "./shared";
 
 export const measure = Command.make(

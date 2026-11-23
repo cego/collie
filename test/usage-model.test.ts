@@ -12,9 +12,8 @@ import {
   subscriptionOf,
   usagePhrase,
   usedFor,
-  type UsageReading,
-  type UsageWindow,
 } from "../src/usage-model";
+import type { UsageReading, UsageWindow } from "../src/usage-model";
 import claudeUsage from "./fixtures/usage/claude-oauth-usage.json";
 import statusLine from "./fixtures/usage/claude-status-line-rate-limits.json";
 import codexRateLimits from "./fixtures/usage/codex-account-ratelimits-read.json";

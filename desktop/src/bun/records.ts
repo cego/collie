@@ -1,8 +1,10 @@
 import { Clock, Effect, Fiber, Schema, Stream, SubscriptionRef } from "effect";
-import { Flow, type RunDetail, type RunRevision } from "../../../src/board-model";
+import { Flow } from "../../../src/board-model";
+import type { RunDetail, RunRevision } from "../../../src/board-model";
 import type { ActionFailed, KeptRecord } from "../shared/flock";
 import { markFirst } from "../../../src/record-marks";
-import { recordEvents, type DoorMap, type RecordDoor, type RecordEvent } from "./machine";
+import { recordEvents } from "./machine";
+import type { DoorMap, RecordDoor, RecordEvent } from "./machine";
 
 interface Told {
   readonly detail: RunDetail | null | undefined;

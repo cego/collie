@@ -2,7 +2,8 @@ import type { Records } from "../src/records";
 import { recordsAt } from "./support/records";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import { Effect, FileSystem, type Scope } from "effect";
+import { Effect, FileSystem } from "effect";
+import type { Scope } from "effect";
 import type { PlatformServices } from "../src/platform";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
@@ -20,10 +21,8 @@ import {
   stepSettled,
   stepResults,
   stepStarted,
-  type Actor,
-  type AdmissionContext,
-  type ProposalLine,
 } from "../src/proposals";
+import type { Actor, AdmissionContext, ProposalLine } from "../src/proposals";
 import { resetExecutors } from "../src/executors";
 import type { Action } from "../src/actions";
 import { carryOutProposal } from "../src/operations";

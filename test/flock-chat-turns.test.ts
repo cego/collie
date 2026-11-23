@@ -12,19 +12,21 @@ import {
   FileSystem,
   Option,
   Schema,
-  type Scope,
   Stream,
   Queue,
   flow,
   Result,
 } from "effect";
+import type { Scope } from "effect";
 import type * as SecureRandom from "effect/crypto/SecureRandom";
 import { TestClock } from "effect/testing";
 import type { NewsBatch } from "../src/board-model";
-import { type Declaration, PROTOCOL, type Significance } from "../src/board-model";
+import { PROTOCOL } from "../src/board-model";
+import type { Declaration, Significance } from "../src/board-model";
 import { stageAttachment } from "../desktop/src/bun/attachments";
 import { openFlockChat } from "../desktop/src/bun/chat";
-import { type ClaudeCode, claudeDriver } from "../desktop/src/bun/claude-driver";
+import { claudeDriver } from "../desktop/src/bun/claude-driver";
+import type { ClaudeCode } from "../desktop/src/bun/claude-driver";
 import type { AguiEvent } from "../desktop/src/shared/agui";
 import type { TurnCost } from "../desktop/src/bun/driver";
 import type { ChatDriver, DriverContext } from "../desktop/src/bun/driver";
@@ -36,14 +38,11 @@ import { DesktopSettings } from "../desktop/src/shared/flock";
 import type { ChatChoices } from "../desktop/src/shared/chat-choices";
 import { NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
 import type { SdkMessage } from "../desktop/src/bun/agui";
-import {
-  callFlockTool,
-  type ChatDoor,
-  type ChatMachine,
-  type FlockChat,
-} from "../desktop/src/bun/flock-tools";
+import { callFlockTool } from "../desktop/src/bun/flock-tools";
+import type { ChatDoor, ChatMachine, FlockChat } from "../desktop/src/bun/flock-tools";
 import { listing } from "../desktop/src/shared/attachments";
-import { aboutNote, type ChatMessage, DESKTOP_SAID } from "../desktop/src/shared/chat-view";
+import { aboutNote, DESKTOP_SAID } from "../desktop/src/shared/chat-view";
+import type { ChatMessage } from "../desktop/src/shared/chat-view";
 import { isString } from "../src/schema";
 
 type Item = (typeof NewsBatch.Type)["items"][number];

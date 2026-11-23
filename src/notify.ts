@@ -1,6 +1,7 @@
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
-import { Context, type Effect } from "effect";
+import { Context } from "effect";
+import type { Effect } from "effect";
 import { mrWords, parseMrUrl } from "./board-model";
 
 export function openedSubject(url: string) {

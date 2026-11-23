@@ -16,15 +16,16 @@ import {
   FileSystem,
   Option,
   Schema,
-  type Scope,
   flow as Schemaflow,
   Result,
 } from "effect";
+import type { Scope } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import type { PlatformServices } from "../src/platform";
 import { expect, setDefaultTimeout, test } from "bun:test";
 import { hostname } from "node:os";
-import { readEnv, type PluginEnv } from "../src/env";
+import { readEnv } from "../src/env";
+import type { PluginEnv } from "../src/env";
 import { setSetting } from "../src/config";
 import { reachKey } from "../src/reach";
 import { amend, readIntent, writeIntent } from "../src/intent";
@@ -50,9 +51,8 @@ import {
   pendingHerdWide,
   read as readProposals,
   record as recordProposal,
-  type Actor,
-  type ProposalRecord,
 } from "../src/proposals";
+import type { Actor, ProposalRecord } from "../src/proposals";
 import type { Action } from "../src/actions";
 import { appendLine, machineHerd } from "../src/steering";
 import { CHAT_TERMINAL, chatPath, HEARD_MAX, hear, writeChat } from "../src/chat";
@@ -60,13 +60,16 @@ import { connect as connectCore } from "../src/hc";
 import { selectionPath, writeSelection } from "../src/selection";
 import { newTask, writeTask } from "../src/task";
 import { hosted, hostedRun, settledRun } from "./support/hosted";
-import { SETUP, type FakeHc } from "./support/fake-hc";
-import { save, type World } from "./support/world";
+import { SETUP } from "./support/fake-hc";
+import type { FakeHc } from "./support/fake-hc";
+import { save } from "./support/world";
+import type { World } from "./support/world";
 import { until } from "./support/host";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { connect, frontDoor, socketOf } from "../src/host";
-import { runDir, type RunView } from "../src/engine";
+import { runDir } from "../src/engine";
+import type { RunView } from "../src/engine";
 import { isSettled } from "../src/lifecycle";
 import { appendLog, MERGE_REQUEST } from "../src/oversight";
 import { RunRecords } from "../src/run-records";
@@ -74,7 +77,8 @@ import { registerAgent } from "../src/registry";
 import { AUDIT_FILE, readAudit } from "../src/audit";
 import * as SqlClient from "effect/sql/SqlClient";
 import { storedAnswers } from "./support/forge";
-import { Flow, FrontDoorRpcs, type Declaration, type FLOCK_READS } from "../src/board-model";
+import { Flow, FrontDoorRpcs } from "../src/board-model";
+import type { Declaration, FLOCK_READS } from "../src/board-model";
 
 const encodeJson = Schemaflow(
   Schema.encodeUnknownResult(Schema.fromJsonString(Schema.Any)),

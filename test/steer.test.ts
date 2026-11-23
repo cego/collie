@@ -2,11 +2,13 @@
 import { recordsAt } from "./support/records";
 import type { Records } from "../src/records";
 import * as Arr from "effect/Array";
-import { Effect, FileSystem, Path, Schema, type Scope, flow, Result } from "effect";
+import { Effect, FileSystem, Path, Schema, flow, Result } from "effect";
+import type { Scope } from "effect";
 import type { PlatformServices } from "../src/platform";
 import { expect, setDefaultTimeout, test } from "bun:test";
 import { steer } from "../src/operations";
-import { DEFAULT_AUTHORITY, readIntent, type Authority } from "../src/intent";
+import { DEFAULT_AUTHORITY, readIntent } from "../src/intent";
+import type { Authority } from "../src/intent";
 import { conversationPath, read as readConversation } from "../src/conversation";
 import { read as readProposals } from "../src/proposals";
 import { budgetPath, readBudget, machineHerd } from "../src/steering";

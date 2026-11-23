@@ -14,12 +14,8 @@ import {
 import type * as HttpClient from "effect/http/HttpClient";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Base64Url from "effect/encoding/Base64Url";
-import {
-  slackApi,
-  slackOAuth,
-  missingSlackScopes,
-  type SlackOAuthAnswer,
-} from "../../../src/slack";
+import { slackApi, slackOAuth, missingSlackScopes } from "../../../src/slack";
+import type { SlackOAuthAnswer } from "../../../src/slack";
 import { redact } from "../../../src/redact";
 import {
   SLACK_CLIENT_ID,

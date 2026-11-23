@@ -5,16 +5,12 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { Database } from "bun:sqlite";
 import { Effect, FileSystem, Result, Schema, flow } from "effect";
-import {
-  type OwnMessage,
-  type OwnSource,
-  type OwnStore,
-  type OwnWords,
-  withinCaps,
-} from "./own-words-model";
+import { withinCaps } from "./own-words-model";
+import type { OwnMessage, OwnSource, OwnStore, OwnWords } from "./own-words-model";
 import { redact } from "./redact";
 import { epochMs, isoAt } from "./time";
-import { isJsonObject, isString, type JsonObject } from "./schema";
+import { isJsonObject, isString } from "./schema";
+import type { JsonObject } from "./schema";
 
 type Json = Schema.Json;
 const isJsonArray = Schema.is(Schema.Array(Schema.Json));

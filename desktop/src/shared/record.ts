@@ -1,6 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import { mrWords, readMrRef, type RecordPart, type RunDetail } from "../../../src/board-model";
+import { mrWords, readMrRef } from "../../../src/board-model";
+import type { RecordPart, RunDetail } from "../../../src/board-model";
 import { mrTab } from "./links";
 import type { Target } from "./board-clicks";
 import { parkLine } from "../../../src/park-cause";

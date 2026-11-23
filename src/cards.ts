@@ -8,7 +8,8 @@ import { forgeOf } from "./forge/forge";
 import { appendRunJournal, lastRunJournal, readRunJournal, runJournal } from "./journal";
 import { redact } from "./redact";
 import { RunRecords, runOfDir } from "./run-records";
-import { sameTree, type Verification } from "./verify";
+import { sameTree } from "./verify";
+import type { Verification } from "./verify";
 import { ProducerReport, reportFields } from "./narrative-model";
 
 const RevisionSchema = Schema.Struct({

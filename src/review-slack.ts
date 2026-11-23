@@ -1,7 +1,8 @@
 import { Effect, FileSystem, Option, Schema } from "effect";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import { mrId, mrTarget, readMrRef, type MrRef } from "./board-model";
+import { mrId, mrTarget, readMrRef } from "./board-model";
+import type { MrRef } from "./board-model";
 import type { slackApi } from "./slack";
 import { slackMessageRef } from "./slack";
 import { epochMs } from "./time";

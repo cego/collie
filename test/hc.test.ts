@@ -1,7 +1,9 @@
 import * as Arr from "effect/Array";
 import { describe, expect, test } from "bun:test";
-import { Effect, type Schema } from "effect";
-import { applyNote, connect, snapshotOf, type HcNote, type HcTerminal } from "../src/hc";
+import { Effect } from "effect";
+import type { Schema } from "effect";
+import { applyNote, connect, snapshotOf } from "../src/hc";
+import type { HcNote, HcTerminal } from "../src/hc";
 import { runEffect } from "./support/effect";
 import { jsonText } from "./support/hc-schema";
 import { Rig } from "./support/recorder";

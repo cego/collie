@@ -10,7 +10,8 @@ import * as SqlClient from "effect/sql/SqlClient";
 import type { SqlError } from "effect/sql/SqlError";
 import { connect } from "../src/host";
 import { events, stopHost, until } from "./support/host";
-import { proves, type World } from "./support/world";
+import { proves } from "./support/world";
+import type { World } from "./support/world";
 
 const MODULES = ["resumes.workflow.ts", "paced.workflow.ts"] as const;
 

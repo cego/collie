@@ -9,17 +9,8 @@ import type { JsonObject } from "../../../src/schema";
 import { decodeStrict, jsonSchemaOf } from "../../../src/toolkit";
 import { IMAGE_BYTES, imageSize, LONG_EDGE, shownAs, TEXTUAL } from "../shared/attachments";
 import { readWhole } from "./carried";
-import {
-  type ChatMachine,
-  declareVoice,
-  type FlockChat,
-  newRequest,
-  reach,
-  readable,
-  type Reached,
-  reasonOf,
-  writable,
-} from "./flock-tools";
+import { declareVoice, newRequest, reach, readable, reasonOf, writable } from "./flock-tools";
+import type { ChatMachine, FlockChat, Reached } from "./flock-tools";
 
 export type ToolContent =
   | { readonly type: "text"; readonly text: string }

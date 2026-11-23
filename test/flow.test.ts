@@ -11,11 +11,11 @@ import {
   FileSystem,
   Option,
   Schema,
-  type Scope,
   Stream,
   flow as Schemaflow,
   Result,
 } from "effect";
+import type { Scope } from "effect";
 import type { Flow } from "../src/board-model";
 import { recordIn } from "../src/board-model";
 import { readStepLines } from "../src/steps";
@@ -25,7 +25,8 @@ import { runDir } from "../src/engine";
 import { frontDoor, ownerOf, socketOf } from "../src/host";
 import { until } from "./support/host";
 import { hostRecords, recordsAt } from "./support/records";
-import { blockedAtItsPrompt, collie, proves, type World } from "./support/world";
+import { blockedAtItsPrompt, collie, proves } from "./support/world";
+import type { World } from "./support/world";
 import type { FakeHc } from "./support/fake-hc";
 import { stringifyJson } from "../src/json";
 

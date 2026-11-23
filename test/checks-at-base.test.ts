@@ -4,7 +4,8 @@ import { runDir } from "../src/engine";
 import { readIntent } from "../src/intent";
 import { exec } from "./support/command";
 import { until } from "./support/host";
-import { collie, proves, type World } from "./support/world";
+import { collie, proves } from "./support/world";
+import type { World } from "./support/world";
 import { hostRecords } from "./support/records";
 
 const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);

@@ -23,8 +23,8 @@ import {
   encodeCheckRecord,
   KILL_CEILING,
   runningChecks,
-  type CheckRecord,
 } from "../src/check-processes";
+import type { CheckRecord } from "../src/check-processes";
 import { evidenceDir } from "../src/engine";
 import { restartHostAt } from "../src/lifecycle";
 import { registerAgent } from "../src/registry";

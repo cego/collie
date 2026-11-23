@@ -3,7 +3,8 @@ import { Effect, Stream } from "effect";
 import type { PaneAt } from "./board-model";
 import type { PluginEnv } from "./env";
 import type { Herdr } from "./herdr";
-import { verifyIncarnation, type AgentEntry } from "./registry";
+import { verifyIncarnation } from "./registry";
+import type { AgentEntry } from "./registry";
 import { machineHerd } from "./steering";
 
 export interface LiveHerd {

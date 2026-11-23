@@ -6,7 +6,8 @@ import { pipe } from "effect/Function";
 import * as Option from "effect/Option";
 import { Effect } from "effect";
 import type { CatalogueEntry } from "./catalogue-model";
-import { decodeSubagents, readSubagents, type ClaudeSubagents } from "./subagents";
+import { decodeSubagents, readSubagents } from "./subagents";
+import type { ClaudeSubagents } from "./subagents";
 
 export const DEFAULT_MODEL = "default";
 

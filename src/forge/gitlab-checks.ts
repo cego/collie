@@ -3,7 +3,8 @@ import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 import { hostname } from "node:os";
 import { Clock, Effect, Option, Result, Schema } from "effect";
-import { type ChildProcessSpawner, CommandLine } from "effect/process";
+import { CommandLine } from "effect/process";
+import type { ChildProcessSpawner } from "effect/process";
 import { gitlabHostOf } from "../config";
 import {
   FETCH_LIMIT,
@@ -14,11 +15,12 @@ import {
   onPath,
   passed,
   warned,
-  type Check,
 } from "../doctor-check";
+import type { Check } from "../doctor-check";
 import type { PluginEnv } from "../env";
 import { daysLeft, RENEW_WITHIN_DAYS, TokenSelf, tokenPage } from "../gitlab-token";
-import { whatItSaid, type Runner } from "../mr";
+import { whatItSaid } from "../mr";
+import type { Runner } from "../mr";
 import { glabLoginTo } from "./gitlab";
 import type { ConnectionReading as Probe } from "../connection-model";
 

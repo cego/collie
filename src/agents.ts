@@ -32,7 +32,8 @@ import {
 import type { PlatformServices } from "./platform";
 import * as Activity from "effect/workflow/Activity";
 import * as SecureRandom from "effect/crypto/SecureRandom";
-import { attachmentsDir, listAttachments, type Attachment } from "./attachments";
+import { attachmentsDir, listAttachments } from "./attachments";
+import type { Attachment } from "./attachments";
 import {
   Launched,
   launchDir,
@@ -45,9 +46,10 @@ import {
   withRelaunchLock,
   stemOf,
   wasOrdered,
-  type AgentSession,
 } from "./launches";
-import { CurrentStep, type At } from "./steps";
+import type { AgentSession } from "./launches";
+import { CurrentStep } from "./steps";
+import type { At } from "./steps";
 import { takeStepNotes } from "./step-steering";
 import { stringifyJson } from "./json";
 export { Launched } from "./launches";
@@ -69,10 +71,8 @@ import {
   STOP_WAIT_MS,
   stopUnlaunched,
   withControlLock,
-  type CompactionDeps,
-  type CompactionPorts,
-  type ControlRecord,
 } from "./compaction";
+import type { CompactionDeps, CompactionPorts, ControlRecord } from "./compaction";
 import {
   COMPACTION_PORTS,
   atLeast,
@@ -80,17 +80,17 @@ import {
   questionsSince,
   postUnrepaired,
   UNREPAIRED,
-  type AskedCall,
   QUESTIONS,
   takeHarnessQuestions,
   ranOutSince,
   stoppedSince,
   submittedDelivery,
   piQuestionTool,
-  type AgentQuestion,
 } from "./compactors";
+import type { AskedCall, AgentQuestion } from "./compactors";
 import { RECOMMENDED_MARKER, questionRepair, shortfallOf, solutionsOf } from "./question-standard";
-import { UNPROVABLE, endAgent, type EndDeps } from "./agent-end";
+import { UNPROVABLE, endAgent } from "./agent-end";
+import type { EndDeps } from "./agent-end";
 import { boundThread, withCodex } from "./codex";
 import { kindForRole } from "./cards";
 import { narrativeOf } from "./narrative-model";
@@ -101,19 +101,23 @@ import {
   gitlabHostOf,
   loadDefaults,
   readConfig,
-  type Defaults,
 } from "./config";
-import { autoModeBlock, autoModeFacts, type AutoModeBlock, type RunAuthority } from "./automode";
+import type { Defaults } from "./config";
+import { autoModeBlock, autoModeFacts } from "./automode";
+import type { AutoModeBlock, RunAuthority } from "./automode";
 import { shell } from "./mr";
 import type { ForgeHttp } from "./forge/http";
-import { parseDocument, type YamlMap } from "./yaml";
+import { parseDocument } from "./yaml";
+import type { YamlMap } from "./yaml";
 import { RanOn } from "./board-model";
-import { humanOf, type Asker } from "./proposals";
+import { humanOf } from "./proposals";
+import type { Asker } from "./proposals";
 import { STOP, controlSet } from "./controls";
 import * as dispatch from "./dispatcher";
 import type * as Types from "effect/Types";
 import { bodySections, layers, personaHoles, skillDirs, skillFile } from "./definitions";
-import { currentEnv, selfCommand, type PluginEnv } from "./env";
+import { currentEnv, selfCommand } from "./env";
+import type { PluginEnv } from "./env";
 import {
   HARNESSES,
   foldPreferences,
@@ -132,34 +136,32 @@ import {
   said,
   startArgs,
   sessionArgs,
-  type AgentChoice,
-  type HarnessAdapter,
-  type Room,
-  type StartSession,
-  type PermissionMode,
-  type Preferences,
 } from "./harness";
-import {
-  Herdr,
-  herdrFailureReason,
-  isSettled,
-  RUN_LABEL,
-  type AgentInfo,
-  type AgentStatus,
-  HerdrError,
-} from "./herdr";
+import type {
+  AgentChoice,
+  HarnessAdapter,
+  Room,
+  StartSession,
+  PermissionMode,
+  Preferences,
+} from "./harness";
+import { Herdr, herdrFailureReason, isSettled, RUN_LABEL, HerdrError } from "./herdr";
+import type { AgentInfo, AgentStatus } from "./herdr";
 import { promptAsync } from "./opencode";
 import { isSuperseded, isUnanswered } from "./store";
 import { gate } from "./steering-caps";
 import { actorOf } from "./audit";
-import { keepQueued, readQueue, type Queued } from "./delivery-queue";
-import { verifyingOf, type Verifying } from "./verify";
+import { keepQueued, readQueue } from "./delivery-queue";
+import type { Queued } from "./delivery-queue";
+import { verifyingOf } from "./verify";
+import type { Verifying } from "./verify";
 import { agentName, launchedAs, legacyAgentName, reason, unsafePathComponent } from "./naming";
 import { machineName } from "./peers";
 import type { MachineCatalogue } from "./harness-choice";
 import { askRouteTo } from "./handoff";
 import { epochMs, nowIso } from "./time";
-import { noteContext, noteReminder, type RecoveryOutcome } from "./metrics";
+import { noteContext, noteReminder } from "./metrics";
+import type { RecoveryOutcome } from "./metrics";
 import manifest from "../package.json";
 import {
   appliesTo,
@@ -169,8 +171,8 @@ import {
   subscriptionOf,
   usedFor,
   UsageWindow,
-  type UsageReading,
 } from "./usage-model";
+import type { UsageReading } from "./usage-model";
 import { ownCodexReading, USAGE_INTERVAL_MS } from "./usage";
 import {
   everyRegistered,
@@ -178,9 +180,8 @@ import {
   registerAgent,
   scopeFor,
   verifyIncarnation,
-  type AgentEntry,
-  type Incarnation,
 } from "./registry";
+import type { AgentEntry, Incarnation } from "./registry";
 import { ROLES, steerTarget } from "./steer-target";
 import {
   jsonSchemaFor,
@@ -192,12 +193,8 @@ import {
   WorkflowError,
   panelOf,
   stepFailed,
-  type AskedQuestion,
-  type DecisionSpec,
-  type HostApi,
-  type Projection,
-  type Seat,
 } from "./sdk";
+import type { AskedQuestion, DecisionSpec, HostApi, Projection, Seat } from "./sdk";
 import {
   envFileProblems,
   envLines,
@@ -205,13 +202,14 @@ import {
   mergeClaudeSettings,
   parseProfile,
   roleProfile,
-  type ClaudeOverlay,
-  type RoleProfile,
 } from "./profile";
-import { isString, type JsonObject } from "./schema";
+import type { ClaudeOverlay, RoleProfile } from "./profile";
+import { isString } from "./schema";
+import type { JsonObject } from "./schema";
 import { awaitOutput, outputCollected } from "./output-submit";
 import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } from "./subagents";
-import { Collecting, collectingLayer, type CollectingApi } from "./collecting";
+import { Collecting, collectingLayer } from "./collecting";
+import type { CollectingApi } from "./collecting";
 import { holdsBudgetOf, waitForMemory } from "./memory-wait";
 import {
   appendLine,

@@ -1,26 +1,25 @@
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
-import { For, Index, Show, type JSX } from "solid-js";
-import { TextAttributes, type MouseEvent } from "@opentui/core";
+import { For, Index, Show } from "solid-js";
+import type { JSX } from "solid-js";
+import { TextAttributes } from "@opentui/core";
+import type { MouseEvent } from "@opentui/core";
 import { agentCount, finishedLabel, whereItIs, workingLabel, waitingLabel } from "../board";
-import {
-  foldFinished,
-  foldWaiting,
-  sectionOf,
-  solutionTitle,
-  type Decision,
-  type HeaderSentence,
-  type Proposal,
-  type Question,
-  type Sections,
-  type TaskView,
-  SECTIONS,
-  type Section as SectionId,
+import { foldFinished, foldWaiting, sectionOf, solutionTitle, SECTIONS } from "../board-model";
+import type {
+  Decision,
+  HeaderSentence,
+  Proposal,
+  Question,
+  Sections,
+  TaskView,
+  Section as SectionId,
 } from "../board-model";
 import type { UsagePhrase } from "../usage-model";
 import { newerLine } from "../workspace";
 import { parkLine } from "../park-cause";
-import { ALL_KEYS, type Command, type MenuItem, type Older, primaryFor } from "./state";
+import { ALL_KEYS, primaryFor } from "./state";
+import type { Command, MenuItem, Older } from "./state";
 import { C, cardEdge, sentenceColour, stateGlyph, stepGlyph } from "./sections";
 
 export interface Decide {

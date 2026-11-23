@@ -21,13 +21,14 @@ import {
   writeLaunchFiles,
   whyUnavailable,
   writeChat,
-  type ChatRecord,
 } from "../src/chat";
+import type { ChatRecord } from "../src/chat";
 import { setSetting, writeConfigValue } from "../src/config";
 import { chatContextFor } from "../src/statusline";
 import { selectionPath, writeSelection } from "../src/selection";
 import { machineHerd } from "../src/steering";
-import { Rig, type Call } from "./support/recorder";
+import { Rig } from "./support/recorder";
+import type { Call } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 import { TOOLS } from "../src/tools";
 import { runEffect } from "./support/effect";

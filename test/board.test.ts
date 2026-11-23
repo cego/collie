@@ -17,17 +17,12 @@ import {
   sentenceFor,
   whereItIs,
   workingLabel,
-  type Sentence,
 } from "../src/board";
-import {
-  mrLabel,
-  type Flow,
-  type ForgeChecks,
-  type Mergeability,
-  type MrState,
-  type OfferView,
-} from "../src/board-model";
-import { appendStepLine, type StepLine, type StepMeta } from "../src/steps";
+import type { Sentence } from "../src/board";
+import { mrLabel } from "../src/board-model";
+import type { Flow, ForgeChecks, Mergeability, MrState, OfferView } from "../src/board-model";
+import { appendStepLine } from "../src/steps";
+import type { StepLine, StepMeta } from "../src/steps";
 import { machineName } from "../src/peers";
 import { NOTHING_TO_LAND } from "../src/standing";
 import { writeStageProof } from "../src/shipping";
@@ -43,9 +38,9 @@ import {
   sortBoard,
   primaryAction,
   cardActions,
-  type TaskMr,
   TaskView,
 } from "../src/board-model";
+import type { TaskMr } from "../src/board-model";
 import { applyItem, EMPTY_FLOCK, flockCards } from "../desktop/src/shared/flock";
 import { recordAudit } from "../src/audit";
 import { recordDisposition } from "../src/disposition";
@@ -59,18 +54,21 @@ import {
   readVerifications,
   VERIFYING,
   verifyingOf,
-  type Verification,
 } from "../src/verify";
+import type { Verification } from "../src/verify";
 import { checkSentence, followLog } from "../src/checks";
 import { MEMORY_WAIT } from "../src/memory-wait";
 import { encodeCheckRecord } from "../src/check-processes";
 import { readEnv } from "../src/env";
 import type { AgentInfo } from "../src/herdr";
-import { appendLine, toldIn, toldLine, type Delivery } from "../src/steering";
+import { appendLine, toldIn, toldLine } from "../src/steering";
+import type { Delivery } from "../src/steering";
 import { herdLines } from "../src/toolkit";
-import { append as appendProposal, type ProposalLine } from "../src/proposals";
+import { append as appendProposal } from "../src/proposals";
+import type { ProposalLine } from "../src/proposals";
 import type { AgentEntry } from "../src/registry";
-import { factsOfView, type RunFacts } from "../src/runs";
+import { factsOfView } from "../src/runs";
+import type { RunFacts } from "../src/runs";
 import type { RunView } from "../src/engine";
 import type { TaskRecord } from "../src/task";
 import { memoryRecords, runEffect } from "./support/effect";

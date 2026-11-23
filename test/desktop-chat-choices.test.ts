@@ -7,7 +7,6 @@ import { retelling, tableOffer } from "../desktop/src/bun/chat-choices";
 import { changeSettings } from "../desktop/src/bun/settings";
 import { attachmentPart } from "../desktop/src/shared/attachments";
 import {
-  type ChatChoices,
   chatSelects,
   choiceNotices,
   rememberChoice,
@@ -15,12 +14,12 @@ import {
   replyButton,
   chatAnnouncement,
   stopDraft,
-  type Offered,
   refusalSaid,
   runsAs,
   typedEntry,
   modelMenu,
 } from "../desktop/src/shared/chat-choices";
+import type { ChatChoices, Offered } from "../desktop/src/shared/chat-choices";
 import { NO_FLOCK_SETTINGS, takeFrom } from "../desktop/src/shared/flock-settings";
 
 const CLAUDE: ReadonlyArray<Offered> = [

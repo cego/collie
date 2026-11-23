@@ -6,10 +6,12 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 import type * as RpcMessage from "effect/rpc/RpcMessage";
 import * as RpcServer from "effect/rpc/RpcServer";
 import { TestClock } from "effect/testing";
-import { type Door, DoorMap, type Reached, sweepOn } from "../desktop/src/bun/machine";
+import { DoorMap, sweepOn } from "../desktop/src/bun/machine";
+import type { Door, Reached } from "../desktop/src/bun/machine";
 import type { Attempted } from "../desktop/src/bun/sent";
 import { ActionFailed } from "../desktop/src/shared/flock";
-import { type CleanupReport, FrontDoorRpcs, HostRefused } from "../src/board-model";
+import { FrontDoorRpcs, HostRefused } from "../src/board-model";
+import type { CleanupReport } from "../src/board-model";
 
 type Rpcs = RpcGroup.Rpcs<typeof FrontDoorRpcs>;
 

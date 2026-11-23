@@ -20,8 +20,8 @@ import {
   planReposOf,
   renderApproved,
   step,
-  type VerifySpec,
 } from "collie";
+import type { VerifySpec } from "collie";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import markdown from "./plan.md" with { type: "text" };

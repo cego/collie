@@ -5,7 +5,8 @@ import type { PlatformError } from "effect/PlatformError";
 import type { PluginEnv } from "./env";
 import type { HerdrError } from "./herdr";
 import { currentPid, withLock } from "./lock";
-import { err, HostUnread, newRequestId, ExpectedError, type OpResult } from "./operations";
+import { err, HostUnread, newRequestId, ExpectedError } from "./operations";
+import type { OpResult } from "./operations";
 
 export const ResultBoundary = Schema.Union([
   Schema.Struct({

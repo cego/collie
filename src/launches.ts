@@ -15,7 +15,8 @@ import {
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
 import { ensureLockDir, withLock } from "./lock";
-import { choiceSaid, RanOn, type RunStep } from "./board-model";
+import { choiceSaid, RanOn } from "./board-model";
+import type { RunStep } from "./board-model";
 import { StepPlace } from "./steps";
 import { ClaudeSubagents } from "./subagents";
 import { StoreWrites } from "./store-writes";

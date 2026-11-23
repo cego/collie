@@ -4,7 +4,8 @@ import { Effect, FileSystem, Option, Path, Schema } from "effect";
 import { sha256Hex } from "./attachments";
 import { nowIso } from "./time";
 import type { ChildProcessSpawner } from "effect/process";
-import { shell, type Runner } from "./mr";
+import { shell } from "./mr";
+import type { Runner } from "./mr";
 
 export const RELEASE_TAG = /^\d+\.\d+\.\d+$/;
 

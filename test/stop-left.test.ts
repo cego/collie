@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
-import { act, type Door } from "../desktop/src/bun/machine";
+import { act } from "../desktop/src/bun/machine";
+import type { Door } from "../desktop/src/bun/machine";
 import { ActionFailed } from "../desktop/src/shared/flock";
 import { controlled } from "../src/lifecycle";
 import type { Controlled } from "../src/board-model";

@@ -12,7 +12,8 @@ import * as Rec from "effect/Record";
 import { pipe } from "effect/Function";
 // oxlint-disable-next-line effecttsgo/node-builtin-import -- A signal handler decides a hand-over before the interrupt it races can end a check, so it reads synchronously.
 import { readFileSync, rmSync } from "node:fs";
-import { createConnection, type Socket as NetSocket } from "node:net";
+import { createConnection } from "node:net";
+import type { Socket as NetSocket } from "node:net";
 import { withdrawStepNote } from "./step-steering";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import type { PlatformServices } from "./platform";
@@ -55,21 +56,18 @@ import * as RpcSchema from "effect/rpc/RpcSchema";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import manifest from "../package.json";
-import { RunModel, runModelLayer, type RunModelApi } from "./run-model";
+import { RunModel, runModelLayer } from "./run-model";
+import type { RunModelApi } from "./run-model";
 import { RunPageAsked, RunSummary, pageOf, summaryOf } from "./run-list";
-import { recordsAt, type Records } from "./records";
+import { recordsAt } from "./records";
+import type { Records } from "./records";
 import { RunRecords } from "./run-records";
 import { controlOf, controlSet } from "./controls";
-import {
-  FINISHED_STEPS,
-  drawerWrites,
-  recordFlow,
-  recordFrames,
-  watched,
-  type RecordSources,
-} from "./record";
+import { FINISHED_STEPS, drawerWrites, recordFlow, recordFrames, watched } from "./record";
+import type { RecordSources } from "./record";
 import { markFirst } from "./record-marks";
-import { doorThread, engineEnd, type EngineEnd, type Listed, type Opened } from "./door";
+import { doorThread, engineEnd } from "./door";
+import type { EngineEnd, Listed, Opened } from "./door";
 import { SLOW_RPC_MS, firstValueTimed } from "./first-value";
 import { TurnScheduler } from "./turns";
 import {
@@ -98,10 +96,8 @@ import {
   evidenceDir,
   STOP,
   AWAITING,
-  type HostServices,
-  type KeptViews,
-  type Locate,
 } from "./engine";
+import type { HostServices, KeptViews, Locate } from "./engine";
 import { RequestedBy } from "./board-model";
 import type { MeasureEvent } from "./measurement-model";
 import {
@@ -120,14 +116,8 @@ import { OutcomeRecords, outcomeRecordsOf } from "./outcomes";
 import { removedNotice, scrub, scrubJson } from "./redact";
 import { readMetrics } from "./metrics";
 import { readCards } from "./cards";
-import {
-  CheckProcesses,
-  endAllWithin,
-  hostCheckProcesses,
-  type CheckProcessesApi,
-  type Leftover,
-  type LeftoverEnd,
-} from "./check-processes";
+import { CheckProcesses, endAllWithin, hostCheckProcesses } from "./check-processes";
+import type { CheckProcessesApi, Leftover, LeftoverEnd } from "./check-processes";
 import { readDrift } from "./drift";
 import {
   readIntent,
@@ -178,30 +168,33 @@ import {
   tasksSweeper,
   idleAgentsSweeper,
   noteIdle,
-  type FinishedSince,
-  type IdleSince,
   generationsDir,
   generationsSweeper,
   judge,
   sweepAsked,
   sweepingWith,
   worktreesSweeper,
-  type SweptBy,
 } from "./cleanup";
+import type { FinishedSince, IdleSince, SweptBy } from "./cleanup";
 import { startedOf } from "./automode";
 import { startedOf as processStarted } from "./processes";
 import { once, readAudit, recordAudit, startedBy, trimAudit, whoActed, actorOf } from "./audit";
 import { usagePhrase } from "./usage-model";
 import { currentEnv, leaveLauncher, withoutHerdrOne, withoutLauncher } from "./env";
 import { installation as installedRelease, RELEASE_TAG } from "./release";
-import { Herdr, isSettled, type AgentInfo } from "./herdr";
-import { taskOffers, type Offer } from "./offers";
-import { buildBoard, type KeptCards, LANDED_STATES, ownedMrs, taskFlowOf } from "./board";
-import { mrOf, readForge, readMrStates, watchedMr, type MrPanels } from "./merges";
+import { Herdr, isSettled } from "./herdr";
+import type { AgentInfo } from "./herdr";
+import { taskOffers } from "./offers";
+import type { Offer } from "./offers";
+import { buildBoard, LANDED_STATES, ownedMrs, taskFlowOf } from "./board";
+import type { KeptCards } from "./board";
+import { mrOf, readForge, readMrStates, watchedMr } from "./merges";
+import type { MrPanels } from "./merges";
 import { mrIdIn, projectHere, shell } from "./mr";
 import { ForgeHttp, forgeHttpLayer } from "./forge/http";
 import { fetchRef, followDetail } from "./run-detail";
-import { buildMachineOwn, buildRunDetail, type PlanCache } from "./views";
+import { buildMachineOwn, buildRunDetail } from "./views";
+import type { PlanCache } from "./views";
 import {
   Answered,
   ASKED_KINDS,
@@ -217,8 +210,6 @@ import {
   IdentityRpc,
   HostRefused,
   StaleAct,
-  type RunRevision,
-  type Toasted,
   NewsBatch,
   PaneAt,
   SharedSettings,
@@ -232,11 +223,8 @@ import {
   Started,
   SteerOutcome,
   Attachments,
-  type FrontDoor,
-  type OfferView,
-  type TaskView,
-  type Where,
 } from "./board-model";
+import type { RunRevision, Toasted, FrontDoor, OfferView, TaskView, Where } from "./board-model";
 import {
   attachedLine,
   attachmentRefusal,
@@ -244,8 +232,8 @@ import {
   copyInto,
   namesIn,
   sha256Hex,
-  type Attached,
 } from "./attachments";
+import type { Attached } from "./attachments";
 import { boardMessages, shareBoard } from "./board-stream";
 import { recordDisposition, refRuns, qualifiedRuns } from "./disposition";
 import { markSeenSince, readSeen, recordSeen } from "./seen";
@@ -260,7 +248,8 @@ import {
 } from "./news";
 import { evaluationDeps } from "./evaluator";
 import { ActionSchema, refusedAction } from "./actions";
-import { clearOverride, err, request, steer, type OpResult } from "./operations";
+import { clearOverride, err, request, steer } from "./operations";
+import type { OpResult } from "./operations";
 import { REJECTED } from "./envelope";
 import {
   appendLine,
@@ -285,12 +274,9 @@ import {
   RecordSchema,
   reconcileStep,
   stepResults,
-  type ProposalLine,
-  type ProposalRecord,
   voiceOf,
-  type Asker,
-  type Voice,
 } from "./proposals";
+import type { ProposalLine, ProposalRecord, Asker, Voice } from "./proposals";
 import { carryOut, carryOutAsked, followUpField } from "./run-actions";
 import { retitleGenericTasks } from "./tasknames";
 import { VerifySpecSchema } from "./verify-spec";
@@ -312,26 +298,13 @@ import {
   takeShared,
 } from "./config";
 import { coreSocket } from "./hc";
-import {
-  decodeAnswer,
-  machineName,
-  peersOf,
-  relayOf,
-  runShell,
-  startPeers,
-  type Peers,
-} from "./peers";
+import { decodeAnswer, machineName, peersOf, relayOf, runShell, startPeers } from "./peers";
+import type { Peers } from "./peers";
 import { RunLinkNotice, readRunLinks, recordRunLink } from "./run-links";
 import type { SshMachine } from "./ssh-connection";
 import { LADDER_BOUND } from "./peer-transport";
-import {
-  Invited,
-  MachineUnreachable,
-  Peer,
-  PeerView,
-  RelayHeaderJson,
-  type RelayHeader,
-} from "./peers-model";
+import { Invited, MachineUnreachable, Peer, PeerView, RelayHeaderJson } from "./peers-model";
+import type { RelayHeader } from "./peers-model";
 import { latest, readDispositions } from "./disposition";
 import {
   fallbacksOf,
@@ -342,7 +315,8 @@ import {
   readLaunches,
   runAgents,
 } from "./launches";
-import { factsOfView, newestFirst, settled, type RunFacts } from "./runs";
+import { factsOfView, newestFirst, settled } from "./runs";
+import type { RunFacts } from "./runs";
 import { Store } from "./store";
 import type { Woke } from "./mr-watch-model";
 import { SESSIONS_EVERY, agentsIn, focusPane, herdChanges, liveHerds } from "./herds";
@@ -355,8 +329,8 @@ import {
   releaseOwnLock,
   signalProcess,
   withLock,
-  type LockHolder,
 } from "./lock";
+import type { LockHolder } from "./lock";
 import { stringifyJson, parseJson } from "./json";
 
 export const BUILD: string = Bun.env.COLLIE_TEST_BUILD ?? manifest.version;

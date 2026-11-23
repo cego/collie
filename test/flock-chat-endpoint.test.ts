@@ -6,7 +6,8 @@ import type * as SecureRandom from "effect/crypto/SecureRandom";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { loopbackTools } from "../desktop/src/bun/chat-endpoint";
-import { FLOCK_TOOLS, type FlockChat } from "../desktop/src/bun/flock-tools";
+import { FLOCK_TOOLS } from "../desktop/src/bun/flock-tools";
+import type { FlockChat } from "../desktop/src/bun/flock-tools";
 import { FILE_TOOLS } from "../desktop/src/bun/file-tools";
 import { NO_HUMAN } from "../desktop/src/bun/session";
 

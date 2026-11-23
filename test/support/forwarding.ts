@@ -1,4 +1,5 @@
-import { createServer, type Server } from "node:net";
+import { createServer } from "node:net";
+import type { Server } from "node:net";
 import { tmpdir } from "node:os";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";

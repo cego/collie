@@ -8,15 +8,8 @@ import type { Flow, FlowLane, FlowNode, FlowRun, MrState } from "./board-model";
 import { mrRefOf, mrUrlOf } from "./board-model";
 import { lastAudit, whoActed } from "./audit";
 import type { PluginEnv } from "./env";
-import {
-  currentOf,
-  laneOf,
-  linkSaid,
-  linkState,
-  releaseRow,
-  type ChildFact,
-  type LaneWait,
-} from "./flow";
+import { currentOf, laneOf, linkSaid, linkState, releaseRow } from "./flow";
+import type { ChildFact, LaneWait } from "./flow";
 import { readLaunches } from "./launches";
 import { runTitle } from "./naming";
 import { machineName } from "./peers";

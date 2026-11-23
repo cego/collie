@@ -17,18 +17,20 @@ import {
   Order,
   Path,
   Schema,
-  type Scope,
   flow,
   Result,
 } from "effect";
+import type { Scope } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import type { MrForge, MrState } from "../../src/board-model";
 import type { ForgeFacts } from "../../src/board";
 import { writeMrStates } from "../../src/merges";
-import { forgeHttpTest, type ForgeHttp } from "../../src/forge/http";
+import { forgeHttpTest } from "../../src/forge/http";
+import type { ForgeHttp } from "../../src/forge/http";
 import { runEffect } from "./effect";
 import { glabExpiry, MONTHS } from "../../src/forge/gitlab";
-import { shell, type Ran, type Runner, type RunnerEnv } from "../../src/mr";
+import { shell } from "../../src/mr";
+import type { Ran, Runner, RunnerEnv } from "../../src/mr";
 import type { FakeBin } from "./bin";
 import { recordStart } from "../../src/starts";
 import { forwarding } from "./forwarding";

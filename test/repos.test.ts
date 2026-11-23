@@ -6,7 +6,8 @@ import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { connect } from "../src/host";
 import { stopHost, until } from "./support/host";
-import { proves, save, type World } from "./support/world";
+import { proves, save } from "./support/world";
+import type { World } from "./support/world";
 
 const MODULES = ["spread.workflow.ts", "share.workflow.ts"] as const;
 

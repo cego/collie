@@ -5,11 +5,13 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { Schema, flow, Result } from "effect";
-import { STOP, type RunView } from "./engine";
+import { STOP } from "./engine";
+import type { RunView } from "./engine";
 import { isSuperseded, isUnanswered } from "./store";
 import type { Metrics } from "./board-model";
 import { epochMs, took } from "./time";
-import { measuresOf, type Measures, type OutcomeRecords } from "./outcomes";
+import { measuresOf } from "./outcomes";
+import type { Measures, OutcomeRecords } from "./outcomes";
 import type { Metric, RecoveryAction } from "./metrics";
 
 const asJsonText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);

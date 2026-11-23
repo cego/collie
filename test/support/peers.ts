@@ -7,15 +7,19 @@ import { pipe } from "effect/Function";
 import solidPlugin from "@opentui/solid/bun-plugin";
 import manifest from "../../package.json";
 import type { PlatformServices } from "../../src/platform";
-import { Config, Effect, FileSystem, Schema, type Scope, flow, Result } from "effect";
+import { Config, Effect, FileSystem, Schema, flow, Result } from "effect";
+import type { Scope } from "effect";
 import { exec } from "./command";
 import { suiteEnv } from "./effect";
 import { armTripwire, untripped } from "./herdr-tripwire";
-import { type FakeHc, serveFakeHc } from "./fake-hc";
-import { type FakeSsh, writeFakeSsh, socketDir } from "./fake-ssh";
+import { serveFakeHc } from "./fake-hc";
+import type { FakeHc } from "./fake-hc";
+import { writeFakeSsh, socketDir } from "./fake-ssh";
+import type { FakeSsh } from "./fake-ssh";
 import { fixtures, root, stopHost } from "./host";
 import { peersOf } from "../../src/peers";
-import { collie, collieCommand, type World } from "./world";
+import { collie, collieCommand } from "./world";
+import type { World } from "./world";
 
 const asCommand = flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Array(Schema.String))),

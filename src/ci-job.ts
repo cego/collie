@@ -4,23 +4,20 @@ import { pipe as pipe_ } from "effect/Function";
 import { Clock, Duration, Effect, Option } from "effect";
 import { mrRefOf } from "./board-model";
 import { checkProof } from "./check-proof";
-import { forgeOf, type FailedAttempt, type FailedJob, type JobState } from "./forge/forge";
+import { forgeOf } from "./forge/forge";
+import type { FailedAttempt, FailedJob, JobState } from "./forge/forge";
 import type { MrRef } from "./board-model";
 import { noteVerification } from "./metrics";
-import { shell, type Runner } from "./mr";
+import { shell } from "./mr";
+import type { Runner } from "./mr";
 import { appendLog } from "./oversight";
 import { conflictsWithTarget } from "./review-wait";
 import { epochMs, nowIso } from "./time";
 import { rememberCiTarget } from "./park-recheck";
-import { branchChange, ownTests, type BranchChange, type FailedTest } from "./own-tests";
-import {
-  appendVerification,
-  encodeVerifying,
-  fingerprint,
-  readVerifications,
-  type CheckCommand,
-  type Verification,
-} from "./verify";
+import { branchChange, ownTests } from "./own-tests";
+import type { BranchChange, FailedTest } from "./own-tests";
+import { appendVerification, encodeVerifying, fingerprint, readVerifications } from "./verify";
+import type { CheckCommand, Verification } from "./verify";
 import type { VerifySpec } from "./verify-spec";
 import type { Control } from "./controls";
 

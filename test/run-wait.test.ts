@@ -2,7 +2,8 @@ import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem, Schema } from "effect";
 import { stopHost } from "./support/host";
-import { collie, proves, type World } from "./support/world";
+import { collie, proves } from "./support/world";
+import type { World } from "./support/world";
 
 const View = Schema.Struct({
   runId: Schema.String,

@@ -9,7 +9,8 @@ import { runOnPath } from "./support/forge";
 import { exec } from "./support/command";
 import { FakeBin } from "./support/bin";
 import { Rig } from "./support/recorder";
-import { checkoutFor, checkoutRefusal, type RecordedBy } from "../src/worktree";
+import { checkoutFor, checkoutRefusal } from "../src/worktree";
+import type { RecordedBy } from "../src/worktree";
 import type { AgentInfo, AgentStatus } from "../src/herdr";
 
 const BRANCH = "mk/run-x";

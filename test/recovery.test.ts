@@ -3,7 +3,8 @@ import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Config, Effect, FileSystem, Schema, flow, Result } from "effect";
 import { connect, frontDoor, ownerOf, socketOf } from "../src/host";
-import { collie, proves, type World } from "./support/world";
+import { collie, proves } from "./support/world";
+import type { World } from "./support/world";
 import { Database } from "bun:sqlite";
 import type { Metric } from "../src/metrics";
 import { stopHost, until } from "./support/host";
@@ -11,14 +12,8 @@ import { readAudit } from "../src/audit";
 import { recordsReadLayer } from "../src/records";
 import { NOTIFIED, RunRecords } from "../src/run-records";
 import { FakeBin } from "./support/bin";
-import {
-  FORGE_HOST,
-  PROJECT,
-  fakeForge,
-  forgeOnPath,
-  serveForges,
-  type FakeMr,
-} from "./support/forge";
+import { FORGE_HOST, PROJECT, fakeForge, forgeOnPath, serveForges } from "./support/forge";
+import type { FakeMr } from "./support/forge";
 import { exec } from "./support/command";
 import { holderLives } from "../src/lock";
 import { herdOf } from "../src/steering";

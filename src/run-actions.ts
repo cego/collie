@@ -10,7 +10,8 @@ import type { PlatformError } from "effect/PlatformError";
 import { reason } from "./naming";
 import type { PlatformServices } from "./platform";
 import type { Records } from "./records";
-import { executorFor, registerExecutor, registeredKinds, type ExecutionResult } from "./executors";
+import { executorFor, registerExecutor, registeredKinds } from "./executors";
+import type { ExecutionResult } from "./executors";
 import type { PluginEnv } from "./env";
 import {
   answerRun,
@@ -36,14 +37,8 @@ import { agentStartRefusal, CHAT_CHECKOUT_FIX } from "./agent-start";
 import { RESERVED_INPUTS } from "./sdk";
 import { PROJECTS_ROOT_OPTION, projectsRoot, repositoryCheckout } from "./projects";
 import { isOpen, listTasks, removeTask } from "./task";
-import {
-  clearOverride,
-  collieOwnRefusal,
-  err,
-  workspaceNamed,
-  type Failure,
-  type OpResult,
-} from "./operations";
+import { clearOverride, collieOwnRefusal, err, workspaceNamed } from "./operations";
+import type { Failure, OpResult } from "./operations";
 import { Herdr } from "./herdr";
 import { runDir } from "./engine";
 import {
@@ -78,11 +73,11 @@ import {
   stepSettled,
   stepStarted,
   voiceOf,
-  type Actor,
-  type ProposalRecord,
 } from "./proposals";
+import type { Actor, ProposalRecord } from "./proposals";
 import type { Action } from "./actions";
-import { ProposalRefused, type ProposalCarried, type StepResult } from "./board-model";
+import { ProposalRefused } from "./board-model";
+import type { ProposalCarried, StepResult } from "./board-model";
 import { fingerprint } from "./verify";
 import { findRun } from "./runs";
 

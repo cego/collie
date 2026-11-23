@@ -4,10 +4,12 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Effect, FileSystem, Schema, SchemaGetter, flow, Result } from "effect";
 import { isBoolean, isNumber, isString } from "./schema";
-import { checkProof, owesNothingHere, unstableWhy, type CheckProof } from "./check-proof";
+import { checkProof, owesNothingHere, unstableWhy } from "./check-proof";
+import type { CheckProof } from "./check-proof";
 import type { Measurement } from "./measurement-model";
 import type { CheckCommand, Snapshot, Verification } from "./verify";
-import { isYamlMap, YamlValueJsonSchema, type YamlValue } from "./yaml";
+import { isYamlMap, YamlValueJsonSchema } from "./yaml";
+import type { YamlValue } from "./yaml";
 
 const said = (field: string) =>
   Schema.refine<Schema.String, string>((value): value is string => Str.trim(value) !== "", {

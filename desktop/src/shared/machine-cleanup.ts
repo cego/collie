@@ -1,7 +1,8 @@
 import * as Num from "effect/Number";
 import * as Arr from "effect/Array";
 import { Schema } from "effect";
-import { type CleanupItem, type CleanupKept, CleanupReport } from "../../../src/board-model";
+import { CleanupReport } from "../../../src/board-model";
+import type { CleanupItem, CleanupKept } from "../../../src/board-model";
 import { humanBytes } from "../../../src/bytes";
 import type { MachineRow } from "./flock";
 import { NOT_LIVE_SAID } from "./in-sync";

@@ -5,13 +5,8 @@ import { expect, test } from "bun:test";
 import { Clock, Effect, Fiber, FileSystem, Schema, flow, Result } from "effect";
 import { TestClock } from "effect/testing";
 import { withCodex, currentContext } from "../src/codex";
-import {
-  atBoundary,
-  awaitReady,
-  Unsubmitted,
-  type CompactionPort,
-  type CompactionOutcome,
-} from "../src/compaction";
+import { atBoundary, awaitReady, Unsubmitted } from "../src/compaction";
+import type { CompactionPort, CompactionOutcome } from "../src/compaction";
 import { codexPort, servedEndpoint } from "../src/compactors";
 import type { Channel } from "../src/dispatcher";
 import { handOverClaim } from "../src/engine";

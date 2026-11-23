@@ -7,15 +7,10 @@ import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
-import { speaksForHuman, type Asker } from "./proposals";
-import {
-  actorOf,
-  readAudit,
-  recordAudit,
-  whoActed,
-  type AuditLine,
-  type ScheduledBy,
-} from "./audit";
+import { speaksForHuman } from "./proposals";
+import type { Asker } from "./proposals";
+import { actorOf, readAudit, recordAudit, whoActed } from "./audit";
+import type { AuditLine, ScheduledBy } from "./audit";
 import { LinkDelivery, readLinkDeliveries } from "./run-links";
 import { appendLogLine } from "./run-log";
 import { readReplies, recordReply } from "./replies";
@@ -44,8 +39,8 @@ import {
   Stream,
   flow,
   Result,
-  type Types,
 } from "effect";
+import type { Types } from "effect";
 import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -84,23 +79,25 @@ import {
   WorkflowError,
   checkEntry,
   definitionOf,
-  type WrittenDefinition,
   describeMetadata,
   jsonSchemaFor,
-  type ChildAsk,
-  type ChildRun,
-  type ChildrenApi,
-  type ActionFacts,
-  type InputField,
-  type InputFields,
-  type WorkflowMetadata,
-  type WorkflowAgentPreferences,
-  type HostCodec,
-  type HostPayload,
-  type HostWorkflow,
-  type Registration,
-  type WorkflowDefinition,
-  type WorkflowEntry,
+} from "./sdk";
+import type {
+  WrittenDefinition,
+  ChildAsk,
+  ChildRun,
+  ChildrenApi,
+  ActionFacts,
+  InputField,
+  InputFields,
+  WorkflowMetadata,
+  WorkflowAgentPreferences,
+  HostCodec,
+  HostPayload,
+  HostWorkflow,
+  Registration,
+  WorkflowDefinition,
+  WorkflowEntry,
 } from "./sdk";
 import {
   FALLBACK_DEFAULTS,
@@ -120,7 +117,8 @@ import type { UsageReading } from "./usage-model";
 import { currentEnv } from "./env";
 import { waitForMemory } from "./memory-wait";
 import { measure, readMeasurements } from "./measurement";
-import { finalMeasurementLine, type Measurement } from "./measurement-model";
+import { finalMeasurementLine } from "./measurement-model";
+import type { Measurement } from "./measurement-model";
 import { PROJECTS_ROOT_OPTION, projectsRoot, repositoryCheckout } from "./projects";
 import { gitDirOf, publicationCheckouts, throughAliases, remoteOf } from "./issue-privacy";
 import {
@@ -130,20 +128,15 @@ import {
   helleHolders,
   releaseClaim,
   waitForHelle,
-  type HelleClaim,
 } from "./helle";
+import type { HelleClaim } from "./helle";
 import { helleUrlOf } from "./helle-url";
 import { currentPid, signalProcess } from "./lock";
-import { skillDirs, skillFile, type CheckoutKind, type InputStrategy } from "./definitions";
+import { skillDirs, skillFile } from "./definitions";
+import type { CheckoutKind, InputStrategy } from "./definitions";
 import { EXCLUSIVE_STRATEGIES } from "./strategies";
-import {
-  appendMetric,
-  noteVerification,
-  metricsOf,
-  readMetrics,
-  recoveriesIn,
-  type Metric,
-} from "./metrics";
+import { appendMetric, noteVerification, metricsOf, readMetrics, recoveriesIn } from "./metrics";
+import type { Metric } from "./metrics";
 import { ForgeHttp, forgeHttpLayer } from "./forge/http";
 import { followRequest } from "./follow-through";
 import { EngineTouches, engineTouchesLayer, touching } from "./engine-touches";
@@ -158,18 +151,10 @@ import {
   readRollback,
   readStage,
   readTag,
-  type MergeRequestRead,
-  type ProductionRead,
-  type RollbackRead,
-  type StageRead,
 } from "./releasing";
-import {
-  blockedLine,
-  conflictsWithTarget,
-  reviewWaitOf,
-  standingOf,
-  type ReviewStanding,
-} from "./review-wait";
+import type { MergeRequestRead, ProductionRead, RollbackRead, StageRead } from "./releasing";
+import { blockedLine, conflictsWithTarget, reviewWaitOf, standingOf } from "./review-wait";
+import type { ReviewStanding } from "./review-wait";
 import { NOTHING_TO_LAND } from "./standing";
 import { AwaitingJson, AwaitingSchema, THE_AUTHOR, overdueLine } from "./awaiting";
 import { Woke, collieRunOf } from "./mr-watch-model";
@@ -189,8 +174,10 @@ import {
 import { redact } from "./redact";
 import { leaksIn, marker, ownRepository, refusal } from "./public-text";
 import { releasesOf } from "./releases";
-import { reportOf, type Recorded } from "./report";
-import { outcomeRecordsOf, type OutcomeRecords } from "./outcomes";
+import { reportOf } from "./report";
+import type { Recorded } from "./report";
+import { outcomeRecordsOf } from "./outcomes";
+import type { OutcomeRecords } from "./outcomes";
 import {
   Park,
   ParkCause,
@@ -221,7 +208,8 @@ import { COLLIE_REPOSITORY, FORGES, forgeOf } from "./forge/forge";
 import { links } from "./forge/review";
 import { integrateDefault, integratedLine } from "./integrate";
 import { planRunOf, strategyNamed, workSourceOf } from "./strategies";
-import { Notifier, SOUND, notificationTitle, openedSubject, wanted, type Sound } from "./notify";
+import { Notifier, SOUND, notificationTitle, openedSubject, wanted } from "./notify";
+import type { Sound } from "./notify";
 import {
   Oversight,
   cardCheckpoints,
@@ -234,17 +222,18 @@ import {
   settleAtFinish,
   standForElection,
   writeCard,
-  type Correcting,
-  type Watched,
 } from "./oversight";
+import type { Correcting, Watched } from "./oversight";
 import { evaluationDeps } from "./evaluator";
 import { budgetPath, herdOf, humanSubmits, machineHerd } from "./steering";
-import { hostDatabase, recordsLayer, type Records } from "./records";
+import { hostDatabase, recordsLayer } from "./records";
+import type { Records } from "./records";
 import { addressOf, RunRecords } from "./run-records";
 import { featuresOf, recordFeatures } from "./run-features";
 import { Steered } from "./delivery-queue";
 import type { JudgementDeps } from "./drift";
-import { finishedOnRecord, writeCheckpoint, type Card } from "./cards";
+import { finishedOnRecord, writeCheckpoint } from "./cards";
+import type { Card } from "./cards";
 import { reason, taskTitleOf, unsafePathComponent } from "./naming";
 import { freshTaskLabel } from "./tasknames";
 import { attachmentRefusal, attachmentsDir, copyInto, listAttachments } from "./attachments";
@@ -255,8 +244,8 @@ import {
   seedIntent,
   withOutcome,
   writeIntent,
-  type IntentSeed,
 } from "./intent";
+import type { IntentSeed } from "./intent";
 import { latest, readDispositions } from "./disposition";
 import { openFindingsIn } from "./output";
 import {
@@ -267,14 +256,10 @@ import {
   planReposOf,
   prerequisitesOf,
 } from "./plan";
-import {
-  judgePrerequisites,
-  mergeRequestFor,
-  type MrLanding,
-  type PrerequisiteStanding,
-  type RunDetail,
-} from "./prerequisites";
-import { SELF, argumentsWithout, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
+import { judgePrerequisites, mergeRequestFor } from "./prerequisites";
+import type { MrLanding, PrerequisiteStanding, RunDetail } from "./prerequisites";
+import { SELF, argumentsWithout, inputsFor, offersFrom } from "./offers";
+import type { Declared, Offer } from "./offers";
 import { isOutcome, REQUESTABLE } from "./outcome";
 import { Foreground } from "./foreground";
 import {
@@ -285,13 +270,10 @@ import {
   sameRow,
   storeLayer,
   supersededReason,
-  type Superseded,
-  type Admission,
-  type DecisionRow,
-  type RunRow,
-  type StoreApi,
 } from "./store";
-import { HostRefused, RequestedBy, RunReport, type Disposition } from "./board-model";
+import type { Superseded, Admission, DecisionRow, RunRow, StoreApi } from "./store";
+import { HostRefused, RequestedBy, RunReport } from "./board-model";
+import type { Disposition } from "./board-model";
 import {
   TASK_INPUT,
   branchFor,
@@ -301,9 +283,8 @@ import {
   pinnedCheckout,
   repositoryName,
   workOf,
-  type BranchAsk,
-  type RecordedBy,
 } from "./worktree";
+import type { BranchAsk, RecordedBy } from "./worktree";
 import { Herdr } from "./herdr";
 
 import type { PluginEnv } from "./env";
@@ -317,9 +298,12 @@ import {
   targetFromSlack,
 } from "./review-slack";
 import { slackMessageRef } from "./slack";
-import { ConnectionId, type ConnectionReading } from "./connection-model";
-import { StartedSchema, type RunAuthority, type Started } from "./automode";
-import { WorktreeRecordSchema, type WorktreeRecord } from "./run";
+import { ConnectionId } from "./connection-model";
+import type { ConnectionReading } from "./connection-model";
+import { StartedSchema } from "./automode";
+import type { RunAuthority, Started } from "./automode";
+import { WorktreeRecordSchema } from "./run";
+import type { WorktreeRecord } from "./run";
 import { isOpen, listTasks, newTask, readTask, taskOfWorkspace, writeTask } from "./task";
 import { nowIso, epochMs } from "./time";
 import {
@@ -332,18 +316,15 @@ import {
   readStepSteering,
   StepNote as SteeringNote,
 } from "./step-steering";
-import { launchesOf, readLaunches, type Launched } from "./launches";
+import { launchesOf, readLaunches } from "./launches";
+import type { Launched } from "./launches";
 import { steerTarget } from "./steer-target";
-import { CurrentStep, appendStepLine, readStepLines, type StepLine, type StepNote } from "./steps";
+import { CurrentStep, appendStepLine, readStepLines } from "./steps";
+import type { StepLine, StepNote } from "./steps";
 import { classifyGivenSet, classifyGivenTarget, classifyWorkSource, defaultBase } from "./inputs";
 import type { PlatformServices } from "./platform";
-import {
-  updateApproved,
-  approvedFrom,
-  approvedIn,
-  PROJECT_FILE,
-  type VerifySpec,
-} from "./verify-spec";
+import { updateApproved, approvedFrom, approvedIn, PROJECT_FILE } from "./verify-spec";
+import type { VerifySpec } from "./verify-spec";
 import { rerunArgv } from "./bun-tests";
 import { branchChange, ownTests } from "./own-tests";
 import {
@@ -362,11 +343,8 @@ import {
   resolveExecutable,
   runApproved,
   VERIFYING,
-  type CheckPass,
-  type CheckRun,
-  type FailedTest,
-  type Verification,
 } from "./verify";
+import type { CheckPass, CheckRun, FailedTest, Verification } from "./verify";
 import * as Workflow from "effect/workflow/Workflow";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import type * as MessageStorage from "effect/cluster/MessageStorage";

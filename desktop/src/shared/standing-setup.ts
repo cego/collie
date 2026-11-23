@@ -2,7 +2,8 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { Schema } from "effect";
-import { OwnStore, type OwnWords, withinCaps } from "../../../src/own-words-model";
+import { OwnStore, withinCaps } from "../../../src/own-words-model";
+import type { OwnWords } from "../../../src/own-words-model";
 import type { StandingDirection } from "../../../src/standing-direction";
 import type { DesktopSettings } from "./flock";
 

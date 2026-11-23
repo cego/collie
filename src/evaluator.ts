@@ -44,7 +44,8 @@ export type DriftReport = Schema.Schema.Type<typeof DriftReportSchema>;
 export const JudgementSchema = Schema.Struct({ reports: Schema.Array(DriftReportSchema) });
 export type Judgement = Schema.Schema.Type<typeof JudgementSchema>;
 
-import { ActionSchema, recipientOf, type Action } from "./actions";
+import { ActionSchema, recipientOf } from "./actions";
+import type { Action } from "./actions";
 
 export const ProposalSchema = Schema.Struct({
   interpretation: Schema.String,

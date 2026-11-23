@@ -2,12 +2,14 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import * as Arr from "effect/Array";
 import { Effect } from "effect";
-import { appState, type ControlSession } from "../../src/flows";
+import { appState } from "../../src/flows";
+import type { ControlSession } from "../../src/flows";
 import { Herdr } from "../../src/herdr";
 import { scopeFor } from "../../src/registry";
 import type { RunFacts } from "../../src/runs";
 import type { RunDetail } from "../../src/board-model";
-import { appendCard, type Card } from "../../src/cards";
+import { appendCard } from "../../src/cards";
+import type { Card } from "../../src/cards";
 import type { ProposalLine, ProposalRecord } from "../../src/proposals";
 import type { DetailKey } from "../../src/lifecycle";
 import { Rig } from "../support/recorder";

@@ -11,9 +11,8 @@ import {
   REGISTERED,
   registerAgent,
   registerOf,
-  type AgentEntry,
-  type RegistryScope,
 } from "../src/registry";
+import type { AgentEntry, RegistryScope } from "../src/registry";
 import { StoreWrites } from "../src/store-writes";
 import { runEffect } from "./support/effect";
 import { stopHost } from "./support/host";

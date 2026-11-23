@@ -1,9 +1,9 @@
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import type { Question } from "../src/board-model";
-import { applyItem, EMPTY_FLOCK, type FlockItem, flockCards } from "../desktop/src/shared/flock";
+import { applyItem, EMPTY_FLOCK, flockCards } from "../desktop/src/shared/flock";
+import type { FlockItem } from "../desktop/src/shared/flock";
 import {
-  type Answering,
   answerKey,
   answerSent,
   answersSettled,
@@ -11,13 +11,13 @@ import {
   cardQuestion,
   nothingAnswered,
   openQuestions,
-  type Sitting,
   sittingAnswered,
   sittingMoved,
   sittingSees,
   sittingStarts,
   sittingView,
 } from "../desktop/src/shared/pending-answer";
+import type { Answering, Sitting } from "../desktop/src/shared/pending-answer";
 import { task } from "./support/task";
 
 const question: (id: string, run?: string) => Question = (id: string, run = "r-1") => ({

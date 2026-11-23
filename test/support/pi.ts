@@ -1,6 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import { Effect, type Schema } from "effect";
+import { Effect } from "effect";
+import type { Schema } from "effect";
 
 export interface PiTool {
   readonly name: string;

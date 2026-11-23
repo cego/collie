@@ -4,16 +4,13 @@ import * as Arr from "effect/Array";
 import { Option, Schema } from "effect";
 import {
   parseSetting,
-  type Setting,
   SETTING_GROUPS,
-  type SettingGroup,
   SETTINGS,
-  type SettingKind,
   settingShown,
-  type SettingUnit,
   SettingValue,
   settingText,
 } from "../../../src/settings";
+import type { Setting, SettingGroup, SettingKind, SettingUnit } from "../../../src/settings";
 import type { DesktopSettings, DesktopSettingsChange, MachineRow } from "./flock";
 import { whenOf } from "./flow";
 import { percent } from "./scale";

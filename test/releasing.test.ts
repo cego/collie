@@ -7,7 +7,8 @@ import type { Runner } from "../src/mr";
 import { fastForward, readProduction, readTag, stackOrder } from "../src/releasing";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
-import { FORGE_HOST, PROJECT, fakeForge, type ForgeModel } from "./support/forge";
+import { FORGE_HOST, PROJECT, fakeForge } from "./support/forge";
+import type { ForgeModel } from "./support/forge";
 
 const REF = { project: PROJECT.gitlab, iid: "30" };
 const PIPELINE = `https://${PROJECT.gitlab}/-/pipelines/7`;

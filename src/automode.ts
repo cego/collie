@@ -4,7 +4,8 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { Effect, Schema } from "effect";
 import { FORGES, forgeOfHost } from "./forge/forge";
-import { projectFromRemote, type Runner } from "./mr";
+import { projectFromRemote } from "./mr";
+import type { Runner } from "./mr";
 import { redact, scrub } from "./redact";
 
 export const StartedSchema = Schema.Struct({

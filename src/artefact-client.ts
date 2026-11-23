@@ -1,5 +1,6 @@
 import { Effect, FileSystem, Option, Path, Stream } from "effect";
-import { HostRefused, PART_BYTES, type BoardMessage } from "./board-model";
+import { HostRefused, PART_BYTES } from "./board-model";
+import type { BoardMessage } from "./board-model";
 import type { RpcClientError } from "effect/rpc/RpcClientError";
 import type { PlatformError } from "effect/PlatformError";
 import type { HostClient } from "./host";

@@ -3,7 +3,8 @@ import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema, flow as Schemaflow, Result } from "effect";
 import * as Str from "effect/String";
-import { Flow, type FlowRun } from "../src/board-model";
+import { Flow } from "../src/board-model";
+import type { FlowRun } from "../src/board-model";
 import { readAudit } from "../src/audit";
 import { recordsReadLayer } from "../src/records";
 import { runDir } from "../src/engine";
@@ -14,7 +15,8 @@ import { RunLinkNotice } from "../src/run-links";
 import { connect } from "../src/host";
 import { runEffect } from "./support/effect";
 import { stopHost, until } from "./support/host";
-import { type Side, twoMachines } from "./support/peers";
+import { twoMachines } from "./support/peers";
+import type { Side } from "./support/peers";
 import { registeredAt } from "./support/records";
 
 const encode = Schemaflow(

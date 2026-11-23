@@ -2,13 +2,15 @@
 import { Herdr } from "../src/herdr";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
-import { Array as Arr, Effect, FileSystem, Layer, Option, type Scope } from "effect";
+import { Array as Arr, Effect, FileSystem, Layer, Option } from "effect";
+import type { Scope } from "effect";
 import { Rig } from "./support/recorder";
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
 import { fixtures, until } from "./support/host";
 import { agentsLayer } from "../src/agents";
-import { Registry, foundationLayer, registryLayer, type HostServices } from "../src/engine";
+import { Registry, foundationLayer, registryLayer } from "../src/engine";
+import type { HostServices } from "../src/engine";
 import { STOP } from "../src/controls";
 
 const ROOT = new URL("../", import.meta.url).pathname;

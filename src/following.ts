@@ -1,11 +1,6 @@
 import * as Arr from "effect/Array";
-import {
-  mrReadiness,
-  type ForgeChecks,
-  type ReadyToRelease,
-  type RunProgress,
-  type TaskMr,
-} from "./board-model";
+import { mrReadiness } from "./board-model";
+import type { ForgeChecks, ReadyToRelease, RunProgress, TaskMr } from "./board-model";
 import type { RunView } from "./engine";
 import { HOLD, STOP } from "./controls";
 import { isSetAside, isUnanswered } from "./store";

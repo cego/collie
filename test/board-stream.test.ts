@@ -7,7 +7,6 @@ import {
   ConfigProvider,
   DateTime,
   Deferred,
-  type Duration,
   Effect,
   Fiber,
   FileSystem,
@@ -21,16 +20,9 @@ import {
   flow as Schemaflow,
   Result,
 } from "effect";
-import {
-  BoardMessage,
-  type Flow,
-  PaneAt,
-  PROTOCOL,
-  TaskView,
-  type BoardSnapshot,
-  recordIn,
-  sectionOf,
-} from "../src/board-model";
+import type { Duration } from "effect";
+import { BoardMessage, PaneAt, PROTOCOL, TaskView, recordIn, sectionOf } from "../src/board-model";
+import type { Flow, BoardSnapshot } from "../src/board-model";
 import { buildBoard } from "../src/board";
 import { boardMessages, shareBoard } from "../src/board-stream";
 import { recordDisposition } from "../src/disposition";
@@ -50,7 +42,8 @@ import { fastForward, runEffect } from "./support/effect";
 import { stopHost, until } from "./support/host";
 import { task } from "./support/task";
 import { madeRun, recordsAt } from "./support/records";
-import { collie, proves, type World } from "./support/world";
+import { collie, proves } from "./support/world";
+import type { World } from "./support/world";
 
 const firstSnapshot = (state: string) =>
   Effect.scoped(

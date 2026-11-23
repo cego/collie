@@ -4,7 +4,8 @@ import { Effect, FileSystem } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { humanBytes } from "./bytes";
 import type { PluginEnv } from "./env";
-import { shell, type Runner } from "./mr";
+import { shell } from "./mr";
+import type { Runner } from "./mr";
 
 export const DF_ENV = "COLLIE_DF";
 

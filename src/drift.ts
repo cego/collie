@@ -16,16 +16,11 @@ import {
 import { shell } from "./mr";
 import { isRecord, isString } from "./schema";
 import { nowIso } from "./time";
-import {
-  DriftReportSchema,
-  evaluate,
-  flagsPresent,
-  type DriftReport,
-  type EvaluatorDeps,
-  type Ref,
-} from "./evaluator";
+import { DriftReportSchema, evaluate, flagsPresent } from "./evaluator";
+import type { DriftReport, EvaluatorDeps, Ref } from "./evaluator";
 import { insideKnown } from "./conversation";
-import { reserve, settle as settleBudget, type CallLimits } from "./steering";
+import { reserve, settle as settleBudget } from "./steering";
+import type { CallLimits } from "./steering";
 import { stringifyJson } from "./json";
 
 export const MAX_LINES_PER_FILE = 200;

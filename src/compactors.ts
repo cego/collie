@@ -43,26 +43,18 @@ import {
   summarize,
   createSession,
 } from "./opencode";
-import {
-  current,
-  isFull,
-  resetPhrase,
-  StatusLineLimits,
-  statusLineWindows,
-  type StatusSample,
-} from "./usage-model";
-import {
-  CONTROL_DIR,
-  Unsubmitted,
-  type CompactionPort,
-  type CompactionPorts,
-  type AgentContext,
-  type LaunchContext,
-  type ReadyContext,
-  type StopTarget,
-  type SeenProcess,
-  type Stopped,
-  readControl,
+import { current, isFull, resetPhrase, StatusLineLimits, statusLineWindows } from "./usage-model";
+import type { StatusSample } from "./usage-model";
+import { CONTROL_DIR, Unsubmitted, readControl } from "./compaction";
+import type {
+  CompactionPort,
+  CompactionPorts,
+  AgentContext,
+  LaunchContext,
+  ReadyContext,
+  StopTarget,
+  SeenProcess,
+  Stopped,
 } from "./compaction";
 import {
   processOf,
@@ -71,8 +63,8 @@ import {
   sessionOf,
   stillRunning,
   terminate,
-  type ProcessInfo,
 } from "./processes";
+import type { ProcessInfo } from "./processes";
 import { holderLives, hostLockOf, lockHolder, withLock } from "./lock";
 import { carriedDelivery } from "./dispatcher";
 import { epochMs } from "./time";

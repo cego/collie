@@ -4,7 +4,8 @@ import { Clock, Effect, FileSystem, Option, Path, Result, Schema } from "effect"
 import * as Base64 from "effect/encoding/Base64";
 import { PART_BYTES } from "../../../src/board-model";
 import { sha256Hex } from "../../../src/attachments";
-import { capRefusal, type Staged } from "../shared/attachments";
+import { capRefusal } from "../shared/attachments";
+import type { Staged } from "../shared/attachments";
 
 export class AttachmentRefused extends Schema.TaggedError<
   AttachmentRefused,

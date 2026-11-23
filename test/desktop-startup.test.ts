@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
 import { Array as Arr, Deferred, Effect, Queue, Stream } from "effect";
-import { type BoardMessage, type BoardSnapshot, PROTOCOL } from "../src/board-model";
-import { flockStream, type Route, type RouteChange } from "../desktop/src/bun/machine";
+import { PROTOCOL } from "../src/board-model";
+import type { BoardMessage, BoardSnapshot } from "../src/board-model";
+import { flockStream } from "../desktop/src/bun/machine";
+import type { Route, RouteChange } from "../desktop/src/bun/machine";
 import type { FlockItem } from "../desktop/src/shared/flock";
 
 const snapshot: (installation: string) => BoardSnapshot = (installation) => ({

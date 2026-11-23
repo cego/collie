@@ -5,8 +5,10 @@ import { pipe as pipe_ } from "effect/Function";
 import { Effect, Path, Schema } from "effect";
 import { appendJournal, readJournal } from "./journal";
 import { runTitle } from "./naming";
-import { settled, type RunFacts } from "./runs";
-import { mrLabel, type Reopened, type Significance, type TaskView } from "./board-model";
+import { settled } from "./runs";
+import type { RunFacts } from "./runs";
+import { mrLabel } from "./board-model";
+import type { Reopened, Significance, TaskView } from "./board-model";
 import { readReplies } from "./replies";
 
 const SaidSchema = Schema.Struct({ at: Schema.String, key: Schema.String });

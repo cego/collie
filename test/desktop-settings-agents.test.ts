@@ -12,8 +12,8 @@ import {
   changeFallbacks,
   agentSettingChanges,
   rememberCatalogues,
-  type MachineCatalogue,
 } from "../desktop/src/shared/settings-agents";
+import type { MachineCatalogue } from "../desktop/src/shared/settings-agents";
 import { editSetting, NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
 
 const readings: ReadonlyArray<MachineCatalogue> = [

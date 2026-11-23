@@ -18,11 +18,8 @@ import {
   recordEvents,
   spawned,
   syncNow,
-  type RouteChange,
-  type BoardSource,
-  type Doors,
-  type Route,
 } from "../desktop/src/bun/machine";
+import type { RouteChange, BoardSource, Doors, Route } from "../desktop/src/bun/machine";
 import type { FlockItem } from "../desktop/src/shared/flock";
 
 const machine = { profile: "fixture", name: "vm-mk" };

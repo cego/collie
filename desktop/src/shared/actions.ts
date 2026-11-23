@@ -1,4 +1,5 @@
-import { Cause, Exit, Option, Result, type Schema } from "effect";
+import { Cause, Exit, Option, Result } from "effect";
+import type { Schema } from "effect";
 import * as Arr from "effect/Array";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import type * as RpcClientError from "effect/rpc/RpcClientError";

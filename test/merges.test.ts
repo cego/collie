@@ -6,12 +6,15 @@ import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
 import type { Records } from "../src/records";
-import { Effect, FileSystem, Layer, Schema, type Scope } from "effect";
+import { Effect, FileSystem, Layer, Schema } from "effect";
+import type { Scope } from "effect";
 import type { FetchLike } from "forges";
-import { forgeHttpTest, type ForgeHttp } from "../src/forge/http";
+import { forgeHttpTest } from "../src/forge/http";
+import type { ForgeHttp } from "../src/forge/http";
 import { recordAudit } from "../src/audit";
 import { buildBoard } from "../src/board";
-import { sectionOf, type MrState, type TaskView } from "../src/board-model";
+import { sectionOf } from "../src/board-model";
+import type { MrState, TaskView } from "../src/board-model";
 import { readDispositions, recordDisposition } from "../src/disposition";
 import {
   MERGE_POLL_MS,
@@ -34,14 +37,10 @@ import { madeRun } from "./support/records";
 import { task, taskMr } from "./support/task";
 import { memoryRecords, runEffect } from "./support/effect";
 import { epochMs } from "../src/time";
-import { readLanding, writeLanding, type Landing } from "../src/landing";
-import {
-  fakeForge,
-  storedAnswers,
-  type Check,
-  type FakeMr,
-  type ForgeModel,
-} from "./support/forge";
+import { readLanding, writeLanding } from "../src/landing";
+import type { Landing } from "../src/landing";
+import { fakeForge, storedAnswers } from "./support/forge";
+import type { Check, FakeMr, ForgeModel } from "./support/forge";
 
 const GITLAB = "gitlab.cego.dk/mk/collie";
 

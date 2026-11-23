@@ -1,4 +1,5 @@
-import { isFocusKey, type Key } from "./terminal-input";
+import { isFocusKey } from "./terminal-input";
+import type { Key } from "./terminal-input";
 
 interface Pane {
   readonly min: number;

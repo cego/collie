@@ -10,26 +10,19 @@ import { Cause, Clock, Effect, Exit, Option, Predicate, Result, Schema, Struct }
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Tool from "effect/ai/Tool";
 import * as Toolkit from "effect/ai/Toolkit";
-import {
-  type Declaration,
-  type FLOCK_READS,
-  HostRefused,
-  NEWS_BATCH,
-  type NewsBatch,
-  PROTOCOL,
-  type Significance,
-  type TaskView,
+import { HostRefused, NEWS_BATCH, PROTOCOL } from "../../../src/board-model";
+import type {
+  Declaration,
+  FLOCK_READS,
+  NewsBatch,
+  Significance,
+  TaskView,
 } from "../../../src/board-model";
-import {
-  claimProject,
-  type HelleCredentials,
-  type HelleProject,
-  helleMe,
-  helleProjects,
-  releaseClaim,
-} from "../../../src/helle";
+import { claimProject, helleMe, helleProjects, releaseClaim } from "../../../src/helle";
+import type { HelleCredentials, HelleProject } from "../../../src/helle";
 import { HELLE_TOKEN_STEPS } from "../../../src/helle-url";
-import { isString, type JsonObject } from "../../../src/schema";
+import { isString } from "../../../src/schema";
+import type { JsonObject } from "../../../src/schema";
 import { scheduleLines } from "../../../src/schedule-model";
 import { modelsLines } from "../../../src/catalogue-model";
 import { connectionsLines } from "../../../src/connection-model";
@@ -46,13 +39,18 @@ import {
   searchesArtefacts,
   TAKES,
 } from "../../../src/toolkit";
-import { artefactOwner, FlockArtefacts, type FlockSearch } from "../../../src/artefact-search";
+import { artefactOwner, FlockArtefacts } from "../../../src/artefact-search";
+import type { FlockSearch } from "../../../src/artefact-search";
 import type { Staged } from "../shared/attachments";
-import { type ChatChoices, type Resolved, runsAsOffered } from "../shared/chat-choices";
-import { type ActionFailed, type ChatBoard, unreadBecause } from "../shared/flock";
-import { moveSchedule, type ScheduleDoor } from "../../../src/schedule-move";
+import { runsAsOffered } from "../shared/chat-choices";
+import type { ChatChoices, Resolved } from "../shared/chat-choices";
+import { unreadBecause } from "../shared/flock";
+import type { ActionFailed, ChatBoard } from "../shared/flock";
+import { moveSchedule } from "../../../src/schedule-move";
+import type { ScheduleDoor } from "../../../src/schedule-move";
 import { carriedPaths } from "./carried";
-import { type ActionsLog, confirmed, Outlined, reasonOf, unlogged, withheldOf } from "./sent";
+import { confirmed, Outlined, reasonOf, unlogged, withheldOf } from "./sent";
+import type { ActionsLog } from "./sent";
 import type { Door } from "./machine";
 import type { StandingDirection } from "../../../src/standing-direction";
 import { stringifyJson } from "../../../src/json";

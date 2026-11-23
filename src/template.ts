@@ -2,7 +2,8 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import { Schema } from "effect";
-import { isYamlMap, type YamlMap, type YamlValue } from "./yaml";
+import { isYamlMap } from "./yaml";
+import type { YamlMap, YamlValue } from "./yaml";
 import { stringifyJson } from "./json";
 
 export interface Rendered {

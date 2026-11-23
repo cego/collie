@@ -8,7 +8,8 @@ import {
   offerKey,
   offeringOf,
 } from "../desktop/src/shared/actions";
-import { type OfferView, primaryAction, cardActions } from "../src/board-model";
+import { primaryAction, cardActions } from "../src/board-model";
+import type { OfferView } from "../src/board-model";
 import { ActionFailed } from "../desktop/src/shared/flock";
 import { runEffect } from "./support/effect";
 import { task, taskMr } from "./support/task";

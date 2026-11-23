@@ -1,4 +1,5 @@
-import { plugin, type OnLoadCallback, type PluginBuilder } from "bun";
+import { plugin } from "bun";
+import type { OnLoadCallback, PluginBuilder } from "bun";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 

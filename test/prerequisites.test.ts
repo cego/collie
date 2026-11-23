@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { judgePrerequisites, type MrLanding, type RunDetail } from "../src/prerequisites";
+import { judgePrerequisites } from "../src/prerequisites";
+import type { MrLanding, RunDetail } from "../src/prerequisites";
 
 const MR = "https://gitlab.example.com/group/app/-/merge_requests/7";
 const OTHER_MR = "https://gitlab.example.com/group/app/-/merge_requests/9";

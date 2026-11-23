@@ -5,7 +5,8 @@ import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import { Clock, Duration, Effect, FileSystem, Option, Path, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
-import { isSettled, type Herdr, type AgentInfo } from "./herdr";
+import { isSettled } from "./herdr";
+import type { Herdr, AgentInfo } from "./herdr";
 import type { CheckoutKind } from "./definitions";
 import { diffTargetOf, planRunOf, repositoryOf, workSourceOf } from "./strategies";
 import { runningChecks } from "./check-processes";
@@ -17,8 +18,8 @@ import {
   projectHere,
   shell,
   whatItSaid,
-  type Runner,
 } from "./mr";
+import type { Runner } from "./mr";
 import { mrWords, parseMrTarget, readMrRef, readMrUrl } from "./board-model";
 import { FORGES, forgeOf, forgeOfHost } from "./forge/forge";
 import { withLock } from "./lock";
@@ -30,7 +31,8 @@ import type { WorktreeRecord } from "./run";
 import type { RunFacts } from "./runs";
 import { slugify } from "./template";
 import { changeBranch } from "./plan";
-import { unlistedServers, type CompactionPorts } from "./compaction";
+import { unlistedServers } from "./compaction";
+import type { CompactionPorts } from "./compaction";
 import { COMPACTION_PORTS } from "./compactors";
 import { endAgent, endedLine, runLog } from "./agent-end";
 import { readLaunches } from "./launches";

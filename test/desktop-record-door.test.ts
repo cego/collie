@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { Array as Arr, Effect, Option, Stream } from "effect";
-import { DoorMap, openDoors, recordEvents, type Doors } from "../desktop/src/bun/machine";
+import { DoorMap, openDoors, recordEvents } from "../desktop/src/bun/machine";
+import type { Doors } from "../desktop/src/bun/machine";
 import { recordKeeper } from "../desktop/src/bun/records";
 import type { RunDetail } from "../src/board-model";
 import { flowNode, mainFlow } from "./support/flow";

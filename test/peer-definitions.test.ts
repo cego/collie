@@ -7,7 +7,8 @@ import { withLock } from "../src/lock";
 import { fileTime } from "../src/time";
 import { memoryRecords, runEffect } from "./support/effect";
 import { until } from "./support/host";
-import { twoMachines, type Side } from "./support/peers";
+import { twoMachines } from "./support/peers";
+import type { Side } from "./support/peers";
 import { proves } from "./support/world";
 
 test("a definition created, edited, removed or edited on both reaches the other host by its latest edit", () =>

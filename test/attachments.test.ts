@@ -4,14 +4,17 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
-import { Effect, FileSystem, Schema, type Scope, flow, Result } from "effect";
+import { Effect, FileSystem, Schema, flow, Result } from "effect";
+import type { Scope } from "effect";
 import { readAudit } from "../src/audit";
-import { runDir, type RunView } from "../src/engine";
+import { runDir } from "../src/engine";
+import type { RunView } from "../src/engine";
 import { connect } from "../src/host";
 import { isSettled } from "../src/lifecycle";
 import { stopHost, until } from "./support/host";
 import { hostRecords } from "./support/records";
-import { collie, proves, type World } from "./support/world";
+import { collie, proves } from "./support/world";
+import type { World } from "./support/world";
 import type { FakeHc } from "./support/fake-hc";
 
 const trailOf = (state: string, runId: string) =>

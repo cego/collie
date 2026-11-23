@@ -4,21 +4,20 @@ import * as Option from "effect/Option";
 import { pipe } from "effect/Function";
 import { DateTime } from "effect";
 import { CommandLine } from "effect/process";
-import {
-  mrLabel,
-  ranOn,
-  type Flow,
-  type ForgeChecks,
-  type MrState,
-  type FlowLink,
-  type FlowWait,
-  type FlowAttempt,
-  type FlowLane,
-  type FlowNode,
-  type FlowQuestion,
-  type FlowRun,
-  type FlowState,
-  type RequestedBy,
+import { mrLabel, ranOn } from "./board-model";
+import type {
+  Flow,
+  ForgeChecks,
+  MrState,
+  FlowLink,
+  FlowWait,
+  FlowAttempt,
+  FlowLane,
+  FlowNode,
+  FlowQuestion,
+  FlowRun,
+  FlowState,
+  RequestedBy,
 } from "./board-model";
 import type { Launched } from "./launches";
 import type { RunState } from "./runs";

@@ -4,8 +4,10 @@ import * as Arr from "effect/Array";
 import { Clock, Effect, Option, Result, Schema, Stream } from "effect";
 import { CommandLine } from "effect/process";
 import { verifiedRunner as sharedVerifiedRunner } from "../../../src/releases";
-import { type OnboardRun, type OnboardStep, SETTLED, type Skippable } from "../shared/flock";
-import { collieSaid, type Route, type ShellRoute, spawned } from "./machine";
+import { SETTLED } from "../shared/flock";
+import type { OnboardRun, OnboardStep, Skippable } from "../shared/flock";
+import { collieSaid, spawned } from "./machine";
+import type { Route, ShellRoute } from "./machine";
 import { CHILD_CWD, childEnv } from "./login-env";
 
 export const RELEASES = "https://github.com/cego/collie/releases/download";

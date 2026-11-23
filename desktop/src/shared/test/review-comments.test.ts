@@ -8,13 +8,12 @@ import {
   clearSent,
   compose,
   diffAnchor,
-  type DiffAnchor,
-  type Draft,
   editDraft,
   inHunks,
   planAnchor,
   removeDraft,
 } from "../review-comments";
+import type { DiffAnchor, Draft } from "../review-comments";
 
 const plan: (id: string, file: string, quote: string, text: string) => Draft = (
   id,

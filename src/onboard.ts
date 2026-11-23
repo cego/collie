@@ -14,12 +14,14 @@ import { glabHosts, pushCheck } from "./forge/gitlab-checks";
 import { gitlabHostOf } from "./config";
 import { tokenPage } from "./gitlab-token";
 import type { PluginEnv } from "./env";
-import { err, prepareSteps, upgrade, type OpResult } from "./operations";
+import { err, prepareSteps, upgrade } from "./operations";
+import type { OpResult } from "./operations";
 import { whatItSaid } from "./mr";
 import { HELLE_TOKEN_STEPS, helleUrlOf } from "./helle-url";
 import { helleEnvPath, LINEAR_MCP_ADD, LINEAR_MCP_FIX } from "./connection-probes";
 import { connectionOnMachine } from "./connections";
-import { installation, releaseVersion, RELEASE_TAG, type Carried } from "./release";
+import { installation, releaseVersion, RELEASE_TAG } from "./release";
+import type { Carried } from "./release";
 import manifest from "../package.json";
 
 export type StepStatus = "done" | "in_place" | "skipped" | "needs_root" | "needs_human" | "failed";

@@ -4,7 +4,8 @@ import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
-import { createServer, isIP, type Server, type Socket } from "node:net";
+import { createServer, isIP } from "node:net";
+import type { Server, Socket } from "node:net";
 // oxlint-disable-next-line effecttsgo/node-builtin-import -- effect/crypto has no X.509 certificate inspection.
 import { X509Certificate } from "node:crypto";
 import { hostname, networkInterfaces } from "node:os";
@@ -24,31 +25,26 @@ import {
   Result,
   Schedule,
   Schema,
-  type Scope,
   Semaphore,
   Stream,
   flow,
 } from "effect";
+import type { Scope } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import { ChildProcess, ChildProcessSpawner, CommandLine } from "effect/process";
-import {
-  FrontDoor,
-  HostRefused,
-  type BoardSnapshot,
-  type RequestConflict,
-  type SharedSettings,
-  type ShellResult,
-  type ShellRequest,
+import { FrontDoor, HostRefused } from "./board-model";
+import type {
+  BoardSnapshot,
+  RequestConflict,
+  SharedSettings,
+  ShellResult,
+  ShellRequest,
 } from "./board-model";
 import { channelInto } from "./channel";
-import { openPeer, REACH_BOUND, type Way } from "./peer-transport";
-import {
-  resolvedHost,
-  ride,
-  SOCKET_PATH_MAX,
-  sshConnection,
-  type SshMachine,
-} from "./ssh-connection";
+import { openPeer, REACH_BOUND } from "./peer-transport";
+import type { Way } from "./peer-transport";
+import { resolvedHost, ride, SOCKET_PATH_MAX, sshConnection } from "./ssh-connection";
+import type { SshMachine } from "./ssh-connection";
 import { remoteCollie } from "./ssh-argv";
 import { shell } from "./mr";
 import {
@@ -61,10 +57,9 @@ import {
   Waits,
   AgentAddress,
   AgentAddressJson,
-  type HerdrMachine,
   Peer,
-  type PeerView,
 } from "./peers-model";
+import type { HerdrMachine, PeerView } from "./peers-model";
 import { reason } from "./naming";
 import { sharedSettings, takeShared } from "./config";
 import { byKey, latestEdits, takeFrom } from "./flock-settings";

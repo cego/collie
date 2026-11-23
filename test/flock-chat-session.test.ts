@@ -6,10 +6,12 @@ import { homedir } from "node:os";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 /* oxlint-enable effecttsgo/node-builtin-import */
-import { Effect, FileSystem, type Scope, Stream } from "effect";
+import { Effect, FileSystem, Stream } from "effect";
+import type { Scope } from "effect";
 import { platformLayer } from "../src/platform";
 import { SESSION_STORES, sessionStoreReached } from "../src/own-words";
-import { type ClaudeCode, claudeDriver } from "../desktop/src/bun/claude-driver";
+import { claudeDriver } from "../desktop/src/bun/claude-driver";
+import type { ClaudeCode } from "../desktop/src/bun/claude-driver";
 import type { DriverContext } from "../desktop/src/bun/driver";
 import { sessionOptions, userMcpServers } from "../desktop/src/bun/session";
 import { opensOn } from "../desktop/src/bun/chat-choices";

@@ -1,7 +1,8 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Deferred, Effect } from "effect";
-import { createSignal, type Accessor } from "solid-js";
+import { createSignal } from "solid-js";
+import type { Accessor } from "solid-js";
 import type { InputPrompts, PickItem } from "../inputs";
 
 export type Ask =

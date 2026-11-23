@@ -8,7 +8,8 @@ import { readSeen } from "../src/seen";
 import { hostRecords } from "./support/records";
 import { epochMs } from "../src/time";
 import { stopHost, until } from "./support/host";
-import { collie, proves, type World } from "./support/world";
+import { collie, proves } from "./support/world";
+import type { World } from "./support/world";
 
 const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const Board = Schema.Struct({

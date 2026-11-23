@@ -11,8 +11,8 @@ import {
   pendingProposals,
   read,
   tail,
-  type Turn,
 } from "../src/conversation";
+import type { Turn } from "../src/conversation";
 import { runEffect } from "./support/effect";
 import { epochMs } from "../src/time";
 

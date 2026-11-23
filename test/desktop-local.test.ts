@@ -17,14 +17,8 @@ import {
   flow,
   Result,
 } from "effect";
-import {
-  type BoardMessage,
-  type BoardSnapshot,
-  BRIDGE_READY,
-  PROTOCOL,
-  recordIn,
-  type Toasted,
-} from "../src/board-model";
+import { BRIDGE_READY, PROTOCOL, recordIn } from "../src/board-model";
+import type { BoardMessage, BoardSnapshot, Toasted } from "../src/board-model";
 import { readAudit } from "../src/audit";
 import { hostRecords } from "./support/records";
 import { runDir } from "../src/engine";
@@ -35,10 +29,9 @@ import {
   machineBoard,
   buildVerdict,
   openBridge,
-  type Route,
-  type RouteChange,
   syncNow,
 } from "../desktop/src/bun/machine";
+import type { Route, RouteChange } from "../desktop/src/bun/machine";
 import type { FlockItem } from "../desktop/src/shared/flock";
 import { TestClock } from "effect/testing";
 import { fastForward, runEffect, suiteEnv } from "./support/effect";

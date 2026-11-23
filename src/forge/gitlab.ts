@@ -14,18 +14,19 @@ import {
   Schema,
 } from "effect";
 import { CommandLine } from "effect/process";
-import {
-  mrWords,
-  type ForgeChecks,
-  type Mergeability,
-  type MrDetails,
-  type MrPanel,
-  type MrRef,
-  type MrUnavailable,
+import { mrWords } from "../board-model";
+import type {
+  ForgeChecks,
+  Mergeability,
+  MrDetails,
+  MrPanel,
+  MrRef,
+  MrUnavailable,
 } from "../board-model";
 import { epochMs } from "../time";
 import { failedTestsIn } from "../own-tests";
-import { keepCredentialHelper, projectHere, whatItSaid, type Runner } from "../mr";
+import { keepCredentialHelper, projectHere, whatItSaid } from "../mr";
+import type { Runner } from "../mr";
 import type {
   DeployTier,
   DeployedRead,
@@ -45,15 +46,8 @@ import type {
   ReviewRequest,
 } from "./forge";
 import type { ForgeHttp } from "./http";
-import {
-  loginReadiness,
-  pagesAs,
-  request,
-  requestAs,
-  requestText,
-  type Answered,
-  type ForgeLogin,
-} from "./http";
+import { loginReadiness, pagesAs, request, requestAs, requestText } from "./http";
+import type { Answered, ForgeLogin } from "./http";
 import {
   listIssues,
   createIssue,
@@ -67,7 +61,8 @@ import {
   viewerLogin,
   myMergeRequests,
 } from "./threads";
-import { judgeComments, type ForgeComment, type MergeAnswer, type ReviewRead } from "./review";
+import { judgeComments } from "./review";
+import type { ForgeComment, MergeAnswer, ReviewRead } from "./review";
 
 export const MR_TEMPLATE = ".gitlab/merge_request_templates/default.md";
 export const GLAB_RELOGIN = "glab auth login";

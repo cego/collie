@@ -1,21 +1,17 @@
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Clock, DateTime, Effect, FileSystem, Schema, flow, Result, type Types } from "effect";
-import {
-  forgetGone,
-  idleAgentsSweeper,
-  JOURNAL,
-  noteIdle,
-  sweep,
-  type FinishedSince,
-  type IdleSince,
-} from "../src/cleanup";
+import { Clock, DateTime, Effect, FileSystem, Schema, flow, Result } from "effect";
+import type { Types } from "effect";
+import { forgetGone, idleAgentsSweeper, JOURNAL, noteIdle, sweep } from "../src/cleanup";
+import type { FinishedSince, IdleSince } from "../src/cleanup";
 import { appendCard } from "../src/cards";
 import { STOP } from "../src/controls";
 import { RunRecords } from "../src/run-records";
-import { recordLaunch, type Launched } from "../src/launches";
+import { recordLaunch } from "../src/launches";
+import type { Launched } from "../src/launches";
 import { keepQueued } from "../src/delivery-queue";
-import { Herdr, type AgentInfo } from "../src/herdr";
+import { Herdr } from "../src/herdr";
+import type { AgentInfo } from "../src/herdr";
 import type { CompactionPorts, Stopped } from "../src/compaction";
 import { appendLine } from "../src/steering";
 import type { RunFacts } from "../src/runs";

@@ -1,5 +1,6 @@
 // WARNING: Models OpenSSH's fallback to a login of its own where the control socket has gone.
-import { createConnection, createServer, type Server, type Socket } from "node:net";
+import { createConnection, createServer } from "node:net";
+import type { Server, Socket } from "node:net";
 import * as BunChildProcessSpawner from "@effect/platform-bun/BunChildProcessSpawner";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import * as BunPath from "@effect/platform-bun/BunPath";

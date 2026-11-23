@@ -1,6 +1,8 @@
 import { For, Show } from "solid-js";
-import { TextAttributes, type MouseEvent } from "@opentui/core";
-import { statusColour, type Row } from "./state";
+import { TextAttributes } from "@opentui/core";
+import type { MouseEvent } from "@opentui/core";
+import { statusColour } from "./state";
+import type { Row } from "./state";
 import { C } from "./sections";
 
 export interface PaneProps {

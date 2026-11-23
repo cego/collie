@@ -1,4 +1,5 @@
-import { Option, Schema, Result, flow, type Types } from "effect";
+import { Option, Schema, Result, flow } from "effect";
+import type { Types } from "effect";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 

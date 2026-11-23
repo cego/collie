@@ -5,7 +5,8 @@ import { Effect, Option, Schema, flow, Result } from "effect";
 import { Command, Flag } from "effect/cli";
 import manifest from "../../package.json";
 import { attempt, say } from "../envelope";
-import { onboard as onboardMachine, type OnboardEvent, type StepStatus } from "../onboard";
+import { onboard as onboardMachine } from "../onboard";
+import type { OnboardEvent, StepStatus } from "../onboard";
 import { HELLE_TOKEN_STEPS } from "../helle-url";
 import { context, gitlabHostFlag, root, stdinText, withGitlabHost } from "./shared";
 

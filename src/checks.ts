@@ -6,16 +6,8 @@ import { Effect } from "effect";
 import { Buffer } from "node:buffer";
 import type { RunFacts } from "./runs";
 import type { RunningCheck } from "./board-model";
-import {
-  decodeVerifying,
-  readProofsOf,
-  readVerifications,
-  VERIFYING,
-  verifyingOf,
-  type Pass,
-  type Verification,
-  type Verifying,
-} from "./verify";
+import { decodeVerifying, readProofsOf, readVerifications, VERIFYING, verifyingOf } from "./verify";
+import type { Pass, Verification, Verifying } from "./verify";
 import { RunRecords } from "./run-records";
 import { epochMs } from "./time";
 import type { CheckRecord } from "./check-processes";

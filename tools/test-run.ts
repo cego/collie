@@ -4,8 +4,10 @@ import * as Arr from "effect/Array";
 import * as Num from "effect/Number";
 import * as Rec from "effect/Record";
 import { loadavg } from "node:os";
-import { type Duration, Effect, FileSystem, Option, Path, Schema, flow, Result } from "effect";
-import { admitted, type Budget, type Kind, shareOf } from "./budget";
+import { Effect, FileSystem, Option, Path, Schema, flow, Result } from "effect";
+import type { Duration } from "effect";
+import { admitted, shareOf } from "./budget";
+import type { Budget, Kind } from "./budget";
 import { inTurn } from "./suite-lock";
 
 const exists = (path: string) =>

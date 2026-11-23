@@ -1,5 +1,6 @@
 import { Effect } from "effect";
-import { RunRecords, type RunRecordsApi } from "./run-records";
+import { RunRecords } from "./run-records";
+import type { RunRecordsApi } from "./run-records";
 
 export const HOLD = "hold";
 export const STOP = "stop";

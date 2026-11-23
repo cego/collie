@@ -1,15 +1,19 @@
 import type { PlatformServices } from "../../src/platform";
-import { Effect, FileSystem, type Scope } from "effect";
+import { Effect, FileSystem } from "effect";
+import type { Scope } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
-import { readEnv, type PluginEnv } from "../../src/env";
+import { readEnv } from "../../src/env";
+import type { PluginEnv } from "../../src/env";
 import { resetExecutors } from "../../src/executors";
 import { connect } from "../../src/host";
-import { seedIntent, writeIntent, type Authority } from "../../src/intent";
+import { seedIntent, writeIntent } from "../../src/intent";
+import type { Authority } from "../../src/intent";
 import { runDir } from "../../src/engine";
 import { isSettled } from "../../src/lifecycle";
 import { stopHost, until } from "./host";
 import { overHost } from "./records";
-import { proves, type World } from "./world";
+import { proves } from "./world";
+import type { World } from "./world";
 import type { FakeHc } from "./fake-hc";
 
 export const MODULES = [

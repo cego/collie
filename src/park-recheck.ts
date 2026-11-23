@@ -7,8 +7,10 @@ import { forgeOf } from "./forge/forge";
 import { appendRunJournal, readRunJournal, runJournal } from "./journal";
 import { projectHere, shell, whatItSaid } from "./mr";
 import type { RunView } from "./engine";
-import { herdrFailureReason, type Herdr } from "./herdr";
-import { parkText, type ParkCause } from "./park-cause";
+import { herdrFailureReason } from "./herdr";
+import type { Herdr } from "./herdr";
+import { parkText } from "./park-cause";
+import type { ParkCause } from "./park-cause";
 import { readStepLines } from "./steps";
 import { isSettledDelivery, newestById, readLedger } from "./steering";
 

@@ -17,7 +17,8 @@ import type { Agents } from "../src/agents";
 import { agentsLayer } from "../src/agents";
 import type { Host } from "../src/sdk";
 import { Children } from "../src/sdk";
-import { foundationLayer, loadEntry, runDir, type Herd } from "../src/engine";
+import { foundationLayer, loadEntry, runDir } from "../src/engine";
+import type { Herd } from "../src/engine";
 import {
   Oversight,
   checkDrift,
@@ -26,9 +27,8 @@ import {
   ruleFacts,
   standForElection,
   writeCard,
-  type Correcting,
-  type Watched,
 } from "../src/oversight";
+import type { Correcting, Watched } from "../src/oversight";
 import { readCards, writeCheckpoint } from "../src/cards";
 import {
   MAX_FILES,
@@ -40,22 +40,16 @@ import {
   findingKey,
   readDrift,
   readElections,
-  type JudgementDeps,
 } from "../src/drift";
+import type { JudgementDeps } from "../src/drift";
 import { read as readProposals } from "../src/proposals";
 import { recordsAt } from "../src/records";
 import { herdOf } from "../src/steering";
 import { Herdr } from "../src/herdr";
 import { readVerifications } from "../src/verify";
 import { updateApproved } from "../src/verify-spec";
-import {
-  amend,
-  readIntent,
-  seedIntent,
-  writeIntent,
-  type Authority,
-  type Constraint,
-} from "../src/intent";
+import { amend, readIntent, seedIntent, writeIntent } from "../src/intent";
+import type { Authority, Constraint } from "../src/intent";
 import { Store } from "../src/store";
 import { RunRecords } from "../src/run-records";
 import { recordReply } from "../src/replies";

@@ -5,7 +5,8 @@ import { pipe } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
-import { eventsIn, idleAgain, readSaid, remember, type Event } from "../src/proactive";
+import { eventsIn, idleAgain, readSaid, remember } from "../src/proactive";
+import type { Event } from "../src/proactive";
 import { task } from "./support/task";
 import {
   append as appendNews,

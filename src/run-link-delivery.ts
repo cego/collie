@@ -13,8 +13,8 @@ import {
   readSentNotices,
   recordLinkDelivery,
   recordSentNotice,
-  type RunLinkNotice,
 } from "./run-links";
+import type { RunLinkNotice } from "./run-links";
 import { factsOfView } from "./runs";
 import { epochMs, nowIso } from "./time";
 

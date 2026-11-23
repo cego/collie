@@ -7,13 +7,8 @@ import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema, Stream } from "effect";
-import {
-  bridgeCommand,
-  linkRoute,
-  openDoors,
-  remoteRoute,
-  type ShellRoute,
-} from "../desktop/src/bun/machine";
+import { bridgeCommand, linkRoute, openDoors, remoteRoute } from "../desktop/src/bun/machine";
+import type { ShellRoute } from "../desktop/src/bun/machine";
 import { giveHelle, giveToken } from "../desktop/src/bun/credentials";
 import { onboardThrough, platformOf } from "../desktop/src/bun/onboarding";
 import { generateKeyPairSync } from "node:crypto";
@@ -22,13 +17,15 @@ import { readAudit } from "../src/audit";
 import { peersOf } from "../src/peers";
 import { exec } from "./support/command";
 import { memoryRecords, runEffect } from "./support/effect";
-import { releaseBinary, twoMachines, type Side } from "./support/peers";
+import { releaseBinary, twoMachines } from "./support/peers";
+import type { Side } from "./support/peers";
 import { freePort } from "./support/fake-ssh";
 import { collieCommand } from "./support/world";
 import { runDir } from "../src/engine";
 import { BUILD, connect, ownerOf } from "../src/host";
 import { stopHost, until } from "./support/host";
-import { applyItem, EMPTY_FLOCK, flockCards, type FlockItem } from "../desktop/src/shared/flock";
+import { applyItem, EMPTY_FLOCK, flockCards } from "../desktop/src/shared/flock";
+import type { FlockItem } from "../desktop/src/shared/flock";
 import { flockMrs } from "../desktop/src/shared/card-mrs";
 import { task, taskMr } from "./support/task";
 

@@ -7,7 +7,8 @@ import { Context, Data, Effect, FileSystem, Layer, Path, Schema, flow, Result } 
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
 import { markWorked } from "./run-records";
-import { readJournal, type Journal } from "./journal";
+import { readJournal } from "./journal";
+import type { Journal } from "./journal";
 import { ensureLockDir, withLock } from "./lock";
 import { StoreWrites } from "./store-writes";
 import { nowIso, epochMs } from "./time";

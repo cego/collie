@@ -25,18 +25,14 @@ import {
   pasteInto,
   rereads,
   sessionLocal,
-  type Filter,
   retarget,
   rowsOf,
   NEEDS_YOU,
   selectableRows,
   viewRows,
   wideRows,
-  type KeyContext,
-  type MenuItem,
-  type Keypress,
-  type Row,
 } from "../../src/ui/state";
+import type { Filter, KeyContext, MenuItem, Keypress, Row } from "../../src/ui/state";
 import { NO_MARKS } from "../../src/lines";
 import { DateTime } from "effect";
 import { ago, agoShort, took, epochMs } from "../../src/time";

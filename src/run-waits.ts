@@ -3,11 +3,15 @@ import * as Option from "effect/Option";
 import { Effect } from "effect";
 import type * as Types from "effect/Types";
 import type { Awaiting } from "./awaiting";
-import { boardOption, type BoardAgent, type Question } from "./board-model";
+import { boardOption } from "./board-model";
+import type { BoardAgent, Question } from "./board-model";
 import type { UsageWait } from "./flow";
-import { memoryWaitOf, type MemoryWait } from "./memory-wait";
-import { pendingFor, type ProposalLine, type ProposalRecord } from "./proposals";
-import { settled, type RunFacts } from "./runs";
+import { memoryWaitOf } from "./memory-wait";
+import type { MemoryWait } from "./memory-wait";
+import { pendingFor } from "./proposals";
+import type { ProposalLine, ProposalRecord } from "./proposals";
+import { settled } from "./runs";
+import type { RunFacts } from "./runs";
 
 const NO_AGENT_TO_STEER =
   "no agent of this Run is live to redirect: pick a solution or stop the Run";

@@ -10,7 +10,8 @@ import { PeerView } from "../src/peers-model";
 import { runEffect } from "./support/effect";
 import { blackhole, freePort, resetter } from "./support/fake-ssh";
 import { stopHost, until } from "./support/host";
-import { listenerPort, twoMachines, type Side } from "./support/peers";
+import { listenerPort, twoMachines } from "./support/peers";
+import type { Side } from "./support/peers";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const Listed = Schema.Struct({ machines: Schema.Array(PeerView) });

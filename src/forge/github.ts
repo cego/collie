@@ -4,16 +4,10 @@ import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import { Clock, Duration, Effect, FileSystem, Option, Path, Result, Schema } from "effect";
 import { CommandLine } from "effect/process";
-import {
-  mrPath,
-  mrWords,
-  type ForgeChecks,
-  type Mergeability,
-  type MrDetails,
-  type MrPanel,
-  type MrRef,
-} from "../board-model";
-import { keepCredentialHelper, whatItSaid, type Runner } from "../mr";
+import { mrPath, mrWords } from "../board-model";
+import type { ForgeChecks, Mergeability, MrDetails, MrPanel, MrRef } from "../board-model";
+import { keepCredentialHelper, whatItSaid } from "../mr";
+import type { Runner } from "../mr";
 import { failedTestsIn } from "../own-tests";
 import { epochMs } from "../time";
 import type {
@@ -33,16 +27,8 @@ import type {
   ReviewRequest,
 } from "./forge";
 import type { ForgeHttp } from "./http";
-import {
-  loginReadiness,
-  graphqlAs,
-  pagesAs,
-  request,
-  requestAs,
-  requestText,
-  type Answered,
-  type ForgeLogin,
-} from "./http";
+import { loginReadiness, graphqlAs, pagesAs, request, requestAs, requestText } from "./http";
+import type { Answered, ForgeLogin } from "./http";
 import {
   listIssues,
   createIssue,
@@ -56,14 +42,8 @@ import {
   viewerLogin,
   myMergeRequests,
 } from "./threads";
-import {
-  judgeComments,
-  QUEUE_MERGERS,
-  type CommentKind,
-  type ForgeComment,
-  type MergeAnswer,
-  type ReviewRead,
-} from "./review";
+import { judgeComments, QUEUE_MERGERS } from "./review";
+import type { CommentKind, ForgeComment, MergeAnswer, ReviewRead } from "./review";
 
 import type { PluginEnv } from "../env";
 import type { ConnectionReading as Probe } from "../connection-model";

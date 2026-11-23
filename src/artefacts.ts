@@ -12,19 +12,14 @@ import {
   Semaphore,
   Schedule,
   Struct,
-  type Types,
 } from "effect";
+import type { Types } from "effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as SecureRandom from "effect/crypto/SecureRandom";
-import {
-  Artefact,
-  type ArtefactCollection,
-  type ArtefactMatches,
-  type ArtefactSearch,
-  RegisterArtefact,
-} from "./artefact-model";
+import { Artefact, RegisterArtefact } from "./artefact-model";
+import type { ArtefactCollection, ArtefactMatches, ArtefactSearch } from "./artefact-model";
 import { ATTACHMENT_BYTES, mediaTypeOf, sha256Hex } from "./attachments";
 import { HostRefused, PART_BYTES, RequestConflict } from "./board-model";
 import { AuditLine } from "./audit";

@@ -14,10 +14,8 @@ import {
   splitDisputed,
   substantiated,
   unsubstantiated,
-  type Finding,
-  type FixOutput,
-  type Synthesis,
 } from "../src/output";
+import type { Finding, FixOutput, Synthesis } from "../src/output";
 import type { YamlMap } from "../src/yaml";
 import type { Verification } from "../src/verify";
 import review522 from "./fixtures/public-text/mr-522-synthesis.json";

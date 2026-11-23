@@ -7,7 +7,8 @@ import { connect } from "../src/host";
 import { readTask } from "../src/task";
 import { events, root, stopHost, until } from "./support/host";
 import { hostRecords } from "./support/records";
-import { proves, save, type World } from "./support/world";
+import { proves, save } from "./support/world";
+import type { World } from "./support/world";
 
 const MODULES = [
   "reviewed.workflow.ts",

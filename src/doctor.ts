@@ -2,7 +2,8 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import { Clock, Effect, Option, Path, Result, Schema } from "effect";
-import { CommandLine, type ChildProcessSpawner } from "effect/process";
+import { CommandLine } from "effect/process";
+import type { ChildProcessSpawner } from "effect/process";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import { loadDefaults, worktreesDirectory } from "./config";
 import { savedModules } from "./discovery";
@@ -10,7 +11,8 @@ import { layers, loadDefinitions, skillDirs, skillFile } from "./definitions";
 import type { PluginEnv } from "./env";
 import { HARNESSES } from "./harness";
 import { Herdr } from "./herdr";
-import { shell, type Runner } from "./mr";
+import { shell } from "./mr";
+import type { Runner } from "./mr";
 import { isCheckout } from "./release";
 import { isNewer, newestRelease, releasesOf } from "./releases";
 import manifest from "../package.json";
@@ -23,18 +25,13 @@ import { claudeSettingsPath, readStatusLine, STATUS_LINE_ARGS } from "./statusli
 import { humanBytes } from "./bytes";
 import { diskSaid, lowOn, readDisk } from "./disk";
 import { collieCache } from "./cleanup";
-import {
-  anyRuns,
-  cleanupListing,
-  hostRegistered,
-  machineList,
-  machineShell,
-  type Door,
-} from "./lifecycle";
+import { anyRuns, cleanupListing, hostRegistered, machineList, machineShell } from "./lifecycle";
+import type { Door } from "./lifecycle";
 import { peersOf } from "./peers";
 import { herdOfHost } from "./host";
 import { tmpdir } from "node:os";
-import { machineMemory, memorySaid, type Memory } from "./memory";
+import { machineMemory, memorySaid } from "./memory";
+import type { Memory } from "./memory";
 import {
   FETCH_LIMIT,
   answered,
@@ -45,8 +42,8 @@ import {
   passed,
   runnable,
   warned,
-  type Check,
 } from "./doctor-check";
+import type { Check } from "./doctor-check";
 import { gitlabChecks } from "./forge/gitlab-checks";
 import { connect, coreSocket } from "./hc";
 import { hcInstallDir, hcMeets, hcVersion } from "./hc-install";

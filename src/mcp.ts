@@ -22,7 +22,8 @@ import manifest from "../package.json";
 import { currentEnv } from "./env";
 import { replacedOnDisk } from "./flows";
 import { shell } from "./mr";
-import { isJsonObject, type JsonObject } from "./schema";
+import { isJsonObject } from "./schema";
+import type { JsonObject } from "./schema";
 import { callTool, SUBMIT, TOOLS } from "./tools";
 import { ROLE_TOOLS } from "./toolkit";
 

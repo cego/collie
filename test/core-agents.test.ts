@@ -8,13 +8,15 @@ import { Clock, Effect, Fiber, FileSystem, Layer, Option, Schema } from "effect"
 import { TestClock } from "effect/testing";
 import type * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import type { PlatformServices } from "../src/platform";
-import { Agents, agentWork, agentsLayer, type AgentHost } from "../src/agents";
+import { Agents, agentWork, agentsLayer } from "../src/agents";
+import type { AgentHost } from "../src/agents";
 import { foundationLayer } from "../src/engine";
 import type { Collecting } from "../src/collecting";
 import { Store } from "../src/store";
 import { hostLockOf } from "../src/lock";
 import { agentName } from "../src/naming";
-import { Rig, type Call } from "./support/recorder";
+import { Rig } from "./support/recorder";
+import type { Call } from "./support/recorder";
 import { Herdr } from "../src/herdr";
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { asRun, enveloped } from "./support/enveloped";

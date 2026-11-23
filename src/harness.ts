@@ -5,10 +5,14 @@ import * as Rec from "effect/Record";
 import { Effect, FileSystem, Option, Schema } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { PluginEnv } from "./env";
-import { isJsonObject, isString, type JsonObject } from "./schema";
-import { type AutoCompactWindow, autoCompactWindowOf, PERMISSION_MODES } from "./settings";
-import { claudeTrust, type Trust } from "./trust";
-import { DEFAULT_MODEL, HARNESS_MODELS, type HarnessModels } from "./harness-choice";
+import { isJsonObject, isString } from "./schema";
+import type { JsonObject } from "./schema";
+import { autoCompactWindowOf, PERMISSION_MODES } from "./settings";
+import type { AutoCompactWindow } from "./settings";
+import { claudeTrust } from "./trust";
+import type { Trust } from "./trust";
+import { DEFAULT_MODEL, HARNESS_MODELS } from "./harness-choice";
+import type { HarnessModels } from "./harness-choice";
 import type { YamlValue } from "./yaml";
 import { stringifyJson } from "./json";
 

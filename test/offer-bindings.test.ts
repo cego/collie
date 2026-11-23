@@ -4,11 +4,14 @@ import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { Effect, Schema } from "effect";
 import * as Option from "effect/Option";
-import { connect, frontDoor, socketOf, type HostClient } from "../src/host";
+import { connect, frontDoor, socketOf } from "../src/host";
+import type { HostClient } from "../src/host";
 import { currentEnv } from "../src/env";
-import { makeOffer, type FlowPrompts } from "../src/flows";
+import { makeOffer } from "../src/flows";
+import type { FlowPrompts } from "../src/flows";
 import { stopHost, until } from "./support/host";
-import { proves, save, type World } from "./support/world";
+import { proves, save } from "./support/world";
+import type { World } from "./support/world";
 
 const MR = "https://gitlab.example.com/group/app/-/merge_requests/7";
 

@@ -6,20 +6,14 @@ import * as Arr from "effect/Array";
 import { CommandLine } from "effect/process";
 import type { VerifySpec } from "./verify-spec";
 import { checkProof, owedLocally, owesNothingHere, unstableWhy } from "./check-proof";
-import {
-  passed,
-  ranOneTest,
-  sameAsked,
-  sameTree,
-  type CheckCommand,
-  type FailedTest,
-  type Snapshot,
-  type Verification,
-} from "./verify";
+import { passed, ranOneTest, sameAsked, sameTree } from "./verify";
+import type { CheckCommand, FailedTest, Snapshot, Verification } from "./verify";
 import { isString, isBoolean } from "./schema";
 import { planRunOf } from "./strategies";
-import { isYamlMap, type YamlValue } from "./yaml";
-import { finalMeasurementLine, type Measurement } from "./measurement-model";
+import { isYamlMap } from "./yaml";
+import type { YamlValue } from "./yaml";
+import { finalMeasurementLine } from "./measurement-model";
+import type { Measurement } from "./measurement-model";
 
 // WARNING: unspecified is not feature: an unclassified Run must not be held to a feature's evidence.
 export const KINDS = [

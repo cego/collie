@@ -1,9 +1,11 @@
 import { expect, test } from "bun:test";
 import { Array as Arr, Effect, Fiber, Stream } from "effect";
-import { DoorMap, type Doors } from "../desktop/src/bun/machine";
+import { DoorMap } from "../desktop/src/bun/machine";
+import type { Doors } from "../desktop/src/bun/machine";
 import { recordKeeper } from "../desktop/src/bun/records";
 import type { KeptRecord } from "../desktop/src/shared/flock";
-import { frame, frameAt, recordDoor, type Asked } from "./support/record-doors";
+import { frame, frameAt, recordDoor } from "./support/record-doors";
+import type { Asked } from "./support/record-doors";
 
 const shownBy = (done: () => boolean) =>
   Effect.gen(function* () {

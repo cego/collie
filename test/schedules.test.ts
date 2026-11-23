@@ -13,7 +13,8 @@ import { isoOf, ScheduleChanged, ScheduleListing } from "../src/schedule-model";
 import { epochMs } from "../src/time";
 import { stopHost, until } from "./support/host";
 import { memoryRecords } from "./support/effect";
-import { collie, proves, type World } from "./support/world";
+import { collie, proves } from "./support/world";
+import type { World } from "./support/world";
 import { exec } from "./support/command";
 import { stringifyJson } from "../src/json";
 

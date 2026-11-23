@@ -18,11 +18,13 @@ import { TestClock } from "effect/testing";
 import type { ChildProcessSpawner } from "effect/process";
 import type { MrForge } from "../src/board-model";
 import { FORGES } from "../src/forge/forge";
-import { forgeHttpLayer, forgeHttpTest, type ForgeHttp } from "../src/forge/http";
+import { forgeHttpLayer, forgeHttpTest } from "../src/forge/http";
+import type { ForgeHttp } from "../src/forge/http";
 import { rollupChecks } from "../src/forge/github";
 import { gitlab, glabExpiry, pipelineChecks } from "../src/forge/gitlab";
 import type { ReviewRead } from "../src/forge/review";
-import { shell, type Runner } from "../src/mr";
+import { shell } from "../src/mr";
+import type { Runner } from "../src/mr";
 import { FakeBin } from "./support/bin";
 import { epochMs } from "../src/time";
 import { runEffect } from "./support/effect";
@@ -37,9 +39,8 @@ import {
   serveForges,
   rfc822,
   CLI,
-  type FakeMr,
-  type ForgeModel,
 } from "./support/forge";
+import type { FakeMr, ForgeModel } from "./support/forge";
 import * as Layer from "effect/Layer";
 
 const HEAD = "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b";

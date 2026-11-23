@@ -18,10 +18,11 @@ import {
   sectionOf,
   SECTIONS,
   shippingLabel,
-  type TaskView,
   mrNounOf,
 } from "./board-model";
-import { isString, type JsonObject } from "./schema";
+import type { TaskView } from "./board-model";
+import { isString } from "./schema";
+import type { JsonObject } from "./schema";
 import { stringifyJson } from "./json";
 
 // WARNING: a key a tool does not take is refused, never stripped: a model told 'started' would believe the goal is in force.

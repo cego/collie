@@ -5,7 +5,8 @@ import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
 import { checkModule, createEntry, describeModule, forkEntry } from "../src/authoring";
-import { discover, searchPath, type EntryLayer } from "../src/discovery";
+import { discover, searchPath } from "../src/discovery";
+import type { EntryLayer } from "../src/discovery";
 import {
   TOOLCHAIN,
   loadEntry,

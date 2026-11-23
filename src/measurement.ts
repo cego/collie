@@ -16,7 +16,8 @@ import {
   Stream,
 } from "effect";
 import { AwaitingJson } from "./awaiting";
-import { CheckProcesses, type CheckOf } from "./check-processes";
+import { CheckProcesses } from "./check-processes";
+import type { CheckOf } from "./check-processes";
 import type { PluginEnv } from "./env";
 import { appendRunJournal, readRunJournal, runJournal } from "./journal";
 import type { Control } from "./controls";
@@ -28,9 +29,8 @@ import {
   limitsOf,
   MeasurementJson,
   PASS_LABEL,
-  type Measurement,
-  type Sample,
 } from "./measurement-model";
+import type { Measurement, Sample } from "./measurement-model";
 import { harnessLacking } from "./harness-held";
 import { machineMemory } from "./memory";
 import { waitForMemory } from "./memory-wait";

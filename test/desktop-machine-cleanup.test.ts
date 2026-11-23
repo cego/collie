@@ -8,16 +8,18 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 import type * as RpcMessage from "effect/rpc/RpcMessage";
 import * as RpcServer from "effect/rpc/RpcServer";
 import { TestClock } from "effect/testing";
-import { cleanupOn, type Door, DoorMap, type Reached } from "../desktop/src/bun/machine";
+import { cleanupOn, DoorMap } from "../desktop/src/bun/machine";
+import type { Door, Reached } from "../desktop/src/bun/machine";
 import {
   CLEANUP_UPGRADE_SAID,
-  type CleanupRead,
   choose,
   cleanupView,
   sweptToast,
 } from "../desktop/src/shared/machine-cleanup";
+import type { CleanupRead } from "../desktop/src/shared/machine-cleanup";
 import { cleanupLines } from "../src/cleanup";
-import { type CleanupReport, FrontDoorRpcs, HostRefused } from "../src/board-model";
+import { FrontDoorRpcs, HostRefused } from "../src/board-model";
+import type { CleanupReport } from "../src/board-model";
 
 type Rpcs = RpcGroup.Rpcs<typeof FrontDoorRpcs>;
 

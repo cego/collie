@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { Effect, Fiber, Stream } from "effect";
-import { connect, type HostClient } from "../src/host";
+import { connect } from "../src/host";
+import type { HostClient } from "../src/host";
 import { isSettled } from "../src/lifecycle";
 import { until } from "./support/host";
 import { hosted } from "./support/hosted";

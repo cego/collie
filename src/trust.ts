@@ -1,8 +1,10 @@
 // WARNING: claude's config is not ours: unreadable data is always left untouched.
 import * as Arr from "effect/Array";
-import { Effect, FileSystem, Path, Schema, type PlatformError } from "effect";
+import { Effect, FileSystem, Path, Schema } from "effect";
+import type { PlatformError } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
-import { isYamlMap, YamlMapSchema, type YamlMap } from "./yaml";
+import { isYamlMap, YamlMapSchema } from "./yaml";
+import type { YamlMap } from "./yaml";
 import { currentPid, withLock } from "./lock";
 
 export type TrustState = "trusted" | "untrusted" | "unknown";

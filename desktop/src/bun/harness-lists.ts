@@ -1,5 +1,6 @@
 import * as Arr from "effect/Array";
-import { Deferred, Effect, Option, Result, SubscriptionRef, type Types } from "effect";
+import { Deferred, Effect, Option, Result, SubscriptionRef } from "effect";
+import type { Types } from "effect";
 import type { HarnessCatalogue } from "../../../src/catalogue-model";
 import type { ListedModel } from "./claude-models";
 

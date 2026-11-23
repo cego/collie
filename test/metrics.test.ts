@@ -1,11 +1,6 @@
 import { expect, test } from "bun:test";
-import {
-  metricsOf,
-  obstacleOf,
-  repeatedFailure,
-  type FailureLike,
-  type Metric,
-} from "../src/metrics";
+import { metricsOf, obstacleOf, repeatedFailure } from "../src/metrics";
+import type { FailureLike, Metric } from "../src/metrics";
 
 const failure = (over: Partial<FailureLike> = {}) => ({
   name: "tests",

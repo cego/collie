@@ -3,7 +3,8 @@ import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import { createServer } from "node:net";
 import { Deferred, Effect, Exit, Option, Schema, Scope } from "effect";
-import { MachineUnreachable, type Peer } from "./peers-model";
+import { MachineUnreachable } from "./peers-model";
+import type { Peer } from "./peers-model";
 import type { SshConnection } from "./ssh-connection";
 
 export type Way = "direct" | "ssh";

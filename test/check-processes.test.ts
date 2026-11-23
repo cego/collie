@@ -28,8 +28,8 @@ import {
   hostCheckProcesses,
   KILL_CEILING,
   runningChecks,
-  type RunningCheck,
 } from "../src/check-processes";
+import type { RunningCheck } from "../src/check-processes";
 import {
   bindingsOf,
   commandOf,
@@ -38,13 +38,8 @@ import {
   startedOf,
   stillRunning,
 } from "../src/processes";
-import {
-  collect,
-  finishCheck,
-  readVerifications,
-  startCheck,
-  type Verification,
-} from "../src/verify";
+import { collect, finishCheck, readVerifications, startCheck } from "../src/verify";
+import type { Verification } from "../src/verify";
 import { RUNNING_CHECK, RunRecords } from "../src/run-records";
 import { runEffect } from "./support/effect";
 import { exec, startDetached } from "./support/command";

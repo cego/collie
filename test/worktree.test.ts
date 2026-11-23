@@ -6,7 +6,8 @@ import * as Rec from "effect/Record";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
 import { Clock, DateTime, Effect, FileSystem, Layer, Option, Schema, flow, Result } from "effect";
-import { forgeHttpOnPath, forgeOnPath, runOnPath, type FakeMr } from "./support/forge";
+import { forgeHttpOnPath, forgeOnPath, runOnPath } from "./support/forge";
+import type { FakeMr } from "./support/forge";
 import { Rig, TEST_LOGIN as LOGIN } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 import {
@@ -18,9 +19,8 @@ import {
   pruneWorktrees,
   repositoryName,
   roams,
-  type BranchAsk,
-  type BranchSource,
 } from "../src/worktree";
+import type { BranchAsk, BranchSource } from "../src/worktree";
 import type { AgentEntry } from "../src/registry";
 import type { RunFacts } from "../src/runs";
 import { madeRun, runFacts } from "./support/records";
@@ -39,7 +39,8 @@ import { recordDisposition } from "../src/disposition";
 import type { TaskRecord } from "../src/task";
 import { epochMs } from "../src/time";
 import { withLock } from "../src/lock";
-import { NOTHING_SETTLING, onBranch, reviewingDir, type Settling } from "../src/worktree";
+import { NOTHING_SETTLING, onBranch, reviewingDir } from "../src/worktree";
+import type { Settling } from "../src/worktree";
 import { encodeCheckRecord } from "../src/check-processes";
 import { RUNNING_CHECK, RunRecords } from "../src/run-records";
 import { shell } from "../src/mr";

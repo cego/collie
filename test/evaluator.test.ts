@@ -14,12 +14,11 @@ import {
   jsonSchemaFor,
   structuredFrom,
   validate,
-  type Proposal,
-  type Route,
-  type ValidationContext,
 } from "../src/evaluator";
+import type { Proposal, Route, ValidationContext } from "../src/evaluator";
 import { ActionSchema } from "../src/actions";
-import { DEFAULT_AUTHORITY, type Authority } from "../src/intent";
+import { DEFAULT_AUTHORITY } from "../src/intent";
+import type { Authority } from "../src/intent";
 import { runEffect } from "./support/effect";
 import { leaks } from "../tools/evaluator-probe";
 import { stringifyJson, parseJson } from "../src/json";

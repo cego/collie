@@ -2,14 +2,16 @@ import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Clock, Effect, Fiber, FileSystem, Option, Queue, Schema, Stream } from "effect";
-import { Flow, recordIn, type RunDetail } from "../src/board-model";
+import { Flow, recordIn } from "../src/board-model";
+import type { RunDetail } from "../src/board-model";
 import { runDir } from "../src/engine";
 import { readEnv } from "../src/env";
 import { timedFlow } from "../src/flow-timing";
 import { frontDoor, socketOf } from "../src/host";
 import { toolNamed } from "../src/tools";
 import { until } from "./support/host";
-import { collie, proves, type World } from "./support/world";
+import { collie, proves } from "./support/world";
+import type { World } from "./support/world";
 
 const RunId = Schema.Struct({ runId: Schema.String });
 

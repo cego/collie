@@ -2,13 +2,8 @@ import * as Arr from "effect/Array";
 import { describe, expect, test } from "bun:test";
 import { Effect, Schema, flow, Result } from "effect";
 import { BenchmarkPlan, decodeBenchmarkPlan, limitsOf } from "../src/measurement-model";
-import {
-  Judgement,
-  JudgementJson,
-  judge,
-  type Limits,
-  type MetricSamples,
-} from "../src/measurement-verdict";
+import { Judgement, JudgementJson, judge } from "../src/measurement-verdict";
+import type { Limits, MetricSamples } from "../src/measurement-verdict";
 import ff23b932 from "./fixtures/measurements/run-ff23b932-calibration.json" with { type: "json" };
 
 const ID = "measurement-7f3a";

@@ -2,7 +2,8 @@ import * as Str from "effect/String";
 import { Effect } from "effect";
 import type { MrDetails } from "./board-model";
 import type { MrPanels } from "./merges";
-import { judge, type MrReading, type Observed, type Woke } from "./mr-watch-model";
+import { judge } from "./mr-watch-model";
+import type { MrReading, Observed, Woke } from "./mr-watch-model";
 import type { WatchRow } from "./store";
 
 export interface Watches {

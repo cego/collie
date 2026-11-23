@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { type Drawn, drawnSaid, monitorOf, zoomFor } from "../desktop/src/shared/scale";
+import { drawnSaid, monitorOf, zoomFor } from "../desktop/src/shared/scale";
+import type { Drawn } from "../desktop/src/shared/scale";
 import { stringifyJson } from "../src/json";
 
 const LAPTOP = {

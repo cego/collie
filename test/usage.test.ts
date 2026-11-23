@@ -16,9 +16,8 @@ import {
   codexReading,
   makeUsage,
   USAGE_INTERVAL_MS,
-  type Asked,
-  type UsageSources,
 } from "../src/usage";
+import type { Asked, UsageSources } from "../src/usage";
 import { fallbackLines, usageLines } from "../src/commands/usage";
 import { fallbacksOf } from "../src/launches";
 import { readEnv } from "../src/env";

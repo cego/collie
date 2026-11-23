@@ -3,9 +3,11 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Data, Effect, FileSystem } from "effect";
 import { RELAUNCH, RunRecords } from "./run-records";
-import { STOP_WAIT_MS, notStopped, stopAgent, type CompactionDeps } from "./compaction";
+import { STOP_WAIT_MS, notStopped, stopAgent } from "./compaction";
+import type { CompactionDeps } from "./compaction";
 import type { AgentInfo, Herdr, HerdrError } from "./herdr";
-import { launchDir, readLaunches, stemOf, withRelaunchLock, type Launched } from "./launches";
+import { launchDir, readLaunches, stemOf, withRelaunchLock } from "./launches";
+import type { Launched } from "./launches";
 import { reason } from "./naming";
 
 export interface EndDeps extends Pick<CompactionDeps, "ports" | "stateDir" | "log"> {

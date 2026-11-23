@@ -12,14 +12,10 @@ import { changeSchedule, flockSchedules, moduleFor, scheduleDoorOn } from "../li
 import { machineName } from "../peers";
 import { moveSchedule } from "../schedule-move";
 import type { PlatformServices } from "../platform";
-import { err, workspaceNamed, type Failure, type OpResult } from "../operations";
-import {
-  SCHEDULE_PROJECTS_ROOT,
-  type ScheduleChange,
-  changedLine,
-  machineOf,
-  scheduleLine,
-} from "../schedule-model";
+import { err, workspaceNamed } from "../operations";
+import type { Failure, OpResult } from "../operations";
+import { SCHEDULE_PROJECTS_ROOT, changedLine, machineOf, scheduleLine } from "../schedule-model";
+import type { ScheduleChange } from "../schedule-model";
 import { givenVerifications } from "../verify-spec";
 import { answering, cliDoor, parseInput, requestIdFlag, root } from "./shared";
 

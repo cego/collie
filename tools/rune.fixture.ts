@@ -8,13 +8,8 @@ import type { RpcClientError } from "effect/rpc/RpcClientError";
 import type * as RpcGroup from "effect/rpc/RpcGroup";
 import type { RequestId } from "effect/rpc/RpcMessage";
 import * as RpcServer from "effect/rpc/RpcServer";
-import {
-  clientProtocol,
-  heldUntilListened,
-  serverProtocol,
-  type ToMain,
-  type ToView,
-} from "../desktop/src/shared/channel";
+import { clientProtocol, heldUntilListened, serverProtocol } from "../desktop/src/shared/channel";
+import type { ToMain, ToView } from "../desktop/src/shared/channel";
 import { ActionFailed, DesktopRpcs, FlockItem } from "../desktop/src/shared/flock";
 import { Flow } from "../src/board-model";
 import { FLOCK } from "../test/support/rune.fixture";

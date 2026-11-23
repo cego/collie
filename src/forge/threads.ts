@@ -4,9 +4,11 @@ import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import { Effect, Schema, flow, Result } from "effect";
 import type { Thread } from "forges";
-import { ForgeHttp, pagesAs, request, requestAs, type ForgeLogin } from "./http";
+import { ForgeHttp, pagesAs, request, requestAs } from "./http";
+import type { ForgeLogin } from "./http";
 import { Issue } from "./issues";
-import { mrWords, type MrRef } from "../board-model";
+import { mrWords } from "../board-model";
+import type { MrRef } from "../board-model";
 
 const threadRepo = (login: ForgeLogin, project: string) => {
   const path = pipe(project, Str.slice(login.host.length + 1));

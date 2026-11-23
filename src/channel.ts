@@ -1,6 +1,7 @@
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
-import { createConnection, type Socket } from "node:net";
+import { createConnection } from "node:net";
+import type { Socket } from "node:net";
 import { Data, Effect, Option, Schema, flow, Result } from "effect";
 import type * as RpcMessage from "effect/rpc/RpcMessage";
 import type { Declaration } from "./board-model";

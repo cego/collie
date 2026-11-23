@@ -1,11 +1,13 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
-import { Clock, Duration, Effect, FileSystem, Option, Schema, type Scope, Stream } from "effect";
+import { Clock, Duration, Effect, FileSystem, Option, Schema, Stream } from "effect";
+import type { Scope } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { HostRefused } from "./board-model";
 import { withLock } from "./lock";
 import { MachineUnreachable } from "./peers-model";
-import { MUX_BOUND, muxArgv, riderArgv, type Verb } from "./ssh-argv";
+import { MUX_BOUND, muxArgv, riderArgv } from "./ssh-argv";
+import type { Verb } from "./ssh-argv";
 
 export interface SshMachine {
   readonly label: string;

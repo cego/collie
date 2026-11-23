@@ -27,17 +27,10 @@ import {
   settle,
   settleStaleReservations,
   textHash,
-  type BudgetLine,
-  type Delivery,
-  type LedgerLine,
 } from "../src/steering";
-import {
-  deliverable,
-  everyRegistered,
-  registerAgent,
-  verifyIncarnation,
-  type AgentEntry,
-} from "../src/registry";
+import type { BudgetLine, Delivery, LedgerLine } from "../src/steering";
+import { deliverable, everyRegistered, registerAgent, verifyIncarnation } from "../src/registry";
+import type { AgentEntry } from "../src/registry";
 import type { AgentInfo } from "../src/herdr";
 import { runEffect } from "./support/effect";
 import { recordsAt } from "./support/records";

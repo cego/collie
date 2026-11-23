@@ -12,7 +12,8 @@ import {
   slackAuthorizeUrl,
   slackUserSession,
 } from "../desktop/src/bun/slack-user";
-import { credentialsFile, giveSlackUser, type Keyring } from "../desktop/src/bun/credentials";
+import { credentialsFile, giveSlackUser } from "../desktop/src/bun/credentials";
+import type { Keyring } from "../desktop/src/bun/credentials";
 import { fingerprint, givenCredentials } from "../desktop/src/bun/given";
 import { localRoute } from "../desktop/src/bun/machine";
 import { ranWith } from "../desktop/src/bun/onboarding";

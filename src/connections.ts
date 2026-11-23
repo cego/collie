@@ -1,13 +1,6 @@
 import * as Arr from "effect/Array";
-import {
-  Cause,
-  Context,
-  Duration,
-  Effect,
-  type FileSystem,
-  type Path,
-  type PlatformError,
-} from "effect";
+import { Cause, Context, Duration, Effect } from "effect";
+import type { FileSystem, Path, PlatformError } from "effect";
 import type { ConnectionId, ConnectionReading } from "./connection-model";
 import type { PluginEnv } from "./env";
 import {
@@ -18,7 +11,8 @@ import {
   probeHelle,
   probeLinearMcp,
 } from "./connection-probes";
-import { shell, type Runner } from "./mr";
+import { shell } from "./mr";
+import type { Runner } from "./mr";
 import type { ChildProcessSpawner } from "effect/process";
 import { redact } from "./redact";
 import { probeSlack, SLACK_FIX } from "./slack-credentials";

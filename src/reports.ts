@@ -1,7 +1,8 @@
 import * as Arr from "effect/Array";
 import { Effect, FileSystem, Layer, Option, Queue, Schedule } from "effect";
 import type { PluginEnv } from "./env";
-import { Registry, owesReport, type CrashPoint, type RunView } from "./engine";
+import { Registry, owesReport } from "./engine";
+import type { CrashPoint, RunView } from "./engine";
 import { Store } from "./store";
 import type { RunReport } from "./board-model";
 import { Agents } from "./agents";

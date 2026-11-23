@@ -3,10 +3,14 @@ import * as Str from "effect/String";
 import { expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
 import { Effect, FileSystem, Schema } from "effect";
-import { act, actOn, type Door } from "../desktop/src/bun/machine";
-import { actionsLog, type Attempted } from "../desktop/src/bun/sent";
-import { ActionFailed, type DesktopAction } from "../desktop/src/shared/flock";
-import { HostRefused, type ActionResult } from "../src/board-model";
+import { act, actOn } from "../desktop/src/bun/machine";
+import type { Door } from "../desktop/src/bun/machine";
+import { actionsLog } from "../desktop/src/bun/sent";
+import type { Attempted } from "../desktop/src/bun/sent";
+import { ActionFailed } from "../desktop/src/shared/flock";
+import type { DesktopAction } from "../desktop/src/shared/flock";
+import { HostRefused } from "../src/board-model";
+import type { ActionResult } from "../src/board-model";
 import { fastForward } from "./support/effect";
 import { parseJson } from "../src/json";
 

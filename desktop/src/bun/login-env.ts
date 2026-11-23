@@ -1,7 +1,8 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { homedir } from "node:os";
-import { Config, type Duration, Effect, Option, Path } from "effect";
+import { Config, Effect, Option, Path } from "effect";
+import type { Duration } from "effect";
 import { withoutHerdrOne, withoutLauncher } from "../../../src/env";
 
 const BIN = Effect.runSync(

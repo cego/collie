@@ -31,7 +31,8 @@ import {
 } from "./records-import";
 import { StoreWrites } from "./store-writes";
 import { RUN_RECORDS_MIGRATION } from "./run-records";
-import { RequestConflict, RunReport, type Solution } from "./board-model";
+import { RequestConflict, RunReport } from "./board-model";
+import type { Solution } from "./board-model";
 import { nowIso } from "./time";
 import { Observed, WatchCursor, Woke } from "./mr-watch-model";
 import { ShippingGo } from "./shipping";

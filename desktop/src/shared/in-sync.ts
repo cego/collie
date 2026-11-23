@@ -1,14 +1,8 @@
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import {
-  CREDENTIALS,
-  type Credential,
-  type MachineRow,
-  type NotLive,
-  type OnboardStep,
-  SETTLED,
-} from "./flock";
+import { CREDENTIALS, SETTLED } from "./flock";
+import type { Credential, MachineRow, NotLive, OnboardStep } from "./flock";
 
 export interface Lag {
   readonly part: "version" | "settings" | "definitions" | "credentials" | "onboarding";

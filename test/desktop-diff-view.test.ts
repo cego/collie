@@ -5,14 +5,12 @@ import {
   activeFile,
   choiceForEvery,
   closedFolders,
-  type DiffTreeNode,
   diffTree,
   filterTree,
   fileBeside,
   fileOpen,
   fileSelected,
   foldersOn,
-  type Folders,
   openFolders,
   paneStepped,
   paneWidth,
@@ -28,6 +26,7 @@ import {
   viewedCount,
   viewedFiles,
 } from "../desktop/src/shared/diff-view";
+import type { DiffTreeNode, Folders } from "../desktop/src/shared/diff-view";
 
 const file: (path: string) => DiffFile = (path) => ({
   path,

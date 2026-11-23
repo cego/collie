@@ -4,7 +4,8 @@ import { pipe as pipe_ } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
-import { createConnection, createServer, type Server } from "node:net";
+import { createConnection, createServer } from "node:net";
+import type { Server } from "node:net";
 import {
   Clock,
   Deferred,
@@ -32,7 +33,8 @@ import { toolNamed } from "../src/tools";
 import { certOf, certificateFor, keyOf, peersOf, relayOf } from "../src/peers";
 import { runEffect } from "./support/effect";
 import { stopHost, until } from "./support/host";
-import { listenerPort, twoMachines, type Side } from "./support/peers";
+import { listenerPort, twoMachines } from "./support/peers";
+import type { Side } from "./support/peers";
 import { exec } from "./support/command";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);

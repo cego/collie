@@ -7,7 +7,8 @@ import { pipe as pipe_ } from "effect/Function";
 import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { Path } from "effect";
-import { Effect, FileSystem, Layer, type Schema } from "effect";
+import { Effect, FileSystem, Layer } from "effect";
+import type { Schema } from "effect";
 import type * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import {
   NOTIFICATION_KINDS,

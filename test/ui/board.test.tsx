@@ -6,19 +6,15 @@ import { expect, test } from "bun:test";
 import { Effect, Schedule } from "effect";
 import { createSignal } from "solid-js";
 import { testRender } from "@opentui/solid";
-import { TextAttributes, TextRenderable, type BaseRenderable } from "@opentui/core";
+import { TextAttributes, TextRenderable } from "@opentui/core";
+import type { BaseRenderable } from "@opentui/core";
 import { runEffect } from "../support/effect";
 import { task } from "../support/task";
 import { App } from "../../src/ui/App";
 import type { AppState, Command } from "../../src/ui/state";
 import type { Ask, Pending } from "../../src/ui/prompts";
-import {
-  mrTarget,
-  SECTIONS,
-  type RunDetail,
-  type TaskMr,
-  type TaskView,
-} from "../../src/board-model";
+import { mrTarget, SECTIONS } from "../../src/board-model";
+import type { RunDetail, TaskMr, TaskView } from "../../src/board-model";
 import { NO_RUN_OUTCOME } from "../../src/views";
 import type { Live } from "../../src/live";
 import type { Card } from "../../src/cards";

@@ -11,8 +11,8 @@ import {
   taskOfWorkspace,
   withTaskLock,
   writeTask,
-  type TaskRecord,
 } from "../src/task";
+import type { TaskRecord } from "../src/task";
 import { TaskWrites } from "../src/store-writes";
 import { runEffect } from "./support/effect";
 import { recordsAt } from "./support/records";

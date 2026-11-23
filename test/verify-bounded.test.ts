@@ -6,7 +6,8 @@ import { Effect, FileSystem, Result, Schema, flow } from "effect";
 import { registeredAt } from "./support/records";
 import { exec } from "./support/command";
 import { until } from "./support/host";
-import { collie, proves, type World } from "./support/world";
+import { collie, proves } from "./support/world";
+import type { World } from "./support/world";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 

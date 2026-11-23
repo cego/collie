@@ -11,19 +11,19 @@ import { byKey, latestEdits } from "./flock-settings";
 import { ensureLockDir, withLock } from "./lock";
 import { isNumber, isString } from "./schema";
 import {
-  type Defaults,
   FALLBACK_DEFAULTS,
   isDensity,
   isQuestionMode,
   isScope,
   parseShared,
   SETTINGS,
-  type SettingValue,
   WORKTREES_DIRECTORY,
 } from "./settings";
+import type { Defaults, SettingValue } from "./settings";
 import type { SharedSetting, SharedSettings } from "./board-model";
 import { isReachKey, REACH_SETTING, reachKey } from "./reach";
-import { isYamlMap, YamlMapSchema, type YamlMap, type YamlValue } from "./yaml";
+import { isYamlMap, YamlMapSchema } from "./yaml";
+import type { YamlMap, YamlValue } from "./yaml";
 import { stringifyJson } from "./json";
 
 export { type Defaults, FALLBACK_DEFAULTS } from "./settings";

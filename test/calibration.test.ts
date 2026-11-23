@@ -1,7 +1,8 @@
 import * as Arr from "effect/Array";
 import { describe, expect, test } from "bun:test";
 import { Effect, Schema } from "effect";
-import { BenchmarkPlan, calibrationOf, type Measurement } from "../src/measurement-model";
+import { BenchmarkPlan, calibrationOf } from "../src/measurement-model";
+import type { Measurement } from "../src/measurement-model";
 import { Judgement } from "../src/measurement-verdict";
 import ff23b932 from "./fixtures/measurements/run-ff23b932-calibration.json" with { type: "json" };
 

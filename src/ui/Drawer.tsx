@@ -1,46 +1,27 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
-import { createEffect, createMemo, createResource, For, Show, type JSX } from "solid-js";
-import {
-  TextAttributes,
-  type MouseEvent,
-  type ScrollBoxRenderable,
-  type TextRenderable,
-} from "@opentui/core";
+import { createEffect, createMemo, createResource, For, Show } from "solid-js";
+import type { JSX } from "solid-js";
+import { TextAttributes } from "@opentui/core";
+import type { MouseEvent, ScrollBoxRenderable, TextRenderable } from "@opentui/core";
 import { useRenderer, useTerminalDimensions } from "@opentui/solid";
-import {
-  ranOn,
-  requestedByLine,
-  type MrDetails,
-  type MrPanel,
-  type Panel,
-  type PlanPanel,
-  type RunDetail,
-  type TaskView,
-  mrReadiness,
-  mrTarget,
-  mrWords,
-  readMrRef,
-} from "../board-model";
+import { ranOn, requestedByLine, mrReadiness, mrTarget, mrWords, readMrRef } from "../board-model";
+import type { MrDetails, MrPanel, Panel, PlanPanel, RunDetail, TaskView } from "../board-model";
 import { truncated } from "../views";
 import type { Live } from "../live";
 import { sinceReview } from "../mr";
-import {
-  asText,
-  cardLines,
-  deliveryLine,
-  driftLines,
-  type Line as Evidence,
-  type Tone,
-} from "../lines";
-import { dispositionsFor, menuFor, type Command } from "./state";
+import { asText, cardLines, deliveryLine, driftLines } from "../lines";
+import type { Line as Evidence, Tone } from "../lines";
+import { dispositionsFor, menuFor } from "./state";
+import type { Command } from "./state";
 import { styledMarkdown } from "./markdown";
 import { C, stateGlyph, stepGlyph } from "./sections";
 import { handoffsDir } from "../handoffs";
 import { replyLine } from "../replies";
 import { PARK_CAUSES, parkLine } from "../park-cause";
-import { artefactLines, type ArtefactCollection } from "../artefact-model";
+import { artefactLines } from "../artefact-model";
+import type { ArtefactCollection } from "../artefact-model";
 
 const DRAWER_LINES = 8;
 

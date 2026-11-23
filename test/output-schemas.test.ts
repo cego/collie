@@ -15,8 +15,8 @@ import {
   parseSynthesis,
   renderPublicReview,
   unmetCriteria,
-  type Parsed,
 } from "../src/output";
+import type { Parsed } from "../src/output";
 import { YamlValueJsonSchema } from "../src/yaml";
 import { jsonSchemaFor } from "../src/sdk";
 import { stringifyJson } from "../src/json";

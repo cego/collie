@@ -1,4 +1,5 @@
-import { Schema, type Effect, type FileSystem, type Path, type Scope, type Stream } from "effect";
+import { Schema } from "effect";
+import type { Effect, FileSystem, Path, Scope, Stream } from "effect";
 import type * as SecureRandom from "effect/crypto/SecureRandom";
 import type { AguiEvent } from "../shared/agui";
 import type { Answers, ChatMessage, Earlier } from "../shared/chat-view";

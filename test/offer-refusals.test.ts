@@ -5,14 +5,16 @@ import { readDispositions } from "../src/disposition";
 import { hostRecords } from "./support/records";
 import { MR_STATES_FILE } from "../src/merges";
 import { currentEnv } from "../src/env";
-import { connect, type HostClient } from "../src/host";
+import { connect } from "../src/host";
+import type { HostClient } from "../src/host";
 import { carryOutAsked } from "../src/run-actions";
 import { toolNamed } from "../src/tools";
 import { stopHost, until } from "./support/host";
 import { recordsAt } from "./support/records";
 import { FakeBin } from "./support/bin";
 import { forgeOnPath, serveForges } from "./support/forge";
-import { collie, proves, type World } from "./support/world";
+import { collie, proves } from "./support/world";
+import type { World } from "./support/world";
 
 const MODULES = ["delivers.workflow.ts", "ships.workflow.ts", "stages.workflow.ts"];
 const MR = "https://gitlab.cego.dk/cego/app/-/merge_requests/12";

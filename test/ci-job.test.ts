@@ -10,21 +10,16 @@ import { recheckPark, rememberCiTarget } from "../src/park-recheck";
 import type { MrForge } from "../src/board-model";
 import type { Runner } from "../src/mr";
 import type { FetchLike } from "forges";
-import { readVerifications, VERIFYING, verifyingOf, type CheckCommand } from "../src/verify";
+import { readVerifications, VERIFYING, verifyingOf } from "../src/verify";
+import type { CheckCommand } from "../src/verify";
 import { controlOf } from "../src/controls";
 import { RunRecords } from "../src/run-records";
 import type { VerifySpec } from "../src/verify-spec";
 import { exec } from "./support/command";
 import { fastForward, runEffect } from "./support/effect";
 import { forgeHttpTest } from "../src/forge/http";
-import {
-  FORGE_HOST,
-  PROJECT,
-  fakeForge,
-  type FakeJob,
-  type FakeMr,
-  type FakeRequest,
-} from "./support/forge";
+import { FORGE_HOST, PROJECT, fakeForge } from "./support/forge";
+import type { FakeJob, FakeMr, FakeRequest } from "./support/forge";
 
 const NUXI: VerifySpec = {
   name: "nuxi",

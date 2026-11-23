@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import * as Arr from "effect/Array";
 import { Effect, Option, Stream } from "effect";
-import { cardActions, primaryAction, type TaskView } from "../src/board-model";
+import { cardActions, primaryAction } from "../src/board-model";
+import type { TaskView } from "../src/board-model";
 import { connect, frontDoor, socketOf } from "../src/host";
 import { stopHost, until } from "./support/host";
 import { proves } from "./support/world";

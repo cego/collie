@@ -1,23 +1,18 @@
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Deferred, Effect, Exit, Fiber, Queue, Result, Stream } from "effect";
-import {
-  act,
-  definitionsIn,
-  DoorMap,
-  type Door,
-  type Doors,
-  offersOn,
-  recordEvents,
-  type RecordEvent,
-} from "../desktop/src/bun/machine";
+import { act, definitionsIn, DoorMap, offersOn, recordEvents } from "../desktop/src/bun/machine";
+import type { Door, Doors, RecordEvent } from "../desktop/src/bun/machine";
 import { RpcClientDefect, RpcClientError } from "effect/rpc/RpcClientError";
-import { HostRefused, type RunDetail } from "../src/board-model";
+import { HostRefused } from "../src/board-model";
+import type { RunDetail } from "../src/board-model";
 import type { HostDefinitions } from "../src/definitions-model";
-import { ActionFailed, type KeptRecord } from "../desktop/src/shared/flock";
+import { ActionFailed } from "../desktop/src/shared/flock";
+import type { KeptRecord } from "../desktop/src/shared/flock";
 import { recordKeeper } from "../desktop/src/bun/records";
 import { asOfSaid, recordStanding, refusal } from "../desktop/src/shared/kept-records";
-import { frameAt, recordDoor, unchanged, type Asked } from "./support/record-doors";
+import { frameAt, recordDoor, unchanged } from "./support/record-doors";
+import type { Asked } from "./support/record-doors";
 import { fastForward } from "./support/effect";
 
 const machine = { profile: "vm", name: "vm-mk" };

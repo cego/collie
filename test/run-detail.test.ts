@@ -15,7 +15,8 @@ import {
   Schema,
   Stream,
 } from "effect";
-import { startedBy, type AuditLine } from "../src/audit";
+import { startedBy } from "../src/audit";
+import type { AuditLine } from "../src/audit";
 import type { RunDetail } from "../src/board-model";
 import { recordIn } from "../src/board-model";
 import { evidenceDir, runDir } from "../src/engine";
@@ -28,9 +29,11 @@ import { followRunDetail } from "../src/lifecycle";
 import { scopeFor } from "../src/registry";
 import { recordReply } from "../src/replies";
 import { diffOf, fetchRef, keepDiffs, runDiff } from "../src/run-detail";
-import { recordFrames, type RecordSources } from "../src/record";
+import { recordFrames } from "../src/record";
+import type { RecordSources } from "../src/record";
 import { makeRunModel } from "../src/run-model";
-import { buildRunDetail, type PlanCache } from "../src/views";
+import { buildRunDetail } from "../src/views";
+import type { PlanCache } from "../src/views";
 import { madeRun, recordsAt } from "./support/records";
 import { recordsReadLayer } from "../src/records";
 import { runRowId } from "../src/ui/state";

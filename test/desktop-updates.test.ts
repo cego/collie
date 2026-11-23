@@ -16,19 +16,12 @@ import {
 import { TestClock } from "effect/testing";
 import { BunServices } from "@effect/platform-bun";
 import { signRelease } from "../src/signing";
-import {
-  type Prepared,
-  type UpdaterPort,
-  applyAtLaunch,
-  restartToUpdate,
-  updatesOf,
-} from "../desktop/src/bun/updates";
+import { applyAtLaunch, restartToUpdate, updatesOf } from "../desktop/src/bun/updates";
+import type { Prepared, UpdaterPort } from "../desktop/src/bun/updates";
 import type { UpdateNews } from "../desktop/src/shared/flock";
 import { fastForward } from "./support/effect";
-import {
-  electrobunUpdater,
-  type ElectrobunUpdaterApi,
-} from "../desktop/src/bun/electrobun-updater";
+import { electrobunUpdater } from "../desktop/src/bun/electrobun-updater";
+import type { ElectrobunUpdaterApi } from "../desktop/src/bun/electrobun-updater";
 
 const pair = () => {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");

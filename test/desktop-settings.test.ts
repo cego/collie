@@ -15,26 +15,26 @@ import {
   Stream,
   SubscriptionRef,
 } from "effect";
-import { HostRefused, type SharedSetting } from "../src/board-model";
+import { HostRefused } from "../src/board-model";
+import type { SharedSetting } from "../src/board-model";
 import {
   desktopChange,
   editSetting,
   editSettings,
   flockReach,
-  type FlockSettings,
   NO_FLOCK_SETTINGS,
-  type Reached,
   settingSections,
   syncPill,
   takeFrom,
 } from "../desktop/src/shared/flock-settings";
+import type { FlockSettings, Reached } from "../desktop/src/shared/flock-settings";
 import {
   definitionsSync,
-  type FlockDefinitions,
   flockSync,
   readFlockSettings,
   writeFlockSettings,
 } from "../desktop/src/bun/flock-settings";
+import type { FlockDefinitions } from "../desktop/src/bun/flock-settings";
 import type { SharedDefinition } from "../src/definitions-model";
 import { latestEdits } from "../src/flock-settings";
 import { epochMs } from "../src/time";
@@ -44,10 +44,10 @@ import {
   carryIntoFlock,
   changeSettings,
   heldSettings,
-  type Offers,
   readSettings,
   writeSettings,
 } from "../desktop/src/bun/settings";
+import type { Offers } from "../desktop/src/bun/settings";
 
 const at = (hour: number) => `2026-10-07T${pipe_(String(hour), Str.padStart(2, "0"))}:00:00.000Z`;
 const set = (key: string, value: SharedSetting["value"], hour: number) => ({
