@@ -30,7 +30,7 @@ let herdKey: string;
 let core: FakeHc;
 
 const deps = (root: string) => ({
-  herdKey: herdKey,
+  herdKey,
   evaluator: {
     help: Effect.succeed(
       Arr.join(

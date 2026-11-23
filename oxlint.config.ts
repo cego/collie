@@ -41,7 +41,6 @@ const migrating = {
   "no-fallthrough": "off",
   "no-unexpected-multiline": "off",
   "no-useless-assignment": "off",
-  "object-shorthand": "off",
   "prefer-const": "off",
   "preserve-caught-error": "off",
   "import/consistent-type-specifier-style": "off",
