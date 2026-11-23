@@ -116,7 +116,7 @@ import { RequestedBy, sortBoard } from "./board-model";
 import { CardRows, type CardRow } from "./card-rows";
 import { MERGE_REQUESTS } from "./merge-requests";
 import { MODULE_REVISIONS, ModuleRevisions } from "./module-revisions";
-import { BRANCHES, Branches } from "./branches";
+import { BRANCHES, Branches, branchKey } from "./branches";
 import { CONNECTIONS } from "./connection-rows";
 import type { MeasureEvent } from "./measurement-model";
 import {
@@ -1174,12 +1174,17 @@ const handlers = (
             );
             const cardOf = (run: string) =>
               Option.getOrUndefined(Arr.findFirst(cards, (card) => card.runs.includes(run)));
-            const runs = yield* Effect.forEach(page, ({ facts }) =>
-              Effect.map(
-                facts.branch === null || model === undefined
-                  ? Effect.succeed(null)
-                  : model.head(facts),
-                (head) => summaryOf(facts, cardOf(facts.id), head),
+            // The git syncer's rows, as a card reads them: a listing asks git nothing.
+            const branches = yield* Branches.use((rows) => rows.all).pipe(
+              Effect.provideContext(bun),
+            );
+            const runs = Arr.map(page, ({ facts }) =>
+              summaryOf(
+                facts,
+                cardOf(facts.id),
+                facts.branch === null
+                  ? null
+                  : (branches.get(branchKey(facts.cwd, facts.branch))?.head ?? null),
               ),
             );
             const views = asked.full
