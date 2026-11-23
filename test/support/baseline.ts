@@ -346,6 +346,7 @@ const forgetJournal = (runs: ReadonlyArray<string>, journal: string) =>
 
 /** A clock whose waits of ten seconds or more, as between merge attempts, pass at once. */
 const quickWaits = Effect.map(Clock.Clock, (clock): Clock.Clock =>
+  // SAFETY: the prototype is `clock`, so every Clock member but `sleep` is its own.
   Object.assign(Object.create(clock) as Clock.Clock, {
     sleep: (duration: Duration.Duration) =>
       clock.sleep(
@@ -17536,7 +17537,7 @@ for (const name of ["gitlab", "github"] as const) {
                 );
                 expect(parked.status).toBe("suspended");
                 expect(cause).toBe("forge-unavailable");
-                expect(PARK_CAUSES[cause as ParkCause].kind).toBe("rechecks");
+                expect(PARK_CAUSES["forge-unavailable"].kind).toBe("rechecks");
                 const why = yield* parkedWhy(runId);
                 expect(why).toContain(pipe(head, Str.slice(0, 8)));
                 expect(why).toContain("502");

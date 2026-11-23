@@ -497,12 +497,10 @@ function mergeAnswer(
   const sha = field(args, "sha") ?? "";
   const merged = { mr, sha, method: field(args, "merge_method"), fields: fieldsOf(args) };
   const failure = model.mergeFailures?.[0];
-  if (failure !== undefined)
-    return {
-      ...refused(`${failure.status} ${failure.message}`),
-      failedMerge: mr,
-      ...(failure.applied === true ? { merged } : {}),
-    };
+  if (failure !== undefined) {
+    const failed: Answer = { ...refused(`${failure.status} ${failure.message}`), failedMerge: mr };
+    return failure.applied === true ? { ...failed, merged } : failed;
+  }
   if (mr.state !== "open") return refused(NOT_MERGEABLE[forge]);
   if (sha !== (mr.head ?? "")) return refused(HEAD_MOVED[forge]);
   if ((mr.mergeable ?? "yes") !== "yes") return refused(NOT_MERGEABLE[forge]);
