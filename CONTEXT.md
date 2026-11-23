@@ -581,8 +581,11 @@ for before it closes anything of a Task, and a checkout any Task still owes some
 is kept whatever a Run's line says. Only a landed Task folds into History a day after
 it ends; one that still owes a merge request stays on the board however old it is.
 
-**Merge watch** — The host's round, every 5 minutes, that asks each merge request's own
-forge what became of it and records `merged` as that forge's word when it merged. It asks
+**Merge watch** — The host's forge syncer: its round asks each merge request's own forge what
+became of it, every minute for one on a card and every 5 minutes for the rest, and at once
+after a Run publishes it, and records `merged` as that forge's word when it merged. What it
+reads is the only forge answer a card or a listing's offers see; taking an offer asks again
+(ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs). It asks
 about every merge request a Task owes, whatever its section, age or the Dispositions of
 its Runs, follows a merged one to production, and keeps asking about a closed one in case
 it is reopened. Only a merge request settled by `abandoned` is not asked about. Each answer

@@ -7,6 +7,7 @@ import { Effect, FileSystem } from "effect";
 import { readAudit } from "../src/audit";
 import { connect } from "../src/host";
 import { withLock } from "../src/lock";
+import { tellHost } from "../src/tell-host";
 import { fileTime } from "../src/time";
 import { memoryRecords, runEffect } from "./support/effect";
 import { until } from "./support/host";
@@ -33,6 +34,9 @@ test(
                 yield* fs.utimes(staged, fileTime(at), fileTime(at));
                 yield* fs.rename(staged, file(side, path));
               });
+            // Nothing is watched: a hand edit reaches the other host once its own is told.
+            const told = (side: Side, path: string) =>
+              tellHost(side.world.state, [file(side, path)]);
             for (const side of [first, second])
               yield* fs.writeFileString(
                 file(side, "workflows/package.json"),
@@ -47,9 +51,10 @@ test(
               (has) => has === "forked\n",
             );
 
-            // A directory replaced by hand is watched again, and a save made while its catch-up waits
-            // on the other host reaches it without another save.
+            // A directory replaced by hand, and a save made while its catch-up waits on the other
+            // host, reach it.
             yield* fs.writeFileString(file(first, "personas/kept.md"), "kept\n");
+            yield* told(first, "personas/kept.md");
             yield* until(
               () => text(second, "personas/kept.md"),
               (has) => has === "kept\n",
@@ -65,6 +70,7 @@ test(
                 yield* fs.rename(file(first, "personas-new"), file(first, "personas"));
                 yield* Effect.sleep("250 millis");
                 yield* fs.writeFileString(file(first, "personas/after.md"), "after\n");
+                yield* told(first, "personas/after.md");
                 yield* Effect.sleep("250 millis");
               }),
             );
@@ -72,12 +78,14 @@ test(
             expect(yield* text(second, "personas/after.md")).toBe("after\n");
 
             yield* fs.writeFileString(file(second, "workflows/forked.workflow.ts"), "edited\n");
+            yield* told(second, "workflows/forked.workflow.ts");
             yield* until(
               () => text(first, "workflows/forked.workflow.ts"),
               (has) => has === "edited\n",
             );
 
             yield* fs.remove(file(first, "workflows/forked.workflow.ts"));
+            yield* told(first, "workflows/forked.workflow.ts");
             yield* until(
               () => fs.exists(file(second, "workflows/forked.workflow.ts")),
               (exists) => !exists,
@@ -90,6 +98,8 @@ test(
               ],
               { concurrency: "unbounded" },
             );
+            yield* told(first, "personas/both.md");
+            yield* told(second, "personas/both.md");
             yield* until(
               () => Effect.all([text(first, "personas/both.md"), text(second, "personas/both.md")]),
               (both) => Arr.every(both, (has) => has === "second's\n"),

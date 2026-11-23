@@ -85,6 +85,7 @@ import {
   type ProcessInfo,
 } from "./processes";
 import { holderLives, hostLockOf, lockHolder, withLock } from "./lock";
+import { tellHost } from "./tell-host";
 import { carriedDelivery } from "./dispatcher";
 import { epochMs } from "./time";
 
@@ -1012,6 +1013,8 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
     const line = encodeAskedCall(repairing ? { ...call, repair: "in-reply" } : call);
     yield* fs.makeDirectory(dir, { recursive: true });
     yield* fs.writeFileString(path.join(dir, QUESTIONS), `${line}\n`, { flag: "a" });
+    // Nothing watches: the host is told, so the question reaches the Run now.
+    yield* tellHost(path.dirname(path.dirname(dir)), [path.join(dir, QUESTIONS)]);
     return repairing ? deniedWith(questionRepair(questions)) : DENIED_QUESTION;
   }
   const transcript = payload.transcript_path;

@@ -60,6 +60,7 @@ import {
 } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import * as HttpClient from "effect/http/HttpClient";
 import * as Socket from "effect/socket/Socket";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcClient from "effect/rpc/RpcClient";
@@ -73,16 +74,9 @@ import manifest from "../package.json";
 import { RunModel, runModelLayer, type RunModelApi } from "./run-model";
 import { RunPageAsked, RunSummary, pageOf, summaryOf } from "./run-list";
 import { recordsAt, type Records } from "./records";
-import { RunRecords } from "./run-records";
+import { RUN_RECORDS, RunRecords } from "./run-records";
 import { controlOf, controlSet } from "./controls";
-import {
-  FINISHED_STEPS,
-  drawerWrites,
-  recordFlow,
-  recordFrames,
-  watched,
-  type RecordSources,
-} from "./record";
+import { FINISHED_STEPS, recordFlow, recordFrames, type RecordSources } from "./record";
 import { markFirst } from "./record-marks";
 import { doorThread, engineEnd, type EngineEnd, type Listed, type Opened } from "./door";
 import { SLOW_RPC_MS, firstValueTimed } from "./first-value";
@@ -116,8 +110,14 @@ import {
   type HostServices,
   type KeptViews,
   type Locate,
+  revisionOf,
 } from "./engine";
-import { RequestedBy } from "./board-model";
+import { RequestedBy, sortBoard } from "./board-model";
+import { CardRows, type CardRow } from "./card-rows";
+import { MERGE_REQUESTS } from "./merge-requests";
+import { MODULE_REVISIONS, ModuleRevisions } from "./module-revisions";
+import { BRANCHES, Branches, branchKey } from "./branches";
+import { CONNECTIONS } from "./connection-rows";
 import type { MeasureEvent } from "./measurement-model";
 import {
   RunMetrics,
@@ -215,7 +215,15 @@ import { currentEnv, leaveLauncher, withoutHerdrOne, withoutLauncher } from "./e
 import { installation as installedRelease, RELEASE_TAG } from "./release";
 import { Herdr, isSettled, type AgentInfo } from "./herdr";
 import { taskOffers, type Offer } from "./offers";
-import { buildBoard, type KeptCards, LANDED_STATES, ownedMrs, taskFlowOf } from "./board";
+import {
+  buildBoard,
+  SyncedBranches,
+  type KeptCard,
+  type KeptCards,
+  LANDED_STATES,
+  ownedMrs,
+  taskFlowOf,
+} from "./board";
 import { mrOf, readForge, readMrStates, watchedMr, type MrPanels } from "./merges";
 import { mrIdIn, projectHere, shell } from "./mr";
 import { ForgeHttp, forgeHttpLayer } from "./forge/http";
@@ -1184,12 +1192,17 @@ const handlers = (
             );
             const cardOf = (run: string) =>
               Option.getOrUndefined(Arr.findFirst(cards, (card) => card.runs.includes(run)));
-            const runs = yield* Effect.forEach(page, ({ facts }) =>
-              Effect.map(
-                facts.branch === null || model === undefined
-                  ? Effect.succeed(null)
-                  : model.head(facts),
-                (head) => summaryOf(facts, cardOf(facts.id), head),
+            // The git syncer's rows, as a card reads them: a listing asks git nothing.
+            const branches = yield* Branches.use((rows) => rows.all).pipe(
+              Effect.provideContext(bun),
+            );
+            const runs = Arr.map(page, ({ facts }) =>
+              summaryOf(
+                facts,
+                cardOf(facts.id),
+                facts.branch === null
+                  ? null
+                  : (branches.get(branchKey(facts.cwd, facts.branch))?.head ?? null),
               ),
             );
             const views = asked.full
@@ -1502,11 +1515,83 @@ const hostBoard = (dir: string) =>
     const idle: IdleSince = new Map();
     const finishedSince: FinishedSince = new Map();
     const cards: KeptCards | undefined =
-      model === undefined ? undefined : { revision: model.inputsAt, kept: new Map() };
+      model === undefined
+        ? undefined
+        : { revision: model.inputsAt, content: model.content, kept: new Map() };
+    // The previous host's cards: this host's board until its first pass, kept unconfirmed
+    // until that pass finds what each was derived from unmoved.
+    const rows = cards === undefined ? [] : yield* CardRows.use((rows) => rows.all);
+    const seeded = new Map<string, TaskView | null>();
+    for (const row of rows) {
+      seeded.set(row.task, row.view);
+      cards?.kept.set(row.task, {
+        key: "",
+        digest: row.digest,
+        due: row.due,
+        view: row.view,
+        unconfirmed: true,
+      });
+    }
+    /** The board until the first pass: each card as the previous host left it, marked as such. */
+    // None left is no board to show: the first pass's is the first.
+    let projected: ReadonlyArray<TaskView> | null =
+      cards === undefined || rows.length === 0
+        ? null
+        : sortBoard(
+            Arr.flatMap(rows, (row) =>
+              row.view === null ? [] : [{ ...row.view, confirmed: false, asOf: row.at }],
+            ),
+          );
+    /** What each Task's row says now, by the objects written, so a pass writes only what moved. */
+    const written = new Map<string, { readonly view: TaskView | null; readonly kept: KeptCard }>(
+      Arr.flatMap(rows, (row) => {
+        const kept = cards?.kept.get(row.task);
+        return kept === undefined ? [] : [[row.task, { view: row.view, kept }] as const];
+      }),
+    );
+    /** Writes the cards whose view, digest or due time moved, and drops those gone. */
+    const project = (views: ReadonlyArray<TaskView>) =>
+      Effect.gen(function* () {
+        if (cards === undefined) return;
+        const at = yield* Clock.currentTimeMillis;
+        const shown = new Map(Arr.map(views, (view) => [view.id, view] as const));
+        const put: Array<CardRow> = [];
+        for (const [task, kept] of cards.kept) {
+          if (kept.unconfirmed === true) continue;
+          const view = kept.view === null ? null : (shown.get(task) ?? null);
+          const was = written.get(task);
+          if (
+            was !== undefined &&
+            was.view === view &&
+            was.kept.digest === kept.digest &&
+            was.kept.due === kept.due
+          )
+            continue;
+          written.set(task, { view, kept });
+          put.push({ task, view, digest: kept.digest, due: kept.due, at });
+        }
+        const drop = Arr.filter([...written.keys()], (task) => !cards.kept.has(task));
+        for (const task of drop) written.delete(task);
+        yield* CardRows.use((rows) => rows.write(put, drop));
+      }).pipe(
+        Effect.provideContext(bun),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("the board's cards were not written", cause),
+        ),
+      );
     /** The offers a build read, which the door is told of with its listing. */
     const offered = new Map<string, ReadonlyArray<OfferView>>();
     const boardOf = (facts: ReadonlyArray<RunFacts>, alive: ReadonlyArray<AgentInfo>) =>
       Effect.gen(function* () {
+        if (cards !== undefined)
+          cards.modules = Arr.join(
+            Arr.map(
+              [...(yield* ModuleRevisions.use((rows) => rows.all))].sort(),
+              ([dir, revision]) => `${dir}@${revision}`,
+            ),
+            "\n",
+          );
+        const refused = yield* hostRefuses;
         return yield* buildBoard({
           env,
           runs: facts,
@@ -1518,9 +1603,11 @@ const hostBoard = (dir: string) =>
               Effect.orElseSucceed(() => []),
               Effect.tap((offers) => Effect.sync(() => offered.set(runId, offers))),
             ),
-          head: model?.head,
           cards,
-        });
+        }).pipe(
+          Effect.provideService(SyncedBranches, yield* Branches.use((rows) => rows.all)),
+          (built) => (refused ? refusingOutside(built) : built),
+        );
       }).pipe(
         (built) =>
           model === undefined
@@ -1528,10 +1615,44 @@ const hostBoard = (dir: string) =>
             : Effect.provideService(built, FileSystem.FileSystem, model.reading),
         Effect.provideContext(bun),
       );
+    /** Each agent's status as the last listing found it. */
+    const statuses = new Map<string, string>();
+    /**
+     * The files of each Run whose agent started or ended a turn, or went, read again: what an
+     * agent writes is read then, never watched
+     * (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs).
+     */
+    const turned = (alive: ReadonlyArray<AgentInfo>) =>
+      Effect.gen(function* () {
+        if (model === undefined) return;
+        const moved = new Set<string>();
+        const present = new Set<string>();
+        for (const agent of alive) {
+          present.add(agent.name);
+          if (statuses.get(agent.name) !== agent.status) moved.add(agent.name);
+          statuses.set(agent.name, agent.status);
+        }
+        for (const name of [...statuses.keys()])
+          if (!present.has(name)) {
+            moved.add(name);
+            statuses.delete(name);
+          }
+        if (moved.size === 0) return;
+        const runs = new Set(
+          Arr.flatMap(yield* everyRegistered.pipe(Effect.provideContext(bun)), (entry) =>
+            moved.has(entry.agent) ? [entry.runId] : [],
+          ),
+        );
+        for (const run of runs)
+          for (const under of ["runs", "agents", "evidence"])
+            yield* model.invalidate(`${env.stateDir}/${under}/${run}`);
+        for (const name of moved) yield* model.invalidate(`${env.stateDir}/compaction/${name}`);
+      });
     /** The board, with the Runs it was built from. */
     const listingOf = (agents: typeof agentsNow) =>
       Effect.gen(function* () {
         const { alive } = yield* agents.pipe(Effect.provideContext(bun));
+        yield* turned(alive);
         noteIdle(idle, alive, yield* Clock.currentTimeMillis);
         const facts = yield* runs;
         // Before the build, so each card's key holds its Runs' revisions as read.
@@ -1545,14 +1666,20 @@ const hostBoard = (dir: string) =>
       const started = yield* Clock.currentTimeMillis;
       const built = yield* listingOf(agentsNow);
       if (model === undefined) return built;
+      const views = model.stamp(built.views);
+      yield* project(views);
       if (!filled) {
         filled = true;
+        projected = null;
         const took = (yield* Clock.currentTimeMillis) - started;
+        let confirmed = 0;
+        for (const [task, view] of seeded) if (cards?.kept.get(task)?.view === view) confirmed++;
+        seeded.clear();
         yield* Effect.logInfo(
-          `the Run model holds ${built.runs.length} Runs, filled in ${took} ms`,
+          `the Run model holds ${built.runs.length} Runs, filled in ${took} ms; ${confirmed} of ${rows.length} cards the last host left were confirmed unchanged`,
         );
       }
-      return { ...built, views: model.stamp(built.views) };
+      return { ...built, views };
     });
     const aliveOf = (agents: typeof agentsNow) =>
       Effect.map(agents, ({ alive }) => alive).pipe(Effect.provideContext(bun));
@@ -1667,6 +1794,12 @@ const hostBoard = (dir: string) =>
       herdr,
       bun,
       listing,
+      /** The previous host's cards, unconfirmed, until this host's first pass is done; then null. */
+      projected: () => projected,
+      /** Merge requests the forge syncer reads on its next round, whenever it last read them. */
+      nudged: new Set<string>(),
+      /** The git syncer's read of what a follow-up of a Run would enter at. */
+      recover: (runId: string) => registry.syncRecovery(runId).pipe(Effect.provideContext(hosted)),
       runs,
       kept,
       factsOf,
@@ -1718,45 +1851,23 @@ class SharedBoard extends Context.Service<
   }
 >()("collie/SharedBoard") {}
 
-/** What the host writes for itself, by its path under the state directory, which no build reads. */
-const isBookkeeping = ({ _tag, path }: FileSystem.WatchEvent) => {
-  const [top, , below] = Str.split(path, "/");
-  const name = pipe(
-    path,
-    Str.slice(Option.getOrElse(pipe(path, Str.lastIndexOf("/")), () => -1) + 1),
-  );
-  if (pipe(name, Str.endsWith(".lock")) || pipe(name, Str.endsWith(".tmp")) || top === "ssh")
-    return true;
-  if (isHostLog(path) || /^host\.db-(wal|journal)$/.test(path)) return true;
-  if (top === "compaction") return name !== QUESTIONS;
-  // The board reads only these directories' mtime, which a file growing leaves alone.
-  return (
-    _tag === "Update" &&
-    ((top === "runs" && below === "handoffs") || (top === "evidence" && below === "verify"))
-  );
-};
-
-/**
- * Each write under the state directory that may move the board, by its path inside it: one
- * outside every Run's own directories only where the Run model's reads read it.
- */
-export const boardWrites = (dir: string, model?: RunModelApi) =>
-  watched(dir, model?.disable).pipe(
-    Stream.tap((event) => model?.invalidate(`${dir}/${event.path}`) ?? Effect.void),
-    Stream.filter((event) => !isBookkeeping(event)),
-    // An agent's question is tended to however the board reads it.
-    Stream.filter(
-      (event) =>
-        model === undefined ||
-        pipe(event.path, Str.endsWith(`/${QUESTIONS}`)) ||
-        model.wasRead(`${dir}/${event.path}`),
-    ),
-    Stream.map((event) => event.path),
-  );
-
 export const boardTableWrites = Stream.unwrap(
   Effect.map(Reactivity.Reactivity, (reactivity) =>
-    reactivity.stream([DELIVERIES, LAUNCHES, PROPOSALS, REGISTERED, TASKS], Effect.void),
+    reactivity.stream(
+      [
+        DELIVERIES,
+        LAUNCHES,
+        PROPOSALS,
+        REGISTERED,
+        TASKS,
+        RUN_RECORDS,
+        MERGE_REQUESTS,
+        MODULE_REVISIONS,
+        BRANCHES,
+        CONNECTIONS,
+      ],
+      Effect.void,
+    ),
   ),
 );
 
@@ -1771,11 +1882,12 @@ const sharedBoardLayer = (dir: string) =>
       const reactivity = yield* Reactivity.Reactivity;
       const model = Option.getOrUndefined(yield* Effect.serviceOption(RunModel));
       const { listing, herdrMoved, ...board } = yield* hostBoard(dir);
-      // Debounced apart from the tick, so a burst of writes cannot hold the tick back.
-      // Shared, so every subscriber rides one recursive watch: setting one up walks the tree.
+      // Nothing is watched (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs): a
+      // write moves the board where it went through the host, or the host was told of it, or
+      // an agent's turn ended. Debounced apart from the tick, so a burst cannot hold it back.
       const writes = yield* Stream.mergeAll(
         [
-          Stream.merge(boardWrites(dir, model), model?.moved ?? Stream.empty).pipe(
+          (model?.changed ?? Stream.empty).pipe(
             Stream.debounce("200 millis"),
             Stream.map(() => undefined),
           ),
@@ -1966,8 +2078,19 @@ const doorFeedLayer = (door: EngineEnd, panels: MrPanels) =>
 const sideJobsLayer = (panels: MrPanels) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
-      const { env, herdr, bun, boards, sweepers, record, stop, watches, requested } =
-        yield* SharedBoard;
+      const {
+        env,
+        herdr,
+        bun,
+        boards,
+        sweepers,
+        record,
+        stop,
+        watches,
+        requested,
+        nudged,
+        recover,
+      } = yield* SharedBoard;
       const board = Stream.runHead(boards).pipe(
         Effect.flatMap((latest) =>
           latest._tag === "Some" ? Effect.succeed(latest.value) : Effect.never,
@@ -1975,7 +2098,19 @@ const sideJobsLayer = (panels: MrPanels) =>
       );
       const model = Option.getOrUndefined(yield* Effect.serviceOption(RunModel));
       yield* Effect.forkScoped(
-        sideJobs({ env, herdr, board, panels, record, stop, watches, requested, sweepers }).pipe(
+        sideJobs({
+          env,
+          herdr,
+          board,
+          panels,
+          record,
+          stop,
+          watches,
+          requested,
+          sweepers,
+          nudged,
+          recover,
+        }).pipe(
           // Each round reads every Run's files, as the board does: through the model.
           (jobs) =>
             model === undefined
@@ -2080,13 +2215,18 @@ const frontDoorHandlers = (
   stamp: string,
   toasted: PubSub.PubSub<Toasted>,
   reconnects: Effect.Effect<number>,
+  userDirMoved: Effect.Effect<void>,
 ) =>
   FrontDoorRpcs.toLayer(
     Effect.gen(function* () {
       const registry = yield* Registry;
+      const layerScope = yield* Effect.scope;
+      /** What peers share is offered again, without the caller waiting on the peers. */
+      const offerShared = Effect.asVoid(Effect.forkIn(userDirMoved, layerScope));
       const hosted = yield* Effect.context<HostServices>();
       const reliance = yield* Reliance;
-      const { env, herdr, bun, sweepers, listed, changed, writes, ...shared } = yield* SharedBoard;
+      const { env, herdr, bun, sweepers, listed, changed, writes, projected, nudged, ...shared } =
+        yield* SharedBoard;
       const collecting = yield* Collecting;
       const forgeHttp = yield* ForgeHttp;
       const boards = shared.boards.pipe(Stream.map((built) => built.views));
@@ -2103,6 +2243,27 @@ const frontDoorHandlers = (
       // ponytail: kept for the host's life; evict by age if a host lives for months.
       const plans: PlanCache = new Map();
       const record = yield* recordSources({ panels, plans });
+      const model = Option.getOrUndefined(yield* Effect.serviceOption(RunModel));
+      /** What another process wrote, read again: the state directory's files, or a module. */
+      const told = (paths: ReadonlyArray<string>) =>
+        Effect.forEach(
+          paths,
+          (path) =>
+            Effect.gen(function* () {
+              if (Str.startsWith(`${env.stateDir}/`)(path)) {
+                if (model !== undefined) yield* model.invalidate(path);
+                return;
+              }
+              if (Str.startsWith(`${env.userDir}/`)(path)) yield* offerShared;
+              // A workflow layer's directory, whose revision is computed now and kept for listings.
+              const at = Str.lastIndexOf("/workflows")(path);
+              if (Option.isNone(at)) return;
+              const dir = Str.slice(0, at.value + "/workflows".length)(path);
+              const rows = yield* ModuleRevisions;
+              yield* rows.put(dir, yield* revisionOf(dir));
+            }),
+          { discard: true },
+        );
       /**
        * The revision each act of a request was first answered with. A retried request carries
        * nothing out again, so its answer is the one it had: read anew, it was the Run's
@@ -2849,6 +3010,8 @@ const frontDoorHandlers = (
                 .publish({ runId, title, file, onto, pushOnly, skipCi })
                 .pipe(Effect.mapError((error) => new HostRefused({ reason: error.reason })));
               if (!pushOnly) yield* registry.mergeRequest(runId, published.url);
+              // What a push moved reaches its card on the forge syncer's next round, not its next minute.
+              if (published.url !== "") nudged.add(published.url);
               return published;
             }),
           ).pipe(Effect.provideContext(hosted)),
@@ -3022,6 +3185,7 @@ const frontDoorHandlers = (
                 ),
               );
               yield* trimAudit(trail, SETTINGS_TRAIL).pipe(Effect.orDie);
+              yield* offerShared;
               return taken;
             }),
           ),
@@ -3073,6 +3237,7 @@ const frontDoorHandlers = (
                 ),
               );
               yield* trimAudit(trail, DEFINITIONS_TRAIL).pipe(Effect.orDie);
+              yield* offerShared;
               return held;
             }),
           ),
@@ -4237,14 +4402,13 @@ const frontDoorHandlers = (
         progress: ({ runId }) => progressFor(runId),
         runDetail: (key) => {
           const { runId, tail, pages, refreshMr } = key;
-          const own = drawerWrites(env.stateDir, runId).pipe(Stream.provideContext(bun));
           // Whole records say their minutes as of when they were read, so they follow the tick.
           if (record !== undefined)
-            return recordFrames(
-              record,
-              key,
-              Stream.merge(key.parts === true ? writes : changed, own),
-            ).pipe(markFirst("host:emit", runId), Stream.provideContext(bun), Stream.orDie);
+            return recordFrames(record, key, key.parts === true ? writes : changed).pipe(
+              markFirst("host:emit", runId),
+              Stream.provideContext(bun),
+              Stream.orDie,
+            );
           let fresh = refreshMr;
           const detail = Effect.gen(function* () {
             const view = yield* registry.view(runId);
@@ -4284,7 +4448,7 @@ const frontDoorHandlers = (
             ).pipe(Effect.orElseSucceed(() => null));
             return yield* buildRunDetail({ env, runId, runs, mr, tail, pages, plans, flow });
           }).pipe(Effect.provideContext(bun));
-          return followDetail(detail, Stream.merge(changed, own)).pipe(Stream.orDie);
+          return followDetail(detail, changed).pipe(Stream.orDie);
         },
         artefacts: ({ runId, refresh }) =>
           known(runId).pipe(
@@ -4404,6 +4568,7 @@ const frontDoorHandlers = (
             Effect.provideService(ForgeHttp, forgeHttp),
           ),
         toasts: () => Stream.fromPubSub(toasted),
+        wrote: ({ paths }) => told(paths).pipe(Effect.provideContext(bun)),
         board: () =>
           Stream.unwrap(
             liveHerds(herdr, env).pipe(
@@ -4420,7 +4585,13 @@ const frontDoorHandlers = (
                       herd === null ? [] : [{ id: herd }],
                     ),
                   },
-                  boards,
+                  // Until the first pass, the previous host's cards, then every pass.
+                  boards: Stream.unwrap(
+                    Effect.sync(() => {
+                      const first = projected();
+                      return first === null ? boards : Stream.concat(Stream.make(first), boards);
+                    }),
+                  ),
                 }),
               ),
               Effect.provideContext(bun),
@@ -4563,7 +4734,38 @@ export const serve = (named: string): Effect.Effect<void, never, PlatformService
     Effect.orDie,
     Effect.provideService(Scheduler.Scheduler, new TurnScheduler(servedNow)),
     Effect.updateService(FileSystem.FileSystem, foregroundFileSystem),
+    refusingWatch,
     Effect.provide(Layer.merge(tracingLayer(BUILD), foregroundLayer)),
+  );
+
+/** What the suite refuses a host (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs). */
+const hostRefuses = Config.Boolean("COLLIE_HOST_REFUSES").pipe(
+  Config.withDefault(false),
+  Effect.orDie,
+);
+
+/** A card's derivation reads the Run model and the syncers' rows, never git, a forge or HTTP. */
+const refusingOutside = <A, E, R>(derivation: Effect.Effect<A, E, R>) =>
+  derivation.pipe(
+    Effect.provideService(
+      ChildProcessSpawner.ChildProcessSpawner,
+      ChildProcessSpawner.make(() => Effect.die("a card's derivation spawned a process")),
+    ),
+    Effect.provideService(
+      HttpClient.HttpClient,
+      HttpClient.make((request) => Effect.die(`a card's derivation asked ${request.url}`)),
+    ),
+  );
+
+/** A host holds no file watch; under `COLLIE_HOST_REFUSES`, one that comes back is a defect. */
+const refusingWatch = <A, E, R>(host: Effect.Effect<A, E, R>) =>
+  Effect.flatMap(hostRefuses, (refuses) =>
+    refuses
+      ? Effect.updateService(host, FileSystem.FileSystem, (fs) => ({
+          ...fs,
+          watch: (path) => Stream.die(`the host watched ${path}, and a host holds no file watch`),
+        }))
+      : host,
   );
 
 /** How long a host told to stop waits for running steps before it exits anyway. */
@@ -4863,79 +5065,93 @@ const own = (
           Effect.provideContext(bun),
         ),
     });
-    return yield* Layer.launch(
-      RpcServer.layer(AllRpcs.middleware(SlowRpcs)).pipe(
-        Layer.provide(
-          Layer.mergeAll(
-            handlers(dir, installation, development, declared, peers),
-            frontDoorHandlers(
-              dir,
-              installation,
-              development,
-              panels,
-              declared,
-              stamp,
-              toasted,
-              Ref.get(reconnects),
-            ),
-            sideJobsLayer(panels),
-            doorFeedLayer(door, panels),
-            questionsLayer,
-            slowRpcsLayer,
-            Layer.effectDiscard(
-              Effect.gen(function* () {
-                const { reportsLayer } = yield* Effect.promise(() => import("./reports"));
-                yield* Layer.build(
-                  reportsLayer({ env, installation, stamp, crashAt, linked, live: peers.live }),
-                );
-              }),
-            ),
-          ).pipe(
-            Layer.provide(sharedBoardLayer(dir)),
+    // Scoped as Layer.launch is, so a stop ends the server before the rest of the host.
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* Layer.build(
+          RpcServer.layer(AllRpcs.middleware(SlowRpcs)).pipe(
             Layer.provide(
               Layer.mergeAll(
-                schedulesLayer({ dir, env: { ...env, stateDir: dir }, installation, seconds }).pipe(
-                  Layer.provideMerge(
-                    registryLayer(dir, {
-                      catalogue,
-                      locate: locateIn(env),
-                      userDir: env.userDir,
-                      crashAt,
-                      supersedeGraceMs: graceMs,
-                      namesTasks: true,
-                      placing: { herdr, env: { ...env, stateDir: dir } },
-                      keep:
-                        runModel === undefined
-                          ? undefined
-                          : { revision: runModel.factsAt, reading: runModel.reading },
-                    }),
+                handlers(dir, installation, development, declared, peers),
+                frontDoorHandlers(
+                  dir,
+                  installation,
+                  development,
+                  panels,
+                  declared,
+                  stamp,
+                  toasted,
+                  Ref.get(reconnects),
+                  peers.userDirMoved,
+                ),
+                sideJobsLayer(panels),
+                doorFeedLayer(door, panels),
+                questionsLayer,
+                slowRpcsLayer,
+                Layer.effectDiscard(
+                  Effect.gen(function* () {
+                    const { reportsLayer } = yield* Effect.promise(() => import("./reports"));
+                    yield* Layer.build(
+                      reportsLayer({ env, installation, stamp, crashAt, linked, live: peers.live }),
+                    );
+                  }),
+                ),
+              ).pipe(
+                Layer.provide(sharedBoardLayer(dir)),
+                Layer.provide(
+                  Layer.mergeAll(
+                    schedulesLayer({
+                      dir,
+                      env: { ...env, stateDir: dir },
+                      installation,
+                      seconds,
+                    }).pipe(
+                      Layer.provideMerge(
+                        registryLayer(dir, {
+                          catalogue,
+                          locate: locateIn(env),
+                          userDir: env.userDir,
+                          crashAt,
+                          supersedeGraceMs: graceMs,
+                          namesTasks: true,
+                          placing: { herdr, env: { ...env, stateDir: dir } },
+                          keep:
+                            runModel === undefined
+                              ? undefined
+                              : { revision: runModel.factsAt, reading: runModel.reading },
+                        }),
+                      ),
+                    ),
+                    Layer.succeed(Usage, usage),
+                    Layer.succeed(HarnessCatalogues, harnesses),
                   ),
                 ),
-                Layer.succeed(Usage, usage),
-                Layer.succeed(HarnessCatalogues, harnesses),
               ),
             ),
-          ),
-        ),
-        Layer.provide(door.protocol),
-        Layer.provide(
-          (yield* configuredAgents(dir, usage.readings, catalogue)).pipe(
-            Layer.provideMerge(
-              foundationLayer({
-                dir,
-                userDir: env.userDir,
-                toast: (title, body, sound, runId) =>
-                  PubSub.publish(toasted, { runId, title, body, sound }).pipe(Effect.asVoid),
-                herd: { socketPath: herdSocket, pluginRoot: env.pluginRoot },
-                readings: usage.readings,
-                messagePoll: seconds ? "1 second" : undefined,
-              }).pipe(Layer.provideMerge(Layer.succeed(CheckProcesses, checks))),
+            Layer.provide(door.protocol),
+            Layer.provide(
+              (yield* configuredAgents(dir, usage.readings, catalogue)).pipe(
+                Layer.provideMerge(
+                  foundationLayer({
+                    dir,
+                    userDir: env.userDir,
+                    toast: (title, body, sound, runId) =>
+                      PubSub.publish(toasted, { runId, title, body, sound }).pipe(Effect.asVoid),
+                    herd: { socketPath: herdSocket, pluginRoot: env.pluginRoot },
+                    readings: usage.readings,
+                    messagePoll: seconds ? "1 second" : undefined,
+                  }).pipe(Layer.provideMerge(Layer.succeed(CheckProcesses, checks))),
+                ),
+              ),
             ),
+            Layer.provide(forgeHttpLayer),
+            Layer.tap(() => Effect.forkScoped(onceAnswering)),
           ),
-        ),
-        Layer.provide(forgeHttpLayer),
-        Layer.tap(() => Effect.forkScoped(onceAnswering)),
-      ),
+        );
+        // From now on the engine answers a board; until now the door answered one from the projection.
+        door.post({ _tag: "Serving" });
+        return yield* Effect.never;
+      }),
     );
   }).pipe(Effect.provide([usageLayer, catalogueLayer(dir)]), Effect.orDie);
 
