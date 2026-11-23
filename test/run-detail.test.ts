@@ -88,6 +88,7 @@ test("a drawer's subscription follows the Run's log and evidence, and fetches th
         yield* fs.writeFileString(`${dir}/log.txt`, "later line\n", { flag: "a" });
         yield* fs.makeDirectory(`${world.state}/evidence/${runId}`, { recursive: true });
         yield* fs.writeFile(`${world.state}/evidence/${runId}/shot.png`, new Uint8Array([1, 2, 3]));
+        yield* tellHost(world.state, [`${world.state}/evidence/${runId}/shot.png`]);
         const last = yield* Fiber.await(reading).pipe(Effect.timeout("30 seconds"));
         expect(seen[0]?.id).toBe(runId);
         expect(last._tag).toBe("Success");
