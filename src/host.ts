@@ -1991,6 +1991,12 @@ const doorFeedLayer = (door: EngineEnd, panels: MrPanels) =>
         ),
         Effect.forkScoped,
       );
+      const branches = yield* Branches;
+      yield* Queue.take(door.wants).pipe(
+        Effect.flatMap(branches.want),
+        Effect.forever,
+        Effect.forkScoped,
+      );
       yield* Queue.take(door.slow).pipe(
         Effect.flatMap(({ rpc, ms }) =>
           Effect.logWarning(`the door's ${rpc} stream took ${ms} ms to send its first value`),
