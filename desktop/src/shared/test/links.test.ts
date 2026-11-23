@@ -57,7 +57,7 @@ test("a link named twice is one card, and keeps the title it was given", () => {
 test("a link in an Output's JSON ends where its string does", () => {
   expect(
     webLinks({
-      texts: ['{"notes":"Saw https://kibana.cego.dk/app/1\\nthen \\"https://x.dk/2\\""}'],
+      texts: [String.raw`{"notes":"Saw https://kibana.cego.dk/app/1\nthen \"https://x.dk/2\""}`],
       mr: null,
     }),
   ).toEqual([

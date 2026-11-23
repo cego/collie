@@ -94,7 +94,7 @@ export function matchesGlob(glob: string, path: string) {
     Arr.map(Str.split(glob, "**"), (part) =>
       Arr.join(
         Arr.map(Str.split(part, "*"), (piece) =>
-          pipe(piece, Str.replace(/[.+?^${}()|[\]\\]/g, "\\$&")),
+          pipe(piece, Str.replace(/[.+?^${}()|[\]\\]/g, String.raw`\$&`)),
         ),
         "[^/]*",
       ),

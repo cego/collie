@@ -33,6 +33,8 @@ const correctnessDefaults = {
 const unfit = {
   // WARNING: oxlint 1.94 reports a let reassigned after a closure captures it, as in test/run-model.test.ts.
   "prefer-const": "off",
+  // WARNING: it rewrites the prose "UTF-8" in a message assertion as an encoding id.
+  "unicorn/text-encoding-identifier-case": "off",
 } as const;
 
 const migrating = {
@@ -77,10 +79,8 @@ const migrating = {
   "unicorn/prefer-native-coercion-functions": "off",
   "unicorn/prefer-set-has": "off",
   "unicorn/prefer-single-call": "off",
-  "unicorn/prefer-string-raw": "off",
   "unicorn/prefer-string-replace-all": "off",
   "unicorn/prefer-top-level-await": "off",
-  "unicorn/text-encoding-identifier-case": "off",
 } as const;
 
 export default defineConfig({
@@ -121,7 +121,10 @@ export default defineConfig({
     "anti-slop/no-unknown-parameters": "error",
     "anti-slop/require-safety-comment-for-type-assertion": ["error", { markers: ["WARNING"] }],
     "anti-slop-effect/no-service-constructor-imports": "error",
-    "landmines-style/no-comments": ["error", { publicApi: ["/src/(sdk|collie-module)\\.ts$"] }],
+    "landmines-style/no-comments": [
+      "error",
+      { publicApi: [String.raw`/src/(sdk|collie-module)\.ts$`] },
+    ],
     "effecttsgo/any-unknown-in-error-context": "error",
     "effecttsgo/prefer-effect-array": "error",
     "effecttsgo/prefer-effect-string": "error",

@@ -168,11 +168,11 @@ test("a target occupied while a fork is being prepared is never overwritten", ()
       yield* mkdirp(join(targetDir, "personas"));
       const forkModule = pipe(
         new URL("../src/fork.ts", import.meta.url).pathname,
-        Str.replaceAll("'", "\\'"),
+        Str.replaceAll("'", String.raw`\'`),
       );
       const platformModule = pipe(
         new URL("../src/platform.ts", import.meta.url).pathname,
-        Str.replaceAll("'", "\\'"),
+        Str.replaceAll("'", String.raw`\'`),
       );
       const marker = join(root, "child-ready");
       const child = Bun.spawn(

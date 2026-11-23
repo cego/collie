@@ -199,7 +199,7 @@ const TERMINALS: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
 ];
 
 const appleString = (text: string) =>
-  `"${pipe_(text, Str.replaceAll("\\", "\\\\"), Str.replaceAll('"', '\\"'))}"`;
+  `"${pipe_(text, Str.replaceAll("\\", String.raw`\\`), Str.replaceAll('"', String.raw`\"`))}"`;
 
 export const inTerminal = (
   command: ReadonlyArray<string>,

@@ -7,7 +7,16 @@ import { STATUS_LINE_ARGS, statusLineCommand } from "../src/statusline";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 
-const WORDS = ["two words", "it's", `say "hi"`, "a;b", "$HOME", "*", "back\\slash", "line\nbreak"];
+const WORDS = [
+  "two words",
+  "it's",
+  `say "hi"`,
+  "a;b",
+  "$HOME",
+  "*",
+  String.raw`back\slash`,
+  "line\nbreak",
+];
 
 const argvOf = (line: string, program: string, env: Readonly<Record<string, string>> = {}) =>
   Effect.gen(function* () {

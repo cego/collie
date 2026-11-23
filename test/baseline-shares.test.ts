@@ -57,7 +57,7 @@ test("a pattern matching scenarios in two shares yields all four files", () => {
 
 test("a pattern matches each pass's full test names, as -t does", () => {
   expect(scenarioFiles(names, "^beta$")).toEqual(["test/baseline-07.test.ts"]);
-  expect(scenarioFiles(names, "beta \\(under an unrelated id\\)")).toEqual([
+  expect(scenarioFiles(names, String.raw`beta \(under an unrelated id\)`)).toEqual([
     "test/baseline-unrelated-07.test.ts",
   ]);
 });

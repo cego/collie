@@ -41,7 +41,12 @@ export function failedTests(output: string) {
 export function rerunArgv(test: FailedTest) {
   const joined = Arr.join(Str.split(test.name, " > "), " ");
   const file = pipe(test.file, Str.startsWith("/")) ? test.file : `./${test.file}`;
-  return ["test", file, "-t", `^${pipe(joined, Str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))}$`];
+  return [
+    "test",
+    file,
+    "-t",
+    `^${pipe(joined, Str.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`))}$`,
+  ];
 }
 
 // WARNING: 'matched 0 tests' and two tests of that name do not count as ran alone.

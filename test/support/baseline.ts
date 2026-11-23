@@ -21976,7 +21976,7 @@ const NOISY_BENCH = Arr.join(
   [
     'echo x >> "$1"',
     'if [ $(($(wc -l < "$1") % 2)) -eq 1 ]; then v=5; else v=15; fi',
-    'printf \'{"value": %s, "count": 7}\\n\' "$v"',
+    String.raw`printf '{"value": %s, "count": 7}\n' "$v"`,
     "",
   ],
   "\n",
@@ -22720,7 +22720,7 @@ const CYCLE_BENCH = Arr.join(
     "[ -f fixed ] && count=3",
     "size=100; [ -f size ] && size=$(cat size)",
     'if [ -e jitter ]; then echo x >> "$1"; if [ $(($(wc -l < "$1") % 2)) -eq 1 ]; then size=60; else size=140; fi; fi',
-    'printf \'{"count": %s, "size": %s}\\n\' "$count" "$size"',
+    String.raw`printf '{"count": %s, "size": %s}\n' "$count" "$size"`,
     "",
   ],
   "\n",

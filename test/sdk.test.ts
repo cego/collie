@@ -328,7 +328,16 @@ test("a pattern check is drawn as the pattern a model is held to, with or withou
 });
 
 test("a flagless pattern that matches differently under the u flag is not drawn", () => {
-  const sources = ["^..$", "^.$", "^[^a]$", "^\\S$", "^\\W$", "^\\D$", "^\\p{L}$", "^\\u{61}$"];
+  const sources = [
+    "^..$",
+    "^.$",
+    "^[^a]$",
+    String.raw`^\S$`,
+    String.raw`^\W$`,
+    String.raw`^\D$`,
+    String.raw`^\p{L}$`,
+    String.raw`^\u{61}$`,
+  ];
   for (const source of sources) {
     const drawn = jsonSchemaFor(Schema.String.check(Schema.isPattern(new RegExp(source))));
     expect(drawn.document).not.toHaveProperty("pattern");

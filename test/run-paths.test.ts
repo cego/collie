@@ -202,7 +202,7 @@ test("taking over a crashed breaker's guard leaves this process's own claim", ()
 const breakInChild = (lock: string, marker: string) => {
   const lockModule = pipe_(
     new URL("../src/lock.ts", import.meta.url).pathname,
-    Str.replaceAll("'", "\\'"),
+    Str.replaceAll("'", String.raw`\'`),
   );
   return Bun.spawn(
     [

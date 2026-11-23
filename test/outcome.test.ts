@@ -807,7 +807,7 @@ test.each([
   "grep -q foo src/x.ts",
   '"/usr/bin/grep" -q foo src/x.ts',
   "'rg' foo src",
-  "g\\rep -q foo src/x.ts",
+  String.raw`g\rep -q foo src/x.ts`,
   'git "grep" foo',
   "gr\\\nep -q foo src/x.ts",
   '"gr\\\nep" -q foo src/x.ts',

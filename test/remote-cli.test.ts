@@ -279,7 +279,7 @@ test("a verify from an empty caller runs and is recorded on its owning Machine",
           "--",
           "sh",
           "-c",
-          "printf 'owner output\\n'; pwd",
+          String.raw`printf 'owner output\n'; pwd`,
         ])).envelope,
       ).toMatchObject({
         ok: true,

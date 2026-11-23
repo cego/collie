@@ -581,7 +581,7 @@ const PAGE = 100;
 // WARNING: GitLab's * matches across / too, unlike a glob.
 const wildcard = (pattern: string) =>
   new RegExp(
-    `^${pipe(pattern, Str.replace(/[.+?^${}()|[\]\\]/g, "\\$&"), Str.replaceAll("*", ".*"))}$`,
+    `^${pipe(pattern, Str.replace(/[.+?^${}()|[\]\\]/g, String.raw`\$&`), Str.replaceAll("*", ".*"))}$`,
   );
 
 function protects(project: string, branch: string, cwd: string) {

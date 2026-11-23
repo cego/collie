@@ -58,7 +58,7 @@ test("no attribute keeps a script URL, whatever a component calls it", () => {
       ["prose-card", { to: "javascript:window.pwned=true", title: "a card" }],
       ["prose-a", { ":to": '" JaVa\tScRiPt:alert(1)"' }, "go"],
       ["prose-callout", { ":ui": '{"base":"javascript:x"}', icon: "i-lucide-info" }, "note"],
-      ["prose-card", { ":to": '"\\u006aavascript:x()"' }],
+      ["prose-card", { ":to": String.raw`"\u006aavascript:x()"` }],
       ["prose-card", { ":to": "frontmatter.away" }],
       ["input", { type: "checkbox", ":checked": "true" }],
     ]),

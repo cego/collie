@@ -391,9 +391,9 @@ test("a base whose own edit to a script the harness edits merges cleanly is refu
       yield* exec(["mkdir", "bench"], { cwd: repo });
       const script = (first: string, last: string) =>
         write("bench/edited.sh", `${first}\n:\n:\n:\n:\n${last}\n`);
-      yield* script("x=1", 'echo "{\\"counter\\": $(cat value)}"');
+      yield* script("x=1", String.raw`echo "{\"counter\": $(cat value)}"`);
       const before = yield* commit("a benchmark script before the harness");
-      yield* script("x=2", 'echo "{\\"counter\\": $(cat value)}"');
+      yield* script("x=2", String.raw`echo "{\"counter\": $(cat value)}"`);
       const harness = yield* commit("harness");
       yield* git("reset", "-q", "--hard", before);
       yield* script("x=1", "echo '{\"counter\": 1}'");

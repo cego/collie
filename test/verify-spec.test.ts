@@ -256,7 +256,7 @@ test("an approved check renders as a line a shell runs with the same words", () 
       const spec: VerifySpec = {
         name: "echoes",
         executable: "printf",
-        argv: ["%s\\0", "two words", "$HOME costs"],
+        argv: [String.raw`%s\0`, "two words", "$HOME costs"],
         cwd: "/",
       };
       const line = pipe_(renderApproved([spec]), Str.slice("- echoes: ".length, -" (in /)".length));

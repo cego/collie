@@ -227,8 +227,7 @@ const fakeGitWithCheckouts = (
     },
     opts.refusals ?? {},
     {
-      "worktree add":
-        'for a in "$@"; do case "$a" in /*) mkdir -p "$a" && printf "gitdir: $a/.gitdir\\n" > "$a/.git"; break ;; esac; done',
+      "worktree add": String.raw`for a in "$@"; do case "$a" in /*) mkdir -p "$a" && printf "gitdir: $a/.gitdir\n" > "$a/.git"; break ;; esac; done`,
       "worktree remove": 'rm -rf "$3"',
       ...opts.scripts,
     },
@@ -895,7 +894,7 @@ test("a branch with commits the remote has not seen keeps its worktree", () =>
     Effect.gen(function* () {
       yield* collieWorktree("wt");
       yield* mergedMr();
-      yield* settledGit({ "rev-list HEAD --not": "a1\\nb2" });
+      yield* settledGit({ "rev-list HEAD --not": String.raw`a1\nb2` });
 
       expect(yield* prune()).toEqual(["kept wt · 2 commit(s) on no remote"]);
     }),
@@ -2029,8 +2028,7 @@ test("a clone made before Collie kept its credentials gets the helper on its nex
         },
         {},
         {
-          "worktree add":
-            'for a in "$@"; do case "$a" in /*) mkdir -p "$a" && printf "gitdir: $a/.gitdir\\n" > "$a/.git"; break ;; esac; done',
+          "worktree add": String.raw`for a in "$@"; do case "$a" in /*) mkdir -p "$a" && printf "gitdir: $a/.gitdir\n" > "$a/.git"; break ;; esac; done`,
         },
       );
 
@@ -2127,9 +2125,8 @@ test("a GitLab URL is cloned before the Renovate worktree is cut", () =>
         },
         {},
         {
-          clone: 'mkdir -p "$4" && printf "gitdir: $4/.gitdir\\n" > "$4/.git"',
-          "worktree add":
-            'for a in "$@"; do case "$a" in /*) mkdir -p "$a" && printf "gitdir: $a/.gitdir\\n" > "$a/.git"; break ;; esac; done',
+          clone: String.raw`mkdir -p "$4" && printf "gitdir: $4/.gitdir\n" > "$4/.git"`,
+          "worktree add": String.raw`for a in "$@"; do case "$a" in /*) mkdir -p "$a" && printf "gitdir: $a/.gitdir\n" > "$a/.git"; break ;; esac; done`,
         },
       );
       yield* bin.add("glab", 'case "$1 $2" in "config get") printf token ;; *) exit 1 ;; esac');
@@ -2429,8 +2426,7 @@ test("a taken-over roaming checkout has its new head's dependencies installed be
   runOnPath(
     Effect.gen(function* () {
       const taken = yield* roamingMovedTo({
-        install:
-          'mkdir -p node_modules/.bin && printf "#!/bin/sh\\nexit 0\\n" > node_modules/.bin/tool && chmod +x node_modules/.bin/tool',
+        install: String.raw`mkdir -p node_modules/.bin && printf "#!/bin/sh\nexit 0\n" > node_modules/.bin/tool && chmod +x node_modules/.bin/tool`,
       });
 
       const checkout = yield* renovateCheckout();
@@ -2497,7 +2493,7 @@ test("an ended Run's checkout that holds work is kept for it and passed over, an
       yield* fakeGitWithRoaming(taken, { "status --porcelain": " M package.json\n" });
       const dirty = yield* renovateCheckout();
       yield* fakeGitWithRoaming(taken, {
-        "rev-list HEAD --not --branches --remotes": "a1\\nb2\\n",
+        "rev-list HEAD --not --branches --remotes": String.raw`a1\nb2\n`,
       });
       const unpushed = yield* renovateCheckout();
 
@@ -2865,7 +2861,7 @@ test("without an upstream, a commit that is on no other branch keeps the checkou
       yield* settledGit({
         "rev-parse --abbrev-ref --symbolic-full-name @{u}": "",
         "symbolic-ref --short refs/remotes/origin/HEAD": "origin/master",
-        "rev-list HEAD --not": "c1\\nc2",
+        "rev-list HEAD --not": String.raw`c1\nc2`,
       });
 
       expect(yield* prune()).toEqual(["kept wt · 2 commit(s) on no remote"]);
@@ -3109,8 +3105,7 @@ test("a reviewed branch that exists only here is checked out as it is", () =>
         },
         { "fetch origin": "fatal: unable to access 'https://gitlab.example.com/'" },
         {
-          "worktree add":
-            'for a in "$@"; do case "$a" in /*) mkdir -p "$a" && printf "gitdir: $a/.gitdir\\n" > "$a/.git"; break ;; esac; done',
+          "worktree add": String.raw`for a in "$@"; do case "$a" in /*) mkdir -p "$a" && printf "gitdir: $a/.gitdir\n" > "$a/.git"; break ;; esac; done`,
         },
       );
 
@@ -3340,7 +3335,7 @@ test("a squash-merged branch goes when its head is the head that merged", () =>
       yield* mergedMr("abc123");
       yield* settledGit({
         "rev-parse --abbrev-ref --symbolic-full-name @{u}": "",
-        "rev-list HEAD --not": "c1\\nc2",
+        "rev-list HEAD --not": String.raw`c1\nc2`,
         "rev-parse HEAD": "abc123",
       });
 
@@ -3607,7 +3602,7 @@ test("a Renovate clone no Run uses and no checkout is left of goes; one a Run us
       const used = `${root}/${Bun.hash(repository).toString(16)}`;
       const unused = `${root}/abc`;
       for (const clone of [used, unused]) yield* fs.makeDirectory(clone, { recursive: true });
-      yield* fakeGitAnswering({ "worktree list --porcelain": "worktree $PWD\\n" });
+      yield* fakeGitAnswering({ "worktree list --porcelain": String.raw`worktree $PWD\n` });
       const runs = [
         runFacts({
           id: "r-renovate",
