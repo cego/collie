@@ -740,7 +740,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | { readonly _tag: "Merged"; readonly sha: string }
     | { readonly _tag: "HeadMoved"; readonly head: string }
     | { readonly _tag: "MergedOutside"; readonly sha: string; readonly by: string; readonly at: string }
-    | { readonly _tag: "Refused"; readonly reason: string };
+    | { readonly _tag: "Refused"; readonly reason: string }
+    | { readonly _tag: "Transient"; readonly reason: string };
   export const MergeOutcomeSchema: Schema.Codec<MergeOutcome, unknown, never, never>;
 
   /** What claim holds, with what a free-only claim left to whom, why there is nothing to claim, or why the claims a Run needs could not be settled. */

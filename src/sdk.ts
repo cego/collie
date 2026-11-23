@@ -1154,7 +1154,8 @@ export interface HostApi {
    * the forge is asked and says after what came of it; the merge watch reads it to leave this
    * Run, and the Runs it was started from, running when the merge lands. Answers `Merged`
    * with the merged commit, `HeadMoved` where the merge request's head is no longer `head`,
-   * `MergedOutside` where someone else merged it first, or `Refused` with the forge's why.
+   * `MergedOutside` where someone else merged it first, `Refused` with the forge's why, or
+   * `Transient` with why, unmerged on a failure a merge at the same head may clear.
    * Fails for a Run that recorded no merge request. Take it inside an Activity: a replay
    * settles an attempt an earlier host left on the forge's word rather than merging again.
    */

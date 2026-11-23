@@ -936,6 +936,13 @@ after, what came of it. It answers a `MergeOutcome` (`MergeOutcomeSchema` journa
 - `HeadMoved`: the merge request's `head` is no longer the one asked for; nothing merged.
 - `MergedOutside`: someone else merged it first, at `sha`, `by` whom and `at` when.
 - `Refused`: the forge's `reason`, such as a conflict or a merge request already closed.
+- `Transient`: nothing merged on a failure a merge at the same head may clear, with the
+  forge's `reason`: a 5xx, a network failure, a timeout or a rate limit, GitHub's 405 "Base
+  branch was modified", or GitLab's 422 "Branch cannot be merged". The attempt is withdrawn.
+
+Where the forge answers `Transient` or says the merge request is already merged, the landing
+reads the review and settles the attempt as a restart would: a merge by Collie's own login
+at `head` is `Merged`, anyone else's is `MergedOutside`.
 
 The landing is what keeps the merge watch from stopping this Run, and the Runs it was
 started from, when the merge lands ([The merge watch](internals.md#the-forge-boundary)).
