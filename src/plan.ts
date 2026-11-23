@@ -119,6 +119,7 @@ export function afterMergeIn(text: string) {
   return returned;
 }
 
+// WARNING: counts only the Run's own directory: the plan it was given is someone else's work.
 export const planIssuesIn = Effect.fn("Plan.planIssuesIn")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -216,11 +217,13 @@ export interface PlanRepos {
   refusal: PlanRefusal | null;
 }
 
+// WARNING: a ticket's id is its one number however padded, so `2` means `02-api.md`.
 function ticketId(raw: string) {
   const digits = /^0*(\d+)/.exec(raw)?.[1];
   return digits ?? raw;
 }
 
+// WARNING: digits count only as a whole word: `v2` is not a blocker on ticket 02.
 function blockersIn(said: string) {
   const ids = Arr.filter(
     Arr.map(Str.split(said, /[\s,;]+/), (word) =>
@@ -249,6 +252,7 @@ interface Ticket {
 
 type Placed = Ticket & { repo: string };
 
+// WARNING: `..` is refused, not resolved, so no ticket can aim a Run at a repository the operator never named.
 function repoUnderRoot(raw: string) {
   const value = Str.trim(raw);
   if (value === "" || pipe_(value, Str.startsWith("/")) || pipe_(value, Str.startsWith("~"))) {
@@ -278,6 +282,7 @@ function indexBy(index: Map<string, string[]>, key: string, file: string) {
   else index.set(key, [file]);
 }
 
+// WARNING: a plan naming one repository by path is not single-repo: it needs a run rooted there.
 export function isSingleRepo(plan: PlanRepos) {
   const returned: boolean =
     plan.refusal === null && plan.repos.length === 1 && plan.repos[0]!.path === ".";
@@ -355,6 +360,7 @@ export function readPlanRepos(
     return outcome;
   }
 
+  // WARNING: checked before the single-repository shortcut, so one plan is never judged differently as one repo or two.
   const claiming = new Map<string, string[]>();
   for (const ticket of parsed) indexBy(claiming, ticket.id, ticket.file);
   const twice = Arr.filter([...claiming.values()], (files) => files.length > 1);
@@ -478,6 +484,7 @@ export function readPlanRepos(
   }
   const keys = [...ticketsOf.keys()];
 
+  // WARNING: only edges between Changes: an edge inside one is the implementer's ordering.
   const blockers = new Map<string, Set<string>>(Arr.map(keys, (key) => [key, new Set<string>()]));
   const interleaving = new Map<string, string[]>();
   for (const ticket of placed) {
@@ -500,6 +507,7 @@ export function readPlanRepos(
       Arr.every([...blockers.get(key)!], (from) => settled.has(from)),
     );
     if (wave.length === 0) {
+      // WARNING: only the Changes on the cycle are named, not those downstream of it.
       let cyclic = left;
       for (;;) {
         const waited = Arr.filter(cyclic, (key) =>
@@ -575,6 +583,7 @@ export const planReposOf = Effect.fn("Plan.planReposOf")(function* (planDir: str
     const repo = repoUnderRoot(REPO_LINE.exec(ticket.text)?.[1] ?? "");
     if (repo !== null) named.add(repo);
   }
+  // WARNING: a .git file is a worktree, and either form is a checkout to root a run at.
   const checkouts = new Set<string>();
   for (const repo of named) {
     if (yield* fs.exists(path.join(root, repo, ".git"))) checkouts.add(repo);
@@ -607,6 +616,7 @@ function titleOf(file: string, text: string) {
   );
 }
 
+// WARNING: refuses nothing: readPlanRepos already refused any cycle, and a second opinion here would disagree.
 export function orderedTickets(
   tickets: ReadonlyArray<{ file: string; text: string }>,
   repo?: string,

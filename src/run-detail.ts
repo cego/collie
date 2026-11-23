@@ -36,6 +36,7 @@ export const planDirOf = Effect.fn("RunDetail.planDirOf")(function* (run: RunFac
 
 const git = (cwd: string, args: ReadonlyArray<string>) => shell("git", [...args], cwd);
 
+// WARNING: NUL-separated, so git's quoted paths come back as they are on disk.
 const fields = (text: string) => Arr.filter(Str.split(text, "\0"), (field) => field !== "");
 
 const mergeBase = Effect.fn("RunDetail.mergeBase")(function* (root: string, branch: string) {
@@ -96,6 +97,7 @@ export const runDiff = Effect.fn("RunDetail.runDiff")(function* (at: {
       (yield* git(root, ["ls-files", "-z", "--others", "--exclude-standard"])).stdout,
     )) {
       const file = `${root}/${path}`;
+      // WARNING: never through a link, device or FIFO: an agent's checkout is untrusted.
       const linked = yield* fs.readLink(file).pipe(
         Effect.as(true),
         Effect.orElseSucceed(() => false),
@@ -137,6 +139,7 @@ export const FINAL_DIFF = "diff.json";
 
 let lastPatch: { readonly key: string; readonly text: string } | null = null;
 
+// WARNING: paths are literal: a `[` or `*` in a name is not a glob.
 const literally = (root: string, args: ReadonlyArray<string>) =>
   git(root, ["--literal-pathspecs", ...args]);
 
@@ -214,6 +217,7 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
     offset: 0,
     length: PART_BYTES,
   },
+  // WARNING: not the Run's checkout, which is removed once the Run settles.
   glabCwd: string = run.dir,
 ) {
   const part = {
@@ -221,6 +225,7 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
     length: Math.min(Math.max(0, range.length), PART_BYTES),
   };
   const fs = yield* FileSystem.FileSystem;
+  // WARNING: parts are bytes, so a character across a seam is whole only once joined.
   const asked: (bytes: Uint8Array, size: number, file: string | null) => RunFile = (
     bytes,
     size,
@@ -233,6 +238,7 @@ export const fetchRef = Effect.fn("RunDetail.fetchRef")(function* (
     const bytes = new TextEncoder().encode(content);
     return asked(bytes.subarray(part.offset, part.offset + part.length), bytes.length, null);
   };
+  // WARNING: only regular files: a FIFO or device would never answer.
   const read = (file: string) =>
     Effect.scoped(
       Effect.gen(function* () {

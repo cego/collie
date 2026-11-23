@@ -15,6 +15,7 @@ const said = (field: string) =>
     message: `${field} is required, and must not be blank`,
   });
 
+// WARNING: absent and null both read as none, which keeps an older Output readable.
 const optionalList = <S extends Schema.Top>(item: S) =>
   Schema.NullOr(Schema.Array(item)).pipe(
     Schema.decodeTo(Schema.Array(item), {
@@ -38,6 +39,7 @@ const listed = <
     },
   );
 
+// WARNING: severity is free text: only minor is non-blocking, so a closed union would throw reviews away.
 export const FindingSchema = Schema.Struct({
   id: Schema.optionalKey(Schema.String.pipe(said("id"))),
   status: Schema.optionalKey(Schema.Literals(["open", "fixed", "disputed", "obsolete"])),
@@ -99,6 +101,8 @@ export interface Fixed {
 
 const VerdictSchema = Schema.Literals(["clean", "findings"]);
 
+// WARNING: no schema is closed against extra keys: an Output may say more than a gate reads.
+// WARNING: a judgement is read from a reviewer's Output only: the author of a change cannot vouch for its own scope.
 const JUDGEMENTS = {
   scope_met: Schema.optionalKey(Schema.Boolean),
   behavior_preserved: Schema.optionalKey(Schema.Boolean),
@@ -149,6 +153,7 @@ export const FixedSchema = Schema.Struct({
   note: Schema.optionalKey(Schema.String),
 });
 
+// WARNING: a dropped finding must say why, or it is lost rather than resolved.
 const DroppedSchema = FindingSchema.pipe(
   Schema.refine<typeof FindingSchema, typeof FindingSchema.Type>(
     (value): value is typeof FindingSchema.Type => Str.trim(value.reason ?? "") !== "",
@@ -186,6 +191,7 @@ export const CriterionSchema = Schema.Struct({
 });
 export type Criterion = typeof CriterionSchema.Type;
 
+// WARNING: criteria compare on words, since a copy may drop formatting.
 const criterionKey = (text: string) =>
   Str.trim(
     pipe(
@@ -250,6 +256,7 @@ export const FixOutputSchema = Schema.Struct({
   checks: optionalList(CheckSchema),
 }).pipe(listed());
 
+// WARNING: pushed false is a real answer, so the url is optional rather than the proof.
 export const MrOutputSchema = Schema.Struct({
   pushed: Schema.Boolean,
   mr_url: Schema.optionalKey(Schema.NullOr(Schema.String)),
@@ -263,12 +270,14 @@ export const PlanOutputSchema = Schema.Struct({
 
 export const REVIEW_FILE = "review.md";
 
+// WARNING: the JSON a card counts; review.md is prose for the human and is never counted.
 export const FINDINGS_FILE = "findings.json";
 
 const FindingsJson = Schema.fromJsonString(Schema.Array(FindingSchema));
 const decodeFindings = Schema.decodeUnknownEffect(FindingsJson);
 const encodeFindings = flow(Schema.encodeResult(FindingsJson), Result.getOrThrow);
 
+// WARNING: written together: a review with no findings file is one nothing can count.
 export const leaveReview = (dir: string, synthesis: typeof SynthesisSchema.Type) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) =>
@@ -461,6 +470,7 @@ export function parseFindings(raw: YamlValue | undefined, where: string) {
   return returned;
 }
 
+// WARNING: the line is left out on purpose: it moves as the branch is fixed, and a dispute must survive that.
 export function findingKey(f: Pick<Finding, "file" | "title">) {
   return `${f.file ?? ""}::${Str.toLowerCase(Str.trim(f.title))}`;
 }
@@ -503,6 +513,7 @@ export function parseSynthesis(text: string, where: string) {
     return returned;
   }
   for (const [i, finding] of dropped.value.entries()) {
+    // WARNING: a finding dropped without a reason is lost, not resolved.
     if (!finding.reason || Str.trim(finding.reason) === "") {
       const returned: Parsed<Synthesis> = {
         ok: false,
@@ -555,11 +566,13 @@ export function parseFixed(value: YamlValue | undefined, where: string) {
   return returned;
 }
 
+// WARNING: a passed flag in an Output is a claim and is ignored: the verification journal decides.
 export interface Check {
   name: string;
   note?: string;
 }
 
+// WARNING: fixed entries are objects, not sentences, so the engine can match each to a finding.
 export interface FixOutput {
   verdict: "clean" | "findings";
   findings: Finding[];
@@ -647,6 +660,7 @@ function parseChecks(value: YamlValue | undefined, where: string) {
   return returned;
 }
 
+// WARNING: a blocker needs a place and a reason, not a changed file: a broken unchanged caller is a valid blocker; minor findings are exempt.
 export function substantiated(finding: Finding) {
   if (!isBlocking(finding)) return true;
   return Str.trim(finding.file ?? "") !== "" && Str.trim(finding.detail ?? "") !== "";
@@ -666,6 +680,7 @@ export function unsubstantiated(findings: ReadonlyArray<Finding>) {
   );
 }
 
+// WARNING: an unrecognised severity blocks: only minor does not.
 export function isBlocking(finding: Finding) {
   return (
     finding.status !== "fixed" && finding.status !== "obsolete" && finding.severity !== "minor"
@@ -679,6 +694,7 @@ export type Halt =
   | "definition_changed"
   | "evidence_missing";
 
+// WARNING: a disputed finding is not part of the same-set check: the argument is moving, not standing.
 export function blockingKeys(findings: ReadonlyArray<Finding>) {
   return [
     ...new Set(
@@ -705,9 +721,11 @@ export type Rally =
       readonly outstanding: Finding[];
     };
 
+// WARNING: the same blocking set twice is no progress, since a third attempt would raise it again.
 export function settleRound(round: {
   readonly live: ReadonlyArray<Finding>;
   readonly disputed: ReadonlyArray<Finding>;
+  // WARNING: reopened disputes drive the loop whatever their severity, as a human resumed the Run for them.
   readonly reopened?: ReadonlyArray<Finding>;
   readonly at: number;
   readonly seen?: { readonly at: number; readonly keys: ReadonlyArray<string> } | null;
@@ -781,6 +799,7 @@ export interface CheckEvidence {
   readonly content?: string;
 }
 
+// WARNING: an agent's own check record counts: what binds it is the collector, not who called it.
 function checkGap(name: string, proof: CheckProof, evidence: CheckEvidence) {
   switch (proof.state) {
     case "passed":
@@ -803,6 +822,7 @@ function checkGap(name: string, proof: CheckProof, evidence: CheckEvidence) {
   }
 }
 
+// WARNING: the review before the last fix is history, and a fix's own word is not a review.
 export function settleFinalFix(
   live: ReadonlyArray<Finding>,
   fix: FixReport,
@@ -845,6 +865,7 @@ export function settleFinalFix(
       unverified.push(`no disposition for ${oneLine(finding)}`);
     }
   }
+  // WARNING: a blocking dispute not raised again is still a dispute: leaving it out is not the human deciding.
   const raised = new Set(Arr.map(live, findingKey));
   const standing = Arr.filter(fix.disputed, (d) => isBlocking(d) && !raised.has(findingKey(d)));
   for (const d of standing) disputes.push(disputeLine(d));
@@ -991,6 +1012,7 @@ function sameEvidence(left: Finding, right: Finding) {
   );
 }
 
+// WARNING: a dispute raised again with new evidence is a new finding, not the old one.
 export function remainingDisputes(disputed: ReadonlyArray<Finding>, review: Disposed) {
   const standing = standingIn(review);
   const resolved = new Set(Arr.map([...review.fixed, ...withdrawnIn(review)], findingKey));
@@ -1018,6 +1040,7 @@ export function conflictingDispositions(review: Disposed) {
   return [...new Set(lines)];
 }
 
+// WARNING: a rejected finding stops driving the loop; only a reviewer's rebuttal brings it back.
 export function splitDisputed(findings: ReadonlyArray<Finding>, disputed: ReadonlyArray<Finding>) {
   const split: Split = { live: [], settled: [], rebutted: [] };
   for (const finding of findings) {

@@ -22,6 +22,7 @@ import { nowIso } from "./time";
 import { TOOLS } from "./tools";
 import { stringifyJson } from "./json";
 
+// WARNING: shorter than HARNESSES: chat needs a native editor, a resumable session id, and a way to add Collie's tools.
 export const CHAT_HARNESSES = ["claude", "pi"] as const;
 export type ChatHarness = (typeof CHAT_HARNESSES)[number];
 
@@ -79,6 +80,7 @@ export interface LaunchFiles {
   readonly settings: string;
 }
 
+// WARNING: every flag is this launch only; nothing rewrites ~/.claude or ~/.pi, and nothing pins a spend.
 export function chatArgs(
   harness: ChatHarness,
   sessionId: string,
@@ -90,6 +92,7 @@ export function chatArgs(
     flag === undefined || autoCompactWindow === null ? [] : [flag, String(autoCompactWindow)];
   return harness === "claude"
     ? [
+        // WARNING: never --continue, which reopens the latest conversation in this directory, possibly someone else's.
         "--session-id",
         sessionId,
         "--append-system-prompt-file",
@@ -107,18 +110,22 @@ export function chatArgs(
     : [
         "--session-id",
         sessionId,
+        // WARNING: pi reads a path given here as file contents.
         "--append-system-prompt",
         files.systemPrompt,
         "-e",
         files.extension,
+        // WARNING: no context files, so the role is the appended prompt, not whatever repository the terminal is in.
         "--no-context-files",
       ];
 }
 
+// WARNING: never sendUserMessage, which looks typed by the human; Claude has no push and is told on its next turn.
 export function pushable(harness: ChatHarness) {
   return harness === "pi"
     ? {
         attempts: true,
+        // WARNING: observed arrival only, never assumed from a flag.
         proven: false,
         how: "Collie's Pi extension hands the batch to Pi's own queue as a custom message, between turns. That the message arrives has not been observed on this installation, so the conversation is still told on its next turn and nothing is marked delivered on the strength of the send.",
       }
@@ -129,6 +136,7 @@ export function pushable(harness: ChatHarness) {
       };
 }
 
+// WARNING: reported, not thrown: a chat that will not open must not make the board or Runs unavailable.
 export function whyUnavailable(harness: ChatHarness, found: string | null) {
   return found === null
     ? `${harness} is not installed or not on PATH; the board and existing Runs are unaffected`
@@ -153,6 +161,7 @@ export function preferredHarness(value: string | undefined) {
   return isChatHarness(value) ? value : DEFAULT_CHAT_HARNESS;
 }
 
+// WARNING: independent of the worker harness default; a Herd on Codex still chats in Claude unless told otherwise.
 export const chatHarnessOf = Effect.fn("Chat.harnessOf")(function* (userDir: string) {
   const raw = yield* readConfig(userDir);
   const value = raw[CHAT_HARNESS_KEY];
@@ -165,10 +174,13 @@ export const startedNow = Effect.fn("Chat.startedNow")(function* (
   return started({ ...opts, at: yield* nowIso });
 });
 
+// WARNING: loaded with -e, not installed in ~/.pi, which would change every Pi the human starts.
 export function piExtension(
   command: ReadonlyArray<string>,
   tools: ReadonlyArray<PiTool>,
+  // WARNING: passed explicitly, never inherited: a pane's env can name another Herd under a probe.
   env: Readonly<Record<string, string>>,
+  // WARNING: watch the directory, not the file; the journal is replaced by rename whenever it is trimmed.
   newsDir: string,
   newsFile: string,
   question: (PiTool & { readonly helper: ReadonlyArray<string> }) | null = null,
@@ -317,11 +329,13 @@ export function claudeSettings(
   const heard = { type: "command", command: run("heard") };
   const hooks = {
     UserPromptSubmit: [{ hooks: [{ type: "command", command: run("context") }, heard] }],
+    // WARNING: a turn's words end with its Stop, so an unprompted turn carries none.
     Stop: [{ hooks: [heard] }],
   };
   return `${stringifyJson({ hooks }, 2)}\n`;
 }
 
+// WARNING: only UserPromptSubmit carries a prompt; other hooks' input has none.
 const HookInput = Schema.fromJsonString(
   Schema.Struct({ session_id: Schema.String, prompt: Schema.optionalKey(Schema.String) }),
 );
@@ -454,11 +468,13 @@ export type Started =
   | { readonly kind: "launched"; readonly record: ChatRecord }
   | { readonly kind: "unavailable"; readonly harness: ChatHarness; readonly why: string };
 
+// WARNING: always a new conversation: a resumed one carries its history and model into every turn; never open the other harness instead.
 export const startChat = Effect.fn("Chat.start")(function* (
   herdr: Herdr,
   env: PluginEnv,
   key: string,
   log: (line: string) => Effect.Effect<void, never, never>,
+  // WARNING: a probe running from source passes its own entrypoint, since selfCommand would name the probe.
   self: ReadonlyArray<string> = selfCommand(),
   help: typeof installedHelp = installedHelp,
 ) {
@@ -496,6 +512,7 @@ export const startChat = Effect.fn("Chat.start")(function* (
     yield* log(`chat: started without an auto-compact window: ${window.leftOff}`);
 
   const cwd = yield* herdDir(env.stateDir, key);
+  // WARNING: one object for both adapters; different answers mean two conversations about different Herds. Empty values read as unset.
   const serverEnv = {
     COLLIE_STATE_DIR: env.stateDir,
     COLLIE_USER_DIR: env.userDir,

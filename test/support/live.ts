@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import { Config, Effect, FileSystem } from "effect";
 import { LIVE_HARNESSES } from "./live-switch";
 
+// WARNING: These depend on the installed version, so an ordinary run skips them rather than failing.
 export const onMachineWith = (harness: string) =>
   Bun.env[LIVE_HARNESSES] === "1" && Bun.which(harness) !== null ? test : test.skip;
 

@@ -36,8 +36,10 @@ test("the argv is the isolation, so it is asserted exactly", () => {
     "-p",
     "--output-format",
     "json",
+    // WARNING: The CLI parses this word as JSON, not as a path.
     "--json-schema",
     '{"type":"object"}',
+    // WARNING: Load-bearing flags: --tools "" removes the model's tools; the settings and MCP flags drop inherited hooks and servers. No spend cap, by design.
     "--tools",
     "",
     "--restricted",
@@ -202,6 +204,7 @@ test("nothing is allowed without a grant, and a grant is only good for a Driver'
   const granting = { ...DEFAULT_AUTHORITY, auto_correct: true };
   expect(validate(correction, ctx({}, granting))[0]?.state).toBe("allowed_now");
 
+  // WARNING: The grant was for correcting drift, not for doing whatever a conversation found.
   expect(validate(correction, ctx({ origin: "steer" }, granting))[0]?.state).toBe("pending");
 });
 

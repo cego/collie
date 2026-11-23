@@ -1,3 +1,4 @@
+// WARNING: A Run's status is never edited: a failed Run merged by hand keeps both facts.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";

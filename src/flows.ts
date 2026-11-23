@@ -123,6 +123,7 @@ export interface ControlSession extends BoardSession {
 
 export type Mode = "pick" | "continue" | "resume" | "fork";
 
+// WARNING: the board's directory is no checkout, so a Run started there is placed rather than asked for one.
 const fromBoard = Effect.fn("Flows.fromBoard")(function* (env: PluginEnv) {
   const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   return key !== null && env.cwd === (yield* herdDir(env.stateDir, key));
@@ -197,6 +198,7 @@ export const pickFlow = Effect.fn("Flows.pickFlow")(function* (
   return 0;
 });
 
+// WARNING: the row's Workflow is passed on, never re-picked, or a different one could start.
 const startChosen = Effect.fn("Flows.startChosen")(function* (
   herdr: Herdr,
   env: PluginEnv,
@@ -286,6 +288,7 @@ const startModule = Effect.fn("Flows.startModule")(function* (
     const root = (yield* projectsRoot(env)).path;
     const candidates = strategy === "goal" ? [] : yield* placeableUnder(root);
     const byUrl = placedByUrl(words, candidates);
+    // WARNING: a repository URL no local checkout has is cloned by the Run itself.
     if (strategy === "goal" || (byUrl === null && strategy === "repository" && isUrl(words))) {
       rooted = true;
       at = { ...env, cwd: root };
@@ -672,6 +675,7 @@ const whyNoRenderer = Effect.fn("Flows.whyNoRenderer")(function* () {
   return null;
 });
 
+// WARNING: an upgrade renames a new file over the old, so compare the inode, never the path.
 export const replacedOnDisk = (file: string, every: Duration.Input = "2 seconds") =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -694,6 +698,7 @@ export const replacedOnDisk = (file: string, every: Duration.Input = "2 seconds"
 
 const BOARD_USAGE_EVERY = "15 seconds";
 
+// WARNING: OpenTUI is a dynamic import, so the CLI never loads the native renderer.
 export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
   herdr: Herdr,
   env: PluginEnv,
@@ -702,11 +707,13 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
   const platform = yield* Effect.context<
     FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
   >();
+  // WARNING: a file write can precede the host's publication, which must wake the terminal too.
   const changes = yield* Queue.sliding<void>(1);
   yield* Effect.addFinalizer(() => Queue.shutdown(changes));
   const changed = () => {
     Queue.offerUnsafe(changes, undefined);
   };
+  // WARNING: each host usage read is audited, so it is cached with a TTL.
   const usageNow = yield* Effect.cachedWithTTL(
     usageReadings(env, "board").pipe(
       Effect.map((read) => (read.ok ? read.value : [])),
@@ -721,17 +728,20 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     pluginRoot: env.pluginRoot,
     releases: releasesOf(env.raw),
     userDir: env.userDir,
+    // WARNING: compaction is asked and reported, never waited on, or the actions queue stalls.
     compaction: { waitMs: 0 },
     tasksOf: yield* followBoard(env, changed),
     detailOf: yield* followRunDetail(env, changed),
     usageOf: () => usageNow,
   };
+  // WARNING: a rebuilt binary ends the board, so the host starts the new build.
   const why =
     (yield* whyNoRenderer()) ??
     (yield* Effect.gen(function* () {
       const { runApp } = yield* Effect.promise(() => import("./ui/bridge"));
       const app = appState(session, env);
       const records = yield* RunRecords;
+      // WARNING: navigate reaches the screen only through dispatch, never a herdr focus call.
       let dispatch: ((command: Command) => void) | null = null;
       const navigate = (run: string) =>
         dispatch?.({ _tag: "SetFilter", filter: { kind: "run", id: run } });
@@ -755,6 +765,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
       }).pipe(Effect.raceFirst(Effect.flatten(replacedOnDisk(process.execPath))));
       return null;
     }).pipe(
+      // WARNING: an interrupt is re-raised, not handed to the text view, which would hang the closing pane.
       Effect.catchCauseIf(
         (cause) => !Cause.hasInterrupts(cause),
         (cause) => Effect.succeed(Str.split(reason(cause), "\n")[0]!),
@@ -824,6 +835,7 @@ export function appState(session: ControlSession, env: PluginEnv) {
     const state = {
       view: focus.view,
       filter: focus.filter,
+      // WARNING: the board is Herd-wide; a workspace is only a filter over it.
       tasks: tasksBuilt,
       now: yield* Clock.currentTimeMillis,
       density: defaults.density,
@@ -869,6 +881,7 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       ),
     );
   switch (command._tag) {
+    // WARNING: resolved at Enter, as herdr compacts tab ids; never focused, which turns done into idle.
     case "Jump": {
       const jump = command.jump;
       if (jump.kind === "agent") return attachLine(jump.agent);
@@ -960,6 +973,7 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
         hash: command.hash,
         request: yield* newRequestId(),
       });
+      // WARNING: navigate applies here since the host has no screen; an applied action counts even if a later one failed.
       const carried = Schema.decodeUnknownOption(CarriedSteps)(
         done.ok ? done.data : done.error.details,
       );
@@ -982,6 +996,7 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     case "OpenMr": {
       const ref = parseMrTarget(command.target);
       if (!ref) return `${command.target} is not a merge request`;
+      // WARNING: an unqualified mr:N resolves from the run's own checkout, never the caller's directory.
       const run = command.runId === null ? null : yield* runOf(command.runId);
       const forge = forgeOf(ref);
       const opened = yield* forge.open(ref, run?.cwd ?? env.cwd, shell);
@@ -1121,6 +1136,7 @@ const launch = Effect.fn("Flows.launch")(function* (
   prompts: FlowPrompts,
   opts: { workflow: string; inputs: Record<string, string>; note: string; parent?: RunFacts },
 ) {
+  // WARNING: the same launch flow as the picker, so a Choice step is never skipped.
   const line = yield* startChosen(session.herdr, env, prompts, {
     workflow: opts.workflow,
     given: opts.inputs,
@@ -1164,6 +1180,7 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
     });
     return { ...live, tasks: yield* tasksOf() };
   });
+  // WARNING: without a TTY nothing can answer a key; print once and end.
   if (!process.stdin.isTTY) {
     const view = yield* boardOf(session, yield* scan(env, session));
     const steering = yield* steeringOf(view);
@@ -1262,6 +1279,7 @@ const act = Effect.fn("Flows.act")(function* (
   return null;
 });
 
+// WARNING: the run's agents are left running; their panes are the transcript.
 export const stopRun = Effect.fn("Flows.stopRun")(function* (env: PluginEnv, runId: string) {
   const stopped = yield* controlRun(env, {
     door: "board",
@@ -1286,6 +1304,7 @@ const ledgersOf: (env: PluginEnv) => Ledgers = (env) => ({
   proposals: (herd) => hostProposals(env, herd).pipe(Effect.orElseSucceed(() => [])),
 });
 
+// WARNING: config.json is read once per quiet period; per redraw it cost thousands of reads an hour.
 const QUIET_FOR_MS = 30_000;
 const quietSeen = new Map<string, { at: number; quietMs: number }>();
 
@@ -1336,6 +1355,7 @@ const boardOf = Effect.fn("Flows.boardOf")(function* (session: ControlSession, s
     ...session,
     stateDir: session.stateDir,
     workspaceLabel: null,
+    // WARNING: a core that will not answer means nothing is verified alive, not a crash.
     alive: yield* session.herdr.agentList().pipe(Effect.orElseSucceed(() => [])),
     worktrees: yield* reportedWorktrees(session.stateDir),
     pluginRoot: session.pluginRoot,

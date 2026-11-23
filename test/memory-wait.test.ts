@@ -148,6 +148,7 @@ test("a stop that lands as memory frees still stops the start", () =>
             stateDir: rig.stateDir,
             runId: "r1",
             what: "build's agent",
+            // WARNING: the stop lands while memory is read, so memory is seen free before the stop is.
             stopped: Effect.suspend(() =>
               stop
                 ? TestClock.withLive(Effect.sleep("100 millis")).pipe(Effect.as(true))

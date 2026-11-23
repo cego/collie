@@ -174,6 +174,7 @@ export const parseSchedule = (
 export const isoOf = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
 
 const latestAtOrBefore = (cron: Cron.Cron, now: number) => {
+  // WARNING: Cron.prev is strict, so it is asked from just past now.
   const found = Cron.prev(cron, now + 1000).getTime();
   return found > now ? Cron.prev(cron, found).getTime() : found;
 };
@@ -182,6 +183,7 @@ export type Wake =
   | { readonly _tag: "end"; readonly why: "removed" | "paused" | "superseded" }
   | { readonly _tag: "start"; readonly occurrence: number };
 
+// WARNING: a late clock starts one Run for all it missed, from the latest occurrence due.
 export const onWake: (o: {
   readonly cron: Cron.Cron;
   readonly schedule: { readonly paused: boolean; readonly epoch: string } | null;
@@ -195,6 +197,7 @@ export const onWake: (o: {
   return { _tag: "start", occurrence: Math.max(o.occurrence, latestAtOrBefore(o.cron, o.now)) };
 };
 
+// WARNING: a resume passes now as dealt, which keeps it from catching up on missed occurrences.
 export const nextOccurrence = (cron: Cron.Cron, dealt: number, now: number) => {
   const latest = latestAtOrBefore(cron, now);
   return latest > dealt ? latest : Cron.next(cron, now).getTime();

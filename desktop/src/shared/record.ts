@@ -82,6 +82,7 @@ export const rememberScroll = (memory: ScrollMemory, tab: string, position: numb
 export const scrollToRestore = (memory: ScrollMemory, tab: string) =>
   tab === UNSCROLLED ? null : (memory.get(tab) ?? 0);
 
+// WARNING: visited tabs stay mounted, so what was opened in them is there on return.
 export const tabsKept = (kept: ReadonlySet<string>, shown: string) =>
   shown === UNSCROLLED || shown === "log" || kept.has(shown) ? kept : new Set(kept).add(shown);
 
@@ -128,6 +129,7 @@ export const landingOf = (
     : { tab: "diff", at: "line", file, line };
 };
 
+// WARNING: skips Terminal, whose pane keeps the keys.
 export const tabBeside = (tabs: ReadonlyArray<Tab>, shown: string, step: 1 | -1) => {
   const stops = Arr.filter(tabs, ({ value }) => value !== UNSCROLLED || value === shown);
   const at = Option.getOrElse(
@@ -166,6 +168,7 @@ export const keyAction = (facts: KeyFacts) => {
   }
 };
 
+// WARNING: inside a shadow root the event target is only its host, so read the composed path.
 export const typedIn = (composedPath: ReadonlyArray<Target>) => composedPath[0] ?? null;
 
 export type SummaryFacts = Pick<
@@ -247,6 +250,7 @@ export const timingLine = (
 
 const SCROLL_SETTLED_MS = 150;
 
+// WARNING: a frame's callbacks run before its paint, so `then` must wait for the next frame.
 export const afterPaint = (frame: (callback: () => void) => void, then: () => void) =>
   frame(() => frame(then));
 

@@ -9,6 +9,7 @@ export interface Channel<Out, In> {
   readonly listen: (receive: (frame: In) => void) => void;
 }
 
+// WARNING: a Hello ends what a view left running before a reload, and keeps its request ids apart.
 export interface Hello {
   readonly _tag: "Hello";
 }
@@ -39,6 +40,7 @@ export const clientProtocol = (channel: Channel<ToMain, ToView>) =>
     Effect.fnUntraced(function* (writeResponse, clientIds) {
       const inbox = yield* Queue.unbounded<ToView>();
       channel.listen((frame) => Queue.offerUnsafe(inbox, frame));
+      // WARNING: every response goes to every client; a second view client would need its request ids kept apart.
       yield* Queue.take(inbox).pipe(
         Effect.flatMap((response) =>
           Effect.forEach(clientIds, (id) => writeResponse(id, response), { discard: true }),
@@ -62,6 +64,7 @@ export const serverProtocol = (channel: Channel<ToView, ToMain>) =>
     Effect.fnUntraced(function* (writeRequest) {
       const inbox = yield* Queue.unbounded<ToMain>();
       const disconnects = yield* Queue.unbounded<number>();
+      // WARNING: one view at a time; a Desktop with several windows keys clients by window.
       let clientId = 0;
       channel.listen((frame) => Queue.offerUnsafe(inbox, frame));
       yield* Queue.take(inbox).pipe(

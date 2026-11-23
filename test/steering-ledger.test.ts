@@ -122,11 +122,13 @@ test("an entry written before incarnations still decodes, and is never a deliver
 test("an entry with no incarnation is not an answer either, so a later read can heal it", () =>
   runEffect(
     Effect.gen(function* () {
+      // WARNING: A missing terminal_id is not a final word: a later read may replace the entry, so it is not deliverable yet.
       const early = entry();
       delete early.incarnation;
       yield* registerAgent(scope, early);
       expect(deliverable((yield* everyRegistered)[0]!)).toBe(false);
 
+      // WARNING: Registering an agent again replaces its row; healing on read depends on that.
       yield* registerAgent(scope, entry());
       const healed = yield* everyRegistered;
       expect(healed).toHaveLength(1);
@@ -294,6 +296,7 @@ test("the same work blocks a second delivery; the same words about other work do
   const inFlight = delivery({ state: "submitted" });
   expect(blocked([inFlight], inFlight.causal_key)?.id).toBe("d1");
 
+  // WARNING: Identical text can be different work; match on the causal key, never the text.
   const elsewhere = delivery({
     id: "d2",
     cause: { kind: "nudge", ref: "build" },
@@ -301,6 +304,7 @@ test("the same work blocks a second delivery; the same words about other work do
   });
   expect(blocked([inFlight], elsewhere.causal_key)).toBeNull();
 
+  // WARNING: Settled work stops blocking; unknown work keeps blocking until someone answers.
   expect(blocked([delivery({ state: "superseded" })], inFlight.causal_key)).toBeNull();
   expect(blocked([delivery({ state: "unknown" })], inFlight.causal_key)?.state).toBe("unknown");
 });
@@ -349,6 +353,7 @@ test("the call record counts every call, settles the abandoned, and refuses none
   const limits = { maxSeconds: 120, maxOutputBytes: 262_144 };
   const at = (minute: number) => `2026-09-09T10:${pipe_(String(minute), Str.padStart(2, "0"))}:00Z`;
 
+  // WARNING: Usage is data: a record of failed calls never refuses the next one.
   const call: (id: string, when: string) => BudgetLine[] = (id, when) => [
     { kind: "reserve", id, run: "r1", at: when, max_seconds: 120, max_output_bytes: 1 },
     { kind: "settle", id, at: when, outcome: "failed", seconds: 1, bytes: 0 },
@@ -367,6 +372,7 @@ test("the call record counts every call, settles the abandoned, and refuses none
     },
   ]);
 
+  // WARNING: A reservation nobody settled counts as a failure: the record must not say fewer calls were made.
   const abandoned: BudgetLine[] = [
     { kind: "reserve", id: "gone", run: "r1", at: at(0), max_seconds: 120, max_output_bytes: 1 },
   ];

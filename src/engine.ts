@@ -390,6 +390,7 @@ export class EntryError extends Schema.TaggedError<EntryError, { readonly brand:
 export const REFUSED_INPUT = "invalid_input";
 export const NEEDS_INPUT = "needs_input";
 
+// WARNING: a placement may have changed things outside Collie, which nothing here can prove either way.
 class PlacementUncertain extends Schema.TaggedError<
   PlacementUncertain,
   { readonly brand: unique symbol }
@@ -402,11 +403,13 @@ export class ToolchainError extends Data.TaggedError("ToolchainError")<{
   readonly message: string;
 }> {}
 
+// WARNING: an external module's `effect` must resolve here, or it is a second copy whose service keys differ.
 const NAMESPACES = [
   ["effect", EffectRoot],
   ["effect/workflow", WorkflowModules],
   ["effect/process", ProcessModules],
   ["effect/crypto", CryptoModules],
+  // WARNING: the rc.117 path, kept so a module saved before 4.0.0 still loads; remove in Collie 0.42.0.
   ["effect/unstable/workflow", WorkflowModules],
 ] as const;
 
@@ -418,6 +421,7 @@ const REMOVED = [
 ] as const;
 
 export const sdkModules: () => ReadonlyArray<readonly [string, object]> = () => {
+  // WARNING: sdk.ts must not import herdr; agents.ts does.
   const served: Array<readonly [string, object]> = [["collie", { ...Sdk, ...AgentsSdk }]];
   for (const [prefix, namespace] of NAMESPACES) {
     served.push([prefix, namespace]);
@@ -427,11 +431,13 @@ export const sdkModules: () => ReadonlyArray<readonly [string, object]> = () => 
   return served;
 };
 
+// WARNING: must match package.json; engine.test.ts checks it, or author types are about another Effect.
 export const TOOLCHAIN = {
   effect: "4.1.4",
   typescript: "^7.0.2",
 } as const;
 
+// WARNING: kept in step with src/sdk.ts; engine.test.ts typechecks a module against it.
 export const SDK_DECLARATIONS = `declare module "collie" {
   export type ConnectionId = ${Arr.join(
     Arr.map(ConnectionId.literals, (id) => stringifyJson(id)),
@@ -2740,6 +2746,7 @@ declare module "*.md" {
 
 let sdkInstalled = false;
 
+// WARNING: `self` is the offering workflow even after a fork renames it.
 const itself = (workflow: string) => (workflow === "self" ? SELF : workflow);
 
 export function declaredByModule(metadata: WorkflowMetadata | undefined) {
@@ -2783,6 +2790,7 @@ export function installSdk() {
     name: "collie-sdk",
     setup(build) {
       for (const [specifier, namespace] of sdkModules()) {
+        // WARNING: spread so the values stay the binary's own; the loader takes a plain object.
         build.module(specifier, () => ({ exports: { ...namespace }, loader: "object" }));
       }
       for (const [specifier, reason] of REMOVED)
@@ -2793,12 +2801,14 @@ export function installSdk() {
   });
 }
 
+// WARNING: importing runs the author's top-level code; nothing here is a sandbox.
 export const loadEntry: (
   file: string,
   revision?: string,
 ) => Effect.Effect<WorkflowEntry, EntryError, FileSystem.FileSystem> = Effect.fn(
   "Engine.loadEntry",
 )(function* (file: string, revision?: string) {
+  // WARNING: Bun's module registry never invalidates; each read must be of a fresh staged copy.
   const staged = yield* stagedEntry(file, revision);
   return yield* readStagedEntry(file, staged);
 });
@@ -2920,6 +2930,7 @@ const releaseEntry = (runId: string) =>
     return hold === undefined ? Effect.succeed(false) : Deferred.succeed(hold, undefined);
   });
 
+// WARNING: upstream resume gives no wake acknowledgment, so entries are observed here.
 const entriesOf = new WeakMap<HostWorkflow, Map<string, number>>();
 
 const waitForEntry = (workflow: HostWorkflow, runId: string, before: number) =>
@@ -2935,6 +2946,7 @@ const registrationOf: (definition: WorkflowDefinition, name: string) => Registra
   name,
 ) => {
   // WARNING: every workflow is executed with this envelope, and its input is the definition's own struct, whose fields checkEntry has held to be schemas.
+  // WARNING: every workflow runs with this envelope, whose input is the definition's own struct checkEntry held to schemas.
   const payload = Schema.Struct({ runId: Schema.String, input: definition.input }) as HostPayload;
   const error: HostCodec =
     definition.error === undefined
@@ -2956,10 +2968,12 @@ const registrationOf: (definition: WorkflowDefinition, name: string) => Registra
     ) ?? [];
   const enter = (envelope: Schema.Schema.Type<HostPayload>) => {
     // WARNING: the envelope decoded against the definition's own input struct.
+    // WARNING: the envelope was decoded against the definition's own input struct.
     const input = envelope.input as never;
     const run = Run.of({ id: readEnvelope(envelope).runId, workflow: definition.id });
     const before = entries.get(run.id) ?? 0;
     entries.set(run.id, before + 1);
+    // WARNING: a first entry by this host into work an earlier host entered resumes it; it restarts only where none did.
     const cause = entryCauses.get(run.id) ?? (before === 0 ? "restarted" : null);
     entryCauses.delete(run.id);
     const entered = Effect.gen(function* () {
@@ -3005,6 +3019,7 @@ const TERMINAL = "terminal.json";
 const ended = (runId: string, status: typeof RunStatus.Type) =>
   Effect.gen(function* () {
     if (status.status === "complete" || status.status === "failed") {
+      // WARNING: the host runs every Run with its records; a module's own Layer cannot ask for them.
       const records = yield* Effect.serviceOption(RunRecords);
       if (Option.isNone(records))
         return yield* Effect.die(`${runId} ended with no records to keep it`);
@@ -3031,6 +3046,7 @@ const told = (runId: string, status: typeof RunStatus.Type) =>
     }),
   );
 
+// WARNING: the cache is imported as code, so it is used only where nobody else can write.
 const entriesRoot = Effect.fn("Engine.entriesRoot")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
   const cache = Bun.env.XDG_CACHE_HOME || `${Bun.env.HOME ?? Bun.env.TMPDIR ?? "/tmp"}/.cache`;
@@ -3050,6 +3066,7 @@ const entriesRoot = Effect.fn("Engine.entriesRoot")(function* (file: string) {
   return entries;
 });
 
+// WARNING: stage under a temp name, then rename, so no process imports a copy another is still writing.
 const stagedEntry = Effect.fn("Engine.stagedEntry")(function* (file: string, revision?: string) {
   const fs = yield* FileSystem.FileSystem;
   const entries = yield* entriesRoot(file);
@@ -3058,6 +3075,7 @@ const stagedEntry = Effect.fn("Engine.stagedEntry")(function* (file: string, rev
   const root = `${entries}/generations/${name}`;
   const staged = { root, file: `${root}${file}` };
   if (yield* fs.exists(staged.file).pipe(Effect.orElseSucceed(() => false))) {
+    // WARNING: an entry's age is its last use, which cleanup removes entries by.
     const now = DateTime.toDateUtc(yield* DateTime.now);
     yield* fs.utimes(root, now, now).pipe(Effect.ignore);
     return staged;
@@ -3127,6 +3145,7 @@ const sourceTree = Effect.fn("Engine.sourceTree")(function* (dir: string) {
           }),
         );
   };
+  // WARNING: an installed dependency counts by names alone; reading the whole toolchain costs more than a start.
   const installed = yield* fs.readDirectory(`${dir}/node_modules`, { recursive: true }).pipe(
     Effect.orElseSucceed(() => {
       const returned: Array<string> = [];
@@ -3139,6 +3158,7 @@ const sourceTree = Effect.fn("Engine.sourceTree")(function* (dir: string) {
   );
   const names = (yield* sourcesIn(dir)).sort();
   for (const name of names) {
+    // WARNING: a directory reads as nothing; its contents are listed under their own names.
     const content = yield* contentOf(`${dir}/${name}`);
     read += `${name}:${Bun.hash(content).toString(16)}\n`;
   }
@@ -3188,6 +3208,7 @@ const scanners = {
   js: new Bun.Transpiler({ loader: "js" }),
 };
 
+// WARNING: unparseable code imports nothing; an installed package is linked, never copied.
 const importedBy = (file: string, text: string, loader: "ts" | "tsx" | "js") => {
   let imports: ReadonlyArray<{ readonly path: string }> = [];
   try {
@@ -3206,6 +3227,7 @@ const importedBy = (file: string, text: string, loader: "ts" | "tsx" | "js") => 
   });
 };
 
+// WARNING: Bun's registry never invalidates, so each generation is a copy at fresh paths; a host wipes them on start.
 export const stageGeneration: (options: {
   readonly dir: string;
   readonly name: string;
@@ -3296,16 +3318,21 @@ export function engineLayer(options: {
   readonly dir: string;
   readonly messagePoll?: Duration.Input | undefined;
 }) {
+  // WARNING: engine tables and Collie's rows share one connection in one file.
   const sql = hostDatabase(options.dir).pipe(Layer.orDie, Layer.provideMerge(Reactivity.layer));
   const shardingConfig = {
+    // WARNING: a stopped host lets a running workflow finish its step rather than killing it.
     preemptiveShutdown: false,
+    // WARNING: infinite, so a missing module waits for repair instead of failing its messages after a minute.
     entityRegistrationTimeout: Duration.infinity,
+    // WARNING: one shard: each is a lock row held by the one runner.
     shardsPerGroup: 1,
   };
   const polled =
     options.messagePoll === undefined
       ? shardingConfig
       : { ...shardingConfig, entityMessagePollInterval: options.messagePoll };
+  // WARNING: built when a host builds it, never on import; client commands must not pay for the cluster.
   const engine = Layer.unwrap(
     Effect.promise(() =>
       Promise.all([
@@ -3361,6 +3388,7 @@ export function engineLayer(options: {
 
 const ONE_SHARD = "default:1";
 
+// WARNING: a message on any other shard is never read again, so move them here before the cluster reads storage.
 const oneShard = Layer.effectDiscard(
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -3402,6 +3430,7 @@ const HAND_OVER_TIMEOUT = "30 seconds";
 
 export { HOLD, STOP };
 export const PARKED = "parked";
+// WARNING: read only beside PARKED; the host clears both together.
 export const PARK_CAUSE = "park-cause";
 const PARK_INFO = "park-info";
 const ParkJson = Schema.fromJsonString(Park);
@@ -3533,6 +3562,7 @@ const startOf = (cwd: string) =>
     ),
   );
 
+// WARNING: checks are read at the start ref, or from the working tree where there is no ref.
 const approvedAt = Effect.fn("Engine.approvedAt")(function* (
   cwd: string,
   userDir: string,
@@ -3548,6 +3578,7 @@ const approvedAt = Effect.fn("Engine.approvedAt")(function* (
   });
 });
 
+// WARNING: frozen at admission, so editing the checks file changes the next Run only.
 export const freezeApproved = Effect.fn("Engine.freezeApproved")(function* (options: {
   readonly dir: string;
   readonly runId: string;
@@ -3579,6 +3610,7 @@ const ciJobsOfIn = (dir: string, runId: string) =>
 
 const claimPath = (dir: string, runId: string) => `${runDir(dir, runId)}/helle.json`;
 
+// WARNING: an older host recorded one claim, not a list; decode both shapes.
 const decodeClaims = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Union([HelleClaimSchema, Schema.Array(HelleClaimSchema)])),
 );
@@ -3609,6 +3641,7 @@ const writeClaims = (file: string, claims: ReadonlyArray<HelleClaim>) =>
     ),
   );
 
+// WARNING: serialises claim changes, which several Runs make to one record at once.
 const changingClaims = Semaphore.makeUnsafe(1);
 
 const updateClaims = (
@@ -3651,6 +3684,7 @@ const helleWhere = (
       envFile: env.raw.HELLE_ENV_FILE ?? null,
       url: helleUrlOf(env.raw),
       repositoryPath: yield* projectHere(cwd, runShell),
+      // WARNING: a checkout's name does not identify its Helle project.
       repoName: (yield* repositoryName(runShell, cwd)) ?? (yield* Path.Path).basename(cwd),
       deploys: deploys ?? null,
       declared: yield* declaredProjects(cwd),
@@ -3682,6 +3716,7 @@ export class Executions extends Context.Service<
   }
 >()("collie/Executions") {}
 
+// WARNING: the old record goes only after its Runs stop and their agents close, or they keep changing what the claim guards.
 export const handOverClaim = Effect.fn("Engine.handOverClaim")(function* (options: {
   readonly dir: string;
   readonly slug: string;
@@ -3737,6 +3772,7 @@ export const handOverClaim = Effect.fn("Engine.handOverClaim")(function* (option
 
 const AWAY_FILE = "away-from";
 
+// WARNING: a crash mid-comparison leaves the checkout at the base; this puts it back.
 const restoreCheckout = (cwd: string, away: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -3827,6 +3863,7 @@ const branchOwns = (cwd: string, test: FailedTest) =>
     return branch !== null && ownTests([test], yield* branchChange(cwd, branch)).length > 0;
   });
 
+// WARNING: a checkout with changes of its own is refused; they would travel to the base.
 const atDefaultBase = <A, R>(
   cwd: string,
   away: string,
@@ -4006,6 +4043,7 @@ export const hostLayer: (options: {
             const channel = isText(configured) ? Str.trim(configured) : "";
             const row = yield* store.run(runId);
             if (toast === undefined && (channel === "" || row === null)) return;
+            // WARNING: mark before delivery, so a replay never repeats an attempted post.
             const said = `${kind}:${pipe(about.key ?? "", Str.replaceAll("\n", " "))}`;
             if ((yield* runRecords.control(NOTIFIED, runId, said)) !== null) return;
             yield* runRecords.setControl(NOTIFIED, runId, "", said);
@@ -4406,6 +4444,7 @@ export const hostLayer: (options: {
           Effect.gen(function* () {
             const { env } = yield* placing;
             const roots = [root];
+            // WARNING: checkouts made before the setting stay where herdr put them, so both directories are searched.
             for (const dir of [yield* worktreesDirectory(env), `${env.home}/.herdr/worktrees`])
               if (yield* fs.exists(dir)) roots.push(dir);
             return yield* publicationCheckouts(roots);
@@ -4852,6 +4891,7 @@ export const hostLayer: (options: {
                         })),
                       ),
                 ),
+                // WARNING: a Run with no row has no checkout; asking about one never started must leave nothing behind.
                 Effect.tap((admitted) =>
                   admitted === null
                     ? Effect.void
@@ -5000,6 +5040,7 @@ export const hostLayer: (options: {
             writeCheckpoint(runDir(dir, runId), { ...checkpoint, at }),
           ).pipe(Effect.provideService(RunRecords, runRecords)),
         record: (runId, event) =>
+          // WARNING: a replay writes its log again; the log records each run, not a deduplicated story.
           appendLog(runDir(dir, runId), event).pipe(
             Effect.provideService(FileSystem.FileSystem, fs),
             Effect.provideService(RunRecords, runRecords),
@@ -5041,6 +5082,7 @@ export const hostLayer: (options: {
                     yield* put(PARKED, why);
                     return;
                   }
+                  // WARNING: decided before the park shows; a resume arriving mid-call would be lost.
                   const recoveries = recoveriesIn(
                     yield* readMetrics(evidenceDir(dir, runId)).pipe(Effect.provideContext(bun)),
                   );
@@ -5049,6 +5091,7 @@ export const hostLayer: (options: {
                   const claims =
                     park.kind !== "rechecks" &&
                     healOwed([park.id!, ...legacy], recoveries) &&
+                    // WARNING: a park its Heal caused again is that Heal's to settle.
                     !(healing._tag === "Some" && healing.value.cause === cause);
                   const passed = claims ? yield* passedOverHere(runId, cause, recoveries) : null;
                   yield* put(PARK_CAUSE, cause);
@@ -5583,6 +5626,7 @@ export const hostLayer: (options: {
           ).pipe(
             Effect.provide(FetchHttpClient.layer),
             Effect.provideContext(services),
+            // WARNING: a refusal by Helle means this Run cannot take the claim; the author's own failures pass through.
             Effect.mapError((cause: HelleError | E) =>
               cause instanceof HelleError ? new WorkflowError({ reason: cause.message }) : cause,
             ),
@@ -5608,6 +5652,7 @@ export const hostLayer: (options: {
               envFile: env.raw.HELLE_ENV_FILE ?? null,
               url: helleUrlOf(env.raw),
             });
+            // WARNING: a claim Helle refuses to give back stays recorded, for a later release to retry.
             const given = new Set<string>();
             for (const one of held) {
               const released = yield* releaseClaim(creds, one.slug).pipe(
@@ -6390,6 +6435,7 @@ export const hostLayer: (options: {
           const at = yield* watched(runId);
           const deps =
             judged === "none" ? null : yield* judging(at).pipe(Effect.provideContext(bun));
+          // WARNING: corrections go through the caller's own agents, never at the finish, where no next work exists.
           const agents = yield* Effect.serviceOption(Agents);
           const atWork =
             Option.isNone(agents) || judged === "finish" ? null : yield* agents.value.atWork(runId);
@@ -6404,6 +6450,7 @@ export const hostLayer: (options: {
           const done = yield* checkDrift(at, where, judged, deps, to).pipe(
             Effect.provideContext(bun),
           );
+          // WARNING: the finish stands the cross-run check, writing an unanswered one down as owed.
           if (judged !== "none")
             yield* standForElection(at, where, judged === "finish", deps).pipe(
               Effect.provideContext(bun),
@@ -6436,6 +6483,7 @@ export const hostLayer: (options: {
         finish: (runId) =>
           Effect.gen(function* () {
             const at = yield* watched(runId);
+            // WARNING: bounded, or a hung approved command holds the Run's ending forever.
             for (const name of yield* under(grantedToRun(at))) {
               const outcome = yield* check({ runId, name, cwd: at.cwd }, { pass: "finish" }).pipe(
                 Effect.map((one) => `${one.result} (exit ${one.exit})`),
@@ -6460,6 +6508,7 @@ export const hostLayer: (options: {
               writeCard(settled, { kind: "final", step: "finish", claims: [] }),
             );
             yield* told(runId, [card]);
+            // WARNING: at the finish only, the last moment an owed cross-run check can be reported.
             if (card.cross_run === "pending")
               yield* notify(runId, "drift-unresolved", "cross_run_pending", { key: "cross_run" });
           }).pipe(Effect.ignore({ log: "Unhandled" })),
@@ -6522,6 +6571,7 @@ export interface Herd {
   readonly locate?: Effect.Effect<string | null, never, PlatformServices>;
 }
 
+// WARNING: each load mints a new name, so a Run recovers under the name it started on.
 export const nextRegistrationName: (
   known: ReadonlyArray<{ readonly workflow: string }>,
   id: string,
@@ -6537,6 +6587,7 @@ const untilStopped = (registration: Registration, executionId: string) =>
 
 const wokeText = flow(Schema.encodeResult(Schema.fromJsonString(Woke)), Result.getOrThrow);
 
+// WARNING: a Run may wake before reading its answer; the wake resumes whatever park it reaches next.
 export const answerDecision: (
   registration: Registration,
   options: { readonly name: string; readonly executionId: string; readonly value: string },
@@ -6551,6 +6602,7 @@ export const answerDecision: (
   );
 };
 
+// WARNING: a failure carries its module file, since a missing service shows only when the body asks for it.
 export const RunStatus = Schema.Union([
   Schema.Struct({ status: Schema.Literals(["pending", "suspended"]) }),
   Schema.Struct({ status: Schema.Literal("ended"), at: Schema.String }),
@@ -6595,6 +6647,7 @@ const exitStatus: (
     }
     return { status: "complete", value: isJson(result) ? result : Formatter.format(result) };
   }
+  // WARNING: a workflow's own failure is in the words its schema writes.
   const failure = Cause.findErrorOption(exit.cause);
   const written =
     error === undefined || Option.isNone(failure) || isWorkflowError(failure.value)
@@ -6617,6 +6670,7 @@ const reasonOf: (cause: Cause.Cause<unknown>) => string = (cause) => {
   return reason;
 };
 
+// WARNING: the field's name is the author's; read it by strategy, never by name.
 const pointedAt: (
   generation: Generation,
   input: Readonly<Record<string, Schema.Json>>,
@@ -6656,6 +6710,7 @@ export const GIVEN = "given";
 export const TYPED = "typed";
 export const INFERRED = "inferred";
 
+// WARNING: text is tried as a string before JSON, so a string-or-number union keeps 12 as text.
 export const settleInput: (
   fields: InputFields,
   given: Given,
@@ -6694,6 +6749,7 @@ export const settleInput: (
   return Effect.succeed({ input, provenance });
 };
 
+// WARNING: held encoded so the row stores exactly the admitted JSON.
 export interface Settled {
   readonly input: Record<string, Schema.Json>;
   readonly provenance: Record<string, string>;
@@ -6728,6 +6784,7 @@ const isDrawn = Schema.is(Schema.Record(Schema.String, Schema.Json));
 const refusedInput = (reason: string) =>
   Effect.fail(new HostRefused({ reason: `${REFUSED_INPUT}: ${reason}` }));
 
+// WARNING: a fixed outcome cannot be overridden by the caller.
 const refuseOptions: (
   generation: Generation,
   options: Readonly<Record<string, string>>,
@@ -7043,6 +7100,7 @@ const writeSeed = Effect.fn("Engine.writeSeed")(function* (options: {
   yield* writeIntent(at, inherited === null ? seeded : propagate(inherited, seeded).intent);
 });
 
+// WARNING: a card reads the outcome from here, never from the workflow id.
 const launchOptions = (generation: Generation, asked: Readonly<Record<string, string>>) =>
   generation.fixedOutcome === null ? asked : { ...asked, outcome: generation.fixedOutcome };
 
@@ -7092,6 +7150,7 @@ export const RunView = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
   workspace: Schema.NullOr(Schema.String),
   worktree: Schema.NullOr(WorktreeRecordSchema),
+  // WARNING: a stored fact, not read from the workflow id, so a renamed workflow is held to its declaration.
   outcome: Schema.String,
   created: Schema.String,
   status: RunStatus,
@@ -7314,6 +7373,7 @@ export type CrashPoint =
   | "recovery-park-cleared"
   | "recovery-entered";
 
+// WARNING: a parent's child is located the same way, so a project override reaches its work.
 export type Locate = (options: {
   readonly project: string;
   readonly id: string;
@@ -7351,6 +7411,7 @@ export const registryLayer: (
   | PlatformServices
 > = (dir, options?) => Layer.effect(Registry)(makeRegistry(dir, options));
 
+// WARNING: one SQLite client and one Store sit behind all three, never a second connection.
 export const foundationLayer: (options: {
   readonly dir: string;
   readonly userDir?: string;
@@ -7422,6 +7483,7 @@ const makeRegistry: (
   const mergeRequestOf = (runId: string) =>
     recordedMergeRequest(runId).pipe(Effect.provideContext(bun));
 
+  // WARNING: a branch Run's repository other than its checkout is refused, never ignored.
   const refuseElsewhere = Effect.fn("Engine.refuseElsewhere")(function* (
     generation: Generation,
     settled: Settled,
@@ -7478,6 +7540,7 @@ const makeRegistry: (
   const unavailable = new Map<string, string>();
   const newestOf = new Map<string, string>();
   let known = yield* store.generations;
+  // WARNING: staged copies are cleared on start, never restored.
   yield* clearGenerations(dir);
   const waking = yield* Semaphore.make(1);
   const controlling = yield* Semaphore.make(1);
@@ -7546,6 +7609,7 @@ const makeRegistry: (
       }
     }
     for (const run of held) heldAtEntry.set(run, yield* Deferred.make<void>());
+    // WARNING: the only place a host binds services into a module's Layer; modules provide the rest themselves.
     yield* Layer.buildWithScope(
       registration.layer.pipe(
         Layer.provide(
@@ -7611,6 +7675,7 @@ const makeRegistry: (
     return generation;
   });
 
+  // WARNING: merging this way keeps the parent's instance and scope, which is what links child to parent.
   const hostServices = yield* Effect.context<HostServices>();
   const generationsRegistered = yield* Deferred.make<void>();
   const landingTakeover = Effect.fn("Host.takeOverLanding")(function* (asked: {
@@ -7801,6 +7866,7 @@ const makeRegistry: (
     return yield* startOf(ask.project);
   });
 
+  // WARNING: a checkout that cannot be cut is refused now, before anything exists to clean up.
   const placeRun = Effect.fn("Engine.placeRun")(function* (ask: {
     readonly generation: Generation;
     readonly runId: string;
@@ -7919,11 +7985,13 @@ const makeRegistry: (
       if (checkout.note !== "") yield* said({ runDir: runDir(dir, ask.runId) }, checkout.note);
     }
     if (ask.taskLabel === undefined) return { placed, task: ask.task };
+    // WARNING: a start about a Task's work joins that Task's workspace, wherever it came from.
     if (ask.workspace === undefined && opened === null) {
       const joined = yield* taskWorking(generation, ask, placed);
       if (joined !== null) return { placed, task: joined.id };
     }
     const label = opened?.label ?? ask.taskLabel;
+    // WARNING: only a Herdr 1 placement records a workspace; core records none.
     const workspace = opened?.id ?? ask.workspace ?? null;
     const rootPane = opened === null ? null : (placed.worktree?.root_pane_id ?? null);
     const known =
@@ -8001,6 +8069,7 @@ const makeRegistry: (
   );
   const claimingOf = (request: string) => claiming[stripeOf(request)]!;
 
+  // WARNING: a claim found already made may have placed something, so it is kept on refusal.
   const placeClaimed = Effect.fn("Engine.placeClaimed")(function* (row: RunRow, fresh: boolean) {
     const generation = live.get(row.generation);
     const placing = decodePlacing(row.placing ?? "");
@@ -8031,6 +8100,7 @@ const makeRegistry: (
         },
       });
     }).pipe(
+      // WARNING: an uncertain placement keeps its claim, so a retry cannot open a second Run.
       Effect.tapErrorTag("HostRefused", () => (fresh ? store.forget(row.run) : Effect.void)),
       Effect.catchTag("PlacementUncertain", (failure) =>
         Effect.fail(new HostRefused({ reason: failure.reason })),
@@ -8088,6 +8158,7 @@ const makeRegistry: (
         return none;
       }),
     );
+    // WARNING: options are serialisable; no parent Context, service or Layer crosses to the child.
     const parentPreferences = yield* preferencesFromOptions(parentOptions).pipe(
       Effect.mapError((cause) => refused(`claudeSubagents: ${String(cause)}`)),
     );
@@ -8137,6 +8208,7 @@ const makeRegistry: (
           ).pipe(Effect.provideContext(bun))
         : null;
     const claimed = yield* claimAndPlace({
+      // WARNING: the invocation is the claim; changed input is refused, not run twice.
       request: runId,
       run: runId,
       workflow: generation.id,
@@ -8150,6 +8222,7 @@ const makeRegistry: (
       task: ask.ownTask === true ? null : parent.task,
       parent: ask.runId,
     }).pipe(Effect.mapError((failure) => refused(failure.reason)));
+    // WARNING: a child's checks are frozen from its parent, grants included, never read when it asks.
     const parentChecks = request.kind === "existing" ? [] : yield* approvedOf(dir, parent.run);
     yield* freezeApproved({
       dir,
@@ -8164,6 +8237,7 @@ const makeRegistry: (
     );
     if (claimed.fresh) yield* recordFeatures(claimed.row.run).pipe(Effect.provideContext(bun));
     if (claimed.row.accepted === null) yield* attachInto(claimed.row);
+    // WARNING: a sweep must not dispatch a child with no parent to wake; the parent hands its children over here.
     yield* store.accepted(claimed.row.run);
     const at = yield* CurrentStep;
     if (at !== null && claimed.fresh)
@@ -8190,8 +8264,10 @@ const makeRegistry: (
       Effect.mapError(() => refused(`${found.generation.entry} no longer takes ${row.input}`)),
     );
     if (row.parent !== null) yield* runRecords.setControl(AWAITED, row.parent, "", child.runId);
+    // WARNING: runs on the parent's fiber; a child's completion wakes the parent and interrupting the parent reaches the child.
     const workflow = found.generation.registration.workflow;
     const written = Schema.encodeUnknownOption(Schema.toCodecJson(workflow.errorSchema));
+    // WARNING: no yield may sit between this and the engine's registration, or a finished child re-runs under the same id.
     const derived = row.execution === (yield* workflow.executionId(payload));
     return yield* Effect.suspend(() =>
       derived
@@ -8237,6 +8313,7 @@ const makeRegistry: (
       ),
     );
 
+  // WARNING: nothing happens where the module is unregistered or no longer takes its input; the row stays for a repair.
   const handOver = Effect.fn("Engine.handOver")(function* (row: RunRow, clear = true) {
     const generation = live.get(row.generation);
     if (generation === undefined || unplaced(row)) return false;
@@ -8248,6 +8325,7 @@ const makeRegistry: (
     const old = yield* parkedOf(row.run);
     if (clear) yield* clearParked(row.run);
     yield* releaseEntry(row.run);
+    // WARNING: upstream retries a send it cannot route without end; the row stays unaccepted for the next host.
     // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- The registered author's erased error schema reaches this discard call; failures become defects below.
     yield* engine
       .execute(generation.registration.workflow, {
@@ -8295,6 +8373,7 @@ const makeRegistry: (
       ),
     );
 
+  // WARNING: the row is read again under the claim, since another pass may have placed or handed it over.
   const recoverAdmission = (row: RunRow) =>
     claimingOf(row.request).withPermits(1)(
       store.run(row.run).pipe(
@@ -8309,6 +8388,7 @@ const makeRegistry: (
       ),
     );
 
+  // WARNING: the engine keeps one completion, so every recorded answer may be handed again.
   const reconcileAnswers = (reached: (run: string) => boolean = () => true) =>
     Effect.gen(function* () {
       const woken: string[] = [];
@@ -8372,6 +8452,7 @@ const makeRegistry: (
     return status;
   });
 
+  // WARNING: query by shard and processed; by entity alone it scans every message on each sweep.
   const wakeOf = Effect.fn("Engine.wakeOf")(function* (execution: string) {
     const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
     if (Option.isNone(sql)) return null;
@@ -8399,6 +8480,7 @@ const makeRegistry: (
     if (done !== undefined) return { status: done, wakes: null };
     const kept = asleep.get(execution);
     if (kept !== undefined && stillAsleep(execution)) return kept;
+    // WARNING: read the count before polling, so a write landing during the poll is not missed.
     const at = touches?.of(execution);
     const status = yield* polled(generation, execution);
     if (status.status !== "suspended") {
@@ -8539,6 +8621,7 @@ const makeRegistry: (
       };
     }
     const { status, wakes } = yield* engineSays(generation, row.execution);
+    // WARNING: a failed Run keeps its claim, which may guard half-done shared work.
     const kept = status.status === "failed" ? yield* claimOf(row.run) : null;
     return {
       ...about,
@@ -8566,6 +8649,7 @@ const makeRegistry: (
     return set;
   });
 
+  // WARNING: return only once the run has settled, or a completion landing mid-wake is lost.
   const wake = Effect.fn("Engine.wake")(function* (
     runId: string,
     found: {
@@ -8650,6 +8734,7 @@ const makeRegistry: (
     return recoveryPark !== undefined || status === "suspended";
   }, waking.withPermits(1));
 
+  // WARNING: a control read at a boundary is read again after the suspend, or a release landing before it is lost.
   const armed = new Map<string, object>();
   const boundary = (read: Effect.Effect<boolean>, control: string, runId: string) =>
     Effect.tap(read, (on) => {
@@ -8772,6 +8857,7 @@ const makeRegistry: (
       };
       yield* (yield* Foreground).boundary;
       const view = yield* viewOf(row, read);
+      // WARNING: a settled status is final, a suspended one stands until the engine writes, and a running one is polled.
       if (finished.has(row.execution) || stillAsleep(row.execution))
         kept.views.set(row.run, { row, ...before, view });
       else kept.views.delete(row.run);
@@ -8808,6 +8894,7 @@ const makeRegistry: (
       .run(runId)
       .pipe(Effect.flatMap((row) => (row === null ? Effect.succeed(null) : viewOf(row))));
 
+  // WARNING: writes to upstream's tables invalidate nothing of Collie's, so one shared fiber polls on a schedule.
   const watched = new Map<string, { readonly row: RunRow; said: string }>();
   const remember = (row: RunRow) => watched.set(row.run, { row, said: "" });
   for (const row of yield* store.runs) remember(row);
@@ -8948,6 +9035,7 @@ const makeRegistry: (
       ? supersedeFor(runId, sent.delivery, actor, sent.agent)
       : Effect.void;
 
+  // WARNING: a message typed into a Claude pane is recorded external by its hook, and may already be delivered.
   const missedMessages = Effect.gen(function* () {
     const runs = Arr.dedupe(Arr.map(yield* store.supersedable, (row) => row.run));
     if (runs.length === 0) return;
@@ -9121,12 +9209,14 @@ const makeRegistry: (
           reason: `${runId} has left park ${healing}, the one its Heal was started for`,
         });
     }
+    // WARNING: the stop is written before anything wakes, so a woken run never finds the request that stopped it.
     const stopped = new Set<string>();
     for (const one of runs) {
       if (control === STOP && !set && (yield* controlsOf(one)).includes(STOP)) stopped.add(one);
       yield* setControl(one, control, set);
     }
     yield* store.announce;
+    // WARNING: a hold needs no wake, since a held run reads it at the next boundary; every other control needs one.
     const woken: string[] = [];
     if (!(control === HOLD && set)) {
       for (const one of runs) {
@@ -9151,7 +9241,9 @@ const makeRegistry: (
     return { runs, left };
   });
 
+  // WARNING: one registration at a time, or two starts minting one name would stage over each other.
   const registering = yield* Semaphore.make(1);
+  // WARNING: a grant reads and writes one file; concurrent grants would drop each other's.
   const invoking = yield* Semaphore.make(1);
 
   const mint = Effect.fn("Engine.Registry.mint")(function* (file: string) {
@@ -9315,6 +9407,7 @@ const makeRegistry: (
         );
       }
     }
+    // WARNING: a follow-up shares its parent's checkout, so it must not start while the parent is still going or resumable.
     const ended = state.status === "complete" || state.status === "failed";
     const stopped = (yield* controlsOf(runId)).includes(STOP);
     const notYet = ended
@@ -9435,7 +9528,9 @@ const makeRegistry: (
       return yield* new HostRefused({ reason: `${REFUSED_INPUT}: ${unattachable}` });
     const request = yield* checkoutRequest(generation, asked, options.root ?? null);
     const launch = launchOptions(generation, asked);
+    // WARNING: an empty set counts as none, so the project's verify.json still applies.
     const verify = options.verify?.length ? options.verify : undefined;
+    // WARNING: inputs are settled before any row, claim or execution exists, so a refusal leaves nothing behind.
     const settled = yield* settleInput(generation.fields, {
       json: options.input,
       text: options.text ?? {},
@@ -9643,6 +9738,7 @@ const makeRegistry: (
       return { registrations: yield* held, takenUp: recovered };
     });
 
+  // WARNING: a gone file leaves only its own generation unavailable; one broken module must not stop the rest.
   for (const route of known) {
     yield* register(route).pipe(
       Effect.catchTag("EntryError", (failure) =>
@@ -9880,6 +9976,7 @@ const makeRegistry: (
         options.runId,
         options.request,
       );
+      // WARNING: a card is not authority; the offer is asked again of the module as it is now.
       const offer = Option.getOrUndefined(
         Arr.findFirst(
           offersFrom(generation.offers, facts, {
@@ -9905,6 +10002,7 @@ const makeRegistry: (
         return yield* new HostRefused({
           reason: `"${bound.value}" is Collie's to set when "${options.offer}" starts ${offer.workflow}, so it cannot be given`,
         });
+      // WARNING: the caller's own values win over an offer's fill-ins.
       const filled = {
         ...inputsFor(offer, { runId: row.run, runDir: where, facts, input }),
         ...options.input,
@@ -10014,11 +10112,13 @@ const makeRegistry: (
         });
       }
       const value = named?.id ?? options.value;
+      // WARNING: an agent's question needs no workflow to wake, since a finished Run's module may be gone.
       const byAgent = Arr.some(
         yield* store.asked(options.runId),
         (row) => row.decision === name && row.asker !== null,
       );
       if (!byAgent && found._tag === "Failure") return yield* found.failure;
+      // WARNING: the database, not timing, orders racing answers; only the row's writer completes the deferred.
       const settled = yield* store.settle({
         run: options.runId,
         decision: name,
@@ -10030,6 +10130,7 @@ const makeRegistry: (
         return yield* new HostRefused({ reason: settled.reason });
       }
       if (settled._tag === "accepted") yield* crash("answered");
+      // WARNING: an agent's question is answered to its agent, never woken, since waking the workflow would replay it.
       if (settled.row.asker === null && found._tag === "Success") {
         const { registration } = found.success.generation;
         const executionId = found.success.execution;
@@ -10148,6 +10249,7 @@ const makeRegistry: (
       if (row === null) {
         return yield* new HostRefused({ reason: `no run "${options.runId}" was started here` });
       }
+      // WARNING: a command resolves as the gate does, so a check that could never run is refused now.
       if (options.command !== null) {
         const own = yield* treeOf(row, options.runId, dir);
         const at =
@@ -10178,6 +10280,7 @@ const makeRegistry: (
       readonly mode?: AgentsSdk.DeliveryMode;
       readonly actor?: Asker;
     }) {
+      // WARNING: a finished Run's agents need its row, not its module, to be closed.
       if ((yield* store.run(options.runId)) === null) {
         return yield* new HostRefused({ reason: `no run "${options.runId}" was started here` });
       }

@@ -13,6 +13,7 @@ import { NAMED_FAILURES, failureReader } from "../bun-tests";
 import { printResult } from "../envelope";
 import { answering, cliDoor, root } from "./shared";
 
+// WARNING: under --json both streams go to stderr, since stdout is the one envelope.
 const echoed = Effect.fn("collie.verify.echoed")(function* () {
   const stdio = yield* Stdio.Stdio;
   const json = (yield* root).json;
@@ -73,6 +74,7 @@ const bounded = (record: Verification, ran: boolean, failures: ReadonlyArray<str
   };
 };
 
+// WARNING: not a mutation: a replayed request id would hand back a result about a tree that has since moved.
 export const verify = Command.make(
   "verify",
   {

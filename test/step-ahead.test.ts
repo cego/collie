@@ -27,6 +27,7 @@ const coreCall = flow(
   Result.getOrThrow,
 );
 
+// WARNING: A launch is recorded before its prompt is written, so the prompt is what is waited on.
 const promptOf = (state: string, runId: string, operation: string) =>
   until(
     () =>
@@ -305,6 +306,7 @@ test("a steer sent while a just-launched agent's step is still going out reaches
         const fs = yield* FileSystem.FileSystem;
         const outputs = `${world.home}/outputs.json`;
         yield* fs.writeFileString(outputs, encode([null, null]));
+        // WARNING: Core refuses a blocked agent's first prompt, so the step is retried later.
         core.refuse("terminal.send", "blocked", "the agent is blocked");
         const start = yield* collie(world, ["run", "start", "step-ahead", "--input", "goal=steer"]);
         const { runId } = runIdOf(start.envelope.data);

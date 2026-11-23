@@ -1,3 +1,4 @@
+// WARNING: nothing here imports effect or holds a runtime, so the components stay testable with plain data.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -47,6 +48,7 @@ export interface Focus {
   tail: boolean;
   artefacts?: boolean;
   reviewPages: number;
+  // WARNING: a repeated focus must look new, so a repeated Refresh still reads.
   nonce: number;
 }
 
@@ -115,17 +117,21 @@ export type Command =
   | { _tag: "UndoStop" }
   | { _tag: "OpenLog"; runId: string }
   | { _tag: "OpenCheckOutput"; runId: string }
+  // WARNING: the id makes it that Choice: a question replaced since it was drawn is a different question.
   | { _tag: "Answer"; runId: string; choiceId: string; value: string }
   | { _tag: "SendReview"; runId: string | null }
   | { _tag: "InvokeOffer"; runId: string; offer: string }
   | { _tag: "ChooseOffer"; runId: string }
   | { _tag: "PostReview"; runId: string }
+  // WARNING: names the run too: glab resolves an unqualified mr:42 from the directory it runs in.
   | { _tag: "OpenMr"; target: string; runId: string | null }
   | { _tag: "ChooseMr"; copy: boolean; mrs: ReadonlyArray<MrChoice> }
   | { _tag: "CopyLink"; url: string }
   | { _tag: "RunWorkflow"; workflow: string }
+  // WARNING: the hash travels with the id: consent is to this payload, not a summary of it.
   | { _tag: "ConfirmProposal"; id: string; hash: string }
   | { _tag: "DeclineProposal"; id: string; hash: string }
+  // WARNING: asks for a value rather than writing one: an empty value would unset what the button was meant to set.
   | { _tag: "EditSetting"; key: string; multiline: boolean }
   | { _tag: "OpenRecord"; id: string }
   | { _tag: "OpenSteer"; id: string }
@@ -157,6 +163,7 @@ export type Command =
   | { _tag: "Refresh" }
   | { _tag: "Quit" };
 
+// WARNING: a command added to this list and not to the Command type goes down the wrong lane.
 const FOCUS_ONLY = [
   "ShowView",
   "ShowOlder",
@@ -237,9 +244,11 @@ export interface Rereads {
   forceMr: boolean;
 }
 
+// WARNING: compared by contents: a copy of shown would turn every cursor move into a full re-read.
 const sameViews = (a: ReadonlyArray<ViewName>, b: ReadonlyArray<ViewName>) =>
   a.length === b.length && Arr.every(a, (view, at) => view === b[at]);
 
+// WARNING: a field added to Focus without a decision here re-reads every run directory on each cursor move.
 export function rereads(last: Focus | null, next: Focus) {
   if (last === null) return { reuse: false, forceMr: false };
   const asked = last.nonce !== next.nonce;
@@ -370,6 +379,7 @@ function definitionRow(d: DefinitionRow) {
   return returned;
 }
 
+// WARNING: id is given, not derived from the key: two rows share a key and must not share an id.
 function settingRow(
   id: string,
   key: string,
@@ -390,6 +400,7 @@ function settingRow(
   return returned;
 }
 
+// WARNING: a finished Run keeps its agents: a hand-off outlives the Run it was started for.
 export function rowsOf(board: WorkspaceView, marks?: Marks) {
   const rows: Row[] = [];
   const onBoard = [...board.active, ...board.recent];
@@ -507,6 +518,7 @@ function nested(row: Row, depth: number) {
 
 const unqualified = (row: Row) => ({ ...row, title: Str.split(row.title, " · ")[0]! });
 
+// WARNING: no needsYou though counted: a workspace counted beside its own waiting run would read as two.
 function groupRow(group: WideGroup, marks?: Marks) {
   const returned: Row = {
     ...BLANK,
@@ -673,6 +685,7 @@ export interface Action {
   command: Command;
 }
 
+// WARNING: start, fix and review act on this workspace's checkout, so they are offered on a local board only.
 export function actionsFor(row: Row | null, filter: Filter) {
   if (!row) {
     const returned: Action[] = [];
@@ -744,6 +757,7 @@ export function actionsFor(row: Row | null, filter: Filter) {
   return returned;
 }
 
+// WARNING: the order is stated once: a flow's question, then the selected Run's, then the filter, then Settings, then the board.
 export type Keyboarding =
   | { _tag: "Flow" }
   | { _tag: "Proposal"; proposal: { id: string; hash: string } }
@@ -1057,6 +1071,7 @@ export function footerKeys(opts: {
 }) {
   if (opts.on._tag === "Choice") return "↑↓ move · Enter choose · Esc leave the run open";
   if (opts.on._tag === "Setting") return "type a value · Enter set it · Esc leave it";
+  // WARNING: the filter takes keys too, so the board's own keys would be a lie here.
   if (opts.on._tag === "Filter") return "type to narrow · Enter keep it · Esc drop it";
   if (opts.on._tag === "Proposal") return "Enter carry it out · Esc decline it";
   return Arr.join([...opts.panel, ...globalKeys(opts.filter)], " · ");
@@ -1130,8 +1145,11 @@ const SESSION_MODES = new Map<string, Mode>([
 const doing: (command: Command) => KeyIntent = (command) => ({ _tag: "Do", command });
 
 export function keyIntent(at: KeyContext, key: Keypress) {
+  // WARNING: any key closes the overlay and does nothing else; first, since App draws it over the flow.
   if (at.helping) return { _tag: "Help", open: false };
+  // WARNING: a flow owns the keyboard; a key that moved the Selection would act on a board nobody sees.
   if (at.on._tag === "Flow") return null;
+  // WARNING: a human consenting must not stop a run by pressing k: only yes and no are answers.
   if (at.on._tag === "Proposal") {
     const { id, hash } = at.on.proposal;
     if (key.name === "return") return doing({ _tag: "ConfirmProposal", id, hash });
@@ -1176,6 +1194,7 @@ export function keyIntent(at: KeyContext, key: Keypress) {
     return { _tag: "Filtering", filter: "", typing: false };
   }
   if (key.name === "escape") return doing({ _tag: "SetFilter", filter: { kind: "all" } });
+  // WARNING: after everything that takes text: a free-text answer must be able to contain a question mark.
   if (key.sequence === "?") return { _tag: "Help", open: true };
   if (at.scrollable) {
     if (key.name === "pageup") return { _tag: "Scroll", by: -1, unit: "page" };
@@ -1183,6 +1202,7 @@ export function keyIntent(at: KeyContext, key: Keypress) {
     if (key.shift && key.name === "up") return { _tag: "Scroll", by: -1, unit: "line" };
     if (key.shift && key.name === "down") return { _tag: "Scroll", by: 1, unit: "line" };
   }
+  // WARNING: arrows, not hjkl: k is the stop key, and a destructive key that sometimes means up is worse than none.
   if (key.name === "up") return { _tag: "Move", by: -1 };
   if (key.name === "down") return { _tag: "Move", by: 1 };
   if (key.name === "tab") return { _tag: "ShowViewBy", by: key.shift ? -1 : 1 };

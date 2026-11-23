@@ -1,3 +1,4 @@
+// WARNING: Bun's terminal, not `script`: util-linux, BSD and macOS differ in flags and socket handling.
 import { type Cause, Effect, Queue, type Scope, Stream } from "effect";
 
 export interface InTerminal {

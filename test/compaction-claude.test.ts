@@ -68,6 +68,7 @@ const encodeStatusLine = flow(
   Result.getOrThrow,
 );
 
+// WARNING: PreCompact alone carries the instructions; PostCompact has no field with Collie's marker, so completion is correlated by position.
 const Pre = Schema.Struct({
   session_id: Schema.String,
   hook_event_name: Schema.tag("PreCompact"),
@@ -121,6 +122,7 @@ const measured = (session: string, input: number, output: number, percent: numbe
         cache_read_input_tokens: 2_000,
       },
     },
+    // WARNING: The cumulative cost total is billing, not context; reading it is the mistake this accounting avoids.
     cost: { total_cost_usd: 12.5 },
   });
 
@@ -153,6 +155,7 @@ afterEach(() => runEffect(rig.close()));
 test("the sample is input plus output, with the cache folded in exactly once", () =>
   runEffect(
     Effect.gen(function* () {
+      // WARNING: 15,500 already contains the cache writes and reads; do not add them again.
       const line = yield* recordClaudeEvent(dir, measured("s-1", 15_500, 1_200, 8));
 
       expect(yield* claude.usage(ctx())).toBe(16_700);
@@ -190,6 +193,7 @@ test("the marked PreCompact is the start, and the PostCompact after it the succe
       expect(prompted[0]).toStartWith("/compact ");
       expect(instructions).toContain("(collie:req-1)");
 
+      // WARNING: PostCompact carries no marker, so the next manual completion on the session is what finishes the attempt.
       yield* recordClaudeEvent(dir, pre("s-1", "manual", instructions));
       expect(yield* claude.poll(ctx(), "req-1")).toBeNull();
       yield* recordClaudeEvent(dir, post("s-1", "manual"));
@@ -439,6 +443,7 @@ onMachineWith("claude")(
       Effect.gen(function* () {
         const wanted = VERIFIED_VERSIONS.get("claude") ?? "";
         const installed = yield* Effect.promise(() => Bun.$`claude --version`.text());
+        // WARNING: A floor, not an equality: an exact version failed the day Claude updated, which says nothing about the interface.
         expect([Str.trim(installed), atLeast(installed, wanted)]).toEqual([
           Str.trim(installed),
           true,

@@ -34,6 +34,7 @@ export const readWhole = Effect.fn("Carried.readWhole")(function* (
   }
 });
 
+// WARNING: a host keeps an upload for a week, so a day here stays well inside it.
 const REMEMBERED = 24 * 60 * 60 * 1000;
 
 const uploaded = Effect.fn("Carried.upload")(function* (

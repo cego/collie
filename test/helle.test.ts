@@ -1293,6 +1293,7 @@ test("adopting a claim stops the Run that held it and its children, waits them o
         ...host({ children: ["r-child"], stopsAfter: 2 }),
       });
       expect(handed).toEqual(["r-old"]);
+      // WARNING: every agent the stop could not close is closed before the record goes, or it could still change what the claim guards.
       expect(said).toEqual([
         "stop r-old",
         "looked at r-old",

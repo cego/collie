@@ -22,6 +22,7 @@ export const offersSetup = ({ direction, connected, version, settings }: OfferFa
   settings.setupNever !== true &&
   settings.setupNotNow !== version;
 
+// WARNING: 'Not now' holds until Desktop's next version; 'Don't ask again' holds for good.
 export const declined = (forGood: boolean, version: string) =>
   forGood ? { setupNever: true } : { setupNotNow: version };
 

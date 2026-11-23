@@ -96,9 +96,11 @@ const stateOf: (view: RunView) => RunState = (view) => {
       return "succeeded";
     case "failed":
       return stopped ? "stopped" : "failed";
+    // WARNING: a stop suspends the Run; otherwise only a question or a parked Run is waiting.
     case "suspended":
       if (stopped) return "stopped";
       return view.parked !== null || Arr.some(view.waiting, isUnanswered) ? "waiting" : "running";
+    // WARNING: concurrent work can keep the Run pending while one Activity is parked.
     case "pending":
       if (stopped) return "stopped";
       return view.parked !== null ? "waiting" : "running";
@@ -192,6 +194,7 @@ export const factsOfView: (stateDir: string, view: RunView) => RunFacts = (state
   },
 });
 
+// WARNING: a stop leaves the question open in the engine for a resume, so an ended Run asks only through its agent.
 const isAsking: (view: RunView, one: RunView["waiting"][number]) => boolean = (view, one) => {
   const state = stateOf(view);
   return isUnanswered(one) && (!settled({ state }) || (one.asker != null && state !== "stopped"));
@@ -215,6 +218,7 @@ const executionOf: (view: RunView) => Execution = (view) => {
 
 type Client = FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner;
 
+// WARNING: a host that will not answer costs the caller its Runs, never the whole read.
 export const listRuns = Effect.fn("Runs.list")(function* (env: PluginEnv) {
   const live = yield* runViews(env, null);
   return newestFirst(Arr.map(live.runs, (view) => factsOfView(env.stateDir, view)));

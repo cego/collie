@@ -1,3 +1,4 @@
+// WARNING: data only: nothing here is a threshold or refuses anything.
 import * as Num from "effect/Number";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
@@ -62,6 +63,7 @@ export interface Report {
   readonly measures: Measures;
 }
 
+// WARNING: null means the host could not read the record, not that it is empty.
 export interface Recorded {
   readonly records: OutcomeRecords | null;
   readonly metrics: ReadonlyArray<Metric>;

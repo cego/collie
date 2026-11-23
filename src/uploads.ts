@@ -1,3 +1,4 @@
+// WARNING: keyed by sha256: a retried part is the same part, so no request id is needed.
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Clock, Effect, FileSystem, Path, Result, Semaphore } from "effect";
@@ -56,6 +57,7 @@ const receivePart = Effect.fn("Uploads.receive")(function* (stateDir: string, pa
     Effect.map((info) => Number(info.size)),
     Effect.orElseSucceed(() => 0),
   );
+  // WARNING: a part sent again after it arrived is the same part, not an overrun.
   if (part.offset + bytes.length <= arrived && part.offset + bytes.length < part.size)
     return { path: null, complete: false };
   if (part.offset !== arrived) {

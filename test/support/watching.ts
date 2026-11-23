@@ -206,6 +206,7 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
     Arr.filter((cmd) => cmd === "terminal.run"),
   );
 
+  // WARNING: Every intervening timer still fires, so the fast clock steps over the five-minute poll.
   const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices | Scope.Scope>) =>
     runLive(
       fastForward(

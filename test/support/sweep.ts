@@ -1,7 +1,9 @@
+// WARNING: Reads /proc, so Linux only.
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
+// WARNING: Called by a process exit listener, which cannot finish Effect FileSystem's asynchronous cleanup.
 import {
   accessSync,
   chmodSync,
@@ -17,6 +19,7 @@ import * as Rec from "effect/Record";
 const { join } = Effect.runSync(Path.Path.pipe(Effect.provide(Path.layer)));
 
 export const MARKER = "COLLIE_TEST_ROOT";
+// WARNING: /tmp, not TMPDIR, so a control socket path stays short enough to bind.
 export const SOCKET_BASE = "/tmp";
 
 export const MEMORY_BASE = Effect.runSync(
@@ -58,6 +61,7 @@ export const kill = (pid: number) => {
 
 const PF_KTHREAD = 0x200000;
 
+// WARNING: Between execve's switch and its environment write, environ reads empty, so read it again.
 const execing = (stat: string) => {
   const fields = Str.split(
     pipe(stat, Str.slice(Option.getOrElse(pipe(stat, Str.lastIndexOf(")")), () => -1) + 2)),
@@ -92,6 +96,7 @@ export const marked = (
         Bun.sleepSync(1);
         read = environ();
       }
+      // WARNING: The exec may finish between the empty read and the stat read.
       if (read === "") read = environ();
       const env = `\0${read}\0`;
       if (!Arr.every(want, (binding) => pipe(env, Str.includes(binding)))) return [];
@@ -132,6 +137,7 @@ export const sweepEveryBase = (memory = MEMORY_BASE) =>
     }
   });
 
+// WARNING: A Go module cache is read-only, so give write back before removing; a root that will not go is reported, never thrown.
 const writable = (dir: string) => {
   try {
     chmodSync(dir, 0o700);

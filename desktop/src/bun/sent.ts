@@ -33,6 +33,7 @@ export type ActionsLog = (line: Attempted) => Effect.Effect<void>;
 
 export const unlogged: ActionsLog = () => Effect.void;
 
+// WARNING: one lock per file, shared by its writers: a rotation is a stat, a rename and an append.
 const writing = new Map<string, Semaphore.Semaphore>();
 
 export const actionsLog = (dir: string, maxBytes = LOG_BYTES) =>
@@ -117,6 +118,7 @@ export interface Sending extends Omit<Attempted, "attempt" | "ended" | "reason">
   readonly what: string;
 }
 
+// WARNING: a retry reuses the request id, which the host takes once.
 export const confirmed = <A, E extends { readonly _tag: string; readonly message: string }, R>(
   { log, what, withheld, ...sending }: Sending,
   call: Effect.Effect<A, E, R>,

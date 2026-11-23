@@ -371,6 +371,7 @@ test("a pi agent on core asks with its question tool: two Decisions, its next st
           expect(launched.agentSession).toEqual({ kind: "pi", value: chosen ?? "" });
 
           const tools = yield* piTools(argv[argv.indexOf("-e") + 1] ?? "");
+          // WARNING: The helper stamps its question on the wall clock, which the test clock runs ahead of; a question stamped before its work was given is not that work's.
           yield* waitFor(
             Effect.map(TestClock.withLive(Clock.currentTimeMillis), (now) => now > launched.at!),
           );
@@ -515,6 +516,7 @@ test("Go to pane names an agent's core terminal while the host still inherits He
     Effect.gen(function* () {
       const core = yield* rig.startCore();
       const started = yield* launched(core, "builder-1", rig.projectDir);
+      // WARNING: The rig's env carries HERDR_SOCKET_PATH to a tripwire; asking it anything fails the rig on close.
       const env = rig.pluginEnv();
 
       const at = yield* focusPane(yield* liveHerds(new Herdr(env), env), [

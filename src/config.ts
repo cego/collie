@@ -54,6 +54,7 @@ export function configValue(raw: YamlMap, dotted: string) {
   return node;
 }
 
+// WARNING: numbers must be written as numbers, since loadDefaults ignores strings; null removes a key, while an empty string is a value.
 export const writeConfigValue = Effect.fn("Config.writeConfigValue")(function* (
   userDir: string,
   dotted: string,
@@ -160,6 +161,7 @@ const readShared = Effect.fn("Config.sharedSettings")(function* (userDir: string
     const at = stamps.set[key] ?? (value === null ? undefined : written);
     return at === undefined ? [] : [{ key, value, at }];
   });
+  // WARNING: recorded the first time, so a later write to the file does not make them newer.
   const unstamped = Arr.filter(settings, ({ key }) => stamps.set[key] === undefined);
   if (unstamped.length > 0)
     yield* writeSettingsSet(userDir, {
@@ -224,6 +226,7 @@ export class SettingRefused extends Data.TaggedError("SettingRefused")<{
   readonly reason: string;
 }> {}
 
+// WARNING: refused whole, with why, where any one value is not one its setting takes.
 export const takeShared = (
   userDir: string,
   given: ReadonlyArray<SharedSetting>,
@@ -295,6 +298,7 @@ export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (userDir:
       ? raw.board_quiet_ms
       : FALLBACK_DEFAULTS.boardQuietMs,
     idleCloseMs: isNumber(raw.idle_close_ms) ? raw.idle_close_ms : FALLBACK_DEFAULTS.idleCloseMs,
+    // WARNING: only an explicit false turns it off; keep the !== false test.
     runModel: raw.run_model !== false,
     memoryHold: isNumber(raw.memory_hold) ? raw.memory_hold : FALLBACK_DEFAULTS.memoryHold,
     compactAtTokens: isNumber(raw.compact_at_tokens)
@@ -307,6 +311,7 @@ export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (userDir:
       () => [],
     ),
     trust: raw.trust === "auto" || raw.trust === "never" ? raw.trust : FALLBACK_DEFAULTS.trust,
+    // WARNING: kept as written, not coerced, since readers would otherwise hide it; validation names it.
     permissions: permissionsAsWritten(raw.permissions) ?? FALLBACK_DEFAULTS.permissions,
     scope: isString(raw.scope) && isScope(raw.scope) ? raw.scope : FALLBACK_DEFAULTS.scope,
     density:
@@ -319,6 +324,7 @@ export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (userDir:
       isString(raw.questions) && isQuestionMode(raw.questions)
         ? raw.questions
         : FALLBACK_DEFAULTS.questions,
+    // WARNING: only an explicit false turns it off; anything else leaves a human told what happened.
     proactive: raw.proactive !== false,
     gitlabHost:
       isString(raw.gitlab_host) && isHostName(raw.gitlab_host)

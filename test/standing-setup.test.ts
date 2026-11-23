@@ -1,3 +1,4 @@
+// WARNING: Sessions are read only after the human has said what they hold; nothing is read before they choose.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";

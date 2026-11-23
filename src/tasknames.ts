@@ -1,3 +1,4 @@
+// WARNING: every label is data, quoted into the pack; what comes back is a display label, never a path, agent or command.
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -198,6 +199,7 @@ export function namePack(context: TaskContext, live: LiveNames) {
   );
 }
 
+// WARNING: a prefix the person uses belongs to the repository it names; borrowed for another, it files work under somebody else's project.
 export function cleanName(answer: TaskName, context: TaskContext, live: LiveNames) {
   const otherwise = fallbackName(context, live);
   const project = oneLine(answer.project);
@@ -234,6 +236,7 @@ const liveNames: (env: PluginEnv) => Effect.Effect<LiveNames, never, PlatformSer
   "tasknames.liveNames",
 )(function* (env: PluginEnv) {
   const own = yield* Effect.serviceOption(Tasks);
+  // WARNING: lazy: lifecycle imports the host, which imports this.
   const { hostTasks } = yield* Effect.promise(() => import("./lifecycle"));
   const tasks = yield* (Option.isSome(own) ? own.value.list : hostTasks(env)).pipe(
     Effect.orElseSucceed(() => []),

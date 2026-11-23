@@ -104,6 +104,7 @@ test("the fingerprint moves for anything that changes what a command would see",
       yield* git(["add", "-A"]);
       expect((yield* fingerprint(repo)).fingerprint).toBe(unstaged.fingerprint);
 
+      // WARNING: untracked content counts; a test that passed on an uncommitted file passed on a tree nobody else gets.
       yield* git(["checkout", "-q", "--", "."]);
       yield* git(["reset", "-q"]);
       const back = yield* fingerprint(repo);
@@ -114,6 +115,7 @@ test("the fingerprint moves for anything that changes what a command would see",
       const changed = yield* fingerprint(repo);
       expect(changed.fingerprint).not.toBe(withUntracked.fingerprint);
 
+      // WARNING: ignored files are not part of what a command sees under version control.
       yield* fs.makeDirectory(path.join(repo, "ignored"), { recursive: true });
       yield* fs.writeFileString(path.join(repo, "ignored", "big"), "noise\n");
       expect((yield* fingerprint(repo)).fingerprint).toBe(changed.fingerprint);
@@ -244,6 +246,7 @@ test("the argument list is the command; nothing is handed to a shell", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
       const runDir = path.join(repo, ".run");
+      // WARNING: a shell would read this as two commands; a spawn passes it as one argument.
       const record = yield* collect(runDir, {
         run: "r1",
         name: "echo",
@@ -270,6 +273,7 @@ test("a directory outside the Run is refused, and one inside it is not", () =>
       expect(yield* insideRun(path.join(repo, "src"), run)).toBe(true);
       const elsewhere = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-other-" });
       expect(yield* insideRun(elsewhere, run)).toBe(false);
+      // WARNING: a sibling whose path merely starts with the Run's is not inside it.
       expect(yield* insideRun(`${repo}-next-door`, run)).toBe(false);
     }),
   ));
@@ -291,6 +295,7 @@ test("Collie runs only the command the human approved, argument for argument", (
       expect(ran.result).toBe("pass");
       expect(ran.by).toBe("collie");
 
+      // WARNING: the wrapper is part of what was approved; one extra word is a different command.
       const near = yield* runApproved(runDir, run, [approved], {
         ...approved,
         argv: ["--bail", "--watch"],
@@ -373,6 +378,7 @@ test("an expected failure passes when it fails, and fails when it does not", () 
       const path = yield* Path.Path;
       const runDir = path.join(repo, ".run-expect");
 
+      // WARNING: a reproduction passes on its non-zero exit.
       const reproduced = yield* collect(runDir, {
         run: "r1",
         name: "regression",
@@ -386,6 +392,7 @@ test("an expected failure passes when it fails, and fails when it does not", () 
       expect(reproduced.exit).toBe(1);
       expect(reproduced.expect).toBe("fail");
 
+      // WARNING: the same command succeeding is the reproduction failing, not a fix.
       const didNot = yield* collect(runDir, {
         run: "r1",
         name: "regression",
@@ -398,6 +405,7 @@ test("an expected failure passes when it fails, and fails when it does not", () 
       expect(didNot.result).toBe("fail");
       expect(didNot.exit).toBe(0);
 
+      // WARNING: unstable beats the expectation both ways; an expected failure on a moving tree is not a reproduction.
       const moved = yield* collect(runDir, {
         run: "r1",
         name: "regression",
@@ -514,6 +522,7 @@ test("expectation is applied only after the stability rules", () => {
   expect(resultOf(same, same, 0, "pass")).toBe("pass");
   expect(resultOf(same, other, 1, "fail")).toBe("unstable");
   expect(resultOf({ head_sha: "a", fingerprint: TOO_LARGE }, same, 1, "fail")).toBe("unstable");
+  // WARNING: the default is what every record written before --expect meant.
   expect(resultOf(same, same, 0)).toBe("pass");
 });
 
@@ -522,6 +531,7 @@ test("a verification is stale the moment the tree it ran on moves", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
+      // WARNING: outside the repository; a journal written inside the tree would move the fingerprint of the tree it records.
       const runDir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-run-" });
       const record = yield* collect(runDir, {
         run: "r1",
@@ -537,6 +547,7 @@ test("a verification is stale the moment the tree it ran on moves", () =>
       yield* fs.writeFileString(path.join(repo, "tracked.txt"), "two\n");
       expect(staleAgainst(record, yield* fingerprint(repo))).toBe(true);
 
+      // WARNING: a tree nobody could measure is never one a result still speaks for.
       expect(staleAgainst(record, { head_sha: record.end.head_sha, fingerprint: TOO_LARGE })).toBe(
         true,
       );
@@ -641,6 +652,7 @@ test("a fingerprint writes nothing to the checkout's index, so it holds no lock 
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
+      // WARNING: a status of git's own would write the new time to the index, so this file is touched and not edited.
       const touched = fileTime("2026-01-01T00:00:00Z");
       yield* fs.utimes(path.join(repo, "tracked.txt"), touched, touched);
       const index = path.join(repo, ".git", "index");
@@ -657,6 +669,7 @@ test("an edit of the same size, in the second its file was staged, moves the tre
       const path = yield* Path.Path;
       const file = path.join(repo, "tracked.txt");
       const index = path.join(repo, ".git", "index");
+      // WARNING: a file's change time cannot be set, so the repository is one that does not read it.
       const second = fileTime("2026-01-01T00:00:00Z");
       yield* git(["config", "core.trustctime", "false"]);
       yield* fs.utimes(file, second, second);

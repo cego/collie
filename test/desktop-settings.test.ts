@@ -137,6 +137,7 @@ test("an edit in Desktop is the latest, is checked as the TUI checks it, and dif
   expect(editSetting(first, "max_iterations", "eight", at(12))).toEqual({
     refused: 'max_iterations has to be a whole number, not "eight"',
   });
+  // WARNING: A cleared setting is an edit too: it unsets the key on every Machine.
   expect(editSetting(first, "scope", "", at(12))).toMatchObject({
     settings: { scope: { value: null, from: "Desktop" } },
   });

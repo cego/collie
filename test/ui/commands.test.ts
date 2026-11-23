@@ -90,6 +90,7 @@ effectTest("clearing a default unsets it rather than configuring an empty one", 
 
   const note = yield* set("harness", "");
 
+  // WARNING: an empty harness is not a harness: validation would fail on it while Settings shows the key as unset.
   expect(note).toContain("unset");
   expect(yield* readConfig(rig.pluginEnv().userDir)).not.toHaveProperty("harness");
   expect((yield* loadDefaults(rig.pluginEnv().userDir)).harness).toBe("claude");
@@ -111,6 +112,7 @@ effectTest(
 effectTest(
   "permissions is refused unless it is a mode a Run can start an agent with",
   function* () {
+    // WARNING: written, it would fail every later loadDefaults, including the Settings view meant to repair it.
     const note = yield* set("permissions", "yolo");
 
     expect(note).toContain("auto, bypass, harness");
@@ -152,6 +154,7 @@ effectTest(
 );
 
 effectTest("a default is written without the whitespace around it", function* () {
+  // WARNING: the trim is used only for the checks, so the untrimmed string is written and then fails validation.
   const note = yield* set("harness", "  codex  ");
 
   expect(note).toBe("harness is now codex");
@@ -164,9 +167,11 @@ effectTest("a setting records when it was set, and proactive is one", function* 
   expect(yield* set("proactive", "false")).toBe("proactive is now false");
 
   expect((yield* loadDefaults(userDir)).proactive).toBe(false);
+  // WARNING: the latest edit of a key is what a Flock shares.
   expect(Rec.keys((yield* readSettingsSet(userDir)).set)).toEqual(["proactive"]);
   expect(yield* set("models.claude", "claude-x, claude-y")).toContain("claude-x, claude-y");
   expect((yield* loadDefaults(userDir)).models).toEqual({ claude: ["claude-x", "claude-y"] });
+  // WARNING: a remembered answer is a Run's own note, never a setting.
   expect(yield* set("linear.team", "CEG")).toContain("not one of Collie's settings");
 });
 
@@ -209,6 +214,7 @@ effectTest(
     expect(yield* jump({ kind: "workspace", workspaceId: "w9", label: "Implement · glass" })).toBe(
       "Implement · glass — nothing to jump to",
     );
+    // WARNING: a run row resolves its agent from the register now, not from an id the board cached when it drew the row.
     expect(yield* jump({ kind: "run", runId: run.id, label: "Implement · glass" })).toBe(
       "attach to impl-9 with: hc attach impl-9",
     );
@@ -229,6 +235,7 @@ effectTest("Enter on an Elsewhere row says so and asks core nothing", function* 
 effectTest("w on another workspace's run opens its merge request, not this repo's", function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  // WARNING: glab resolves the project from its cwd, so the run's own checkout is the only cwd that names it.
   const checkout = path.join(rig.root, "another-checkout");
   yield* fs.makeDirectory(checkout, { recursive: true });
   const run = yield* elsewhere({ workspaceId: "w9", target: "mr:42", cwd: checkout });

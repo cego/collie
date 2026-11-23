@@ -38,6 +38,7 @@ export const UNREACHABLE_RELEASES = "http://127.0.0.1:9";
 
 export interface Call extends Schema.Schema.Type<typeof CallSchema> {}
 
+// WARNING: In the rig's environment rather than the process's, so no test reaches a real glab to learn who is running it.
 export const TEST_LOGIN = "tester";
 
 export class Rig {
@@ -185,8 +186,11 @@ export class Rig {
       GITLAB_USER_LOGIN: TEST_LOGIN,
       GITHUB_ACTOR: TEST_LOGIN,
       COLLIE_RELEASES: UNREACHABLE_RELEASES,
+      // WARNING: Never the real Machine's memory, as Collie reads it.
       COLLIE_PROC: this.procDir,
+      // WARNING: Never the real Machine's free disk, as Collie reads it.
       COLLIE_DF: this.dfPath,
+      // WARNING: Never the human's core: the fake core's socket, once startCore serves it.
       HC_SOCKET: this.coreSocket,
       ...overrides,
     };
@@ -202,6 +206,7 @@ export class Rig {
       const fs = yield* FileSystem.FileSystem;
       if (!(yield* fs.exists(logPath))) return [];
       const text = yield* fs.readFileString(logPath);
+      // WARNING: A line with no newline yet is still being written.
       const whole = Str.split(text, "\n").slice(0, -1);
       return yield* Effect.forEach(
         Arr.filter(whole, (line) => Str.trim(line) !== ""),

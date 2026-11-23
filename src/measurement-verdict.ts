@@ -30,6 +30,7 @@ export const Judgement = Schema.Struct({
 });
 export type Judgement = typeof Judgement.Type;
 
+// WARNING: Infinite ratios and bounds are kept as they are: plain JSON writes them as null.
 export const JudgementJson = Schema.fromJsonString(Schema.toCodecJson(Judgement));
 
 export class MeasurementRefused extends Data.TaggedError("MeasurementRefused")<{

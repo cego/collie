@@ -296,6 +296,7 @@ test("idle review-request rounds list for the account glab switched to", () =>
             () => Effect.sync(() => listings(forge).length),
             (count) => count >= 1,
           );
+          // WARNING: The old token is refused and ForgeHttp retries with the new one, so no round sees a 401.
           yield* forge.set({ ...(yield* forge.model()), token: "ann-token", login: "ann" });
           yield* until(
             () =>

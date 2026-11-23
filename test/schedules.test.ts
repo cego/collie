@@ -212,6 +212,7 @@ test("a pause and a resume asked while an occurrence is admitted wait for its Ru
     (world) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
+        // WARNING: naming reads this Markdown inside admission, while the Schedule's lock is held.
         const source = `${world.project}/admission.md`;
         const entered = `${world.home}/admitting`;
         const hold = `${world.home}/hold-admission`;

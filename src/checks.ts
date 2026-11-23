@@ -36,6 +36,7 @@ const USUAL_OF = 5;
 
 export const LAST_LINES = 40;
 
+// WARNING: read only the end of the log; it can be large.
 const TAIL_READ = 16 * 1024;
 
 export const lastLinesOf = (log: string | null, count = LAST_LINES) =>
@@ -51,6 +52,7 @@ export const lastLinesOf = (log: string | null, count = LAST_LINES) =>
         Effect.orElseSucceed(() => []),
       );
 
+// WARNING: a Run with no marker is read from its running check's record, as an agent's own verify is.
 export const markersOf = Effect.fn("Checks.markersOf")(function* (
   records: ReadonlyArray<CheckRecord> = [],
 ) {
@@ -105,6 +107,7 @@ const usualOf = Effect.fn("Checks.usualOf")(function* (
   return last.length % 2 === 1 ? last[mid]! : (last[mid - 1]! + last[mid]!) / 2;
 });
 
+// WARNING: remembered per run; each board refresh would otherwise re-read every journal.
 const usualRemembered = Effect.fn("Checks.usualRemembered")(function* (
   run: RunFacts,
   runs: ReadonlyArray<RunFacts>,
@@ -158,6 +161,7 @@ const bytesFrom = (log: string, offset: number) =>
     Effect.orElseSucceed(() => Buffer.alloc(0)),
   );
 
+// WARNING: counts bytes, not characters, so a cut never splits one.
 export const followLog = Effect.fn("Checks.followLog")(function* (
   run: RunFacts,
   log: string,
@@ -169,6 +173,7 @@ export const followLog = Effect.fn("Checks.followLog")(function* (
     const read = yield* bytesFrom(log, offset);
     offset += read.length;
     pending = Buffer.concat([pending, read]);
+    // WARNING: up to the last newline: a half-written line is said when it is whole.
     const end = pending.lastIndexOf(10) + 1;
     if (end > 0) {
       yield* say(pending.subarray(0, end).toString("utf8"));

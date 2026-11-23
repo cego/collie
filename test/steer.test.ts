@@ -1,3 +1,4 @@
+// WARNING: A steer is a question: it must never reach an agent, whatever authority the Run has granted.
 import { recordsAt } from "./support/records";
 import type { Records } from "../src/records";
 import * as Arr from "effect/Array";
@@ -184,6 +185,7 @@ test("a steer with no target is refused before anything is spent", () =>
         text: "what is going on?",
         requestId: "req-2",
       });
+      // WARNING: A flock question is refused before the call, never answered by a model.
       expect(result).toMatchObject({ ok: false, error: { code: "invalid_input" } });
       expect(yield* readBudget(yield* budgetPath(stateDir, herdKey))).toEqual([]);
     }),
@@ -233,6 +235,7 @@ test("a Run nobody named is not one Collie will guess at", () =>
 test("every call is counted and costed, and none is refused over the count", () =>
   inWorld(
     Effect.gen(function* () {
+      // WARNING: An old Intent's model-call cap still decodes and decides nothing: usage is never enforced.
       const run = yield* aRun({ ...DEFAULT_AUTHORITY, model_calls_per_run: 1 });
       yield* setReply(
         envelope({
@@ -362,6 +365,7 @@ test("the pack names the runs and the target's own intent, and no pane text", ()
       expect(pack).toContain(run.id);
       expect(pack).toContain("Goal: add a picker");
       expect(pack).toContain("Intent version: 1");
+      // WARNING: The pack never reads a terminal: an agent's status reaches it only as core's status.
       expect(yield* fs.readFileString(core.logPath)).not.toContain('"cmd":"terminal.read"');
     }),
   ));
@@ -401,6 +405,7 @@ test("a follow-up is answered with the earlier turns of the same conversation", 
       });
 
       const pack = yield* fs.readFileString(packFile);
+      // WARNING: Without the conversation so far, a follow-up has no memory of the first question.
       expect(pack).toContain("## This conversation so far");
       expect(pack).toContain("- human: how is the flock?");
       expect(pack).toContain("- collie: Two are running.");
@@ -440,6 +445,7 @@ test("the pack says when it is not listing the whole Herd", () =>
       });
 
       const pack = yield* fs.readFileString(packFile);
+      // WARNING: A model told about forty of forty-two and not told so answers 'that is all of them' in good faith.
       expect(pack).toMatch(/\(\d+ more Run\(s\) not listed here\)/);
     }),
   ));

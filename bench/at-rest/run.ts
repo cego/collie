@@ -47,6 +47,7 @@ const threadsCpu = (pid: number) => {
       else if (comm === "Worker") cpu.worker += ms;
       else cpu.other += ms;
     } catch {}
+  // WARNING: a thread that ended takes its share with it; the process total below keeps it.
   return cpu;
 };
 const usage = (pid: number) => {
@@ -63,6 +64,7 @@ const usage = (pid: number) => {
   );
   const threads = threadsCpu(pid);
   return {
+    // WARNING: /proc stat fields: utime and stime are 14-15, cutime and cstime 16-17, minflt and cminflt 10-11.
     cpu_ms: (Number(f[11]) + Number(f[12])) * tickMs,
     children_cpu_ms: (Number(f[13]) + Number(f[14])) * tickMs,
     main_cpu_ms: threads.main,

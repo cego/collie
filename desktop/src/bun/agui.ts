@@ -1,3 +1,4 @@
+// WARNING: decoded, not typed against the SDK, because Collie's own suite does not install it.
 import * as Arr from "effect/Array";
 import { Option, Schema } from "effect";
 import { isString } from "../../../src/schema";
@@ -43,6 +44,7 @@ const ToolResult = Schema.Struct({
   ]),
 });
 
+// WARNING: a subagent's message (parent_tool_use_id set) is not read.
 const Known = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("stream_event"),
@@ -112,6 +114,7 @@ export const step: (
   const read = known.value;
   const begun: AguiEvent[] = [];
   let now = state;
+  // WARNING: a turn begins with the model's first word, or ends without one.
   if (now.run === null) {
     if (read.type === "user") return [now, []];
     const run = `${now.thread}:${now.turns + 1}`;

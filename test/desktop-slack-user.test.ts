@@ -415,6 +415,7 @@ test("a Machine an older Desktop gave the sign-in is not given it again, and a l
       yield* app.session.signIn;
       const fs = yield* FileSystem.FileSystem;
       const signIn = fingerprint((yield* app.keyring.lookup("slack-user-grant"))!);
+      // WARNING: An older Desktop recorded the bot's removal as slack and the sign-in as slack-user.
       const older = `{"slack":"${fingerprint("")}","slack-user":"${signIn}"}`;
       yield* fs.writeFileString(`${app.dir}/given/given.json`, `{"vm":${older},"mini":${older}}`);
       const desktop2 = yield* reopen(app);

@@ -1,3 +1,4 @@
+// WARNING: a redirect may hand an asset to GitHub's CDN, but must never turn an update into a request to another service.
 import { Effect } from "effect";
 import * as HttpClient from "effect/http/HttpClient";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";

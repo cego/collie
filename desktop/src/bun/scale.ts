@@ -5,6 +5,7 @@ import { Effect, Queue, Stream } from "effect";
 import { type MonitorScale, monitorOf, zoomFor } from "../shared/scale";
 import { output } from "./machine";
 
+// WARNING: reads Hyprland only; GNOME and KDE need reading once Desktop runs there.
 const monitorScale: (title: string) => Effect.Effect<MonitorScale> = (title) =>
   Bun.env.HYPRLAND_INSTANCE_SIGNATURE === undefined
     ? Effect.succeed({ _tag: "Unknown", reason: "This is not a Hyprland session" })

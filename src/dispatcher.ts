@@ -40,6 +40,7 @@ import type { FrontDoor } from "./board-model";
 import { scrub } from "./redact";
 import { keepMessage } from "./attachments";
 
+// WARNING: a message may sit reserved until a later reader calls it unknown.
 export const SUBMIT_TIMEOUT_MS = 60_000;
 
 const LISTING_MAX_AGE_MS = 5_000;
@@ -90,6 +91,7 @@ export const deliveryText = (
   return heading === "" ? words : `${heading}\n${words}`;
 };
 
+// WARNING: past about 3 lines or 800 characters Claude Code shows the text as pasted content; 700 leaves room for a resend's token.
 export const PASTE_BUDGET = { lines: 3, chars: 700 } as const;
 
 const fits = (typed: string) =>
@@ -99,6 +101,7 @@ const fits = (typed: string) =>
 export const KEPT =
   "Kept as a file in the Run. Auto mode reads only what is typed: ask for an action it must clear in a message of at most 3 lines and 700 characters.";
 
+// WARNING: never cut, since an excerpt can change what it asks.
 export const fitDelivery = Effect.fn("Dispatcher.fitDelivery")(function* (
   into: string,
   token: string,
@@ -144,6 +147,7 @@ export interface DeliveryDraft {
   readonly patienceMs?: number;
 }
 
+// WARNING: matched by herdr's error code, never its message text.
 const AGENT_BLOCKED = "agent_blocked";
 const TRANSIENT_REFUSALS: ReadonlySet<string> = new Set([AGENT_BLOCKED]);
 
@@ -156,6 +160,7 @@ type Refusal =
   | "deferred"
   | "exhausted";
 
+// WARNING: never a throw: each outcome is a fact the caller records, and an exception would lose the delivery id.
 export type SubmitOutcome =
   | {
       readonly ok: true;
@@ -223,6 +228,7 @@ const ORDER = {
 
 const MODE_ORDER = { interrupt: 0, now: 1, boundary: 2 } satisfies Record<Delivery["mode"], number>;
 
+// WARNING: last, not undefined, in the arithmetic: a NaN comparison leaves the list in whatever order it arrived.
 const LAST = Number.MAX_SAFE_INTEGER;
 // WARNING: the index is checked by `?? LAST` — a kind or mode these tables do not name reads as absent and sorts last, which is the point of the lookup.
 const causeRank = (kind: string) => ORDER[kind as Cause["kind"]] ?? LAST;
@@ -238,6 +244,7 @@ export function dispatchOrder<
   );
 }
 
+// WARNING: the incarnation is revalidated before any send, since an inherited agent name or pane may now belong to something else.
 export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, R>(
   deps: DispatcherDeps,
   entry: AgentEntry,
@@ -275,6 +282,7 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
             });
           if (Buffer.byteLength(text, "utf8") > MAX_DELIVERY_BYTES)
             return refuse(null, "too_long", `over ${MAX_DELIVERY_BYTES} bytes`);
+          // WARNING: fails closed before anything is reserved: an unshown mode would produce a delivery nobody can settle.
           const ungated = yield* gate(draft.harness ?? "", draft.mode).pipe(
             Effect.as(null),
             Effect.catch((cause) => Effect.succeed(cause)),
@@ -292,6 +300,7 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
             )
           )
             return refuse(null, "deferred", "agent is not idle");
+          // WARNING: a whole compaction can happen inside one transaction, so a listing older than a few seconds is re-read.
           if ((yield* Clock.currentTimeMillis) - listedAt > LISTING_MAX_AGE_MS) {
             listing = yield* agentsNow(deps);
             listedAt = yield* Clock.currentTimeMillis;
@@ -305,6 +314,7 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
         }).pipe(Effect.orDie),
     };
 
+    // WARNING: closed however the body ends, so a failed body cannot keep a sender with nothing serialising it.
     const result = yield* body(channel).pipe(
       Effect.ensuring(
         Effect.sync(() => {
@@ -324,6 +334,7 @@ function refuse(id: string | null, reason: Refusal, detail: string) {
 const agentsNow = (deps: DispatcherDeps) =>
   deps.herdr.agentList().pipe(Effect.orElseSucceed(() => []));
 
+// WARNING: reserved before herdr is called and never removed; a crash between them settles as unknown, not guessed.
 function deliveryOf(
   entry: AgentEntry,
   terminalId: string,
@@ -366,6 +377,7 @@ const send = Effect.fn("Dispatcher.send")(function* (
 
   const key = causalKey(draft.run, draft.cause, draft.intentVersion);
   const ledger = yield* readLedgerWhole(terminalId);
+  // WARNING: an unreadable line is a delivery nobody can account for; sending again could be a second copy.
   if (ledger.corrupt > 0) {
     yield* deps.log(
       `not sent to ${entry.agent}: ${ledger.corrupt} unreadable line(s) in its ledger`,
@@ -403,6 +415,7 @@ const send = Effect.fn("Dispatcher.send")(function* (
         );
   const settledAt = yield* nowIso;
   if (Result.isSuccess(sent)) {
+    // WARNING: submitted either way; what herdr could not vouch for is kept as a note, never rounded up to a delivery seen taken.
     const line = { ...reserved, at: settledAt, state: "submitted" as const };
     yield* appendLine(
       sent.success === "observed"
@@ -413,8 +426,10 @@ const send = Effect.fn("Dispatcher.send")(function* (
       yield* appendLine({ ...line, state: "acknowledged", note: TURN_STARTED });
     return { ok: true as const, id, submission: sent.success };
   }
+  // WARNING: a refusal herdr answered with is a fact; a transport that never answered is not.
   const why = herdrFailureReason(sent.failure);
   if (sent.failure.answered !== true) {
+    // WARNING: Collie never retries out of unknown on its own.
     yield* appendLine({ ...reserved, at: settledAt, state: "unknown", note: why });
     return refuse(id, "unknown", why);
   }
@@ -424,6 +439,7 @@ const send = Effect.fn("Dispatcher.send")(function* (
     yield* appendLine({ ...coded, at: settledAt, state: "failed", note: why });
     return refuse(id, "failed", why);
   }
+  // WARNING: measured from the ledger, not this process, so a sender that comes back after a restart keeps the same deadline.
   const before = deferralsOf(ledger.lines, id);
   const attempts = before.count + 1;
   const held = before.since === null ? 0 : (yield* Clock.currentTimeMillis) - epochMs(before.since);
@@ -447,6 +463,7 @@ export interface Patience {
 
 export const PATIENCE: Patience = { firstMs: 2_000, maxMs: 30_000, forMs: 10 * 60_000 };
 
+// WARNING: each try is a transaction of its own, so nothing waits holding the agent's ledger lock.
 export const submitPatiently = Effect.fn("Dispatcher.submitPatiently")(function* (
   deps: DispatcherDeps,
   entry: AgentEntry,
@@ -490,6 +507,7 @@ export interface ConfirmDeps<R> {
   readonly graceMs: number;
 }
 
+// WARNING: a settled agent showing neither a taken turn nor a delivery for the whole grace fails Unconfirmed; nothing proves resending is safe.
 export const confirmSubmitted = Effect.fn("Dispatcher.confirmSubmitted")(function* <R>(
   deps: ConfirmDeps<R>,
   entry: AgentEntry,
@@ -561,6 +579,7 @@ const settlePending = Effect.fn("Dispatcher.settlePending")(function* (
 
 export const DELIVERY_TOKEN = "collie-delivery:";
 
+// WARNING: herdr sees a prompt's first few hundred bytes and a slash command keeps its first line, so the token goes on its own line near the top.
 export function marked(text: string, id: string) {
   const token = `${DELIVERY_TOKEN}${id}`;
   if (Str.split(text, "\n").includes(token)) return text;
@@ -621,6 +640,7 @@ const recordUngated = Effect.fn("Dispatcher.recordUngated")(function* (
   });
 });
 
+// WARNING: never says stopped: keys do not prove the harness stopped, so the log says interrupt_requested.
 export const interrupt = Effect.fn("Dispatcher.interrupt")(function* (
   deps: DispatcherDeps & {
     readonly status: (agent: string) => Effect.Effect<string, never, PlatformServices>;
@@ -631,6 +651,7 @@ export const interrupt = Effect.fn("Dispatcher.interrupt")(function* (
   draft: DeliveryDraft,
   waitMs = INTERRUPT_WAIT_MS,
 ) {
+  // WARNING: before the keys: gating the text as a now is too late to un-press a key.
   const ungated = yield* gate(draft.harness ?? "", "interrupt").pipe(
     Effect.as(null),
     Effect.catch((cause) => Effect.succeed(cause)),
@@ -646,6 +667,7 @@ export const interrupt = Effect.fn("Dispatcher.interrupt")(function* (
   if (sent !== null) return refuse(null, "failed", `interrupt keys not sent: ${sent}`);
   yield* deps.log(`${entry.agent}: interrupt_requested`);
 
+  // WARNING: waiting is a courtesy, not a condition: the text goes out whether or not the status moves.
   const deadline = (yield* Clock.currentTimeMillis) + waitMs;
   while ((yield* Clock.currentTimeMillis) < deadline) {
     if ((yield* deps.status(entry.agent)) !== "working") break;

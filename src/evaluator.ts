@@ -1,3 +1,4 @@
+// WARNING: the model is a harness CLI run once with no tools or inherited config, and speaks only in closed schemas.
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -53,12 +54,14 @@ export const ProposalSchema = Schema.Struct({
 });
 export type Proposal = Schema.Schema.Type<typeof ProposalSchema>;
 
+// WARNING: display data only; no field here lets the model say anything that acts.
 export const TaskNameSchema = Schema.Struct({
   project: Schema.String,
   title: Schema.String,
 });
 export type TaskName = Schema.Schema.Type<typeof TaskNameSchema>;
 
+// WARNING: only paths it was shown may be chosen, so an answer points only where a Run could already go.
 export const RouteSchema = Schema.Struct({
   answer: Schema.Literals(["one", "several", "none"]),
   checkouts: Schema.Array(Schema.String),
@@ -88,6 +91,7 @@ export class EvaluatorUnavailable extends Data.TaggedError("EvaluatorUnavailable
   reason: string;
 }> {}
 
+// WARNING: each flag is load-bearing for isolation; there is no spending flag, since usage is recorded, never capped.
 export const REQUIRED_FLAGS = [
   "--print",
   "--output-format",
@@ -107,6 +111,7 @@ export interface CallLimits {
   readonly effort: string;
 }
 
+// WARNING: this list is the whole isolation; a dropped flag shows in no test.
 export function argvFor(limits: CallLimits, schema: string, systemPromptFile: string) {
   return [
     "-p",
@@ -130,6 +135,7 @@ export function argvFor(limits: CallLimits, schema: string, systemPromptFile: st
   ];
 }
 
+// WARNING: the payload is found by what validates, since the CLI envelope may rename its fields.
 export function structuredFrom<A, I>(raw: string, schema: Schema.Codec<A, I, never>) {
   const decode = Schema.decodeUnknownOption(schema);
   const parse = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
@@ -165,6 +171,7 @@ export interface EvaluatorDeps {
   readonly limits: CallLimits;
 }
 
+// WARNING: a bracketed suffix such as [-file] names both spellings.
 export function missingFlags(help: string) {
   const named = pipe_(help, Str.replace(/(--[a-z-]+)\[(-[a-z-]+)\]/g, "$1 $1$2"));
   return Arr.filter(REQUIRED_FLAGS, (flag) => !pipe_(named, Str.includes(flag)));
@@ -234,6 +241,7 @@ const capped = <E, R>(stream: Stream.Stream<Uint8Array, E, R>, cap: number) =>
     ),
   );
 
+// WARNING: the caller reserves and settles the budget around this, never here.
 export const call = Effect.fn("Evaluator.call")(function* (
   deps: EvaluatorDeps,
   kind: EvaluationKind,
@@ -251,12 +259,14 @@ export const call = Effect.fn("Evaluator.call")(function* (
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const handle = yield* spawner.spawn(
       ChildProcess.make("claude", argv, {
+        // WARNING: the pack goes on stdin, since argv is visible to other processes.
         stdin: Stream.make(new TextEncoder().encode(pack)),
         stdout: "pipe",
         stderr: "pipe",
         extendEnv: true,
       }),
     );
+    // WARNING: both streams are read concurrently, or a full stderr pipe stalls the child into a timeout.
     const [read, failed, exit] = yield* Effect.all(
       [
         capped(handle.stdout, deps.limits.maxOutputBytes),
@@ -288,6 +298,7 @@ export const call = Effect.fn("Evaluator.call")(function* (
   };
 });
 
+// WARNING: telemetry only; nothing may decide from the cost.
 const CostEnvelope = Schema.Struct({ total_cost_usd: Schema.Finite });
 const costOf = (stdout: string) =>
   Schema.decodeOption(Schema.fromJsonString(Schema.Unknown))(stdout).pipe(
@@ -296,6 +307,7 @@ const costOf = (stdout: string) =>
     Option.getOrUndefined,
   );
 
+// WARNING: an answer outside its schema yields no action at all.
 export const evaluate = Effect.fn("Evaluator.evaluate")(function* (
   deps: EvaluatorDeps,
   kind: EvaluationKind,
@@ -308,6 +320,7 @@ export const evaluate = Effect.fn("Evaluator.evaluate")(function* (
       value: null,
       error: ran.stderr === "" ? ran.outcome : `${ran.outcome}: ${Str.trim(ran.stderr)}`,
     };
+  // WARNING: per kind, since inference over the union picks one member's type.
   const decoded =
     kind === "judgement"
       ? structuredFrom(ran.stdout, JudgementSchema)
@@ -337,6 +350,7 @@ export interface Validated {
   readonly state: "allowed_now" | "pending";
 }
 
+// WARNING: only a Driver's drift check may act on the grant; a steer's proposal goes back to its human.
 function granted(action: Action, authority: Authority) {
   switch (action.kind) {
     case "deliver":
@@ -355,6 +369,7 @@ function runOf(action: Action) {
   return "run" in action ? action.run : null;
 }
 
+// WARNING: an action about a Run not shown becomes ask_human, not dropped.
 export function validate(proposal: Proposal, ctx: ValidationContext) {
   return Arr.map(proposal.actions, (action) => {
     const refused = refusalFor(action, ctx);
@@ -417,6 +432,7 @@ export interface BudgetedDeps {
   readonly budget: string;
 }
 
+// WARNING: without its prompt the data shown is no longer data, so no call is made.
 export const budgetedDeps = Effect.fn("Evaluator.budgetedDeps")(function* (
   env: {
     readonly userDir: string;

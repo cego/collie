@@ -16,6 +16,7 @@ export interface Key {
 export const isFocusKey = (key: Key) =>
   Str.toLowerCase(key.key) === "f" && key.shiftKey && (key.ctrlKey || key.metaKey);
 
+// WARNING: paste is left to the browser, which xterm.js sends bracketed where the pane asked for it.
 export const keyAction = (key: Key, hasSelection: boolean) => {
   if (isFocusKey(key)) return "focus";
   const letter = Str.toLowerCase(key.key);

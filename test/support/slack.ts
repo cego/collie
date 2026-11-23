@@ -1,3 +1,4 @@
+// WARNING: Requests are recorded without their authorization header, so no token reaches a log.
 import { pipe } from "effect/Function";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";

@@ -54,6 +54,7 @@ test("an automatically resumed fiber receives a fresh turn budget", () =>
 test("a fiber resumed into a chain of inline continuations receives a fresh turn budget", () => {
   const mapped = (count: Effect.Effect<unknown>) =>
     Arr.reduce(Arr.range(1, 20), count, (effect) => Effect.map(effect, (value) => value));
+  // WARNING: Effect's operation-budget yields resume into the chain, so the count includes them.
   return timeYields(mapped).then((yielded) => expect(yielded).toHaveLength(1));
 });
 

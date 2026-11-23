@@ -122,6 +122,7 @@ test("verify from an agent's pane answers the failure, its tests, the tail and t
         expect(answer.verification.tail.stdout).toContain("line 5000");
         expect(answer.log).toMatch(/^evidence:verify\/.+\.log$/);
         expect(answer.bounded).toContain(`collie run read ${runId} ${answer.log}`);
+        // WARNING: both lines sit far before the 4 KB tail.
         const everything = `${streamed}${encode(said.envelope)}`;
         expect(everything).not.toContain("line 1000");
         expect(everything).not.toContain("line 2500");

@@ -1406,6 +1406,7 @@ test("a merge an earlier host recorded under its hostless label is not recorded 
           created: "2026-10-15T09:30:00Z",
         }),
       ];
+      // WARNING: v0.118.0 wrote a disposition with its label and no host.
       yield* recordDisposition(runDir(stateDir, "r-build"), {
         at: MERGED_AT,
         by: "gitlab",
@@ -1417,6 +1418,7 @@ test("a merge an earlier host recorded under its hostless label is not recorded 
       yield* settleMerges({
         stateDir,
         cwd: "/project",
+        // WARNING: the forge gives no merge time; only the recorded Disposition dates the merge.
         run: forge("gitlab", { mrs: [mr65({ state: "merged" })] }),
         views: yield* buildBoard({ env, runs, now: TEN, quietMs: Infinity }),
         runs,
@@ -1593,6 +1595,7 @@ test("an interrupted attempt on a legacy bare merge request is settled as the MR
   runWithForge(
     Effect.gen(function* () {
       const bare = "mr:65";
+      // WARNING: within the minute the forge's clock may run behind the host's.
       const { stateDir, stops, round } = yield* merging(
         Arr.map(RELEASE, (run) => ({
           ...run,

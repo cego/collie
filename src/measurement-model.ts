@@ -145,6 +145,7 @@ export const MeasurementSchema = Schema.Struct({
   at: Schema.String,
 });
 export type Measurement = typeof MeasurementSchema.Type;
+// WARNING: Infinite ratios are kept as they are: plain JSON writes them as null.
 export const MeasurementJson = Schema.toCodecJson(MeasurementSchema);
 
 export const summaryOf = (measurement: Pick<Measurement, "result">) => {
@@ -192,6 +193,7 @@ export interface Lost {
   readonly why: string;
 }
 
+// WARNING: A harness that ran nothing, or differs on identical trees, is broken; too-noisy metrics leave proof unavailable.
 export type Calibration =
   | { readonly _tag: "Calibrated" }
   | { readonly _tag: "HarnessBroken"; readonly why: ReadonlyArray<string> }

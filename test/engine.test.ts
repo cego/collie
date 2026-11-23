@@ -83,6 +83,7 @@ test("a hold suspends at a boundary and release resumes the same run without lau
         decision: "decision",
         value: "go",
       });
+      // WARNING: The boundary read is a plain Effect, so it sees a flag set while waiting rather than a value cached from the first attempt.
       const paused = yield* until(
         () => events(state, "r1"),
         (log) => log.includes("held"),
@@ -211,6 +212,7 @@ test("two stop and resume cycles keep the run's work and it still completes", ()
           () => events(state, "r1"),
           (log) => stopsIn(log) === cycle,
         );
+        // WARNING: Asked until, not once: the run logs that it is stopping before it has finished suspending, so reading then is mid-attempt.
         yield* host.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
         yield* host.ask({ op: "resume", id: "proof", runId: "r1" });
       }
@@ -403,6 +405,7 @@ test("the provisioned toolchain typechecks every module against the declarations
         "planned",
         "measured",
         "landing",
+        // WARNING: The shipped workflows are held to the same declarations as an author's, or the contract is two contracts.
         "plan",
         "review",
         "architecture",
@@ -476,6 +479,7 @@ test("a Run's execution id is the one Effect 4.0.1 derived, so a recorded Run is
       const execution = yield* entry
         .make("echo@1")
         .workflow.executionId({ runId: "run-0c0ffee0", input: { text: "hi", times: 2 } });
+      // WARNING: Captured under Effect 4.0.1.
       expect(execution).toBe("5c3dc3215494e321b93f992d11ccc29e");
     }),
   ));
@@ -558,6 +562,7 @@ test("work for a workflow nobody has registered waits past upstream's deadline f
       const sibling = flow("sibling");
       const payload = { runId: "r1" };
       const executionId = yield* patient.executionId(payload);
+      // WARNING: In-process, so the minute upstream would fail it after passes on a test clock.
       const session = <A, E>(
         registered: Layer.Layer<never, never, WorkflowEngine.WorkflowEngine>,
         body: Effect.Effect<A, E, WorkflowEngine.WorkflowEngine | TestClock.TestClock>,
@@ -583,6 +588,7 @@ test("work for a workflow nobody has registered waits past upstream's deadline f
           yield* patient.execute(payload, { discard: true });
           for (let step = 0; step < 36; step++) {
             yield* TestClock.adjust("5 seconds");
+            // WARNING: The engine's storage reads are real IO between ticks.
             yield* TestClock.withLive(Effect.sleep("2 millis"));
           }
           return yield* patient.poll(executionId);
@@ -826,6 +832,7 @@ test("a service a module never provided is reported against the file that asks f
         { op: "poll", id: "unwired", runId: "u1" },
         (reply) => reply.status === "failed",
       );
+      // WARNING: Merging a Layer beside a workflow supplies it nothing, and the host only learns that when the body asks.
       expect(failed.value).toContain("Service not found: unwired/Missing");
       expect(failed.id).toContain("unwired.workflow.ts");
       yield* host.stop;

@@ -30,6 +30,7 @@ beforeEach(() =>
       dir = `${rig.root}/host`;
       yield* fs.makeDirectory(dir, { recursive: true });
       yield* fs.makeDirectory(rig.projectDir, { recursive: true });
+      // WARNING: a real repository, since a verification binds to the tree it ran on.
       for (const args of [
         ["init", "-q"],
         ["config", "user.email", "t@example.com"],

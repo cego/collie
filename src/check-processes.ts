@@ -97,6 +97,7 @@ export interface RunningCheck {
   readonly stderr: Stream.Stream<Uint8Array, PlatformError>;
   readonly exit: Effect.Effect<number, PlatformError>;
   readonly logged: boolean;
+  // WARNING: never completes for a check this host ended (D4).
   readonly collected: <A, E, R>(collecting: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
 }
 
@@ -136,10 +137,12 @@ export interface CheckProcessesApi {
     spawn: (markers: Readonly<Record<string, string>>) => Effect.Effect<H>,
     say?: (line: string) => Effect.Effect<void>,
   ) => Effect.Effect<AdoptedCheck<H> | null, CheckRefused, Scope.Scope>;
+  // WARNING: a handed-over check is neither ended nor collected by this host from now on.
   readonly handOver: Effect.Effect<ReadonlyArray<string>>;
   readonly takenOver: Effect.Effect<ReadonlyArray<CheckRecord>>;
   readonly claim: (id: string) => Effect.Effect<RunningCheck | null, never, Scope.Scope>;
   readonly endAll: Effect.Effect<ReadonlyArray<CheckOf>>;
+  // WARNING: includes a check still being spawned; its record goes only once it is gone.
   readonly killEnded: Effect.Effect<void>;
   readonly collecting: Effect.Effect<ReadonlyArray<string>>;
   readonly left: Effect.Effect<ReadonlyArray<Leftover>>;
@@ -254,6 +257,7 @@ const spawnSupervised = (
           },
         ),
       )
+      // WARNING: unref'd so a host handing over leaves the supervisor running.
       .pipe(Effect.tap((handle) => handle.unref)),
   );
 
@@ -346,6 +350,7 @@ const newId = (run: string, began: string) =>
     (salt) => `${run}@${epochMs(began)}-${pipe_(salt.toString(16), Str.slice(2))}`,
   );
 
+// WARNING: in memory only; nothing outside this process could finish an unrecorded check.
 const unrecordedChecks = new Map<string, { readonly finishing: Finishing; readonly kept: Kept }>();
 
 const unrecorded: CheckProcessesApi = {
@@ -443,6 +448,7 @@ const isGone = (proved: Proved) => proved.group === null && proved.marked.length
 export type Kill = (target: number, name: NodeJS.Signals) => void;
 const processKill: Kill = (target, name) => process.kill(target, name);
 
+// WARNING: signals nothing not proved to be the check's: its pid and start token must still match.
 const signal = (
   proved: { readonly group: number | null; readonly marked: ReadonlyArray<Marked> },
   name: NodeJS.Signals,
@@ -474,6 +480,7 @@ const goneWithin = (
     );
   });
 
+// WARNING: a zombie counts as gone.
 export const endCheck = Effect.fn("CheckProcesses.endCheck")(function* (
   record: Pick<CheckRecord, "id" | "leader">,
   installation: string,
@@ -487,6 +494,7 @@ export const endCheck = Effect.fn("CheckProcesses.endCheck")(function* (
   return yield* goneWithin(record, installation, 1_000);
 });
 
+// WARNING: ids are <run>@<epoch ms>-<hex>; runOfId parses that shape.
 const runOfId = (id: string) =>
   pipe_(
     id,
@@ -533,6 +541,7 @@ export interface HandedOver {
   readonly checks: ReadonlyArray<string>;
 }
 
+// WARNING: building it ends the checks a previous host left, where sweep is true.
 export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (options: {
   readonly dir: string;
   readonly installation: string;
@@ -549,6 +558,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
   const { dir, installation, kill = processKill, supervisor } = options;
   const fs = yield* FileSystem.FileSystem;
   const records = yield* RunRecords;
+  // WARNING: only these services, so a check's spawn and finalizer stay in its caller's Scope.
   const services = Context.make(FileSystem.FileSystem, fs).pipe(
     Context.add(
       ChildProcessSpawner.ChildProcessSpawner,
@@ -563,7 +573,9 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
   >();
   let stopping = false;
   let killing = false;
+  // WARNING: a spawning check's processes carry their markers before its record is read.
   const spawning = new Map<string, Ending>();
+  // WARNING: added before the spawn, so no check of this host is ever taken for a leftover.
   const ours = new Set<string>();
   const host = { pid: process.pid, started: (yield* startedOf(process.pid)) ?? "" };
 
@@ -575,6 +587,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
       entry.handed
         ? Effect.void
         : endCheck(entry.record, installation, kill).pipe(
+            // WARNING: where /proc cannot be read the record is the only proof, so it stays until the check is gone.
             Effect.flatMap((gone) => (gone ? forget(entry.record.id) : untrack(entry.record.id))),
             Effect.ignore,
           ),
@@ -683,6 +696,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
         found.set(id, [...known.values()]);
       }),
     );
+  // WARNING: a look already under way is not enough: a fresh one alone sees a process born since.
   const signalAll = (ids: ReadonlyArray<string>, name: NodeJS.Signals) =>
     Effect.gen(function* () {
       for (const id of ids) {
@@ -742,6 +756,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
       ours.add(id);
       yield* Effect.addFinalizer(() => Effect.sync(() => ours.delete(id)));
       yield* clearOf(check.run, say);
+      // WARNING: uninterruptible from spawn to finalizer, so no interruption leaves a check unended.
       return yield* Effect.uninterruptible(
         Effect.gen(function* () {
           if (stopping) return null;
@@ -844,6 +859,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
         const ends = nothingKept();
         const store = (name: keyof Kept, bytes: Uint8Array) => {
           const path = outputsOf(dir, id)[name];
+          // WARNING: a file cut short is worse than none; without it only this host finishes the check.
           return fs.writeFile(path, bytes).pipe(
             Effect.catch(() => fs.remove(path, { force: true })),
             Effect.ignore,
@@ -856,6 +872,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
           entry.supervised ? () => Effect.void : store,
           collectedOf(entry),
         );
+        // WARNING: a supervised check is finished from its supervisor's files, which may not exist yet.
         if (entry.supervised)
           return Effect.succeed({
             ...running,
@@ -1010,6 +1027,7 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
   return returned;
 });
 
+// WARNING: must stay under the host's stop slack.
 export const KILL_CEILING = Duration.seconds(3);
 
 export const endAllWithin = (

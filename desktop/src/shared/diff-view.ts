@@ -94,6 +94,7 @@ export const closedFolders = (folders: Folders, open: ReadonlyArray<string>) =>
     ? folders.closed
     : new Set(Arr.filter(folders.all, (folder) => !open.includes(folder)));
 
+// WARNING: a row's click selects nothing itself, so the active file stays the only selection.
 export const fileSelected = (event: { preventDefault(): void }, key: string) => {
   event.preventDefault();
   return pipe(key, Str.endsWith("/")) ? null : key;
@@ -300,6 +301,7 @@ export const activeFile = ({ sections, readingLine, atEnd, held }: Reading) => {
 export const reachBy = (box: Span, row: Span) =>
   row.top < box.top ? row.top - box.top : row.bottom > box.bottom ? row.bottom - box.bottom : 0;
 
+// WARNING: matches @pierre/diffs' default line height.
 const DIFF_LINE = 20;
 
 export const readingHeight = ({ added, removed }: DiffFile, visible: number) =>

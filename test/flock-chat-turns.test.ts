@@ -383,6 +383,7 @@ test("Desktop speaks first only about what matters, and the rest goes with the h
         expect(seen.prompts[0]).not.toContain("r2:ended");
         expect(seen.context[0]).toContain("Everything is on the vm");
         expect(read).toEqual(["r1:asking"]);
+        // WARNING: Nobody is there to click an answer, so the question is refused rather than waited on.
         expect(seen.refusals).toEqual(seen.prompts.slice(0, 1));
         const fs = yield* FileSystem.FileSystem;
         for (let tries = 0; tries < 200 && !(yield* fs.exists(`${dir}/flock-usage.jsonl`)); tries++)
@@ -574,6 +575,7 @@ test("a message with an image hands the SDK the words, Desktop's listing and the
         expect(shot).toMatchObject({ name: "shot.png", size: 16, mediaType: "image/png" });
         expect(shot.path).toStartWith(`${dir}/attachments/`);
         expect(yield* (yield* FileSystem.FileSystem).readFile(shot.path)).toEqual(original);
+        // WARNING: A PNG's header is all Desktop reads to know an image is within 2000 px.
         const smaller = new Uint8Array(24);
         smaller.set([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
         new DataView(smaller.buffer).setUint32(16, 2000);

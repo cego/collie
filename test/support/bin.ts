@@ -71,6 +71,7 @@ export class FakeBin {
     });
   }
 
+  // WARNING: Write a fresh file and rename it over the old: Linux refuses to write a running executable (ETXTBSY).
   add(name: string, script: string) {
     return Effect.gen(
       function* (this: FakeBin) {

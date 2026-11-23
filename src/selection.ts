@@ -1,3 +1,4 @@
+// WARNING: an input, never a filter, and rewritten rather than appended: chat must not answer about a card already closed.
 import { Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import { herdDir } from "./steering";
 

@@ -29,6 +29,7 @@ export type Moved =
 
 const why = (failure: DoorFailure) => ("reason" in failure ? failure.reason : failure.message);
 
+// WARNING: step request ids derive from the request, so a retried move repeats nothing.
 export const moveSchedule: (asked: {
   readonly from: ScheduleDoor;
   readonly to: ScheduleDoor;

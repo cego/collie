@@ -57,6 +57,7 @@ export const shOn = (route: ShellRoute, script: string, stdin?: Uint8Array) =>
   route.execute?.(script, stdin) ??
   Effect.flatMap(route.sh(script), (command) => ranWith(command, stdin));
 
+// WARNING: sha256sum on Linux, shasum on macOS.
 const SHA256 = "{ sha256sum 2>/dev/null || shasum -a 256; }";
 
 const placedAt = (version: string) => `"$HOME/.cache/collie/runners/collie-${version}"`;
@@ -66,6 +67,7 @@ const place = (route: ShellRoute, version: string, runner: { bytes: Uint8Array; 
     const file = placedAt(version);
     const there = yield* shOn(route, `${SHA256} < ${file} 2>/dev/null`);
     if (pipe_(there.out, Str.slice(0, 64)) === runner.sha256) return;
+    // WARNING: not shOn: a link carries stdin as text, which would change a binary's bytes.
     const upload = yield* route.sh(
       Arr.join(
         [
@@ -245,6 +247,7 @@ export const onboardThrough = Effect.fn("Desktop.onboardThrough")(function* (
       }),
     );
     const said = new Response(child.stderr).text();
+    // WARNING: one forward per port: cancelling a second would drop the first.
     const forwarded = new Set<number>();
     yield* Stream.fromReadableStream({ evaluate: () => child.stdout, onError: String }).pipe(
       Stream.decodeText(),
@@ -355,5 +358,6 @@ export const doctorOn = (route: Pick<Route, "collie">, gitlabHost?: string) =>
       Effect.option,
     );
 
+// WARNING: via rides the SSH connection onboarding opened; the release placed there must carry hc.
 export const addToCore = (collie: ReadonlyArray<string>, label: string, target: string) =>
   collieSaid(collie, ["machine", "add", label, "--target", target]).pipe(Effect.asVoid);

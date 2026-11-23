@@ -111,6 +111,7 @@ test("a value the Run was started with is passed on as it was, null included", (
     { inputs: { value: "started-with", missing: "started-with", mr: "merge-request" } },
     { runId: "r", runDir: "/r", facts: facts(), input: { value: null } },
   );
+  // WARNING: an explicit null is a value; an absent field and a fact the Run lacks are not.
   expect(passed).toEqual({ value: null });
 });
 

@@ -228,6 +228,7 @@ type TargetRed = typeof TargetRed.Type;
 export const Checked = Schema.Struct({
   head: Schema.String,
   failed: Schema.Array(Schema.String),
+  // WARNING: a Run journaled before 0.110.0 replays checks recorded without it.
   conflicting: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
   target: Schema.optionalKey(TargetRed),
 });
@@ -414,6 +415,7 @@ const endLine = (member: SetMember, end: SetEnd) => {
   }
 };
 
+// WARNING: one waiting on another of the set starts only after that Run merged it, never after it failed.
 const releaseEach = (members: ReadonlyArray<SetMember>) =>
   Effect.gen(function* () {
     const host = yield* Host;
@@ -576,6 +578,7 @@ const humanVoice = (by: { readonly origin: string; readonly said?: string }) =>
   ["board", "desktop", "cli-tty"].includes(by.origin) ||
   (by.origin === "chat" && by.said !== undefined);
 
+// WARNING: the host records a start from an offer only for a human, so only a human's start counts.
 const releasedByHuman = (place: {
   readonly lineage: ReadonlyArray<string>;
   readonly authority: { readonly started: unknown };
@@ -830,6 +833,7 @@ export default defineWorkflow({
           );
       }
 
+      // WARNING: the go's options depend on this, so it comes before the checks and the wait; it reads only.
       const assessed = yield* assess(
         agentWork({
           ...as("assess"),
@@ -1111,6 +1115,7 @@ export default defineWorkflow({
                   }
                   if (standing._tag === "Held")
                     return yield* Workflow.suspend(yield* WorkflowInstance);
+                  // WARNING: leave this read unfinished when parking; resume must read the forge again.
                   if (standing._tag === "Conflicting") {
                     if (standing.head === previous)
                       return yield* park(
@@ -1195,6 +1200,7 @@ export default defineWorkflow({
             );
             return n;
           });
+        // WARNING: local success cannot restart the repair allowance on review reentry.
         let repairs = 0;
         let ciBefore: string | null = null;
         const proving = (
@@ -1355,6 +1361,7 @@ export default defineWorkflow({
         let gos = 0;
         let stagings = 0;
         let merged: Omit<Landed, "recovery"> | null = null;
+        // WARNING: journaled, so a replay asks what the first pass asked, whatever the settings say now.
         const sharing = yield* Activity.make({
           name: "share-settings",
           success: Schema.Struct({ on: Schema.Boolean, channel: Schema.String }),
@@ -1569,6 +1576,7 @@ export default defineWorkflow({
                   name: `go-${gos}.give-back`,
                   execute: Effect.asVoid(host.release(runId)),
                 });
+          // WARNING: the claim can wait on a teammate or a question, so the review is read once it is held.
           const still = yield* Activity.make({
             name: `go-${gos}.check`,
             success: ReviewStandingSchema,
@@ -1815,6 +1823,7 @@ export default defineWorkflow({
             output: Staged,
           });
           const pipeline = staged.pipeline_url || null;
+          // WARNING: a tag that is not proved leaves shared work half-done, so the claim stays with this Run for Release again.
           const read = yield* Activity.make({
             name: "read-tag",
             success: TagReadSchema,
@@ -1843,6 +1852,7 @@ export default defineWorkflow({
               success: RollbackReadSchema,
               execute: host.readRollback({ runId, cwd, off: [landed.sha] }),
             });
+            // WARNING: only a stage the forge shows back on production's release is safe to give back.
             if (back._tag === "Unshown")
               return yield* fail(`${stageFailed}. Its rollback is not shown: ${back.why}`);
             yield* giveBack;
@@ -1917,6 +1927,7 @@ export default defineWorkflow({
                   : "somebody already started the production jobs, so nothing was played",
               );
           }
+          // WARNING: the forge decides when production carries the merge, never an Output.
           for (const sha of tagOnly ? tagMerges : [landed.sha]) {
             const carried = yield* host.awaitProduction({
               runId,

@@ -289,6 +289,7 @@ const intended = (
     yield* writeIntent(at, { ...seeded, authority: { ...seeded.authority, ...authority } });
   });
 
+// WARNING: the host's records live here too, so git is told to look only at the work.
 const repository = () =>
   Effect.gen(function* () {
     for (const args of [
@@ -304,6 +305,7 @@ const repository = () =>
     );
   });
 
+// WARNING: a tracked edit left uncommitted; the base falls back to HEAD, so a commit would hide it.
 const edited = () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

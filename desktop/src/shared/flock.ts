@@ -1,3 +1,4 @@
+// WARNING: no Bun-only import: the view bundles this.
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
@@ -324,8 +325,10 @@ export type UpdateNews = typeof UpdateNews.Type;
 export const DesktopUpdates = Schema.Struct({ version: Schema.String, news: UpdateNews });
 export type DesktopUpdates = typeof DesktopUpdates.Type;
 export const DesktopSettings = Schema.Struct({
+  // WARNING: an earlier Desktop's own, kept only until carried into the Flock's settings.
   proactive: Schema.optionalKey(Schema.Boolean),
   gitlabHost: Schema.optionalKey(Schema.String),
+  // WARNING: an earlier Desktop's own, kept only until carried into the Flock's settings.
   machineRule: Schema.optionalKey(Schema.String),
   zoom: Schema.optionalKey(Schema.Finite),
   chatHarness: Schema.optionalKey(Schema.String),
@@ -402,6 +405,7 @@ export const DesktopRpcs = RpcGroup.make(
     error: ActionFailed,
     stream: true,
   }),
+  // WARNING: never recorded anywhere.
   Rpc.make("terminalSend", { payload: { command: TerminalCommand }, error: ActionFailed }),
   Rpc.make("openLink", { payload: { url: Schema.String } }),
   Rpc.make("definitions", {
@@ -422,6 +426,7 @@ export const DesktopRpcs = RpcGroup.make(
     success: Schema.String,
     error: ActionFailed,
   }),
+  // WARNING: asking syncs every connected Machine, so an edit made on one since it connected is picked up.
   Rpc.make("flockSettings", { success: FlockSettings, error: ActionFailed, stream: true }),
   Rpc.make("setFlockSetting", {
     payload: { key: Schema.String, value: Schema.String },
@@ -466,6 +471,7 @@ export const DesktopRpcs = RpcGroup.make(
     error: ActionFailed,
   }),
   Rpc.make("pasteCode", { payload: { job: Schema.String, code: Schema.String } }),
+  // WARNING: nothing on the Machine is stopped or uninstalled.
   Rpc.make("removeMachine", {
     payload: { profile: Schema.String },
     success: Schema.String,
@@ -668,6 +674,7 @@ export const DesktopRpcs = RpcGroup.make(
   }),
   Rpc.make("setupOffer", { success: Schema.Boolean, stream: true }),
   Rpc.make("declineSetup", { payload: { forGood: Schema.Boolean }, error: ActionFailed }),
+  // WARNING: reads no message text, only what each computer keeps.
   Rpc.make("setupInventory", { success: Schema.Array(ComputerStores) }),
   Rpc.make("chooseSetup", { payload: { choice: SetupChoice } }),
   Rpc.make("setupChosen", { success: Schema.NullOr(SetupChoice), stream: true }),
@@ -1158,5 +1165,6 @@ export const machineRows: (flock: Flock) => ReadonlyArray<MachineRow> = (flock) 
 export const flockOf = <E, R>(items: Stream.Stream<FlockItem, E, R>) =>
   items.pipe(
     Stream.scan(() => EMPTY_FLOCK, applyItem),
+    // WARNING: the empty Flock a scan starts from is not a board anyone was told.
     Stream.drop(1),
   );

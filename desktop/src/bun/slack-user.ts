@@ -92,6 +92,7 @@ const listen = (state: string, open: (url: string) => Effect.Effect<void>, url: 
       Effect.try({
         try: () =>
           Bun.serve({
+            // WARNING: a held port refuses here; browsers fall back to it for localhost.
             hostname: "127.0.0.1",
             port: SLACK_CALLBACK_PORT,
             fetch: (request) => {
@@ -134,6 +135,7 @@ export const slackUserSession = Effect.fnUntraced(function* (options: {
   readonly retireBot: Effect.Effect<unknown, string>;
   readonly client?: HttpClient.HttpClient;
 }) {
+  // WARNING: a refresh token works once, so renewals never overlap.
   const lock = Semaphore.makeUnsafe(1);
   let trouble: string | null = null;
   const changed = yield* SubscriptionRef.make(0);
@@ -165,6 +167,7 @@ export const slackUserSession = Effect.fnUntraced(function* (options: {
     );
 
   const signIn = Effect.gen(function* () {
+    // WARNING: a grant from another app renews only against that app.
     const id = (yield* kept)?.clientId ?? SLACK_CLIENT_ID;
     const state = secret();
     const verifier = secret();

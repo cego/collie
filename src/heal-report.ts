@@ -7,6 +7,7 @@ import { WorkflowError, type HostApi } from "./sdk";
 import { recoveriesIn, type HealFinding, type Metric, type Publication } from "./metrics";
 
 const KEY = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+// WARNING: Shared with self-improve's marker, so either finds the other's issues.
 const MARKER = /<!-- collie-finding: ([a-z0-9-]+) -->/g;
 const markerOf = (key: string) => `<!-- collie-finding: ${key} -->`;
 const keysIn = (body: string) =>
@@ -114,9 +115,11 @@ const commentOf = (item: Pending) =>
     "\n\n",
   );
 
+// WARNING: The forge's own words for a write whose answer was lost.
 const sent = (reason: string) => pipe(reason, Str.endsWith("before retrying"));
 
 const ANSWER_WITHIN = Duration.minutes(2);
+// WARNING: A write that times out may still have landed.
 const bounded = <A>(call: Effect.Effect<A, WorkflowError>, write: boolean) =>
   call.pipe(
     Effect.timeoutOrElse({
@@ -136,6 +139,7 @@ export interface Reported {
   readonly issue?: string;
 }
 
+// WARNING: Lists first, so a filing whose answer was lost is found by its marker, not filed again.
 export const report = (host: HostApi, item: Pending, known: ReadonlyMap<string, string>) =>
   Effect.gen(function* () {
     const why = setAside(item);

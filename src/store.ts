@@ -53,6 +53,7 @@ const Run = Schema.Struct({
   options: Schema.NullOr(Schema.String),
   checkout: Schema.NullOr(Schema.String),
   asked: Schema.NullOr(Schema.String),
+  // WARNING: so a placement a crash cut short is made again.
   placing: Schema.NullOr(Schema.String),
   report: Schema.NullOr(Schema.String),
   admitted: Schema.String,
@@ -193,6 +194,7 @@ export interface WatchRow {
 
 export interface StoreApi {
   readonly remember: (generation: GenerationRow) => Effect.Effect<void>;
+  // WARNING: replaying the wait says it again and changes nothing.
   readonly asking: (question: {
     readonly run: string;
     readonly decision: string;
@@ -221,6 +223,7 @@ export interface StoreApi {
     readonly actor: AuditLine["actor"];
     readonly agent: string;
   }) => Effect.Effect<Superseded>;
+  // WARNING: the guard is the database's: ordered against the messaged agent's answer and any newer message.
   readonly revise: (revising: {
     readonly run: string;
     readonly decision: string;
@@ -244,10 +247,12 @@ export interface StoreApi {
   ) => Effect.Effect<RunRow>;
   readonly recordPlacing: (run: string, placing: string) => Effect.Effect<void>;
   readonly forget: (run: string) => Effect.Effect<void>;
+  // WARNING: a row the engine never accepted is left, for recovery to hand over.
   readonly retire: <E>(
     runs: ReadonlyArray<string>,
     clear: (row: RunRow) => Effect.Effect<void, E>,
   ) => Effect.Effect<ReadonlyArray<string>, E>;
+  // WARNING: the engine has this work; a crash before this receipt is what recovery looks for.
   readonly accepted: (run: string) => Effect.Effect<void>;
   readonly pending: Effect.Effect<ReadonlyArray<RunRow>>;
   readonly reportsPending: Effect.Effect<ReadonlyArray<RunRow>>;
@@ -594,6 +599,7 @@ function makeStore(stateDir: string | undefined) {
         SqlClient.SqlClient | FileSystem.FileSystem | Path.Path
       >,
     ) => (stateDir === undefined ? Effect.void : Effect.provideContext(read(stateDir), files));
+    // WARNING: a database that will not migrate is a broken host, not a request that failed.
     yield* SqliteMigrator.run({
       loader: Migrator.fromRecord(
         migrations({
@@ -608,6 +614,7 @@ function makeStore(stateDir: string | undefined) {
       ),
       table: "collie_migrations",
     }).pipe(Effect.orDie);
+    // WARNING: SQLite moves data_version only for another connection's commits.
     const dataVersion = sql<{ readonly data_version: number }>`PRAGMA data_version`.pipe(
       Effect.map((rows) => rows[0]?.data_version ?? 0),
       Effect.orElseSucceed(() => 0),
@@ -619,6 +626,7 @@ function makeStore(stateDir: string | undefined) {
     const wrote = (runs?: ReadonlyArray<string>) =>
       Effect.sync(() => {
         written++;
+        // WARNING: another connection's commit names no Run, and only the host writes a Run's row.
         if (runs !== undefined) told?.(runs);
         if (runs === undefined) dirty = "all";
         else if (dirty !== "all") for (const run of runs) dirty.add(run);
@@ -856,6 +864,7 @@ function makeStore(stateDir: string | undefined) {
             ? (answer.answerer.from.agent ?? null)
             : null;
         yield* decide(answer.run);
+        // WARNING: a superseded workflow question with no revision still takes the messaged agent's answer.
         const settled = yield* mutation(
           [answer.run],
           sql`
@@ -982,6 +991,7 @@ function makeStore(stateDir: string | undefined) {
         if (admission.attachments?.length) askedFor.attachments = [...admission.attachments];
         const asked = canonical(askedFor);
         const at = yield* nowIso;
+        // WARNING: the claim is the insert: the database, not a read, decides which caller made it.
         const claimed = yield* mutation(
           [admission.run],
           sql`
@@ -1204,6 +1214,7 @@ const answererText = flow(
   Result.getOrThrow,
 );
 
+// WARNING: key order is ignored: two objects that differ only in key order are one request.
 const canonical = (value: Schema.Json) => asJsonText(ordered(value));
 
 const ordered: (value: Schema.Json) => Schema.Json = (value) => {

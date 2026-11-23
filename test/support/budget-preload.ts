@@ -1,3 +1,4 @@
+// WARNING: Bun runs this in each test process and again per file under --isolate, so each run takes one worker and gives it back.
 import * as Arr from "effect/Array";
 import { afterAll } from "bun:test";
 import { availableParallelism } from "node:os";
@@ -28,6 +29,7 @@ await Effect.runPromise(
   }).pipe(
     Scope.provide(scope),
     Effect.provide(BunServices.layer),
+    // WARNING: Effect's default provider keeps the environment read first, before hosts.ts sets the test's, so provide it explicitly.
     Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv()),
   ),
 );

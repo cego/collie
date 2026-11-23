@@ -1,3 +1,4 @@
+// WARNING: Real SQLite in a real file: durability and atomicity cannot be answered in a map.
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";

@@ -1,3 +1,4 @@
+// WARNING: a send is not a receipt: an item stays pending until the conversation itself says otherwise.
 import * as Arr from "effect/Array";
 import { Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import { NEWS_BATCH, NewsReceipt, Significance } from "./board-model";
@@ -14,12 +15,14 @@ const ItemSchema = Schema.Struct({
   run: Schema.String,
   text: Schema.String,
   at: Schema.String,
+  // WARNING: items written before significance existed decode as routine.
   significance: Significance.pipe(Schema.withDecodingDefaultKey(Effect.succeed("routine"))),
 });
 export type Item = Schema.Schema.Type<typeof ItemSchema>;
 
 const LineSchema = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("item"), ...ItemSchema.fields }),
+  // WARNING: read is the only receipt that counts; uncertain is kept, not retried, since a repeated ambiguous delivery is the same news twice.
   Schema.Struct({
     kind: NewsReceipt,
     key: Schema.String,
@@ -52,6 +55,7 @@ export interface Batch {
   readonly omitted: number;
 }
 
+// WARNING: a sent item stays pending: a transport accepting it is not a conversation receiving it.
 export function pending(lines: ReadonlyArray<Line>, conversation = NATIVE, bound = NEWS_BATCH) {
   const all = Arr.map(
     Arr.filter(live(lines), (entry) => !entry.read.has(conversation)),
@@ -101,6 +105,7 @@ export function uncertain(lines: ReadonlyArray<Line>, conversation = NATIVE) {
   );
 }
 
+// WARNING: deduplicated here too, since a restart re-noticing a halt must not queue it twice.
 export const append = Effect.fn("News.append")(function* (
   file: string,
   item: Omit<Item, "at" | "significance"> & { readonly significance?: Significance },

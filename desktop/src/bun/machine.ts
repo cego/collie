@@ -1,3 +1,4 @@
+// WARNING: never Collie's host client: over a channel it would start a host here or signal a foreign pid.
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -153,6 +154,7 @@ export const stderrTail = Effect.fnUntraced(function* (
 
 export type WaitingOnSso = (said: string) => Effect.Effect<void>;
 
+// WARNING: matches the SSO prompt sshd prints before a login waits.
 const SSO = /\bSSO\b/;
 
 export interface RouteFailure {
@@ -176,6 +178,7 @@ const afterReady = (from: ReadableStream<Uint8Array>, onReady: () => void) => {
       {
         transform: (chunk, out) => {
           if (ready) return out.enqueue(chunk);
+          // WARNING: searched as bytes, so a character split across chunks reaches the host whole.
           seen = Buffer.concat([seen, chunk]);
           const at = seen.indexOf(marker);
           if (at === -1) return;
@@ -186,6 +189,7 @@ const afterReady = (from: ReadableStream<Uint8Array>, onReady: () => void) => {
         },
       },
       undefined,
+      // WARNING: read without a reader, so the marker is found before the client that reads it starts.
       { highWaterMark: Number.MAX_SAFE_INTEGER },
     ),
   );
@@ -200,6 +204,7 @@ const openingScope = <A, E, R>(effect: Effect.Effect<A, E, R | Scope.Scope>) =>
     );
   });
 
+// WARNING: a bridge that ends first was never a host; the Machine has no collie.
 export const openBridge = Effect.fn("Desktop.openBridge")(function* (
   command: ReadonlyArray<string>,
   env: Readonly<Record<string, string | undefined>> = childEnv(),
@@ -242,9 +247,11 @@ export const openBridge = Effect.fn("Desktop.openBridge")(function* (
     Effect.promise(() => ready.promise),
     ended,
   );
+  // WARNING: the client starts after this: its pings would time out a bridge still starting.
   yield* started.pipe(
     Effect.timeoutOrElse({
       duration: "2 minutes",
+      // WARNING: an SSO login takes as long as its human does.
       orElse: () =>
         signingIn
           ? started
@@ -309,6 +316,7 @@ export const openBridge = Effect.fn("Desktop.openBridge")(function* (
           ),
     }),
   );
+  // WARNING: kill before RPC finalizers wait for the bridge's streams.
   yield* Effect.addFinalizer(() => Effect.sync(() => child.kill()));
   const closed = Effect.raceFirst(ended, Deferred.await(broken));
   return Object.assign(door, { closed });
@@ -316,6 +324,7 @@ export const openBridge = Effect.fn("Desktop.openBridge")(function* (
 
 export type Door = Omit<Effect.Success<ReturnType<typeof openBridge>>, "identity" | "closed">;
 
+// WARNING: a record has its own channel, since a client reads one channel's messages in order.
 export interface Doors extends BoardSource {
   readonly machine: KnownMachine;
   readonly desktop: Door;
@@ -542,6 +551,7 @@ export const remoteRoute = Effect.fn("Desktop.remoteRoute")(function* (
   pairs = false,
   answerWithin: Duration.Input = MUX_BOUND,
 ) {
+  // WARNING: an SSO login's text is kept until it ends, for a route opened while it waits.
   let waiting: WaitingOnSso | undefined;
   let unheard: string | undefined;
   const heard: WaitingOnSso = (said) =>
@@ -788,6 +798,7 @@ export const linkRoute = (
 
 const RELEASE = /^\d+\.\d+\.\d+$/;
 
+// WARNING: a development checkout is never upgraded, and a host in the protocol window is read as it is.
 export const buildVerdict = (snapshot: BoardSnapshot, version: string) =>
   snapshot.protocol > PROTOCOL + 1
     ? "update-desktop"
@@ -828,6 +839,7 @@ export type RouteChange<D extends BoardSource = Doors> =
   | { readonly _tag: "Wake"; readonly profile: string }
   | { readonly _tag: "Reopen"; readonly profile: string };
 
+// WARNING: a Machine reached two ways is shown through its first route; a route added later ranks below a link and above SSH.
 export const flockStream = <D extends BoardSource>(
   routes: ReadonlyArray<Route<D>>,
   doors: Map<string, D>,
@@ -850,7 +862,9 @@ export const flockStream = <D extends BoardSource>(
       const routeAt: Array<Route<D>> = [];
       const done = new Set<number>();
       const merged = new Map<number, string>();
+      // WARNING: asked to upgrade at most once per connection; a failed one is asked again when it next connects.
       const upgrading = new Set<string>();
+      // WARNING: upgrading now, which a reopen would cut off; the upgrade reopens by itself.
       const upgradingNow = new Set<string>();
       const owns = (at: number, { machine, message }: MachineMessage) =>
         Effect.gen(function* () {
@@ -983,6 +997,7 @@ export const flockStream = <D extends BoardSource>(
                 upgradeThenReopen(route, installation, from),
               ),
             );
+            // WARNING: a route merged into another may toast in the moment before it ends.
             const toasts = (door.toasts ?? Stream.empty).pipe(
               Stream.tap((toast) =>
                 Effect.sync(() =>
@@ -994,6 +1009,7 @@ export const flockStream = <D extends BoardSource>(
                 ),
               ),
               Stream.drain,
+              // WARNING: a host too old to send toasts still shows its board.
               Stream.ignoreCause,
             );
             return Stream.merge(Stream.merge(board, upgrade, { haltStrategy: "left" }), toasts, {
@@ -1023,6 +1039,7 @@ export const flockStream = <D extends BoardSource>(
           Effect.sync(() => upgradingNow.add(installation)).pipe(
             Effect.andThen(upgradeTo(route, version)),
             Effect.ensuring(Effect.sync(() => upgradingNow.delete(installation))),
+            // WARNING: a failed or cut-off upgrade is asked again when the Machine next connects.
             Effect.onError(() => Effect.sync(() => upgrading.delete(installation))),
             Effect.match({
               onSuccess: () =>
@@ -1144,6 +1161,7 @@ export const flockStream = <D extends BoardSource>(
                     ([installation]) => installation,
                   );
                   if (Arr.some(owned, (installation) => upgradingNow.has(installation))) return;
+                  // WARNING: asked again even where the last upgrade succeeded and did not move.
                   for (const installation of owned) upgrading.delete(installation);
                   yield* Queue.offer(reopens[at]!, undefined);
                   yield* Queue.offer(wakes[at]!, undefined);
@@ -1245,6 +1263,7 @@ const over = <A, R>({ machine }: Reached, call: Effect.Effect<A, Refused, R>, re
           }),
         );
       const misfit = Option.getOrUndefined(Arr.findFirst(cause.reasons, Cause.isDieReason))?.defect;
+      // WARNING: the RPC client dies on a misfit, with its schema issue as the defect's cause.
       return Predicate.isError(misfit) && SchemaIssue.isIssue(misfit.cause)
         ? Effect.fail(
             new ActionFailed({
@@ -1393,6 +1412,7 @@ export const act = (
           ...addressOf(action),
           text: action.text,
         };
+        // WARNING: JSON has no undefined, so an absent step is left out.
         if (action.step !== undefined) deliver.step = action.step;
         return door
           .act({
@@ -1905,6 +1925,7 @@ export const cleanupOn = (doors: DoorMap<Reached>, profile: string) =>
     );
   });
 
+// WARNING: a retry reuses the request, and the host sweeps once per request.
 export const sweepOn = (
   doors: DoorMap<Reached>,
   { installation, machine }: { readonly installation: string; readonly machine: string },

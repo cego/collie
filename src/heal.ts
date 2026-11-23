@@ -53,6 +53,7 @@ export const passedOver = (facts: {
   return null;
 };
 
+// WARNING: Imported when asked: discovery loads modules through the engine, which imports this.
 export const healerFor = (env: Pick<PluginEnv, "pluginRoot" | "userDir">, project: string) =>
   Effect.promise(() => import("./discovery")).pipe(
     Effect.flatMap(({ savedModules }) =>

@@ -31,6 +31,7 @@ export const bridge = Effect.fn("Bridge")(function* (
   machine: string | null = null,
 ) {
   const env = yield* currentEnv.pipe(Effect.orDie);
+  // WARNING: a host on another build is still piped to; front doors speak a protocol, not a build.
   yield* Effect.scoped(
     connect(env.stateDir, {
       hostEnv: { COLLIE_STATE_DIR: env.stateDir },

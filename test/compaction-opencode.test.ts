@@ -212,6 +212,7 @@ test("without a total it is input, output and both cache halves — and not reas
   runEffect(
     Effect.gen(function* () {
       yield* bind();
+      // WARNING: OpenCode's overflow predicate does not add reasoning; 900 here would be the wrong answer.
       fake.messages = [
         assistant("m1", {
           input: 100,
@@ -243,6 +244,7 @@ test("a turn still finishing does not hide the last turn that measured the conte
   runEffect(
     Effect.gen(function* () {
       yield* bind();
+      // WARNING: A boundary lands while OpenCode still closes its last message; the finished turn before it is the context as of the last model response.
       fake.messages = [
         assistant("m1", {
           total: 91_446,
@@ -328,6 +330,7 @@ test("a summarize that broke may still have been accepted, so it is not unsubmit
       const failure = yield* opencode.request(ctx(), "req-1").pipe(Effect.result);
 
       expect(why(failure)).toContain("503");
+      // WARNING: The client's timeout fires while the server's summarize keeps going, so this is not a request that never left.
       expect(Result.isFailure(failure) && failure.failure instanceof Unsubmitted).toBe(false);
     }),
   ));
@@ -488,6 +491,7 @@ test("a request nothing recorded as submitted has no outcome", () =>
 test("two agents in one directory each read their own session", () =>
   runEffect(
     Effect.gen(function* () {
+      // WARNING: Every server answers with every session in the project; only the id each agent was launched with tells them apart.
       const other = path.join(rig.root, "controls", "review-r1");
       yield* fs.makeDirectory(other, { recursive: true });
       yield* bind();

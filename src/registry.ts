@@ -9,6 +9,7 @@ import type { AgentInfo } from "./herdr";
 import { StoreWrites } from "./store-writes";
 import { epochMs } from "./time";
 
+// WARNING: an agent name names a role, not a process; the incarnation identifies the process.
 export interface Incarnation {
   terminalId: string;
   agentSession: { kind: string; value: string } | null;
@@ -45,6 +46,7 @@ export const AgentEntrySchema = Schema.Struct({
   runId: Schema.String,
   workflow: Schema.String,
   at: Schema.String,
+  // WARNING: optional so an older register still decodes; such an entry can be stopped and pruned, never delivered to.
   incarnation: Schema.optionalKey(IncarnationSchema),
 });
 const EntryJson = Schema.fromJsonString(AgentEntrySchema);
@@ -63,6 +65,7 @@ export function registerOf(scope: RegistryScope) {
   return `${pipe_(last, Str.replace(/[^A-Za-z0-9._-]+/g, "-")) || "repo"}-${scopeKey(scope)}`;
 }
 
+// WARNING: exported so steering shares this key; two copies of the formula would disagree about which workspace is which.
 export function scopeKey(scope: RegistryScope) {
   const where = scope.workspaceId ?? scope.cwd;
   return pipe_(Bun.hash(`${scope.session ?? ""} ${where}`).toString(16), Str.slice(0, 12));
@@ -135,16 +138,19 @@ export const registeredLayer = Layer.effect(Registered)(
 
 export const everyRegistered = Registered.use((registered) => registered.all);
 
+// WARNING: an entry registered before core's listing, whose agent core lacks, is dropped.
 export const registerAgent = (
   scope: RegistryScope,
   entry: AgentEntry,
   alive?: { readonly agents: ReadonlyArray<AgentInfo>; readonly listedAt: string },
 ) => Registered.use((registered) => registered.register(scope, entry, alive));
 
+// WARNING: fails closed: an entry without an incarnation is never delivered to.
 export function deliverable(entry: AgentEntry): entry is AgentEntry & { incarnation: Incarnation } {
   return entry.incarnation !== undefined;
 }
 
+// WARNING: a name match is not enough: core's own incarnation must match too.
 export function verifyIncarnation(entry: AgentEntry, alive: ReadonlyArray<AgentInfo>) {
   if (!deliverable(entry)) {
     const returned: { ok: true; info: AgentInfo } | { ok: false; reason: string } = {
@@ -190,6 +196,7 @@ export function liveEntries(entries: ReadonlyArray<AgentEntry>, alive: ReadonlyA
   return Arr.filter(entries, (e) => matching(e, alive).length > 0);
 }
 
+// WARNING: another Run's agent in the role is never the answer; this is read only.
 export const lineageAgent = Effect.fn("lineageAgent")(function* (
   alive: ReadonlyArray<AgentInfo>,
   role: string,

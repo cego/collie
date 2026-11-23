@@ -31,8 +31,10 @@ import type { Selection } from "../selection";
 
 export type { Focus };
 
+// WARNING: fs.watch drops events silently on some filesystems; the tick makes a missed event cost latency, not the update.
 const POLL_MS = 3_000;
 
+// WARNING: nothing is signalled or written during the grace, so an undo takes back a decision rather than racing one.
 const GRACE_MS = 5_000;
 
 export interface Bridge<E, R> {
@@ -85,6 +87,7 @@ export function runFlow<A, E, R>(body: (prompts: InputPrompts) => Effect.Effect<
   }).pipe(Effect.scoped);
 }
 
+// WARNING: has its own key handler: App's is removed on unmount, which would leave no key to quit with.
 export function StoppedDrawing(props: { why: string; what: string; onQuit: () => void }) {
   const renderer = useRenderer();
   onMount(() => {
@@ -112,8 +115,10 @@ export function driveBridge<E, R>(bridge: Bridge<E, R>) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const { prompts, pending } = signalPrompts();
+    // WARNING: control and work are separate queues: a slow command must not stall the keyboard.
     const control = yield* Queue.make<FocusCommand>();
     const work = yield* Queue.make<Command>();
+    // WARNING: its own lane: on the work queue a stop would hold up every command behind it.
     const stops = yield* Queue.make<Extract<Command, { _tag: "StopRun" | "UndoStop" }>>();
     const closed = yield* Deferred.make<void>();
 
@@ -136,6 +141,7 @@ export function driveBridge<E, R>(bridge: Bridge<E, R>) {
     const waiting = new Map<string, Fiber.Fiber<unknown, unknown>>();
     const marked = () => setState((previous) => ({ ...previous, stopping: [...waiting.keys()] }));
 
+    // WARNING: a failed read says so and keeps the last state, instead of freezing the tab on one bad read.
     const stated = <A,>(effect: Effect.Effect<A, E, R>) =>
       effect.pipe(
         Effect.map((value) => ({ ok: true as const, value })),
@@ -232,6 +238,7 @@ export function driveBridge<E, R>(bridge: Bridge<E, R>) {
         Effect.gen(function* () {
           const command = yield* Queue.take(work);
           const note = yield* stated(bridge.act(command, prompts));
+          // WARNING: only when it worked: a failure already put its reason in the footer, which an unconditional write erases.
           if (note.ok) setState((previous) => ({ ...previous, note: note.value ?? null }));
           yield* SubscriptionRef.update(focus, (at) => ({ ...at, nonce: at.nonce + 1 }));
         }),

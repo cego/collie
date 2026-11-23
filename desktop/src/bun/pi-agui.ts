@@ -138,6 +138,7 @@ export const piEvents = (thread: string) => {
   const step: (record: PiRecord) => ReadonlyArray<AguiEvent> = (record) => {
     switch (record.type) {
       case "agent_start":
+        // WARNING: Pi may start another low-level run while recovering; it is still this message.
         return [];
       case "message_start":
         if (record.message.role === "assistant") message++;

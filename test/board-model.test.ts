@@ -1,3 +1,4 @@
+// WARNING: the model is bundled for a browser and must load with no runtime to reach.
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
@@ -263,6 +264,7 @@ test("loading the board model does nothing but define it", () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const { code } = yield* bundled;
+      // WARNING: only what a browser has: process, timers, fetch or console at load throws here.
       const sandbox = { TextEncoder, TextDecoder, console: undefined };
       expect(() => runInNewContext(code, sandbox)).not.toThrow();
       expect(Rec.keys(sandbox)).toEqual(["TextEncoder", "TextDecoder", "console"]);

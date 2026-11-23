@@ -139,6 +139,7 @@ test("a verify waits while the Machine is short, pausing only its own agent's bu
 
         expect(Arr.some(yield* registeredAt(world.state), (one) => one.runId === runId)).toBe(true);
 
+        // WARNING: what a human frees memory with never waits; a new Run's first agent does.
         const second = yield* client
           .start({
             project: world.project,

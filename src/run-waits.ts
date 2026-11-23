@@ -54,6 +54,7 @@ export const runWaits = Effect.fn("RunWaits.of")(function* (
         Arr.findFirst(agents, (agent) => agent.run === run.id && agent.status === "blocked"),
       ) ?? null,
     parked: run.state === "waiting" && run.asking.length === 0 ? { reason: run.parked } : null,
+    // WARNING: a hold on a Run that ended holds nothing, and a finished Run refuses its release.
     held: run.held && !settled(run),
     memory: yield* memoryWaitOf(run.id),
     awaiting: run.awaiting,

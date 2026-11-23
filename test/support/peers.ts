@@ -168,8 +168,10 @@ export const releaseBinary = Effect.fn("PeerTest.releaseBinary")(function* (
   const musl = (yield* Config.String("OPENTUI_LIBC").pipe(Config.withDefault(""))) === "musl";
   const built = yield* Effect.promise(() =>
     Bun.build({
+      // WARNING: A release carries the host door's Worker entry, as tools/build.ts builds it.
       entrypoints: [`${root}src/main.ts`, `${root}src/door.ts`],
       target: "bun",
+      // WARNING: As tools/build.ts pins it: only this libc's renderer package must be installed.
       define: { "process.env.OPENTUI_LIBC": musl ? '"musl"' : '"glibc"' },
       bytecode: true,
       format: "esm",

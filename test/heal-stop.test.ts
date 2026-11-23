@@ -1,3 +1,4 @@
+// WARNING: A person's Stop that lands while a Heal's resume is on its way still stands, so the resume is refused under the Stop's permit.
 import { Herdr } from "../src/herdr";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";

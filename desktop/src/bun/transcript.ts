@@ -55,6 +55,7 @@ const decodeEntry = Schema.decodeUnknownOption(Entry);
 
 type Part = ChatMessage["parts"][number];
 
+// WARNING: Claude Code writes this text as the user message when a turn is interrupted.
 const INTERRUPTED = /^\[Request interrupted by user/;
 
 const textOf = (

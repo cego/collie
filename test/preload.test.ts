@@ -232,6 +232,7 @@ describe("the start-of-suite sweep", () => {
         const live = `collie-test-${process.pid}-x`;
         yield* fs.makeDirectory(dead);
         yield* fs.makeDirectory(`${dir}/${live}`);
+        // WARNING: a read-only directory inside, as a Go module cache is, still goes.
         yield* fs.makeDirectory(`${dead}/cache/pkg`, { recursive: true });
         yield* fs.chmod(`${dead}/cache`, 0o555);
         const orphan = Bun.spawn(["sh", "-c", "echo up; exec sleep 63"], {
@@ -254,6 +255,7 @@ describe("the start-of-suite sweep", () => {
         const fs = yield* FileSystem.FileSystem;
         const proc = yield* fs.makeTempDirectoryScoped({ prefix: "proc-" });
         const pid = `${proc}/4242`;
+        // WARNING: proc(5) field 51, env_end, is 0 until execve has written the environment.
         const stat = (envEnd: string) =>
           `4242 (sh) R 1 4242 4242 0 -1 4194304${pipe_(" 0", Str.repeat(41))} ${envEnd} 0\n`;
         yield* fs.makeDirectory(pid);
@@ -288,6 +290,7 @@ describe("the start-of-suite sweep", () => {
           `${pid}/stat.next`,
           `4242 (sleep) S 1 4242 4242 0 -1 4194304${pipe_(" 0", Str.repeat(41))} 140730872492009 0\n`,
         );
+        // WARNING: FIFOs order the reads: environ reads empty until exec finishes, then stat is read.
         yield* exec(["mkfifo", `${pid}/environ`, `${pid}/stat`]);
         const execs = Bun.spawn([
           "sh",

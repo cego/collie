@@ -34,6 +34,7 @@ function first(env: Record<string, string | undefined>, ...keys: string[]) {
   return null;
 }
 
+// WARNING: execPath is the runner itself only under Bun's /$bunfs/ single-file build; otherwise it is bun.
 export function ownRoot(
   modulePath: string = import.meta.path,
   execPath: string = process.execPath,
@@ -41,6 +42,7 @@ export function ownRoot(
 ) {
   if (!pipe(modulePath, Str.startsWith("/$bunfs/"))) return null;
   const at = Option.getOrElse(pipe(execPath, Str.lastIndexOf("/bin/")), () => -1);
+  // WARNING: a downloaded runner upgrades the installation, never the caller's stale PWD.
   return at > 0
     ? pipe(execPath, Str.slice(0, at))
     : collieDir === null
@@ -68,6 +70,7 @@ export function readEnv(
     ownRoot(import.meta.path, process.execPath, collieDir) ??
     env.PWD ??
     ".";
+  // WARNING: PWD goes stale after any chdir; the real directory never does.
   const explicitCwd = first(env, "COLLIE_CWD");
   const cwd = explicitCwd ?? process.cwd();
 
@@ -140,6 +143,7 @@ export const currentEnv = Effect.gen(function* () {
 
 const LAUNCHER_PRELOADS = new Set(["./libcef.so", "./libvk_swiftshader.so"]);
 
+// WARNING: library paths are known only from Desktop's bin; without one they are kept.
 export const withoutLauncher = (
   env: Readonly<Record<string, string | undefined>>,
   bin?: string,

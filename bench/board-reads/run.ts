@@ -7,6 +7,7 @@ import { recordsAt } from "../../src/records";
 import { factsOfView } from "../../src/runs";
 import { stringifyJson } from "../../src/json";
 
+// WARNING: a Collie entry asked to start a host would start this file again, so it must never start one.
 if (Bun.argv.slice(2).some((arg) => arg !== "--open")) process.exit(2);
 Bun.env.COLLIE_HOST = "/bin/false";
 

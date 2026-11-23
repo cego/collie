@@ -69,6 +69,7 @@ const Window = Schema.Struct({
   machine: Schema.String,
   runs: Schema.Array(Schema.String),
   report: Schema.Unknown,
+  // WARNING: a completed window predating these measures stays frozen when its Run resumes.
   questions: Schema.optionalKey(QuestionMeasures),
   repeated: Schema.optionalKey(Schema.Array(Finding)),
 });
@@ -414,6 +415,7 @@ export default defineWorkflow({
         ...Arr.filter(restarts, ({ name }) => !Arr.some(fresh, (one) => one.name === name)),
         ...fresh,
       ].slice(0, bound);
+      // WARNING: read by number, since the forge's open listing can lag the issues this Run just filed.
       const published =
         starting.length === 0
           ? Result.succeed([])

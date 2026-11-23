@@ -85,6 +85,7 @@ export function hostOf(project: string | null) {
   return host && pipe(host, Str.includes(".")) ? host : null;
 }
 
+// WARNING: GitLab sends null for an absent value, so every field it may omit is also nullable.
 const optionalText = Schema.optionalKey(Schema.NullOr(Schema.String));
 const optionalFlag = Schema.optionalKey(Schema.NullOr(Schema.Boolean));
 const optionalCount = Schema.optionalKey(Schema.NullOr(Schema.Finite));
@@ -166,6 +167,7 @@ function mergeabilityOf(detailed: string | null | undefined, legacy: string | nu
   return returned;
 }
 
+// WARNING: never called from a render path or for a list; fetched once per Selection and cached per ref.
 export function mrDetails<R>(ref: MrRef, cwd: string, run: Runner<R>) {
   const returned: Effect.Effect<MrPanel, never, R | ForgeHttp> = Effect.gen(function* () {
     const where = whereOf(ref);
@@ -253,6 +255,7 @@ const approvalsOf = (approvals: typeof Approvals.Type) =>
     ? ""
     : approvalsLine(approvals.approvals_required, approvals.approvals_left);
 
+// WARNING: where neither approval field answers, say nothing rather than guess zero.
 function approvalsLine(
   requiredOrNull: number | null | undefined,
   leftOrNull: number | null | undefined,
@@ -322,6 +325,7 @@ export function gitlabForProject<R>(project: string | null, cwd: string, run: Ru
   });
 }
 
+// WARNING: the authenticated user, not the assignee: a branch belongs to whoever pushes it.
 export function glabLogin<R>(cwd: string, run: Runner<R>, project: string | null = null) {
   return Effect.gen(function* () {
     const named = project ?? (yield* projectHere(cwd, run));
@@ -574,6 +578,7 @@ const DefaultBranch = Schema.Struct({ default_branch: Schema.String });
 const ProtectedBranch = Schema.Struct({ name: Schema.String });
 const PAGE = 100;
 
+// WARNING: GitLab's * matches across / too, unlike a glob.
 const wildcard = (pattern: string) =>
   new RegExp(
     `^${pipe(pattern, Str.replace(/[.+?^${}()|[\]\\]/g, "\\$&"), Str.replaceAll("*", ".*"))}$`,
@@ -653,6 +658,7 @@ const JOB_STATES = new Map<string, JobState>([
   ["running", "running"],
 ]);
 
+// WARNING: a merged-results pipeline counts for the head only where its merge commit's parent is the head.
 function job(ref: MrRef, name: string, cwd: string) {
   const returned: Effect.Effect<JobRead, never, ForgeHttp> = Effect.gen(function* () {
     const where = whereOf(ref);
@@ -697,6 +703,7 @@ function job(ref: MrRef, name: string, cwd: string) {
   return returned;
 }
 
+// WARNING: glab answers an env token for any host, so only a stored login is the host's own.
 export function glabLoginTo(host: string, stored = false) {
   const glab = <R>(args: ReadonlyArray<string>, run: Runner<R>, cwd: string) =>
     stored
@@ -724,6 +731,7 @@ export function glabLoginTo(host: string, stored = false) {
       ),
     token: (run, cwd) =>
       Effect.map(value("token", run, cwd), (said) => (said === "" ? null : said)),
+    // WARNING: glab refreshes an expired OAuth token only when it builds an API client.
     refresh: (run, cwd) =>
       Effect.map(run("glab", ["auth", "status", "--hostname", host], cwd), (ran) => ran.code === 0),
   };
@@ -745,6 +753,7 @@ export const MONTHS = [
   "Dec",
 ];
 
+// WARNING: glab writes expiry in Go's RFC 822 layout, in the Machine's own zone.
 export function glabExpiry(said: string) {
   const m = /^(\d{2}) (\w{3}) (\d{2}) (\d{2}):(\d{2}) (\S+)$/.exec(Str.trim(said));
   if (m === null) return null;
@@ -1046,6 +1055,7 @@ function readReview(ref: MrRef, cwd: string) {
     const approved = yield* rest(ReviewApprovals, `${route}/approvals`);
     if (!approved.ok) return approved;
     const listed = Arr.map(approved.value.approved_by ?? [], (one) => one.user.username);
+    // WARNING: approval state is a Premium or Ultimate feature; elsewhere approvals read as one rule.
     const state = yield* rest(ApprovalState, `${route}/approval_state`);
     const rules = !state.ok
       ? [
@@ -1060,6 +1070,7 @@ function readReview(ref: MrRef, cwd: string) {
           required: rule.approvals_required,
           by: Arr.map(rule.approved_by ?? [], (one) => one.username),
         }));
+    // WARNING: names bound to a release come from the same snapshot as its required approvals.
     const approvers =
       state.ok && rules.length > 0 ? Arr.dedupe(Arr.flatMap(rules, (rule) => rule.by)) : listed;
     const comments: ForgeComment[] = [];
@@ -1152,6 +1163,7 @@ function reply(ref: MrRef, to: Pick<ForgeComment, "thread">, body: string, cwd: 
   });
 }
 
+// WARNING: never `glab mr merge`, whose --auto-merge defaults on.
 function merge(ref: MrRef, head: string, cwd: string) {
   const returned: Effect.Effect<MergeAnswer, never, ForgeHttp> = Effect.gen(function* () {
     const where = whereOf(ref);
@@ -1283,6 +1295,7 @@ function pipelineStatus(url: string, cwd: string) {
     const m = /^https?:\/\/([^/\s]+)\/(.+?)\/-\/pipelines\/(\d+)(?:[/?#]\S*)?$/.exec(Str.trim(url));
     if (!m) return null;
     const [, host, project, id] = m;
+    // WARNING: the address is agent text; only a host the human logged glab in to is asked.
     const said = yield* requestAs(
       PipelineState,
       glabLoginTo(host!, true),

@@ -59,6 +59,7 @@ export function checkProof(got: Journal, name: string, unmatched: Unmatched = "a
           ? check.argv === undefined || sameCommand(v, { ...v, argv: check.argv })
           : sameCommand(v, { ...command, executable: command.executable ?? v.executable })),
     );
+    // WARNING: a pipeline pass is bound to its commit, not only to the tree's bytes.
     const proof = Option.getOrUndefined(
       Arr.findLast(
         jobs,
@@ -89,6 +90,7 @@ function stateOf(runs: ReadonlyArray<Verification>, last: Verification | undefin
   if (last !== undefined && passed(last)) return "passed";
   const latest = last ?? runs.at(-1);
   if (latest === undefined) return "never";
+  // WARNING: an earlier-tree record is no failure here, so the check still owes a pass.
   if (last === undefined && latest.expect === "fail") return "earlier";
   if (latest.result === "fail" || latest.expect === "fail") return "failed";
   if (latest.result === "unstable") return "unstable";

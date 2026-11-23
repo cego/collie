@@ -1,3 +1,4 @@
+// WARNING: The wait runs in the runner before any agent starts, so a queue of hours costs no model tokens.
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -51,6 +52,7 @@ const Claimed = Schema.Struct({ position: Schema.Finite, already_queued: Schema.
 
 export interface HelleProject extends Schema.Schema.Type<typeof Project> {}
 
+// WARNING: A missing file or token is a refusal, never 'no Helle project': Helle could not be asked.
 export const credentials = Effect.fn("Helle.credentials")(function* (where: {
   home: string;
   envFile?: string | null;
@@ -71,6 +73,7 @@ export const credentials = Effect.fn("Helle.credentials")(function* (where: {
   return { url: where.url ?? HELLE_URL, token } satisfies HelleCredentials;
 });
 
+// WARNING: Every non-2xx fails, so a Helle that cannot answer stops the Run rather than skipping the gate.
 const call = Effect.fn("Helle.call")(function* <S extends Schema.Top>(
   creds: HelleCredentials,
   method: "GET" | "POST",
@@ -126,6 +129,7 @@ const answersTo = (project: HelleProject, name: string) =>
     (one) => Str.toLowerCase(one) === Str.toLowerCase(name),
   );
 
+// WARNING: Group case is Helle's own typing and never decides a match.
 export function resolveProject(
   projects: readonly HelleProject[],
   repositoryPath: string | null,
@@ -135,6 +139,7 @@ export function resolveProject(
     Option.getOrUndefined(
       Option.map(Option.fromNullishOr(repositoryPath), (present_) => Str.toLowerCase(present_)),
     ) ?? "";
+  // WARNING: The remote names the repository, not the checkout's clone, which a roaming Run names by a hash.
   const name =
     Option.getOrUndefined(
       Option.map(Option.fromNullishOr(repositoryPath), (present__) =>
@@ -174,6 +179,7 @@ export interface Deploys {
   declared: readonly string[] | null;
 }
 
+// WARNING: The first path segment is the forge's host, which no Helle group names.
 const groupOf = (repositoryPath: string | null) =>
   Option.getOrUndefined(
     Option.map(Option.fromNullishOr(repositoryPath), (present) =>
@@ -203,6 +209,7 @@ const twice = (name: string, found: readonly HelleProject[]) =>
     ", ",
   )}`;
 
+// WARNING: Anything it cannot settle is Unresolved, never an empty set.
 export function resolveProjects(projects: readonly HelleProject[], release: Deploys) {
   if (release.declared !== null) {
     const slugs = new Set<string>();
@@ -411,6 +418,7 @@ export type Held =
 
 const AFFIRMATIVE = /^(y|yes)$/i;
 
+// WARNING: Projects are held in a fixed order and never waited for while a later one is held, so overlapping Runs cannot deadlock.
 export const waitForHelle = <E, R>(gate: HelleGate<E, R>) =>
   gateOf(gate).pipe(
     Effect.onExit((exit) =>
@@ -479,6 +487,7 @@ const gateOf = Effect.fn("Helle.waitForHelle")(function* <E, R>(gate: HelleGate<
   }
 
   const hold = Effect.fn("Helle.hold")(function* (slug: string) {
+    // WARNING: Claimed on every entry, resume included: the Run may have fallen out of a queue while not running.
     const claimed = yield* claimProject(creds, slug);
     if (claimed.already_queued && !recorded.has(slug)) {
       yield* takeOver(slug);
@@ -501,10 +510,12 @@ const gateOf = Effect.fn("Helle.waitForHelle")(function* <E, R>(gate: HelleGate<
       if (position === 0) return;
       if (gate.queued !== undefined) yield* gate.queued(slug, position);
       yield* Effect.sleep(gate.pollMs ?? POLL_MS);
+      // WARNING: Not in the queue any more: keep the last known position rather than a place it does not have.
       position = positionOf(yield* helleProject(creds, slug), me.user_id) ?? position;
     }
   });
 
+  // WARNING: Give back a claim on a later project before waiting for an earlier one.
   while (true) {
     const positions: (number | null)[] = [];
     for (const slug of needed.slugs)

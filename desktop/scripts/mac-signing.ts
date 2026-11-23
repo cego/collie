@@ -16,6 +16,7 @@ export const macSigning = (env: Record<string, string | undefined>) => {
   return { codesign, notarize };
 };
 
+// WARNING: Bun's JIT and an ad hoc identity's libraries need these to run under the hardened runtime.
 export const MAC_ENTITLEMENTS = {
   "com.apple.security.cs.allow-jit": true,
   "com.apple.security.cs.allow-unsigned-executable-memory": true,

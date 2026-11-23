@@ -326,6 +326,7 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
             )?.paneId;
             expect(sibling).toBeDefined();
           }
+          // WARNING: stopped, not killed: core starts a running Run's lost agent again.
           if (mode === "gone")
             expect((yield* second.cli(["run", "stop", requesterRun])).envelope.ok).toBe(true);
           if (mode === "away" || mode === "away-close") yield* stopHost(second.world.state);

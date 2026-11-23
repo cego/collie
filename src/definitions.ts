@@ -27,6 +27,7 @@ export const INPUT_STRATEGIES = [
   "reach",
   "internal",
   "repository",
+  // WARNING: a legacy key, still read as repository.
   "gitlab-repository",
 ] as const;
 
@@ -40,6 +41,7 @@ export interface Provenance {
   parentHash?: string;
 }
 
+// WARNING: a branch checkout is its own, so two Runs never share an index or a stash stack.
 export type CheckoutKind = "none" | "branch" | "roaming";
 
 export interface PersonaDef extends Provenance {

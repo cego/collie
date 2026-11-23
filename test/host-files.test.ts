@@ -225,6 +225,7 @@ test("a glob stops listing, and a grep stops its search, at the bound, and a glo
         yield* fs.makeDirectory(`${dir}/${sub}`);
         for (let n = 0; n < 4; n++) yield* fs.writeFileString(`${dir}/${sub}/f${n}.ts`, "needle\n");
       }
+      // WARNING: a link back up is not followed, so the walk ends.
       yield* fs.symlink(dir, `${dir}/a/loop`);
       const globbed = yield* globFiles("**/*.ts", dir, 5);
       expect(globbed.paths).toHaveLength(5);

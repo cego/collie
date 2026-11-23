@@ -170,6 +170,7 @@ test("a paired base host still draws its board after refusing the additive RPC",
         const client = yield* RpcClient.makeNoSerialization(FrontDoorRpcs, {
           supportsAck: true,
           // WARNING: a newer client can send a tag the older server does not know.
+          // WARNING: A newer client can send a tag the older server does not know.
           onFromClient: ({ message }) => server.write(0, message as never),
         });
         toClient = client.write;

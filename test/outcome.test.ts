@@ -238,6 +238,7 @@ test("a feature names what it built and the review says the scope was met", () =
 });
 
 test("a gap is a check's only where a verification on this tree could close it", () => {
+  // WARNING: running a check again moves neither the judgement nor the Output, so a fix is never asked to.
   const got = withOutput(
     { tickets_done: [], scope_met: false },
     { verifications: [], tickets: [{ file: "01.md", checks: ["typecheck"] }] },

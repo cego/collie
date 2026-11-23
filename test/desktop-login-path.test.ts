@@ -1,3 +1,4 @@
+// WARNING: On macOS a Dock-opened Desktop inherits launchd's PATH, so it takes the login shell's PATH as Terminal would.
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { loginPath, MARK, pathIn } from "../desktop/src/bun/login-path";

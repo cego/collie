@@ -26,6 +26,7 @@ describe("every reply the pinned schema allows decodes", () => {
   }
 });
 
+// WARNING: hc 0.1.14 leaves machines out although the schema requires it; the probe is what catches that.
 test("a decoder requiring a field the schema leaves optional is refused, naming the reply", () => {
   const strict = Schema.Struct({
     ...replies["terminal.read"].fields,

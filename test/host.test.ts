@@ -557,6 +557,7 @@ test("a host whose state directory is taken away while a step will not end is go
       const { took, log, bound } = yield* outlivesAStubbornStep("", (state) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
+          // WARNING: rename, not delete: a recursive delete races the host's writes; its last lines land in an empty dir put back.
           yield* fs.rename(state, `${state}.gone`);
           yield* fs.makeDirectory(state);
         }).pipe(Effect.orDie),
@@ -1328,6 +1329,7 @@ test("a lock left by a dead host is recovered without touching the process that 
         connect(state).pipe(Effect.flatMap((client) => client.identity())),
       ).pipe(Effect.orDie);
       expect(who.pid).not.toBe(bystander.pid);
+      // WARNING: the claim's identity decides staleness, never a signal to a pid a new process may have inherited.
       expect((yield* ownerOf(state))?.pid).toBe(who.pid);
       expect(yield* signalProcess(bystander.pid)).toBe(true);
       yield* stopHost(state);
@@ -1545,6 +1547,7 @@ test("a host stops once its directory is gone, or the process it was to outlive 
         ? [binary.value]
         : [process.execPath, `${root}src/main.ts`];
       const [executable = "bun", ...prefix] = command;
+      // WARNING: not this test's child: a killed child would linger as a zombie that a signal still reaches.
       const detached = yield* exec(["sh", "-c", "sleep 60 >/dev/null 2>&1 & echo $!"]);
       const outlived = Number(Str.trim(detached.stdout));
       const suite = yield* suiteEnv;
@@ -1582,6 +1585,7 @@ test("a host stops once its directory is gone, or the process it was to outlive 
       const removed = (yield* workspace("collie-host-removed-")).state;
       const orphan = yield* hostFor(removed, "");
       yield* owned(removed);
+      // WARNING: rename, not delete: a recursive delete races the files the host still writes there.
       yield* fs.rename(removed, `${removed}.gone`);
       yield* gone(orphan);
     }),

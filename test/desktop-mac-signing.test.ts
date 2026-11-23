@@ -1,3 +1,4 @@
+// WARNING: Only a Developer ID with a complete set of notarization credentials is notarized, and signing runs after release metadata is written.
 import { expect, test } from "bun:test";
 import { macSigning } from "../desktop/scripts/mac-signing";
 

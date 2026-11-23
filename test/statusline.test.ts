@@ -1,3 +1,4 @@
+// WARNING: A status line someone else set is reported, never replaced: Collie is a guest in their settings.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -120,6 +121,7 @@ test("settings Collie cannot read are refused rather than replaced", () =>
       const fs = yield* FileSystem.FileSystem;
       const file = yield* claudeSettingsPath(env);
       yield* fs.makeDirectory(`${home}/.claude`, { recursive: true });
+      // WARNING: A half-edited file is kept whole: writing over it would drop the human's own settings.
       const broken = `{"theirs": "kept",\n`;
       yield* fs.writeFileString(file, broken);
 

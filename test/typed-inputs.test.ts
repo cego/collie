@@ -1,3 +1,4 @@
+// WARNING: Text is tried as text first and as JSON only where the schema refuses it; missing is absent, never empty.
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
@@ -232,6 +233,7 @@ test("a pasted merge request URL is handed over as mr:, and a target of no known
         () => client.status({ runId: started.runId }),
         (status) => status.status === "complete" || status.status === "failed",
       );
+      // WARNING: A raw URL was once read as worktree; this mr: shape is what every reader decides from.
       expect(done).toEqual({ status: "complete", value: "mr:gitlab.example.com/acme/app!42" });
 
       const refused = yield* client

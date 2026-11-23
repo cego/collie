@@ -907,6 +907,7 @@ export const tokenOf = (forge: MrForge, model: ForgeModel) =>
     ? (model.oauth?.token ?? model.token ?? "glpat-fake")
     : (model.token ?? "gho-fake");
 
+// WARNING: glab stores a token's expiry as Go's RFC 822, in UTC.
 export const rfc822 = (ms: number) => {
   const at = DateTime.toPartsUtc(DateTime.makeUnsafe(ms));
   const two = (n: number) => pipe(String(n), Str.padStart(2, "0"));
@@ -935,6 +936,7 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under) {
     }
     const login = model.oauth;
     const expires = login === undefined ? null : glabExpiry(login.expiry);
+    // WARNING: Building glab's API client refreshes an expired OAuth token, as glab 1.53.0 does.
     const returned: Answer =
       login !== undefined && expires !== null && expires <= under.now
         ? {
@@ -1950,6 +1952,7 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>) {
             state: one.state === "open" ? "open" : "closed",
             created_at: one.createdAt ?? "",
             merged_at: one.mergedAt ?? null,
+            // WARNING: GitHub stamps a merged pull request closed too.
             closed_at: one.closedAt ?? one.mergedAt ?? null,
             auto_merge:
               one.autoMerge === true
@@ -2456,6 +2459,7 @@ function gh(model: ForgeModel, args: ReadonlyArray<string>) {
           state: Str.toUpperCase(one.state),
           createdAt: one.createdAt ?? "",
           mergedAt: one.mergedAt ?? null,
+          // WARNING: GitHub stamps a merged pull request closed too.
           closedAt: one.closedAt ?? one.mergedAt ?? null,
         }),
       ),
@@ -2902,6 +2906,7 @@ const glabEnvironment = Effect.gen(function* () {
   return false;
 }).pipe(Effect.orElseSucceed(() => false));
 
+// WARNING: Readers in the host and CLI must see a complete model while another face replaces it.
 let modelWrites = 0;
 const writeModel = (file: string, model: ForgeModel) =>
   Effect.gen(function* () {
@@ -2931,6 +2936,7 @@ export const forgeBin = Effect.fn("forge.bin")(function* (
     now: yield* Clock.currentTimeMillis,
     environment: yield* glabEnvironment,
   });
+  // WARNING: Writing back an unchanged model would undo a test's write that landed since the read.
   if (said.model !== model) yield* writeModel(file, said.model);
   return said.ran;
 });

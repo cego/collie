@@ -1,3 +1,4 @@
+// WARNING: no Bun-only import: the view bundles this.
 import { Schema } from "effect";
 
 const Message = { messageId: Schema.String };

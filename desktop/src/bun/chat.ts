@@ -110,6 +110,7 @@ interface Voice {
   news?: FlockBatch;
 }
 
+// WARNING: News is written after a board change, so look only once it has settled.
 const SETTLE = "3 seconds";
 
 const LOOK_AGAIN = "2 minutes";
@@ -282,9 +283,11 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
   };
   const usage = (yield* Path.Path).join(opts.dir, "flock-usage.jsonl");
   const desktopTurns = yield* SubscriptionRef.make<DesktopTurn>("ended");
+  // WARNING: grows by one key per item spoken of, for as long as Desktop runs.
   const spoken = new Set<string>();
   let resting = false;
   const ask = (toolUseID: string, signal: AbortSignal) => {
+    // WARNING: a Desktop turn has nobody to click an answer, so it gets none.
     if (said === undefined) return Promise.resolve(null);
     const early = clicked.get(toolUseID);
     if (early !== undefined) {
@@ -341,6 +344,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
       }),
       Effect.forkScoped,
     );
+    // WARNING: added after the reader, so it runs first and ends the reader's pending message.
     yield* Effect.addFinalizer(() => session.close);
     return { session, events, ended: () => ended };
   });
@@ -424,6 +428,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
     );
   });
 
+  // WARNING: a turn its reader dropped is interrupted and seen out, so the next starts clean.
   const turnOn = Effect.fnUntraced(function* (
     running: Live,
     content: string | Array<ContentBlock>,
@@ -469,10 +474,12 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
           if (event.type === "TOOL_CALL_START" && event.toolCallName === "AskUserQuestion")
             questions.add(event.toolCallId);
           if (ends(event)) finished = true;
+          // WARNING: the model's first event shows it has the message and its News.
           if (news === undefined || event.type === "RUN_STARTED" || ends(event)) return Effect.void;
           const settled = news;
           news = undefined;
           for (const placed of settled.items) spoken.add(newsKey(placed));
+          // WARNING: a quick reply's settling runs after this turn's voice has ended.
           return delivered(
             { ...flock, said: () => voice.said, attachments: () => voice.files },
             settled,
@@ -502,6 +509,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
       Effect.scoped,
       Effect.ensuring(SubscriptionRef.set(desktopTurns, "ended")),
     );
+    // WARNING: a turn that failed before the model had its News waits for the next look, not the next nudge.
     resting = Arr.every(fresh.items, (placed) => !spoken.has(newsKey(placed)));
     const result = running.session.lastTurn();
     if (result !== undefined && result !== before)
@@ -516,6 +524,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
       });
   }).pipe(turns.withPermitsIfAvailable(1), Effect.provideContext(services), Effect.ignore);
 
+  // WARNING: a fixed look-again for News written after its board change settled; a host push would replace it.
   yield* Effect.sync(() => {
     resting = false;
   }).pipe(Effect.andThen(nudge), Effect.repeat(Schedule.spaced(LOOK_AGAIN)), Effect.forkIn(scope));
@@ -593,6 +602,7 @@ export const openFlockChat = Effect.fn("FlockChat.open")(function* (opts: {
         })),
       ),
     ),
+    // WARNING: a turn under way is interrupted, and its session ends before the next starts.
     reopen: (conversation) =>
       Effect.gen(function* () {
         if (turning !== undefined) yield* turning.session.interrupt;

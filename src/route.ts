@@ -69,6 +69,7 @@ export const routerDeps = (env: PluginEnv) =>
     effort: "low",
   });
 
+// WARNING: an answer that is not exactly one shown checkout places nothing.
 export const routed = Effect.fn("Route.routed")(function* (
   deps: BudgetedDeps | null,
   words: string,

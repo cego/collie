@@ -1,3 +1,4 @@
+// WARNING: no Bun-only import: the view bundles this.
 export type Column = "reading" | "wide" | "full";
 
 const COLUMNS = new Map<string, Column>([

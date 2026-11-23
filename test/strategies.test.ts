@@ -1,3 +1,4 @@
+// WARNING: Strategies never look Inputs up by the shipped names (plan, target); a renamed workflow must behave identically.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";

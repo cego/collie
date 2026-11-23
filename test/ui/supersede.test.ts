@@ -1,5 +1,6 @@
 import * as Cause from "effect/Cause";
 
+// WARNING: a newer focus interrupts the read in flight, and a slow command never stalls the next keypress.
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Deferred, Effect, FileSystem, Queue, Stream } from "effect";
 import { Rig } from "../support/recorder";
@@ -20,6 +21,7 @@ beforeEach(() =>
 
 afterEach(() => runEffect(rig.close()));
 
+// WARNING: newer rather than note, since a load keeps the note the last command left in the footer.
 function stateFor(selected: string | null) {
   const returned: AppState = {
     view: "runs",
@@ -256,6 +258,7 @@ test("a usage audit written by a read does not trigger another read", () =>
         load: () =>
           Effect.gen(function* () {
             const reading = ++reads;
+            // WARNING: a board refresh asks the host for usage, which appends its audit; bound the loop so a broken build cannot run forever.
             if (reading > 1 && reading <= 4)
               yield* Queue.offer(events, { _tag: "Update", path: "usage/operations.jsonl" });
             return stateFor(String(reading));
@@ -355,6 +358,7 @@ test("a command that takes its time does not stall the next keypress", () =>
         driven.dispatch({ _tag: "OpenMr", target: "mr:host/g/p!1", runId: null });
         yield* until("the command to start", () => acted.length === 1);
 
+        // WARNING: a focus change never joins the queue the slow command sits in.
         driven.dispatch({ _tag: "Select", id: "run:b", on: null });
         yield* until("the Selection to land", () => driven.state().newer === "run:b");
 
@@ -387,6 +391,7 @@ test("a Refresh asked for twice is read twice, because a repeat is the whole poi
         driven.dispatch({ _tag: "Refresh" });
         yield* until("the second re-read", () => nonces.includes(2));
 
+        // WARNING: without the nonce, changes would drop a repeated focus and pressing the key again would do nothing.
         expect(nonces).toContain(1);
         expect(nonces).toContain(2);
       }),
@@ -447,6 +452,7 @@ test("a load's own note is shown, and taken back when the load stops saying it",
         hostSays = null;
         yield* refreshed(null);
 
+        // WARNING: a command's note is the command's; a load with nothing to say leaves it.
         driven.dispatch({ _tag: "OpenMr", target: "mr:host/g/p!1", runId: null });
         yield* until("the command's note", () => driven.state().note === "opened");
         driven.dispatch({ _tag: "Refresh" });
@@ -476,6 +482,7 @@ test("the board opens on the scope from config, and g is what changes it after",
 
         expect(scopes[0]).toBe("all");
 
+        // WARNING: wait on the state, not on the load call; the stream writes state a moment after the scope push.
         driven.dispatch({ _tag: "ToggleFilter" });
         yield* until("the narrowed board", () => driven.state().filter.kind === "workspace");
         expect(scopes).toContain("workspace");

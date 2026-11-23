@@ -250,6 +250,7 @@ const HelleTool = Tool.make("collie_helle", {
   .annotate(Tool.Title, "Helle")
   .annotate(Tool.Readonly, false);
 
+// WARNING: definitions, installation and holds read a Machine's files, which no host operation hands over.
 export const FlockTools = Toolkit.make(
   CollieTools.tools.collie_herd,
   CollieTools.tools.collie_run,
@@ -350,6 +351,7 @@ interface Placed {
   readonly id: string;
 }
 
+// WARNING: a name nobody has goes to the only Machine, whose host says it has no such thing.
 export const place = (
   named: string,
   owners: ReadonlyArray<{
@@ -550,6 +552,7 @@ const sentOn = <A, E extends { readonly _tag: string; readonly message: string }
   );
 };
 
+// WARNING: a write no reply confirmed is not a failure.
 const endedAs = (error: { readonly _tag: string; readonly message: string }) => ({
   state: error._tag === "Unconfirmed" ? "not confirmed" : "failed",
   note: reasonOf(error),
@@ -1076,6 +1079,7 @@ const carryOut = Effect.fn("FlockTools.do")(function* (flock: FlockChat, input: 
     ).pipe(Effect.catch((error) => Effect.succeed(endedAs(error))));
     said.push(`${kind}: ${done.state}${done.note ? ` — ${done.note}` : ""}`);
     if (done.state === "not confirmed") unconfirmed = true;
+    // WARNING: what follows a failure was asked on the assumption it did not happen.
     if (done.state === "failed" || done.state === "not confirmed") break;
   }
   return `${unconfirmed ? `Request: ${request}\n` : ""}${Arr.join(said, "\n")}`;
@@ -1180,6 +1184,7 @@ const doOne = (machine: Reached, kind: string, action: JsonObject, request: stri
     default:
       return door.act({ actions: [action], request }).pipe(
         Effect.map((results) => results[0] ?? { state: "failed", note: "the host said nothing" }),
+        // WARNING: chat names no revision, so no act of its is stale.
         Effect.catchTag("StaleAct", (stale) =>
           Effect.fail(new HostRefused({ reason: stale.reason })),
         ),
@@ -1415,6 +1420,7 @@ const projectLine = (project: HelleProject, me: string) => {
   }`;
 };
 
+// WARNING: Runs share the human's Helle identity, so a Run's record would give the human's claim back.
 const forgottenByRuns = Effect.fn("FlockTools.forgottenByRuns")(function* (
   flock: FlockChat,
   slug: string,

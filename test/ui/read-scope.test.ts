@@ -1,3 +1,4 @@
+// WARNING: the Task board is the host's; the older workspace lists are not a second source of truth.
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import * as Arr from "effect/Array";
 import { Effect } from "effect";

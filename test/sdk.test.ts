@@ -288,6 +288,7 @@ test("modules are staged where only this account can write, and a cache others c
         }),
       );
       Bun.env.XDG_CACHE_HOME = cache;
+      // WARNING: another account could have made this and put what it likes where a module is read.
       yield* fs.makeDirectory(entries, { recursive: true });
       yield* fs.chmod(entries, 0o777);
       const refused = yield* loadEntry(`${fixtures}/hello.workflow.ts`).pipe(Effect.flip);
@@ -303,6 +304,7 @@ test("a schema JSON Schema cannot say everything about is still a schema, and sa
   expect(drawable.limits).toEqual([]);
   expect(drawable.document).not.toBeNull();
 
+  // WARNING: a declared schema draws as an empty object; the JSON Schema limit is on the copy a model is held to, not the contract.
   const url = Schema.declare((value: unknown): value is URL => value instanceof URL);
   const undrawable = Schema.Struct({ at: url });
   const projected = jsonSchemaFor(undrawable);

@@ -59,6 +59,7 @@ export interface UsageAccount {
   readonly machines: ReadonlyArray<{ readonly machine: string; readonly reading: UsageReading }>;
 }
 
+// WARNING: ChatGPT's account id is its workspace's, shared by every seat, so the email tells seats apart.
 const accountKey = (reading: UsageReading, machine: string) =>
   reading.account === null
     ? `${reading.subscription}:on ${machine}`

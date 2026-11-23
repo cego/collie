@@ -128,6 +128,7 @@ const reported = (at: string | undefined) => {
   return iso === undefined ? undefined : { at: iso, provenance: "caller-reported" };
 };
 type SourceDate = Artefact["created"];
+// WARNING: a verified date stays; a report never stands in for one.
 const dated = (prior: SourceDate, next: SourceDate) =>
   prior?.provenance === "provider-verified" ? prior : (next ?? prior ?? null);
 const isExternal = (item: Artefact) => item.url !== undefined || item.provider !== undefined;
@@ -239,6 +240,7 @@ const make = Effect.gen(function* () {
         }),
       )
       .pipe(Effect.orDie);
+  // WARNING: an external entry whose export fails leaves its hosted source's state alone.
   const failed = (prior: Artefact, error: CopyFailure) =>
     Effect.gen(function* () {
       const reason = reasonOf(error);
@@ -580,6 +582,7 @@ const make = Effect.gen(function* () {
       }>`SELECT cursor FROM collie_artefact_index WHERE run = ${run.id}`.pipe(Effect.orDie))[0]
         ?.cursor ?? "";
     for (const [prefix, root, role] of [
+      // WARNING: sorted by prefix, since the cursor compares whole refs.
       ["attachment", `${run.dir}/attachments`, "input"],
       ["evidence", run.evidence, "evidence"],
       ["handoff", `${run.dir}/handoffs`, "handoff"],

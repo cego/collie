@@ -439,11 +439,13 @@ function protects(project: string, branch: string, cwd: string) {
     const classic = yield* graphqlAs(ClassicRules, LOGIN, cwd, CLASSIC_RULES, { owner, name });
     if (!classic.ok) return null;
     const nodes = classic.value.repository.branchProtectionRules.nodes;
+    // WARNING: a full page leaves protection unknown, never none.
     if (nodes.length >= PAGE) return null;
     return Arr.some(nodes, (rule) => new Bun.Glob(rule.pattern).match(branch));
   });
 }
 
+// WARNING: a failed read is not "none"; it must stay unknown.
 function forBranch(project: string, branch: string, cwd: string) {
   const returned: Effect.Effect<ForBranch, never, ForgeHttp> = Effect.map(
     pullsFrom(project, branch, "open", cwd),
@@ -548,6 +550,7 @@ function job(ref: MrRef, name: string, cwd: string) {
     const head = pull.value.head.sha;
     const unread = (why: string) =>
       ({ ok: false, reason: `could not list the check runs on ${head}: ${why}` }) as const;
+    // WARNING: filter=all lists the attempts a rerun left behind, newest first.
     const named: Array<(typeof CheckRuns.Type)["check_runs"][number]> = [];
     for (let page = 1; ; page++) {
       const some = yield* checkRuns(
@@ -564,6 +567,7 @@ function job(ref: MrRef, name: string, cwd: string) {
     const failed = Arr.filter(before, (one) => stateOf(one) === "failed");
     let absent: JobState = "missing";
     if (found === undefined) {
+      // WARNING: GitHub creates a job behind `needs` only once its needs finish.
       let listed = 0;
       for (let page = 1; absent === "missing"; page++) {
         const some = yield* checkRuns(repo, head, `per_page=100&page=${page}`, cwd);
@@ -638,6 +642,7 @@ function baseJob(ref: MrRef, name: string, cwd: string) {
     const there = yield* checkRun(repo, base, name, cwd);
     if (!there.ok) return unread(there.reason);
     if (there.value === undefined) {
+      // WARNING: the target tip stands in only where CI never ran at the merge-base.
       const any = yield* checkRuns(repo, base, "per_page=1", cwd);
       if (!any.ok) return unread(any.reason);
       if (any.value.length > 0)
@@ -1051,6 +1056,7 @@ const alreadyMerged: (pull: Merged) => MergeAnswer = (pull) => ({
   at: pull.mergedAt ?? "",
 });
 
+// WARNING: a merge still queued after two hours is dequeued, so nothing merges unwatched.
 const mergeQueued: (
   ref: MrRef,
   id: string,

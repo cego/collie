@@ -103,6 +103,7 @@ test("migrate up: the first host imports every legacy record once, as written, a
         ],
         missing: null,
       });
+      // WARNING: a file written after the import is not a record, and a second host imports nothing again.
       yield* fs.writeFileString(`${stateDir}/runs/run-a/steps.jsonl`, '{"kind":"late"}\n');
       expect(yield* read).toEqual(first);
       expect(yield* fs.readFileString(`${stateDir}/runs/run-a/intent.json`)).toBe(

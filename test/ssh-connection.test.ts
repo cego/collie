@@ -94,6 +94,7 @@ test("openers in separate processes that come together start one master between 
       const fs = yield* FileSystem.FileSystem;
       const { dir, state, ssh, fake } = yield* rig;
       const opener = `${dir}/opener.ts`;
+      // WARNING: Outside the repository a bare import would be auto-installed at another version.
       yield* fs.writeFileString(
         opener,
         `import * as BunServices from "${Bun.resolveSync("@effect/platform-bun/BunServices", root)}";
@@ -109,6 +110,7 @@ const { opened } = await Effect.runPromise(
 await Bun.write(out!, String(opened));
 `,
       );
+      // WARNING: The master it starts keeps a stdout pipe open, so its answer goes to a file.
       const codes = yield* Effect.all(
         Arr.map([0, 1], (one) =>
           Effect.promise(

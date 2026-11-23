@@ -55,6 +55,7 @@ const handlers = Rpcs.toLayer({
             shutdown: { args: ["i32", "i32"], returns: "i32" },
           },
         );
+        // WARNING: Bun duplicates stdout; shutdown ends the socket through both descriptors.
         libc.symbols.shutdown(1, 1);
         libc.close();
       }

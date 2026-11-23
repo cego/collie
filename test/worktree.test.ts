@@ -178,6 +178,7 @@ const fakeGitAnswering = (
     ],
     "\n",
   );
+  // WARNING: the directory as well as the question: a command about the repository runs where it outlives the checkout being removed.
   return bin.add(
     "git",
     `printf '%s\\t%s\\n' "$PWD" "$*" >> "${gitLog()}"\n${warning && `echo "${warning}" >&2\n`}case "$*" in\n${branches}\nesac`,
@@ -196,6 +197,7 @@ const gitAnswers = (branch = "add-picker", remoteBranches: string[] = []) => ({
     ]),
   ),
   "rev-parse --abbrev-ref HEAD": branch,
+  // WARNING: every generated name is put to git before it is used as one.
   "check-ref-format": "",
 });
 
@@ -465,6 +467,7 @@ test("a name too long to slug is bounded and made distinct, never asked for", ()
     Effect.gen(function* () {
       yield* fakeGit();
 
+      // WARNING: every plan under tasks/ slugs to one clipped branch, and the branch keys the worktree, so a clipped name carries what the cap dropped.
       const at = (name: string) => plan({ plan_kind: "text" }, undefined, { name });
       const one = yield* at("/home/mk/work/gitte2/gitlab.cego.dk/tasks/collie-global-board");
       const two = yield* at("/home/mk/work/gitte2/gitlab.cego.dk/tasks/collie-run-board");
@@ -534,6 +537,7 @@ test("a target Collie guessed names no branch; only one a human gave does", () =
     Effect.gen(function* () {
       yield* fakeGit();
 
+      // WARNING: inference offers branch:<default>...<current>; taking that as the build branch would put the run in the operator's own tree.
       const inputs = { plan_kind: "text", target: "branch:master...foo" };
       expect(
         yield* plan(inputs, undefined, { sources: { target: "current branch" } }),
@@ -552,6 +556,7 @@ test("two descriptions that start alike are two branches", () =>
     Effect.gen(function* () {
       yield* fakeGit();
 
+      // WARNING: the picker truncates the name to 24 characters, so slugging it could never hit the 40-character cap.
       const first = "Fix the parser so a diff of two refs with no branch works";
       const second = "Fix the parser so a diff of two refs with a different outcome";
       const branches = new Set<string>();
@@ -595,6 +600,7 @@ test("a plan directory Collie itself pointed at names no branch; the run's own n
     Effect.gen(function* () {
       yield* fakeGit();
 
+      // WARNING: chained plans share the basename plan, so taking it would put every chained run on one branch and checkout.
       const dir = `${rig.root}/state/runs/plan-add-a-version-flag-20260904/plan`;
       for (const source of ["chained from plan-add-a-version-flag-20260904", "plan run pr-1"]) {
         expect(
@@ -1177,6 +1183,7 @@ test("a core that will not list agents judges nothing, and says so", () =>
       yield* collieWorktree("wt");
       yield* settledGit();
       yield* mergedMr();
+      // WARNING: a live agent's pane is the one condition nothing else establishes, so a herdr that cannot be asked must not read as none.
       const herdr = new UnreadableCore(rig.pluginEnv());
 
       expect(
@@ -1685,6 +1692,7 @@ test("a workspace whose own directory is not a checkout still gets its run a wor
   runOnPath(
     Effect.gen(function* () {
       yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }]);
+      // WARNING: COLLIE_CWD names the repository and beats the workspace's inferred directory.
       const env = rig.pluginEnv({ COLLIE_CWD: rig.projectDir });
       expect(env.cwd).toBe(rig.projectDir);
 
@@ -1730,6 +1738,7 @@ test("a branch with a slash in it nests, and never collides with the dashed name
       const worktrees = join(rig.root, ".collie", "worktrees", "project");
       expect(nested.cwd).toBe(join(worktrees, "feature", "foo"));
       expect(dashed.cwd).toBe(join(worktrees, "feature-foo"));
+      // WARNING: two branches are two checkouts; sharing a destination is one step from sharing an index.
       expect(nested.cwd).not.toBe(dashed.cwd);
     }),
   ));
@@ -2161,6 +2170,7 @@ test("the repository a checkout belongs to is git's, never the directory's own n
   runOnPath(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
+      // WARNING: a Renovate checkout is always named renovate and a branch-owning one after its branch, so the basename lies.
       const roaming = join(rig.root, ".collie", "worktrees", "project", "roaming");
       const owned = join(rig.root, ".collie", "worktrees", "project", "add-picker");
       for (const at of [roaming, owned]) yield* fs.makeDirectory(at, { recursive: true });
@@ -2185,6 +2195,7 @@ test("a linked worktree of a repository picks the same destination the repositor
         { path: linked, branch: "some-feature" },
       ]);
 
+      // WARNING: pointed at the linked worktree, the destination is still the repository's, or one repo gets two Renovate checkouts.
       const checkout = yield* renovateCheckout({ repository: linked });
 
       expect(checkout.cwd).toBe(join(rig.root, ".collie", "worktrees", "project", "roaming"));
@@ -2368,9 +2379,11 @@ test("a Renovate Run takes over the checkout an ended Run of the repository left
       const commands = yield* asked();
       expect(Arr.some(commands, (c) => pipe_(c, Str.startsWith("worktree add")))).toBe(false);
       expect(Arr.some(commands, (c) => pipe_(c, Str.startsWith("worktree remove")))).toBe(false);
+      // WARNING: a fetch can prune the only ref a commit was on, so what would be lost is read after it.
       const fetched = commands.indexOf("fetch --quiet origin");
       expect(fetched).toBeGreaterThanOrEqual(0);
       expect(commands.indexOf("rev-list HEAD --not --branches --remotes")).toBeGreaterThan(fetched);
+      // WARNING: recorded as the new Run's before the lock goes, so the next start finds it taken.
       expect(claims).toEqual([{ path: taken, locked: true }]);
     }),
   ));
@@ -2477,6 +2490,7 @@ test("an ended Run's checkout that holds work is kept for it and passed over, an
     Effect.gen(function* () {
       const taken = join(rig.root, ".collie", "worktrees", "project", "roaming");
       yield* worktreeOwnedBy(taken, rig.projectDir);
+      // WARNING: the earlier Run's own record is the only proof that a checkout is a Renovate Run's.
       const runId = yield* renovateRunAt(taken);
       const held = `passed over ${taken}: a checkout of ${rig.projectDir}, recorded by Run ${runId}, kept:`;
 
@@ -2584,6 +2598,7 @@ test("two repositories of the same name never share one Renovate checkout: the o
   runOnPath(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
+      // WARNING: the path is named after the repository, not its location, so two projects want the same path.
       const other = join(rig.root, "elsewhere", "project");
       yield* fs.makeDirectory(other, { recursive: true });
       const taken = join(rig.root, ".collie", "worktrees", "project", "roaming");
@@ -2605,6 +2620,7 @@ test("a path in the way that will not say whose it is is passed over, rather tha
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const at = join(rig.root, ".collie", "worktrees", "project", "roaming");
+      // WARNING: something there and nothing says what: it is named and left, never a worktree added on top of it.
       yield* fs.makeDirectory(at, { recursive: true });
       yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }]);
 
@@ -2784,6 +2800,7 @@ test("a board outside any repository still sweeps the checkouts the Runs recorde
       const worktreePath = yield* collieWorktree("wt", { managedBy: "git", workspaceId: null });
       yield* settledGit();
       yield* mergedMr();
+      // WARNING: herdr refuses to list worktrees from Home, so the sweep asks the recorded checkout instead.
       const home = join(rig.root, "home");
       yield* fs.makeDirectory(home, { recursive: true });
       const herdr = new Herdr(rig.pluginEnv());
@@ -2969,6 +2986,7 @@ test("with no upstream, a branch the remote still has is kept", () =>
   runOnPath(
     Effect.gen(function* () {
       yield* collieWorktree("wt");
+      // WARNING: a checkout whose branch is still there is not settled, upstream ref or no.
       yield* bin.add("glab", `exit 1`);
       yield* settledGit({
         "rev-parse --abbrev-ref --symbolic-full-name @{u}": "",
@@ -2991,6 +3009,7 @@ test("one repository's board neither forgets nor reports another's", () =>
 
       expect(yield* prune()).toEqual(["kept wt · uncommitted changes"]);
 
+      // WARNING: another repository's sweep shares the installation's state file and leaves this one's verdict alone.
       const elsewhere = join(rig.root, "another-repo");
       yield* fs.makeDirectory(elsewhere, { recursive: true });
       yield* settledGit({
@@ -3144,6 +3163,7 @@ test("a merge request from a fork is refused even where its branch name is local
 test("a checkout with no GitLab remote cannot be shown to be the reviewed project", () =>
   runOnPath(
     Effect.gen(function* () {
+      // WARNING: a bare mr:42 came from this remote; a checkout with no remote names no merge request.
       yield* fakeGitAnswering({ "symbolic-ref --short refs/remotes/origin/HEAD": "origin/master" });
       yield* bin.add("glab", `echo '{"source_branch": "theirs"}'`);
 

@@ -66,8 +66,10 @@ const LOCKFILES = [
 ];
 
 const OUTPUT_BYTES = 4 * 1024;
+// WARNING: A last line longer than this is cut, and its metrics go missing.
 const LINE_BYTES = 64 * 1024;
 const HOST_READINGS = ["wall_ms", "cpu_ms", "peak_kb"];
+// WARNING: A dead host's benchmark processes are ended by the next Measurement.
 const MEASURING = "measure: ";
 
 export const measurementsDir = (stateDir: string) => `${stateDir}/measurements`;
@@ -219,6 +221,7 @@ type Ended =
     }
   | { readonly _tag: "TimedOut" };
 
+// WARNING: No shell between: spawned here for CPU time and peak, not by the checks.
 const runOnce = (
   check: CheckOf,
   command: { readonly executable: string; readonly argv: ReadonlyArray<string> },
@@ -238,6 +241,7 @@ const runOnce = (
       } catch {}
     };
     yield* Effect.addFinalizer(() => Effect.sync(end));
+    // WARNING: Adoption cannot be interrupted once it spawns, so its deadline ends the command beside it.
     yield* Effect.forkScoped(
       Effect.sleep(Duration.millis(deadline - (yield* Clock.currentTimeMillis))).pipe(
         Effect.andThen(
@@ -286,6 +290,7 @@ const runOnce = (
             output: tail(`${stdout}${stderr}`),
             wall: Number(now - began) / 1e6,
             cpu: Number(usage?.cpuTime.total ?? 0) / 1000,
+            // WARNING: On Linux the peak is the host's RSS at fork, a floor; a clean peak needs a small launcher.
             peak: Number(usage?.maxRSS ?? 0) / 1024,
           };
           return returned;
@@ -294,6 +299,7 @@ const runOnce = (
       Effect.timeoutOption(Duration.millis(left)),
       Effect.map((ended) => (expired ? timedOut : Option.getOrElse(ended, () => timedOut))),
     );
+    // WARNING: A check its host ended while stopping never answers, so no failure is recorded.
     return yield* adopted.collected(left <= 0 || expired ? Effect.succeed(timedOut) : collecting);
   }).pipe(Effect.scoped);
 

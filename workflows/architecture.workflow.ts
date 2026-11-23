@@ -42,6 +42,7 @@ const Report = Schema.Struct({
   }),
 });
 
+// WARNING: absent rather than empty, exactly as a front door passes them.
 const launch = (options: Record<string, string>) =>
   Rec.fromEntries(Arr.filter(Rec.toEntries(options), ([, value]) => value !== ""));
 

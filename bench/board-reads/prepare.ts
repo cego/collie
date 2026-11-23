@@ -1,4 +1,5 @@
 /* oxlint-disable effecttsgo/node-builtin-import, effecttsgo/global-console, no-restricted-globals -- prepares an offline benchmark's copy, never a host's live state. */
+// WARNING: opened once, so a tree that imports records has done so before any sample.
 import { chmodSync, cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 
 const [snapshot, views] = Bun.argv.slice(2);
@@ -52,6 +53,7 @@ for (const tool of ["gh", "glab", "herdr", "hc", "collie", "claude", "codex", "o
   );
   chmodSync(`${work}/bin/${tool}`, 0o755);
 }
+// WARNING: cp -a keeps modification times, which a build before Run records reads.
 run(["cp", "-a", snapshot, `${work}/state`]);
 cpSync(views, `${work}/views.json`);
 run(["bun", "bench/board-reads/run.ts", "--open"]);

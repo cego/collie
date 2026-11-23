@@ -52,6 +52,7 @@ export const piDriver: (
       const servers = piServers(
         yield* Effect.tryPromise(userServers).pipe(Effect.orElseSucceed(() => ({}))),
       );
+      // WARNING: a short private name avoids user overrides and Pi hashing provider tool names.
       const server = `cf-${pipe_(
         yield* Effect.promise(() =>
           context.run(Effect.flatMap(SecureRandom.SecureRandom, (random) => random.uuidV4())),

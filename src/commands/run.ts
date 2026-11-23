@@ -130,6 +130,7 @@ import {
 import { outOfReach, readRunLines } from "../run-read";
 import { DEFAULT_LINES } from "../text-lines";
 
+// WARNING: paired by position; a repeated flag arrives as its own list, so order between lists is lost.
 function namedConstraints(texts: ReadonlyArray<string>, severities: ReadonlyArray<string>) {
   const constraints: Array<Omit<Constraint, "since">> = [];
   const refuse = (error: string) => ({ error, constraints });
@@ -145,6 +146,7 @@ function namedConstraints(texts: ReadonlyArray<string>, severities: ReadonlyArra
   return { error: null, constraints };
 }
 
+// WARNING: fresh unless the caller names a Task; an unasked continuation is how two pieces of work become one.
 const chosenTask = Effect.fn("collie.chosenTask")(function* (
   env: PluginEnv,
   named: Option.Option<string>,
@@ -162,6 +164,7 @@ const chosenTask = Effect.fn("collie.chosenTask")(function* (
   return taken({ mode: "continue", task });
 });
 
+// WARNING: refused rather than dropped; a decision nobody answered is worse than being told so here.
 function unsupportedDecide(decide: ReadonlyArray<string>) {
   if (decide.length === 0) return null;
   return err(
@@ -278,8 +281,10 @@ const runStart = Command.make(
           if (!given.ok) return err("invalid_input", given.error);
           return yield* mutation(base.env, "run-start", request, (requestId) =>
             Effect.gen(function* () {
+              // WARNING: resolved inside the mutation so a replayed request returns its recorded result whether or not the workspace is still open.
               const resolved = yield* context(global, (yield* selected(global)) !== null);
               if (resolved._tag === "ContextFailure") return resolved.result;
+              // WARNING: inference is task-local, so a continuation sees its own Task's plans and a fresh start sees only the Runs recorded before Tasks.
               const task = yield* chosenTask(resolved.env, taskId);
               if (!task.ok) return task.error;
               const saved =
@@ -289,6 +294,7 @@ const runStart = Command.make(
               if (saved !== null) {
                 const unsupported = unsupportedDecide(decide);
                 if (unsupported !== null) return unsupported;
+                // WARNING: the host's own options are kept apart from the author's payload, so a module's input never gets host values.
                 const launch = hostOptions(explicit.given);
                 const agent = Arr.flatMap(
                   Rec.toEntries({ harness, model, effort }),
@@ -750,6 +756,7 @@ const runReport = Command.make(
   ),
 );
 
+// WARNING: the files are the record; read the directory, not an engine's list of what it wrote.
 const runOutput = Command.make(
   "output",
   {
@@ -968,6 +975,7 @@ const runWait = Command.make(
   ({ runIds, all, follow, timeout, until }) =>
     Effect.gen(function* () {
       const global = yield* root;
+      // WARNING: guarded, not attempt: the stream prints its own lines, but a defect must still end as one envelope.
       yield* guarded(waitFor(global, runIds, follow, timeout, until, all), global.json);
     }),
 ).pipe(
@@ -976,6 +984,7 @@ const runWait = Command.make(
   ),
 );
 
+// WARNING: the current state arrives first; what the status stream lacks (readiness, steps, agents, CI) is polled.
 const waitForRun = Effect.fn("collie.waitForRun")(function* (
   global: Global,
   env: PluginEnv,
@@ -1021,6 +1030,7 @@ const waitForRun = Effect.fn("collie.waitForRun")(function* (
       return (yield* verdict) !== "waiting";
     }).pipe(Effect.orDie),
   ).pipe(Effect.scoped);
+  // WARNING: a host replaced under the wait ends its stream; the wait goes on against the next host.
   const watching = Effect.gen(function* () {
     for (;;) {
       const exit = yield* Effect.exit(once);
@@ -1039,6 +1049,7 @@ const waitForRun = Effect.fn("collie.waitForRun")(function* (
   });
   const needsProgress = options.until === "ready" || options.until === "needs-human";
   const asking = options.follow || needsProgress;
+  // WARNING: a host restarting fails a look or two; one that never answers cannot end a wait for readiness.
   const polling = Effect.gen(function* () {
     let failures = 0;
     for (;;) {
@@ -1085,6 +1096,7 @@ const waitForRun = Effect.fn("collie.waitForRun")(function* (
       )}.`,
       { run: runId },
     );
+  // WARNING: --follow already said everything as it happened; one more envelope would print the last line twice.
   if (options.follow) return null;
   const view = yield* Ref.get(seen);
   if (view === null) return err("run_not_found", `Run "${runId}" was not found.`, { run: runId });
@@ -1609,6 +1621,7 @@ const runDrift = Command.make("drift", { runId: runIdArg }, ({ runId }) =>
                       ", ",
                     )}${report.evidence_truncated ? " (evidence truncated)" : ""}`,
                 ),
+                // WARNING: a judgement nobody could make is worth saying; the alternative is a Run that looks clean because nothing looked at it.
                 ...Arr.map(skipped, (line) => `skipped\t${line.reason}`),
               ],
               "\n",
@@ -1958,6 +1971,7 @@ const intentAuthority = Command.make(
     ),
 ).pipe(Command.withDescription("Grant or withdraw what Collie may do to a Run without asking"));
 
+// WARNING: the wrapper is part of the check: bun test and bun test --bail are two different checks.
 const intentVerification = Command.make(
   "verification",
   {

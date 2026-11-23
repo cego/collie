@@ -159,6 +159,7 @@ export const reportsLayer = (opts: {
           yield* write(view.runId, closure === undefined ? report : { ...report, closure });
         });
 
+      // WARNING: a peer's link is up before its host serves calls over it.
       const answers = (peer: Peer) =>
         asks({ ...env, machine: peer.name }, (client) => client.identity()).pipe(
           Effect.timeoutOption("5 seconds"),

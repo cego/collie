@@ -83,6 +83,7 @@ export const shortfallOf = (question: AskedQuestion) => {
   return `The agent gave ${count} ${count === 1 ? "option" : "options"} and ${recommendation}; Collie asked for ${listed(Arr.map(gaps, (gap) => gap.shortfall))}.`;
 };
 
+// WARNING: more or fewer than one marked means none is recommended.
 export const solutionsOf = (question: AskedQuestion) => {
   const one = recommendedCount(question) === 1;
   const ordered = one

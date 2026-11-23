@@ -207,6 +207,7 @@ export function laneOf(facts: LaneFacts) {
         one.attempts.push({ at: entry.at, cause: entry.cause });
 
   const declared = forecasts.length > 0 || runs.size > 0;
+  // WARNING: a launch from before Steps were recorded names its Step by the key it replayed under.
   const stepKeyOf = (launch: Launched) =>
     launch.step?.key ?? (runs.has(launch.operation) ? launch.operation : undefined);
   const keyOfLaunch = new Map<string, string>();
@@ -740,7 +741,9 @@ function withWait(nodes: FlowNode[], wait: LaneWait | null) {
   if (wait === null) return;
   const at = heldUp(nodes);
   const node = nodes[at];
+  // WARNING: an open question is already what the node waits on; no wait is added.
   if (node === undefined || (node.state === "needs-you" && node.wait === null)) return;
+  // WARNING: a failed Step already says why its Run parked.
   if (wait.wait === "parked" && Arr.some(nodes, (one) => one.state === "failed")) return;
   nodes[at] = {
     ...node,

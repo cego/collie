@@ -34,6 +34,7 @@ export const WatchChange = Schema.Struct({
   newHead: Schema.Boolean,
   comments: Schema.Array(Schema.String),
   pipeline: Schema.NullOr(Schema.String),
+  // WARNING: null where ancestry was not read, so it is not a force push.
   forcePush: Schema.NullOr(Schema.Boolean),
 });
 export type WatchChange = typeof WatchChange.Type;
@@ -74,6 +75,7 @@ export const collieRunOf = (body: string) => {
 
 export const signedByCollie = (body: string) => collieRunOf(body) !== null;
 
+// WARNING: a descends answer left out means ancestry was not read, not that the head is new.
 export function judge(options: {
   readonly cursor: WatchCursor;
   readonly observed: Observed | null;

@@ -24,6 +24,7 @@ import review522 from "./fixtures/public-text/mr-522-synthesis.json";
 import { leaksIn } from "../src/public-text";
 import { stringifyJson } from "../src/json";
 
+// WARNING: whether a check passed is read from the journal on this tree, never from the fix's Output.
 const FINAL = { head_sha: "abc123", fingerprint: "tree-1" };
 const EARLIER = { head_sha: "abc000", fingerprint: "tree-0" };
 function record(over: Partial<Verification> & { name: string }) {
@@ -632,6 +633,7 @@ test("the last fix is not enough with a missing disposition, a reworded title, a
     "no disposition for [blocker] No exit code",
   );
   expect(halt({ ...good, checks: [] })).toBe("fix_unverified: no checks reported");
+  // WARNING: the Output's own word on a check is never read; the journal is.
   const claimed = {
     ...good,
     checks: [{ name: "bun test", note: "all green" }],

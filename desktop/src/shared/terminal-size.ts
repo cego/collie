@@ -1,3 +1,4 @@
+// WARNING: each resize redraws the agent's whole pane, so only the size a drag settles at is sent.
 export interface Timers<Handle> {
   readonly set: (run: () => void, ms: number) => Handle;
   readonly clear: (handle: Handle) => void;
@@ -20,6 +21,7 @@ export const settledResizes = <Handle>(
     send(cols, rows);
   };
   return {
+    // WARNING: a controller just opened refuses any resize sent while it starts.
     opened: (cols: number, rows: number) => {
       cancel();
       tell(cols, rows);

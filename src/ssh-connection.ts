@@ -12,7 +12,9 @@ export interface SshMachine {
   readonly target: string;
 }
 
+// WARNING: the longest unix socket path macOS binds.
 export const SOCKET_PATH_MAX = 104;
+// WARNING: ssh appends a dot and 16 characters while binding a control path, so the path must leave room.
 const BIND_SUFFIX = 17;
 const OPEN_BOUND = "2 minutes";
 
@@ -22,6 +24,7 @@ export const controlPathOf = (stateDir: string, machine: SshMachine) =>
     Str.slice(0, 16),
   )}`;
 
+// WARNING: in a directory only this user reads: the master's socket is a login.
 export const controlPath = Effect.fn("SshConnection.controlPath")(
   function* (stateDir: string, machine: SshMachine) {
     const path = controlPathOf(stateDir, machine);
@@ -136,6 +139,7 @@ export const sshConnection = Effect.fn("SshConnection.handle")(function* (
   return connection;
 });
 
+// WARNING: the master is ssh's own and outlives this scope, kept by ControlPersist after it returns.
 export const openConnection = Effect.fn("SshConnection.open")(function* (
   stateDir: string,
   machine: SshMachine,
@@ -173,6 +177,7 @@ export const openConnection = Effect.fn("SshConnection.open")(function* (
     machine: machine.label,
     seen: `another opener held its SSH connection for longer than ${Duration.format(bound)}`,
   });
+  // WARNING: another process may be waiting on the same SSO login: wait for it, then look again.
   return yield* withLock(
     `${path}.lock`,
     contended,
@@ -219,6 +224,7 @@ const opened = Effect.fnUntraced(function* (
           "ConnectTimeout=15",
           machine.target,
         ],
+        // WARNING: not its own process group, which a closing scope would end with the master in it.
         { stdin: "ignore", stdout: "ignore", stderr: "pipe", detached: false },
       ),
     );

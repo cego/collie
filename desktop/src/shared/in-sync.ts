@@ -21,6 +21,7 @@ export interface InSync {
   readonly behind: ReadonlyArray<Lag>;
 }
 
+// WARNING: a version that is not a release asks nothing of one.
 export interface DesktopHolds {
   readonly version: string;
   readonly credentials: ReadonlyArray<Credential>;
@@ -123,6 +124,7 @@ const lags = (row: MachineRow, desktop: DesktopHolds) => {
   return [...version, ...settings, ...definitions, ...credentials, ...onboarding];
 };
 
+// WARNING: a part not known yet is not behind.
 export const inSync: (row: MachineRow, desktop: DesktopHolds) => InSync = (row, desktop) => {
   if (row.state !== "live") return { state: row.state, behind: [] };
   const behind = lags(row, desktop);

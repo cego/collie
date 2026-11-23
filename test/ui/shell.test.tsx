@@ -72,6 +72,7 @@ test("the render-error screen can do the one thing it offers, and gives the mous
       yield* Effect.promise(() => t.flush());
 
       expect(t.captureCharFrame()).toContain("Collie stopped drawing");
+      // WARNING: App's key handler is removed in onCleanup before this screen is up, so this screen registers its own or the pane sticks.
       t.mockInput.pressKey("q");
       yield* Effect.promise(() => t.flush());
       expect(quits).toHaveLength(1);
@@ -80,6 +81,7 @@ test("the render-error screen can do the one thing it offers, and gives the mous
       yield* Effect.promise(() => t.flush());
       expect(quits).toHaveLength(2);
 
+      // WARNING: App's onBlur also released the mouse; without it the mouse stays captured and copy-paste breaks in other panes.
       expect(t.renderer.useMouse).toBe(false);
     }),
   ));
@@ -124,6 +126,7 @@ test("a proposal that has appeared is drawn, and Enter confirms exactly what is 
       };
       const app = yield* mount(appState({ live }));
 
+      // WARNING: drawn without taking pane focus: a proposal awaiting an answer is the board telling the human it waits.
       expect(app.acted()).toEqual([{ _tag: "Preview", id: "p1" }]);
       yield* app.setState(appState({ live, previewing: "p1" }));
       expect(app.frame()).toContain("You want the implementer to slow down.");

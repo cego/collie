@@ -51,6 +51,7 @@ export const waitsOnApproval = (standing: ReviewStanding) =>
   standing._tag === "Waiting" &&
   Arr.some(standing.why, (one) => pipe(one, Str.startsWith(`${UNAPPROVED} (`)));
 
+// WARNING: a moved head is checked first, so a new head that is ready still reads as moved.
 export function standingOf(
   read: ReviewRead,
   against: {
@@ -168,6 +169,7 @@ export const SettledAnswersSchema = Schema.Struct({
 });
 export type SettledAnswers = typeof SettledAnswersSchema.Type;
 
+// WARNING: a fixed answer counts only where its commit is on the head: a commit that left the head proves nothing.
 export function settleAnswers(round: {
   readonly given: ReadonlyArray<OpenComment>;
   readonly answers: ReadonlyArray<Answer>;

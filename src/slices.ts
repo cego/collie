@@ -1,3 +1,4 @@
+// WARNING: items are keyed by identity, never position; identical identities are refused before any item starts.
 import * as Arr from "effect/Array";
 import { unsafePathComponent } from "./naming";
 

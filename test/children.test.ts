@@ -401,6 +401,7 @@ test("a project that overrides only the child changes the child, and leaves the 
           () => client.run({ runId: started.runId }).pipe(Effect.orDie),
           (view) => view?.status.status === "complete",
         );
+        // WARNING: A service is its key, not the file that declared it.
         expect(done?.status).toEqual({
           status: "complete",
           value: "strict:n+override:n/pass+ok",

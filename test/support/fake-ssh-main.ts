@@ -1,3 +1,4 @@
+// WARNING: Models OpenSSH's fallback to a login of its own where the control socket has gone.
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import * as BunChildProcessSpawner from "@effect/platform-bun/BunChildProcessSpawner";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
@@ -129,6 +130,7 @@ const main = Effect.gen(function* () {
                 return reply("ok");
               }
               if (asked.op === "exit" || asked.op === "drop") {
+                // WARNING: The master goes before it answers, so the asker may bind the path at once.
                 yield* unlink;
                 conn.end("ok\n", finish);
                 return;
@@ -219,6 +221,7 @@ const main = Effect.gen(function* () {
   }
   if (verb !== undefined) {
     yield* said(`mux ${verb}${spec === undefined ? "" : ` ${spec}`} ${target}`);
+    // WARNING: OpenSSH includes configured forwards in both requests, though -S already names the master; an unrelated remote forward can fail either.
     if (
       (verb === "forward" || verb === "cancel") &&
       config !== "/dev/null" &&

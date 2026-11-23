@@ -78,6 +78,7 @@ export const measureStart = (start: {
           detached: true,
         }),
       ),
+      // WARNING: its own process group still holds what it started once it has ended itself.
       (app) =>
         Effect.gen(function* () {
           const group = -app.pid;

@@ -452,6 +452,7 @@ describe("a key in the record", () => {
   test("gives nothing with Ctrl or Meta, but Alt does not stop it", () => {
     expect(action({ ctrlOrMeta: true })).toBeNull();
     expect(action({ key: "j", ctrlOrMeta: true })).toBeNull();
+    // WARNING: What Alt or AltGr typed is the key itself: ] on a Nordic layout.
     expect(action({ key: "]" })).toBe("next-tab");
   });
 

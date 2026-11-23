@@ -35,9 +35,11 @@ export const suiteEnv = Config.all({
   COLLIE_TEST_FILE: Config.String("COLLIE_TEST_FILE").pipe(Config.withDefault("")),
   COLLIE_PROC: Config.String("COLLIE_PROC").pipe(Config.withDefault("")),
   COLLIE_MEMORY_EVERY: Config.String("COLLIE_MEMORY_EVERY").pipe(Config.withDefault("")),
+  // WARNING: Never the human's core: a test that wants one starts the rig's and names its socket.
   HC_SOCKET: Config.succeed("/nonexistent/collie-test/hc.sock"),
 }).pipe(Config.map((env) => ({ ...env, ...GIT_QUIET })));
 
+// WARNING: File and database IO still take real time under the fast clock, so a Connection read or server start has no deadline.
 export const fastForward = <A, E, R>(effect: Effect.Effect<A, E, R>, tick = 25) =>
   Effect.gen(function* () {
     const clock = yield* TestClock.make();

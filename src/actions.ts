@@ -11,6 +11,7 @@ const Attachments = Schema.Array(Schema.String).annotate({
     "Files to give the work, copied into the Run's own directory. In Native chat, paths on this Machine. In Desktop's Flock chat, a path on the computer Desktop runs on or <machine>:<path>; left out, the files of the human's message that asked for it go with it, and [] sends none.",
 });
 
+// WARNING: set_verification.command and start.verify run as Collie's own process at the gate, outside agents' permission rules: a deliberate hole.
 export const ActionSchema = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("update_intent"),
@@ -23,6 +24,7 @@ export const ActionSchema = Schema.Union([
     kind: Schema.Literal("set_verification"),
     run: Schema.String,
     name: Schema.String,
+    // WARNING: absent withdraws the check of that name.
     command: Schema.optionalKey(VerifySpecSchema.mapFields(Struct.omit(["name"]))),
   }),
   Schema.Struct({
@@ -37,6 +39,7 @@ export const ActionSchema = Schema.Union([
     agent: Schema.optionalKey(Schema.String),
     to: Schema.optionalKey(Schema.String),
     text: Schema.String,
+    // WARNING: absent means now: a human's message is about the work under way, not the next step.
     mode: Schema.Literals(["boundary", "now", "interrupt"]).pipe(
       Schema.withDecodingDefaultKey(Effect.succeed("now" as const)),
     ),
@@ -46,6 +49,7 @@ export const ActionSchema = Schema.Union([
     kind: Schema.Literal("hold"),
     run: Schema.String,
     before: Schema.optionalKey(Schema.String),
+    // WARNING: refused at admission rather than dropped, as nothing lifts a hold at a time.
     until: Schema.optionalKey(Schema.String),
     reason: Schema.optionalKey(Schema.String),
   }),
@@ -68,6 +72,7 @@ export const ActionSchema = Schema.Union([
     workflow: Schema.String,
     inputs: Schema.Record(Schema.String, Schema.String),
     decisions: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+    // WARNING: optional in the schema, but a start without one is refused rather than rooted where the agent asks.
     workspace: Schema.optionalKey(Schema.String),
     title: Schema.optionalKey(Schema.String),
     verify: Schema.optionalKey(Schema.Array(VerifySpecSchema)),
@@ -97,9 +102,11 @@ export const ActionSchema = Schema.Union([
     run: Schema.String,
     agent: Schema.String,
   }),
+  // WARNING: standing authority is not settable here: widening what Runs may do without asking is a grant, and a model that could ask for one would authorise itself.
   Schema.Struct({
     kind: Schema.Literal("update_defaults"),
     change: Schema.Literals(["add-constraint", "remove-constraint"]),
+    // WARNING: named rather than inherited: defaults are filed per workspace, so a board confirmation would otherwise write a file no Run reads.
     workspace: Schema.String,
     text: Schema.String,
   }),

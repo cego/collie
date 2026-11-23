@@ -65,6 +65,7 @@ function Menu(props: { pending: Pending }) {
     if (/^[\x20-\x7e]$/.test(key.sequence)) return setQuery((q) => q + key.sequence);
   });
 
+  // WARNING: a paste arrives as its own event, never as keys: without this the field silently drops it.
   usePasteInto(setQuery);
 
   return (

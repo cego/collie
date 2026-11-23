@@ -1,3 +1,4 @@
+// WARNING: a large Run's 220 Steps cost a first frame several times its budget.
 export interface StepWindow {
   readonly from: number;
   readonly to: number;

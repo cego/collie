@@ -115,6 +115,7 @@ test("every row carries the stable id its actions are aimed at", () => {
     ["agent", "agent:impl-1"],
     ["recent", "run:r0"],
   ]);
+  // WARNING: ids carry no position; the list re-sorts each refresh and an index would silently retarget the action.
   expect(Arr.map(rows, (r) => r.id)).not.toContain("0");
 });
 
@@ -200,6 +201,7 @@ test("an agent whose run is not on the board goes in a group of its own", () => 
     board({
       agents: [
         agent("1", "Implementer", "r1"),
+        // WARNING: a finished run keeps its agents; a hand-off names an implementer that outlives its run, so it hangs off that run.
         agent("2", "Reviewer", "r0"),
         agent("3", "Stray", "gone"),
       ],
@@ -308,6 +310,7 @@ test("the digits are numbered across the tree, so one names the row it is on", (
     ["└ Reviewer", "2"],
     ["└ Planner", "3"],
   ]);
+  // WARNING: past the ninth the row stays and the digit goes; there are nine digits and a board can hold more agents.
   const many = Arr.filter(
     wideRows(
       wideView([
@@ -399,6 +402,7 @@ test("a group keeps a run's question, so it is answered where it is seen", () =>
 
   expect(Arr.map(rows, (r) => r.runId)).toEqual([null, "r1", "r2"]);
   expect(rows[1]!.choice).toBe(MENU);
+  // WARNING: waiting runs are counted in the group summary, not as needsYou, or the footer's count reads as two.
   expect(rows[0]!.detail).toContain("1 running");
   expect(needsYouStatus(rows, null)).toBe("1 run(s) need you");
 });
@@ -415,6 +419,7 @@ test("Enter on a row says where to go, from a key rather than a cached id", () =
   );
   const [workspace, active, agentRow] = rows;
 
+  // WARNING: herdr compacts tab and pane ids, so each row is keyed by the one key that survives a redraw.
   expect(workspace!.jump).toEqual({
     kind: "workspace",
     workspaceId: "w28",
@@ -536,6 +541,7 @@ test("starting a workflow is this Session's, so a wide row is not offered one", 
   const [row] = rowsOf(board({ recent: [run("r0", { target, fixable: true })] })) as [Row];
 
   expect(Arr.map(actionsFor(row, HERE), (a) => a.key)).toEqual(["l", "x", "o", "w"]);
+  // WARNING: the merge request is still the run's own: opening and posting act on the run, not this checkout.
   expect(Arr.map(actionsFor(row, EVERYWHERE), (a) => a.key)).toEqual(["l", "o", "w"]);
   expect(keyIntent(keys({ row, filter: HERE }), press("x"))).toEqual({
     _tag: "Do",
@@ -590,6 +596,7 @@ test("a row's actions name the row, not the newest run", () => {
 });
 
 test("a clean review can still be opened in a browser", () => {
+  // WARNING: a fix round and a second review run in this workspace's checkout, so they stay Session-local.
   const target = "mr:gitlab.example.com/g/p!42";
   // WARNING: one recent row goes into each board, so each list has exactly that row.
   const [clean] = rowsOf(board({ recent: [run("r0", { target, fixable: false })] })) as [Row];
@@ -601,6 +608,7 @@ test("a clean review can still be opened in a browser", () => {
 });
 
 test("one thing owns the keyboard, in one order", () => {
+  // WARNING: the keyboard, a paste and the footer must agree on the field; each used to work it out separately.
   const setting = { key: "model", value: "opus" };
   const all = { flow: true, choice: MENU, filtering: true, setting };
 
@@ -642,6 +650,7 @@ test("a filter keeps a matching agent under the run it works for", () => {
   expect(Arr.map(matching(rows, "r2"), (r) => [r.kind, r.title])).toEqual([
     ["active", "Implement · r2"],
   ]);
+  // WARNING: the order is the board's, not the match rank, or a pick list would lift an agent above its own run.
   const order = (kept: Row[]) => Arr.map(kept, (r) => rows.indexOf(r));
   expect(order(matching(rows, "Planner"))).toEqual([2, 3]);
   expect(order(matching(rows, "r"))).toEqual([0, 1, 2, 3]);
@@ -675,6 +684,7 @@ test("a filtered wide board keeps the workspace a matching run is in", () => {
     ]),
   );
 
+  // WARNING: a wide run is named by its workflow alone, so the workspace row is the one thing a filter must not drop.
   const byAgent = matching(rows, "Implementer");
   expect(Arr.map(byAgent, (r) => [r.kind, r.title])).toEqual([
     ["group", "Implement · glass"],
@@ -725,6 +735,7 @@ test("a paste fills a field and never submits it", () => {
 
   expect(pasteInto("", bytes(url))).toBe(url);
   expect(pasteInto("https://", bytes("gitlab.cego.dk"))).toBe("https://gitlab.cego.dk");
+  // WARNING: a pasted newline is the submit key, so it must reach the field as nothing at all.
   expect(pasteInto("", bytes(`${url}\n`))).toBe(url);
   expect(pasteInto("", bytes(`one\r\ntwo\n`))).toBe("onetwo");
   expect(pasteInto("", bytes("\x1b[Bfix-\x07caf\u00e9"))).toBe("[Bfix-caf\u00e9");
@@ -741,6 +752,7 @@ test("a row says how long it has been like this, not when", () => {
 });
 
 test("the long and short renderings never disagree about the unit", () => {
+  // WARNING: the resume menu and the tab's row list both show these, so one instant must read the same in both.
   for (const seconds of [0, 59, 60, 3_599, 3_600, 86_399, 86_400, 200_000]) {
     const at = NOW - seconds * 1000;
     const long = ago(FIXED_ISO(at), NOW);
@@ -767,6 +779,7 @@ test("one focus command changes only what it names", () => {
   expect(retarget(at, { _tag: "ToggleTail" }).tail).toBe(true);
   expect(retarget({ ...at, tail: true }, { _tag: "ToggleTail" }).tail).toBe(false);
   expect(retarget(at, { _tag: "Refresh" }).nonce).toBe(1);
+  // WARNING: a new Selection starts from the first page, not from how far the last one had been paged.
   expect(retarget(at, { _tag: "MoreReview" }).reviewPages).toBe(2);
   expect(
     retarget({ ...at, reviewPages: 4 }, { _tag: "Select", id: "run:r2", on: null }).reviewPages,
@@ -785,6 +798,7 @@ test("moving the Selection reuses the board; anything else re-reads it", () => {
 
   expect(rereads(at, { ...at, selected: "run:r2" })).toEqual({ reuse: true, forceMr: false });
 
+  // WARNING: a Refresh and the read after a command go past the merge-request cache.
   expect(rereads(at, { ...at, nonce: 1 })).toEqual({ reuse: false, forceMr: true });
   expect(rereads(at, { ...at, selected: "run:r2", nonce: 1 })).toEqual({
     reuse: false,
@@ -801,6 +815,7 @@ test("a row id says whether it is a Run, and which one", () => {
   expect(runIdOf("agent:impl-1")).toBeNull();
   expect(runIdOf("workflow:review")).toBeNull();
   expect(runIdOf(null)).toBeNull();
+  // WARNING: the row ids the board mints are the ones this reads back.
   expect(runIdOf(rowsOf(board({ recent: [run("r1")] }))[0]!.id)).toBe("r1");
 });
 
@@ -872,12 +887,14 @@ test("the footer offers the panel's keys and the globals, and no more", () => {
   expect(footerKeys({ panel: ["t log tail"], on: { _tag: "Board" }, filter: HERE })).toBe(
     `t log tail · ${globals}`,
   );
+  // WARNING: g names where it goes; starting a run is this Session's, so the all-workspaces board does not offer it.
   expect(footerKeys({ panel: [], on: { _tag: "Board" }, filter: EVERYWHERE })).toBe(
     "g local · ? keys · q close",
   );
 });
 
 test("a field that has taken the keys says what they do instead", () => {
+  // WARNING: while a choice has the keyboard the board's keys are inert, so offering them would be a lie.
   expect(footerKeys({ panel: [], on: { _tag: "Choice", choice: MENU }, filter: HERE })).toBe(
     "↑↓ move · Enter choose · Esc leave the run open",
   );
@@ -945,6 +962,7 @@ function press(sequence: string, over: Omit<Keypress, "sequence"> = {}) {
 }
 
 test("the help overlay owns the keyboard, then a flow, then the board", () => {
+  // WARNING: a flow running inline has its own handler; a key that also moved the Selection would act on a hidden board.
   expect(keyIntent(keys({ on: { _tag: "Flow" } }), press("q", { name: "q" }))).toBeNull();
   expect(keyIntent(keys({ on: { _tag: "Flow" } }), press("?"))).toBeNull();
 
@@ -963,6 +981,7 @@ test("the help overlay owns the keyboard, then a flow, then the board", () => {
 });
 
 test("a literal question mark reaches the text it was typed into", () => {
+  // WARNING: printable characters belong to whatever takes text; only the board owns the printable keys otherwise.
   const asked: PendingChoice = { ...MENU, kind: "ask", items: [] };
   expect(
     keyIntent(
@@ -1004,6 +1023,7 @@ test("the filter keeps the keyboard until Enter or Esc, and Enter keeps the text
     filter: "",
     typing: false,
   });
+  // WARNING: a key the board owns is text while the filter has the keyboard.
   expect(keyIntent(typing, press("R"))).toEqual({
     _tag: "Filtering",
     filter: "reviR",
@@ -1016,6 +1036,7 @@ test("Esc on the board drops a filter it is still narrowed by, and nothing else"
   const esc = press("\x1b", { name: "escape" });
 
   expect(keyIntent(narrowed, esc)).toEqual({ _tag: "Filtering", filter: "", typing: false });
+  // WARNING: with no filter set Esc widens the board; narrowing to one workspace is a filter too, so both exits share a key.
   expect(keyIntent(keys({ query: "" }), esc)).toEqual({
     _tag: "Do",
     command: { _tag: "SetFilter", filter: { kind: "all" } },
@@ -1029,6 +1050,7 @@ test("a Settings row being edited owns the keyboard until it is sent or abandone
     _tag: "Editing",
     editing: { key: "model", value: "opus" },
   });
+  // WARNING: Enter sends the value and closes the editor in one intent; a bare command left the footer in editor mode.
   expect(keyIntent(editing, press("\r", { name: "return" }))).toEqual({
     _tag: "Submitted",
     command: { _tag: "SetDefault", key: "model", value: "opu" },
@@ -1107,6 +1129,7 @@ test("the row's own actions are the last thing a key is tried against", () => {
     _tag: "Do",
     command: { _tag: "StopRun", runId: "r1" },
   });
+  // WARNING: s names its review; an argument-less send meant the newest run in the Session.
   expect(keyIntent(keys({ row }), press("s"))).toEqual({
     _tag: "Do",
     command: { _tag: "SendReview", runId: "r1" },
@@ -1221,6 +1244,7 @@ test("every one of more than nine merge requests is reachable from the chooser b
 });
 
 test("every key a card's menu offers is one the overlay advertises", () => {
+  // WARNING: a key offered on a card and missing from ? is a key nobody can look up.
   const advertised = new Set(Arr.map(ALL_KEYS, (entry) => entry.key));
   const states = ["blocked", "active", "quiet", "failed", "stopped", "done"] as const;
   const offered = new Set(
@@ -1322,6 +1346,7 @@ test("the next-question key is the board's, unless a field is taking text", () =
 });
 
 test("the filter says which board this is, and the Session-local keys read it", () => {
+  // WARNING: narrowed either way is one Session's, since a Run belongs to the workspace it was started in.
   expect(sessionLocal({ kind: "all" })).toBe(false);
   expect(sessionLocal({ kind: "workspace", id: "w1" })).toBe(true);
   expect(sessionLocal({ kind: "run", id: "r1" })).toBe(true);
@@ -1444,6 +1469,7 @@ test("a run filter keeps that run's agents and its repository runs", () => {
     }),
   });
 
+  // WARNING: on the local board an agent sits at its run's depth, so depth alone cannot say where a group ends.
   expect(Arr.map(rows, (r) => r.id)).toEqual(["run:r1", "agent:implementer-1"]);
 });
 
@@ -1550,6 +1576,7 @@ test("what became of the work is offered once the work is over, with its MR as t
       command: { _tag: "RecordDisposition", runId: "r1", kind: "abandoned", ref: "" },
     },
   ]);
+  // WARNING: stopped and failed work can also have been landed by hand.
   expect(dispositionsFor(task({ state: "failed" }))[0]!.command).toEqual({
     _tag: "RecordDisposition",
     runId: "r1",

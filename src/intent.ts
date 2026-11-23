@@ -65,6 +65,7 @@ export type IntentSeed = typeof IntentSeedSchema.Type;
 const IntentJson = Schema.fromJsonString(IntentSchema);
 const encodeIntent = flow(Schema.encodeResult(IntentJson), Result.getOrThrow);
 
+// WARNING: Never replaced by a default: an unreadable Intent stops rather than being guessed.
 export class IntentUnreadable extends Data.TaggedError("IntentUnreadable")<{
   dir: string;
   cause: string;
@@ -82,6 +83,7 @@ export const readIntent = Effect.fn("Intent.read")(function* (dir: string) {
   return raw === null ? null : yield* decodeIntent(dir)(raw);
 });
 
+// WARNING: Read, decision and write are one transaction, so two amendments cannot erase each other.
 export const updateIntent = <E, R>(
   dir: string,
   change: (intent: Intent | null) => Effect.Effect<Intent | null, E, R>,
@@ -171,6 +173,7 @@ function applied(intent: Intent, change: Change, version: number) {
   }
 }
 
+// WARNING: A no-op returns the same version: a bump that changed nothing would be a history entry nobody can act on.
 export function amend(intent: Intent, change: Change, by: string, at: string, voice: Voice = {}) {
   const version = intent.version + 1;
   const next = applied(intent, change, version);
@@ -190,6 +193,7 @@ export function withOutcome(options: Readonly<Record<string, string>>, intent: I
 
 export const PLAN_AUTHOR = "plan:plan/SPEC.md";
 
+// WARNING: A constraint anyone else removed is never put back by the plan.
 export function followPlan(
   intent: Intent,
   found: ReadonlyArray<Omit<Constraint, "since">>,
@@ -228,6 +232,7 @@ export interface SeedOptions {
   readonly runVerification?: ReadonlyArray<VerifySpec>;
 }
 
+// WARNING: Named entries replace a default with the same id, so a stricter one is one constraint, not two.
 export function seedIntent(run: string, options: SeedOptions) {
   const byId = new Map<string, Constraint>();
   for (const constraint of options.defaults?.constraints ?? []) byId.set(constraint.id, constraint);
@@ -286,6 +291,7 @@ const HEADING = /^#+\s/;
 const BULLET = /^(\s*)[-*]\s+(.*\S)\s*$/;
 const NUMBERED = /^(\s*)\d+[.)]\s+(.*\S)\s*$/;
 
+// WARNING: Heading match only, with no model: a plan may not grant authority.
 export function extractRequirements(text: string, file: string) {
   const lines = Str.split(text, "\n");
   const constraints: Array<Omit<Constraint, "since">> = [];
@@ -326,6 +332,7 @@ export function extractRequirements(text: string, file: string) {
       continue;
     }
     flush();
+    // WARNING: A numbered item ends a bullet but is not one.
     if (item !== null) bullet = { indent, parts: [item[2]!], line: index + 1 };
   }
   flush();
@@ -466,6 +473,7 @@ const BOOLEAN_AUTHORITIES = new Set<string>([
 ]);
 const COUNT_AUTHORITIES = new Set<string>(["max_corrections_per_constraint"]);
 
+// WARNING: Every grant is named here: an unvalidated key would be a grant nobody made.
 export function authorityPatch(pairs: ReadonlyArray<string>) {
   const patch: {
     -readonly [K in keyof Authority]?: Authority[K];
@@ -478,6 +486,7 @@ export function authorityPatch(pairs: ReadonlyArray<string>) {
     if (BOOLEAN_AUTHORITIES.has(key)) {
       if (value !== "true" && value !== "false") return { error: `"${key}" is true or false.` };
       // WARNING: `key` is in BOOLEAN_AUTHORITIES, so it names one of the boolean grants; they all take the same value type, and the literal picks one of them to say so.
+      // WARNING: `key` is in BOOLEAN_AUTHORITIES, so it names a boolean grant; they all take the same value type.
       patch[key as "auto_correct"] = value === "true";
       continue;
     }
@@ -485,6 +494,7 @@ export function authorityPatch(pairs: ReadonlyArray<string>) {
       const count = Number(value);
       if (!Number.isInteger(count) || count < 0) return { error: `"${key}" is a whole number.` };
       // WARNING: `key` is in COUNT_AUTHORITIES, so it names one of the numeric grants.
+      // WARNING: `key` is in COUNT_AUTHORITIES, so it names a numeric grant.
       patch[key as "max_corrections_per_constraint"] = count;
       continue;
     }

@@ -35,6 +35,7 @@ export const projectsRoot = Effect.fn("Projects.projectsRoot")(function* (env: P
 const DEPTH = 5;
 const SKIPPED = "node_modules";
 
+// WARNING: a .git file is a worktree, not a checkout, and nothing below a checkout is searched.
 export const checkoutsUnder = Effect.fn("Projects.checkoutsUnder")(function* (root: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;

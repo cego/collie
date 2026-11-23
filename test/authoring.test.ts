@@ -74,6 +74,7 @@ test("an install that omits the compiler or keeps an older Effect is an unavaila
       const pkg = yield* fs.readFileString(installed);
       const shared = `${dir}/shared-package.json`;
       yield* fs.link(installed, shared);
+      // WARNING: Bun hardlinks this file to its package cache: replace the entry before writing, or the cache is corrupted.
       yield* fs.remove(installed);
       yield* fs.writeFileString(
         installed,
@@ -210,6 +211,7 @@ test("checking a module where an older Effect was provisioned moves it to the ho
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-authoring-stale-" });
       yield* provisionToolchain(dir);
+      // WARNING: a release of Effect 4.0.0-rc.117 left this shape; keep it as shipped.
       const pkg = yield* fs.readFileString(`${dir}/package.json`);
       yield* fs.writeFileString(
         `${dir}/package.json`,

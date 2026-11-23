@@ -23,6 +23,7 @@ class LockContended extends Data.TaggedError("LockContended") {}
 
 export interface LockHolder {
   pid: number;
+  // WARNING: The start time tells a reused pid from the holder.
   start: string | null;
 }
 
@@ -88,6 +89,7 @@ const acquireLock = Effect.fn("acquireLock")(function* (
   );
 });
 
+// WARNING: The release is attached before the first claim, or an interrupt between them strands the lock.
 export const withLock = <A, E, R, A2, E2, R2>(
   lock: string,
   contended: Effect.Effect<A2, E2, R2>,
@@ -114,12 +116,14 @@ export const withLock = <A, E, R, A2, E2, R2>(
     );
   });
 
+// WARNING: The first claim fails on a directory nothing has created yet.
 export const ensureLockDir = Effect.fn("ensureLockDir")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   yield* fs.makeDirectory(path.dirname(file), { recursive: true });
 });
 
+// WARNING: Break under the guard: a contender that read a stale claim must not delete a fresh one.
 export const breakStaleLock = Effect.fn("breakStaleLock")(function* (lock: string) {
   const guard = `${lock}.break`;
   if (!(yield* claimBreakGuard(guard))) return false;
@@ -128,6 +132,7 @@ export const breakStaleLock = Effect.fn("breakStaleLock")(function* (lock: strin
   );
 });
 
+// WARNING: Take over a stale guard by renaming over it, never remove then create: two breakers would each delete the other's claim.
 const claimBreakGuard = Effect.fn("claimBreakGuard")(function* (guard: string) {
   const fs = yield* FileSystem.FileSystem;
   if (yield* tryClaimLock(guard)) return true;
@@ -135,12 +140,14 @@ const claimBreakGuard = Effect.fn("claimBreakGuard")(function* (guard: string) {
     Effect.catchTag("PlatformError", (error) => Effect.succeed(error.reason._tag === "NotFound")),
   );
   if (fresh) return false;
+  // WARNING: Per claim, not per process: fibers of one process share a guard too.
   const tmp = `${guard}.${yield* currentPid}.${yield* Random.nextInt}.tmp`;
   yield* fs.writeFileString(tmp, yield* ownClaim());
   yield* fs.rename(tmp, guard);
   return yield* holdsLock(guard);
 });
 
+// WARNING: No lock means no removal: a claim that arrived in between would be deleted.
 const inspectAndBreak = Effect.fn("inspectAndBreak")((lock: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -153,6 +160,7 @@ const inspectAndBreak = Effect.fn("inspectAndBreak")((lock: string) =>
     yield* fs.remove(lock, { force: true });
     return true;
   }).pipe(
+    // WARNING: An unreadable lock must not be broken.
     Effect.catchTag("PlatformError", (error) => Effect.succeed(error.reason._tag === "NotFound")),
   ),
 );
@@ -180,8 +188,10 @@ export const releaseOwnLock = Effect.fn("releaseOwnLock")(function* (lock: strin
   if (yield* holdsLock(lock)) yield* fs.remove(lock, { force: true });
 });
 
+// WARNING: A loser waits out the winner, then reads what it wrote, rather than failing as busy.
 export const READ_WRITE_LOCK_BUDGET = Duration.seconds(30);
 
+// WARNING: Every writer of a Run's files takes it, so two amendments cannot both write.
 export function withDirLock<A, E, R>(
   dir: string,
   effect: Effect.Effect<A, E, R>,
@@ -225,6 +235,7 @@ function validHolder(claim: string) {
   return holder && Number.isInteger(holder.pid) && holder.pid > 0 ? holder : null;
 }
 
+// WARNING: A malformed claim gets a grace period to finish its atomic write.
 export const lockWriteIsFresh = Effect.fn("lockWriteIsFresh")(function* (lock: string) {
   const fs = yield* FileSystem.FileSystem;
   const at = yield* Clock.currentTimeMillis;

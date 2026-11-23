@@ -295,6 +295,7 @@ const reachedOf = (machines: ReadonlyArray<Reached>) => {
   };
 };
 
+// WARNING: one made while the Flock's settings cannot be read would be made blind.
 export const flockReach = (readable: boolean, machines: ReadonlyArray<Reached>) => {
   if (!readable) return { refused: "Not set: the Flock's settings could not be read" };
   const { behind, all, of } = reachedOf(machines);

@@ -1,3 +1,4 @@
+// WARNING: A Run no journal says anything about gets no marks, never a reassuring clean default.
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import { Clock, Effect, FileSystem, Path, Schema } from "effect";
@@ -129,6 +130,7 @@ export const liveFor = Effect.fn("Live.for")(function* (opts: {
       waiting: pendingNews(newsLines).items.length,
       uncertain: uncertainNews(newsLines).length,
     };
+    // WARNING: Drawn whatever the Selection is: a proposal nothing draws expires unseen.
     const herdWide = pendingHerdWide(lines, now);
     const one = opts.run;
     if (one === null) {
@@ -159,12 +161,14 @@ export const liveFor = Effect.fn("Live.for")(function* (opts: {
   return { live, marks } satisfies BoardLive;
 });
 
+// WARNING: Shown only while auto_correct, exclusive_steering and an invisible harness all hold.
 const unattributed = Effect.fn("Live.unattributed")(function* (run: MarkedRun) {
   if (run.harnesses.length === 0) return false;
   const intent = yield* readIntent(run.dir).pipe(Effect.orElseSucceed(() => null));
   if (intent === null) return false;
   const { auto_correct, exclusive_steering } = intent.authority;
   if (!auto_correct || !exclusive_steering) return false;
+  // WARNING: A harness with no row is shown as unproven, never as nothing to say.
   return Arr.some(
     run.harnesses,
     (harness) => capabilitiesOf(harness)?.attribution?.status !== "proven",

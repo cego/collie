@@ -11,6 +11,7 @@ export const described = (pid: number) =>
       ChildProcess.make("ps", ["-o", "lstart=", "-o", "args=", "-p", String(pid)], {
         stdout: "pipe",
         stderr: "ignore",
+        // WARNING: lstart's width is fixed only in the C locale.
         env: { LC_ALL: "C" },
         extendEnv: true,
       }),

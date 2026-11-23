@@ -28,6 +28,7 @@ const BunWebSocket = WebSocket as new (
 export interface Opened {
   readonly send: (data: Uint8Array) => void;
   readonly close: () => void;
+  // WARNING: data that arrived before listen is buffered for the first listener.
   readonly listen: (deliver: (data: Uint8Array) => void, done: (reason: string) => void) => void;
   readonly way: Way;
   readonly direct: string | null;

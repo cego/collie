@@ -8,6 +8,7 @@ export function openedSubject(url: string) {
   return mr === null ? undefined : `${mrWords(mr).sign}${mr.iid}`;
 }
 
+// WARNING: a new kind needs a defended answer to whether it is worth interrupting a human for.
 export const NOTIFICATION_KINDS = [
   "needs-you",
   "run-done",
@@ -15,8 +16,10 @@ export const NOTIFICATION_KINDS = [
   "run-healed",
   "mr-opened",
   "drift-unresolved",
+  // WARNING: request, not done: auto-correct being on is not the human wanting it done behind their back.
   "correction-sent",
   "proposal-pending",
+  // WARNING: an agent's claim never toasts: a claim is not something you can go and try.
   "slice-ready",
   "intent-changed",
 ] as const;
@@ -65,12 +68,14 @@ export function notificationTitle(
   return `${repoOf(cwd)} · ${slug} ${HEADLINE[kind](subject)}`;
 }
 
+// WARNING: a kind absent from the map is on.
 export type NotificationSettings = Readonly<Record<string, boolean>>;
 
 export function wanted(settings: NotificationSettings, kind: NotificationKind) {
   return settings[kind] !== false;
 }
 
+// WARNING: a toast that cannot be raised never fails the Run.
 export class Notifier extends Context.Service<
   Notifier,
   {

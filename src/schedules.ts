@@ -63,6 +63,7 @@ import {
 export const schedulesDir = (dir: string) => `${dir}/schedules`;
 const trailOf = (dir: string, name: string) => `${schedulesDir(dir)}/${name}`;
 const recordOf = (dir: string, name: string) => `${trailOf(dir, name)}/schedule.json`;
+// WARNING: the last removal's request is kept, so a retry interrupted before its receipt finds it done.
 const removedOf = (dir: string, name: string) => `${trailOf(dir, name)}/removed`;
 
 const HERDR_WAIT = "1 minute";
@@ -128,6 +129,7 @@ export const schedulesLayer = (options: {
       const hosted = yield* Effect.context<HostServices | PlatformServices>();
       const scope = yield* Effect.scope;
       const machine: ScheduleMachine = { installation: options.installation, hostname: hostname() };
+      // WARNING: one writer of the records at a time: a change and an occurrence both read and write them.
       const writing = yield* Semaphore.make(1);
 
       const read = (name: string) =>
@@ -343,6 +345,7 @@ export const schedulesLayer = (options: {
       ) {
         yield* herdrAnswers(name, occurrence);
         const refused = (why: string) => ({ kind: "refused" as const, reason: why });
+        // WARNING: held from the read to the recorded Run, so a pause, resume or removal lands wholly before or after it.
         return yield* writing.withPermits(1)(
           Effect.gen(function* () {
             const record = yield* read(name);
@@ -374,6 +377,7 @@ export const schedulesLayer = (options: {
         );
       });
 
+      // WARNING: a chain a resume left waiting hands the new epoch its first occurrence, with no catch-up.
       const recordOccurrence = Effect.fn("Schedules.recordOccurrence")(function* (
         payload: typeof ScheduleWorkflow.payloadSchema.Type,
         occurrence: string,
@@ -428,6 +432,7 @@ export const schedulesLayer = (options: {
             yield* DurableClock.sleep({
               name: "occurrence",
               duration: Duration.millis(Math.max(0, due - (yield* Clock.currentTimeMillis))),
+              // WARNING: every wake-up is the persisted clock, however near the occurrence.
               inMemoryThreshold: Duration.zero,
             });
             const woke = yield* Activity.make({
@@ -457,11 +462,13 @@ export const schedulesLayer = (options: {
               success: OccurrenceOutcome,
               execute: startOccurrence(payload.name, payload.epoch, woke.occurrence),
             });
+            // WARNING: on this execution's own fiber, so the Run's end wakes it; a suspension passes through.
             if (outcome.kind === "started")
               yield* registry.result(outcome.run).pipe(
                 Effect.catch(() => Effect.void),
                 Effect.catchDefect(() => Effect.void),
               );
+            // WARNING: decided once, so a replay starts the same execution rather than a later one.
             const next = yield* Activity.make({
               name: "record",
               success: Schema.NullOr(
@@ -534,6 +541,7 @@ export const schedulesLayer = (options: {
           );
           if (removed !== undefined && removed !== record?.added) return yield* done(null);
         }
+        // WARNING: this request's own write, from an attempt that stopped before its receipt.
         if (record !== null && record.epoch === request && change.change !== "pause")
           return yield* done(record);
         if (change.change === "add") {
@@ -618,6 +626,7 @@ export const schedulesLayer = (options: {
           return pending;
         });
 
+      // WARNING: keyed, so running it again is a no-op unless the engine lost the execution.
       yield* Effect.forkScoped(
         Effect.gen(function* () {
           const names = yield* fs

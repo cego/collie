@@ -115,6 +115,7 @@ export type Failure = {
   readonly unreached?: true;
 };
 
+// WARNING: a host that could not be asked is not the same as having nothing.
 export class HostUnread extends Data.TaggedError("HostUnread")<{
   readonly error: ExpectedError;
   readonly message: string;
@@ -142,10 +143,12 @@ const ok: <A extends object>(data: A, human: string) => OpResult = <A extends ob
   human,
 });
 
+// WARNING: reusing a request id replays the mutation rather than repeating it.
 export const newRequestId = Effect.fn("operations.newRequestId")(function* () {
   return yield* (yield* SecureRandom.SecureRandom).uuidV4();
 });
 
+// WARNING: ambiguity is an error, never a guess: a launch aimed at a guess runs in a repository nobody asked for.
 export const workspaceNamed: (
   env: PluginEnv,
   named: string | undefined,
@@ -289,7 +292,9 @@ export const upgrade = Effect.fn("operations.upgrade")(function* (
   }
   const head = () => run("git", ["rev-parse", "--short", "HEAD"], root).pipe(Effect.map(short));
   const before = yield* head();
+  // WARNING: --ff-only never merges or rebases local work; --autostash carries uncommitted work through the pull.
   const pulled = yield* run("git", ["pull", "--ff-only", "--autostash"], root);
+  // WARNING: a conflicting autostash exits 0, so unmerged files are checked for separately.
   const unmerged = Str.trim((yield* run("git", ["ls-files", "--unmerged"], root)).stdout);
   if (pulled.code !== 0 || unmerged !== "") {
     return err("operation_failed", `Could not update ${root}.`, {
@@ -350,6 +355,7 @@ const migrate = Effect.fn("operations.migrate")(function* (
       { root, source },
     );
   }
+  // WARNING: the release's own runner, since one built from this clone would place the clone's source.
   const placed = yield* handOff(env, target, source, key, run, path.join(env.collieDir, "release"));
   if (!placed.ok) return placed;
 
@@ -515,6 +521,7 @@ const HandedOff = Schema.fromJsonString(
   ]),
 );
 
+// WARNING: nothing is replaced unless the target runner runs.
 const handOff = Effect.fn("operations.handOff")(function* (
   env: PluginEnv,
   target: string,
@@ -585,6 +592,7 @@ const prepareAndDesktop = Effect.fn("operations.prepareAndDesktop")(function* (
       output: whatItSaid(installed),
     });
   }
+  // WARNING: loaded lazily: only an upgrade reaches Desktop.
   const { dataHomeOf, updateDesktop } = yield* Effect.promise(() => import("./desktop"));
   const desktop = yield* updateDesktop(to ?? (yield* releaseVersion(root)), {
     dataHome: dataHomeOf(env.home, env.raw.XDG_DATA_HOME),
@@ -593,6 +601,7 @@ const prepareAndDesktop = Effect.fn("operations.prepareAndDesktop")(function* (
   return { ok: true as const, steps };
 });
 
+// WARNING: half of a contract with prepare.sh's printf: a reworded step line would silently empty this report.
 const PREPARE_LINE = /^prepare: ([a-z-]+): (done|already in place|skipped|failed)(?: — (.*))?$/;
 
 export function prepareSteps(output: string) {
@@ -610,6 +619,7 @@ function short(result: { code: number; stdout: string }) {
   return result.code === 0 ? Str.trim(result.stdout) : "";
 }
 
+// WARNING: a continuation's Task is given, never found by label, since two Tasks may share one.
 export const taskFor = Effect.fn("operations.taskFor")(function* (
   env: PluginEnv,
   choice: TaskChoice,
@@ -649,12 +659,14 @@ export const clearOverride = Effect.fn("operations.clearOverride")(function* (
   return ok({ runId, agent }, `Cleared the manual override on ${agent}.`);
 });
 
+// WARNING: this is all chat may do: the same path a steer takes, with no second model re-reading the request.
 export const request = Effect.fn("operations.request")(function* (
   env: PluginEnv,
   herdKey: string,
   options: {
     readonly interpretation: string;
     readonly actions: ReadonlyArray<Action>;
+    // WARNING: stamped by the entrypoint, never read out of the request.
     readonly actor: Actor;
   },
 ) {
@@ -665,6 +677,7 @@ export const request = Effect.fn("operations.request")(function* (
   const runs = new Map<string, RunFacts>();
   for (const id of named) {
     const run = Option.getOrUndefined(Arr.findFirst(known, (one) => one.id === id)) ?? null;
+    // WARNING: refused, not retargeted: a guess lands an action on someone else's work.
     if (run === null) return err("run_not_found", `No Run "${id}".`, { run: id });
     runs.set(id, run);
   }
@@ -748,6 +761,7 @@ const cardRevision = Effect.fn("operations.cardRevision")(function* (
   return card === undefined ? "unknown" : { id, revision: revisionOf(card.revision) };
 });
 
+// WARNING: a front door never chooses the budget, so a board and a terminal cannot disagree about spend.
 export const steer = Effect.fn("operations.steer")(function* (
   env: PluginEnv,
   deps: {
@@ -762,6 +776,7 @@ export const steer = Effect.fn("operations.steer")(function* (
     readonly dryRun?: boolean;
     readonly requestId: string;
     readonly origin?: FrontDoor;
+    // WARNING: an event question is journaled as the event, never as the human's words.
     readonly asked?: "human" | "event";
   },
 ) {
@@ -776,6 +791,7 @@ export const steer = Effect.fn("operations.steer")(function* (
       code: "target_required",
     });
   if (run === null) return err("run_not_found", `No Run "${target}".`, { run: target });
+  // WARNING: a retry asks nobody again, since a second answer could order the actions differently.
   if (options.dryRun !== true && options.asked !== "event") {
     const before = yield* carriedBefore(deps.herdKey, options.requestId);
     if (before !== null) return before;
@@ -789,6 +805,7 @@ export const steer = Effect.fn("operations.steer")(function* (
   const from = options.from ?? null;
   const pack = yield* evidencePack(env, options.text, run, from, journal);
 
+  // WARNING: read before the call: recorded as {}, the proposal would skip the version gate after the money is spent.
   const intent = yield* readIntent(run.dir).pipe(Effect.orElseSucceed(() => "unreadable" as const));
   if (intent === "unreadable")
     return err("invalid_state", `${run.id}'s Intent cannot be read; nothing was proposed.`);
@@ -838,6 +855,7 @@ export const steer = Effect.fn("operations.steer")(function* (
     interpretation: proposed.interpretation,
     targets: [{ run: run.id }],
     actions: Arr.map(checked, (entry) => entry.action),
+    // WARNING: a requested action is not the Driver's standing authority, so nothing is pre-allowed.
     allowedNow: [],
     intentVersions: intent === null ? {} : { [run.id]: intent.version },
     by: `evaluator:${callId}`,
@@ -903,6 +921,7 @@ const HERD_LINES = 40;
 const TURNS_IN_CONTEXT = 20;
 const CARDS_IN_CONTEXT = 3;
 
+// WARNING: a steer is a question, never a command: its proposal stays pending even where Collie may correct drift.
 export const herdFacts = Effect.fn("operations.herdFacts")(function* (env: PluginEnv) {
   const runs = yield* listRuns(env);
   const registered = yield* everyRegistered;
@@ -1201,6 +1220,7 @@ const evidencePack = Effect.fn("operations.evidencePack")(function* (
     yield* herdFacts(env),
   ];
 
+  // WARNING: without the conversation, an untargeted question has no memory to resolve a follow-up against.
   const said = yield* tail(journal, TURNS_IN_CONTEXT);
   if (said.length > 0) {
     lines.push(

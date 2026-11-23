@@ -1,3 +1,4 @@
+// WARNING: keyed by branch: git allows one checkout per checked-out branch, so Runs on one branch share one.
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -25,6 +26,7 @@ import { worktreesDirectory } from "./config";
 import { withoutCredentials } from "./automode";
 import type { AgentEntry } from "./registry";
 import type { WorktreeRecord } from "./run";
+// WARNING: type-only: a value import would cycle through the host.
 import type { RunFacts } from "./runs";
 import { slugify } from "./template";
 import { changeBranch } from "./plan";
@@ -34,10 +36,12 @@ import { endAgent, endedLine, runLog } from "./agent-end";
 import { readLaunches } from "./launches";
 import { installDependencies } from "./dependencies";
 
+// WARNING: decided by the Workflow's checkout declaration, never its name: a fork would inherit its parent's directory.
 export function mutates(checkout: CheckoutKind) {
   return checkout !== "none";
 }
 
+// WARNING: a roaming checkout is detached and binds no branch: git allows one checkout per branch.
 export function roams(checkout: CheckoutKind) {
   return checkout === "roaming";
 }
@@ -47,6 +51,7 @@ const ROAMING_DIRS = ["roaming", "roaming-2", "roaming-3"];
 const remoteRepository = (value: string) =>
   /^(?:https?:\/\/|ssh:\/\/|[^@\s]+@)/.test(value) && projectFromRemote(value) !== null;
 
+// WARNING: hashed, not slugged: a clipped slug would make two destinations share one lock.
 export const destinationLock = (stateDir: string, at: string) =>
   `${stateDir}/worktree-${Bun.hash(at).toString(16)}.lock`;
 
@@ -57,6 +62,7 @@ export interface BranchAsk {
   name: string;
   inputs: Record<string, string>;
   strategies?: Record<string, string> | undefined;
+  // WARNING: only a target a human gave names a branch to build: an inferred one is the caller's own checkout.
   sources?: Record<string, string> | undefined;
   explicit?: string | null | undefined;
   taskBranch?: string | null | undefined;
@@ -110,6 +116,7 @@ export interface BranchPlan {
 
 export const BRANCH_INPUT = "branch";
 
+// WARNING: optional, not a new strategy: inference never supplies it, and a Run without it still starts.
 export function branchListed(checkout: CheckoutKind, inputs: Record<string, string>) {
   const returned: Record<string, string> =
     mutates(checkout) && !roams(checkout) ? { ...inputs, [BRANCH_INPUT]: "optional" } : inputs;
@@ -120,6 +127,7 @@ export const TASK_INPUT = "task";
 
 const SLUG_MAX = 40;
 
+// WARNING: a review or named merge request whose branch cannot be established is refused, never given a new branch.
 export const branchFor = Effect.fn("worktree.branchFor")(function* (opts: BranchAsk) {
   const run = opts.run ?? shell;
   const refuse: (why: string) => BranchPlan = (why) => ({
@@ -146,6 +154,7 @@ export const branchFor = Effect.fn("worktree.branchFor")(function* (opts: Branch
   }
   const branch = changeBranch(plan, opts.change);
   if (asked.generated) {
+    // WARNING: validated now: an illegal ref would fail at worktree add, after the Run had started.
     const legal = yield* run("git", ["check-ref-format", `refs/heads/${branch}`], opts.cwd);
     if (legal.code !== 0) return refuse(`${branch} is not a branch name git will accept`);
   }
@@ -164,6 +173,7 @@ export const branchFor = Effect.fn("worktree.branchFor")(function* (opts: Branch
   } satisfies BranchPlan;
 });
 
+// WARNING: never the OS user or the assignee: a wrong login puts a branch under someone else's name.
 const whoami = Effect.fn("worktree.whoami")(function* (
   opts: BranchAsk,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
@@ -219,6 +229,7 @@ const branchName = Effect.fn("worktree.branchName")(function* (
     Option.map(Option.fromNullishOr(opts.explicit), (present__) => Str.trim(present__)),
   );
   if (explicit) return verbatim(explicit, "explicit");
+  // WARNING: reviewed means the branch already holds the work, so it is cut from that work.
   const work = workSourceOf(opts);
   if (work?.kind === "review") {
     const reviewed = yield* reviewedBranch(opts.cwd, diffTargetOf(opts)?.value ?? "", run);
@@ -245,13 +256,17 @@ const branchName = Effect.fn("worktree.branchName")(function* (
     Option.map(Option.fromNullishOr(opts.taskBranch), (present____) => Str.trim(present____)),
   );
   if (taskBranch) return verbatim(taskBranch, "from the task", true);
+  // WARNING: a plan's directory name, never a Run's own plan directory, which always reads plan.
   const ownPlan = work !== null && planRunOf(work.value) !== null;
   if (work?.kind === "plan-dir" && !ownPlan && said(opts, work.name)) {
     return generated(path.basename(work.value), "from plan", work.value);
   }
+  // WARNING: the whole described work, never the 24-character label: a truncated name must not become a branch.
   const described = work !== null && !ownPlan && said(opts, work.name);
+  // WARNING: an issue's URL names the same work as its id; slugging the URL would name the branch after linear.app.
   const issue = work?.kind === "linear" ? linearIssueOf(work.value) : null;
   if (described) return generated(issue ?? work.value, "from the work");
+  // WARNING: a Run naming no work gets no name: two sharing one would share a branch, checkout and stash.
   return generated(opts.name, "from the run name", `${opts.name}\n${work?.value ?? ""}`);
 });
 
@@ -266,6 +281,7 @@ function generated(from: string, source: BranchSource, distinctBy = from) {
   return returned;
 }
 
+// WARNING: a digest of the whole text, since slugs drop letters and the branch keys the worktree.
 function taskSlug(from: string, distinctBy: string) {
   const derived = slugify(from, SLUG_MAX);
   if (letters(from) === letters(derived)) {
@@ -278,6 +294,7 @@ function letters(text: string) {
   return pipe_(Str.toLowerCase(text), Str.replace(/[^\p{L}\p{N}]+/gu, ""));
 }
 
+// WARNING: a reviewed branch is cut from its own remote tip, never the default; refused if neither remote nor local has it.
 const baseFor = Effect.fn("worktree.baseFor")(function* (
   branch: string,
   cwd: string,
@@ -319,12 +336,14 @@ export const defaultStart = Effect.fn("worktree.defaultStart")(function* (
   return tracked ? `origin/${head}` : head;
 });
 
+// WARNING: only these provenances are a human's word; anything inferred describes the surroundings, never the branch.
 const SAID = new Set(["explicit", "typed", "asked"]);
 
 function said(opts: BranchAsk, name: string) {
   return SAID.has(opts.sources?.[name] ?? "");
 }
 
+// WARNING: HEAD and a sha are refs a human may review, but not branches to build.
 function targetBranch(target: string) {
   const head = branchTargetHead(target) ?? "";
   if (head === "" || head === "HEAD" || /^[0-9a-f]{7,40}$/.test(head)) {
@@ -346,6 +365,7 @@ const mrUrlsIn = (text: string) =>
     return ref === null ? [] : [ref];
   });
 
+// WARNING: a bare !42 in prose is not read: #1 and issue numbers make it a guess.
 const mrNamedBy = Effect.fn("worktree.mrNamedBy")(function* (
   text: string,
   cwd: string,
@@ -365,6 +385,7 @@ const reviewedBranch = Effect.fn("worktree.reviewedBranch")(function* (
 ) {
   const mr = parseMrTarget(target);
   if (mr) {
+    // WARNING: a merge request of another project cannot be fixed from this checkout: herdr worktree only makes this repository's.
     const words = mrWords(mr);
     const named = mr.project === null ? `${words.sign}${mr.iid}` : words.label;
     if (mr.project) {
@@ -411,6 +432,7 @@ const reviewedBranch = Effect.fn("worktree.reviewedBranch")(function* (
   return { branch, reviewed: false };
 });
 
+// WARNING: the work's branch is where it was placed or its diff target names, never the caller's HEAD.
 export const workOf = Effect.fn("worktree.workOf")(function* (
   opts: BranchAsk & { readonly branch: string | null },
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
@@ -443,6 +465,7 @@ const isBranch = Effect.fn("worktree.isBranch")(function* (
   return false;
 });
 
+// WARNING: nested, not flattened: feature/foo flattened would collide with a branch named feature-foo.
 const branchPath = (branch: string) => Str.split(branch, "/");
 
 interface Listed {
@@ -483,10 +506,12 @@ const gitWorktrees = Effect.fn("worktree.gitWorktrees")(function* (
         ) ?? null,
     });
   }
+  // WARNING: git lists the main worktree first, the one repository command that survives removing a checkout.
   const repo = checkouts[0]?.path;
   return repo === undefined ? null : { repo, checkouts };
 });
 
+// WARNING: a checkout's basename is its branch or nothing, never the repository's name.
 export const repositoryName = Effect.fn("worktree.repositoryName")(function* (
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
   cwd: string,
@@ -496,6 +521,7 @@ export const repositoryName = Effect.fn("worktree.repositoryName")(function* (
   return listing === null ? null : path.basename(listing.repo);
 });
 
+// WARNING: reuses the checkout a branch already has: git allows one worktree per checked-out branch.
 const gitCheckout = Effect.fn("worktree.gitCheckout")(function* (opts: {
   cwd: string;
   branch: string;
@@ -509,6 +535,7 @@ const gitCheckout = Effect.fn("worktree.gitCheckout")(function* (opts: {
   const { run, branch } = opts;
   const listing = yield* gitWorktrees(run, opts.cwd);
   if (!listing) return { refused: `${opts.cwd} is not a git checkout` };
+  // WARNING: git lists a checkout before it is filled, so even a listed slot waits for the lock.
   const first = path.join(opts.worktrees, path.basename(listing.repo), ...branchPath(branch));
   return yield* withLock(
     destinationLock(opts.stateDir, first),
@@ -526,6 +553,7 @@ const freeSlot = Effect.fn("worktree.freeSlot")(function* (opts: {
 }) {
   const passed: string[] = [];
   for (const slot of [opts.first, `${opts.first}-2`, `${opts.first}-3`]) {
+    // WARNING: git lists a checkout whose directory is gone and refuses to add another there.
     const taken =
       (yield* occupant(slot)) ??
       (Arr.some(opts.listing.checkouts, (checkout) => checkout.path === slot)
@@ -571,6 +599,7 @@ const cutBranchCheckout = Effect.fn("worktree.cutBranchCheckout")(function* (opt
     );
     if (resolved.code !== 0) return { refused: `${base} is not a commit` };
     start = Str.trim(resolved.stdout);
+    // WARNING: git branch, not worktree add -b: -b fails the same whether or not it made the branch.
     const made = yield* run("git", ["branch", branch, start], opts.repo);
     if (made.code !== 0) return { refused: whatItSaid(made) || `git would not make ${branch}` };
     const remoteBase = opts.base;
@@ -579,6 +608,7 @@ const cutBranchCheckout = Effect.fn("worktree.cutBranchCheckout")(function* (opt
   }
   const added = yield* run("git", ["worktree", "add", at, branch], opts.repo);
   if (added.code !== 0) {
+    // WARNING: deleted only while still where it was made, so nobody else's branch goes with it.
     if (!known) yield* run("git", ["update-ref", "-d", `refs/heads/${branch}`, start], opts.repo);
     return { refused: whatItSaid(added) || `git would not add a worktree at ${at}` };
   }
@@ -592,6 +622,7 @@ const newOnOrigin = Effect.fn("worktree.newOnOrigin")(function* (branch: string,
     cwd,
   );
   if (local.code === 0) return null;
+  // WARNING: ls-remote exits 2 for a missing ref; any other failure says nothing.
   const remote = yield* shell(
     "git",
     ["ls-remote", "--exit-code", "--heads", "origin", `refs/heads/${branch}`],
@@ -604,6 +635,7 @@ const newOnOrigin = Effect.fn("worktree.newOnOrigin")(function* (branch: string,
     : null;
 });
 
+// WARNING: git writes the .git file once, at worktree add: its time tells this checkout from a later one at the same path.
 const madeAt = Effect.fn("worktree.madeAt")(function* (worktreePath: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -613,8 +645,10 @@ const madeAt = Effect.fn("worktree.madeAt")(function* (worktreePath: string) {
   return Option.isSome(mtime) ? mtime.value.getTime() : null;
 });
 
+// WARNING: fails closed: an owner that cannot be read is null, never assumed, since unknown and nobody must not decide alike.
 const occupant = Effect.fn("worktree.occupant")(function* (at: string) {
   const fs = yield* FileSystem.FileSystem;
+  // WARNING: a dangling symlink holds the path, though exists follows it and says no.
   const there =
     Option.isSome(yield* fs.readLink(at).pipe(Effect.option)) ||
     (yield* fs.exists(at).pipe(Effect.orElseSucceed(() => true)));
@@ -653,6 +687,7 @@ const wouldLose = Effect.fn("worktree.wouldLose")(function* (
     : { lost: `${count} commit${count === 1 ? "" : "s"} on no branch or remote` };
 });
 
+// WARNING: one roaming checkout per repository: two Runs in one working tree share an index and a stash.
 const roamingCheckout = Effect.fn("worktree.roamingCheckout")(function* (opts: {
   cwd: string;
   worktrees: string;
@@ -670,6 +705,7 @@ const roamingCheckout = Effect.fn("worktree.roamingCheckout")(function* (opts: {
     path.join(opts.worktrees, path.basename(listing.repo), dir),
   );
   const at = slots[0]!;
+  // WARNING: the look and the claim are one step under the lock, or two starts both find the same slot free.
   return yield* withLock(
     destinationLock(opts.stateDir, at),
     Effect.succeed({ refused: `${at} is being claimed by another Run starting now` }),
@@ -725,6 +761,7 @@ const claimRoaming = Effect.fn("worktree.claimRoaming")(function* (opts: {
     seen.push({ at, taken, recorded });
   }
 
+  // WARNING: a checkout's memory of the remote can be a week stale, so fetch before judging the base.
   const fetched = yield* run("git", ["fetch", "--quiet", "origin"], opts.repo);
   if (
     fetched.code !== 0 &&
@@ -734,6 +771,7 @@ const claimRoaming = Effect.fn("worktree.claimRoaming")(function* (opts: {
   }
   const base = yield* defaultStart(opts.repo, run);
 
+  // WARNING: Collie never stashes, commits, resets or deletes a slot.
   const passed: Array<{ at: string; kept: string }> = [];
   for (const { at, taken, recorded } of seen) {
     if (taken === null) {
@@ -750,6 +788,7 @@ const claimRoaming = Effect.fn("worktree.claimRoaming")(function* (opts: {
     else if (taken.owner === null || !listed.has(at)) pass("not one git lists");
     else if (!(yield* isTheOneMade(at, recorded.worktree))) pass("not the checkout that Run made");
     else {
+      // WARNING: the fetch can prune the only ref a commit was on, so check again after it.
       const before = yield* wouldLose(run, at);
       if (before !== null && "unread" in before)
         return { refused: `${at} is ${held}: ${before.unread}` };
@@ -759,6 +798,7 @@ const claimRoaming = Effect.fn("worktree.claimRoaming")(function* (opts: {
       }
       const released = yield* recorded.release;
       if (released !== null) return { refused: `${at} is ${held}: ${released}` };
+      // WARNING: check again once agents are closed: one could have written until then; past release a slot is refused, never passed over.
       const after = yield* wouldLose(run, at);
       if (after !== null) {
         return {
@@ -847,6 +887,7 @@ const withDependencies = Effect.fn("worktree.withDependencies")(function* (check
   };
 });
 
+// WARNING: a mutating Run never falls back to its launch directory: two Runs in one checkout share an index and a stash.
 export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
   herdr: Herdr,
   opts: CheckoutAsk,
@@ -1043,6 +1084,7 @@ const PruneEntry = Schema.Struct({
   checked_at: Schema.Finite,
   line: Schema.String,
   removed: Schema.Boolean,
+  // WARNING: the verdicts file is per installation: each repository's sweep keys its own entries.
   repo: Schema.String,
 });
 const PruneStateJson = Schema.fromJsonString(
@@ -1065,6 +1107,7 @@ export interface Settling {
   readonly protect: ReadonlySet<string>;
 }
 
+// WARNING: keyed by project and branch: a branch name means nothing outside its repository.
 export const onBranch = (project: string, branch: string) => `${project}\n${branch}`;
 
 export const NOTHING_SETTLING: Settling = {
@@ -1098,7 +1141,9 @@ const inUse = Effect.fn("worktree.inUse")(function* (
   if (agents._tag === "Failure") return null;
   const paths = new Map(opts.paths);
   for (const agent of agents.success) {
+    // WARNING: a finished Run's idle agent is what removal ends; counting it as work kept every checkout forever.
     if (opts.leftovers.has(agent.paneId) && agent.status !== "working") continue;
+    // WARNING: an agent cd-ed into a checkout is working in it, so both directories count.
     for (const dir of [agent.cwd, agent.foregroundCwd]) {
       if (dir) paths.set(dir, "an agent is working in it");
     }
@@ -1114,6 +1159,7 @@ const inUse = Effect.fn("worktree.inUse")(function* (
 const inside = (at: string, dir: string | null | undefined) =>
   dir !== null && dir !== undefined && (dir === at || pipe_(dir, Str.startsWith(`${at}/`)));
 
+// WARNING: the only chance to end these agents: once the checkout is removed, no later sweep returns.
 const endLeftovers = Effect.fn("worktree.endLeftovers")(function* (
   herdr: Herdr,
   opts: {
@@ -1209,13 +1255,16 @@ const settled = Effect.fn("worktree.settled")(function* (
   const held = heldBy(opts.use, worktree);
   if (held) return keepIt(held);
 
+  // WARNING: a roaming checkout has no branch to ask about: its work was pushed to the Renovate branches it moved across.
   const settledBy = worktree.branch === "" ? null : yield* landedBy(worktree, landed, opts);
   if (settledBy !== null && settledBy.keep !== undefined) return settledBy;
+  // WARNING: checked last: a checkout is never removed from under its open Task.
   const task = settling.taskHolds.get(worktree.path);
   if (task !== undefined) return keepIt(task);
   return settledBy ?? settledBecause("its Run is over and it holds nothing");
 });
 
+// WARNING: a remote branch that is gone counts as merged or abandoned on purpose.
 const landedBy = Effect.fn("worktree.landedBy")(function* (
   worktree: { path: string; branch: string },
   landed: Landed | undefined,
@@ -1271,6 +1320,7 @@ function commits(result: { stdout: string }) {
   return Arr.filter(Str.split(result.stdout, "\n"), (line) => Str.trim(line) !== "").length;
 }
 
+// WARNING: a squash merge leaves only the merged head to go by; a pruned branch's commits live in the default branch's ref.
 const unpushedWork = Effect.fn("worktree.unpushedWork")(function* (
   worktree: { path: string },
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
@@ -1312,6 +1362,7 @@ function fromRuns(
     const at =
       worktree?.path ??
       Option.getOrUndefined(Arr.findFirst(roaming, (path) => inside(path, run.cwd)));
+    // WARNING: a stopped or failed Run can resume in its checkout until its work lands.
     const landed =
       (run.worktree !== null && settling.landedAt.has(run.worktree.path)) ||
       settling.landedOn.has(onBranch(run.project, run.branch ?? run.worktree?.branch ?? ""));
@@ -1366,6 +1417,7 @@ const prune = Effect.fn("worktree.prune")(function* (
   const run = opts.run ?? shell;
   const now = opts.now ?? (yield* Clock.currentTimeMillis);
   const statePath = path.join(opts.stateDir, PRUNE_FILE);
+  // WARNING: a branch with a slash nests, so the last path part would read feature/foo as foo.
   const nameOf = (worktree: { path: string; branch: string }) =>
     worktree.branch || path.basename(worktree.path);
   const state = yield* fs.readFileString(statePath).pipe(
@@ -1380,6 +1432,7 @@ const prune = Effect.fn("worktree.prune")(function* (
   const { mine, paths, panes, projects } = opts.recorded;
   const settling = opts.settling ?? NOTHING_SETTLING;
   const listing = opts.listing;
+  // WARNING: match made_at too, or a human's checkout later made at the same path reads as Collie's.
   const candidates: Array<Listed & { branch: string }> = [];
   for (const worktree of listing?.worktrees ?? []) {
     if (opts.only !== undefined && worktree.path !== opts.only) continue;
@@ -1387,12 +1440,14 @@ const prune = Effect.fn("worktree.prune")(function* (
     const record = mine.get(worktree.path);
     if (!record || record.made_at === null) continue;
     if (settling.protect.has(worktree.path)) continue;
+    // WARNING: a repository's main checkout is never Collie's, whatever a record says.
     const git = yield* fs.stat(path.join(worktree.path, ".git")).pipe(Effect.option);
     if (Option.isSome(git) && git.value.type === "Directory") continue;
     if ((yield* madeAt(worktree.path)) !== record.made_at) continue;
     candidates.push({ ...worktree, branch });
   }
 
+  // WARNING: repository commands run in the repository's own checkout, never a candidate a removal may delete.
   const repo = listing?.source ?? opts.cwd;
   const round = { state, statePath, before, now, repo };
 
@@ -1410,6 +1465,7 @@ const prune = Effect.fn("worktree.prune")(function* (
   const judged: Judged[] = [];
   if (due.length === 0) return { lines: yield* conclude(round), judged };
 
+  // WARNING: a core that will not answer is no proof nothing is live: judge nothing, write nothing.
   const leftovers = new Set(Arr.flatMap([...panes.values()], (left) => [...left]));
   const use = yield* inUse(opts.herdr, {
     stateDir: opts.stateDir,
@@ -1439,6 +1495,7 @@ const prune = Effect.fn("worktree.prune")(function* (
       judged.push({ path: worktree.path, why: verdict.why, removed: false });
       continue;
     }
+    // WARNING: the branch is deleted with -d, which git refuses if unmerged: that refusal is the guard.
     const outcome =
       verdict.keep === undefined
         ? yield* removeWorktree(opts.herdr, worktree, {
@@ -1519,6 +1576,7 @@ const removeWorktree = Effect.fn("worktree.removeWorktree")(function* (
     line: `kept ${opts.name} · ${why}`,
     removed: false,
   });
+  // WARNING: never --force: git's own refusal to drop a dirty or unmerged checkout is the guard.
   const dropped = yield* opts.run("git", ["worktree", "remove", worktree.path], opts.repo);
   if (dropped.code !== 0) return kept(whatItSaid(dropped) || "git would not remove it");
 
@@ -1531,6 +1589,7 @@ const removeWorktree = Effect.fn("worktree.removeWorktree")(function* (
     registered: opts.registered,
   });
 
+  // WARNING: the checkout is gone, so this is a removal even if its branch stays; a kept entry would be forgotten.
   const deleted =
     worktree.branch === ""
       ? { code: 0, stdout: "" }
@@ -1543,6 +1602,7 @@ const removeWorktree = Effect.fn("worktree.removeWorktree")(function* (
   return { line: `♻ removed ${opts.name} · ${why}${agents}`, removed: true } satisfies Removal;
 });
 
+// WARNING: one pruner at a time: two would decide separately and could remove one checkout twice.
 export const pruneWorktrees = (opts: PruneOptions) =>
   judgeWorktrees(opts).pipe(Effect.map((round) => round.lines));
 
@@ -1572,6 +1632,7 @@ export const reportedWorktrees = Effect.fn("worktree.reportedWorktrees")(functio
   return reported(state, yield* Clock.currentTimeMillis);
 });
 
+// WARNING: each repository is asked from its own checkout: the Home is no repository and lists nothing.
 const sweep = Effect.fn("worktree.sweep")(function* (opts: PruneOptions) {
   const fs = yield* FileSystem.FileSystem;
   const checking = new Set(Arr.map(yield* runningChecks, (record) => record.run));
@@ -1601,6 +1662,7 @@ const sweep = Effect.fn("worktree.sweep")(function* (opts: PruneOptions) {
   return { lines, judged, busy: false };
 });
 
+// WARNING: pinned to the forge's merge request ref, not a sha: a fork's head is not on origin.
 export const pinnedCheckout = Effect.fn("worktree.pinnedCheckout")(function* (opts: {
   readonly repo: string;
   readonly worktrees: string;

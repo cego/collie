@@ -94,6 +94,7 @@ const Offloaded = Schema.Struct({
   url: Schema.String,
 });
 
+// WARNING: absent rather than empty, exactly as a front door passes them.
 const launch = (options: Record<string, string>) =>
   Rec.fromEntries(Arr.filter(Rec.toEntries(options), ([, value]) => value !== ""));
 
@@ -108,6 +109,7 @@ const REFINE = "Refine";
 const FINISH = "Finish planning";
 const CHOICES = [IMPLEMENT, ARCHITECTURE, OPINION, OFFLOAD, REFINE, FINISH];
 
+// WARNING: the menu's bound is what stops a plan nobody is finishing from asking forever.
 const ROUNDS = 6;
 
 const OPINIONS = 2;

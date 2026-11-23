@@ -58,6 +58,7 @@ export const probeGitlab = Effect.fn("Connections.probeGitlab")(function* <R>(
   } satisfies Probe;
 });
 
+// WARNING: read the status whatever its exit code; one host with a bad token fails it for all.
 export const glabHosts = (status: string) =>
   Arr.map(
     Arr.filter(Str.split(status, "\n"), (line) => /^[a-z0-9.-]+(:\d+)?$/i.test(line)),
@@ -91,6 +92,7 @@ const tokenExpiry = Effect.fn("Doctor.tokenExpiry")(function* (
   return passed(`${host}: the token expires on ${expires}`);
 });
 
+// WARNING: a forwarded SSH agent goes when the computer it came from sleeps.
 const FORWARDED_AGENT = /^\/tmp\/ssh-[^/]+\/agent\.\d+$/;
 
 export const pushCheck = Effect.fn("Doctor.pushCheck")(function* (

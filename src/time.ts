@@ -31,6 +31,7 @@ const UNITS = [
   { unit: "minute", short: "m", size: 60 },
 ] as const;
 
+// WARNING: a negative span is 0s: the two ends come from different clocks.
 export function took(ms: number) {
   const seconds = Math.max(0, Math.floor(ms / 1000));
   if (seconds < 60) return `${seconds}s`;

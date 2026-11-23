@@ -15,6 +15,7 @@ export type FlockSetting = typeof FlockSetting.Type;
 
 export const FlockSettings = Schema.Struct({
   settings: Schema.Record(Schema.String, FlockSetting),
+  // WARNING: only a first sync says where a value came from.
   synced: Schema.Array(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
 });
 export type FlockSettings = typeof FlockSettings.Type;
@@ -27,8 +28,10 @@ const valueOf = (value: Schema.Json | null) =>
 const same = (a: Schema.Json | null, b: Schema.Json | null) =>
   settingText(valueOf(a)) === settingText(valueOf(b));
 
+// WARNING: never taken from a Machine; its token is made for Desktop.
 const GIVEN_ONLY = "gitlab_host";
 
+// WARNING: a tie keeps the held value, and a removal counts as an edit.
 export const latestEdits = <
   Held extends { readonly at: string },
   Has extends { readonly at: string },

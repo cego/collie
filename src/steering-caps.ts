@@ -1,3 +1,4 @@
+// WARNING: capabilities move to proven only from a live test record, never from --help text.
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import { Data, Effect } from "effect";
@@ -22,6 +23,7 @@ export const CAPABILITIES = {
       interrupt_key: ["Escape"],
     },
     ack: { status: "proven", version_floor: "2.1.263", tested_at: "2026-09-11" },
+    // WARNING: unproven until a probe passes on a release that records injected turns as harness, not external.
     attribution: { status: "unproven", version_floor: "2.1.263", tested_at: null },
   },
   codex: {
@@ -33,6 +35,7 @@ export const CAPABILITIES = {
       interrupt_key: ["Escape"],
     },
     ack: { status: "unproven", version_floor: "0.153.4", tested_at: null },
+    // WARNING: no hook surface Collie can install: an external prompt is invisible to it.
     attribution: { status: "unproven", version_floor: "0.153.4", tested_at: null },
   },
   opencode: {
@@ -48,6 +51,7 @@ export const CAPABILITIES = {
   },
   pi: {
     now: { status: "unproven", version_floor: "0.85.1", tested_at: null },
+    // WARNING: Escape ends pi's turn, but now stays unproven: a prompt typed mid-turn waits in its editor.
     interrupt: {
       status: "proven",
       version_floor: "0.85.1",
@@ -82,6 +86,7 @@ export class CapabilityUnproven extends Data.TaggedError("CapabilityUnproven")<{
   reason: string;
 }> {}
 
+// WARNING: fails closed: an unknown harness, untested capability or older install is refused.
 export const gate = Effect.fn("SteeringCaps.gate")(function* (
   harness: string,
   mode: "boundary" | "now" | "interrupt",

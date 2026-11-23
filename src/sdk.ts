@@ -1,3 +1,4 @@
+// WARNING: metadata is data, never control flow; a conflict is refused at load, before any Run starts.
 import * as Struct from "effect/Struct";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
@@ -330,6 +331,7 @@ const declares = (fields: Schema.Struct.Fields, [head = "", ...rest]: ReadonlyAr
   if (field === undefined) return false;
   if (rest.length === 0) return true;
   if (isStruct(field)) return declares(field.fields, rest);
+  // WARNING: a record's keys are its values', and nothing here can know them ahead.
   return Predicate.hasProperty(field, "key") && Predicate.hasProperty(field, "value");
 };
 
@@ -719,6 +721,7 @@ const Holding = Schema.Union([
   Schema.Struct({ unresolved: Schema.String }),
 ]);
 
+// WARNING: null is read as unsettled, so a replay asks rather than goes on.
 const SingleClaim = Schema.NullOr(Schema.Struct({ slug: Schema.String })).pipe(
   Schema.decodeTo(Holding, {
     decode: SchemaGetter.transform((one) =>
@@ -836,6 +839,7 @@ export interface HostApi {
     failed: string,
     target: string,
   ) => Effect.Effect<string | null>;
+  // WARNING: held and stopRequested are plain Effects, not Activities: an Activity would replay the first attempt answer.
   readonly held: (runId: string) => Effect.Effect<boolean>;
   readonly stopRequested: (runId: string) => Effect.Effect<boolean>;
   readonly record: (runId: string, event: string) => Effect.Effect<void>;
@@ -2326,12 +2330,14 @@ export function jsonSchemaFor(schema: Schema.Constraint) {
       withPatterns(SchemaRepresentation.toRepresentation(Schema.toCodecJson(schema).ast)),
     );
     const document = asJson({ ...drawn.schema, $defs: drawn.definitions });
+    // WARNING: scanned without $defs, a container of schemas: empty there means no definitions were needed.
     return { document, limits: unconstrained(asJson({ ...drawn.schema }), "") };
   } catch (cause) {
     return { document: null, limits: [String(cause)] };
   }
 }
 
+// WARNING: Effect draws a pattern only for a RegExp with the u flag, which a JSON Schema pattern implies.
 function withPatterns<T>(node: T) {
   if (isList(node)) {
     // WARNING: the same list, each element copied with its own type.

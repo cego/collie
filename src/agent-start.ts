@@ -1,3 +1,4 @@
+// WARNING: nothing is inferred or routed; a gap is refused with what would fill it.
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -16,6 +17,7 @@ import { RESERVED_INPUTS } from "./sdk";
 import { strategyMeaning } from "./strategies";
 import { repositoryName } from "./worktree";
 
+// WARNING: a module may not declare these names (checkEntry refuses them), so a host option is never an input.
 export function hostOptions(given: Given) {
   return {
     input: {
@@ -34,6 +36,7 @@ export function hostOptions(given: Given) {
 
 const isOption = (name: string) => name in RESERVED_INPUTS;
 
+// WARNING: a host option that arrived as typed JSON is written back as it came.
 export const asOptionText = (value: Schema.Json) => (isText(value) ? value : asJsonText(value));
 const isText = Schema.is(Schema.String);
 const asJsonText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);

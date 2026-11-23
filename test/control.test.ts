@@ -37,6 +37,7 @@ test("one answer settles the question a run is asking, and the next one is refus
       });
       expect(first.ok).toBe(true);
 
+      // WARNING: A second answer is not a correction: the run already acts on the first, and changing it would change started work.
       const again = yield* host.ask({
         op: "answer",
         id: "proof",
@@ -281,6 +282,7 @@ test("a hold holds the run it names and nothing beside it, and survives the host
       );
       yield* first.stop;
 
+      // WARNING: A control is durable state about the run, not something the process that took it remembers.
       const second = yield* openHost(state);
       yield* second.ask({ op: "start", id: "proof", runId: "r1", input: { note: "held" } });
       expect((yield* second.ask({ op: "poll", id: "proof", runId: "r1" })).status).toBe(

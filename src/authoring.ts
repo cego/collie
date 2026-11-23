@@ -1,3 +1,4 @@
+// WARNING: nothing here runs a workflow body, takes an agent or opens a worktree; constructing a module runs only its top level and make.
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -257,6 +258,7 @@ const write = Effect.fn("Authoring.write")(function* (dir: string, id: string, t
       toolchain: null,
     };
   }
+  // WARNING: after the entry and never fatal: the toolchain serves typechecking only; the module runs with `collie` resolved from the executable.
   const provisioned = yield* provisionToolchain(dir).pipe(Effect.result);
   return {
     ok: true,

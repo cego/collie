@@ -55,6 +55,7 @@ export function reachOf(inputs: ReadonlyArray<Declared>) {
   return choices.length === 0 ? null : { name: field.name, choices };
 }
 
+// WARNING: dots are escaped, since a setting key splits on them.
 const segment = (project: string) => pipe(encodeURIComponent(project), Str.replaceAll(".", "%2E"));
 
 export const reachKey = (workflow: string, project: string) =>

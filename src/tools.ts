@@ -1,3 +1,4 @@
+// WARNING: the bridge's actor is stamped here, not worked out from the process: a model in a pane inherits its terminal and would read as a human.
 import * as Rec from "effect/Record";
 import { withArtefacts } from "./artefact-client";
 import * as Arr from "effect/Array";
@@ -102,6 +103,7 @@ import {
   type ToolName,
 } from "./toolkit";
 
+// WARNING: a tool call cannot fail into the conversation: an unreadable record is an answer the model can act on.
 type ToolAnswer = Effect.Effect<
   string,
   never,
@@ -433,6 +435,7 @@ const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: J
           Effect.map((results) => results[0]!),
         );
     said.push(`${done.kind}: ${done.state}${done.note ? ` — ${done.note}` : ""}`);
+    // WARNING: what follows a failure was asked on the assumption it did not happen.
     if (done.state === "failed") break;
   }
   return Arr.join(said, "\n");
@@ -772,6 +775,7 @@ const hold = Effect.fn("Tools.hold")(function* (env: PluginEnv, input: typeof Ho
   const why = reason ?? "asked in chat";
   const requestId = yield* (yield* SecureRandom.SecureRandom).uuidV4();
 
+  // WARNING: one channel for every control, so chat can do to a Run only what the board and CLI can.
   const oneRun: Action = { kind: "hold", run: run!, reason: why };
   const held = yield* actAsked(env, {
     door: yield* toolDoor(env),
@@ -890,6 +894,7 @@ const receiptFacts = Effect.fn("Tools.receipts")(function* (env: PluginEnv, run:
   const now = yield* Clock.currentTimeMillis;
   const proposals = pendingFor(yield* hostRunProposals(env, run), run, now);
   const asked = yield* asks(env, (client) => client.deliveries({ runId: run }));
+  // WARNING: every delivery is on the ledger before it is sent, so no steer sits unrecorded.
   const deliveries = asked.ok ? (asked.value ?? []) : [];
   const unread = asked.ok ? [] : [`- the ledger could not be read: ${asked.error.message}`];
   const waiting = [
@@ -1017,6 +1022,7 @@ const shortened = (text: string, most: number) => {
 const installationFacts = Effect.fn("Tools.installation")(function* (env: PluginEnv) {
   const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   const health = yield* doctor(env).pipe(Effect.orElseSucceed(() => null));
+  // WARNING: per directory, since a new Run begins with the file under the directory it was started in.
   const tasks = yield* hostTasks(env).pipe(Effect.orElseSucceed(() => []));
   const dirs = Arr.dedupe(Arr.map(Arr.filter(tasks, isOpen), (task) => task.cwd));
   const defaults = yield* Effect.forEach(dirs, (cwd) =>
@@ -1029,6 +1035,7 @@ const installationFacts = Effect.fn("Tools.installation")(function* (env: Plugin
   );
   const harness = yield* chatHarnessOf(env.userDir);
   const chat = key === null ? null : yield* readChat(yield* chatPath(env.stateDir, key));
+  // WARNING: only where a host has served this directory: reading is no reason to start one.
   const served = yield* anyRuns(env);
   const sweepable = served ? yield* cleanupListing(env, "chat") : null;
   const scheduled = served ? yield* scheduleListing(env, "chat") : null;

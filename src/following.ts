@@ -13,6 +13,7 @@ import { isSetAside, isUnanswered } from "./store";
 export const UNTILS = ["terminal", "attention", "ready", "needs-human"] as const;
 export type Until = (typeof UNTILS)[number];
 
+// WARNING: a superseded question keeps the workflow suspended while its agent works on the message.
 export const atAttention: (view: RunView) => boolean = (view) =>
   view.parked !== null ||
   (view.status.status === "suspended" &&

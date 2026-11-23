@@ -1,3 +1,4 @@
+// WARNING: Every reply is checked against the pinned hc.openrpc.json first, so a reply the real core could not send fails the call that caused it.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -33,7 +34,9 @@ export interface FakeHc {
   readonly print: (name: string, text: string) => Effect.Effect<void>;
   readonly exit: (name: string, code: number) => Effect.Effect<void>;
   readonly lose: Effect.Effect<void>;
+  // WARNING: Core reports a program missing from its own PATH as spawn_failed, and the terminal it made for it as removed.
   readonly startable: (program: string, can: boolean) => void;
+  // WARNING: Core's own PATH is bare, so it finds a program only on the PATH the launch passes in its env.
   readonly barePath: () => void;
   readonly cd: (name: string, dir: string) => void;
   readonly roster: (
@@ -49,6 +52,7 @@ interface Added {
   why: string | null;
 }
 
+// WARNING: How far core streams ahead of a viewer's CREDIT, as hc 0.1.14 does.
 export const CORE_WINDOW = 256 * 1024;
 const CHUNK = 16 * 1024;
 

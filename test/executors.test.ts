@@ -1,3 +1,4 @@
+// WARNING: A written defaults file counts only where a Run started in that workspace reads it; applied is not proof a Run will read it.
 import * as Option from "effect/Option";
 import { pipe as pipe_ } from "effect/Function";
 import * as Str from "effect/String";
@@ -59,6 +60,7 @@ afterEach(() =>
   ),
 );
 
+// WARNING: The registry is the process's: left registered, the next file's confirmations run against executors closing over a deleted temp directory.
 afterAll(() => {
   resetExecutors();
 });
@@ -110,6 +112,7 @@ test("a removal names the constraint's id, and prose removes nothing and says so
       });
       const id = (yield* readDefaults(yield* defaultsOfW1()))!.constraints[0]!.id;
 
+      // WARNING: Ids are a hash of the text, so the words never match one; reporting that as applied would claim a constraint was dropped that is still there.
       const byProse = yield* carry({
         kind: "update_defaults",
         change: "remove-constraint",

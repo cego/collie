@@ -40,6 +40,7 @@ test("a host reads its shared definitions with their edit times, and takes only 
           yield* put(`workflows/${toolchain}`, "this Machine's own\n", 5);
         yield* put("workflows/node_modules/effect/package.json", "{}\n", 5);
         yield* put("workflows/nested/deeper.ts", "not shared\n", 5);
+        // WARNING: no editor leftovers or links, which would reach outside the Layer.
         yield* put("workflows/.mine.workflow.ts.swp", "vim's\n", 5);
         yield* put("workflows/mine.md~", "a backup\n", 5);
         yield* put("outside.txt", "not the Layer's\n", 5);

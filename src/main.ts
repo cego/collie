@@ -1,8 +1,10 @@
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import { Config, Console, Effect } from "effect";
 
+// WARNING: Bun.argv, not Stdio's args: this choice is made before any Effect runs.
 const args = Bun.argv.slice(2);
 
+// WARNING: Runs inside a harness on every prompt: failing to find a session must not break its status line.
 const compactionProgram = Effect.gen(function* () {
   const dir = args[2] ?? "";
   const [stdin, { recordClaudeEvent }] = yield* Effect.promise(() =>
@@ -24,19 +26,23 @@ const started = Config.String("COLLIE_TEST_STARTS").pipe(
   Effect.ignore,
 );
 
+// WARNING: Run `program`, not `app`: only its handler turns a parse failure into exit 2.
 const cliProgram = Effect.promise(() => import("./collie")).pipe(
   Effect.flatMap(({ program }) => program),
 );
 
 const chosen = args[0] === "herdr" && args[1] === "compaction" ? compactionProgram : cliProgram;
 
+// WARNING: Written out here so this file loads no Collie module.
 if (args[0] === "supervise-check") {
+  // WARNING: A check's supervisor outlives its reader, so a closed pipe must not end it.
   const [{ supervise }, { platformLayer }] = await Promise.all([
     import("./check-supervisor"),
     import("./platform"),
   ]);
   await Effect.runPromise(supervise(args.slice(1)).pipe(Effect.provide(platformLayer)));
 } else {
+  // WARNING: After the peer closes, writes must error rather than wait on a drain that never comes.
   for (const stream of [process.stdout, process.stderr]) {
     stream.on("error", (error: NodeJS.ErrnoException) => {
       if (error.code === "EPIPE") process.exit(1);

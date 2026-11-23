@@ -1,3 +1,4 @@
+// WARNING: Electrobun's self-extractor cannot read GNU long-name tar entries, so a path over 100 characters never ships.
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
@@ -5,6 +6,7 @@ import { Effect, FileSystem } from "effect";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 
+// WARNING: Owner and group zeroed: a large UID does not fit a USTAR header.
 const flavour = (format: string) =>
   exec(["tar", "--version"]).pipe(
     Effect.map((done) =>

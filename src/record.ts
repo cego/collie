@@ -181,6 +181,7 @@ export const recordFrames = (
       const diffAt = (run: RunFacts) =>
         Effect.gen(function* () {
           const at = `${yield* model.checkout(run)}\0${run.state}\0${run.branch}\0${run.cwd}`;
+          // WARNING: a going Run's diff includes uncommitted edits no git directory records, so it is read each time.
           if (kept?.at !== at || kept.diff?.live !== false)
             kept = {
               at,
@@ -193,6 +194,7 @@ export const recordFrames = (
       const context = yield* Effect.context<
         Path.Path | ChildProcessSpawner.ChildProcessSpawner | Launches | RunRecords
       >();
+      // WARNING: a failing part ends the stream, as a failed whole record always has.
       const part = <E>(name: RecordPart, value: Effect.Effect<Partial<RunDetail>, E, Needs>) => ({
         name,
         value: value.pipe(
@@ -267,6 +269,7 @@ export const recordFrames = (
         return true;
       };
 
+      // WARNING: heard before the first read, so a write during it is sent after it.
       const heard = yield* Queue.sliding<void>(1);
       yield* changes.pipe(
         Stream.runForEach(() => Queue.offer(heard, undefined)),

@@ -154,6 +154,7 @@ test("an unpadded blocker still names the ticket it obviously means", () => {
 });
 
 test("only a word that is nothing but a number is a ticket number", () => {
+  // WARNING: the number 2 in a plan means 02-web.md; dropping that edge would start both repositories in one wave.
   const plan = readPlanRepos(
     [
       ticket("01-contract", { repo: "cego/api" }),
@@ -203,6 +204,7 @@ test("a blocker that names no ticket of this plan is refused, not dropped", () =
 });
 
 test("two tickets numbered the same are refused, naming both", () => {
+  // WARNING: two tickets wearing one number cannot say which an edge points at, so a duplicate is refused.
   const plan = readPlanRepos(
     [
       ticket("01-api", { repo: "cego/api" }),
@@ -323,6 +325,7 @@ test("only this repository's tickets are sliced, and every ticket is returned ex
     "01-api.md",
     "03-more.md",
   ]);
+  // WARNING: an edge onto a ticket outside this slice's repo does not hold it back; that ordering is the fan-out's.
   expect(Arr.map(orderedTickets(tickets, "cego/web"), (s) => s.file)).toEqual(["02-web.md"]);
   expect(Arr.map(orderedTickets(tickets), (s) => s.file)).toHaveLength(3);
 });

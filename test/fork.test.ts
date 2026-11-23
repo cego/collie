@@ -80,6 +80,7 @@ test("a full copy is the whole file, and records what it copied", () =>
       expect(result.message).toContain("no longer follows the original");
       const text = yield* readText(result.path);
       const hash = yield* contentHash(before);
+      // WARNING: Quoted where the hash is all digits, which YAML would decode as a number and parseWorkflow drops.
       expect(text).toMatch(new RegExp(`^forked_from_hash: "?${hash}"?$`, "m"));
       expect(
         (yield* loadDefinitions(yield* layers(env))).personas.get("reviewer")!.forkedFromHash,

@@ -1,3 +1,4 @@
+// WARNING: refuses a key Collie does not check with, so a release fails here rather than at every install.
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";

@@ -23,6 +23,7 @@ const MemoryWaitJson = Schema.fromJsonString(
     what: Schema.String,
     sentence: Schema.String,
     since: Schema.Finite,
+    // WARNING: An older read means the waiting host is dead.
     read: Schema.Finite,
     every: Schema.Finite,
     asker: Schema.NullOr(Schema.String),

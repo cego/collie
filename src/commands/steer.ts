@@ -69,6 +69,7 @@ const hashOf = Effect.fn("Steer.hashOf")(function* (env: PluginEnv, id: string) 
   return (found.ok ? found.value?.content_hash : undefined) ?? "";
 });
 
+// WARNING: each action is admitted again before it runs; the first failure stops the rest.
 export const confirm = Command.make(
   "confirm",
   { proposalId: proposalIdArg, hash: hashFlag, requestId: requestIdFlag },
@@ -101,6 +102,7 @@ export const decline = Command.make(
     ),
 ).pipe(Command.withDescription("Say no to a proposal, so it stops being pending"));
 
+// WARNING: Collie never decides an unknown delivery's fate; only a human settles it.
 export const runDeliveries = Command.make(
   "deliveries",
   {

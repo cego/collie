@@ -25,6 +25,7 @@ export interface StagedPart {
 
 const storeOf = (dir: string) => `${dir}/attachments`;
 
+// WARNING: a name stays one directory entry and one line of a listing.
 const plainName = (name: string) =>
   // oxlint-disable-next-line no-control-regex -- File names must reject ASCII control bytes and DEL.
   !["", ".", "..", ".scaled"].includes(name) && !/[/\\\u0000-\u001f\u007f]/.test(name);

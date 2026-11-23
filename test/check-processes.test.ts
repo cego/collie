@@ -369,6 +369,7 @@ const withoutProc = Effect.gen(function* () {
     readFileString: (path, encoding) =>
       hidden(path) ? fs.readFileString("/nonexistent/proc") : fs.readFileString(path, encoding),
   };
+  // WARNING: procps spells macOS's -E as e.
   const macPs = ChildProcessSpawner.make((command) =>
     command._tag === "StandardCommand" && command.command === "ps" && command.args.includes("-E")
       ? spawner.spawn(
@@ -1205,6 +1206,7 @@ test.skipIf(process.platform !== "linux")(
 
         refusing = true;
         expect(yield* checks.endAll).toHaveLength(3);
+        // WARNING: Time passes only by its sleeps, so a slow /proc look under load counts for nothing.
         const clock = yield* TestClock.make();
         const slept: Clock.Clock = { ...clock, sleep: (duration) => clock.adjust(duration) };
         const began = clock.currentTimeMillisUnsafe();

@@ -20,6 +20,7 @@ const printed = Effect.gen(function* () {
   const written: string[] = [];
   const write = process.stdout.write.bind(process.stdout);
   // WARNING: the board writes one string and reads nothing back, so the overload that takes an encoding or a callback is never the one reached here.
+  // WARNING: the board writes one string and reads nothing back, so the encoding and callback overload is never reached.
   process.stdout.write = ((chunk: string) => {
     written.push(String(chunk));
     return true;
@@ -123,6 +124,7 @@ test("the Home draws the host's board and follows it as it changes", () =>
             );
             const before = yield* app.load(focus());
             expect(Arr.map(before.tasks, (task) => task.name)).toEqual(["Hi"]);
+            // WARNING: reading a subscription's latest value does not drive it; each next read waits for the host follower to say something changed.
             const changed = Effect.gen(function* () {
               yield* Queue.take(changes);
               return yield* app.load(focus());
@@ -148,6 +150,7 @@ test("the Home draws the host's board and follows it as it changes", () =>
             expect(after.tasks[0]?.disposition).toBe("merged");
             expect(notifications).toBeGreaterThan(beforeChange);
 
+            // WARNING: a host gone away is said, and the cards it last sent are not passed off as live.
             const beforeDisconnect = notifications;
             yield* stopHost(world.state);
             const away = yield* changed.pipe(

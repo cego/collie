@@ -266,6 +266,7 @@ export const sweep = <E = never, R = never>(
     }),
   );
 
+// WARNING: once begun a sweep finishes and records its report even if its caller goes away.
 export const sweepAsked = <E, R>(
   trail: string,
   line: Omit<Parameters<typeof once>[1], "result">,
@@ -363,6 +364,7 @@ export const settlingOf = (opts: {
             runs: opts.runs,
             tasks: opts.tasks,
             includeHistory: true,
+            // WARNING: settlement needs work facts, not offers from this host's own socket.
             offers: () => Effect.succeed([]),
           });
     const viewOf = new Map(Arr.map([...views, ...(opts.views ?? [])], (view) => [view.id, view]));
@@ -382,6 +384,7 @@ export const settlingOf = (opts: {
           Option.getOrUndefined,
         );
       const item = Option.getOrUndefined(Arr.findFirst(view?.mrs ?? [], (one) => one.id === id));
+      // WARNING: a Task keeps what it still owes, whatever its Run's line says.
       const owed = opts.views === null || (view !== undefined && !view.landed);
       const openLabel = state === "open" && branch !== "" ? label : null;
       if (owed) {
@@ -391,6 +394,7 @@ export const settlingOf = (opts: {
         continue;
       }
       const head = id === null ? null : (forge.get(id)?.head ?? null);
+      // WARNING: only a merge's head is on the remote; a closed merge request's head never landed.
       const heads =
         head !== null && state !== undefined && state !== "open" && state !== "closed"
           ? [head]
@@ -440,6 +444,7 @@ export const worktreesSweeper: (opts: {
   runs: ReadonlyArray<RunFacts>;
   registered: ReadonlyArray<AgentEntry>;
   cwd: string;
+  // WARNING: read when judging, so a Task closed earlier in the same sweep counts as closed.
   settling?: Effect.Effect<Settling, never, PlatformServices | Records>;
 }) => Sweeper = (opts) => {
   const kind = "worktree";
@@ -524,6 +529,7 @@ export const stateSweeper: (stateDir: string, rows: ReadonlySet<string>) => Swee
   rows,
 ) => {
   const kind = "state";
+  // WARNING: a child Run's files belong to its root Run.
   const owned = (run: string) => rows.has(run) || rows.has(Str.split(run, ".")[0] ?? run);
   const quiet = (target: string, why: string) =>
     Effect.map(changedToday(target), (changed) =>
@@ -577,6 +583,7 @@ export const stateSweeper: (stateDir: string, rows: ReadonlySet<string>) => Swee
             return returned;
           }),
         );
+        // WARNING: imported into host.db; a later release deletes it, not this sweep.
         if (inside.includes(LEDGER_FILE)) return null;
       }
       return yield* quiet(target, rowless);
@@ -617,6 +624,7 @@ export const stateSweeper: (stateDir: string, rows: ReadonlySet<string>) => Swee
   };
 };
 
+// WARNING: an upload not asked for in a week; a Run given one holds its own copy.
 export const uploadsSweeper: (stateDir: string) => Sweeper = (stateDir) => {
   const kind = "upload";
   const root = uploadsDir(stateDir);
@@ -662,6 +670,7 @@ const removeIf = (
     return gone._tag === "Success" ? { freed: bytes } : { kept: String(gone.failure) };
   });
 
+// WARNING: nothing is judged where core will not list its agents.
 export const compactionSweeper: (
   stateDir: string,
   sessions: ReadonlyArray<Herdr>,
@@ -786,6 +795,7 @@ const SECTION_SAID: Record<Section, string> = {
   finished: "Finished",
 };
 
+// WARNING: a host restart only delays a close; the first-seen times are kept across sweeps, not persisted.
 export const tasksSweeper: (opts: {
   tasks: ReadonlyArray<TaskRecord>;
   views: ReadonlyArray<TaskView>;
@@ -888,6 +898,7 @@ export const idleAgentsSweeper: (opts: {
   idleCloseMs: number;
   ports?: CompactionPorts;
   stopMs?: number;
+  // WARNING: core cannot yet prove no one is viewing; by default every agent is kept.
   unattended?: (at: AgentInfo) => Effect.Effect<boolean>;
 }) => Sweeper = (opts) => {
   const kind = "idle-agent";
@@ -942,6 +953,7 @@ export const idleAgentsSweeper: (opts: {
     return found;
   });
 
+  // WARNING: a Run that resumed and ended again between sweeps counts from its latest end.
   const lastFinished = (run: RunFacts, now: number) =>
     Effect.gen(function* () {
       const card = yield* finishedOnRecord(run.dir).pipe(Effect.orElseSucceed(() => null));
@@ -1173,6 +1185,7 @@ export const measurementTreesSweeper: (
       const sizes = yield* sizesOf(Arr.map(remove, (item) => item.target));
       return { remove: Arr.map(remove, (item, at) => ({ ...item, bytes: sizes[at] ?? 0 })), keep };
     }),
+    // WARNING: a Measurement holds the lock from before its tree is made until it ends.
     remove: (item) =>
       withLock(
         lock,
@@ -1281,6 +1294,7 @@ export interface RetentionFacts {
   readonly runs: ReadonlyArray<RunFacts>;
 }
 
+// WARNING: rows go first; files left by a failure in between are the state sweeper's no-row rule's job.
 export const retentionSweeper: (opts: {
   stateDir: string;
   sessions: ReadonlyArray<Herdr>;
@@ -1310,6 +1324,7 @@ export const retentionSweeper: (opts: {
             newest = Math.max(newest, Option.getOrNull(info.value.mtime)?.getTime() ?? 0);
         }
       }
+      // WARNING: no time to go by counts as just ended, so nothing is forgotten on a guess.
       return newest === 0 ? yield* Clock.currentTimeMillis : newest;
     });
 
@@ -1456,6 +1471,7 @@ const DesktopInstalled = Schema.fromJsonString(
   Schema.Struct({ version: Schema.String, hash: Schema.optionalKey(Schema.String) }),
 );
 
+// WARNING: a tar is kept wherever the running bundle is not known.
 export const desktopSweeper: (root: string, state: string, installedPath: string) => Sweeper = (
   root,
   state,

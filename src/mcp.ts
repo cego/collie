@@ -26,6 +26,7 @@ import { isJsonObject, type JsonObject } from "./schema";
 import { callTool, SUBMIT, TOOLS } from "./tools";
 import { ROLE_TOOLS } from "./toolkit";
 
+// WARNING: Nothing may write stdout but the protocol: a stray line is a framing error.
 export const serveMcp = Effect.fn("Mcp.serve")(
   function* () {
     const env = yield* currentEnv;
@@ -42,6 +43,7 @@ export const serveMcp = Effect.fn("Mcp.serve")(
     const unlisted = yield* Layer.build(
       McpServer.visibility(({ method }) => Effect.succeed(method !== "tools/list")).layer,
     );
+    // WARNING: Not McpServer.toolkit: it answers in JSON and protocol errors, not sentences.
     const submits = env.raw.COLLIE_OUTPUT_SUBMIT === "tool";
     for (const tool of submits ? [...TOOLS, SUBMIT] : TOOLS) {
       const listed =
@@ -51,6 +53,7 @@ export const serveMcp = Effect.fn("Mcp.serve")(
         title: tool.title,
         description: tool.description,
         inputSchema: tool.input,
+        // WARNING: A tool that settles news or carries out an instruction must not claim readOnlyHint.
         annotations: { readOnlyHint: tool.readOnly },
       });
       yield* server.addTool({
@@ -81,6 +84,7 @@ export const serveMcp = Effect.fn("Mcp.serve")(
     }),
   ),
   Effect.provideService(Logger.LogToStderr, true),
+  // WARNING: Native stdio interrupts its owner at EOF: end cleanly, not as exit 130.
   Effect.forkScoped,
   Effect.flatMap(Fiber.await),
   Effect.flatMap((exit) =>
@@ -89,6 +93,7 @@ export const serveMcp = Effect.fn("Mcp.serve")(
   Effect.scoped,
 );
 
+// WARNING: After an upgrade the binary on disk answers; tool names stay this build's until reconnect.
 export const answering = Effect.fn("Mcp.answering")(function* <R>(opts: {
   readonly binary: string;
   readonly every?: Duration.Input;
@@ -104,6 +109,7 @@ export const answering = Effect.fn("Mcp.answering")(function* <R>(opts: {
       Effect.andThen(Ref.set(replaced, true)),
     ),
   );
+  // WARNING: Read the binary before answering, or a rename over it is never seen.
   return (name: string, input: JsonObject) =>
     Deferred.await(watching).pipe(
       Effect.andThen(Ref.get(replaced)),

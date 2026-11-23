@@ -22,6 +22,7 @@ export const claudeSettingsPath = Effect.fn("StatusLine.settingsPath")(function*
   return path.join(dir, "settings.json");
 });
 
+// WARNING: points at this binary, not a PATH name: a pane's PATH is not the installer's.
 export function statusLineCommand(self: ReadonlyArray<string> = selfCommand()) {
   return Result.getOrThrow(CommandLine.join([...self, ...STATUS_LINE_ARGS]));
 }
@@ -90,6 +91,7 @@ export const installStatusLine = Effect.fn("StatusLine.install")(function* (env:
   if (found.kind === "ours" && found.command === command)
     return `Claude Code already prints the board's selection; ${file} is already configured.`;
   const settings = yield* readSettings(file);
+  // WARNING: refused rather than replaced: a file half-edited by hand loses all of it when rewritten.
   if (settings === null)
     return `Collie could not read ${file}, so it changed nothing. Fix the JSON, or set statusLine.command in it to: ${command}`;
   settings["statusLine"] = { type: "command", command, padding: 0 };

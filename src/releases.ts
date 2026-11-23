@@ -30,6 +30,7 @@ export const newestRelease = (source: string) =>
 const READ_EVERY_MS = 5 * 60_000;
 const newest = new Map<string, { readAt: number; version: string | null }>();
 
+// WARNING: answers from the last read and refreshes at most every few minutes, so a redraw never waits on the network.
 export const newerRelease = Effect.fn("Releases.newerRelease")(function* (
   source: string,
   version: string,
@@ -72,6 +73,7 @@ const fetched = (url: string) =>
     Effect.provide(FetchHttpClient.layer),
   );
 
+// WARNING: verified on every use, so a kept copy changed since is refused.
 export const verifiedRunner = Effect.fn("Releases.verifiedRunner")(function* (
   releases: string,
   version: string,

@@ -1,3 +1,4 @@
+// WARNING: membership is recorded, never inferred from a label: two Tasks may share a project prefix.
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -35,6 +36,7 @@ export interface TasksApi {
   readonly ofWorkspace: (workspace: string) => Effect.Effect<TaskRecord | null>;
   readonly put: (task: TaskRecord) => Effect.Effect<TaskRecord>;
   readonly remove: (id: string) => Effect.Effect<void>;
+  // WARNING: held from reading a Task to writing it back, so two Runs cannot both replace its workspace.
   readonly locked: <A, E, R>(id: string, effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   readonly lockedIfFree: <A, E, R>(
     id: string,

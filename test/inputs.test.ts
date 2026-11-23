@@ -121,6 +121,7 @@ test("diff-target falls back to the branch diff when there is no open merge requ
 test("diff-target skips a merge request that is no longer open", () =>
   runOnPath(
     Effect.gen(function* () {
+      // WARNING: glab lists only open merge requests, so a merged one is not there.
       yield* bin.add("glab", glabListing({}));
       yield* bin.add(
         "git",
@@ -704,6 +705,7 @@ test("a diff-target given on the command line is normalised, not just shaped", (
         kind: "branch",
         value: "branch:main...add-picker",
       });
+      // WARNING: a shape nothing recognises is refused by whoever admits it, never read as worktree.
       expect(targetKind("https://gitlab.cego.dk/cego/collie/-/merge_requests/2")).toBe("");
       expect(targetKind("mr:group/app")).toBe("");
     }),

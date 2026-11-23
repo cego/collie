@@ -273,6 +273,7 @@ export default defineWorkflow({
               Schema.Struct({ cwd: Schema.String, branch: Schema.String }),
               Schema.Struct({ refused: Schema.String }),
             ]),
+            // WARNING: stage commits and pushes nothing, so the waiting Run's checkout will do.
             execute: host.checkoutReviewed(runId, { inStarter: true }),
           });
           if ("refused" in checkout)
@@ -447,6 +448,7 @@ export default defineWorkflow({
       for (let n = 1; ; n++) {
         const { head, read: onStage } = yield* putOnStage(
           Effect.gen(function* () {
+            // WARNING: hours may pass since the head was read, waiting on claims or the human; read it again.
             const now = yield* Activity.make({
               name: `head.${n}`,
               success: ReviewHeadSchema,

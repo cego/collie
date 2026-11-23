@@ -12,6 +12,7 @@ const IDENTIFIER = "dk.cego.collie.desktop";
 const RELEASED_FOR = "linux-x64";
 const PREFIX = `stable-${RELEASED_FOR}`;
 
+// WARNING: Electrobun's own file format as 2.0.2 writes it; recheck on an upgrade.
 const Installed = Schema.fromJsonString(
   Schema.Struct({
     version: Schema.String,
@@ -153,6 +154,7 @@ export const updateDesktop = Effect.fn("desktop.update")(function* (
   const staged = yield* fs
     .readFileString(preparedRecordOf(root))
     .pipe(Effect.flatMap(Schema.decodeUnknownEffect(PreparedRecord)), Effect.option);
+  // WARNING: one already staged is never replaced by an older one.
   const target = Option.match(staged, {
     onNone: () => to,
     onSome: ({ version }) => (Bun.semver.order(version, to) >= 0 ? version : to),
@@ -235,6 +237,7 @@ export interface DesktopOwn {
 }
 
 const USAGE_KEEP_MS = 30 * 24 * 60 * 60_000;
+// WARNING: as long as Claude Code keeps the transcripts that name a chat attachment.
 const ATTACHMENT_KEEP_MS = 30 * 24 * 60 * 60_000;
 const PARTIAL_KEEP_MS = 24 * 60 * 60_000;
 const UsageAt = Schema.fromJsonString(Schema.Struct({ at: Schema.String }));

@@ -1,3 +1,4 @@
+// WARNING: no Bun-only import: the view bundles this module.
 import { Cause, Clock, Deferred, Effect, Exit, Option, Stream } from "effect";
 import { backoff } from "../../../src/peers-model";
 import { saidOf } from "./said";
@@ -45,9 +46,11 @@ export const retrying: <A, E extends Error, R>(
           return returned;
         }),
         Stream.tap(() => Effect.sync(() => void (reached = true))),
+        // WARNING: a subscription that ends was cut off, so it is retried as an interruption is.
         Stream.concat(Stream.failCause(Cause.interrupt())),
         Stream.catchCause((cause) => {
           const [failed, renewed] = reached ? [0, 0] : [failures, renewals];
+          // WARNING: a renewed connection is no trouble: taken again at once, and quietly after that.
           if (Cause.hasInterruptsOnly(cause))
             return renewed === 0
               ? after(failed, 1)

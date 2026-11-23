@@ -121,6 +121,7 @@ const pendingProposals = Effect.fn("Oversight.pendingProposals")(function* (at: 
   return pendingFor(yield* proposalsOf(at.runId), at.runId, yield* Clock.currentTimeMillis);
 });
 
+// WARNING: never fatal: losing the work to protect its report is the wrong way round.
 export const writeCard = Effect.fn("Oversight.writeCard")(function* (
   at: Watched,
   what: {
@@ -216,6 +217,7 @@ export const writeCard = Effect.fn("Oversight.writeCard")(function* (
     narrative: what.narrative ?? null,
     ...reportFields(what),
   });
+  // WARNING: a card is a reading of the Run: failing to keep one must not fail the Run.
   yield* appendCard(at.runDir, card).pipe(
     Effect.catchDefect((defect) =>
       Effect.logError(`${at.runId}'s card was not recorded`, Cause.die(defect)),
@@ -256,6 +258,7 @@ export const ruleFacts = Effect.fn("Oversight.ruleFacts")(function* (at: Watched
         ],
         "\n",
       );
+  // WARNING: untracked files count: an agent's new file is in no diff until someone commits it.
   const untracked = yield* gitOutput(["ls-files", "--others", "--exclude-standard"], at.cwd);
   const branch = yield* shell("git", ["rev-parse", "--abbrev-ref", "HEAD"], at.cwd);
   const outputs: Record<string, Record<string, string>> = {};
@@ -301,6 +304,7 @@ const checkRuleDrift = Effect.fn("Oversight.checkRuleDrift")(function* (
     yield* appendDrift(at.runDir, report).pipe(Effect.ignore({ log: "Unhandled" }));
     yield* said(at, driftSaid(report, where));
   }
+  // WARNING: a report gone is a fix only where the check found fewer things: an unchanged tree finds the same ones.
   for (const report of openReports(before)) {
     if (Arr.some(found, (still) => still.constraint === report.constraint)) continue;
     yield* appendDrift(at.runDir, { ...report, at: yield* nowIso, resolution: "verified" }).pipe(
@@ -310,6 +314,7 @@ const checkRuleDrift = Effect.fn("Oversight.checkRuleDrift")(function* (
   }
 });
 
+// WARNING: a judgement that could not be made is recorded as skipped, which leaves the Run unverified rather than checked.
 const judgeDrift = Effect.fn("Oversight.judgeDrift")(function* (
   at: Watched,
   intent: Intent,
@@ -401,6 +406,7 @@ const noticeOverride = Effect.fn("Oversight.noticeOverride")(function* (
   yield* said(at, `${to.agent}: manual_override — someone typed into its pane`);
 });
 
+// WARNING: a correction is correction_submitted, never verified: sending text is not the work changing.
 const correctDrift = Effect.fn("Oversight.correctDrift")(function* (
   at: Watched,
   intent: Intent,
@@ -467,8 +473,10 @@ const correctDrift = Effect.fn("Oversight.correctDrift")(function* (
   return { sent, escalated };
 });
 
+// WARNING: nothing follows these states, so a correction in one is not in flight.
 const SETTLED: ReadonlySet<string> = new Set(["failed", "superseded"]);
 
+// WARNING: only a Run on its own worktree builds from its SPEC; elsewhere the SPEC is the product.
 const followRunPlan = Effect.fn("Oversight.followRunPlan")(
   function* (at: Watched) {
     if (at.worktree === null) return;
@@ -502,6 +510,7 @@ export const checkDrift = Effect.fn("Oversight.checkDrift")(function* (
   yield* followRunPlan(at);
   const intent = yield* readIntent(at.runDir).pipe(Effect.orElseSucceed(() => null));
   if (intent === null) return NOTHING_CORRECTED;
+  // WARNING: mid-Integration the default branch's changes would read as the Run's own.
   const deferred = judging === "boundary" && (yield* merging(at.cwd));
   if (deferred)
     yield* said(at, `drift not judged at ${where}: an integration's conflicts are open`);
@@ -654,6 +663,7 @@ const unshown = (diff: CrossRunDiff) =>
       ? `diff could not be read: ${diff.why}`
       : null;
 
+// WARNING: fenced as data: a diff can say anything, including that it is an instruction.
 const workLines = (target: CrossRunTarget) => {
   const { diff } = target;
   return [
@@ -709,6 +719,7 @@ const judgeCrossRun = Effect.fn("Oversight.judgeCrossRun")(function* (
   const byId = new Map(Arr.map(targets, (target) => [target.id, target]));
   let filed = 0;
   for (const found of asked.reports) {
+    // WARNING: a model may cite only a Run the question named or the pack showed; anything else is reaching outside it.
     const target = byId.get(found.run);
     if (target === undefined || !target.constraintIds.includes(found.constraint)) continue;
     const work = citedIn(shownOf(target), target.cwd);
@@ -757,6 +768,7 @@ const judgeCrossRun = Effect.fn("Oversight.judgeCrossRun")(function* (
   return null;
 });
 
+// WARNING: a loser saying it moved tells the winner its snapshot is behind.
 export const standForElection = Effect.fn("Oversight.standForElection")(function* (
   at: Watched,
   where: string,
@@ -815,6 +827,7 @@ export const standForElection = Effect.fn("Oversight.standForElection")(function
         );
         if (why !== null) {
           yield* said(at, `cross-run judgement not made at ${snapshotAt}: ${why}`);
+          // WARNING: only a leaving Run writes the owed mark: one at every boundary could never be cleared.
           if (leaving) yield* owe("nobody could make it");
           return;
         }
@@ -849,6 +862,7 @@ export const grantedToRun = Effect.fn("Oversight.grantedToRun")(function* (at: W
   );
 });
 
+// WARNING: a finished Run is extended by nobody but its human; a blocker becomes a proposal, not a prompt to an agent.
 export const settleAtFinish = Effect.fn("Oversight.settleAtFinish")(function* (at: Watched) {
   const intent = yield* readIntent(at.runDir).pipe(Effect.orElseSucceed(() => null));
   if (intent === null) return null;
@@ -885,6 +899,7 @@ export const settleAtFinish = Effect.fn("Oversight.settleAtFinish")(function* (a
 
 const CARDED = "steering/carded";
 
+// WARNING: an agent's own words are carried as claims and labelled as claims.
 export const cardCheckpoints = Effect.fn("Oversight.cardCheckpoints")(function* (
   at: Watched,
   step: string,
@@ -899,6 +914,7 @@ export const cardCheckpoints = Effect.fn("Oversight.cardCheckpoints")(function* 
   for (const { file, checkpoint } of done) {
     const key = `${file}@${checkpoint.at}`;
     if (carded.has(key)) continue;
+    // WARNING: uninterruptible: a watch cut between the mark and the card would leave a ticket marked and never carded.
     const card = yield* Effect.uninterruptible(
       records
         .append(run, CARDED, [key])

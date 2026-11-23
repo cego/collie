@@ -400,6 +400,7 @@ export const renovation = (landing: Landing = shippedLanding) =>
             output: Tracked,
           }),
         );
+        // WARNING: a long wait, resume or cycle rollover must not split the repository's issue across two.
         const bound = { input: { ...input, inputs: { ...inputs, issue: tracked.issue } } };
         const assessed = yield* assessStep(
           agentWork({
@@ -438,6 +439,7 @@ export const renovation = (landing: Landing = shippedLanding) =>
           return `${tracked.issue}: ${recorded.status}`;
         }
 
+        // WARNING: the first thing that touches anything shared; the claim is held until the Run is settled.
         const held = yield* claimStep(
           host.claim({
             runId,
@@ -463,6 +465,7 @@ export const renovation = (landing: Landing = shippedLanding) =>
             `◦ ${"none" in held ? held.none : held.unresolved} — carrying on without one`,
           );
         const claim = "slugs" in held && held.slugs.length > 0 ? Arr.join(held.slugs, ", ") : null;
+        // WARNING: given back once work is finished, not before; holding it across a consultation stops a half-finished deploy.
         const finished = (outcome: string) =>
           (claim === null ? Effect.void : host.release(runId)).pipe(Effect.as(outcome));
 
@@ -486,11 +489,13 @@ export const renovation = (landing: Landing = shippedLanding) =>
               output: Staged,
             }),
           );
+          // WARNING: nothing shows stage is back on its stable release, so the claim stays with this failed Run.
           if (!staged.verified) {
             return yield* new WorkflowError({
               reason: `${tracked.issue}: stage was not verified, so nothing is merged`,
             });
           }
+          // WARNING: approved by another team member, never by the Run that wrote the batch.
           const approval = yield* approvalStep(
             agentWork({
               ...asRenovator(here, "approval"),
@@ -547,6 +552,7 @@ export const renovation = (landing: Landing = shippedLanding) =>
             ? outcome
             : `${outcome}; production jobs left to play: ${Arr.join(left, ", ")}`;
         }
+        // WARNING: the forge decides when production carries the merge, never the Output.
         const carried = yield* productionStep(
           host.awaitProduction({
             runId,

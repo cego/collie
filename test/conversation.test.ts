@@ -71,6 +71,7 @@ test("a path outside the Runs Collie knows about is not one it will show", () =>
       const roots = ["/state/runs/implement-1"];
       expect(insideKnown("/state/runs/implement-1/log.txt", roots)).toBe(true);
       expect(insideKnown("/state/runs/implement-1", roots)).toBe(true);
+      // WARNING: A sibling whose path merely starts the same way is not inside it.
       expect(insideKnown("/state/runs/implement-11/log.txt", roots)).toBe(false);
       expect(insideKnown("/etc/shadow", roots)).toBe(false);
 

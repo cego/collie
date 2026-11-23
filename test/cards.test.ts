@@ -66,6 +66,7 @@ test("readiness never says more than the evidence does", () => {
 
 test("a verification on other bytes is stale, and one on the same bytes at another commit is a pass for this one", () => {
   expect(verificationOn(verification(), revision).result).toBe("pass");
+  // WARNING: A new commit of the same bytes is the same tree, not a stale one.
   expect(
     verificationOn(verification({ end: { head_sha: "def", fingerprint: "f1" } }), revision).result,
   ).toBe("pass");
@@ -146,6 +147,7 @@ test("a card computes its own readiness, so it cannot be told it is verified", (
   });
   expect(built.verifications[0]?.result).toBe("stale");
   expect(built.readiness).toBe("inspect-ready");
+  // WARNING: Agent claims are never among the verifications.
   expect(Arr.map(built.claims, (claim) => claim.text)).toEqual(["the tests pass"]);
   expect(Arr.map(built.verifications, (entry) => entry.name)).toEqual(["tests"]);
   expect(built.missing).toEqual(["no verification named typecheck"]);

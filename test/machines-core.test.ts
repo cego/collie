@@ -82,6 +82,7 @@ test("onboarding a VM opens one SSH master, core keeps it with a via that rides 
           expect(via).toContain(`-S ${master} `);
           expect(via).toContain("ProxyCommand=false");
           expect(via).toEndWith(" mk@second");
+          // WARNING: core's dial rides the SSH master, so core does no login of its own.
           expect(yield* sshSaid(first, "ride")).toContain("ride mk@second true");
           expect(yield* sshSaid(first, "login")).toEqual([]);
 

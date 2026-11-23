@@ -78,6 +78,7 @@ const open = (url: string) =>
             });
           }
         };
+        // WARNING: a close answers everyone still waiting, so a server that goes away fails the exchange.
         socket.onclose = () => {
           for (const waiting of pending.values()) {
             waiting({
@@ -133,6 +134,7 @@ const open = (url: string) =>
     }),
   );
 
+// WARNING: initialize is part of opening; every other method is refused before it.
 export const withCodex = <A, E, R>(
   url: string,
   use: (client: CodexClient) => Effect.Effect<A, E, R>,
@@ -158,12 +160,14 @@ const ThreadRead = Schema.Struct({
   thread: Schema.Struct({
     id: Schema.String,
     cwd: Schema.optionalKey(Schema.String),
+    // WARNING: an ephemeral thread is the TUI's own cheap thread, not the agent.
     ephemeral: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
     parentThreadId: Schema.optionalKey(Schema.NullOr(Schema.String)),
     path: Schema.optionalKey(Schema.NullOr(Schema.String)),
     status: Schema.optionalKey(Schema.Struct({ type: Schema.String })),
     historyMode: Schema.optionalKey(Schema.String),
     preview: Schema.optionalKey(Schema.String),
+    // WARNING: empty unless includeTurns is asked for, which a thread with no user message refuses.
     turns: Schema.optionalKey(Schema.Array(Schema.Unknown)),
   }),
 });
@@ -197,6 +201,7 @@ const TurnsList = Schema.Struct({
 const TokenUsage = Schema.Struct({
   threadId: Schema.String,
   tokenUsage: Schema.Struct({
+    // WARNING: totalTokens is the context; total and its parts overlap, so never add or threshold them.
     last: Schema.Struct({ totalTokens: Schema.Finite }),
   }),
 });
@@ -206,6 +211,7 @@ const decoded = <S extends Schema.Top>(what: string, schema: S, value: Reply["re
     Effect.mapError((cause) => failed(`${what}: ${String(cause)}`)),
   );
 
+// WARNING: more than one of the agent's own threads is refused, not guessed at; ephemeral and sub-agent threads do not count.
 export const boundThread = Effect.fn("Codex.boundThread")(function* (
   client: CodexClient,
   cwd: string,
@@ -247,6 +253,7 @@ export const boundThread = Effect.fn("Codex.boundThread")(function* (
   return threadId;
 });
 
+// WARNING: null is not zero: no model request yet, or usage invalidated by a compaction.
 export const currentContext = Effect.fn("Codex.currentContext")(function* (
   client: CodexClient,
   threadId: string,
@@ -283,6 +290,7 @@ export const compactionItems = Effect.fn("Codex.compactionItems")(function* (
   );
 });
 
+// WARNING: Codex's question tool returns at once, so this message is all there is of a question.
 export const askedQuestions = Effect.fn("Codex.askedQuestions")(function* (
   client: CodexClient,
   threadId: string,
@@ -299,6 +307,7 @@ export const askedQuestions = Effect.fn("Codex.askedQuestions")(function* (
   );
 });
 
+// WARNING: read the turn's own terminal status; never infer completion from idleness.
 export const turnOutcome = Effect.fn("Codex.turnOutcome")(function* (
   client: CodexClient,
   threadId: string,
@@ -327,6 +336,7 @@ export interface LoadedThread {
   readonly running: ReadonlyArray<string>;
 }
 
+// WARNING: refused where an agent's own thread works in another directory; that server is not provably this agent's.
 export const agentThreads = Effect.fn("Codex.agentThreads")(function* (
   client: CodexClient,
   cwd: string,
@@ -362,11 +372,13 @@ export const agentThreads = Effect.fn("Codex.agentThreads")(function* (
   return threads;
 });
 
+// WARNING: Codex 0.162.1 refuses turns of a thread no user message has materialized.
 const unmaterialized = (threadId: string, cause: CodexError) =>
   cause.code === -32600 &&
   cause.message ===
     `thread/turns/list: thread ${threadId} is not materialized yet; thread/turns/list is unavailable before first user message`;
 
+// WARNING: Codex 0.162.1 refuses to list an idle paginated thread with no user message.
 const unlisted = (cause: CodexError) =>
   cause.code === -32601 && cause.message === "thread/turns/list: list_turns is not supported yet";
 
@@ -385,5 +397,6 @@ export const runningTurns = Effect.fn("Codex.runningTurns")(function* (
   );
 });
 
+// WARNING: an empty reply accepts cancellation and promises nothing.
 export const interruptTurn = (client: CodexClient, threadId: string, turnId: string) =>
   Effect.asVoid(client.call("turn/interrupt", { threadId, turnId }));

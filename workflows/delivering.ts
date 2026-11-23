@@ -108,6 +108,7 @@ const remoteHead = (cwd: string, branch: string) =>
       [text(handle.stdout), text(handle.stderr), handle.exitCode],
       { concurrency: "unbounded" },
     );
+    // WARNING: --exit-code: 2 is no such ref; any other non-zero means origin did not answer.
     if (code === 2) return { ok: true, head: null } as const;
     if (code !== 0)
       return { ok: false, reason: Str.trim(said) || `git ls-remote exited ${code}` } as const;
@@ -237,6 +238,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
       fingerprint: final.fingerprint,
     }));
 
+    // WARNING: an Output saying tests pass is a claim; a journaled pass bound to this tree is evidence.
     let passes = 0;
     let reruns = 0;
     let passed: ReadonlyArray<string> = [];
@@ -273,6 +275,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         name: `gate.${passes}`,
         success: Schema.Struct({
           gaps: Schema.Array(Schema.String),
+          // WARNING: a pass journaled before gaps were told apart handed a fix every gap.
           fixable: Schema.optionalKey(Schema.Array(Schema.String)),
           passed: Schema.Array(Schema.String),
           tree: Schema.optionalKey(Tree),
@@ -281,6 +284,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           const checks = yield* host.approved(runId);
           const now = [...passed];
           const journal = { ...(yield* host.evidence(runId, cwd)), approved: checks };
+          // WARNING: on a tree a fix left as it was, its records stand; only a check with none runs.
           const unmoved = since !== undefined && sameTree(since, journal.final);
           const whole = why.pass === "recheck" ? wholeRunsOwed(journal) : null;
           for (const spec of owedLocally(checks)) {
@@ -301,6 +305,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
       passed = pass.passed;
       return { gaps: pass.gaps, fixable: pass.fixable ?? pass.gaps, tree: pass.tree };
     });
+    // WARNING: a Flake, or a test failing at the base too, is neither a gap nor a pass.
     const settleTests = Effect.gen(function* () {
       const approved = yield* host.approved(runId);
       for (const { check, test } of rerunsOwed({
@@ -308,6 +313,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         approved,
       }))
         yield* host.verify({ runId, name: check, cwd, pass: "rerun", test });
+      // WARNING: a base that cannot be reached exempts nothing.
       for (const { check, test } of baselinesOwed({
         ...(yield* host.evidence(runId, cwd)),
         approved,
@@ -340,6 +346,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
     const { unreviewed, stalled } = yield* gate(
       Effect.gen(function* () {
         let gaps = yield* settleFailed(yield* gapsNow({ pass: "gate" }));
+        // WARNING: a check that fails then passes on the same tree is a flake; a Run ending on one proved nothing.
         if (gaps.fixable.length > 0)
           gaps = yield* settleFailed(yield* gapsNow({ pass: "recheck" }));
         let unreviewed = rallied.unreviewed;
@@ -485,6 +492,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
             }
             const reviewedAgain = missing.reviewable.length > 0;
             if (reviewedAgain) {
+              // WARNING: checks that passed before a merge prove nothing about the tree after it.
               const checked = (yield* host.evidence(runId, cwd)).final;
               yield* ask.integrate("merge-proof");
               const now = (yield* host.evidence(runId, cwd)).final;
@@ -507,6 +515,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         return { unreviewed, stalled };
       }),
     );
+    // WARNING: a dispute the human settles stays counted at its own severity, whatever review wrote last.
     if (rallied.disputes.length > 0) {
       const disputedKeys = new Set(Arr.map(rallied.disputes, findingKey));
       const onFile = yield* findingsIn(dir);
@@ -518,6 +527,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
     const checks = yield* host.approved(runId);
     const journal = { ...(yield* host.evidence(runId, cwd)), approved: checks };
     const flakes = flakesOf(journal);
+    // WARNING: failed before this Run changed anything and still fails: reported, never passed.
     const preexisting = baseFailuresOf(journal);
     const unsettled = [
       ...ask.unsettled,
@@ -574,6 +584,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         const settledEvidence = yield* host.evidence(runId, cwd);
         const linear = yield* connection("linear", "connection.mr-linear");
         const fs = yield* FileSystem.FileSystem;
+        // WARNING: a park per attempt, so a resume asks again rather than replaying the undone Output.
         const parkedAt = (attempt: number) => `${dir}/mr-parked-${attempt}`;
         let attempt = 1;
         while (yield* fs.exists(parkedAt(attempt)).pipe(Effect.orDie)) attempt += 1;
@@ -595,6 +606,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           agent: ask.agent,
           role: ask.role,
           pushes: true,
+          // WARNING: not merging: only a message of its own asks for that.
           clears: !ready.branch
             ? []
             : [
@@ -606,6 +618,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
             ...ask.input,
             inputs: { ...ask.input.inputs, outcome: yield* ask.outcomeJournaled },
             verify: renderApproved(spawned(checks, settledEvidence.verifications)),
+            // WARNING: read after the gate settled, so the merge request cites the passing runs.
             evidence: renderEvidence(settledEvidence),
             unreviewed,
             unsettled: Arr.join(

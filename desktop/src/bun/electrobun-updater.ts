@@ -21,6 +21,7 @@ const Checked = Schema.Struct({
 type Checked = typeof Checked.Type;
 const Downloaded = Schema.Struct({ error: Schema.String });
 type Downloaded = typeof Downloaded.Type;
+// WARNING: restarting says the restart is under way, so the apply that returned succeeded.
 const Status = Schema.Struct({
   message: Schema.String,
   restarting: Schema.optional(Schema.Boolean),

@@ -158,6 +158,7 @@ export const journal = (
   return renderRecordedChecks({ verifications, final });
 };
 
+// WARNING: without what names a Run's agent, a verify the reviewer runs is refused, not recorded on the probe's Run.
 export const outsideAnyRun = (env: NodeJS.ProcessEnv) =>
   Rec.fromEntries(
     Arr.filter(Rec.toEntries(env), ([name]) => !["COLLIE_RUN", "COLLIE_AGENT"].includes(name)),

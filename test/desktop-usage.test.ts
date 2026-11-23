@@ -460,6 +460,7 @@ describe("the main process asks each Machine's host", () => {
           const collie = Option.isSome(binary)
             ? [binary.value]
             : [process.execPath, `${root}src/main.ts`];
+          // WARNING: No Claude login under this HOME and no Codex on this PATH: nothing reaches an endpoint.
           const door = yield* openBridge(bridgeCommand(collie, "mk-pc"), {
             PATH: "/usr/bin:/bin",
             HOME: world.home,

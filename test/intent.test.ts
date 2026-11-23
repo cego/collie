@@ -232,10 +232,12 @@ test("plan requirements become warn constraints with provenance, and never autho
   }
   expect(found.constraints[0]?.provenance?.heading).toBe("Requirements");
   expect(found.constraints[2]?.provenance?.heading).toBe("Success criteria");
+  // WARNING: nothing in a plan is a grant; extractRequirements returns constraints only.
   expect(Rec.keys(found)).toEqual(["goal", "constraints"]);
 });
 
 test("a numbered plan has a goal and constraints like any other", () => {
+  // WARNING: this repo's SPEC.md numbers its headings; read without goal or requirements, it seeds plan-dir Runs with nothing to steer by.
   const numbered = Arr.join(
     [
       "# Spec: something",

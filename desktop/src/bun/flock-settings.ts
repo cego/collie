@@ -116,6 +116,7 @@ export interface SettingsDoor<E> {
   }) => Effect.Effect<SharedSettings, E>;
 }
 
+// WARNING: asked even with nothing to give, so the Machine records that a Desktop shares its settings.
 export const syncSettings = <E>(
   flock: FlockSettings,
   name: string,
@@ -153,6 +154,7 @@ interface Synced<T, M, SaveError> {
   readonly told: (machine: M, failed: string | null) => Effect.Effect<void>;
 }
 
+// WARNING: a Machine's answer is taken as it is by then, so an edit made meanwhile survives.
 const latestSync = <T, Has, M extends { readonly name: string }, SaveError, ExchangeError>(
   options: Synced<T, M, SaveError> & {
     readonly what: string;

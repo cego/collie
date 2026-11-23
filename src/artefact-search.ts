@@ -1,3 +1,4 @@
+// WARNING: a Machine that could not be searched is named, never read as having nothing; two routes to one Machine are searched once.
 import { Cause, Data, Effect, Option, Schema } from "effect";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -105,6 +106,7 @@ const readCursor = (cursor: string | undefined) =>
     Effect.mapError(() => new HostRefused({ reason: "That search cursor is not one Collie gave" })),
   );
 
+// WARNING: pages compare newest detected first, then by installation, Run and id, which the cursor relies on.
 const before = (
   a: { readonly installation: string; readonly item: Artefact },
   b: { readonly installation: string; readonly item: Artefact },

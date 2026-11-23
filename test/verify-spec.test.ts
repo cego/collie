@@ -82,6 +82,7 @@ test("the project's file wins whole, and the user's is not merged into it", () =
       const path = yield* Path.Path;
       yield* write(path.join(userDir, "verify.json"), [LINT]);
       yield* write(path.join(cwd, PROJECT_FILE), [TESTS]);
+      // WARNING: not [TESTS, LINT]: the user's global verifications would run a command neither file names.
       expect(yield* approvedFrom({ cwd, userDir })).toEqual([TESTS]);
     }),
   ));
@@ -161,6 +162,7 @@ test("an Intent's authority is the set; the seed is only for a Run with no Inten
   });
   expect(approvedFor([TESTS], null)).toEqual([TESTS]);
   expect(approvedFor([TESTS], intent([LINT]))).toEqual([LINT]);
+  // WARNING: an Intent that grants nothing is a Run that may run nothing; the seed does not put a human-removed entry back.
   expect(approvedFor([TESTS], intent([]))).toEqual([]);
   const seeded = seedIntent("r1", { runVerification: [TESTS] });
   expect(seeded.authority.run_verification).toEqual([TESTS]);
@@ -223,6 +225,7 @@ test("a Run keeps the set it started with, whatever the file says later", () =>
         seedIntent("r1", { runVerification: yield* approvedFrom({ cwd, userDir }) }),
       );
 
+      // WARNING: a permission that moved under a Run is not a permission, so the Run is unchanged.
       yield* write(path.join(cwd, PROJECT_FILE), [LINT]);
       const now = yield* approvedFrom({ cwd, userDir });
       expect(now).toEqual([LINT]);

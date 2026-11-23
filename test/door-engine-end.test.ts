@@ -59,6 +59,7 @@ test("a client that half-closed and still writes leaves every other client answe
       request(1, "a", "ping");
       yield* until(() => answered(1, "a"));
 
+      // WARNING: One client's frame must not end the shared loop: a half-closed connection's late frame is refused for that connection alone.
       request(2, "s", "ticks");
       frame(2, { _tag: "Eof" });
       frame(2, { _tag: "Ack", requestId: "gone" });

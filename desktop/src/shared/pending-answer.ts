@@ -1,3 +1,4 @@
+// WARNING: no Bun-only import: the view bundles this module.
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import type { Decision, Question, TaskView } from "../../../src/board-model";
@@ -6,6 +7,7 @@ export interface InFlight {
   readonly shown: string;
   readonly machine: string;
   readonly confirmed: boolean;
+  // WARNING: a try of a send that a newer answer replaced must change nothing.
   readonly send: number;
 }
 
@@ -71,6 +73,7 @@ export const answersSettled = (
 
 type QuestionsOf = Pick<TaskView, "decision"> & { readonly questions?: ReadonlyArray<Question> };
 
+// WARNING: an older host lists no questions, so its question decision stands alone.
 export const openQuestions = (task: QuestionsOf) =>
   task.questions ?? (task.decision?.kind === "question" ? [task.decision] : []);
 
@@ -116,6 +119,7 @@ export type Condition =
   | { readonly kind: "gone" };
 
 export interface SittingEntry {
+  // WARNING: kept as last seen, so the question is still drawn after the board drops it.
   readonly question: Question;
   readonly seen: Pick<InFlight, "shown" | "machine" | "confirmed"> | null;
   readonly was: Condition["kind"];

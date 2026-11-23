@@ -5,6 +5,7 @@ import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import { isBoolean, isNumber, isString } from "./schema";
 
+// WARNING: deliberately over-eager: a false positive costs a retype, a false negative writes a live credential to disk.
 const SECRETS: ReadonlyArray<readonly [RegExp, string, string]> = [
   [/\bglpat-[A-Za-z0-9_-]{16,}/g, "<gitlab token>", "<gitlab token>"],
   [/\bgh[pousr]_[A-Za-z0-9]{16,}/g, "<github token>", "<github token>"],

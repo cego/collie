@@ -71,6 +71,7 @@ test("an action kind is registered by the module that owns the operation, and no
 test("nobody stamps a human actor; who is human is derived", () =>
   runEffect(
     Effect.gen(function* () {
+      // WARNING: the journal records who settled what; actorNow(env, id) is the only way to name a human.
       const stampers = Arr.map(
         Arr.filter(yield* sources(), (file) => /["'`]human:\$\{/.test(file.text)),
         (file) => file.name,

@@ -274,6 +274,7 @@ export default defineWorkflow({
                 head,
               }),
             });
+      // WARNING: journaled, so a replay takes the road the round took whatever the setting says now.
       const following = (round: number) =>
         kind !== "mr"
           ? Effect.succeed(false)
@@ -689,6 +690,7 @@ export default defineWorkflow({
       };
 
       const agents = yield* Agents;
+      // WARNING: a fix Collie ran is reviewed again at once; one handed to an agent Collie does not watch waits for the human.
       const reviewedAgain = (
         at: number,
         answered: string,
@@ -926,6 +928,7 @@ export default defineWorkflow({
           continue;
         }
 
+        // WARNING: the live implementer of the originating Run builds this work and fixes it; two agents on one checkout are two hands on one index.
         fixes += 1;
         rallied += 1;
         const operation = fixes === 1 ? "fix" : `fix-${fixes}`;

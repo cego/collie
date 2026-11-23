@@ -1,3 +1,4 @@
+// WARNING: hc-pin.json's version is the oldest hc Collie works with.
 import { expect, test } from "bun:test";
 import { hcMeets } from "../src/hc-install";
 

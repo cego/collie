@@ -1,3 +1,4 @@
+// WARNING: the Electrobun extractor cannot read GNU long-name or pax headers, or paths over 100 bytes.
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";

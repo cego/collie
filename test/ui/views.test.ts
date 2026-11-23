@@ -134,6 +134,7 @@ effectTest("a run that can supply the work says so, and one that cannot does not
 
   expect(by("worktree").fixable).toBe(true);
   expect(by("worktree").detail).toContain("2 finding(s) open");
+  // WARNING: clean means nothing open to fix; offering fix would start an implement run over no findings.
   expect(by("branch:main...x").fixable).toBe(false);
   expect(by(null).fixable).toBe(false);
 });
@@ -208,6 +209,7 @@ effectTest("Settings offers every key loadDefaults reads, and repeats none of th
     Option.getOrUndefined(Arr.findFirst(settings.defaults, (d) => d.key === "permissions"))!.value,
   ).toBe("auto");
 
+  // WARNING: a hand-edited nonsense value must still render, because a read that threw would take the repair tool down.
   yield* fs.writeFileString(path.join(env.userDir, "config.json"), `{ "permissions": "yolo" }`);
   const broken = yield* buildSettings(env);
   expect(
@@ -291,6 +293,7 @@ effectTest("an empty review reads as empty rather than as no review at all", fun
 
   const detail = yield* detailOf(run);
 
+  // WARNING: a file that is there and empty is not the same as a run that wrote none.
   expect(detail?.review).toEqual({ _tag: "Text", text: "", truncated: false });
 });
 
@@ -340,6 +343,7 @@ test("a ticket's title is its first heading, and it is done when every box is ch
   expect(closed.title).toBe("Needs you first");
   expect(closed.done).toBe(true);
 
+  // WARNING: no boxes is not all checked: an unmarked ticket is open.
   const bare = planTicket("03-no-heading.md", "just prose\n");
   expect(bare).toEqual({ file: "03-no-heading.md", title: "03-no-heading.md", done: false });
 });
@@ -403,6 +407,7 @@ effectTest(
         yield* fs.writeFileString(path.join(run.dir, "plan", "SPEC.md"), spec);
       });
 
+    // WARNING: a stopped run's agent can still rewrite its plan, so a write is read again.
     const done = yield* seed({ workflow: "implement" });
     yield* write(done, "# first\n");
     expect((yield* detailOf(done, { plans }))!.plan!.spec).toMatchObject({ text: "# first\n" });
@@ -411,6 +416,7 @@ effectTest(
       text: "# rewritten\n",
     });
 
+    // WARNING: a running plan may be written as it is read, so it is never cached.
     const going = yield* seed({ workflow: "implement", state: "running" });
     yield* write(going, "# first\n");
     expect((yield* detailOf(going, { plans }))!.plan!.spec).toMatchObject({ text: "# first\n" });
@@ -493,6 +499,7 @@ effectTest(
     yield* progressed(builder, "01-landed.md", "done");
     yield* stepped(builder, "02-stepped.md");
     yield* progressed(builder, "03-started.md", "started");
+    // WARNING: a failed Run proves nothing, whatever its slices said.
     const failed = yield* seed({ workflow: "implement", state: "failed", settled: fromPlan });
     yield* progressed(failed, "04-failed.md", "done");
     yield* stepped(failed, "04-failed.md");
@@ -699,6 +706,7 @@ effectTest("a Run's detail carries the same interruption facts the CLI reports",
 
   const detail = yield* detailOf(run);
 
+  // WARNING: the board and the CLI classify a stop the same way, so they cannot disagree about why a Run stopped.
   expect(detail!.attention.category).toBe("interrupted");
   expect(detail!.attention.reason).toBe("failed");
   expect(detail!.attention.actions).toEqual(["show", "actions"]);

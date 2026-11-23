@@ -123,6 +123,7 @@ const asked = Effect.fn("Doctor.asked")(function* (env: PluginEnv) {
   return { harnesses: [defaults.harness] };
 });
 
+// WARNING: never prompts, since a hidden credential prompt would hang the terminal, and it is bounded; settings go as arguments, not the inherited environment.
 const FETCH = [
   "GIT_TERMINAL_PROMPT=0",
   "GIT_ASKPASS=",
@@ -139,6 +140,7 @@ const fetchRemote = (root: string, run: Runner<ChildProcessSpawner.ChildProcessS
   Effect.timeoutOption(run("env", FETCH, root), FETCH_LIMIT);
 
 const FETCH_EVERY_MS = 5 * 60_000;
+// WARNING: the board redraws often; a count is re-read only this often rather than spawning git on every redraw.
 const COUNT_FOR_MS = 30_000;
 
 interface Known {
@@ -186,6 +188,7 @@ const count = Effect.fn("Doctor.count")(function* (
   return behind;
 });
 
+// WARNING: a file that claims an id and will not load answers for it; the layer below is not consulted.
 const overrides = Effect.fn("Doctor.overrides")(function* (env: PluginEnv) {
   const saved = yield* savedModules(env);
   const own = Arr.map(
@@ -247,6 +250,7 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
 
   checks.push({
     name: "runner",
+    // WARNING: the shim exec's this, so a bin without its executable bit is the same permission-denied failure as a shim without one.
     ...((yield* runnable(path.join(root, "bin", "collie")))
       ? passed(`${root}/bin/collie`)
       : failed("not built", `sh ${root}/prepare.sh`)),
@@ -304,6 +308,7 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
     });
   }
 
+  // WARNING: reported, never failed: a machine that is otherwise ready must not exit non-zero over a status line.
   const line = yield* readStatusLine(env);
   const settings = yield* claudeSettingsPath(env);
   const install = `collie ${Arr.join(STATUS_LINE_ARGS, " ")} --install`;
@@ -575,6 +580,7 @@ function report(checks: Check[]) {
   return err(
     "operation_failed",
     Arr.join([`${failed.length} of ${checks.length} checks failed.`, render(checks)], "\n"),
+    // WARNING: spread into plain maps: err takes a YAML map, and Check is an interface with no index signature.
     { checks: Arr.map(checks, (check) => ({ ...check })), ready: false },
   );
 }

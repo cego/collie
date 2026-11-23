@@ -93,6 +93,7 @@ export const FIX_PROMPT = content.template("fix", {
   disputed: text,
 });
 
+// WARNING: the role in the definition sets the reviewer, not the work's pin, so a fork's role reaches every reviewer.
 export const REVIEWER = { harness: "claude", model: "opus", effort: "high" };
 
 export const IMPLEMENTER = { harness: "claude", model: "opus", effort: "high" };
@@ -261,6 +262,7 @@ export const reviewPass = (ask: ReviewAsk) =>
         yield* recordReview(recorded);
         return recorded;
       });
+    // WARNING: a check left to CI is read from the forge where the Run has a merge request, never run.
     const leftToCi = yield* Effect.forEach(
       Arr.filter(yield* host.approved(id), (spec) => spec.ci !== undefined),
       (spec) =>
@@ -293,6 +295,7 @@ export const reviewPass = (ask: ReviewAsk) =>
         const collected = yield* Effect.forEach(seats, ({ operation }) =>
           fs.exists(agents.outputFor(id, operation)),
         );
+        // WARNING: earlier passes without a journaled scope cannot acquire one on replay.
         if (Arr.some(collected, Boolean)) return null;
         return yield* host.reviewScope(id, ask.source ?? ask.plan, ask.proves, ask.risks);
       }).pipe(Effect.orDie),
@@ -304,6 +307,7 @@ export const reviewPass = (ask: ReviewAsk) =>
         success: Schema.Void,
         execute: host.recordReview(id, scope, scope?.target ?? ask.base ?? "", review),
       });
+    // WARNING: a lone reviewer is asked for the synthesis's own fields; a second agent would only copy it.
     if (seats.length === 1) {
       const [only] = seats;
       const alone: SynthesisReport = yield* agentWork({
@@ -409,6 +413,7 @@ export interface Rallied extends Reviewed {
   readonly halted: string | null;
 }
 
+// WARNING: the last fix has no review after it, so its account is judged against the journal, not taken on its word.
 export const rally = (ask: {
   readonly rounds: { n: number };
   readonly cwd: string;
@@ -546,6 +551,7 @@ export const rally = (ask: {
             };
           }
           if (round.go === "clean") {
+            // WARNING: nothing blocking is not nothing found; what is left goes to the merge request unfixed.
             if (synthesis.findings.length > 0) {
               yield* host.record(
                 runId,
@@ -593,6 +599,7 @@ export const rally = (ask: {
 
           if (at === ROUNDS) {
             const settled = settleFinalFix(round.live, fixed, yield* host.evidence(runId, ask.cwd));
+            // WARNING: every round's disputes count, not only this fix's; earlier ones are still the human's to settle.
             if (settled.ok || settled.halt === "dispute_unresolved") {
               yield* leaveOutstanding((yield* host.place(runId)).dir, settled.outstanding);
               return {

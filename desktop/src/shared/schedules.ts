@@ -10,6 +10,7 @@ export const MachineSchedules = Schema.Struct({
   name: Schema.String,
   schedules: Schema.Array(ScheduleEntry),
   problem: Schema.NullOr(Schema.String),
+  // WARNING: an unreachable Machine stops none of its Schedules.
   unreachable: Schema.Boolean,
 });
 export type MachineSchedules = typeof MachineSchedules.Type;
@@ -54,6 +55,7 @@ const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", 
 const NUMBER = /^\d+$/;
 
 export const cronWords = (cron: string) => {
+  // WARNING: only common five-field shapes; anything else is shown as its expression.
   const [minute, hour, day, month, weekday, ...rest] = Str.split(Str.trim(cron), /\s+/);
   if (rest.length > 0 || weekday === undefined || day !== "*" || month !== "*") return null;
   const step = /^\*\/(\d+)$/.exec(minute!)?.[1];

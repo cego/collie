@@ -1,3 +1,4 @@
+// WARNING: OpenCode's servers isolate nothing, so Collie creates the session and hands it over with --session.
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -57,6 +58,7 @@ const decode = <S extends Schema.Top>(
     Effect.mapError((cause) => failed(`${what}: ${String(cause)}`)),
   );
 
+// WARNING: non-2xx fails with the body: a summarize that answered 503 is a request that did not happen.
 const send = Effect.fn("OpenCode.send")(function* (
   what: string,
   request: HttpClientRequest.HttpClientRequest,
@@ -78,6 +80,7 @@ const send = Effect.fn("OpenCode.send")(function* (
   return yield* response.json.pipe(Effect.mapError((cause) => failed(`${what}: ${reason(cause)}`)));
 }, Effect.provide(FetchHttpClient.layer));
 
+// WARNING: created, not found: no server tells sessions apart by directory or port.
 export const createSession = Effect.fn("OpenCode.createSession")(function* (base: string) {
   const created = yield* decode(
     "POST /session",
@@ -115,12 +118,14 @@ export const messages = Effect.fn("OpenCode.messages")(function* (base: string, 
   );
 });
 
+// WARNING: reasoning tokens are left out on purpose, as OpenCode's own overflow predicate leaves them out.
 export function contextTokens(message: OpenCodeMessage) {
   const tokens = message.info.tokens;
   if (!tokens) return null;
   return tokens.total ?? tokens.input + tokens.output + tokens.cache.read + tokens.cache.write;
 }
 
+// WARNING: null after a compaction, and unfinished messages are skipped: the newest then measures nothing of the rebuilt context.
 export function currentContext(all: ReadonlyArray<OpenCodeMessage>) {
   for (const message of [...all].reverse()) {
     if (message.info.role !== "assistant") continue;
@@ -139,6 +144,7 @@ export function sessionModel(all: ReadonlyArray<OpenCodeMessage>) {
   return null;
 }
 
+// WARNING: prompts go through the server: keys typed before the agent's TUI serves are lost.
 export const promptAsync = Effect.fn("OpenCode.promptAsync")(function* (
   base: string,
   session: string,
@@ -153,6 +159,7 @@ export const promptAsync = Effect.fn("OpenCode.promptAsync")(function* (
   );
 });
 
+// WARNING: a 200 is not proof of compaction: the handler returns a bare true, so the outcome is read back off the messages.
 export const summarize = Effect.fn("OpenCode.summarize")(function* (
   base: string,
   session: string,

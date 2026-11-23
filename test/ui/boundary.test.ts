@@ -57,6 +57,7 @@ test("a wrapped value import counts as one", () => {
 test("views may import pure Effect helpers directly", () => {
   for (const path of PURE_EFFECT_HELPERS)
     expect(effectRuntimeImports(`import * as Helpers from "${path}";`)).toEqual([]);
+  // WARNING: a barrel import loads the runtime even when the named export is a pure helper.
   expect(effectRuntimeImports('import { Array } from "effect";')).toEqual(["effect"]);
 });
 
@@ -75,6 +76,7 @@ test("runtime imports stay forbidden under aliases, deep paths and dynamic loadi
   }
 });
 
+// WARNING: a component reaching for the Effect runtime puts a second runtime inside the render tree.
 test("components import only pure Effect helpers", () =>
   runEffect(
     Effect.gen(function* () {
@@ -87,6 +89,7 @@ test("components import only pure Effect helpers", () =>
     }),
   ));
 
+// WARNING: judged on code only; a comment naming Effect must not fail this check.
 test("the state layer holds no Effect", () =>
   runEffect(
     Effect.gen(function* () {

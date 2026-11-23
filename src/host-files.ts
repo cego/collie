@@ -64,6 +64,7 @@ const dotNames = (pattern: string) =>
     pipe_(name, Str.startsWith(".")),
   );
 
+// WARNING: Unlike Effect Glob's `**`, named dot segments match at any depth.
 const reaches = (pattern: string) => {
   const glob = new Bun.Glob(pattern);
   const dotted = Arr.map(dotNames(pattern), (segment) => new Bun.Glob(segment));
@@ -93,6 +94,7 @@ export const globFiles = Effect.fn("HostFiles.glob")(function* (
     .readDirectory(root)
     .pipe(Effect.mapError((cause) => refused(`${root} cannot be listed: ${String(cause)}`)));
   const rg = Bun.which("rg");
+  // WARNING: Links below the root are not followed, and dot directories are entered only where the pattern names them.
   const listed = yield* (
     rg === null || dotted.length > 0
       ? searched(
@@ -228,9 +230,11 @@ export const grepFiles = Effect.fn("HostFiles.grep")(function* (
 ) {
   const root = yield* searchRoot(asked.path, closed);
   const shut = yield* closedRoots(closed);
+  // WARNING: A line names its file first, then a separator that varies with the mode.
   const keep = (line: string) => !Arr.some(shut, (one) => pipe_(line, Str.startsWith(one)));
   const mode = asked.outputMode ?? "files_with_matches";
   const rg = Bun.which("rg");
+  // WARNING: A file is no working directory: a search of one file runs beside it.
   const cwd = (yield* (yield* FileSystem.FileSystem).stat(root).pipe(
     Effect.map((info) => info.type === "Directory"),
     Effect.orElseSucceed(() => false),
@@ -243,6 +247,7 @@ export const grepFiles = Effect.fn("HostFiles.grep")(function* (
       ? searched("grep", [...grepArgs(asked, mode), root], cwd, limit, bound, keep)
       : searched(rg, [...rgArgs(asked, mode), root], cwd, limit, bound, keep)
   ).pipe(Effect.mapError((cause) => refused(`the search of ${root} failed: ${String(cause)}`)));
+  // WARNING: Exit 1 is nothing matched; above it with matches, some files could not be read.
   if (found.code > 1 && found.lines.length === 0)
     return yield* refused(`the search of ${root} failed (exit ${found.code})`);
   return {
@@ -266,6 +271,7 @@ const realOf: (
   for (let links = 0; ;) {
     const real = yield* fs.realPath(existing).pipe(Effect.option);
     if (real._tag === "Some") return rest === "" ? real.value : paths.join(real.value, rest);
+    // WARNING: A dangling link is where a write through it lands.
     const target = yield* fs.readLink(existing).pipe(Effect.option);
     if (target._tag === "Some") {
       if (++links > 40) return yield* refused(`${path} has too many links to follow`);

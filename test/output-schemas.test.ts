@@ -237,6 +237,7 @@ test("the merge request and plan steps carry what a card reads, and no more", ()
       Result.getOrThrow,
     )({ pushed: true, mr_url: "https://example/mr/1" }),
   ).toEqual({ pushed: true, mr_url: "https://example/mr/1" });
+  // WARNING: pushed is never absent; a step silent on it has not reported whether a pipeline was started.
   expect(Schema.decodeUnknownExit(MrOutputSchema)({ mr_url: "u" })._tag).toBe("Failure");
 
   expect(

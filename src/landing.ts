@@ -58,6 +58,7 @@ export const writeLanding = Effect.fn("Landing.write")(function* (runDir: string
   yield* appendLog(runDir, lineOf(record));
 });
 
+// WARNING: The forge's clock may run this far behind the host's.
 const CLOCK_SKEW_MS = 60_000;
 
 export type Settled =
@@ -65,6 +66,7 @@ export type Settled =
   | { readonly _tag: "Landed"; readonly sha: string }
   | { readonly _tag: "Outside"; readonly sha: string; readonly by: string; readonly at: string };
 
+// WARNING: A merge-queue merge counts as Collie's only at a head written no earlier than the attempt.
 export function settleAttempt(attempt: Landing, read: Extract<ReviewRead, { readonly ok: true }>) {
   if (read.state !== "merged" || read.merged === null) {
     const returned: Settled = { _tag: "Unmerged" };

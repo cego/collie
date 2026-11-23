@@ -42,6 +42,7 @@ interface Shown {
   readonly bytes: number;
 }
 
+// WARNING: a terminal a whole window behind is attached again for a fresh paint, not drained of core's backlog.
 export const attachCore = Effect.fn("Desktop.attachCore")(function* (
   command: ReadonlyArray<string>,
   machine: string,

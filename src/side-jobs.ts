@@ -61,6 +61,7 @@ const sayWhatHappened = Effect.fn("SideJobs.sayWhatHappened")(function* (
   for (const event of disputes) held.add(event.key);
   for (const event of [...eventsIn(runs, drifting, ready, done), ...disputes]) {
     if (!held.has(event.key) || (said.has(event.key) && !gone.has(event.key))) continue;
+    // WARNING: remembered only once it is in the journal, so a failed write is retried next round.
     const queued = yield* appendNews(file, {
       key: event.key,
       run: event.run,
@@ -94,6 +95,7 @@ const news = Effect.fn("SideJobs.news")(function* (
   done: ReadonlyMap<string, Reopened>,
 ) {
   if (!(yield* loadDefaults(env.userDir)).proactive) return;
+  // WARNING: unread Tasks would put every Run in the host's own Herd and retire the rest's News.
   const herdOfTask = new Map(Arr.map(yield* listTasks, (task) => [task.id, task.herd ?? null]));
   const own = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   for (const { herd } of sessions) {
@@ -114,6 +116,7 @@ const every = <E, R>(spaced: Duration.Input, round: Effect.Effect<unknown, E, R>
   );
 
 const LOOK_EVERY = "5 seconds";
+// WARNING: a forge is asked about a merge request every 5 minutes whatever this is.
 const MERGES_EVERY = "10 seconds";
 const SWEEP_EVERY = "10 minutes";
 
@@ -132,6 +135,7 @@ export const keepAgainAfter = (failures: number) =>
 
 const KEEP_RETRY_TICK = "1 second";
 
+// WARNING: a refused start is retried after keepAgainAfter, not on the next tick: core reports it removed, so that loops forever.
 export const keepTerminals = (env: PluginEnv, herdr: Herdr) =>
   Effect.gen(function* () {
     let failures = 0;

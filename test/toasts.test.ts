@@ -6,6 +6,7 @@ import { until } from "./support/host";
 import { hosted } from "./support/hosted";
 import type { World } from "./support/world";
 
+// WARNING: The Run finishes only once answered, so a Desktop is listening when it does.
 const answeredRun = (client: HostClient, world: World, request: string) =>
   Effect.gen(function* () {
     const { runId } = yield* client.start({

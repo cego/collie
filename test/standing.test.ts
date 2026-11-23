@@ -1,3 +1,4 @@
+// WARNING: Classification uses what a Run left behind, never its workflow's name; a renamed fork classifies the same.
 import { expect, test } from "bun:test";
 import { filed, standingOf, type WorkFacts } from "../src/standing";
 
@@ -39,6 +40,7 @@ test("a branch nobody has answered for is not landed, and is not a plan either",
 });
 
 test("tickets beside a branch are work in progress, not a plan to hand on", () => {
+  // WARNING: A branch left beside a plan is the human's to decide, not a go to build from it.
   expect(standingOf(facts({ planIssues: 2, branch: "mk/thing" })).planReady).toBe(false);
   expect(standingOf(facts({ planIssues: 2, mr: "mk/collie!65" })).planReady).toBe(false);
 });

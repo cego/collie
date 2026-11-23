@@ -1,3 +1,4 @@
+// WARNING: owns no engine state: deleting the tab loses nothing and the next Run recreates it.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -20,6 +21,7 @@ import { took, epochMs } from "./time";
 import type { AgentInfo } from "./herdr";
 
 const RECENT = 5;
+// WARNING: keys 1-9 focus an agent, which bounds how many the board can offer.
 export const MAX_AGENTS = 9;
 const DEFAULT_QUIET_MS = 5 * 60_000;
 
@@ -47,6 +49,7 @@ export interface RunRow {
   detail: string;
   at: number;
   target: string | null;
+  // WARNING: the fan-out's own record: an ordinary chain's parent ends early, so parentage would misplace live runs.
   children: ReadonlyArray<string>;
   fixable: boolean;
   choice: PendingChoice | null;
@@ -109,6 +112,7 @@ const activeDetail = Effect.fn("activeDetail")(function* (
   quietMs: number,
 ) {
   const asked = run.asking[0];
+  // WARNING: must come before the quiet scan, or a run waiting on the human reads as quiet.
   if (asked !== undefined) return `waiting on ${asked.name} — your turn`;
   if (run.state === "waiting") return run.note ?? "parked";
   if (run.awaiting !== null) return `waiting for ${run.awaiting.on}`;
@@ -126,6 +130,7 @@ const mtimeOf = Effect.fn("mtimeOf")(function* (file: string) {
   );
 });
 
+// WARNING: a shallow scan: a run that writes only below its top is not seen.
 export const touchedDirAt = Effect.fn("touchedDirAt")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -239,6 +244,7 @@ export const buildView = Effect.fn("buildView")(function* (
       });
     }
   }
+  // WARNING: a wide group keeps every agent and gives none a digit: digits number the whole tree.
   const agents = opts.grouped
     ? rows
     : Arr.map(rows.slice(0, MAX_AGENTS), (r, i) => ({ ...r, key: String(i + 1) }));
@@ -248,6 +254,7 @@ export const buildView = Effect.fn("buildView")(function* (
 
   const active: RunRow[] = [];
   for (const r of Arr.filter(runs, (r) => !settled(r))) {
+    // WARNING: herdr's blocked is a permission prompt that nothing else records.
     const blocked = Arr.some(rows, (row) => row.run === r.id && row.status === "blocked");
     active.push({
       id: r.id,

@@ -1,3 +1,4 @@
+// WARNING: A blocked port resets each connection at its first bytes, as Cloudflare WARP resets the TLS ClientHello on a peer's port.
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
@@ -8,6 +9,7 @@ import { fixtureBinary } from "./bin";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
+// WARNING: macOS's TMPDIR alone is 49 bytes, too long for a control socket under it.
 export const socketDir = (prefix: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) =>

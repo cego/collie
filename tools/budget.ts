@@ -1,5 +1,7 @@
+// WARNING: admitted once its share has free workers, whatever waits before it, so a large request can wait behind smaller ones.
 import * as Arr from "effect/Array";
 import * as Num from "effect/Number";
+// WARNING: FileSystem cannot write to or close a pipe it did not open.
 // oxlint-disable-next-line effecttsgo/node-builtin-import -- FileSystem cannot write to or close a pipe it did not open.
 import { closeSync, writeSync } from "node:fs";
 import { getPriority, setPriority, tmpdir } from "node:os";
@@ -34,6 +36,7 @@ export const budgetOf = (cores: number, override?: string) => {
   return { total, reserve: Math.max(2, Math.floor(total / 4)) };
 };
 
+// WARNING: under two slots for whole suites, both kinds take from all of the budget.
 const pooled = (budget: Budget) => budget.total - budget.reserve < 2;
 
 export const shareOf = (budget: Budget, kind: Kind) =>
@@ -51,6 +54,7 @@ export const admission: (
   );
   const holds = Arr.filter(classOf, (one) => one.state === "held");
   let free = share - Arr.reduce(holds, 0, (sum, one) => sum + one.workers);
+  // WARNING: an earlier waiter that fits now is admitted on its own look, so its workers are not free.
   const ahead: Entry[] = [];
   for (const one of Arr.sortWith(
     Arr.filter(classOf, (it) => it.state === "waiting" && it.seq < request.seq),
@@ -100,6 +104,7 @@ type State = typeof StateSchema.Type;
 
 export const HOLD_ENV = "COLLIE_TEST_HOLD";
 
+// WARNING: per user, so one user's runs never wait on a store they cannot clean.
 export const STORE = `${tmpdir()}/collie-test-budget-${process.getuid?.() ?? "user"}`;
 
 const POLL = "250 millis";

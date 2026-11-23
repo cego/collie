@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+// WARNING: no Bun-only import: the view bundles this module.
 import * as Struct from "effect/Struct";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -34,6 +35,7 @@ const scripted = (attributes: ElementNodeAttributes, name: string) => {
     } catch {
       return true;
     }
+  // WARNING: a URL's scheme survives whitespace and control characters, which JSON writes escaped; decode them before testing.
   return /javascript:/i.test(pipe(rendered, Str.replace(/\\(?:[bfnrt]|u00[01][\da-f])|\s/gi, "")));
 };
 
@@ -101,8 +103,10 @@ export const SAFE_PLUGINS = [
       "base",
       "link",
       "meta",
+      // WARNING: modal, so an allowed dialog would make the whole window inert.
       "dialog",
     ],
+    // WARNING: nothing is fetched from the network; an image a Run kept is evidence, read from its host.
     allowedImagePrefixes: ["data:image/"],
   }),
   confined(),

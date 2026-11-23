@@ -258,6 +258,7 @@ test("the TUI drawer is what the host serves, and follows it", () =>
         yield* fs.writeFileString(`${runDir(world.state, runId)}/log.txt`, "from the host\n", {
           flag: "a",
         });
+        // WARNING: the host may send other parts first; load the app only once the updated log frame has arrived.
         yield* Stream.fromQueue(changes).pipe(
           Stream.mapEffect(() => detailOf({ runId, tail: true, pages: 1, refreshMr: false })),
           Stream.filter(
@@ -412,6 +413,7 @@ test("an ended Run keeps its diff once its checkout has gone, file by file", () 
         const kept = yield* fetchRef(pruned, "diff:kept.txt");
         expect(kept.content).toContain("+three");
         expect(kept.content).not.toContain("new.txt");
+        // WARNING: git quotes a patch header name, so the file is still found by its on-disk name.
         expect((yield* fetchRef(pruned, "diff:tab\there.txt")).content).toContain("+odd");
 
         const head = yield* fetchRef(pruned, "diff:kept.txt", { offset: 0, length: 10 });

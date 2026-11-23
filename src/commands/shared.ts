@@ -115,6 +115,7 @@ export const context = Effect.fn("collie.context")(function* (
 
 export const discoveryContext = Effect.fn("collie.discoveryContext")(function* (global: Global) {
   if (Option.isSome(global.workspace)) return yield* context(global, true);
+  // WARNING: an inherited workspace may have closed and there may be no herdr to ask; this is never a reason to fail.
   const tried = yield* context(global, (yield* selected(global)) !== null).pipe(
     Effect.orElseSucceed(() => null),
   );
@@ -287,8 +288,10 @@ export function cliOrigin(at: { readonly terminal: boolean; readonly agent: bool
   return at.terminal && !at.agent ? "cli-tty" : "cli";
 }
 
+// WARNING: all three streams, not stdout alone: a redirected command is still a person at a terminal.
 export const cliDoor = Effect.fn("Shared.cliDoor")(function* (env: PluginEnv) {
   const terminal = Boolean(process.stdin.isTTY || process.stdout.isTTY || process.stderr.isTTY);
+  // WARNING: who it is comes from its launch: core names no agent of a process.
   const named = env.raw.COLLIE_AGENT ?? "";
   if (named !== "") {
     const run = yield* Effect.scoped(

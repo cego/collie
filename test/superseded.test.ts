@@ -1,3 +1,4 @@
+// WARNING: A set-aside question is no Decision on any surface, refuses stale answers, and stays set aside across a restart.
 import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";

@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+// WARNING: these flags stop model-initiated tool use and inherited config; they are not an OS sandbox.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -99,6 +100,7 @@ const Event = Schema.Struct({
 });
 const asEvent = Schema.decodeUnknownOption(Event);
 
+// WARNING: recorded by name, so a release adding a second one is a failure.
 const STRUCTURED_OUTPUT = "StructuredOutput";
 
 export function leaks(transcript: string) {
@@ -172,6 +174,7 @@ const probe = Effect.fn("probe.run")(function* (calls: number) {
   void isolated.stdin.write(PACK);
   void isolated.stdin.end();
   const transcript = (yield* drained(isolated)).stdout;
+  // WARNING: read as events, not words: the CLI's system line names its tool list, so the words appear in a clean transcript.
   const leaked = leaks(transcript);
   const keepAt = Bun.argv.indexOf("--transcript");
   if (keepAt > 0 && Bun.argv[keepAt + 1]) {

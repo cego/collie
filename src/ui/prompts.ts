@@ -34,6 +34,7 @@ export function signalPrompts() {
           Deferred.doneUnsafe(answered, Effect.succeed(value));
         },
       });
+      // WARNING: cleared on the way out too: an interrupted flow must not leave a question on screen.
       return yield* Deferred.await(answered).pipe(
         Effect.onInterrupt(() => Effect.sync(() => setPending(null))),
       );

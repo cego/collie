@@ -20,6 +20,7 @@ export type ConnectionReading = typeof ConnectionReading.Type;
 export const Connection = Schema.Struct({ id: ConnectionId, reading: ConnectionReading });
 export type Connection = typeof Connection.Type;
 
+// WARNING: until the next protocol bump a sign-in is sent as protocol 4's slack-user, not slack.
 export const HostConnections = Schema.Array(
   Schema.Struct({ id: Schema.String, reading: ConnectionReading }),
 ).pipe(

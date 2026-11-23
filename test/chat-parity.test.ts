@@ -270,6 +270,7 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
     {
       route: "propose",
       kind: "update_defaults",
+      // WARNING: The id, not the prose: ids hash the text, so a constraint named in words matches nothing.
       action: {
         kind: "update_defaults",
         change: "remove-constraint",
@@ -405,6 +406,7 @@ test("every operation a human has, native chat has a route to", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-parity-" });
+      // WARNING: Empty PATH: installation checks would otherwise run the operator's claude, glab and gh, each allowed 20s.
       const env = readEnv({ ...process.env, COLLIE_STATE_DIR: stateDir, PATH: "" });
       yield* registerRunExecutors();
       const carried = new Set(registeredKinds());

@@ -1,3 +1,4 @@
+// WARNING: no Bun-only import: the view bundles this.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -20,13 +21,16 @@ export type StagedOrRefused = typeof StagedOrRefused.Type;
 
 export const FILE_CAP = 20 * 1024 * 1024;
 export const MESSAGE_CAP = 30 * 1024 * 1024;
+// WARNING: the most base64 a message hands the model inline, under the API's 32 MB request.
 export const INLINE_BUDGET = 24 * 1024 * 1024;
+// WARNING: the longest edge the API takes in a request of more than 20 images.
 export const LONG_EDGE = 2000;
 
 export const SHOWN = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
 export type ShownImage = (typeof SHOWN)[number];
 export const shownAs = (mediaType: string) =>
   Option.getOrUndefined(Arr.findFirst(SHOWN, (one) => one === mediaType));
+// WARNING: 5 MB once base64, the API's limit for one image.
 export const IMAGE_BYTES = 3.75 * 1024 * 1024;
 export const TEXTUAL = /^text\/|json|xml|javascript|yaml|toml|x-sh|^application\/octet-stream$/;
 
@@ -83,6 +87,7 @@ export const imageSize = (bytes: Uint8Array) => {
           at += 1;
           continue;
         }
+        // WARNING: SOF markers, except DHT, JPG and DAC, are the frame headers.
         if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker))
           return { width: view.getUint16(at + 7), height: view.getUint16(at + 5) };
         at += 2 + view.getUint16(at + 2);
@@ -111,6 +116,7 @@ const decoded = (text: string) => {
   }
 };
 
+// WARNING: file managers name files as file:// URIs, which only the main process can read.
 export const uriListPaths = (text: string) => {
   const paths: string[] = [];
   const refused: string[] = [];

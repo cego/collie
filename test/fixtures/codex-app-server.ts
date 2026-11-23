@@ -211,6 +211,7 @@ const play = async (turn: Turn, params: JsonObject) => {
       delta,
     });
   completed(turn, { type: "agentMessage", id: `${turn.id}-text`, text: "Hello" });
+  // WARNING: A request the chat does not answer must be refused, not left waiting.
   await ask("item/tool/requestUserInput", {
     threadId: loaded!.id,
     turnId: turn.id,

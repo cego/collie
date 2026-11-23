@@ -1,3 +1,4 @@
+// WARNING: no Bun-only import: the view bundles this.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";

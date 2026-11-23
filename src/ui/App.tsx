@@ -70,6 +70,7 @@ export function App(props: AppProps) {
   const [toast, setToast] = createSignal<string | null>(null);
   const [helping, setHelping] = createSignal(false);
 
+  // WARNING: mouse reporting only while focused: otherwise clicks in every other herdr pane lose copy and paste.
   onFocus(() => {
     renderer.useMouse = true;
   });
@@ -79,6 +80,7 @@ export function App(props: AppProps) {
 
   const tasks = () => props.state().tasks;
   const sections = createMemo(() => sectionsOf(tasks(), query()));
+  // WARNING: over every Task, not the search's results: a decision a query hides still waits on the human.
   const header = createMemo(() => headerSentence(tasks(), props.state().now));
   const usage = createMemo(() => usagePhrase(props.state().usage ?? [], props.state().now));
   const columns = () => columnsFor(dimensions().width, props.state().density);
@@ -111,6 +113,7 @@ export function App(props: AppProps) {
     drawer()?.scrollTo(0);
   });
 
+  // WARNING: remembered rather than read back: the read lands a tick after the dispatch.
   let tailing = false;
   let showingArtefacts = false;
   createEffect(() => {
@@ -128,6 +131,7 @@ export function App(props: AppProps) {
 
   const flow = () => props.pending?.() ?? null;
 
+  // WARNING: closed on the next tick: a terminal reporting a press twice would hit the menu's backdrop instead.
   const closeMenu = () => {
     queueMicrotask(() => setMenuOn(null));
   };
@@ -287,6 +291,7 @@ export function App(props: AppProps) {
       ),
     );
 
+  // WARNING: resolved from what is pending, not what was drawn: a cached id and hash would consent to a superseded payload.
   const previewing = () => {
     const id = props.state().previewing;
     if (id === null || carded().has(id)) return null;
@@ -323,11 +328,13 @@ export function App(props: AppProps) {
   });
 
   useKeyboard((key: Keypress) => {
+    // WARNING: while a flow asks, q is a letter of the goal, not the close key.
     if (flow() !== null) return;
     setToast(null);
     if (helping()) return setHelping(false);
     if (key.name === "tab") return onwards();
     if (pane() !== null) return typeIntoSetting(key);
+    // WARNING: above everything: a confirmation's keys must not act on cards the human cannot see.
     const proposal = previewing();
     if (proposal !== null) {
       if (key.name === "return") {
@@ -366,6 +373,7 @@ export function App(props: AppProps) {
       return item === undefined || item.disabled === true ? undefined : act(item.command);
     }
     if (steering()) return typeIntoSteer(key);
+    // WARNING: before the board's keys: while typing, q is a letter and / is not the search.
     const asked = typingInto();
     if (asked !== null) return typeIntoAnswer(asked, key);
     if (searching()) return typeIntoSearch(key);

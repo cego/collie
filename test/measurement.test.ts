@@ -244,6 +244,7 @@ test("collie measure and host.measure sample A B B A after a warmup and judge a 
           "no-change",
         );
 
+        // WARNING: judged against the merge base the host found, not the base it was asked for.
         yield* exec(["git", "branch", "-M", "master"], { cwd: world.project });
         const back = Str.trim(
           (yield* exec(["git", "rev-parse", "HEAD"], {

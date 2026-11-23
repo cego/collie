@@ -1,3 +1,4 @@
+// WARNING: glab runs only in the GitLab adapter and gh only in the GitHub one.
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -326,6 +327,7 @@ export interface Forge {
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<Posted, never, R | ForgeHttp>;
+  // WARNING: a retry reconciles an uncertain write with the forge before approving again.
   readonly approve: <R>(
     ref: MrRef,
     head: string,
@@ -364,6 +366,7 @@ export interface Forge {
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<Readiness, never, R | ForgeHttp>;
+  // WARNING: merges through the REST endpoint at head, never as admin or with auto-merge.
   readonly merge: <R>(
     ref: MrRef,
     head: string,
@@ -391,6 +394,7 @@ export interface Forge {
 
 export const COLLIE_REPOSITORY = "github.com/cego/collie";
 
+// WARNING: adapters import mr.ts, which imports this registry before they finish initializing.
 export const FORGES: Readonly<Record<MrForge, Forge>> = {
   get gitlab() {
     return gitlab;

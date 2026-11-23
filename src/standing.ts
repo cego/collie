@@ -1,3 +1,4 @@
+// WARNING: what became of a Run's work is read from its facts, never from its workflow's name.
 import * as Arr from "effect/Array";
 import type { Disposition } from "./board-model";
 import { epochMs } from "./time";
@@ -33,6 +34,7 @@ export function standingOf(facts: WorkFacts) {
     facts.branch === null &&
     facts.mr === null &&
     !facts.disposed;
+  // WARNING: a plan owes nothing to a forge: somebody saying what became of it settles it.
   const answered = facts.branch !== null || facts.mr !== null || facts.disposed;
   return { unfiled, planReady, landed: unfiled || (facts.settled && !facts.owing && answered) };
 }

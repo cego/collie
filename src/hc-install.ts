@@ -19,6 +19,7 @@ export const hcVersion = (said: string) => {
     : null;
 };
 
+// WARNING: A prerelease is older than its release; output naming no version does not meet min.
 export const hcMeets = (said: string, min: string) => {
   const version = hcVersion(said);
   return version !== null && Bun.semver.order(version, min) >= 0;
@@ -37,6 +38,7 @@ export interface HcStep {
 
 const PLACED_HC = "hc-placed.sha256";
 
+// WARNING: Swapped with `hc update --from`, not overwritten, so its running terminals survive.
 export const placeHc = Effect.fn("HcInstall.place")(function* (
   env: {
     readonly raw: Readonly<Record<string, string | undefined>>;

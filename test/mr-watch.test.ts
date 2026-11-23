@@ -172,6 +172,7 @@ test("a host killed while a Run waits leaves it waiting, and the next host wakes
             (view) => view?.status.status === "complete",
           );
           const resumedAt = yield* Clock.currentTimeMillis;
+          // WARNING: measured from the first host's sighting, not this host's own first read.
           expect(resumedAt - since).toBeLessThan(QUIET_MS + 60_000);
           const value = done?.status.status === "complete" ? done.status.value : null;
           expect((yield* decodeWoke(value))._tag).toBe("Changed");

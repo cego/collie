@@ -53,6 +53,7 @@ export function whatItSaid(result: Ran) {
   );
 }
 
+// WARNING: the empty helper entry first drops any helper git read from a wider config; setting it again changes nothing.
 export const keepCredentialHelper = Effect.fn("mr.keepCredentialHelper")(function* <R>(
   checkout: string,
   host: string,
@@ -70,6 +71,7 @@ export const keepCredentialHelper = Effect.fn("mr.keepCredentialHelper")(functio
 
 const LINEAR_ID = /\b([A-Z][A-Z0-9]+-\d+)\b/g;
 
+// WARNING: null for a target that is not a branch, empty for one naming none: callers must tell them apart.
 export function branchTargetHead(target: string) {
   if (!pipe_(target, Str.startsWith("branch:"))) {
     const returned: string | null = null;
@@ -85,6 +87,7 @@ export function branchTargetHead(target: string) {
   return returned;
 }
 
+// WARNING: an unreadable merge request answers no: staying quiet on someone else's change is the costlier mistake.
 export function assignedTo<R>(mr: MrRef, who: string, cwd: string, run: Runner<R>) {
   const returned: Effect.Effect<boolean, never, R | ForgeHttp> = Effect.gen(function* () {
     const panel = yield* forgeOf(mr).details(mr, cwd, run);
@@ -99,6 +102,7 @@ export function postNote<R>(
     readonly cwd: string;
     readonly body: string;
     readonly review?: { readonly runId: string; readonly head: string; readonly round: number };
+    // WARNING: this host is GitLab whatever its name, so the forge is never read from the host name.
     readonly gitlabHost?: string;
   },
   run: Runner<R>,
@@ -189,15 +193,18 @@ export function projectFromRemote(url: string) {
   return returned;
 }
 
+// WARNING: a command that cannot start exits 127 with why on stderr; it never throws, so no glab is an answer.
 export function shell(cmd: string, args: string[], cwd: string, env?: RunnerEnv) {
   const returned: Effect.Effect<Ran, never, ChildProcessSpawner.ChildProcessSpawner> = Effect.gen(
     function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const command = ChildProcess.make(cmd, args, {
         cwd,
+        // WARNING: optional locks off, so a status does not hold index.lock and refuse a commit an agent makes meanwhile.
         env: cmd === "git" ? { GIT_OPTIONAL_LOCKS: "0", ...env } : env,
         stdout: "pipe",
         stderr: "pipe",
+        // WARNING: extendEnv keeps this process's environment, which git and glab need to find their config and credentials.
         extendEnv: true,
       });
       const handle = yield* spawner.spawn(command);
@@ -293,6 +300,7 @@ export function productionCarries<R>(
   return returned;
 }
 
+// WARNING: a forge that cannot be read fails rather than answering none, since a push is safe only once it has said no.
 export function autoMergingHere<R>(cwd: string, run: Runner<R>, gitlabHost?: string) {
   const returned: Effect.Effect<string | null, string, R | ForgeHttp> = Effect.gen(function* () {
     const here = yield* forgeHere(cwd, run, gitlabHost);
@@ -363,6 +371,7 @@ export function prepareMergeRequest<R>(
     readonly source?: { readonly value: string; readonly kind: string };
     readonly onto?: string | undefined;
     readonly assignees?: Partial<Record<MrForge, YamlValue>>;
+    // WARNING: this host is GitLab whatever its name, so the forge is never read from the host name.
     readonly gitlabHost?: string;
   },
   run: Runner<R>,
@@ -402,6 +411,7 @@ export function prepareMergeRequest<R>(
     const branch = Str.trim(
       (yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], opts.cwd)).stdout,
     );
+    // WARNING: a detached checkout is on no branch, so it has no merge request.
     const found =
       branch === "HEAD" || branch === ""
         ? { ok: true as const, open: null }

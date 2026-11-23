@@ -13,6 +13,7 @@ export const remoteCollie = (args: ReadonlyArray<string>) =>
     " ",
   );
 
+// WARNING: without ProxyCommand=false, ssh falls back to a login of its own.
 export const riderArgv = (path: string, target: string, remote: string, ssh = "ssh") => [
   ...rider(path, target, ssh),
   remote,
@@ -57,6 +58,7 @@ export const viaTarget = (via: string) => {
 
 export type Verb = "check" | "forward" | "cancel" | "exit";
 
+// WARNING: only the named master and explicit forwards: reading SSH config here would replay its forwards.
 export const muxArgv = (
   ssh: string,
   path: string,

@@ -15,6 +15,7 @@ export const attentionFor = Effect.fn("attention.attentionFor")(function* (run: 
       explanation: `${run.id} is waiting on "${asked.name}": ${asked.prompt}`,
       actions: ["answer", "show"],
     } satisfies Attention;
+  // WARNING: below a question (the human is waited on) and above completed (a drifted finish is not what was asked).
   const unresolved = yield* driftUnresolved(run.dir);
   if (unresolved !== null)
     return {
@@ -85,6 +86,7 @@ export const attentionFor = Effect.fn("attention.attentionFor")(function* (run: 
         : ({
             category: "none",
             reason: "working",
+            // WARNING: open drift on a running Run is said, but is not attention: it may still be corrected.
             explanation: `${run.id} is running.${yield* driftNote(run.dir)}`,
             actions: ["show", "stop"],
           } satisfies Attention);

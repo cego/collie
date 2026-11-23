@@ -111,6 +111,7 @@ const threadRef = (
   number,
 });
 
+// WARNING: A previous head the forge no longer has does not count as an ancestor.
 export const descendsFrom = (
   login: ForgeLogin,
   project: string,
@@ -391,6 +392,7 @@ export const approveReview = (
     const pull = `repos/${path}/pulls/${ref.iid}`;
     const current = () =>
       requestAs(Schema.Struct({ head: Schema.Struct({ sha: Schema.String }) }), login, cwd, pull);
+    // WARNING: GitHub has no atomic head guard, so these checks race; replace them if it gains one.
     if (login.forge === "github") {
       const before = yield* current();
       if (!before.ok || before.value.head.sha !== head)

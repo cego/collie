@@ -23,6 +23,7 @@ export class HerdrError extends Data.TaggedError("HerdrError")<{
   readonly message: string;
   readonly detail: string;
   readonly code?: string;
+  // WARNING: Absent where nobody knows whether the request arrived: only a failed send, not an unknown one, is safe to resend.
   readonly answered?: true;
 }> {}
 
@@ -143,6 +144,7 @@ export class Herdr {
     return Effect.flatMap(coreSocket(this.env.raw), use);
   }
 
+  // WARNING: Given this host's PATH: a core started over SSH has no login shell's PATH.
   agentLaunch(opts: {
     readonly name: string;
     readonly argv: ReadonlyArray<string>;
@@ -214,6 +216,7 @@ export class Herdr {
     return returned;
   }
 
+  // WARNING: A send that started no turn gets one Enter, never the text again: the work would run twice.
   agentPrompt(target: string, text: string) {
     const returned: HerdrEffect<Submission> = this.onCore((socket) =>
       Effect.gen(function* () {
@@ -268,6 +271,7 @@ export class Herdr {
     return this.onCore((socket) => coreCall(socket, "machine.rm", { machine: name }));
   }
 
+  // WARNING: Anything that could not be asked may be live: 'could not ask' is not 'absent'.
   agentsAlive(names: ReadonlyArray<string>) {
     const ask = (name: string) => this.agentStatus(name);
     const returned: Effect.Effect<AgentsAlive, never, PlatformServices> = Effect.gen(function* () {
@@ -279,6 +283,7 @@ export class Herdr {
             Effect.succeed(cause.code === "agent_not_found" ? ("gone" as const) : null),
           ),
         );
+        // WARNING: Idle is alive: it holds its name and terminal, so a new start under that name would collide.
         if (status === "working" || status === "blocked" || status === "idle")
           return "live" as const;
         if (status === "gone" || status === "done") continue;
@@ -297,6 +302,7 @@ export class Herdr {
           [...view.current.terminals.values()],
           (one) => one.name === target,
         );
+        // WARNING: A restarted agent shares its name with the incarnation core lost: prefer the live one.
         const seen = Arr.findFirst(named, (one) => one.state === "live").pipe(
           Option.orElse(() => Arr.head(named)),
           Option.getOrUndefined,

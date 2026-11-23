@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+// WARNING: Effect has no CPU-count or shared system-temporary-directory service.
 // oxlint-disable-next-line effecttsgo/node-builtin-import -- Effect has no CPU-count or shared system-temporary-directory service.
 import { availableParallelism, tmpdir } from "node:os";
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
@@ -104,6 +105,7 @@ const runSuite = (targeted: boolean, kind: Kind, since: bigint, budget: Budget, 
           yield* Console.error("test: could not build the executables the suite runs");
           return 1;
         }
+        // WARNING: these are durations, never results; Bun still discovers every test and replaces the estimates.
         yield* prepareTimings(targeted, timings, seed);
         yield* fs.writeFileString(starts, "");
         const running = yield* Clock.monotonicTimeNanos;

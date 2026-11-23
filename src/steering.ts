@@ -1,3 +1,4 @@
+// WARNING: append-only: a ledger whose past can be edited cannot answer 'was this already sent' after a crash.
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -85,6 +86,7 @@ export const DeliverySchema = Schema.Struct({
 });
 export type Delivery = Schema.Schema.Type<typeof DeliverySchema>;
 
+// WARNING: automatic corrections under an override stop until a human clears it.
 const OverrideSchema = Schema.Struct({
   kind: Schema.Literals(["manual_override", "override_cleared"]),
   at: Schema.String,
@@ -112,6 +114,7 @@ export function textHash(text: string) {
   return digest(text);
 }
 
+// WARNING: keyed by the work, not the text: a re-worded nudge for the same work must not send twice.
 export function causalKey(run: string, cause: Cause, intentVersion: number) {
   return digest(`${run}\u0000${cause.kind}\u0000${cause.ref}\u0000${intentVersion}`);
 }
@@ -272,6 +275,7 @@ export const appendLine = (line: LedgerLine) => Deliveries.use((ledgers) => ledg
 export const readLedger = (incarnation: string) =>
   Effect.map(readLedgerWhole(incarnation), (ledger) => ledger.lines);
 
+// WARNING: an unreadable line blocks the work it was about; the sender refuses rather than sending into a gap.
 export const readLedgerWhole = (incarnation: string) =>
   Deliveries.use((ledgers) => ledgers.ledger(incarnation));
 
@@ -312,6 +316,7 @@ export const forgetDeliveries = (runs: ReadonlyArray<string>) =>
 
 export const overriddenRuns = Deliveries.use((ledgers) => ledgers.overridden);
 
+// WARNING: an unknown blocks until a human reconciles it, never by timing out into a resend.
 export function blocked(lines: ReadonlyArray<LedgerLine>, causal_key: string, resending?: string) {
   let found: Delivery | null = null;
   for (const delivery of newestById(lines).values()) {
@@ -340,6 +345,7 @@ export function deferralsOf(lines: ReadonlyArray<LedgerLine>, id: string) {
   return { since, count };
 }
 
+// WARNING: a crash after reserved and one after herdr returned look identical, so both settle to unknown.
 export function settleStaleReservations(
   lines: ReadonlyArray<LedgerLine>,
   nowMs: number,
@@ -385,6 +391,7 @@ export const isSettledDelivery = (delivery: Delivery) =>
   delivery.state !== "unknown" &&
   !isUnobserved(delivery);
 
+// WARNING: a timeout alone never supplies an answer or authorizes a resend.
 export function reconcile(
   lines: ReadonlyArray<LedgerLine>,
   id: string,
@@ -430,6 +437,7 @@ export const herdKey = Effect.fn("Steering.herdKey")(function* <R>(
   return digest(real);
 });
 
+// WARNING: a Collie not started by herdr has no Herd; a cwd fallback would key two sessions to one Herd.
 export const herdOf = (socketPath: string | null) =>
   herdKey(socketPath, () => Effect.succeed(null));
 
@@ -484,6 +492,7 @@ export interface CallLimits {
   readonly effort?: string;
 }
 
+// WARNING: a call that took the model down still happened and still counts.
 function staleSettlements(lines: ReadonlyArray<BudgetLine>, nowMs: number, at: string) {
   const settled = new Set(Arr.flatMap(lines, (l) => (l.kind === "settle" ? [l.id] : [])));
   const answer: BudgetLine[] = Arr.flatMap(lines, (line) => {
@@ -506,6 +515,7 @@ function staleSettlements(lines: ReadonlyArray<BudgetLine>, nowMs: number, at: s
   return answer;
 }
 
+// WARNING: usage is counted, never a quota: nothing here refuses or throttles a call.
 export function planReservation(
   lines: ReadonlyArray<BudgetLine>,
   request: { readonly id: string; readonly run: string | null; readonly at: string },
@@ -543,6 +553,7 @@ export const appendBudget = Effect.fn("Steering.appendBudget")(function* (
   yield* fs.writeFileString(file, `${body}\n`, { flag: "a" });
 });
 
+// WARNING: a busy lock appends anyway: a record that a call happened must not stop the call.
 export const reserve = Effect.fn("Steering.reserve")(function* (
   file: string,
   request: { readonly id: string; readonly run: string | null },

@@ -6,6 +6,7 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { createServer, isIP, type Server, type Socket } from "node:net";
 // oxlint-disable-next-line effecttsgo/node-builtin-import -- effect/crypto has no X.509 certificate inspection.
+// WARNING: effect/crypto cannot inspect X.509 certificates, so node:crypto is imported for it.
 import { X509Certificate } from "node:crypto";
 import { hostname, networkInterfaces } from "node:os";
 import type { ServerWebSocket } from "bun";
@@ -159,6 +160,7 @@ const bindHost = Config.String("COLLIE_PEER_HOST").pipe(
   Effect.orDie,
 );
 
+// WARNING: compared without saying how much matched: the answer is only match or not.
 const sameSecret = (given: string, kept: string) => {
   const a = Buffer.from(given);
   const b = Buffer.from(kept);
@@ -486,6 +488,7 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
     | SecureRandom.SecureRandom
     | ChildProcessSpawner.ChildProcessSpawner
   >();
+  // WARNING: port 0 is chosen once and kept, so every later opening binds the same port.
   const keptPort = `${link.dir}/peer-port`;
   let listenPort = yield* port;
   if (listenPort === 0)
@@ -932,6 +935,7 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
     };
   };
 
+  // WARNING: the newest control link an installation opens is the one kept.
   const controlFrom: (peer: Peer, transport: Way, direct: string | null) => Accepted = (
     peer,
     transport,
@@ -1209,6 +1213,7 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
         const previous = Option.getOrUndefined(
           Arr.findFirst(peers, (one) => one.installation === peer.installation),
         );
+        // WARNING: simultaneous opposite invitations agree that the higher installation dials.
         const paired =
           peer.dials === "out" &&
           previous?.dials === "in" &&
@@ -1289,6 +1294,7 @@ const decodeRefusal = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ error: Schema.Struct({ message: Schema.String }) })),
 );
 
+// WARNING: a dropped connection is a failure, never a login, so only a front door that can show the login calls this.
 export const pairWith = Effect.fn("Peers.pairWith")(
   function* (
     machine: HerdrMachine,
@@ -1355,6 +1361,7 @@ export const pairWith = Effect.fn("Peers.pairWith")(
     ),
 );
 
+// WARNING: the first change is a catch-up, so a save made before the watches are placed is still seen.
 export const definitionChanges = (userDir: string, kinds: ReadonlyArray<string>) =>
   Stream.unwrap(
     Effect.gen(function* () {

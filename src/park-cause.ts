@@ -113,6 +113,7 @@ const healLines = (ids: ReadonlyArray<string>, recoveries: ReadonlyArray<Metric>
 export const healNth = (park: string, recoveries: ReadonlyArray<Metric>) =>
   new Set(Arr.map(healLines([park], recoveries), (line) => line.recoveryId ?? line.at)).size + 1;
 
+// WARNING: ids also carries a park's identities from before they were derived.
 export const healOwed = (ids: ReadonlyArray<string>, recoveries: ReadonlyArray<Metric>) => {
   const lines = healLines(ids, recoveries);
   const skipped = new Set(
@@ -139,6 +140,7 @@ export const healInFlight = (line: Metric) =>
 export const parkWithRecovery = (park: Park, actions: ReadonlyArray<Metric>) => {
   const same = Arr.filter(actions, (line) => line.cause === park.cause);
   const tries = Arr.filter(same, (line) => line.action === "resumed" && line.outcome !== "skipped");
+  // WARNING: tries before this park began still count when the same park is entered again.
   const exhausted =
     tries.length >= 3 &&
     Arr.every(

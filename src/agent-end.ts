@@ -1,3 +1,4 @@
+// WARNING: every end takes these steps in order: prove the incarnation, stop it, require Quiet, end its terminal, log the end.
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Data, Effect, FileSystem } from "effect";
@@ -18,6 +19,7 @@ export type Ended =
   | { readonly _tag: "Closed"; readonly ended: boolean }
   | { readonly _tag: "NotQuiet"; readonly reason: string; readonly locked?: string }
   | { readonly _tag: "Unprovable"; readonly reason: string }
+  // WARNING: only where the caller closes: another process holds the agent's name, so its panes stay.
   | { readonly _tag: "Replaced"; readonly reason: string };
 
 export const endedLine = (agent: string, why: string) => `${agent} ended: ${why}`;

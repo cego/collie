@@ -55,6 +55,7 @@ const fromSecretTool = (tool: string) =>
     const found = new Map<string, string>();
     if (which(tool) === null) return found;
     for (const key of ENTRIES) {
+      // WARNING: a locked keyring may wait on an unlock prompt; Desktop's launch does not.
       const ran = yield* ranWith([tool, "lookup", "service", "collie-desktop", "key", key]).pipe(
         Effect.timeoutOption("5 seconds"),
       );
@@ -64,6 +65,7 @@ const fromSecretTool = (tool: string) =>
     return found;
   });
 
+// WARNING: until it exists, an earlier Desktop's Secret Service entries are copied into it.
 export const credentialsFile: (
   dir: string,
   secretTool?: string,
@@ -92,6 +94,7 @@ export const credentialsFile: (
     const found = yield* fromSecretTool(secretTool).pipe(
       Effect.orElseSucceed(() => new Map<string, string>()),
     );
+    // WARNING: written only with something in it, so a keyring that did not answer is asked again.
     if (found.size > 0) yield* write(found);
     return found;
   });
@@ -102,6 +105,7 @@ export const credentialsFile: (
         Effect.mapError((error) => `${file}: ${error.message}`),
         Effect.provide(BunFileSystem.layer),
       );
+  // WARNING: written even when nothing is left, so an earlier Desktop's keyring is not copied back.
   const forget = (key: string) =>
     locked(
       load.pipe(
@@ -117,6 +121,7 @@ export const credentialsFile: (
     store: (key, _label, value) =>
       locked(load.pipe(Effect.flatMap((values) => write(new Map(values).set(key, value))))),
     clear: forget,
+    // WARNING: an older Collie's bot token, which nothing reads any more.
     forgetSlackBot: forget("slack-token"),
   };
 };
@@ -215,6 +220,7 @@ const onEvery = (routes: ReadonlyArray<ShellRoute>, script: string, stdin: strin
     { concurrency: "unbounded" },
   );
 
+// WARNING: suppress login output, which a paired host would record as the shell result.
 export const giveToken = (routes: ReadonlyArray<ShellRoute>, host: string, token: string) =>
   onEvery(
     routes,
@@ -245,6 +251,7 @@ const COLLIE_CONFIG = '"${XDG_CONFIG_HOME:-$HOME/.config}/collie"';
 const writeCollieFile = (file: string) =>
   `umask 077 && mkdir -p ${COLLIE_CONFIG} && rm -f ${COLLIE_CONFIG}/${file}.new && cat > ${COLLIE_CONFIG}/${file}.new && mv ${COLLIE_CONFIG}/${file}.new ${COLLIE_CONFIG}/${file}`;
 
+// WARNING: an older Collie's bot token in slack.env goes either way.
 export const giveSlackUser = (routes: ReadonlyArray<ShellRoute>, text: string) => {
   const grant = text === "" ? null : decodeGrant(text);
   const bot = `rm -f ${COLLIE_CONFIG}/slack.env`;
@@ -273,6 +280,7 @@ const callbackPort = (url: string) =>
     Option.filter((port) => port > 0),
   );
 
+// WARNING: Claude Code's callback goes to $BROWSER's shim, which forwards it to open here.
 export const claudeLoginThrough = Effect.fn("Desktop.claudeLoginThrough")(function* (
   route: ShellRoute,
   open: (url: string) => Effect.Effect<void>,
@@ -295,6 +303,7 @@ export const claudeLoginThrough = Effect.fn("Desktop.claudeLoginThrough")(functi
     yield* run.step({ ...login, status: "failed", detail: "could not start the login there" });
     return { ended: false, run: run.current() };
   }
+  // WARNING: over SSH no terminal is passed through, so the Machine's own script gives one.
   const command = yield* route.sh(
     `export BROWSER=${SHIM}; if [ -t 0 ]; then exec claude auth login; else ${scriptLine("claude auth login")}; fi`,
   );
@@ -304,6 +313,7 @@ export const claudeLoginThrough = Effect.fn("Desktop.claudeLoginThrough")(functi
     Stream.splitLines,
     Stream.map((line) => URL_IN.exec(line)?.[0]),
     Stream.filter((url) => url !== undefined),
+    // WARNING: read to the end all the same: a login whose output is not read dies of SIGPIPE.
     Stream.runForEach((url) =>
       Arr.some(run.current().steps, (step) => step.step === login.step && step.url !== undefined)
         ? Effect.void

@@ -12,6 +12,7 @@ export const SIGNATURE_SUFFIX = ".sig";
 
 export const P256_SIGNATURE_SUFFIX = ".p256.sig";
 
+// WARNING: an update's signature covers its decompressed tar, which is what an installed update is made of.
 export const appliedSignatureOf = (archive: string) =>
   pipe(archive, Str.endsWith(".tar.zst"))
     ? `${pipe(archive, Str.slice(0, -".zst".length))}${SIGNATURE_SUFFIX}`

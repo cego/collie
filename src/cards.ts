@@ -85,6 +85,7 @@ export const readFinalCard = Effect.fn("Cards.final")(function* (runDir: string)
   return yield* lastRunJournal(cardsPath(runDir), CardJson, ["final"]);
 });
 
+// WARNING: read from the final card the finish writes, which the host records without the Run's module; null where stopped.
 export const finishedOnRecord = Effect.fn("Cards.finishedOnRecord")(function* (runDir: string) {
   return Option.getOrUndefined(yield* readFinalCard(runDir))?.at ?? null;
 });
@@ -95,6 +96,7 @@ export function newest(cards: ReadonlyArray<Card>) {
   return [...latest.values()];
 }
 
+// WARNING: decided by the step's role, never its name; review-the-docs done by an implementer is not a review.
 export const REVIEW_ROLE = "reviewer";
 
 export function kindForRole(role: string | null | undefined) {
@@ -107,6 +109,7 @@ export interface ReadinessFacts {
   readonly verifiedHere: boolean;
 }
 
+// WARNING: a verification on another revision does not verify this card; that is what stale is for.
 export function readiness(facts: ReadinessFacts) {
   if (facts.verifiedHere && facts.changed) return "verified";
   if (facts.changed && facts.claimed) return "inspect-ready";
@@ -126,6 +129,7 @@ export interface SignificanceFacts {
   readonly ended: "failed" | "stopped" | null;
 }
 
+// WARNING: decided by rules over facts, never model text; decision outranks consequential because the human is being waited on.
 export function significance(facts: SignificanceFacts) {
   if (
     facts.pendingChoice ||
@@ -154,6 +158,7 @@ export function verificationOn(
   return returned;
 }
 
+// WARNING: text for a human's own shell, never executed; a card that ran it would change what it describes.
 export function inspectFor(options: {
   readonly worktree: string | null;
   readonly base: string;
@@ -212,6 +217,7 @@ export interface CardSources {
   readonly narrative: string | null;
 }
 
+// WARNING: readiness and significance are computed here, so a caller cannot hand in a card that says verified.
 export function buildCard(sources: CardSources) {
   const verifications = Arr.map(sources.verifications, (entry) =>
     verificationOn(entry, sources.revision),

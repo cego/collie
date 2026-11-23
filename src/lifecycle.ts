@@ -159,6 +159,7 @@ export const moduleFor: (
     ),
   );
 
+// WARNING: Reads the database, not a host: a machine with no Runs must not start one to be told so.
 export const anyRuns: (env: PluginEnv) => Effect.Effect<boolean, never, FileSystem.FileSystem> = (
   env,
 ) =>
@@ -191,6 +192,7 @@ export const refusal: (cause: HostFailure) => Failure = (cause) => {
 const refused: (cause: HostFailure) => Failure = (cause) => {
   switch (cause._tag) {
     case "HostRefused":
+      // WARNING: Input refusals are exit 2, not exit 1.
       if (pipe_(cause.reason, Str.startsWith(`${REFUSED_INPUT}:`)))
         return err(
           "invalid_input",
@@ -241,6 +243,7 @@ const declaring: (door: Door, stamp?: string) => Declaration = (door, stamp?) =>
 
 const toStderr = (text: string) => Effect.sync(() => void process.stderr.write(text));
 
+// WARNING: A host's own jobs never pair.
 export const ensurePaired = Effect.fn("Lifecycle.ensurePaired")(function* (
   env: PluginEnv,
   name: string,
@@ -304,6 +307,7 @@ const openAndWake = (
     const listed = named(yield* herdrMachines(env), name);
     const paired =
       listed === undefined && Arr.some(yield* peersOf(env.stateDir), (peer) => peer.name === name);
+    // WARNING: A pairing core does not keep has no saved target: ssh resolves its name.
     const machine =
       listed ??
       (target !== undefined || paired ? { label: name, target: target ?? name } : undefined);
@@ -503,6 +507,7 @@ export const asksRun: <A>(
     );
   });
 
+// WARNING: Same request, same Run; the Task is chosen first, so agents open in its workspace.
 export const startRun = Effect.fn("Lifecycle.startRun")(function* (
   env: PluginEnv,
   options: {
@@ -519,10 +524,12 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
     readonly attachments?: ReadonlyArray<string> | undefined;
   },
 ) {
+  // WARNING: Refused before a Task is opened for it, as the host would refuse it before the claim.
   const unattachable = yield* attachmentRefusal(options.attachments ?? []).pipe(
     Effect.orElseSucceed(() => null),
   );
   if (unattachable !== null) return err("invalid_input", unattachable);
+  // WARNING: A start on another Machine opens its own Task and reads no defaults here.
   const elsewhere = env.machine !== undefined;
   if (elsewhere && options.task.mode !== "new")
     return err(
@@ -646,8 +653,10 @@ export const runShown = (env: PluginEnv, runId: string) =>
 export const runProgress = (env: PluginEnv, runId: string) =>
   asksRun(env, runId, (client) => client.progress({ runId }));
 
+// WARNING: Verifications bind to the checkout the host placed; one collected elsewhere binds to a tree nobody looked at.
 export const treeOf: (view: RunView) => string = (view) => view.cwd;
 
+// WARNING: A host that will not start costs the caller those Runs, never the whole listing.
 export const runViews: (
   env: PluginEnv,
   task: string | null,
@@ -666,6 +675,7 @@ export const runViews: (
     ),
   );
 
+// WARNING: A token from a host that has started again is refused as stale_cursor, never guessed across.
 export const flockRunPage = Effect.fn("Lifecycle.flockRunPage")(function* (
   env: PluginEnv,
   asked: RunListAsked,
@@ -813,6 +823,7 @@ export const asksArtefactRun = <A>(
     ),
   );
 
+// WARNING: The first state is the current one, not a replay of what changed.
 export const watchRun: <R>(
   env: PluginEnv,
   runId: string,
@@ -1014,6 +1025,7 @@ export const followRunDetail = Effect.fn("Lifecycle.followRunDetail")(function* 
               ),
           ),
         ).pipe(
+          // WARNING: A host going away ends the stream interrupted, which the retry answers.
           Effect.catchCause((cause) =>
             Cause.hasInterruptsOnly(cause) ? Effect.void : Effect.logError(cause),
           ),
@@ -1030,6 +1042,7 @@ export const followRunDetail = Effect.fn("Lifecycle.followRunDetail")(function* 
   };
 });
 
+// WARNING: A file put back is picked up here, not by restarting the host.
 export const recoverRun: (
   env: PluginEnv,
   runId: string,
@@ -1060,6 +1073,7 @@ const shown =
     return returned;
   };
 
+// WARNING: Null means the one it waits on; refused where that is not exactly one.
 export const answerRun: (
   env: PluginEnv,
   options: {
@@ -1098,6 +1112,7 @@ export const answerRun: (
     ),
   );
 
+// WARNING: Work no host runs is held in intent: a control it could not apply is not done.
 export const controlRun: (
   env: PluginEnv,
   options: {
@@ -1270,6 +1285,7 @@ export const rememberChecks = Effect.fn("lifecycle.rememberChecks")(function* (
   env: PluginEnv,
   options: {
     readonly runId: string;
+    // WARNING: A settled Run's worktree is gone: fall back to the checkout it was started for.
     readonly checkouts: ReadonlyArray<string>;
     readonly replace: boolean;
   },
@@ -1367,6 +1383,7 @@ export const steerRun: (
           mode: options.mode,
           attachments: options.attachments,
         });
+        // WARNING: Only a gone agent is carried on elsewhere: a refused send to a live one may still be working the text.
         const route =
           sent.gone === true && sent.finished === true
             ? yield* followUpRoute(client, options)
@@ -1402,6 +1419,7 @@ export const steerRun: (
             sent.redacted,
           ),
         };
+      // WARNING: Never read as delivered when nothing was sent.
       const why = Arr.join(
         Arr.filter(
           [`Nothing was delivered: ${sent.detail || "no agent to tell"}.`, sent.workflowNotice],
@@ -1458,6 +1476,7 @@ export const carriedResult: ({ proposal, results }: ProposalCarried) => OpResult
   );
   if (Arr.some(results, (r) => r.state !== "applied")) {
     const changed = Arr.some(results, (r) => r.state === "applied" && r.kind !== "none");
+    // WARNING: needs_input is retryable without a receipt only when nothing has happened yet.
     const code =
       results.at(-1)?.kind === "ask_human" && !changed ? "needs_input" : "operation_failed";
     return err(code, message, { proposal, results: Arr.map(results, (r) => ({ ...r })) });
@@ -2101,6 +2120,7 @@ export const machineConnect = (
     Effect.map(openAndWake(env, name, said, target), (opened) => ({ machine: name, ...opened })),
   );
 
+// WARNING: Core never logs in by itself: its via rides this computer's SSH connection.
 export const machineAdd = (
   env: PluginEnv,
   name: string,

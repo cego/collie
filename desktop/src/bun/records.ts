@@ -24,11 +24,13 @@ interface Kept {
 const keyOf = (installation: string, runId: string) => `${installation}\u0000${runId}`;
 
 const sameFlow = Schema.toEquivalence(Flow);
+// WARNING: a frame is encoded again to weigh it; use the door's bytes once it hands them on.
 const weighed = (detail: RunDetail | null) =>
   Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(detail).pipe(
     Effect.map((text) => Buffer.byteLength(text, "utf8")),
     Effect.orDie,
   );
+// WARNING: each later part of a record carries the whole Flow again, which the view keeps rather than decodes.
 const newFlowsOnly: (
   shown: Flow | undefined,
   record: KeptRecord,
@@ -50,6 +52,7 @@ const apply = (told: Told, event: RecordEvent, now: number) => {
         asOf: null,
         confirmed: now,
         failure: null,
+        // WARNING: a record whose parts are still coming is not yet at a revision to resume from.
         revision:
           event.detail === null
             ? undefined

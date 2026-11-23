@@ -32,6 +32,7 @@ export const markSeenSince = Effect.fn("Seen.markSince")(function* (stateDir: st
     );
 });
 
+// WARNING: a Run that ended before recording began counts as seen.
 export const seenSince = Effect.fn("Seen.since")(function* (stateDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const text = yield* fs

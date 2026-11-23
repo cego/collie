@@ -368,6 +368,7 @@ function Section(props: { label: string; fg?: string; children: JSX.Element }) {
   );
 }
 
+// WARNING: cells are reused by position: a fresh snapshot updates the cell rather than recreating its text.
 function Grid(props: {
   views: ReadonlyArray<TaskView>;
   columns: number;
@@ -709,6 +710,7 @@ export function KeyHelp(props: { onClose: () => void }) {
 const MENU_WIDTH = 26;
 const RIGHT_BUTTON = 2;
 
+// WARNING: drawn only where every human looking at the pane can see a picture; otherwise no mark at all.
 function Logo(props: { file: string }) {
   return (
     <image

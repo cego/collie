@@ -1,3 +1,4 @@
+// WARNING: no effects and nothing Bun-only, so Desktop's Flock chat serves the same definitions.
 import * as Struct from "effect/Struct";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
@@ -23,6 +24,7 @@ import {
 import { isString, type JsonObject } from "./schema";
 import { stringifyJson } from "./json";
 
+// WARNING: a key a tool does not take is refused, never stripped: a model told 'started' would believe the goal is in force.
 export const STRICT = { onExcessProperty: "error", errors: "all" } as const;
 
 export const decodeStrict = <S extends Schema.ConstraintDecoder<unknown, never>>(schema: S) => {
@@ -390,6 +392,7 @@ export const CollieTools = Toolkit.make(
     parameters: DefinitionInput,
   }),
   collieTool("collie_installation", {
+    // WARNING: doctor fetches refs, which writes to the object store: bounded, and still not a read.
     readOnly: false,
     title: "This installation",
     description:

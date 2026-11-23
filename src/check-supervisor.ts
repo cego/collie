@@ -34,6 +34,7 @@ export const supervise = Effect.fn("CheckSupervisor.supervise")(function* ([
 ]: ReadonlyArray<string>) {
   const fs = yield* FileSystem.FileSystem;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  // WARNING: the host reading these may be gone; the check must run on without it.
   const relays = { stdout: process.stdout, stderr: process.stderr };
   for (const stream of [relays.stdout, relays.stderr]) stream.on("error", () => {});
   const kept = { stdout: new Uint8Array(), stderr: new Uint8Array() };
@@ -71,11 +72,13 @@ export const supervise = Effect.fn("CheckSupervisor.supervise")(function* ([
           stdout: "pipe",
           stderr: "pipe",
           extendEnv: true,
+          // WARNING: stays in the supervisor's group, which a host ends as the check's.
           detached: false,
         }),
       );
       yield* whole(files.pid, Buffer.from(String(handle.pid))).pipe(Effect.ignore);
       const tagged = (name: Name) => Stream.map(handle[name], (chunk) => ({ name, chunk }));
+      // WARNING: one merged stream keeps the log in arrival order.
       yield* Stream.merge(tagged("stdout"), tagged("stderr")).pipe(
         Stream.runForEach(({ name, chunk }) => take(name, chunk)),
       );

@@ -40,6 +40,7 @@ const failedAnswer = <E>(cause: Cause.Cause<E>) =>
 
 const inFlight = new Set<Readonly<Record<string, string>>>();
 
+// WARNING: An answer outlives its forwarder once the host has stopped, and still writes where it was asked to.
 export const answering = (bindings: Readonly<Record<string, string>>) =>
   Arr.filter(Arr.fromIterable(inFlight), (env) =>
     Arr.every(Rec.toEntries(bindings), ([key, value]) => env[key] === value),
@@ -82,11 +83,13 @@ const serve = (path: string) =>
 let listening: { readonly path: string; readonly server: Server } | null = null;
 const once = Semaphore.makeUnsafe(1);
 
+// WARNING: Under the file's home, which the preload neither sweeps nor counts as left; a new one once the root is gone (--rerun-each).
 const socket = once.withPermits(1)(
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     if (listening !== null && (yield* fs.exists(listening.path))) return listening.path;
     listening?.server.close();
+    // WARNING: Read from Bun.env, the preload's, whatever Config provider the test runs under.
     const root = Bun.env[MARKER];
     const at = `${root === undefined ? tmpdir() : `${root}/home`}/fake.sock`;
     yield* fs.remove(at, { force: true });
@@ -95,6 +98,7 @@ const socket = once.withPermits(1)(
   }).pipe(Effect.orDie),
 );
 
+// WARNING: Listen before the shim starts, or its first call goes unanswered.
 export const forwarding = Effect.fn("forwarding")(function* <E>(
   compiled: string,
   args: ReadonlyArray<string>,

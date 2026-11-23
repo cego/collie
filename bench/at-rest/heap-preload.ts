@@ -1,5 +1,6 @@
 /* oxlint-disable effecttsgo/node-builtin-import -- preloaded before the host's Effect runtime exists. */
 
+// WARNING: the host never handles SIGUSR2; only this preload does.
 import { heapStats } from "bun:jsc";
 import { renameSync, writeFileSync } from "node:fs";
 import { stringifyJson } from "../../src/json";

@@ -1,3 +1,4 @@
+// WARNING: claude's config is not ours: unreadable data is always left untouched.
 import * as Arr from "effect/Array";
 import { Effect, FileSystem, Path, Schema, type PlatformError } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
@@ -80,6 +81,7 @@ export function claudeTrust(home: string, backupDir: string) {
     );
   });
 
+  // WARNING: claude takes no lock, so each attempt lands only while the bytes it read are still on disk.
   const writeGrant = Effect.fn("Trust.writeGrant")(function* (cwd: string) {
     for (let attempt = 0; attempt < GRANT_ATTEMPTS; attempt++) {
       const result = yield* tryGrant(cwd);
@@ -116,6 +118,7 @@ export function claudeTrust(home: string, backupDir: string) {
 
     const info = yield* fs.stat(configPath);
     const backup = pathService.join(backupDir, "claude.json.bak");
+    // WARNING: the backup holds claude's secrets, so it is no more readable than the original.
     yield* fs.writeFileString(backup, raw);
     yield* fs.chmod(backup, info.mode & 0o777);
     const tmp = `${configPath}.herdr-${yield* currentPid}`;

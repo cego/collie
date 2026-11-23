@@ -17,6 +17,7 @@ test("a test process sees no herdr session it was not given, and no default stat
 });
 
 test("a fixture Run started from a pane-like environment writes nothing outside the test's own directories", () => {
+  // WARNING: checked first, so a suite that would still resolve the operator's directories touches nothing.
   const outside = readEnv(Bun.env);
   expect(outside.home).not.toBe(operatorHome);
   expect(pipe(outside.stateDir, Str.startsWith(`${operatorHome}/`))).toBe(false);

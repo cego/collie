@@ -444,6 +444,7 @@ for (const late of [false, true])
         );
         const run = runFacts({ id: "r1", cwd: repo, branch: "mk/ship" });
         yield* model.observe([run]);
+        // WARNING: acquiring the pull alone does not subscribe to the model's events.
         const listen = Stream.toPull(model.moved).pipe(
           Effect.flatMap((pull) => Effect.forkChild(pull, { startImmediately: true })),
         );

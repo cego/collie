@@ -23,6 +23,7 @@ import { StoreWrites, TaskWrites } from "./store-writes";
 import { workSourceOf } from "./strategies";
 
 const OWN_DIR = /^(?:runs|agents|evidence)\/([^/]*)/;
+// WARNING: NUL cannot appear in a path, so this key never collides with one.
 const RECURSIVE = "\0recursive";
 
 const fingerprint = flow(
@@ -47,6 +48,7 @@ const keysOf = (run: RunFacts) => {
   };
 };
 
+// WARNING: keep a failure as its reason's data, not an Error: a held Error slows every heap collection.
 const kept = <A>(
   capacity: number,
   lookup: (key: string) => Effect.Effect<A, PlatformError.PlatformError>,
@@ -87,6 +89,7 @@ const kept = <A>(
     });
 };
 
+// WARNING: both models draw revisions from one shared counter, and each is told what the other moved.
 export interface ModelLink {
   readonly counter: Int32Array;
   readonly epoch: string;
@@ -108,6 +111,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   let seq = 0;
   const next = () => (link === undefined ? ++seq : Atomics.add(link.counter, 0, 1) + 1);
   let enabled = true;
+  // WARNING: bumped by every invalidation, so a read it overtook is read again.
   let generation = 0;
   const revisions = new Map<string, number>();
   const facts = new Map<string, { readonly text: string; readonly revision: number }>();
@@ -134,6 +138,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   const wrote = (runs: ReadonlyArray<string>) => {
     for (const run of runs) touchFacts(run);
   };
+  // WARNING: a Task's records are its Runs' as much as its own rows, so both are invalidated.
   const wroteTasks = (tasks: ReadonlyArray<string>) => {
     for (const task of tasks) for (const run of indexes.byTask.get(task) ?? []) touchFacts(run);
   };
@@ -152,6 +157,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   };
   const groups = new Map<string, ReturnType<typeof readsOf>>();
   const readsOf = (group: string) => {
+    // WARNING: the shared group holds a file per Task, so it needs the larger bound.
     const capacity = group === "shared" ? 65_536 : 1_024;
     const memo = <A>(lookup: (key: string) => Effect.Effect<A, PlatformError.PlatformError>) =>
       kept(capacity, lookup);
@@ -186,6 +192,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     groups.delete(group);
     if (group === "shared") return;
     moving(Str.slice(4)(group));
+    // WARNING: a Run's directory or control file coming or going changes the listing above it.
     if (Str.split(inside, "/").length <= 2) groups.delete("shared");
   };
   const invalidate = (path: string) =>
@@ -337,6 +344,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     return [...(indexes.byPlan.get(plan) ?? []), ...(owner === undefined ? [] : [owner])];
   };
 
+  // WARNING: unwatched, nothing says what moved, so every read is a revision no reader has seen.
   const revision = (run: string) => ({
     epoch,
     seq: enabled ? (revisions.get(run) ?? 0) : next(),
@@ -353,6 +361,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
       : next();
 
   const records = new Map<string, { readonly text: string; readonly seq: number }>();
+  // WARNING: a record that moved while none of its Runs did moves its own Run, as an agent's or merge request's does.
   const stampRecord = (key: string, run: string, runs: ReadonlyArray<string>, text: string) => {
     const was = records.get(key);
     if (was !== undefined && was.text !== text && highest([run, ...runs]) === was.seq) touch(run);
@@ -386,7 +395,9 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
 
   const heads = new Map<string, string | null>();
   const readers = new Map<string, Set<string>>();
+  // WARNING: a head read in a checkout stands until it moves only once every watch there is in place.
   const watching = new Set<string>();
+  // WARNING: replay 1: the first build may read a head before the board subscribes to its changes.
   const moves = yield* PubSub.unbounded<void>({ replay: 1 });
   const checkouts = new Map<string, number>();
   const moved = (cwd: string) => {
@@ -413,6 +424,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
       const onReady = () => {
         if (++ready === 3) {
           watching.add(cwd);
+          // WARNING: a commit between the first head read and watch registration produced no event.
           moved(cwd);
         }
       };
@@ -451,6 +463,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
       const watched = watching.has(run.cwd);
       const at = checkouts.get(run.cwd) ?? 0;
       const read = yield* readBranchHead(run).pipe(Effect.orElseSucceed(() => null));
+      // WARNING: a checkout that moved during its head read keeps no head, or the board never shows the move.
       if (watched && (checkouts.get(run.cwd) ?? 0) === at) heads.set(key, read);
       return read;
     }).pipe(Effect.provideContext(spawning));

@@ -1,3 +1,4 @@
+// WARNING: produced when the View is first shown, never at startup, or every run's outputs load at once.
 import * as Arr from "effect/Array";
 import { branchMovement } from "./recovery";
 import * as Str from "effect/String";
@@ -112,6 +113,7 @@ export interface DefinitionRow {
   problems: string[];
 }
 
+// WARNING: a module that fails validation keeps its row: errors are collected per row, not aborting the view.
 export const buildWorkflows = Effect.fn("Views.buildWorkflows")(function* (env: PluginEnv) {
   const saved = yield* savedModules(env);
   const described = yield* Effect.forEach(saved.entries, readModule);
@@ -146,6 +148,7 @@ const capped = Effect.fn("Views.capped")(function* (file: string, cap: number) {
   const fs = yield* FileSystem.FileSystem;
   const info = yield* fs.stat(file).pipe(Effect.orElseSucceed(() => null));
   if (info === null) return null;
+  // WARNING: read to the cap, never the whole file: an agent's output can be any size.
   const text = yield* fs.stream(file, { bytesToRead: cap }).pipe(
     Stream.decodeText(),
     Stream.mkString,
@@ -165,6 +168,7 @@ export const tailed = Effect.fn("Views.tailed")(function* (file: string, cap: nu
     Stream.mkString,
     Effect.orElseSucceed(() => ""),
   );
+  // WARNING: a tail starts mid-line, so the partial first line is dropped.
   return from === 0
     ? { _tag: "Text" as const, text, truncated: false }
     : {
@@ -188,6 +192,7 @@ export function planTicket(file: string, text: string) {
   const returned: PlanTicket = {
     file,
     title: heading === "" ? file : heading,
+    // WARNING: a ticket with no checkboxes is open: every() over nothing is true.
     done: marks.length > 0 && Arr.every(marks, (mark) => mark !== " "),
   };
   return returned;
@@ -284,6 +289,7 @@ const repoLines = new Map<
 
 const REPO_SCAN_CAP = 1024 * 1024;
 
+// WARNING: an empty Repo value can run on to a later line, so an unread tail could change it.
 function repoLineIn(text: string, truncated: boolean) {
   const whole = truncated
     ? pipe(text, Str.slice(0, Option.getOrElse(pipe(text, Str.lastIndexOf("\n")), () => -1) + 1))
@@ -346,6 +352,7 @@ const planStamps = Effect.fn("Views.planStamps")(function* (run: RunFacts) {
 
 export type PlanCache = Map<string, { readonly stamps: string; readonly plan: PlanPanel | null }>;
 
+// WARNING: keyed by cap too: a further page reads further into a spec that was cut short.
 const plannedFor = Effect.fn("Views.plannedFor")(function* (
   run: RunFacts,
   cap: number,
@@ -429,6 +436,7 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
   mr: MrPanel | null;
   tail?: boolean;
   pages?: number;
+  // WARNING: a Run still going is never cached: it may be writing its plan as it is read.
   plans?: PlanCache;
   flow?: Flow | null;
   parts?: boolean;
@@ -581,6 +589,7 @@ function scalar(value: YamlValue | undefined) {
     const returned: string = "";
     return returned;
   }
+  // WARNING: serialised with JSON, not String: a map-like value would show as [object Object].
   const returned: string = isString(value) ? value : stringifyJson(value);
   return returned;
 }

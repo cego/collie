@@ -1,3 +1,4 @@
+// WARNING: Written out in full rather than cast, so a field a rule reads cannot silently disappear.
 import * as Arr from "effect/Array";
 import { Data, Effect, FileSystem, Layer, Option } from "effect";
 import type { RunFacts } from "../../src/runs";
@@ -63,6 +64,7 @@ export { recordsAt };
 
 export class NoHostDb extends Data.TaggedError("NoHostDb")<{ readonly stateDir: string }> {}
 
+// WARNING: A read fails until the host has made and migrated host.db; the poll retries.
 export const hostRecords = <A, E>(stateDir: string, read: Effect.Effect<A, E, Records>) =>
   Effect.gen(function* () {
     if (!(yield* (yield* FileSystem.FileSystem).exists(`${stateDir}/host.db`).pipe(Effect.orDie)))
@@ -103,6 +105,7 @@ export const launchedAt = (stateDir: string, run: string, operation: string) =>
     ),
   );
 
+// WARNING: Reads and writes must meet the host's records, not runEffect's empty ones.
 export const hostRunRecords: (stateDir: () => string) => RunRecordsApi = (stateDir) => {
   const at = <A, E, R>(use: (records: RunRecordsApi) => Effect.Effect<A, E, R>) =>
     FileSystem.FileSystem.pipe(

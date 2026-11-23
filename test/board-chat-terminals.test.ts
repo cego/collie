@@ -77,6 +77,7 @@ test("a chat core cannot start is tried again after a wait that grows, not on th
           (calls) => runsOf(calls, "collie-chat").length > 0,
         );
         yield* Effect.sleep("3 seconds");
+        // WARNING: a failed start must not retry at once: core's removal event would retry dozens of times a second.
         const failed = runsOf(yield* logged(core), "collie-chat").length;
         expect(failed).toBeLessThanOrEqual(3);
 

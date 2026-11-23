@@ -17,6 +17,7 @@ const OnboardingFile = Schema.fromJsonString(MachineOnboarding);
 const OwnFile = Schema.fromJsonString(MachineOwnRead);
 const fileOf = (dir: string, key: string) => `${dir}/${encodeURIComponent(key)}.json`;
 const SAVE_EVERY = "1 second";
+// WARNING: one board save or removal at a time, so a removal never runs under a save in flight.
 const boardFiles = Semaphore.makeUnsafe(1);
 
 const savedIn = <A>(dir: string, file: Schema.Codec<A, string>) =>

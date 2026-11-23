@@ -132,6 +132,7 @@ const expand = (path: string, home: string) =>
       ? `${home}${pipe(path, Str.slice(1))}`
       : path;
 
+// WARNING: the shell reads a file's value, so only its path is typed, never the value.
 export const envLines = (env: Env, home: string) =>
   Arr.map(Rec.toEntries(env), ([name, value]) =>
     isLiteral(value)
@@ -173,6 +174,7 @@ const ClaudeHooks = Schema.Record(Schema.String, Schema.Array(Schema.Json));
 type ClaudeHooks = typeof ClaudeHooks.Type;
 const decodeHooks = Schema.decodeUnknownOption(ClaudeHooks);
 
+// WARNING: Collie's hooks come first and the overlay cannot override them.
 export function mergeClaudeSettings(collie: ClaudeSettings, overlay: ClaudeOverlay) {
   const { hooks: added = {}, ...rest } = overlay;
   const own = Option.getOrElse(decodeHooks(collie.hooks), () => {

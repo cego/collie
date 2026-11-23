@@ -1,3 +1,4 @@
+// WARNING: no Bun-only import: the view bundles this.
 export interface BoardState {
   readonly selected: string | null;
   readonly page: string | null;

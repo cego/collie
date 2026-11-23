@@ -5,6 +5,7 @@ export interface StepTip {
   readonly open: string | null;
   readonly waiting: string | null;
   readonly instantUntil: number;
+  // WARNING: a press focuses its Step without that being a reason to show the tip.
   readonly pressed: boolean;
 }
 export const CLOSED: StepTip = {

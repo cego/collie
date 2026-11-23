@@ -214,6 +214,7 @@ export interface ListFlags {
   readonly since: string | null;
 }
 
+// WARNING: a page token carries its filters, so `after` takes no others.
 export const listAsked: (
   flags: ListFlags,
   task: string | null,

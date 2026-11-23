@@ -1,3 +1,4 @@
+// WARNING: kept apart from the Agent SDK so the suite can read what it is started with.
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
@@ -109,6 +110,7 @@ type Effort = (typeof EFFORTS)[number];
 export const isEffort = (effort: string): effort is Effort =>
   Arr.some(EFFORTS, (one) => one === effort);
 
+// WARNING: none of these asks the human first.
 const BUILT_IN = ["Read", "Glob", "Grep", "Write", "Edit", "Bash"];
 
 type Permission<Input> =
@@ -151,6 +153,7 @@ const decodeClaudeJson = Schema.decodeUnknownOption(
 );
 const decodeServer = Schema.decodeUnknownOption(UserMcpServer);
 
+// WARNING: a session with no setting sources loads none of the user's servers itself.
 export const userMcpServers: (claudeJson: string) => UserMcpServers = (claudeJson) =>
   Rec.fromEntries(
     Arr.flatMap(
@@ -258,6 +261,7 @@ export const sessionOptions = <Server>(opts: {
   readonly placement: () => Placement | undefined;
   readonly standing: () => StandingDirection | undefined;
 }) => {
+  // WARNING: an older Claude Code names no tool's MCP server, so tools are known by name.
   const prefixes = [...Arr.map(Rec.keys(opts.userServers), toolPrefix), CONNECTOR_PREFIX];
   const ofUserServer = (name: string) =>
     Arr.some(

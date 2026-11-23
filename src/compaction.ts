@@ -35,6 +35,7 @@ import {
   terminate,
 } from "./processes";
 
+// WARNING: fixed; a shorter wait sends the next work into a context nobody has established.
 export const COMPACTION_WAIT_MS = 5 * 60 * 1000;
 
 export const RECONCILE_AFTER_MS = 2 * COMPACTION_WAIT_MS;
@@ -44,6 +45,7 @@ export const STOP_WAIT_MS = 30_000;
 export const CONTROL_DIR = "compaction";
 const CONTROL_FILE = "control.json";
 
+// WARNING: a bad value is kept as a message, not coerced; the default would silently compact an agent someone meant to leave alone.
 export type Threshold =
   | { readonly tokens: number }
   | { readonly off: true }
@@ -61,11 +63,13 @@ export function threshold(configured: number) {
   return { tokens: configured };
 }
 
+// WARNING: only a request that provably never left is Unsubmitted; a socket that closed may already have been accepted.
 export class Unsubmitted extends Data.TaggedError("Unsubmitted")<{
   readonly message: string;
   readonly cause?: unknown;
 }> {}
 
+// WARNING: no third member: an absent completion is not a failure, so the request stays unresolved until the harness says.
 export type CompactionOutcome =
   | { readonly kind: "success" }
   | { readonly kind: "failure"; readonly reason: string };
@@ -82,6 +86,7 @@ export interface LaunchContext {
 
 export interface AgentContext extends LaunchContext {
   run: string;
+  // WARNING: a request's sends run in the Dispatcher's transaction; a reading or poll sends nothing.
   channel: Channel;
   endpoint: string | null;
 }
@@ -104,6 +109,7 @@ export interface Installed {
   args: ReadonlyArray<string>;
   endpoint?: string;
   pid?: number;
+  // WARNING: a pid alone is not an identity; the command line shows it is still the endpoint's process.
   command?: string;
 }
 
@@ -144,6 +150,7 @@ export interface StopTarget {
 }
 
 export interface CompactionPort {
+  // WARNING: refuses an unmanaged harness; a silently unmanaged agent is the partial-harness failure.
   readonly gate: Effect.Effect<void, PortError, PortServices>;
   install(ctx: LaunchContext): Effect.Effect<Installed, PortError, PortServices>;
   usage(ctx: AgentContext): Effect.Effect<number | null, PortError, PortServices>;
@@ -178,9 +185,11 @@ export interface CompactionPorts {
   readonly [harness: string]: CompactionPort;
 }
 
+// WARNING: configured is the Run's own threshold, which is not always the config file's.
 export interface CompactionSettings {
   configured?: number;
   ports?: CompactionPorts;
+  // WARNING: 0 is for an interactive caller, so the Control Plane's one action fiber is not held for five minutes.
   waitMs?: number;
 }
 
@@ -239,6 +248,7 @@ export const withControlLock = <A, E, R>(
 ) =>
   Effect.gen(function* () {
     const path = yield* Path.Path;
+    // WARNING: outside the directory being pruned, so removing controls never removes the lock.
     const lock = path.join(stateDir, "compaction-locks", `${agent}.lock`);
     yield* ensureLockDir(lock);
     return yield* withLock(
@@ -249,6 +259,7 @@ export const withControlLock = <A, E, R>(
     );
   });
 
+// WARNING: a half-written or hand-edited record reads as none; the fallback is dispatching work as before.
 export const readControl = Effect.fn("Compaction.readControl")(function* (
   stateDir: string,
   agent: string,
@@ -314,6 +325,7 @@ export const installControls = Effect.fn("Compaction.installControls")(function*
   const limit = yield* enabled(deps.configured);
   const fs = yield* FileSystem.FileSystem;
   const dir = yield* controlDir(deps.stateDir, agent.agent);
+  // WARNING: a new process, not a reused agent: even a native fallback discards its predecessor's controls, once it is Quiet and never while it may still write.
   const prior = yield* readControl(deps.stateDir, agent.agent);
   const reached =
     prior === null ? null : yield* stopRecord(deps, prior, deps.stopMs ?? STOP_WAIT_MS);
@@ -346,6 +358,7 @@ export const installControls = Effect.fn("Compaction.installControls")(function*
     ),
   );
   if (!supported) return [];
+  // WARNING: the engine holds the control lock through install and start; a parallel launch must not prune before herdr lists the agent.
   yield* Effect.ignore(putDownStaleControls(deps, agent.agent));
   yield* fs.makeDirectory(dir, { recursive: true });
   const ctx: LaunchContext = {
@@ -397,6 +410,7 @@ export interface StopReached extends Stopped {
 
 export class NotQuiet extends Data.TaggedError("NotQuiet")<{ readonly message: string }> {}
 
+// WARNING: the record goes only once its agent is Quiet.
 const stopRecord = Effect.fn("Compaction.stopRecord")(function* (
   deps: Pick<CompactionDeps, "ports" | "stateDir" | "log">,
   record: ControlRecord,
@@ -409,6 +423,7 @@ const stopRecord = Effect.fn("Compaction.stopRecord")(function* (
   const told = record.runLog === null ? deps.log : appendTo(record.runLog);
   const note = (line: string) => Effect.ignore(Effect.provideContext(told(line), services));
   const now = yield* stop(target, note, budgetMs);
+  // WARNING: a server gone before this stop read anything ran the turns an earlier stop covered.
   const reached = now.turns === null ? { ...now, turns: record.stop?.turns ?? null } : now;
   if (reached.state === "quiet") {
     yield* note(`${record.agent}: quiet — ${stopFacts(target, reached.turns)}`);
@@ -498,6 +513,7 @@ export const serversOfRun = Effect.fn("Compaction.serversOfRun")(function* (
   for (const name of names) {
     const text = yield* fs.readFileString(path.join(root, name, CONTROL_FILE)).pipe(Effect.result);
     if (text._tag === "Failure") {
+      // WARNING: a start writes its record last, under its lock.
       if (text.failure.reason._tag !== "NotFound")
         unread.push(`${name}'s control record cannot be read (${reason(text.failure)})`);
       continue;
@@ -512,6 +528,7 @@ export const serversOfRun = Effect.fn("Compaction.serversOfRun")(function* (
   return { servers, unread };
 });
 
+// WARNING: stops without waiting for the control lock, which a start in flight holds.
 export const stopUnlaunched = Effect.fn("Compaction.stopUnlaunched")(function* (
   deps: Pick<CompactionDeps, "ports" | "stateDir" | "log">,
   agent: string,
@@ -527,6 +544,7 @@ export const stopUnlaunched = Effect.fn("Compaction.stopUnlaunched")(function* (
   );
 });
 
+// WARNING: an agent works in each record's directory until its server is Quiet, whatever its pane did.
 export const unlistedServers = Effect.fn("Compaction.unlistedServers")(function* (
   stateDir: string,
   sessions: ReadonlyArray<Pick<Herdr, "agentList">>,
@@ -574,6 +592,7 @@ export const lostServer = Effect.fn("Compaction.lostServer")(function* (
   return `${record.harness} server pid ${record.pid} has exited and ${record.endpoint} is unavailable`;
 });
 
+// WARNING: herdr answers agent start before the harness draws its prompt, so text typed early is lost.
 export const awaitReady = Effect.fn("Compaction.awaitReady")(function* (
   deps: Pick<CompactionDeps, "ports" | "stateDir" | "log" | "pollMs">,
   agent: string,
@@ -602,6 +621,7 @@ export const awaitReady = Effect.fn("Compaction.awaitReady")(function* (
   return `${record.harness} gave no sign it was up within ${Math.round(budgetMs / 1000)}s${why === "" ? "" : ` (${why})`}`;
 });
 
+// WARNING: best-effort; an agent this Session cannot see is not necessarily gone, so only the ones herdr does not list are put down.
 const putDownStaleControls = Effect.fn("Compaction.putDownStaleControls")(function* (
   deps: Pick<CompactionDeps, "ports" | "stateDir" | "herdr" | "log" | "stopMs">,
   launching: string,
@@ -632,8 +652,10 @@ export const putDownControl = Effect.fn("Compaction.putDownControl")(function* <
     deps.stateDir,
     name,
     Effect.gen(function* () {
+      // WARNING: a launch may finish while we wait for its lock; the earlier list cannot prove this agent is still absent.
       if (yield* listed) return "core lists its agent again";
       const record = yield* readControl(deps.stateDir, name);
+      // WARNING: a server already signalled is only looked at again, so no launch waits out its budget.
       const signalled =
         Option.getOrUndefined(
           Option.flatMap(Option.fromNullishOr(record), (present) =>
@@ -666,6 +688,7 @@ const putDownServer = Effect.fn("Compaction.putDownServer")(function* (
   yield* deps.log(`${record.agent}: stopped its compaction endpoint (pid ${pid})`);
 });
 
+// WARNING: a pid is signalled only if its command line still matches, since pids are reused; a record with no command is never signalled.
 export const endpointPid = Effect.fn("Compaction.endpointPid")(function* (
   record: Pick<ControlRecord, "pid" | "command"> | null,
   proc = "/proc",
@@ -675,6 +698,7 @@ export const endpointPid = Effect.fn("Compaction.endpointPid")(function* (
   return pipe_(yield* commandOf(pid, proc), Str.includes(command)) ? pid : null;
 });
 
+// WARNING: never a liveness nudge, a mid-step recovery message or a human typing in the pane; those are not boundaries.
 export const atBoundary = Effect.fn("Compaction.atBoundary")(function* <SubmissionError>(
   deps: CompactionDeps,
   at: { agent: string; run: string; step: string },
@@ -698,6 +722,7 @@ export const atBoundary = Effect.fn("Compaction.atBoundary")(function* <Submissi
     channel: sendsNothing(record.agent),
   };
 
+  // WARNING: an attempt left unresolved outranks a fresh reading: no new work reaches an agent whose compaction is still in the air.
   if (record.attempt) {
     yield* deps.log(
       `${at.agent}: compaction ${record.attempt.id} from ${record.attempt.step} is still unresolved`,
@@ -716,6 +741,7 @@ export const atBoundary = Effect.fn("Compaction.atBoundary")(function* <Submissi
           .pipe(Effect.as(null)),
       ),
     );
+  // WARNING: unavailable is not zero and not the last high reading; recheck at the next eligible boundary.
   if (sample === null) {
     yield* deps.log(`${at.agent}: no usable context sample; sending the work`);
     return DISPATCH;
@@ -739,6 +765,7 @@ export const atBoundary = Effect.fn("Compaction.atBoundary")(function* <Submissi
     deadline: now + deps.waitMs,
     asked: now,
   };
+  // WARNING: written before the request is sent, so a crash leaves the attempt visible.
   yield* writeControl(deps.stateDir, { ...record, attempt });
   yield* deps.warn(
     `  ⇣ ${at.agent}: ${sample} tokens in context — asking it to compact before ${at.step}`,
@@ -751,6 +778,7 @@ export const atBoundary = Effect.fn("Compaction.atBoundary")(function* <Submissi
     yield* deps.log(`${at.agent}: compaction request written, no turn observed`);
   }
   if (failure instanceof Unsubmitted) {
+    // WARNING: a channel that refused a submission is temporary and does not pause the Run; only an unconfirmed outcome does.
     yield* writeControl(deps.stateDir, { ...record, attempt: null });
     yield* deps.warn(
       `  ⚠ ${at.agent}: could not ask it to compact (${failure.message}) — sending the work anyway`,
@@ -765,6 +793,7 @@ export const atBoundary = Effect.fn("Compaction.atBoundary")(function* <Submissi
   return yield* settle(deps, ctx, record, attempt, at.step);
 });
 
+// WARNING: runs in no transaction, so a steer is never refused behind it; it may send nothing.
 const sendsNothing: (agent: string) => Channel = (agent) => ({
   agent,
   submit: () =>
@@ -837,6 +866,7 @@ const resolved = Effect.fn("Compaction.resolved")(function* (
   return DISPATCH;
 });
 
+// WARNING: only the harness's own correlated evidence ends a request; an ack, an old idle state or a transport error establishes nothing.
 const settle = Effect.fn("Compaction.settle")(function* (
   deps: CompactionDeps,
   ctx: AgentContext,
@@ -856,6 +886,7 @@ const settle = Effect.fn("Compaction.settle")(function* (
     }),
   );
   if (done !== null) return done;
+  // WARNING: the attempt is kept, not cleared: a timeout is not proof the agent stopped compacting, so nothing retries or replays the work.
   if (deps.waitMs === 0)
     return {
       dispatch: false,

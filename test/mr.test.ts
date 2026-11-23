@@ -483,6 +483,7 @@ test("a merge request that has not moved since a review says so, and one that ha
 test("a real merge request decodes, nulls and absent approvals and all", () =>
   runEffect(
     Effect.gen(function* () {
+      // WARNING: GitLab sends pipeline: null for a merge request with no second pipeline; the schema must accept null.
       const fs = yield* FileSystem.FileSystem;
       const real = yield* fs.readFileString("test/support/mr-view.json");
       const glab = recorder({

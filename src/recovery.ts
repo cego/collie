@@ -192,6 +192,7 @@ export const recoveryFrom = Effect.fn("Recovery.from")(
       Arr.flatMap(readings, (one) => one.lines),
       Order.mapInput(Str.Order, (one: typeof ReviewedWork.Type) => one.at),
     );
+    // WARNING: the recovering agent cannot read the host's database, so its input is a file.
     yield* (yield* FileSystem.FileSystem).writeFileString(
       `${options.dir}/recovery-reviews.jsonl`,
       Arr.join(
@@ -250,6 +251,7 @@ export const recoveryFrom = Effect.fn("Recovery.from")(
           isBlocking,
         )
       : false;
+    // WARNING: shortcut: external issue bodies need review until the host can snapshot them.
     const external = (yield* classifyWorkSource(options.source)).kind === "linear";
     const judgement = (review: typeof SynthesisSchema.Type) => {
       switch (current.outcome) {
@@ -360,6 +362,7 @@ export const consumedCard = Effect.fn("Recovery.consumedCard")(function* (
       };
 });
 
+// WARNING: a failure's regression needs the same work's first verified fix, so later replays cannot stand in for it.
 export const sourceEvidence = Effect.fn("Recovery.sourceEvidence")(function* (options: {
   readonly cwd: string;
   readonly consumed: ConsumedCard;

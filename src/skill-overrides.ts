@@ -6,6 +6,7 @@ import { pipe } from "effect/Function";
 import { parseDocument } from "./yaml";
 import { isString } from "./schema";
 
+// WARNING: the first Claude Code version that honours skillOverrides.
 export const SKILL_OVERRIDES_VERSION = "2.1.129";
 export const MAIN_CHECKOUT_SKILLS_VERSION = "2.1.277";
 

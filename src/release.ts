@@ -87,6 +87,7 @@ const filesUnder = Effect.fn("release.filesUnder")(function* (dir: string) {
   return files.sort();
 });
 
+// WARNING: unlocked: callers go through placeLocked.
 export const placeRelease = Effect.fn("release.place")(function* (
   carried: Carried,
   collieDir: string,

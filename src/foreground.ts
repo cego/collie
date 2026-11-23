@@ -1,3 +1,4 @@
+// WARNING: a held pass waits no longer than the background work it ran since its last hold, so answers cannot starve it.
 import { Channel, Clock, Context, Effect, Fiber, FileSystem, Latch, Layer, Stream } from "effect";
 
 export const PATIENCE = "250 millis";
@@ -26,6 +27,7 @@ interface ServingLease extends ForegroundApi {
   readonly io: ForegroundApi["wait"];
 }
 
+// WARNING: a captured host context must not replace a live lease.
 const Serving = Context.Reference<ServingLease | null>("collie/ForegroundLease", {
   defaultValue: () => null,
 });
@@ -40,6 +42,7 @@ export const waitingForIO: ForegroundApi["wait"] = (effect) =>
     lease !== null && live.has(lease) ? lease.io(effect) : effect,
   );
 
+// WARNING: wrap the file system before any host component captures it.
 export const foregroundFileSystem = (fs: FileSystem.FileSystem) => {
   const operation =
     <Self, Args extends unknown[], A, E, R>(

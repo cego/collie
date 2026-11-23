@@ -41,6 +41,7 @@ export function isPermissionMode(value: string | undefined): value is Permission
   return value !== undefined && PERMISSION_MODE_SET.has(value);
 }
 
+// WARNING: Kept as written even when not a string: a dropped `permissions: false` would fall back to auto and approve its own calls.
 export function permissionsAsWritten(value: YamlValue | undefined) {
   if (value === undefined) return undefined;
   return isString(value) ? value : stringifyJson(value);
@@ -54,6 +55,7 @@ const ManagedSettingsJson = Schema.fromJsonString(
   }),
 );
 
+// WARNING: Organisation managed settings forbid bypass, and no flag overrides them.
 export const claudeForbidsBypass = Effect.fn("Harness.claudeForbidsBypass")(function* (
   dir: string,
 ) {
@@ -93,6 +95,7 @@ export interface HarnessAdapter extends HarnessModels {
   id: string;
   kind: string;
   modelArgs(model: string): string[];
+  // WARNING: Takes a path, not the text: herdr rejects agent arguments it cannot encode for the shell.
   personaArgs?(personaFile: string): string[];
   dirArgs?(dir: string): string[];
   effortArgs?(effort: string): string[];
@@ -107,6 +110,7 @@ export interface HarnessAdapter extends HarnessModels {
     readonly args: string[];
     readonly env: Readonly<Record<string, string>>;
   };
+  // WARNING: Only for starting a skill: nothing expands a slash command in a prompt, so mention one with skillMention.
   skillCommand(name: string): string;
   stuckHint?: string;
 }
@@ -167,8 +171,10 @@ export const HARNESSES: Harnesses = {
     mcp: ({ extension }) => ({ args: ["-e", extension], env: {} }),
     skillCommand: (name) => `/skill:${name}`,
     modelArgs: (model) => ["--model", model],
+    // WARNING: pi reads a path here as file contents, so the persona file is passed directly.
     personaArgs: (file) => ["--append-system-prompt", file],
     effortArgs: (effort) => ["--thinking", effort],
+    // WARNING: No permissionArgs: pi has no tool-approval prompt, and its --approve only trusts project-local files.
     ...HARNESS_MODELS.pi!,
   },
   opencode: {
@@ -197,6 +203,7 @@ export const HARNESSES: Harnesses = {
     },
     skillCommand: (name) => `the ${stringifyJson(name)} skill`,
     modelArgs: (model) => ["--model", model],
+    // WARNING: No auto mode: pi's --auto approves every call rather than reviewing it.
     permissionArgs: { bypass: ["--auto"] },
     ...HARNESS_MODELS.opencode!,
   },
@@ -294,8 +301,10 @@ export function startArgs(
   ];
 }
 
+// WARNING: Cached per process: the binary does not change under a running host.
 const helps = new Map<string, string>();
 
+// WARNING: Empty, and not cached, where the harness cannot be run.
 export const installedHelp = Effect.fn("Harness.installedHelp")(function* (kind: string) {
   const known = helps.get(kind);
   if (known !== undefined) return known;

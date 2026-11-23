@@ -18,6 +18,7 @@ export const PROC_ENV = "COLLIE_PROC";
 
 export const PRESSURE_SHORT = 10;
 
+// WARNING: A hold of 0 is never short, pressure included.
 export const shortOfMemory = (memory: Memory, hold: number) =>
   hold > 0 &&
   memory.known &&

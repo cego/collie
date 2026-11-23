@@ -1185,6 +1185,7 @@ for (const name of ["gitlab", "github"] as const) {
   });
 }
 
+// WARNING: Shell metacharacters without the injection shapes a security scanner flags (SEC-148).
 const SHELL_WORD = `'x;y $HOME *`;
 
 const URLS = {
@@ -3021,6 +3022,7 @@ for (const snapshot of [
   test(`GitLab approval snapshot: a ${snapshot.change} supplies both rule readiness and current human names`, () =>
     runEffect(
       Effect.gen(function* () {
+        // WARNING: The global /approvals list and /approval_state disagree on current rule contributors.
         const review = yield* reviewOn("gitlab", {
           required: 1,
           approvers: snapshot.earlier,

@@ -47,6 +47,7 @@ const line = await runEffect(
       yield* Effect.addFinalizer(() => stopHost(world.state));
       yield* say("preparing the board: 50 Runs, one of 40 Steps");
       yield* prepare({ ...COUNTS, runs: 50, large: 1, old: 10, live: 0, largeSteps: 40 });
+      // WARNING: running before Desktop starts, so the host is not in Desktop's tree.
       yield* Effect.scoped(connect(world.state));
       yield* say(`launching ${launcher}`);
       return yield* measureStart({

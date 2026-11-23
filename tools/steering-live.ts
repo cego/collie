@@ -58,6 +58,7 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
       fs.remove(scratch, { recursive: true, force: true }).pipe(Effect.ignore),
     );
   const runDir = path.join(scratch, "run");
+  // WARNING: the probe's ledger is its own, never the host's that this herdr serves.
   const records = yield* Layer.build(recordsAt(scratch));
   yield* fs.makeDirectory(path.join(runDir, "steering", "acks"), { recursive: true });
 
@@ -126,6 +127,7 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
     note: nowAcked ? `wrote ${ackPath(runDir, nowId)}` : "no ack file appeared",
   });
 
+  // WARNING: leaving working is what can be observed; it is not a claim that the harness stopped.
   const before = yield* herdr
     .agentStatus(agent)
     .pipe(Effect.orElseSucceed(() => "unknown" as const));
@@ -140,6 +142,7 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
     note: `was ${before}; left working within ${INTERRUPT_WAIT_MS}ms: ${moved}; acknowledged: ${interruptAcked}`,
   });
 
+  // WARNING: only Claude installs a hook that can see a submission at all.
   if (harness !== "claude") {
     rows.push({
       capability: "attribution",
@@ -147,6 +150,7 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
       note: "no hook surface Collie can install on this harness",
     });
   } else {
+    // WARNING: only a live Run's oversight writes manual_override; read the hook's record, not the ledger.
     const deliveredAsCollie = yield* submittedDelivery(hookDir, nowId);
     const before = yield* externalSubmissions(hookDir);
     yield* Effect.log(`Type any line into ${agent}'s pane now, then Enter. Waiting 90 seconds.`);

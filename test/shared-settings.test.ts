@@ -25,6 +25,7 @@ test("a host shares its settings with when each was set, and keeps the latest ed
       Effect.gen(function* () {
         yield* writeConfigValue(world.config, "scope", "all");
         yield* setSetting(world.config, "model", "sonnet", "2026-10-07T10:00:00.000Z");
+        // WARNING: a remembered answer is this Machine's own and is never shared.
         yield* writeConfigValue(world.config, "linear.team", "CEG");
         const client = yield* connect(world.state);
         yield* client.declare({ frontDoor: "desktop" });
@@ -88,6 +89,7 @@ test("a host shares its settings with when each was set, and keeps the latest ed
         const said = yield* collie(world, ["settings", "set", "max_iterations", "9"]);
         expect(said.envelope).toMatchObject({ ok: true });
         expect((yield* loadDefaults(world.config)).maxIterations).toBe(9);
+        // WARNING: only a Desktop marks settings shared with the Flock.
         expect((yield* readSettingsSet(world.config)).flock).toEqual(after.flock!);
         const nine = yield* collie(world, ["settings", "set", "max_iterations", "nine"]);
         expect(nine.envelope).toMatchObject({ ok: false });

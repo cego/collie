@@ -51,6 +51,7 @@ export const ClaudeModels = Schema.Array(
 );
 export type ClaudeModels = typeof ClaudeModels.Type;
 
+// WARNING: Claude's default entry is replaced by Collie's own default.
 export const claudeEntries = (models: ClaudeModels) =>
   Arr.map(
     Arr.filter(models, ({ value }) => value !== DEFAULT_MODEL),
@@ -87,6 +88,7 @@ export const codexEntries = ({ data }: CodexModelList) =>
     }),
   );
 
+// WARNING: pi's thinking column says only yes or no, so effort is not read from it.
 export const piEntries = (text: string) => {
   const [header, ...rows] = Arr.map(Str.split(text, "\n"), (line) =>
     Str.split(Str.trim(line), /\s+/),

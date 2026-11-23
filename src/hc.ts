@@ -53,6 +53,7 @@ export const replies = {
   "terminal.run": HcTerminal,
   "terminal.list": Schema.Struct({
     terminals: Schema.Array(HcTerminal),
+    // WARNING: Required by the schema, but hc 0.1.14 leaves it out.
     machines: opt(Schema.Array(Machine)),
   }),
   "terminal.get": HcTerminal,
@@ -286,6 +287,7 @@ export const connectOver = Effect.fn("Hc.connectOver")(function* (
       return Option.isSome(note) ? Queue.offer(notes, note.value).pipe(Effect.asVoid) : Effect.void;
     }
     pending.delete(message.id);
+    // WARNING: Framed mode starts with the bytes after the hello reply, which are still to be parsed.
     if (framesAfter.delete(message.id) && message.result !== undefined) framed = true;
     return Deferred.succeed(reply, message).pipe(Effect.asVoid);
   };

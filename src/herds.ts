@@ -19,6 +19,7 @@ export const liveHerds = Effect.fn("Herds.live")(function* (herdr: Herdr, env: P
   return [{ herd, herdr }] satisfies ReadonlyArray<LiveHerd>;
 });
 
+// WARNING: An old name never identifies a replacement terminal.
 export const focusPane = Effect.fn("Herds.focusPane")(function* (
   sessions: ReadonlyArray<LiveHerd>,
   agents: ReadonlyArray<AgentEntry>,

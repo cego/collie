@@ -140,6 +140,7 @@ const hostedOver = Effect.fn("test.hostedOver")(function* (
       encode(Arr.map(outputs, (one) => one ?? { writes: [], output: null, owed: true })),
     )
     .pipe(Effect.orDie);
+  // WARNING: the spawned host inherits this process's environment, so it must own this world's state, never the operator's.
   const set = {
     COLLIE_STATE_DIR: world.state,
     COLLIE_USER_DIR: world.config,

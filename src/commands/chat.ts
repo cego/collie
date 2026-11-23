@@ -36,6 +36,7 @@ import { TOOLS, toolNamed } from "../tools";
 import { UnknownJson, answering, requestIdFlag, stdinText } from "./shared";
 import { mutation } from "../envelope";
 
+// WARNING: a changed preference is pending, not a fact about the running pane.
 const status = Command.make("status", {}, () =>
   answering((env) =>
     Effect.gen(function* () {
@@ -66,6 +67,7 @@ const status = Command.make("status", {}, () =>
             `running\t${record?.harness ?? "nothing"}`,
             `preference\t${chosen}${pending === null ? "" : "\tnext launch"}`,
             unavailable === null ? `${chosen}\tinstalled` : `${chosen}\t${unavailable}`,
+            // WARNING: whether there is a conversation and whether Collie can interrupt it are two questions.
             `delivery\t${delivery.proven ? "push" : "on the next turn"}\t${delivery.how}`,
             `waiting\t${batch.items.length}${batch.omitted > 0 ? ` (+${batch.omitted} older)` : ""}`,
             ...(unsettled.length === 0 ? [] : [`uncertain\t${Arr.join(unsettled, ", ")}`]),
@@ -77,6 +79,7 @@ const status = Command.make("status", {}, () =>
   ),
 ).pipe(Command.withDescription("Which harness this Herd's conversation is in, and which is next"));
 
+// WARNING: changes what opens next; never stops, replaces or summarises a running conversation.
 const harness = Command.make(
   "harness",
   {
@@ -129,6 +132,7 @@ const news = Command.make(
       Effect.gen(function* () {
         const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
         if (key === null) return err("invalid_state", "Collie cannot reach core.");
+        // WARNING: sent and uncertain are transport facts; only collie_news being read settles an item.
         const settled =
           sent || unsure
             ? yield* settleNewsFor(env, {
@@ -152,6 +156,7 @@ const news = Command.make(
     ),
 ).pipe(Command.withDescription("What Collie has noticed that nobody has read yet"));
 
+// WARNING: runs on every redraw, so it reads one small file only.
 const statusLine = Command.make(
   "status-line",
   {
@@ -259,6 +264,7 @@ export const chat = Command.make("chat").pipe(
   Command.withSubcommands([status, harness, news, statusLine, context, heard]),
 );
 
+// WARNING: loads protocol schemas only here, not for every CLI invocation.
 export const mcp = Command.make("mcp", {}, () =>
   Effect.promise(() => import("../mcp")).pipe(Effect.flatMap(({ serveMcp }) => serveMcp())),
 ).pipe(

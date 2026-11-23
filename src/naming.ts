@@ -20,6 +20,7 @@ function sanitize(text: string) {
   );
 }
 
+// WARNING: the run's sequence number is reserved first: a long model name truncated it and herdr refused the duplicate agent name.
 export function agentName(slug: string, stepId: string, variantKey: string | null, seq: number) {
   return nameWith(slug, stepId, variantKey, seq, false);
 }
@@ -97,11 +98,13 @@ export function stepLabel(slug: string, stepId: string, variantKey: string | nul
   );
 }
 
+// WARNING: workflow-controlled names become path components, so a definition must not be able to name a file outside the run.
 export function unsafePathComponent(value: string) {
   if (value === "") return "is empty";
   if (value === "." || value === "..") return `is "${value}"`;
   if (pipe(value, Str.includes("/")) || pipe(value, Str.includes("\\")))
     return "contains a path separator";
+  // WARNING: NUL fails filesystem calls and a newline corrupts a forked name's frontmatter, so both are refused here.
   if (/\p{Cc}/u.test(value)) return "contains a control character";
   return null;
 }
@@ -112,6 +115,7 @@ export function reason(cause: unknown) {
 
 export const GLYPH = { running: "⚙", waiting: "⚠", done: "✓", failed: "✗" } as const;
 
+// WARNING: the dog is a tab identity matched against herdr's tab list, so it stays out of the status GLYPH.
 const COLLIE_GLYPH = "\u{1F415}";
 
 export const COLLIE_TAB = `${COLLIE_GLYPH} Collie`;
@@ -152,6 +156,7 @@ export function tabLabel(glyph: string, name: string) {
 
 export function tabNameOf(label: string) {
   const glyphs = Arr.join([...Rec.values(GLYPH), COLLIE_GLYPH], "");
+  // WARNING: the u flag, or the dog's surrogate halves enter the class and stripping leaves a lone surrogate.
   return Str.trim(pipe(label, Str.replace(new RegExp(`^[${glyphs}]\\s*`, "u"), "")));
 }
 

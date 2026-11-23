@@ -28,6 +28,7 @@ const run = (
 
 const prepare = () => run("prepare.sh");
 
+// WARNING: without npx the missing-CLI path is under test; node in /usr/bin would run the real skills CLI.
 const withoutNpx = Effect.fn("prepareTest.withoutNpx")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const tools = `${home}/tools`;
@@ -110,6 +111,7 @@ test("prepare leaves Collie on PATH and the operator skill without a plugin", ()
         `COLLIE_ROOT="\${COLLIE_ROOT:-${root}}"`,
       );
       expect(yield* fs.exists(`${root}/bin/collie`)).toBe(true);
+      // WARNING: claude-code reads only its own store; everything else reads the universal one.
       expect(yield* fs.readLink(`${home}/.claude/skills/collie`)).toBe(`${root}/skills/collie`);
       expect(yield* fs.readLink(`${home}/.agents/skills/collie`)).toBe(`${root}/skills/collie`);
     }),
@@ -148,6 +150,7 @@ test("an unchanged checkout is not rebuilt, and a changed one is", () =>
 
       const unchanged = yield* prepare();
 
+      // WARNING: bun build --compile is seconds and not byte-identical, so a rebuild would report a change that did not happen.
       expect(unchanged.out).toContain("prepare: runner: already in place");
       expect(yield* exists(`${home}/builds`)).toBe(false);
 
@@ -263,6 +266,7 @@ test("a skill deleted by hand is added again rather than called already in place
     Effect.gen(function* () {
       yield* fakeSkillsCli();
       yield* prepare();
+      // WARNING: the store is what the stamp is checked against; removing from it makes the next run add, not skip.
       yield* remove(`${home}/.agents/skills/tdd`);
       yield* remove(`${home}/skills-calls`);
 

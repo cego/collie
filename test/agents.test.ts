@@ -203,6 +203,7 @@ const hostOf: () => AgentHost = () => ({
   collectMs: 400,
   help: (kind) => Effect.succeed(kind === "codex" ? CODEX_HELP : CLAUDE_HELP),
   version: () => Effect.succeed("2.1.309 (Claude Code)"),
+  // WARNING: codex's controls would start the operator's own app-server, so they are left out.
   ports: Struct.omit(COMPACTION_PORTS, ["codex"]),
 });
 
@@ -1086,6 +1087,7 @@ const wrote = (runId: string, about: string) =>
     Effect.orElseSucceed(() => false),
   );
 
+// WARNING: the work is submitted, not awaited: a closed session leaves a launch with no result, which a replay must not fill with a second agent.
 const interrupted = (runId: string, reached: Reached, over?: Partial<AgentHost>) =>
   session(
     Effect.gen(function* () {
@@ -4076,6 +4078,7 @@ const stopsOnError = (agent: string, error: string, after = "Your task for this 
       sessionManager: { getSessionFile: () => "/home/mk/.pi/sessions/one.jsonl" },
       getContextUsage: () => ({ tokens: 1 }),
     };
+    // WARNING: the extension stamps wall time, which this Run's fast clock runs ahead of.
     setSystemTime(yield* Clock.currentTimeMillis);
     try {
       handlers.get("turn_end")!({ message: { stopReason: "error", errorMessage: error } }, ctx);
@@ -5976,6 +5979,7 @@ const controls = hostRunRecords(() => dir);
 const control = (name: string, runId: string, set: boolean) =>
   Effect.flatMap(nowIso, (at) => controls.setControl(name, runId, set ? at : null));
 
+// WARNING: read as the door reads: opening the database to migrate it would contend with the host it watches.
 const controlRead = (name: string, runId: string) =>
   hostRecords(
     dir,
@@ -7936,6 +7940,7 @@ test("a step pointer that vanished is not sent again: the step waits for you, na
     }),
   ));
 
+// WARNING: a budget no real IO can outrun on the fast test clock.
 const OUTLASTS_IO = 300_000;
 
 const reconciled = (runId: string, as: "sent" | "not-sent") =>

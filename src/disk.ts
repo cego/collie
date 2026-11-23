@@ -34,6 +34,7 @@ export const readDisk = Effect.fn("Disk.read")(function* (
   const mounts = new Map<string, Mount>();
   for (const line of Str.split(said, "\n").slice(1)) {
     const [, blocks, , available, , ...mount] = Str.split(Str.trim(line), /\s+/);
+    // WARNING: a line of df's complaints, not a filesystem.
     if (mount.length === 0 || !/^\d+$/.test(blocks ?? "") || !/^\d+$/.test(available ?? ""))
       continue;
     const name = Arr.join(mount, " ");

@@ -1,3 +1,4 @@
+// WARNING: Desktop mints the session id; the Machine rule and News go in its hook, not the message.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -63,6 +64,7 @@ export const claudeDriver: <Server>(
 ) => ChatDriver = <Server>(claude: ClaudeCode<Server>, opts: DriverContext) => {
   const server = claude.server(opts.flock, opts.run);
   return {
+    // WARNING: the SDK carries a Claude Code of its own where none is on PATH.
     installed: true,
     open: Effect.fnUntraced(function* (id, model, effort) {
       const known = yield* Effect.tryPromise(() =>

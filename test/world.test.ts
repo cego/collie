@@ -87,6 +87,7 @@ test("world cleanup waits for a host to exit after it gives back its lock", () =
     }).pipe(Effect.scoped),
   ));
 
+// WARNING: the process markers read Linux /proc; the other world proofs are portable.
 test.skipIf(process.platform !== "linux")(
   "world cleanup waits for its surviving command before removing the directory",
   () => {

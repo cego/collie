@@ -185,6 +185,7 @@ import manifest from "../../../package.json";
 import { timingLine } from "../shared/record";
 
 const windowOn = (url: string, title: string, frame: BrowserWindow["frame"]) => {
+  // WARNING: the view loads while Desktop starts, so its frames wait in this inbox.
   const inbox = heldUntilListened<ToMain>();
   const rpc = BrowserView.defineRPC({
     maxRequestTime: 10_000,
@@ -196,7 +197,9 @@ const windowOn = (url: string, title: string, frame: BrowserWindow["frame"]) => 
       },
     },
   });
+  // WARNING: macOS bundles no CEF, so its windows render with the system's WebKit.
   const window = new BrowserWindow({ title, url, renderer: "cef", frame, rpc });
+  // WARNING: the view holds the Bun bridge, so nothing may navigate off it; Linux CEF ignores this as a window option.
   window.webview.setNavigationRules(["^*", url, "about:srcdoc"]);
   const channel: Channel<ToView, ToMain> = {
     send: (frame) => window.webview.rpc?.send.frame(frame),
@@ -228,6 +231,7 @@ const openUrl = (url: string) =>
 
 const openSlack = Effect.gen(function* () {
   if (which(OPENER) === null) return yield* openUrl(SLACK_WEB);
+  // WARNING: never killed; still running means the app took the link.
   const child = Bun.spawn([OPENER, SLACK_APP], {
     env: childEnv(),
     cwd: CHILD_CWD,
@@ -237,17 +241,20 @@ const openSlack = Effect.gen(function* () {
   if (Option.isSome(code) && code.value !== 0) yield* openUrl(SLACK_WEB);
 });
 
+// WARNING: COLLIE_DESKTOP_STATE_HOME moves only Desktop's own state; what it starts keeps XDG_STATE_HOME.
 const StateDir = Config.String("COLLIE_DESKTOP_STATE_HOME").pipe(
   Config.orElse(() => Config.String("XDG_STATE_HOME")),
   Config.orElse(() => Config.String("HOME").pipe(Config.map((home) => `${home}/.local/state`))),
 );
 
 const main = Effect.gen(function* () {
+  // WARNING: before anything is spawned, so every child starts with the shell's PATH and variables.
   const tookLoginEnv = yield* takeLoginEnv;
   const updater = yield* electrobunUpdater(Updater);
   yield* applyAtLaunch(updater).pipe(
     Effect.catch((reason) => Effect.logWarning(`Desktop update not installed: ${reason}`)),
   );
+  // WARNING: opened only after a readied update had its chance to install, so none closes again.
   const board = windowOn(VIEW, "Collie", { width: 1200, height: 800, x: 120, y: 80 });
   const updates = yield* updatesOf(updater, manifest.version);
   const local = hostname();
@@ -256,6 +263,7 @@ const main = Effect.gen(function* () {
   const releases = yield* Config.String("COLLIE_DESKTOP_RELEASES").pipe(
     Config.withDefault(RELEASES),
   );
+  // WARNING: a Desktop from a checkout may trust another key; a release never.
   const key =
     (yield* updater.channel) === "stable"
       ? RELEASE_PUBLIC_KEY
@@ -263,6 +271,7 @@ const main = Effect.gen(function* () {
           Config.withDefault(RELEASE_PUBLIC_KEY),
         );
   const own = (yield* Path.Path).join(yield* StateDir, "collie-desktop");
+  // WARNING: started on this bundle, so every other staged update was applied or passed over.
   yield* pruneDesktop({
     root: Utils.paths.userData,
     state: own,
@@ -299,6 +308,7 @@ const main = Effect.gen(function* () {
       Effect.suspend(() => readPiModels(SubscriptionRef.getUnsafe(flockSettings), own)),
     ),
   });
+  // WARNING: before Desktop's own settings are held, so a save does not write back what was carried.
   const loadedFlock = yield* carryIntoFlock(own, yield* nowIso).pipe(Effect.result);
   const flockReadable = Result.isSuccess(loadedFlock);
   const unreadableFlock = new ActionFailed({
@@ -354,6 +364,7 @@ const main = Effect.gen(function* () {
     `${homedir()}/.config`;
   const keyring = credentialsFile(`${config}/collie-desktop`);
   const blank: Credentials = { gitlab: null, helle: false, ...gitlabPages() };
+  // WARNING: its expiry is GitLab's to say, so a token renewed elsewhere is not warned of.
   const held = Effect.gen(function* () {
     const token = yield* keyring.lookup("gitlab-token");
     const expires =
@@ -372,6 +383,7 @@ const main = Effect.gen(function* () {
     return returned;
   });
   const credentials = yield* SubscriptionRef.make(blank);
+  // WARNING: read beside the start, not before it: frames the view sends before the RPCs are served are lost.
   yield* held.pipe(
     Effect.flatMap((read) =>
       SubscriptionRef.update(credentials, (now) => (now === blank ? read : now)),
@@ -379,6 +391,7 @@ const main = Effect.gen(function* () {
     Effect.ignore({ log: "Warn" }),
     Effect.forkScoped,
   );
+  // WARNING: an older Desktop that was killed left its own SSH masters behind.
   yield* sweepSshControls(tmpdir(), childEnv()).pipe(Effect.ignore);
   const listed = yield* rosterOf(collie).pipe(
     Effect.map((said) => said.roster),
@@ -529,6 +542,7 @@ const main = Effect.gen(function* () {
     },
     machine: door.machine,
   });
+  // WARNING: a Machine out of reach, or on a collie without the operation, is synced when it next connects.
   const toldSynced =
     (part: MachineSynced["part"]) =>
     ({ machine }: { readonly machine: KnownMachine }, failed: string | null) =>
@@ -681,6 +695,7 @@ const main = Effect.gen(function* () {
     }).pipe(
       Effect.tap((run) => saveOnboarding(onboardings, { _tag: "Onboarding", job, machine, run })),
       Effect.tap(() => PubSub.publish(changes, { _tag: "Wake", profile: machine.profile })),
+      // WARNING: forked, since an unreachable Machine would hold the onboarding open until it is back.
       Effect.tap(() => doctored(route).pipe(Effect.forkIn(scope))),
       Effect.ensuring(ended(job, machine.profile)),
       Effect.provide(BunServices.layer),
@@ -933,6 +948,7 @@ const main = Effect.gen(function* () {
     flock: () =>
       Stream.unwrap(
         Effect.gen(function* () {
+          // WARNING: before the routes are read, so a route added meanwhile is not missed.
           const changed = yield* PubSub.subscribe(changes);
           const told = yield* PubSub.subscribe(news);
           const reachable = Arr.map([...routes.values()], ({ route }) => route);
@@ -942,6 +958,7 @@ const main = Effect.gen(function* () {
           const doctorOnceLive = (item: FlockItem) => {
             if ("_tag" in item || item.message._tag !== "Snapshot") return Effect.void;
             const route = routes.get(item.machine.profile)?.route;
+            // WARNING: again on a new build, which an older one could not answer --gitlab-host for.
             const once = `${item.machine.profile}@${item.message.build}`;
             if (route === undefined || checked.has(once)) return Effect.void;
             checked.add(once);
@@ -1080,6 +1097,7 @@ const main = Effect.gen(function* () {
           return yield* Effect.fail(`"${named}" is not a host name, such as gitlab.example.com`);
         if (named === gitlabHost()) return `GitLab is ${named} already`;
         if (!flockReadable) return yield* Effect.fail(unreadableFlock.reason);
+        // WARNING: a token is made for one GitLab, so the old host's goes before the host changes.
         const token = yield* keyring.lookup("gitlab-token").pipe(Effect.orElseSucceed(() => null));
         if (token !== null) yield* keyring.clear("gitlab-token");
         yield* editFlock("gitlab_host", named).pipe(Effect.mapError((failed) => failed.reason));
@@ -1207,6 +1225,7 @@ const main = Effect.gen(function* () {
             cols,
             rows,
           );
+          // WARNING: one terminal at a time: a newer one ends this one.
           if (shownTerminal !== undefined) Deferred.doneUnsafe(shownTerminal.ended, Effect.void);
           const mine = { send: opened.send, ended: Deferred.makeUnsafe<void>() };
           shownTerminal = mine;
@@ -1553,9 +1572,11 @@ const main = Effect.gen(function* () {
   return yield* Layer.launch(servedOn(board.channel));
 }).pipe(Effect.scoped, Effect.provide(platformLayer));
 
+// WARNING: a Mac sends Cmd+C, Cmd+V, Cmd+Q and the rest through its menu bar, which is empty until set.
 if (process.platform === "darwin")
   Electrobun.ApplicationMenu.setApplicationMenu(applicationMenu(process.platform));
 
+// WARNING: quitting may end the process before any scope closes, and an SSH master would outlive it.
 Electrobun.events.on("before-quit", endChildren);
 process.on("exit", endChildren);
 

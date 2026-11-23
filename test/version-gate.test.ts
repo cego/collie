@@ -49,6 +49,7 @@ test("a harness whose --version failed is asked again once the failure has expir
         Effect.provideService(Clock.Clock, clock),
       );
 
+      // WARNING: kept a while, so a launch right behind a failed one does not probe again.
       expect((yield* Effect.flip(gate)).message).toBe("cannot ask opencode its version (exit 1)");
       expect((yield* Effect.flip(gate)).message).toBe("cannot ask opencode its version (exit 1)");
       expect(asked).toEqual([["opencode", "--version"]]);

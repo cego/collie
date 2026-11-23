@@ -1,9 +1,11 @@
+// WARNING: no Bun-only import: the view bundles this module.
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import type { Question } from "../../../src/board-model";
 import type { DesktopAction } from "./flock";
 
+// WARNING: no host option can take this id.
 export const HOLD = "\u0000hold";
 
 type Status =
@@ -53,6 +55,7 @@ export type Event =
       readonly kind: "replied";
       readonly request: string;
       readonly ok: false;
+      // WARNING: a refused request would be refused again, so it is not retried.
       readonly refused: boolean;
       readonly reason: string;
     };

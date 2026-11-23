@@ -88,6 +88,7 @@ const written = Effect.fn("test.written")(function* () {
 test("a card-bound proposal carries the revision it was asked about", () =>
   runEffect(
     Effect.gen(function* () {
+      // WARNING: without the binding, admit has no revision to compare, so revision_moved is unreachable.
       const bound = yield* record(file, {
         interpretation: "the branch is wrong",
         targets,
@@ -247,6 +248,7 @@ test("declining settles it, and it cannot then be confirmed", () =>
       expect(
         yield* confirm(file, proposal.id, proposal.content_hash, human, versions),
       ).toMatchObject({ refused: "not_pending" });
+      // WARNING: it cannot be declined twice: the journal would say it was answered twice.
       expect(yield* decline(file, proposal.id, human)).toMatchObject({ refused: "not_pending" });
     }),
   ));
@@ -428,6 +430,7 @@ test("an Intent nobody can decode refuses the confirmation instead of reading as
         by: "evaluator:call-1",
       });
 
+      // WARNING: a corrupt Intent after the proposal is the window that matters: its version is unreadable, not absent.
       yield* RunRecords.use((records) => records.put(run.id, INTENT_FILE, "{ not json"));
 
       const out = yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
@@ -549,6 +552,7 @@ test("a confirmed start goes through the same Input settling a typed one does", 
         by: "evaluator:call-1",
       });
 
+      // WARNING: start takes the same two steps as run start, so an unnamed Input is refused, not guessed; no human is there to ask.
       const out = yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
       expect(out.ok).toBe(false);
       if (out.ok) return;
@@ -673,6 +677,7 @@ test("a proposal is pending until it is answered or it expires", () => {
 test("a proposal about the installation is waiting on the Herd, not on any Run", () =>
   runEffect(
     Effect.gen(function* () {
+      // WARNING: upgrade and similar actions name no Run, so they record no targets; a board asking per Run would never draw them.
       const herdWide = yield* record(file, {
         interpretation: "bring this installation up to date",
         targets: [],

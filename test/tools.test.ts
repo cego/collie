@@ -3,6 +3,7 @@ import { recordsAt } from "./support/records";
 import type { Records } from "../src/records";
 import * as Cause from "effect/Cause";
 
+// WARNING: Reads cover the whole Herd and say when truncated: a model not told answers 'that is all of them' in good faith.
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
@@ -174,6 +175,7 @@ test("the tools are one Toolkit, each saying how it fails and that it needs no a
 });
 
 test("a tool that writes does not tell a client it only reads", () => {
+  // WARNING: readOnly is the tool's own answer: reading news, checking the installation and proposing all write.
   const writes = Arr.map(
     Arr.filter(TOOLS, (tool) => !tool.readOnly),
     (tool) => tool.name,
@@ -190,6 +192,7 @@ test("a tool that writes does not tell a client it only reads", () => {
 test("the Tasks a Run can be started into are something chat can read", () =>
   inWorld(
     Effect.gen(function* () {
+      // WARNING: A Task with no Run is invisible in the Herd, so tasks are listed from the Task list, not the Run list.
       const task = yield* newTask({
         workspace: null,
         label: "picker",
@@ -284,6 +287,7 @@ test("the run tool lists a page that says whether it is whole, and its next reac
       expect(page.complete).toBe(true);
       expect([...seen].sort()).toEqual(Arr.map(made, (run) => run.id).sort());
 
+      // WARNING: A filter belongs to a listing, so given without list it is refused rather than ignored.
       expect(yield* call("collie_run", { status: ["live"] })).toContain(
         'collie_run refused the request (InvalidInput): status only filter a listing, which takes "list": true',
       );
@@ -345,6 +349,7 @@ test("a run-scoped read with no run takes the board's selection, and says that i
       });
 
       const detail = yield* call("collie_run");
+      // WARNING: Answers say which Run they concern; an unnamed answer is how the wrong work gets described.
       expect(detail).toContain("Strapi prod seeder");
       expect(detail).toContain("add a picker");
 
@@ -713,6 +718,7 @@ test("concurrent retries that both miss the receipt execute the request only onc
                 file !== receipt || found
                   ? Effect.void
                   : Effect.gen(function* () {
+                      // WARNING: Both callers see the absent receipt before either claims its lock.
                       if (++readers === 2) yield* Deferred.succeed(ready, undefined);
                       yield* Deferred.await(ready);
                     }),
@@ -951,6 +957,7 @@ test("an unavailable action fails immediately instead of waiting for confirmatio
     }),
   ));
 
+// WARNING: The host's news sweep is off here, or it retires these items before the read under test.
 const newsFile = Effect.fn("test.newsFile")(function* () {
   yield* setSetting(env.userDir, "proactive", false, "2026-11-16T00:00:00.000Z");
   return yield* newsPath(stateDir, KEY);
@@ -1376,6 +1383,7 @@ test("an offer the Run does not make, or cannot make now, starts nothing and say
 test("the definitions tool answers with the module an id runs, not the file below it", () =>
   inWorld(
     Effect.gen(function* () {
+      // WARNING: This checkout is the installation, so the shipped modules are these, not the installed release.
       const shipped = readEnv({
         ...process.env,
         COLLIE_ROOT: new URL("../", import.meta.url).pathname,
@@ -2115,6 +2123,7 @@ test("the host answers a Flock chat's read with Native chat's own answer, delive
   inWorld(
     Effect.gen(function* () {
       const run = yield* aRun("add a picker");
+      // WARNING: Settled first: asking and suspending are two steps, and a read between them differs.
       const native = yield* until(
         () => call("collie_run", { run: run.id }),
         (said) => pipe_(said, Str.includes("Status: waiting")),

@@ -1,3 +1,4 @@
+// WARNING: Nothing here throttles or stops a Run: usage is data, never a limit.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
@@ -39,6 +40,7 @@ export const HealFinding = Schema.Struct({
 });
 export type HealFinding = typeof HealFinding.Type;
 
+// WARNING: `uncertain` sent a write whose answer was lost; both `refused` and `uncertain` are retried.
 export const Publication = Schema.Literals([
   "filed",
   "linked",
@@ -164,6 +166,7 @@ export interface FailureLike {
   readonly tail: { readonly stderr: string };
 }
 
+// WARNING: Never a halt: a repeat is an obstacle sentence, not evidence the work cannot be done.
 export function repeatedFailure(records: ReadonlyArray<FailureLike>, n: number) {
   if (n < 2) return null;
   const byName = new Map<string, FailureLike[]>();

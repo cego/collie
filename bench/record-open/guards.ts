@@ -27,6 +27,7 @@ const ancestorsOf = Effect.fnUntraced(function* (pid: number) {
   return found;
 });
 
+// WARNING: inside a Measurement the host that started this process already holds the lock.
 export const measuring = <A, E, R>(
   lock: string,
   say: (line: string) => Effect.Effect<void>,

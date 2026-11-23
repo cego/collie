@@ -79,6 +79,7 @@ export const collie = Effect.fn("World.collie")(function* (
       COLLIE_CWD: world.project,
       COLLIE_HOST: asCommand(command),
       ...suite,
+      // WARNING: This env is otherwise built from nothing, so the world's own core is passed explicitly.
       HC_SOCKET: Bun.env.HC_SOCKET,
       ...extra,
     },
@@ -123,10 +124,12 @@ export const save = (into: string, names: ReadonlyArray<string>) =>
     for (const name of names) yield* fs.copyFile(`${fixtures}/${name}`, `${into}/${name}`);
   }).pipe(Effect.orDie);
 
+// WARNING: A host is a child that inherits the process environment, not this world's Config.
 const fakesIn = Effect.fn("World.fakesIn")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const tripwire = yield* armTripwire(dir);
   yield* Effect.addFinalizer(() => tripwire.stop);
+  // WARNING: A host asks claude --help before an agent starts; the operator's claude is too slow under a suite, so fake it.
   const harnesses = `${dir}/harnesses`;
   yield* fs.makeDirectory(harnesses).pipe(Effect.orDie);
   yield* fs
@@ -195,8 +198,10 @@ export const proves = <A, E>(
         home: `${dir}/home`,
         project: `${dir}/project`,
       };
+      // WARNING: Stop the host before the directory goes, or a host left running can write it back.
       yield* Effect.addFinalizer(() =>
         stopHost(world.state).pipe(
+          // WARNING: A forwarded call may outlive its host and write into this directory; let this world's finish before removing it.
           Effect.andThen(
             until(
               () =>
@@ -231,6 +236,7 @@ export const proves = <A, E>(
           .pipe(Effect.orDie);
       const command = yield* collieCommand;
       const suite = yield* suiteEnv;
+      // WARNING: Never the operator's live core, which on a desk is the real one.
       const fakes = yield* fakesIn(dir);
       return yield* body(world, fakes.core).pipe(
         Effect.tap(() => (modelOff ? neverModelled(world) : Effect.void)),

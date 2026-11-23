@@ -1,5 +1,6 @@
 import * as Cause from "effect/Cause";
 
+// WARNING: each definition is decided by its latest edit, removals included; a replaced file is kept under replaced/.
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
@@ -21,6 +22,7 @@ const SEEN_FILE = "definitions-set.json";
 
 export const byPath = (definition: { readonly path: string }) => definition.path;
 
+// WARNING: hidden files and editor backups beside a definition are not shared.
 const shareable = (path: string) => {
   const [kind, name, ...deeper] = Str.split(path, "/");
   return (
@@ -170,6 +172,7 @@ export const takeDefinitions = (
         const had = Option.getOrUndefined(Arr.findFirst(held, (one) => one.path === edit.path));
         const content = had?.base64 ?? null;
         if (yield* throughLink(userDir, edit.path)) continue;
+        // WARNING: saved by hand since it was read: left alone.
         if ((yield* modifiedAt(file)) !== (content === null ? null : had?.at)) continue;
         if (had !== undefined && content !== null && content !== edit.base64) {
           const replaced = `replaced/${had.at}/${edit.path}`;

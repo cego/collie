@@ -75,6 +75,7 @@ test("a stop is marked on the board and nothing is sent until the grace is up", 
 
         yield* until("the stop to be sent", () => acted.length === 1);
         expect(acted).toEqual([{ _tag: "StopRun", runId: "run:a" }]);
+        // WARNING: the mark goes when the stop does; what is on the board is what has not been sent.
         expect(driven.state().stopping).toEqual([]);
       }),
     ),

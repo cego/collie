@@ -23,6 +23,7 @@ export const ResultBoundary = Schema.Union([
     data: Schema.ObjectKeyword,
     human: Schema.String,
   }),
+  // WARNING: tools reach this module while operations is still loading, so it cannot import operations.
   Schema.Struct({ ok: Schema.Literal(false), error: Schema.suspend(() => ExpectedError) }),
 ]);
 const ResultBoundaryJson = Schema.fromJsonString(ResultBoundary);
@@ -38,12 +39,14 @@ export type Result = OpResult;
 export type CollieError = Config.ConfigError | Error | HerdrError | PlatformError;
 type CollieServices = PlatformServices;
 
+// WARNING: rejected commands write no receipt, as nothing happened for a retry to replay.
 export const REJECTED: ReadonlyArray<ExpectedError["code"]> = [
   "invalid_input",
   "needs_input",
   "workspace_required",
 ];
 
+// WARNING: goes through the Stdio sink, not process.stdout, so an embedding host sees the output.
 export const say = Effect.fn("collie.say")(function* (line: string) {
   const stdio = yield* Stdio.Stdio;
   yield* Stream.make(`${line}\n`).pipe(Stream.run(stdio.stdout({ endOnDone: false })));
@@ -62,13 +65,16 @@ export const printResult = Effect.fn("collie.printResult")(function* (
         ? result.human
         : result.error.message,
   );
+  // WARNING: exit status has no Effect equivalent, so it is set on the process.
   if (!result.ok) process.exitCode = REJECTED.includes(result.error.code) ? 2 : 1;
 }, Effect.orDie);
 
+// WARNING: a defect must still end in one envelope, never empty streams and a bare exit status.
 export function attempt<E, R>(operation: Effect.Effect<Result, E, R>, json: boolean) {
   return guarded(operation.pipe(Effect.flatMap((result) => printResult(result, json))), json);
 }
 
+// WARNING: whatever escapes a printing command still becomes one envelope.
 export function guarded<E, R>(operation: Effect.Effect<void, E, R>, json: boolean) {
   return operation.pipe(
     Effect.catch((cause) =>
@@ -80,6 +86,7 @@ export function guarded<E, R>(operation: Effect.Effect<void, E, R>, json: boolea
       ),
     ),
     Effect.catchDefect((defect) => printResult(err("operation_failed", String(defect)), json)),
+    // WARNING: an interrupt still writes an envelope, so a parser never reads an empty stream.
     Effect.onInterrupt(() =>
       printResult(err("operation_failed", "interrupted before it finished"), json).pipe(
         Effect.ignore,
@@ -106,6 +113,7 @@ const readReceipt = Effect.fn("collie.readReceipt")(function* (file: string) {
   return yield* Schema.decodeEffect(ResultBoundaryJson)(yield* fs.readFileString(file));
 });
 
+// WARNING: failures carry the request id too, so a retry replays rather than starting a second Run.
 function withRequestId(result: Result, id: string) {
   if (!result.ok)
     return err(result.error.code, result.error.message, {

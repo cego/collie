@@ -1,3 +1,4 @@
+// WARNING: Electrobun's launcher sets LD_PRELOAD for Desktop alone; children given the user's environment, or every child writes ld.so errors.
 import { expect, test } from "bun:test";
 import { withoutLauncher } from "../src/env";
 

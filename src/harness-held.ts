@@ -3,6 +3,7 @@ import * as Str from "effect/String";
 import { Effect } from "effect";
 import { shell } from "./mr";
 
+// WARNING: Decides by content, not ancestry: copies under other SHAs count.
 export const harnessLacking = (cwd: string, at: string, commits: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const git = (...args: string[]) => shell("git", args, cwd);
@@ -21,6 +22,7 @@ export const harnessLacking = (cwd: string, at: string, commits: ReadonlyArray<s
       );
       if (files.code !== 0) break;
       touched.push(...Arr.filter(Str.split(files.stdout, "\0"), Str.isNonEmpty));
+      // WARNING: An empty pathspec would compare the whole tree.
       if (
         touched.length === 0 ||
         (yield* git("--literal-pathspecs", "diff", "--quiet", commit, at, "--", ...touched))

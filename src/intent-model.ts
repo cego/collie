@@ -45,6 +45,7 @@ export const AuthoritySchema = Schema.Struct({
   stop_allowed: Schema.Boolean,
   exclusive_steering: Schema.Boolean,
   run_verification: Schema.Array(VerifySpecSchema),
+  // WARNING: Read so older Intents decode; never written and never enforced.
   model_calls_per_run: Schema.optionalKey(Schema.Int),
 });
 

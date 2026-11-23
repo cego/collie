@@ -361,6 +361,7 @@ test("a job that passes for a checkout with changes it never saw proves nothing"
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const { asked, at, forge } = yield* waiting("passed");
+      // WARNING: Overrides the operator's status.showUntrackedFiles so the checkout reads the same whatever git is set to.
       yield* exec(["git", "config", "status.showUntrackedFiles", "no"], { cwd: asked.cwd });
       yield* fs.writeFileString(`${asked.cwd}/unseen.txt`, "x");
       expect(yield* read(asked, forge)).toEqual({

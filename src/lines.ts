@@ -1,3 +1,4 @@
+// WARNING: The discipline is in the lines: `claimed:` keeps a claim from reading as a pass, and `missing` is always emitted.
 import * as Struct from "effect/Struct";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -92,6 +93,7 @@ export function cardLines(card: Card) {
   return lines;
 }
 
+// WARNING: Never written to the Run's inbox: a report on a finished Run has no consumer, so it shows as undelivered.
 export function driftLines(report: DriftReport, undelivered = false) {
   const lines = [
     line(
@@ -155,6 +157,7 @@ export function describeAction(action: Action) {
         : `let Collie run ${action.name} for ${action.run}: ${commandLine(action.command)}`;
     case "remember_verification":
       return `keep ${action.run}'s checks for every later Run in its repository${action.replace === true ? ", replacing what is kept there" : ""}`;
+    // WARNING: Always name the workspace: a line without it asks a yes to a change nobody could see.
     case "update_defaults":
       return action.change === "remove-constraint"
         ? `remove the constraint ${action.text} from ${everyNewRunIn(action.workspace)}`
@@ -182,6 +185,7 @@ export function describeAction(action: Action) {
         action.workspace === undefined
           ? "no workspace named, so it will be refused"
           : `workspace ${action.workspace}`;
+      // WARNING: Inputs are shown too: a yes to a workflow name alone approves a plan nobody read.
       const on = named(action.inputs);
       const decided = named(action.decisions ?? {});
       const checks = Arr.map(action.verify ?? [], (spec) => `${spec.name}: ${commandLine(spec)}`);

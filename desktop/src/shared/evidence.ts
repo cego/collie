@@ -1,3 +1,4 @@
+// WARNING: no Bun-only import: the view bundles this.
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -80,6 +81,7 @@ export const sortEvidence = (files: ReadonlyArray<EvidenceFile>) => {
   };
 };
 
+// WARNING: Metrics do not count as evidence.
 export const hasEvidence = ({
   verifications,
   evidence,

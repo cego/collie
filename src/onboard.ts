@@ -1,3 +1,4 @@
+// WARNING: nothing here runs sudo: a step that needs root stops with the command to run.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -47,8 +48,10 @@ export interface OnboardOptions {
   readonly to: string;
   readonly carried?: Carried | null;
   readonly skip?: ReadonlyArray<Skippable>;
+  // WARNING: credentials go on stdin, never as an argument, where the process list would show them.
   readonly secrets?: Readonly<Record<string, string>>;
   readonly terminal?: boolean;
+  // WARNING: a login that needs the human starts only when someone sees the stream.
   readonly attended?: boolean;
 }
 
@@ -59,6 +62,7 @@ const CLAUDE_LOGIN = "claude auth login";
 const LOGIN_LIMIT = "10 minutes";
 const COMMAND_LIMIT = "15 minutes";
 const SETTLED: ReadonlyArray<StepStatus> = ["done", "in_place", "skipped"];
+// WARNING: RFC 3986 characters only, so terminal escapes after a URL are not read as part of it.
 const URL_IN = /https:\/\/[\w\-.~:/?#[\]@!$&'()*+,;=%]+/;
 
 const done: (detail: string) => Outcome = (detail) => ({ status: "done", detail });
@@ -131,6 +135,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
   const localBin = `${env.home}/.local/bin`;
   const binDir = env.raw["COLLIE_BIN_DIR"] ?? localBin;
   const inherited = Arr.filter(Str.split(env.raw["PATH"] ?? "", ":"), (dir) => dir !== "");
+  // WARNING: installers' bin dirs go first, since a fresh SSH session's PATH may not include them yet.
   const search = Arr.join([...new Set([binDir, localBin, ...inherited])], ":");
   const release = `${env.collieDir}/release`;
   let root = release;
@@ -148,6 +153,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         ChildProcess.make(cmd, [...args], {
           cwd,
           env: { ...childEnv, ...extra },
+          // WARNING: USER must survive: Claude Code's macOS Keychain lookup needs it to say it is logged in.
           extendEnv: true,
           stdin: input === null ? "ignore" : Stream.make(new TextEncoder().encode(input)),
           stdout: "pipe",
@@ -514,6 +520,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         ),
         { recursive: true },
       );
+      // WARNING: mode applies only to a new file, so an older one is chmodded before the write.
       if (there) yield* fs.chmod(file, 0o600);
       if (current !== text) yield* fs.writeFileString(file, text, { mode: 0o600 });
       return current === text ? inPlace(`credentials at ${file}`) : done(`wrote ${file}`);
@@ -546,6 +553,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
           ...(port && { port: Number(port) }),
         });
       };
+      // WARNING: Claude Code may print only the paste-code URL and send the callback one to $BROWSER.
       const shims = yield* fs.makeTempDirectoryScoped({ prefix: "collie-login-" });
       const handed = `${shims}/url`;
       yield* fs.writeFileString(`${shims}/browser`, `#!/bin/sh\necho "$1" > '${handed}'\n`);

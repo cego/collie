@@ -1,3 +1,4 @@
+// WARNING: A half-written last line is skipped; an undecodable line elsewhere is corruption, not an interrupted append.
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { Effect, FileSystem, Option, Path, Schema } from "effect";

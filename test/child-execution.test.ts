@@ -1,3 +1,4 @@
+// WARNING: Effect 4.0.1 derives a workflow's execution id differently from its payload; a finished child must not run twice.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";

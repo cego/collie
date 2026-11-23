@@ -5,7 +5,9 @@ import { pipe } from "effect/Function";
 import * as Str from "effect/String";
 import { afterAll, afterEach, beforeAll, beforeEach, setDefaultTimeout } from "bun:test";
 import { Clock, Effect, Path, Schedule } from "effect";
+// WARNING: Bun's preload mutates the environment inherited by tests; Config is read-only.
 /* oxlint-disable effecttsgo/process-env */
+// WARNING: The exit listener must finish cleanup synchronously; Effect FileSystem is asynchronous.
 import {
   existsSync,
   mkdirSync,
@@ -20,6 +22,7 @@ import { GIT_QUIET } from "./git-quiet";
 import { alive, kill, MARKER, marked, rootBase } from "./sweep";
 import { testBunfig } from "./packages";
 
+// WARNING: Bun reads no default timeout from bunfig, and this overrides --timeout.
 setDefaultTimeout(30_000);
 
 const base = rootBase();
@@ -31,24 +34,28 @@ const makeRoot = () => {
   process.env.HOME = join(root, "home");
   mkdirSync(process.env.HOME);
   writeFileSync(join(process.env.HOME, ".bunfig.toml"), testBunfig);
+  // WARNING: Git 2.47+ detaches the maintenance a commit starts, which writes into a test's repository while the test removes it.
   writeFileSync(
     join(process.env.HOME, ".gitconfig"),
     "[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n",
   );
 };
 makeRoot();
+// WARNING: Bun.main is the file running now, which is set per test when several files run in one process.
 const nameTestFile = () => {
   process.env.COLLIE_TEST_FILE = relative(new URL("../..", import.meta.url).pathname, Bun.main);
 };
 nameTestFile();
 Object.assign(process.env, GIT_QUIET);
 process.env.COLLIE_HOST_WATCH_PID = String(process.pid);
+// WARNING: Kept well inside settled below, so a host told to stop is gone before the check.
 process.env.COLLIE_HOST_STOP_GRACE ??= "500 millis";
 for (const key of Struct.keys(process.env))
   if (pipe(key, Str.startsWith("HERDR_"))) delete process.env[key];
 delete process.env.COLLIE_USER_DIR;
 delete process.env.COLLIE_STATE_DIR;
 delete process.env.COLLIE_ROOT;
+// WARNING: Never the human's core: a host a test starts keeps its board and chat terminals there.
 process.env.HC_SOCKET = "/nonexistent/collie-test/hc.sock";
 delete process.env.HC_SESSION;
 process.env.COLLIE_RELEASES = "http://127.0.0.1:9";
@@ -82,6 +89,7 @@ const inherit = <F extends typeof Bun.spawn | typeof Bun.spawnSync>(spawn: F) =>
 Bun.spawn = inherit(Bun.spawn);
 Bun.spawnSync = inherit(Bun.spawnSync);
 
+// WARNING: Scans each live host's lock under this root, not the process table, which is too slow to read after every test.
 const hosts = () =>
   Arr.flatMap(
     [
@@ -113,6 +121,7 @@ const hosts = () =>
 
 const entries = () => Arr.filter(readdirSync(root), (name) => name !== "home");
 
+// WARNING: Settle well inside a hook's own timeout, so what is left is reported rather than timed out.
 const settled = <A>(find: () => ReadonlyArray<A>) =>
   Effect.gen(function* () {
     const deadline = (yield* Clock.currentTimeMillis) + 2_500;

@@ -43,6 +43,7 @@ export interface SessionCall {
   readonly command?: string | undefined;
 }
 
+// WARNING: Pi runs this source without Effect, so it may use nothing from outside it.
 /* oxlint-disable effecttsgo/prefer-effect-array, effecttsgo/prefer-effect-string -- Pi runs this source without Effect. */
 export function sessionStoreReached(
   stores: ReadonlyArray<string>,
@@ -317,6 +318,7 @@ const decodeCount = flow(
   Result.getOrThrow,
 );
 
+// WARNING: a missing table or column makes the whole store unreadable.
 const openCodeStore = (file: string, since: number | null) =>
   Effect.try({
     try: () => {
@@ -388,6 +390,7 @@ const fileStores: (home: string) => ReadonlyArray<FileStore> = (home) => [
   {
     source: "claude-code",
     root: `${home}/.claude/projects`,
+    // WARNING: a session's subagents sit in a folder beside it and are not sessions.
     isSession: (relative) => /^[^/]+\/[^/]+\.jsonl$/.test(relative),
     types: CLAUDE_TYPES,
     read: (records, relative) =>

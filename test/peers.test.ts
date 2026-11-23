@@ -700,6 +700,7 @@ test("a listener given port 0 keeps the port it got when it opens again, in a la
     ),
   ));
 
+// WARNING: no /proc table where the kernel has no IPv6.
 const procTable = (path: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(path)).pipe(
     Effect.map((text) => Str.split(text, "\n").slice(1)),
@@ -734,6 +735,7 @@ const listensOn = (pid: number, tables = ["/proc/net/tcp", "/proc/net/tcp6"]) =>
     const ports: number[] = [];
     for (const table of tables) {
       for (const row of yield* procTable(table)) {
+        // WARNING: in /proc/net/tcp the state 0A means LISTEN.
         const [, local, , state, , , , , , inode] = Str.split(Str.trim(row), /\s+/);
         if (state === "0A" && inode !== undefined && sockets.has(inode))
           ports.push(Number.parseInt(Str.split(local!, ":")[1]!, 16));

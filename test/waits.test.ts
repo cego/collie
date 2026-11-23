@@ -261,6 +261,7 @@ test("a fast-forwarded server start waits for a server that takes real time to c
     ),
   ));
 
+// WARNING: past any pid_max, so no process here can be one of the machine's.
 const ROOT = 4_194_400;
 const CHILD = 4_194_401;
 

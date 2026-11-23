@@ -1,3 +1,4 @@
+// WARNING: no Bun-only import: the view bundles this module.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
@@ -68,6 +69,7 @@ const textAt = (file: FileDiffMetadata, line: number, side: SelectionSide) => {
   return text === undefined ? [] : [pipe(text, Str.replace(/\r?\n$/, ""))];
 };
 
+// WARNING: a selection crossing to the other side anchors its first line alone, since the two sides number apart.
 export const diffAnchor: (
   path: string,
   range: SelectedLineRange,

@@ -1,3 +1,4 @@
+// WARNING: each engine write moves the count, so an unchanged count means the Run's engine state is unchanged.
 import { Context, Effect, Layer } from "effect";
 import type * as MessageStorage from "effect/cluster/MessageStorage";
 import type * as SqlClient from "effect/sql/SqlClient";
@@ -26,6 +27,7 @@ export const touching: (
   sql: SqlClient.SqlClient,
   touches: EngineTouches["Service"],
 ) => MessageStorage.MessageStorage["Service"] = (inner, sql, touches) => {
+  // WARNING: a reply names only its request, which recorded its entity when saved.
   const owners = new Map<string, string>();
   const ownerOf = (requestId: bigint) => {
     const known = owners.get(String(requestId));

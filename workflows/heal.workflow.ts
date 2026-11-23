@@ -54,6 +54,7 @@ const outputWith = <Fields extends Schema.Struct.Fields>(fields: Fields) => {
 };
 
 export const Healed = outputWith({ ...finding, ...report });
+// WARNING: completed executions predate issue reporting; only agentWork validates new output.
 const RecordedHeal = outputWith({
   ...finding,
   title: Schema.optionalKey(report.title),

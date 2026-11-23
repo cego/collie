@@ -9,6 +9,7 @@ export const doctor = Command.make("doctor", { gitlabHost: gitlabHostFlag }, ({ 
     const global = yield* root;
     yield* attempt(
       Effect.gen(function* () {
+        // WARNING: needs no workspace; it must work from a plain shell, where nothing is set up yet.
         const resolved = yield* context(global, false);
         if (resolved._tag === "ContextFailure") return resolved.result;
         const env = withGitlabHost(resolved.env, gitlabHost);

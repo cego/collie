@@ -29,6 +29,7 @@ const copied = Bun.spawnSync(
   ],
   { stdio: ["ignore", "inherit", "inherit"] },
 );
+// WARNING: rsync's 24: a file vanished while it was read, as a live host's do.
 if (copied.exitCode !== 0 && copied.exitCode !== 24) process.exit(copied.exitCode ?? 1);
 const db = new Database(`${from}/host.db`, { readonly: true });
 db.query("VACUUM INTO ?").run(`${to}/host.db`);

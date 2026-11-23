@@ -1,3 +1,4 @@
+// WARNING: the bundle hash is not authentication, so the tar verifies against Collie's release key first.
 import {
   Clock,
   Deferred,
@@ -79,6 +80,7 @@ export interface Updates {
   readonly check: Effect.Effect<UpdateNews>;
 }
 
+// WARNING: looked at each minute, so a check missed while the computer slept runs soon after it wakes.
 export const updatesOf = (
   port: UpdaterPort,
   version: string,
@@ -110,6 +112,7 @@ export const updatesOf = (
     const once = Effect.gen(function* () {
       unreached = true;
       const now = yield* SubscriptionRef.get(latest);
+      // WARNING: a ready update stays ready while Desktop looks for a newer one.
       if (now._tag !== "Ready") yield* say({ _tag: "Checking" });
       const found = yield* within(port.check, CHECK_WITHIN, "the check");
       unreached = false;

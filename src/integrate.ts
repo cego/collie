@@ -6,6 +6,7 @@ import { installDependencies } from "./dependencies";
 import { defaultBase } from "./inputs";
 import { whatItSaid, type Runner } from "./mr";
 
+// WARNING: Unavailable also covers a failed install: the next integration installs again before it reports merged.
 export const IntegrationSchema = Schema.Struct({
   status: Schema.Literals(["unchanged", "merged", "conflicted", "waiting", "unavailable"]),
   branch: Schema.String,
@@ -62,6 +63,7 @@ export const integrateDefault = (
       Arr.filter(Str.split(said.stdout, "\n"), (file) => file !== ""),
     );
     const merging = yield* git("rev-parse", "-q", "--verify", "MERGE_HEAD");
+    // WARNING: An unfinished merge is still the builder's, however often it is asked about.
     if (merging.code === 0) {
       const files = yield* unmerged;
       if (files.length > 0)

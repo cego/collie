@@ -21,6 +21,7 @@ export function installFakeSkills(home: string) {
     ]) {
       const dir = path.join(home, ".agents", "skills", skill);
       yield* fs.makeDirectory(dir, { recursive: true });
+      // WARNING: Installed means the SKILL.md file exists: both the check and the agent's mention need the file, not just the directory.
       yield* fs.writeFileString(path.join(dir, "SKILL.md"), `# ${skill}\n`);
     }
   });

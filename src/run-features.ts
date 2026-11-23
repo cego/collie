@@ -1,3 +1,4 @@
+// WARNING: fixed at start: a Run with no record started on an earlier release, so its replay meets nothing new.
 import { Effect, Schema } from "effect";
 import { RunRecords } from "./run-records";
 

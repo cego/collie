@@ -165,6 +165,7 @@ test("a settled agent being collected from is told its verify ended, and no one 
         for (const part of ['"unit"', "pass (exit 0)", Str.trim(head), ran.verification.log!])
           expect(said).toContain(part);
 
+        // WARNING: once it is one of the Run's Checks it is answered from its record, never run, for an agent as for a human.
         yield* grant("unit", "/bin/true");
         const asHuman = { COLLIE_AGENT: "not-an-agent" };
         const again = yield* verify("unit", "/bin/true", asAgent);

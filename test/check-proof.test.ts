@@ -212,6 +212,7 @@ test("a check left to CI waits on its job until its pass on this commit is recor
   const nuxi = (verifications: ReadonlyArray<Verification>, final = FINAL) =>
     checkProof({ verifications, final, approved: [NUXI] }, "nuxi");
   expect(nuxi([]).state).toBe("waiting");
+  // WARNING: A local run of the command is no proof; only the job's own commit counts.
   expect(nuxi([jobPass({ pass: "gate", job: undefined })]).state).toBe("waiting");
   const earlier = { head_sha: "abc000", fingerprint: "tree-0" };
   expect(nuxi([jobPass({ start: earlier, end: earlier })]).state).toBe("waiting");

@@ -128,6 +128,7 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
         yield* options.tell(stateOf(machine, credential, text));
       }),
     );
+  // WARNING: one give at a time per Machine and credential, so the last given is the last recorded.
   const giving = new Map<string, Semaphore.Semaphore>();
   const giveOne = (route: ShellRoute, credential: Credential, text: Effect.Effect<string | null>) =>
     Effect.suspend(() => {
@@ -156,6 +157,7 @@ export const givenCredentials = Effect.fn("Given.open")(function* (options: {
           ),
         { concurrency: "unbounded" },
       ),
+    // WARNING: read again at its turn, so a give queued behind a newer one never undoes it.
     giveLacking: (route: ShellRoute) =>
       Effect.flatMap(heldFor(route.machine), (texts) =>
         Effect.forEach(

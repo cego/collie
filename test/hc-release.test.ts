@@ -1,3 +1,4 @@
+// WARNING: Bundled only once the archive hashes to the pin.
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";

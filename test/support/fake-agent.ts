@@ -75,6 +75,7 @@ const answerFrom = Effect.fn("fakeAgent.answer")(function* (
   };
 });
 
+// WARNING: Agents answer one prompt at a time, so two never take the same queue entry.
 const turn = Semaphore.makeUnsafe(1);
 
 export const answerPrompt = (text: string, log: string, queuePath: string) =>

@@ -1,3 +1,4 @@
+// WARNING: a pid alone is not identity: numbers are reused, so only command, start and session together prove a process.
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Option from "effect/Option";
@@ -16,6 +17,7 @@ export interface ProcessInfo {
 
 const PROC = "/proc";
 
+// WARNING: the command may hold spaces and parens, so fields are read after its last paren.
 const statFields = (pid: number) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(`${PROC}/${pid}/stat`)),
@@ -110,6 +112,7 @@ export const startedOf = Effect.fn("Processes.startedOf")(function* (pid: number
   return Str.trim(yield* ps(["-o", "lstart=", "-p", String(pid)])) || null;
 });
 
+// WARNING: where the platform cannot read a session, descendants must be taken before the root exits.
 export const sessionOf = Effect.fn("Processes.sessionOf")(function* (root: number) {
   if (yield* readsSessions) {
     const fs = yield* FileSystem.FileSystem;
@@ -170,8 +173,10 @@ const readBindings = Effect.fnUntraced(function* (pid: number, names: ReadonlyAr
   return found;
 });
 
+// WARNING: never read without /proc: ps -E puts the environment into the arguments.
 export const bindingsOf = Effect.fn("Processes.bindingsOf")(readBindings);
 
+// WARNING: the start is read before the bindings, so a reused pid never passes as the bound one.
 export const boundProcesses = Effect.fn("Processes.boundProcesses")(function* (
   names: ReadonlyArray<string>,
 ) {
@@ -198,6 +203,7 @@ export const boundProcesses = Effect.fn("Processes.boundProcesses")(function* (
 export const stillRunning = (one: Pick<ProcessInfo, "pid" | "started">) =>
   processOf(one.pid).pipe(Effect.map((now) => now !== null && now.started === one.started));
 
+// WARNING: only ESRCH proves absence; a failed inspection or permission check does not.
 export const processAbsent = (pid: number) =>
   Effect.sync(() => {
     try {
@@ -208,5 +214,6 @@ export const processAbsent = (pid: number) =>
     }
   });
 
+// WARNING: one SIGTERM, never repeated or SIGKILL: a forced end cannot be vouched for.
 export const terminate = (pid: number) =>
   Effect.ignore(Effect.try(() => process.kill(pid, "SIGTERM")));

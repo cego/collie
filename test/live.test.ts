@@ -199,6 +199,7 @@ test("correcting a Run nobody can prove they own says so on the row, permanently
   runEffect(
     Effect.gen(function* () {
       const { stateDir, runDir, ledgers } = yield* rig();
+      // WARNING: SPEC 7.5: without attribution, auto_correct is honoured only with exclusive_steering plus a permanent row warning.
       const granted = seedIntent("r1", {
         defaults: {
           constraints: [],
@@ -285,6 +286,7 @@ test("a proposal about the installation is drawn whatever row is selected", () =
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const { stateDir, runDir, records, ledgers } = yield* rig();
+      // WARNING: a socket path names a Herd, so the proposal is filed under the key this state directory resolves to.
       const socketPath = path.join(stateDir, "herdr.sock");
       yield* fs.writeFileString(socketPath, "");
       const herdWide = yield* recordProposal(yield* herdOf(socketPath), {

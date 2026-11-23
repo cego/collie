@@ -3,6 +3,7 @@ import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 import type { FailedTest } from "./verify-model";
 
+// WARNING: more failures than this is a broken change, not flakiness.
 const MAX_FAILED = 20;
 
 const FILE_HEADER = /^(\S+\.[cm]?[jt]sx?):$/;
@@ -12,6 +13,7 @@ const FAIL_COUNT = /^\s*(\d+) fail$/;
 const ERROR_COUNT = /^\s*\d+ errors?$/;
 const HOOK = "(unnamed)";
 
+// WARNING: null where the output cannot be read whole: fail count disagrees, an error sits outside any test, a failure has no file or is a hook's, or there are over MAX_FAILED.
 export function failedTests(output: string) {
   const lines = Str.split(output, "\n");
   const found = new Map<string, FailedTest>();
@@ -35,12 +37,14 @@ export function failedTests(output: string) {
   return [...found.values()];
 }
 
+// WARNING: a path, not a filter: bare, bun runs every file whose path contains it; -t joins nested names with one space where bun prints ' > '.
 export function rerunArgv(test: FailedTest) {
   const joined = Arr.join(Str.split(test.name, " > "), " ");
   const file = pipe(test.file, Str.startsWith("/")) ? test.file : `./${test.file}`;
   return ["test", file, "-t", `^${pipe(joined, Str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))}$`];
 }
 
+// WARNING: 'matched 0 tests' and two tests of that name do not count as ran alone.
 export function ranAlone(exit: number, output: string) {
   return exit === 0 && /^\s*1 pass$/m.test(output) && /^\s*0 fail$/m.test(output);
 }

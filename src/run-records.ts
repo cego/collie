@@ -1,3 +1,4 @@
+// WARNING: each record is named by the file an older build kept it in: the import reads and the rollback writes those names.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Clock, Context, Effect, Layer, Option } from "effect";
@@ -113,6 +114,7 @@ export interface RunRecordsApi {
     prefix: string,
   ) => Effect.Effect<ReadonlyArray<{ readonly name: string; readonly data: string }>>;
   readonly put: (run: string, name: string, value: string | null) => Effect.Effect<void>;
+  // WARNING: one transaction: no other write lands between the read and the write.
   readonly update: <E, R>(
     run: string,
     name: string,
@@ -152,6 +154,7 @@ export interface ControlRow {
 
 export class RunRecords extends Context.Service<RunRecords, RunRecordsApi>()("collie/RunRecords") {}
 
+// WARNING: writing one of these does not make the Run active: it is not work the Run did.
 export const BOOKKEEPING: ReadonlySet<string> = new Set([
   "operations.jsonl",
   "steering/disposition.jsonl",
@@ -236,6 +239,7 @@ export const readAhead: (records: RunRecordsApi, runs: ReadonlyArray<string>) =>
   };
 };
 
+// WARNING: step times outlive the Run, so forgetting a Run must not drop them.
 export const keepStepTimes = (run: string | null) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;

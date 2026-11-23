@@ -362,6 +362,7 @@ export const healParks = <E, R, E2, R2>(opts: {
       const claims: Array<{ view: RunView; claim: Metric }> = [];
       const all: Array<Metric> = [];
       let judged = false;
+      // WARNING: only a Heal its claim names; one started before a crash is taken up again.
       let flying = false;
       for (const view of views) {
         const read = yield* readMetrics(evidence(view.runId));
@@ -457,6 +458,7 @@ export const healParks = <E, R, E2, R2>(opts: {
       }
       if (judged) yield* noteFailures(recoveriesIn(all));
       if (flying || claims.length === 0 || (yield* machineMemory(opts.env)).short) return;
+      // WARNING: read after the claims, so a park written by a claim is in what is read.
       const now = new Map(Arr.map(yield* opts.views, (view) => [view.runId, view] as const));
       for (const { view, claim } of claims.sort((a, b) =>
         Str.localeCompare(b.claim.at)(a.claim.at),
@@ -517,6 +519,7 @@ export const healParks = <E, R, E2, R2>(opts: {
             (line) => line.kind === "report" && line.heal === item.heal,
           ),
         );
+        // WARNING: an unchanged retry is not recorded again, so a lasting refusal stays one line.
         if (last?.publication !== reported.publication || last.note !== reported.note)
           yield* appendMetric(evidence(item.run), {
             at: yield* nowIso,

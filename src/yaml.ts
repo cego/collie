@@ -35,10 +35,12 @@ export function isYamlMap(value: YamlValue | undefined): value is YamlMap {
 
 const KEY = /^("(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_][A-Za-z0-9_./-]*)\s*:(?:[ \t]+(.*))?$/;
 
+// WARNING: .inf and .nan read as null and 1_000 as 1000: not YAML 1.2 conformant.
 export function parseYaml(src: string) {
   let parsed: YamlValue;
   try {
     // WARNING: the parser yields nulls, booleans, numbers and strings in maps and sequences, which is exactly YamlValue.
+    // WARNING: the parser yields only nulls, booleans, numbers and strings in maps and sequences, which is YamlValue.
     parsed = Yaml.parse(src) as YamlValue;
   } catch (cause) {
     throw new YamlError({ message: cause instanceof Error ? cause.message : String(cause) });
@@ -48,6 +50,7 @@ export function parseYaml(src: string) {
 
 const BARE = /^[A-Za-z0-9_](?:[A-Za-z0-9_./ -]*[A-Za-z0-9_./-])?$/;
 
+// WARNING: bare only where the parser reads it back unchanged: true, 5 and ~ must be quoted.
 export function yamlScalar(value: string) {
   return BARE.test(value) && parseYaml(value) === value ? value : stringifyJson(value);
 }
@@ -61,6 +64,7 @@ function unquote(raw: string) {
   return raw;
 }
 
+// WARNING: FENCE must end the block where parseDocument does, or a --- in a block scalar hides a key.
 export function setFrontmatterKey(text: string, key: string, value: string) {
   const lines = Str.split(text, "\n");
   const written = `${key}: ${yamlScalar(value)}`;
@@ -101,6 +105,7 @@ export function parseDocument(text: string) {
   const m = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(normalised);
   if (!m) return { data: {}, body: Str.trim(normalised) };
   const parsed = parseYaml(m[1]!);
+  // WARNING: a block of only comments parses to null: frontmatter with no keys, not a failed mapping.
   const data = parsed === null ? {} : parsed;
   if (!isYamlMap(data)) throw new YamlError({ message: "frontmatter must be a mapping" });
   return {

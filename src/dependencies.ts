@@ -15,6 +15,7 @@ export const installDependencies = Effect.fn("dependencies.installDependencies")
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  // WARNING: read from this head, not the base verify.json: its lockfile is the one to satisfy.
   const file = path.join(checkout, ".collie", "dependencies.json");
   if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) {
     return { ran: null };

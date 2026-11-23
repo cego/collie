@@ -48,6 +48,7 @@ const SKIPPED = new Set([
   ".vscode-server",
 ]);
 
+// WARNING: Dangling links and unreadable paths are skipped; other inspection errors propagate.
 export const publicationCheckouts = Effect.fn("Issues.publicationCheckouts")(function* (
   roots: ReadonlyArray<string>,
   known: ReadonlyArray<string> = [],
@@ -70,6 +71,7 @@ export const publicationCheckouts = Effect.fn("Issues.publicationCheckouts")(fun
       }
       return canonical;
     });
+  // WARNING: A shallower route walks a directory again.
   const walked = new Map<string, number>();
   const children = (root: string, dir: string, left: number) =>
     Effect.gen(function* () {
@@ -119,6 +121,7 @@ export const gitDirOf = Effect.fn("Issues.gitDirOf")(function* (dir: string) {
       pipe_(present___, Str.slice("gitdir: ".length)),
     ),
   );
+  // WARNING: Joined unnormalised, as Git does: `..` leaves a linked dir physically.
   const gitDir = named === undefined ? marker : path.isAbsolute(named) ? named : `${dir}/${named}`;
   return (yield* fs.exists(`${gitDir}/HEAD`)) ? gitDir : null;
 });

@@ -1,3 +1,4 @@
+// WARNING: Never Bun.spawnSync: under load it can lose the child's exit and spin the worker forever (oven-sh/bun#34069).
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";

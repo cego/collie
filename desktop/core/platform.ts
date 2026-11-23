@@ -14,6 +14,7 @@ interface Rpc {
   send: { frame: (frame: Frame) => void };
 }
 
+// WARNING: stdout carries Effect RPC frames alone, so logs go to stderr.
 console.log = console.error;
 console.info = console.error;
 console.debug = console.error;
@@ -61,6 +62,7 @@ export class BrowserWindow {
     renderer?: string;
     frame?: BrowserWindow["frame"];
   }) {
+    // WARNING: only the board's window has a shell; a popped-out chat has none yet.
     if (shell === undefined) {
       shell = rpc;
       rpc.send = { frame: (frame) => void process.stdout.write(ndjson.encode(frame) ?? "") };
@@ -108,6 +110,7 @@ const UpdateManifest = Schema.fromJsonString(
     platform: Schema.Literal(process.platform === "darwin" ? "macos" : "linux"),
     arch: Schema.Literal(process.arch),
     version: Schema.String,
+    // WARNING: both name files on disk, so neither may name a path.
     hash: Schema.String.check(Schema.isPattern(/^[a-z0-9]{1,13}$/)),
     artifact: Schema.Struct({
       file: Schema.String.check(Schema.isPattern(/^stable-[\w.-]+\.tar\.zst$/)),

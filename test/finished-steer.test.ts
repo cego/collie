@@ -289,6 +289,7 @@ const steerable = <A, E>(
         const fs = yield* FileSystem.FileSystem;
         const outputs = `${world.home}/outputs.json`;
         yield* fs.writeFileString(outputs, encode(answers)).pipe(Effect.orDie);
+        // WARNING: The host a client spawns inherits this process's environment, so it must own this world's state.
         const set = {
           COLLIE_STATE_DIR: world.state,
           COLLIE_USER_DIR: world.config,
@@ -565,6 +566,7 @@ test("a steer is typed plain within 3 lines and 700 characters, or kept as a fil
 test("review comments Desktop sends reach the chosen live agent, signed as the human in Desktop, once per request", () =>
   steerable("collie-finished-comments-", (world) =>
     Effect.gen(function* () {
+      // WARNING: Desktop delivers now, which the host sends only to a claude it knows is new enough.
       const fs = yield* FileSystem.FileSystem;
       const bin = `${world.home}/bin`;
       yield* fs.makeDirectory(bin, { recursive: true }).pipe(Effect.orDie);

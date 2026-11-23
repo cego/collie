@@ -9,6 +9,7 @@ const SLOW_BUILD_MS = 2_000;
 
 const MAX_REST_MS = 5_000;
 
+// WARNING: a reader reads its own writes: its board covers every change seen before it was read.
 export const shareBoard = <A, E, R, R2>(options: {
   readonly build: Effect.Effect<A, E, R>;
   readonly changed: Stream.Stream<unknown, never, R2>;
@@ -34,6 +35,7 @@ export const shareBoard = <A, E, R, R2>(options: {
     const refreshes = (options.refresh ?? Stream.never).pipe(Stream.map(() => seen));
     yield* Stream.concat(Stream.make(0), Stream.merge(changes, refreshes)).pipe(
       Stream.buffer({ capacity: 1, strategy: "sliding" }),
+      // WARNING: a failed build is skipped: the last board stands until a change builds again.
       Stream.mapEffect((covers) =>
         timed.pipe(
           Effect.map((board) => Option.some({ covers, board })),
@@ -58,6 +60,7 @@ export const shareBoard = <A, E, R, R2>(options: {
         Effect.sync(() => {
           const since = seen;
           return SubscriptionRef.changes(latest).pipe(
+            // WARNING: a slow reader skips to the latest board; a client is told by diff.
             Stream.buffer({ capacity: 1, strategy: "sliding" }),
             Stream.filter(Option.isSome),
             Stream.map((built) => built.value),

@@ -74,6 +74,7 @@ test("a clone at the Collie directory is the installation, whatever its state", 
     }),
   ));
 
+// WARNING: Collie Desktop's launcher makes every child write these LD_ lines to stderr.
 const LD_SO_NOISE = Arr.map(
   ["./libcef.so", "./libvk_swiftshader.so"],
   (lib) =>

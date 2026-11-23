@@ -347,6 +347,7 @@ onMachineWith("pi")(
           ),
         );
 
+        // WARNING: A fresh session has nothing to compact; before any response its context estimate is unavailable.
         expect(outcome?.kind).toBe("failure");
         expect(yield* pi.usage(ctx())).toBeNull();
       }),

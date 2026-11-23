@@ -1,3 +1,4 @@
+// WARNING: Herdr 1 is gone from Collie: any call to it is recorded and fails the test, naming the call.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Effect, FileSystem } from "effect";

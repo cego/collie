@@ -81,6 +81,7 @@ const mount = Effect.fn("selection.mount")(function* (state: AppState) {
         settle,
       ),
     selected: () => readSelection(file),
+    // WARNING: the record is written a frame after the change, not with it, so wait until wanted holds.
     selectedWhen: (wanted: (record: Effect.Success<ReturnType<typeof readSelection>>) => boolean) =>
       until(() => readSelection(file), wanted),
     lineOf(text: string) {
@@ -111,6 +112,7 @@ test("selecting a card writes what chat needs about it, and closing it clears th
       Effect.gen(function* () {
         const app = yield* mount(appState({ tasks: [task()] }));
 
+        // WARNING: nothing is selected until something is, so chat never answers about a card left from an earlier board.
         expect(yield* app.selected()).toBe(null);
 
         yield* app.click(6, app.lineOf("Strapi prod seeder"));
@@ -136,6 +138,7 @@ test("closing the board leaves nothing selected behind it", () =>
         yield* app.click(6, app.lineOf("Strapi prod seeder"));
         expect(yield* app.selectedWhen((record) => record !== null)).not.toBe(null);
 
+        // WARNING: a board nobody has open selects nothing, so chat cannot answer about a card that was on screen.
         yield* app.dispatch({ _tag: "Quit" });
 
         expect(yield* app.selectedWhen((record) => record === null)).toBe(null);

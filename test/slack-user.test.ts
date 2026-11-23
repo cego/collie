@@ -141,6 +141,7 @@ test("the user token is handed back only once Slack says it is the expected huma
   ));
 
 test("Slack's rotating access and refresh tokens are redacted whole", () => {
+  // WARNING: joined so secret scanning does not take it for a real token.
   const refresh = "xoxe-1" + "-My0xLTEyMzQ1Ni1yZWZyZXNoLXRva2Vu";
   const access = "xoxe.xoxp-1" + "-Mi0yLTEyMzQ1Ni1hY2Nlc3MtdG9rZW4";
   expect(redact(`refresh ${refresh} then ${access}.`)).toBe(

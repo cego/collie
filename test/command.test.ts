@@ -82,6 +82,7 @@ test("interrupting a fixture command ends its child and the child's process grou
         () => Effect.sync(() => alive(parent)),
         (live) => !live,
       );
+      // WARNING: A killed descendant can briefly be a zombie until its parent or init reaps it.
       const executing = () =>
         fs.readFileString(`/proc/${child}/stat`).pipe(
           Effect.map((stat) => !/\) Z /.test(stat)),

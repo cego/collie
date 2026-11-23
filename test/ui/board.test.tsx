@@ -168,6 +168,7 @@ const mount = Effect.fn("board.mount")(function* (
       }
       throw new Error(`nothing drawn containing ${stringifyJson(text)}`);
     },
+    // WARNING: Comark renders asynchronously, so flush until the text appears.
     until: (text: string) =>
       flush.pipe(
         Effect.repeat({
@@ -639,6 +640,7 @@ test("a question with no options is typed into on the card, and Enter sends it",
       expect(app.said()).toContain("What should the seeder be called?");
       yield* app.clickOn("type your answer");
 
+      // WARNING: While a card is typed into, the board's own keys are letters: q and / are not keys.
       void app.mockInput.typeText("queue it under /tmp");
       yield* app.flush;
       expect(app.said()).toContain("queue it under /tmp");
@@ -1619,6 +1621,7 @@ test("Log tails the run's log, and only that tab asks for it", () =>
 
       yield* app.clickOn("Log");
 
+      // WARNING: The log is read only while it is being looked at.
       expect(app.acted()).toEqual([{ _tag: "ToggleTail" }]);
       yield* app.setState(
         appState({
@@ -1811,6 +1814,7 @@ test("clear drops the selection, and so does an ordinary click", () =>
 test("the launch flow owns the keyboard while it is asking", () =>
   runEffect(
     Effect.gen(function* () {
+      // WARNING: Board keys are not keys while an inline question is being typed at, even q and r in the goal.
       const app = yield* mount(appState({ tasks: THREE }), 120, 40, {
         _tag: "Question",
         header: "What is the goal?",
@@ -1888,6 +1892,7 @@ test("a menu item pressed where it is drawn acts, and does not open the card ben
       yield* app.clickOn("⋯");
       expect(app.said()).toContain("Go to its tab");
 
+      // WARNING: Pressed by position, the menu is over the card, so the card must not hear it.
       const before = app.commands.length;
       const y = app.lineOf("Go to its tab");
       const row = app.frameLine(y);
@@ -1992,6 +1997,7 @@ test("the Home draws a card the host serves, with no board built here", () =>
           }),
           Effect.provide(recordsReadLayer(env.stateDir)),
         );
+        // WARNING: The host is stopped by proves once this scope closes; stopped here, the board reconnects and starts one that outlives the test.
         const app = yield* mount(state);
         const said = app.said();
         expect(said).toContain("One task is waiting on you.");

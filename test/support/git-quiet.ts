@@ -1,3 +1,4 @@
+// WARNING: No git a test starts may collect garbage or run maintenance in a repository the test removes (Git 2.47+ detaches it).
 export const GIT_QUIET = {
   GIT_CONFIG_COUNT: "2",
   GIT_CONFIG_KEY_0: "gc.auto",

@@ -1,3 +1,4 @@
+// WARNING: No /proc on macOS, so ps says what a recorded pid is.
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { endpointPid } from "../src/compaction";

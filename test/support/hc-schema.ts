@@ -64,6 +64,7 @@ const ANY: ReadonlyArray<Schema.Json> = [null, false, 0, "s", [], {}];
 function samples(node: Node, seen: ReadonlyArray<string> = []) {
   if (node.$ref !== undefined) {
     const [name, target] = component(node.$ref);
+    // WARNING: WaitResult nests itself, so only one level of it is sampled.
     const answer: ReadonlyArray<Schema.Json> = seen.includes(name)
       ? []
       : samples(target, [...seen, name]);
@@ -168,6 +169,7 @@ export function replyViolation(method: string, reply: Schema.Json) {
     schema = SchemaRepresentation.fromJsonSchemaDocument({
       dialect: "draft-2020-12",
       // WARNING: as above.
+      // WARNING: A method's result is a JSON Schema node, as at the other conversion.
       schema: JsonSchema.fromSchemaOpenApi3_1(resultOf(method) as JsonSchema.JsonSchema).schema,
       definitions,
     });

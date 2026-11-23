@@ -1,3 +1,4 @@
+// WARNING: activity is not a trigger: only a transition the board already read starts a turn.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -30,6 +31,7 @@ export function eventsIn(
   ]);
 }
 
+// WARNING: includes events a more pressing one masks, so a masked event is not reported as gone.
 export function holding(
   runs: ReadonlyArray<RunFacts>,
   drifting: ReadonlyMap<string, string> = new Map(),

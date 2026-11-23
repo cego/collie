@@ -117,6 +117,7 @@ export const claiming =
       const host = yield* Host;
       const { runId, cwd, words } = options;
       const deploys = how.deploys ?? options.deploys;
+      // WARNING: a claim given back mid-Run must not be taken again on replay, so it is journaled.
       const attempt = (at: string, n: number) =>
         Effect.gen(function* () {
           const take = (step: string, adopting: Effect.Effect<boolean, WorkflowError>) =>
@@ -307,6 +308,7 @@ const sha256 = (text: string) => {
   );
 };
 
+// WARNING: the id's SHA-256 keeps two merge request ids apart; the capped slug alone would not.
 export const invocationFor = (workflow: "release" | "stage" | "tag", member: SetMember) =>
   workflow === "tag"
     ? `tag-${sha256(member.id)}`

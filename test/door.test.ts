@@ -29,6 +29,7 @@ const silentEngine = (
   offers: ReadonlyArray<readonly [string, ReadonlyArray<OfferView>]> = [],
 ) =>
   Effect.gen(function* () {
+    // WARNING: The engine lists its Runs only once it has migrated host.db.
     yield* Layer.build(recordsAt(dir));
     const heard: Array<FromDoor> = [];
     const listening = yield* Deferred.make<void>();

@@ -1,3 +1,4 @@
+// WARNING: Drains on its first SIGTERM as codex 0.162.0 does on a websocket.
 import * as BunChildProcessSpawner from "@effect/platform-bun/BunChildProcessSpawner";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import * as BunPath from "@effect/platform-bun/BunPath";
@@ -29,6 +30,7 @@ export interface StandIn {
     parent?: string;
     path?: string;
     turn?: { id: string; writes?: string };
+    // WARNING: thread/turns/list refuses a thread with no user message, as codex 0.162.1 does.
     unmaterialized?: boolean;
     unlistable?: boolean;
     historyMode?: "legacy" | "paginated";
@@ -42,6 +44,7 @@ export interface StandIn {
   neverExit?: boolean;
   dropOn?: string;
   continuation?: boolean;
+  // WARNING: Takes SIGTERM only after this many turn/interrupts are answered, as a server that reads them first does.
   lateDrain?: number;
   child?: "ends" | "ignores";
   env?: ReadonlyArray<string>;

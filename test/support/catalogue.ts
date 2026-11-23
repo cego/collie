@@ -32,6 +32,7 @@ export const fakeSources = (replaced: Partial<CatalogueSources> = {}) => ({
   ...replaced,
 });
 
+// WARNING: Unexpected RPCs die, so a CLI test cannot pass by asking the wrong operation.
 export const serveCatalogue = (
   state: string,
   catalogues: HarnessCatalogues["Service"],

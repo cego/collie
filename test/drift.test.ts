@@ -1,3 +1,4 @@
+// WARNING: A rule check must never pass on an absence: no verification, no Output or no merge request is no evidence.
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -188,6 +189,7 @@ test("a diff is split per file, capped, and secret files are named rather than q
       Option.map(Option.fromNullishOr(blocks[0]), (present_) => Str.split(present_.diff, "\n")),
     ),
   ).toHaveLength(MAX_LINES_PER_FILE);
+  // WARNING: The name is the evidence; the diff contents are never handed to a model.
   expect(blocks[1]?.diff).toBe("<redacted>");
   expect(blocks[1]?.diff).not.toContain("hunter2");
   expect(blocks[2]?.truncated).toBe(false);
@@ -654,6 +656,7 @@ test("what the model returns is filed against this Run, at this version, and now
       const dir = yield* checkout("hw-judge-");
       const base = yield* committed(dir, { "a.ts": "export const a = 1;\n" });
       const evaluator = yield* fakeEvaluator(dir);
+      // WARNING: The model names the constraint and how bad, never the Run, Intent version, time or whether it is still open.
       yield* evaluator.reply(
         envelope({
           result: {
@@ -815,6 +818,7 @@ test("every judgement is made and recorded; none is refused over how many came b
 
 test("a card says a cross-run check happened, and stops saying so when it goes stale", () => {
   const at = "2026-09-10T12:00:00Z";
+  // WARNING: none means there was nothing to check; a judgement that was made must be distinguishable from one never made.
   expect(evaluatedFor([], "r1")).toBe(false);
   expect(evaluatedFor([{ kind: "evaluated", at, by: "r1", runs: ["r1", "r2"] }], "r1")).toBe(true);
   expect(evaluatedFor([{ kind: "evaluated", at, by: "r2", runs: ["r2"] }], "r1")).toBe(false);

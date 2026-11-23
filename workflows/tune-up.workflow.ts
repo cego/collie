@@ -313,6 +313,7 @@ const Repaired = Schema.Struct({
 });
 
 const Planned = Schema.Struct({
+  // WARNING: measure judges the plan, so warmup stays as Harness wrote it.
   plan: BenchmarkPlan.mapFields((fields) => ({ ...fields, harness: Harness, warmup: Schema.Int })),
   reason: text,
 });
@@ -911,6 +912,7 @@ interface Archived {
 const unarchived = (cause: { readonly message: string }) =>
   new WorkflowError({ reason: `the archive could not be written: ${cause.message}` });
 
+// WARNING: the harness commits are read before cleanup takes them off.
 const archivedHarness = ({ cwd, archive, plan }: Archived) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -1508,6 +1510,7 @@ export default defineWorkflow({
             const known = foundIn(yield* search(named(`${key}-search`)), false);
             if (known !== null) return yield* recorded(decided, known);
             const creating = named(`${key}-create`);
+            // WARNING: a create launched whose Output was never collected is never collected now; a new agent could file twice.
             const state = yield* FileSystem.FileSystem.pipe(
               Effect.flatMap((fs) => fs.readFileString(`${launches}/${creating}`)),
               Effect.orElseSucceed(() => ""),
@@ -1661,6 +1664,7 @@ export default defineWorkflow({
         });
       const cycle = (n: number, automatic: boolean) =>
         Effect.gen(function* () {
+          // WARNING: the shape a Run recorded before this build, so one it started still recovers.
           const begun = yield* Activity.make({
             name: automatic ? `cycle-${n}.start` : `cycle-${n}.start-after-no`,
             success: Schema.Struct({ spent: Schema.NullOr(text), tree: Tree }),
@@ -2180,6 +2184,7 @@ export default defineWorkflow({
       });
       yield* writeBody;
 
+      // WARNING: taken inside delivery's proof Activity, which a replay skips, so it is kept to be read back.
       const proofReview = `${place.dir}/proof-review.json`;
       const ProofReview = Schema.fromJsonString(
         Schema.Struct({ reviewed: SynthesisSchema, on: Snapshot }),

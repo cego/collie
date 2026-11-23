@@ -34,6 +34,7 @@ export interface Candidate {
   value: string;
   source: string;
   label?: string;
+  // WARNING: Offered in a menu, never chosen by inference alone.
   menuOnly?: boolean;
 }
 
@@ -47,7 +48,9 @@ export interface InputPrompts<E = never, R = never> {
   ask(question: string): Effect.Effect<string | null, E, R>;
 }
 
+// WARNING: More would bury the branch's own ticket behind the oldest plans.
 const PLAN_DIR_CANDIDATES = 3;
+// WARNING: Beyond five, remembered targets bury the branch's own merge request, the common case.
 const REVIEWED_TARGETS = 5;
 const WORK_SOURCE_QUESTION = "What should be built?";
 const TARGET_QUESTION = "Review what?";
@@ -70,6 +73,7 @@ export interface Resolution {
 export interface InferContext<R = ChildProcessSpawner.ChildProcessSpawner> {
   cwd: string;
   runs?: ReadonlyArray<RunFacts>;
+  // WARNING: Only this Task's finished Runs are offered: a repository match alone must not hand over another Task's plan.
   task?: string | null;
   run?: Runner<R>;
   gitlabHost?: string | undefined;
@@ -201,6 +205,7 @@ export function defaultBase(run: NonNullable<InferContext["run"]>, cwd: string) 
   return returned;
 }
 
+// WARNING: A fresh start sees Runs recorded before Tasks existed, so an upgraded install's plans stay findable.
 function finishedHere(runs: ReadonlyArray<RunFacts>, cwd: string, task?: string | null) {
   return Arr.filter(
     runs,
@@ -208,6 +213,7 @@ function finishedHere(runs: ReadonlyArray<RunFacts>, cwd: string, task?: string 
   );
 }
 
+// WARNING: The test is plan/SPEC.md, not the workflow's name.
 export function planDirs(
   runs: ReadonlyArray<RunFacts>,
   cwd: string,
@@ -443,9 +449,11 @@ export function classifyTarget(typed: string, baseRef: string, project: string |
   return returned;
 }
 
+// WARNING: A pasted merge-request URL is normalised here, or it falls through to worktree on its shape alone.
 export function classifyGivenTarget(typed: string, ctx: InferContext) {
   const returned: Effect.Effect<Candidate | null, never, ChildProcessSpawner.ChildProcessSpawner> =
     Effect.gen(function* () {
+      // WARNING: An already-normalised target is passed through: classifying it again would nest its prefix.
       const kind = targetKind(Str.trim(typed));
       if (kind !== "") return { kind, value: Str.trim(typed), source: "typed" };
       const run = ctx.run ?? shell;
@@ -501,6 +509,7 @@ export function classifyWorkSource(typed: string) {
     const text = Str.trim(typed);
     const source = "typed";
 
+    // WARNING: Named, never inferred from a path: a follow-up reuses the Run's branch and merge request.
     if (pipe(text, Str.startsWith("followup:")))
       return {
         kind: "followup",

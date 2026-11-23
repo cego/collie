@@ -93,6 +93,7 @@ test("even splits leave every one of N panes the same width", () => {
 });
 
 test("a long model never truncates away the number that makes a name unique", () => {
+  // WARNING: herdr caps agent names at 32 characters and refuses a duplicate.
   const a = agentName("review-smoke-tab-16", "review", "pi-openai-codex/gpt-5.6-sol", 23);
   const b = agentName("review-smoke-tab-16", "review", "pi-openai-codex/gpt-5.6-sol", 24);
 
@@ -181,6 +182,7 @@ test("agent names stay herdr-legal and are never what a label shows", () => {
 
 test("the Collie tab's label survives its own helpers", () => {
   expect(tabNameOf(COLLIE_TAB)).toBe("Collie");
+  // WARNING: without the u flag the emoji splits into surrogate halves and leaves a lone one in the name.
   expect(Array.from(tabNameOf("🐕 Collie"))).toHaveLength(6);
   expect(tabNameOf(tabLabel(GLYPH.running, "implement"))).toBe("Implement");
 });

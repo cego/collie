@@ -40,6 +40,7 @@ export type ReviewRead =
     }
   | { readonly ok: false; readonly reason: string };
 
+// WARNING: GitHub's merge queue merges as these logins, on behalf of whoever queued the pull request.
 export const QUEUE_MERGERS: ReadonlySet<string> = new Set([
   "github-merge-queue",
   "github-merge-queue[bot]",
@@ -86,6 +87,7 @@ export function judgeComments(
   }));
 }
 
+// WARNING: Matches the whole url: `#note_1` is not linked by `#note_12`.
 export function links(body: string, url: string) {
   return url !== "" && new RegExp(`${RegExp.escape(url)}(?!\\w)`).test(body);
 }

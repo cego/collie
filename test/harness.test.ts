@@ -122,6 +122,7 @@ test("pi takes a provider-qualified model, a thinking level and the persona file
 test("a skill is started in each harness's own syntax", () => {
   expect(HARNESSES.claude!.skillCommand("code-review")).toBe("/code-review");
   expect(HARNESSES.pi!.skillCommand("code-review")).toBe("/skill:code-review");
+  // WARNING: No slash form: these surface skills to the model by description, so a slash would be sent as literal text.
   expect(HARNESSES.codex!.skillCommand("code-review")).toBe('the "code-review" skill');
   expect(HARNESSES.opencode!.skillCommand("code-review")).toBe('the "code-review" skill');
   for (const adapter of Rec.values(HARNESSES)) {
@@ -160,6 +161,7 @@ test("every harness starts in its auto mode, and past its prompts only when bypa
   expect(permissionsOf("codex", "gpt-5", "bypass")).toEqual([
     "--dangerously-bypass-approvals-and-sandbox",
   ]);
+  // WARNING: opencode's --auto approves every call rather than reviewing it, so it has no auto mode.
   expect(permissionsOf("opencode", "anthropic/claude-sonnet-4")).toEqual([]);
   expect(permissionsOf("opencode", "anthropic/claude-sonnet-4", "bypass")).toEqual(["--auto"]);
   for (const mode of ["auto", "bypass"] as const)

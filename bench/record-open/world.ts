@@ -1,3 +1,4 @@
+// WARNING: the state directory is at the same short path every time, so a kept fixture's paths hold.
 import { tmpdir } from "node:os";
 import { Effect, FileSystem } from "effect";
 import { GIT_QUIET } from "../../test/support/git-quiet";
@@ -6,6 +7,7 @@ import { stringifyJson } from "../../src/json";
 
 export const root = new URL("../../", import.meta.url).pathname;
 const tag = Bun.hash(root).toString(16).slice(0, 8);
+// WARNING: the host's socket is in its state directory, so the path must stay short.
 export const live = `${tmpdir()}/cro-${tag}`;
 export const kept = `${root}.scratch/record-open`;
 export const world = {
@@ -33,6 +35,7 @@ export const enterWorld = Effect.gen(function* () {
     `#!/bin/sh\n[ "$1" = --help ] && echo "  --autocompact <auto|tokens>" && exit 0\nexit 1\n`,
     { mode: 0o755 },
   );
+  // WARNING: Desktop takes its login shell's environment; this one hands back the world's.
   yield* fs.writeFileString(
     `${world.bin}/login-shell`,
     `#!/bin/sh\n[ "$1" = -lc ] && shift && exec /bin/sh -c "$@"\nexec /bin/sh "$@"\n`,
@@ -50,6 +53,7 @@ export const enterWorld = Effect.gen(function* () {
     COLLIE_HOST: stringifyJson([process.execPath, `${root}src/main.ts`]),
     COLLIE_HOST_WATCH_PID: String(process.pid),
     COLLIE_RECORD_MARKS: recordMarksFile,
+    // WARNING: never the user's core and its Machines.
     HC_SOCKET: `${live}/absent-core.sock`,
     PATH: `${world.bin}:${Bun.env.PATH ?? ""}`,
   });

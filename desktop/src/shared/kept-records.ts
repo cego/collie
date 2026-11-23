@@ -115,6 +115,7 @@ export const keptHolder = (
       }
     for (const key of keys) {
       if (held.has(key) || !keptKeys(set).has(key)) continue;
+      // WARNING: held before hold runs, which may tell a size and so trim at once.
       held.set(key, () => {});
       const release = hold(key, (bytes) => {
         set = sized(set, key, bytes);

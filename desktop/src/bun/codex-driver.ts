@@ -1,3 +1,4 @@
+// WARNING: Codex mints its own thread ids, so codex-threads.json maps each conversation to its thread.
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
@@ -550,6 +551,7 @@ const decodeRead = decoded(
 );
 const decodeModels = decoded(CodexModelList);
 
+// WARNING: Codex 0.170.0 refuses to resume a thread it has no rollout of.
 const unknownThread = (cause: CodexError) =>
   cause.code === -32600 && pipe_(cause.message, Str.startsWith("no rollout found"));
 

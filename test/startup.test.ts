@@ -1,3 +1,4 @@
+// WARNING: Every collie, hook and board start pays for what loads here, and the compaction helper runs on every prompt.
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";

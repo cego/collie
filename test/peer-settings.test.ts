@@ -66,6 +66,7 @@ test("paired hosts share the latest settings without Desktop, keep edit times an
           yield* first.lists([second]);
           expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
           const [laptop] = yield* peersOf(second.world.state);
+          // WARNING: the timestamp and sender are separate writes; wait for the whole update before reading.
           const received = yield* until(
             () => readSettingsSet(second.world.config),
             (has) => has.set.model === "2099-10-12T10:00:00.000Z" && has.flock?.by === laptop!.name,
@@ -206,6 +207,7 @@ test("the newer paired release upgrades the older one, replaces its host and res
           const before = yield* ownerOf(first.world.state);
           yield* first.lists([second]);
           yield* onOlder(["--machine", "second", "board"]);
+          // WARNING: the shell's append redirection creates an empty file before echo writes; read the completed line.
           const upgraded = yield* until(
             () =>
               fs

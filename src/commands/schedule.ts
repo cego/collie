@@ -27,6 +27,7 @@ const SCHEDULE_CHECKOUT_FIX = `Name the checkout with --workspace <absolute path
 
 type CheckoutOf = { readonly path: string | null } | { readonly error: OpResult };
 
+// WARNING: a workspace may be gone when the Schedule fires, so its id or label is its checkout's path.
 const checkoutOf: (
   env: PluginEnv,
   given: string,

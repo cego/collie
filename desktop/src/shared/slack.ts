@@ -2,6 +2,7 @@ import * as Arr from "effect/Array";
 import { isDirectMessage, type SlackChannel } from "../../../src/slack";
 
 export const SLACK_CLIENT_ID = "2673706937.12461393591409";
+// WARNING: the port the shared app's settings name as its callback; changing it breaks sign-in.
 export const SLACK_CALLBACK_PORT = 47328;
 export const SLACK_CALLBACK_PATH = "/slack/callback";
 export const SLACK_REDIRECT_URL = `http://localhost:${SLACK_CALLBACK_PORT}${SLACK_CALLBACK_PATH}`;

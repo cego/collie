@@ -20,8 +20,10 @@ const answer = (over: { closed?: ReadonlyArray<string> } = {}) => ({
 
 const answering = (done: typeof Controlled.Type) => {
   // WARNING: `Control` never asks to discard the reply, so it is the value.
+  // WARNING: Control never asks to discard the reply, so it is the value.
   const fake: Partial<Door> = { control: () => Effect.succeed(done as never) };
   // WARNING: `Control` calls only `control`.
+  // WARNING: Control calls only control, so the partial door is the whole door.
   const desktop = fake as Door;
   return { machine: { profile: "vm", name: "vm-mk" }, desktop };
 };

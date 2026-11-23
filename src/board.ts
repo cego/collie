@@ -1,3 +1,4 @@
+// WARNING: read-only and derived: nothing infers what the files do not say; a finished Run with a merge request has not been merged by anyone.
 import { readStageProof, type ShippingAction } from "./shipping";
 import {
   fallbacksOf,
@@ -568,6 +569,7 @@ function stateOf(
   if (status === "stopped") return "stopped";
   if (status === "failed") return "failed";
   if (status === "succeeded" || status === "ended") return "done";
+  // WARNING: under the endings, since only a Run still going can be waiting for anyone.
   if (stalled) return "blocked";
   return silent ? "quiet" : "active";
 }
@@ -645,6 +647,7 @@ const branchHead = Effect.fn("Board.branchHead")(function* (run: RunFacts, now: 
 });
 
 const HEAD_FOR_MS = 60_000;
+// WARNING: one entry per checkout and branch for the process's life; prune if that grows.
 const heads = new Map<string, { readonly at: number; readonly sha: string | null }>();
 
 function withoutPaths(text: string) {
@@ -785,6 +788,7 @@ const fanOf = Effect.fn("Board.fanOf")(function* (
   };
 });
 
+// WARNING: a stop suspends a Run, so its parent waits on it forever; a finished child hands back its own work.
 const over: (run: RunFacts, runs: ReadonlyArray<RunFacts>) => boolean = (run, runs) => {
   if (ended(run)) return true;
   if (run.asking.length > 0 || run.parked !== null) return false;
@@ -1013,6 +1017,7 @@ const nextChange = (then: number, now: number) => {
   return then + (Math.floor((now - then) / size) + 1) * size;
 };
 
+// WARNING: Herd-wide on purpose: one board per Herd, and a workspace is a filter over it.
 export const buildBoard = Effect.fn("Board.build")(function* (opts: BoardOptions) {
   const runs = newestFirst(opts.runs ?? (yield* listRuns(opts.env)));
   const records = yield* RunRecords;
@@ -1178,6 +1183,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
         const touched = yield* RunRecords.use((records) =>
           records.activity(Arr.map(everyRun, (run) => run.id)),
         );
+        // WARNING: a Run records no end: its last activity is its end, and one that wrote nothing ended no later than it began.
         const endedAt = (run: RunFacts) =>
           run.finished === null
             ? touched.get(run.id) || epochMs(run.created)
@@ -1202,6 +1208,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           );
         const repoRun =
           !several && lead !== undefined && children.includes(lead.owner) ? lead.owner : undefined;
+        // WARNING: read whatever the state: a merge GitLab reported lands the work even while the Run is still going.
         const disposition = yield* dispositionOf(repoRun === undefined ? runs : [...runs, repoRun]);
         const checking = Arr.filter(everyRun, (run) => checked.has(run.id));
         const leader = leaderOf(runs);
@@ -1325,6 +1332,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
         const decision: Decision | null = proposed ? asProposal(proposed) : (questions[0] ?? null);
 
         const status = leader.state;
+        // WARNING: a fan-out waiting on its Repo runs writes nothing itself; their work is its work.
         const working = [leader, ...children];
         const ownsAgent = (agent: { readonly run: string }) =>
           Arr.some(working, (run) => run.id === agent.run);

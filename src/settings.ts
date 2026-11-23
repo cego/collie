@@ -29,10 +29,12 @@ export function isQuestionMode(value: string): value is Questions {
   return Arr.some(QUESTION_MODES, (mode) => mode === value);
 }
 
+// WARNING: auto is the default: an unwatched prompt would stop the Run rather than protect it.
 export const PERMISSION_MODES = ["auto", "bypass", "harness"] as const;
 
 export const HARNESS_NAMES = ["claude", "codex", "opencode", "pi"] as const;
 
+// WARNING: absolute, not a percent of a window: the four harnesses measure different windows.
 export const COMPACT_AT_TOKENS = 150_000;
 export const COMPACTION_OFF = 0;
 
@@ -53,6 +55,7 @@ export interface Defaults {
   idleCloseMs: number;
   runModel: boolean;
   memoryHold: number;
+  // WARNING: read as written, never coerced: a fallback would silently compact an agent meant to be left alone.
   compactAtTokens: number;
   claudeAutoCompactWindow: number | string;
   models: Readonly<Record<string, ReadonlyArray<string>>>;
@@ -63,6 +66,7 @@ export interface Defaults {
   density: Density;
   notifications: Readonly<Record<string, boolean>>;
   questions: Questions;
+  // WARNING: changes what is said, never what may be done: a proactive turn's proposal takes the same authority path.
   proactive: boolean;
   gitlabHost: string;
   agentProfile: string;
@@ -116,6 +120,7 @@ export interface Setting {
   readonly label: string;
   readonly description: string;
   readonly unit?: SettingUnit;
+  // WARNING: this Machine's alone, never shared with the Flock.
   readonly machine?: true;
 }
 
@@ -439,6 +444,7 @@ export const settingOf = (key: string) =>
   Option.getOrUndefined(Arr.findFirst(SETTINGS, (setting) => setting.key === key)) ??
   (isReachKey(key) ? reachSetting(key) : undefined);
 
+// WARNING: empty is unset (an empty harness fails every Run); a number arrives as a number, since loadDefaults ignores strings.
 export function parseSetting(key: string, typed: string) {
   const setting = settingOf(key);
   if (setting === undefined) return { refused: `${key} is not one of Collie's settings` };
@@ -446,6 +452,7 @@ export function parseSetting(key: string, typed: string) {
   if (said === "") return { value: null };
   switch (setting.kind) {
     case "number":
+      // WARNING: within the safe integers too: a threshold no Run can use fails every launch.
       return /^\d+$/.test(said) && Number.isSafeInteger(Number(said))
         ? { value: Number(said) }
         : { refused: `${key} has to be a whole number, not "${typed}"` };

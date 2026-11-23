@@ -14,6 +14,7 @@ export const MAX_AGE_DAYS = 30;
 const TurnSchema = Schema.Struct({
   id: Schema.String,
   at: Schema.String,
+  // WARNING: kept distinct from human so the conversation never shows the human asking what they did not ask.
   role: Schema.Literals(["human", "collie", "event"]),
   text: Schema.String,
   target: Schema.optionalKey(Schema.String),
@@ -26,6 +27,7 @@ type Draft = { -readonly [K in keyof Turn]: Turn[K] };
 const TurnJson = Schema.fromJsonString(TurnSchema);
 const encodeTurn = flow(Schema.encodeResult(TurnJson), Result.getOrThrow);
 
+// WARNING: refused rather than shown: a path in a turn came from a model, which is no reason to open a file.
 export function insideKnown(path: string, roots: ReadonlyArray<string>) {
   return Arr.some(
     roots,
@@ -45,6 +47,7 @@ export class ConversationBusy extends Data.TaggedError("ConversationBusy")<{ fil
 
 export const read = (file: string) => readJournal(file, TurnJson);
 
+// WARNING: trimmed on write, not by a sweep: the write is the only moment anyone holds the lock.
 export function keep(turns: ReadonlyArray<Turn>, nowMs: number) {
   const oldest = nowMs - MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
   return Arr.filter(turns, (turn) => {

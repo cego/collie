@@ -20,6 +20,7 @@ export type Records =
   | Artefacts
   | RunRecords;
 
+// WARNING: fresh, or a nested provide would reuse the outer connection.
 export const recordsLayer = Layer.fresh(
   Layer.mergeAll(
     deliveriesLayer,

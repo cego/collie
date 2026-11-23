@@ -45,12 +45,14 @@ export const VerificationSchema = Schema.Struct({
   exit: Schema.Int,
   seconds: Schema.Finite,
   tail: Schema.Struct({ stdout: Schema.String, stderr: Schema.String }),
+  // WARNING: fail is how a bug is proved: a regression test failing before its fix is evidence, not a failure.
   expect: Schema.Literals(["pass", "fail"]).pipe(
     Schema.withDecodingDefaultKey(Effect.succeed("pass" as const)),
   ),
   result: Schema.Literals(["pass", "fail", "unstable"]),
   moved: Schema.optionalKey(Schema.Array(MovedPathSchema)),
   at: Schema.String,
+  // WARNING: an agent may collect proof; only Collie runs an approved spec.
   by: Schema.Literals(["agent", "collie"]),
   step: Schema.optional(Schema.String),
   place: Schema.optional(Schema.NullOr(StepPlace)),
@@ -104,6 +106,7 @@ export const ProofSchema = VerificationSchema.mapFields((fields) => ({
 }));
 export type Proof = typeof ProofSchema.Type;
 
+// WARNING: a merge patch drops nulls at every depth, so place is kept in the patch's target.
 export const PROOF_SQL = `CASE WHEN journal = 'evidence/steering/verifications.jsonl' THEN
   CASE WHEN json_valid(line) THEN json_patch(
     CASE WHEN line -> '$.place' IS NULL THEN '{}' ELSE json_object('place', line -> '$.place') END,

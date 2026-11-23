@@ -12,6 +12,7 @@ import type { Readiness } from "./forge";
 export interface ForgeLogin {
   readonly forge: MrForge;
   readonly host: string;
+  // WARNING: A stricter read of a host keeps its own entry, so the cache key is not the host alone.
   readonly key: string;
   readonly display: string;
   readonly cli: string;
@@ -36,6 +37,7 @@ export type Answered<A> =
 export class ForgeHttp extends Context.Service<
   ForgeHttp,
   {
+    // WARNING: After a 401 the token is read again once and the call made once more: a forge that answers 401 applied nothing.
     readonly ask: <A>(
       login: ForgeLogin,
       cwd: string,
@@ -158,6 +160,7 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
                 const error =
                   failed.cause instanceof Error ? failed.cause : new Error(String(failed.cause));
                 const refused = error instanceof forges.ForgeApiError && error.status === 401;
+                // WARNING: Another call may have read a new token since this one sent its own.
                 if (refused && slot.token === token) slot.token = null;
                 const reason = reasonOf(forges, login.display, error);
                 const transient =

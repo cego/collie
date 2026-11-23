@@ -380,6 +380,7 @@ const handOverAskedOf = (dir: string) => `${dir}/host.handover`;
 const HandOverAsked = Schema.fromJsonString(
   Schema.Struct({ pid: Schema.Int, build: Schema.String }),
 );
+// WARNING: Written before the lock is released, so the new host finds it.
 const handedOverOf = (dir: string) => `${dir}/host.handed-over`;
 const HandedOverJson = Schema.fromJsonString(
   Schema.Struct({
@@ -476,12 +477,14 @@ export const HostRpcs = RpcGroup.make(
     error: EntryError,
   }),
   Rpc.make("registrations", { success: Registrations }),
+  // WARNING: Asked per project: an override is one project's, and one host serves them all.
   Rpc.make("discover", { payload: { project: Schema.String }, success: Catalogue }),
   Rpc.make("status", {
     payload: { runId: Schema.String },
     success: RunStatus,
     error: HostRefused,
   }),
+  // WARNING: A run whose module is missing is still returned, with its file to repair named, not an error.
   Rpc.make("run", { payload: { runId: Schema.String }, success: Schema.NullOr(RunView) }),
   Rpc.make("runWork", {
     payload: { runId: Schema.String },
@@ -605,8 +608,10 @@ export const HostRpcs = RpcGroup.make(
   }),
 );
 
+// WARNING: A client of another build uses FrontDoorRpcs alone.
 const AllRpcs = HostRpcs.merge(FrontDoorRpcs);
 
+// WARNING: Streams are timed to their first value: they are meant to stay open.
 export class SlowRpcs extends RpcMiddleware.Service<SlowRpcs>()("collie/SlowRpcs") {}
 
 export const slowRpcsLayer = Layer.succeed(SlowRpcs)((effect, { rpc }) =>
@@ -663,6 +668,7 @@ export const timingFirstValues: <
   handlers: H,
 ) => H = <H extends Record<string, (...args: ReadonlyArray<never>) => object>>(handlers: H) =>
   // WARNING: each handler is replaced by one taking its arguments and answering its type.
+  // WARNING: Each handler is replaced by one taking its arguments and answering its type.
   Rec.map(handlers, (handler, name) => (...args: ReadonlyArray<never>) => {
     const answer = handler(...args);
     return Stream.isStream(answer) || Effect.isEffect(answer) ? serveAnswer(answer, name) : answer;
@@ -750,12 +756,14 @@ const healerBound =
       Registry,
       (registry) =>
         // WARNING: each handler is replaced by one taking its arguments and answering its type.
+        // WARNING: Each handler is replaced by one taking its arguments and answering its type.
         Rec.map(handlers, (handler, name) =>
           HEALER_READS.has(name)
             ? handler
             : (payload: never, options: never) => {
                 const refusal = Effect.gen(function* () {
                   // WARNING: every RPC handler is called with the options carrying its client.
+                  // WARNING: Every RPC handler is called with the options carrying its client.
                   const who = stampIn(declared, (options as { client: { id: number } }).client);
                   if (who.origin !== "agent" || who.from?.run === undefined) return;
                   const heals = (yield* registry
@@ -818,6 +826,7 @@ export type HostClient = RpcClient.RpcClient<
 
 const serialization = RpcSerialization.layerNdjson;
 
+// WARNING: One entry per connection, never removed: prune on disconnect if hosts live for months.
 type Declared = Map<
   number,
   { readonly frontDoor: FrontDoor; readonly from?: Where | undefined; readonly voice?: Voice }
@@ -963,6 +972,7 @@ const handlers = (
         discover: ({ project }) =>
           catalogue(project).pipe(
             Effect.map((found) => ({
+              // WARNING: Without the revision: the host decides a reload itself, not the caller.
               entries: Arr.map(
                 found.entries,
                 ({ id, title, description, layer, path, inputs, outcome }) => ({
@@ -1084,6 +1094,7 @@ const handlers = (
                 Arr.filter(all, (run) => asked.task === null || run.task === asked.task),
                 (facts) => ({ facts, revision: model?.inputsAt([facts.id]) ?? 0 }),
               ),
+              // WARNING: With no Run model nothing says what moved, so every Run is marked as moved.
               model === undefined ? { ...asked, since: null } : asked,
             );
             const cardOf = (run: string) =>
@@ -1228,6 +1239,7 @@ const handlers = (
                 mode: mode ?? null,
               };
               if (attached !== undefined) asked.attachments = attached;
+              // WARNING: Set only where given, so a request recorded before `to` existed still matches.
               if (to !== undefined) asked.to = to;
               if (step !== undefined) asked.step = step;
               return once(
@@ -1296,6 +1308,7 @@ const attachedAs = (into: string | null, paths: ReadonlyArray<string> | undefine
     ),
   );
 
+// WARNING: Told to the caller but not kept as its request's answer.
 class SteerUnanswered extends Schema.TaggedError<
   SteerUnanswered,
   { readonly brand: unique symbol }
@@ -1316,6 +1329,7 @@ const outcomeOf: (result: OpResult) => SteerOutcome = (result) =>
         data: fromText(toText(result.error.details ?? {})),
       };
 
+// WARNING: Through JSON text: an undefined field is dropped rather than refused.
 const toText = Schemaflow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
   Result.getOrThrow,
@@ -1325,6 +1339,7 @@ const fromText = Schemaflow(
   Result.getOrThrow,
 );
 
+// WARNING: Built again with nothing written, so 'silent for' stays true.
 const boardTick = Config.Duration("COLLIE_BOARD_TICK").pipe(
   Config.withDefault(Duration.seconds(5)),
   Effect.orDie,
@@ -1353,12 +1368,15 @@ const hostBoard = (dir: string) =>
     const hosted = yield* Effect.context<HostServices>();
     const env = yield* servingEnv(dir);
     const herdr = new Herdr(env);
+    // WARNING: Read no more often than herdChanges: each read is a herdr process.
     const herdsNow = yield* Effect.cachedWithTTL(liveHerds(herdr, env), SESSIONS_EVERY);
+    // WARNING: A write moves no agent: herdr is read again only after herdrMoved.
     const [agentsCached, herdrMoved] = yield* Effect.cachedInvalidateWithTTL(
       Effect.flatMap(herdsNow, agentsIn),
       Duration.infinity,
     );
     let agentsRead: Effect.Success<typeof agentsCached> | undefined;
+    // WARNING: Told synchronously, so a record opened after aliveNow draws it.
     const agentsSeen = new Set<(alive: ReadonlyArray<AgentInfo>) => void>();
     const agentsNow = Effect.map(agentsCached, (agents) => {
       if (agents !== agentsRead) for (const told of agentsSeen) told(agents.alive);
@@ -1370,6 +1388,7 @@ const hostBoard = (dir: string) =>
     const kept: KeptViews | undefined =
       model === undefined ? undefined : { revision: model.factsAt, views: new Map() };
     const facts = new WeakMap<RunView, RunFacts>();
+    // WARNING: The same object for as long as the view is: callers key on its identity.
     const factsOf = (view: RunView) => {
       const known = facts.get(view);
       if (known !== undefined) return known;
@@ -1411,6 +1430,7 @@ const hostBoard = (dir: string) =>
         const { alive } = yield* agents.pipe(Effect.provideContext(bun));
         noteIdle(idle, alive, yield* Clock.currentTimeMillis);
         const facts = yield* runs;
+        // WARNING: Observed before the build, so each card's key holds the revisions as read.
         if (model !== undefined) yield* model.observe(facts);
         const views = yield* boardOf(facts, alive);
         return { runs: facts, views, alive };
@@ -1433,6 +1453,7 @@ const hostBoard = (dir: string) =>
       Effect.map(agents, ({ alive }) => alive).pipe(Effect.provideContext(bun));
     const seen = new Map<string, number>();
     const storage = yield* Effect.context<MessageStorage.MessageStorage>();
+    // WARNING: Fresh sessions, not the board's cached ones: a session opened since would look gone.
     const sweepersOver = <E, F>(board: BoardSource<E, F>) =>
       Effect.gen(function* () {
         const herds = yield* liveHerds(herdr, env);
@@ -1441,8 +1462,10 @@ const hostBoard = (dir: string) =>
         const tasks = yield* listTasks;
         const views = yield* board.views(herds).pipe(Effect.option);
         return [
+          // WARNING: Before the worktrees: a checkout goes only once its Task has closed.
           tasksSweeper({
             tasks,
+            // WARNING: With no board, no Task is judged Finished, so nothing closes.
             views: Option.getOrElse(views, () => []),
             seen,
           }),
@@ -1452,6 +1475,7 @@ const hostBoard = (dir: string) =>
             runs: all,
             idle,
             finishedSince,
+            // WARNING: A config that cannot be read closes nothing.
             idleCloseMs: yield* loadDefaults(env.userDir).pipe(
               Effect.map((defaults) => defaults.idleCloseMs),
               Effect.orElseSucceed(() => 0),
@@ -1487,9 +1511,11 @@ const hostBoard = (dir: string) =>
               ? `${env.home}/Applications/collie-desktop.app/Contents/Resources/version.json`
               : `${desktopRootOf(dataHomeOf(env.home, env.raw["XDG_DATA_HOME"]))}/app/Resources/version.json`,
           ),
+          // WARNING: Last: a Task is kept while its workspace or checkout remains.
           retentionSweeper({
             stateDir: env.stateDir,
             sessions,
+            // WARNING: All reads or none: a Task judged without its Runs would look forgettable.
             facts: Effect.all({
               tasks: listTasks,
               views: board.views(herds),
@@ -1619,6 +1645,7 @@ const sharedBoardLayer = (dir: string) =>
       const reactivity = yield* Reactivity.Reactivity;
       const model = Option.getOrUndefined(yield* Effect.serviceOption(RunModel));
       const { listing, herdrMoved, ...board } = yield* hostBoard(dir);
+      // WARNING: Shared, so each subscriber does not set up its own recursive watch, which walks the tree.
       const writes = yield* Stream.mergeAll(
         [
           Stream.merge(boardWrites(dir, model), model?.moved ?? Stream.empty).pipe(
@@ -1857,6 +1884,7 @@ const UPLOADS_TRAIL = 1000;
 const Written = Schema.Struct({ path: Schema.String, bytes: Schema.Int });
 const Edited = Schema.Struct({ path: Schema.String, replaced: Schema.Int });
 
+// WARNING: A Herd's key names one directory under the state directory, never above it.
 const isHerdName = (herd: string) => herd !== "." && herd !== ".." && /^[^/\\]+$/.test(herd);
 
 const finishTakenOver = (stateDir: string) =>
@@ -1919,11 +1947,15 @@ const frontDoorHandlers = (
       const harnesses = yield* HarnessCatalogues;
       const schedules = yield* Schedules;
       const artefacts = yield* Artefacts;
+      // WARNING: Trimming rewrites the trail through one temporary file: one read records at a time.
       const recordingUsage = yield* Semaphore.make(1);
       const recordingShell = yield* Semaphore.make(1);
+      // WARNING: Two doors acknowledging at once must still leave one seen line.
       const seeing = yield* Semaphore.make(1);
+      // WARNING: Kept for the host's life: evict by age if a host lives for months.
       const plans: PlanCache = new Map();
       const record = yield* recordSources({ panels, plans });
+      // WARNING: A retry answers with the revision first answered, not the Run's current one.
       const actRevisions = new Map<string, RunRevision>();
       const revisionOfAct = (request: string, index: number, now: RunRevision) => {
         const key = `${request}#${index}`;
@@ -1986,6 +2018,7 @@ const frontDoorHandlers = (
         whoOf(client).origin === "desktop"
           ? []
           : Arr.map(SESSION_STORES, (store) => `${env.home}/${store}`);
+      // WARNING: An agent settled while Collie waits on its Output is told its verify ended, or it waits forever.
       const toldVerifyEnded = (
         client: { readonly id: number },
         verified: import("./verify-model").Verification,
@@ -2023,6 +2056,7 @@ const frontDoorHandlers = (
         const running = carrying.get(carryingKey(proposal, request));
         return running === undefined ? null : Effect.flatten(Deferred.await(running));
       };
+      // WARNING: In the host's scope: a caller that stops waiting leaves the control running.
       const controls = yield* Effect.scope;
       const controlling = new Map<
         string,
@@ -2040,6 +2074,7 @@ const frontDoorHandlers = (
       const trail = (runId: string) => runDir(env.stateDir, runId);
       const askersHerd = (client: { readonly id: number }) =>
         machineHerd(askerEnv(client)).pipe(Effect.orElseSucceed(() => null));
+      // WARNING: A host that dies between acting and recording leaves that one unrecorded.
       const fresh = <A extends { readonly fresh: boolean }, I extends Schema.Json, E>(
         runId: (value: A) => string,
         line: {
@@ -2324,6 +2359,7 @@ const frontDoorHandlers = (
             });
           return yield* act(file, lines);
         }).pipe(plainly);
+      // WARNING: A Run stopped after its merge request landed stays stopped.
       const takeUp = Effect.fn("Host.takeUp")(function* (
         runId: string,
         recoveryPark?: string,
@@ -2440,6 +2476,7 @@ const frontDoorHandlers = (
           { frontDoor, session: _herdrSession, from, stamp: stamped, ...voice },
           { client },
         ) => {
+          // WARNING: Which Machine a channel came from is said by this host's own link, never by the channel.
           if (from?.machine !== undefined && stamped !== stamp)
             return Effect.fail(
               new HostRefused({ reason: "a channel cannot say which Machine it came from" }),
@@ -3101,6 +3138,7 @@ const frontDoorHandlers = (
                 asked: { interpretation, actions },
                 result: SteerOutcome,
               },
+              // WARNING: A refusal is not kept against its request, so it can be asked again corrected.
               request(asker, key, { interpretation, actions: decoded.value, actor }).pipe(
                 Effect.flatMap((result) =>
                   !result.ok && REJECTED.includes(result.error.code)
@@ -3359,6 +3397,7 @@ const frontDoorHandlers = (
                         ),
                         Effect.result,
                       ),
+                      // WARNING: Ending the race ends the command's process group with its scope.
                       stopped.pipe(
                         Effect.repeat({
                           until: (stop) => stop,
@@ -4206,6 +4245,7 @@ const installationOf = Effect.fn("Host.installationOf")(function* (dir: string) 
   const known = Str.trim(yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => "")));
   if (known !== "") return known;
   const made = yield* (yield* SecureRandom.SecureRandom).uuidV4();
+  // WARNING: Renamed into place, so a host that dies mid-write leaves no half an id.
   yield* fs.writeFileString(`${file}.new`, `${made}\n`);
   yield* fs.rename(`${file}.new`, file);
   return made;
@@ -4234,12 +4274,14 @@ const endCiWaits = Effect.gen(function* () {
       yield* RunRecords.use((records) => records.setControl(VERIFYING, row.run, null));
 });
 
+// WARNING: Losing the lock is not a failure: a host is already here, which is what the caller wanted.
 export const serve: (
   named: string,
 ) => Effect.Effect<void, never, PlatformServices | Scope.Scope> = (named) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     yield* fs.makeDirectory(named, { recursive: true });
+    // WARNING: Resolved before the chdir below moves where a relative path points.
     const dir = yield* fs.realPath(named);
     yield* Effect.sync(() => {
       process.chdir(dir);
@@ -4247,10 +4289,12 @@ export const serve: (
     });
     const lock = lockOf(dir);
     yield* ensureLockDir(lock);
+    // WARNING: withLock breaks a dead holder's claim before its last attempt, so nothing is left for a human to clear.
     return yield* withLock(
       lock,
       Effect.void,
       Effect.gen(function* () {
+        // WARNING: No process can carry an id this host has yet to make.
         const fresh = !(yield* fs.exists(`${dir}/installation`));
         const installation = yield* installationOf(dir);
         yield* markSeenSince(dir, yield* nowIso);
@@ -4258,6 +4302,7 @@ export const serve: (
           .readFileString(handedOverOf(dir))
           .pipe(Effect.flatMap(Schema.decodeUnknownEffect(HandedOverJson)), Effect.option);
         yield* fs.remove(handedOverOf(dir), { force: true }).pipe(Effect.ignore);
+        // WARNING: Opened after the checks a host before it left are taken over, and it migrates the store first.
         const checkRecords = yield* Layer.build(recordsAt(dir));
         const checks = yield* hostCheckProcesses({
           dir,
@@ -4265,6 +4310,7 @@ export const serve: (
           onRun: onLeftoversRun(dir),
           sweep: false,
           supervisor: yield* hostCommand,
+          // WARNING: Only a host of the build it was handed to takes the checks over.
           ...(Option.isSome(handedOver) &&
             handedOver.value.build === BUILD && { handedOver: handedOver.value }),
         }).pipe(Effect.provideContext(checkRecords));
@@ -4284,6 +4330,7 @@ export const serve: (
         yield* Effect.forkScoped(
           rotateInPlace(outputOf(dir)).pipe(Effect.repeat(Schedule.spaced("1 minute"))),
         );
+        // WARNING: A config that cannot be read leaves the model on, its default.
         const modelled = yield* currentEnv.pipe(
           Effect.flatMap((env) => loadDefaults(env.userDir)),
           Effect.map((defaults) => defaults.runModel),
@@ -4321,6 +4368,7 @@ const stopGrace = Config.Duration("COLLIE_HOST_STOP_GRACE").pipe(
   Effect.orDie,
 );
 const STOP_SIGNALS = ["SIGTERM", "SIGINT"] as const;
+// WARNING: Long enough for the log's next flush, which an exit does not wait for.
 const LOG_FLUSH = "200 millis";
 
 type StopReason = Data.TaggedEnum<{
@@ -4345,6 +4393,7 @@ const boundedStop = (dir: string, lock: string, checks: CheckProcessesApi) =>
     const host = { pid: process.pid, started: (yield* processStarted(process.pid)) ?? "" };
     const context = yield* Effect.context<never>();
     let handed: { readonly build: string; readonly checks: ReadonlyArray<string> } | null = null;
+    // WARNING: In the outer scope, which closes only once the shutdown it bounds has finished.
     yield* Deferred.await(stopping).pipe(
       Effect.flatMap((why) => Effect.logInfo(stopSaid(why))),
       Effect.andThen(
@@ -4377,6 +4426,7 @@ const boundedStop = (dir: string, lock: string, checks: CheckProcessesApi) =>
       ),
       Effect.andThen(Effect.logWarning(`still stopping after ${Duration.format(grace)}; exiting`)),
       Effect.andThen(Effect.sleep(LOG_FLUSH)),
+      // WARNING: Released here, rather than left for the next host to judge stale.
       Effect.andThen(releaseOwnLock(lock)),
       Effect.catch((failed) =>
         Effect.fail(failed).pipe(
@@ -4388,6 +4438,7 @@ const boundedStop = (dir: string, lock: string, checks: CheckProcessesApi) =>
       Effect.forkScoped,
     );
     const signalled = () => {
+      // WARNING: Decided as the signal lands, before an interrupted check's Scope can end it.
       const asked = handOverAsked(dir);
       if (asked !== null && asked.pid === process.pid && newer(asked.build, BUILD))
         handed = { build: asked.build, checks: Effect.runSyncWith(context)(checks.handOver) };
@@ -4405,6 +4456,7 @@ const boundedStop = (dir: string, lock: string, checks: CheckProcessesApi) =>
     return (why: StopReason) => Deferred.succeed(stopping, why).pipe(Effect.asVoid);
   });
 
+// WARNING: Read and removed at once: a signal handler must not wait.
 const handOverAsked = (dir: string) => {
   try {
     const text = readFileSync(handOverAskedOf(dir), "utf8");
@@ -4415,6 +4467,7 @@ const handOverAsked = (dir: string) => {
   }
 };
 
+// WARNING: Judged by the lock, not the directory: a host still starting recreates the directory.
 const orphaned = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -4503,6 +4556,7 @@ const own = (
     const bun = yield* Effect.context<PlatformServices>();
     const runModel = Option.getOrUndefined(yield* Effect.serviceOption(RunModel));
     const herdr = new Herdr(env);
+    // WARNING: Under the lock, so the socket file is a dead host's: a unix socket cannot bind while its file exists.
     yield* fs.remove(socketOf(dir), { force: true }).pipe(Effect.orDie);
     yield* Effect.addFinalizer(() => fs.remove(socketOf(dir), { force: true }).pipe(Effect.ignore));
     const pid = yield* currentPid;
@@ -4541,6 +4595,7 @@ const own = (
     const stamp = yield* (yield* SecureRandom.SecureRandom).uuidV4();
     const toasted = yield* PubSub.unbounded<Toasted>();
     const reconnects = yield* Ref.make(0);
+    // WARNING: Kept until the reports layer takes them, so a link up before it starts is not missed.
     const linked = yield* Queue.unbounded<Peer>();
     const peers = yield* startPeers({
       reconnected: Ref.update(reconnects, (count) => count + 1),
@@ -4657,6 +4712,7 @@ const own = (
     );
   }).pipe(Effect.provide([usageLayer, catalogueLayer(dir)]), Effect.orDie);
 
+// WARNING: A newer host is reported, not replaced: the client is what is stale.
 export const connect: (
   dir: string,
   options?: {
@@ -4672,6 +4728,7 @@ export const connect: (
     const build = options?.build ?? BUILD;
     const hostEnv = options?.hostEnv ?? {};
     let who = yield* ensureRunning(dir, hostEnv, build);
+    // WARNING: Only a newer copy of the same installation upgrades the host; a dev checkout is not one.
     const install = (yield* currentEnv.pipe(Effect.orDie)).pluginRoot;
     const ours = who.root === undefined || sameInstallation(who.root, install);
     const replaced = ours && newer(build, who.build);
@@ -4711,6 +4768,7 @@ export const restartHost = Effect.fn("Host.restart")(function* (
       build: Option.match(answered, { onNone: () => null, onSome: (who) => who.build }),
     };
     const build = options?.build ?? BUILD;
+    // WARNING: A host that did not answer is judged by the build it recorded.
     const older =
       before.build === null
         ? (yield* olderSilentOwner(dir, build)) === owner.pid
@@ -4735,6 +4793,7 @@ export const restartSaid = (
 
 const STOP_SLACK = Duration.seconds(5);
 
+// WARNING: Waits by the clock, not a poll count, so load cannot stretch it.
 const stopOwner = Effect.fn("Host.stopOwner")(function* (dir: string, pid: number) {
   const goneWithin = (duration: Duration.Input) =>
     liveOwner(dir).pipe(
@@ -4819,6 +4878,7 @@ const openGroup = <Rpcs extends Rpc.Any>(
 
 const open = (dir: string) => openGroup(socketOf(dir), AllRpcs);
 
+// WARNING: Nothing is started or stopped from here, so a remote client cannot reach a process of its own.
 export const frontDoor = (socket: string) => openGroup(socket, FrontDoorRpcs);
 
 export const peerChannel = (stateDir: string, name: string, header: RelayHeader) =>
@@ -4999,6 +5059,7 @@ const olderSilentOwner = Effect.fn("Host.olderSilentOwner")(function* (dir: stri
 const sameInstallation = (served: string, install: string) =>
   served === install || install === `${served}/release`;
 
+// WARNING: Asking is the whole probe: a socket that opens proves a file, and only an answer proves a host.
 const ensureRunning = Effect.fn("Host.ensureRunning")(function* (
   dir: string,
   hostEnv: Readonly<Record<string, string>>,
@@ -5007,6 +5068,7 @@ const ensureRunning = Effect.fn("Host.ensureRunning")(function* (
   const first = yield* ask(dir).pipe(Effect.result);
   if (first._tag === "Success") return first.success;
   const silent = yield* olderSilentOwner(dir, build);
+  // WARNING: Too slow to answer is not gone: it still hears its signal and hands its checks over.
   if (silent !== null) yield* replaceOwner(dir, silent, build);
   const started = Effect.scoped(
     Effect.gen(function* () {
@@ -5045,6 +5107,7 @@ const diagnose = Effect.fn("Host.diagnose")(function* (dir: string) {
   );
 });
 
+// WARNING: Detached and unreferenced: the host must outlive whoever started it.
 const spawnHost = Effect.fn("Host.spawn")(function* (
   named: string,
   hostEnv: Readonly<Record<string, string>>,
@@ -5056,6 +5119,7 @@ const spawnHost = Effect.fn("Host.spawn")(function* (
   const { pluginRoot, userDir } = env;
   return yield* Effect.gen(function* () {
     yield* fs.makeDirectory(named, { recursive: true });
+    // WARNING: Resolved before the host starts in it, so a relative path would name somewhere else.
     const dir = yield* fs.realPath(named);
     yield* rotateInPlace(outputOf(dir));
     const handle = yield* spawner.spawn(
@@ -5073,6 +5137,7 @@ const spawnHost = Effect.fn("Host.spawn")(function* (
         ],
         {
           cwd: dir,
+          // WARNING: A client started by Desktop may carry its launcher's LD_PRELOAD.
           // oxlint-disable-next-line effecttsgo/process-env -- A client started by Desktop may carry its launcher's LD_PRELOAD.
           env: withoutLauncher(
             withoutHerdrOne({
@@ -5090,6 +5155,7 @@ const spawnHost = Effect.fn("Host.spawn")(function* (
         },
       ),
     );
+    // WARNING: Unreferenced before the caller's scope closes, or the spawner's finalizer kills the host.
     yield* Effect.asVoid(handle.unref);
     return handle;
   }).pipe(Effect.catch((cause) => unavailable(named, String(cause))));
@@ -5104,6 +5170,7 @@ const hostCommand: Effect.Effect<ReadonlyArray<string>> = Effect.gen(function* (
     if (!pipe(Str.trimStart(value), Str.startsWith("["))) return [value];
     return yield* Schema.decodeEffect(CommandJson)(value).pipe(Effect.orElseSucceed(() => [value]));
   }
+  // WARNING: A compiled binary's entry lives under /$bunfs: passing that path would be read as a subcommand.
   return pipe(Bun.main, Str.startsWith("/$bunfs/"))
     ? [process.execPath]
     : [process.execPath, Bun.main];

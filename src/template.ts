@@ -14,6 +14,7 @@ export interface RenderOptions {
   skill?: (name: string) => string;
 }
 
+// WARNING: nothing expands a slash command in a prompt, so a mention is a path, the same for every harness.
 export function skillMention(skills: ReadonlyMap<string, string>) {
   const returned: (name: string) => string = (name) => {
     const file = skills.get(name);
@@ -59,6 +60,7 @@ const NOT_GIVEN = "not given";
 
 export function renderTemplate(text: string, input: YamlMap, opts: RenderOptions = {}) {
   const missing: string[] = [];
+  // WARNING: skills first, so {{skill:x}} is never mistaken for missing input.
   // oxlint-disable-next-line effecttsgo/prefer-effect-string -- This replacement depends on each match; Effect String accepts only string replacements.
   const withSkills = text.replace(SKILL, (all, name: string) =>
     opts.skill ? opts.skill(name) : all,
@@ -93,6 +95,7 @@ export function slugify(text: string, max = 40) {
   return slug(text, max).slug;
 }
 
+// WARNING: a clipped slug is a label, never an identity: long texts sharing a prefix would collide.
 export function slug(text: string, max = 40) {
   const full = pipe(
     Str.toLowerCase(text),
@@ -100,5 +103,6 @@ export function slug(text: string, max = 40) {
     Str.replace(/^-+|-+$/g, ""),
   );
   const cut = pipe(full, Str.slice(0, max), Str.replace(/-+$/g, ""));
+  // WARNING: the fallback name counts as clipped: it stands for the text, so texts with no alphanumerics would share it.
   return { slug: cut || "run", clipped: cut !== full || cut === "" };
 }

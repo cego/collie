@@ -1,3 +1,4 @@
+// WARNING: nothing here reads a workflow's name, so a fork renaming the shipped ones keeps the same offers.
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
@@ -96,6 +97,7 @@ export function argumentsWithout(drawn: Schema.Json | null, names: ReadonlySet<s
     : { ...document, properties };
 }
 
+// WARNING: a throwing eligibility takes only its own offer off the card.
 function refusal(offer: Declared, facts: ActionFacts) {
   try {
     return offer.eligible(facts) ? null : "its conditions are not met";
@@ -104,6 +106,7 @@ function refusal(offer: Declared, facts: ActionFacts) {
   }
 }
 
+// WARNING: a closed list on purpose: an offer names a fact and nothing here reads an expression.
 export const NEEDS = {
   findings: "a finding it left open for somebody to fix",
   "diff-target": "something it was pointed at",
@@ -145,6 +148,7 @@ export interface OfferDef {
 
 export type OfferFacts = ActionFacts;
 
+// WARNING: a caller with no record of a fact answers no: an offer is made on what is known.
 const met = (need: Need, facts: ActionFacts) => {
   switch (need) {
     case "findings":
@@ -187,6 +191,7 @@ export function inputsFor(
     readonly input: Readonly<Record<string, Schema.Json>>;
   },
 ) {
+  // WARNING: undefined means nothing to pass; a null the Run was started with is a value.
   const value = (source: Source, name: string) => {
     switch (source) {
       case "run-id":

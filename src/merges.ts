@@ -127,6 +127,7 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
   making: ReadonlySet<string>;
 }) {
   const fs = yield* FileSystem.FileSystem;
+  // WARNING: Earlier hosts' answers are merged in, so a fresh host does not re-ask what already landed.
   for (const [label, state] of yield* readMrStates(opts.stateDir)) opts.states.set(label, state);
   const forge = new Map(yield* readForge(opts.stateDir));
   let asked = false;
@@ -194,6 +195,7 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
           });
   }
   for (const { mr, abandoned, runs, owner } of watched) {
+    // WARNING: Only an abandonment settles a merge request for good; a closed one may be reopened.
     if (abandoned) continue;
     const label = mrLabel(mr);
     if (mrRefOf(mr) === null) continue;
@@ -216,6 +218,7 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
         MERGE_POLL_MS <=
         opts.now
     ) {
+      // WARNING: Stamped before asking, so a forge that cannot be asked is not asked every tick.
       opts.checked.set(id, opts.now);
       asked = true;
       const answered = yield* forgeAnswer(`mr:${id}`, at, opts.run, (panel) =>
@@ -239,6 +242,7 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
           });
       }
     }
+    // WARNING: Every round, not only when asked: a stop that did not take is asked again.
     const state = opts.states.get(id);
     if (state === undefined || state === "open" || state === "closed") continue;
     const read = opts.panels.get(id)?.panel;
@@ -260,6 +264,7 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
     );
     if (going.length === 0) continue;
     const spared = yield* sparedBy(id, working, opts);
+    // WARNING: An attempt the forge cannot settle yet spares and stops nothing.
     if (spared === null) continue;
     for (const run of going) if (!spared.has(run.id)) yield* opts.stop(run.id, `${label} merged`);
   }
@@ -365,6 +370,7 @@ const abandonedIn = Effect.fn("Merges.abandonedIn")(function* (dir: string) {
   );
 });
 
+// WARNING: A hostless ref an earlier host wrote is read in the id's project.
 const firstMerged = Effect.fn("Merges.firstMerged")(function* (
   dirs: ReadonlyArray<string>,
   id: string,
@@ -382,6 +388,7 @@ const firstMerged = Effect.fn("Merges.firstMerged")(function* (
   return first;
 });
 
+// WARNING: A merge request merged or closed before the Task's first Run is an older branch's.
 const fromBranches = Effect.fn("Merges.fromBranches")(function* <R>(
   view: TaskView,
   opts: {
@@ -433,6 +440,7 @@ const fromBranches = Effect.fn("Merges.fromBranches")(function* <R>(
   return found;
 });
 
+// WARNING: Never an error: a card with no answer reads unchecked.
 const forgeAnswer = Effect.fn("Merges.forgeAnswer")(function* <R>(
   mr: string,
   cwd: string,
@@ -482,6 +490,7 @@ const newerEntry: (known: Entry | undefined, incoming: Entry) => Entry = (known,
   return asked === undefined ? kept : { ...kept, asked };
 };
 
+// WARNING: Merged over the file, never replaced: a fresh pane would erase what earlier panes learned.
 export const writeMrStates = Effect.fn("Merges.write")(function* (
   stateDir: string,
   states: ReadonlyMap<string, MrState>,
@@ -517,6 +526,7 @@ const readEntries = Effect.fn("Merges.readEntries")(function* (stateDir: string)
     .pipe(Effect.orElseSucceed(() => "{}"));
   const decoded = Schema.decodeOption(StatesJson)(text);
   if (Option.isSome(decoded)) return new Map<string, Entry>(Rec.toEntries(decoded.value));
+  // WARNING: An unreadable file is no memory, not a failure.
   const old = Option.getOrElse(Schema.decodeOption(OldStatesJson)(text), () => ({}));
   return new Map<string, Entry>(
     Arr.map(Rec.toEntries(old), ([label, state]) => [label, { state }]),

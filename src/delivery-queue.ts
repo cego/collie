@@ -4,6 +4,7 @@ import { AuditLine } from "./audit";
 export const Steered = Schema.Struct({
   note: Schema.optional(Schema.String),
   agent: Schema.String,
+  // WARNING: delivered means submitted to the harness, never accepted by this queue.
   delivered: Schema.Boolean,
   delivery: Schema.optionalKey(Schema.String),
   detail: Schema.String,

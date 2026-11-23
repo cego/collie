@@ -1,3 +1,4 @@
+// WARNING: carrying out needs the host, and lifecycle reads operations, so this module sits downstream of both.
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -103,6 +104,7 @@ export function followUpField(drawn: Schema.Json | null) {
 }
 
 export const registerRunExecutors = Effect.fn("runActions.register")(function* () {
+  // WARNING: a second registration would claim an action kind twice, so a repeat call returns early.
   if (registeredKinds().length > 0) return;
   const failed: (note: string) => ExecutionResult = (note) => ({ state: "failed", note });
   const settled: (result: OpResult | Failure) => ExecutionResult = (result) =>
@@ -145,6 +147,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         answerRun(env, {
           door: by,
           runId: action.run,
+          // WARNING: an answer lands on the question it was given, not whatever is open now.
           decision: action.choiceId === "" ? null : action.choiceId,
           value: action.answer,
           request: by.requestId,
@@ -229,6 +232,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
             return yield* Effect.fail(
               `the Intent is v${intent.version}, not v${action.base_version}`,
             );
+          // WARNING: a constraint is semantic: a model's words are not a rule Collie can check by itself.
           return amendIntent(
             intent,
             action.change === "set-goal"
@@ -266,6 +270,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       });
       if (!granted.ok) return failed(granted.error.message);
       const dir = runDir(env.stateDir, action.run);
+      // WARNING: an Intent that failed to follow the grant is reported as such, not as the grant failing.
       const unlisted = yield* updateIntent(dir, (intent) =>
         intent === null
           ? Effect.succeed(null)
@@ -393,6 +398,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   );
   registerExecutor("update_defaults", (action, _by, env) =>
     Effect.gen(function* () {
+      // WARNING: the named workspace's scope, never this process's: a Run reads its defaults where it was started.
       const where = yield* workspaceNamed(env, action.workspace);
       if (where === null) return failed("update_defaults has to name a workspace");
       if ("error" in where) return failed(where.error);
@@ -400,6 +406,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       const file = yield* defaultsPath(env.stateDir, scopeKey(scope));
       const current = (yield* readDefaults(file)) ?? EMPTY_DEFAULTS;
       if (action.change === "remove-constraint") {
+        // WARNING: ids are hashes of the text, so a prose name matches none and is refused, not reported as applied.
         if (!Arr.some(current.constraints, (c) => c.id === action.text))
           return failed(
             `no default constraint "${action.text}" in ${where.found.label}; remove one by the id \`collie_installation\` lists`,
@@ -457,6 +464,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       action.machine,
       elsewhereCleanup,
       Effect.gen(function* () {
+        // WARNING: an unreadable listing keeps every Task, since it cannot prove any is unreachable.
         const listing = yield* runViews(env, null);
         const owned = new Set(Arr.map(listing.runs, (run) => run.task));
         const gone =
@@ -545,6 +553,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       Effect.catch((cause) => Effect.succeed(failed(String(cause)))),
     ),
   );
+  // WARNING: unattended: nobody sees a login URL from here, so a login is left as a step to do.
   registerExecutor("onboard", (action, _by, env) =>
     onboard(
       env,
@@ -569,6 +578,7 @@ export const carryOut = Effect.fn("runActions.carryOut")(function* (
   actor: Actor,
   ownRequest = false,
 ) {
+  // WARNING: without registration every action is refused as executor_missing, which would misstate this build.
   yield* registerRunExecutors();
   const file = yield* journalOf(proposalId);
   if (file === null)
@@ -602,6 +612,7 @@ export const carryOut = Effect.fn("runActions.carryOut")(function* (
 
   const results: StepResult[] = [];
   const expectedVersions = { ...judged.proposal.intent_versions };
+  // WARNING: a later action on a failed Run was asked assuming the failure did not happen; the others are independent.
   const failedRuns = new Set<string>();
   const settle = Effect.fnUntraced(function* (
     index: number,
@@ -660,6 +671,7 @@ export const carryOut = Effect.fn("runActions.carryOut")(function* (
       expectedVersions[action.run] = action.base_version + 1;
   }
   return { proposal: proposalId, results } satisfies ProposalCarried;
+  // WARNING: a hung-up client must not cut steps off from their record.
 }, Effect.uninterruptible);
 
 export const carryOutProposal = (
@@ -692,6 +704,7 @@ const stepOf = (actor: Actor, step: string | number) => ({
   requestId: `${actor.requestId}:${step}`,
 });
 
+// WARNING: no proposal, since the human already asked; what Collie wants of its own accord still goes through request.
 export const carryOutAsked = Effect.fn("runActions.carryOutAsked")(function* (
   env: PluginEnv,
   actions: ReadonlyArray<Action>,
@@ -727,6 +740,7 @@ const admissionFor = Effect.fn("runActions.admissionFor")(function* (
   if (run === null) return admit(action, emptyAdmission());
   const live = yield* new Herdr(env).agentList().pipe(Effect.orElseSucceed(() => []));
   const agent = "agent" in action ? (action.agent ?? null) : null;
+  // WARNING: refused rather than read as no version, or a corrupt file would pass as having none to disagree with.
   const intent = yield* readIntent(run.dir).pipe(Effect.orElseSucceed(() => "unreadable" as const));
   if (intent === "unreadable") return `${run.id}'s Intent cannot be read`;
   const bound = proposal?.card;

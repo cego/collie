@@ -178,6 +178,7 @@ const SliceRecord = Schema.Struct({
   title: Schema.String,
   blockedBy: Schema.Array(Schema.String),
   checks: Schema.Array(Schema.String),
+  // WARNING: a reading journaled before tickets carried criteria has none.
   criteria: Schema.optionalKey(Schema.Array(Schema.String)),
   benchmark: Schema.optionalKey(Schema.NullOr(Schema.String)),
   prerequisites: Schema.optionalKey(
@@ -196,6 +197,7 @@ const Opened = Schema.Struct({
   mr_url: Schema.optionalKey(Schema.NullOr(Schema.String)),
   linear_issues: Schema.optionalKey(Schema.Array(Schema.String)),
   branch: Schema.optionalKey(Schema.String),
+  // WARNING: false is a real answer: auto-merge on somebody else's merge request is a reason not to push.
   pushed: Schema.Boolean,
 });
 
@@ -288,6 +290,7 @@ export default defineWorkflow({
   // oxlint-disable-next-line unicorn/no-thenable -- the Input is named `then`
   hints: { plan: "work-source", then: "reach" },
   path: [...delivery, next],
+  // WARNING: the branch is built on a worktree of its own, so two Runs never share an index.
   checkout: "branch",
   outcome: {
     selectable: ["feature", "bug", "refactor", "investigation", "docs", "migration"],
@@ -377,6 +380,7 @@ export default defineWorkflow({
               })),
               refusal: read.refusal?.message ?? null,
             })),
+            // WARNING: a plan that cannot be read is refused by name, not a defect the Run dies of.
             Effect.catch((cause) =>
               Effect.succeed({
                 single: false,
@@ -434,6 +438,7 @@ export default defineWorkflow({
         run: { dir: place.dir, id: runId },
         verify: yield* checksNow,
       };
+      // WARNING: asked again for each ticket, so a planner that has gone is never described as live.
       const sessionNow = Effect.map(agents.askRoute("planner", place.lineage), (ask) => ({
         ask,
       }));
@@ -462,6 +467,7 @@ export default defineWorkflow({
         if (done.status === "waiting") yield* host.record(runId, `not integrated: ${done.reason}`);
         return done;
       });
+      // WARNING: work goes on only from an integrated checkout.
       const integrated = (operation: string, conflictsToTicket = false) =>
         Effect.gen(function* () {
           const settles = (done: Integration) =>
@@ -487,6 +493,7 @@ export default defineWorkflow({
             });
           return { ...merged, base };
         });
+      // WARNING: the kind may change while the Run is live, so it is read at each use.
       const outcomeOf = Effect.map(host.place(runId), (now) => now.options.outcome ?? "");
       let kindReadings = 0;
       const kindNow = Effect.suspend(() => {
@@ -508,6 +515,7 @@ export default defineWorkflow({
         integrate: integrated,
       };
 
+      // WARNING: each reading is recorded, so a replay is handed the list that was read.
       let readings = 0;
       const ticketsNow = Effect.gen(function* () {
         readings += 1;
@@ -529,6 +537,7 @@ export default defineWorkflow({
         }));
       });
       let tickets: ReadonlyArray<Slice> = yield* ticketsNow;
+      // WARNING: read only after the build, which is what writes SPEC.md for any source but a plan.
       let specReadings = 0;
       const specNow = Effect.gen(function* () {
         const plan = source.kind === "plan-dir" ? source.value : `${place.dir}/plan`;
@@ -558,6 +567,7 @@ export default defineWorkflow({
       const answeredFor: Answered[] = [];
       let build: typeof Built.Type | null = null;
       let rallied: Rallied | null = null;
+      // WARNING: an empty Input is one left out, so an empty recovery is new work.
       const recovers = asked.recovery === "" ? undefined : asked.recovery;
       const recovered = yield* Activity.make({
         name: "recovery-entry",
@@ -608,6 +618,7 @@ export default defineWorkflow({
           success: Schema.NullOr(Built),
           execute: claimsAt(parent),
         });
+        // WARNING: a completed null Activity stays null on replay.
         if (build === null)
           build = yield* Activity.make({
             name: "recovery-build-claims-ancestry",
@@ -707,6 +718,7 @@ export default defineWorkflow({
         }
       });
       for (; recovery.entry === "Build";) {
+        // WARNING: identities are checked before work; two tickets nobody can tell apart would share one result.
         const clash = identityProblem(Arr.map(tickets, (ticket) => ticket.file));
         if (clash !== null) return yield* new WorkflowError({ reason: clash });
         const next = yield* pickable;
@@ -790,6 +802,7 @@ export default defineWorkflow({
                 `${item}: ${place.dir}/plan/SPEC.md cannot be read, so the issue's acceptance criteria cannot be checked and no review starts`,
               );
             }
+            // WARNING: a plan's tickets are read again before each judgement; one that cannot be read keeps its last reading.
             let read: ReadonlyArray<{ file: string } & typeof TicketReading.Type> =
               source.kind === "plan-dir"
                 ? Arr.map(ticket === null ? tickets : [ticket], (one) => ({
@@ -827,6 +840,7 @@ export default defineWorkflow({
             const commits = [...(build.commits ?? [])];
             let criteria = spec;
             let unmet: ReadonlyArray<Finding> = [];
+            // WARNING: another hand-back on an unchanged tree cannot move a blocker, so a stall asks instead.
             let blockers: ReadonlyArray<Finding> = [];
             let stalls = 0;
             let unmetAsks = 0;
@@ -1087,6 +1101,7 @@ export default defineWorkflow({
     }),
 });
 
+// WARNING: one set to merge itself is left to do that, so nobody is asked about it.
 const releasing = (delivered: {
   readonly mr: string;
   readonly cwd: string;

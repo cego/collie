@@ -16,6 +16,7 @@ export const FastForwardSchema = Schema.Union([
 ]);
 export type FastForward = typeof FastForwardSchema.Type;
 
+// WARNING: a checkout at origin's tip carrying a stale journaled head answers At, not a refusal.
 export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts: {
   readonly runDir: string;
   readonly cwd: string;
@@ -45,6 +46,7 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
   if ((yield* git(["cat-file", "-e", `${opts.head}^{commit}`])).code !== 0)
     return refused(`origin does not have ${short(opts.head)}`);
   if ((yield* git(["merge-base", "--is-ancestor", from, opts.head])).code !== 0) {
+    // WARNING: a head that is an ancestor of the checkout is a stale journal, not a force push.
     const carries = (yield* git(["merge-base", "--is-ancestor", opts.head, from])).code === 0;
     const branch = Str.trim((yield* git(["rev-parse", "--abbrev-ref", "HEAD"])).stdout);
     const atOrigin =
@@ -330,6 +332,7 @@ const inProduction = <R>(opts: {
     return (yield* carries(gitOf(opts), read.sha, opts.merged)) === true;
   });
 
+// WARNING: a manual job waiting to start has not finished, so the tag is not yet proved.
 export const readTag = Effect.fn("Releasing.readTag")(function* <R>(opts: {
   readonly cwd: string;
   readonly tag: string;

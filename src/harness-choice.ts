@@ -38,6 +38,7 @@ export const HARNESS_MODELS: ModelCatalogue = {
     efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
   },
   opencode: {
+    // WARNING: Empty: provider qualification names the Subscription as well as the model.
     models: [],
     modelPattern: /^[a-z0-9-]+\/[A-Za-z0-9._:-]+$/,
   },
@@ -125,6 +126,7 @@ export interface MachineCatalogue {
   }>;
 }
 
+// WARNING: A layer that switches harness keeps nothing chosen below it: a model and effort belong to their harness.
 export function foldPreferences(layers: ReadonlyArray<Preferences | undefined>) {
   let harness: string | undefined;
   let model: string | undefined;
@@ -162,6 +164,7 @@ export function foldPreferences(layers: ReadonlyArray<Preferences | undefined>) 
   return returned;
 }
 
+// WARNING: A combination the harness does not take is refused with what it would take, never quietly replaced.
 export function resolveChoice(
   layers: ReadonlyArray<Preferences | undefined>,
   extraModels: Readonly<Record<string, ReadonlyArray<string>>> = {},
@@ -371,6 +374,7 @@ export interface Chosen {
   readonly skipped: ReadonlyArray<string>;
 }
 
+// WARNING: A bad folded or otherwise choice is refused; a bad chain entry is skipped.
 export function resolveWithRoom(
   layers: ReadonlyArray<Preferences | undefined>,
   chain: ReadonlyArray<string>,

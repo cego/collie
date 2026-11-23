@@ -211,6 +211,7 @@ test("what became of a Run and its follow-up are the host's to write, stamped wi
           (view) => view?.status.status === "complete",
         );
 
+        // WARNING: a retried act is one operation per step, however often it is sent.
         const followUp = {
           actions: [{ kind: "followup", run: runId, text: "more" }],
           request: "a-1",
@@ -222,6 +223,7 @@ test("what became of a Run and its follow-up are the host's to write, stamped wi
           (one) => one.parent === runId,
         );
         expect(children).toHaveLength(1);
+        // WARNING: a propose cut off before its answer was kept is carried out again as the same steps.
         const proposed = {
           ...followUp,
           herd: "some-herd",

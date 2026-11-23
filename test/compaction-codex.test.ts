@@ -81,6 +81,7 @@ function serve() {
             });
           case "thread/resume": {
             reply({ thread: { id: threadId } });
+            // WARNING: A rejoin replays the current usage, the only way this adapter reads a Codex agent's context.
             if (fake.usage !== null) {
               ws.send(
                 stringifyJson({
@@ -89,6 +90,7 @@ function serve() {
                     threadId,
                     turnId: "t-1",
                     tokenUsage: {
+                      // WARNING: Accumulated session usage, which must never be thresholded.
                       total: {
                         totalTokens: 999_999,
                         inputTokens: 0,
@@ -98,6 +100,7 @@ function serve() {
                       },
                       last: {
                         totalTokens: fake.usage,
+                        // WARNING: The overlapping parts of total are not addends.
                         inputTokens: fake.usage - 20,
                         cachedInputTokens: fake.usage - 100,
                         cacheWriteInputTokens: 0,
@@ -208,6 +211,7 @@ test("a reachable App Server is ready before the first prompt creates its thread
 test("the TUI's own ephemeral thread is not a second agent to choose between", () =>
   runEffect(
     Effect.gen(function* () {
+      // WARNING: A Codex TUI loads an ephemeral thread beside the agent's; only one of the two loaded threads is the agent.
       fake.threads = ["thread-1", "thread-helper"];
       fake.ephemeral = ["thread-helper"];
 

@@ -168,6 +168,7 @@ test("a break guard left by a crashed breaker is recovered", () =>
 
       expect(yield* breakStaleLock(lock)).toBe(true);
       expect(yield* fs.exists(lock)).toBe(false);
+      // WARNING: released only because the claim in it was this process's own, never removed blind.
       expect(yield* fs.exists(guard)).toBe(false);
     }),
   ));
@@ -259,6 +260,7 @@ test("a claim that changed since it was inspected is never the one removed", () 
       );
       expect(yield* fs.exists(changed)).toBe(true);
 
+      // WARNING: a fifo cannot feed two reads, since two writes can be taken as one; a file gives both reads the same bytes.
       const unchanged = path.join(dir, "unchanged.lock");
       yield* fs.writeFileString(unchanged, stale);
       const second = breakInChild(unchanged, path.join(dir, "unchanged.ready"));

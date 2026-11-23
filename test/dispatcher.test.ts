@@ -252,6 +252,7 @@ test("the record is written before core is called, and settled after", () =>
   runEffect(
     Effect.gen(function* () {
       const records = yield* Effect.context<Records>();
+      // WARNING: Read inside the fake send: the only moment that tells "reserved before the call" from "both written after". It must be synchronous.
       let atSendTime: string[] = [];
       const h = fake({
         onPrompt: Effect.gen(function* () {
@@ -286,6 +287,7 @@ test("a submission core saw no turn come of is submitted, with that as its note"
       const outcome = yield* transaction(h.deps, entry, (channel) =>
         channel.submit("read the prompt file", draft),
       );
+      // WARNING: Written as submitted, never rounded up to a turn nobody saw start; the note tells a lost prompt from an ignored one.
       expect(outcome).toEqual({ ok: true, id: "req-1-1", submission: "unobserved" });
       const settled = Arr.filter(
         yield* readLedger("term-1"),
@@ -490,6 +492,7 @@ test("the same work is not sent twice while the first attempt is unsettled", () 
 
       const h = fake();
       const again = yield* transaction(h.deps, entry, (channel) =>
+        // WARNING: A different request id for the same work: a request-id check would miss it and a causal key catches it.
         channel.submit("hello again", { ...draft, requestId: "req-9" }),
       );
 
@@ -693,6 +696,7 @@ test("what goes out first is the human interrupting, and last is a compaction", 
 });
 
 test("the order survives the inbox, whose decode types mode and cause as plain strings", () => {
+  // WARNING: An unknown kind used to make the comparison NaN, leaving the batch in arrival order.
   const queued = [
     { mode: "boundary", cause: { kind: "handoff", ref: "h" } },
     { mode: "boundary", cause: { kind: "from-a-newer-collie", ref: "?" } },

@@ -1,3 +1,4 @@
+// WARNING: the files are left in place for a host of an older build.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Data, Effect, FileSystem, Layer, Option, Path, PlatformError, Schema } from "effect";
@@ -28,6 +29,7 @@ import {
   trimStepTimes,
 } from "./run-records";
 
+// WARNING: only a missing path is no records; any other failure fails the migration so the next host retries it.
 const orMissing =
   <A>(none: A) =>
   <R>(read: Effect.Effect<A, PlatformError.PlatformError, R>) =>
@@ -56,12 +58,14 @@ export const importReports = Effect.fn("RecordsImport.reports")(function* (state
   }
 });
 
+// WARNING: a torn last line is the append a crash cut short, and is dropped.
 const journalLines = (raw: string) => {
   const lines = Arr.filter(Str.split(raw, "\n"), (text) => Str.trim(text) !== "");
   const last = lines.at(-1);
   return last !== undefined && !isJson(last) ? lines.slice(0, -1) : lines;
 };
 
+// WARNING: an unreadable line is kept, so the ledger still counts it and still blocks its work.
 export const importLedgers = Effect.fn("RecordsImport.ledgers")(function* (stateDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -352,6 +356,7 @@ export class LaterMigration extends Data.TaggedError("LaterMigration")<{
   readonly migration: string;
 }> {}
 
+// WARNING: refused while a later migration is recorded: a re-upgrade runs only migrations after the latest.
 export const rollbackRunRecords = Effect.fn("RecordsImport.rollback")(function* (stateDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;

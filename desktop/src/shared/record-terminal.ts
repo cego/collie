@@ -4,6 +4,7 @@ import * as Rec from "effect/Record";
 import type { BoardAgent } from "../../../src/board-model";
 import { ROLES } from "../../../src/steer-target";
 
+// WARNING: kept while shown, so a dropped connection says why and offers Reattach rather than removing the pane.
 export const offersTerminal = (asOf: number | null, chosen: string | undefined) =>
   asOf === null || chosen === "terminal";
 
@@ -66,6 +67,7 @@ export const addressOf = (who: Readonly<Address>) => {
   return address;
 };
 
+// WARNING: 4 is the first board protocol whose hosts take a delivery to a role or to no agent; both shipped together.
 export const ADDRESSED_DELIVERY = 4;
 
 export const deliveryChoices = (
@@ -160,6 +162,7 @@ export const askedFor = (
   );
 };
 
+// WARNING: only the newest waiting switch opens; a stop cancels any that wait.
 export const switches = (release: () => Promise<void>) => {
   let newest = 0;
   let released = Promise.resolve();

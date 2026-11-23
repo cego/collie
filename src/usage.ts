@@ -43,6 +43,7 @@ import {
 } from "./usage-model";
 import { stringifyJson } from "./json";
 
+// WARNING: Claude's endpoint refuses callers who ask more often than this.
 export const USAGE_INTERVAL_MS = 5 * 60_000;
 export const USAGE_CALL_MS = 10_000;
 
@@ -86,6 +87,7 @@ const problem: (
   problem: text,
 });
 
+// WARNING: a refusal's back-off is honoured and the last good reading kept while no new one lands.
 const paced = Effect.fn("Usage.paced")(function* (
   subscription: Subscription,
   ask: Effect.Effect<Asked>,
@@ -199,6 +201,7 @@ const readText = (file: string) =>
     return yield* fs.readFileString(file);
   }).pipe(Effect.orElseSucceed(() => null));
 
+// WARNING: Claude Code suffixes its Keychain item with a hash of its config dir when one is set.
 const keychain = (configDir: string | undefined) =>
   Effect.gen(function* () {
     const service =
@@ -240,6 +243,7 @@ export const claudeLoginSource = (env: PluginEnv) =>
     return returned;
   });
 
+// WARNING: never refresh or write this login: a refresh rotates the token and signs Claude Code out.
 export const askClaude: (
   login: ClaudeLoginSource,
 ) => Effect.Effect<Asked, never, HttpClient.HttpClient> = (login) =>
@@ -434,6 +438,7 @@ const viaStdio: Effect.Effect<
   const handle = yield* spawner
     .spawn(
       ChildProcess.make("codex", ["app-server"], {
+        // WARNING: a closed stdin tells the server to stop before it answers, so stdin is held open.
         stdin: Stream.concat(
           Stream.make(new TextEncoder().encode(Arr.join(lines, ""))),
           Stream.never,

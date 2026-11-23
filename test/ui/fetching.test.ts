@@ -145,6 +145,7 @@ const seedMany = Effect.fn("fetching.seedMany")(function* (count: number) {
         strategies: { target: "diff-target" },
       },
     });
+    // WARNING: disposed, so the background merge watch asks GitLab nothing and every counted glab call is the selection's own.
     yield* recordDisposition(run.dir, {
       at: run.created,
       by: "test",
@@ -207,6 +208,7 @@ effectTest("a view nobody has opened is not read at all", function* () {
 
   const state = yield* app().load(focus());
 
+  // WARNING: the laziness is in the state; History, Workflows and Settings cost nothing until shown.
   expect(state.history).toBeNull();
   expect(state.definitions).toBeNull();
   expect(state.settings).toBeNull();
@@ -238,6 +240,7 @@ effectTest("a glab that writes a notice to stderr is still read as a merge reque
 });
 
 effectTest("a card outside the legacy lists still fills its own record", function* () {
+  // WARNING: a card can name a Run neither list holds, and its record must not come back as the whole Herd's evidence.
   const ids = yield* seedMany(8);
   const oldest = ids[0]!;
   const run = Option.getOrThrow(Arr.findFirst(runs, (one) => one.id === oldest));
@@ -272,6 +275,7 @@ effectTest("the merge request a Run opened is the one its record details", funct
   });
   const asked = glab();
 
+  // WARNING: an implement Run's merge request is what it produced, not what it was pointed at.
   expect((yield* watched(run, asked))?._tag).toBe("Details");
   expect(asked.views()).toHaveLength(1);
 });

@@ -104,6 +104,7 @@ export type FromDoor =
 const DoorRpcs = RpcGroup.make(IdentityRpc, RunDetailRpc);
 const MODELLED = new Set(["identity", "runDetail"]);
 const UNMODELLED = new Set(["identity"]);
+// WARNING: a client that stops reading is ended at this limit, or it holds the host's memory for as long as it lives.
 const OUTBOX_LIMIT = 4096;
 const WARMING = 10;
 
@@ -112,6 +113,7 @@ export interface Port<Out, In> {
   readonly listen: (receive: (message: In) => void) => void;
 }
 
+// WARNING: a frame the server refuses is interrupted for its client alone; the loop must go on for every other client.
 export const passFrames = <Frame>(
   frames: Queue.Queue<{ readonly conn: number; readonly frame: Frame }>,
   writeRequest: (conn: number, frame: Frame) => Effect.Effect<void>,
@@ -273,6 +275,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
   Effect.gen(function* () {
     const inbox = yield* Queue.unbounded<ToDoor>();
     port.listen((message) => Queue.offerUnsafe(inbox, message));
+    // WARNING: moves made before the door opens are applied once its model is made, not dropped.
     const early: Array<ToDoor> = [];
     let first = yield* Queue.take(inbox);
     while (first._tag !== "Open") {
@@ -303,6 +306,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
     let alive: ReadonlyArray<AgentInfo> = [];
     const writes = yield* PubSub.unbounded<void>();
     const firstListed = yield* Deferred.make<ReadonlyArray<string>>();
+    // WARNING: the engine lists its Runs only once host.db is migrated.
     const migrated = yield* Deferred.make<void>();
     let asked = 0;
     const answers = new Map<number, Deferred.Deferred<unknown>>();
@@ -410,6 +414,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
                 ? Effect.succeed(held)
                 : ask({ _tag: "Offers", runId }).pipe(
                     // WARNING: the engine answers an `Offers` ask with the Run's offers.
+                    // WARNING: the engine answers an Offers ask with the Run's offers.
                     Effect.map((asked) => asked as ReadonlyArray<OfferView>),
                   );
             },
@@ -421,6 +426,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
                   Arr.every(held, (one) => read.get(one.id) === model.factsAt(one.id));
                 if (current) return held;
                 // WARNING: the engine answers a `Related` ask with the Runs it read, as `Listed`.
+                // WARNING: the engine answers a Related ask with the Runs it read, as Listed.
                 const runs = (yield* ask({
                   _tag: "Related",
                   runId,
@@ -434,6 +440,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
                 ? Effect.succeed(null)
                 : ask({ _tag: "Mr", run, fresh }).pipe(
                     // WARNING: the engine answers an `Mr` ask with the merge watch's panel.
+                    // WARNING: the engine answers an Mr ask with the merge watch's panel.
                     Effect.map((panel) => panel as MrPanel | null),
                   ),
           };
@@ -470,6 +477,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
               ),
             ).pipe(Stream.orDie),
     });
+    // WARNING: a new heap runs the record's code slowly until its JIT compiles it, hence the warming.
     if (sources !== undefined) {
       const unheard: RecordSources = {
         ...sources,
@@ -550,6 +558,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
           const parser = RpcSerialization.ndjson.makeUnsafe();
           const writer = yield* client.writer;
           const held = new Set<string | number>();
+          // WARNING: each client's outbox has its own writer fiber, so a stalled or gone client ends only itself.
           const outbox = yield* Queue.unbounded<RpcMessage.FromServerEncoded>();
           const ended = yield* Deferred.make<void>();
           yield* Queue.take(outbox).pipe(
@@ -611,6 +620,7 @@ if (!isMainThread) {
     }).pipe(
       Effect.provide(platformLayer),
       Effect.catchCause((cause) => Effect.logError("the door has stopped", cause)),
+      // WARNING: exits this thread only; the engine stops the host once it has gone.
       Effect.ensuring(Effect.sync(() => process.exit(1))),
     ),
   );

@@ -14,6 +14,7 @@ export class Collecting extends Context.Service<Collecting, CollectingApi>()("co
 
 export const collectingLayer = Layer.effect(Collecting)(
   Effect.sync(() => {
+    // WARNING: counted, so one collection ending never takes another of the same agent off.
     const now = new Map<string, number>();
     const keysOf = (run: string, agent: string, launch?: string) =>
       launch === undefined

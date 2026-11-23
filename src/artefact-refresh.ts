@@ -59,6 +59,7 @@ export const refreshJobs = () => {
         (job: RefreshJob<R>) => job.key,
         Order.String,
       );
+      // WARNING: starts from the last source checked, so a failing one cannot hold the front.
       const rotated = Arr.take(
         [
           ...Arr.filter(ready, (job) => job.key > cursor),

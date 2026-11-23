@@ -1221,6 +1221,7 @@ test("a retried start admitted before its set was frozen is frozen with the set 
           const registry = yield* Registry;
           const [proved] = yield* loaded(registry, [`${fixtures}/proved.workflow.ts`]);
           const input = { note: "x" };
+          // WARNING: the host died between admitting the Run and freezing what proves it.
           yield* (yield* Store).admit({
             request: "r1",
             run: "run-cut",
@@ -1880,6 +1881,7 @@ test("a roaming start is refused an ended Run's checkout where moving it would o
           const first = yield* start(roams!, { request: "r1", text: { work: "fail" } });
           if (first._tag === "Failure") return yield* Effect.die(first.failure);
           yield* finished(first.success.runId);
+          // WARNING: the default branch tracks a file the checkout holds as ignored, so git keeps it as its own.
           yield* fs.writeFileString(`${rig.projectDir}/.git/info/exclude`, "generated.txt\n");
           yield* fs.writeFileString(`${rig.projectDir}/generated.txt`, "tracked");
           yield* git("add", "-f", "generated.txt");
@@ -2790,6 +2792,7 @@ test("forgetting a Run removes its row, its launches and what the engine kept of
           const gone = ids[0]!;
           const kept = ids[1]!;
           const execution = (yield* store.run(gone))!.execution;
+          // WARNING: a claim the engine never accepted; recovery would hand it over.
           yield* store.admit({
             request: "r-claim",
             run: "run-claimed",

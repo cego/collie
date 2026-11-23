@@ -163,6 +163,7 @@ const readingFiles = (machine: ChatMachine) =>
   machine.board._tag === "Live" ? takingFiles(reach(machine)) : readable(machine);
 
 const READ_LINES = 2000;
+// WARNING: a file with no newlines must not be read whole.
 const READ_BYTES = 8 * 1024 * 1024;
 
 const LINE_CHARS = 2000;

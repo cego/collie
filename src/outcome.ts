@@ -1,3 +1,4 @@
+// WARNING: nothing here reads a file or runs a command: the caller collects the evidence and this says what is missing.
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import { pipe } from "effect/Function";
@@ -20,6 +21,7 @@ import { planRunOf } from "./strategies";
 import { isYamlMap, type YamlValue } from "./yaml";
 import { finalMeasurementLine, type Measurement } from "./measurement-model";
 
+// WARNING: unspecified is not feature: an unclassified Run must not be held to a feature's evidence.
 export const KINDS = [
   "unspecified",
   "feature",
@@ -67,6 +69,7 @@ export interface Collected {
   }>;
 }
 
+// WARNING: a pass that a later fail on the same tree contradicts does not count.
 function lastPassedAtFinal(got: Collected, name: string) {
   return owesNothingHere(checkProof(got, name));
 }
@@ -121,6 +124,7 @@ function shellWords(script: string) {
   return words;
 }
 
+// WARNING: a passing text search does not prove the check; it shows only that the text is there.
 function provedAtFinal(got: Collected, name: string) {
   if (lastPassedAtFinal(withoutSearches(got, name), name)) return "passed";
   return lastPassedAtFinal(got, name) ? "searched" : "unproved";
@@ -171,6 +175,7 @@ function rerunOf(got: Journal, last: Verification | undefined) {
       ),
     );
   const passedAlone = (test: FailedTest) => rerun(test)?.result === "pass";
+  // WARNING: a branch's own test that passed alone is still the Run's to fix; the base never had it fail.
   const ownPassedAlone = (test: FailedTest) => passedAlone(test) && rerun(test)?.own === true;
   const alone = (test: FailedTest) => passedAlone(test) && !ownPassedAlone(test);
   const bases = (test: FailedTest, among: ReadonlyArray<Verification>) =>
@@ -216,6 +221,7 @@ export function settledChecks(got: Journal & Pick<Collected, "approved">) {
   );
 }
 
+// WARNING: a flake is never a pass, so the merge request names it.
 export function flakesOf(got: Journal & Pick<Collected, "approved">) {
   return Arr.flatMap(
     got.approved,
@@ -301,6 +307,7 @@ export function needsChecks(kind: Outcome) {
 export const noCheckNamed =
   "no check is named for Collie to run, so nothing proves this Run: name the commands that prove work in this repository, each with `collie run intent verification <run> --name <name> [--cwd <dir>] -- <command>`";
 
+// WARNING: an empty set is a gap, not a pass, or this gate would say yes to anything.
 function approvedSetGaps(got: Collected) {
   if (got.approved.length === 0) return [noCheckNamed];
   const gaps: string[] = [];
@@ -376,6 +383,7 @@ export function evidenceRoots(own: string, cwd: string, workSource: string) {
   return [own, cwd, ...planned];
 }
 
+// WARNING: a `..` in a reference is refused, as no one can answer for where it lands.
 export function refInside(roots: ReadonlyArray<string>, ref: string) {
   const value = Str.trim(ref);
   if (value === "" || pipe(value, Str.includes(".."))) return false;
@@ -422,6 +430,7 @@ function gapsOf(kind: Outcome, got: Collected) {
       const done = names(anyField(got, "tickets_done"));
       if (done.length === 0) claim("no ticket is reported built (tickets_done is empty)");
       judged("scope_met", "the review did not report scope_met: true for the agreed scope");
+      // WARNING: a ticket's proof counts only as a pass on the tree in front of us, whoever collected it.
       for (const ticket of got.tickets) {
         for (const name of ticket.checks) {
           const proof = provedAtFinal(got, name);
@@ -437,6 +446,7 @@ function gapsOf(kind: Outcome, got: Collected) {
       break;
     }
     case "bug": {
+      // WARNING: a regression needs a fail then a pass on different trees: a reproduction that never failed proves nothing.
       const regression = Arr.filter(got.verifications, (v) => v.name === "regression");
       const reproduced = Arr.filter(regression, (v) => v.expect === "fail" && v.result === "pass");
       const before = Arr.filter(reproduced, (v) => earlierTree(v, got.final));
@@ -500,6 +510,7 @@ function gapsOf(kind: Outcome, got: Collected) {
     }
     case "migration": {
       for (const name of ["migrate-up", "migrate-down"]) {
+        // WARNING: rollback counts as migrate-down's proof, so a project that names it that way still proves it can go back.
         const proofs = Arr.map(name === "migrate-down" ? [name, "rollback"] : [name], (one) => ({
           one,
           proof: provedAtFinal(got, one),
@@ -595,6 +606,7 @@ function finalMeasurementGaps(got: Collected) {
   return gaps;
 }
 
+// WARNING: finishing without a patch is a real outcome for investigations and performance, not a failure.
 export function endsWithoutPatch(kind: Outcome, got: Collected) {
   if (kind === "investigation") return anyField(got, "patch") === false;
   if (kind !== "performance") return false;

@@ -7,6 +7,7 @@ import { stopHost } from "./support/host";
 import { collie, proves, type World } from "./support/world";
 import frozenJson from "./fixtures/run-detail-base.json";
 
+// WARNING: master's wire schema before revisions, as an older client decodes it; this fixture is frozen.
 const frozen: unknown = frozenJson;
 const baseRunDetail = Schema.make<Schema.Codec<unknown, unknown>>(
   SchemaRepresentation.fromRepresentation(

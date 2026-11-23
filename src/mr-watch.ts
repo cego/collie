@@ -34,6 +34,7 @@ export const settleWatches = Effect.fn("MrWatch.settle")(function* (opts: {
   readonly watches: Watches;
 }) {
   for (const row of yield* opts.watches.list([...opts.panels.keys()])) {
+    // WARNING: a wake from an earlier round or host may not have reached the Run, so a set wake is not proof of delivery.
     if (row.woke !== null) {
       yield* opts.watches.wake(row.run, row.name, row.woke);
       continue;

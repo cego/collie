@@ -1,3 +1,4 @@
+// WARNING: nothing here runs an action: confirm returns the actions that may run, and their executors run them.
 import { StoreWrites } from "./store-writes";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -38,7 +39,9 @@ export const RecordSchema = Schema.Struct({
   created_at: Schema.String,
   expires_at: Schema.String,
   intent_versions: Schema.Record(Schema.String, Schema.Int),
+  // WARNING: a yes about one revision is not a yes once the tree has moved.
   card: Schema.optionalKey(Schema.Struct({ id: Schema.String, revision: Schema.String })),
+  // WARNING: a role's name and pane pass to its next occupant, so a delivery must not reach a process that never saw the proposal.
   incarnations: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   by: Schema.String,
   state: Schema.Literal("pending"),
@@ -54,6 +57,7 @@ const SettledSchema = Schema.Struct({
   attachments: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
+// WARNING: a started line with no settlement is a crash mid-action: confirm refuses rather than rerunning.
 const StepSchema = Schema.Struct({
   kind: Schema.Literal("step"),
   proposal: Schema.String,
@@ -70,6 +74,7 @@ const LineJson = Schema.fromJsonString(LineSchema);
 export const decodeProposalLineOption = Schema.decodeOption(LineJson);
 const encodeLine = flow(Schema.encodeResult(LineJson), Result.getOrThrow);
 
+// WARNING: canonical, so a reordered field is the same proposal, but any changed action always hashes differently.
 export function contentHash(
   targets: ReadonlyArray<{ readonly run: string }>,
   actions: ReadonlyArray<Action>,
@@ -94,6 +99,7 @@ export interface ProposalsApi {
   readonly all: Effect.Effect<ReadonlyArray<ProposalLine>>;
   readonly journalOf: (id: string) => Effect.Effect<string | null>;
   readonly append: (journal: string, line: ProposalLine) => Effect.Effect<void>;
+  // WARNING: the read and the append are one act, so two confirmations cannot both pass.
   readonly atomically: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
 }
 
@@ -175,6 +181,7 @@ export interface Recorded {
 export const record = Effect.fn("Proposals.record")(function* (journal: string, what: Recorded) {
   const now = yield* DateTime.now;
   const at = DateTime.formatIso(now);
+  // WARNING: the clock alone does not tell two identical proposals apart.
   const nonce = yield* Random.nextInt;
   const line: ProposalRecord = {
     kind: "proposal",
@@ -197,6 +204,7 @@ export const record = Effect.fn("Proposals.record")(function* (journal: string, 
   return written;
 });
 
+// WARNING: chat is stamped by its entrypoint: the bridge inherits a terminal, so a tty check would read a model as a person.
 export interface Actor extends Voice {
   readonly origin: FrontDoor;
   readonly requestId: string;
@@ -250,6 +258,7 @@ export interface Confirmed {
   readonly actions: ReadonlyArray<Action>;
 }
 
+// WARNING: reconcile may answer only an unsettled start: settling one that never ran records a human's word about nothing.
 function unsettled(lines: ReadonlyArray<ProposalLine>, id: string) {
   const indices: number[] = [];
   for (const line of lines) {
@@ -267,6 +276,7 @@ function unsettled(lines: ReadonlyArray<ProposalLine>, id: string) {
   return indices;
 }
 
+// WARNING: names no Run, so pendingFor would let these expire unseen.
 export function pendingHerdWide(lines: ReadonlyArray<ProposalLine>, nowMs: number) {
   return Arr.filter(unanswered(lines, nowMs), (line) => line.targets.length === 0);
 }
@@ -299,6 +309,7 @@ function unanswered(lines: ReadonlyArray<ProposalLine>, nowMs: number) {
   return records;
 }
 
+// WARNING: pure: the caller writes under the lock, so the check and the write are one act.
 export function judgeConfirmation(
   lines: ReadonlyArray<ProposalLine>,
   id: string,
@@ -432,6 +443,7 @@ export const decline = Effect.fn("Proposals.decline")(function* (
       const lines = yield* read(journal);
       if (!Arr.some(lines, (line) => line.kind === "proposal" && line.id === id))
         return settledAs("not_found", `no proposal "${id}"`, id);
+      // WARNING: a second answer would leave the journal saying both confirmed and declined.
       const settled = Option.getOrUndefined(
         Arr.findFirst(
           lines,
@@ -459,6 +471,7 @@ export function answeredBy(lines: ReadonlyArray<ProposalLine>, request: string) 
   );
 }
 
+// WARNING: an action never reached is skipped as not_run, except after the ask_human a carry-out stops at.
 export function stepResults(lines: ReadonlyArray<ProposalLine>, id: string) {
   const proposal = Option.getOrUndefined(
     Arr.findFirst(
@@ -517,6 +530,7 @@ export const stepSettled = Effect.fn("Proposals.stepSettled")(function* (
   yield* append(journal, note === undefined ? line : { ...line, note });
 });
 
+// WARNING: a timeout never counts as an answer: callers establish what happened before retrying.
 export const reconcileStep = Effect.fn("Proposals.reconcileStep")(function* (
   journal: string,
   proposal: string,
@@ -575,6 +589,7 @@ const NOT_ABOUT_A_RUN: ReadonlySet<ActionKind> = new Set([
   "onboard",
 ]);
 
+// WARNING: re-asks everything the proposal assumed: time passes between reading a proposal and confirming it.
 export function admit(action: Action, ctx: AdmissionContext) {
   if (NOT_ABOUT_A_RUN.has(action.kind)) return null;
   if (!ctx.run) return "the run is gone";
@@ -582,6 +597,7 @@ export function admit(action: Action, ctx: AdmissionContext) {
   const terminal = TERMINAL_STATUSES.has(ctx.run.status);
   if (action.kind === "followup" && !terminal)
     return "a follow-up is a child of a finished run, and this one is still going";
+  // WARNING: a finished Run's live agents still take steering; only actions needing a step to run are refused.
   if (terminal && (action.kind === "hold" || action.kind === "release"))
     return "a finished Run has no step left to hold; stop closes its agents";
   if (terminal && action.kind === "set_verification")

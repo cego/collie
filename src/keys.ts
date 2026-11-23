@@ -29,6 +29,7 @@ export function tokenizeKeys(chunk: string) {
   return out;
 }
 
+// WARNING: Stdio cannot set raw mode and would race this reader on stdin; output goes through Bun.write for ordering.
 interface KeyboardInput {
   readonly isTTY?: boolean;
   setRawMode?(enabled: boolean): void;
@@ -38,6 +39,7 @@ interface KeyboardInput {
   off(event: "data", listener: (buffer: Buffer) => void): void;
 }
 
+// WARNING: process.stdin is read only when a key is first wanted: reading it sets the stream up.
 export const keyboard = (input: KeyboardInput = process.stdin) =>
   Effect.acquireRelease(
     Effect.gen(function* () {

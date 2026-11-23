@@ -233,6 +233,7 @@ test("a workflow is forked by importing it, so fork takes no Markdown merge flag
 test("a command group named with no subcommand is invalid input, not success", () =>
   runEffect(
     Effect.gen(function* () {
+      // WARNING: Effect's CLI raises the same ShowHelp for --help with no parse errors; only whether help was asked tells them apart.
       for (const argv of [["--json", "run"], ["--json", "workflow"], ["--json"]]) {
         const stopped = yield* cli(argv);
         expect(yield* parseEnvelope(stopped.stdout)).toMatchObject({
@@ -619,6 +620,7 @@ test("an agent saves a workflow, checks it and finds it, with nothing to registe
       expect(checked.stdout).toContain("tally\tproject\tok");
       expect(checked.stdout).not.toContain("not typechecked");
 
+      // WARNING: Never overwrite a file already there: it is the one the human edited.
       const before = yield* fs.readFileString(join(saved, "tally.workflow.ts"));
       const again = yield* cli(
         ["--json", "workflow", "create", "tally", "--layer", "project"],
@@ -780,6 +782,7 @@ test("run metrics reports what a Run produced, and says so when it has produced 
       const bare = yield* parseEnvelope(empty.stdout);
       expect(bare.ok).toBe(true);
       // WARNING: the envelope decoded `ok: true` above, and `run metrics` puts exactly these fields in `data` — asserted immediately below, so a shape that changed fails here rather than passing silently.
+      // WARNING: the envelope decoded ok above, and run metrics puts exactly these fields in data, asserted below.
       const data = bare.data as {
         metrics: { timeToFirstEvidence: number | null };
         outcome: string;
@@ -868,6 +871,7 @@ test("run report counts every Run by where it ended, and refuses a --since that 
       }).pipe(Effect.provide(recordsAt(world.state)));
       const measured = yield* cli(["--json", "run", "report"], env);
       // WARNING: `run report`'s `data` is the Report; only its peak context is read.
+      // WARNING: run report's data is the Report; only its peak context is read.
       const measures = (yield* parseEnvelope(measured.stdout)).data as {
         measures: {
           peakContext: Array<{ runId: string; tokens: number | null; agent: string | null }>;
@@ -905,6 +909,7 @@ test("usage is each Subscription's reading in the standard envelope, and says wh
       yield* fs.writeFileString(join(claudeDir, ".credentials.json"), login);
       const state = yield* fs.makeTempDirectoryScoped({ prefix: "collie-state-" });
       yield* Effect.addFinalizer(() => Effect.ignore(stopHost(state)));
+      // WARNING: No PATH: this Machine has no Codex, and nothing here may reach a real endpoint.
       const env = { CLAUDE_CONFIG_DIR: claudeDir, COLLIE_STATE_DIR: state };
 
       const read = yield* cli(["--json", "usage"], env);

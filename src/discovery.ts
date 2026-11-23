@@ -1,3 +1,4 @@
+// WARNING: only entry files are discovered; helpers are reached by import, never found.
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Rec from "effect/Record";
@@ -62,6 +63,7 @@ export interface Catalogued {
   readonly problems: ReadonlyArray<Fault>;
 }
 
+// WARNING: a layer that claims an id settles it; the layer below is not consulted even if the claim does not load.
 export const discover: (
   roots: ReadonlyArray<Root>,
 ) => Effect.Effect<Catalogued, never, FileSystem.FileSystem> = Effect.fn("Discovery.discover")(
@@ -96,6 +98,7 @@ type Claim =
       readonly message: string;
     };
 
+// WARNING: a file that cannot be imported claims the id its name says; a typo inside it does not make it someone else's.
 const claimsIn = Effect.fn("Discovery.claimsIn")(function* (root: Root) {
   const revision = yield* revisionOf(root.dir);
   const claims: Array<Claim> = [];

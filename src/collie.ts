@@ -1,5 +1,6 @@
 import * as Arr from "effect/Array";
 import { Console, Effect, Layer, Schema } from "effect";
+// WARNING: install.sh and herdr read the release version from this manifest; a --version disagreeing with it is worse than none.
 import manifest from "../package.json";
 import { CliConfig, CliError, Command, GlobalFlag } from "effect/cli";
 import { persona } from "./commands/persona";
@@ -60,9 +61,11 @@ export const app = root.pipe(
   ]),
 );
 
+// WARNING: read from Bun.argv because the formatter and Console are chosen before any Effect runs.
 const jsonAsked = Bun.argv.includes("--json");
 const helpAsked = Bun.argv.includes("--help") || Bun.argv.includes("-h");
 
+// WARNING: under --json Effect's own output goes to stderr, so stdout stays the envelope.
 const consoleToStderr = Console.Console.of({
   ...globalThis.console,
   log: (...args: ReadonlyArray<unknown>) => {
@@ -77,6 +80,7 @@ const consoleToStderr = Console.Console.of({
 
 const isShowHelp = Schema.is(CliError.ShowHelp);
 
+// WARNING: ShowHelp also fires for an unusable command line, so argv, not the error, says --help was asked.
 export const program = app.pipe(
   Command.run({ version: manifest.version }),
   Effect.catch((cause) =>

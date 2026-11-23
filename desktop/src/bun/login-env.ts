@@ -16,6 +16,7 @@ const END = "<<collie-env-end-7f3a9c>>";
 
 const LIMIT = "5 seconds";
 
+// WARNING: rc files print around the markers; only what lies between them is read.
 export const parseLoginEnv = (output: string) => {
   const start = Option.getOrElse(pipe_(output, Str.indexOf(BEGIN)), () => -1);
   const found = new Map<string, string>();
@@ -36,11 +37,14 @@ export const parseLoginEnv = (output: string) => {
 
 export const CHILD_CWD = homedir();
 
+// WARNING: Bun ignores environment changes made after it started, so children get a copy.
 export const childEnv = () => withoutLauncher(withoutHerdrOne(desktopEnv()), BIN);
 
+// WARNING: children inherit the process environment, not an Effect Config.
 // oxlint-disable-next-line effecttsgo/process-env -- Children inherit the process environment, not an Effect Config.
 const desktopEnv = () => process.env;
 
+// WARNING: Bun's own lookup uses the PATH it started with.
 export const which = (command: string) => Bun.which(command, { PATH: childEnv().PATH });
 
 export const readLoginEnv = (shell: string, limit: Duration.Input = LIMIT) =>
@@ -107,6 +111,7 @@ export const agentState = (
     }),
   );
 
+// WARNING: an rc file's agent may hold a key only after a terminal asks, so the agent holding keys wins.
 export const takesLoginAgent = Effect.fn("Desktop.takesLoginAgent")(function* (
   session: string | undefined,
   login: string | undefined,
@@ -121,6 +126,7 @@ export const takesLoginAgent = Effect.fn("Desktop.takesLoginAgent")(function* (
   return ours !== "empty";
 });
 
+// WARNING: the agent variables are taken or kept together.
 const AGENT_VARIABLES = ["SSH_AUTH_SOCK", "SSH_AGENT_PID"];
 
 export const takeLoginEnv = Effect.gen(function* () {
@@ -145,6 +151,7 @@ export const takeLoginEnv = Effect.gen(function* () {
   return true;
 }).pipe(Effect.orElseSucceed(() => false));
 
+// WARNING: a plain shell preserves the resolved PATH; login profiles may reset it.
 export const localShell = (tookLoginEnv: boolean) =>
   tookLoginEnv
     ? Config.succeed(["/bin/sh", "-c"])

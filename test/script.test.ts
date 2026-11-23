@@ -1,3 +1,4 @@
+// WARNING: util-linux script on Linux and BSD script on macOS, which takes neither -e, -f nor -c.
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";

@@ -93,6 +93,7 @@ const screen = (socket: string) =>
     Effect.orElseSucceed(() => ""),
   );
 
+// WARNING: a harness is working while it starts and idle before it reads anything; wait on the screen marker, not the status.
 const answers = Effect.fn("live.answers")(function* (
   socket: string,
   marker: string,
@@ -150,6 +151,7 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
   const chosen = preferredHarness(yield* chatHarnessOf(userDir));
   const key = yield* machineHerd(env);
   const chatFile = yield* chatPath(stateDir, key);
+  // WARNING: the host goes first so the terminals it keeps are not started again once killed.
   yield* Effect.addFinalizer(() =>
     keep
       ? Effect.log(`kept ${stateDir} and ${userDir}`)
@@ -180,6 +182,7 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
   );
   yield* Effect.sleep("10 seconds");
 
+  // WARNING: a screen shows the question as well as the answer, so a marker typed into the question proves nothing.
   const prompt = (text: string) =>
     herdr
       .agentPrompt(CHAT_TERMINAL, text)

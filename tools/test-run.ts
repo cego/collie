@@ -123,6 +123,7 @@ const TimingsJson = Schema.fromJsonString(
 const decodeTimings = Schema.decodeUnknownOption(TimingsJson);
 const encodeTimings = flow(Schema.encodeResult(TimingsJson), Result.getOrThrow);
 
+// WARNING: Bun's timings merge keeps dropped files forever, so they are removed here.
 export const prepareTimings = Effect.fn("prepareTimings")(function* (
   targeted: boolean,
   timings: string,

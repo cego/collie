@@ -1,3 +1,4 @@
+// WARNING: only this live probe catches a core that sends less than its schema promises (hc 0.1.14 omitted machines).
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -290,6 +291,7 @@ const harnessArgv = (name: string) => {
   }
 };
 
+// WARNING: the answer is not in the prompt, so seeing it shows the harness acted on what it was sent.
 const ANSWER = "DETCA";
 const PROMPT = "Reply with the word acted spelled backwards in capital letters, and nothing else.";
 const TURN_SECONDS = 300;
@@ -297,6 +299,7 @@ const TURN_SECONDS = 300;
 const harness = Effect.fn("HcProbe.harness")(function* (socket: string, cwd: string, name: string) {
   const argv = harnessArgv(name);
   if (argv === undefined) return yield* fail(`no harness ${name}: claude, codex or pi`);
+  // WARNING: as Collie's launch does, so Claude opens at its prompt and not its folder-trust dialog.
   if (name === "claude") {
     const granted = yield* claudeTrust(yield* Config.String("HOME"), `${cwd}/..`).grant(cwd);
     if (!granted.ok) return yield* fail(granted.message);
@@ -356,6 +359,7 @@ const harness = Effect.fn("HcProbe.harness")(function* (socket: string, cwd: str
   );
   const shown = yield* screen;
   yield* Console.error(`${name}: reported ${Arr.join(words, ", ")}; answered ${ANSWER}`);
+  // WARNING: a TUI wraps and indents long lines, so the prompt is found with its spacing evened out.
   const even = (text: string) => pipe(text, Str.replace(/\s+/g, " "));
   yield* expect(
     pipe(even(shown), Str.includes(even(PROMPT))),
@@ -374,6 +378,7 @@ const PI_ANSWER = "BLUE";
 
 const piQuestion = Effect.fn("HcProbe.piQuestion")(function* (socket: string, dir: string) {
   const fs = yield* FileSystem.FileSystem;
+  // WARNING: the probe stands in for the host that owns this state directory.
   yield* fs.writeFileString(hostLockOf(dir), `{"pid":${process.pid},"start":null}`);
   const name = "probe-pi-question";
   const control = yield* controlDir(dir, name);
@@ -451,6 +456,7 @@ const piQuestion = Effect.fn("HcProbe.piQuestion")(function* (socket: string, di
   yield* api.call("terminal.kill", { terminal: agent.address });
 });
 
+// WARNING: OpenCode's free model misspells words spelled backwards, so these are facts it gets right.
 const capital = (country: string, answer: string) => ({
   prompt: `Reply with the capital of ${country} in capital letters, and nothing else.`,
   answer,
@@ -559,6 +565,7 @@ const opencode = Effect.fn("HcProbe.opencode")(function* (
   const workedThenIdle = (seen: ReadonlyArray<string>) =>
     seen.includes("working") && seen.lastIndexOf("idle") > seen.indexOf("working");
 
+  // WARNING: settled by the screen, not status, so a run without the reporter still gets this far.
   yield* until("each agent to answer its first prompt", () =>
     Effect.gen(function* () {
       for (const one of agents)
@@ -760,6 +767,7 @@ const resume = Effect.fn("HcProbe.resume")(function* (
   );
   yield* expect(left.length === 0, `${agent} to be gone after core stopped`);
 
+  // WARNING: an old App Server is put down first; a server still holding the thread leaves it read-only to the next.
   if (server?.pid !== undefined) {
     yield* terminate(server.pid);
     yield* fs.exists(`/proc/${server.pid}`).pipe(
@@ -802,6 +810,7 @@ const resume = Effect.fn("HcProbe.resume")(function* (
     yield* promptAsync(served.endpoint, recorded, RECALL);
     yield* after.until(`${name} to answer`, () => Effect.succeed(after.settled(from)));
   } else yield* after.told(RECALL);
+  // WARNING: Claude reports done before it has drawn its answer.
   const shown = yield* after.screen.pipe(
     Effect.repeat({
       until: (text) => pipe(text, Str.includes(RECALLED)),
@@ -859,6 +868,7 @@ const program = Effect.gen(function* () {
     yield* fs.makeDirectory(`${dir}/${sub}`, { mode: 0o700 });
   const binary = yield* fetchPinned(dir);
   const socket = `${dir}/run/hc.sock`;
+  // WARNING: only what hc and the probe's shells need; nothing that names a live core, herdr or agent.
   const env = {
     PATH: yield* Config.String("PATH"),
     HOME: home,

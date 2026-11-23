@@ -34,6 +34,7 @@ export const actionRunner = (
   }) => Promise<Exit.Exit<string, Failed>>,
   tell: (notice: ActionNotice) => void,
 ) => {
+  // WARNING: one gesture is one request, reused on every try; the host takes it once.
   const run = (
     installation: string,
     action: DesktopAction,

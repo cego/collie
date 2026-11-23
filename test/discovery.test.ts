@@ -143,6 +143,7 @@ test("two entries in one layer claiming one id are an error that names the other
       const first = yield* where.save("user", "copy.workflow.ts", entry("proof"));
       const second = yield* where.save("user", "proof.workflow.ts", entry("proof"));
       yield* where.save("user", "plain.workflow.ts", entry("plain"));
+      // WARNING: An ambiguous claim is refused even when the layer below has a good one: a duplicate is a mistake to fix, not a choice to make.
       yield* where.save("shipped", "proof.workflow.ts", entry("proof"));
 
       const found = yield* discover(where.roots);
@@ -160,6 +161,7 @@ test("only entry files are looked at, and an entry is read without being built",
       yield* where.save("user", "helper.ts", "export const label = (note: string) => note;\n");
       yield* where.save("user", "notes.md", "A prompt beside the code.\n");
       yield* where.save("user", "proof.workflow.ts.bak", entry("stale"));
+      // WARNING: Discovery imports a module only to read it; building is what a start does, so an unbuildable entry is still an entry.
       yield* where.save(
         "user",
         "plain.workflow.ts",
@@ -193,6 +195,7 @@ test("an edited helper is a new revision of the entry beside it", () =>
       );
       const after = yield* discover(where.roots);
       expect(after.entries[0]?.revision).not.toBe(before.entries[0]?.revision);
+      // WARNING: An edit to a file the entry imports is an edit to the entry; the revision is the directory's.
       expect(after.entries[0]?.id).toBe("proof");
     }).pipe(Effect.scoped),
   ));
@@ -262,6 +265,7 @@ test("an installed dependency counts by its name, not by everything inside it", 
       yield* fs.writeFileString(`${installed}/index.js`, "module.exports = 1;\n");
 
       const before = yield* discover(where.roots);
+      // WARNING: A dependency's contents are not read: reading all of the toolchain would slow every start.
       yield* fs.writeFileString(`${installed}/index.js`, "module.exports = 2;\n");
       expect((yield* discover(where.roots)).entries[0]?.revision).toBe(before.entries[0]?.revision);
 
@@ -275,6 +279,7 @@ test("an installed dependency counts by its name, not by everything inside it", 
 test("the user's workflows are not something the installation's own checkout can overwrite", () =>
   runEffect(
     Effect.gen(function* () {
+      // WARNING: collie upgrade fast-forwards this checkout; an untracked or unignored user directory is one it could write over.
       const ignored = yield* Effect.promise(() =>
         Bun.$`git check-ignore user/workflows/mine.workflow.ts`.cwd(repo).nothrow().quiet(),
       );

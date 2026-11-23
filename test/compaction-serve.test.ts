@@ -75,6 +75,7 @@ test("the line the server prints is what comes back, and the server outlives the
       );
 
       expect(served.found).toBe("34567");
+      // WARNING: Detached and unreffed, or the spawner's finalizer would kill the server it just started; it must outlive the Run.
       expect(alive(served.pid)).toBe(true);
     }),
   ));

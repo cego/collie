@@ -238,6 +238,7 @@ test("a delivery whose merge request the forge reads merged refuses Ship and Sta
         ]);
 
         yield* stopHost(world.state);
+        // WARNING: a first host's ask to the absent forge holds a restarted host off for five minutes.
         yield* (yield* FileSystem.FileSystem).remove(`${world.state}/${MR_STATES_FILE}`, {
           force: true,
         });

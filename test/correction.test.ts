@@ -81,6 +81,7 @@ test("each gate refuses on its own, and none of them substitutes for another", (
 
 test("a harness that cannot tell Collie's own text from a human's needs to be told nobody else is steering", () => {
   const open = [report()];
+  // WARNING: No attribution: Collie cannot know whether it is taking turns with a person.
   expect(decideCorrections(intentWith(), open, ctx({ attributable: false }))).toEqual([]);
   expect(
     decideCorrections(intentWith({ exclusive_steering: true }), open, ctx({ attributable: false })),
@@ -97,6 +98,7 @@ test("a blocking report may go now, but only where that was granted and proven",
     decideCorrections(intentWith({ now_allowed: true }), blocking, ctx({ nowProven: true }))[0]
       ?.mode,
   ).toBe("now");
+  // WARNING: A warning is never urgent, however much authority there is.
   expect(
     decideCorrections(intentWith({ now_allowed: true }), [report()], ctx({ nowProven: true }))[0]
       ?.mode,
@@ -167,6 +169,7 @@ test("aligned: true is the strong claim, and every way of not knowing is unverif
   expect(alignment(intent, [report({ severity: "block" })], judged)).toMatchObject({
     aligned: "false",
   });
+  // WARNING: A correction that was sent settles nothing on its own: the report is still open.
   expect(
     alignment(intent, [report({ severity: "block", resolution: "correction_submitted" })], judged),
   ).toMatchObject({ aligned: "false" });
@@ -233,6 +236,7 @@ test("the wake rule makes every Driver a candidate, not only the ones with sibli
   expect(shouldStand(nobody, false)).toBe(false);
   expect(shouldStand(nobody, true)).toBe(true);
 
+  // WARNING: A pending evaluation is everybody's; without this it waits for a Driver with a parent, which may never run again.
   const stuck: ElectionLine[] = [{ kind: "pending", since: "t1", runs: ["r1"] }];
   expect(shouldStand(stuck, false)).toBe(true);
   expect(pendingEvaluation(stuck)).toMatchObject({ runs: ["r1"] });

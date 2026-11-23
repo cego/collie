@@ -25,6 +25,7 @@ import type { VerifySpec } from "./verify-spec";
 import type { Control } from "./controls";
 
 export const CI_POLL = Duration.seconds(30);
+// WARNING: matches the default Output budget; change them together.
 export const CI_BOUND = Duration.hours(2);
 
 export type CiJob =
@@ -46,6 +47,7 @@ export type CiJob =
       readonly conflicts?: true;
     };
 
+// WARNING: only the job itself may name no failed test, and only beside others (#460).
 const sharedJobs = (job: string, head: FailedAttempt, base: FailedAttempt) => {
   const here = head.jobs;
   if (here === null || base.jobs === null || here.length === 0) return null;
@@ -175,6 +177,7 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
 }) {
   const { spec, cwd } = asked;
   const job = spec.ci ?? "";
+  // WARNING: the tree is read again before a pass is recorded, so it binds to the tree it ran on.
   const tree = yield* fingerprint(cwd);
   const head = tree.head_sha;
   yield* rememberCiTarget(asked.runDir, { head, job, mr: asked.mr, cwd }).pipe(Effect.orDie);
@@ -216,6 +219,7 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
     for (;;) {
       const read = yield* forge.job(ref, job, cwd, asked.run);
       if (!read.ok) return unproved(`could not be read: ${read.reason}`);
+      // WARNING: pending may mean the forge has not seen the push or retry yet, or the MR moved on without this checkout.
       let state =
         read.head !== head ||
         (retried !== null && read.state === "missing") ||
@@ -324,6 +328,7 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
         ).pipe(Effect.ignore);
         return { proved: proof, ...flake };
       }
+      // WARNING: a forge with no pipeline for the head says pending, without a job.
       const absent =
         state === "missing" ||
         (state === "pending" && read.head === head && read.id === null && read.url === null);
@@ -338,6 +343,7 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
             log,
             conflicts: true,
           } satisfies CiJob;
+        // WARNING: the forge runs no pipeline until it has said whether it can merge.
         if (mergeable?.state === "unknown") state = "pending";
       }
       if (state !== "pending" && state !== "running")

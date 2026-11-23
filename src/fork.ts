@@ -47,6 +47,7 @@ export const forkResolvedDefinition = Effect.fn("Fork.forkResolvedDefinition")(f
   });
 });
 
+// WARNING: Never overwrites: an existing fork is the one already edited.
 export const forkDefinition = Effect.fn("Fork.forkDefinition")(function* (
   source: string,
   kind: DefinitionKind,
@@ -109,6 +110,7 @@ export const forkDefinition = Effect.fn("Fork.forkDefinition")(function* (
       };
 });
 
+// WARNING: Keeps its own name, or the parent's name would shadow it; records the parent it came from, not its inherited hash.
 function copied(text: string, hash: string, source: string, target: string) {
   const stamped = setFrontmatterKey(text, "forked_from_hash", hash);
   return source === target ? stamped : setFrontmatterKey(stamped, "name", target);

@@ -42,6 +42,7 @@ const PICKS = [{ label: "Postgres (Recommended)" }, { label: "SQLite" }, { label
 
 const GRACE_MS = 3_000;
 const TICK_MS = 500;
+// WARNING: Must exceed the grace and two board ticks, or no revision has opened yet.
 const SETTLED = Duration.millis(GRACE_MS + 4 * TICK_MS);
 
 type Client = Effect.Success<ReturnType<typeof connect>>;
@@ -264,6 +265,7 @@ test("Desktop's steering entry sends the words to the board's steer target, whic
         HC_SOCKET: Bun.env.HC_SOCKET ?? "",
       });
       const reached = { machine: { profile: "local", name: "mk-pc" }, desktop: bridge };
+      // WARNING: herdr's live agents are read only at the board's next tick, so wait for it.
       const card = yield* until(
         () => cardOf(at),
         (task) => task?.questions?.[0]?.steer?.agent != null,
@@ -885,6 +887,7 @@ test("typing into the agent's Claude pane closes its own question, which is not 
 test("a workflow Choice's steering entry names the agent `run steer` reaches, and blank words are refused and supersede nothing", () =>
   atQuestion("collie-steer-entry-", (at) =>
     Effect.gen(function* () {
+      // WARNING: herdr's live agents are read only at the board's next tick, so wait for it.
       const card = yield* until(
         () => cardOf(at),
         (one) => one?.questions?.[0]?.steer?.agent != null,

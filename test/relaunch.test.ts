@@ -20,10 +20,12 @@ test("a board notices its binary renamed over, and nothing while it is left alon
         yield* Effect.sleep(100);
         expect(watching.pollUnsafe()).toBeUndefined();
 
+        // WARNING: tools/build.ts installs by writing beside the binary and renaming over it; that is what a rebuild looks like.
         yield* fs.writeFileString(`${bin}.new`, "new");
         yield* fs.rename(`${bin}.new`, bin);
         expect(Option.isSome(yield* Fiber.join(watching))).toBe(true);
 
+        // WARNING: a path nobody can read never counts as rebuilt.
         const missing = yield* Effect.flatten(replacedOnDisk(`${dir}/gone`, "10 millis")).pipe(
           Effect.timeoutOption(100),
         );

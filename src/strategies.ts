@@ -29,12 +29,14 @@ export function fieldsWithStrategy(
 
 export type TargetKind = "mr" | "branch" | "worktree";
 
+// WARNING: mr: is read the way parseMrTarget reads it, so mr:group/app is no kind.
 export function targetKind(value: string) {
   if (parseMrTarget(value) !== null) return "mr";
   if (pipe(value, Str.startsWith("branch:"))) return "branch";
   return Str.trim(value) === "worktree" ? "worktree" : "";
 }
 
+// WARNING: validation allows one field per exclusive strategy, so the first is the only one.
 export function settledBy(where: Settled, strategy: InputStrategy) {
   const name = fieldsWithStrategy(where.strategies ?? {}, strategy)[0];
   if (name === undefined) return null;
@@ -51,6 +53,7 @@ export function settledBy(where: Settled, strategy: InputStrategy) {
   };
 }
 
+// WARNING: a work source's kind cannot be told from its text: it is whatever settling recorded.
 function kindOf(strategy: InputStrategy, name: string, where: Settled) {
   if (strategy === "diff-target") return targetKind(where.inputs[name] ?? "");
   if (strategy === "plan-dir") return "plan-dir";
@@ -65,6 +68,7 @@ export const planRunOf = (value: string) =>
 
 export const diffTargetOf = (where: Settled) => settledBy(where, "diff-target");
 
+// WARNING: a recorded Run still carries the old name, so it is still read.
 const OLD_NAMES = new Map<InputStrategy, InputStrategy>([["gitlab-repository", "repository"]]);
 
 export const strategyNamed = (strategy: InputStrategy) => OLD_NAMES.get(strategy) ?? strategy;
@@ -72,6 +76,7 @@ export const strategyNamed = (strategy: InputStrategy) => OLD_NAMES.get(strategy
 export const repositoryOf = (where: Settled) =>
   settledBy(where, "repository") ?? settledBy(where, "gitlab-repository");
 
+// WARNING: two fields claiming work source leave inference no answer; renaming must not change which one is picked.
 export const EXCLUSIVE_STRATEGIES: ReadonlyArray<InputStrategy> = [
   "goal",
   "work-source",

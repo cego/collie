@@ -1,3 +1,4 @@
+// WARNING: no I/O and no Bun-only import: a browser bundle imports this too.
 import { NarrativeReport } from "./narrative-model";
 import {
   Artefact,
@@ -497,6 +498,7 @@ export const Metrics = Schema.Struct({
 });
 export type Metrics = typeof Metrics.Type;
 
+// WARNING: every field but the iid is optional on the wire, since GitLab's shape varies by version and token.
 export const MrDetails = Schema.TaggedStruct("Details", {
   iid: Schema.String,
   project: Schema.NullOr(Schema.String),
@@ -957,6 +959,7 @@ export function readinessOfRun(runId: string, card: TaskView | undefined, ended:
   return returned;
 }
 
+// WARNING: an optional field or new message keeps it; a removal or a change of meaning bumps it.
 export const PROTOCOL = 5;
 
 export const Herd = Schema.Struct({
@@ -1033,6 +1036,7 @@ export class StaleAct extends Schema.TaggedError<StaleAct, { readonly brand: uni
   { run: Schema.String, step: Schema.String, reason: Schema.String },
 ) {}
 
+// WARNING: an accepted request is never silently changed: an idempotency key must never do that.
 export class RequestConflict extends Schema.TaggedError<
   RequestConflict,
   { readonly brand: unique symbol }
@@ -1049,6 +1053,7 @@ export const Answered = Schema.Struct({
   redacted: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
+// WARNING: applied is whether the run was told: a control over work no host runs is an intent, not a confirmation.
 export const Controlled = Schema.Struct({
   runId: Schema.String,
   control: Schema.String,
@@ -1059,6 +1064,7 @@ export const Controlled = Schema.Struct({
   closed: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
+// WARNING: a stop that could not make an agent Quiet is a failed operation, never 'Stopped'.
 export const leftSaid = (done: typeof Controlled.Type) => {
   if (done.left.length === 0) return null;
   if (done.closed !== undefined)
@@ -1134,6 +1140,7 @@ export const SteerOutcome = Schema.Struct({
 });
 export type SteerOutcome = typeof SteerOutcome.Type;
 
+// WARNING: amending an Intent, forking a definition and changing a workspace's defaults are collie_propose's, not the board's.
 export const ASKED_KINDS = [
   "stop",
   "resume",
@@ -1198,6 +1205,7 @@ export const Where = Schema.Struct({
 });
 export type Where = typeof Where.Type;
 
+// WARNING: output before this line is a login shell's; after it, the host's.
 export const BRIDGE_READY = "collie-bridge-ready";
 
 export const Declaration = Schema.Struct({
@@ -1310,6 +1318,7 @@ export const RunDetailRpc = Rpc.make("runDetail", {
   stream: true,
 });
 
+// WARNING: every operation takes a request id: the same one twice is one operation, and with other arguments it is refused.
 export const FrontDoorRpcs = RpcGroup.make(
   Rpc.make("refresh", {
     payload: { request: Schema.String },
@@ -1324,6 +1333,7 @@ export const FrontDoorRpcs = RpcGroup.make(
   }),
   Rpc.make("board", { success: BoardMessage, stream: true }),
   Rpc.make("toasts", { success: Toasted, stream: true }),
+  // WARNING: a channel that never declares is stamped cli, never a human.
   Rpc.make("declare", {
     payload: Declaration,
     error: HostRefused,
@@ -1716,6 +1726,7 @@ export const FrontDoorRpcs = RpcGroup.make(
     success: Schema.Struct({ text: Schema.String, omitted: Schema.Int }),
     error: HostRefused,
   }),
+  // WARNING: a file written whole, never inside the host's state directory.
   Rpc.make("writeFile", {
     payload: { path: Schema.String, content: Schema.String, request: Schema.String },
     success: Schema.Struct({ path: Schema.String, bytes: Schema.Int }),
@@ -1811,6 +1822,7 @@ export function mrWords(ref: MrRef) {
   };
 }
 
+// WARNING: a bare or hostless reference is resolved only against the project it was typed in.
 export function mrId(text: string, typedIn?: { readonly project: string | null }) {
   const said = Str.trim(text);
   const ref =
@@ -2512,6 +2524,7 @@ export const SECTIONS: ReadonlyArray<readonly [Section, string]> = [
 const SECTION_ORDER = new Map(Arr.map(SECTIONS, ([section], at) => [section, at]));
 const STATE_RANK = new Map<TaskState, number>(Arr.map(STATE_ORDER, (state, at) => [state, at]));
 
+// WARNING: nothing else is ranked: a board that reorders itself on every tick cannot be pointed at.
 export function sortBoard(views: ReadonlyArray<TaskView>) {
   return [...views].sort(
     (a, b) =>
@@ -2532,6 +2545,7 @@ export interface Sections {
   finished: TaskView[];
 }
 
+// WARNING: work ready to release is never folded, however long it has waited.
 export function foldWaiting(waiting: ReadonlyArray<TaskView>, now: number) {
   const old = (view: TaskView) => !view.ready && (view.ended ?? view.at) < now - WAIT_FOLD_MS;
   return { recent: Arr.filter(waiting, (view) => !old(view)), older: Arr.filter(waiting, old) };
@@ -2579,6 +2593,7 @@ export interface HeaderSentence {
   urgent: boolean;
 }
 
+// WARNING: counted over every Task, so a decision the search hides is still counted.
 export function headerSentence(views: ReadonlyArray<TaskView>, now?: number) {
   const needs = Arr.filter(views, (view) => sectionOf(view) === "needs-you").length;
   const working = Arr.filter(views, (view) => sectionOf(view) === "working");

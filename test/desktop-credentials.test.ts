@@ -256,6 +256,7 @@ test("onboarding gives the runner Desktop's secrets on stdin, and forwards and o
     }),
   ));
 
+// WARNING: claude auth login as Claude Code 2.1 runs it: the URL with its callback port goes to $BROWSER; only the paste-code URL is printed.
 const fakeClaude = (dir: string) =>
   executable(
     `${dir}/claude`,

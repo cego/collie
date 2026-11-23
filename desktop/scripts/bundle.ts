@@ -22,6 +22,7 @@ const ROOT = new URL("../../", import.meta.url).pathname;
 const IDENTIFIER = "dk.cego.collie.desktop";
 const CHANNEL = "stable";
 const BASE_URL = "https://github.com/cego/collie/releases/latest/download";
+// WARNING: USTAR cannot hold directory-service UIDs; archives belong to no build account.
 const TAR_OWNER =
   process.platform === "darwin" ? ["--uid=0", "--gid=0"] : ["--owner=0", "--group=0"];
 
@@ -42,6 +43,7 @@ const layoutOf = (os: Os) =>
         version: "Resources/version.json",
       };
 
+// WARNING: installed apps request these update filenames, so they are kept.
 const prefixOf = (os: Os, arch: string) => `${CHANNEL}-${os}-${arch}`;
 
 const run = Effect.fn("bundle.run")(function* (
@@ -105,6 +107,7 @@ ${pipe(
 </dict></plist>
 `;
 
+// WARNING: install-desktop.sh writes the absolute Exec and Icon when it installs the entry.
 const DESKTOP_ENTRY = `[Desktop Entry]
 Type=Application
 Name=Collie
@@ -127,6 +130,7 @@ ${pipe(
 
 export const macSignings = (env: Env, entitlements: string, app: string) => {
   const identity = macSigning(env).codesign ? (env.ELECTROBUN_DEVELOPER_ID ?? "-") : "-";
+  // WARNING: Apple's timestamp server serves a real identity only.
   const timestamp = identity === "-" ? [] : ["--timestamp"];
   return Arr.map(
     [`${app}/Contents/MacOS/collie-core`, `${app}/Contents/MacOS/launcher`, app],
@@ -193,6 +197,7 @@ export interface AssembleOptions {
   readonly shell: string;
   readonly core: string;
   readonly icon: string;
+  // WARNING: kept only for the old updater's bundle validation and uninstall contract.
   readonly manager: string;
   readonly version: string;
   readonly baseUrl: string;
@@ -292,6 +297,7 @@ export const assemble = Effect.fn("bundle.assemble")(function* (options: Assembl
   );
 });
 
+// WARNING: the installed v2 updater requires its native manager in every replacement bundle.
 const compatibilityManager = (os: Os, arch: string, work: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -323,6 +329,7 @@ const compatibilityManager = (os: Os, arch: string, work: string) =>
     return `${source}/${member}`;
   }).pipe(Effect.provide(FetchHttpClient.layer));
 
+// WARNING: keeps the existing one-line installer's signed asset names.
 export const packageInstaller = (out: string, os: Os, arch: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

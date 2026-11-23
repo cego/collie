@@ -184,6 +184,7 @@ const exchange = <A>(
       .spawn(
         ChildProcess.make(command, args, {
           cwd,
+          // WARNING: stdin stays open; a closed stdin makes the harness stop before it answers.
           stdin: Stream.concat(Stream.make(new TextEncoder().encode(sent)), Stream.never),
           stdout: "pipe",
           stderr: "ignore",
@@ -274,6 +275,7 @@ const codexModels = (cwd: string) =>
         params: { clientInfo: { name: "collie", version: "0" } },
       },
       { jsonrpc: "2.0", method: "initialized" },
+      // WARNING: reads one page; follow nextCursor if Codex ever lists more.
       { jsonrpc: "2.0", id: 2, method: "model/list", params: { includeHidden: true } },
     ],
     (line) => {

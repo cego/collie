@@ -170,6 +170,7 @@ test("a client that closes and comes back is told where the work is now, not wha
       yield* client
         .answer({ runId, decision: "decision", value: "again", request: "answer-again" })
         .pipe(Effect.orDie);
+      // WARNING: a stream's first item is the current state, so a late listener is not waiting on a change already made.
       const first = yield* Stream.runHead(client.watch({ runId }));
       expect(Option.isSome(first)).toBe(true);
       const seen = yield* Stream.runHead(
@@ -453,6 +454,7 @@ test("a start given its checks with --verify is admitted, and its Intent grants 
         expect(withdrawn.envelope.data).toMatchObject({
           approved: [{ name: "unit" }, { name: "e2e" }],
         });
+        // WARNING: an empty list once read as nothing granted, while the host held the grant.
         const regranted = yield* collie(world, ["run", "intent", "show", runId]);
         expect(regranted.envelope.data).toMatchObject({
           intent: { authority: { run_verification: [{ name: "unit" }, { name: "e2e" }] } },

@@ -20,6 +20,7 @@ export type UsageWindow = typeof UsageWindow.Type;
 
 export const UsageReading = Schema.Struct({
   subscription: Schema.Literals(SUBSCRIPTIONS),
+  // WARNING: the account id is stable and never an email: one address can hold a personal plan and a team seat.
   account: Schema.NullOr(Schema.String),
   accountLabel: Schema.NullOr(Schema.String),
   plan: Schema.NullOr(Schema.String),
@@ -60,6 +61,7 @@ export function subscriptionOf(choice: ChoiceLike) {
 
 const squeezed = (text: string) => pipe(Str.toLowerCase(text), Str.replace(/[^a-z0-9]/g, ""));
 
+// WARNING: a choice left at default is resolved by its caller; unresolved, it names no model.
 export function appliesTo(window: UsageWindow, model: string | null) {
   if (window.model === null) {
     return true;
@@ -70,6 +72,7 @@ export function appliesTo(window: UsageWindow, model: string | null) {
   return pipe(squeezed(model), Str.includes(squeezed(Str.split(window.model, " ")[0] ?? "")));
 }
 
+// WARNING: a window past its reset is unused, whatever was last read.
 export function current(window: UsageWindow, now: number) {
   if (window.resetsAt === null || epochMs(window.resetsAt) > now) {
     const returned: UsageWindow = window;
@@ -151,6 +154,7 @@ export function usagePhrase(readings: ReadonlyArray<UsageReading>, now: number) 
   return returned;
 }
 
+// WARNING: every field is optional: two of the three sources are undocumented.
 const ClaudeRow = Schema.Struct({
   utilization: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
   percent: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
@@ -195,6 +199,7 @@ function claudeWindow(
     model,
     usedPercent: row.percent ?? row.utilization ?? 0,
     resetsAt: row.resets_at ?? null,
+    // WARNING: severity is a display level only; credits beyond the plan mark nothing.
     reached: (row.locked_reason ?? null) !== null,
   };
   return returned;

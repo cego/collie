@@ -85,6 +85,7 @@ const claudeAt = (script: string) =>
 
 const GITLAB = "gitlab.cego.dk";
 
+// WARNING: real glab writes auth status to stderr.
 const glab = (status: string, rest = "") =>
   bin.add(
     "glab",
@@ -669,6 +670,7 @@ esac`,
   ));
 
 test("Claude Code is asked whether it is logged in with the whole environment, not only what Collie reads", () => {
+  // WARNING: macOS Keychain lookup needs USER, which currentEnv does not keep.
   const user = Bun.env.USER;
   Bun.env.USER = "someone";
   return runEffect(

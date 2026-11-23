@@ -48,6 +48,7 @@ const healthy = Effect.fn("doctorTest.healthy")(function* () {
   yield* writeConfigValue(rig.userDir, "gitlab_host", "gitlab.example");
   yield* gitlab({ expires: "2099-01-01" });
   yield* bin.add("ssh", `echo "Welcome to GitLab, @t!"; exit 0`);
+  // WARNING: A fetch that prompts is stopped by the settings behind `$*`; the match must cover every argument.
   yield* bin.add("git", `case "$*" in *rev-list*) echo 0 ;; *) exit 0 ;; esac`);
   yield* bin.add(
     "claude",
@@ -543,6 +544,7 @@ test("a skill store that is not there is named, with the routine that fills it",
       expect(result.ok).toBe(false);
       const skills = check(result, "skills");
       expect(skills.detail).toContain("operator skill");
+      // WARNING: The fix is the routine that owns the sources and store, not a bare npx skills add, which installs a name into neither reliably.
       expect(skills.fix).toBe(`sh ${rig.baselineDir}/prepare.sh`);
     }),
   ));
@@ -733,8 +735,10 @@ test("what is overridden here is named, never judged and never edited", () =>
       expect(found.ok).toBe(true);
       expect(found.detail).toContain(`review (project, ${mine})`);
       expect(found.fix).toBe("");
+      // WARNING: An id doctor recognised would privilege a shipped workflow over one someone wrote, so it names no opinion.
       expect(found.detail).not.toContain("still runs");
 
+      // WARNING: A module that answers for an id but will not load is the one exception: the layer below is not consulted, so nothing would run that id.
       yield* fs.writeFileString(mine, "export const id = 1;\n");
       const broken = check(yield* report(), "workflows");
       expect(broken.detail).toContain("review:");

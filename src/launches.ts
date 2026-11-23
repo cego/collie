@@ -46,18 +46,22 @@ export const Launched = Schema.Struct({
   model: Schema.optionalKey(Schema.String),
   effort: Schema.optionalKey(Schema.NullOr(Schema.String)),
   claudeSubagents: Schema.optionalKey(ClaudeSubagents),
+  // WARNING: On the clock the harness's telemetry is stamped with, not the host's.
   at: Schema.optionalKey(Schema.Finite),
   sequence: Schema.optionalKey(Schema.Finite),
   from: Schema.optionalKey(RanOn),
   why: Schema.optionalKey(Schema.String),
   next: Schema.optionalKey(RanOn),
+  // WARNING: Core's id for the process: the name alone is reused by the next one.
   terminalId: Schema.optionalKey(Schema.String),
   agentSession: Schema.optionalKey(AgentSession),
   step: Schema.optionalKey(LaunchedIn),
+  // WARNING: Fixed at launch: its tool server cannot change afterwards.
   outputSubmit: Schema.optionalKey(Schema.Literals(["file", "tool"])),
 });
 export type Launched = typeof Launched.Type;
 
+// WARNING: Holds no credential: the environment and authority are read again at restart.
 export const StartedWith = Schema.Struct({
   runId: Schema.String,
   operation: Schema.String,
@@ -79,8 +83,10 @@ export const StartedWith = Schema.Struct({
 
 export const startedDir = (stateDir: string, runId: string) => `${stateDir}/relaunch/${runId}`;
 
+// WARNING: Longer than the stop, close or start it may wait out, so the lock is never stolen.
 const RELAUNCH_LOCK_BUDGET = Duration.minutes(2);
 
+// WARNING: Recovery never starts an agent that an end has retired.
 export const withRelaunchLock = <A, E, R, A2, E2, R2>(
   stateDir: string,
   runId: string,
@@ -146,6 +152,7 @@ export const launchesLayer = Layer.effect(Launches)(
         Effect.sync(() => told?.([run])),
         reactivity.invalidate([LAUNCHES]),
       );
+    // WARNING: Launches from before the order was kept sort first, by their file name.
     const inOrder = sql`ORDER BY run, ordered, stem || '.launch.json'`;
     return {
       of: (runs) =>

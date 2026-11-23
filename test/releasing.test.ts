@@ -99,6 +99,7 @@ test("a plain push past the journaled head is not refused; the checkout is taken
       const third = yield* commit("three.ts");
       expect(second).not.toBe(first);
       expect(third).not.toBe(second);
+      // WARNING: a replayed head the checkout no longer carries is answered At, not refused as after a force push.
       const moved = yield* fastForward({ runDir: `${root}/run`, cwd, head: first, run: runner() });
       expect(moved._tag).toBe("At");
       if (moved._tag === "At") {
@@ -112,6 +113,7 @@ test("a true force push (a head the checkout neither is at nor sits behind) is s
   runEffect(
     Effect.gen(function* () {
       const { fs, root, cwd, first } = yield* repository;
+      // WARNING: the first head stays a loose object so the journaled head still resolves, as a rewritten remote leaves it.
       yield* git(cwd, "update-ref", "-d", "refs/heads/main");
       yield* git(cwd, "checkout", "-q", "--orphan", "main");
       yield* fs.writeFileString(`${cwd}/rewrite.ts`, "rewrite.ts");

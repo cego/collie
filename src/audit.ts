@@ -151,6 +151,7 @@ export const recordAudit = Effect.fn("Audit.record")(function* <A, I extends Sch
     : appendJournal(fileOf(runDir), AuditJson, full);
 });
 
+// WARNING: two copies of one request arriving together can both act; a lock per Run would prevent it.
 export const once = Effect.fn("Audit.once")(function* <A, I extends Schema.Json, E, R>(
   runDir: string,
   line: Voice & {

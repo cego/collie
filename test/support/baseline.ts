@@ -2,6 +2,7 @@ import { Herdr } from "../../src/herdr";
 import { isString } from "../../src/schema";
 import { hostRecords, hostRunRecords, launchesAt, overHost } from "./records";
 
+// WARNING: Every scenario runs as shipped and under unrelated ids; the same assertions must hold both times.
 import * as Arr from "effect/Array";
 import { RunRecords } from "../../src/run-records";
 import { nowIso } from "../../src/time";
@@ -336,6 +337,7 @@ const session = <A, E>(run: Effect.Effect<A, E, SessionServices>, override?: Hos
         ),
       ),
       Effect.scoped,
+      // WARNING: The hang guard stays on real time; the Run keeps the scenario's clock.
       Effect.provideService(Clock.Clock, clock),
       Effect.timeout("60 seconds"),
       Effect.provideService(Clock.Clock, Clock.Clock.defaultValue()),
@@ -382,6 +384,7 @@ const runChild = (
     childRuns.set(ask.invocation, { made, registered, runId, input: ask.input, id });
   }).pipe(Effect.orDie, Effect.provideContext(running.context));
 
+// WARNING: Runs on its parent's fiber, as the host does, so the engine links the two.
 const childEnd = (running: NonNullable<typeof runningChildren>, child: ChildRunning) =>
   // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- A loaded module's erased error, translated to WorkflowError below, as the host translates it.
   child.made.workflow.execute({ runId: child.runId, input: child.input }).pipe(
@@ -478,6 +481,7 @@ const laneWhen = (options: {
   readonly options?: Readonly<Record<string, string>>;
   readonly ready: (lane: FlowLane) => boolean;
   readonly host?: HostOverride;
+  // WARNING: A working agent left running makes the engine wait out its termination timeout.
   readonly outputs: ReadonlyArray<Schema.Json>;
   readonly working: { readonly operation: string; readonly output: unknown };
   readonly rest: ReadonlyArray<Schema.Json>;
@@ -506,6 +510,7 @@ const laneWhen = (options: {
           ...options.working,
           rest: options.rest,
         };
+        // WARNING: The fake reads its queue by position, so taken entries must stay where they were.
         yield* rig.queueOutputs([...options.outputs, null, ...completing.rest]).pipe(Effect.orDie);
         yield* (yield* FileSystem.FileSystem)
           .writeFileString(
@@ -565,6 +570,7 @@ const undeclaredWork = () =>
     return loose;
   });
 
+// WARNING: Seeded here because place reads it: a Run works in the checkout it was started for, a fact about the Run.
 const admit = (options: {
   readonly runId: string;
   readonly workflow: string;
@@ -4076,6 +4082,7 @@ const approve = (runId: string, names: ReadonlyArray<string>) =>
     Effect.orDie,
   );
 
+// WARNING: A push is known not to be a merge only once the forge has said there is no merge request.
 const noMergeRequests = Effect.acquireRelease(
   Effect.gen(function* () {
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
@@ -4085,6 +4092,7 @@ const noMergeRequests = Effect.acquireRelease(
   (bin) => bin.restore(),
 );
 
+// WARNING: A verification binds to the tree it ran on; a directory git knows nothing about has no tree to move.
 const levelRepository = () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -4097,10 +4105,12 @@ const levelRepository = () =>
     yield* fs.writeFileString(config, pipe(text, Str.replace(`${made}/origin.git`, origin)));
   }).pipe(Effect.orDie);
 
+// WARNING: Per home: a --rerun-each run removes the last run's.
 let prepared: { readonly home: string; readonly made: string } | undefined;
 
 const preparedRepository = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
+  // WARNING: The default provider holds the environment the file started with; HOME is read from it.
   const home = yield* Config.String("HOME").pipe(
     Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv()),
   );
@@ -6838,6 +6848,7 @@ scenario("implement merges a moved default branch at the next ticket, and review
       );
 
       expect(log).toContain(`integrated master@${moved}`);
+      // WARNING: A merge commit on the branch, never a rebase: what was built must remain its parent.
       const parents = Str.split(
         yield* git(rig.projectDir, "rev-list", "--parents", "-n", "1", "HEAD"),
         " ",
@@ -7061,6 +7072,7 @@ scenario(
         );
         expect(cleared).not.toContain("mk/one-registry");
         expect(cleared).not.toContain("merging");
+        // WARNING: Collie ran the checks itself, so this is not the agent's claim.
         expect(opening).toContain("unit");
         expect(opening).toContain("by collie");
       }),
@@ -10111,6 +10123,7 @@ scenario(
               options: { outcome: "feature" },
             });
             const running = yield* Effect.forkChild(
+              // WARNING: Authored modules expose Schema.Unknown failures; this test records their actual result.
               // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context
               made.workflow
                 .execute({ runId, input: { plan, ...FINISH } })
@@ -24438,6 +24451,7 @@ once("tune-up declares every input with its default, and its path", () =>
   ),
 );
 
+// WARNING: No prompt may contain $( or a backtick inside a fenced block: those are shell, not Markdown.
 const noCommandSubstitution = () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -24630,6 +24644,7 @@ const withForges = (body: () => Promise<void>) =>
 
 export const SHARES = 12;
 
+// WARNING: Hashing each name means adding one moves no other share.
 export const split = (names: ReadonlyArray<string>, of: number) => {
   const shares = Array.from({ length: of }, () => {
     const returned: string[] = [];

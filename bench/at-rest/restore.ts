@@ -15,6 +15,7 @@ const run = (argv: string[]) => {
 
 if (!existsSync(`${root}node_modules/effect/package.json`)) {
   run(["bun", "install", "--frozen-lockfile"]);
+  // WARNING: Bun can cache an ancestor's Effect resolution before the install.
   run([process.execPath, ...Bun.argv.slice(1)]);
   process.exit(0);
 }

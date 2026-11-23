@@ -27,6 +27,7 @@ export const warned = (detail: string, fix: string) => ({
 
 export const FETCH_LIMIT = "20 seconds";
 
+// WARNING: an install ends by running doctor, so nothing it asks over the network may wait on an unreachable host.
 export const answered = (
   command: Effect.Effect<Ran, never, ChildProcessSpawner.ChildProcessSpawner>,
 ) =>
@@ -34,6 +35,7 @@ export const answered = (
     Effect.map(Option.getOrElse(() => ({ code: 124, stdout: "", stderr: "timed out" }))),
   );
 
+// WARNING: the executable bit is the question, not the file; a non-executable shim fails only at the point of use.
 export const onPath = Effect.fn("Doctor.onPath")(function* (search: string, name: string) {
   const path = yield* Path.Path;
   for (const dir of Arr.filter(Str.split(search, ":"), (d) => d !== "")) {

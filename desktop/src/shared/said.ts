@@ -1,3 +1,4 @@
+// WARNING: no Bun-only import: the view bundles this module.
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Cause, Predicate, Schema } from "effect";

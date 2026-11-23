@@ -683,6 +683,7 @@ const cacheItems = (listed: { readonly envelope: { readonly data?: unknown } }) 
   };
 };
 
+// WARNING: A listing judges the board the host built last, which may lag this Run's latest state.
 const cacheListing = (world: World, judged: (items: ReturnType<typeof cacheItems>) => boolean) =>
   until(() => Effect.map(collie(world, ["cleanup"]), cacheItems), judged);
 

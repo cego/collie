@@ -158,15 +158,20 @@ test("both harnesses are wired to the same Collie reads", () => {
   for (const tool of TOOLS) expect(extension).toContain(tool.name);
   expect(extension).toContain("pi.registerTool");
   expect(extension).toContain('"tools", "call"');
+  // WARNING: Both adapters read the same Collie; two answers about two Herds is the failure this prevents.
   expect(extension).toContain('"COLLIE_STATE_DIR":"/s"');
   expect(extension).toContain("...process.env, ...ENV");
+  // WARNING: Watch the directory, not the file: trims replace the journal by rename.
   expect(extension).toContain('const NEWS_DIR = "/s/herd/abc"');
   expect(extension).toContain("watch(NEWS_DIR");
+  // WARNING: Custom message, never sendUserMessage (it looks typed by the human) and never into a running turn.
   expect(extension).toContain("pi.sendMessage");
   expect(extension).not.toContain("pi.sendUserMessage");
   expect(extension).toContain('deliverAs: "followUp"');
   expect(extension).toContain("triggerTurn: true");
+  // WARNING: No spawnSync: a blocking call stalls Pi's event loop and editor.
   expect(extension).not.toContain("spawnSync");
+  // WARNING: Match the journal itself, not the tmp file a trim renames over it, or the same item is delivered twice.
   expect(extension).toContain("String(name) === NEWS_FILE");
   expect(config).toMatchObject({
     mcpServers: { collie: { env: { COLLIE_STATE_DIR: "/s" } } },
@@ -208,9 +213,11 @@ test("both adapters are told about the same Collie, in one place", () =>
         mcpConfig: mcpConfig(["/bin/collie"], serverEnv),
       });
 
+      // WARNING: Same environment reaches both adapters; once Pi's extension read a different Collie.
       const extension = yield* fs.readFileString(files.extension);
       const config = decodeJson(yield* fs.readFileString(files.mcpConfig));
       // WARNING: the file was written by `claudeSettings` two lines above, whose one shape this names.
+      // WARNING: the hook was written by claudeSettings above, whose one shape this names.
       const hook = decodeJson(yield* fs.readFileString(files.settings)) as {
         hooks: {
           UserPromptSubmit: Array<{ hooks: Array<{ command: string }> }>;

@@ -12,6 +12,7 @@ export const WorktreeRecordSchema = Schema.Struct({
     Schema.withDecodingDefaultKey(Effect.succeed("herdr" as const)),
   ),
   workspace_id: Schema.NullOr(Schema.String),
+  // WARNING: a record without made_at is never a prune candidate: a path and a branch do not prove Collie made the checkout.
   made_at: Schema.NullOr(Schema.Finite).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   root_tab_id: Schema.NullOr(Schema.String).pipe(
     Schema.withDecodingDefaultKey(Effect.succeed(null)),

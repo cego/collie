@@ -428,12 +428,14 @@ test.each([true, false])(
         const control = (yield* readControl(`${rig.root}/state`, agent))!;
         const pid = control.pid!;
         const fs = yield* FileSystem.FileSystem;
+        // WARNING: Reaped, not only a zombie: the stop proves the server's absence by ESRCH.
         const loseServer = Effect.gen(function* () {
           kill(pid);
           while (!(yield* processAbsent(pid))) yield* TestClock.withLive(Effect.sleep("10 millis"));
         }).pipe(Effect.provideService(FileSystem.FileSystem, fs));
         if (alreadyGone) yield* loseServer;
         let reads = 0;
+        // WARNING: This platform can inspect live processes but cannot find a dead parent's session.
         const withoutSessions = {
           ...fs,
           exists: (path: string) => {
@@ -714,6 +716,7 @@ test("the agents log has each state reached with the full ids, and only a quiet 
     }),
   ));
 
+// WARNING: Nothing takes over beside an agent that is not Quiet.
 const release = () =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.writeFileString(`${eventsFile()}.release`, "")),
@@ -1060,6 +1063,7 @@ test("a sweep stops again a record whose earlier stop failed before it signalled
           "\n",
         ),
       ).toContain("the connection was lost");
+      // WARNING: Live: the server's exit after its signal is real time, not the fast clock's.
       const swept = yield* TestClock.withLive(sweep([sweeper], `${rig.root}/state`, "host"));
       expect(Arr.map(yield* signals(), (one) => one.signal)).toEqual(["SIGTERM"]);
       expect(Arr.map(swept.remove, (one) => one.target)).toEqual([

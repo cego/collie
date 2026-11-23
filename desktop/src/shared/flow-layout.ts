@@ -14,6 +14,7 @@ const RAIL_START = { share: 0.25, max: 192 };
 const sized = (pane: Pane, chosen: number, room: number) =>
   Math.round(Math.max(pane.min, Math.min(chosen, room * pane.share)));
 
+// WARNING: below this the context column would leave the work too narrow.
 const SIDE_BY_SIDE = 672;
 
 export const stacks = (room: number) => room < SIDE_BY_SIDE;

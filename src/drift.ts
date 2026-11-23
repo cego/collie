@@ -1,3 +1,4 @@
+// WARNING: the drift journal is append-only; a resolution is a new line, never an edit.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -172,6 +173,7 @@ const whole = (evidence: ReadonlyArray<Ref> | null) =>
 
 function breachOf(rule: RuleSpec, facts: RuleFacts) {
   if (rule.kind !== "protected_paths") return whole(refsOf(rule, facts));
+  // WARNING: the globs are where change is allowed; every file outside them is reported.
   const outside = Arr.filter(
     facts.changedFiles,
     (file) => !Arr.some(rule.globs, (glob) => matchesGlob(glob, file)),
@@ -236,6 +238,7 @@ function refsOf(rule: Exclude<RuleSpec, { kind: "protected_paths" }>, facts: Rul
     }
     case "command_exit": {
       const verification = facts.verifications[rule.name];
+      // WARNING: nobody ran it is not the same as it passed; a missing verification is a violation.
       if (verification === undefined) {
         const returned: Ref[] | null = [
           { kind: "verification", path: rule.name, excerpt: "no verification of that name" },
@@ -272,6 +275,7 @@ export interface EvidenceBlock {
 
 export class TreeUnread extends Data.TaggedError("TreeUnread")<{ reason: string }> {}
 
+// WARNING: a failing git diff is not an unchanged tree; it must never read as empty.
 export const gitOutput = Effect.fn("Drift.gitOutput")(function* (args: string[], cwd: string) {
   const ran = yield* shell("git", args, cwd);
   if (ran.code === 0) return ran.stdout;
@@ -280,6 +284,7 @@ export const gitOutput = Effect.fn("Drift.gitOutput")(function* (args: string[],
   });
 });
 
+// WARNING: in a merge, the working tree against MERGE_HEAD is the Run's side alone.
 export const merging = Effect.fn("Drift.merging")(function* (worktree: string) {
   return (yield* shell("git", ["rev-parse", "-q", "--verify", "MERGE_HEAD"], worktree)).code === 0;
 });
@@ -474,6 +479,7 @@ export const PLAN_NARROWS_GOAL = [
   "A report must cite the work it was shown.",
 ];
 
+// WARNING: the diff is untrusted data; it goes last and fenced so it cannot read as instructions.
 export function judgementPack(
   intent: Intent,
   evidence: {
@@ -528,6 +534,7 @@ export const citedIn = (shown: ShownWork, worktree: string) => (ref: Ref) => {
   return shown.files.includes(file) ? { ...ref, path: file } : null;
 };
 
+// WARNING: the model sets only constraint and severity; a ref outside the Run is dropped, never rewritten.
 export function judgedReport(
   report: DriftReport,
   intent: Pick<Intent, "run" | "version">,
@@ -574,6 +581,7 @@ export const askJudgement = Effect.fn("Drift.askJudgement")(function* (
   const missing = checked.success;
   if (missing.length > 0) return notAsked(`the evaluator is missing ${Arr.join(missing, ", ")}`);
 
+  // WARNING: usage is recorded, never enforced; no call is refused over a count.
   const callId = yield* deps.newId;
   yield* reserve(deps.budgetFile, { id: callId, run }, deps.limits);
   const asked = yield* evaluate(deps.evaluator, "judgement", pack);
@@ -589,6 +597,7 @@ export const askJudgement = Effect.fn("Drift.askJudgement")(function* (
     : ({ refused: null, reports: answer.reports } satisfies Asked);
 });
 
+// WARNING: a skipped judgement is unverified, never aligned: true.
 export const judge = Effect.fn("Drift.judge")(function* (
   deps: JudgementDeps,
   intent: Intent,
@@ -602,6 +611,7 @@ export const judge = Effect.fn("Drift.judge")(function* (
   },
 ) {
   const semantic = Arr.filter(intent.constraints, (constraint) => constraint.kind === "semantic");
+  // WARNING: with no semantic constraint there is nothing to report against, so no call is made.
   if (semantic.length === 0) return NOTHING;
 
   const read = yield* evidenceFor(what.worktree, judgementPaths(intent), what.base).pipe(
@@ -609,6 +619,7 @@ export const judge = Effect.fn("Drift.judge")(function* (
   );
   const unread =
     read._tag === "Failure" ? `the diff could not be read: ${read.failure.reason}` : null;
+  // WARNING: no checkout is an empty diff; any other git failure is never judged on nothing.
   if (unread !== null && !(yield* outsideGit(what.worktree))) {
     yield* recordSkipped(what.runDir, intent.run, unread);
     return NOTHING;
@@ -623,6 +634,7 @@ export const judge = Effect.fn("Drift.judge")(function* (
     outputs: shown.outputs,
     truncated: diff.truncated || shown.truncated,
   };
+  // WARNING: a report must cite shown work, so with none the call could find nothing.
   if (evidence.blocks.length === 0 && evidence.outputs.length === 0) {
     yield* recordSkipped(what.runDir, intent.run, unread ?? "no change to judge");
     return NOTHING;
@@ -695,7 +707,9 @@ export function decideCorrections(
   const authority = intent.authority;
   if (!authority.auto_correct) return [];
   if (ctx.held) return [];
+  // WARNING: a human is typing into that agent; Collie does not take turns with them.
   if (ctx.overridden) return [];
+  // WARNING: on a harness that hides external submissions, correcting needs exclusive steering.
   if (!ctx.attributable && !authority.exclusive_steering) return [];
 
   const corrections: Correction[] = [];
@@ -709,6 +723,7 @@ export function decideCorrections(
   return corrections;
 }
 
+// WARNING: sent without a human reading it; it must make the agent report a conflict, not pick one silently.
 export function correctionText(deliveryId: string, constraint: Constraint, report: DriftReport) {
   const evidence = Arr.join(
     Arr.map(
@@ -739,6 +754,7 @@ export function correctionsSent(
   return counted;
 }
 
+// WARNING: true needs every rule passing and every semantic constraint judged untruncated; unverified is the honest answer when nobody looked.
 export interface Alignment {
   readonly aligned: "true" | "false" | "unverified";
   readonly why: string;
@@ -807,6 +823,7 @@ export function alignment(intent: Intent | null, lines: ReadonlyArray<DriftLine>
   return returned;
 }
 
+// WARNING: a report on an older Intent version or a removed constraint is superseded, not left open.
 export function supersededBy(reports: ReadonlyArray<DriftReport>, intent: Intent) {
   const live = new Set(Arr.map(intent.constraints, (constraint) => constraint.id));
   return Arr.filter(
@@ -815,6 +832,7 @@ export function supersededBy(reports: ReadonlyArray<DriftReport>, intent: Intent
   );
 }
 
+// WARNING: a loser's dirty line is what stops the winner's answer going stale.
 const ElectionSchema = Schema.Union([
   Schema.Struct({
     kind: Schema.Literals(["candidate", "dirty"]),
@@ -851,6 +869,7 @@ export const readElections = (file: string) => readJournal(file, ElectionJson);
 export const appendElection = (file: string, line: ElectionLine) =>
   appendJournal(file, ElectionJson, line);
 
+// WARNING: a pending line wakes every Driver in the Herd, not only siblings; a parent may never run again.
 export function shouldStand(lines: ReadonlyArray<ElectionLine>, hasSiblings: boolean) {
   if (hasSiblings) return true;
   return pendingEvaluation(lines) !== null;
@@ -865,6 +884,7 @@ export function alreadyStood(lines: ReadonlyArray<ElectionLine>, run: string) {
   );
 }
 
+// WARNING: a pending mark stands until an evaluated line covers all its Runs; otherwise every Driver stands forever.
 export function pendingEvaluation(lines: ReadonlyArray<ElectionLine>) {
   let latest: PendingEvaluation | null = null;
   for (const line of lines) {

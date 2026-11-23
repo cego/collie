@@ -267,6 +267,7 @@ test("a dead owned server on core resumes its conversation once despite competin
           return super.terminalKill(address).pipe(
             Effect.tap(() => {
               if (agents === undefined || recovering === null) return Effect.void;
+              // WARNING: Detached: recovery interrupts the fiber closing the pane, and a child would end with it.
               return Effect.forkDetach(agents.resumeLost(recovering, runningNow)).pipe(
                 Effect.tap((fiber) => Effect.sync(() => competitions.push(fiber))),
                 Effect.asVoid,
@@ -486,11 +487,13 @@ test("a core holder loss mid-Run starts each agent of the Run again in its own s
       expect(after(of("claude").argv, "--resume")).toBe(sessions.claude.value);
       expect(of("claude").argv).not.toContain("--session-id");
       expect(of("codex").argv.slice(0, 3)).toEqual(["codex", "resume", THREAD]);
+      // WARNING: Codex refuses permission overrides on a remote resume; the thread keeps its own.
       expect(of("codex").argv).not.toContain("--approve-for-me");
       expect(after(of("opencode").argv, "--session")).toBe("ses_notes");
       expect(of("opencode").argv).not.toContain("--prompt");
       expect(after(of("pi").argv, "--session-id")).toBe(sessions.pi.value);
 
+      // WARNING: OpenCode takes no keys until its TUI is drawn, so its server is prompted instead.
       expect(sendsSince(calls, before)).toEqual([]);
       const posted = sendsSince(calls, before, "prompt_async");
       expect(Arr.map(posted, (send) => send.terminal)).toEqual([named("opencode")]);
@@ -685,6 +688,7 @@ for (const [hasSession, sessionOnlyAnchor, outcome] of [
           expect(reused.reused).toBe(true);
           expect(reused.terminalId).toBe(latest.terminalId);
 
+          // WARNING: Older naming truncated the generation suffix; keep these persisted names literal.
           const collided = "w01-public-text-is-chec-5hhdvh-r";
           const historical = { ...earlier, agent: collided };
           yield* recordLaunch(historical);
@@ -904,6 +908,7 @@ test("core recovery resumes each agent only after its own quota wait clears", ()
           return runId;
         }),
       );
+      // WARNING: The prior host has stopped; call the recovery boundary without another engine concurrently resuming the workflow.
       yield* Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const agents = yield* Agents;
@@ -1013,6 +1018,7 @@ test("a host starts again an agent resumed on core, though its Herdr 1 register 
           return { runId, agent };
         }),
       );
+      // WARNING: Herdr 1 kept its row in a register named by its socket and workspace.
       yield* registerAgent(
         { session: `${rig.root}/herdr.sock`, workspaceId: "w1", cwd: rig.projectDir },
         {

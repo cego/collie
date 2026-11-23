@@ -1,3 +1,4 @@
+// WARNING: A capability is a recorded live result, never read from docs; with no result the gate refuses.
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
@@ -85,6 +86,7 @@ test("proven is a recorded date, attribution and the other harnesses are not, an
         for (const [capability, record] of Rec.toEntries(row)) {
           if (record.status === "proven") expect(record.tested_at).not.toBeNull();
           else expect(record.tested_at).toBeNull();
+          // WARNING: Attribution needs a human at a Collie-launched agent's pane; no agent pressing keys can record it.
           if (capability === "attribution") expect(record.status).toBe("unproven");
         }
       const proven = Arr.flatMap(Rec.toEntries(CAPABILITIES), ([harness, row]) =>
@@ -100,6 +102,7 @@ test("proven is a recorded date, attribution and the other harnesses are not, an
       ]);
 
       expect(needed("boundary")).toBeNull();
+      // WARNING: A boundary delivery is the next prompt file, which every harness already takes.
       expect(yield* gate("claude", "boundary").pipe(Effect.exit)).toMatchObject({
         _tag: "Success",
       });
@@ -151,6 +154,7 @@ test("an interrupt is a key and a message, and is never called stopping", () =>
       expect(interruptKeys("claude")).toEqual(["Escape"]);
       expect(interruptKeys("nothing-like-this")).toBeNull();
 
+      // WARNING: herdr cannot show a harness has stopped, so an interrupt is recorded as keys sent and acknowledged, never as stopped.
       const fs = yield* FileSystem.FileSystem;
       for (const name of ["dispatcher.ts", "steering-caps.ts"]) {
         const source = new URL(`../src/${name}`, import.meta.url).pathname;

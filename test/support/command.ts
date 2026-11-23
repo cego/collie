@@ -1,3 +1,4 @@
+// WARNING: Never Bun.spawnSync: under load it can lose the child's exit and spin the worker forever (oven-sh/bun#34069).
 import * as Str from "effect/String";
 import { Effect } from "effect";
 
@@ -19,6 +20,7 @@ const terminate = Effect.fn("test.command.terminate")(function* (child: Bun.Subp
         ),
     }),
   );
+  // WARNING: Descendants may ignore SIGTERM, so the group is SIGKILLed and must not outlive its leader.
   signal(child, "SIGKILL");
 });
 
@@ -64,6 +66,7 @@ export const exec = Effect.fn("test.exec")(
   Effect.orDie,
 );
 
+// WARNING: exec ends the whole process group a command leaves, so a detached command must lead its own session.
 export const startDetached = (argv: ReadonlyArray<string>) =>
   exec([
     "sh",

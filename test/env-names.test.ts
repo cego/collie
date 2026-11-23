@@ -1,3 +1,4 @@
+// WARNING: Collie's processes find each other by COLLIE_* names alone; Herdr 1's names are not read.
 import { expect, test } from "bun:test";
 import { Config, Effect, FileSystem } from "effect";
 import { socketOf } from "../src/host";
