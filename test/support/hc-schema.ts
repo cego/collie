@@ -172,7 +172,6 @@ export function replyViolation(method: string, reply: Schema.Json) {
   if (!schema) {
     schema = SchemaRepresentation.fromJsonSchemaDocument({
       dialect: "draft-2020-12",
-      // WARNING: as above.
       // WARNING: A method's result is a JSON Schema node, as at the other conversion.
       schema: JsonSchema.fromSchemaOpenApi3_1(resultOf(method) as JsonSchema.JsonSchema).schema,
       definitions,

@@ -141,7 +141,6 @@ export const takesLoginAgent = Effect.fn("Desktop.takesLoginAgent")(function* (
   return ours !== "empty";
 });
 
-// WARNING: the agent variables are taken or kept together.
 const AGENT_VARIABLES = new Set(["SSH_AUTH_SOCK", "SSH_AGENT_PID"]);
 
 export const takeLoginEnv = Effect.gen(function* () {

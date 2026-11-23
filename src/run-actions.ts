@@ -743,7 +743,7 @@ const stepOf = (actor: Actor, step: string | number) => ({
   requestId: `${actor.requestId}:${step}`,
 });
 
-// WARNING: no proposal, since the human already asked; what Collie wants of its own accord still goes through request.
+// WARNING: carried out without a proposal, because the human already asked for it.
 export const carryOutAsked = Effect.fn("runActions.carryOutAsked")(function* (
   env: PluginEnv,
   actions: ReadonlyArray<Action>,

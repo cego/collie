@@ -1,4 +1,3 @@
-// WARNING: nothing here reads a file or runs a command: the caller collects the evidence and this says what is missing.
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import { pipe } from "effect/Function";

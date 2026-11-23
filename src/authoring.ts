@@ -248,7 +248,7 @@ const write = Effect.fn("Authoring.write")(function* (dir: string, id: string, t
       toolchain: null,
     };
   }
-  // WARNING: after the entry and never fatal: the toolchain serves typechecking only; the module runs with `collie` resolved from the executable.
+  // WARNING: a failed provisioning must not fail the read; the toolchain only serves typechecking.
   const provisioned = yield* provisionToolchain(dir).pipe(Effect.result);
   return {
     ok: true,
