@@ -5103,6 +5103,7 @@ export const connectPeer: (
 > = (stateDir, name, header, options?) => {
   const build = options?.build ?? BUILD;
   let mismatch: HostVersionMismatch | undefined;
+  let hereIsRelease: boolean | undefined;
   return Effect.gen(function* () {
     const conn = yield* peerChannel(stateDir, name, header);
     const socket = yield* BunSocket.fromDuplex(Effect.succeed(conn));
@@ -5139,14 +5140,17 @@ export const connectPeer: (
     return client;
   }).pipe(
     Effect.tapError((cause) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         if (cause instanceof HostVersionMismatch) {
           mismatch = cause;
+          hereIsRelease ??= yield* isRelease(stateDir);
         }
       }),
     ),
+    // WARNING: Only a release's host upgrades the far one (levelPeer), so only then is a wait rewarded.
     Effect.retry({
       while: () =>
+        hereIsRelease === true &&
         mismatch !== undefined &&
         mismatch.development === undefined &&
         RELEASE_TAG.test(build) &&
@@ -5169,6 +5173,12 @@ export const connectPeer: (
 };
 
 const unavailable = (dir: string, reason: string) => new HostUnavailable({ dir, reason });
+
+const isRelease = (dir: string) =>
+  Effect.scoped(open(dir).pipe(Effect.flatMap((client) => client.identity()))).pipe(
+    Effect.map((who) => who.development === undefined),
+    Effect.orElseSucceed(() => true),
+  );
 
 export const herdOfHost = Effect.fn("Host.herdOfHost")(function* (dir: string) {
   const owner = yield* liveOwner(dir);
