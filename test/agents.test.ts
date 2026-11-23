@@ -214,6 +214,7 @@ const hostOf: () => AgentHost = () => ({
   compactAtTokens: 0,
   pollMs: 20,
   collectMs: 400,
+  readyMs: 1000,
   help: (kind) => Effect.succeed(kind === "codex" ? CODEX_HELP : CLAUDE_HELP),
   version: () => Effect.succeed("2.1.309 (Claude Code)"),
   // WARNING: codex's controls would start the operator's own app-server, so they are left out.
@@ -3033,7 +3034,7 @@ test("an open question pauses an idle agent's Output budget, which runs again on
           yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
           yield* asksTwo;
           yield* questionsOf(2);
-          yield* spend(150_000);
+          yield* spend(75_000);
           expect(yield* parked("r1")).toBe(false);
 
           yield* answer("ask-review-1", "Postgres");
