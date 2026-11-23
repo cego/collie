@@ -9,12 +9,13 @@ import { expect, test } from "bun:test";
 import { Effect, FileSystem, Option, Result, Schema, Stream, flow } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import type { TaskView } from "../src/board-model";
-import { buildBoard, readBranchHead } from "../src/board";
+import { buildBoard } from "../src/board";
 import { currentEnv } from "../src/env";
 import { Herdr } from "../src/herdr";
 import { agentsIn, liveHerds } from "../src/herds";
 import { connect, frontDoor, socketOf } from "../src/host";
-import { factsOfView, newestFirst } from "../src/runs";
+import { shell } from "../src/mr";
+import { factsOfView, newestFirst, type RunFacts } from "../src/runs";
 import { tellHost } from "../src/tell-host";
 import { appendVerification, type Verification } from "../src/verify";
 import { FakeBin } from "./support/bin";
@@ -63,6 +64,15 @@ const elsewhere = (world: World, statement: string, params: ReadonlyArray<string
     ]);
     expect(ran.stderr).toBe("");
   });
+
+/** The commit the Run's branch is at now in its checkout, as git reads it. */
+const readBranchHead = (run: RunFacts) =>
+  run.branch === null
+    ? Effect.succeed(null)
+    : Effect.map(
+        shell("git", ["rev-parse", "--verify", "--quiet", `${run.branch}^{commit}`], run.cwd),
+        (read) => (read.code === 0 && Str.trim(read.stdout) !== "" ? Str.trim(read.stdout) : null),
+      );
 
 test(
   "each change made outside the host reaches the board once the host is told of it, and equals a board read from disk",

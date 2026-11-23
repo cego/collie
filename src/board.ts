@@ -57,7 +57,7 @@ import { awaitingLine } from "./awaiting";
 import { MERGE_POLL_MS, mrOf, readForge, readMrStates } from "./merges";
 import { filed, NOTHING_TO_LAND, type Recorded, settlementOf, standingOf } from "./standing";
 import { offersOf } from "./lifecycle";
-import { mrIdWith, needsProject, shell } from "./mr";
+import { mrIdWith, needsProject } from "./mr";
 import { Branches, branchKey, type Branch, type BranchesApi } from "./branches";
 import type {
   Disposition,
@@ -716,18 +716,6 @@ export function checksAt(
       : Arr.some(approved, (spec) => !newest.has(spec.name));
   return unrun ? { state: "unchecked" } : { state: "passed", at };
 }
-
-/** The commit the Run's branch is at now in its checkout, or null where that cannot be read. */
-export const readBranchHead = Effect.fn("Board.readBranchHead")(function* (run: RunFacts) {
-  if (run.branch === null) return null;
-  const read = yield* shell(
-    "git",
-    ["rev-parse", "--verify", "--quiet", `${run.branch}^{commit}`],
-    run.cwd,
-  );
-  const sha = Str.trim(read.stdout);
-  return read.code === 0 && sha !== "" ? sha : null;
-});
 
 /** The commit `run`'s branch is at, as the git syncer last read it. */
 const headOf = (run: RunFacts) => Effect.map(syncedBranch(run, true), (row) => row?.head ?? null);
