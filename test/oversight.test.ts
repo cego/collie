@@ -5,15 +5,18 @@ import * as Rec from "effect/Record";
 import * as Option from "effect/Option";
 import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Clock, Effect, FileSystem, Layer, Path, Schema } from "effect";
+import type { Path } from "effect";
+import { Clock, Effect, FileSystem, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
-import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
+import type * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig } from "./support/recorder";
 import { exec } from "./support/command";
 import { runEffect as runShared } from "./support/effect";
 import { overHost } from "./support/records";
-import { Agents, agentsLayer } from "../src/agents";
-import { Children, Host } from "../src/sdk";
+import type { Agents } from "../src/agents";
+import { agentsLayer } from "../src/agents";
+import type { Host } from "../src/sdk";
+import { Children } from "../src/sdk";
 import { foundationLayer, loadEntry, runDir, type Herd } from "../src/engine";
 import {
   Oversight,

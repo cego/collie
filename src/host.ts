@@ -1,3 +1,4 @@
+import type { Verification, VerifyEvent } from "./verify-model";
 import { Artefacts } from "./artefacts";
 import { submitOutput } from "./output-submit";
 import { Artefact } from "./artefact-model";
@@ -15,6 +16,7 @@ import { createConnection, type Socket as NetSocket } from "node:net";
 import { withdrawStepNote } from "./step-steering";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import type { PlatformServices } from "./platform";
+import type { Exit, Scope } from "effect";
 import {
   Cause,
   Clock,
@@ -25,7 +27,6 @@ import {
   Ref,
   Duration,
   Effect,
-  Exit,
   Fiber,
   FileSystem,
   Layer,
@@ -37,7 +38,6 @@ import {
   Path,
   Schedule,
   Schema,
-  Scope,
   Semaphore,
   Stream,
   Struct,
@@ -1892,13 +1892,10 @@ const finishTakenOver = (stateDir: string) =>
     const checks = yield* CheckProcesses;
     const { finishCheck, noVerdict } = yield* Effect.promise(() => import("./verify"));
     const { noteVerification } = yield* Effect.promise(() => import("./metrics"));
-    const followed = new Map<
-      string,
-      Deferred.Deferred<import("./verify-model").Verification, HostRefused>
-    >();
+    const followed = new Map<string, Deferred.Deferred<Verification, HostRefused>>();
     for (const record of yield* checks.takenOver) {
       if (record.by !== "agent") continue;
-      const done = yield* Deferred.make<import("./verify-model").Verification, HostRefused>();
+      const done = yield* Deferred.make<Verification, HostRefused>();
       followed.set(record.id, done);
       yield* Effect.scoped(
         checks.claim(record.id).pipe(
@@ -2019,10 +2016,7 @@ const frontDoorHandlers = (
           ? []
           : Arr.map(SESSION_STORES, (store) => `${env.home}/${store}`);
       // WARNING: An agent settled while Collie waits on its Output is told its verify ended, or it waits forever.
-      const toldVerifyEnded = (
-        client: { readonly id: number },
-        verified: import("./verify-model").Verification,
-      ) => {
+      const toldVerifyEnded = (client: { readonly id: number }, verified: Verification) => {
         const asker = whoOf(client);
         const { run, agent } = asker.from ?? {};
         if (asker.origin !== "agent" || run === undefined || agent === undefined)
@@ -3316,7 +3310,7 @@ const frontDoorHandlers = (
                   { _tag: "Result" as const, verification: recorded, ran: false },
                 );
               }
-              return Stream.callback<typeof import("./verify-model").VerifyEvent.Type, HostRefused>(
+              return Stream.callback<typeof VerifyEvent.Type, HostRefused>(
                 (queue) =>
                   Effect.gen(function* () {
                     const echo = (stream: "stdout" | "stderr") => (text: string) =>
@@ -4824,7 +4818,7 @@ const replaceOwner = (dir: string, pid: number, build: string) =>
 
 const FOLLOW_FOR = "2 minutes";
 
-type VerifyEventOf = typeof import("./verify-model").VerifyEvent.Type;
+type VerifyEventOf = typeof VerifyEvent.Type;
 type Followed<E, D> = E | D | HostRefused | HostUnavailable | RpcClientError.RpcClientError;
 
 export const followVerify: <E, R, D>(

@@ -2,7 +2,8 @@ import { Effect, FileSystem, Option, Schema } from "effect";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { mrId, mrTarget, readMrRef, type MrRef } from "./board-model";
-import { slackApi, slackMessageRef } from "./slack";
+import type { slackApi } from "./slack";
+import { slackMessageRef } from "./slack";
 import { epochMs } from "./time";
 
 const Correlation = Schema.Union([

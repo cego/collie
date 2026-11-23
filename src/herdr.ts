@@ -1,9 +1,10 @@
 import * as Arr from "effect/Array";
 import type { PlatformServices } from "./platform";
-import { Data, Deferred, Effect, Option, Queue, Schedule, Schema, Stream } from "effect";
+import type { Schema } from "effect";
+import { Data, Deferred, Effect, Option, Queue, Schedule, Stream } from "effect";
 import type { PluginEnv } from "./env";
 import { reason } from "./naming";
-import { HerdrMachine } from "./peers-model";
+import type { HerdrMachine } from "./peers-model";
 import { viaTarget } from "./ssh-argv";
 import {
   applyNote,

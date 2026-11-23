@@ -1,7 +1,8 @@
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
-import { Effect, FileSystem, Option, Path, Redacted, Stream } from "effect";
+import type { FileSystem, Path, Redacted } from "effect";
+import { Effect, Option, Stream } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { YamlValue } from "./yaml";

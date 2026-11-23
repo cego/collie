@@ -8,17 +8,8 @@ import { pipe as pipe_ } from "effect/Function";
 import * as Rec from "effect/Record";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
-import {
-  Duration,
-  Effect,
-  FileSystem,
-  PlatformError,
-  Path,
-  Schema,
-  flow,
-  Result,
-  Struct,
-} from "effect";
+import type { Path } from "effect";
+import { Duration, Effect, FileSystem, PlatformError, Schema, flow, Result, Struct } from "effect";
 import { TestClock } from "effect/testing";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig } from "./support/recorder";

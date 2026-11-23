@@ -25,7 +25,8 @@ import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import type { PlatformServices } from "./platform";
 import { agentStartRefusal, hostOptions } from "./agent-start";
 import { once, readAudit, recordAudit, type ScheduledBy } from "./audit";
-import { HostRefused, RequestConflict, Started, type FrontDoor, type Where } from "./board-model";
+import type { RequestConflict } from "./board-model";
+import { HostRefused, Started, type FrontDoor, type Where } from "./board-model";
 import { savedModules } from "./discovery";
 import {
   forgetExecution,

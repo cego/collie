@@ -2,6 +2,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
+import type { Layer, Path, Scope } from "effect";
 import {
   Clock,
   Config,
@@ -10,11 +11,8 @@ import {
   Effect,
   Fiber,
   FileSystem,
-  Layer,
   Option,
-  Path,
   Schema,
-  Scope,
   Stream,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";

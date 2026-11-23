@@ -1,3 +1,4 @@
+import type { PlatformError } from "effect/PlatformError";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { Effect, FileSystem, Option, Schema, Semaphore, Stream } from "effect";
@@ -64,29 +65,28 @@ export const appendLogLine = Effect.fn("RunLog.append")(function* (dir: string, 
 export const readLogTail: (
   dir: string,
   cap: number,
-) => Effect.Effect<
-  LogTail | null,
-  import("effect/PlatformError").PlatformError,
-  FileSystem.FileSystem
-> = Effect.fn("RunLog.tail")(function* (dir: string, cap: number) {
-  const fs = yield* FileSystem.FileSystem;
-  if (!(yield* fs.exists(`${dir}/log.txt`))) return null;
-  const index = yield* indexOf(dir);
-  const from = Math.max(0, index.bytes - cap);
-  const raw = yield* fs
-    .stream(`${dir}/log.txt`, { offset: from })
-    .pipe(Stream.decodeText(), Stream.mkString);
-  const text =
-    from === 0
-      ? raw
-      : pipe_(raw, Str.includes("\n"))
-        ? pipe_(raw, Str.slice(Option.getOrElse(pipe_(raw, Str.indexOf("\n")), () => -1) + 1))
-        : "";
-  const shown =
-    text === "" ? 0 : Str.split(text, "\n").length - Number(pipe_(text, Str.endsWith("\n")));
-  const tail: LogTail = {
-    panel: { _tag: "Text", text, truncated: from > 0 },
-    firstLine: index.lines + Number(!index.ended) - shown + 1,
-  };
-  return tail;
-}, writing.withPermits(1));
+) => Effect.Effect<LogTail | null, PlatformError, FileSystem.FileSystem> = Effect.fn("RunLog.tail")(
+  function* (dir: string, cap: number) {
+    const fs = yield* FileSystem.FileSystem;
+    if (!(yield* fs.exists(`${dir}/log.txt`))) return null;
+    const index = yield* indexOf(dir);
+    const from = Math.max(0, index.bytes - cap);
+    const raw = yield* fs
+      .stream(`${dir}/log.txt`, { offset: from })
+      .pipe(Stream.decodeText(), Stream.mkString);
+    const text =
+      from === 0
+        ? raw
+        : pipe_(raw, Str.includes("\n"))
+          ? pipe_(raw, Str.slice(Option.getOrElse(pipe_(raw, Str.indexOf("\n")), () => -1) + 1))
+          : "";
+    const shown =
+      text === "" ? 0 : Str.split(text, "\n").length - Number(pipe_(text, Str.endsWith("\n")));
+    const tail: LogTail = {
+      panel: { _tag: "Text", text, truncated: from > 0 },
+      firstLine: index.lines + Number(!index.ended) - shown + 1,
+    };
+    return tail;
+  },
+  writing.withPermits(1),
+);

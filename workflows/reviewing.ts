@@ -1,8 +1,8 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
+import type { FixOutputSchema } from "collie";
 import {
   Agents,
-  FixOutputSchema,
   Host,
   ReviewOutputSchema,
   ReviewScope,

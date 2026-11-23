@@ -1,7 +1,8 @@
 // WARNING: A Run no journal says anything about gets no marks, never a reassuring clean default.
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
-import { Clock, Effect, FileSystem, Path, Schema } from "effect";
+import type { FileSystem } from "effect";
+import { Clock, Effect, Path, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import type { AgentEntry } from "./registry";
 import type { RunFacts } from "./runs";

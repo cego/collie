@@ -1,4 +1,5 @@
-import { Cause, Effect, Queue, Stream } from "effect";
+import type { Cause } from "effect";
+import { Effect, Queue, Stream } from "effect";
 import type { Doors } from "../../desktop/src/bun/machine";
 import type { RecordUnchanged, RunDetail, RunRevision } from "../../src/board-model";
 

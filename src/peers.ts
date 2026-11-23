@@ -9,6 +9,7 @@ import { createServer, isIP, type Server, type Socket } from "node:net";
 import { X509Certificate } from "node:crypto";
 import { hostname, networkInterfaces } from "node:os";
 import type { ServerWebSocket } from "bun";
+import type { Path } from "effect";
 import {
   Clock,
   Config,
@@ -20,7 +21,6 @@ import {
   FiberSet,
   FileSystem,
   Option,
-  Path,
   Result,
   Schedule,
   Schema,

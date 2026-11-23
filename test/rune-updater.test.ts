@@ -1,3 +1,4 @@
+import type * as Platform from "../desktop/core/platform";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
@@ -58,7 +59,7 @@ const VersionJson = Schema.fromJsonString(
 );
 
 let install = "";
-let standIn: typeof import("../desktop/core/platform");
+let standIn: typeof Platform;
 beforeAll(() =>
   runEffect(
     Effect.gen(function* () {

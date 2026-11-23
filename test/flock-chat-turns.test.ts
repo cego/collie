@@ -4,13 +4,13 @@ import * as Rec from "effect/Record";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { platformLayer } from "../src/platform";
+import type { Path } from "effect";
 import {
   Deferred,
   Effect,
   Fiber,
   FileSystem,
   Option,
-  Path,
   Schema,
   type Scope,
   Stream,
@@ -18,9 +18,10 @@ import {
   flow,
   Result,
 } from "effect";
-import * as SecureRandom from "effect/crypto/SecureRandom";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import { TestClock } from "effect/testing";
-import { type Declaration, NewsBatch, PROTOCOL, type Significance } from "../src/board-model";
+import type { NewsBatch } from "../src/board-model";
+import { type Declaration, PROTOCOL, type Significance } from "../src/board-model";
 import { stageAttachment } from "../desktop/src/bun/attachments";
 import { openFlockChat } from "../desktop/src/bun/chat";
 import { type ClaudeCode, claudeDriver } from "../desktop/src/bun/claude-driver";

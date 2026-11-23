@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { platformLayer } from "../src/platform";
 import { Deferred, Effect, Fiber, FileSystem } from "effect";
-import * as SecureRandom from "effect/crypto/SecureRandom";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { loopbackTools } from "../desktop/src/bun/chat-endpoint";

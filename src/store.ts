@@ -1,18 +1,16 @@
 import * as Struct from "effect/Struct";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
+import type { FileSystem, Path, Stream } from "effect";
 import {
   Context,
   Effect,
-  FileSystem,
   Layer,
-  Path,
   Option,
   Order,
   Schedule,
   Schema,
   Semaphore,
-  Stream,
   flow,
   Result,
 } from "effect";

@@ -1,10 +1,10 @@
 import * as Arr from "effect/Array";
 import type { PlatformServices } from "./platform";
+import type { Duration } from "effect";
 import {
   Cause,
   Context,
   Deferred,
-  Duration,
   Effect,
   Exit,
   Fiber,

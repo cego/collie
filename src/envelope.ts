@@ -1,16 +1,6 @@
 import type { PlatformServices } from "./platform";
-import {
-  Config,
-  Effect,
-  FileSystem,
-  Option,
-  Path,
-  Schema,
-  Stdio,
-  Stream,
-  flow,
-  Result,
-} from "effect";
+import type { Config } from "effect";
+import { Effect, FileSystem, Option, Path, Schema, Stdio, Stream, flow, Result } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import type { PluginEnv } from "./env";
 import type { HerdrError } from "./herdr";

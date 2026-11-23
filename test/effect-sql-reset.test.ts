@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { Effect, Layer } from "effect";
 import * as Arr from "effect/Array";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
-import * as Envelope from "effect/cluster/Envelope";
+import type * as Envelope from "effect/cluster/Envelope";
 import * as Snowflake from "effect/cluster/Snowflake";
 import * as SqlMessageStorage from "effect/cluster/SqlMessageStorage";
 import * as Digest from "effect/crypto/Digest";

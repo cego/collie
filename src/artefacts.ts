@@ -1,5 +1,5 @@
+import type { Cause } from "effect";
 import {
-  Cause,
   Clock,
   Context,
   Data,

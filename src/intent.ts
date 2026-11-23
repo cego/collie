@@ -7,13 +7,8 @@ import * as Option from "effect/Option";
 import { Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import { RunRecords, runOfDir } from "./run-records";
 import type { Voice } from "./proposals";
-import {
-  AuthoritySchema,
-  ConstraintSchema,
-  DefaultsSchema,
-  IntentSeedSchema,
-  RuleSpecSchema,
-} from "./intent-model";
+import type { IntentSeedSchema, RuleSpecSchema } from "./intent-model";
+import { AuthoritySchema, ConstraintSchema, DefaultsSchema } from "./intent-model";
 import { VerifySpecSchema, type VerifySpec } from "./verify-spec";
 import { stringifyJson } from "./json";
 

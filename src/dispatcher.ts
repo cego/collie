@@ -3,17 +3,8 @@ import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import type { PlatformServices } from "./platform";
-import {
-  Clock,
-  Data,
-  DateTime,
-  Duration,
-  Effect,
-  FileSystem,
-  Path,
-  Predicate,
-  Result,
-} from "effect";
+import type { FileSystem, Path } from "effect";
+import { Clock, Data, DateTime, Duration, Effect, Predicate, Result } from "effect";
 import { HerdrError, herdrFailureReason, isSettled, type Herdr, type Submission } from "./herdr";
 import { verifyIncarnation, type AgentEntry, type Incarnation } from "./registry";
 import {

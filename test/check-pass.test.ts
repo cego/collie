@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { ConfigProvider, Effect, Exit, FileSystem, Path } from "effect";
+import type { Path } from "effect";
+import { ConfigProvider, Effect, Exit, FileSystem } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { Host } from "../src/sdk";
 import { evidenceDir, foundationLayer, runDir, STOP } from "../src/engine";

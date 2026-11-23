@@ -13,14 +13,13 @@ import * as Struct from "effect/Struct";
 import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { hostname } from "node:os";
+import type { Context, Duration } from "effect";
 import {
   Clock,
   Config,
-  Context,
   ConfigProvider,
   DateTime,
   Deferred,
-  Duration,
   Effect,
   Exit,
   Fiber,
@@ -101,13 +100,13 @@ import {
   markerOf,
   sortOut,
 } from "../../workflows/retrospective";
+import type { RunStatus } from "../../src/engine";
 import {
   AWAITING,
   HOLD,
   STOP,
   PARKED,
   PARK_CAUSE,
-  RunStatus,
   Registry,
   answerDecision,
   checkoutRefusedFile,

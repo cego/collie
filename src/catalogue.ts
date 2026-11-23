@@ -1,14 +1,13 @@
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
+import type { FileSystem, Path } from "effect";
 import {
   Clock,
   Context,
   DateTime,
   Effect,
-  FileSystem,
   Layer,
   Option,
-  Path,
   Result,
   Schema,
   Semaphore,

@@ -44,8 +44,8 @@ import type {
   TagPipelineRead,
   ReviewRequest,
 } from "./forge";
+import type { ForgeHttp } from "./http";
 import {
-  ForgeHttp,
   loginReadiness,
   pagesAs,
   request,

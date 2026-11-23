@@ -62,9 +62,7 @@ import {
   type Controlled,
   leftSaid,
   FrontDoor,
-  Declaration,
   HostRefused,
-  StaleAct,
   recordIn,
   type Disposition,
   type Seen,
@@ -92,7 +90,7 @@ import {
   type OpenDecision,
   type RunView,
 } from "./engine";
-import type { OfferView } from "./board-model";
+import type { OfferView, Declaration, StaleAct } from "./board-model";
 import {
   err,
   ExpectedError,

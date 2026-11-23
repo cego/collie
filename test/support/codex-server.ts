@@ -1,4 +1,5 @@
 // WARNING: Drains on its first SIGTERM as codex 0.162.0 does on a websocket.
+import type { ServerWebSocket } from "bun";
 import * as BunChildProcessSpawner from "@effect/platform-bun/BunChildProcessSpawner";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import * as BunPath from "@effect/platform-bun/BunPath";
@@ -214,7 +215,7 @@ const main = Effect.gen(function* () {
     const status: Schema.Json = idle ? { type: "idle" } : { type: "active", activeFlags: [] };
     return status;
   };
-  const answer = (ws: import("bun").ServerWebSocket<undefined>, raw: string | Buffer) =>
+  const answer = (ws: ServerWebSocket<undefined>, raw: string | Buffer) =>
     Effect.gen(function* () {
       const { id, method, params = {} } = yield* Schema.decodeEffect(Request)(String(raw));
       yield* record({ method, params });

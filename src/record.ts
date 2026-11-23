@@ -1,18 +1,8 @@
-import { RunRecords } from "./run-records";
+import type { RunRecords } from "./run-records";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import {
-  Clock,
-  Effect,
-  FileSystem,
-  Path,
-  Queue,
-  Result,
-  Schema,
-  Stream,
-  Struct,
-  flow,
-} from "effect";
+import type { Path } from "effect";
+import { Clock, Effect, FileSystem, Queue, Result, Schema, Stream, Struct, flow } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import type {
   MrPanel,

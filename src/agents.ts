@@ -9,6 +9,7 @@ import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
+import type { Path } from "effect";
 import {
   Clock,
   Config,
@@ -20,7 +21,6 @@ import {
   Formatter,
   Layer,
   Option,
-  Path,
   Predicate,
   Schedule,
   Schema,
@@ -53,6 +53,7 @@ import { stringifyJson } from "./json";
 export { Launched } from "./launches";
 import * as Workflow from "effect/workflow/Workflow";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
+import type { NotQuiet } from "./compaction";
 import {
   COMPACTION_WAIT_MS,
   pollCompaction,
@@ -63,7 +64,6 @@ import {
   installControls,
   lostServer,
   readControl,
-  NotQuiet,
   notStopped,
   serversOfRun,
   STOP_WAIT_MS,

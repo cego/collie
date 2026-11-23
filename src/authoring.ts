@@ -4,7 +4,8 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Option from "effect/Option";
-import { Effect, FileSystem, Path, Schema, type PlatformError } from "effect";
+import type { Schema } from "effect";
+import { Effect, FileSystem, Path, type PlatformError } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import {
   ENTRY_SUFFIX,

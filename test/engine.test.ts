@@ -10,14 +10,15 @@ import * as SingleRunner from "effect/cluster/SingleRunner";
 import * as Digest from "effect/crypto/Digest";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
-import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
+import type * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import * as Workflow from "effect/workflow/Workflow";
 import * as DurableDeferred from "effect/workflow/DurableDeferred";
 import { answerDecision, engineLayer, loadEntry, TOOLCHAIN } from "../src/engine";
 import { EngineTouches } from "../src/engine-touches";
 import type { HostCodec, HostPayload, HostWorkflow } from "../src/sdk";
 import { runEffect } from "./support/effect";
-import { HostReply, events, fixtures, openHost, root, until, workspace } from "./support/host";
+import type { HostReply } from "./support/host";
+import { events, fixtures, openHost, root, until, workspace } from "./support/host";
 
 const stopsIn = (log: ReadonlyArray<string>) =>
   Arr.filter(log, (line) => line === "stopped").length;

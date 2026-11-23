@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { Duration, Effect, Fiber, FileSystem, Logger } from "effect";
+import type { Duration } from "effect";
+import { Effect, Fiber, FileSystem, Logger } from "effect";
 import { TestClock } from "effect/testing";
 import { judge, sweep } from "../src/cleanup";
 import { runEffect } from "./support/effect";

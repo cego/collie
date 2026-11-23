@@ -1,3 +1,4 @@
+import type { ForgeHere } from "./mr";
 import { ShippingGo, writeStageProof } from "./shipping";
 import { Artefacts } from "./artefacts";
 import { NarrativeReport } from "./narrative-model";
@@ -18,6 +19,7 @@ import {
 import { LinkDelivery, readLinkDeliveries } from "./run-links";
 import { appendLogLine } from "./run-log";
 import { readReplies, recordReply } from "./replies";
+import type { Scope } from "effect";
 import {
   Cache,
   Cause,
@@ -38,7 +40,6 @@ import {
   Random,
   Schedule,
   Schema,
-  Scope,
   Semaphore,
   Stream,
   flow,
@@ -202,7 +203,7 @@ import {
   recoveryLine,
 } from "./park-cause";
 import { healOn, healRequest, healerFor, passedOver } from "./heal";
-import type { Metrics, Solution } from "./board-model";
+import type { Metrics, Solution, Answered, Controlled, RequestConflict } from "./board-model";
 import {
   forgeOfRef,
   mrId,
@@ -290,15 +291,7 @@ import {
   type RunRow,
   type StoreApi,
 } from "./store";
-import {
-  Answered,
-  Controlled,
-  HostRefused,
-  RequestConflict,
-  RequestedBy,
-  RunReport,
-  type Disposition,
-} from "./board-model";
+import { HostRefused, RequestedBy, RunReport, type Disposition } from "./board-model";
 import {
   TASK_INPUT,
   branchFor,
@@ -7211,7 +7204,7 @@ export interface Generation {
   readonly follows?: string;
   readonly source: string;
   readonly metadata: Schema.Json;
-  readonly connections?: import("./sdk").WorkflowConnections;
+  readonly connections?: Sdk.WorkflowConnections;
   readonly offers: ReadonlyArray<Declared>;
   readonly agents: WorkflowAgentPreferences | undefined;
   readonly registration: Registration;
@@ -9487,7 +9480,7 @@ const makeRegistry: (
     const field = fieldWith(generation.hints, "diff-target");
     const target = field === undefined ? undefined : input[field];
     const ref = isText(target) ? parseMrTarget(target) : null;
-    let here: import("./mr").ForgeHere | null = null;
+    let here: ForgeHere | null = null;
     if (Arr.some(ids, (id) => id === "gitlab" || id === "github") && ref === null) {
       const defaults = yield* loadDefaults(userDir).pipe(
         Effect.provideContext(bun),

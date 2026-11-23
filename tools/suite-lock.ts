@@ -1,6 +1,7 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
-import { Clock, Duration, Effect, Fiber, Option, Stream } from "effect";
+import type { Duration } from "effect";
+import { Clock, Effect, Fiber, Option, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { lockHolder, withLock } from "../src/lock";
 

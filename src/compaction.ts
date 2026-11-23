@@ -2,6 +2,7 @@ import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
+import type { PlatformError } from "effect";
 import {
   Clock,
   Cause,
@@ -10,7 +11,6 @@ import {
   Effect,
   FileSystem,
   Path,
-  PlatformError,
   Result,
   Schedule,
   Schema,

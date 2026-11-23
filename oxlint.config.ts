@@ -59,7 +59,6 @@ const migrating = {
   "react/no-unknown-property": "off",
   "react/refs": "off",
   "react-hooks/rules-of-hooks": "off",
-  "typescript/consistent-type-imports": "off",
   "typescript/no-empty-object-type": "off",
   "typescript/no-import-type-side-effects": "off",
   "typescript/no-misused-promises": "off",

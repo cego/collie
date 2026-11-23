@@ -59,7 +59,8 @@ import {
   readControl,
   type CompactionPorts,
 } from "./compaction";
-import { launchDir, launchesOf, readLaunches, stemOf, Launched } from "./launches";
+import type { Launched } from "./launches";
+import { launchDir, launchesOf, readLaunches, stemOf } from "./launches";
 import { endAgent, runLog } from "./agent-end";
 import { COMPACTION_PORTS, transcriptOf } from "./compactors";
 import { uploadsDir } from "./uploads";

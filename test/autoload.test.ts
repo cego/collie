@@ -2,18 +2,9 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
-import {
-  Config,
-  ConfigProvider,
-  Effect,
-  FileSystem,
-  Option,
-  Schema,
-  Scope,
-  flow,
-  Result,
-} from "effect";
-import { ChildProcessSpawner } from "effect/process";
+import type { Scope } from "effect";
+import { Config, ConfigProvider, Effect, FileSystem, Option, Schema, flow, Result } from "effect";
+import type { ChildProcessSpawner } from "effect/process";
 import { connect } from "../src/host";
 import { runEffect } from "./support/effect";
 import { events, stopHost, until } from "./support/host";

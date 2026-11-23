@@ -1,3 +1,4 @@
+import type { Toast } from "../src/engine";
 import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -5,8 +6,9 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Layer, Path, type Schema } from "effect";
-import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
+import type { Path } from "effect";
+import { Effect, FileSystem, Layer, type Schema } from "effect";
+import type * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import {
   NOTIFICATION_KINDS,
   Notifier,
@@ -18,7 +20,8 @@ import { slackApi } from "../src/slack";
 import { writeConfigValue } from "../src/config";
 import { fakeSlack, signedInToSlack } from "./support/slack";
 import { Rig } from "./support/recorder";
-import { Agents, agentsLayer } from "../src/agents";
+import type { Agents } from "../src/agents";
+import { agentsLayer } from "../src/agents";
 import { runEffect } from "./support/effect";
 import { recordsAt } from "./support/records";
 import { Children, Host } from "../src/sdk";
@@ -97,7 +100,7 @@ const session = <A, E>(
   options: {
     readonly dir?: string;
     readonly slack?: typeof slackApi;
-    readonly toast?: import("../src/engine").Toast;
+    readonly toast?: Toast;
   } = {},
 ) =>
   run.pipe(

@@ -2,7 +2,7 @@ import * as Str from "effect/String";
 import * as Cause from "effect/Cause";
 import { pipe as pipe_ } from "effect/Function";
 import { Clock, Config, Context, Effect, Layer, Option, Schema, Semaphore } from "effect";
-import { ChildProcessSpawner } from "effect/process";
+import type { ChildProcessSpawner } from "effect/process";
 import type { FetchLike, ForgeProvider, GitHubProvider } from "forges";
 import type { MrForge } from "../board-model";
 import { shell, type Runner } from "../mr";

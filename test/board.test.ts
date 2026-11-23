@@ -4,7 +4,8 @@ import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
-import { Clock, DateTime, Effect, Fiber, FileSystem, Path, Schema } from "effect";
+import type { Path } from "effect";
+import { Clock, DateTime, Effect, Fiber, FileSystem, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import {
   boardLines,
@@ -78,7 +79,8 @@ import { RUNNING_CHECK, RunRecords } from "../src/run-records";
 import { exec } from "./support/command";
 import { collie, proves } from "./support/world";
 import { stopHost, until } from "./support/host";
-import { Launched, orderLaunch, recordLaunch } from "../src/launches";
+import type { Launched } from "../src/launches";
+import { orderLaunch, recordLaunch } from "../src/launches";
 import { epochMs } from "../src/time";
 import { seedIntent, writeIntent } from "../src/intent";
 import { updateApproved } from "../src/verify-spec";

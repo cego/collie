@@ -1,7 +1,7 @@
 import * as Arr from "effect/Array";
+import type { Agents } from "collie";
 import {
   FindingSchema,
-  Agents,
   Host,
   Run,
   WorkflowError,

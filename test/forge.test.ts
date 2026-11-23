@@ -15,7 +15,7 @@ import {
   Schema,
 } from "effect";
 import { TestClock } from "effect/testing";
-import { ChildProcessSpawner } from "effect/process";
+import type { ChildProcessSpawner } from "effect/process";
 import type { MrForge } from "../src/board-model";
 import { FORGES } from "../src/forge/forge";
 import { forgeHttpLayer, forgeHttpTest, type ForgeHttp } from "../src/forge/http";

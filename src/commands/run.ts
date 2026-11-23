@@ -1,3 +1,6 @@
+import type { Verification } from "../verify";
+import type { VerifySpec } from "../verify-spec";
+import type { IntentChangeSchema } from "../intent-model";
 import * as Arr from "effect/Array";
 import { withArtefacts, uploadArtefact } from "../artefact-client";
 import type { RegisterArtefact } from "../artefact-model";
@@ -5,12 +8,12 @@ import { parkLine } from "../park-cause";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
+import type { FileSystem } from "effect";
 import {
   Cause,
   Data,
   Duration,
   Effect,
-  FileSystem,
   Exit,
   Option,
   Path,
@@ -672,7 +675,7 @@ const runChecks = Command.make(
             const ended = yield* Effect.scoped(
               Effect.gen(function* () {
                 const log = yield* followCheckLog(resolved.env, runId);
-                const nothingYet: () => import("../verify").Verification | null = () => null;
+                const nothingYet: () => Verification | null = () => null;
                 const last = yield* Stream.runFoldEffect(log, nothingYet, (last, event) =>
                   event._tag === "Output"
                     ? say(event.text).pipe(Effect.as(last))
@@ -1757,7 +1760,7 @@ function intentChange(
     readonly propagate?: boolean;
     readonly verification?: {
       readonly name: string;
-      readonly command: Omit<import("../verify-spec").VerifySpec, "name"> | null;
+      readonly command: Omit<VerifySpec, "name"> | null;
     };
   } = {},
 ) {
@@ -1767,7 +1770,7 @@ function intentChange(
       Effect.gen(function* () {
         const resolved = yield* resolveCommandRun(global, runId);
         if (resolved._tag === "RunFailure") return resolved.result;
-        let wanted: typeof import("../intent-model").IntentChangeSchema.Type;
+        let wanted: typeof IntentChangeSchema.Type;
         if (options.verification !== undefined)
           wanted = { kind: "verification", ...options.verification };
         else {

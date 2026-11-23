@@ -5,18 +5,8 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Num from "effect/Number";
 import { pipe } from "effect/Function";
-import {
-  Cause,
-  Clock,
-  Effect,
-  Exit,
-  FileSystem,
-  Option,
-  Predicate,
-  Result,
-  Schema,
-  Struct,
-} from "effect";
+import type { FileSystem } from "effect";
+import { Cause, Clock, Effect, Exit, Option, Predicate, Result, Schema, Struct } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Tool from "effect/ai/Tool";
 import * as Toolkit from "effect/ai/Toolkit";
@@ -44,6 +34,7 @@ import { scheduleLines } from "../../../src/schedule-model";
 import { modelsLines } from "../../../src/catalogue-model";
 import { connectionsLines } from "../../../src/connection-model";
 import { DEFAULT_MODEL } from "../../../src/harness-choice";
+import type { HoldInput, RunInput } from "../../../src/toolkit";
 import {
   answerWith,
   CollieTools,
@@ -51,9 +42,7 @@ import {
   decodeLoose,
   describeTool,
   herdLines,
-  HoldInput,
   refusedActions,
-  RunInput,
   searchesArtefacts,
   TAKES,
 } from "../../../src/toolkit";

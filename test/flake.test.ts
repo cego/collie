@@ -1,13 +1,14 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Path } from "effect";
+import type { Path } from "effect";
+import { Effect, FileSystem } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { Host, type WorkflowError } from "../src/sdk";
 import { evidenceDir, foundationLayer } from "../src/engine";
 import { Store } from "../src/store";
 import { updateApproved } from "../src/verify-spec";
-import { RunRecords } from "../src/run-records";
+import type { RunRecords } from "../src/run-records";
 import { FakeBin } from "./support/bin";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";

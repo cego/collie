@@ -11,7 +11,8 @@ import { connect } from "../src/host";
 import { factsOfView } from "../src/runs";
 import { storedAnswers } from "./support/forge";
 import { runEffect } from "./support/effect";
-import { HostReply, events, fixtures, openHost, runDirOf, until, workspace } from "./support/host";
+import type { HostReply } from "./support/host";
+import { events, fixtures, openHost, runDirOf, until, workspace } from "./support/host";
 
 const suspended = (reply: typeof HostReply.Type) => reply.status === "suspended";
 const complete = (reply: typeof HostReply.Type) => reply.status === "complete";

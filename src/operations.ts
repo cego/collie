@@ -11,7 +11,7 @@ import type { PlatformServices } from "./platform";
 import { repositoryCheckout } from "./projects";
 import { Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
-import { ChildProcessSpawner } from "effect/process";
+import type { ChildProcessSpawner } from "effect/process";
 import { nowIso } from "./time";
 import { attentionFor } from "./attention";
 import type { PluginEnv } from "./env";

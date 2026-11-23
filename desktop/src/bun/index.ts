@@ -24,7 +24,7 @@ import {
   flow,
 } from "effect";
 import { CommandLine } from "effect/process";
-import * as Digest from "effect/crypto/Digest";
+import type * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as RpcServer from "effect/rpc/RpcServer";
 import Electrobun, { BrowserView, BrowserWindow, Utils, Updater } from "../../core/platform";
@@ -35,6 +35,7 @@ import {
   type ToMain,
   type ToView,
 } from "../shared/channel";
+import type { Skippable } from "../shared/flock";
 import {
   ActionFailed,
   applyItem,
@@ -52,7 +53,6 @@ import {
   type MachineOwnRead,
   type OnboardRun,
   type OnboardStep,
-  Skippable,
   type TerminalCommand,
 } from "../shared/flock";
 import { RELEASE_PUBLIC_KEY } from "../../../src/signing";

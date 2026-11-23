@@ -2,17 +2,8 @@
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import {
-  Config,
-  ConfigProvider,
-  Effect,
-  FileSystem,
-  Option,
-  Schema,
-  Scope,
-  flow,
-  Result,
-} from "effect";
+import type { Scope } from "effect";
+import { Config, ConfigProvider, Effect, FileSystem, Option, Schema, flow, Result } from "effect";
 import type { PlatformServices } from "../src/platform";
 import { currentEnv } from "../src/env";
 import { pickFlow, type FlowPrompts } from "../src/flows";

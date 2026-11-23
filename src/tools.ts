@@ -9,7 +9,7 @@ import * as Option from "effect/Option";
 import type { PlatformServices } from "./platform";
 import { Clock, Effect, Result, Schema, flow as Schemaflow } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
-import { ChildProcessSpawner } from "effect/process";
+import type { ChildProcessSpawner } from "effect/process";
 import type * as Tool from "effect/ai/Tool";
 import type { PluginEnv } from "./env";
 import { choiceLines, newRequestId, runFacts } from "./operations";
@@ -79,21 +79,18 @@ import { isString, type JsonObject } from "./schema";
 import { scheduleLines } from "./schedule-model";
 import { checkModule, readModule, type Checked as ModuleCheck, type Described } from "./authoring";
 import { savedModules } from "./discovery";
+import type { DefinitionInput, HoldInput, RunInput, RunListInput } from "./toolkit";
 import {
   answerWith,
   CollieTools,
   decodeStrict,
   decodeAsked,
   decodeLoose,
-  DefinitionInput,
   describeTool,
   herdLines,
-  HoldInput,
   isToolName,
   refused,
   refusedActions,
-  RunInput,
-  RunListInput,
   searchesArtefacts,
   type Settle,
   SETTLE_KINDS,

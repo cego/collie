@@ -1,17 +1,16 @@
 // WARNING: metadata is data, never control flow; a conflict is refused at load, before any Run starts.
+import type { ClaudeSubagents } from "./subagents";
 import * as Struct from "effect/Struct";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import { pipe } from "effect/Function";
 import * as Option from "effect/Option";
+import type { FileSystem, Layer, Path } from "effect";
 import {
   Cause,
   Context,
   Effect,
-  FileSystem,
-  Layer,
-  Path,
   Predicate,
   Result,
   Schema,
@@ -65,7 +64,7 @@ import {
 } from "./steps";
 import type { Asker } from "./proposals";
 import type { UsageReading } from "./usage-model";
-import { Recovery, ReviewScope } from "./recovery";
+import type { Recovery, ReviewScope } from "./recovery";
 export { Recovery, ReviewScope } from "./recovery";
 import type { Integration } from "./integrate";
 import type { BenchmarkPlan, Measurement } from "./measurement-model";
@@ -511,7 +510,7 @@ export interface AgentPreferences {
   readonly harness?: string;
   readonly model?: string;
   readonly effort?: string;
-  readonly claudeSubagents?: import("./subagents").ClaudeSubagents;
+  readonly claudeSubagents?: ClaudeSubagents;
   /** Past this share of its busiest window, 1–100, this agent is not chosen for new work. */
   readonly upTo?: number;
   /**

@@ -1,8 +1,8 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
+import type { Cause } from "effect";
 import {
-  Cause,
   Config,
   Effect,
   Fiber,

@@ -1,17 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import {
-  Config,
-  Effect,
-  Exit,
-  FileSystem,
-  Path,
-  PlatformError,
-  Schema,
-  Scope,
-  flow,
-  Result,
-} from "effect";
+import type { PlatformError } from "effect";
+import { Config, Effect, Exit, FileSystem, Path, Schema, Scope, flow, Result } from "effect";
 import { readEnv } from "../../src/env";
 import { connect } from "../../src/hc";
 import { SETUP, serveFakeHc, type FakeHc } from "./fake-hc";

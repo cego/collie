@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { Effect, Schema } from "effect";
+import type { Schema } from "effect";
+import { Effect } from "effect";
 import { decodeBenchmarkPlan } from "../src/measurement-model";
 
 const metric = (name: string, role: "primary" | "guardrail") => ({

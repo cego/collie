@@ -5,7 +5,8 @@ import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
-import { HostReply, openHost, until, workspace } from "./support/host";
+import type { HostReply } from "./support/host";
+import { openHost, until, workspace } from "./support/host";
 
 const suspended = (reply: typeof HostReply.Type) => reply.status === "suspended";
 const complete = (reply: typeof HostReply.Type) => reply.status === "complete";

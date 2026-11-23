@@ -1,7 +1,8 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
-import { ConfigProvider, Effect, FileSystem, Schema, Scope } from "effect";
+import type { Scope } from "effect";
+import { ConfigProvider, Effect, FileSystem, Schema } from "effect";
 import type { PlatformServices } from "../src/platform";
 import { savedReaches, writeConfigValue } from "../src/config";
 import { currentEnv, type PluginEnv } from "../src/env";

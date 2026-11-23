@@ -21,7 +21,7 @@ import {
   flow,
   Result,
 } from "effect";
-import { ChildProcessSpawner } from "effect/process";
+import type { ChildProcessSpawner } from "effect/process";
 import type { MrForge, MrState } from "../../src/board-model";
 import type { ForgeFacts } from "../../src/board";
 import { writeMrStates } from "../../src/merges";

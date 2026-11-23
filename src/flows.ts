@@ -36,7 +36,7 @@ import { liveFor, markedOf, type Ledgers } from "./live";
 import { RunRecords } from "./run-records";
 import { isStale, layers, loadDefinitions, type Definitions, type Provenance } from "./definitions";
 import type { PluginEnv } from "./env";
-import { Herdr } from "./herdr";
+import type { Herdr } from "./herdr";
 import { inferInput, type InputPrompts, type PickItem } from "./inputs";
 import type { Found } from "./discovery";
 import {

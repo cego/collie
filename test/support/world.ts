@@ -1,6 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
+import type { Scope } from "effect";
 import {
   Config,
   ConfigProvider,
@@ -8,7 +9,6 @@ import {
   FileSystem,
   Option,
   Schema,
-  Scope,
   Stream,
   flow,
   Result,
