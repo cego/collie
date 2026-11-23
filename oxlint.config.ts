@@ -45,15 +45,17 @@ const unfit = {
   "@nkzw/no-instanceof": "off",
   // WARNING: a workflow's state is replaced, never mutated, and its loops run a handful of rounds.
   "oxc/no-accumulating-spread": "off",
-} as const;
-
-const migrating = {
-  eqeqeq: "off",
+  // WARNING: Effect's modules are namespaces by design, imported whole as `import * as`.
   "import/no-namespace": "off",
+  // WARNING: the terminal UI is Solid on OpenTUI, whose JSX props and reactive stores React's rules misread.
   "react/immutability": "off",
   "react/no-unknown-property": "off",
   "react/refs": "off",
+  // WARNING: it reads a service's `.use(...)`, such as the SQL client's, as React's `use` hook.
   "react-hooks/rules-of-hooks": "off",
+} as const;
+
+const migrating = {
   "typescript/no-non-null-assertion": "off",
   "typescript/no-unsafe-argument": "off",
   "typescript/no-unsafe-assignment": "off",
@@ -159,6 +161,8 @@ export default defineConfig({
       "error",
       { types: { Date: { message: "A time is a DateTime, or epoch milliseconds." } } },
     ],
+    // WARNING: `== null` matches null and undefined alike, on purpose.
+    eqeqeq: ["error", "always", { null: "ignore" }],
     // WARNING: a failed cleanup is ignored on purpose; there is nothing left to tell.
     "no-empty": ["error", { allowEmptyCatch: true }],
     // WARNING: an interface extending a Schema's Type names it without widening.
