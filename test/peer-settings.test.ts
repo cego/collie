@@ -13,6 +13,7 @@ import {
 } from "../desktop/src/bun/flock-settings";
 import { editSetting, NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
 import { levelPeer, peersOf, runShell, type Link } from "../src/peers";
+import { tellHost } from "../src/tell-host";
 import { memoryRecords, runEffect } from "./support/effect";
 import { until } from "./support/host";
 import { releaseBinary, twoMachines } from "./support/peers";
@@ -62,6 +63,11 @@ test(
         (first, second) =>
           Effect.gen(function* () {
             const fs = yield* FileSystem.FileSystem;
+            // As `collie config` does: the host is told, since nothing watches the user directory.
+            const set = (side: typeof first, value: string, at: string) =>
+              setSetting(side.world.config, "model", value, at).pipe(
+                Effect.andThen(tellHost(side.world.state, [`${side.world.config}/config.json`])),
+              );
             yield* setSetting(first.world.config, "model", "sonnet", "2099-10-12T10:00:00.000Z");
             yield* setSetting(
               first.world.config,
@@ -89,7 +95,7 @@ test(
                 ),
               ),
             ).toBeUndefined();
-            yield* setSetting(second.world.config, "model", "haiku", "2099-10-12T11:00:00.000Z");
+            yield* set(second, "haiku", "2099-10-12T11:00:00.000Z");
             yield* until(
               () => readSettingsSet(first.world.config),
               (has) => has.set.model === "2099-10-12T11:00:00.000Z",
@@ -97,7 +103,7 @@ test(
             expect(yield* fs.readFileString(`${first.world.config}/config.json`)).toContain(
               "haiku",
             );
-            yield* setSetting(first.world.config, "model", "opus", "2099-10-12T12:00:00.000Z");
+            yield* set(first, "opus", "2099-10-12T12:00:00.000Z");
             yield* until(
               () => there.settings(),
               (has) => Arr.some(has.settings, (one) => one.key === "model" && one.value === "opus"),
@@ -107,8 +113,8 @@ test(
             );
             yield* Effect.all(
               [
-                setSetting(first.world.config, "model", "haiku", "2099-10-12T13:00:00.000Z"),
-                setSetting(second.world.config, "model", "sonnet", "2099-10-12T14:00:00.000Z"),
+                set(first, "haiku", "2099-10-12T13:00:00.000Z"),
+                set(second, "sonnet", "2099-10-12T14:00:00.000Z"),
               ],
               { concurrency: "unbounded" },
             );
@@ -137,6 +143,10 @@ test(
                     "Desktop",
                     "2099-10-12T15:00:00.000Z",
                   ).pipe(
+                    // The host's own setSettings offers what it took to its peers.
+                    Effect.andThen(
+                      tellHost(side.world.state, [`${side.world.config}/config.json`]),
+                    ),
                     Effect.andThen(sharedSettings(side.world.config)),
                     Effect.provideContext(services),
                   ),

@@ -18,7 +18,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
-import { Clock, Effect, FileSystem, Option, Result, Schema, flow } from "effect";
+import { Clock, Context, Effect, FileSystem, Option, Result, Schema, flow } from "effect";
 import { lastAudit } from "./audit";
 import { planDirOf } from "./run-detail";
 import { readAhead, RunRecords, type RunRecordsApi } from "./run-records";
@@ -57,7 +57,8 @@ import { awaitingLine } from "./awaiting";
 import { MERGE_POLL_MS, mrOf, readForge, readMrStates } from "./merges";
 import { filed, NOTHING_TO_LAND, type Recorded, settlementOf, standingOf } from "./standing";
 import { offersOf } from "./lifecycle";
-import { mrIdIn, shell } from "./mr";
+import { mrIdIn, mrIdWith, shell } from "./mr";
+import { branchKey, type Branch } from "./branches";
 import type {
   Disposition,
   Flow,
@@ -223,6 +224,10 @@ export interface ForgeFacts {
   /** Its source and target branches, where the forge named them. */
   readonly source?: string;
   readonly target?: string;
+  /** Who opened it, its approvals as the forge phrases them, and whether a discussion is open. */
+  readonly author?: string;
+  readonly approvals?: string;
+  readonly unresolved?: boolean;
   /** When the forge gave this answer, and when the watch last asked it. */
   readonly read?: string;
   readonly asked?: string;
@@ -725,6 +730,12 @@ export const readBranchHead = Effect.fn("Board.readBranchHead")(function* (run: 
   return read.code === 0 && sha !== "" ? sha : null;
 });
 
+/** The commit `run`'s branch is at, as the git syncer last read it where it keeps it. */
+const headOf = (run: RunFacts, now: number) =>
+  Effect.flatMap(syncedBranch(run), (row) =>
+    row === undefined ? branchHead(run, now) : Effect.succeed(row?.head ?? null),
+  );
+
 /** `readBranchHead`, read again only once `HEAD_FOR_MS` has passed. */
 const branchHead = Effect.fn("Board.branchHead")(function* (run: RunFacts, now: number) {
   if (run.branch === null) return null;
@@ -954,8 +965,31 @@ const FINISHED_FOR_MS = 24 * 60 * 60 * 1000;
 /** The MR id of `mrOf(run)`, a legacy bare or hostless one read in the Run's checkout. */
 const mrIdOf = (run: RunFacts) => {
   const mr = mrOf(run);
-  return mr === null ? Effect.succeed(null) : mrIdIn(mr, run.cwd, shell);
+  return mr === null ? Effect.succeed(null) : mrIdAt(mr, run);
 };
+
+/**
+ * What the git syncer last read of each checkout and branch, by `branchKey`, where a host
+ * keeps it (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs); null where git is
+ * asked as a card is drawn, as a process with no host does.
+ */
+export const SyncedBranches = Context.Reference<ReadonlyMap<string, Branch> | null>(
+  "collie/SyncedBranches",
+  { defaultValue: () => null },
+);
+
+const syncedBranch = (run: RunFacts) =>
+  Effect.map(SyncedBranches, (rows) =>
+    rows === null ? undefined : (rows.get(branchKey(run.cwd, run.branch)) ?? null),
+  );
+
+/** `mr`'s MR id as read in `run`'s checkout. */
+const mrIdAt = (mr: string, run: RunFacts) =>
+  Effect.flatMap(syncedBranch(run), (row) =>
+    row === undefined
+      ? mrIdIn(mr, run.cwd, shell)
+      : Effect.succeed(mrIdWith(mr, row?.project ?? null)),
+  );
 
 /** A merge request of a Task, as its Runs carry it. */
 interface Carried {
@@ -1038,7 +1072,7 @@ const ledgerOf = Effect.fn("Board.ledgerOf")(function* (
           : line.ref === ""
             ? null
             : (mrId(line.ref, { project: carried === null ? null : mrIdProject(carried) }) ??
-              (yield* mrIdIn(line.ref, run.cwd, shell)));
+              (yield* mrIdAt(line.ref, run)));
       const local = yield* Effect.forEach(
         refRuns(line.ref, machine),
         Effect.fnUntraced(function* (word) {
@@ -1142,11 +1176,15 @@ const GOING_EVERY_MS = 5_000;
 /** A Task's card as a build derived it, kept until what it was derived from moves. */
 export interface KeptCard {
   readonly key: string;
+  /** What it was derived from by content, which a later host can check without deriving it. */
+  readonly digest: string;
   /** When time alone next changes what the card says. */
   readonly due: number;
   readonly view: TaskView | null;
   /** The card said again at a later time, where only its ages move; null once it leaves the board. */
   readonly retimed?: ((now: number) => Retimed | null) | undefined;
+  /** Read from the projection a previous host wrote: kept only where its digest still holds. */
+  readonly unconfirmed?: true;
 }
 
 interface Retimed {
@@ -1157,10 +1195,15 @@ interface Retimed {
 /** Cards kept from one build to the next, and the revision a set of Runs is at. */
 export interface KeptCards {
   readonly revision: (runs: ReadonlyArray<string>) => number;
+  /** What a set of Runs' facts are, by content: the same across a host restart. */
+  readonly content?: (runs: ReadonlyArray<string>) => string;
+  /** The workflow modules' kept revisions, which a card's offers are resolved from. */
+  modules?: string;
   readonly kept: Map<string, KeptCard>;
 }
 
 const cardKey = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
+const digestOf = flow(cardKey, (key) => Bun.hash(key).toString(36));
 
 /** When an age measured from `then` next reads differently: each second, minute, hour or day. */
 const nextChange = (then: number, now: number) => {
@@ -1217,7 +1260,7 @@ interface BoardOptions {
   includeHistory?: boolean;
   /** Where each Task's whole Flow is put, by the Task's id. */
   flows?: Map<string, Flow>;
-  /** The commit a Run's branch is at; read through a minute's cache where not given. */
+  /** The commit a Run's branch is at, where a caller reads it its own way. */
   head?: (run: RunFacts) => Effect.Effect<string | null>;
   /** Cards from the last build, reused where nothing they were derived from moved. */
   cards?: KeptCards;
@@ -1314,17 +1357,15 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           const mr = mrOf(run);
           carried.push({ run, id: mr === null ? null : yield* mrIdOf(run), mr });
         }
-        const key =
+        const read = Arr.flatMap(everyRun, (run) => [
+          run.id,
+          ...(run.parent === null ? [] : [run.parent]),
+          ...Arr.map(flowInputs.children.get(run.id) ?? [], (child) => child.id),
+        ]);
+        const inputs =
           cards === undefined
-            ? ""
-            : cardKey([
-                cards.revision(
-                  Arr.flatMap(everyRun, (run) => [
-                    run.id,
-                    ...(run.parent === null ? [] : [run.parent]),
-                    ...Arr.map(flowInputs.children.get(run.id) ?? [], (child) => child.id),
-                  ]),
-                ),
+            ? []
+            : [
                 Arr.map(everyRun, (run) => [
                   run.id,
                   markers.get(run.id) ?? null,
@@ -1340,8 +1381,27 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                 [...paired],
                 quietMs,
                 [...missingCheckouts],
-              ]);
+                cards.modules ?? "",
+                yield* Effect.forEach(everyRun, syncedBranch),
+              ];
+        const key = cards === undefined ? "" : cardKey([cards.revision(read), inputs]);
+        const touched = yield* RunRecords.use((records) =>
+          records.activity(Arr.map(everyRun, (run) => run.id)),
+        );
+        let digested: string | undefined;
+        // Its Runs' facts and when each last did anything, in place of revisions a restart renumbers.
+        const digest = () =>
+          (digested ??= digestOf([
+            cards?.content?.(read) ?? "",
+            Arr.map(everyRun, (run) => touched.get(run.id) ?? 0),
+            inputs,
+          ]));
         const kept = cards?.kept.get(id);
+        if (kept?.unconfirmed === true && now < kept.due && kept.digest === digest()) {
+          const confirmed: KeptCard = { key, digest: kept.digest, due: kept.due, view: kept.view };
+          cards!.kept.set(id, confirmed);
+          return confirmed.view;
+        }
         if (kept !== undefined && kept.key === key) {
           if (now < kept.due) return kept.view;
           const again = kept.retimed?.(now);
@@ -1351,13 +1411,11 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           }
         }
         const keep = (view: TaskView | null, due: number, retimed?: KeptCard["retimed"]) => {
-          cards?.kept.set(id, { key, due, view, retimed });
+          if (cards !== undefined)
+            cards.kept.set(id, { key, digest: digest(), due, view, retimed });
           return view;
         };
         yield* boundary;
-        const touched = yield* RunRecords.use((records) =>
-          records.activity(Arr.map(everyRun, (run) => run.id)),
-        );
         // A Run records no end of its own: its last activity is when it ended, and a Run
         // that wrote nothing ended no later than it began.
         const endedAt = (run: RunFacts) =>
@@ -1621,7 +1679,12 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           disposed: disposition !== null,
           asking: decision !== null,
         });
-        const movement = landed ? null : yield* branchMovement(leader);
+        const synced = yield* syncedBranch(leader);
+        const movement = landed
+          ? null
+          : synced === undefined
+            ? yield* branchMovement(leader)
+            : (synced?.movement?.said ?? null);
         /** A merge request's checks and readiness, read in the Run `merging`. */
         const judged = Effect.fnUntraced(function* (
           id: string | null,
@@ -1639,7 +1702,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                   Effect.provideService(RunRecords, whole),
                   Effect.orElseSucceed(() => []),
                 ),
-                head: forged?.head ?? (yield* opts.head?.(merging) ?? branchHead(merging, now)),
+                head: forged?.head ?? (yield* opts.head?.(merging) ?? headOf(merging, now)),
                 approved: yield* Effect.forEach(
                   approvedFor(
                     yield* approvedIn(merging.evidence),

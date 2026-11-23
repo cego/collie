@@ -591,8 +591,11 @@ for before it closes anything of a Task, and a checkout any Task still owes some
 is kept whatever a Run's line says. Only a landed Task folds into History a day after
 it ends; one that still owes a merge request stays on the board however old it is.
 
-**Merge watch** — The host's round, every 5 minutes, that asks each merge request's own
-forge what became of it and records `merged` as that forge's word when it merged. It asks
+**Merge watch** — The host's forge syncer: its round asks each merge request's own forge what
+became of it, every minute for one on a card and every 5 minutes for the rest, and at once
+after a Run publishes it, and records `merged` as that forge's word when it merged. What it
+reads is the only forge answer a card or a listing's offers see; taking an offer asks again
+(ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs). It asks
 about every merge request a Task owes, whatever its section, age or the Dispositions of
 its Runs, follows a merged one to production, and keeps asking about a closed one in case
 it is reopened. Only a merge request settled by `abandoned` is not asked about. Each answer
@@ -881,7 +884,7 @@ failed attempts that named each, so a test that keeps flaking can be found.
 
 **Obstacle** — What is identifiably in a Run's way, in one sentence: a command failing several times in a row the same way. It is shown to the human and given to the next prompt so the approach can change. It stops nothing.
 
-**Slice** — One item of a list of work — a ticket's build — known by its name, never by where it sits. It has its own prompt and its own Output, runs on the list's one agent (under `agent_sessions: ticket` or `round`, each later ticket on an agent of its own, given the **Hand-over**), and is handed only its ticket and a few lines of fact about the items before it — their commits and what they verified, never their transcripts. A replayed or resumed Run reuses the items already done and does only what is left.
+**Slice** — One item of a list of work — a ticket's build — known by its name, never by where it sits. It has its own prompt and its own Output, runs on the list's one agent (under `agent_sessions: ticket` or `round`, each later ticket on an agent of its own, given the **Hand-over**), and is handed only its ticket and a few lines of fact about the items before it — their commits and what they verified, never their transcripts. A replayed or resumed Run reuses the items already done and does only what is left. `run metrics` counts each Slice once, by its name, at its latest status, and the tokens its agent used on it under its name as the step.
 
 **Choice** — A question a Run asks the human with `ask`, from a closed set of options. Each option is a solution: an id, a title, a one-line detail, and whether it is the **Recommended solution**, which every front door lists first. What the answer does next — start another Workflow, prompt an agent, post a review, stop — is the Workflow's own code. An answer names a solution's id or its title; one outside the options, or a second answer to one already answered, is refused and starts nothing. A Workflow that recommends none, or more than one, is not stopped: the Choice is posted unmarked with a shortfall. One of fewer than three options also offers **Hold the Run**, which holds the Run with reason `held at question <name>` and answers nothing. Its **Steering entry** supersedes it rather than answering it, and it is asked again once that work ends (**Superseded question**) (ADR-draft-a-runs-question-is-a-questionnaire).
 

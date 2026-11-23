@@ -14,7 +14,7 @@ import type { Posted } from "../sdk";
 import { github } from "./github";
 import { gitlab } from "./gitlab";
 import type { Answered, ForgeHttp } from "./http";
-import type { FiledIssue, IssueList } from "./issues";
+import type { FiledIssue, IssueList, IssueQuery } from "./issues";
 import type { ForgeComment, MergeAnswer, ReviewRead } from "./review";
 import type { FailedTest } from "../own-tests";
 
@@ -213,13 +213,18 @@ export interface Forge {
     never,
     R
   >;
-  /** The open issues, or with `numbers` those issues read one by one: a listing can lag a filing. */
+  /**
+   * The open issues; with numbers, those issues read one by one, as a listing can lag a
+   * filing; with `closedSince`, the issues closed since then.
+   */
   readonly issues: <R>(
     project: string,
     cwd: string,
     run: Runner<R>,
-    numbers?: ReadonlyArray<number>,
+    which?: IssueQuery,
   ) => Effect.Effect<IssueList, never, R | ForgeHttp>;
+  /** The open merge requests, with their descriptions as `body`. */
+  readonly requests: (project: string, cwd: string) => Effect.Effect<IssueList, never, ForgeHttp>;
   readonly fileIssue: <R>(
     project: string,
     title: string,
