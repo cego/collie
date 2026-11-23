@@ -513,6 +513,10 @@ test("a read that is not a listing, as `collie workflow check` takes, imports ev
       host.layerReads();
 
       yield* host.fresh;
-      expect(Arr.some(host.layerReads(), (path) => pipe_(path, Str.endsWith(plain)))).toBe(true);
+      // Hashing reads the file too; only an import looks for its staged generation.
+      const staged = Arr.filter(host.layerReads(), (path) =>
+        pipe_(path, Str.includes("/generations/")),
+      );
+      expect(Arr.some(staged, (path) => pipe_(path, Str.endsWith(plain)))).toBe(true);
     }).pipe(Effect.scoped),
   ));
