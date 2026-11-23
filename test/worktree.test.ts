@@ -34,6 +34,7 @@ import {
   worktreesSweeper,
 } from "../src/cleanup";
 import { buildBoard } from "../src/board";
+import { Branches, branchKey } from "../src/branches";
 import { readEnv } from "../src/env";
 import { recordDisposition } from "../src/disposition";
 import { MergeRequests, MrEntry } from "../src/merge-requests";
@@ -3323,6 +3324,16 @@ test("a legacy bare mr: target is settled as the merge request of its checkout's
       });
       yield* forgeAnswered(
         '{"gitlab.example.com/group/app!42":{"state":"merged","read":"2026-09-14T09:00:00Z"},"gitlab.example.com/group/web!42":{"state":"open","read":"2026-09-14T09:00:00Z"}}',
+      );
+      yield* Branches.use((branches) =>
+        branches.put(
+          new Map(
+            Arr.map(recorded, (run) => [
+              branchKey(run.cwd, run.branch),
+              { head: null, project: "gitlab.example.com/group/app", movement: null },
+            ]),
+          ),
+        ),
       );
       settling = yield* settlingOf({
         stateDir: rig.stateDir,

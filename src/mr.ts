@@ -269,7 +269,7 @@ export function mrIdIn<R>(mr: string, cwd: string, run: Runner<R>) {
   return returned;
 }
 
-const needsProject = (mr: string) => {
+export const needsProject = (mr: string) => {
   if (mrId(mr) !== null) {
     return false;
   }

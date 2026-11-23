@@ -105,7 +105,7 @@ import type { CardRow } from "./card-rows";
 import { MERGE_REQUESTS } from "./merge-requests";
 import { MODULE_REVISIONS, ModuleRevisions, onSyncedRevisions } from "./module-revisions";
 import { BRANCHES, Branches, branchKey } from "./branches";
-import { CONNECTIONS } from "./connection-rows";
+import { CONNECTIONS, ConnectionRows } from "./connection-rows";
 import type { MeasureEvent } from "./measurement-model";
 import {
   RunMetrics,
@@ -196,7 +196,7 @@ import { Herdr, isSettled } from "./herdr";
 import type { AgentInfo } from "./herdr";
 import { taskOffers } from "./offers";
 import type { Offer } from "./offers";
-import { buildBoard, LANDED_STATES, ownedMrs, SyncedBranches, taskFlowOf } from "./board";
+import { buildBoard, LANDED_STATES, ownedMrs, taskFlowOf } from "./board";
 import type { KeptCard, KeptCards } from "./board";
 import { mrOf, readForge, readMrStates, watchedMr } from "./merges";
 import type { MrPanels } from "./merges";
@@ -1527,6 +1527,7 @@ const hostBoard = (dir: string) =>
             ),
             "\n",
           );
+          cards.connections = yield* ConnectionRows.use((rows) => rows.readings);
         }
         const refused = yield* hostRefuses;
         return yield* buildBoard({
@@ -1541,10 +1542,7 @@ const hostBoard = (dir: string) =>
               Effect.tap((offers) => Effect.sync(() => offered.set(runId, offers))),
             ),
           cards,
-        }).pipe(
-          Effect.provideService(SyncedBranches, yield* Branches.use((rows) => rows.all)),
-          (built) => (refused ? refusingOutside(built) : built),
-        );
+        }).pipe((built) => (refused ? refusingOutside(built) : built));
       }).pipe(
         (built) =>
           model === undefined
@@ -1918,6 +1916,12 @@ const doorFeedLayer = (door: EngineEnd, panels: MrPanels) =>
         Effect.flatMap(({ runs, ms }) =>
           Effect.logInfo(`the door has read ${runs} records to warm it, in ${ms} ms`),
         ),
+        Effect.forkScoped,
+      );
+      const branches = yield* Branches;
+      yield* Queue.take(door.wants).pipe(
+        Effect.flatMap(branches.want),
+        Effect.forever,
         Effect.forkScoped,
       );
       yield* Queue.take(door.slow).pipe(

@@ -21,6 +21,7 @@ import {
 import type { Sentence } from "../src/board";
 import { mrLabel } from "../src/board-model";
 import type { Flow, ForgeChecks, Mergeability, MrState, OfferView } from "../src/board-model";
+import { Branches, branchKey } from "../src/branches";
 import { appendStepLine } from "../src/steps";
 import type { StepLine, StepMeta } from "../src/steps";
 import { machineName } from "../src/peers";
@@ -3860,6 +3861,11 @@ test("a succeeded Run's open merge request is ready only on checks at its branch
         mr: PR,
         finished: "2026-09-14T09:30:00Z",
       });
+      yield* Branches.use((branches) =>
+        branches.put(
+          new Map([[branchKey(repo, "mk/ship"), { head, project: null, movement: null }]]),
+        ),
+      );
       const view = Effect.map(board(env, [run]), (views) => views[0]!);
 
       expect((yield* view).sentence).toBe("cego/collie#30 is open; nothing has checked it.");

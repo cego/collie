@@ -32,6 +32,8 @@ import type { PlatformServices } from "./platform";
 import { recordFrames } from "./record";
 import type { RecordSources } from "./record";
 import { hostDatabase, recordsReadLayer } from "./records";
+import { Branches } from "./branches";
+import type { BranchRun } from "./branches";
 import { firstValueTimed } from "./first-value";
 import { markFirst } from "./record-marks";
 import { RunModel, runModelLayer } from "./run-model";
@@ -105,6 +107,7 @@ export type FromDoor =
   | { readonly _tag: "Finished"; readonly run: string; readonly step: string; readonly seq: number }
   | { readonly _tag: "Unfinished"; readonly run: string; readonly step: string }
   | { readonly _tag: "Ask"; readonly ask: number; readonly asked: Asked }
+  | { readonly _tag: "Want"; readonly run: BranchRun }
   | { readonly _tag: "Warmed"; readonly runs: number; readonly ms: number }
   | { readonly _tag: "Slow"; readonly rpc: string; readonly ms: number };
 
@@ -153,6 +156,7 @@ export const engineEnd = (port: Port<ToDoor, FromDoor>) =>
     }>();
     const disconnects = yield* Queue.unbounded<number>();
     const asks = yield* Queue.unbounded<{ readonly ask: number; readonly asked: Asked }>();
+    const wants = yield* Queue.unbounded<BranchRun>();
     const listening = yield* Deferred.make<void>();
     const warmed = yield* Deferred.make<{ readonly runs: number; readonly ms: number }>();
     const slow = yield* Queue.unbounded<{ readonly rpc: string; readonly ms: number }>();
@@ -176,6 +180,8 @@ export const engineEnd = (port: Port<ToDoor, FromDoor>) =>
           return model?.unfinished(message.run, message.step);
         case "Ask":
           return Queue.offerUnsafe(asks, message);
+        case "Want":
+          return Queue.offerUnsafe(wants, message.run);
         case "Warmed":
           return Deferred.doneUnsafe(warmed, Effect.succeed(message));
         case "Slow":
@@ -216,6 +222,7 @@ export const engineEnd = (port: Port<ToDoor, FromDoor>) =>
         model = engine;
       },
       asks,
+      wants,
       warmed: Deferred.await(warmed),
       slow,
       post: port.post,
@@ -486,7 +493,14 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
     const withRecords = yield* Effect.cached(
       Deferred.await(migrated).pipe(
         Effect.andThen(Layer.buildWithScope(recordsReadLayer(env.stateDir), scope)),
-        Effect.map((records) => Context.merge(bun, records)),
+        Effect.map((records) =>
+          Context.add(Context.merge(bun, records), Branches, {
+            ...Context.get(records, Branches),
+            // WARNING: only the engine's Git sync reads what is wanted, so the door posts it there.
+            want: ({ cwd, dir, branch, state }) =>
+              Effect.sync(() => port.post({ _tag: "Want", run: { cwd, dir, branch, state } })),
+          }),
+        ),
       ),
     );
     // WARNING: the engine answers a board only once started, which can take seconds; null where none can be read.

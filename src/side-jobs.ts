@@ -37,7 +37,7 @@ import { keepDiffs } from "./run-detail";
 import { Artefacts } from "./artefacts";
 import { ModuleRevisions } from "./module-revisions";
 import { Branches, branchKey, readBranch } from "./branches";
-import type { Branch } from "./branches";
+import type { Branch, BranchRun } from "./branches";
 import { ConnectionRows } from "./connection-rows";
 import { connectionOnMachine } from "./connections";
 import { revisionOf } from "./engine";
@@ -191,7 +191,10 @@ export const gitSync = <E, R>(
         backstopAt = start;
       }
       const byId = new Map(Arr.map(runs, (run) => [run.id, run] as const));
-      const due = new Map<string, RunFacts>();
+      const branches = yield* Branches;
+      const due = new Map<string, BranchRun>(
+        Arr.map(yield* branches.wanted, (run) => [branchKey(run.cwd, run.branch), run]),
+      );
       const moved = new Set<string>();
       for (const view of views) {
         const at = `${view.revision?.epoch ?? ""}:${view.revision?.seq ?? ""}`;
@@ -215,7 +218,7 @@ export const gitSync = <E, R>(
       for (const [key, run] of due) {
         read.set(key, yield* readBranch(run));
       }
-      yield* (yield* Branches).put(read);
+      yield* branches.put(read);
       for (const run of moved) {
         yield* recover(run);
       }

@@ -308,6 +308,34 @@ test("the door asks the engine for the offers of a plan ready to implement it wa
     }).pipe(Effect.scoped),
   ));
 
+test("a record the door draws hands a branch Git sync has not read to the engine", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-door-" });
+      const socket = `${dir}/host.sock`;
+      const run = yield* madeRun(dir, {
+        id: "r1",
+        state: "running",
+        cwd: "/project",
+        branch: "mk/unread",
+        created: "2026-10-30T09:00:00Z",
+      });
+      const { heard } = yield* silentEngine(dir, socket, [run]);
+      yield* Effect.flatMap(frontDoor(socket), (client) =>
+        client
+          .runDetail({ runId: "r1", tail: false, pages: 1, refreshMr: false, parts: true })
+          .pipe(Stream.runHead, Effect.timeout("5 seconds")),
+      );
+      yield* until(() => Arr.some(heard, (one) => one._tag === "Want"));
+      const wanted = Arr.flatMap(heard, (one) => (one._tag === "Want" ? [one.run] : []));
+      expect(Arr.map(wanted, (one) => [one.cwd, one.branch])).toContainEqual([
+        "/project",
+        "mk/unread",
+      ]);
+    }).pipe(Effect.scoped),
+  ));
+
 test("the door shows the offers the engine's board read with its listing, and asks for none", () =>
   runEffect(
     Effect.gen(function* () {

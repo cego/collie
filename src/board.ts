@@ -48,7 +48,7 @@ import {
 import type { CheckCommand, Verification } from "./verify";
 import { approvedFor, approvedIn } from "./verify-spec";
 import { readIntent } from "./intent";
-import { findingsIn, isBlocking } from "./output";
+import { findingsIn, isBlocking, openFindingsIn } from "./output";
 import { markersOf, runningCheck } from "./checks";
 import { runningChecks } from "./check-processes";
 import { waitLine } from "./memory-wait";
@@ -58,9 +58,9 @@ import { MERGE_POLL_MS, mrOf, readForge, readMrStates } from "./merges";
 import { filed, NOTHING_TO_LAND, settlementOf, standingOf } from "./standing";
 import type { Recorded } from "./standing";
 import { offersOf } from "./lifecycle";
-import { mrIdIn, mrIdWith, shell } from "./mr";
-import { branchKey } from "./branches";
-import type { Branch } from "./branches";
+import { mrIdWith, needsProject } from "./mr";
+import { Branches, branchKey } from "./branches";
+import type { Branch, BranchesApi } from "./branches";
 import type {
   Disposition,
   Flow,
@@ -75,7 +75,6 @@ import { flowInputsFor, taskFlowFor } from "./flow-read";
 import { machineName, peersOf } from "./peers";
 import { Deliveries, deliveriesAhead, deliveriesOf, SENT_STATES, toldIn } from "./steering";
 import { finishedOnRecord } from "./cards";
-import { branchMovement } from "./recovery";
 import { owedLocally } from "./check-proof";
 import {
   Answered,
@@ -705,41 +704,7 @@ export function checksAt(
   return returned;
 }
 
-export const readBranchHead = Effect.fn("Board.readBranchHead")(function* (run: RunFacts) {
-  if (run.branch === null) {
-    return null;
-  }
-  const read = yield* shell(
-    "git",
-    ["rev-parse", "--verify", "--quiet", `${run.branch}^{commit}`],
-    run.cwd,
-  );
-  const sha = Str.trim(read.stdout);
-  return read.code === 0 && sha !== "" ? sha : null;
-});
-
-const headOf = (run: RunFacts, now: number) =>
-  Effect.flatMap(syncedBranch(run), (row) =>
-    row === undefined ? branchHead(run, now) : Effect.succeed(row?.head ?? null),
-  );
-
-const branchHead = Effect.fn("Board.branchHead")(function* (run: RunFacts, now: number) {
-  if (run.branch === null) {
-    return null;
-  }
-  const key = `${run.cwd}\0${run.branch}`;
-  const known = heads.get(key);
-  if (known !== undefined && now - known.at < HEAD_FOR_MS) {
-    return known.sha;
-  }
-  const head = yield* readBranchHead(run);
-  heads.set(key, { at: now, sha: head });
-  return head;
-});
-
-const HEAD_FOR_MS = 60_000;
-// WARNING: one entry per checkout and branch for the process's life; prune if that grows.
-const heads = new Map<string, { readonly at: number; readonly sha: string | null }>();
+const headOf = (run: RunFacts) => Effect.map(syncedBranch(run, true), (row) => row?.head ?? null);
 
 function withoutPaths(text: string) {
   // oxlint-disable-next-line effecttsgo/prefer-effect-string -- This replacement depends on each match; Effect String accepts only string replacements.
@@ -955,23 +920,33 @@ const mrIdOf = (run: RunFacts) => {
   return mr === null ? Effect.succeed(null) : mrIdAt(mr, run);
 };
 
-// WARNING: null where git is asked as a card is drawn, as a process with no host does.
-export const SyncedBranches = Context.Reference<ReadonlyMap<string, Branch> | null>(
-  "collie/SyncedBranches",
-  { defaultValue: () => null },
-);
+// WARNING: a build never asks git; it reads what the git syncer last read.
+class SyncedBranches extends Context.Service<
+  SyncedBranches,
+  { readonly rows: ReadonlyMap<string, Branch>; readonly want: BranchesApi["want"] }
+>()("collie/SyncedBranches") {}
 
-const syncedBranch = (run: RunFacts) =>
-  Effect.map(SyncedBranches, (rows) =>
-    rows === null ? undefined : (rows.get(branchKey(run.cwd, run.branch)) ?? null),
-  );
+const withSyncedBranches = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const branches = yield* Branches;
+    return yield* Effect.provideService(effect, SyncedBranches, {
+      rows: yield* branches.all,
+      want: branches.want,
+    });
+  });
+
+const syncedBranch = (run: RunFacts, wanted = false) =>
+  Effect.gen(function* () {
+    const synced = yield* SyncedBranches;
+    const row = synced.rows.get(branchKey(run.cwd, run.branch));
+    if (row === undefined && wanted) {
+      yield* synced.want(run);
+    }
+    return row ?? null;
+  });
 
 const mrIdAt = (mr: string, run: RunFacts) =>
-  Effect.flatMap(syncedBranch(run), (row) =>
-    row === undefined
-      ? mrIdIn(mr, run.cwd, shell)
-      : Effect.succeed(mrIdWith(mr, row?.project ?? null)),
-  );
+  Effect.map(syncedBranch(run, needsProject(mr)), (row) => mrIdWith(mr, row?.project ?? null));
 
 interface Carried {
   readonly id: string | null;
@@ -1013,7 +988,7 @@ function mrsOf(
 export const ownedMrs = Effect.fn("Board.ownedMrs")(function* (runs: ReadonlyArray<RunFacts>) {
   const carried = yield* Effect.forEach(newestFirst(runs), (run) =>
     Effect.map(mrIdOf(run), (id) => ({ run, id, mr: mrOf(run) })),
-  );
+  ).pipe(withSyncedBranches);
   const entries = mrsOf(
     Arr.flatMap(carried, ({ run, id, mr }) =>
       id === null || mr === null ? [] : [{ run, id, mr }],
@@ -1164,7 +1139,9 @@ export interface KeptCards {
   // WARNING: must give the same answer across a host restart.
   readonly content?: (runs: ReadonlyArray<string>) => string;
   modules?: string;
+  connections?: ReadonlyMap<string, string>;
   readonly kept: Map<string, KeptCard>;
+  offers?: Map<string, { readonly key: string; readonly offers: ReadonlyArray<OfferView> }>;
 }
 
 const cardKey = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
@@ -1189,6 +1166,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: BoardOptions
   const runs = newestFirst(opts.runs ?? (yield* listRuns(opts.env)));
   const records = yield* RunRecords;
   return yield* drawBoard({ ...opts, runs }, records).pipe(
+    withSyncedBranches,
     Effect.provideService(
       RunRecords,
       readAhead(
@@ -1278,6 +1256,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
   }
 
   const flowInputs = yield* flowInputsFor(opts.env, all);
+  const synced = yield* SyncedBranches;
   const leaders = Arr.map([...groups.values()], leaderOf);
   const launches = yield* launchesAhead(
     yield* Launches,
@@ -1341,7 +1320,8 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                 quietMs,
                 [...missingCheckouts],
                 cards.modules ?? "",
-                yield* Effect.forEach(everyRun, syncedBranch),
+                Arr.map(everyRun, (run) => cards.connections?.get(run.cwd) ?? ""),
+                yield* Effect.forEach(everyRun, (run) => syncedBranch(run)),
               ];
         const key = cards === undefined ? "" : cardKey([cards.revision(read), inputs]);
         const touched = yield* RunRecords.use((records) =>
@@ -1371,6 +1351,37 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
             return again.view;
           }
         }
+        const offersFor = Effect.fnUntraced(function* (runId: string) {
+          const run = runsById.get(runId);
+          if (cards === undefined || run === undefined) {
+            return yield* offersOfRun(runId);
+          }
+          const id =
+            Option.getOrUndefined(Arr.findFirst(carried, (one) => one.run.id === runId))?.id ??
+            null;
+          const forged = id === null ? undefined : forge.get(id);
+          // WARNING: the forge reading again what it said is no move, so `read` and `asked` stay out of the key.
+          const { read, asked: _, ...said } = forged ?? { read: undefined };
+          const key = cardKey([
+            cards.content?.([runId]) ?? cards.revision([runId]),
+            touched.get(runId) ?? 0,
+            yield* planIssuesIn(run.dir),
+            yield* openFindingsIn(run.dir),
+            latest(yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => []))),
+            cards.modules ?? "",
+            id === null ? null : (mrStates.get(id) ?? null),
+            forged === undefined ? null : [said, read !== undefined],
+            cards.connections?.get(run.cwd) ?? "",
+          ]);
+          cards.offers ??= new Map();
+          const was = cards.offers.get(runId);
+          if (was?.key === key) {
+            return was.offers;
+          }
+          const offers = yield* offersOfRun(runId);
+          cards.offers.set(runId, { key, offers });
+          return offers;
+        });
         const keep = (view: TaskView | null, due: number, retimed?: KeptCard["retimed"]) => {
           if (cards !== undefined) {
             cards.kept.set(id, { key, digest: digest(), due, view, retimed });
@@ -1632,12 +1643,9 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           disposed: disposition !== null,
           asking: decision !== null,
         });
-        const synced = yield* syncedBranch(leader);
         const movement = landed
           ? null
-          : synced === undefined
-            ? yield* branchMovement(leader)
-            : (synced?.movement?.said ?? null);
+          : ((yield* syncedBranch(leader, true))?.movement?.said ?? null);
         const judged = Effect.fnUntraced(function* (
           id: string | null,
           mr: string | null,
@@ -1652,7 +1660,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                   Effect.provideService(RunRecords, whole),
                   Effect.orElseSucceed(() => []),
                 ),
-                head: forged?.head ?? (yield* opts.head?.(merging) ?? headOf(merging, now)),
+                head: forged?.head ?? (yield* opts.head?.(merging) ?? headOf(merging)),
                 approved: yield* Effect.forEach(
                   approvedFor(
                     yield* approvedIn(merging.evidence),
@@ -1803,7 +1811,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           Option.getOrUndefined(Arr.findFirst(each, (one) => one.mr === shippingMr))?.owner ??
           leader;
         const ownedOffers = yield* Effect.forEach(mrs, (one) =>
-          Effect.map(offersOfRun(one.run), (offers) => ({
+          Effect.map(offersFor(one.run), (offers) => ({
             run: one.run,
             named: one.short,
             offers,
@@ -1826,7 +1834,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
             Number(one.unavailable !== undefined) - Number(other.unavailable !== undefined),
         );
         const offered = planReady
-          ? offerOf(yield* offersOfRun(leader.id))
+          ? offerOf(yield* offersFor(leader.id))
           : shippingMr !== null && go === undefined
             ? shippingOffer(
                 Option.getOrUndefined(
@@ -1900,7 +1908,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                   : (readiness.missing[0]?.said ?? null)
                 : null,
             mrOf,
-            mrIdOf,
+            mrIdOf: (run) => Effect.provideService(mrIdOf(run), SyncedBranches, synced),
           },
           flowInputs,
         );
@@ -2116,6 +2124,11 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
     for (const id of opts.cards.kept.keys()) {
       if (!groups.has(id)) {
         opts.cards.kept.delete(id);
+      }
+    }
+    for (const id of opts.cards.offers?.keys() ?? []) {
+      if (!runsById.has(id)) {
+        opts.cards.offers!.delete(id);
       }
     }
   }

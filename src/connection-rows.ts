@@ -19,6 +19,8 @@ export interface ConnectionRowsApi {
   readonly of: (at: ConnectionAt) => Effect.Effect<ConnectionReading | null>;
   readonly wanted: Effect.Effect<ReadonlyArray<ConnectionAt & { readonly read: number }>>;
   readonly put: (at: ConnectionAt, reading: ConnectionReading, read: number) => Effect.Effect<void>;
+  // WARNING: a checkout's text keys its Runs' offers, so it must move only when one of its readings does.
+  readonly readings: Effect.Effect<ReadonlyMap<string, string>>;
 }
 
 export class ConnectionRows extends Context.Service<ConnectionRows, ConnectionRowsApi>()(
@@ -73,6 +75,18 @@ export const connectionRowsLayer = Layer.effect(ConnectionRows)(
             yield* reactivity.invalidate([CONNECTIONS]);
           }
         }).pipe(Effect.orDie),
+      readings: sql<{ readonly id: string; readonly cwd: string; readonly reading: string | null }>`
+        SELECT id, cwd, reading FROM collie_connections ORDER BY cwd, id
+      `.pipe(
+        Effect.map((rows) => {
+          const byCwd = new Map<string, string>();
+          for (const row of rows) {
+            byCwd.set(row.cwd, `${byCwd.get(row.cwd) ?? ""}${row.id}=${row.reading ?? ""}\n`);
+          }
+          return byCwd;
+        }),
+        Effect.orDie,
+      ),
     } satisfies ConnectionRowsApi;
   }),
 );

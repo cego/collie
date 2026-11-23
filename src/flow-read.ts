@@ -3,7 +3,6 @@ import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Clock, Effect, FileSystem } from "effect";
-import type { ChildProcessSpawner } from "effect/process";
 import type { Flow, FlowLane, FlowNode, FlowRun, MrState } from "./board-model";
 import { mrRefOf, mrUrlOf } from "./board-model";
 import { lastAudit, whoActed } from "./audit";
@@ -178,9 +177,7 @@ export interface TaskFacts {
     | undefined;
   readonly readiness: string | null;
   readonly mrOf: (run: RunFacts) => string | null;
-  readonly mrIdOf: (
-    run: RunFacts,
-  ) => Effect.Effect<string | null, never, ChildProcessSpawner.ChildProcessSpawner>;
+  readonly mrIdOf: (run: RunFacts) => Effect.Effect<string | null>;
 }
 
 export const flowInputsFor = Effect.fn("Flow.inputs")(function* (

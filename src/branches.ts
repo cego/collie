@@ -23,10 +23,19 @@ const decodeBranch = Schema.decodeUnknownOption(BranchJson);
 
 export const branchKey = (cwd: string, branch: string | null) => `${cwd}\0${branch ?? ""}`;
 
+export interface BranchRun {
+  readonly cwd: string;
+  readonly dir: string;
+  readonly branch: string | null;
+  readonly state: string;
+}
+
 export interface BranchesApi {
   readonly all: Effect.Effect<ReadonlyMap<string, Branch>>;
   // WARNING: a write that moves nothing invalidates nothing.
   readonly put: (rows: ReadonlyMap<string, Branch>) => Effect.Effect<void>;
+  readonly want: (run: BranchRun) => Effect.Effect<void>;
+  readonly wanted: Effect.Effect<ReadonlyArray<BranchRun>>;
 }
 
 export class Branches extends Context.Service<Branches, BranchesApi>()("collie/Branches") {}
@@ -53,8 +62,15 @@ export const branchesLayer = Layer.effect(Branches)(
       ),
       Effect.orDie,
     );
+    let asked = new Map<string, BranchRun>();
     return {
       all,
+      want: (run) => Effect.sync(() => void asked.set(branchKey(run.cwd, run.branch), run)),
+      wanted: Effect.sync(() => {
+        const taken = [...asked.values()];
+        asked = new Map();
+        return taken;
+      }),
       put: (rows) =>
         Effect.gen(function* () {
           if (rows.size === 0) {
@@ -86,12 +102,7 @@ export const branchesLayer = Layer.effect(Branches)(
   }),
 );
 
-export const readBranch = Effect.fn("Branches.read")(function* (run: {
-  readonly cwd: string;
-  readonly dir: string;
-  readonly branch: string | null;
-  readonly state: string;
-}) {
+export const readBranch = Effect.fn("Branches.read")(function* (run: BranchRun) {
   const project = yield* projectHere(run.cwd, shell);
   if (run.branch === null) {
     return { head: null, project, movement: null } satisfies Branch;
