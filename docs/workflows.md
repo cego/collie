@@ -831,8 +831,15 @@ back to waiting. A merge the forge refuses is read once more at that head: where
 longer ready, as when another merge left it in conflict with its target branch, the claim is
 given back, the Run says why on its log and goes back to waiting. A confirmed target
 conflict returns to repair and proof, then asks a fresh go naming the repaired head.
-The earlier go authorizes neither merging nor tagging that head. Only a refusal while the
-forge still says it is ready fails the Run. The agent then tags by the repository's own conventions, and Collie reads
+The earlier go authorizes neither merging nor tagging that head. A merge the forge answers
+with an error a retry can clear — a server error, a network failure or timeout, a rate
+limit, GitHub's "Base branch was modified", or GitLab's "Branch cannot be merged" — is tried
+again at the same head within the same go, 10 seconds apart, while the merge request still
+reads ready, up to three attempts in all. Where it still cannot merge, or the merge request
+cannot be read, the Run keeps its claim and parks `forge-unavailable`, naming the head and the
+forge's last reason; once the forge answers again it resumes and merges that head, with no new
+go and no new Run. Only a refusal while the forge still says it is ready fails the Run. The
+agent then tags by the repository's own conventions, and Collie reads
 the tag back on origin, carrying the merged commit, with its pipeline finished and
 succeeded by the forge's word: the pipeline the agent named, or the newest the forge shows
 the tag started, and only one the forge shows ran for that tag and its commit in this

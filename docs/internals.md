@@ -1213,7 +1213,8 @@ merge, unless the pull request is already in the queue at that head, as after a 
 restart. It then reads the pull request every 30 s for up to two hours, Collie's CI bound.
 A merge the queue made at that head answers `Merged` with the queue's merge commit, and any
 other merge answers `AlreadyMerged`; a pull request the queue removed answers `Refused` with
-the reason of its latest `RemovedFromMergeQueueEvent`; a moved head answers `HeadMoved`. One
+the reason of its latest `RemovedFromMergeQueueEvent`; a moved head answers `HeadMoved`; a
+transient failure of the merge-method read, the queue read or the enqueue answers `Transient`. One
 still queued after two hours is dequeued and refused as timed out, so nothing merges while
 no Run waits on it. Where GitHub refuses the dequeue, the adapter asks again at every read
 and answers only once the pull request is out of the queue or merged. GitHub attributes a
