@@ -45,6 +45,7 @@ import { focus } from "./support/focus";
 import { stopHost, until } from "./support/host";
 import { collie, proves } from "./support/world";
 import * as Layer from "effect/Layer";
+import { tellHost } from "../src/tell-host";
 
 const runIdOf = (envelope: { readonly data?: unknown }) =>
   Schema.decodeUnknownEffect(Schema.Struct({ runId: Schema.String }))(envelope.data).pipe(
@@ -335,12 +336,15 @@ test.skipIf(process.getuid?.() === 0)(
             );
             yield* fs.makeDirectory(evidenceDir(world.state, runId), { recursive: true });
             yield* fs.writeFileString(`${evidenceDir(world.state, runId)}/poke`, "");
+            // Nothing is watched: a write the host did not make reaches it when it is told.
+            yield* tellHost(world.state, [`${evidenceDir(world.state, runId)}/poke`]);
             yield* until(
               () => Effect.sync(() => defects.length),
               (count) => count > 0,
             );
             yield* fs.chmod(dir, 0o755);
             yield* fs.writeFileString(`${dir}/log.txt`, "after the defect\n", { flag: "a" });
+            yield* tellHost(world.state, [`${dir}/log.txt`]);
             const after = yield* detailOf(key).pipe(
               Effect.repeat({
                 until: (detail) =>

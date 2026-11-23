@@ -15,6 +15,7 @@ import { Herdr } from "../src/herdr";
 import { agentsIn, liveHerds } from "../src/herds";
 import { connect, frontDoor, socketOf } from "../src/host";
 import { factsOfView, newestFirst } from "../src/runs";
+import { tellHost } from "../src/tell-host";
 import { appendVerification, type Verification } from "../src/verify";
 import { FakeBin } from "./support/bin";
 import { exec } from "./support/command";
@@ -64,7 +65,7 @@ const elsewhere = (world: World, statement: string, params: ReadonlyArray<string
   });
 
 test(
-  "each change made outside the host reaches the board through its own event, and equals a board read from disk",
+  "each change made outside the host reaches the board once the host is told of it, and equals a board read from disk",
   () =>
     proves(
       "collie-run-model-host-",
@@ -166,6 +167,8 @@ test(
           };
 
           const client = yield* connect(world.state).pipe(Effect.orDie);
+          // Nothing is watched: a write the host did not make reaches it when it is told.
+          const told = (path: string) => tellHost(world.state, [path]);
           const spawning = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>();
           const fromDisk = Effect.gen(function* () {
             const views = yield* client.runs({ task: null }).pipe(Effect.orDie);
@@ -232,6 +235,7 @@ test(
             }),
             store,
           ]);
+          yield* told(`${world.state}/runs/${store}`);
           yield* arrival(mark, changed);
           yield* equalsDisk;
 
@@ -247,6 +251,7 @@ test(
             encodeJson({ cwd: repo, branch: "mk/ship", workspace: null, worktree: null }),
             checkout,
           ]);
+          yield* told(`${world.state}/runs/${checkout}`);
           const record: Verification = {
             id: `v-test-${head}`,
             run: checkout,
@@ -271,6 +276,8 @@ test(
           });
           mark = seen.length;
           yield* git("commit", "-q", "--allow-empty", "-m", "two");
+          // An agent's turn ending says as much, which has the git syncer read its branch.
+          yield* told(`${world.state}/runs/${checkout}`);
           yield* arrival(mark, (tasks) => {
             const card = cardOf(tasks, checkout);
             return card._tag === "Some" && card.value.checks?.state === "unchecked";
@@ -297,6 +304,7 @@ test(
             `${world.install}/user/workflows/notes.md`,
             `${runDir}/plan/issues/01-next.md`,
           ]);
+          yield* told(`${runDir}/plan/issues/01-next.md`);
           yield* arrival(mark, changed);
           yield* equalsDisk;
 
@@ -305,12 +313,14 @@ test(
           mark = seen.length;
           changed = changedFrom(files);
           yield* exec(["mv", runDir, kept]);
+          yield* told(runDir);
           yield* arrival(mark, changed);
           yield* equalsDisk;
 
           mark = seen.length;
           changed = changedFrom(files);
           yield* exec(["cp", "-r", kept, runDir]);
+          yield* told(runDir);
           yield* arrival(mark, changed);
           yield* equalsDisk;
         }).pipe(Effect.provide(recordsAt(world.state))),

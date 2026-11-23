@@ -36,6 +36,7 @@ import {
 import { buildBoard } from "../src/board";
 import { readEnv } from "../src/env";
 import { recordDisposition } from "../src/disposition";
+import { MergeRequests, MrEntry } from "../src/merge-requests";
 import type { TaskRecord } from "../src/task";
 import { epochMs } from "../src/time";
 import { withLock } from "../src/lock";
@@ -296,6 +297,14 @@ const plan = (inputs: Record<string, string>, explicit?: string, extra: Partial<
     login: LOGIN,
     ...extra,
   });
+
+/** The forge's answers as the Merge watch keeps them, each over an older one. */
+const forgeAnswered = Effect.fn("test.forgeAnswered")(function* (json: string) {
+  const entries = yield* Schema.decodeEffect(
+    Schema.fromJsonString(Schema.Record(Schema.String, MrEntry)),
+  )(json).pipe(Effect.orDie);
+  yield* (yield* MergeRequests).merge(new Map(Rec.toEntries(entries)));
+});
 
 test("only the workflows that declare a checkout get one of their own", () => {
   expect(mutates("branch")).toBe(true);
@@ -3470,9 +3479,7 @@ test("a merge the merge watch recorded on GitHub settles a branch still on the r
       const at = yield* collieWorktree("wt");
       recorded = Arr.map(recorded, (run) => ({ ...run, mr: "https://github.com/o/r/pull/5" }));
       yield* settledGit({ "ls-remote --heads origin": "deadbeef refs/heads/wt" });
-      yield* fs.makeDirectory(`${rig.stateDir}/board`, { recursive: true });
-      yield* fs.writeFileString(
-        `${rig.stateDir}/board/mr-states.json`,
+      yield* forgeAnswered(
         '{"github.com/o/r#5":{"state":"merged","checks":{"state":"passed"},"head":"abc","read":"2026-09-14T09:00:00Z"}}',
       );
       settling = yield* settlingOf({
@@ -3513,9 +3520,7 @@ test("a legacy bare mr: target is settled as the merge request of its checkout's
         "worktree remove": "",
         "branch -d": "Deleted branch.",
       });
-      yield* fs.makeDirectory(`${rig.stateDir}/board`, { recursive: true });
-      yield* fs.writeFileString(
-        `${rig.stateDir}/board/mr-states.json`,
+      yield* forgeAnswered(
         '{"gitlab.example.com/group/app!42":{"state":"merged","read":"2026-09-14T09:00:00Z"},"gitlab.example.com/group/web!42":{"state":"open","read":"2026-09-14T09:00:00Z"}}',
       );
       settling = yield* settlingOf({
@@ -3637,9 +3642,7 @@ const sharedCheckout = Effect.fn("worktreeTest.sharedCheckout")(function* (
       note: null,
     });
   recorded = [first, second];
-  yield* fs.makeDirectory(`${rig.stateDir}/board`, { recursive: true });
-  yield* fs.writeFileString(
-    `${rig.stateDir}/board/mr-states.json`,
+  yield* forgeAnswered(
     `{"gitlab.cego.dk/mk/support!279":{"state":"${state}","read":"2026-09-14T09:00:00Z"}}`,
   );
   const views = yield* buildBoard({
@@ -3715,11 +3718,10 @@ for (const taskless of [false, true])
               note: null,
             });
           const fs = yield* FileSystem.FileSystem;
-          yield* fs.writeFileString(
-            `${rig.stateDir}/board/mr-states.json`,
+          yield* forgeAnswered(
             answer === "closed"
               ? '{"gitlab.cego.dk/mk/support!279":{"state":"closed","read":"2026-09-14T10:00:00Z"}}'
-              : "{}",
+              : '{"gitlab.cego.dk/mk/support!279":{"read":"2026-09-14T10:00:00Z"}}',
           );
           const views =
             answer === "board-failed"

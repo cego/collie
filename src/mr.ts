@@ -289,17 +289,24 @@ export function mrIdIn<R>(
   run: Runner<R>,
 ): Effect.Effect<string | null, never, R> {
   return Effect.gen(function* () {
-    const id = mrId(mr);
-    if (id !== null) return id;
-    const said = Str.trim(mr);
-    if (readMrRef(said, { project: null }) === null && readMrRef(`mr:${said}`) === null)
-      return null;
+    if (!needsProject(mr)) return mrId(mr);
     const known = checkouts.get(cwd);
     const project = known ?? (yield* projectHere(cwd, run));
     if (project !== null) checkouts.set(cwd, project);
     return mrId(mr, { project });
   });
 }
+
+/** Whether `mr` is a bare or hostless reference, which only a checkout's project resolves. */
+const needsProject = (mr: string) => {
+  if (mrId(mr) !== null) return false;
+  const said = Str.trim(mr);
+  return readMrRef(said, { project: null }) !== null || readMrRef(`mr:${said}`) !== null;
+};
+
+/** `mrIdIn` with the checkout's project already read, as the git syncer keeps it. */
+export const mrIdWith = (mr: string, project: string | null): string | null =>
+  needsProject(mr) ? mrId(mr, { project }) : mrId(mr);
 
 // ponytail: a checkout's project for the process's life, read only for legacy references.
 const checkouts = new Map<string, string>();
@@ -315,15 +322,18 @@ export function forgeHere<R>(
   run: Runner<R>,
   gitlabHost?: string,
 ): Effect.Effect<ForgeHere, never, R> {
-  return Effect.map(projectHere(cwd, run), (project): ForgeHere => {
-    if (project === null) return { ok: false, reason: "this repo has no remote" };
-    const host = Str.split(project, "/")[0]!;
-    const name = forgeOfHost(host, gitlabHost);
-    return name === null
-      ? { ok: false, reason: `${host} is neither GitHub nor GitLab` }
-      : { ok: true, forge: FORGES[name], project };
-  });
+  return Effect.map(projectHere(cwd, run), (project) => forgeOfProject(project, gitlabHost));
 }
+
+/** `forgeHere` of a checkout whose project was already read, as the git syncer keeps it. */
+export const forgeOfProject = (project: string | null, gitlabHost?: string): ForgeHere => {
+  if (project === null) return { ok: false, reason: "this repo has no remote" };
+  const host = Str.split(project, "/")[0]!;
+  const name = forgeOfHost(host, gitlabHost);
+  return name === null
+    ? { ok: false, reason: `${host} is neither GitHub nor GitLab` }
+    : { ok: true, forge: FORGES[name], project };
+};
 
 /** Whether the forge shows production carrying `sha`: false where it cannot say. */
 export function productionCarries<R>(
