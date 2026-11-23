@@ -146,15 +146,12 @@ export const noteReminder = (
     build: line.build,
   });
 
-/** A ticket's slice as it stands: started, then done. */
 export const noteSlice = (runDir: string, at: string, ticket: string, status: string) =>
   appendMetric(runDir, { at, kind: "slice", subject: ticket, value: 0, note: status });
 
-/** A review round starting, its number as the rally counts it. */
 export const noteRound = (runDir: string, at: string, round: string, n: number) =>
   appendMetric(runDir, { at, kind: "round", subject: round, value: n, note: "" });
 
-/** One context sample the harness reported at a work boundary. */
 export const noteContext = (runDir: string, at: string, agent: string, tokens: number) =>
   appendMetric(runDir, { at, kind: "context", subject: agent, value: tokens, note: "" });
 
@@ -258,7 +255,7 @@ export function metricsOf(lines: ReadonlyArray<Metric>, createdAt: string) {
         slices.set(line.subject, line.note);
         break;
       case "round":
-        // A round past the first reviews a fix.
+        // WARNING: a round past the first reviews a fix.
         if (line.value > 1) {
           rework += 1;
         }

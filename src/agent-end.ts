@@ -1,15 +1,3 @@
-// The one way a Run's agent ends (ADR-0059 D1, D4). Every end takes the same steps, in
-// this order:
-//
-// 1. prove the incarnation is this Run's, from its launch record;
-// 2. stop it where its work runs;
-// 3. require it to be Quiet;
-// 4. end its core terminal, and require what ran in it to be Quiet;
-// 5. log the end on the Run's log.
-//
-// In the caller's mode, steps 4 and 5 are the caller's: it ends the terminals itself once
-// every agent has answered, then logs each end with `endedLine`.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Clock, Data, Effect, FileSystem, Schedule } from "effect";
@@ -31,10 +19,6 @@ export type Closes = "close" | "caller";
 
 export type Ended =
   | { readonly _tag: "Closed"; readonly ended: boolean }
-  /**
-   * `locked` is why no stop could be made, where none could. `left` is what of its pane was
-   * still running once it closed.
-   */
   | {
       readonly _tag: "NotQuiet";
       readonly reason: string;
@@ -142,8 +126,7 @@ const ending = Effect.fnUntraced(function* (
       : ({ _tag: "Closed", ended: false } satisfies Ended);
   }
 
-  // Read before the stop, while a harness that answers only alive can name its records,
-  // and again once Quiet, for what it did after.
+  // WARNING: read before the stop, while a harness that answers only alive can still name its records.
   if (deps.account !== undefined) {
     yield* deps.account(launched.agent);
   }
@@ -165,7 +148,6 @@ const ending = Effect.fnUntraced(function* (
     } satisfies Ended;
   }
 
-  // Only where its work is in its terminal, and this end ends it.
   const pane =
     reached.success === null && closes === "close"
       ? yield* paneProcesses(deps, launched.root, one?.paneId)
@@ -174,7 +156,7 @@ const ending = Effect.fnUntraced(function* (
   if (deps.account !== undefined) {
     yield* deps.account(launched.agent);
   }
-  // Ended on purpose, so nothing starts it again.
+  // WARNING: ended on purpose, so nothing may start it again.
   const runId = launched.runId;
   if (runId !== undefined) {
     yield* RunRecords.use((records) => records.setControl(RELAUNCH, runId, null, launched.agent));
@@ -212,7 +194,6 @@ const ending = Effect.fnUntraced(function* (
   return { _tag: "Closed", ended } satisfies Ended;
 });
 
-/** The process at a pane's root now, which its agent's start records; undefined where none is named. */
 export const rootOf = (herdr: Pick<Herdr, "terminalRoot">, address: string) =>
   Effect.gen(function* () {
     const pid = yield* herdr.terminalRoot(address).pipe(Effect.orElseSucceed(() => null));
@@ -220,14 +201,9 @@ export const rootOf = (herdr: Pick<Herdr, "terminalRoot">, address: string) =>
     return pid === null || started === null ? undefined : { pid, started };
   });
 
-/** How long what a closed pane leaves gets to end before each process is sent its one SIGTERM. */
 const HANGUP_GRACE_MS = 2000;
 
-/**
- * Every process of the agent's pane, read before its close: the session of the root its
- * start recorded and of the root its pane has now. A root whose pid is now another process
- * names nothing; where none names anything, why Quiet cannot be confirmed.
- */
+// WARNING: a root whose pid now belongs to another process names nothing.
 const paneProcesses = Effect.fnUntraced(function* (
   deps: Pick<EndDeps, "herdr">,
   recorded: SeenProcess | undefined,
@@ -268,10 +244,7 @@ const paneProcesses = Effect.fnUntraced(function* (
   return { roots, noted };
 });
 
-/**
- * What of a closed pane is still running once the stop's budget is spent: each process left
- * after the grace a hang-up gets is sent one SIGTERM, as a Codex server's session is.
- */
+// WARNING: each process still running after the hang-up grace gets exactly one SIGTERM.
 const settled = Effect.fnUntraced(function* (
   roots: ReadonlyArray<SeenProcess>,
   noted: ReadonlyArray<SeenProcess>,
@@ -280,8 +253,7 @@ const settled = Effect.fnUntraced(function* (
   const start = yield* Clock.currentTimeMillis;
   const running = Effect.gen(function* () {
     const found = [...noted];
-    // A process started as the pane closed is in its session too, while its root's pid is
-    // not another process's.
+    // WARNING: a process started as the pane closed is in its session too, while its root's pid is not reused.
     for (const root of roots) {
       const now = yield* processOf(root.pid);
       if (now !== null && now.started !== root.started) {
@@ -316,7 +288,6 @@ const settled = Effect.fnUntraced(function* (
   );
 });
 
-/** A Run's log, for an end its Agents service does not make. */
 export const runLog = (stateDir: string, runId: string) => (line: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

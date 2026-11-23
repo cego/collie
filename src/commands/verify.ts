@@ -131,7 +131,7 @@ export const verify = Command.make(
       return printResult(err("invalid_input", "verify needs a command to run."), true);
     }
     const wanted = Option.getOrElse(expect, () => "pass");
-    // ponytail: split on spaces, so a prepare that needs a quoted word goes in a script.
+    // WARNING: split on spaces, so a prepare that needs a quoted word goes in a script.
     const [prepareWith, ...prepareArgv] = Arr.filter(
       Str.split(
         Option.getOrElse(prepare, () => ""),

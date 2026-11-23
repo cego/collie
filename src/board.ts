@@ -217,11 +217,9 @@ export interface ForgeFacts {
   readonly mergeable?: Mergeability;
   readonly source?: string;
   readonly target?: string;
-  /** Who opened it, its approvals as the forge phrases them, and whether a discussion is open. */
   readonly author?: string;
   readonly approvals?: string;
   readonly unresolved?: boolean;
-  /** When the forge gave this answer, and when the watch last asked it. */
   readonly read?: string;
   readonly asked?: string;
 }
@@ -640,7 +638,7 @@ function stateOf(
   if (status === "succeeded" || status === "ended") {
     return "done";
   }
-  // WARNING: under the endings, since only a Run still going can be waiting for anyone.
+  // WARNING: checked after the ending statuses, because a finished Run cannot be waiting on anyone.
   if (stalled) {
     return "blocked";
   }
@@ -720,13 +718,11 @@ export const readBranchHead = Effect.fn("Board.readBranchHead")(function* (run: 
   return read.code === 0 && sha !== "" ? sha : null;
 });
 
-/** The commit `run`'s branch is at, as the git syncer last read it where it keeps it. */
 const headOf = (run: RunFacts, now: number) =>
   Effect.flatMap(syncedBranch(run), (row) =>
     row === undefined ? branchHead(run, now) : Effect.succeed(row?.head ?? null),
   );
 
-/** `readBranchHead`, read again only once `HEAD_FOR_MS` has passed. */
 const branchHead = Effect.fn("Board.branchHead")(function* (run: RunFacts, now: number) {
   if (run.branch === null) {
     return null;
@@ -770,10 +766,8 @@ function basename(path: string) {
   return Str.split(pipe(path, Str.replace(/\/+$/, "")), "/").at(-1) ?? path;
 }
 
-/** The role whose work moves from agent to agent under `agent_sessions: ticket`. */
 const BUILDER_ROLE = "implementer";
 
-/** Each Run's registered agents, grouped once for every card a build asks about. */
 const groupedRegistered = new WeakMap<ReadonlyArray<AgentEntry>, Map<string, Array<AgentEntry>>>();
 const registeredByRun = (registered: ReadonlyArray<AgentEntry>) => {
   const kept = groupedRegistered.get(registered);
@@ -793,11 +787,7 @@ const registeredByRun = (registered: ReadonlyArray<AgentEntry>) => {
   return byRun;
 };
 
-/**
- * The Task's agents herdr still has. One entry per live agent, however many Runs it
- * worked for: a card counts agents, not the work they took. A Run whose builder work moved
- * on from agent to agent also lists, `ended`, each builder before the live one.
- */
+// WARNING: one entry per live agent however many Runs it worked for: a card counts agents, not work.
 function agentsOf(
   runs: ReadonlyArray<RunFacts>,
   registered: ReadonlyArray<AgentEntry>,
@@ -965,11 +955,7 @@ const mrIdOf = (run: RunFacts) => {
   return mr === null ? Effect.succeed(null) : mrIdAt(mr, run);
 };
 
-/**
- * What the git syncer last read of each checkout and branch, by `branchKey`, where a host
- * keeps it (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs); null where git is
- * asked as a card is drawn, as a process with no host does.
- */
+// WARNING: null where git is asked as a card is drawn, as a process with no host does.
 export const SyncedBranches = Context.Reference<ReadonlyMap<string, Branch> | null>(
   "collie/SyncedBranches",
   { defaultValue: () => null },
@@ -980,7 +966,6 @@ const syncedBranch = (run: RunFacts) =>
     rows === null ? undefined : (rows.get(branchKey(run.cwd, run.branch)) ?? null),
   );
 
-/** `mr`'s MR id as read in `run`'s checkout. */
 const mrIdAt = (mr: string, run: RunFacts) =>
   Effect.flatMap(syncedBranch(run), (row) =>
     row === undefined
@@ -988,7 +973,6 @@ const mrIdAt = (mr: string, run: RunFacts) =>
       : Effect.succeed(mrIdWith(mr, row?.project ?? null)),
   );
 
-/** A merge request of a Task, as its Runs carry it. */
 interface Carried {
   readonly id: string | null;
   readonly mr: string;
@@ -1163,13 +1147,10 @@ const GOING_EVERY_MS = 5000;
 
 export interface KeptCard {
   readonly key: string;
-  /** What it was derived from by content, which a later host can check without deriving it. */
   readonly digest: string;
-  /** When time alone next changes what the card says. */
   readonly due: number;
   readonly view: TaskView | null;
   readonly retimed?: ((now: number) => Retimed | null) | undefined;
-  /** Read from the projection a previous host wrote: kept only where its digest still holds. */
   readonly unconfirmed?: true;
 }
 
@@ -1180,9 +1161,8 @@ interface Retimed {
 
 export interface KeptCards {
   readonly revision: (runs: ReadonlyArray<string>) => number;
-  /** What a set of Runs' facts are, by content: the same across a host restart. */
+  // WARNING: must give the same answer across a host restart.
   readonly content?: (runs: ReadonlyArray<string>) => string;
-  /** The workflow modules' kept revisions, which a card's offers are resolved from. */
   modules?: string;
   readonly kept: Map<string, KeptCard>;
 }
@@ -1234,7 +1214,6 @@ interface BoardOptions {
   only?: string;
   includeHistory?: boolean;
   flows?: Map<string, Flow>;
-  /** The commit a Run's branch is at, where a caller reads it its own way. */
   head?: (run: RunFacts) => Effect.Effect<string | null>;
   cards?: KeptCards;
 }
@@ -1369,7 +1348,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           records.activity(Arr.map(everyRun, (run) => run.id)),
         );
         let digested: string | undefined;
-        // Its Runs' facts and when each last did anything, in place of revisions a restart renumbers.
+        // WARNING: facts and last activity, not revisions, which a restart renumbers.
         const digest = () =>
           (digested ??= digestOf([
             cards?.content?.(read) ?? "",
@@ -1399,8 +1378,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           return view;
         };
         yield* boundary;
-        // A Run records no end of its own: its last activity is when it ended, and a Run
-        // that wrote nothing ended no later than it began.
+        // WARNING: a Run records no end of its own; one that wrote nothing ended no later than it began.
         const endedAt = (run: RunFacts) =>
           run.finished === null
             ? touched.get(run.id) || epochMs(run.created)
@@ -1660,7 +1638,6 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           : synced === undefined
             ? yield* branchMovement(leader)
             : (synced?.movement?.said ?? null);
-        /** A merge request's checks and readiness, read in the Run `merging`. */
         const judged = Effect.fnUntraced(function* (
           id: string | null,
           mr: string | null,
@@ -2228,7 +2205,6 @@ export function whereItIs(view: TaskView) {
   );
 }
 
-/** How many agents are on it, or nothing where herdr has none left. */
 export function agentCount(view: TaskView) {
   const n = Arr.filter(view.agents, (one) => one.status !== ENDED_AGENT).length;
   return n === 0 ? "" : `${n} ${n === 1 ? "agent" : "agents"}`;

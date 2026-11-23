@@ -1,7 +1,3 @@
-// Each Connection reading an offer needs, as the host last read it, in its database
-// (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs). A listing's offers read the
-// row; taking an offer, and the syncer, read the Connection itself.
-
 import * as Arr from "effect/Array";
 import { Context, Effect, Layer, Option, Result, Schema, flow } from "effect";
 import * as Reactivity from "effect/reactivity/Reactivity";
@@ -13,16 +9,14 @@ const encodeReading = flow(Schema.encodeResult(ReadingJson), Result.getOrThrow);
 const decodeReading = Schema.decodeUnknownOption(ReadingJson);
 const decodeId = Schema.decodeUnknownOption(ConnectionId);
 
-/** Where a Connection is read: its id, and the checkout it is read from. */
 export interface ConnectionAt {
   readonly id: ConnectionId;
   readonly cwd: string;
 }
 
 export interface ConnectionRowsApi {
-  /** The kept reading, or null where none was read yet, which asks the syncer for one. */
+  // WARNING: a null reading asks the syncer for one.
   readonly of: (at: ConnectionAt) => Effect.Effect<ConnectionReading | null>;
-  /** Every Connection a listing asked for: those never read first. */
   readonly wanted: Effect.Effect<ReadonlyArray<ConnectionAt & { readonly read: number }>>;
   readonly put: (at: ConnectionAt, reading: ConnectionReading, read: number) => Effect.Effect<void>;
 }
@@ -31,7 +25,6 @@ export class ConnectionRows extends Context.Service<ConnectionRows, ConnectionRo
   "collie/ConnectionRows",
 ) {}
 
-/** What a moved reading invalidates. */
 export const CONNECTIONS = "collie/connections";
 
 export const connectionRowsLayer = Layer.effect(ConnectionRows)(

@@ -85,7 +85,6 @@ export type ToDoor =
       readonly offers: ReadonlyArray<readonly [string, ReadonlyArray<OfferView>]>;
     }
   | { readonly _tag: "Wrote" }
-  /** The engine serves the front door from now on: it has started its Runs. */
   | { readonly _tag: "Serving" }
   | { readonly _tag: "Answer"; readonly ask: number; readonly value: unknown };
 
@@ -354,7 +353,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
       readonly frame: RpcMessage.FromServerEncoded;
     }>();
 
-    /** Until the engine serves, the door answers a board with the projection first. */
+    // WARNING: until the engine serves, the door answers a board with the projection first.
     let engineServing = false;
     const told = (message: ToDoor) => {
       switch (message._tag) {
@@ -490,11 +489,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
         Effect.map((records) => Context.merge(bun, records)),
       ),
     );
-    /**
-     * The cards the last host left, as a first board, read over a connection of the door's own
-     * (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs): the engine answers a
-     * board only once it has started, which can take seconds. Null where none can be read.
-     */
+    // WARNING: the engine answers a board only once started, which can take seconds; null where none can be read.
     const projection = yield* Effect.cached(
       Effect.gen(function* () {
         const context = yield* Layer.buildWithScope(
@@ -533,7 +528,6 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
         Effect.catchCause(() => Effect.succeed(null)),
       ),
     );
-    /** Each board request the door answered first, by `conn:id`: the Acks of its own chunk. */
     const boardsFirst = new Map<string, { swallow: number; answered: boolean }>();
     const boardKey = (conn: number, id: string | number) => `${conn}:${id}`;
     const boardAsked = yield* Queue.unbounded<{
@@ -667,7 +661,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
         boardsFirst.set(boardKey(conn, frame.id), { swallow: 0, answered: false });
         Queue.offerUnsafe(boardAsked, { conn, id: frame.id });
       }
-      // The client's Ack of the door's own chunk is not the engine's to hear.
+      // WARNING: the client's Ack of the door's own chunk is not the engine's to hear.
       if (frame._tag === "Ack") {
         const key = boardKey(conn, frame.requestId);
         const first = boardsFirst.get(key);

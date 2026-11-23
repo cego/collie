@@ -53,7 +53,6 @@ const SpecSchema = Schema.Struct({
   test: Schema.optionalKey(FailedTestSchema),
   own: VerificationSchema.fields.own,
   environment: Schema.optionalKey(Schema.String),
-  /** Where it runs in an isolated checkout, the directory its record names instead. */
   isolated: Schema.optionalKey(
     Schema.Struct({
       ...IsolatedSchema.fields,

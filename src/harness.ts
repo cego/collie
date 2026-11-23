@@ -288,11 +288,6 @@ export const CollieStatus = async () => {
 };
 `;
 
-/**
- * The OpenCode plugin that records, in `file`, what the server reports of each finished
- * message, each completed tool call's output size and each prompt's opening, with the
- * session a sub-agent's work belongs to: the usage ledger's record of an OpenCode agent.
- */
 export const opencodeUsage = (file: string) => `import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -341,7 +336,6 @@ export const CollieUsage = async () => ({
 });
 `;
 
-/** The harness argv an agent is started with in its core terminal. */
 export function startArgs(
   harness: HarnessAdapter,
   model: string,

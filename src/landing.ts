@@ -32,7 +32,7 @@ export const MergeOutcomeSchema = Schema.Union([
     at: Schema.String,
   }),
   Schema.TaggedStruct("Refused", { reason: Schema.String }),
-  /** Unmerged on a failure a later merge at the same head may clear. */
+  // WARNING: a later merge at the same head may clear a Transient failure.
   Schema.TaggedStruct("Transient", { reason: Schema.String }),
 ]);
 export type MergeOutcome = typeof MergeOutcomeSchema.Type;
@@ -110,8 +110,7 @@ export const settleLeft = Effect.fn("Landing.settleLeft")(function* (
 
 const outside = (by: string) => `merged outside this Run by ${by}`;
 
-/** The outcome a settled attempt came to, or null for one still unmerged. */
-const settledOutcome = (settled: Settled): MergeOutcome | null => {
+const settledOutcome: (settled: Settled) => MergeOutcome | null = (settled) => {
   if (settled._tag === "Landed") {
     return { _tag: "Merged", sha: settled.sha };
   }
@@ -122,7 +121,6 @@ const settledOutcome = (settled: Settled): MergeOutcome | null => {
   return null;
 };
 
-/** Whether two references name one merge request, a legacy one read in the checkout at `cwd`. */
 const sameMr = <R>(
   one: string,
   other: string,

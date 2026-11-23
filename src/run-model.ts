@@ -135,9 +135,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     return at;
   };
   const touchFacts = (run: string) => touch(run, true);
-  /** Each write through the host, to a file or a row, and each read it was told to make again. */
   const changes = yield* PubSub.sliding<void>(1);
-  /** The Runs whose rows were written. */
   const wrote = (runs: ReadonlyArray<string>) => {
     for (const run of runs) {
       touchFacts(run);
@@ -412,7 +410,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
       : next();
 
   const hashes = new Map<string, { readonly text: string; readonly hash: string }>();
-  /** The Runs' facts by content, not by revision: what a later host can compare. */
+  // WARNING: by content, not revision, so a later host can compare.
   const content = (runs: ReadonlyArray<string>) =>
     Arr.join(
       Arr.map(runs, (run) => {
@@ -498,7 +496,6 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
     unfinished,
     planned,
     indexes: () => indexes,
-    /** Each time a write through the host, or a read it was told to make again, moved a Run. */
     changed: Stream.fromPubSub(changes),
   };
 });

@@ -1,6 +1,3 @@
-// What a Run's host recorded that a comparison of Runs reads: its reviewers' findings, its
-// required Checks on its final tree, who intervened from outside it, and when it ended.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Effect, FileSystem, Schema } from "effect";

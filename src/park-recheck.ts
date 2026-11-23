@@ -60,7 +60,6 @@ const NotQuiet = Schema.fromJsonString(
 
 const notQuietJournal = (dir: string) => runJournal(dir, "not-quiet.jsonl");
 
-/** The predecessor a `predecessor-not-quiet` park waits on, and what of its pane was left. */
 export const rememberNotQuiet = (dir: string, predecessor: typeof NotQuiet.Type) =>
   appendRunJournal(notQuietJournal(dir), NotQuiet, predecessor);
 
@@ -75,7 +74,6 @@ const StaleHandOver = Schema.fromJsonString(
 
 const staleHandOverJournal = (dir: string) => runJournal(dir, "hand-over-stale.jsonl");
 
-/** The checkout a `hand-over-stale` park last saw, which its recheck waits to see hold still. */
 export const rememberStaleHandOver = (dir: string, seen: typeof StaleHandOver.Type) =>
   appendRunJournal(staleHandOverJournal(dir), StaleHandOver, seen);
 
@@ -287,8 +285,9 @@ export const recheckPark = (
           return reply(false, "no predecessor recorded");
         }
         for (const one of last.left) {
-          if (yield* stillRunning(one))
+          if (yield* stillRunning(one)) {
             return reply(false, `${last.agent}'s pid ${one.pid} is still running`);
+          }
         }
         const kept = yield* readControl(stateDir, last.agent).pipe(
           Effect.flatMap((record) => (record === null ? Effect.succeed(null) : keptFor(record))),

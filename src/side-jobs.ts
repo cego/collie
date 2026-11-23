@@ -151,16 +151,9 @@ const LOOK_EVERY = "5 seconds";
 // WARNING: a forge is asked about a merge request every 5 minutes whatever this is.
 const MERGES_EVERY = "10 seconds";
 const SWEEP_EVERY = "10 minutes";
-/**
- * How often what the host keeps is read again for a change made outside Collie, which
- * nothing else tells it of (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs).
- */
+// WARNING: the backstop poll is the only way the host hears of a change made outside Collie.
 export const BACKSTOP_EVERY = "5 minutes";
 const BACKSTOP_MS = 5 * 60_000;
-/**
- * The Connection syncer: each Connection a listing asked for and none read yet, at once; every
- * one kept, on the backstop poll. A listing's offers read only these rows.
- */
 export const connectionSync = (env: PluginEnv) =>
   every(
     GIT_SYNC_EVERY,
@@ -168,22 +161,16 @@ export const connectionSync = (env: PluginEnv) =>
       const rows = yield* ConnectionRows;
       const now = yield* Clock.currentTimeMillis;
       for (const at of yield* rows.wanted) {
-        if (at.read === 0 || now - at.read >= BACKSTOP_MS)
+        if (at.read === 0 || now - at.read >= BACKSTOP_MS) {
           yield* rows.put(at, yield* connectionOnMachine({ ...env, cwd: at.cwd }, at.id), now);
+        }
       }
     }),
   );
 
-/** How often the git syncer looks for cards that moved, whose branches it reads again. */
 const GIT_SYNC_EVERY = "2 seconds";
-/** A git round slower than this is logged, so a stuck checkout is visible. */
 const GIT_SLOW_MS = 5000;
 
-/**
- * The git syncer: the branch of each Run on a card that moved, which a turn, a Step's end, a
- * publish or a push does, read again; every live card's on the backstop poll. A card's
- * derivation reads only what this kept (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs).
- */
 export const gitSync = <E, R>(
   board: Effect.Effect<
     { readonly runs: ReadonlyArray<RunFacts>; readonly views: ReadonlyArray<TaskView> },
@@ -192,7 +179,6 @@ export const gitSync = <E, R>(
   >,
   recover: (runId: string) => Effect.Effect<void> = () => Effect.void,
 ) => {
-  /** Each card's revision when its branches were last read. */
   const seen = new Map<string, string>();
   let backstopAt = Number.NEGATIVE_INFINITY;
   return every(
@@ -389,9 +375,7 @@ export const sideJobs = <E, R>(opts: {
   readonly watches: Watches;
   readonly requested: Requested;
   readonly sweepers: Effect.Effect<ReadonlyArray<Sweeper>, E, R>;
-  /** Merge requests a Run just pushed to, which the merge watch reads on its next round. */
   readonly nudged?: Set<string>;
-  /** Reads from git what a follow-up of a Run would enter at. */
   readonly recover?: (runId: string) => Effect.Effect<void>;
 }) => {
   const { env, herdr } = opts;

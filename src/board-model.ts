@@ -194,10 +194,8 @@ export type Proposal = typeof Proposal.Type;
 export const Decision = Schema.Union([Question, Proposal]);
 export type Decision = typeof Decision.Type;
 
-/** A card agent's status once core no longer has it. */
 export const ENDED_AGENT = "ended";
 
-/** One live agent of the Task, as a card counts them and a search matches them. */
 export const BoardAgent = Schema.Struct({
   name: Schema.String,
   role: Schema.optionalKey(Schema.String),
@@ -454,12 +452,8 @@ export const TaskView = Schema.Struct({
   at: Schema.Finite,
   flow: Schema.optionalKey(FlowStrip),
   revision: Schema.optionalKey(RunRevision),
-  /**
-   * False while this host has not yet confirmed a card the previous host derived; absent once it
-   * has, and from an older host.
-   */
+  // WARNING: absent means confirmed, as an older host writes it.
   confirmed: Schema.optionalKey(Schema.Boolean),
-  /** When an unconfirmed card was derived, in epoch milliseconds. */
   asOf: Schema.optionalKey(Schema.Finite),
 });
 export type TaskView = typeof TaskView.Type;
@@ -1173,7 +1167,6 @@ export const SteerOutcome = Schema.Struct({
 });
 export type SteerOutcome = typeof SteerOutcome.Type;
 
-// WARNING: amending an Intent, forking a definition and changing a workspace's defaults are collie_propose's, not the board's.
 export const ASKED_KINDS = [
   "stop",
   "resume",
@@ -1365,12 +1358,9 @@ export const FrontDoorRpcs = RpcGroup.make(
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
   Rpc.make("board", { success: BoardMessage, stream: true }),
-  /**
-   * A process other than the host wrote these paths, which nothing watches: a helper (status
-   * line, hook, compactor) or a CLI command, so the host reads them again.
-   */
+  // WARNING: nothing watches these paths; a helper or CLI that wrote them must send this.
   Rpc.make("wrote", { payload: { paths: Schema.Array(Schema.String) } }),
-  /** Each toast raised while subscribed; one raised with nobody subscribed is dropped. */
+  // WARNING: a toast raised with nobody subscribed is dropped.
   Rpc.make("toasts", { success: Toasted, stream: true }),
   // WARNING: a channel that never declares is stamped cli, never a human.
   Rpc.make("declare", {
@@ -1535,7 +1525,6 @@ export const FrontDoorRpcs = RpcGroup.make(
       cwd: Schema.optionalKey(Schema.String),
       expect: Schema.Literals(["pass", "fail"]),
       again: Schema.optionalKey(Schema.Boolean),
-      /** Run in a detached checkout of the start tree, after `prepare` there. */
       isolated: Schema.optionalKey(Schema.Boolean),
       prepare: Schema.optionalKey(PrepareSchema),
     },

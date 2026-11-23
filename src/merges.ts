@@ -6,15 +6,7 @@ import { MergeRequests } from "./merge-requests";
 import type { MergeRequestsApi, MrEntry } from "./merge-requests";
 import type { ForgeFacts } from "./board";
 import { readEnv } from "./env";
-import {
-  Mergeability,
-  mrId,
-  mrIdProject,
-  mrLabel,
-  mrRefOf,
-  parseMrTarget,
-  readMrRef,
-} from "./board-model";
+import { mrId, mrIdProject, mrLabel, mrRefOf, parseMrTarget, readMrRef } from "./board-model";
 import type { MrPanel, MrState, TaskView } from "./board-model";
 import { latest, readDispositions, recordDisposition } from "./disposition";
 import { forgeOf } from "./forge/forge";
@@ -39,10 +31,8 @@ export function mrOf(run: RunFacts) {
 export { MERGE_POLL_MS } from "./shipping";
 import { MERGE_POLL_MS } from "./shipping";
 
-/** How often an open merge request on a card the board shows is read. */
 export const MERGE_SYNC_MS = 60_000;
 
-/** What the merge watch last read of each merge request, by MR id, and when. */
 export type MrPanels = Map<string, { readonly at: number; readonly panel: MrPanel }>;
 
 export const watchedMr = Effect.fn("Merges.watchedMr")(function* <R>(opts: {
@@ -123,7 +113,6 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
   states: Map<string, MrState>;
   panels: MrPanels;
   making: ReadonlySet<string>;
-  /** Merge requests to ask about this round, whenever they were last read: a Run just pushed to them. */
   nudged?: Set<string>;
 }) {
   const fs = yield* FileSystem.FileSystem;
@@ -239,7 +228,6 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
       continue;
     }
     const dirs = Arr.map(runs, (run) => runDir(opts.stateDir, run));
-    // An open one on a card the board shows is read each minute, the rest every 5 minutes.
     const known = opts.states.get(id);
     const every =
       visible && (known === undefined || known === "open") ? MERGE_SYNC_MS : MERGE_POLL_MS;
@@ -323,10 +311,8 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
   }
 });
 
-/** How long who Collie is on a forge host stands before the syncer asks again. */
 const LOGIN_EVERY_MS = 60 * 60_000;
 
-/** Who Collie is on the merge request's forge host, kept with when it was read, asked hourly. */
 const keepLogin = Effect.fn("Merges.keepLogin")(function* <R>(
   requests: MergeRequestsApi,
   id: string,
@@ -344,17 +330,13 @@ const keepLogin = Effect.fn("Merges.keepLogin")(function* <R>(
     return;
   }
   const login = yield* forgeOf(ref).login(cwd, run, ref.project);
-  // A login that could not be read keeps the last one known, as an answer the forge could not give does.
+  // WARNING: a login that could not be read keeps the last one known.
   if (login === null && kept !== null) {
     return;
   }
   yield* requests.putLogin(host, { login, read: now });
 });
 
-/**
- * The ids of the Runs whose work is the merge request `id`, whichever Task they are in: its
- * owner, each given it, and each on its source branch in its owner's checkout.
- */
 const workingOn = Effect.fn("Merges.workingOn")(function* <R>(
   id: string,
   owner: string,
@@ -594,7 +576,7 @@ const panelFacts: (panel: Extract<MrPanel, { _tag: "Details" }>) => ForgeFacts =
   return panel.mergeable === undefined ? facts : { ...facts, mergeable: panel.mergeable };
 };
 
-/** Merged over what is kept, never a replacement: the newer read of each stands. */
+// WARNING: merged over what is kept, never replacing it: the newer read of each stands.
 export const writeMrStates = Effect.fn("Merges.write")(function* (
   _stateDir: string,
   states: ReadonlyMap<string, MrState>,
@@ -615,7 +597,6 @@ export const writeMrStates = Effect.fn("Merges.write")(function* (
   yield* requests.merge(entries);
 });
 
-/** What the watch last learned, or nothing: a host that never watched has never asked a forge. */
 const readEntries = Effect.fn("Merges.readEntries")(function* (_stateDir: string) {
   return yield* MergeRequests.use((requests) => requests.entries);
 });

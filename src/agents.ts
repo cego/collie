@@ -334,17 +334,18 @@ export class AgentParked extends Schema.TaggedError<
   cause: Schema.optionalKey(ParkCause),
 }) {}
 
-/** An incarnation with the process at its pane's root, where one could be named at its start. */
 type Rooted = Incarnation & { readonly root?: Launched["root"] };
 
-const rooted = (incarnation: Incarnation | undefined, root: Launched["root"]): Rooted | undefined =>
+const rooted: (
+  incarnation: Incarnation | undefined,
+  root: Launched["root"],
+) => Rooted | undefined = (incarnation, root) =>
   incarnation === undefined
     ? undefined
     : root === undefined
       ? incarnation
       : { ...incarnation, root };
 
-/** The Run's own questions, which a collection puts an agent's question on. */
 export interface Questions {
   readonly ask: (question: DecisionSpec, asker: string) => Effect.Effect<void>;
   readonly asked: Effect.Effect<ReadonlyArray<AskedQuestion>>;
@@ -384,26 +385,17 @@ export interface AgentsApi {
   readonly skills: (names: ReadonlyArray<string>) => Effect.Effect<ReadonlyMap<string, string>>;
   readonly outputSubmit: Effect.Effect<"file" | "tool">;
   readonly attachments: (runId: string) => Effect.Effect<ReadonlyArray<Attachment>>;
-  /** The Run's next hand-over revision, built from host state and kept beside every earlier one. */
   readonly handOver: (
     about: Omit<
       HandOverState,
       "revision" | "goal" | "constraints" | "plan" | "checkout" | "reports"
     > & { readonly cwd: string },
   ) => Effect.Effect<HandOver>;
-  /** What of the checkout a hand-over is held to at dispatch. */
   readonly atCheckout: (cwd: string, plan: string | null) => Effect.Effect<AtDispatch>;
-  /** Keeps what a stale hand-over's park rechecks. */
   readonly handOverStale: (
     runId: string,
     seen: Omit<AtDispatch, "dirty"> & { readonly cwd: string; readonly dir: string | null },
   ) => Effect.Effect<void>;
-  /**
-   * What an agent is told about asking for a decision its work does not cover: the pane
-   * of whoever is live in that role in this Run's lineage — `Place.lineage` — and
-   * otherwise to decide and record it under `assumptions` in its Output. A role, not a bare route: who may be asked is the
-   * workflow's own declaration.
-   */
   readonly askRoute: (role: string, lineage: ReadonlyArray<string>) => Effect.Effect<string>;
   readonly pollMs: number;
   readonly collectMs: number;
@@ -421,18 +413,13 @@ export interface AgentsApi {
   >;
   readonly ranOut: (launched: Launched) => Effect.Effect<RanOut>;
   readonly stopped: (launched: Launched, since?: number) => Effect.Effect<string | null>;
-  /**
-   * Closes this one agent's pane, with `line` in the Run's log; parks unless it is gone.
-   * `ended` says why another agent takes its work: `ran out` where none is given.
-   */
+  // WARNING: retire parks the Run unless the pane is gone.
   readonly retire: (
     launched: Launched,
     line: string,
     ended?: string,
   ) => Effect.Effect<void, AgentParked>;
-  /** The latest launch of the agent this Run's work names `agent`; null where it has none. */
   readonly lastLaunch: (runId: string, agent: string) => Effect.Effect<Launched | null>;
-  /** A line in the Run's log. */
   readonly say: (runId: string, line: string) => Effect.Effect<void>;
   readonly stepMessage: (ask: AgentAsk) => { readonly typed: string; readonly prompt: string };
   readonly launch: (
@@ -452,14 +439,7 @@ export interface AgentsApi {
     readonly text: string;
   }) => Effect.Effect<Steered | null, AgentParked>;
   readonly halt: (runId: string, why?: string) => Effect.Effect<Halted>;
-  /** Reads each of this Run's agents' usage into its ledger once more, as the Run settles. */
   readonly account: (runId: string, heal: boolean) => Effect.Effect<void>;
-  /**
-   * What the agent wrote, or null where it has written nothing in the time allowed.
-   * `unless` is an Output already known to be unusable: the same text again is the agent
-   * not having rewritten the file, which is not an answer to having been asked to.
-   */
-  /** Runs `waiting` with this agent on the list of those collected from, as `collect` does. */
   readonly collectedDuring: <A, E, R>(
     launched: Launched,
     waiting: Effect.Effect<A, E, R>,
@@ -590,12 +570,8 @@ interface Doing<Output extends OutputContract> {
   readonly claudeSubagents?: ClaudeSubagents;
   readonly permissions?: PermissionMode;
   readonly seat?: Seat;
-  /** What only the workflow knows of this work, for a hand-over to an agent taking it over. */
   readonly handOver?: HandOverGiven;
-  /**
-   * The agent whose work this continues, where `agent` has not yet run in this Run: it is
-   * ended and found Quiet first, and `agent` is first handed the host's hand-over.
-   */
+  // WARNING: set only where `agent` has not yet run in this Run; the agent it names is ended and found Quiet first.
   readonly takesOver?: { readonly agent: string; readonly why: string };
 }
 
@@ -1073,7 +1049,7 @@ export const agentWork: <
         });
       });
     const plan = given.handOver?.plan ?? null;
-    /** The prompt carrying `handed`, rebuilt once where the checkout moved; parks where it moves again. */
+    // WARNING: the prompt is rebuilt once if the checkout moved; a second move parks.
     const dispatching = (
       handed: HandOver,
       rebuild: Effect.Effect<HandOver>,
@@ -1237,7 +1213,7 @@ export const agentWork: <
         effort: next.effort,
         sequence,
         prompt: renderPrompt({ ...parts, handover: renderHandOver(handed, ranOutWhy) }).text,
-        // The chain's first agent, which is what a later ask for this agent may still name.
+        // WARNING: the chain's first agent, which a later ask for this agent may still name.
         from: currentAsk.from ?? on,
         why: out.why,
       };
@@ -1703,7 +1679,6 @@ export interface AgentHost {
   readonly ports?: CompactionPorts;
   readonly help?: typeof installedHelp;
   readonly self?: ReadonlyArray<string>;
-  /** The checkout as Git has it; `git status` where left out. */
   readonly checkout?: (cwd: string) => Effect.Effect<CheckoutNow>;
 }
 
@@ -1939,7 +1914,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       const plugins = isJsonArray(settings.plugin) ? settings.plugin : [];
       return { ...settings, plugin: [...plugins, `file://${reporter}`] };
     });
-  /** OpenCode's settings with Collie's usage plugin after every other. */
+  // WARNING: Collie's usage plugin goes after every other plugin.
   const withUsage = (ask: AgentAsk, agent: string, settings: JsonObject) =>
     Effect.gen(function* () {
       const plugin = `${dirFor(ask.runId)}/${stemOf(ask)}.usage.js`;
@@ -1948,7 +1923,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       const plugins = isJsonArray(settings.plugin) ? settings.plugin : [];
       return { ...settings, plugin: [...plugins, `file://${plugin}`] };
     });
-  /** The launch record with the session its harness opened, once `read` names it. */
   const withSession = (
     launched: Launched,
     read: Effect.Effect<string | null, never, AgentServices>,
@@ -2888,7 +2862,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             }
             return landed;
           });
-        // Stopped while it waited for memory: nothing started, and the caller sees the stop.
         if (memory === "stopped") {
           return yield* landedOn(undefined);
         }
@@ -3565,7 +3538,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             (yield* may) &&
             !(yield* holdsBudgetOf(launched.runId, launched.agent)) &&
             (openQuestions.get(launched.agent)?.size ?? 0) === 0 &&
-            // `unasked` can wait out a delivery of answers, which starts a turn.
+            // WARNING: `unasked` can wait out a delivery of answers, which starts a turn.
             (yield* settled)
           ) {
             return;
@@ -5055,11 +5028,7 @@ const OUTPUT_REMINDERS = 2;
 const reminderText: (output: string) => string = (output) =>
   `${REMINDER_OPENING} A chat message is not the Output: write ${output}, the JSON the contract described and nothing else.\nOUTPUT_PATH: ${output}`;
 
-/**
- * One Output the agent could not write correctly, handed back to that same agent with the
- * reason. It is still in its pane holding the work; starting the work again would throw a
- * whole round away over a write.
- */
+// WARNING: the Output goes back to the same agent, which still holds the work; restarting would throw a whole round away over a write.
 export const repairText: (output: string, problem: string) => string = (output, problem) =>
   `${REPAIR_OPENING} ${problem}\n\nWrite ${output} again — the JSON the contract described, nothing else. Do not redo the work, do not explain, do not write anything outside that file. It is the only thing missing.\nOUTPUT_PATH: ${output}`;
 

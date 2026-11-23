@@ -4,7 +4,7 @@ import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import { DateTime, Effect, Schema, flow, Result } from "effect";
 import { epochMs } from "../time";
-import type { RepoRef, Thread, ThreadRef } from "forges";
+import type { Thread } from "forges";
 import { ForgeHttp, pagesAs, request, requestAs } from "./http";
 import type { ForgeLogin } from "./http";
 import { Issue } from "./issues";
@@ -70,7 +70,7 @@ export const listIssues = (login: ForgeLogin, project: string, cwd: string, whic
               signal,
             }),
           ).then((threads) =>
-            // `since` is when an issue was last updated, which is at or after it closed.
+            // WARNING: `since` is when an issue was last updated, at or after it closed.
             which === undefined
               ? threads
               : Arr.filter(
@@ -85,7 +85,6 @@ export const listIssues = (login: ForgeLogin, project: string, cwd: string, whic
     return listed.ok ? { ok: true as const, issues: listed.value } : listed;
   });
 
-/** The open merge requests, as issues: their number, title, description and url. */
 export const listRequests = (login: ForgeLogin, project: string, cwd: string) =>
   Effect.gen(function* () {
     const http = yield* ForgeHttp;

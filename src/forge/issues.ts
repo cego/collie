@@ -18,5 +18,4 @@ export type IssueList =
 export type FiledIssue =
   | ({ readonly ok: true } & IssueRef)
   | { readonly ok: false; readonly reason: string };
-/** Issues by number, or every issue closed at or after an ISO moment. */
 export type IssueQuery = ReadonlyArray<number> | { readonly closedSince: string };

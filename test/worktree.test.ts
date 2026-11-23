@@ -255,7 +255,6 @@ const plan = (inputs: Record<string, string>, explicit?: string, extra: Partial<
     ...extra,
   });
 
-/** The forge's answers as the Merge watch keeps them, each over an older one. */
 const forgeAnswered = Effect.fn("test.forgeAnswered")(function* (json: string) {
   const entries = yield* Schema.decodeEffect(
     Schema.fromJsonString(Schema.Record(Schema.String, MrEntry)),
@@ -3280,7 +3279,6 @@ test("cleanup keeps every worktree when core will not list agents, and says why"
 test("a merge the merge watch recorded on GitHub settles a branch still on the remote", () =>
   runOnPath(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       const at = yield* collieWorktree("wt");
       recorded = Arr.map(recorded, (run) => ({ ...run, mr: "https://github.com/o/r/pull/5" }));
       yield* settledGit({ "ls-remote --heads origin": "deadbeef refs/heads/wt" });
@@ -3307,7 +3305,6 @@ test("a merge the merge watch recorded on GitHub settles a branch still on the r
 test("a legacy bare mr: target is settled as the merge request of its checkout's project", () =>
   runOnPath(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       yield* collieWorktree("wt");
       recorded = Arr.map(recorded, (run) => ({ ...run, mr: "mr:42" }));
       yield* fakeGitAnswering({
@@ -3400,7 +3397,6 @@ const sharedCheckout = Effect.fn("worktreeTest.sharedCheckout")(function* (
   state: "open" | "merged",
   abandoned = false,
 ) {
-  const fs = yield* FileSystem.FileSystem;
   const at = yield* collieWorktree("wt", { state: "failed" });
   yield* settledGit({ "ls-remote --heads origin": "deadbeef refs/heads/wt" });
   const shared = {
@@ -3518,7 +3514,6 @@ for (const taskless of [false, true]) {
               note: null,
             });
           }
-          const fs = yield* FileSystem.FileSystem;
           yield* forgeAnswered(
             answer === "closed"
               ? '{"gitlab.cego.dk/mk/support!279":{"state":"closed","read":"2026-09-14T10:00:00Z"}}'

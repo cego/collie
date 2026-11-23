@@ -348,9 +348,9 @@ export interface LoadedThread {
   readonly id: string;
   readonly transcript: string | null;
   readonly running: ReadonlyArray<string>;
-  /** For a sub-agent's thread, the thread that spawned it; null for the agent's own. */
+  // WARNING: null for the agent's own thread, set only for a sub-agent's.
   readonly parent: string | null;
-  /** The cheap thread a TUI keeps for itself. */
+  // WARNING: the cheap thread a TUI keeps for itself, not the agent's work.
   readonly ephemeral: boolean;
 }
 

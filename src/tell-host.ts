@@ -1,17 +1,11 @@
-// How a process other than the host says what it wrote, since nothing watches
-// (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs). Its own module, so a hook
-// helper does not load the host to say it.
-
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import { Effect, Layer } from "effect";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import { FrontDoorRpcs } from "./board-model";
 
-/**
- * Tells the host answering in `stateDir` that these paths were written. A host that is not
- * running reads them when it starts, so a failure is no one's to handle.
- */
+// WARNING: in a module of its own, so a hook helper does not load the host to say what it wrote.
+// WARNING: a host that is not running reads the paths when it starts, so a failure is no one's to handle.
 export const tellHost = (stateDir: string, paths: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const context = yield* Layer.build(

@@ -1,21 +1,15 @@
-// The board's projection in the host's database (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs):
-// each Task's card as it was last derived, with the digest of what it was derived from, so a
-// host's first board is these rows and a card is derived again only when what it read moves.
-
 import * as Arr from "effect/Array";
 import { Context, Effect, Layer, Option, Result, Schema, flow } from "effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import { TaskView } from "./board-model";
 
-/** One Task's card. `view` is null for a card folded into History. */
+// WARNING: `view` is null for a card folded into History.
 export interface CardRow {
   readonly task: string;
   readonly view: TaskView | null;
-  /** What the card was derived from, by content, so it holds across a host restart. */
+  // WARNING: by content, so it holds across a host restart.
   readonly digest: string;
-  /** When time alone next changes what the card says; Infinity for never. */
   readonly due: number;
-  /** When the host that derived it wrote it. */
   readonly at: number;
 }
 
@@ -32,9 +26,8 @@ interface Stored {
 }
 
 export interface CardRowsApi {
-  /** Every card, folded ones too; a row whose view no longer decodes is left out. */
+  // WARNING: a row whose view no longer decodes is left out.
   readonly all: Effect.Effect<ReadonlyArray<CardRow>>;
-  /** Writes these cards and drops these Tasks' cards, in one transaction. */
   readonly write: (put: ReadonlyArray<CardRow>, drop: ReadonlyArray<string>) => Effect.Effect<void>;
 }
 
@@ -46,9 +39,9 @@ export const cardRowsLayer = Layer.effect(CardRows)(
     return {
       all: sql<Stored>`SELECT task, view, digest, due, at FROM collie_cards`.pipe(
         Effect.map(
-          Arr.flatMap((row): ReadonlyArray<CardRow> => {
+          Arr.flatMap((row) => {
             const view = row.view === null ? Option.some(null) : decodeView(row.view);
-            return Option.isNone(view)
+            const returned: ReadonlyArray<CardRow> = Option.isNone(view)
               ? []
               : [
                   {
@@ -59,6 +52,7 @@ export const cardRowsLayer = Layer.effect(CardRows)(
                     at: row.at,
                   },
                 ];
+            return returned;
           }),
         ),
         Effect.orDie,

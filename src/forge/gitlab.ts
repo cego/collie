@@ -1315,7 +1315,7 @@ function reply(ref: MrRef, to: Pick<ForgeComment, "thread">, body: string, cwd: 
   });
 }
 
-/** A failed merge, as a merge at the same head may or may not clear it. */
+// WARNING: a merge at the same head may or may not clear this failure.
 const unmerged: (
   failed: Extract<Answered<unknown>, { ok: false }>,
   reason: string,
@@ -1328,10 +1328,6 @@ const unmerged: (
   reason,
 });
 
-/**
- * GitLab's merge endpoint at `head`, never `glab mr merge`, whose `--auto-merge` defaults
- * to on. No squash is passed, so the project's own setting stands.
- */
 // WARNING: never `glab mr merge`, whose --auto-merge defaults on.
 function merge(ref: MrRef, head: string, cwd: string) {
   const returned: Effect.Effect<MergeAnswer, never, ForgeHttp> = Effect.gen(function* () {

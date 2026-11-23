@@ -98,10 +98,6 @@ export const discover: (
   },
 );
 
-/**
- * A directory's revision: the kept one on a synced read, else computed now and kept
- * (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs).
- */
 export const revisionIn = Effect.fn("Discovery.revisionIn")(function* (dir: string) {
   const kept = yield* RevisionRows;
   if (kept?.synced === true) {
@@ -117,7 +113,6 @@ export const revisionIn = Effect.fn("Discovery.revisionIn")(function* (dir: stri
   return revision;
 });
 
-/** What one file in one layer says it is, or why it could not say. */
 type Claim =
   | { readonly kind: "entry"; readonly id: string; readonly path: string; readonly found: Found }
   | {
@@ -165,13 +160,13 @@ const claimsIn = Effect.fn("Discovery.claimsIn")(function* (root: Root) {
   return claims;
 });
 
-/** Each layer's last read, which a listing reuses until its content revision moves. */
+// WARNING: reused until the layer's content revision moves.
 const keptClaims = new Map<
   string,
   { readonly revision: string; readonly claims: ReadonlyArray<Claim> }
 >();
 
-/** What one module declares it takes, in the order a front door should ask for it. */
+// WARNING: in the order a front door should ask for them.
 export const declaredBy = (entry: WorkflowEntry) =>
   Arr.map(Rec.toEntries(entry.input), ([name, field]) => {
     const drawn = jsonSchemaFor(field);

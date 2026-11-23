@@ -6,11 +6,10 @@ import { CommandLine } from "effect/process";
 import { addressOf, RunRecords } from "./run-records";
 import { PrepareSchema } from "./verify-model";
 
-/** Why a check cannot be marked as it is, or undefined where it can. */
-export const markRefused = (spec: {
+export const markRefused: (spec: {
   readonly ci?: string;
   readonly before_review?: boolean;
-}): string | undefined =>
+}) => string | undefined = (spec) =>
   spec.ci !== undefined && spec.before_review === true
     ? "a check left to CI cannot run before review: nobody runs it locally"
     : undefined;
@@ -23,11 +22,9 @@ export const VerifySpecSchema = Schema.Struct({
   cwd: Schema.String,
   // WARNING: a ci check is proved by its pipeline job; nobody runs it locally.
   ci: Schema.optionalKey(Schema.String),
-  /** Run in a detached checkout of its start tree, so edits in the Worktree cannot move it. */
+  // WARNING: a detached checkout of its start tree, so edits in the Worktree cannot move it.
   isolated: Schema.optionalKey(Schema.Boolean),
-  /** Run first in that checkout, recorded with the check. */
   prepare: Schema.optionalKey(PrepareSchema),
-  /** Run on the builder's tree before a review round opens; a failure goes back to the builder. */
   before_review: Schema.optionalKey(Schema.Boolean),
 }).check(Schema.makeFilter(markRefused));
 export type VerifySpec = Schema.Schema.Type<typeof VerifySpecSchema>;

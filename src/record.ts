@@ -1,6 +1,5 @@
 import type { RunRecords } from "./run-records";
 import * as Arr from "effect/Array";
-import * as Str from "effect/String";
 import type { Path } from "effect";
 import { Clock, Effect, FileSystem, Queue, Result, Schema, Stream, Struct, flow } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
@@ -148,7 +147,6 @@ export const recordBase = (sources: RecordSources, runId: string, pages: number)
     };
   }).pipe(Effect.provideService(FileSystem.FileSystem, sources.model.reading));
 
-/** A Step in these states has finished: an act shown on it before is refused. */
 export const FINISHED_STEPS = new Set(["done", "failed", "stopped", "not-run"]);
 
 export const recordFlow = (sources: RecordSources, runId: string) =>
@@ -173,7 +171,7 @@ export const recordFrames = (
 
       const diffAt = (run: RunFacts) =>
         Effect.gen(function* () {
-          // What the git syncer last read of the checkout: it reads again on a turn or a Step's end.
+          // WARNING: the git syncer re-reads the checkout only on a turn or a Step's end.
           const branch = (yield* Branches.use((rows) => rows.all)).get(
             branchKey(run.cwd, run.branch),
           );

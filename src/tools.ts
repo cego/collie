@@ -1,25 +1,3 @@
-// What native chat may ask Collie, and nothing else.
-//
-// These are the model's whole reach. There is no "run this command" here and no route to
-// a record: a conversation held in Claude or Pi reads the Herd through the same shared
-// operations the board draws itself from, so the two cannot tell different stories — and
-// a model that decided to be creative has nowhere to put it.
-//
-// Most of them only read. The rest write, and say so with `Tool.Readonly` rather than
-// letting a client assume. Every write here carries out what the human asked for in this
-// conversation, at once — chat may do what they could do on the board themselves, because
-// sending them to the UI for it is chat obstructing the person it serves (ADR-0011).
-// `collie_hold` holds; `collie_do` takes the board's own actions and decisions, with the
-// open card standing in for a Run nobody named; `collie_propose` takes the whole closed
-// action set — Intent amendments, forks, defaults, upgrades — with a request id that makes
-// a retry return the first receipt. The evaluator's proposals wait on the board for
-// whoever settles them, and what no tool here does, chat runs through the CLI as the
-// human would (AGENTS.md, invariant 1).
-//
-// The bridge's actor is stamped by this entrypoint rather than worked out from the process
-// — a model inside a harness's pane inherits that pane's terminal, and the CLI's "a TTY
-// means a person" shortcut would read it as human. Attribution, never a gate.
-
 import { readMetrics } from "./metrics";
 import { readUsage } from "./usage-ledger";
 import { descendantsOf, usageLines, usageOf, withChildren } from "./usage-ledger-model";

@@ -966,7 +966,6 @@ export default defineWorkflow({
           continue;
         }
 
-        // WARNING: the live implementer of the originating Run builds this work and fixes it; two agents on one checkout are two hands on one index.
         fixes += 1;
         rallied += 1;
         const operation = fixes === 1 ? "fix" : `fix-${fixes}`;
@@ -1040,7 +1039,7 @@ export default defineWorkflow({
             output: FixOutputSchema,
           });
         const fixed = yield* fixingStep(
-          // What the rally is fixing: a dispute raised again with no rebuttal is not work.
+          // WARNING: a dispute raised again with no rebuttal is not work.
           fixWith(operation, formatFindings(split.live)),
           { round: fixes },
         );

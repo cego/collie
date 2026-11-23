@@ -563,9 +563,8 @@ const pi: CompactionPort = {
   usage: (ctx) => latestUsage(ctx.dir),
   records: (ctx) =>
     transcriptsIn(ctx.dir).pipe(
-      Effect.map(Arr.map((path): Source => ({ path, format: "pi", parent: null }))),
+      Effect.map(Arr.map((path) => ({ path, format: "pi", parent: null }) satisfies Source)),
     ),
-  // The extension's `session_start` sample.
   ready: reported,
   // WARNING: the human's channel, so a refusal from herdr is a request that never left.
   request: (ctx, requestId) => submitCompaction(ctx, requestId, `/collie-compact ${requestId}`),
@@ -870,7 +869,7 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
     const line = encodeAskedCall(repairing ? { ...call, repair: "in-reply" } : call);
     yield* fs.makeDirectory(dir, { recursive: true });
     yield* fs.writeFileString(path.join(dir, QUESTIONS), `${line}\n`, { flag: "a" });
-    // Nothing watches: the host is told, so the question reaches the Run now.
+    // WARNING: nothing watches the file, so the host must be told for the question to reach the Run.
     yield* tellHost(path.dirname(path.dirname(dir)), [path.join(dir, QUESTIONS)]);
     return repairing ? deniedWith(questionRepair(questions)) : DENIED_QUESTION;
   }
@@ -1066,7 +1065,6 @@ export const transcriptOf = Effect.fn("Compactors.transcriptOf")(function* (
   );
 });
 
-/** Every conversation this agent's controls have named, on the session they are bound to. */
 const transcriptsIn = (dir: string) =>
   readEvents(dir).pipe(
     Effect.map((events) =>
@@ -1074,7 +1072,6 @@ const transcriptsIn = (dir: string) =>
     ),
   );
 
-/** Claude's transcript, and each sub-agent's file Claude keeps beside it. */
 const claudeRecords = Effect.fn("Compactors.claudeRecords")(function* (ctx: AgentContext) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -1085,17 +1082,15 @@ const claudeRecords = Effect.fn("Compactors.claudeRecords")(function* (ctx: Agen
     const subagents = path.join(path.dirname(transcript), session, "subagents");
     const names = yield* fs.readDirectory(subagents).pipe(Effect.orElseSucceed(() => []));
     for (const name of Arr.sort(names, Order.String)) {
-      if (Str.endsWith(".jsonl")(name))
+      if (Str.endsWith(".jsonl")(name)) {
         sources.push({ path: path.join(subagents, name), format: "claude", parent: session });
+      }
     }
   }
   return sources;
 });
 
-/**
- * Whether the transcript this agent's harness last named has a line `boundary` takes for a
- * compaction, stamped at or after `since`: what settles a request whose completion was lost.
- */
+// WARNING: this is what settles a request whose completion was lost.
 const transcriptCompacted = Effect.fn("Compactors.transcriptCompacted")(function* (
   dir: string,
   since: number,
@@ -1144,7 +1139,7 @@ const claude: CompactionPort = {
     }),
   usage: (ctx) => latestUsage(ctx.dir),
   records: claudeRecords,
-  // The status line is drawn with the REPL, so its first call is the prompt being there.
+  // WARNING: the status line is drawn with the REPL, so its first call means the prompt is there.
   ready: reported,
   request: (ctx, requestId) =>
     submitCompaction(ctx, requestId, `/compact ${claudeInstructions(requestId)}`),
@@ -1594,7 +1589,6 @@ export const codexPort: (server: string) => CompactionPort = (server) => ({
         }),
       );
     }),
-  // Each loaded thread's rollout: its own, and those of the sub-agents it spawned.
   records: (ctx) =>
     Effect.gen(function* () {
       const url = yield* codexAt(ctx);
@@ -1669,7 +1663,6 @@ export const codexPort: (server: string) => CompactionPort = (server) => ({
 
 // WARNING: Collie picks the port: --port 0 prints it nowhere readable, and serve + attach refuses --model and --auto.
 const OPENCODE_LOG = "server.log";
-/** Where Collie's usage plugin writes what OpenCode reports of each message, beside its controls. */
 export const OPENCODE_USAGE = "opencode-usage.jsonl";
 const OPENCODE_LISTENING = /http:\/\/127\.0\.0\.1:\d+/;
 const OPENCODE_START_MS = 30_000;

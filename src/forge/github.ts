@@ -1120,7 +1120,7 @@ const QUEUE_POLL = Duration.seconds(30);
 const QUEUE_BOUND = Duration.hours(2);
 type Merged = typeof MergedPull.Type;
 
-/** A failed call on the merge path, as a merge at the same head may or may not clear it. */
+// WARNING: a merge at the same head may or may not clear this failure.
 const unmerged: (
   failed: Extract<Answered<unknown>, { ok: false }>,
   reason: string,

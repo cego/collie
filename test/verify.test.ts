@@ -911,7 +911,6 @@ function nodeOptions(value: string) {
   };
 }
 
-/** A tool of the test's own, outside the tree, whose content is what it is. */
 const recordOf = <E, R>(found: Effect.Effect<{ readonly record: Verification | null }, E, R>) =>
   Effect.map(found, (one) => one.record);
 
@@ -970,7 +969,6 @@ test("a pass is relied on only while its tree, its command and its environment a
       const collies = yield* runApproved(runDir, run, [spec], spec);
       expect((yield* relied())?.id).toBe(collies.id);
 
-      // Another command under the same name.
       expect(
         yield* recordOf(reliedFor(runDir, run, { ...spec, argv: ["--bail"] }, since)),
       ).toBeNull();
@@ -1060,7 +1058,7 @@ test("the latest record of that command on the tree decides, whoever asked", () 
 
       yield* appendVerification(runDir, { ...passed, id: "again" });
       expect((yield* recordOf(reliedFor(runDir, run, spec, since)))?.id).toBe("again");
-      // Collected before this host started.
+      // WARNING: the record was collected before this host started.
       expect(yield* recordOf(reliedFor(runDir, run, spec, "2999-01-01T00:00:00.000Z"))).toBeNull();
 
       const { environment: _, ...older } = passed;
@@ -1069,7 +1067,6 @@ test("the latest record of that command on the tree decides, whoever asked", () 
     }),
   ));
 
-/** A Run's check that passed once on this tree, and the lookup of it from a host started `since`. */
 const passedOnce = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const runDir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-run-" });
@@ -1167,7 +1164,6 @@ test("a command whose latest record on the tree expected red is not reused becau
     }),
   ));
 
-/** Isolated runs of commands in `repo`, their checkouts and a notes directory outside both. */
 const isolation = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const notes = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-notes-" });
@@ -1280,7 +1276,7 @@ for (const script of ["check.sh", "..check.sh"]) {
         const { notes, checkouts } = yield* isolation;
         yield* fs.writeFileString(`${repo}/${script}`, "#!/bin/sh\nexit 7\n");
         yield* fs.chmod(`${repo}/${script}`, 0o755);
-        // Rewrites the Worktree's script after the checkout was made from it.
+        // WARNING: rewrites the Worktree's script after the checkout was made from it.
         const prepare = {
           executable: "sh",
           argv: ["-c", `printf '#!/bin/sh\\nexit 0\\n' > ${repo}/${script}`],

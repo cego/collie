@@ -2306,10 +2306,7 @@ export const measureRun = Effect.fn("Lifecycle.measureRun")(function* (
   return { ok: true as const, events: client.measure(request) };
 });
 
-/**
- * What a Run spent, with every Run started under it, each read from the host that has it.
- * A child whose records cannot be read is listed as unreadable.
- */
+// WARNING: a child whose records cannot be read is listed as unreadable, not failed.
 export const usageFor = Effect.fn("Usage.for")(function* (
   env: PluginEnv,
   runId: string,
@@ -2345,11 +2342,7 @@ export const usageFor = Effect.fn("Usage.for")(function* (
   };
 });
 
-/**
- * The report over every Run this Machine's host has, for whichever door asks: a Run
- * whose metrics cannot be read fails it, and one whose records cannot be read is
- * measured without them.
- */
+// WARNING: a Run whose metrics cannot be read fails the report; one with unreadable records is measured without them.
 export const reportFor = Effect.fn("Report.for")(function* (env: PluginEnv, since: string | null) {
   const hosted = yield* runViews(env, null);
   const metrics = new Map<string, Metrics>();

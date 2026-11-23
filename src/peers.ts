@@ -382,8 +382,7 @@ export const levelPeer = Effect.fn("Peers.level")(function* (link: Link, peer: P
   );
 }, Effect.scoped);
 
-/** What this host's peers module answers. */
-/** How often what peers share is offered again, for an edit nothing told the host of. */
+// WARNING: a backstop for an edit nothing told the host of.
 const USER_DIR_BACKSTOP = "5 minutes";
 
 export interface Peers {
@@ -398,7 +397,6 @@ export interface Peers {
   readonly list: Effect.Effect<ReadonlyArray<PeerView>>;
   readonly wake: (name: string) => Effect.Effect<void>;
   readonly live: (installation: string) => Effect.Effect<boolean>;
-  /** Something under the user directory was written: what peers share is offered now. */
   readonly userDirMoved: Effect.Effect<void>;
 }
 
@@ -1212,15 +1210,12 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
       { discard: true },
     );
   });
-  /**
-   * Settings and definitions offered to each live peer again. Nothing watches the user
-   * directory (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs): a write through
-   * the host, or one the host is told of, asks now, and the backstop poll catches an edit.
-   */
+  // WARNING: nothing watches the user directory; the backstop poll catches an edit the host was not told of.
   const userDirMoved = Effect.gen(function* () {
     for (const kind of definitionKinds) {
-      if (!(yield* fs.exists(`${link.userDir}/${kind}`)))
+      if (!(yield* fs.exists(`${link.userDir}/${kind}`))) {
         yield* fs.makeDirectory(`${link.userDir}/${kind}`, { recursive: true });
+      }
     }
     yield* Effect.forEach(
       Arr.filter(peers, (peer) => standings.get(peer.installation)?.state === "live"),

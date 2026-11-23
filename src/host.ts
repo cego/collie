@@ -1122,7 +1122,7 @@ const handlers = (
             );
             const cardOf = (run: string) =>
               Option.getOrUndefined(Arr.findFirst(cards, (card) => card.runs.includes(run)));
-            // The git syncer's rows, as a card reads them: a listing asks git nothing.
+            // WARNING: a listing asks git nothing; it reads the git syncer's rows.
             const branches = yield* Branches.use((rows) => rows.all).pipe(
               Effect.provideContext(bun),
             );
@@ -1449,8 +1449,7 @@ const hostBoard = (dir: string) =>
       model === undefined
         ? undefined
         : { revision: model.inputsAt, content: model.content, kept: new Map() };
-    // The previous host's cards: this host's board until its first pass, kept unconfirmed
-    // until that pass finds what each was derived from unmoved.
+    // WARNING: the previous host's cards stand until the first pass, unconfirmed until it finds their sources unmoved.
     const rows = cards === undefined ? [] : yield* CardRows.use((rows) => rows.all);
     const seeded = new Map<string, TaskView | null>();
     for (const row of rows) {
@@ -1463,8 +1462,7 @@ const hostBoard = (dir: string) =>
         unconfirmed: true,
       });
     }
-    /** The board until the first pass: each card as the previous host left it, marked as such. */
-    // None left is no board to show: the first pass's is the first.
+    // WARNING: none left is no board to show; the first pass's board is the first.
     let projected: ReadonlyArray<TaskView> | null =
       cards === undefined || rows.length === 0
         ? null
@@ -1473,14 +1471,13 @@ const hostBoard = (dir: string) =>
               row.view === null ? [] : [{ ...row.view, confirmed: false, asOf: row.at }],
             ),
           );
-    /** What each Task's row says now, by the objects written, so a pass writes only what moved. */
+    // WARNING: kept so a pass writes only the cards that moved.
     const written = new Map<string, { readonly view: TaskView | null; readonly kept: KeptCard }>(
       Arr.flatMap(rows, (row) => {
         const kept = cards?.kept.get(row.task);
         return kept === undefined ? [] : [[row.task, { view: row.view, kept }] as const];
       }),
     );
-    /** Writes the cards whose view, digest or due time moved, and drops those gone. */
     const project = (views: ReadonlyArray<TaskView>) =>
       Effect.gen(function* () {
         if (cards === undefined) {
@@ -1517,14 +1514,15 @@ const hostBoard = (dir: string) =>
           Effect.logWarning("the board's cards were not written", cause),
         ),
       );
-    /** The offers a build read, which the door is told of with its listing. */
     const offered = new Map<string, ReadonlyArray<OfferView>>();
     const boardOf = (facts: ReadonlyArray<RunFacts>, alive: ReadonlyArray<AgentInfo>) =>
       Effect.gen(function* () {
         if (cards !== undefined) {
           cards.modules = Arr.join(
             Arr.map(
-              [...(yield* ModuleRevisions.use((rows) => rows.all))].sort(),
+              [...(yield* ModuleRevisions.use((rows) => rows.all))].sort(([a], [b]) =>
+                a < b ? -1 : a > b ? 1 : 0,
+              ),
               ([dir, revision]) => `${dir}@${revision}`,
             ),
             "\n",
@@ -1554,13 +1552,8 @@ const hostBoard = (dir: string) =>
             : Effect.provideService(built, FileSystem.FileSystem, model.reading),
         Effect.provideContext(bun),
       );
-    /** Each agent's status as the last listing found it. */
     const statuses = new Map<string, string>();
-    /**
-     * The files of each Run whose agent started or ended a turn, or went, read again: what an
-     * agent writes is read then, never watched
-     * (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs).
-     */
+    // WARNING: what an agent writes is read when its turn starts or ends, never watched.
     const turned = (alive: ReadonlyArray<AgentInfo>) =>
       Effect.gen(function* () {
         if (model === undefined) {
@@ -1575,7 +1568,7 @@ const hostBoard = (dir: string) =>
           }
           statuses.set(agent.name, agent.status);
         }
-        for (const name of [...statuses.keys()]) {
+        for (const name of Arr.fromIterable(statuses.keys())) {
           if (!present.has(name)) {
             moved.add(name);
             statuses.delete(name);
@@ -1590,14 +1583,14 @@ const hostBoard = (dir: string) =>
           ),
         );
         for (const run of runs) {
-          for (const under of ["runs", "agents", "evidence"])
+          for (const under of ["runs", "agents", "evidence"]) {
             yield* model.invalidate(`${env.stateDir}/${under}/${run}`);
+          }
         }
         for (const name of moved) {
           yield* model.invalidate(`${env.stateDir}/compaction/${name}`);
         }
       });
-    /** The board, with the Runs it was built from. */
     const listingOf = (agents: typeof agentsNow) =>
       Effect.gen(function* () {
         const { alive } = yield* agents.pipe(Effect.provideContext(bun));
@@ -1626,7 +1619,9 @@ const hostBoard = (dir: string) =>
         const took = (yield* Clock.currentTimeMillis) - started;
         let confirmed = 0;
         for (const [task, view] of seeded) {
-          if (cards?.kept.get(task)?.view === view) confirmed++;
+          if (cards?.kept.get(task)?.view === view) {
+            confirmed++;
+          }
         }
         seeded.clear();
         yield* Effect.logInfo(
@@ -1744,11 +1739,9 @@ const hostBoard = (dir: string) =>
       herdr,
       bun,
       listing,
-      /** The previous host's cards, unconfirmed, until this host's first pass is done; then null. */
       projected: () => projected,
-      /** Merge requests the forge syncer reads on its next round, whenever it last read them. */
+      // WARNING: read on the forge syncer's next round, however recently it last read them.
       nudged: new Set<string>(),
-      /** The git syncer's read of what a follow-up of a Run would enter at. */
       recover: (runId: string) => registry.syncRecovery(runId).pipe(Effect.provideContext(hosted)),
       runs,
       kept,
@@ -1822,9 +1815,7 @@ const sharedBoardLayer = (dir: string) =>
       const reactivity = yield* Reactivity.Reactivity;
       const model = Option.getOrUndefined(yield* Effect.serviceOption(RunModel));
       const { listing, herdrMoved, ...board } = yield* hostBoard(dir);
-      // Nothing is watched (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs): a
-      // write moves the board where it went through the host, or the host was told of it, or
-      // an agent's turn ended. Debounced apart from the tick, so a burst cannot hold it back.
+      // WARNING: nothing is watched; debounced apart from the tick so a burst of writes cannot hold the board back.
       const writes = yield* Stream.mergeAll(
         [
           (model?.changed ?? Stream.empty).pipe(
@@ -2056,7 +2047,6 @@ const sideJobsLayer = (panels: MrPanels) =>
           nudged,
           recover,
         }).pipe(
-          // Each round reads every Run's files, as the board does: through the model.
           (jobs) =>
             model === undefined
               ? jobs
@@ -2152,7 +2142,6 @@ const frontDoorHandlers = (
     Effect.gen(function* () {
       const registry = yield* Registry;
       const layerScope = yield* Effect.scope;
-      /** What peers share is offered again, without the caller waiting on the peers. */
       const offerShared = Effect.asVoid(Effect.forkIn(userDirMoved, layerScope));
       const hosted = yield* Effect.context<HostServices>();
       const reliance = yield* Reliance;
@@ -2174,7 +2163,6 @@ const frontDoorHandlers = (
       const plans: PlanCache = new Map();
       const record = yield* recordSources({ panels, plans });
       const model = Option.getOrUndefined(yield* Effect.serviceOption(RunModel));
-      /** What another process wrote, read again: the state directory's files, or a module. */
       const told = (paths: ReadonlyArray<string>) =>
         Effect.forEach(
           paths,
@@ -2189,7 +2177,6 @@ const frontDoorHandlers = (
               if (Str.startsWith(`${env.userDir}/`)(path)) {
                 yield* offerShared;
               }
-              // A workflow layer's directory, whose revision is computed now and kept for listings.
               const at = Str.lastIndexOf("/workflows")(path);
               if (Option.isNone(at)) {
                 return;
@@ -2200,12 +2187,7 @@ const frontDoorHandlers = (
             }),
           { discard: true },
         );
-      /**
-       * The revision each act of a request was first answered with. A retried request carries
-       * nothing out again, so its answer is the one it had: read anew, it was the Run's
-       * revision now, which a follow-up's child had moved since. A model's revisions compare
-       * only within its epoch, so the host's life is as long as one is worth keeping.
-       */
+      // WARNING: a retried request answers with the revision it first had; read anew it would be the Run's current one.
       const actRevisions = new Map<string, RunRevision>();
       const revisionOfAct = (request: string, index: number, now: RunRevision) => {
         const key = `${request}#${index}`;
@@ -2970,7 +2952,7 @@ const frontDoorHandlers = (
               if (!pushOnly) {
                 yield* registry.mergeRequest(runId, published.url);
               }
-              // What a push moved reaches its card on the forge syncer's next round, not its next minute.
+              // WARNING: a push reaches its card on the forge syncer's next round, not its next minute.
               if (published.url !== "") {
                 nudged.add(published.url);
               }
@@ -4426,7 +4408,7 @@ const frontDoorHandlers = (
         progress: ({ runId }) => progressFor(runId),
         runDetail: (key) => {
           const { runId, tail, pages, refreshMr } = key;
-          // Whole records say their minutes as of when they were read, so they follow the tick.
+          // WARNING: whole records say their minutes as of their read, so they follow the tick.
           if (record !== undefined) {
             return recordFrames(record, key, key.parts === true ? writes : changed).pipe(
               markFirst("host:emit", runId),
@@ -4612,7 +4594,6 @@ const frontDoorHandlers = (
                       herd === null ? [] : [{ id: herd }],
                     ),
                   },
-                  // Until the first pass, the previous host's cards, then every pass.
                   boards: Stream.unwrap(
                     Effect.sync(() => {
                       const first = projected();
@@ -4761,13 +4742,12 @@ export const serve: (
     Effect.provide(Layer.merge(tracingLayer(BUILD), foregroundLayer)),
   );
 
-/** What the suite refuses a host (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs). */
 const hostRefuses = Config.Boolean("COLLIE_HOST_REFUSES").pipe(
   Config.withDefault(false),
   Effect.orDie,
 );
 
-/** A card's derivation reads the Run model and the syncers' rows, never git, a forge or HTTP. */
+// WARNING: a card's derivation reads only the Run model and the syncers' rows, never git, a forge or HTTP.
 const refusingOutside = <A, E, R>(derivation: Effect.Effect<A, E, R>) =>
   derivation.pipe(
     Effect.provideService(
@@ -4780,7 +4760,7 @@ const refusingOutside = <A, E, R>(derivation: Effect.Effect<A, E, R>) =>
     ),
   );
 
-/** A host holds no file watch; under `COLLIE_HOST_REFUSES`, one that comes back is a defect. */
+// WARNING: a host holds no file watch; under COLLIE_HOST_REFUSES one coming back is a defect.
 const refusingWatch = <A, E, R>(host: Effect.Effect<A, E, R>) =>
   Effect.flatMap(hostRefuses, (refuses) =>
     refuses
@@ -4791,7 +4771,6 @@ const refusingWatch = <A, E, R>(host: Effect.Effect<A, E, R>) =>
       : host,
   );
 
-/** How long a host told to stop waits for running steps before it exits anyway. */
 const stopGrace = Config.Duration("COLLIE_HOST_STOP_GRACE").pipe(
   Config.withDefault(Duration.seconds(5)),
   Effect.orDie,
@@ -5070,7 +5049,7 @@ const own = (
           Effect.provideContext(bun),
         ),
     });
-    // Scoped as Layer.launch is, so a stop ends the server before the rest of the host.
+    // WARNING: scoped as Layer.launch is, so a stop ends the server before the rest of the host.
     return yield* Effect.scoped(
       Effect.gen(function* () {
         yield* Layer.build(
@@ -5153,7 +5132,7 @@ const own = (
             Layer.tap(() => Effect.forkScoped(onceAnswering)),
           ),
         );
-        // From now on the engine answers a board; until now the door answered one from the projection.
+        // WARNING: from now the engine answers a board; until now the door answered from the projection.
         door.post({ _tag: "Serving" });
         return yield* Effect.never;
       }),

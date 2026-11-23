@@ -1,6 +1,3 @@
-// `run metrics --compare … --against …`, as the CLI and `collie_run` both ask it: each named
-// Run's records read from the host that has it, then compared.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
@@ -14,16 +11,16 @@ import { compareSets } from "./trial-model";
 import type { Comparison, Labelled, Planted } from "./trial-model";
 
 export interface TrialAsk {
-  /** `<run>` or `<run>=<case>`. */
   readonly compare: ReadonlyArray<string>;
   readonly against: ReadonlyArray<string>;
-  /** `<run>=<review-run>`. */
   readonly audit: ReadonlyArray<string>;
-  /** `<case>=<file>:<line>`. */
   readonly plant: ReadonlyArray<string>;
 }
 
-const cut = (spec: string, at: Option.Option<number>): readonly [string, string | null] =>
+const cut: (spec: string, at: Option.Option<number>) => readonly [string, string | null] = (
+  spec,
+  at,
+) =>
   Option.match(
     Option.filter(at, (index) => index > 0),
     {

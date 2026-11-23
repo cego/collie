@@ -179,17 +179,13 @@ export interface Forge {
     never,
     R
   >;
-  /**
-   * The open issues; with numbers, those issues read one by one, as a listing can lag a
-   * filing; with `closedSince`, the issues closed since then.
-   */
+  // WARNING: with numbers, issues are read one by one, as a listing can lag a filing.
   readonly issues: <R>(
     project: string,
     cwd: string,
     run: Runner<R>,
     which?: IssueQuery,
   ) => Effect.Effect<IssueList, never, R | ForgeHttp>;
-  /** The open merge requests, with their descriptions as `body`. */
   readonly requests: (project: string, cwd: string) => Effect.Effect<IssueList, never, ForgeHttp>;
   readonly fileIssue: <R>(
     project: string,

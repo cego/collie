@@ -312,7 +312,7 @@ test.skipIf(process.getuid?.() === 0)(
             );
             yield* fs.makeDirectory(evidenceDir(world.state, runId), { recursive: true });
             yield* fs.writeFileString(`${evidenceDir(world.state, runId)}/poke`, "");
-            // Nothing is watched: a write the host did not make reaches it when it is told.
+            // WARNING: nothing is watched; a write the host did not make reaches it only when told.
             yield* tellHost(world.state, [`${evidenceDir(world.state, runId)}/poke`]);
             yield* until(
               () => Effect.sync(() => defects.length),

@@ -1,6 +1,3 @@
-// Collie's own records, in the host's database (ADR-draft-collies-own-records-live-in-the-hosts-database):
-// one service per kind, over whichever connection to `host.db` a layer is given.
-
 import { cardRowsLayer } from "./card-rows";
 import type { CardRows } from "./card-rows";
 import { mergeRequestsLayer } from "./merge-requests";

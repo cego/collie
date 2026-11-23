@@ -254,10 +254,8 @@ const SHARE_SETTINGS = {
 } as const;
 
 const ROUNDS = 4;
-/** Merges a go tries at one head while the forge's failures are transient, and the wait between. */
 const MERGE_ATTEMPTS = 3;
 const MERGE_SPACING = "10 seconds";
-/** A transient merge failure whose re-read is no longer Ready. */
 const Unheld = Schema.TaggedStruct("Unheld", { standing: ReviewStandingSchema });
 
 const checkingOut = step({
@@ -1812,7 +1810,7 @@ export default defineWorkflow({
               name: `merge.${gos}`,
               success: Schema.Union([MergeOutcomeSchema, Unheld]),
               error: WorkflowError,
-              // Parks inside, keeping the claim, so a resume merges afresh.
+              // WARNING: parks inside, keeping the claim, so a resume merges afresh.
               execute: Effect.gen(function* () {
                 for (let attempt = 1; ; attempt++) {
                   const outcome = yield* host.merge({ runId, cwd, head });

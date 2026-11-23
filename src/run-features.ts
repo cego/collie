@@ -8,13 +8,9 @@ export const FEATURES_FILE = "features.json";
 
 export const RunFeatures = Schema.Struct({
   review_delta: Schema.optionalKey(Schema.Boolean),
-  /** Implement's review rounds give findings ledger ids. */
   findings_ledger: Schema.optionalKey(Schema.Boolean),
-  /** An implement Run plans a source that is not a plan before building it. */
   inline_plan: Schema.optionalKey(Schema.Boolean),
-  /** Which agents an implement Run's tickets, fix rounds and delivery run on. */
   agent_sessions: Schema.optionalKey(Schema.Literals(["run", "ticket", "round"])),
-  /** Its checks marked `before_review` run before each review round opens. */
   before_review: Schema.optionalKey(Schema.Boolean),
 });
 export type RunFeatures = typeof RunFeatures.Type;
@@ -31,7 +27,12 @@ export const recordFeatures = Effect.fn("RunFeatures.record")(function* (
   run: string,
   userDir: string,
 ) {
-  const config = yield* readConfig(userDir).pipe(Effect.orElseSucceed((): YamlMap => ({})));
+  const config = yield* readConfig(userDir).pipe(
+    Effect.orElseSucceed(() => {
+      const none: YamlMap = {};
+      return none;
+    }),
+  );
   const features: RunFeatures = {
     ...CURRENT_FEATURES,
     inline_plan: config.inline_plan === "on",

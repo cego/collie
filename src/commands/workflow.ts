@@ -169,7 +169,7 @@ const workflowCheck = Command.make(
             (one) => checkModule({ layer: one.layer, path: one.path }),
             { concurrency: 4 },
           );
-          // The host keeps each layer's revision for its listings, and reads them again now.
+          // WARNING: the host re-reads each layer's revision only when told.
           yield* tellHost(resolved.env.stateDir, [
             ...new Set(Arr.map([...saved.entries, ...saved.problems], (one) => one.path)),
           ]);

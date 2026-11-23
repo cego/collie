@@ -1668,7 +1668,6 @@ test("a check whose Verification cannot be appended gives no verdict", () =>
     }),
   ));
 
-/** A repository to check in, and a command that notes each start beside it and holds until `go` is there. */
 const heldTwice = (one: Effect.Success<typeof world>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -1730,7 +1729,6 @@ test("two identical requests for a check while it runs start one process, and bo
           }),
         ),
       );
-      // Until it waits on the first, or has started a process of its own.
       yield* until(
         () => Effect.map(held.lines, (lines) => lines + waiting.length),
         (n) => n >= 2,

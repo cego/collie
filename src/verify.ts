@@ -15,7 +15,6 @@ import {
   flow,
   Result,
 } from "effect";
-import type { Scope } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { Stream } from "effect";
 // oxlint-disable-next-line effecttsgo/node-builtin-import -- Effect's file info has no ctime.
@@ -482,14 +481,9 @@ const installedAt = Effect.fn("Verify.installedAt")(function* (root: string) {
   return Arr.join(lines, "\n");
 });
 
-/**
- * The environment a check runs in: the executable's real path and content, the runtimes
- * on PATH, `TOOLCHAIN_VARIABLES`, and the dependencies installed in `cwd`'s checkout, or for
- * one run isolated, the prepare that installs them in its own. Null where any of them cannot
- * be read, which no record can be reused under.
- */
+// WARNING: null where any part cannot be read, and no record is reused under a null environment.
 export const environmentOf = Effect.fn("Verify.environmentOf")(
-  function* (absolute: string, cwd: string, isolated?: Isolation | undefined) {
+  function* (absolute: string, cwd: string, isolated?: Isolation) {
     const parts = [yield* identityOf(absolute)];
     for (const runtime of TOOLCHAIN_RUNTIMES) {
       const found = Bun.which(runtime, { PATH: Bun.env.PATH ?? "" });
@@ -634,7 +628,6 @@ export interface Collected {
   // WARNING: a rerun passes only if it ran alone and passed; at the baseline, a test the base lacks passes.
   readonly test?: FailedTest;
   readonly own?: boolean;
-  /** Run in a detached checkout of its start tree under `checkouts`, after its prepare there. */
   readonly isolated?: Isolation & { readonly checkouts: string };
 }
 
@@ -655,7 +648,6 @@ export const startCheck = Effect.fn("Verify.startCheck")(function* (
   return yield* startPrepared(runDir, what, yield* prepare(what), echo);
 });
 
-/** What a check is run with and on, read before it starts. */
 interface Prepared {
   readonly absolute: string;
   readonly environment: string | null;
@@ -663,10 +655,8 @@ interface Prepared {
   readonly placed?: Placed;
 }
 
-/** Where an isolated check runs, and how its prepare ended there. */
 interface Placed {
   readonly checkout: string;
-  /** What it spawns: the checkout's copy of an executable inside the repository. */
   readonly executable: string;
   readonly prepare?: { readonly exit: number; readonly seconds: number } & Prepare;
   readonly output?: { readonly stdout: string; readonly stderr: string };
@@ -684,10 +674,6 @@ const prepare = Effect.fn("Verify.prepare")(function* (what: Collected) {
   };
 });
 
-/**
- * A detached checkout of `start`, which already holds the Worktree's untracked files and none
- * of its ignored ones, and the prepare run there first.
- */
 const isolate = Effect.fn("Verify.isolate")(function* (
   what: Collected & { readonly isolated: NonNullable<Collected["isolated"]> },
   { start, absolute }: Prepared,
@@ -727,7 +713,7 @@ const isolate = Effect.fn("Verify.isolate")(function* (
     return { checkout, executable };
   }
   const began = yield* Clock.currentTimeMillis;
-  // ponytail: outside CheckProcesses, so a host replaced while it runs does not take it over.
+  // WARNING: run outside CheckProcesses, so a host replaced while it runs does not take it over.
   const ran = yield* shell(prepare.executable, [...prepare.argv], checkout);
   const seconds = ((yield* Clock.currentTimeMillis) - began) / 1000;
   return {
@@ -743,7 +729,7 @@ const startPrepared = Effect.fn("Verify.startPrepared")(function* (
   what: Collected,
   prepared: Prepared,
   echo?: Echo,
-): Effect.fn.Return<StartedCheck, VerifyRefused, Services | Scope.Scope> {
+) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   let already = 0;
@@ -821,7 +807,6 @@ const checkOf = (what: Collected) => ({
   ...(what.pass && { pass: what.pass }),
 });
 
-/** What a check runs, where, and what finishing its record takes. */
 const toRun = Effect.fn("Verify.toRun")(function* (
   runDir: string,
   what: Collected,
@@ -855,10 +840,7 @@ const toRun = Effect.fn("Verify.toRun")(function* (
   };
 });
 
-/**
- * The Verification of a check that exited with `exit`, from its record and output alone, so
- * any host on its state directory can finish it; appended to its Run's evidence.
- */
+// WARNING: built from its record and output alone, so any host on its state directory can finish it.
 export const finishCheck = (id: string, name: string, exit: number) =>
   Effect.flatMap(readCheck(id, name), (read) => settleCheck(read, exit));
 
@@ -877,7 +859,7 @@ const readCheck = Effect.fn("Verify.readCheck")(function* (id: string, name: str
 
 type Asker = NonNullable<Verification["answered"]>[number];
 
-const askerOf = (what: Pick<Collected, "by" | "pass">): Asker => ({
+const askerOf: (what: Pick<Collected, "by" | "pass">) => Asker = (what) => ({
   by: what.by,
   ...passFields(what.pass),
 });
@@ -961,54 +943,51 @@ const settleCheck = Effect.fn("Verify.settleCheck")(function* (
   return kept;
 });
 
-export const collect = (
+export const collect = Effect.fn("Verify.collect")(function* (
   runDir: string,
   what: Collected,
-  /** Where each stream is shown as it arrives, for a caller watching the command run. */
   echo?: Echo,
-) =>
-  Effect.gen(function* () {
-    const prepared = yield* prepare(what);
-    const key = sharedRunOf(runDir, what, prepared);
-    if (key === null) {
-      return yield* collectPrepared(runDir, what, prepared, `unshared ${++unshared}`, echo);
+) {
+  const prepared = yield* prepare(what);
+  const key = sharedRunOf(runDir, what, prepared);
+  if (key === null) {
+    return yield* collectPrepared(runDir, what, prepared, `unshared ${++unshared}`, echo);
+  }
+  for (;;) {
+    const running = underWay.get(key);
+    if (running === undefined) {
+      break;
     }
-    for (;;) {
-      const running = underWay.get(key);
-      if (running === undefined) {
-        break;
-      }
-      running.joined.push(askerOf(what));
-      if (echo?.said !== undefined) {
-        yield* echo.said(`"${what.name}" is already running on this tree: waiting on it`);
-      }
-      const exit = yield* Effect.exit(Deferred.await(running.done));
-      // Where the run it waited on was ended, it runs anew.
-      if (!Exit.hasInterrupts(exit)) {
-        return yield* exit;
-      }
+    running.joined.push(askerOf(what));
+    if (echo?.said !== undefined) {
+      yield* echo.said(`"${what.name}" is already running on this tree: waiting on it`);
     }
-    const entry: UnderWay = { done: Deferred.makeUnsafe(), joined: [] };
-    underWay.set(key, entry);
-    const close = Effect.sync(() => {
-      if (underWay.get(key) === entry) {
-        underWay.delete(key);
-      }
-      return entry.joined;
-    });
-    return yield* collectPrepared(runDir, what, prepared, key, echo, close).pipe(
-      Effect.onExit((exit) => Effect.andThen(close, Deferred.done(entry.done, exit))),
-    );
-  }).pipe(Effect.withSpan("Verify.collect"));
+    const exit = yield* Effect.exit(Deferred.await(running.done));
+    // WARNING: where the run it waited on was interrupted, it runs anew.
+    if (!Exit.hasInterrupts(exit)) {
+      return yield* exit;
+    }
+  }
+  const entry: UnderWay = { done: Deferred.makeUnsafe(), joined: [] };
+  underWay.set(key, entry);
+  const close = Effect.sync(() => {
+    if (underWay.get(key) === entry) {
+      underWay.delete(key);
+    }
+    return entry.joined;
+  });
+  return yield* collectPrepared(runDir, what, prepared, key, echo, close).pipe(
+    Effect.onExit((exit) => Effect.andThen(close, Deferred.done(entry.done, exit))),
+  );
+});
 
 const collectPrepared = (
   runDir: string,
   what: Collected,
   prepared: Prepared,
-  /** Identifies the run, so requests not sharing one never share an isolated checkout. */
+  // WARNING: requests not sharing a run never share an isolated checkout.
   request: string,
   echo?: Echo,
-  /** Takes the identical requests that joined it, after which none more do. */
   close: Effect.Effect<ReadonlyArray<Asker>> = Effect.succeed([]),
 ) =>
   Effect.gen(function* () {
@@ -1032,7 +1011,7 @@ const collectPrepared = (
           (exit, read) => [read, exit] as const,
         ),
       ),
-      // Its Scope ends what is left of it before the tree is looked at again.
+      // WARNING: its Scope ends what is left of it before the tree is looked at again.
       Effect.scoped,
       Effect.flatMap(([read, exit]) =>
         Effect.flatMap(close, (joined) => settleCheck(read, exit, joined)),
@@ -1040,7 +1019,6 @@ const collectPrepared = (
     );
   });
 
-/** A check whose prepare failed, finished from the prepare's output without running it. */
 const unprepared = Effect.fn("Verify.unprepared")(function* (
   runDir: string,
   what: Collected,
@@ -1069,11 +1047,10 @@ interface UnderWay {
   readonly joined: Array<Asker>;
 }
 
-// ponytail: in memory, as only this process's requests can wait on its run.
+// WARNING: in memory, as only this process's requests can wait on its run.
 const underWay = new Map<string, UnderWay>();
 let unshared = 0;
 
-/** What makes two requests one run, or null where the tree or environment cannot be known. */
 const sharedRunOf = (runDir: string, what: Collected, prepared: Prepared) =>
   prepared.environment === null ||
   prepared.start.fingerprint === TOO_LARGE ||
@@ -1115,21 +1092,13 @@ export type CheckRun = {
   readonly id: string;
   readonly cwd: string;
   readonly worktree: string | null;
-  /** Where its isolated checks' checkouts are made, under its state. */
   readonly checkouts?: string;
 };
 
-/** How a check marked isolated is run; undefined for one that is not. */
-export const isolationOf = (spec: VerifySpec): Isolation | undefined =>
+export const isolationOf: (spec: VerifySpec) => Isolation | undefined = (spec) =>
   spec.isolated === true ? { prepare: spec.prepare } : undefined;
 
-/**
- * A verification Collie runs itself, which it does only for one of the Run's checks —
- * exactly, argument by argument. The wrapper is part of the check: `npm test` and
- * `npm test -- --bail` are not the same one. Anyone names them (verify.json, `--verify`,
- * `run intent verification`, chat's `set_verification`), with no yes (ADR-0055). It runs
- * here, outside any agent's permission rules.
- */
+// WARNING: only one of the Run's checks, matched argument by argument; it runs outside any agent's permission rules.
 export const runApproved = Effect.fn("Verify.runApproved")(function* (
   runDir: string,
   run: CheckRun,
@@ -1233,7 +1202,6 @@ export const ranOneTest = (v: Pick<Verification, "test">) => v.test !== undefine
 
 export const passed = (v: Verification) => v.result === "pass" && v.expect === "pass";
 
-/** Why no record answers for a command now: exactly one reason, naming the record compared with. */
 export type Miss =
   | { readonly reason: "none" }
   | {
@@ -1241,15 +1209,13 @@ export type Miss =
       readonly record: string;
     };
 
-/** What a lookup found: a record, or why none answers. */
 export type Reuse =
   | { readonly record: Verification; readonly miss: null }
   | { readonly record: null; readonly miss: Miss };
 
-const missed = (miss: Miss): Reuse => ({ record: null, miss });
+const missed: (miss: Miss) => Reuse = (miss) => ({ record: null, miss });
 
-/** Why it was not reused, as the Run's log and `collie verify` say it. */
-export const missSaid = (miss: Miss): string => {
+export const missSaid = (miss: Miss) => {
   switch (miss.reason) {
     case "none":
       return "no record of this command on this Run";
@@ -1264,11 +1230,7 @@ export const missSaid = (miss: Miss): string => {
   }
 };
 
-/**
- * The latest record of exactly this command on this tree, where it was collected in this
- * environment since `since`, stable and expecting what was asked. Whoever asked for it does
- * not matter: the host ran it. A run of one failed test is never the command's own.
- */
+// WARNING: a run of one failed test is never the command's own record.
 function latestRecord(
   records: ReadonlyArray<Verification>,
   wanted: Pick<Verification, "name" | "executable" | "argv" | "cwd"> & {
@@ -1359,10 +1321,11 @@ export const recordedFor = Effect.fn("Verify.recordedFor")(function* (
   );
 });
 
-/** `recordFor` a pass; a record that failed on this tree answers nothing, and is no miss. */
 export const reliedFor = (runDir: string, run: CheckRun, spec: VerifySpec, since: string) =>
   recordFor(runDir, run, spec, since, "pass").pipe(
-    Effect.map((found): { readonly record: Verification | null; readonly miss: Miss | null } =>
-      found.record === null || passed(found.record) ? found : { record: null, miss: null },
-    ),
+    Effect.map((found) => {
+      const relied: { readonly record: Verification | null; readonly miss: Miss | null } =
+        found.record === null || passed(found.record) ? found : { record: null, miss: null };
+      return relied;
+    }),
   );

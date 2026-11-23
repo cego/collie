@@ -162,7 +162,6 @@ const outsideHarness = (
     return [...outside].sort();
   });
 
-/** A base tree, or a candidate's scratch tree, kept for the Run's later Measurements. */
 const baseTree = (
   stateDir: string,
   runId: string,

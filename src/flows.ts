@@ -1115,9 +1115,9 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
         return parsed.refused;
       }
       return yield* setSetting(env.userDir, command.key, parsed.value, yield* nowIso).pipe(
-        // The host offers it to its peers once told, since nothing watches the user directory.
+        // WARNING: nothing watches the user directory, so the host must be told.
         Effect.tap(() => tellHost(env.stateDir, [`${env.userDir}/config.json`])),
-        // What was written, so the note cannot disagree with the file.
+        // WARNING: the note says what was written, so it cannot disagree with the file.
         Effect.as(`${command.key} is now ${settingText(parsed.value) || "unset"}`),
         Effect.catch((cause) => Effect.succeed(`${command.key}: ${reason(cause)}`)),
       );

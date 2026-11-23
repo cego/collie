@@ -94,7 +94,7 @@ test("Go to pane on a Run whose builder work moved on opens the live builder's p
       const sessions = [{ herd: null, herdr: new Herdr(rig.pluginEnv()) }];
       const first = registered("build-r1", "ended-1");
       const second = yield* rig.addAgent("build-02-r1");
-      // Newest first, as the host asks.
+      // WARNING: newest first, as the host asks.
       expect((yield* focusPane(sessions, [registered("build-02-r1", second), first]))?.core).toBe(
         second,
       );

@@ -246,7 +246,6 @@ test("a card another host derived is confirmed by content, without deriving it, 
       expect(derived.length).toBe(5);
       derived.length = 0;
 
-      // The next host: another epoch, every card as the last one left it.
       const after = yield* makeRunModel(dir, "installation");
       const kept = new Map(
         Arr.map([...left.kept], ([task, card]) => [

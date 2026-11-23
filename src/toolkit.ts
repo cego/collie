@@ -37,7 +37,6 @@ export const decodeStrict = <S extends Schema.ConstraintDecoder<unknown, never>>
 export const RunInput = Schema.Struct({ run: Schema.optionalKey(Schema.String) });
 const specs = (description: string) =>
   Schema.optionalKey(Schema.Array(Schema.String).annotate({ description }));
-/** `run metrics --compare … --against …` as `collie_run` takes it. */
 const TrialInput = Schema.Struct({
   compare: specs(
     "Instead of one Run, compare two sets: the first set's Runs, each <run> or <run>=<case>",

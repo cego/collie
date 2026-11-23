@@ -38,9 +38,8 @@ export interface FakeHc {
   readonly stallNextSend: () => void;
   readonly reportedOnly: (names: ReadonlyArray<string>) => void;
   readonly startBlocked: () => void;
-  /** The next terminal's program is the process `pid`, hung up when the terminal is killed. */
+  // WARNING: the program is hung up when the terminal is killed.
   readonly runsAs: (pid: number) => void;
-  /** The terminal named `name` prints `text` to each viewer attached to it. */
   readonly print: (name: string, text: string) => Effect.Effect<void>;
   readonly exit: (name: string, code: number) => Effect.Effect<void>;
   readonly lose: Effect.Effect<void>;
@@ -101,7 +100,7 @@ interface Terminal {
   readonly argv: Schema.Json;
   readonly cwd: string;
   foregroundCwd: string;
-  /** None unless a test names a real process: a made-up pid may be another's. */
+  // WARNING: null unless a test names a real process; a made-up pid may be another's.
   readonly pid: number | null;
   state: "live" | "finished";
   status: string | null;
