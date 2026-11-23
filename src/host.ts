@@ -115,7 +115,7 @@ import {
 import { RequestedBy, sortBoard } from "./board-model";
 import { CardRows, type CardRow } from "./card-rows";
 import { MERGE_REQUESTS } from "./merge-requests";
-import { MODULE_REVISIONS, ModuleRevisions } from "./module-revisions";
+import { MODULE_REVISIONS, ModuleRevisions, onSyncedRevisions } from "./module-revisions";
 import { BRANCHES, Branches, branchKey } from "./branches";
 import { CONNECTIONS } from "./connection-rows";
 import type { MeasureEvent } from "./measurement-model";
@@ -952,7 +952,9 @@ const handlers = (
       // The installation this host belongs to, which the client that started it named.
       const env = yield* currentEnv.pipe(Effect.orDie);
       const catalogue = (project: string) =>
-        discover(searchPath({ pluginRoot: env.pluginRoot, userDir: env.userDir, project }));
+        onSyncedRevisions(
+          discover(searchPath({ pluginRoot: env.pluginRoot, userDir: env.userDir, project })),
+        );
 
       const record = <A, E, R>(runId: string, read: Effect.Effect<A, E, R>) =>
         registry.view(runId).pipe(
@@ -3046,7 +3048,9 @@ const frontDoorHandlers = (
           )(Effect.flatMap(parkHealedBy(client), (healing) => takeUp(runId, undefined, healing))),
         offers: ({ runId }) => serve(offersOn(runId)),
         workflows: ({ project }) =>
-          discover(searchPath({ pluginRoot: env.pluginRoot, userDir: env.userDir, project })).pipe(
+          onSyncedRevisions(
+            discover(searchPath({ pluginRoot: env.pluginRoot, userDir: env.userDir, project })),
+          ).pipe(
             Effect.map(({ entries }) =>
               Arr.map(entries, ({ id, title, description, inputs }) => ({
                 id,
