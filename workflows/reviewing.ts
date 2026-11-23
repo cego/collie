@@ -481,7 +481,7 @@ export const checkedBeforeReview = (ask: {
   readonly fix: (
     operation: string,
     findings: string,
-    failed: ReadonlyArray<Finding>,
+    open: ReadonlyArray<Finding>,
   ) => Effect.Effect<unknown, WorkflowError, Needs>;
 }): Effect.Effect<
   { readonly halted: string; readonly failed: ReadonlyArray<Finding> } | null,

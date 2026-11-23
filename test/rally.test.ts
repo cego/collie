@@ -473,6 +473,46 @@ const ledgerRally = (runId: string) =>
     Effect.orDie,
   );
 
+const fixedEmptyList = {
+  verdict: "clean",
+  fixed: [{ title: "empty list", file: "src/thing.ts" }],
+  checks: [],
+};
+
+test("an implement ticket's first review gives its finding the Run's first id, and the next round keeps that id with its new status", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([
+        { verdict: "findings", summary: "a blocker", findings: [blocker("empty list")] },
+        fixedEmptyList,
+        {
+          verdict: "clean",
+          summary: "fixed",
+          findings: [{ ...blocker("empty list"), status: "fixed" }],
+        },
+      ]);
+      const ran = yield* ledgerRally("r-ledger");
+      expect(ran.second).toContain('"id": "r-ledger-F1"');
+      expect(ran.second).toContain('"status": "open"');
+      expect(said(ran.result)).toBe('[{"id":"r-ledger-F1","status":"fixed","title":"empty list"}]');
+    }),
+  ));
+
+test("a later round's review that leaves out an earlier finding fails the Run, naming the finding whose status it must return", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([
+        { verdict: "findings", summary: "a blocker", findings: [blocker("empty list")] },
+        fixedEmptyList,
+        { verdict: "clean", summary: "nothing left" },
+      ]);
+      const ran = yield* ledgerRally("r-omit");
+      expect(ran.result._tag === "Failure" && String(ran.result.failure)).toContain(
+        "review omitted earlier finding r-omit-F1; return its status",
+      );
+    }),
+  ));
+
 /** The shipped rally on a Run started with `static` marked to run before review, then `after`. */
 const staticRally = <A>(
   runId: string,
@@ -543,46 +583,6 @@ const staticRally = <A>(
     Effect.scoped,
     Effect.orDie,
   );
-
-const fixedEmptyList = {
-  verdict: "clean",
-  fixed: [{ title: "empty list", file: "src/thing.ts" }],
-  checks: [],
-};
-
-test("an implement ticket's first review gives its finding the Run's first id, and the next round keeps that id with its new status", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* rig.queueOutputs([
-        { verdict: "findings", summary: "a blocker", findings: [blocker("empty list")] },
-        fixedEmptyList,
-        {
-          verdict: "clean",
-          summary: "fixed",
-          findings: [{ ...blocker("empty list"), status: "fixed" }],
-        },
-      ]);
-      const ran = yield* ledgerRally("r-ledger");
-      expect(ran.second).toContain('"id": "r-ledger-F1"');
-      expect(ran.second).toContain('"status": "open"');
-      expect(said(ran.result)).toBe('[{"id":"r-ledger-F1","status":"fixed","title":"empty list"}]');
-    }),
-  ));
-
-test("a later round's review that leaves out an earlier finding fails the Run, naming the finding whose status it must return", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* rig.queueOutputs([
-        { verdict: "findings", summary: "a blocker", findings: [blocker("empty list")] },
-        fixedEmptyList,
-        { verdict: "clean", summary: "nothing left" },
-      ]);
-      const ran = yield* ledgerRally("r-omit");
-      expect(ran.result._tag === "Failure" && String(ran.result.failure)).toContain(
-        "review omitted earlier finding r-omit-F1; return its status",
-      );
-    }),
-  ));
 
 /** A fix that changed nothing, which also reads as a clean review. */
 const NOT_FIXED = {
