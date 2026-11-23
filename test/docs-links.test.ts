@@ -26,11 +26,11 @@ function slugs(markdown: string) {
         Str.trim(
           pipe(
             Str.toLowerCase(heading!),
-            Str.replace(/`|\*|\[|\]|\(.*?\)/g, ""),
-            Str.replace(/[^a-z0-9 -]/g, ""),
+            Str.replaceAll(/`|\*|\[|\]|\(.*?\)/g, ""),
+            Str.replaceAll(/[^a-z0-9 -]/g, ""),
           ),
         ),
-        Str.replace(/ /g, "-"),
+        Str.replaceAll(" ", "-"),
       ),
     );
   }

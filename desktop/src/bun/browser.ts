@@ -27,7 +27,7 @@ const commandOf = (entry: string) => {
             ([, quoted, plain]) =>
               Option.getOrUndefined(
                 Option.map(Option.fromNullishOr(quoted), (present) =>
-                  pipe_(present, Str.replace(/\\(.)/g, "$1")),
+                  pipe_(present, Str.replaceAll(/\\(.)/g, "$1")),
                 ),
               ) ??
               plain ??

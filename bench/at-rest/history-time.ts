@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
 
 export const shiftDates = (text: string, by: number) =>
-  text.replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z/g, (iso) =>
+  text.replaceAll(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z/g, (iso) =>
     new Date(Date.parse(iso) + by).toISOString(),
   );
 

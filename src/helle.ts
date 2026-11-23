@@ -66,7 +66,7 @@ export const credentials = Effect.fn("Helle.credentials")(function* (where: {
   const values = new Map<string, string>();
   for (const line of Str.split(text, "\n")) {
     const entry = /^\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
-    if (entry) values.set(entry[1]!, pipe(entry[2]!, Str.replace(/^["']|["']$/g, "")));
+    if (entry) values.set(entry[1]!, pipe(entry[2]!, Str.replaceAll(/^["']|["']$/g, "")));
   }
   const token = values.get("HELLE_API_TOKEN");
   if (!token) return yield* failed(`helle credentials: no HELLE_API_TOKEN in ${file}`);

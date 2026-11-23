@@ -33,7 +33,7 @@ export const specHeadings = (spec: string) =>
       if (level !== undefined)
         found.push({
           level: Number(level),
-          text: Str.trim(pipe(textOf(node), Str.replace(/\s+/g, " "))),
+          text: Str.trim(pipe(textOf(node), Str.replaceAll(/\s+/g, " "))),
         });
       else Arr.forEach(children, visit);
     };

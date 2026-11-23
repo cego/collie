@@ -14,9 +14,9 @@ const DIGEST = 6;
 function sanitize(text: string) {
   return pipe(
     Str.toLowerCase(text),
-    Str.replace(/[^a-z0-9_-]+/g, "-"),
-    Str.replace(/-+/g, "-"),
-    Str.replace(/^-+|-+$/g, ""),
+    Str.replaceAll(/[^a-z0-9_-]+/g, "-"),
+    Str.replaceAll(/-+/g, "-"),
+    Str.replaceAll(/^-+|-+$/g, ""),
   );
 }
 
@@ -63,7 +63,7 @@ function layout(
   legacy: boolean,
 ) {
   const trim = (text: string, room: number) =>
-    pipe(text, Str.slice(0, Math.max(0, room)), Str.replace(/-+$/g, ""));
+    pipe(text, Str.slice(0, Math.max(0, room)), Str.replaceAll(/-+$/g, ""));
   const step = sanitize(
     Arr.join(
       Arr.map(
@@ -218,5 +218,5 @@ export function taskTitleOf(label: string) {
 }
 
 export function oneLine(text: string) {
-  return Str.trim(pipe(text, Str.replace(/\p{Cc}/gu, " "), Str.replace(/\s+/g, " ")));
+  return Str.trim(pipe(text, Str.replaceAll(/\p{Cc}/gu, " "), Str.replaceAll(/\s+/g, " ")));
 }

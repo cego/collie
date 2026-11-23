@@ -1065,10 +1065,10 @@ scenario(
             step,
             false,
           ]);
-        expect(pipe(yield* persona("r-plan", "grill"), Str.replace(/\s+/g, " "))).toContain(
+        expect(pipe(yield* persona("r-plan", "grill"), Str.replaceAll(/\s+/g, " "))).toContain(
           "Write a `changelog` only when a step asks for one",
         );
-        expect(pipe(yield* asked("r-plan", "spec"), Str.replace(/\s+/g, " "))).toContain(
+        expect(pipe(yield* asked("r-plan", "spec"), Str.replaceAll(/\s+/g, " "))).toContain(
           "the spec does not restate them",
         );
         expect((yield* launched())[0]?.args).toContain("--model opus --effort high");
@@ -1090,7 +1090,7 @@ scenario(
           decision: "next-1",
         });
 
-        const told = pipe(yield* asked("r-plan-checks", "tickets"), Str.replace(/\s+/g, " "));
+        const told = pipe(yield* asked("r-plan-checks", "tickets"), Str.replaceAll(/\s+/g, " "));
         expect(told).toContain("The Run's own Checks are already the gate");
         expect(told).toContain("never a ticket's criterion");
         expect(told).toContain(`This Run's Checks: - check: true (in ${rig.projectDir})`);
@@ -1109,7 +1109,7 @@ scenario("a planner whose Run has no Checks is told the gate's rule without a li
         decision: "next-1",
       });
 
-      const told = pipe(yield* asked("r-plan-no-checks", "tickets"), Str.replace(/\s+/g, " "));
+      const told = pipe(yield* asked("r-plan-no-checks", "tickets"), Str.replaceAll(/\s+/g, " "));
       expect(told).toContain("The Run's own Checks are already the gate");
       expect(told).toContain("never a ticket's criterion");
       expect(told).not.toContain("This Run's Checks:");
@@ -1914,7 +1914,7 @@ scenario(
             fs.exists(`${agents}/01-faster.md.prompt.md`).pipe(Effect.orElseSucceed(() => false)),
           (there) => there,
         );
-        const faster = pipe(yield* asked(build, "01-faster.md"), Str.replace(/\s+/g, " "));
+        const faster = pipe(yield* asked(build, "01-faster.md"), Str.replaceAll(/\s+/g, " "));
         for (const pass of ["calibration", "final"])
           expect(faster).toMatch(
             new RegExp(`collie measure --base \\S+ --plan ${benchmark} --pass ${pass}`),
@@ -1953,7 +1953,7 @@ scenario(
         yield* matchGolden(unrooted(plain));
         expect(unrooted(plain)).toBe(yield* readText(GOLDEN));
 
-        const mr = pipe(yield* asked(build, "mr"), Str.replace(/\s+/g, " "));
+        const mr = pipe(yield* asked(build, "mr"), Str.replaceAll(/\s+/g, " "));
         expect(verdictsOf(final)).toEqual(["bench.count gain", "bench.size no-change"]);
         expect(mr).toContain(`final Measurement ${final.id}: bench.count gain`);
         expect(mr).toContain("bench.size no-change");
@@ -3336,7 +3336,7 @@ scenario("a review's fix works in the reviewed branch's own checkout, and is ver
       expect(fix).not.toContain("Do not push");
       expect(fix).toContain("has an open merge request");
       expect(fix).toContain("never force");
-      expect(pipe(fix, Str.replace(/\s+/g, " "))).toContain(
+      expect(pipe(fix, Str.replaceAll(/\s+/g, " "))).toContain(
         "Collie checked before this round started that it does not merge itself once green",
       );
       expect(fix).toContain("has no open merge request, do not push");
@@ -6278,7 +6278,7 @@ for (const [kind, plan] of [
         yield* noMergeRequests;
         yield* repository();
         const fs = yield* FileSystem.FileSystem;
-        const runId = `r-spec-${pipe(kind, Str.replace(/\W/g, "-"))}`;
+        const runId = `r-spec-${pipe(kind, Str.replaceAll(/\W/g, "-"))}`;
         yield* approve(runId, ["unit"]);
         yield* fs.makeDirectory(`${runDir(dir, runId)}/plan`, { recursive: true });
         yield* fs.writeFileString(`${runDir(dir, runId)}/plan/SPEC.md`, "# The spec\n");
@@ -6310,7 +6310,7 @@ for (const workflow of ["general", "investigate"] as const)
 
           const work = pipe(
             yield* asked(runId, workflow === "general" ? "task" : "investigate"),
-            Str.replace(/\s+/g, " "),
+            Str.replaceAll(/\s+/g, " "),
           );
           const benchmark = `${runDir(dir, runId)}/handoffs/<slug>.benchmark.json`;
           expect(work).toContain(`\`${benchmark}\``);
@@ -6336,7 +6336,7 @@ for (const kind of ["typed text", "Linear issue", "follow-up", "review"] as cons
           yield* noMergeRequests;
           yield* repository();
           const fs = yield* FileSystem.FileSystem;
-          const runId = `r-measure-${pipe(kind, Str.replace(/\W/g, "-"))}`;
+          const runId = `r-measure-${pipe(kind, Str.replaceAll(/\W/g, "-"))}`;
           const reviewed = `${rig.root}/${runId}-reviewed`;
           yield* fs.makeDirectory(reviewed, { recursive: true });
           yield* fs.writeFileString(`${reviewed}/review.md`, "# Review\n\nIt is slow.\n");
@@ -6353,7 +6353,7 @@ for (const kind of ["typed text", "Linear issue", "follow-up", "review"] as cons
           yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
           yield* ran({ entry: shipped("implement"), runId, input: { plan, ...FINISH } });
 
-          const building = pipe(yield* asked(runId, "build"), Str.replace(/\s+/g, " "));
+          const building = pipe(yield* asked(runId, "build"), Str.replaceAll(/\s+/g, " "));
           const benchmark = `${runDir(dir, runId)}/plan/issues/NN-<slug>.benchmark.json`;
           expect(building).toContain(`beside its ticket, \`${benchmark}\``);
           for (const pass of ["calibration", "final"])
@@ -7766,14 +7766,14 @@ scenario(
         expect(yield* asked(runId, "review-1")).toContain("(nothing is recorded for this Run)");
         const review = yield* asked(runId, "review-2-1");
         expect(review).toMatch(/- unit: pass \(by collie\), on this tree, at \d{4}-/);
-        const text = pipe(review, Str.replace(/\s+/g, " "));
+        const text = pipe(review, Str.replaceAll(/\s+/g, " "));
         expect(text).toContain("never the whole suite");
         expect(text).toContain("read only the entries for the terms the diff touches");
         expect(text).toContain("list every instance of it in the diff in that finding");
 
         const both = pipe(
           `${yield* persona(runId, "review-2-1")}\n${review}`,
-          Str.replace(/\s+/g, " "),
+          Str.replaceAll(/\s+/g, " "),
         );
         const rules = [
           "is a follow-up",
@@ -7830,7 +7830,7 @@ scenario(
           yield* asked("r-impl-fix", "build"),
           yield* asked("r-impl-fix", "fix-1"),
         ]) {
-          const text = pipe(prompt, Str.replace(/\s+/g, " "));
+          const text = pipe(prompt, Str.replaceAll(/\s+/g, " "));
           expect(text).toContain("the `tdd` skill");
           expect(text).toMatch(
             /run the typecheck and the test files you touched, each through `collie verify`/i,
@@ -11450,7 +11450,7 @@ scenario(
         expect(more).toEqual([]);
         expect(note).toContain("an approval is still needed");
         expect(note).toContain("the pipeline is still running");
-        const prompt = pipe(yield* asked(runId, "mr"), Str.replace(/\s+/g, " "));
+        const prompt = pipe(yield* asked(runId, "mr"), Str.replaceAll(/\s+/g, " "));
         for (const rule of [
           "`blocker` or `major` only where it leaves delivery undone",
           "is `minor`: approvals still needed, a pipeline still running, failures that were there before this Run",
@@ -11558,7 +11558,7 @@ const skippedHead = (pushed: boolean, over: Partial<ForgeModel> = {}) =>
     return { bin, forge, head, branch, plan, started };
   });
 const sha12 = (sha: string) => pipe(sha, Str.slice(0, 12));
-const flat = (text: string) => pipe(text, Str.replace(/\s+/g, " "));
+const flat = (text: string) => pipe(text, Str.replaceAll(/\s+/g, " "));
 
 scenario(
   "a delivery whose push sent nothing gets one merge request pipeline on its skipped head, and the Run records it",

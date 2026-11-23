@@ -50,7 +50,7 @@ test("the batch branch is named outside Renovate Bot's branch prefix on both for
 
 test("the batch leaves out a bump it cannot fix small, with a recommendation, and never stops to ask", () => {
   for (const content of [gitlab, github]) {
-    const batch = pipe(content.sections.get("batch") ?? "", Str.replace(/\s+/g, " "));
+    const batch = pipe(content.sections.get("batch") ?? "", Str.replaceAll(/\s+/g, " "));
     expect(batch).not.toContain("consult");
     expect(batch).toContain(
       "Anything that needs more than that is **left out of the batch** and reported with why and what you recommend",
@@ -64,7 +64,8 @@ test("the batch leaves out a bump it cannot fix small, with a recommendation, an
 
 test("renovate picks among several issues by rule, asks approval on the Run, and leaves production to the human", () => {
   for (const content of [gitlab, github]) {
-    const flat = (step: string) => pipe(content.sections.get(step) ?? "", Str.replace(/\s+/g, " "));
+    const flat = (step: string) =>
+      pipe(content.sections.get(step) ?? "", Str.replaceAll(/\s+/g, " "));
     const track = flat("track");
     expect(track).toContain("the one whose title names the current month or cycle");
     expect(track).toContain("otherwise the one with the earliest due date");

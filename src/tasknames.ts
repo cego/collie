@@ -30,7 +30,7 @@ export interface TaskContext {
 const PREFIXED = /^(.+?)\s\|\s(.+)$/;
 
 function normal(text: string) {
-  return pipe_(Str.toLowerCase(text), Str.replace(/[^a-z0-9]+/g, ""));
+  return pipe_(Str.toLowerCase(text), Str.replaceAll(/[^a-z0-9]+/g, ""));
 }
 
 export function repositoryOf(cwd: string) {
@@ -89,7 +89,7 @@ export function fallbackName(context: TaskContext, live: LiveNames) {
   const kept = words.slice(0, FALLBACK_WORDS);
   while (kept.length > 1 && DANGLING.has(Str.toLowerCase(kept.at(-1)!))) kept.pop();
   return {
-    project: establishedProject(live, repo) ?? sentence(pipe_(repo, Str.replace(/[-_]+/g, " "))),
+    project: establishedProject(live, repo) ?? sentence(pipe_(repo, Str.replaceAll(/[-_]+/g, " "))),
     title: sentence(Arr.join(kept, " ")),
   };
 }

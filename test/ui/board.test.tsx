@@ -98,7 +98,7 @@ const mount = Effect.fn("board.mount")(function* (
     flush,
     frame: () => t.captureCharFrame(),
     said: () =>
-      pipe_(t.captureCharFrame(), Str.replace(/[│┌┐└┘─]/g, " "), Str.replace(/\s+/g, " ")),
+      pipe_(t.captureCharFrame(), Str.replaceAll(/[│┌┐└┘─]/g, " "), Str.replaceAll(/\s+/g, " ")),
     mockInput: t.mockInput,
     escape: Effect.gen(function* () {
       t.mockInput.pressEscape();
@@ -932,7 +932,9 @@ test("a long record does not take the drawer's spacing back from its header", ()
       expect(at("Go to its tab")).toBe(at("Finished; nothing merged yet.") + 2);
       const left =
         Option.getOrElse(pipe_(lines[at("Summary")]!, Str.indexOf("Summary")), () => -1) - 3;
-      expect(pipe_(lines[at("Summary") - 1]!, Str.slice(left), Str.replace(/[│ ]/g, ""))).toBe("");
+      expect(pipe_(lines[at("Summary") - 1]!, Str.slice(left), Str.replaceAll(/[│ ]/g, ""))).toBe(
+        "",
+      );
     }),
   ));
 

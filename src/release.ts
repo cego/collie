@@ -128,7 +128,7 @@ export const placeRelease = Effect.fn("release.place")(function* (
         return returned;
       }),
     );
-    const when = pipe_(yield* nowIso, Str.replace(/:/g, "-"));
+    const when = pipe_(yield* nowIso, Str.replaceAll(":", "-"));
     for (const name of yield* filesUnder(current)) {
       if (name === RECORD) continue;
       const bytes = yield* fs.readFile(path.join(current, name));

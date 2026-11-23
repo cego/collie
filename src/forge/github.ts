@@ -1211,8 +1211,8 @@ const AttemptJobs = Schema.Struct({
 const plainLog = (log: string) =>
   pipe(
     stripVTControlCharacters(log),
-    Str.replace(/^(?:[^\t\n]*\t[^\t\n]*\t)?\d{4}-\d\d-\d\dT[\d:.]+Z ?/gm, ""),
-    Str.replace(/##\[\w+\]/g, ""),
+    Str.replaceAll(/^(?:[^\t\n]*\t[^\t\n]*\t)?\d{4}-\d\d-\d\dT[\d:.]+Z ?/gm, ""),
+    Str.replaceAll(/##\[\w+\]/g, ""),
     Str.replaceAll("\r", ""),
   );
 

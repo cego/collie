@@ -3358,8 +3358,8 @@ const frontDoorHandlers = (
                       );
                       return;
                     }
-                    const started = pipe(yield* nowIso, Str.replace(/[:.]/g, "-"));
-                    const log = `${evidenceDir(env.stateDir, runId)}/verify/${started}-${pipe(name, Str.replace(/[^\w.-]/g, "_"))}.log`;
+                    const started = pipe(yield* nowIso, Str.replaceAll(/[:.]/g, "-"));
+                    const log = `${evidenceDir(env.stateDir, runId)}/verify/${started}-${pipe(name, Str.replaceAll(/[^\w.-]/g, "_"))}.log`;
                     const collected = yield* Effect.raceFirst(
                       collect(
                         evidenceDir(env.stateDir, runId),

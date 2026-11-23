@@ -34,7 +34,7 @@ export function checksIn(text: string) {
   }
   const returned: string[] = Arr.filter(
     Arr.map(Str.split(line, ","), (part) =>
-      Str.trim(pipe_(Str.trim(part), Str.replace(/^`|`$/g, ""))),
+      Str.trim(pipe_(Str.trim(part), Str.replaceAll(/^`|`$/g, ""))),
     ),
     (part) => part !== "",
   );

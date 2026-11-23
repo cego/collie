@@ -360,7 +360,7 @@ const harness = Effect.fn("HcProbe.harness")(function* (socket: string, cwd: str
   const shown = yield* screen;
   yield* Console.error(`${name}: reported ${Arr.join(words, ", ")}; answered ${ANSWER}`);
   // WARNING: a TUI wraps and indents long lines, so the prompt is found with its spacing evened out.
-  const even = (text: string) => pipe(text, Str.replace(/\s+/g, " "));
+  const even = (text: string) => pipe(text, Str.replaceAll(/\s+/g, " "));
   yield* expect(
     pipe(even(shown), Str.includes(even(PROMPT))),
     `${name}'s screen to show the prompt:\n${shown}`,
@@ -596,7 +596,7 @@ const opencode = Effect.fn("HcProbe.opencode")(function* (
     }),
   );
   const shown = yield* screen(first!.address);
-  const even = (text: string) => pipe(text, Str.replace(/\s+/g, " "));
+  const even = (text: string) => pipe(text, Str.replaceAll(/\s+/g, " "));
   yield* expect(
     pipe(even(shown), Str.includes(even(SECOND.prompt))),
     `${first!.name}'s screen to show the sent prompt:\n${shown}`,

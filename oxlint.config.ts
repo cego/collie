@@ -78,7 +78,6 @@ const migrating = {
   "unicorn/prefer-native-coercion-functions": "off",
   "unicorn/prefer-set-has": "off",
   "unicorn/prefer-single-call": "off",
-  "unicorn/prefer-string-replace-all": "off",
   "unicorn/prefer-top-level-await": "off",
 } as const;
 

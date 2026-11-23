@@ -302,7 +302,10 @@ test("the system prompt chat writes takes a reported review as a report, asks be
         tools: [],
         mcpConfig: "{}",
       });
-      const prompt = pipe_(yield* fs.readFileString(files.systemPrompt), Str.replace(/\s+/g, " "));
+      const prompt = pipe_(
+        yield* fs.readFileString(files.systemPrompt),
+        Str.replaceAll(/\s+/g, " "),
+      );
       expect(prompt).toContain(
         `A human reporting a review, such as "I got review on the MR", is telling you what happened, not asking you to change what a Run does.`,
       );
@@ -347,7 +350,7 @@ test("the shipped prompt has chat choose by description, with ad-hoc work as gen
       const fs = yield* FileSystem.FileSystem;
       const prompt = pipe_(
         yield* fs.readFileString(`${import.meta.dir}/../prompts/collie-chat.md`),
-        Str.replace(/\s+/g, " "),
+        Str.replaceAll(/\s+/g, " "),
       );
       expect(prompt).toContain("Choose the workflow whose description fits the request");
       expect(prompt).toContain(

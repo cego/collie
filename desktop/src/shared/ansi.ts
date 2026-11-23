@@ -40,7 +40,7 @@ const CLEARS = new Map<number, ReadonlyArray<string>>([
 ]);
 
 export const ansiSpans = (output: string) => {
-  const text = pipe(output, Str.replace(OTHER, ""));
+  const text = pipe(output, Str.replaceAll(OTHER, ""));
   const spans: AnsiSpan[] = [];
   let style: AnsiSpan["style"] = {};
   const set = (key: string, value: string) => (style = { ...style, [key]: value });

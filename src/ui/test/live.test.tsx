@@ -58,7 +58,7 @@ function live(over: Partial<Live> = {}) {
 const shown = Effect.fn("live.shown")(function* (node: () => JSX.Element, width = 90, height = 30) {
   const t = yield* Effect.promise(() => testRender(node, { width, height }));
   yield* Effect.promise(() => t.flush());
-  return pipe(t.captureCharFrame(), Str.replace(/[│┌┐└┘─]/g, " "), Str.replace(/\s+/g, " "));
+  return pipe(t.captureCharFrame(), Str.replaceAll(/[│┌┐└┘─]/g, " "), Str.replaceAll(/\s+/g, " "));
 });
 
 test("a card says what was asked for, what changed, and what nobody checked", () =>

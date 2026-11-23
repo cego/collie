@@ -291,7 +291,7 @@ function taskSlug(from: string, distinctBy: string) {
 }
 
 function letters(text: string) {
-  return pipe_(Str.toLowerCase(text), Str.replace(/[^\p{L}\p{N}]+/gu, ""));
+  return pipe_(Str.toLowerCase(text), Str.replaceAll(/[^\p{L}\p{N}]+/gu, ""));
 }
 
 // WARNING: a reviewed branch is cut from its own remote tip, never the default; refused if neither remote nor local has it.
@@ -359,7 +359,7 @@ const PROSE_EDGES = /^[('"]+|[)'".,;:!?]+$/g;
 
 const mrUrlsIn = (text: string) =>
   Arr.flatMap(Str.split(text, OUTSIDE_URL), (word) => {
-    const said = pipe_(word, Str.replace(PROSE_EDGES, ""));
+    const said = pipe_(word, Str.replaceAll(PROSE_EDGES, ""));
     const ref = readMrUrl(said);
     if (Str.split(said, "://").length > 2) return [ref, ref];
     return ref === null ? [] : [ref];

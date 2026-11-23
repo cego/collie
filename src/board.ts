@@ -425,7 +425,7 @@ function doneSentence(
     if (mr === null)
       return summary === null || Str.trim(summary) === ""
         ? "Finished; nothing merged yet."
-        : `Completed. It reported: “${pipe(Str.trim(summary), Str.replace(/\s+/g, " "))}”`;
+        : `Completed. It reported: “${pipe(Str.trim(summary), Str.replaceAll(/\s+/g, " "))}”`;
     if (mrState !== null && LANDED_STATES.has(mrState))
       return `Merged as ${mrLabel(mr)}.${mrState === "on-stage" || mrState === "in-prod" ? DEPLOYED[mrState] : ""}`;
     if (mrState === "closed") {
@@ -652,7 +652,7 @@ const heads = new Map<string, { readonly at: number; readonly sha: string | null
 
 function withoutPaths(text: string) {
   // oxlint-disable-next-line effecttsgo/prefer-effect-string -- This replacement depends on each match; Effect String accepts only string replacements.
-  return text.replace(/(?:^|\s)\/(?:[^\s/]+\/)+([^\s/]+)/g, (whole, last: string) =>
+  return text.replaceAll(/(?:^|\s)\/(?:[^\s/]+\/)+([^\s/]+)/g, (whole, last: string) =>
     pipe(whole, Str.startsWith(" ")) ? ` ${last}` : last,
   );
 }

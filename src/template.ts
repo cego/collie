@@ -44,14 +44,21 @@ const BRACES = /\{\{[^}]*\}\}/g;
 
 export function expressionsIn(text: string) {
   const names: string[] = [];
-  for (const [, name] of pipe(text, Str.replace(SKILL, ""), Str.matchAll(EXPRESSION)))
+  for (const [, name] of pipe(text, Str.replaceAll(SKILL, ""), Str.matchAll(EXPRESSION)))
     if (name && !names.includes(name)) names.push(name);
   return names;
 }
 
 export function malformedIn(text: string) {
   return Arr.map(
-    [...pipe(text, Str.replace(SKILL, ""), Str.replace(EXPRESSION, ""), Str.matchAll(BRACES))],
+    [
+      ...pipe(
+        text,
+        Str.replaceAll(SKILL, ""),
+        Str.replaceAll(EXPRESSION, ""),
+        Str.matchAll(BRACES),
+      ),
+    ],
     ([all]) => all,
   );
 }
@@ -62,11 +69,11 @@ export function renderTemplate(text: string, input: YamlMap, opts: RenderOptions
   const missing: string[] = [];
   // WARNING: skills first, so {{skill:x}} is never mistaken for missing input.
   // oxlint-disable-next-line effecttsgo/prefer-effect-string -- This replacement depends on each match; Effect String accepts only string replacements.
-  const withSkills = text.replace(SKILL, (all, name: string) =>
+  const withSkills = text.replaceAll(SKILL, (all, name: string) =>
     opts.skill ? opts.skill(name) : all,
   );
   // oxlint-disable-next-line effecttsgo/prefer-effect-string -- This replacement depends on each match; Effect String accepts only string replacements.
-  const out = withSkills.replace(EXPRESSION, (_all, path: string) => {
+  const out = withSkills.replaceAll(EXPRESSION, (_all, path: string) => {
     const value = lookup(input, Str.split(path, "."));
     if (value === undefined || value === null) {
       if (!missing.includes(path)) missing.push(path);
@@ -99,10 +106,10 @@ export function slugify(text: string, max = 40) {
 export function slug(text: string, max = 40) {
   const full = pipe(
     Str.toLowerCase(text),
-    Str.replace(/[^a-z0-9]+/g, "-"),
-    Str.replace(/^-+|-+$/g, ""),
+    Str.replaceAll(/[^a-z0-9]+/g, "-"),
+    Str.replaceAll(/^-+|-+$/g, ""),
   );
-  const cut = pipe(full, Str.slice(0, max), Str.replace(/-+$/g, ""));
+  const cut = pipe(full, Str.slice(0, max), Str.replaceAll(/-+$/g, ""));
   // WARNING: the fallback name counts as clipped: it stands for the text, so texts with no alphanumerics would share it.
   return { slug: cut || "run", clipped: cut !== full || cut === "" };
 }

@@ -106,7 +106,7 @@ export const append = Effect.fn("Conversation.append")(function* (
 function sanitise(text: string, roots: ReadonlyArray<string>) {
   if (roots.length === 0) return text;
   // oxlint-disable-next-line effecttsgo/prefer-effect-string -- This replacement depends on each match; Effect String accepts only string replacements.
-  return text.replace(/(^|\s)(\/[^\s'"`)]+)/g, (whole, lead: string, found: string) =>
+  return text.replaceAll(/(^|\s)(\/[^\s'"`)]+)/g, (whole, lead: string, found: string) =>
     insideKnown(found, roots) ? whole : `${lead}<external>`,
   );
 }

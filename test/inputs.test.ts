@@ -30,7 +30,7 @@ let rig: Rig;
 let bin: FakeBin;
 let planned: RunFacts[];
 
-const join = (...parts: string[]) => pipe(Arr.join(parts, "/"), Str.replace(/\/+/g, "/"));
+const join = (...parts: string[]) => pipe(Arr.join(parts, "/"), Str.replaceAll(/\/+/g, "/"));
 const mkdir = (path: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.makeDirectory(path, { recursive: true }));
 const writeFile = (path: string, text: string) =>

@@ -23,7 +23,7 @@ import { callTool } from "../src/tools";
 import { readEnv } from "../src/env";
 
 const root = new URL("../", import.meta.url).pathname;
-const join = (...parts: string[]) => pipe_(Arr.join(parts, "/"), Str.replace(/\/+/g, "/"));
+const join = (...parts: string[]) => pipe_(Arr.join(parts, "/"), Str.replaceAll(/\/+/g, "/"));
 
 const CliEnvelope = Schema.fromJsonString(
   Schema.Struct({

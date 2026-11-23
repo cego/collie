@@ -199,10 +199,10 @@ const COLLECT_EXPIRY = "has written nothing";
 export const reasonOf = (note: string) =>
   pipe(
     note,
-    Str.replace(/`[^`]*`/g, "<command>"),
-    Str.replace(/(?<![\w-])\/\S+/g, "<path>"),
-    Str.replace(/\brun-[0-9a-f]+[\w.-]*/g, "<run>"),
-    Str.replace(/\bw\w*:p\d+\b/g, "<pane>"),
+    Str.replaceAll(/`[^`]*`/g, "<command>"),
+    Str.replaceAll(/(?<![\w-])\/\S+/g, "<path>"),
+    Str.replaceAll(/\brun-[0-9a-f]+[\w.-]*/g, "<run>"),
+    Str.replaceAll(/\bw\w*:p\d+\b/g, "<pane>"),
   );
 
 const executableName = (path: string) => Str.split(path, "/").at(-1) ?? path;

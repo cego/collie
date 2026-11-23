@@ -312,7 +312,7 @@ const sha256 = (text: string) => {
 export const invocationFor = (workflow: "release" | "stage" | "tag", member: SetMember) =>
   workflow === "tag"
     ? `tag-${sha256(member.id)}`
-    : `${workflow}-${pipe_(member.id, Str.replace(/[^a-z0-9]+/g, "-"), Str.slice(0, 40))}-${sha256(member.id)}`;
+    : `${workflow}-${pipe_(member.id, Str.replaceAll(/[^a-z0-9]+/g, "-"), Str.slice(0, 40))}-${sha256(member.id)}`;
 
 export const startedWithOne = (facts: ActionFacts) => {
   const set = mrSet(facts.diffTarget ?? "");

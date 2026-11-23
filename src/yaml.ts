@@ -57,7 +57,7 @@ export function yamlScalar(value: string) {
 
 function unquote(raw: string) {
   if (pipe(raw, Str.startsWith('"')) && pipe(raw, Str.endsWith('"')) && raw.length > 1) {
-    return pipe(raw, Str.slice(1, -1), Str.replace(/\\(.)/g, "$1"));
+    return pipe(raw, Str.slice(1, -1), Str.replaceAll(/\\(.)/g, "$1"));
   }
   if (pipe(raw, Str.startsWith("'")) && pipe(raw, Str.endsWith("'")) && raw.length > 1)
     return pipe(raw, Str.slice(1, -1));

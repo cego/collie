@@ -163,7 +163,7 @@ export const refusedAction = (actions: ReadonlyArray<unknown>) => {
     if (Result.isSuccess(decoded)) continue;
     const kind = Predicate.hasProperty(action, "kind") ? action.kind : null;
     return KINDS.has(kind)
-      ? `actions[${at}] (kind "${String(kind)}"): ${pipe_(decoded.failure.message, Str.replace(/\s+/g, " "))}`
+      ? `actions[${at}] (kind "${String(kind)}"): ${pipe_(decoded.failure.message, Str.replaceAll(/\s+/g, " "))}`
       : `actions[${at}] has kind ${stringifyJson(kind)}, which is not a kind Collie takes`;
   }
   return null;

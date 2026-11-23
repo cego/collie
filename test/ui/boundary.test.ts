@@ -16,7 +16,7 @@ const uiFiles = Effect.fn("boundary.uiFiles")(function* (predicate: (name: strin
 function code(source: string) {
   return Arr.join(
     Arr.filter(
-      Str.split(pipe(source, Str.replace(/\/\*[\s\S]*?\*\//g, "")), "\n"),
+      Str.split(pipe(source, Str.replaceAll(/\/\*[\s\S]*?\*\//g, "")), "\n"),
       (line) => !pipe(Str.trimStart(line), Str.startsWith("//")),
     ),
     "\n",

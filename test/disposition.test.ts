@@ -11,7 +11,7 @@ import { runEffect, suiteEnv } from "./support/effect";
 import { hostRecords } from "./support/records";
 
 const root = new URL("../", import.meta.url).pathname;
-const join = (...parts: string[]) => pipe(Arr.join(parts, "/"), Str.replace(/\/+/g, "/"));
+const join = (...parts: string[]) => pipe(Arr.join(parts, "/"), Str.replaceAll(/\/+/g, "/"));
 
 const Envelope = Schema.fromJsonString(
   Schema.Struct({

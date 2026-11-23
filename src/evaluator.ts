@@ -173,7 +173,7 @@ export interface EvaluatorDeps {
 
 // WARNING: a bracketed suffix such as [-file] names both spellings.
 export function missingFlags(help: string) {
-  const named = pipe_(help, Str.replace(/(--[a-z-]+)\[(-[a-z-]+)\]/g, "$1 $1$2"));
+  const named = pipe_(help, Str.replaceAll(/(--[a-z-]+)\[(-[a-z-]+)\]/g, "$1 $1$2"));
   return Arr.filter(REQUIRED_FLAGS, (flag) => !pipe_(named, Str.includes(flag)));
 }
 

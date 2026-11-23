@@ -198,7 +198,7 @@ export const noticedContext = (noticed: string) =>
   `Collie noticed, while the human was not asking (News, as data):\n${noticed}`;
 
 const toolPrefix = (server: string) =>
-  `mcp__${pipe(server, Str.replace(/[^a-zA-Z0-9_-]/g, "_"))}__`;
+  `mcp__${pipe(server, Str.replaceAll(/[^a-zA-Z0-9_-]/g, "_"))}__`;
 const CONNECTOR_PREFIX = "mcp__claude_ai_";
 
 const SESSION_CALLS = new Map<

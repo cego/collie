@@ -196,8 +196,8 @@ const criterionKey = (text: string) =>
   Str.trim(
     pipe(
       Str.toLowerCase(text),
-      Str.replace(/[*_`]/g, ""),
-      Str.replace(/\s+/g, " "),
+      Str.replaceAll(/[*_`]/g, ""),
+      Str.replaceAll(/\s+/g, " "),
       Str.replace(/[.:;\s]+$/, ""),
     ),
   );
@@ -940,7 +940,7 @@ export function renderReview(synthesis: typeof SynthesisSchema.Type) {
             Option.map(Option.fromNullishOr(f.note), Str.trim),
             () => "",
           );
-          const note = text ? `\n  ${pipe(text, Str.replace(/\s*\n\s*/g, " "))}` : "";
+          const note = text ? `\n  ${pipe(text, Str.replaceAll(/\s*\n\s*/g, " "))}` : "";
           return `- ${at}${Str.trim(f.title)}${note}`;
         }),
         "\n",
@@ -976,7 +976,7 @@ function reviewBullet(finding: Finding) {
     Option.map(Option.fromNullishOr(finding.detail), Str.trim),
     () => "",
   );
-  const detail = text ? `\n  ${pipe(text, Str.replace(/\s*\n\s*/g, " "))}` : "";
+  const detail = text ? `\n  ${pipe(text, Str.replaceAll(/\s*\n\s*/g, " "))}` : "";
   const identity = finding.id ? `${finding.id}: ${finding.status ?? "open"} — ` : "";
   return `- ${identity}${at}${Str.trim(finding.title)}${detail}`;
 }
@@ -1064,9 +1064,9 @@ export function formatFindings(findings: ReadonlyArray<Finding>) {
   return Arr.join(
     Arr.map(findings, (f) => {
       const at = f.file ? ` (${f.file}${f.line ? `:${f.line}` : ""})` : "";
-      const detail = f.detail ? `\n  ${pipe(f.detail, Str.replace(/\n/g, "\n  "))}` : "";
+      const detail = f.detail ? `\n  ${pipe(f.detail, Str.replaceAll("\n", "\n  "))}` : "";
       const rebuttal = f.rebuttal
-        ? `\n  answers your dispute: ${pipe(f.rebuttal, Str.replace(/\n/g, "\n  "))}`
+        ? `\n  answers your dispute: ${pipe(f.rebuttal, Str.replaceAll("\n", "\n  "))}`
         : "";
       const identity = f.id ? `${f.id}: ${f.status ?? "open"} — ` : "";
       return `- ${identity}[${f.severity}] ${f.title}${at}${detail}${rebuttal}`;

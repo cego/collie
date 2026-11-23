@@ -13,7 +13,7 @@ import renovateOnGitlab from "../workflows/renovate.gitlab.md" with { type: "tex
 import renovateOnGithub from "../workflows/renovate.github.md" with { type: "text" };
 
 const content = { gitlab: contentOf(onGitlab), github: contentOf(onGithub) };
-const flat = (text: string) => Str.trim(pipe(text, Str.replace(/\s+/g, " ")));
+const flat = (text: string) => Str.trim(pipe(text, Str.replaceAll(/\s+/g, " ")));
 
 test("both forges' release content has the steps the module asks for, and every step fills from what it gives", () => {
   for (const one of Rec.values(content))

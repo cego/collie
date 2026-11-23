@@ -139,7 +139,7 @@ export const claudeDriver: <Server>(
         return path.join(
           config,
           "projects",
-          pipe_(opts.dir, Str.replace(/[^a-zA-Z0-9]/g, "-")),
+          pipe_(opts.dir, Str.replaceAll(/[^a-zA-Z0-9]/g, "-")),
           `${id}.jsonl`,
         );
       }),

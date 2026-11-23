@@ -48,7 +48,7 @@ test.each([implement, tuneUp])(
 );
 
 test("implement's mr step merges on a request of its own from the human, chat or another agent alike", () => {
-  const mr = pipe(contentOf(implement).sections.get("mr") ?? "", Str.replace(/\s+/g, " "));
+  const mr = pipe(contentOf(implement).sections.get("mr") ?? "", Str.replaceAll(/\s+/g, " "));
   expect(mr).toContain("the human typing in this pane");
   expect(mr).toContain(
     "a Delivery from the human, from chat for the human, or from another agent writing as itself",
@@ -63,7 +63,7 @@ test("implement's mr step merges on a request of its own from the human, chat or
 });
 
 test("implement's reviewer rates a test the branch adds, never seen failing, `major`", () => {
-  expect(pipe(REVIEW.text, Str.replace(/\s+/g, " "))).toContain(
+  expect(pipe(REVIEW.text, Str.replaceAll(/\s+/g, " "))).toContain(
     "A test this branch adds with no recorded failing run (`collie verify --expect fail`, or a failing record of it before the change that makes it pass) is `major`: never seen failing, it may be a Tautology. Where it is also the only proof of a criterion, the Tautology rule above makes it a `blocker`.",
   );
 });

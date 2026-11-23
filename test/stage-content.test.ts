@@ -13,7 +13,7 @@ import releaseOnGitlab from "../workflows/release.gitlab.md" with { type: "text"
 import releaseOnGithub from "../workflows/release.github.md" with { type: "text" };
 
 const content = { gitlab: contentOf(onGitlab), github: contentOf(onGithub) };
-const flat = (text: string) => Str.trim(pipe(text, Str.replace(/\s+/g, " ")));
+const flat = (text: string) => Str.trim(pipe(text, Str.replaceAll(/\s+/g, " ")));
 const URL = "https://gitlab.example.com/group/app";
 
 test("both forges' stage content has the steps the module asks for", () => {

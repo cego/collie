@@ -837,7 +837,7 @@ test("Pi is handed the human's servers in its environment, never in the extensio
         )(details.servers),
       ).toEqual(piServers(configured).given);
       expect(details.extension).not.toContain("s3cr3t");
-      const prompt = pipe_(details.systemPrompt, Str.replace(/\s+/g, " "));
+      const prompt = pipe_(details.systemPrompt, Str.replaceAll(/\s+/g, " "));
       expect(prompt).toContain("this chat has linear-server, docs, refused");
       expect(prompt).toContain("legacy (Pi does not speak SSE)");
       expect(prompt).toContain("/mcp login <server>");

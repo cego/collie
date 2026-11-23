@@ -24,7 +24,7 @@ import {
 let rig: Rig;
 let bin: FakeBin;
 
-const join = (...parts: string[]) => pipe(Arr.join(parts, "/"), Str.replace(/\/+/g, "/"));
+const join = (...parts: string[]) => pipe(Arr.join(parts, "/"), Str.replaceAll(/\/+/g, "/"));
 
 const SHIPPED = { plan: "work-source", target: "diff-target" } as const;
 const RENAMED = { spec: "work-source", change: "diff-target" } as const;

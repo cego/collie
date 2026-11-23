@@ -36,7 +36,9 @@ const scripted = (attributes: ElementNodeAttributes, name: string) => {
       return true;
     }
   // WARNING: a URL's scheme survives whitespace and control characters, which JSON writes escaped; decode them before testing.
-  return /javascript:/i.test(pipe(rendered, Str.replace(/\\(?:[bfnrt]|u00[01][\da-f])|\s/gi, "")));
+  return /javascript:/i.test(
+    pipe(rendered, Str.replaceAll(/\\(?:[bfnrt]|u00[01][\da-f])|\s/gi, "")),
+  );
 };
 
 const decoded = (href: string) => {

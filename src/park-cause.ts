@@ -96,9 +96,9 @@ export const parkOf = (cause: ParkCause) => ({ cause, kind: PARK_CAUSES[cause].k
 export const parkText = (text: string) =>
   pipe(
     text,
-    Str.replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z?/g, "<time>"),
-    Str.replace(/\b(?=[0-9a-f-]*\d)[0-9a-f]{7,}(?:-[0-9a-f]+)*\b/gi, "<id>"),
-    Str.replace(/\d+/g, "<n>"),
+    Str.replaceAll(/\d{4}-\d{2}-\d{2}T[\d:.]+Z?/g, "<time>"),
+    Str.replaceAll(/\b(?=[0-9a-f-]*\d)[0-9a-f]{7,}(?:-[0-9a-f]+)*\b/gi, "<id>"),
+    Str.replaceAll(/\d+/g, "<n>"),
   );
 
 export const parkIdentity = (run: string, cause: ParkCause, evidence: ReadonlyArray<string>) =>

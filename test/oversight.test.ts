@@ -1474,7 +1474,7 @@ test("the cross-run judge is told a Run contradicting what another posted on the
         yield* cardedWork("r2", { "src/a.ts": "export const a = 1;\n" });
         const { pack } = yield* judgedAcross(["r1", "r2"], yield* crossRunJudge([]));
 
-        expect(pipe_(pack, Str.replace(/\s+/g, " "))).toContain(
+        expect(pipe_(pack, Str.replaceAll(/\s+/g, " "))).toContain(
           "A Run whose goal or work contradicts what another Run replied on the merge request they are both about is drift: report it on that Run, citing its own work, or, where it has none yet, the reply as a record whose path is the comment it replied to.",
         );
       }),

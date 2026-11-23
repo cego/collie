@@ -1207,7 +1207,7 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
     const steering = yield* steeringOf(view);
     const text = renderWorkspace(view, unreadable ?? note ?? undefined, asking, steering);
     if (text !== drawn) {
-      process.stdout.write(`${CLEAR}${pipe_(text, Str.replace(/\n/g, "\r\n"))}\r\n`);
+      process.stdout.write(`${CLEAR}${pipe_(text, Str.replaceAll("\n", "\r\n"))}\r\n`);
       drawn = text;
     }
     const key = Option.getOrNull(yield* Queue.take(keys).pipe(Effect.timeoutOption(TICK_MS)));

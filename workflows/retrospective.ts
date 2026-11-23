@@ -258,7 +258,7 @@ const classOf = (name: string) =>
   );
 
 const slug = (text: string) =>
-  pipe(Str.toLowerCase(text), Str.replace(/[^a-z0-9]+/g, "-"), Str.replace(/^-|-$/g, ""));
+  pipe(Str.toLowerCase(text), Str.replaceAll(/[^a-z0-9]+/g, "-"), Str.replaceAll(/^-|-$/g, ""));
 
 export const repeatedAnswers = (runs: ReadonlyArray<AskingRun>) => {
   const classes = new Map<

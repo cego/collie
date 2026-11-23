@@ -210,7 +210,7 @@ test("the implementer, and every step prompt that has an agent use collie verify
       const fs = yield* FileSystem.FileSystem;
       const line =
         "A `collie verify` you started in the background is reported to you when it ends, so you may end your turn waiting on it. Never end a turn waiting on any other background job.";
-      const flat = (text: string) => pipe_(text, Str.replace(/\s+/g, " "));
+      const flat = (text: string) => pipe_(text, Str.replaceAll(/\s+/g, " "));
       expect(flat(yield* fs.readFileString(`${root}personas/implementer.md`))).toContain(line);
       for (const workflow of ["implement", "review"]) {
         const steps = Arr.filter(

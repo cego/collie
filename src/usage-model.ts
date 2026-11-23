@@ -59,7 +59,7 @@ export function subscriptionOf(choice: ChoiceLike) {
   return returned;
 }
 
-const squeezed = (text: string) => pipe(Str.toLowerCase(text), Str.replace(/[^a-z0-9]/g, ""));
+const squeezed = (text: string) => pipe(Str.toLowerCase(text), Str.replaceAll(/[^a-z0-9]/g, ""));
 
 // WARNING: a choice left at default is resolved by its caller; unresolved, it names no model.
 export function appliesTo(window: UsageWindow, model: string | null) {

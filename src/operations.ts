@@ -1200,7 +1200,7 @@ export const runFacts = Effect.fn("operations.runFacts")(function* (
         `- ${report.constraint} (${report.severity}, ${report.kind}): ${report.correction ?? "no correction recorded"}`,
       );
   }
-  return Str.trimEnd(pipe(Arr.join(lines, "\n"), Str.replace(/\n{3,}/g, "\n\n")));
+  return Str.trimEnd(pipe(Arr.join(lines, "\n"), Str.replaceAll(/\n{3,}/g, "\n\n")));
 });
 
 const evidencePack = Effect.fn("operations.evidencePack")(function* (

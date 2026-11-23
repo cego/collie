@@ -45,7 +45,7 @@ export function rerunArgv(test: FailedTest) {
     "test",
     file,
     "-t",
-    `^${pipe(joined, Str.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`))}$`,
+    `^${pipe(joined, Str.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`))}$`,
   ];
 }
 

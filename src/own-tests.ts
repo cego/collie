@@ -19,7 +19,7 @@ const LITERAL = /"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|`((?:[^`\\]|\\.)*)`/g;
 
 const literalsOf = (line: string) =>
   Arr.flatMap(Array.from(pipe(line, Str.matchAll(LITERAL))), (m) =>
-    Str.split(pipe(m[1] ?? m[2] ?? m[3] ?? "", Str.replace(/\\(.)/g, "$1")), /\$\{[^}]*\}/),
+    Str.split(pipe(m[1] ?? m[2] ?? m[3] ?? "", Str.replaceAll(/\\(.)/g, "$1")), /\$\{[^}]*\}/),
   );
 
 export const ownTests = (failed: ReadonlyArray<FailedTest>, change: BranchChange) => {

@@ -70,7 +70,7 @@ export function sessionStoreReached(
   const under = (path: string, top: string) =>
     path === top || path.startsWith(top.endsWith("/") ? top : `${top}/`);
   const places = (path: string) => [full(path), real(full(path))];
-  const command = call.command?.replace(/\/(\.\/)+/g, "/").replace(/\/{2,}/g, "/");
+  const command = call.command?.replaceAll(/\/(\.\/)+/g, "/").replaceAll(/\/{2,}/g, "/");
   return stores.find((store) => {
     const tops = [`${home}/${store}`, real(`${home}/${store}`)];
     const inside = (path: string | undefined) =>
@@ -197,7 +197,7 @@ const injected = (text: string) =>
   pipe(text, Str.startsWith("# AGENTS.md instructions"));
 
 const withoutReminders = (text: string) =>
-  Str.trim(pipe(text, Str.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")));
+  Str.trim(pipe(text, Str.replaceAll(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")));
 
 const typedText = (content: Json | undefined, kind: string) => {
   if (isString(content)) return content;

@@ -80,8 +80,8 @@ const program = Effect.gen(function* () {
     Arr.reduce(numbered, text, (out, { slug, number }) =>
       pipe_(
         out,
-        Str.replace(new RegExp(`(?<![a-z0-9-])draft-${slug}\\.md`, "g"), `${number}-${slug}.md`),
-        Str.replace(new RegExp(`ADR-draft-${slug}(?![a-z0-9-])`, "g"), `ADR-${number}`),
+        Str.replaceAll(new RegExp(`(?<![a-z0-9-])draft-${slug}\\.md`, "g"), `${number}-${slug}.md`),
+        Str.replaceAll(new RegExp(`ADR-draft-${slug}(?![a-z0-9-])`, "g"), `ADR-${number}`),
       ),
     );
 

@@ -31,7 +31,7 @@ export const NarrativeReport = Schema.Struct({
 export type NarrativeReport = typeof NarrativeReport.Type;
 
 export const concise = (text: string) => {
-  const words = Str.trim(Str.replace(/\s+/gu, " ")(text));
+  const words = Str.trim(Str.replaceAll(/\s+/gu, " ")(text));
   const sentences = Str.trim(
     Arr.join(
       Option.getOrElse(Str.match(/.+?(?:[.!?。！？](?:\s|$)|$)/gu)(words), () => [words]).slice(

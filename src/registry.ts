@@ -62,7 +62,7 @@ export function registerOf(scope: RegistryScope) {
     Arr.last(Arr.filter(pipe_(where, Str.split("/")), (part) => part !== "")),
     () => "",
   );
-  return `${pipe_(last, Str.replace(/[^A-Za-z0-9._-]+/g, "-")) || "repo"}-${scopeKey(scope)}`;
+  return `${pipe_(last, Str.replaceAll(/[^A-Za-z0-9._-]+/g, "-")) || "repo"}-${scopeKey(scope)}`;
 }
 
 // WARNING: exported so steering shares this key; two copies of the formula would disagree about which workspace is which.

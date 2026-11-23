@@ -144,7 +144,7 @@ const pascal = (words: string) =>
   Arr.join(
     Arr.map(
       Arr.filter(
-        Str.split(pipe(words, Str.replace(/([a-z0-9])([A-Z])/g, "$1 $2")), /[^A-Za-z0-9]+/),
+        Str.split(pipe(words, Str.replaceAll(/([a-z0-9])([A-Z])/g, "$1 $2")), /[^A-Za-z0-9]+/),
         Str.isNonEmpty,
       ),
       (word) => Str.capitalize(/^[A-Z0-9]+$/.test(word) ? Str.toLowerCase(word) : word),

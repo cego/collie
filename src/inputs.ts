@@ -640,7 +640,7 @@ function isPlanDir(dir: string) {
 
 function textLabel(text: string) {
   const words = Arr.filter(
-    Str.split(pipe(Str.toLowerCase(text), Str.replace(/[^a-z0-9]+/g, " ")), " "),
+    Str.split(pipe(Str.toLowerCase(text), Str.replaceAll(/[^a-z0-9]+/g, " ")), " "),
     Boolean,
   );
   let label = "";

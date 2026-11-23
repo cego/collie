@@ -581,7 +581,7 @@ const PAGE = 100;
 // WARNING: GitLab's * matches across / too, unlike a glob.
 const wildcard = (pattern: string) =>
   new RegExp(
-    `^${pipe(pattern, Str.replace(/[.+?^${}()|[\]\\]/g, String.raw`\$&`), Str.replaceAll("*", ".*"))}$`,
+    `^${pipe(pattern, Str.replaceAll(/[.+?^${}()|[\]\\]/g, String.raw`\$&`), Str.replaceAll("*", ".*"))}$`,
   );
 
 function protects(project: string, branch: string, cwd: string) {
@@ -816,7 +816,9 @@ const jobIn = (reached: Reached, cwd: string, id: number, name: string) =>
 
 const plainTrace = (trace: string) =>
   pipe(
-    stripVTControlCharacters(pipe(trace, Str.replace(/section_(?:start|end):\d+:[^\r\n]*\r/g, ""))),
+    stripVTControlCharacters(
+      pipe(trace, Str.replaceAll(/section_(?:start|end):\d+:[^\r\n]*\r/g, "")),
+    ),
     Str.replaceAll("\r", ""),
   );
 

@@ -109,7 +109,7 @@ const asObject = Schema.decodeUnknownResult(Schema.Record(Schema.String, Schema.
 
 const without = (reason: string, withheld: ReadonlyArray<string>) =>
   Arr.reduce(withheld, reason, (left, secret) =>
-    pipe(left, Str.replace(new RegExp(RegExp.escape(secret), "gi"), "…")),
+    pipe(left, Str.replaceAll(new RegExp(RegExp.escape(secret), "gi"), "…")),
   );
 
 export interface Sending extends Omit<Attempted, "attempt" | "ended" | "reason"> {

@@ -302,7 +302,7 @@ export const schedulesLayer = (options: {
             {
               workflow: start.workflow,
               inputs: where.text,
-              goal: pipe_(by.name, Str.replace(/[-_]+/g, " ")),
+              goal: pipe_(by.name, Str.replaceAll(/[-_]+/g, " ")),
             },
           ),
           verify: start.verify,

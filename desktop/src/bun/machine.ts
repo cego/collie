@@ -1268,7 +1268,7 @@ const over = <A, R>({ machine }: Reached, call: Effect.Effect<A, Refused, R>, re
         ? Effect.fail(
             new ActionFailed({
               request,
-              reason: `The call to ${machine.name} did not fit its schema: ${pipe_(formatIssue(misfit.cause), Str.replace(/\s+/g, " "))}`,
+              reason: `The call to ${machine.name} did not fit its schema: ${pipe_(formatIssue(misfit.cause), Str.replaceAll(/\s+/g, " "))}`,
             }),
           )
         : Effect.failCause(cause);

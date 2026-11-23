@@ -11,7 +11,7 @@ const read = (path: string) =>
 test("the collie skill says only --decide is refused, and --goal and --constraint are recorded", () =>
   runEffect(
     Effect.gen(function* () {
-      const skill = pipe_(yield* read("skills/collie/SKILL.md"), Str.replace(/\s+/g, " "));
+      const skill = pipe_(yield* read("skills/collie/SKILL.md"), Str.replaceAll(/\s+/g, " "));
       expect(skill).toContain("so `--decide` is refused");
       expect(skill).toContain("`--goal` and `--constraint` are recorded into the Run's Intent");
     }),

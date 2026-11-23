@@ -4214,7 +4214,7 @@ export const hostLayer: (options: {
                   if (known !== undefined) return known;
                 }
                 const started = yield* nowIso;
-                const log = `${journal}/checks/${pipe(started, Str.replace(/[:.]/g, "-"))}-${pipe(spec.name, Str.replace(/[^\w.-]/g, "_"))}.log`;
+                const log = `${journal}/checks/${pipe(started, Str.replaceAll(/[:.]/g, "-"))}-${pipe(spec.name, Str.replaceAll(/[^\w.-]/g, "_"))}.log`;
                 yield* marker.set(
                   encodeVerifying({
                     name: spec.name,

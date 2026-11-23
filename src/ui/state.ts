@@ -784,7 +784,7 @@ export function keyboardOn(at: {
 const PASTED = new TextDecoder();
 
 export function pasteInto(value: string, bytes: Uint8Array) {
-  return value + pipe(PASTED.decode(bytes), Str.replace(/\p{C}/gu, ""));
+  return value + pipe(PASTED.decode(bytes), Str.replaceAll(/\p{C}/gu, ""));
 }
 
 export function optionWindow<T>(items: readonly T[], at: number, room: number) {

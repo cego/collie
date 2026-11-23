@@ -66,7 +66,7 @@ let liveAs: string | null;
 let claims: Array<{ path: string; locked: boolean }>;
 let settling: Settling;
 
-const join = (...parts: string[]) => pipe_(Arr.join(parts, "/"), Str.replace(/\/+/g, "/"));
+const join = (...parts: string[]) => pipe_(Arr.join(parts, "/"), Str.replaceAll(/\/+/g, "/"));
 
 const readLines = Effect.fn("worktreeTest.readLines")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
