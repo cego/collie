@@ -1157,10 +1157,7 @@ test("a dial-back refused because its ticket expired is in the dialling host's l
           const owner = yield* ownerOf(first.world.state);
           process.kill(owner!.pid, "SIGSTOP");
           const resumed = Effect.sync(() => process.kill(owner!.pid, "SIGCONT"));
-          yield* Effect.gen(function* () {
-            yield* relayAnswer(relay, '{"as":"cli","client":"late"}');
-            yield* Effect.sleep("6 seconds");
-          }).pipe(Effect.ensuring(resumed));
+          yield* relayAnswer(relay, '{"as":"cli","client":"late"}').pipe(Effect.ensuring(resumed));
           const logged = yield* until(
             () => read(`${first.world.state}/host.log`),
             (log) => pipe_(log, Str.includes("dial-back to second failed")),
@@ -1174,6 +1171,7 @@ test("a dial-back refused because its ticket expired is in the dialling host's l
           ).toContain("level=WARN");
         }),
       [],
+      { env: { COLLIE_PEER_TICKET_LIFE: "2 seconds" } },
     ),
   ));
 
