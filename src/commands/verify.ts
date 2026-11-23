@@ -6,7 +6,7 @@ import { Argument, Command, Flag } from "effect/cli";
 import { err } from "../operations";
 import { refusal, verifyRun } from "../lifecycle";
 import { FrontDoor, HostRefused } from "../board-model";
-import { type Echo } from "../verify";
+import type { Echo } from "../verify";
 import { movedLine, type Verification } from "../verify-model";
 import { checkNameOf } from "../verify-spec";
 import { NAMED_FAILURES, failureReader } from "../bun-tests";

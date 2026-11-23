@@ -3,7 +3,7 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
-import { type PlatformServices } from "../../src/platform";
+import type { PlatformServices } from "../../src/platform";
 import type { Records } from "../../src/records";
 import {
   Clock,

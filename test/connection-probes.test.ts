@@ -8,7 +8,7 @@ import { probeGitlab, probeGithub, probeLinearMcp } from "../src/connection-prob
 import { ConnectionReading } from "../src/connection-model";
 import { writeConfigValue } from "../src/config";
 import { parseYaml } from "../src/yaml";
-import { type Runner } from "../src/mr";
+import type { Runner } from "../src/mr";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
 

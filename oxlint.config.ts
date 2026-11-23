@@ -60,7 +60,6 @@ const migrating = {
   "react/refs": "off",
   "react-hooks/rules-of-hooks": "off",
   "typescript/no-empty-object-type": "off",
-  "typescript/no-import-type-side-effects": "off",
   "typescript/no-misused-promises": "off",
   "typescript/no-non-null-assertion": "off",
   "typescript/no-unnecessary-type-assertion": "off",

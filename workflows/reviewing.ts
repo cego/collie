@@ -36,7 +36,7 @@ import {
 } from "collie";
 import { Effect, FileSystem, Option, Result, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
-import { type WorkflowEngine, type WorkflowInstance } from "effect/workflow/WorkflowEngine";
+import type { WorkflowEngine, WorkflowInstance } from "effect/workflow/WorkflowEngine";
 import markdown from "./review.md" with { type: "text" };
 import type { Reviewed } from "./delivering.ts";
 

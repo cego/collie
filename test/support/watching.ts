@@ -13,7 +13,7 @@ import {
   type Scope,
 } from "effect";
 import type { PlatformServices } from "../../src/platform";
-import { type Rig } from "./recorder";
+import type { Rig } from "./recorder";
 import { fastForward, runEffect as runLive } from "./effect";
 import { FakeBin } from "./bin";
 import { forgeOnPath, serveForges, type ForgeModel } from "./forge";

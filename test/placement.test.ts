@@ -46,7 +46,7 @@ import type * as MessageStorage from "effect/cluster/MessageStorage";
 import { SqlClient } from "effect/sql";
 import { approvedIn } from "../src/verify-spec";
 import { readTask, writeTask, type TaskRecord } from "../src/task";
-import { type MrState } from "../src/board-model";
+import type { MrState } from "../src/board-model";
 import { HELLE_URL } from "../src/helle-url";
 import type { Call } from "./support/recorder";
 

@@ -24,7 +24,7 @@ import {
   secretsFor,
 } from "../desktop/src/bun/credentials";
 import { fingerprint, givenCredentials } from "../desktop/src/bun/given";
-import { type Credential, type MachineGiven, type OnboardRun } from "../desktop/src/shared/flock";
+import type { Credential, MachineGiven, OnboardRun } from "../desktop/src/shared/flock";
 import { renewalDue } from "../src/gitlab-token";
 import { HELLE_URL } from "../src/helle-url";
 

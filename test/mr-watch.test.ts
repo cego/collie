@@ -6,7 +6,7 @@ import { TestClock } from "effect/testing";
 import { Rig } from "./support/recorder";
 import { runEffect as runLive } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
-import { type FakeMr, type ForgeModel } from "./support/forge";
+import type { FakeMr, ForgeModel } from "./support/forge";
 import { fixtures } from "./support/host";
 import { decodeWoke, until, watching } from "./support/watching";
 import { Registry, STOP } from "../src/engine";

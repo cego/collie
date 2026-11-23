@@ -6,7 +6,7 @@ import { expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem } from "effect";
 import { readAudit } from "../src/audit";
 import { recordsReadLayer } from "../src/records";
-import { type MrState } from "../src/board-model";
+import type { MrState } from "../src/board-model";
 import { connect } from "../src/host";
 import { factsOfView } from "../src/runs";
 import { storedAnswers } from "./support/forge";

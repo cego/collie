@@ -72,7 +72,7 @@ import { keyboard } from "./keys";
 import { forkResolvedDefinition, type DefinitionKind } from "./fork";
 import { COLLIE_TAB, reason, runTitle } from "./naming";
 import { listRuns, settled, type RunFacts } from "./runs";
-import { type AgentEntry } from "./registry";
+import type { AgentEntry } from "./registry";
 import { reportedWorktrees } from "./worktree";
 import { scopeFor, type RegistryScope } from "./registry";
 import type { CompactionSettings } from "./compaction";
