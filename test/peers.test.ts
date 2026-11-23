@@ -912,7 +912,23 @@ const Machines = Schema.Struct({
   machines: Schema.Array(Schema.Struct({ name: Schema.String, state: Schema.String })),
 });
 
-test("an undialable Machine is reached by dial-back, reconnects without a login, and an away Machine is refused within five seconds", () =>
+const machineState = (side: Side, name: string) =>
+  side
+    .cli(["machine", "list"])
+    .pipe(
+      Effect.map(
+        (read) =>
+          Option.getOrUndefined(
+            Arr.findFirst(
+              flow(Schema.decodeUnknownResult(Machines), Result.getOrThrow)(read.envelope.data)
+                .machines,
+              (one) => one.name === name,
+            ),
+          )?.state,
+      ),
+    );
+
+test("an undialable Machine is reached by dial-back, and a refused replacement link leaves it reachable without another login", () =>
   runEffect(
     twoMachines(
       "collie-reverse-",
@@ -922,25 +938,8 @@ test("an undialable Machine is reached by dial-back, reconnects without a login,
           yield* first.lists([second]);
           expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
           const [laptop] = yield* peersOf(second.world.state);
-          const state = (side: Side, name: string) =>
-            side
-              .cli(["machine", "list"])
-              .pipe(
-                Effect.map(
-                  (read) =>
-                    Option.getOrUndefined(
-                      Arr.findFirst(
-                        flow(
-                          Schema.decodeUnknownResult(Machines),
-                          Result.getOrThrow,
-                        )(read.envelope.data).machines,
-                        (one) => one.name === name,
-                      ),
-                    )?.state,
-                ),
-              );
           yield* until(
-            () => state(second, laptop!.name),
+            () => machineState(second, laptop!.name),
             (state) => state === "live",
           );
           expect((yield* second.cli(["--machine", laptop!.name, "board"])).envelope.ok).toBe(true);
@@ -982,14 +981,39 @@ test("an undialable Machine is reached by dial-back, reconnects without a login,
             return Effect.sync(() => ws.close());
           }).pipe(Effect.timeout("5 seconds"));
           yield* until(
-            () => state(second, laptop!.name),
+            () => machineState(second, laptop!.name),
             (state) => state === "live",
           );
           expect((yield* second.cli(["--machine", laptop!.name, "board"])).envelope.ok).toBe(true);
+          expect(
+            Arr.filter(
+              Str.split(yield* read(first.sshLog), "\n"),
+              (line) =>
+                pipe_(line, Str.startsWith("login")) || pipe_(line, Str.startsWith("master")),
+            ),
+          ).toEqual(["master mk@second"]);
+        }),
+      ["attended.workflow.ts"],
+    ),
+  ));
+
+test("a dial-back Machine away is refused within five seconds, and either host started again reconnects without a login", () =>
+  runEffect(
+    twoMachines(
+      "collie-reverse-",
+      (first, second) =>
+        Effect.gen(function* () {
+          yield* first.lists([second]);
+          expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
+          const [laptop] = yield* peersOf(second.world.state);
+          yield* until(
+            () => machineState(second, laptop!.name),
+            (state) => state === "live",
+          );
 
           yield* stopHost(first.world.state);
           yield* until(
-            () => state(second, laptop!.name),
+            () => machineState(second, laptop!.name),
             (state) => state === "away",
           );
           const at = yield* Clock.currentTimeMillis;
@@ -998,19 +1022,19 @@ test("an undialable Machine is reached by dial-back, reconnects without a login,
           expect((yield* Clock.currentTimeMillis) - at).toBeLessThan(5000);
           yield* first.cli(["machine", "list"]);
           yield* until(
-            () => state(second, laptop!.name),
+            () => machineState(second, laptop!.name),
             (state) => state === "live",
           );
           expect((yield* second.cli(["--machine", laptop!.name, "board"])).envelope.ok).toBe(true);
 
           yield* stopHost(second.world.state);
           yield* until(
-            () => state(first, "second"),
+            () => machineState(first, "second"),
             (state) => state === "connecting",
           );
           yield* second.cli(["machine", "list"]);
           yield* until(
-            () => state(first, "second"),
+            () => machineState(first, "second"),
             (state) => state === "live",
           );
           expect((yield* second.cli(["--machine", laptop!.name, "board"])).envelope.ok).toBe(true);
