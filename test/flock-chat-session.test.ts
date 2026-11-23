@@ -207,7 +207,7 @@ test("a server the human configured keeps how it authenticates and its options",
       type: "http",
       url: "https://signed.example/mcp",
       headersHelper: "/home/mk/bin/mcp-headers",
-      timeout: 60000,
+      timeout: 60_000,
       alwaysLoad: true,
     },
     registered: {

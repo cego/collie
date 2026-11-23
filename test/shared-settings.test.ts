@@ -171,11 +171,11 @@ test("a Flock's auto-compact window is taken when it is the latest edit, and ref
 
       yield* takeShared(
         userDir,
-        [{ key: "claude_auto_compact_window", value: 500000, at: "2026-10-12T10:00:00.000Z" }],
+        [{ key: "claude_auto_compact_window", value: 500_000, at: "2026-10-12T10:00:00.000Z" }],
         "desktop",
         now,
       );
-      expect((yield* loadDefaults(userDir)).claudeAutoCompactWindow).toBe(500000);
+      expect((yield* loadDefaults(userDir)).claudeAutoCompactWindow).toBe(500_000);
     }).pipe(Effect.scoped),
   ));
 

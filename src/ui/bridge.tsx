@@ -32,10 +32,10 @@ import type { Selection } from "../selection";
 export type { Focus };
 
 // WARNING: fs.watch drops events silently on some filesystems; the tick makes a missed event cost latency, not the update.
-const POLL_MS = 3_000;
+const POLL_MS = 3000;
 
 // WARNING: nothing is signalled or written during the grace, so an undo takes back a decision rather than racing one.
-const GRACE_MS = 5_000;
+const GRACE_MS = 5000;
 
 export interface Bridge<E, R> {
   load: (focus: Focus) => Effect.Effect<AppState, E, R>;

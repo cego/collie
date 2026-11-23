@@ -2467,7 +2467,7 @@ test("a checkout made at a recorded path since the Run recorded it is passed ove
       const taken = join(rig.root, ".collie", "worktrees", "project", "roaming");
       yield* worktreeOwnedBy(taken, rig.projectDir);
       const runId = yield* renovateRunAt(taken);
-      yield* (yield* FileSystem.FileSystem).utimes(`${taken}/.git`, 0, 1_000);
+      yield* (yield* FileSystem.FileSystem).utimes(`${taken}/.git`, 0, 1000);
       yield* fakeGitWithRoaming(taken, {});
 
       const checkout = yield* renovateCheckout();

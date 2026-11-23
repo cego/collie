@@ -388,7 +388,7 @@ test("a record the door is slow to send first tells the engine how long it took"
         "runDetail",
       );
       expect(slow._tag === "Some" && slow.value._tag === "Slow" && slow.value.ms).toBeGreaterThan(
-        2_000,
+        2000,
       );
     }).pipe(Effect.scoped),
   ));

@@ -116,10 +116,10 @@ const measured = (session: string, input: number, output: number, percent: numbe
       total_output_tokens: output,
       used_percentage: percent,
       current_usage: {
-        input_tokens: input - 7_000,
+        input_tokens: input - 7000,
         output_tokens: output,
-        cache_creation_input_tokens: 5_000,
-        cache_read_input_tokens: 2_000,
+        cache_creation_input_tokens: 5000,
+        cache_read_input_tokens: 2000,
       },
     },
     // WARNING: The cumulative cost total is billing, not context; reading it is the mistake this accounting avoids.
@@ -156,7 +156,7 @@ test("the sample is input plus output, with the cache folded in exactly once", (
   runEffect(
     Effect.gen(function* () {
       // WARNING: 15,500 already contains the cache writes and reads; do not add them again.
-      const line = yield* recordClaudeEvent(dir, measured("s-1", 15_500, 1_200, 8));
+      const line = yield* recordClaudeEvent(dir, measured("s-1", 15_500, 1200, 8));
 
       expect(yield* claude.usage(ctx())).toBe(16_700);
       expect(line).toBe("context: 8%");
@@ -176,7 +176,7 @@ test("no measurement yet is unavailable, not a context of zero tokens", () =>
 test("a compaction invalidates the sample before it, until the next API call", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* recordClaudeEvent(dir, measured("s-1", 400_000, 1_000, 99));
+      yield* recordClaudeEvent(dir, measured("s-1", 400_000, 1000, 99));
       yield* recordClaudeEvent(dir, post("s-1", "manual"));
       yield* recordClaudeEvent(dir, unmeasured("s-1"));
 
@@ -187,7 +187,7 @@ test("a compaction invalidates the sample before it, until the next API call", (
 test("the marked PreCompact is the start, and the PostCompact after it the success", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* recordClaudeEvent(dir, measured("s-1", 400_000, 1_000, 99));
+      yield* recordClaudeEvent(dir, measured("s-1", 400_000, 1000, 99));
       yield* claude.request(ctx(), "req-1");
       const instructions = pipe_(prompted[0]!, Str.replace(/^\/compact /, ""));
       expect(prompted[0]).toStartWith("/compact ");
@@ -239,7 +239,7 @@ test("a human typing /compact in the pane cannot complete it either", () =>
 test("another session's hooks cannot complete it, and rebind what is current", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* recordClaudeEvent(dir, measured("s-1", 400_000, 1_000, 99));
+      yield* recordClaudeEvent(dir, measured("s-1", 400_000, 1000, 99));
       yield* claude.request(ctx(), "req-1");
       yield* recordClaudeEvent(dir, pre("s-1", "manual", `x (collie:req-1)`));
       yield* recordClaudeEvent(dir, post("s-2", "manual"));
@@ -483,20 +483,20 @@ const limited = (rateLimits: Schema.Json) =>
     session_id: "s-1",
     context_window: {
       total_input_tokens: 15_500,
-      total_output_tokens: 1_200,
+      total_output_tokens: 1200,
       used_percentage: 8,
       current_usage: {
-        input_tokens: 8_500,
-        output_tokens: 1_200,
-        cache_creation_input_tokens: 5_000,
-        cache_read_input_tokens: 2_000,
+        input_tokens: 8500,
+        output_tokens: 1200,
+        cache_creation_input_tokens: 5000,
+        cache_read_input_tokens: 2000,
       },
     },
     rate_limits: rateLimits,
   });
 const fiveHour = (percent: number) => ({
-  five_hour: { used_percentage: percent, resets_at: 1791457799 },
-  seven_day: { used_percentage: 88, resets_at: 1791544799 },
+  five_hour: { used_percentage: percent, resets_at: 1_791_457_799 },
+  seven_day: { used_percentage: 88, resets_at: 1_791_544_799 },
 });
 
 test("a status line's rate_limits are the Machine's newest Claude sample, and its line still prints", () =>
@@ -664,7 +664,7 @@ test("a status line with a window at 100% is the agent running out, saying the w
 test("a status line's full window whose reset has passed is not the agent running out", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* TestClock.setTime(1791457799 * 1000 + 60_000);
+      yield* TestClock.setTime(1_791_457_799 * 1000 + 60_000);
       yield* recordClaudeEvent(dir, limited(fiveHour(100)));
       expect(yield* ranOutSince(dir, 0)).toBeNull();
     }).pipe(Effect.provide(TestClock.layer())),
@@ -710,7 +710,7 @@ const lostCompletion = (transcript: (askedIso: string) => string) =>
       log: (line) => Effect.sync(() => void said.push(line)),
       warn: (line) => Effect.sync(() => void said.push(line)),
       waitMs: 5 * 60_000,
-      pollMs: 1_000,
+      pollMs: 1000,
     };
     const due = yield* pollCompaction(deps, "build-r1");
     const left = (yield* readControl(rig.stateDir, "build-r1"))?.attempt;

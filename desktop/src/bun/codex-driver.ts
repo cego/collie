@@ -145,7 +145,7 @@ const appServer = Effect.fnUntraced(function* (
         : send({
             jsonrpc: "2.0",
             id,
-            error: { code: -32601, message: `Desktop's chat does not answer ${method}` },
+            error: { code: -32_601, message: `Desktop's chat does not answer ${method}` },
           }),
     kill: () => child.kill(),
   };
@@ -553,7 +553,7 @@ const decodeModels = decoded(CodexModelList);
 
 // WARNING: Codex 0.170.0 refuses to resume a thread it has no rollout of.
 const unknownThread = (cause: CodexError) =>
-  cause.code === -32600 && pipe_(cause.message, Str.startsWith("no rollout found"));
+  cause.code === -32_600 && pipe_(cause.message, Str.startsWith("no rollout found"));
 
 const reading = <A>(
   command: ReadonlyArray<string> | null,

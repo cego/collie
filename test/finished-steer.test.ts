@@ -554,11 +554,11 @@ test("a steer is typed plain within 3 lines and 700 characters, or kept as a fil
         requestId: "desktop-1",
       });
       expect(desktop.lines[1]).toMatch(/^From the human, in Desktop, .+\.$/);
-      const desktopLong = yield* steer(`${pipe_("é", Str.repeat(5_000))}\n  kept as typed  `, {
+      const desktopLong = yield* steer(`${pipe_("é", Str.repeat(5000))}\n  kept as typed  `, {
         origin: "desktop",
         requestId: "desktop-2",
       });
-      expect(desktopLong.kept).toBe(`${pipe_("é", Str.repeat(5_000))}\n  kept as typed  `);
+      expect(desktopLong.kept).toBe(`${pipe_("é", Str.repeat(5000))}\n  kept as typed  `);
       expect(desktopLong.lines[1]).toMatch(/^From the human, in Desktop, .+\.$/);
     }),
   ));

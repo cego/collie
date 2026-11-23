@@ -436,7 +436,7 @@ const humansIn = Effect.fn("operations.humansIn")(function* (
   return found;
 });
 
-const PLACING_CLAIMS = 2_400;
+const PLACING_CLAIMS = 2400;
 
 export const placeLocked = Effect.fn("operations.placeLocked")(function* (
   carried: Carried,

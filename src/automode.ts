@@ -71,7 +71,7 @@ export interface AutoModeBlock {
   readonly allow: ReadonlyArray<string>;
 }
 
-const WORDS_MAX = 2_000;
+const WORDS_MAX = 2000;
 
 const DOOR: Readonly<Record<Started["door"], string>> = {
   board: "from the board",

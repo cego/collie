@@ -86,7 +86,7 @@ const hostOf: (compactAtTokens?: number) => AgentHost = (compactAtTokens = 1_000
   model: "default",
   permissions: "auto",
   compactAtTokens,
-  pollMs: 1_000,
+  pollMs: 1000,
   collectMs: 120_000,
   help: () => Effect.succeed("  --dangerously-bypass-hook-trust"),
   ports: { codex: { ...codexPort(`bun ${SERVER} ${config()}`), gate: Effect.void } },
@@ -412,9 +412,9 @@ test("a Codex agent whose turn ends on its question has not ended without its Ou
             agents.endedWithoutOutput(on, Effect.succeed(true), questions),
           );
           yield* waitFor(reported("working"));
-          yield* spend(5_000);
+          yield* spend(5000);
           yield* (yield* rig.startCore()).report(on.agent, "idle");
-          yield* spend(5_000);
+          yield* spend(5000);
           const ended = yield* TestClock.withLive(
             Fiber.join(ending).pipe(Effect.timeoutOption("5 seconds")),
           );

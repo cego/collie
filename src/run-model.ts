@@ -158,7 +158,7 @@ export const makeRunModel = Effect.fn("RunModel.make")(function* (
   const groups = new Map<string, ReturnType<typeof readsOf>>();
   const readsOf = (group: string) => {
     // WARNING: the shared group holds a file per Task, so it needs the larger bound.
-    const capacity = group === "shared" ? 65_536 : 1_024;
+    const capacity = group === "shared" ? 65_536 : 1024;
     const memo = <A>(lookup: (key: string) => Effect.Effect<A, PlatformError.PlatformError>) =>
       kept(capacity, lookup);
     return {

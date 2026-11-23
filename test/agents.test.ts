@@ -1093,7 +1093,7 @@ const interrupted = (runId: string, reached: Reached, over?: Partial<AgentHost>)
     Effect.gen(function* () {
       yield* work.execute({ runId, input: { skip: false } }, { discard: true });
       for (let tries = 0; !(yield* reached); tries++) {
-        if (tries === 3_000) return yield* Effect.die(new Error(`${runId} never got that far`));
+        if (tries === 3000) return yield* Effect.die(new Error(`${runId} never got that far`));
         yield* TestClock.withLive(Effect.sleep("10 millis"));
       }
     }),
@@ -1151,7 +1151,7 @@ const pastTheBudget = Effect.gen(function* () {
     `has written nothing to ${outputPath("r1")} after 0 minutes idle. Collie keeps collecting it;`,
   );
   expect(yield* controlOf(PARKED, "r1")).not.toContain("resume");
-  yield* spend(5_000);
+  yield* spend(5000);
   expect(yield* suspended("r1")).toBe(false);
 });
 
@@ -1253,7 +1253,7 @@ const managedCodex = Effect.gen(function* () {
         Effect.sync(() => {
           const child = spawnServer();
           state.reachable = true;
-          const endpoint = `ws://127.0.0.1:${43000 + children.length}`;
+          const endpoint = `ws://127.0.0.1:${43_000 + children.length}`;
           return {
             args: ["--remote", endpoint],
             endpoint,
@@ -1756,11 +1756,11 @@ test.each([
             yield* Effect.promise(() => managed.children[0]!.exited);
           }
           const transient = failure === "transient" || failure === "transient controls";
-          yield* spend(transient ? 500 : 4_000);
+          yield* spend(transient ? 500 : 4000);
           if (transient) {
             if (failure === "transient controls") yield* fs.writeFileString(controls, saved);
             unhealthy = false;
-            yield* spend(4_000);
+            yield* spend(4000);
             expect(yield* controlOf(PARKED, "r1")).toBe("");
           } else {
             expect(yield* controlOf(PARKED, "r1")).toContain("server health");
@@ -1774,7 +1774,7 @@ test.each([
           );
           return yield* Fiber.join(fiber);
         }),
-        { herdr, harness: "codex", model: "default", ports, readyMs: 1_000 },
+        { herdr, harness: "codex", model: "default", ports, readyMs: 1000 },
       );
       expect(result._tag === "Success" && result.success.note).toBe("late health Output");
       expect(yield* controlOf(PARKED, "r1")).toBe("");
@@ -2145,7 +2145,7 @@ test("a resume sent while the Run is collected past its budget starts no second 
             work,
             yield* work.executionId({ runId: "r1", input: { skip: false } }),
           );
-          yield* spend(5_000);
+          yield* spend(5000);
           yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"late"}`);
           return yield* Fiber.join(fiber);
         }),
@@ -2451,7 +2451,7 @@ for (const [what, herdr] of [
         yield* rig.queueOutputs([null]);
         yield* interrupted("r1", parked("r1"), {
           herdr: herdr(),
-          pollMs: 1_000,
+          pollMs: 1000,
           collectMs: 120_000,
         });
         expect(yield* controlOf(PARKED, "r1")).toContain(
@@ -2552,7 +2552,7 @@ test("an agent that writes no Output after two reminders parks its step as outpu
       const result = yield* session(
         Effect.raceFirst(
           started("r1"),
-          untilParked("r1").pipe(Effect.andThen(spend(5_000)), Effect.as("parked" as const)),
+          untilParked("r1").pipe(Effect.andThen(spend(5000)), Effect.as("parked" as const)),
         ),
         { herdr: new Turns(), collectMs: 600_000 },
       );
@@ -2813,12 +2813,12 @@ test("an agent's two questions are open Decisions on its Run, and both answers g
           expect(asked[1]?.prompt).toBe("Checks: Which checks?");
 
           yield* answer("ask-review-1", "2");
-          yield* spend(5_000);
+          yield* spend(5000);
           expect(sent(yield* rig.calls(), ANSWERED)).toBe(0);
 
           yield* answer("ask-review-2", "1");
           while (!(yield* prompted(ANSWERED))) yield* TestClock.withLive(Effect.sleep("10 millis"));
-          yield* spend(5_000);
+          yield* spend(5000);
           const calls = yield* rig.calls();
           expect(sent(calls, ANSWERED)).toBe(1);
           const delivered = Option.getOrUndefined(
@@ -2836,7 +2836,7 @@ test("an agent's two questions are open Decisions on its Run, and both answers g
         {
           herdr: new UnseenTurn(rig.pluginEnv()),
           collectMs: 120_000,
-          pollMs: 1_000,
+          pollMs: 1000,
         },
       );
     }),
@@ -2880,7 +2880,7 @@ test("an answered question's pending delivery is not interrupted by an Output re
           yield* answer("ask-review-2", "lint");
           yield* Deferred.await(replying);
           yield* Deferred.await(sawIdle);
-          yield* spend(5_000);
+          yield* spend(5000);
           expect(yield* Deferred.isDone(cancelled)).toBe(false);
           yield* Deferred.succeed(release, undefined);
           yield* until(
@@ -2894,7 +2894,7 @@ test("an answered question's pending delivery is not interrupted by an Output re
           expect(sent(yield* rig.calls(), ANSWERED)).toBe(1);
           expect(yield* reminders).toEqual([]);
         }),
-        { herdr, collectMs: 120_000, pollMs: 1_000 },
+        { herdr, collectMs: 120_000, pollMs: 1000 },
       );
     }),
   ));
@@ -2941,7 +2941,7 @@ test("answers from different senders each reach the agent under their own sender
         }),
         {
           collectMs: 120_000,
-          pollMs: 1_000,
+          pollMs: 1000,
         },
       );
     }),
@@ -2967,7 +2967,7 @@ test("an open question pauses an idle agent's Output budget, which runs again on
         {
           herdr: new UnseenTurn(rig.pluginEnv()),
           collectMs: 60_000,
-          pollMs: 1_000,
+          pollMs: 1000,
         },
       );
       expect(yield* controlOf(PARKED, "r1")).toContain("after 1 minutes idle");
@@ -2996,7 +2996,7 @@ test("a question still open when the Output comes is closed, and nothing is sent
           ]);
           return done;
         }),
-        { collectMs: 120_000, pollMs: 1_000 },
+        { collectMs: 120_000, pollMs: 1000 },
       );
       expect(result._tag).toBe("Success");
       expect(sent(yield* rig.calls(), ANSWERED)).toBe(0);
@@ -4024,13 +4024,13 @@ test("an agent that ran out and stays idle past its budget parks the Run, and on
           expect(why).toContain("ran out (rate_limit) before writing");
           expect(why).toEndWith("Collie keeps collecting it.");
           expect(why).not.toContain("Resume");
-          yield* spend(5_000);
+          yield* spend(5000);
           expect(yield* suspended("r1")).toBe(false);
           fallbacks = ["codex/gpt-6.1-sol"];
           yield* TestClock.adjust("1 minute");
           return yield* Fiber.join(fiber);
         }),
-        { fallbacks: Effect.sync(() => fallbacks), collectMs: 2_000 },
+        { fallbacks: Effect.sync(() => fallbacks), collectMs: 2000 },
       );
       expect(result._tag === "Success" && result.success.note).toBe("room came");
       expect(harnessesStarted(yield* rig.calls())).toEqual(["claude", "codex"]);
@@ -4097,14 +4097,14 @@ test("a turn its harness will not retry parks the Run within a poll, quoting the
         Effect.gen(function* () {
           yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
           yield* stopsOnError(agentFor("r1"), EXPIRED);
-          yield* spend(5_000);
+          yield* spend(5000);
           const why = yield* controlOf(PARKED, "r1");
           expect(why).toContain(EXPIRED);
           expect(why).toContain("pi/openai-codex/gpt-5.5");
           expect(why).toContain(outputPath("r1"));
           expect(why).not.toContain("minutes idle");
         }),
-        { ...onPi, collectMs: 3_600_000, pollMs: 1_000 },
+        { ...onPi, collectMs: 3_600_000, pollMs: 1000 },
       );
     }),
   ));
@@ -4122,7 +4122,7 @@ test("a Run parked on a harness stop goes on with the Output its agent writes af
           yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"carried on"}`);
           return yield* Fiber.join(fiber);
         }),
-        { ...onPi, collectMs: 3_600_000, pollMs: 1_000 },
+        { ...onPi, collectMs: 3_600_000, pollMs: 1000 },
       );
       expect(result._tag === "Success" && result.success.note).toBe("carried on");
       expect(yield* isSet(PARKED, "r1")).toBe(false);
@@ -4145,7 +4145,7 @@ test("an agent whose harness stopped and that stays idle past its budget is park
           ...onPi,
           herdr: new UnseenTurn(rig.pluginEnv()),
           collectMs: 60_000,
-          pollMs: 1_000,
+          pollMs: 1000,
         },
       );
     }),
@@ -4159,10 +4159,10 @@ test("a turn its harness will not retry while it repairs its Output parks the Ru
         Effect.gen(function* () {
           yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
           yield* stopsOnError(agentFor("r1"), EXPIRED, "not usable");
-          yield* spend(5_000);
+          yield* spend(5000);
           expect(yield* controlOf(PARKED, "r1")).toContain(EXPIRED);
         }),
-        { ...onPi, collectMs: 3_600_000, pollMs: 1_000 },
+        { ...onPi, collectMs: 3_600_000, pollMs: 1000 },
       );
     }),
   ));
@@ -4171,7 +4171,7 @@ test("a harness stop during a repair still parks its wait after a restart, and a
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const over = { ...onPi, collectMs: 3_600_000, pollMs: 1_000 };
+      const over = { ...onPi, collectMs: 3_600_000, pollMs: 1000 };
       yield* rig.queueOutputs([{ verdict: "maybe" }, null]);
       yield* session(
         Effect.gen(function* () {
@@ -4184,7 +4184,7 @@ test("a harness stop during a repair still parks its wait after a restart, and a
       const result = yield* session(
         Effect.gen(function* () {
           const fiber = yield* Effect.forkChild(started("r1"));
-          yield* spend(5_000);
+          yield* spend(5000);
           expect(yield* controlOf(PARKED, "r1")).toContain(EXPIRED);
           yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"carried on"}`);
           return yield* Fiber.join(fiber);
@@ -4219,7 +4219,7 @@ test("an agent that ran out with nothing to take over, and whose harness then st
           yield* until(parkedSays("ran out (rate_limit) before writing"));
           expect(yield* controlOf(PARKED, "r1")).toContain(EXPIRED);
         }),
-        { fallbacks: Effect.succeed([]), collectMs: 2_000 },
+        { fallbacks: Effect.succeed([]), collectMs: 2000 },
       );
     }),
   ));
@@ -4232,7 +4232,7 @@ test("a replay rechecks a fallback after the earlier host recorded that nothing 
       yield* interrupted("r1", parked("r1"), {
         ...claudeOut,
         fallbacks: Effect.succeed([]),
-        collectMs: 2_000,
+        collectMs: 2000,
       });
       const wait = `${launchDir(dir, "r1")}/${stemOf(yield* launchOf("r1"))}.usage-wait`;
       expect(yield* fs.exists(wait)).toBe(true);
@@ -4316,7 +4316,7 @@ test("when nothing has room the agent that ran out is kept, and the Run parks sa
       yield* interrupted("r1", parked("r1"), {
         ...claudeOut,
         fallbacks: Effect.succeed([]),
-        collectMs: 2_000,
+        collectMs: 2000,
       });
 
       const calls = yield* rig.calls();
@@ -4539,9 +4539,9 @@ test("a quota incident survives a host crash before its collection result is rec
         harness: "codex",
         model: "default",
         ports: managed.ports,
-        readyMs: 1_000,
+        readyMs: 1000,
         fallbacks: Effect.succeed([]),
-        collectMs: 2_000,
+        collectMs: 2000,
       };
       yield* interrupted("r1", Deferred.isDone(written), {
         ...over,
@@ -4638,11 +4638,11 @@ test("a quota wait does not revive a dead managed Codex server before its usage 
           harness: "codex",
           model: "default",
           ports: managed.ports,
-          readyMs: 1_000,
+          readyMs: 1000,
           fallbacks: Effect.succeed([]),
           readings: Effect.sync(() => [machine]),
           ownReading: (agent) => Effect.succeed(agent === agentFor("r1") ? exhausted : null),
-          collectMs: 2_000,
+          collectMs: 2000,
         },
       );
       expect(result._tag).toBe("Some");
@@ -4715,7 +4715,7 @@ test("a quota fallback keeps valid late Output written while retiring its manage
           fallbacks: Effect.sync(() => fallbacks),
           readings: Effect.succeed([{ ...exhausted, windows: [] }]),
           ownReading: (agent) => Effect.succeed(agent === agentFor("r1") ? exhausted : null),
-          collectMs: 2_000,
+          collectMs: 2000,
         },
       );
       expect(result._tag === "Success" && result.success.note).toBe("finished during retirement");
@@ -4783,7 +4783,7 @@ for (const recovery of ["a newer matching reset", "its known reset passing"])
             fallbacks: Effect.succeed([]),
             readings: Effect.sync(() => [machine]),
             ownReading: (agent) => Effect.succeed(agent === agentFor("r1") ? exhausted : null),
-            collectMs: 2_000,
+            collectMs: 2000,
           },
         );
         expect(result._tag).toBe("Some");
@@ -5068,7 +5068,7 @@ test("a replayed legacy quota incident permits one successor and a new unreadabl
       let usageReads = 0;
       const recovering = {
         ...onCodex,
-        collectMs: 2_000,
+        collectMs: 2000,
         readings: Clock.currentTimeMillis.pipe(
           Effect.map((at) => {
             usageReads++;
@@ -6411,7 +6411,7 @@ test("a queued operation follows a harness switch and preserves its long comment
       yield* rig.queueOutputs([{ verdict: "clean", note: "done" }, null]);
       yield* session(started("r1"), { harness: "pi", model: "default" });
       const first = yield* launchOf("r1");
-      const text = `${Str.repeat(5_000)("é")}\n  exact comment  \nAttached: /given/screenshot.png`;
+      const text = `${Str.repeat(5000)("é")}\n  exact comment  \nAttached: /given/screenshot.png`;
       yield* session(
         Agents.pipe(
           Effect.flatMap((agents) =>
@@ -7056,7 +7056,7 @@ const slowCompaction = () => {
 const until = <E, R>(reached: Effect.Effect<boolean, E, R>) =>
   Effect.gen(function* () {
     for (let tries = 0; !(yield* reached); tries++) {
-      if (tries === 3_000) return yield* Effect.die(new Error("never got that far"));
+      if (tries === 3000) return yield* Effect.die(new Error("never got that far"));
       yield* TestClock.withLive(Effect.sleep("10 millis"));
     }
   });
@@ -7369,7 +7369,7 @@ const waitingAtBoundary = Effect.gen(function* () {
   for (let tries = 0; ; tries++) {
     const log = yield* read(`${dir}/agents/r1/agents.log`).pipe(Effect.orElseSucceed(() => ""));
     if (pipe(log, Str.includes("still working; 02-ui"))) return;
-    if (tries === 3_000) return yield* Effect.die(new Error("the boundary never waited"));
+    if (tries === 3000) return yield* Effect.die(new Error("the boundary never waited"));
     yield* TestClock.withLive(Effect.sleep("10 millis"));
   }
 });
@@ -9107,7 +9107,7 @@ test("a verify an idle agent asked for, held for memory past its budget, keeps i
           yield* until(holdsBudgetOf("r1", agentFor("r1")).pipe(overHost(() => dir)));
           herdr.written = true;
           yield* until(parked("r2"));
-          yield* spend(5_000);
+          yield* spend(5000);
           expect(yield* parked("r1")).toBe(false);
 
           herdr.written = false;

@@ -296,7 +296,7 @@ for await (const chunk of Bun.stdin.stream()) {
           send({
             id: message.id!,
             error: {
-              code: -32600,
+              code: -32_600,
               message: `no rollout found for thread id ${Str.isString(params.threadId) ? params.threadId : ""}`,
             },
           });
@@ -338,7 +338,7 @@ for await (const chunk of Bun.stdin.stream()) {
       case "thread/read": {
         const thread = Str.isString(params.threadId) ? threads[params.threadId] : undefined;
         if (thread === undefined)
-          send({ id: message.id!, error: { code: -32600, message: "no such thread" } });
+          send({ id: message.id!, error: { code: -32_600, message: "no such thread" } });
         else answer({ thread: { id: thread.id, path: `${process.cwd()}/${thread.id}.jsonl` } });
         break;
       }

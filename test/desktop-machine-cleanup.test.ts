@@ -346,7 +346,7 @@ describe("the Cleanup dialog", () => {
   test("a live Machine being read says how long it has waited and can't be chosen, while one listed already can", () => {
     const view = cleanupView(
       [live("slow"), live("vm")],
-      reads(reading("slow", 1_000), listed("vm", { remove: [], keep: [], bytes: 0 })),
+      reads(reading("slow", 1000), listed("vm", { remove: [], keep: [], bytes: 0 })),
       null,
       new Map(),
       24_500,
@@ -370,7 +370,7 @@ describe("the Cleanup dialog", () => {
       reads(reading("off", 0)),
       null,
       new Map(),
-      5_000,
+      5000,
     );
     expect(view.rows[0]).toMatchObject({
       said: "Out of reach: down",

@@ -1336,7 +1336,7 @@ const stopCodex = (
     );
   });
 
-const SURVIVOR_GRACE_MS = 2_000;
+const SURVIVOR_GRACE_MS = 2000;
 
 // WARNING: an unnoted process is named and left alone; only the noted processes get the SIGTERM.
 const survivors = (

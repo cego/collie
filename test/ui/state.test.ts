@@ -748,12 +748,12 @@ test("a row says how long it has been like this, not when", () => {
   expect(agoShort(NOW - 3 * 3_600_000, NOW)).toBe("3h ago");
   expect(agoShort(NOW - 4 * 86_400_000, NOW)).toBe("4d ago");
   expect(agoShort(0, NOW)).toBe("");
-  expect(agoShort(NOW + 5_000, NOW)).toBe("now");
+  expect(agoShort(NOW + 5000, NOW)).toBe("now");
 });
 
 test("the long and short renderings never disagree about the unit", () => {
   // WARNING: the resume menu and the tab's row list both show these, so one instant must read the same in both.
-  for (const seconds of [0, 59, 60, 3_599, 3_600, 86_399, 86_400, 200_000]) {
+  for (const seconds of [0, 59, 60, 3599, 3600, 86_399, 86_400, 200_000]) {
     const at = NOW - seconds * 1000;
     const long = ago(FIXED_ISO(at), NOW);
     const short = agoShort(at, NOW);
@@ -878,7 +878,7 @@ test("how long something took reads in the coarsest unit that still says it", ()
   expect(took(63 * 60_000)).toBe("1h03m");
   expect(took(24 * 3_600_000)).toBe("24h00m");
   expect(took(400)).toBe("0s");
-  expect(took(-5_000)).toBe("0s");
+  expect(took(-5000)).toBe("0s");
 });
 
 test("the footer offers the panel's keys and the globals, and no more", () => {

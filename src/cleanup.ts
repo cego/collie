@@ -142,7 +142,7 @@ export const cleanupLines = (report: CleanupReport, applied: boolean) =>
     "\n",
   );
 
-const SLOW_CLEANUP_MS = 2_000;
+const SLOW_CLEANUP_MS = 2000;
 
 type Sweepers<E, R> = ReadonlyArray<Sweeper> | Effect.Effect<ReadonlyArray<Sweeper>, E, R>;
 

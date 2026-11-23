@@ -32,7 +32,7 @@ import { FailedTestSchema, VerificationSchema } from "./verify-model";
 export const CHECK_INSTALLATION = "COLLIE_CHECK_INSTALLATION";
 export const CHECK_ID = "COLLIE_CHECK_ID";
 const KILL_AFTER = "2 seconds";
-const KILL_WAIT = 1_000;
+const KILL_WAIT = 1000;
 
 export interface CheckOf {
   readonly run: string;
@@ -489,9 +489,9 @@ export const endCheck = Effect.fn("CheckProcesses.endCheck")(function* (
   const proved = yield* provedOf(record, installation);
   if (isGone(proved)) return true;
   yield* signal(proved, "SIGTERM", kill);
-  if (yield* goneWithin(record, installation, 2_000)) return true;
+  if (yield* goneWithin(record, installation, 2000)) return true;
   yield* signal(yield* provedOf(record, installation), "SIGKILL", kill);
-  return yield* goneWithin(record, installation, 1_000);
+  return yield* goneWithin(record, installation, 1000);
 });
 
 // WARNING: ids are <run>@<epoch ms>-<hex>; runOfId parses that shape.

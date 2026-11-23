@@ -27,7 +27,7 @@ export function fileTime(iso: string) {
 
 const UNITS = [
   { unit: "day", short: "d", size: 86_400 },
-  { unit: "hour", short: "h", size: 3_600 },
+  { unit: "hour", short: "h", size: 3600 },
   { unit: "minute", short: "m", size: 60 },
 ] as const;
 

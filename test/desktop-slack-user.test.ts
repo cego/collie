@@ -183,7 +183,7 @@ test("a sign-in keeps nothing and gives nothing unless Slack's answer is the hum
           scope: "channels:read,groups:read",
           access_token: "xoxe.xoxp-1-narrow",
           refresh_token: "xoxe-1-narrow",
-          expires_in: 43200,
+          expires_in: 43_200,
         },
       });
       yield* refused(
@@ -197,7 +197,7 @@ test("a sign-in keeps nothing and gives nothing unless Slack's answer is the hum
           scope: "chat:write,channels:read,groups:read",
           access_token: "xoxe.xoxp-1-other",
           refresh_token: "xoxe-1-other",
-          expires_in: 43200,
+          expires_in: 43_200,
         },
       });
       yield* refused("Slack says the token is U456's, not U999's, so nothing was kept");

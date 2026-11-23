@@ -92,7 +92,7 @@ test("the inventory skips dependencies, Git metadata, caches and tool directorie
       const started = yield* Clock.currentTimeMillis;
       const inventory = yield* publicationCheckouts([root]);
 
-      expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(1_000);
+      expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(1000);
       expect(inventory.checkouts).toEqual([`${root}/a/b/c/d/e/deep`, `${root}/own`]);
     }),
   ));

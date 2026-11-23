@@ -125,7 +125,7 @@ test("a link the network refuses waits on an SSH connection without a login, com
             () => listed(first, "second"),
             (view) => view.state === "live",
           );
-          expect((yield* Clock.currentTimeMillis) - at).toBeLessThan(7_000);
+          expect((yield* Clock.currentTimeMillis) - at).toBeLessThan(7000);
           expect(live).toMatchObject({ transport: "ssh", connection: true, waits: null });
           expect(live.direct).toContain(url);
           const theirs = yield* until(

@@ -71,7 +71,7 @@ export const recoveryFailing = (
     }
   });
 
-const RATE_LIMIT_MARGIN_MS = 5_000;
+const RATE_LIMIT_MARGIN_MS = 5000;
 
 const ASKS_FORGE: ReadonlySet<ParkCause> = new Set([
   "forge-unavailable",

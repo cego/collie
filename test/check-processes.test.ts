@@ -719,7 +719,7 @@ test.skipIf(process.platform !== "linux")(
         const ones = yield* startedIn(notes);
 
         listing.armed = true;
-        yield* endAllWithin(checks, Duration.millis(2_000), () => Effect.void);
+        yield* endAllWithin(checks, Duration.millis(2000), () => Effect.void);
         expect(yield* noneRunning(ones)).toBe(true);
       }),
     ),
@@ -727,7 +727,7 @@ test.skipIf(process.platform !== "linux")(
 
 for (const { delay, grace } of [
   { delay: 200, grace: 500 },
-  { delay: 1_700, grace: 2_000 },
+  { delay: 1700, grace: 2000 },
 ])
   test.skipIf(process.platform !== "linux")(
     `a check's child that refuses SIGTERM is killed within a ${grace} ms grace, with each look at /proc ${delay} ms slow`,
@@ -813,7 +813,7 @@ test.skipIf(process.platform !== "linux")(
             return Effect.gen(function* () {
               const names = yield* fs.readDirectory(path, options);
               if (index === 1) yield* fs.writeFileString(`${notes}/spawn`, "");
-              yield* Effect.sleep(Duration.millis(index === 1 ? 4_400 : index === 2 ? 700 : 1_300));
+              yield* Effect.sleep(Duration.millis(index === 1 ? 4400 : index === 2 ? 700 : 1300));
               return names;
             });
           },
@@ -937,7 +937,7 @@ test("ending a marked check waits two seconds for its SIGTERM by the clock, howe
       ).pipe(Effect.provideService(FileSystem.FileSystem, proc));
       expect(gone).toBe(true);
       expect(sent).toEqual(["SIGTERM", "SIGKILL"]);
-      expect((yield* Clock.currentTimeMillis) - began).toBeLessThan(3_200);
+      expect((yield* Clock.currentTimeMillis) - began).toBeLessThan(3200);
     }),
   ));
 
@@ -1211,7 +1211,7 @@ test.skipIf(process.platform !== "linux")(
         const slept: Clock.Clock = { ...clock, sleep: (duration) => clock.adjust(duration) };
         const began = clock.currentTimeMillisUnsafe();
         yield* checks.killEnded.pipe(Effect.provideService(Clock.Clock, slept));
-        expect(clock.currentTimeMillisUnsafe() - began).toBeLessThan(2_000);
+        expect(clock.currentTimeMillisUnsafe() - began).toBeLessThan(2000);
       }),
     ),
 );
@@ -1253,7 +1253,7 @@ test("ending a host's checks waits past its grace for a kill still under way", (
       const began = yield* Clock.currentTimeMillis;
       yield* endAllWithin(checks, Duration.millis(500), () => Effect.void);
       expect(killed).toBe(true);
-      expect((yield* Clock.currentTimeMillis) - began).toBeLessThan(1_400 + 400);
+      expect((yield* Clock.currentTimeMillis) - began).toBeLessThan(1400 + 400);
     }),
   ));
 
@@ -1414,7 +1414,7 @@ test("a background child that sent both its streams elsewhere holds back no chec
         cwd: one.notes,
       });
       expect(kept.tail.stdout).toBe("done\n");
-      expect((yield* Clock.currentTimeMillis) - began).toBeLessThan(2_000);
+      expect((yield* Clock.currentTimeMillis) - began).toBeLessThan(2000);
     }),
   ));
 

@@ -143,7 +143,7 @@ test("with no master open the via fails at once and logs in nowhere, and a front
           expect(retried.state).toBe("unreachable");
           const [, failed] = yield* called(first, "dialled");
           expect(failed?.params).toMatchObject({ code: 255 });
-          expect(Number(failed?.params.ms)).toBeLessThan(2_000);
+          expect(Number(failed?.params.ms)).toBeLessThan(2000);
           expect(yield* sshSaid(first, "login")).toEqual([]);
 
           const opened = yield* first.cli(["machine", "connect", "second"]);

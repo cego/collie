@@ -180,7 +180,7 @@ test("every harness starts in its auto mode, and past its prompts only when bypa
 });
 
 test("Claude Code alone is given its auto-compact window, after everything else it is started with", () => {
-  expect(startArgs(HARNESSES.claude!, "opus", "/p/i.md", "high", "auto", 400000)).toEqual([
+  expect(startArgs(HARNESSES.claude!, "opus", "/p/i.md", "high", "auto", 400_000)).toEqual([
     "--model",
     "opus",
     "--effort",
@@ -200,7 +200,7 @@ test("Claude Code alone is given its auto-compact window, after everything else 
     "--autocompact",
     "auto",
   ]);
-  expect(startArgs(HARNESSES.codex!, "gpt-5", "/p/i.md", undefined, "auto", 400000)).toEqual([
+  expect(startArgs(HARNESSES.codex!, "gpt-5", "/p/i.md", undefined, "auto", 400_000)).toEqual([
     "-m",
     "gpt-5",
     "--approve-for-me",

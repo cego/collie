@@ -1063,7 +1063,7 @@ test.skipIf(process.platform !== "linux")(
 const termWaits = (status: string) =>
   Arr.some(Str.split(status, "\n"), (line) => {
     const [key, mask = ""] = Str.split(line, ":\t");
-    return (key === "ShdPnd" || key === "SigPnd") && (BigInt(`0x${mask}`) & 0x4000n) !== 0n;
+    return (key === "ShdPnd" || key === "SigPnd") && (BigInt(`0x${mask}`) & 0x40_00n) !== 0n;
   });
 
 const takesOverFromASlowHost = (

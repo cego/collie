@@ -164,13 +164,13 @@ test("stdio MCP preserves discovery, tool responses, errors, and shutdown", () =
         name: "collie_hold",
         arguments: [],
       });
-      expect(malformed.error).toMatchObject({ code: -32602 });
+      expect(malformed.error).toMatchObject({ code: -32_602 });
 
       const unknown = yield* server.request("tools/call", {
         name: "not-a-collie-tool",
         arguments: {},
       });
-      expect(unknown.error).toMatchObject({ code: -32602 });
+      expect(unknown.error).toMatchObject({ code: -32_602 });
       expect((yield* server.request("ping", {})).result).toEqual({});
       yield* server.close;
     }).pipe(Effect.scoped),

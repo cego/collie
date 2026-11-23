@@ -16,7 +16,7 @@ describe("the Desktop start harness", () => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const ps = yield* fs.readFileString(`${repo}test/fixtures/desktop-start/ps.txt`);
-        expect(treeRssMib(ps, 2910617)).toBe(1504.5);
+        expect(treeRssMib(ps, 2_910_617)).toBe(1504.5);
       }),
     ));
 

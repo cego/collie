@@ -249,7 +249,7 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
 export const until = <A, E, R>(
   read: () => Effect.Effect<A, E, R>,
   done: (value: A) => boolean,
-  seconds = 3_600,
+  seconds = 3600,
 ) =>
   Effect.suspend(read).pipe(
     Effect.repeat({

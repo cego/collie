@@ -185,7 +185,7 @@ const main = Effect.gen(function* () {
     yield* said(`master ${target}`);
     if (yield* fs.exists(`${dir}/master-hangs`)) {
       process.stderr.write(`Waiting for SSO login for ${target}\n`);
-      return yield* Effect.sleep(1_000).pipe(Effect.repeat(Schedule.forever));
+      return yield* Effect.sleep(1000).pipe(Effect.repeat(Schedule.forever));
     }
     process.stderr.write(`Authenticated to ${target}\n`);
     if (options.get("ControlPersist") !== "yes") return yield* master(path!);

@@ -43,7 +43,7 @@ import { keepMessage } from "./attachments";
 // WARNING: a message may sit reserved until a later reader calls it unknown.
 export const SUBMIT_TIMEOUT_MS = 60_000;
 
-const LISTING_MAX_AGE_MS = 5_000;
+const LISTING_MAX_AGE_MS = 5000;
 
 export const MAX_DELIVERY_BYTES = 8 * 1024;
 
@@ -461,7 +461,7 @@ export interface Patience {
   readonly forMs: number;
 }
 
-export const PATIENCE: Patience = { firstMs: 2_000, maxMs: 30_000, forMs: 10 * 60_000 };
+export const PATIENCE: Patience = { firstMs: 2000, maxMs: 30_000, forMs: 10 * 60_000 };
 
 // WARNING: each try is a transaction of its own, so nothing waits holding the agent's ledger lock.
 export const submitPatiently = Effect.fn("Dispatcher.submitPatiently")(function* (

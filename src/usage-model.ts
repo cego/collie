@@ -361,7 +361,7 @@ export function codexLogin(found: CodexAccount) {
 }
 
 const kindOfLength = (length: number | null) =>
-  length === 300 ? "session" : length === 10080 ? "weekly" : "other";
+  length === 300 ? "session" : length === 10_080 ? "weekly" : "other";
 
 function codexWindows(limit: CodexLimit, model: string | null, blocked: boolean) {
   const rows = Arr.filter([limit.primary, limit.secondary], (row) => row != null);

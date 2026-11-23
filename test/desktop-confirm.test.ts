@@ -47,7 +47,7 @@ test("an answer whose first send is not confirmed is sent again under its reques
     Effect.gen(function* () {
       const { lines, log } = logged();
       const door = answering([Effect.never, accepted(false)]);
-      const said = yield* fastForward(act(door.reached, "ask-1", answer, log), 1_000);
+      const said = yield* fastForward(act(door.reached, "ask-1", answer, log), 1000);
       expect(said).toBe("Answered r-1");
       expect(door.requests).toEqual(["ask-1", "ask-1"]);
       expect(Arr.map(lines, ({ attempt, ended }) => [attempt, ended])).toEqual([
@@ -64,7 +64,7 @@ test("a host that never confirms is tried 3 times, and the failure says so under
       const door = answering([]);
       const failed = yield* fastForward(
         act(door.reached, "ask-2", answer, log).pipe(Effect.flip),
-        1_000,
+        1000,
       );
       expect(failed).toEqual(new ActionFailed({ request: "ask-2", reason: UNCONFIRMED }));
       expect(door.requests).toEqual(["ask-2", "ask-2", "ask-2"]);

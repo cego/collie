@@ -32,7 +32,7 @@ const stand = Effect.fn("test.stand")(function* (says: string, after = "0") {
   return `sh ${script}`;
 });
 
-const serve = (command: string, listening: RegExp, startMs = 5_000) =>
+const serve = (command: string, listening: RegExp, startMs = 5000) =>
   servedEndpoint({
     cwd: rig.projectDir,
     log: path.join(dir, "server.log"),
@@ -142,7 +142,7 @@ test("the server starts with the agent's profile environment, a file-held value 
         log: path.join(dir, "server.log"),
         command: `sh ${script}`,
         listening: /up:(.*)/,
-        startMs: 5_000,
+        startMs: 5000,
         what: "the stand-in server",
         env: envLines({ MODE: "off", TOKEN: { file: "~/token" } }, dir),
       });

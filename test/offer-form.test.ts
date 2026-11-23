@@ -10,7 +10,7 @@ const drawn: Schema.Json = {
     notify: { type: "boolean", description: "Tell the channel" },
     confirmed: { type: "boolean" },
     after: { type: "string", enum: ["", "finish", "release"], description: "What follows" },
-    count: { type: "integer", minimum: -9007199254740991, maximum: 9007199254740991 },
+    count: { type: "integer", minimum: -9_007_199_254_740_991, maximum: 9_007_199_254_740_991 },
     ratio: {
       anyOf: [{ type: "number" }, { type: "string", enum: ["Infinity", "-Infinity", "NaN"] }],
     },

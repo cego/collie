@@ -365,7 +365,7 @@ test("a checkout git lists while another attempt is still filling it is given on
       const filling = yield* Effect.forkChild(ask());
       yield* fs.exists(smudging).pipe(
         Effect.flatMap((there) => (there ? Effect.void : Effect.fail("not yet"))),
-        Effect.retry({ schedule: Schedule.spaced("20 millis"), times: 1_000 }),
+        Effect.retry({ schedule: Schedule.spaced("20 millis"), times: 1000 }),
       );
       const waiting = yield* Effect.forkChild(
         ask().pipe(

@@ -185,12 +185,12 @@ test("failed channel renewals close each generation before capped backoff, and s
       yield* TestClock.adjust(0);
       expect(active).toBe(0);
       yield* Queue.take(items);
-      for (const millis of [1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000]) {
+      for (const millis of [1000, 2000, 4000, 8000, 16_000, 32_000, 60_000, 60_000]) {
         yield* TestClock.adjust(millis);
         yield* Queue.take(items);
         expect(active).toBe(0);
       }
-      expect(times).toEqual([0, 1000, 3000, 7000, 15000, 31000, 63000, 123000, 183000]);
+      expect(times).toEqual([0, 1000, 3000, 7000, 15_000, 31_000, 63_000, 123_000, 183_000]);
       expect(peak).toBe(1);
       yield* Fiber.interrupt(connection);
       yield* TestClock.adjust("5 minutes");

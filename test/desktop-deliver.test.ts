@@ -53,7 +53,7 @@ test("review comments reach the chosen agent word for word as one delivery, at a
     Effect.forEach(
       [
         "1. the plan's `SPEC.md`\n> x\n\nWhy?",
-        `${pipe_("é", Str.repeat(5_000))}\n  kept as typed  `,
+        `${pipe_("é", Str.repeat(5000))}\n  kept as typed  `,
       ],
       (text) =>
         Effect.gen(function* () {

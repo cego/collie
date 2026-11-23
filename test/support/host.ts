@@ -431,7 +431,7 @@ export const openHost = Effect.fn("HostTest.open")(function* (
     until: (request: HostRequest, wanted: (reply: HostReply) => boolean) =>
       ask(request).pipe(
         Effect.filterOrFail(wanted, () => new Cause.NoSuchElementError("not yet")),
-        Effect.retry({ times: 1_000, schedule: Schedule.spaced("20 millis") }),
+        Effect.retry({ times: 1000, schedule: Schedule.spaced("20 millis") }),
         Effect.orDie,
       ),
     stop: child.kill({ killSignal: "SIGTERM" }).pipe(
@@ -591,7 +591,7 @@ const hostLogEnd = Effect.gen(function* () {
 export const until = <A, E, R>(read: () => Effect.Effect<A, E, R>, wanted: (value: A) => boolean) =>
   Effect.suspend(read).pipe(
     Effect.filterOrFail(wanted, (value) => new NotYet(value)),
-    Effect.retry({ times: 1_000, schedule: Schedule.spaced("20 millis") }),
+    Effect.retry({ times: 1000, schedule: Schedule.spaced("20 millis") }),
     Effect.catch((last) =>
       Effect.flatMap(hostLogEnd, (log) =>
         Effect.die(

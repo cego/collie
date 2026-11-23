@@ -74,7 +74,6 @@ const migrating = {
   "typescript/no-unsafe-type-assertion": "off",
   "typescript/switch-exhaustiveness-check": "off",
   "unicorn/consistent-function-scoping": "off",
-  "unicorn/numeric-separators-style": "off",
   "unicorn/prefer-at": "off",
   "unicorn/prefer-native-coercion-functions": "off",
   "unicorn/prefer-set-has": "off",

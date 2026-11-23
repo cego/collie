@@ -71,12 +71,12 @@ export const imageSize = (bytes: Uint8Array) => {
       if (tag(12, "VP8X")) return { width: le24(24) + 1, height: le24(27) + 1 };
       if (tag(12, "VP8 "))
         return {
-          width: view.getUint16(26, true) & 0x3fff,
-          height: view.getUint16(28, true) & 0x3fff,
+          width: view.getUint16(26, true) & 0x3f_ff,
+          height: view.getUint16(28, true) & 0x3f_ff,
         };
       if (tag(12, "VP8L")) {
         const bits = view.getUint32(21, true);
-        return { width: (bits & 0x3fff) + 1, height: ((bits >>> 14) & 0x3fff) + 1 };
+        return { width: (bits & 0x3f_ff) + 1, height: ((bits >>> 14) & 0x3f_ff) + 1 };
       }
     }
     if (bytes[0] === 0xff && bytes[1] === 0xd8)

@@ -147,7 +147,7 @@ test("Settings shows every setting with its control, its value and its default",
   const flock = takeFrom(NO_FLOCK_SETTINGS, "vm-a", [
     set("scope", "all", 9),
     set("models.claude", ["claude-x"], 9),
-    set("quiet_ms", 90000, 9),
+    set("quiet_ms", 90_000, 9),
   ]).flock;
   const sections = settingSections(
     takeFrom(flock, "vm-b", [set("scope", "local", 11)]).flock,
@@ -361,7 +361,7 @@ test("a duration typed in minutes is the Flock's in milliseconds, and Reset unse
   const edited = editSetting(NO_FLOCK_SETTINGS, "quiet_ms", typed.stored, at(12));
   if ("refused" in edited) throw new Error(edited.refused);
 
-  expect(edited.settings.quiet_ms!.value).toBe(900000);
+  expect(edited.settings.quiet_ms!.value).toBe(900_000);
   expect(quiet(edited)).toMatchObject({ value: "15", set: true });
   const reset = editSetting(edited, "quiet_ms", "", at(13));
   if ("refused" in reset) throw new Error(reset.refused);
@@ -373,7 +373,7 @@ test("a Machine's GitLab host and a value its setting refuses are not the Flock'
     set("gitlab_host", "gitlab.elsewhere.com", 9),
     set("scope", "everywhere", 9),
     set("model", "sonnet", 9),
-    set("claude_auto_compact_window", 50000, 9),
+    set("claude_auto_compact_window", 50_000, 9),
   ]);
   expect(Rec.keys(flock.settings)).toEqual(["model"]);
 });

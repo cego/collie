@@ -43,10 +43,10 @@ test("over the byte cap the least recently opened goes first, and never the open
 });
 
 test("a card pointed at for 150 ms is kept, and one pointed away from sooner is not", () => {
-  const at = pointed(EMPTY_KEPT, "p", 1_000);
-  expect(keptKeys(settled(at, 1_000 + POINT_MS - 50)).has("p")).toBe(false);
-  expect(keptKeys(settled(pointed(at, null, 1_100), 1_000 + POINT_MS)).has("p")).toBe(false);
-  expect(keptKeys(settled(at, 1_000 + POINT_MS)).has("p")).toBe(true);
+  const at = pointed(EMPTY_KEPT, "p", 1000);
+  expect(keptKeys(settled(at, 1000 + POINT_MS - 50)).has("p")).toBe(false);
+  expect(keptKeys(settled(pointed(at, null, 1100), 1000 + POINT_MS)).has("p")).toBe(false);
+  expect(keptKeys(settled(at, 1000 + POINT_MS)).has("p")).toBe(true);
 });
 
 test("a record pointed at and then opened is kept once, as the open one", () => {

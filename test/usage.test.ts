@@ -196,7 +196,7 @@ describe("Claude's login", () => {
         yield* TestClock.setTime(10_000);
         const http = fakeHttp(200, asJson(claudeUsage));
         const asked = yield* askClaude({
-          credentials: Effect.succeed(credentials(5_000)),
+          credentials: Effect.succeed(credentials(5000)),
           claudeJson: Effect.succeed(claudeJson),
         }).pipe(Effect.provideService(HttpClient.HttpClient, http.client));
 
@@ -255,7 +255,7 @@ describe("Claude's login", () => {
         const home = yield* fs.makeTempDirectoryScoped();
         const file = path.join(home, ".claude", ".credentials.json");
         yield* fs.makeDirectory(path.dirname(file));
-        yield* fs.writeFileString(file, credentials(5_000));
+        yield* fs.writeFileString(file, credentials(5000));
         yield* fs.writeFileString(path.join(home, ".claude.json"), claudeJson);
         const before = yield* fs.stat(file);
         yield* TestClock.setTime(10_000);
@@ -267,7 +267,7 @@ describe("Claude's login", () => {
         );
 
         expect(asked.reading.account).toBe("org-1:acct-1");
-        expect(yield* fs.readFileString(file)).toBe(credentials(5_000));
+        expect(yield* fs.readFileString(file)).toBe(credentials(5000));
         expect((yield* fs.stat(file)).mtime).toEqual(before.mtime);
       }),
     ));
@@ -310,8 +310,8 @@ describe("ChatGPT", () => {
 
 describe("status-line samples", () => {
   const limits = {
-    five_hour: { used_percentage: 64, resets_at: 1791457799 },
-    seven_day: { used_percentage: 90, resets_at: 1791544799 },
+    five_hour: { used_percentage: 64, resets_at: 1_791_457_799 },
+    seven_day: { used_percentage: 90, resets_at: 1_791_544_799 },
   };
   const withModelWindow: UsageReading = {
     ...read("claude", 0, 31),

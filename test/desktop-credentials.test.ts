@@ -249,7 +249,7 @@ test("onboarding gives the runner Desktop's secrets on stdin, and forwards and o
         "--json onboard --to 0.40.0 --secrets-stdin",
       );
       expect(yield* fs.readFileString(`${dir}/stdin`)).toBe("GITLAB_TOKEN=glpat-good\n");
-      expect(forwarded).toEqual([62074]);
+      expect(forwarded).toEqual([62_074]);
       expect(opened).toEqual([
         "https://mcp.linear.app/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A62074%2Fcallback",
       ]);

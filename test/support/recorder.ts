@@ -104,7 +104,7 @@ export class Rig {
       yield* fs.makeDirectory(`${proc}/pressure`, { recursive: true });
       yield* fs.writeFileString(
         `${proc}/meminfo`,
-        `MemTotal:       ${100 * 1048576} kB\nMemAvailable:   ${Math.round(availableGiB * 1048576)} kB\n`,
+        `MemTotal:       ${100 * 1_048_576} kB\nMemAvailable:   ${Math.round(availableGiB * 1_048_576)} kB\n`,
       );
       yield* fs.writeFileString(
         `${proc}/pressure/memory`,
@@ -122,7 +122,7 @@ export class Rig {
     return Effect.flatMap(FileSystem.FileSystem, (fs) =>
       fs.writeFileString(
         file,
-        `Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 104857600 ${(100 - percentFree) * 1048576} ${percentFree * 1048576} ${100 - percentFree}% /\n`,
+        `Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 104857600 ${(100 - percentFree) * 1_048_576} ${percentFree * 1_048_576} ${100 - percentFree}% /\n`,
       ),
     );
   }

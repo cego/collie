@@ -24,8 +24,8 @@ const WAKE_SECONDS = 4;
 const LATE = {
   listing_ms: 10_000,
   report_ms: 10_000,
-  wake_ms: 3_000,
-  record_ms: 5_000,
+  wake_ms: 3000,
+  record_ms: 5000,
   door_ms: 500,
 };
 const heapFile = `${live}/host-heap.json`;

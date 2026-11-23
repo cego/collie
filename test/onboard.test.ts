@@ -609,7 +609,7 @@ esac`,
         Arr.findFirstIndex(events, (event) => event.event === "result" && event.step === "linear"),
         () => -1,
       );
-      expect(events[human]).toMatchObject({ url, port: 62074 });
+      expect(events[human]).toMatchObject({ url, port: 62_074 });
       expect(human).toBeLessThan(end);
       expect(statusOf(events, "linear")).toBe("done");
     }),
@@ -635,7 +635,7 @@ esac`,
         events,
         (event) => event.event === "human" && event.step === "linear",
       );
-      expect(human.at(-1)).toMatchObject({ url: handed, port: 62074 });
+      expect(human.at(-1)).toMatchObject({ url: handed, port: 62_074 });
       expect(statusOf(events, "linear")).toBe("done");
     }),
   ));

@@ -392,7 +392,7 @@ test("an Unseen Finished Task is drawn outside the collapsed list, a seen one on
 
 const lostVm: (state: "unreachable" | "sso" | "no-collie", at?: number) => FlockItem = (
   state: "unreachable" | "sso" | "no-collie",
-  at = 1_000,
+  at = 1000,
 ) => ({
   _tag: "Lost",
   machine: { profile: vm.profile, name: vm.name, target: vm.target },
@@ -560,11 +560,11 @@ test("the chat reads each Machine the window shows: a live one's board and proto
     ],
     ["vm-mk", { _tag: "Lost", state: "unreachable", reason: "ssh: connection refused" }],
   ]);
-  expect(boards([routed(vm)], new Map([["p-vm", 1_000]]))).toEqual([
-    ["vm-mk", { _tag: "Connecting", since: 1_000 }],
+  expect(boards([routed(vm)], new Map([["p-vm", 1000]]))).toEqual([
+    ["vm-mk", { _tag: "Connecting", since: 1000 }],
   ]);
-  expect(boards([routed(vm), savedOld], new Map([["p-vm", 1_000]]))).toEqual([
-    ["vm-mk", { _tag: "Connecting", since: 1_000 }],
+  expect(boards([routed(vm), savedOld], new Map([["p-vm", 1000]]))).toEqual([
+    ["vm-mk", { _tag: "Connecting", since: 1000 }],
   ]);
   expect(Arr.map(boards([routed(vm), snapshot(vm, []), savedOld]), ([, board]) => board)).toEqual([
     { _tag: "Live", herds: [{ id: "default" }], tasks: [], protocol: 1, files: false },
@@ -597,7 +597,7 @@ test("a saved board and the live Machine its route now reaches are named apart, 
 });
 
 test("a Machine with no live board is said with why, in its route's words where it was lost", () => {
-  expect(unreadBecause("vm-mk", { _tag: "Connecting", since: 1_000 }, 91_000)).toBe(
+  expect(unreadBecause("vm-mk", { _tag: "Connecting", since: 1000 }, 91_000)).toBe(
     "vm-mk is still connecting; Desktop has waited 1 min 30 s for its first board",
   );
   expect(unreadBecause("vm-mk", { _tag: "Connecting", since: null }, 91_000)).toBe(

@@ -40,7 +40,7 @@ const Board = Schema.Struct({ tasks: Schema.Array(TaskView) });
 
 const PICKS = [{ label: "Postgres (Recommended)" }, { label: "SQLite" }, { label: "JSONL" }];
 
-const GRACE_MS = 3_000;
+const GRACE_MS = 3000;
 const TICK_MS = 500;
 // WARNING: Must exceed the grace and two board ticks, or no revision has opened yet.
 const SETTLED = Duration.millis(GRACE_MS + 4 * TICK_MS);

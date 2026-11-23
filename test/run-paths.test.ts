@@ -50,7 +50,7 @@ test("a crashed holder's run lock is broken at once; the save neither waits nor 
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const lock = path.join(dir, "run.json.lock");
-      yield* fs.writeFileString(lock, `${encodeJson({ pid: 999999, start: "1" })}\n`);
+      yield* fs.writeFileString(lock, `${encodeJson({ pid: 999_999, start: "1" })}\n`);
 
       const started = yield* Clock.currentTimeMillis;
       const file = path.join(dir, "intent.json");
@@ -98,7 +98,7 @@ test("lock staleness follows the holder: dead breaks now, live and mid-claim are
       expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(500);
       expect(yield* fs.exists(lock)).toBe(false);
 
-      yield* fs.writeFileString(lock, `${encodeJson({ pid: 999999, start: "1" })}\n`);
+      yield* fs.writeFileString(lock, `${encodeJson({ pid: 999_999, start: "1" })}\n`);
       expect(yield* breakStaleLock(lock)).toBe(true);
       expect(yield* fs.exists(lock)).toBe(false);
     }),
@@ -121,7 +121,7 @@ test("a run lock held past its budget is refused as busy, and nothing is written
         Duration.millis(100),
       ).pipe(Effect.flip);
 
-      expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(1_000);
+      expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(1000);
       expect(refused.message).toContain("could not be acquired");
       expect(yield* fs.exists(file)).toBe(false);
       expect(yield* fs.readFileString(lock)).toBe(held);
@@ -143,7 +143,7 @@ test("a break already in progress leaves the stale lock for its breaker", () =>
       const path = yield* Path.Path;
       const lock = path.join(dir, "guarded.lock");
 
-      yield* fs.writeFileString(lock, `${encodeJson({ pid: 999999, start: "1" })}\n`);
+      yield* fs.writeFileString(lock, `${encodeJson({ pid: 999_999, start: "1" })}\n`);
       yield* fs.writeFileString(`${lock}.break`, "");
 
       expect(yield* breakStaleLock(lock)).toBe(false);
@@ -159,7 +159,7 @@ test("a break guard left by a crashed breaker is recovered", () =>
       const lock = path.join(dir, "crashed.lock");
       const guard = `${lock}.break`;
 
-      yield* fs.writeFileString(lock, `${encodeJson({ pid: 999999, start: "1" })}\n`);
+      yield* fs.writeFileString(lock, `${encodeJson({ pid: 999_999, start: "1" })}\n`);
       yield* fs.writeFileString(guard, "");
       const old = DateTime.toDateUtc(
         DateTime.makeUnsafe((yield* Clock.currentTimeMillis) - 60_000),
@@ -185,7 +185,7 @@ test("taking over a crashed breaker's guard leaves this process's own claim", ()
         lock,
         `${encodeJson({ pid: globalThis.process.pid, start: yield* processStartTime(globalThis.process.pid) })}\n`,
       );
-      yield* fs.writeFileString(guard, `${encodeJson({ pid: 999999, start: "1" })}\n`);
+      yield* fs.writeFileString(guard, `${encodeJson({ pid: 999_999, start: "1" })}\n`);
       const old = DateTime.toDateUtc(
         DateTime.makeUnsafe((yield* Clock.currentTimeMillis) - 60_000),
       );
@@ -245,7 +245,7 @@ test("a claim that changed since it was inspected is never the one removed", () 
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const stale = `${encodeJson({ pid: 999999, start: "1" })}\n`;
+      const stale = `${encodeJson({ pid: 999_999, start: "1" })}\n`;
       const live = `${encodeJson({ pid: globalThis.process.pid, start: null })}\n`;
 
       const changed = path.join(dir, "changed.lock");

@@ -496,7 +496,7 @@ test("a process of the session that ignores SIGTERM fails the stop by its pid, a
       const child = Option.getOrUndefined(
         Arr.findFirst(yield* events(), (one) => one.child !== undefined),
       )!.child!;
-      const halt = yield* TestClock.withLive(halted({ stopMs: 5_000 }));
+      const halt = yield* TestClock.withLive(halted({ stopMs: 5000 }));
       expect(halt.stopped).toEqual([]);
       expect(Arr.join(halt.left, "\n")).toContain(`pid ${child}`);
       expect(alive(child)).toBe(true);
@@ -569,7 +569,7 @@ for (const [what, over, edit, why] of [
   ],
   [
     "an idle thread whose turns are refused for another reason",
-    () => unmaterialized({ turnsRefusal: { code: -32600, message: "rollout is unreadable" } }),
+    () => unmaterialized({ turnsRefusal: { code: -32_600, message: "rollout is unreadable" } }),
     null,
     /rollout is unreadable/,
   ],
@@ -578,7 +578,7 @@ for (const [what, over, edit, why] of [
     () =>
       unmaterialized({
         turnsRefusal: {
-          code: -32603,
+          code: -32_603,
           message: `thread ${THREAD} is not materialized yet; thread/turns/list is unavailable before first user message`,
         },
       }),
@@ -625,7 +625,7 @@ for (const [what, over, edit, why] of [
     "an idle thread whose turns are refused as unsupported for another reason",
     () =>
       unlistable({
-        turnsRefusal: { code: -32601, message: "thread/items/list is not supported yet" },
+        turnsRefusal: { code: -32_601, message: "thread/items/list is not supported yet" },
       }),
     null,
     /thread\/items\/list is not supported yet/,
@@ -777,7 +777,7 @@ const until = (reached: Reached, over?: Partial<AgentHost>, resume = false) =>
       if (resume) yield* engine.resume(work, yield* work.executionId(payload));
       yield* work.execute(payload, { discard: true });
       for (let tries = 0; !(yield* reached); tries++) {
-        if (tries === 3_000) return yield* Effect.die(new Error("r1 never got that far"));
+        if (tries === 3000) return yield* Effect.die(new Error("r1 never got that far"));
         yield* TestClock.withLive(Effect.sleep("10 millis"));
       }
     }),
@@ -844,7 +844,7 @@ test("a restart beside a Codex turn that has not stopped parks, and starts its s
       yield* release();
       const old = yield* serverPid();
       for (let tries = 0; !(yield* processAbsent(old)); tries++) {
-        if (tries === 3_000) return yield* Effect.die(new Error(`server ${old} never exited`));
+        if (tries === 3000) return yield* Effect.die(new Error(`server ${old} never exited`));
         yield* TestClock.withLive(Effect.sleep("10 millis"));
       }
       yield* serve({ threads: [{ id: SUB_THREAD, cwd: rig.projectDir }] });
@@ -1086,7 +1086,7 @@ test("a launch beside an unlisted agent whose server is not Quiet keeps that rec
           configured: host.compactAtTokens,
           log: () => Effect.void,
           herdr: host.herdr,
-          stopMs: 2_000,
+          stopMs: 2000,
         },
         {
           agent: "r2-other",

@@ -294,6 +294,6 @@ test("a look for bound processes on a busy machine takes about one process's rea
         Effect.provideService(FileSystem.FileSystem, slowProc),
       );
       expect(found).toEqual([{ pid: 7, started: "start-7", bound: { COLLIE_PROBE: "carried" } }]);
-      expect((yield* Clock.currentTimeMillis) - began).toBeLessThan(1_000);
+      expect((yield* Clock.currentTimeMillis) - began).toBeLessThan(1000);
     }),
   ));

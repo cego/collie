@@ -135,7 +135,7 @@ effectTest(
   "Claude Code's auto-compact window is 400000 until set, and is stored as written",
   function* () {
     const userDir = rig.pluginEnv().userDir;
-    expect((yield* loadDefaults(userDir)).claudeAutoCompactWindow).toBe(400000);
+    expect((yield* loadDefaults(userDir)).claudeAutoCompactWindow).toBe(400_000);
 
     expect(yield* set("claude_auto_compact_window", "2000000")).toContain(
       "from 100000 to 1000000, or auto",
@@ -143,13 +143,13 @@ effectTest(
     expect(yield* readConfig(userDir)).not.toHaveProperty("claude_auto_compact_window");
 
     yield* set("claude_auto_compact_window", "500000");
-    expect((yield* readConfig(userDir)).claude_auto_compact_window).toBe(500000);
+    expect((yield* readConfig(userDir)).claude_auto_compact_window).toBe(500_000);
     yield* set("claude_auto_compact_window", "auto");
     expect((yield* loadDefaults(userDir)).claudeAutoCompactWindow).toBe("auto");
 
     const fs = yield* FileSystem.FileSystem;
     yield* fs.writeFileString(`${userDir}/config.json`, `{ "claude_auto_compact_window": 50000 }`);
-    expect((yield* loadDefaults(userDir)).claudeAutoCompactWindow).toBe(50000);
+    expect((yield* loadDefaults(userDir)).claudeAutoCompactWindow).toBe(50_000);
   },
 );
 

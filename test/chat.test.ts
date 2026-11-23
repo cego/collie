@@ -100,7 +100,7 @@ test("chat keeps native tools and adds Collie's tools", () => {
     extension: "/d/c.ts",
     settings: "/d/settings.json",
   };
-  const claude = chatArgs("claude", "s-1", files, 400000);
+  const claude = chatArgs("claude", "s-1", files, 400_000);
   expect(claude).toEqual([
     "--session-id",
     "s-1",
@@ -119,7 +119,7 @@ test("chat keeps native tools and adds Collie's tools", () => {
   ]);
   expect(chatArgs("claude", "s-1", files, "auto").slice(-2)).toEqual(["--autocompact", "auto"]);
   expect(chatArgs("claude", "s-1", files, null)).not.toContain("--autocompact");
-  const pi = chatArgs("pi", "s-2", files, 400000);
+  const pi = chatArgs("pi", "s-2", files, 400_000);
   expect(pi).toEqual([
     "--session-id",
     "s-2",

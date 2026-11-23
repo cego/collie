@@ -148,7 +148,7 @@ test("every Clearance fits a 120-character repository URL, and names it exactly 
   expect(url.length).toBe(120);
   const jobs = Arr.map(
     ["deploy-production", "deploy-production:spilnu", "deploy-production:happytiger"],
-    (name, n) => ({ name, url: `${url}/-/jobs/${987654321 + n}` }),
+    (name, n) => ({ name, url: `${url}/-/jobs/${987_654_321 + n}` }),
   );
   const measured = Arr.map(Rec.toEntries(RELEASE_CLEARS), ([step, clears]) => {
     const lines = clears(url, jobs);
@@ -159,12 +159,12 @@ test("every Clearance fits a 120-character repository URL, and names it exactly 
 
 test("production names its jobs with their URLs, then by name, then by count, whichever first fits", () => {
   const url = "https://gitlab.example.com/group/app";
-  const job = (name: string, n: number) => ({ name, url: `${url}/-/jobs/${1000000 + n}` });
+  const job = (name: string, n: number) => ({ name, url: `${url}/-/jobs/${1_000_000 + n}` });
 
   const one = Arr.join(RELEASE_CLEARS.production(url, [job("deploy-production", 4)]), "; ");
   expect(one).toContain("`deploy-production` at /-/jobs/1000004");
 
-  const several = Arr.makeBy(12, (n) => job(`production:app${n}`, 9876540000 + n));
+  const several = Arr.makeBy(12, (n) => job(`production:app${n}`, 9_876_540_000 + n));
   const byName = Arr.join(RELEASE_CLEARS.production(url, several), "; ");
   for (const one of several) expect(byName).toContain(`\`${one.name}\``);
   expect(byName).not.toContain("/-/jobs/");

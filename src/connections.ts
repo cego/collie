@@ -26,7 +26,7 @@ import { slackApi } from "./slack";
 import { GLAB_RELOGIN } from "./forge/gitlab";
 import { ghLogin } from "./forge/github";
 
-export const CONNECTION_TIMEOUT_MS = 6_000;
+export const CONNECTION_TIMEOUT_MS = 6000;
 
 export const ConnectionDeadline = Context.Reference<Duration.Duration>(
   "collie/ConnectionDeadline",

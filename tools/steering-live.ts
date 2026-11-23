@@ -83,7 +83,7 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
     const deadline = (yield* Clock.currentTimeMillis) + budgetMs;
     while ((yield* Clock.currentTimeMillis) < deadline) {
       if (yield* fs.exists(ackPath(runDir, id))) return true;
-      yield* Effect.sleep(2_000);
+      yield* Effect.sleep(2000);
     }
     return false;
   });

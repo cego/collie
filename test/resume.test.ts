@@ -442,7 +442,7 @@ test("a resume does not hand other Runs' recorded answers again", () =>
               client.resume({ runId, request: "resume" }).pipe(Effect.orDie),
             );
             expect(resumed.applied).toBe(true);
-            expect(Duration.toMillis(took)).toBeLessThan(4_000);
+            expect(Duration.toMillis(took)).toBeLessThan(4000);
             for (const other of others)
               expect((yield* client.run({ runId: other.runId }).pipe(Effect.orDie))?.parked).toBe(
                 other.parked,

@@ -90,7 +90,7 @@ const until = <A, E, R>(read: () => Effect.Effect<A, E, R>, wanted: (value: A) =
     for (let tries = 0; ; tries++) {
       const value = yield* read();
       if (wanted(value)) return value;
-      if (tries === 3_000)
+      if (tries === 3000)
         return yield* Effect.die(new Error(`never got there: ${Bun.inspect(value)}`));
       yield* TestClock.withLive(Effect.sleep("20 millis"));
     }

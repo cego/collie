@@ -1,6 +1,6 @@
 import { Clock, Effect, Stream } from "effect";
 
-export const SLOW_RPC_MS = 2_000;
+export const SLOW_RPC_MS = 2000;
 
 export const firstValueTimed = <A, E, R>(
   stream: Stream.Stream<A, E, R>,

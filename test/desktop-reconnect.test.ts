@@ -164,7 +164,7 @@ test("a door that breaks and stays fails a Run's details", () =>
       yield* Queue.fail(a.queue, { _tag: "Broken" });
       const failed = yield* fastForward(
         runDetailOn(doors, "i-1", "r-1").pipe(Stream.runDrain, Effect.flip),
-        1_000,
+        1000,
       );
       expect(failed.reason).toContain("socket closed");
     }),

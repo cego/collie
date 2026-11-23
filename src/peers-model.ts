@@ -10,7 +10,7 @@ export const HerdrMachine = Schema.Struct({
 });
 export type HerdrMachine = typeof HerdrMachine.Type;
 
-export const PEER_PORT = 47217;
+export const PEER_PORT = 47_217;
 
 export const backoff = (failures: number) => Math.min(1000 * 2 ** failures, 60_000);
 

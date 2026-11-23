@@ -38,7 +38,7 @@ test("a verify waits while the Machine is short, pausing only its own agent's bu
             yield* fs.makeDirectory(proc, { recursive: true });
             yield* fs.writeFileString(
               `${proc}/meminfo`,
-              `MemTotal: ${100 * 1048576} kB\nMemAvailable: ${availableGiB * 1048576} kB\n`,
+              `MemTotal: ${100 * 1_048_576} kB\nMemAvailable: ${availableGiB * 1_048_576} kB\n`,
             );
           }).pipe(Effect.orDie);
         yield* memory(50);

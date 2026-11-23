@@ -721,7 +721,7 @@ test("the card, collie_run and collie_herd say the same of a Run waiting for mem
       yield* fs.makeDirectory(proc);
       yield* fs.writeFileString(
         `${proc}/meminfo`,
-        `MemTotal: ${62 * 1048576} kB\nMemAvailable: ${2 * 1048576} kB\n`,
+        `MemTotal: ${62 * 1_048_576} kB\nMemAvailable: ${2 * 1_048_576} kB\n`,
       );
       const env = readEnv({
         COLLIE_STATE_DIR: stateDir,

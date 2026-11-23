@@ -103,7 +103,7 @@ test("a Fallback's launch says what it fell back from and why, and an earlier on
           effort: null,
           from: { harness: "claude", model: "opus", effort: null },
           why: "session 100%, resets 15:45",
-          at: 1791467100000,
+          at: 1_791_467_100_000,
         }),
         launched("r1", {}),
       ]);

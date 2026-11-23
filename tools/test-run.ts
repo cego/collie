@@ -265,7 +265,7 @@ export const report = (run: {
   const { budget } = run;
   const files = Arr.sort(Rec.toEntries(run.timings ?? {}), byDurationDescending);
   const longest = files[0];
-  const summed = Arr.reduce(files, 0, (sum, [, ms]) => sum + ms) / 1_000;
+  const summed = Arr.reduce(files, 0, (sum, [, ms]) => sum + ms) / 1000;
   const kept =
     shareOf(budget, "small") === budget.total
       ? "shared by every run"
@@ -276,8 +276,8 @@ export const report = (run: {
     ...(longest === undefined
       ? []
       : [
-          `test: longest file ${longest[0]} at ${seconds(longest[1] / 1_000)}, ${Math.round(
-            (100 * longest[1]) / 1_000 / run.ran,
+          `test: longest file ${longest[0]} at ${seconds(longest[1] / 1000)}, ${Math.round(
+            (100 * longest[1]) / 1000 / run.ran,
           )} % of the run; per-file time summed ${seconds(summed)}`,
         ]),
     ...startsSummary(run.starts),

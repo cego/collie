@@ -186,7 +186,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
     );
   const notFound = (params: Schema.JsonObject) => ({
     failure: {
-      code: -32000,
+      code: -32_000,
       message: `no terminal ${text(params.terminal) ?? ""}`,
       kind: "not_found",
     },
@@ -330,7 +330,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
     });
   const unknownMachine = (params: Schema.JsonObject) => ({
     failure: {
-      code: -32000,
+      code: -32_000,
       message: `no machine ${text(params.machine) ?? ""}`,
       kind: "machine_unknown",
     },
@@ -358,7 +358,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
           const cwd = text(params.cwd);
           if (cwd !== undefined && !(yield* fs.exists(cwd).pipe(Effect.orElseSucceed(() => false))))
             return {
-              failure: { code: -32000, message: "spawn_failed", kind: "spawn_failed" },
+              failure: { code: -32_000, message: "spawn_failed", kind: "spawn_failed" },
             };
           const program = Arr.filter(Arr.isArray(params.argv) ? params.argv : [], isString)[0];
           const notFound =
@@ -369,7 +369,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
             made += 1;
             yield* emit(`t${made}`, "removed", {});
             return {
-              failure: { code: -32000, message: "spawn_failed", kind: "spawn_failed" },
+              failure: { code: -32_000, message: "spawn_failed", kind: "spawn_failed" },
             };
           }
           made += 1;
@@ -431,7 +431,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
           const status = found.status;
           if (status === "blocked")
             return {
-              failure: { code: -32000, message: "blocked", kind: "blocked" },
+              failure: { code: -32_000, message: "blocked", kind: "blocked" },
             };
           if (found.name !== null && onlyReported.has(found.name))
             return { result: { turn: found.turn, started: true, status } };
@@ -463,7 +463,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
         }
         case "terminal.attach": {
           if (!link.framed)
-            return { failure: { code: -32000, message: "needs_framed", kind: "needs_framed" } };
+            return { failure: { code: -32_000, message: "needs_framed", kind: "needs_framed" } };
           const found = find(params);
           if (!found) return notFound(params);
           const viewer: Viewer = {
@@ -500,7 +500,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
         case "machine.add": {
           const name = text(params.name) ?? text(params.target) ?? "";
           if (machines.has(name))
-            return { failure: { code: -32000, message: "already_added", kind: "already_added" } };
+            return { failure: { code: -32_000, message: "already_added", kind: "already_added" } };
           const via = text(params.via);
           const added: Added = {
             name,
@@ -513,7 +513,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
             yield* dial(added);
             if (added.state !== "connected")
               return {
-                failure: { code: -32000, message: added.why ?? "", kind: "unreachable" },
+                failure: { code: -32_000, message: added.why ?? "", kind: "unreachable" },
               };
           }
           machines.set(name, added);
@@ -531,7 +531,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
           return { result: { removed: name } };
         }
         default:
-          return { failure: { code: -32601, message: `no method ${method}`, kind: "not_found" } };
+          return { failure: { code: -32_601, message: `no method ${method}`, kind: "not_found" } };
       }
     });
 
@@ -548,7 +548,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
         jsonrpc: "2.0",
         id,
         error: {
-          code: -32603,
+          code: -32_603,
           message: `the fake core's reply is one hc.openrpc.json forbids: ${method} ${jsonText(answered.result)}: ${violation}`,
           data: { kind: "fake_core_contract" },
         },
@@ -670,7 +670,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
       answers.set(method, value);
     },
     refuse: (method, kind, message) => {
-      refusals.set(method, { code: -32000, kind, message });
+      refusals.set(method, { code: -32_000, kind, message });
     },
     restore: (method) => {
       refusals.delete(method);

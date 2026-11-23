@@ -24,8 +24,8 @@ try {
   db.close();
   const path = `${directory}/state/steps.jsonl`;
   writeFileSync(path, '{"at":"2026-11-11T09:00:00.000Z","key":"write#1"}\n');
-  utimesSync(path, 1794387600, 1794387600);
-  shiftHistory(directory, 3600000);
+  utimesSync(path, 1_794_387_600, 1_794_387_600);
+  shiftHistory(directory, 3_600_000);
   const read = new Database(`${directory}/state/host.db`, { readonly: true });
   try {
     deepStrictEqual(read.query("SELECT CAST(id AS TEXT) AS id, admitted FROM collie_runs").get(), {
@@ -36,7 +36,7 @@ try {
       read.query("SELECT CAST(id AS TEXT) AS id, deliver_at, payload FROM cluster_messages").get(),
       {
         id: "9007199254740994",
-        deliver_at: 1794391200000,
+        deliver_at: 1_794_391_200_000,
         payload: '{"at":"2026-11-11T10:00:00.000Z"}',
       },
     );
@@ -47,7 +47,7 @@ try {
     readFileSync(path, "utf8"),
     '{"at":"2026-11-11T10:00:00.000Z","key":"write#1"}\n',
   );
-  deepStrictEqual(statSync(path).mtimeMs, 1794391200000);
+  deepStrictEqual(statSync(path).mtimeMs, 1_794_391_200_000);
 } finally {
   rmSync(directory, { recursive: true, force: true });
 }

@@ -78,7 +78,7 @@ test("refresh coalesces sources, limits work, times out and rotates past failing
         yield* clock.adjust(30_000);
         yield* jobs.pass(many);
         expect(visited).toHaveLength(20);
-        expect(yield* Clock.currentTimeMillis).toBe(35001);
+        expect(yield* Clock.currentTimeMillis).toBe(35_001);
       }).pipe(Effect.provideService(Clock.Clock, clock));
     }),
   ));

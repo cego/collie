@@ -1896,7 +1896,7 @@ for (const id of ["review", "second-look"])
                     lines,
                     (line) => line.action === "resumed" && line.outcome === "resumed",
                   ),
-                2 * 3_600,
+                2 * 3600,
               );
               const recovered = yield* until(
                 () => host.status(runId),

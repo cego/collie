@@ -986,7 +986,7 @@ const READS_AT_ONCE = 8;
 
 const DEFAULT_QUIET_MS = 5 * 60_000;
 
-const GOING_EVERY_MS = 5_000;
+const GOING_EVERY_MS = 5000;
 
 export interface KeptCard {
   readonly key: string;
@@ -1012,7 +1012,7 @@ const nextChange = (then: number, now: number) => {
   if (now < then) return then;
   const size = Option.getOrElse(
     Arr.findFirst([86_400_000, 3_600_000, 60_000], (unit) => now - then >= unit),
-    () => 1_000,
+    () => 1000,
   );
   return then + (Math.floor((now - then) / size) + 1) * size;
 };

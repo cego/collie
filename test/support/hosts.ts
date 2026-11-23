@@ -124,7 +124,7 @@ const entries = () => Arr.filter(readdirSync(root), (name) => name !== "home");
 // WARNING: Settle well inside a hook's own timeout, so what is left is reported rather than timed out.
 const settled = <A>(find: () => ReadonlyArray<A>) =>
   Effect.gen(function* () {
-    const deadline = (yield* Clock.currentTimeMillis) + 2_500;
+    const deadline = (yield* Clock.currentTimeMillis) + 2500;
     return yield* Effect.sync(find).pipe(
       Effect.repeat({
         until: (left) => left.length === 0,

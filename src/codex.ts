@@ -4,7 +4,7 @@ import { Data, Effect, Option, Queue, Schema, flow, Result } from "effect";
 const CLIENT_INFO = { name: "collie", version: "0", title: "Collie" };
 
 const CALL_MS = 10_000;
-const REPLAY_MS = 3_000;
+const REPLAY_MS = 3000;
 
 export class CodexError extends Data.TaggedError("CodexError")<{
   readonly message: string;
@@ -374,13 +374,13 @@ export const agentThreads = Effect.fn("Codex.agentThreads")(function* (
 
 // WARNING: Codex 0.162.1 refuses turns of a thread no user message has materialized.
 const unmaterialized = (threadId: string, cause: CodexError) =>
-  cause.code === -32600 &&
+  cause.code === -32_600 &&
   cause.message ===
     `thread/turns/list: thread ${threadId} is not materialized yet; thread/turns/list is unavailable before first user message`;
 
 // WARNING: Codex 0.162.1 refuses to list an idle paginated thread with no user message.
 const unlisted = (cause: CodexError) =>
-  cause.code === -32601 && cause.message === "thread/turns/list: list_turns is not supported yet";
+  cause.code === -32_601 && cause.message === "thread/turns/list: list_turns is not supported yet";
 
 export const runningTurns = Effect.fn("Codex.runningTurns")(function* (
   client: CodexClient,

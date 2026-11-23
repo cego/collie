@@ -866,7 +866,7 @@ test("a GitHub job not yet created while its pipeline still runs is waited on, a
           proved: { pass: "ci", name: "nuxi", job: { name: "test" } },
         });
       }),
-      1_000,
+      1000,
     ),
   ));
 
@@ -966,7 +966,7 @@ test("a GitHub job missing right after its retry is waited on, and its pass is a
           ),
         ).toHaveLength(1);
       }),
-      1_000,
+      1000,
     ),
   ));
 
@@ -1483,6 +1483,6 @@ test("a job missing while the forge has not said whether it can merge is waited 
           proved: { pass: "ci", name: "nuxi", job: { name: "test" } },
         });
       }),
-      1_000,
+      1000,
     ),
   ));

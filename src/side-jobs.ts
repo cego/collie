@@ -131,7 +131,7 @@ export const sweepEvery = <E, R>(
 export const BOARD_TERMINAL = "collie-board";
 
 export const keepAgainAfter = (failures: number) =>
-  Math.min(1_000 * 2 ** Math.max(failures - 1, 0), 5 * 60_000);
+  Math.min(1000 * 2 ** Math.max(failures - 1, 0), 5 * 60_000);
 
 const KEEP_RETRY_TICK = "1 second";
 

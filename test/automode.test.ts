@@ -257,15 +257,15 @@ test("a human's starting words are quoted with their door, scrubbed, and cut at 
       expect(Arr.some(block.allow, (one) => pipe_(one, Str.includes("starting words")))).toBe(true);
 
       const long = yield* blockFor("gitlab", {
-        started: { door: "chat", words: pipe_("x", Str.repeat(2_500)) },
+        started: { door: "chat", words: pipe_("x", Str.repeat(2500)) },
       });
       const cut = Option.getOrUndefined(
         Arr.findFirst(long.block.environment, (one) =>
           pipe_(one, Str.startsWith("The user started")),
         ),
       );
-      expect(cut).toContain(pipe_("x", Str.repeat(2_000)));
-      expect(cut).not.toContain(pipe_("x", Str.repeat(2_001)));
+      expect(cut).toContain(pipe_("x", Str.repeat(2000)));
+      expect(cut).not.toContain(pipe_("x", Str.repeat(2001)));
       expect(cut).toContain("cut at 2,000 characters");
     }),
   ));

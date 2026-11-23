@@ -79,7 +79,7 @@ test("Linux reads MemAvailable, MemTotal and the full avg10 of memory pressure",
         "pressure/memory":
           "some avg10=12.50 avg60=3.00 avg300=1.00 total=100\nfull avg10=4.25 avg60=1.00 avg300=0.50 total=50\n",
       });
-      expect(yield* linuxMemory(root)).toEqual(known(8000000 * 1024, 65000000 * 1024, 4.25));
+      expect(yield* linuxMemory(root)).toEqual(known(8_000_000 * 1024, 65_000_000 * 1024, 4.25));
     }),
   ));
 
@@ -87,7 +87,7 @@ test("a Linux kernel without pressure information is read by memory alone", () =
   runEffect(
     Effect.gen(function* () {
       const root = yield* proc({ meminfo: MEMINFO });
-      expect(yield* linuxMemory(root)).toEqual(known(8000000 * 1024, 65000000 * 1024));
+      expect(yield* linuxMemory(root)).toEqual(known(8_000_000 * 1024, 65_000_000 * 1024));
     }),
   ));
 

@@ -5,9 +5,9 @@ import { recordMarks } from "./record-marks";
 import { Foreground } from "./foreground";
 import { stringifyJson } from "./json";
 
-const SLOW_BUILD_MS = 2_000;
+const SLOW_BUILD_MS = 2000;
 
-const MAX_REST_MS = 5_000;
+const MAX_REST_MS = 5000;
 
 // WARNING: a reader reads its own writes: its board covers every change seen before it was read.
 export const shareBoard = <A, E, R, R2>(options: {

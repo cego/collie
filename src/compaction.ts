@@ -586,7 +586,7 @@ export const lostServer = Effect.fn("Compaction.lostServer")(function* (
   if (!(yield* processAbsent(record.pid))) return null;
   const ready = yield* port.ready(record).pipe(
     Effect.orElseSucceed(() => false),
-    Effect.timeoutOption(2_000),
+    Effect.timeoutOption(2000),
   );
   if (Option.isNone(ready) || ready.value) return null;
   return `${record.harness} server pid ${record.pid} has exited and ${record.endpoint} is unavailable`;

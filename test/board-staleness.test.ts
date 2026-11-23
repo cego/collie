@@ -80,7 +80,7 @@ test("the board never waits on the read", () =>
 
       const text = yield* board(yield* release, releases);
 
-      expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(1_000);
+      expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(1000);
       expect(text).not.toContain("is out");
     }),
   ));

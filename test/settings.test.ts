@@ -167,9 +167,9 @@ describe("Claude Code's auto-compact window", () => {
   });
 
   test("takes a whole number in the range as a number, and auto as itself", () => {
-    expect(parseSetting("claude_auto_compact_window", "100000")).toEqual({ value: 100000 });
-    expect(parseSetting("claude_auto_compact_window", "1000000")).toEqual({ value: 1000000 });
-    expect(parseSetting("claude_auto_compact_window", " 400000 ")).toEqual({ value: 400000 });
+    expect(parseSetting("claude_auto_compact_window", "100000")).toEqual({ value: 100_000 });
+    expect(parseSetting("claude_auto_compact_window", "1000000")).toEqual({ value: 1_000_000 });
+    expect(parseSetting("claude_auto_compact_window", " 400000 ")).toEqual({ value: 400_000 });
     expect(parseSetting("claude_auto_compact_window", "auto")).toEqual({ value: "auto" });
     expect(parseSetting("claude_auto_compact_window", "")).toEqual({ value: null });
   });
@@ -261,7 +261,7 @@ describe("Each setting explains itself", () => {
     expect(settingStored("handoff_timeout_ms", "1.5")).toEqual({ stored: "90000" });
     expect(settingStored("quiet_ms", "")).toEqual({ stored: "" });
     expect(settingStored("quiet_ms", ".5")).toEqual({ stored: "30000" });
-    expect(parseSetting("quiet_ms", "900000")).toEqual({ value: 900000 });
+    expect(parseSetting("quiet_ms", "900000")).toEqual({ value: 900_000 });
     for (const typed of ["-1", "ten"])
       expect(settingStored("board_quiet_ms", typed)).toEqual({
         refused: `board_quiet_ms has to be a number of minutes, not "${typed}"`,

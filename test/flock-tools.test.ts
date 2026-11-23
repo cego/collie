@@ -2121,7 +2121,7 @@ test("an answer its Machine never confirms is said as not confirmed, and nothing
             { kind: "stop", run: "r-2" },
           ],
         }),
-        1_000,
+        1000,
       );
       expect(said).toContain(
         "answer: not confirmed — vm-mk did not confirm the answer to r-2 within 30 s, 3 times. It may still land; Try again sends the same request, which vm-mk takes at most once.",
@@ -2211,10 +2211,10 @@ test("a host that never takes the chat's declaration ends the write as not confi
       };
       const stop = yield* fastForward(
         callFlockTool(flock, "collie_do", { actions: [{ kind: "stop", run: "r-2" }] }),
-        1_000,
+        1000,
       );
       expect(stop).toContain("stop: not confirmed — vm-mk did not confirm the stop to r-2");
-      const held = yield* fastForward(callFlockTool(flock, "collie_hold", { run: "r-2" }), 1_000);
+      const held = yield* fastForward(callFlockTool(flock, "collie_hold", { run: "r-2" }), 1000);
       expect(held).toStartWith("hold: not confirmed — vm-mk did not confirm the hold to r-2");
       expect(Arr.map(lines, ({ kind, ended }) => `${kind} ${ended}`)).toEqual([
         "stop timed-out",

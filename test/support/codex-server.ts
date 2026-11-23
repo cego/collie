@@ -226,7 +226,7 @@ const main = Effect.gen(function* () {
         return ws.send(encode(message));
       };
       const reply = (result: Schema.Json) => send("result", result);
-      const refuse = (message: string, code = -32600) => send("error", { code, message });
+      const refuse = (message: string, code = -32_600) => send("error", { code, message });
       const threadId = Predicate.isString(params.threadId) ? params.threadId : undefined;
       const turnId = Predicate.isString(params.turnId) ? params.turnId : undefined;
       const thread = Option.getOrUndefined(
@@ -258,11 +258,11 @@ const main = Effect.gen(function* () {
             thread?.turnsRefusal ??
             (thread?.unmaterialized
               ? {
-                  code: -32600,
+                  code: -32_600,
                   message: `thread ${thread.id} is not materialized yet; thread/turns/list is unavailable before first user message`,
                 }
               : thread?.unlistable
-                ? { code: -32601, message: "list_turns is not supported yet" }
+                ? { code: -32_601, message: "list_turns is not supported yet" }
                 : undefined);
           if (refusal) return refuse(refusal.message, refusal.code);
           const held = threadId === undefined ? [] : (turns.get(threadId) ?? []);

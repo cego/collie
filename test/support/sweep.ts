@@ -59,7 +59,7 @@ export const kill = (pid: number) => {
   } catch {}
 };
 
-const PF_KTHREAD = 0x200000;
+const PF_KTHREAD = 0x20_00_00;
 
 // WARNING: Between execve's switch and its environment write, environ reads empty, so read it again.
 const execing = (stat: string) => {

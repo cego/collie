@@ -88,7 +88,7 @@ export const answerPrompt = (text: string, log: string, queuePath: string) =>
         fs
           .makeDirectory(lock)
           .pipe(
-            Effect.retry({ times: 1_000, schedule: Schedule.spaced("2 millis") }),
+            Effect.retry({ times: 1000, schedule: Schedule.spaced("2 millis") }),
             Effect.ignore,
           ),
         () =>

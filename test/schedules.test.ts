@@ -261,7 +261,7 @@ test("a pause and a resume asked while an occurrence is admitted wait for its Ru
           (runs) => runs.length >= 1,
         );
         yield* asking(world, first!.run);
-        yield* past((yield* Clock.currentTimeMillis) + 4_000);
+        yield* past((yield* Clock.currentTimeMillis) + 4000);
         expect(yield* scheduled(world, "racing")).toHaveLength(1);
       }),
     MODULES,
@@ -341,7 +341,7 @@ test("a Schedule removed or paused while core does not answer starts no Run once
         yield* collie(world, ["schedule", "remove", "removed"], FAST);
         yield* collie(world, ["schedule", "pause", "paused"], FAST);
         core.restore("terminal.list");
-        yield* past((yield* Clock.currentTimeMillis) + 4_000);
+        yield* past((yield* Clock.currentTimeMillis) + 4000);
         expect(yield* scheduled(world, "removed")).toEqual([]);
         expect(yield* scheduled(world, "paused")).toEqual([]);
       }),
@@ -360,7 +360,7 @@ test("a Run still going holds the next occurrence, its end wakes the chain, and 
         );
         yield* asking(world, first!.run);
         const fell = epochMs(first!.occurrence) + 10_000;
-        yield* past(fell + 1_000);
+        yield* past(fell + 1000);
         expect(yield* scheduled(world, "asks")).toHaveLength(1);
         expect((yield* listed(world)).schedules[0]?.last?.outcome).toMatchObject({
           kind: "waiting-for-run",
@@ -417,7 +417,7 @@ test("a host killed while its Schedule's Run goes admits no second Run, and the 
           (alive) => !alive,
         );
         yield* listed(world);
-        yield* past(epochMs(first!.occurrence) + 5_000);
+        yield* past(epochMs(first!.occurrence) + 5000);
         expect(yield* scheduled(world, "kept")).toHaveLength(1);
         yield* asking(world, first!.run);
         yield* answer(world, first!.run);
@@ -452,15 +452,15 @@ test("occurrences missed while no host ran start once, late, for the latest of t
         const pending = (yield* Schema.decodeUnknownEffect(ScheduleChanged)(
           added.envelope.data,
         ).pipe(Effect.orDie)).schedule?.next;
-        yield* past(epochMs(pending!) + 6_000);
+        yield* past(epochMs(pending!) + 6000);
         const restarted = yield* Clock.currentTimeMillis;
         yield* listed(world);
         const [late] = yield* until(
           () => scheduled(world, "missed"),
           (runs) => runs.length >= 1,
         );
-        expect(epochMs(late!.occurrence)).toBeGreaterThan(epochMs(pending!) + 4_000);
-        expect(epochMs(late!.occurrence)).toBeGreaterThanOrEqual(restarted - 2_000);
+        expect(epochMs(late!.occurrence)).toBeGreaterThan(epochMs(pending!) + 4000);
+        expect(epochMs(late!.occurrence)).toBeGreaterThanOrEqual(restarted - 2000);
         yield* asking(world, late!.run);
         expect(yield* scheduled(world, "missed")).toHaveLength(1);
         yield* schedule(world, ["remove", "missed"]);
@@ -540,7 +540,7 @@ test("a Schedule added paused does not fire, and resuming it starts no catch-up 
           data: { schedule: { paused: true, next: null } },
         });
         const addedAt = yield* Clock.currentTimeMillis;
-        yield* past(addedAt + 5_000);
+        yield* past(addedAt + 5000);
         expect(yield* scheduled(world, "later")).toEqual([]);
         const resumedAt = yield* Clock.currentTimeMillis;
         const resumed = yield* schedule(world, ["resume", "later"]);

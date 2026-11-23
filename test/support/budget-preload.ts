@@ -24,7 +24,7 @@ await Effect.runPromise(
       (sum, one) => sum + one.workers,
     );
     yield* Console.error(
-      `test: admitted after ${(hold.waited / 1_000).toFixed(2)} s queued; small runs hold ${holding} of their ${share} workers`,
+      `test: admitted after ${(hold.waited / 1000).toFixed(2)} s queued; small runs hold ${holding} of their ${share} workers`,
     );
   }).pipe(
     Scope.provide(scope),

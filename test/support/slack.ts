@@ -57,7 +57,7 @@ export const fakeSlack = () => {
       const tokens = {
         access_token: `xoxe.xoxp-1-access-${issued}`,
         refresh_token: `xoxe-1-refresh-${issued}`,
-        expires_in: 43200,
+        expires_in: 43_200,
         token_type: "user",
         scope:
           "chat:write,channels:read,groups:read,reactions:write,reactions:read,channels:history,groups:history,search:read",

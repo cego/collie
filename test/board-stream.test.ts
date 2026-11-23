@@ -576,16 +576,16 @@ test("a build waits as long as the last one took, and at most 5 s, before it sta
         expect(starts).toEqual([0]);
         yield* TestClock.adjust("1 millis");
         yield* settle;
-        expect(starts).toEqual([0, 4_000]);
+        expect(starts).toEqual([0, 4000]);
         yield* Queue.offer(changed, undefined);
         yield* TestClock.adjust("8 seconds");
         yield* settle;
         yield* TestClock.adjust("4999 millis");
         yield* settle;
-        expect(starts).toEqual([0, 4_000]);
+        expect(starts).toEqual([0, 4000]);
         yield* TestClock.adjust("1 millis");
         yield* settle;
-        expect(starts).toEqual([0, 4_000, 17_000]);
+        expect(starts).toEqual([0, 4000, 17_000]);
       }),
     ).pipe(Effect.provide(TestClock.layer())),
   ));

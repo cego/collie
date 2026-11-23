@@ -3049,7 +3049,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             managed = record;
             const up = yield* ready(record).pipe(
               Effect.orElseSucceed(() => false),
-              Effect.timeoutOption(2_000),
+              Effect.timeoutOption(2000),
             );
             if (Option.isSome(up) && up.value) {
               failedAt = null;

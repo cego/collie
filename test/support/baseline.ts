@@ -22672,7 +22672,7 @@ scenario("a tune-up keeps its harness sample deadline through calibration and re
         TUNE_DISCOVERED,
         { ...tunePlan(commit, [STEADY_PRIMARY], UNBUILDABLE(3)), limit: 7200 },
         repaired(
-          { ...tunePlan(commit, [STEADY_PRIMARY]), limit: 10800 },
+          { ...tunePlan(commit, [STEADY_PRIMARY]), limit: 10_800 },
           "bound the complete gate",
         ),
         EXHAUSTED,
@@ -22680,7 +22680,7 @@ scenario("a tune-up keeps its harness sample deadline through calibration and re
       expect((yield* tunedUp(runId, { samples: 4 }))._tag).toBe("Success");
       const measured = yield* calibrations(runId);
       expect(Arr.map(measured, (one) => one.result._tag)).toEqual(["Failed", "Judged"]);
-      expect(Arr.map(measured, (one) => one.plan.limit)).toEqual([7200, 10800]);
+      expect(Arr.map(measured, (one) => one.plan.limit)).toEqual([7200, 10_800]);
     }),
   ),
 );

@@ -93,7 +93,7 @@ describe("parsing", () => {
           kind: "weekly",
           label: "Weekly",
           usedPercent: 2,
-          resetsAt: isoOfSeconds(1791973608),
+          resetsAt: isoOfSeconds(1_791_973_608),
         }),
       ],
       plan: "self_serve_business_prolite",
@@ -106,8 +106,8 @@ describe("parsing", () => {
       rateLimits: {
         ...codexRateLimits.result.rateLimits,
         rateLimitReachedType: "rate_limit_reached",
-        primary: { usedPercent: primary, windowDurationMins: 300, resetsAt: 1791457799 },
-        secondary: { usedPercent: 40, windowDurationMins: 10080, resetsAt: 1791973608 },
+        primary: { usedPercent: primary, windowDurationMins: 300, resetsAt: 1_791_457_799 },
+        secondary: { usedPercent: 40, windowDurationMins: 10_080, resetsAt: 1_791_973_608 },
       },
     });
     expect(
@@ -136,7 +136,7 @@ describe("parsing", () => {
     const spark = {
       ...codexRateLimits.result.rateLimits,
       limitName: "GPT-5.3-Codex-Spark",
-      primary: { usedPercent: 100, windowDurationMins: 10080, resetsAt: 1791973608 },
+      primary: { usedPercent: 100, windowDurationMins: 10_080, resetsAt: 1_791_973_608 },
       rateLimitReachedType: "rate_limit_reached",
     };
     const usage = codexUsage({
@@ -156,12 +156,12 @@ describe("parsing", () => {
 
   test("a Claude status line's rate_limits are its session and weekly windows", () => {
     expect(statusLineWindows(statusLine.rate_limits)).toEqual([
-      window({ usedPercent: 31, resetsAt: isoOfSeconds(1791457799) }),
+      window({ usedPercent: 31, resetsAt: isoOfSeconds(1_791_457_799) }),
       window({
         kind: "weekly",
         label: "Weekly",
         usedPercent: 88,
-        resetsAt: isoOfSeconds(1791544799),
+        resetsAt: isoOfSeconds(1_791_544_799),
       }),
     ]);
   });

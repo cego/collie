@@ -1279,7 +1279,7 @@ test("adopting a claim stops the Run that held it and its children, waits them o
                 return { stopped: [], left: over.lateLeft ?? [] };
               }),
             ),
-          patience: { everyMs: 10, forMs: 5_000 },
+          patience: { everyMs: 10, forMs: 5000 },
         };
       };
 
@@ -1359,7 +1359,7 @@ test("two Runs taking over different claims of one Run both remove theirs from i
           stop: (runId) => Effect.succeed({ runs: [runId], left: [] }),
           stopped: () => Effect.sleep(20).pipe(Effect.as(true)),
           halt: () => Effect.succeed({ stopped: [], left: [] }),
-          patience: { everyMs: 5, forMs: 5_000 },
+          patience: { everyMs: 5, forMs: 5000 },
         });
 
       yield* Effect.all([takeOver("happytiger", "r-a"), takeOver("spilnu", "r-b")], {

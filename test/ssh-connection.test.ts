@@ -211,7 +211,7 @@ test("an opener whose master never answers its check fails within its bound", ()
       const started = yield* Clock.currentTimeMillis;
       const failed = yield* opens(state, ssh, "300 millis").pipe(Effect.flip);
       expect(failed._tag).toBe("MachineUnreachable");
-      expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(1_000);
+      expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(1000);
     }),
   ));
 
@@ -229,7 +229,7 @@ test("the host's handle gives up on a master that never answers", () =>
       expect(refused._tag).toBe("HostRefused");
       yield* handle.exit;
       expect(yield* fs.exists(path)).toBe(false);
-      expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(2_000);
+      expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(2000);
     }),
   ));
 

@@ -253,14 +253,14 @@ test("a fresh detail read also reconciles the board and a watch's older in-memor
         run: gitlab("open"),
         record: () => Effect.void,
         stop: () => Effect.die("completed work"),
-        now: now + 1_000,
+        now: now + 1000,
         checked: new Map(),
         states,
         panels,
         making: new Set(),
       });
       expect(states.get(id)).toBe("merged");
-      expect((yield* board({ now: now + 1_000, includeHistory: true }))[0]?.landed).toBe(true);
+      expect((yield* board({ now: now + 1000, includeHistory: true }))[0]?.landed).toBe(true);
     }),
   ));
 
