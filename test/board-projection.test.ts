@@ -93,7 +93,7 @@ test("a host started where another left its board tells that board first, unconf
         // WARNING: the host logs the count only after it has told clients the confirmed board.
         const log = yield* until(
           () => fs.readFileString(`${world.state}/host.log`).pipe(Effect.orDie),
-          Str.includes("cards the last host left were confirmed unchanged"),
+          Str.includes(" of 1 cards the last host left were confirmed unchanged"),
         );
         // WARNING: a seconds-old card's age is due again by then, so it may be derived rather than confirmed.
         expect(log).toMatch(/[01] of 1 cards the last host left were confirmed unchanged/);
