@@ -48,7 +48,7 @@ import {
 } from "./verify";
 import { approvedFor, approvedIn } from "./verify-spec";
 import { readIntent } from "./intent";
-import { findingsIn, isBlocking } from "./output";
+import { findingsIn, isBlocking, openFindingsIn } from "./output";
 import { markersOf, runningCheck } from "./checks";
 import { runningChecks } from "./check-processes";
 import { waitLine } from "./memory-wait";
@@ -1199,7 +1199,11 @@ export interface KeptCards {
   readonly content?: (runs: ReadonlyArray<string>) => string;
   /** The workflow modules' kept revisions, which a card's offers are resolved from. */
   modules?: string;
+  /** The Connection readings kept for each checkout, which a Run's offers read there. */
+  connections?: ReadonlyMap<string, string>;
   readonly kept: Map<string, KeptCard>;
+  /** Each Run's offers, kept apart from its card until what they are derived from moves. */
+  offers?: Map<string, { readonly key: string; readonly offers: ReadonlyArray<OfferView> }>;
 }
 
 const cardKey = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
@@ -1382,6 +1386,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                 quietMs,
                 [...missingCheckouts],
                 cards.modules ?? "",
+                Arr.map(everyRun, (run) => cards.connections?.get(run.cwd) ?? ""),
                 yield* Effect.forEach(everyRun, syncedBranch),
               ];
         const key = cards === undefined ? "" : cardKey([cards.revision(read), inputs]);
@@ -1410,6 +1415,34 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
             return again.view;
           }
         }
+        /** A Run's offers, asked again only once what they are derived from moved. */
+        const offersFor = Effect.fnUntraced(function* (runId: string) {
+          const run = runsById.get(runId);
+          if (cards === undefined || run === undefined) return yield* offersOfRun(runId);
+          const id =
+            Option.getOrUndefined(Arr.findFirst(carried, (one) => one.run.id === runId))?.id ??
+            null;
+          const forged = id === null ? undefined : forge.get(id);
+          // The forge reading again what it said is no move.
+          const { read, asked: _, ...said } = forged ?? { read: undefined };
+          const key = cardKey([
+            cards.content?.([runId]) ?? cards.revision([runId]),
+            touched.get(runId) ?? 0,
+            yield* planIssuesIn(run.dir),
+            yield* openFindingsIn(run.dir),
+            latest(yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => []))),
+            cards.modules ?? "",
+            id === null ? null : (mrStates.get(id) ?? null),
+            forged === undefined ? null : [said, read !== undefined],
+            cards.connections?.get(run.cwd) ?? "",
+          ]);
+          cards.offers ??= new Map();
+          const was = cards.offers.get(runId);
+          if (was?.key === key) return was.offers;
+          const offers = yield* offersOfRun(runId);
+          cards.offers.set(runId, { key, offers });
+          return offers;
+        });
         const keep = (view: TaskView | null, due: number, retimed?: KeptCard["retimed"]) => {
           if (cards !== undefined)
             cards.kept.set(id, { key, digest: digest(), due, view, retimed });
@@ -1853,7 +1886,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           Option.getOrUndefined(Arr.findFirst(each, (one) => one.mr === shippingMr))?.owner ??
           leader;
         const ownedOffers = yield* Effect.forEach(mrs, (one) =>
-          Effect.map(offersOfRun(one.run), (offers) => ({
+          Effect.map(offersFor(one.run), (offers) => ({
             run: one.run,
             named: one.short,
             offers,
@@ -1876,7 +1909,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
             Number(one.unavailable !== undefined) - Number(other.unavailable !== undefined),
         );
         const offered = planReady
-          ? offerOf(yield* offersOfRun(leader.id))
+          ? offerOf(yield* offersFor(leader.id))
           : shippingMr !== null && go === undefined
             ? shippingOffer(
                 Option.getOrUndefined(
@@ -2166,8 +2199,11 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
     // The host's own build goes one Task at a time, so the loop stays free between them.
     { concurrency: opts.cards === undefined ? READS_AT_ONCE : 1 },
   ).pipe(Effect.provideService(Launches, launches), Effect.provideService(Deliveries, deliveries));
-  if (opts.only === undefined && opts.cards !== undefined)
+  if (opts.only === undefined && opts.cards !== undefined) {
     for (const id of opts.cards.kept.keys()) if (!groups.has(id)) opts.cards.kept.delete(id);
+    for (const id of opts.cards.offers?.keys() ?? [])
+      if (!runsById.has(id)) opts.cards.offers!.delete(id);
+  }
   return sortBoard(Arr.filter(views, (view) => view !== null));
 });
 

@@ -117,7 +117,7 @@ import { CardRows, type CardRow } from "./card-rows";
 import { MERGE_REQUESTS } from "./merge-requests";
 import { MODULE_REVISIONS, ModuleRevisions, onSyncedRevisions } from "./module-revisions";
 import { BRANCHES, Branches, branchKey } from "./branches";
-import { CONNECTIONS } from "./connection-rows";
+import { CONNECTIONS, ConnectionRows } from "./connection-rows";
 import type { MeasureEvent } from "./measurement-model";
 import {
   RunMetrics,
@@ -1585,7 +1585,7 @@ const hostBoard = (dir: string) =>
     const offered = new Map<string, ReadonlyArray<OfferView>>();
     const boardOf = (facts: ReadonlyArray<RunFacts>, alive: ReadonlyArray<AgentInfo>) =>
       Effect.gen(function* () {
-        if (cards !== undefined)
+        if (cards !== undefined) {
           cards.modules = Arr.join(
             Arr.map(
               [...(yield* ModuleRevisions.use((rows) => rows.all))].sort(),
@@ -1593,6 +1593,8 @@ const hostBoard = (dir: string) =>
             ),
             "\n",
           );
+          cards.connections = yield* ConnectionRows.use((rows) => rows.readings);
+        }
         const refused = yield* hostRefuses;
         return yield* buildBoard({
           env,

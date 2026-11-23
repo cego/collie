@@ -80,6 +80,16 @@ card's derivation runs with a process spawner and HTTP client that refuse.
 **D5. Sweepers read only this host's builds.** Cleanup's Task closing, worktree settling and idle
 agents read the boards this host derived, never the rows a previous host left.
 
+**D6. A Run's Offers are kept apart from its card** (cego/collie#537). A card is derived again
+whenever its key moves, and the key holds live agents, deliveries, checks and `since`, none of
+which an Offer reads. So the build's per-host keep holds each Run's Offers under a key of their
+own inputs: the Run's facts by content, when it last did work, its plan's tickets, its open
+findings and its latest disposition; the module revisions; its merge request's state and forge
+row, without when the forge was read; and the Connection readings kept for its checkout. A card
+derived again for any other reason reuses them, and a moved input asks the host again. Nothing
+expires on a clock. Offers of a Run that leaves the board are dropped. They stay in memory
+because they are resolved from a loaded module, and taking an Offer resolves it afresh.
+
 ## Consequences
 
 - A host's first Snapshot no longer waits on the forge, git, module trees or the engine's
