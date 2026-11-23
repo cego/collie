@@ -373,6 +373,14 @@ test("clearing an override from an empty caller clears it on the owning Machine"
 test("a grant from an empty caller holds when the owning Machine's Intent is broken", () =>
   runEffect(
     Effect.gen(function* () {
+      const intent = yield* RunRecords.use((records) => records.fact(runId, INTENT_FILE)).pipe(
+        Effect.provide(recordsAt(second.world.state)),
+      );
+      yield* Effect.addFinalizer(() =>
+        RunRecords.use((records) => records.put(runId, INTENT_FILE, intent)).pipe(
+          Effect.provide(recordsAt(second.world.state)),
+        ),
+      );
       yield* RunRecords.use((records) => records.put(runId, INTENT_FILE, "broken intent")).pipe(
         Effect.provide(recordsAt(second.world.state)),
       );
