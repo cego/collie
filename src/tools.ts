@@ -419,8 +419,8 @@ const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: J
     return refusedActions("collie_do", selected.input, decoded.failure, TAKES.collie_do);
   const actions = decoded.success.actions;
   if (actions.length === 0) return "collie_do needs an action. Ask which one they meant.";
-  const asked: ReadonlyArray<string> = [...ASKED_KINDS, ...SETTLE_KINDS];
-  const wrong = Arr.filter(actions, (action) => !asked.includes(action.kind));
+  const asked: ReadonlySet<string> = new Set([...ASKED_KINDS, ...SETTLE_KINDS]);
+  const wrong = Arr.filter(actions, (action) => !asked.has(action.kind));
   if (wrong.length > 0)
     return `collie_do does not carry out ${Arr.join([...new Set(Arr.map(wrong, (a) => a.kind))], ", ")}: that is collie_propose's, which carries it out in the same call.`;
   const requestId =
@@ -722,11 +722,11 @@ const connectionFacts = Effect.fn("Tools.connectionFacts")(function* (env: Plugi
     : `- (the Connections could not be read: ${read.error.message})`;
 });
 
-const UNSCOPED_KINDS: ReadonlyArray<string> = ["start", "confirm", "decline"];
+const UNSCOPED_KINDS: ReadonlySet<string> = new Set(["start", "confirm", "decline"]);
 
 const wantsRun = (action: JsonObject) => {
   const kind = action["kind"];
-  return action["run"] === undefined && isString(kind) && !UNSCOPED_KINDS.includes(kind);
+  return action["run"] === undefined && isString(kind) && !UNSCOPED_KINDS.has(kind);
 };
 
 const onSelection = Effect.fn("Tools.onSelection")(function* (env: PluginEnv, input: JsonObject) {

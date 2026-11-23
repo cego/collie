@@ -987,10 +987,10 @@ export type TaskUpserted = typeof TaskUpserted.Type;
 export const TaskRemoved = Schema.TaggedStruct("Remove", { seq: Schema.Int, id: Schema.String });
 export type TaskRemoved = typeof TaskRemoved.Type;
 
-const KNOWN_MESSAGES: ReadonlyArray<string> = ["Snapshot", "Upsert", "Remove", "Unknown"];
+const KNOWN_MESSAGES: ReadonlySet<string> = new Set(["Snapshot", "Upsert", "Remove", "Unknown"]);
 
 export const UnknownMessage = Schema.Struct({
-  _tag: Schema.String.pipe(Schema.check(Schema.makeFilter((tag) => !KNOWN_MESSAGES.includes(tag)))),
+  _tag: Schema.String.pipe(Schema.check(Schema.makeFilter((tag) => !KNOWN_MESSAGES.has(tag)))),
   seq: Schema.optionalKey(Schema.Int),
 }).pipe(
   Schema.decodeTo(

@@ -68,7 +68,7 @@ const LOCKFILES = [
 const OUTPUT_BYTES = 4 * 1024;
 // WARNING: A last line longer than this is cut, and its metrics go missing.
 const LINE_BYTES = 64 * 1024;
-const HOST_READINGS = ["wall_ms", "cpu_ms", "peak_kb"];
+const HOST_READINGS = new Set(["wall_ms", "cpu_ms", "peak_kb"]);
 // WARNING: A dead host's benchmark processes are ended by the next Measurement.
 const MEASURING = "measure: ";
 
@@ -651,7 +651,7 @@ const taking = Effect.fn("Measurement.taking")(function* (
             output: ended.output,
           });
         for (const [key, value] of reportedBy(ended.stdout))
-          if (!HOST_READINGS.includes(key)) readings[`${command.name}.${key}`] = value;
+          if (!HOST_READINGS.has(key)) readings[`${command.name}.${key}`] = value;
         readings[`${command.name}.wall_ms`] = ended.wall;
         readings[`${command.name}.cpu_ms`] = ended.cpu;
         readings[`${command.name}.peak_kb`] = ended.peak;

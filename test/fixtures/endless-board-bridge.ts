@@ -6,12 +6,10 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import { BRIDGE_READY, FrontDoorRpcs, IdentityRpc, PROTOCOL } from "../../src/board-model";
 
-const served = ["identity", "board", "toasts", "runDetail"];
+const served = new Set(["identity", "board", "toasts", "runDetail"]);
 const Rpcs = FrontDoorRpcs.omit(
   // WARNING: every other tag of the group, whatever it holds today.
-  ...(Arr.filter([...FrontDoorRpcs.requests.keys()], (tag) => !served.includes(tag)) as [
-    "refresh",
-  ]),
+  ...(Arr.filter([...FrontDoorRpcs.requests.keys()], (tag) => !served.has(tag)) as ["refresh"]),
 ).add(IdentityRpc);
 
 let sent = 0;

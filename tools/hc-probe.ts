@@ -342,12 +342,8 @@ const harness = Effect.fn("HcProbe.harness")(function* (socket: string, cwd: str
   yield* Console.error(`${name}: sent as turn ${sent.turn}, started ${String(sent.started)}`);
   yield* until(`${name} to answer and report done`, () =>
     Effect.gen(function* () {
-      const after = words.slice(before);
-      return (
-        after.includes("working") &&
-        after.includes("done") &&
-        pipe(yield* screen, Str.includes(ANSWER))
-      );
+      const after = new Set(words.slice(before));
+      return after.has("working") && after.has("done") && pipe(yield* screen, Str.includes(ANSWER));
     }),
   );
   const shown = yield* screen;

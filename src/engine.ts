@@ -3811,7 +3811,7 @@ const localChanges = (cwd: string, previous: string, head: string, base: string)
     const owned = own === null ? null : new Set(lines(own.stdout));
     const changed = Arr.filter(
       Arr.map(lines(files.stdout), (one) => Str.split(one, "\t")),
-      (fields) => owned === null || owned.has(fields[fields.length - 1] ?? ""),
+      (fields) => owned === null || owned.has(fields.at(-1) ?? ""),
     );
     const listed = (all: ReadonlyArray<string>) =>
       all.length === 0 ? "(none)" : Arr.join(all, "\n");

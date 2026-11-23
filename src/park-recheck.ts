@@ -111,7 +111,7 @@ const lastCiTargets = (stateDir: string, runId: string) =>
       Effect.orElseSucceed(() => []),
     ),
     (targets) => {
-      const head = targets[targets.length - 1]?.head;
+      const head = targets.at(-1)?.head;
       return new Map(
         Arr.map(
           Arr.filter(targets, (target) => target.head === head),
@@ -179,7 +179,7 @@ export const recheckPark = (
           failedCiJournal(`${stateDir}/runs/${view.runId}`),
           FailedCi,
         ).pipe(Effect.orElseSucceed(() => []));
-        const target = targets[targets.length - 1];
+        const target = targets.at(-1);
         if (target === undefined) return reply(false, "no failed pipeline recorded");
         const ref = mrRefOf(target.mr);
         if (ref === null) return reply(false, `${target.mr} is not a merge request`);

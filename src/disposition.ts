@@ -39,7 +39,7 @@ export const refRuns = (ref: string, machine: string) => {
 
 // WARNING: a correction is a new line rather than an edit, so the history of what people believed is kept.
 export function latest(lines: ReadonlyArray<Disposition>) {
-  return lines.length === 0 ? null : lines[lines.length - 1]!;
+  return lines.length === 0 ? null : lines.at(-1)!;
 }
 
 export function statusLine(status: string, line: Disposition | null) {

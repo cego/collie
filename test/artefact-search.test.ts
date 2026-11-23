@@ -261,7 +261,7 @@ test("search filters by name, description, URL, path, Run, kind, role and unseen
         expect(page.items.length).toBeLessThanOrEqual(4);
         paged.push(...Arr.map(page.items, (item) => item.id));
         if (!page.more) break;
-        const last = page.items[page.items.length - 1]!;
+        const last = page.items.at(-1)!;
         after = { detectedAt: last.detectedAt, run: last.run, id: last.id };
       }
       expect(paged).toEqual(Arr.map(whole.items, (item) => item.id));

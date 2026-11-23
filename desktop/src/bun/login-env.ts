@@ -127,7 +127,7 @@ export const takesLoginAgent = Effect.fn("Desktop.takesLoginAgent")(function* (
 });
 
 // WARNING: the agent variables are taken or kept together.
-const AGENT_VARIABLES = ["SSH_AUTH_SOCK", "SSH_AGENT_PID"];
+const AGENT_VARIABLES = new Set(["SSH_AUTH_SOCK", "SSH_AGENT_PID"]);
 
 export const takeLoginEnv = Effect.gen(function* () {
   const shell = yield* Config.String("SHELL").pipe(
@@ -147,7 +147,7 @@ export const takeLoginEnv = Effect.gen(function* () {
       `Keeping the SSH agent at ${session}: the login shell's at ${login} holds no keys`,
     );
   for (const [name, value] of taken)
-    if (!(keepsAgent && AGENT_VARIABLES.includes(name))) env[name] = value;
+    if (!(keepsAgent && AGENT_VARIABLES.has(name))) env[name] = value;
   return true;
 }).pipe(Effect.orElseSucceed(() => false));
 

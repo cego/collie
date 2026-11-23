@@ -388,16 +388,16 @@ export function laneOf(facts: LaneFacts) {
       (item) => unreached(meta, `${id}@${item}`, item, item),
     );
     const all = listed.length === 0 ? made : sortedByItems(listed, [...made, ...toCome]);
-    const states = Arr.map(made, (one) => one.state);
-    const state: FlowState = states.includes("needs-you")
+    const states = new Set(Arr.map(made, (one) => one.state));
+    const state: FlowState = states.has("needs-you")
       ? "needs-you"
-      : states.includes("running")
+      : states.has("running")
         ? "running"
-        : states.includes("waiting")
+        : states.has("waiting")
           ? "waiting"
-          : states.includes("failed")
+          : states.has("failed")
             ? "failed"
-            : states.includes("stopped")
+            : states.has("stopped")
               ? "stopped"
               : toCome.length > 0 && !ended
                 ? "running"
@@ -710,10 +710,10 @@ const toComeRun: (repo: { readonly repo: string; readonly wave: number }) => Flo
 });
 
 const fanState = (runs: ReadonlyArray<FlowRun>, ended: boolean) => {
-  const states = Arr.map(runs, (one) => one.state);
+  const states = new Set(Arr.map(runs, (one) => one.state));
   for (const state of ["needs-you", "running", "waiting", "failed", "stopped"] as const)
-    if (states.includes(state)) return state;
-  return states.includes("expected") && !ended ? "running" : "done";
+    if (states.has(state)) return state;
+  return states.has("expected") && !ended ? "running" : "done";
 };
 
 const heldUp = (nodes: ReadonlyArray<FlowNode>) => {

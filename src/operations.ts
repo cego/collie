@@ -364,7 +364,7 @@ const migrate = Effect.fn("operations.migrate")(function* (
   const found = yield* humansIn(root, live, run);
   if (found.length === 0) {
     for (const entry of yield* fs.readDirectory(env.collieDir)) {
-      if (!COLLIE_DIR_ENTRIES.includes(entry)) {
+      if (!COLLIE_DIR_ENTRIES.has(entry)) {
         yield* fs.remove(path.join(env.collieDir, entry), { recursive: true });
       }
     }
@@ -392,8 +392,8 @@ const migrate = Effect.fn("operations.migrate")(function* (
 });
 
 const MIGRATION_EXCLUDES = ["/release/", "/kept/"];
-const COLLIE_DIR_ENTRIES = ["release", "user", "kept"];
-const INSTALL_IGNORED = ["bin/", "node_modules/", "user/", "release/", "kept/"];
+const COLLIE_DIR_ENTRIES = new Set(["release", "user", "kept"]);
+const INSTALL_IGNORED = new Set(["bin/", "node_modules/", "user/", "release/", "kept/"]);
 
 const humansIn = Effect.fn("operations.humansIn")(function* (
   root: string,
@@ -415,7 +415,7 @@ const humansIn = Effect.fn("operations.humansIn")(function* (
       ),
       (line) => pipe(line, Str.slice(3)),
     ),
-    (entry) => !INSTALL_IGNORED.includes(entry),
+    (entry) => !INSTALL_IGNORED.has(entry),
   );
   if (ignored.length > 0) found.push(`ignored files of yours: ${Arr.join(ignored, ", ")}`);
   if (said(yield* git("log", "--branches", "--not", "--remotes", "--oneline")) !== "") {

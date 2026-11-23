@@ -63,7 +63,7 @@ const LINEAR_LOGIN = "claude mcp login linear-server";
 const CLAUDE_LOGIN = "claude auth login";
 const LOGIN_LIMIT = "10 minutes";
 const COMMAND_LIMIT = "15 minutes";
-const SETTLED: ReadonlyArray<StepStatus> = ["done", "in_place", "skipped"];
+const SETTLED: ReadonlySet<StepStatus> = new Set(["done", "in_place", "skipped"]);
 // WARNING: RFC 3986 characters only, so terminal escapes after a URL are not read as part of it.
 const URL_IN = /https:\/\/[\w\-.~:/?#[\]@!$&'()*+,;=%]+/;
 
@@ -204,7 +204,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
   });
 
   const finish = (development: boolean) => {
-    const ready = Arr.every(outcomes, (outcome) => SETTLED.includes(outcome.status));
+    const ready = Arr.every(outcomes, (outcome) => SETTLED.has(outcome.status));
     const data = {
       root,
       version: to,
@@ -215,7 +215,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
     if (ready) {
       return { ok: true as const, data, human: "Onboarded: collie doctor is ready." };
     }
-    const left = Arr.filter(outcomes, (o) => !SETTLED.includes(o.status));
+    const left = Arr.filter(outcomes, (o) => !SETTLED.has(o.status));
     return err(
       "operation_failed",
       Arr.join(

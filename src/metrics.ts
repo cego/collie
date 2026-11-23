@@ -193,7 +193,7 @@ function lastLine(text: string) {
     Arr.map(Str.split(text, "\n"), (line) => Str.trim(line)),
     (line) => line !== "",
   );
-  return lines[lines.length - 1] ?? "";
+  return lines.at(-1) ?? "";
 }
 
 export function obstacleOf(found: { name: string; times: number; exit: number; line: string }) {
