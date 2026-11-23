@@ -102,6 +102,10 @@ test("a verify waits while the Machine is short, pausing only its own agent's bu
           () => launchOf(world.state, runId, "build"),
           (one) => one !== undefined,
         ))!;
+        // WARNING: held, so no reminder to write its Output starts a turn just as a verify ends.
+        yield* client
+          .control({ runId, control: "hold", set: true, request: "hold-verifies" })
+          .pipe(Effect.orDie);
         yield* until(
           () =>
             fs.readFileString(core.logPath).pipe(
@@ -162,6 +166,9 @@ test("a verify waits while the Machine is short, pausing only its own agent's bu
           expect(yield* waiting()).toBeNull();
           yield* memory(2);
         }
+        yield* client
+          .control({ runId, control: "hold", set: false, request: "release-verifies" })
+          .pipe(Effect.orDie);
 
         expect(Arr.some(yield* registeredAt(world.state), (one) => one.runId === runId)).toBe(true);
 
