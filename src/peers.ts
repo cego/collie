@@ -16,6 +16,7 @@ import {
   Config,
   DateTime,
   Deferred,
+  Duration,
   Effect,
   Exit,
   Fiber,
@@ -151,6 +152,10 @@ const samePeer = Schema.toEquivalence(Peer);
 const port = Config.Int("COLLIE_PEER_PORT").pipe(Config.withDefault(PEER_PORT), Effect.orDie);
 const bindHost = Config.String("COLLIE_PEER_HOST").pipe(
   Config.withDefault("0.0.0.0"),
+  Effect.orDie,
+);
+const ticketLife = Config.Duration("COLLIE_PEER_TICKET_LIFE").pipe(
+  Config.withDefault(Duration.seconds(10)),
   Effect.orDie,
 );
 
@@ -422,7 +427,6 @@ const firstLine = (conn: Socket, then: (line: string, rest: Buffer) => void) => 
   conn.on("data", take);
 };
 
-const TICKET_LIFE_MS = 10_000;
 const BEAT = "15 seconds";
 const SILENCE_MS = 15_000;
 
@@ -507,6 +511,7 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
     listenPort = Number(yield* fs.readFileString(keptPort).pipe(Effect.orElseSucceed(() => "0")));
   }
   const listenHost = yield* bindHost;
+  const ticketLifeMs = Duration.toMillis(yield* ticketLife);
   const startedAt = DateTime.formatIso(DateTime.makeUnsafe(clock.currentTimeMillisUnsafe()));
   let peers = [...(yield* peersOf(link.dir))];
   const relays = new Map<string, Server>();
@@ -718,7 +723,7 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
       }
       const now = clock.currentTimeMillisUnsafe();
       for (const [id, ticket] of tickets) {
-        if (now - ticket.at > TICKET_LIFE_MS) {
+        if (now - ticket.at > ticketLifeMs) {
           tickets.delete(id);
         }
       }
@@ -1077,7 +1082,7 @@ export const startPeers = Effect.fn("Peers.start")(function* (link: Link) {
         if (ticket === undefined) {
           return new Response("no such ticket", { status: 403 });
         }
-        if (clock.currentTimeMillisUnsafe() - ticket.at > TICKET_LIFE_MS) {
+        if (clock.currentTimeMillisUnsafe() - ticket.at > ticketLifeMs) {
           tickets.delete(id);
           return new Response("the ticket has expired", { status: 403 });
         }
