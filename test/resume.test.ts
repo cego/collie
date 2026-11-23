@@ -33,14 +33,19 @@ const withLostPrompt = <A, E>(
   prefix: string,
   body: (world: World, core: FakeHc) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
 ) =>
-  withCore(prefix, (world, core) => {
-    core.answer("terminal.send", { turn: 0, started: null, status: "idle" });
-    return body(world, core);
-  });
+  withCore(
+    prefix,
+    (world, core) => {
+      core.answer("terminal.send", { turn: 0, started: null, status: "idle" });
+      return body(world, core);
+    },
+    { COLLIE_CONFIRM_GRACE: "1 second" },
+  );
 
 const withCore = <A, E>(
   prefix: string,
   body: (world: World, core: FakeHc) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
+  env: Readonly<Record<string, string>> = {},
 ) =>
   proves(
     prefix,
@@ -50,6 +55,7 @@ const withCore = <A, E>(
           COLLIE_STATE_DIR: world.state,
           COLLIE_USER_DIR: world.config,
           HC_SOCKET: core.socketPath,
+          ...env,
         };
         yield* Effect.acquireRelease(
           Effect.sync(() => {

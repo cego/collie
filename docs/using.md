@@ -254,22 +254,23 @@ Run ended, `bodil remote down <name>` takes the instance down once you are done 
 
 ### Environment variables
 
-| Variable              | Contract                                                                                                                                     |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `COLLIE_DIR`          | The [Collie directory](#the-collie-directory), holding `release/`, `user/` and `kept/`; defaults to `~/.collie`.                             |
-| `COLLIE_RELEASES`     | Where releases are published, for a mirror; defaults to `https://github.com/cego/collie/releases`.                                           |
-| `COLLIE_TOKEN`        | Token used to download a release asset. Optional where `glab` or `gh` is already logged in to the release host.                              |
-| `COLLIE_BIN_DIR`      | Where `install.sh` writes the `collie` on your PATH; defaults to `~/.local/bin`. `collie doctor` looks there for a shim that is not on PATH. |
-| `CLAUDE_SKILLS_DIR`   | Claude Code's skill store, where `prepare.sh` links the operator skill beside `~/.agents/skills`; defaults to `~/.claude/skills`.            |
-| `COLLIE_RELEASE_BASE` | Base URL from which `install.sh` downloads `collie-<os>-<arch>`.                                                                             |
-| `COLLIE_CWD`          | Working directory passed to the board, chat and agent processes; also re-roots a CLI run.                                                    |
-| `COLLIE_HOST`         | Host executable for development and tests: one executable path, or a JSON array containing the executable and arguments.                     |
-| `COLLIE_PROC`         | Where the host reads `meminfo` and `pressure/memory` instead of `/proc`, for tests.                                                          |
-| `COLLIE_MEMORY_EVERY` | How often a start held for memory reads the Machine again, for tests; 15 seconds unset.                                                      |
-| `COLLIE_BOARD_TICK`   | How often the host builds the board again with nothing written, for tests; 5 seconds unset.                                                  |
-| `GITLAB_USER_LOGIN`   | Who a generated branch is namespaced under on GitLab. Unset, Collie asks `glab` who you are for this checkout's host.                        |
-| `GITHUB_ACTOR`        | Who a generated branch is namespaced under on GitHub. Unset, Collie asks `gh` who you are on github.com.                                     |
-| `HELLE_ENV_FILE`      | Where Helle credentials are read from; defaults to `~/.config/helle/env`. See [Optional integrations](#optional-integrations).               |
+| Variable               | Contract                                                                                                                                     |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `COLLIE_DIR`           | The [Collie directory](#the-collie-directory), holding `release/`, `user/` and `kept/`; defaults to `~/.collie`.                             |
+| `COLLIE_RELEASES`      | Where releases are published, for a mirror; defaults to `https://github.com/cego/collie/releases`.                                           |
+| `COLLIE_TOKEN`         | Token used to download a release asset. Optional where `glab` or `gh` is already logged in to the release host.                              |
+| `COLLIE_BIN_DIR`       | Where `install.sh` writes the `collie` on your PATH; defaults to `~/.local/bin`. `collie doctor` looks there for a shim that is not on PATH. |
+| `CLAUDE_SKILLS_DIR`    | Claude Code's skill store, where `prepare.sh` links the operator skill beside `~/.agents/skills`; defaults to `~/.claude/skills`.            |
+| `COLLIE_RELEASE_BASE`  | Base URL from which `install.sh` downloads `collie-<os>-<arch>`.                                                                             |
+| `COLLIE_CWD`           | Working directory passed to the board, chat and agent processes; also re-roots a CLI run.                                                    |
+| `COLLIE_HOST`          | Host executable for development and tests: one executable path, or a JSON array containing the executable and arguments.                     |
+| `COLLIE_PROC`          | Where the host reads `meminfo` and `pressure/memory` instead of `/proc`, for tests.                                                          |
+| `COLLIE_MEMORY_EVERY`  | How often a start held for memory reads the Machine again, for tests; 15 seconds unset.                                                      |
+| `COLLIE_BOARD_TICK`    | How often the host builds the board again with nothing written, for tests; 5 seconds unset.                                                  |
+| `COLLIE_CONFIRM_GRACE` | How long an idle agent may leave a sent prompt untaken before its Run parks, for tests; 15 seconds unset.                                    |
+| `GITLAB_USER_LOGIN`    | Who a generated branch is namespaced under on GitLab. Unset, Collie asks `glab` who you are for this checkout's host.                        |
+| `GITHUB_ACTOR`         | Who a generated branch is namespaced under on GitHub. Unset, Collie asks `gh` who you are on github.com.                                     |
+| `HELLE_ENV_FILE`       | Where Helle credentials are read from; defaults to `~/.config/helle/env`. See [Optional integrations](#optional-integrations).               |
 
 ## Start a run
 

@@ -10,6 +10,7 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import {
   Clock,
+  Config,
   Context,
   Deferred,
   Duration,
@@ -1564,6 +1565,10 @@ const usageRecovered = (spent: SpentChoice, readings: ReadonlyArray<UsageReading
 const READY_TIMEOUT_MS = 120_000;
 
 const CONFIRM_GRACE_MS = 15_000;
+const confirmGrace = Config.Duration("COLLIE_CONFIRM_GRACE").pipe(
+  Config.withDefault(Duration.millis(CONFIRM_GRACE_MS)),
+  Effect.orDie,
+);
 
 const OBSERVE_MS = 20_000;
 
@@ -4575,6 +4580,7 @@ export const configuredAgents = Effect.fn("Agents.configured")(function* (
     permissions: isPermissionMode(defaults.permissions) ? defaults.permissions : "auto",
     trust: defaults.trust,
     compactAtTokens: defaults.compactAtTokens,
+    confirmGraceMs: Duration.toMillis(yield* confirmGrace),
     readings,
     catalogue,
     ownReading: (agent) =>
