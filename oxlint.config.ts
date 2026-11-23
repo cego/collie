@@ -254,6 +254,14 @@ export default defineConfig({
         ],
       },
     },
-    { files: ["**/*"], rules: { ...migrating, ...unfit } },
+    {
+      files: ["**/*"],
+      rules: {
+        ...migrating,
+        ...unfit,
+        // WARNING: the preset leaves no-unreachable to tsc for TypeScript, but tsc only hints at unreachable code without allowUnreachableCode: false.
+        "no-unreachable": "warn",
+      },
+    },
   ],
 });
