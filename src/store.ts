@@ -46,6 +46,7 @@ import {
 } from "./records-import";
 import { StoreWrites } from "./store-writes";
 import { RUN_RECORDS_MIGRATION } from "./run-records";
+import { importMrStates } from "./merge-requests";
 import { RequestConflict, RunReport, type Solution } from "./board-model";
 import { nowIso } from "./time";
 import { Observed, WatchCursor, Woke } from "./mr-watch-model";
@@ -410,6 +411,7 @@ type ImportError = Effect.Error<
     | typeof importLaunches
     | typeof importReports
     | typeof importRunRecords
+    | typeof importMrStates
   >
 >;
 
@@ -421,6 +423,7 @@ const migrations = (imports: {
   readonly launches: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
   readonly reports: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
   readonly runRecords: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
+  readonly mrStates: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
 }) => ({
   "1_runs": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -648,6 +651,44 @@ const migrations = (imports: {
     `;
     yield* sql`CREATE INDEX collie_watches_mr ON collie_watches (mr)`;
   }),
+  "30_connections": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      CREATE TABLE collie_connections (
+        id TEXT NOT NULL,
+        cwd TEXT NOT NULL,
+        reading TEXT,
+        read INTEGER NOT NULL,
+        PRIMARY KEY (id, cwd)
+      ) WITHOUT ROWID
+    `;
+  }),
+  "29_branches": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TABLE collie_branches (key TEXT PRIMARY KEY, row TEXT NOT NULL) WITHOUT ROWID`;
+  }),
+  "28_module_revisions": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TABLE collie_module_revisions (dir TEXT PRIMARY KEY, revision TEXT NOT NULL) WITHOUT ROWID`;
+  }),
+  "27_merge_requests": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TABLE collie_merge_requests (id TEXT PRIMARY KEY, entry TEXT NOT NULL) WITHOUT ROWID`;
+    yield* sql`CREATE TABLE collie_forge_logins (host TEXT PRIMARY KEY, login TEXT, read INTEGER NOT NULL) WITHOUT ROWID`;
+    yield* imports.mrStates;
+  }),
+  "26_cards": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      CREATE TABLE collie_cards (
+        task TEXT PRIMARY KEY,
+        view TEXT,
+        digest TEXT NOT NULL,
+        due REAL,
+        at INTEGER NOT NULL
+      ) WITHOUT ROWID
+    `;
+  }),
   [RUN_RECORDS_MIGRATION]: Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* sql.unsafe(`
@@ -732,6 +773,7 @@ function makeStore(
           launches: imported(importLaunches),
           reports: imported(importReports),
           runRecords: imported(importRunRecords),
+          mrStates: imported(importMrStates),
         }),
       ),
       table: "collie_migrations",

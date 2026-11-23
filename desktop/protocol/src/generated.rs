@@ -151,6 +151,10 @@ pub struct Task {
     pub flow: Option<Flow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<Revision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirmed: Option<bool>,
+    #[serde(rename = "asOf", default, skip_serializing_if = "Option::is_none")]
+    pub as_of: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

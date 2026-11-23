@@ -21,6 +21,7 @@ import { connect, type HostClient } from "../src/host";
 import { factsOfView } from "../src/runs";
 import { stopHost, until } from "./support/host";
 import { collie, proves, save, type World } from "./support/world";
+import { tellHost } from "../src/tell-host";
 
 /** The envelope's payload as text, for asking whether an offer is in it at all. */
 const asText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
@@ -343,6 +344,8 @@ test(
             entry,
             pipe_(source, Str.replace(/actions: \[[\s\S]*?\],\n/, "actions: [],\n")),
           );
+          // As `collie workflow check` does: a listing reads the module's kept revision.
+          yield* tellHost(world.state, [entry]);
 
           expect(
             Arr.map(yield* client.offers({ runId }).pipe(Effect.orDie), (one) => one.id),

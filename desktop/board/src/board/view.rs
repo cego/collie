@@ -1124,7 +1124,10 @@ fn card(
     let foot: Vec<String> = [
         (!p.place.is_empty()).then(|| p.place.clone()),
         Some(task.age.clone()),
-        p.as_of.map(|at| as_of_said(at, app.offset())),
+        // A card the host served from its last projection says when it was derived.
+        p.as_of
+            .or(task.as_of.filter(|_| task.confirmed == Some(false)))
+            .map(|at| as_of_said(at, app.offset())),
         agents,
     ]
     .into_iter()

@@ -1,6 +1,11 @@
 // Collie's own records, in the host's database (ADR-draft-collies-own-records-live-in-the-hosts-database):
 // one service per kind, over whichever connection to `host.db` a layer is given.
 
+import { cardRowsLayer, type CardRows } from "./card-rows";
+import { mergeRequestsLayer, type MergeRequests } from "./merge-requests";
+import { moduleRevisionsLayer, type ModuleRevisions } from "./module-revisions";
+import { branchesLayer, type Branches } from "./branches";
+import { connectionRowsLayer, type ConnectionRows } from "./connection-rows";
 import { Context, Layer } from "effect";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import * as Reactivity from "effect/reactivity/Reactivity";
@@ -21,7 +26,12 @@ export type Records =
   | Registered
   | Tasks
   | Artefacts
-  | RunRecords;
+  | RunRecords
+  | CardRows
+  | MergeRequests
+  | ModuleRevisions
+  | Branches
+  | ConnectionRows;
 
 /**
  * Over the host's own connection, which the Store has migrated. Fresh, or a layer provided
@@ -36,6 +46,11 @@ export const recordsLayer = Layer.fresh(
     tasksLayer,
     artefactsLayer,
     runRecordsLayer,
+    cardRowsLayer,
+    mergeRequestsLayer,
+    moduleRevisionsLayer,
+    branchesLayer,
+    connectionRowsLayer,
   ),
 );
 
