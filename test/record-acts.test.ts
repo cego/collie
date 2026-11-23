@@ -7,6 +7,7 @@ import type { RunDetail } from "../src/board-model";
 import { runDir } from "../src/engine";
 import { readEnv } from "../src/env";
 import { timedFlow } from "../src/flow-timing";
+import { tellHost } from "../src/tell-host";
 import { frontDoor, socketOf } from "../src/host";
 import { toolNamed } from "../src/tools";
 import { until } from "./support/host";
@@ -114,6 +115,7 @@ test("an act shown before its Step finished is refused as stale; one shown befor
         const handoffs = `${runDir(world.state, working.runId)}/handoffs`;
         yield* fs.makeDirectory(handoffs, { recursive: true }).pipe(Effect.orDie);
         yield* fs.writeFileString(`${handoffs}/note.md`, "a note\n").pipe(Effect.orDie);
+        yield* tellHost(world.state, [`${handoffs}/note.md`]);
         let noted = yield* Queue.take(frames);
         while ((noted?.handoffFiles ?? []).length === 0) {
           noted = yield* Queue.take(frames);
