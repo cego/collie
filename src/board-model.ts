@@ -221,6 +221,9 @@ export type Proposal = typeof Proposal.Type;
 export const Decision = Schema.Union([Question, Proposal]);
 export type Decision = typeof Decision.Type;
 
+/** A card agent's status once core no longer has it. */
+export const ENDED_AGENT = "ended";
+
 /** One live agent of the Task, as a card counts them and a search matches them. */
 export const BoardAgent = Schema.Struct({
   /** herdr's own name for it, which carries the role it was started as. */
@@ -538,6 +541,13 @@ export const TaskView = Schema.Struct({
   flow: Schema.optionalKey(FlowStrip),
   /** The highest revision of its Runs; absent from an older host or one with its Run model off. */
   revision: Schema.optionalKey(RunRevision),
+  /**
+   * False while this host has not yet confirmed a card the previous host derived; absent once it
+   * has, and from an older host.
+   */
+  confirmed: Schema.optionalKey(Schema.Boolean),
+  /** When an unconfirmed card was derived, in epoch milliseconds. */
+  asOf: Schema.optionalKey(Schema.Finite),
 });
 export type TaskView = typeof TaskView.Type;
 
@@ -1676,6 +1686,11 @@ export const FrontDoorRpcs = RpcGroup.make(
     error: Schema.Union([HostRefused, RequestConflict]),
   }),
   Rpc.make("board", { success: BoardMessage, stream: true }),
+  /**
+   * A process other than the host wrote these paths, which nothing watches: a helper (status
+   * line, hook, compactor) or a CLI command, so the host reads them again.
+   */
+  Rpc.make("wrote", { payload: { paths: Schema.Array(Schema.String) } }),
   /** Each toast raised while subscribed; one raised with nobody subscribed is dropped. */
   Rpc.make("toasts", { success: Toasted, stream: true }),
   /**
@@ -2672,7 +2687,9 @@ export function flowActions(
   const offered = (node: FlowRun, lane: FlowLane, facts: FlowActionFacts): FlowRun => {
     let primary: FlowAction | null = null;
     const actions: FlowAction[] = [];
-    const live = node.agent != null && Arr.some(view.agents, (one) => one.name === node.agent);
+    const live =
+      node.agent != null &&
+      Arr.some(view.agents, (one) => one.name === node.agent && one.status !== ENDED_AGENT);
     const proposal = node.proposal ?? facts.proposal ?? undefined;
     if (node.link !== undefined) {
       if (node.link.run !== null) primary = "open";

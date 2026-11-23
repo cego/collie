@@ -2,6 +2,9 @@
 
 **Status: accepted.**
 
+**Extended** by [ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs](draft-the-board-is-a-projection-of-facts-the-host-syncs.md)
+to every fact the board reads.
+
 ## What was true before
 
 Confirming or declining a proposal, recording what became of a Run's work, a steer and

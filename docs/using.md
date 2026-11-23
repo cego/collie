@@ -3380,6 +3380,16 @@ See [Claude subagents](#claude-subagents).
 `role_tools` says which of Collie's tools each agent is offered: `all`, the default, or
 `role`. See [Collie's tools per role](#collies-tools-per-role).
 
+`inline_plan` says whether an implement Run given anything but a plan writes one into its
+own directory before building: `off`, the default, or `on`. A Run keeps the value it started
+with. See [`implement`](workflows.md#implement).
+
+`agent_sessions` says which agents an implement Run's work runs on: `run`, the default,
+builds everything on one agent; `ticket` gives each ticket after the first an agent of its
+own and delivery another; `round` also gives each review-fix round a fresh fixer. A Run
+keeps the value it started with. See
+[Which agent does a Run's work](#which-agent-does-a-runs-work).
+
 `output_submit` says how an agent hands in its Output: `file`, the default, or `tool`, which
 also offers it the `collie_submit` tool. See
 [Having an agent do the work](sdk.md#having-an-agent-do-the-work).
@@ -3494,6 +3504,22 @@ chat is given it after its own prompt. It says that work which cannot be wrong, 
 **Tautology**, proves nothing: a builder makes none, and a reviewer or judge raises each one
 it finds. It also holds the code comment rules. Fork it like any persona to change what
 every agent is told; [authoring](authoring.md#every-agent) says how.
+
+### Which agent does a Run's work
+
+An implement Run starts one builder, `build`, and under `agent_sessions: run` it plans,
+builds every ticket, fixes and opens the merge request on it. Under `ticket`, each later
+ticket is built by `build-<ticket>` (the ticket's file name without `.md`), and the final
+review's fixes, the merge request and the CI fix by `deliver`. Under `round`, each
+review-fix round also gets its own fixer, `fix-<ticket>-<n>` or `fix-final-<n>`. Work that
+stays on `build`, such as a single ticket, never moves.
+
+At each move the outgoing agent is ended and must be Quiet before the next one starts; one
+that will not stop parks the Run on `predecessor-not-quiet` until it has. The new agent's
+first message is the host's Hand-over: the head and plan it starts from, the criteria met
+and their proof, the open findings, the pending questions and what the outgoing agent said
+it decided. A wait, a repair, an answer or a restart stays with the agent doing the work.
+On the board each builder is a tab, the live one marked, and Go to pane opens it.
 
 ### Collie's tools per role
 
@@ -3987,8 +4013,27 @@ the worktree once the Run has ended, however it ended, and nothing works in it a
 An `origin` that will not fetch refuses the start, so it never triages stale code.
 Collie's own code, though, is judged against the release the Machine's host runs, which the
 triage is told: a Collie fix counts as already fixed only where its commit is in that
-release's tag, so a fix merged but not yet installed leaves the finding filed or commented
-on as a recurrence.
+release's tag.
+
+Before it files or comments, it also matches each finding against work already done or
+under way, and leaves it out, with why, where:
+
+- its key marker is on an issue closed since the checkout's last release tag (the newest
+  tag by creator date): "fixed on master since <tag>, not yet released". Nothing is
+  commented there, even where the window's Runs still show it: they ran a release that
+  cannot hold the fix;
+- an active Run on this host, one admitted in the last seven days and not ended, names its
+  key as a word or its issue as `#n` in its goal or its plan: "being fixed by <run>";
+- an open merge request's description carries its key marker: "being fixed by <url>".
+
+Where its key is on an issue whose fix a release has since carried, inside the window, it
+is commented on that closed issue with the finding's Runs either side of that release, out
+of the window's Runs either side: `<key>: 4/10 Runs before <tag>, 1/10 after`. The same
+line is under "Released fixes" in `summary.md`. A finding with no released fix records no
+such figures.
+
+Its cost in `collie run metrics` is its own tokens plus every child Run's, its
+Improvements and the Runs they started, each listed ([Metrics](cli.md#metrics)).
 
 It measures the questions its window's Runs asked, computed from the report rather than
 judged by the agent: how many were asked per merge request that landed in the window, and
@@ -4004,8 +4049,8 @@ no repeated-answer findings. It does not read a new window or repeat completed t
 issue filing or Improvement starts.
 
 It waits for its Improvements, then writes `summary.md` in its Run directory: those two
-question measures; each issue filed or commented, by category; each Improvement's Run and how it ended; and each finding
-left out, with why. An Improvement that fails is listed there, and the Run still succeeds.
+question measures; each issue filed or commented, by category; each Improvement's Run and how it ended; each released
+fix's before and after; and each finding left out, with why. An Improvement that fails is listed there, and the Run still succeeds.
 Beside it, `improvements.json` keeps each Improvement's name, issues and how it ended.
 When the forge cannot be read, the retrospective still runs and `summary.md` keeps the
 question measures, its findings, evidence and proposed improvements, with the reason nothing was filed. No issue,
@@ -4250,6 +4295,12 @@ true, where it came from, or why there is none — a login that expired, Codex n
 or not logged in. Machines logged in to one account each read it for themselves; a reading
 names the account by its id, never its email, because one email can hold a personal plan and
 a team seat.
+
+What a Run itself used is its token ledger, in `collie run metrics` and the chat's
+`collie_run`: each request its agents made, read from the harness's own records, by step,
+by commit, by agent session, and the part that went to recovery. A category the harness
+does not report reads `unavailable`, not 0, and each session lists its start-up context
+by part, in characters ([Metrics](cli.md#metrics)). Usage is recorded, never enforced.
 
 An agent can also run out in the middle of its work
 ([ADR-0049](adr/0049-work-goes-to-an-agent-with-usage-left.md) D8): Claude Code says it

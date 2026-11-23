@@ -51,6 +51,7 @@ import {
 } from "./http";
 import {
   listIssues,
+  listRequests,
   createIssue,
   commentIssue,
   postReview,
@@ -1071,6 +1072,19 @@ const QUEUE_POLL = Duration.seconds(30);
 const QUEUE_BOUND = Duration.hours(2);
 type Merged = typeof MergedPull.Type;
 
+/** A failed call on the merge path, as a merge at the same head may or may not clear it. */
+const unmerged = (
+  failed: Extract<Answered<unknown>, { ok: false }>,
+  reason: string,
+): MergeAnswer => ({
+  _tag:
+    failed.transient === true ||
+    (failed.status === 405 && Str.includes("Base branch was modified")(failed.reason))
+      ? "Transient"
+      : "Refused",
+  reason,
+});
+
 const alreadyMerged = (pull: Merged): MergeAnswer => ({
   _tag: "AlreadyMerged",
   merged: pull.mergeCommit?.oid ?? "",
@@ -1118,10 +1132,8 @@ const mergeQueued = Effect.fnUntraced(function* (
       const after = yield* read;
       if (after?.state === "MERGED") return alreadyMerged(after);
       return (
-        (after === null ? undefined : moved(after)) ?? {
-          _tag: "Refused",
-          reason: `GitHub refused to add ${where} to its merge queue: ${enqueued.reason}`,
-        }
+        (after === null ? undefined : moved(after)) ??
+        unmerged(enqueued, `GitHub refused to add ${where} to its merge queue: ${enqueued.reason}`)
       );
     }
   }
@@ -1163,11 +1175,10 @@ function merge(
       name,
       number: Number(ref.iid),
     });
-    if (!method.ok || method.value.repository === null)
-      return {
-        _tag: "Refused",
-        reason: `gh would not say how ${repo} merges${!method.ok ? `: ${method.reason}` : ""}`,
-      };
+    if (!method.ok)
+      return unmerged(method, `gh would not say how ${repo} merges: ${method.reason}`);
+    if (method.value.repository === null)
+      return { _tag: "Refused", reason: `gh would not say how ${repo} merges` };
     const target = method.value.repository.pullRequest;
     if (target !== null) {
       const queue = yield* graphqlAs(MergeQueue, LOGIN, cwd, MERGE_QUEUE, {
@@ -1176,10 +1187,10 @@ function merge(
         branch: target.baseRefName,
       });
       if (!queue.ok)
-        return {
-          _tag: "Refused",
-          reason: `gh would not say whether ${target.baseRefName} of ${repo} has a merge queue: ${queue.reason}`,
-        };
+        return unmerged(
+          queue,
+          `gh would not say whether ${target.baseRefName} of ${repo} has a merge queue: ${queue.reason}`,
+        );
       if (queue.value.repository?.mergeQueue != null)
         return yield* mergeQueued(ref, target.id, head, cwd);
     }
@@ -1194,11 +1205,11 @@ function merge(
     });
     const pull = after.ok ? (after.value.repository?.pullRequest ?? null) : null;
     if (merging.ok) return { _tag: "Merged", merged: pull?.mergeCommit?.oid ?? "" };
-    const refusal = `GitHub refused to merge ${where}: ${merging.reason}`;
-    if (pull === null) return { _tag: "Refused", reason: refusal };
+    const refusal = unmerged(merging, `GitHub refused to merge ${where}: ${merging.reason}`);
+    if (pull === null) return refusal;
     if (pull.state === "MERGED") return alreadyMerged(pull);
     if ((pull.headRefOid ?? "") !== head) return { _tag: "HeadMoved", head: pull.headRefOid ?? "" };
-    return { _tag: "Refused", reason: refusal };
+    return refusal;
   });
 }
 
@@ -1606,7 +1617,8 @@ export const github: Forge = {
     ref.project === null
       ? Effect.succeed({ ok: false, reason: `${mrWords(ref).label} names no GitHub project` })
       : reviewChanges(LOGIN, ref.project, ref, previous, head, cwd),
-  issues: (project, cwd, _run, numbers) => listIssues(LOGIN, project, cwd, numbers),
+  issues: (project, cwd, _run, which) => listIssues(LOGIN, project, cwd, which),
+  requests: (project, cwd) => listRequests(LOGIN, project, cwd),
   fileIssue: (project, title, body, cwd) => createIssue(LOGIN, project, title, body, cwd),
   commentIssue: (project, number, body, cwd) => commentIssue(LOGIN, project, number, body, cwd),
   clone,

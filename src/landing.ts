@@ -38,6 +38,8 @@ export const MergeOutcomeSchema = Schema.Union([
     at: Schema.String,
   }),
   Schema.TaggedStruct("Refused", { reason: Schema.String }),
+  /** Unmerged on a failure a later merge at the same head may clear. */
+  Schema.TaggedStruct("Transient", { reason: Schema.String }),
 ]);
 export type MergeOutcome = typeof MergeOutcomeSchema.Type;
 
@@ -113,6 +115,16 @@ export const settleLeft = Effect.fn("Landing.settleLeft")(function* (
 
 const outside = (by: string) => `merged outside this Run by ${by}`;
 
+/** The outcome a settled attempt came to, or null for one still unmerged. */
+const settledOutcome = (settled: Settled): MergeOutcome | null => {
+  if (settled._tag === "Landed") return { _tag: "Merged", sha: settled.sha };
+  if (settled._tag === "Outside") {
+    const { sha, by, at } = settled;
+    return { _tag: "MergedOutside", sha, by, at };
+  }
+  return null;
+};
+
 /** Whether two references name one merge request, a legacy one read in the checkout at `cwd`. */
 const sameMr = <R>(
   one: string,
@@ -153,13 +165,8 @@ export const land = Effect.fn("Landing.land")(function* <R>(opts: {
       return yield* new WorkflowError({
         reason: `an earlier attempt to merge ${mr} could not be settled: ${read.reason}`,
       });
-    const settled = yield* settleLeft(opts.runDir, left, read);
-    if (settled._tag === "Landed")
-      return { _tag: "Merged", sha: settled.sha } satisfies MergeOutcome;
-    if (settled._tag === "Outside") {
-      const { sha, by, at } = settled;
-      return { _tag: "MergedOutside", sha, by, at } satisfies MergeOutcome;
-    }
+    const settled = settledOutcome(yield* settleLeft(opts.runDir, left, read));
+    if (settled !== null) return settled;
     yield* withdraw(left, "left unanswered by an earlier host");
   }
   landingNow.add(opts.runDir);
@@ -179,7 +186,17 @@ export const land = Effect.fn("Landing.land")(function* <R>(opts: {
       case "HeadMoved":
         yield* withdraw(attempt, `the head moved to ${answer.head}`);
         return { _tag: "HeadMoved", head: answer.head } satisfies MergeOutcome;
-      case "AlreadyMerged":
+      case "Transient":
+      case "AlreadyMerged": {
+        const read = yield* forge.readReview(ref, opts.cwd, opts.run);
+        const settled = read.ok
+          ? settledOutcome(yield* settleLeft(opts.runDir, attempt, read))
+          : null;
+        if (settled !== null) return settled;
+        if (answer._tag === "Transient") {
+          yield* withdraw(attempt, answer.reason);
+          return { _tag: "Transient", reason: answer.reason } satisfies MergeOutcome;
+        }
         yield* withdraw(attempt, outside(answer.by));
         return {
           _tag: "MergedOutside",
@@ -187,6 +204,7 @@ export const land = Effect.fn("Landing.land")(function* <R>(opts: {
           by: answer.by,
           at: answer.at,
         } satisfies MergeOutcome;
+      }
       case "Refused":
         yield* withdraw(attempt, answer.reason);
         return { _tag: "Refused", reason: answer.reason } satisfies MergeOutcome;

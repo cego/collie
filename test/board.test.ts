@@ -51,6 +51,7 @@ import {
   TaskView,
 } from "../src/board-model";
 import { applyItem, EMPTY_FLOCK, flockCards } from "../desktop/src/shared/flock";
+import { agentTabs } from "../desktop/src/shared/record-terminal";
 import { recordAudit } from "../src/audit";
 import { recordDisposition } from "../src/disposition";
 import { readLogTail } from "../src/run-log";
@@ -159,14 +160,26 @@ test(
           const head = Str.trim((yield* exec(["git", "rev-parse", "HEAD"], { cwd })).stdout);
           yield* stopHost(world.state);
           yield* connect(world.state).pipe(Effect.orDie);
-          const board = yield* collie(world, ["board"]);
-          const data = yield* Schema.decodeUnknownEffect(
-            Schema.Struct({
-              tasks: Schema.Array(
-                Schema.Struct({ state: Schema.String, drift: Schema.NullOr(Schema.String) }),
+          // A host just started shows the card it was left; its git sync's first round reads the push.
+          const data = yield* until(
+            () =>
+              collie(world, ["board"]).pipe(
+                Effect.flatMap((board) =>
+                  Schema.decodeUnknownEffect(
+                    Schema.Struct({
+                      tasks: Schema.Array(
+                        Schema.Struct({
+                          state: Schema.String,
+                          drift: Schema.NullOr(Schema.String),
+                        }),
+                      ),
+                    }),
+                  )(board.envelope.data),
+                ),
+                Effect.orDie,
               ),
-            }),
-          )(board.envelope.data).pipe(Effect.orDie);
+            (data) => data.tasks[0]?.drift != null,
+          );
           expect(data.tasks[0]?.state).toBe("failed");
           expect(data.tasks[0]?.drift).toContain(`1 commit past ${ended}`);
           expect(data.tasks[0]?.drift).toContain(head);
@@ -218,7 +231,11 @@ test(
           );
           yield* stopHost(world.state);
           current = yield* connect(world.state).pipe(Effect.orDie);
-          const offered = yield* current.offers({ runId: started.runId }).pipe(Effect.orDie);
+          // A listing reads the recovery the git syncer kept, so it follows that sync.
+          const offered = yield* until(
+            () => current.offers({ runId: started.runId }).pipe(Effect.orDie),
+            (offers) => Str.includes("Checks")(offers[0]?.title ?? ""),
+          );
           expect(offered[0]?.title).toContain("Checks");
           const child = yield* current
             .followUp({
@@ -1039,6 +1056,38 @@ test("a working agent leaves the Task working, saying the step it works on", () 
       expect(sectionOf(view!)).toBe("working");
       expect(Arr.map(view!.agents, (one) => one.name)).toEqual(["impl-1"]);
       expect(view!.sentence).toBe("Reviewing, round 1.");
+    }),
+  ));
+
+test("a Run whose tickets moved to agents of their own shows each builder as a tab, the live one marked, until delivery takes over", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { task: "task-1" });
+      const builders = [
+        registered("build-r1", run.id),
+        registered("build-02-r1", run.id),
+        registered("deliver-r1", run.id),
+      ];
+      const tabsWhile = (alive: ReadonlyArray<AgentInfo>, upTo: number) =>
+        Effect.map(board(env, [run], { alive, registered: Arr.take(builders, upTo) }), ([view]) =>
+          Arr.map(agentTabs(view!.agents, null), (tab) => [tab.name, tab.state]),
+        );
+
+      expect(yield* tabsWhile([agent("build-02-r1", "working")], 2)).toEqual([
+        ["build-r1", "ended"],
+        ["build-02-r1", "working"],
+      ]);
+      expect(yield* tabsWhile([agent("deliver-r1", "working")], 3)).toEqual([
+        ["build-r1", "ended"],
+        ["build-02-r1", "ended"],
+        ["deliver-r1", "working"],
+      ]);
+      const [delivering] = yield* board(env, [run], {
+        alive: [agent("deliver-r1", "working")],
+        registered: builders,
+      });
+      expect(herdLines([delivering!], 0)).toContain("agents deliver-r1");
     }),
   ));
 

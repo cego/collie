@@ -5,6 +5,7 @@
 // next step, a fix round, a hand-off from another Run — and a threshold repeated per
 // harness is a threshold that disagrees with itself.
 
+import type { Source } from "./usage-ledger-model";
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -233,6 +234,10 @@ export interface CompactionPort {
   install(ctx: LaunchContext): Effect.Effect<Installed, PortError, PortServices>;
   /** The harness's own current-context total. `null` where no usable sample exists. */
   usage(ctx: AgentContext): Effect.Effect<number | null, PortError, PortServices>;
+  /** Where the harness keeps each request this agent and its sub-agents made, for the usage ledger. */
+  readonly records?: (
+    ctx: AgentContext,
+  ) => Effect.Effect<ReadonlyArray<Source>, PortError, PortServices>;
   /**
    * Submits a native compaction request. Acknowledgement only, never completion — and
    * `unobserved` where the channel it went through could not confirm even that much.
@@ -444,6 +449,8 @@ export interface CompactionDeps {
     at: { readonly agent: string; readonly run: string; readonly step: string },
     tokens: number,
   ) => Effect.Effect<void, PortError, PortServices | Records>;
+  /** Reads this agent's usage into its Run's ledger; never fails. */
+  account?: (agent: string) => Effect.Effect<void, never, PortServices | Records>;
   waitMs: number;
   pollMs: number;
   /** Waits, before a compaction is asked for, while the agent's Machine is short of disk. */
@@ -1068,6 +1075,17 @@ const sendsNothing = (agent: string): Channel => ({
       reason: "blocked",
       detail: "a compaction's reading or poll sends nothing",
     }),
+});
+
+/** An agent's context for a read, from its control record. */
+export const readingContext = (record: ControlRecord, run: string): AgentContext => ({
+  agent: record.agent,
+  run,
+  harness: record.harness,
+  cwd: record.cwd,
+  dir: record.dir,
+  endpoint: record.endpoint,
+  channel: sendsNothing(record.agent),
 });
 
 /**

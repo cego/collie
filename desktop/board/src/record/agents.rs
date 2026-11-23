@@ -15,6 +15,9 @@ pub struct AgentTab {
     pub shown: bool,
 }
 
+/// A card agent's status once core no longer has it (`ENDED_AGENT` in `src/board-model.ts`).
+pub const ENDED: &str = "ended";
+
 fn role_of(agent: &Agent) -> &str {
     agent.role.as_deref().unwrap_or(&agent.name)
 }
@@ -63,7 +66,12 @@ pub fn agent_tabs(agents: &[Agent], shown: Option<&Agent>) -> Vec<AgentTab> {
 
 /// Only the Run's own live launches, newest last even when reused under another Run.
 pub fn recipients(launches: &[DetailAgent], live: &[Agent]) -> Vec<AgentTab> {
-    let tabs = agent_tabs(live, None);
+    let working: Vec<Agent> = live
+        .iter()
+        .filter(|one| one.status != ENDED)
+        .cloned()
+        .collect();
+    let tabs = agent_tabs(&working, None);
     let names: Vec<&str> = launches.iter().map(|l| l.agent.as_str()).collect();
     let latest = names
         .iter()

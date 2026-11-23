@@ -37,8 +37,8 @@ import {
 } from "effect";
 import type { CheckEvidence, SynthesisSchema } from "./output";
 import type { FailedTest, Snapshot, Verification } from "./verify";
-import type { Issue, IssueRef } from "./forge/issues";
-export type { Issue, IssueRef } from "./forge/issues";
+import type { Issue, IssueQuery, IssueRef } from "./forge/issues";
+export type { Issue, IssueQuery, IssueRef } from "./forge/issues";
 import type { Report } from "./report";
 export type { Report } from "./report";
 export type { Produces, StepKind, StepMeta } from "./steps";
@@ -184,6 +184,7 @@ export {
 } from "./releasing";
 /** Who holds the shared claims a Run needs (`HostApi.holders`). */
 export { HoldersSchema, type Holders } from "./helle";
+export { OutgoingFields, type HandOverGiven, type Outgoing } from "./hand-over";
 
 export {
   CheckSchema,
@@ -801,14 +802,21 @@ export interface HostApi {
   /** This Machine's Run report, for admissions at or after the ISO moment. */
   readonly report: (since: string) => Effect.Effect<Report, WorkflowError>;
   /**
-   * Open issues on the forge of this Run's checkout, or with `numbers` those issues read one
-   * by one. `on: "collie"` asks Collie's own repository instead, as do filing and commenting.
+   * Open issues on the forge of this Run's checkout; with numbers, those issues read one by
+   * one; with `closedSince`, those closed since then. `on: "collie"` asks Collie's own
+   * repository instead, as do filing and commenting.
    */
   readonly issues: (
     runId: string,
-    numbers?: ReadonlyArray<number>,
+    which?: IssueQuery,
     on?: "collie",
   ) => Effect.Effect<ReadonlyArray<Issue>, WorkflowError>;
+  /** Open merge requests on the forge of this Run's checkout, their descriptions as `body`. */
+  readonly requests: (runId: string) => Effect.Effect<ReadonlyArray<Issue>, WorkflowError>;
+  /** The tags of this Run's checkout, newest first by creator date, with when each was made. */
+  readonly releases: (
+    runId: string,
+  ) => Effect.Effect<ReadonlyArray<{ readonly tag: string; readonly at: string }>, WorkflowError>;
   /** Files redacted text on this Run's forge; another checkout's identity is refused. */
   readonly fileIssue: (options: {
     readonly runId: string;
@@ -1146,7 +1154,8 @@ export interface HostApi {
    * the forge is asked and says after what came of it; the merge watch reads it to leave this
    * Run, and the Runs it was started from, running when the merge lands. Answers `Merged`
    * with the merged commit, `HeadMoved` where the merge request's head is no longer `head`,
-   * `MergedOutside` where someone else merged it first, or `Refused` with the forge's why.
+   * `MergedOutside` where someone else merged it first, `Refused` with the forge's why, or
+   * `Transient` with why, unmerged on a failure a merge at the same head may clear.
    * Fails for a Run that recorded no merge request. Take it inside an Activity: a replay
    * settles an attempt an earlier host left on the forge's word rather than merging again.
    */

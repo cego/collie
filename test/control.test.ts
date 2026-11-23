@@ -16,7 +16,7 @@ import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem } from "effect";
 import { readAudit } from "../src/audit";
-import { recordsReadLayer } from "../src/records";
+import { recordsAt, recordsReadLayer } from "../src/records";
 import { type MrState } from "../src/board-model";
 import { connect } from "../src/host";
 import { factsOfView } from "../src/runs";
@@ -417,7 +417,10 @@ const stoppedOn = Effect.fn("test.stoppedOn")(function* (prefix: string, mr: MrS
   );
   const claim = `${yield* runDirOf(state, "r1")}/helle.json`;
   yield* fs.writeFileString(claim, CLAIM);
-  yield* storedAnswers(state, new Map([["gitlab.example.com/group/project!7", mr]]));
+  // Into the database the host reads, not the records this test holds.
+  yield* storedAnswers(state, new Map([["gitlab.example.com/group/project!7", mr]])).pipe(
+    Effect.provide(recordsAt(state)),
+  );
   return { host, state, claim };
 });
 

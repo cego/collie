@@ -341,7 +341,11 @@ test(
             () => client.run({ runId: started.runId }),
             (one) => one?.status.status === "complete",
           );
-          const listed = yield* client.offers({ runId: started.runId });
+          // A listing reads the Connection as the syncer kept it, once it has read it.
+          const listed = yield* until(
+            () => client.offers({ runId: started.runId }),
+            (offers) => !Str.includes("still being read")(offers[0]?.unavailable ?? ""),
+          );
           expect(Arr.map(listed, (one) => one.id)).toEqual(["file", "local"]);
           const absent = listed[0]?.unavailable ?? "";
           expect(absent).toStartWith("needs linear: ");
@@ -359,6 +363,12 @@ test(
             `${world.project}/.mcp.json`,
             '{"mcpServers":{"linear":{"url":"https://mcp.linear.app/mcp"}}}',
           );
+          // Taking the offer reads its Connections again, which the listing then reads; here
+          // it is still refused for helle, which this world has no credentials for.
+          const taken = yield* client
+            .invoke({ runId: started.runId, offer: "file", input: {}, request: "available" })
+            .pipe(Effect.flip);
+          expect(taken.reason).not.toContain("needs linear");
           expect(
             Arr.map(yield* client.offers({ runId: started.runId }), (one) => [
               one.id,

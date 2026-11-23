@@ -19,6 +19,7 @@ import { redactedField, withNotice } from "./redact";
 import type { SettingValue } from "./settings";
 import { reportOf, resultText, type Recorded } from "./report";
 import { metricsOf } from "./metrics";
+import { descendantsOf, usageOf, withChildren } from "./usage-ledger-model";
 import type { OutcomeRecords } from "./outcomes";
 import {
   Cause,
@@ -2376,6 +2377,43 @@ export const measureRun = Effect.fn("Lifecycle.measureRun")(function* (
   if (!found.ok) return found;
   const client = yield* reach(env, found.machine, door);
   return { ok: true as const, events: client.measure(request) };
+});
+
+/**
+ * What a Run spent, with every Run started under it, each read from the host that has it.
+ * A child whose records cannot be read is listed as unreadable.
+ */
+export const usageFor = Effect.fn("Usage.for")(function* (
+  env: PluginEnv,
+  runId: string,
+  door?: Door,
+) {
+  const read = (id: string) =>
+    asksRun(
+      env,
+      id,
+      (client) =>
+        Effect.all({
+          entries: client.runUsage({ runId: id }),
+          lines: client.runMetrics({ runId: id }),
+        }),
+      door,
+    );
+  const own = yield* read(runId);
+  if (!own.ok) return own;
+  const views = (yield* runViews(env, null)).runs;
+  const children = yield* Effect.forEach(descendantsOf(views, runId), (child) =>
+    read(child).pipe(
+      Effect.map((got) => ({
+        runId: child,
+        usage: got.ok ? usageOf(got.value.entries, got.value.lines) : null,
+      })),
+    ),
+  );
+  return {
+    ok: true as const,
+    value: withChildren(usageOf(own.value.entries, own.value.lines), children),
+  };
 });
 
 /**

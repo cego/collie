@@ -365,6 +365,34 @@ the card's agent (`BoardAgent.fallback`), which Desktop draws under the sentence
 `collie usage` prints. An agent that has gone has no work left to move, and is not named.
 It is worked out at launch, so it reads usage as it stood then.
 
+### The hand-over
+
+A Fallback mid-work builds its successor's hand-over in `src/hand-over.ts`, in the Activity
+`<operation>.fallback-<n>.hand-over`. The host's side:
+
+- `agents.handOver` reads the Intent, the plan revision (`planRevision`: a sha256 over every
+  file's path and content under the plan directory) and the checkout (`AgentHost.checkout`,
+  `git status` through `treeOf` by default);
+- `agentWork` adds the journal, the base and the Run's Checks from `host.evidence` and
+  `host.approved`, and the pending questions from `host.asked`.
+
+The workflow passes what only it knows as `AgentWork.handOver`. Implement passes the ticket,
+the plan directory, the ticket's criteria, the last Output's answers to them, the ticket's
+Checks, the ledger's findings, the builder's last Output, and for a fix the head its findings
+were reviewed at (`reviewed`), which the record renders as a `git diff` starting point. `buildHandOver` keeps only what
+that Output said under `decisions`, `rejected` and `next_action`. Each record is appended to
+the Run's `hand-overs.jsonl` journal, its revision one past the last.
+
+At launch, inside `<operation>.fallback-<n>.launch`, `atDispatch` compares the record's head,
+plan revision and whether it has uncommitted work with `agents.atCheckout`. If any changed,
+for instance the outgoing agent left work uncommitted after the record was built, it builds
+the record once more.
+If that one does not match either, the checkout is appended to `hand-over-stale.jsonl` and
+the Run parks on `hand-over-stale`. Its recheck reads the head and plan revision again: it
+clears when they equal the last ones recorded, and otherwise records them and waits. Because
+the record is rendered into the launch's prompt, the step delivery's causal key in the
+Dispatcher's ledger is what keeps a duplicate or a replay from sending it twice.
+
 ## A workflow made of workflows
 
 `child({ runId, invocation, workflow, input })` starts another workflow as part of a Run
@@ -455,7 +483,7 @@ A worktree is **settled**, and only then removed, when all five hold
    their own run would;
 4. its work has landed: no Task whose Runs used it still owes anything on it, as the
    board derives it (**Landed** in `CONTEXT.md`), and the merge watch read its merge
-   request as merged or closed, on GitHub or GitLab (`board/mr-states.json`), the board
+   request as merged or closed, on GitHub or GitLab (`collie_merge_requests` in `host.db`), the board
    says what settled it, or, with neither, its branch is gone from the remote; an open
    merge request keeps it, and a board that could not be built leaves only the remote
    branch to go by;
@@ -1213,7 +1241,8 @@ merge, unless the pull request is already in the queue at that head, as after a 
 restart. It then reads the pull request every 30 s for up to two hours, Collie's CI bound.
 A merge the queue made at that head answers `Merged` with the queue's merge commit, and any
 other merge answers `AlreadyMerged`; a pull request the queue removed answers `Refused` with
-the reason of its latest `RemovedFromMergeQueueEvent`; a moved head answers `HeadMoved`. One
+the reason of its latest `RemovedFromMergeQueueEvent`; a moved head answers `HeadMoved`; a
+transient failure of the merge-method read, the queue read or the enqueue answers `Transient`. One
 still queued after two hours is dequeued and refused as timed out, so nothing merges while
 no Run waits on it. Where GitHub refuses the dequeue, the adapter asks again at every read
 and answers only once the pull request is out of the queue or merged. GitHub attributes a
@@ -1336,6 +1365,19 @@ Run's stop, a Fallback's retirement and worktree cleanup. It proves the live ter
 matches the launch record, stops the harness where its work runs, requires Quiet, and
 records the end in `agents.log`. Terminal cleanup kills only the proven core address.
 An agent whose identity or stopped state cannot be proved is left running and named.
+
+Where its work is in its pane (Claude, Pi, OpenCode, and Codex without its controls) and
+`endAgent` closes the pane itself, it requires Quiet after the close. A launch records the
+process at its terminal's root in its launch record as `root` (`rootOf`: core's terminal pid
+from `terminal.list`, with its start time). Before the close, `paneProcesses` takes that root and the pane's root now, drops one
+whose pid is another process, and notes each one's session with `sessionOf`, so a pane that
+already died still has its processes checked. After the close, `settled` waits up to two seconds
+for what the hang-up ends, sends each process still running one SIGTERM, and waits out the
+stop's budget. What is left makes the end `NotQuiet` with `left`; the Fallback's
+retirement records the agent and `left` in the Run's `not-quiet.jsonl` journal and parks
+with the cause `predecessor-not-quiet`, whose recheck clears once none of `left` is still
+the process noted and `keptFor` keeps no control record of the agent. Where no root can be
+named, the end logs `<agent>: Quiet not confirmed: <why>` and the close stands as the stop.
 
 Every path that replaces an agent or releases what it worked in goes through the same stop
 first. `installControls` stops a record left under the name it installs and fails
@@ -1894,17 +1936,14 @@ its time.
   The board is read from the host's Run model (`src/run-model.ts`,
   [ADR-draft-a-runs-record-is-read-from-its-hosts-run-model](adr/draft-a-runs-record-is-read-from-its-hosts-run-model.md)).
   It keeps each Run's disk inputs in memory, and a change dirties only the Runs it names:
-  host writes before and after the write; the state directory's watch, before the
-  board's debounce; another process's SQLite commit, seen within 250 ms through
-  `PRAGMA data_version`; and a branch moving in a checkout whose head a card reads, through
-  a watch on that checkout's git directories. When all checkout watches are registered,
-  the model invalidates its earlier head reads and publishes a change, covering commits
-  made before registration. It retains one change for a board that subscribes after the
-  first build, so that refresh cannot be lost. A read overtaken by invalidation retries.
-  A missing file is kept as its error's data, not as
-  the error, since every live `Error` slows each collection of the heap. If the recursive watch
-  fails, the model reads from disk, and every read takes a new revision, so nothing derived
-  before is reused. Engine status and clock-derived
+  host writes before and after the write; a path another process wrote and told the host
+  of through the front door's `wrote`; an agent's turn starting or ending, which reads its
+  Run's directories again; and another process's SQLite commit, seen within 250 ms through
+  `PRAGMA data_version`. Nothing is watched
+  ([ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs](adr/draft-the-board-is-a-projection-of-facts-the-host-syncs.md)).
+  A read overtaken by invalidation retries. A missing file is kept as its error's data, not
+  as the error, since every live `Error` slows each collection of the heap. Engine status
+  and clock-derived
   fields remain live. Each change to a Run takes the next number of the host's one sequence,
   and each board item carries the highest of its Runs' as its revision. `run_model: false`
   restores the from-disk build at the next host start; the model is then never filled. The
@@ -1913,6 +1952,17 @@ its time.
   the model's epoch and highest revision, and `--since` returns each Run whose facts or
   files moved past it, so a restart's new epoch makes an older token `stale_cursor`;
   the Flow that `run show` and `collie_run` carry is the record's, below.
+- **The board is a projection** (`src/card-rows.ts`,
+  [ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs](adr/draft-the-board-is-a-projection-of-facts-the-host-syncs.md)).
+  Each Task's card is a row in `collie_cards` with the digest of what it was derived from.
+  A host's first Snapshot is those rows, `confirmed: false`, which the door thread answers
+  from its own read-only connection until the engine serves; the first pass confirms each
+  whose digest still holds and sends an Upsert for the rest, and `host.log` says how many
+  it confirmed. A card's derivation reads only the Run model and rows the syncers keep:
+  the Merge watch's `collie_merge_requests` and forge logins, git sync's `collie_branches`
+  (`src/branches.ts`), `collie_module_revisions` and `collie_connections`. Each syncer is a
+  side job (`src/side-jobs.ts`), with a 5-minute backstop for what changed outside Collie.
+  `bench/board-reads/first.ts` times host start to first Snapshot on a snapshot copy.
 - **A Run's record is read from the model** (`src/record.ts`, D3 to D5 of that ADR). It
   reads only the Runs its Task's rows name (`related` in `src/engine.ts`): the Task's, their
   parents and children, Runs they asked for, and the Runs sharing its plan. A `runDetail`
