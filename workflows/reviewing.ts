@@ -469,6 +469,64 @@ export const ROUNDS = 4;
 
 type Needs = Run | Agents | Host | WorkflowEngine | WorkflowInstance | FileSystem.FileSystem;
 
+/**
+ * The Run's checks marked `before_review`, run on the builder's tree at `cwd` before a review
+ * round opens. A failure goes back to `fix` naming the check, and no reviewer starts until
+ * they pass: null then, else why the round cannot open and what failed, after `ROUNDS` fixes.
+ * A Run whose features do not say `before_review` started on an earlier release, and runs none.
+ */
+export const checkedBeforeReview = (ask: {
+  readonly name: string;
+  readonly cwd: string;
+  readonly fix: (
+    operation: string,
+    findings: string,
+    open: ReadonlyArray<Finding>,
+  ) => Effect.Effect<unknown, WorkflowError, Needs>;
+}): Effect.Effect<
+  { readonly halted: string; readonly failed: ReadonlyArray<Finding> } | null,
+  WorkflowError,
+  Needs
+> =>
+  Effect.gen(function* () {
+    const host = yield* Host;
+    const runId = (yield* Run).id;
+    if ((yield* host.place(runId)).features?.before_review !== true) return null;
+    for (let attempt = 1; ; attempt++) {
+      const failed: ReadonlyArray<Finding> = yield* Activity.make({
+        name: `${ask.name}.${attempt}`,
+        success: Schema.Array(Schema.Struct({ severity: text, title: text, detail: text })),
+        execute: Effect.gen(function* () {
+          const marked = Arr.filter(
+            yield* host.approved(runId),
+            (spec) => spec.before_review === true,
+          );
+          const ran = yield* Effect.forEach(marked, (spec) =>
+            host.verify({ runId, name: spec.name, cwd: ask.cwd }),
+          );
+          return Arr.map(
+            Arr.filter(ran, (one) => one.result !== "pass"),
+            (one) => ({
+              severity: "blocker",
+              title: `check "${one.name}" failed before review`,
+              detail: `It was ${one.result} (exit ${one.exit}); read its output with \`collie run read ${runId} verification:${one.id}\`.`,
+            }),
+          );
+        }).pipe(Effect.orDie),
+      });
+      if (failed.length === 0) return null;
+      if (attempt > ROUNDS)
+        return {
+          halted: `before_review_failed: ${Arr.join(
+            Arr.map(failed, (one) => one.title),
+            "; ",
+          )}, after ${ROUNDS} fixes`,
+          failed,
+        };
+      yield* ask.fix(`${ask.name}-fix-${attempt}`, formatFindings(failed), failed);
+    }
+  });
+
 /** Each blocking dispute left standing, as the merge request lists it for the human. */
 const disputesOf = (findings: ReadonlyArray<Finding>): string[] =>
   Arr.map(
@@ -569,6 +627,26 @@ export const rally = (ask: {
           yield* repair;
           const merged = yield* ask.integrate(`${prefix}merge-${at}`);
           const proves = yield* ask.proves;
+          const unopened = yield* checkedBeforeReview({
+            name: `${prefix}before-review-${at}`,
+            cwd: ask.cwd,
+            fix: (operation, findings, open) => ask.fix({ operation, at, proves, findings, open }),
+          });
+          if (unopened !== null)
+            return {
+              halted: unopened.halted,
+              unreviewed: "",
+              unsettled: disputesOf(disputed),
+              disputes: Arr.filter(disputed, isBlocking),
+              reviewed: {
+                verdict: "findings" as const,
+                summary: unopened.halted,
+                findings: unopened.failed,
+                disputed: [],
+                dropped: [],
+                fixed: [],
+              },
+            };
           const head =
             delta || ledger !== undefined
               ? yield* Activity.make({

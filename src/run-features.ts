@@ -17,12 +17,18 @@ export const RunFeatures = Schema.Struct({
   inline_plan: Schema.optionalKey(Schema.Boolean),
   /** Which agents an implement Run's tickets, fix rounds and delivery run on. */
   agent_sessions: Schema.optionalKey(Schema.Literals(["run", "ticket", "round"])),
+  /** Its checks marked `before_review` run before each review round opens. */
+  before_review: Schema.optionalKey(Schema.Boolean),
 });
 export type RunFeatures = typeof RunFeatures.Type;
 
 const FeaturesJson = Schema.fromJsonString(RunFeatures);
 
-export const CURRENT_FEATURES: RunFeatures = { review_delta: true, findings_ledger: true };
+export const CURRENT_FEATURES: RunFeatures = {
+  review_delta: true,
+  findings_ledger: true,
+  before_review: true,
+};
 
 export const recordFeatures = Effect.fn("RunFeatures.record")(function* (
   run: string,
