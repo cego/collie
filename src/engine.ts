@@ -3323,6 +3323,7 @@ export const clearGenerations: (
 export function engineLayer(options: {
   readonly dir: string;
   readonly messagePoll?: Duration.Input | undefined;
+  readonly terminationTimeout?: Duration.Input | undefined;
 }) {
   // WARNING: engine tables and Collie's rows share one connection in one file.
   const sql = hostDatabase(options.dir).pipe(Layer.orDie, Layer.provideMerge(Reactivity.layer));
@@ -3338,6 +3339,10 @@ export function engineLayer(options: {
     options.messagePoll === undefined
       ? shardingConfig
       : { ...shardingConfig, entityMessagePollInterval: options.messagePoll };
+  const bounded =
+    options.terminationTimeout === undefined
+      ? polled
+      : { ...polled, entityTerminationTimeout: options.terminationTimeout };
   // WARNING: built when a host builds it, never on import; client commands must not pay for the cluster.
   const engine = Layer.unwrap(
     Effect.promise(() =>
@@ -3373,7 +3378,7 @@ export function engineLayer(options: {
             Layer.provideMerge(Runners.layerNoop),
             Layer.provideMerge(storage),
             Layer.provide([Layer.orDie(SqlRunnerStorage.layer), RunnerHealth.layerNoop]),
-            Layer.provide(ShardingConfig.layerFromEnv(polled)),
+            Layer.provide(ShardingConfig.layerFromEnv(bounded)),
             Layer.provide([oneShard.pipe(Layer.provideMerge(sql)), Digest.layerWebCrypto]),
           );
           return ClusterWorkflowEngine.layer.pipe(Layer.provideMerge(cluster));
@@ -7760,6 +7765,7 @@ export const foundationLayer: (options: {
   readonly herd?: Herd;
   readonly readings?: Effect.Effect<ReadonlyArray<UsageReading>>;
   readonly messagePoll?: Duration.Input | undefined;
+  readonly terminationTimeout?: Duration.Input | undefined;
   readonly placing?: { readonly herdr: Herdr; readonly env: PluginEnv };
   readonly productionPoll?: Duration.Input;
   readonly issuePrivacyBudget?: Duration.Input;

@@ -275,11 +275,13 @@ const foundation = () => ({
   placing: { herdr: hostOf().herdr, env: hostOf().env },
   productionPoll,
   reviewPoll,
+  terminationTimeout,
   slack: (token: string) => slackApi(token, slack.client),
 });
 
 let productionPoll: Duration.Input = "20 millis";
 const reviewPoll: Duration.Input = "20 millis";
+const terminationTimeout: Duration.Input = "1 second";
 
 type SessionServices =
   | WorkflowEngine.WorkflowEngine
