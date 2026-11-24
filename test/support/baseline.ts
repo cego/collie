@@ -954,6 +954,106 @@ scenario("stop here is an answer: nothing is started, and the run says where the
   ),
 );
 
+// WARNING: what an architect defers is what somebody may build next, so it is left as findings.
+const DEFERRED_TWO: Schema.Json = {
+  ...REPORT,
+  findings: [],
+  deferred: [
+    {
+      severity: "major",
+      title: "Two registries read the same table",
+      file: "src/registry.ts",
+      line: 12,
+      basis: "fact",
+      evidence: "both names are constructed in main.ts",
+      suggested: "ticket",
+    },
+    { severity: "minor", title: "The adapter's names have drifted", basis: "inference" },
+  ],
+};
+
+const architectureFacts: ActionFacts = {
+  outcome: "feature",
+  succeeded: true,
+  branch: null,
+  mrUrl: null,
+  planIssues: 0,
+  disposed: false,
+  openFindings: 0,
+  diffTarget: null,
+  claim: null,
+};
+
+scenario(
+  "architecture's deferred candidates are its findings, and stopping there leaves them to choose from",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([DEFERRED_TWO]);
+        yield* parked({
+          entry: shipped("architecture"),
+          runId: "r-arch-deferred",
+          input: { goal: "why are there two registries" },
+          decision: "next",
+        });
+        const result = yield* answered({
+          entry: shipped("architecture"),
+          runId: "r-arch-deferred",
+          input: { goal: "why are there two registries" },
+          decision: "next",
+          value: "Stop here",
+        });
+
+        expect(said(result)).toBe("plan/ARCHITECTURE.md: stopped there");
+        const where = runDir(dir, "r-arch-deferred");
+        expect(
+          Arr.map(yield* findingsIn(where), (one) => [one.id, one.title, one.severity]),
+        ).toEqual([
+          ["r-arch-deferred-F1", "Two registries read the same table", "major"],
+          ["r-arch-deferred-F2", "The adapter's names have drifted", "minor"],
+        ]);
+        expect(yield* factOf("r-arch-deferred", "open-findings")).toBe("2");
+
+        const declared = declaredByModule((yield* loadEntry(shipped("architecture"))).metadata);
+        const offered = Arr.map(
+          offersFrom(declared, { ...architectureFacts, openFindings: 2 }),
+          (one) => one.id,
+        );
+        expect(offered).toEqual(["implement-selected", "investigate-further", "plan-this"]);
+        expect(Arr.map(offersFrom(declared, architectureFacts), (one) => one.id)).toEqual([]);
+      }),
+    ),
+);
+
+scenario(
+  "an architecture Run that deferred nothing leaves no findings and finishes as it did",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([REPORT]);
+        yield* parked({
+          entry: shipped("architecture"),
+          runId: "r-arch-nothing",
+          input: { goal: "why are there two registries" },
+          decision: "next",
+        });
+        const result = yield* answered({
+          entry: shipped("architecture"),
+          runId: "r-arch-nothing",
+          input: { goal: "why are there two registries" },
+          decision: "next",
+          value: "Stop here",
+        });
+
+        expect(said(result)).toBe("plan/ARCHITECTURE.md: stopped there");
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.exists(`${runDir(dir, "r-arch-nothing")}/findings.json`)).toBe(false);
+        expect(yield* findingsIn(runDir(dir, "r-arch-nothing"))).toEqual([]);
+        expect(yield* factOf("r-arch-nothing", "open-findings")).toBe("0");
+      }),
+    ),
+);
+
 const GRILLED = {
   verdict: "clean",
   findings: [],
@@ -3806,7 +3906,11 @@ scenario("what a finished Run of each shipped module offers is the module's own 
           }),
           (offer) => [offer.id, offer.workflow, offer.primary],
         ),
-      ).toEqual([["run-again", idOf("review"), true]]);
+      ).toEqual([
+        ["run-again", idOf("review"), true],
+        ["investigate-further", "investigate", false],
+        ["plan-this", "plan", false],
+      ]);
       expect(
         Arr.map(
           offersFrom(review, facts({ diffTarget: "branch:main...HEAD" })),
@@ -3852,7 +3956,19 @@ scenario("what a finished Run of each shipped module offers is the module's own 
         [],
       );
 
-      expect(yield* declaredIn(shipped("architecture"))).toEqual([]);
+      expect(
+        Arr.map(
+          offersFrom(yield* declaredIn(shipped("architecture")), facts({ openFindings: 2 })),
+          (o) => [o.id, o.selects],
+        ),
+      ).toEqual([
+        ["implement-selected", "many"],
+        ["investigate-further", "one"],
+        ["plan-this", "one"],
+      ]);
+      expect(
+        Arr.map(offersFrom(yield* declaredIn(shipped("architecture")), facts({})), (o) => o.id),
+      ).toEqual([]);
 
       const renovate = yield* declaredIn(shipped("renovate"));
       const failed = facts({ succeeded: false, claim: "project" });

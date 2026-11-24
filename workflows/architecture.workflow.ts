@@ -9,10 +9,12 @@ import {
   ask,
   contentOf,
   defineWorkflow,
+  leaveFindings,
   step,
 } from "collie";
 import { Effect, Schema } from "effect";
 import markdown from "./architecture.md" with { type: "text" };
+import { implementSelected, investigateFurther, planThis } from "./selected.ts";
 
 const content = contentOf(markdown);
 const attended = content.template("attended", {
@@ -74,6 +76,7 @@ export default defineWorkflow({
   output: Schema.String,
   agents: { harness: "claude", model: "opus", effort: "high" },
   path: [architecture, menu],
+  followUps: [implementSelected, investigateFurther, planThis],
   run: ({ input: asked }) =>
     Effect.gen(function* () {
       const host = yield* Host;
@@ -96,6 +99,10 @@ export default defineWorkflow({
           output: Report,
         }),
       );
+      // WARNING: only what was deferred is a finding, so a Run that deferred nothing leaves none.
+      if ((report.deferred ?? []).length > 0) {
+        yield* leaveFindings(place.dir, report.deferred ?? []);
+      }
       const next = yield* menu(
         ask({
           name: "next",

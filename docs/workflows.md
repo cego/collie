@@ -1103,7 +1103,14 @@ rooted at, and the architect is told the goal so it knows where to look.
 
 **What happens:** an architect rates every candidate by the deletion test, applies the
 strong ones only, and writes a report into the run directory. Everything else is deferred
-with a reason rather than half-applied.
+with a reason rather than half-applied. What was deferred is left as findings through the
+same leave path a review and an investigation use: `findings.json` in the Run's directory,
+each candidate with an id of its own, and nothing written at all when nothing was deferred.
+So a Run that deferred something offers its deferred candidates the way an investigation
+offers what it found — **Implement selected** builds the ones you choose, **Investigate
+further** investigates one of them, **Plan this** plans it, and the one taken reads `taken`
+by the Run it started. A deferred candidate's `From:` line names `findings.json`, since
+the report the architect named is written wherever it chose.
 
 **Ends with a menu:** **Implement now** (chains `implement` on the report) or **Stop here**.
 **Implement now** names the branch after the `slug` the architect put in its Output, which
