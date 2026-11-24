@@ -36,6 +36,20 @@ will not load.
 (#240) found one more, below as 7: an answer the engine has not processed yet is read early,
 and still wakes the Run later.
 
+**Amended 2026-11-24: Effect 4.1.5, and no patch.** The proof was rerun on 4.1.5
+(`test/engine.test.ts`, `test/child-execution.test.ts`, `test/resume.test.ts` and the
+release-set scenarios) and the seven behaviours below still hold. The three runtime packages
+move together, as the Consequences say. A state directory a 4.1.4 host wrote is read as it
+is: every `CREATE` and `ALTER` statement in `cluster/SqlMessageStorage.js` and
+`cluster/SqlRunnerStorage.js` is unchanged, and `ShardingConfig`'s fields are the same set.
+The upgrade also took away Collie's checked-in `effect` patch: 4.1.5 guards a conditional
+activity reset itself, locking the expected reply before it mutates, so the interrupt that
+parked an attempt no longer replays and the ones that arrived later still reach the attempt
+that resumes (behaviour 8, below). None of that is Collie's code any more.
+`tools/migrate-effect.ts up|down` proves the move both ways, each time installing a throwaway
+copy's lockfile and running the regression test there: one of this tree, one of the
+merge-base's.
+
 A workflow will be a TypeScript file an author writes, outside this repository, and Collie
 will run it. That means Collie either builds durability, replay, suspension and recovery,
 or it uses Effect's. This says it uses Effect's, records exactly which settings that takes,
@@ -144,6 +158,13 @@ Six things the proof measured rather than assumed, and a seventh a Flake found. 
    that Activity again. So `answerDecision` completes a question only once its Run has
    stopped to wait on it. The baseline scenarios that answer before the Run awaits are the
    test.
+
+8. **A guarded Activity reset drops the interrupts the parked attempt saw, and keeps the
+   later ones.** `clearReplies` with `expectedReplyId` locks and checks the expected reply
+   before it mutates, so a stale reset changes nothing; a matching one deletes the replies
+   and the interrupt rows that reply stamped, and leaves the interrupts that arrived after
+   it for the next attempt. `test/effect-sql-reset.test.ts` holds both halves, and
+   `test/resume.test.ts` with `test/core-resume.test.ts` the resume that follows.
 
 ## What this does not decide
 
