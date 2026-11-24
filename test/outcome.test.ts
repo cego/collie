@@ -378,6 +378,50 @@ test("the newest Output that names a reproduction is the one the gate reads", ()
   expect(evidenceGaps("bug", naming("regression", ""))).toEqual([]);
 });
 
+test("an Output naming a check that did not reproduce the bug does not close the gap", () => {
+  const pairs = [
+    record({ name: "tests" }),
+    record({
+      name: "regression",
+      expect: "fail",
+      exit: 1,
+      result: "pass",
+      start: EARLIER,
+      end: EARLIER,
+    }),
+    record({ name: "regression" }),
+  ];
+  const named = collected({
+    verifications: pairs,
+    outputs: new Map<string, YamlValue>([["build", { reproduced: "unit" }]]),
+  });
+  const gaps = evidenceGaps("bug", named);
+  expect(gaps).toHaveLength(1);
+  expect(gaps[0]).toContain('"unit"');
+  expect(gaps[0]).toContain('"regression"');
+});
+
+test("a red and a green of different commands are not a pair a name can close", () => {
+  const pairs = [
+    record({ name: "tests" }),
+    record({
+      name: "regression",
+      argv: ["test", "a.test.ts"],
+      expect: "fail",
+      exit: 1,
+      result: "pass",
+      start: EARLIER,
+      end: EARLIER,
+    }),
+    record({ name: "regression", argv: ["test", "b.test.ts"] }),
+  ];
+  const unnamed = collected({ verifications: pairs });
+  expect(evidenceGaps("bug", unnamed)).toContain(
+    "the Output does not name the verification that reproduced the bug",
+  );
+  expect(checkGaps("bug", unnamed)).not.toContain(UNNAMED_REPRODUCTION);
+});
+
 test("a regression that passed only before the tree moved says it has not run here, not that it fails", () => {
   const middle = { head_sha: "abc0550000000", fingerprint: "tree-m" };
   const reproduced = record({

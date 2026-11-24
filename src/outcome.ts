@@ -535,15 +535,23 @@ function gapsOf(kind: Outcome, got: Collected) {
         );
       }
       const named = reproducedName(got);
+      const pair =
+        fixedBy === undefined
+          ? undefined
+          : Option.getOrUndefined(Arr.findLast(before, (one) => sameAsked(one, fixedBy)));
+      // WARNING: a pair the journal holds is a name an agent can still write; with no pair nothing can.
       if (named === undefined) {
-        // WARNING: a pair the journal holds is a name an agent can still write; with no pair nothing can.
-        if (before.length === 0 || fixedBy === undefined) {
+        if (pair === undefined) {
           claim("the Output does not name the verification that reproduced the bug");
         } else {
           check(
-            'no Output names the reproduction, though "regression" failed before the fix and passes on this tree',
+            `no Output names the reproduction, though "${pair.name}" failed before the fix and passes on this tree`,
           );
         }
+      } else if (pair !== undefined && named !== pair.name) {
+        check(
+          `the Output names "${named}" as the reproduction, but "${pair.name}" is the one that failed before the fix and passes on this tree`,
+        );
       }
       break;
     }
