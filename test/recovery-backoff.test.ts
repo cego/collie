@@ -1,7 +1,8 @@
 import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { expect, test } from "bun:test";
-import { ConfigProvider, Effect, Layer } from "effect";
+import { Clock, ConfigProvider, Effect, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import type { RunView } from "../src/engine";
 import type { ParkCause } from "../src/park-cause";
@@ -10,9 +11,16 @@ import { readMetrics } from "../src/metrics";
 import { mrId } from "../src/board-model";
 import type { MrPanels } from "../src/merges";
 import { forgeHttpLayer } from "../src/forge/http";
+import { rememberCiTarget } from "../src/park-recheck";
+import { newsPath, read as readNews } from "../src/news";
+import { herdOf } from "../src/steering";
 import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
 import { until } from "./support/host";
+import { platformLayer } from "../src/platform";
+import { FakeBin } from "./support/bin";
+import { FORGE_HOST, forgeOnPath, serveForges } from "./support/forge";
+import type { ForgeModel } from "./support/forge";
 
 test("unchanged panel refreshes preserve backoff while changed facts reset it", () =>
   runEffect(
@@ -186,4 +194,150 @@ test("a forge rate limit holds no recheck that asks only herdr", () =>
     Effect.map(rechecksUnderRateLimit("herdr-unavailable"), ([byReset]) =>
       expect(byReset).toBeGreaterThan(0),
     ),
+  ));
+
+const rechecksAgainst = (fault: ForgeModel["httpFault"]) =>
+  Effect.gen(function* () {
+    const rig = yield* Rig.scoped();
+    const env = rig.pluginEnv();
+    const bin = yield* Effect.acquireRelease(FakeBin.make(`${rig.root}/bin`), (one) =>
+      one.restore(),
+    );
+    const head = "4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6";
+    const model: ForgeModel = {
+      installed: true,
+      loggedIn: [FORGE_HOST.gitlab],
+      login: "tester",
+      mrs: [
+        {
+          project: "gitlab.example.com/mk/project",
+          iid: "7",
+          state: "open",
+          head,
+          jobs: [{ name: "test", state: "passed" }],
+        },
+      ],
+      httpFault: fault,
+    };
+    const forge = yield* forgeOnPath(bin, "gitlab", model);
+    const forgeApi = yield* serveForges(forge);
+    const mr = "https://gitlab.example.com/mk/project/-/merge_requests/7";
+    yield* rememberCiTarget(`${env.stateDir}/runs/r1`, {
+      head,
+      job: "test",
+      mr,
+      cwd: rig.projectDir,
+    });
+    const view: RunView = {
+      runId: "r1",
+      workflow: "any",
+      project: rig.projectDir,
+      task: null,
+      parent: null,
+      registration: "any@1",
+      entry: "any.workflow.ts",
+      input: {},
+      provenance: {},
+      strategies: {},
+      options: {},
+      cwd: rig.projectDir,
+      branch: "work",
+      workspace: null,
+      worktree: null,
+      outcome: "feature",
+      created: "1970-01-01T00:00:00.000Z",
+      status: { status: "suspended" },
+      waiting: [],
+      controls: [],
+      diagnostic: null,
+      parked: "job absent",
+      park: {
+        id: "p1",
+        since: "1970-01-01T00:00:00.000Z",
+        cause: "ci-job-absent",
+        kind: "rechecks",
+      },
+      awaiting: null,
+      mr,
+      landing: null,
+    };
+    const clock = yield* TestClock.make();
+    yield* clock.setTime(yield* Clock.currentTimeMillis);
+    return yield* Effect.gen(function* () {
+      yield* Effect.forkScoped(
+        recoverParks({
+          env,
+          herdr: new Herdr(env),
+          reconnects: Effect.succeed(0),
+          panels: new Map(),
+          views: Effect.succeed([view]),
+          resume: () => Effect.die("an absent CI job must not resume"),
+        }).pipe(
+          Effect.provide(
+            ConfigProvider.layerAdd(
+              ConfigProvider.fromUnknown({ COLLIE_RECOVERY_EVERY: "10 millis" }),
+            ),
+          ),
+        ),
+      );
+      const errors = Effect.map(readMetrics(`${env.stateDir}/evidence/r1`), (lines) =>
+        Arr.filter(lines, (line) => line.action === "rechecked" && line.outcome === "error"),
+      );
+      const settle = Effect.gen(function* () {
+        for (let tries = 0; tries < 50; tries++) {
+          yield* TestClock.withLive(Effect.sleep("2 millis"));
+        }
+      });
+      let rounds = 0;
+      for (let tries = 0; tries < 60 && rounds < 3; tries++) {
+        yield* clock.adjust("10 seconds");
+        yield* settle;
+        rounds = (yield* errors).length;
+      }
+      const key = yield* herdOf(env.raw.HC_SOCKET ?? null);
+      const failing = Effect.map(readNews(yield* newsPath(env.stateDir, key)), (news) =>
+        Arr.filter(
+          news,
+          (line) => line.kind === "item" && Str.startsWith("recovery-failing:")(line.key),
+        ),
+      );
+      let items = yield* failing;
+      for (let tries = 0; tries < 100 && items.length === 0; tries++) {
+        yield* TestClock.withLive(Effect.sleep("10 millis"));
+        items = yield* failing;
+      }
+      return { rounds, items };
+    }).pipe(
+      Effect.provideService(Clock.Clock, clock),
+      Effect.provide(
+        Layer.merge(
+          forgeHttpLayer.pipe(
+            Layer.provideMerge(platformLayer),
+            Layer.provideMerge(
+              ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: forgeApi })),
+            ),
+          ),
+          TestClock.layer(),
+        ),
+      ),
+    );
+  });
+
+test("three recheck rounds the forge answers rate-limited raise no Recovery is failing News item", () =>
+  runEffect(
+    Effect.map(
+      rechecksAgainst({ status: 429, headers: { "retry-after": "0" } }),
+      ({ rounds, items }) => {
+        expect(rounds).toBeGreaterThanOrEqual(3);
+        expect(items).toEqual([]);
+      },
+    ),
+  ));
+
+test("three recheck rounds that fail for another reason still raise one Recovery is failing News item", () =>
+  runEffect(
+    Effect.map(rechecksAgainst({ status: 503 }), ({ rounds, items }) => {
+      expect(rounds).toBeGreaterThanOrEqual(3);
+      expect(items).toHaveLength(1);
+    }),
   ));

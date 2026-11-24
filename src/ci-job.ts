@@ -193,6 +193,8 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
   readonly mr: string | null;
   readonly wait: boolean;
   readonly settle?: boolean;
+  readonly bound?: Duration.Input;
+  readonly poll?: Duration.Input;
   readonly verifying: Control;
   readonly run: Runner<R>;
 }) {
@@ -236,6 +238,8 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
   }
   const forge = forgeOf(ref);
   const began = yield* Clock.currentTimeMillis;
+  const bound = Duration.toMillis(asked.bound ?? CI_BOUND);
+  const poll = asked.poll ?? CI_POLL;
   let waiting = false;
   let retried: string | null = null;
   return yield* Effect.gen(function* () {
@@ -395,7 +399,7 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
       if (!asked.wait && retried === null) {
         return unproved(`is ${state}`, state, read.url, log);
       }
-      if ((yield* Clock.currentTimeMillis) - began >= Duration.toMillis(CI_BOUND)) {
+      if ((yield* Clock.currentTimeMillis) - began >= bound) {
         return unproved(`is still ${state} after 2 hours`, state, read.url, log);
       }
       if (!waiting) {
@@ -418,7 +422,7 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
           }),
         );
       }
-      yield* Effect.sleep(CI_POLL);
+      yield* Effect.sleep(poll);
     }
   }).pipe(
     Effect.ensuring(Effect.suspend(() => (waiting ? asked.verifying.set(null) : Effect.void))),

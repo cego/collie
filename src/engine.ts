@@ -4068,6 +4068,8 @@ export const hostLayer: (options: {
   readonly productionPoll?: Duration.Input;
   readonly issuePrivacyBudget?: Duration.Input;
   readonly reviewPoll?: Duration.Input;
+  readonly ciBound?: Duration.Input;
+  readonly ciPoll?: Duration.Input;
 }) => Layer.Layer<
   Host | Notifier | Oversight | Reliance,
   never,
@@ -5623,6 +5625,8 @@ export const hostLayer: (options: {
                   journal: evidenceDir(dir, asked.runId),
                   cwd: asked.cwd,
                   spec,
+                  bound: options.ciBound,
+                  poll: options.ciPoll,
                   command: yield* commandOf({ ...own, cwd: asked.cwd }, spec),
                   mr: yield* mergeRequestOf(asked.runId),
                   wait: asked.wait ?? false,
@@ -7972,6 +7976,8 @@ export const foundationLayer: (options: {
   readonly productionPoll?: Duration.Input;
   readonly issuePrivacyBudget?: Duration.Input;
   readonly reviewPoll?: Duration.Input;
+  readonly ciBound?: Duration.Input;
+  readonly ciPoll?: Duration.Input;
 }) => Layer.Layer<
   | Host
   | Notifier

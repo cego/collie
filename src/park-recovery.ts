@@ -202,7 +202,8 @@ export const recoverParks = <E, R>(opts: {
                 opts.env.stateDir,
                 opts.herdr,
               );
-              failed ||= error;
+              // WARNING: a forge that names when it will answer again has not failed; its recheck is a wait.
+              failed ||= error && rateLimitedUntil(note) === null;
               const line: Metric = {
                 at,
                 kind: "recovery",

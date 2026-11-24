@@ -30,6 +30,7 @@ import {
   Option,
   Order,
   Path,
+  Ref,
   Result,
   Schedule,
   Schema,
@@ -287,10 +288,14 @@ const foundation = () => ({
   productionPoll,
   reviewPoll,
   terminationTimeout,
+  ciBound,
+  ciPoll,
   slack: (token: string) => slackApi(token, slack.client),
 });
 
 let productionPoll: Duration.Input = "20 millis";
+let ciBound: Duration.Input | undefined;
+let ciPoll: Duration.Input | undefined;
 const reviewPoll: Duration.Input = "20 millis";
 const terminationTimeout: Duration.Input = "1 second";
 
@@ -15934,6 +15939,37 @@ for (const [state, jobs] of [
   );
 }
 
+const rechecksOf = (runId: string) =>
+  Effect.map(readMetrics(evidenceDir(dir, runId)), (lines) =>
+    Arr.filter(lines, (line) => line.action === "rechecked"),
+  );
+
+const rechecking = (
+  run: {
+    readonly status: Effect.Effect<typeof RunStatus.Type>;
+    readonly resume: Effect.Effect<void>;
+  },
+  runId: string,
+  mr: string,
+  cwd: string,
+) =>
+  Effect.gen(function* () {
+    const rounds = yield* Ref.make(0);
+    yield* Effect.forkChild(
+      Effect.gen(function* () {
+        for (;;) {
+          const read = yield* parkRecheck(runId, mr, cwd);
+          yield* Ref.update(rounds, (count) => count + 1);
+          if (read.cleared) {
+            return yield* run.resume;
+          }
+          yield* Effect.sleep("20 millis");
+        }
+      }),
+    );
+    return { rounds: Ref.get(rounds) };
+  });
+
 const checkedOutThenAssessed = (runId: string) =>
   Effect.gen(function* () {
     const lines = yield* readStepLines(runDir(dir, runId));
@@ -15944,6 +15980,234 @@ const checkedOutThenAssessed = (runId: string) =>
       Arr.flatMap(lines, (line) => (line.kind === "enter" ? [line.key] : [])).slice(0, 2),
     ).toEqual(["checkout", "assess"]);
   });
+
+scenario(
+  "a Release whose check is left to CI parks ci-job-absent with no fix round when the job is absent at the head, and the host's recheck resumes it once the job passes",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, head, reviewed, changed } = yield* releasable("github", {
+          jobs: [{ name: "static", state: "passed" }],
+        });
+        const runId = "r-release-own-check-absent";
+        yield* ownCheck(runId);
+        yield* rig.queueOutputs([PACKAGED]);
+        const healed = recoveriesHealed(runId);
+        yield* driven(
+          {
+            entry: shipped("release"),
+            runId,
+            input: { mr: RELEASING.github.target },
+            host: releaseHost(),
+          },
+          (run) =>
+            Effect.gen(function* () {
+              const why = yield* until(
+                () => Effect.zip(parkedWhy(runId), run.status),
+                ([why, status]) => why !== "" && status.status === "suspended",
+              );
+              expect(why[0]).toContain(
+                `check is left to CI and unproved: job test on ${pipe(head, Str.slice(0, 12))} is not in its pipeline`,
+              );
+              expect(yield* parkedCause(runId)).toBe("ci-job-absent");
+              expect(yield* wasAsked(runId, "fix-1")).toBe(false);
+              expect(yield* healed).toEqual([]);
+              const host = yield* rechecking(run, runId, RELEASING.github.mr, reviewed);
+              yield* until(
+                () => host.rounds,
+                (count) => count >= 2,
+              );
+              expect((yield* run.status).status).toBe("suspended");
+              expect(yield* wasAsked(runId, "fix-1")).toBe(false);
+              yield* changed({ jobs: [{ name: "test", state: "passed" }] });
+              const go = yield* goAsked(run.asked, "go-1");
+              expect(go.shipping).toEqual({ action: "merge", head });
+              yield* run.answer("go-1", "Finish");
+              expect(outcomeText(yield* ended(run.status))).toBe(
+                `${RELEASING.github.mr} was left open`,
+              );
+            }),
+        );
+        yield* bin.restore();
+        const [proof, ...more] = yield* ciRecords(runId);
+        expect(more).toEqual([]);
+        expect(proof).toMatchObject({ name: "check", result: "pass", end: { head_sha: head } });
+        expect(yield* healed).toEqual([]);
+      }),
+    ),
+);
+
+scenario(
+  "a Release whose check is left to CI parks ci-job-absent with no fix round when the forge rate limits the CI read, and the host's recheck resumes it once the forge answers and the job passed",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, head, reviewed, changed } = yield* releasable("github", {
+          jobs: [{ name: "test", state: "passed" }],
+        });
+        const runId = "r-release-own-check-limited";
+        yield* ownCheck(runId);
+        yield* rig.queueOutputs([PACKAGED]);
+        const healed = recoveriesHealed(runId);
+        const answered = forgeFaces.get("github")!;
+        let limited = true;
+        forgeFaces.set("github", {
+          face: (input, init) =>
+            limited && Str.includes("/check-runs")(input) && Str.includes("check_name=")(input)
+              ? Promise.resolve(
+                  new Response('{"message":"API rate limit exceeded"}', {
+                    status: 429,
+                    headers: { "retry-after": "0" },
+                  }),
+                )
+              : answered.face(input, init),
+        });
+        yield* driven(
+          {
+            entry: shipped("release"),
+            runId,
+            input: { mr: RELEASING.github.target },
+            host: releaseHost(),
+          },
+          (run) =>
+            Effect.gen(function* () {
+              const why = yield* until(
+                () => Effect.zip(parkedWhy(runId), run.status),
+                ([why, status]) => why !== "" && status.status === "suspended",
+              );
+              expect(why[0]).toContain("GitHub answered 429: rate limited");
+              expect(yield* parkedCause(runId)).toBe("ci-job-absent");
+              expect(yield* wasAsked(runId, "fix-1")).toBe(false);
+              expect(yield* healed).toEqual([]);
+              limited = false;
+              yield* changed({ jobs: [{ name: "test", state: "passed" }] });
+              const host = yield* rechecking(run, runId, RELEASING.github.mr, reviewed);
+              const go = yield* goAsked(run.asked, "go-1");
+              expect(go.shipping).toEqual({ action: "merge", head });
+              yield* run.answer("go-1", "Finish");
+              expect(outcomeText(yield* ended(run.status))).toBe(
+                `${RELEASING.github.mr} was left open`,
+              );
+            }),
+        );
+        yield* bin.restore();
+        const [proof, ...more] = yield* ciRecords(runId);
+        expect(more).toEqual([]);
+        expect(proof).toMatchObject({ name: "check", result: "pass", end: { head_sha: head } });
+        expect(yield* healed).toEqual([]);
+      }),
+    ),
+);
+
+scenario(
+  "a Release whose check is left to CI parks ci-job-absent with no fix round when its job is still running at CI_BOUND, and the host's recheck resumes it only once the job ends passed",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        ciBound = "20 millis";
+        ciPoll = "1 millis";
+        const { bin, head, reviewed, changed } = yield* releasable("github", {
+          jobs: [{ name: "test", state: "running" }],
+        });
+        const runId = "r-release-own-check-timeout";
+        yield* ownCheck(runId);
+        yield* rig.queueOutputs([PACKAGED, { verdict: "clean", fixed: [] }]);
+        const healed = recoveriesHealed(runId);
+        yield* driven(
+          {
+            entry: shipped("release"),
+            runId,
+            input: { mr: RELEASING.github.target },
+            host: releaseHost(),
+          },
+          (run) =>
+            Effect.gen(function* () {
+              const why = yield* until(
+                () => Effect.zip(parkedWhy(runId), run.status),
+                ([why, status]) => why !== "" && status.status === "suspended",
+              );
+              expect(why[0]).toContain(
+                `check is left to CI and unproved: job test on ${pipe(head, Str.slice(0, 12))} is still running`,
+              );
+              expect(yield* parkedCause(runId)).toBe("ci-job-absent");
+              expect(yield* wasAsked(runId, "fix-1")).toBe(false);
+              expect(yield* healed).toEqual([]);
+              const host = yield* rechecking(run, runId, RELEASING.github.mr, reviewed);
+              yield* until(
+                () => host.rounds,
+                (count) => count >= 2,
+              );
+              expect((yield* run.status).status).toBe("suspended");
+              expect(
+                Arr.filter(yield* run.asked, (row) => Str.startsWith("go-")(row.decision)),
+              ).toEqual([]);
+              yield* changed({ jobs: [{ name: "test", state: "passed" }] });
+              const go = yield* goAsked(run.asked, "go-1");
+              expect(go.shipping).toEqual({ action: "merge", head });
+              yield* run.answer("go-1", "Finish");
+              expect(outcomeText(yield* ended(run.status))).toBe(
+                `${RELEASING.github.mr} was left open`,
+              );
+            }),
+        );
+        yield* bin.restore();
+        const [proof, ...more] = yield* ciRecords(runId);
+        expect(more).toEqual([]);
+        expect(proof).toMatchObject({ name: "check", result: "pass", end: { head_sha: head } });
+        expect(yield* healed).toEqual([]);
+      }),
+    ),
+);
+
+scenario(
+  "a Release whose check is left to CI that parked ci-job-absent on a job still running at CI_BOUND gives that job one CI fix round when it ends failed",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        ciBound = "20 millis";
+        ciPoll = "1 millis";
+        const { bin, reviewed, changed } = yield* releasable("github", {
+          jobs: [{ name: "test", state: "running" }],
+        });
+        const runId = "r-release-own-check-timeout-failed";
+        yield* ownCheck(runId);
+        yield* rig.queueOutputs([PACKAGED, { verdict: "clean", fixed: [] }]);
+        yield* driven(
+          {
+            entry: shipped("release"),
+            runId,
+            input: { mr: RELEASING.github.target },
+            host: releaseHost(),
+          },
+          (run) =>
+            Effect.gen(function* () {
+              yield* until(
+                () => Effect.zip(parkedWhy(runId), run.status),
+                ([why, status]) => why !== "" && status.status === "suspended",
+              );
+              expect(yield* parkedCause(runId)).toBe("ci-job-absent");
+              expect(yield* wasAsked(runId, "fix-1")).toBe(false);
+              const host = yield* rechecking(run, runId, RELEASING.github.mr, reviewed);
+              yield* until(
+                () => host.rounds,
+                (count) => count >= 2,
+              );
+              expect((yield* run.status).status).toBe("suspended");
+              expect(yield* wasAsked(runId, "fix-1")).toBe(false);
+              yield* changed({
+                jobs: [{ name: "test", state: "failed", retried: "failed" }],
+              });
+              yield* until(
+                () => wasAsked(runId, "fix-1"),
+                (asked) => asked,
+              );
+              expect(yield* wasAsked(runId, "fix-2")).toBe(false);
+            }),
+        );
+        yield* bin.restore();
+      }),
+    ),
+);
 
 const refusingCheckout: (refused: string) => HostOverride = (refused) =>
   Layer.effect(Host)(
@@ -26240,6 +26504,8 @@ export const register = (pass: "shipped" | "unrelated", share: number) => {
         const fs = yield* FileSystem.FileSystem;
         dir = `${rig.root}/host`;
         forgeApi = "";
+        ciBound = undefined;
+        ciPoll = undefined;
         started = [];
         failing = new Set();
         modules = new Map();

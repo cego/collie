@@ -740,7 +740,11 @@ Changes requested keep it from being ready. While what it waits for comes by its
 still running, a teammate's approval, review threads to be resolved — the Run is working,
 not needing you: the card stays under Working and says "Waiting for CI and a teammate's
 approval on `<mr>`.", with no notification and nothing in News, until the wait outlasts 2
-hours (2 days for a person), when it parks. Terminal failed CI at the proved head goes to
+hours (2 days for a person), when it parks. A job absent at the head, still pending or
+running when the wait runs out, or a forge read that was refused, is not a failure: the Run
+parks at once with the cause `ci-job-absent`, spends no round and starts no Heal, and
+Collie rechecks it until every job it recorded at that head has settled, so a job still
+running when the wait ran out is waited for. Terminal failed CI at the proved head goes to
 the same agent's fixer, even when local Checks pass or none are configured. The finding
 names the failed head, check or pipeline, and its forge URL when available. A failure the target branch's newest pipeline shares, test by test, is not the
 fixer's. The Run parks with the cause `target-red`, naming the target branch, its

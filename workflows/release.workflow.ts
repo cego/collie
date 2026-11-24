@@ -1000,6 +1000,7 @@ export default defineWorkflow({
             execute: Effect.gen(function* () {
               const checks = yield* host.approved(runId);
               const failed: Array<string> = [];
+              const unproved: Array<string> = [];
               let conflicting = false;
               let target: TargetRed | undefined;
               for (const spec of Arr.filter(checks, (one) => one.ci === undefined)) {
@@ -1052,11 +1053,20 @@ export default defineWorkflow({
                 }
                 if (read.conflicts === true) {
                   conflicting = true;
-                } else {
+                } else if (read.state === "failed") {
                   failed.push(read.unproved);
+                } else {
+                  unproved.push(read.unproved);
                 }
               }
               const head = (yield* host.evidence(runId, cwd)).final.head_sha;
+              // WARNING: only a job that actually failed earns a fix round; every other unproved read is rechecked.
+              if (unproved.length > 0) {
+                return yield* park(
+                  `The checks at ${short(head)} are unproved, not failed: ${Arr.join([...unproved, ...failed], "; ")}`,
+                  "ci-job-absent",
+                );
+              }
               if (failed.length > 0 && parkWith !== null && !conflicting) {
                 return yield* park(
                   `The checks failed at ${short(head)} ${parkWith}: ${Arr.join(failed, "; ")}`,

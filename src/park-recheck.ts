@@ -212,12 +212,18 @@ export const recheckPark = (
           if (
             read.head !== target.head ||
             read.state === "missing" ||
-            (read.state === "pending" && read.id === null && read.url === null)
+            read.state === "pending" ||
+            read.state === "running"
           ) {
-            return reply(false, `job ${target.job} absent at ${target.head}`);
+            return reply(
+              false,
+              read.state === "pending" || read.state === "running"
+                ? `job ${target.job} is still ${read.state} at ${target.head}`
+                : `job ${target.job} absent at ${target.head}`,
+            );
           }
         }
-        return reply(true, `jobs ${Arr.join([...latest.keys()], ", ")} present at parked head`);
+        return reply(true, `jobs ${Arr.join([...latest.keys()], ", ")} settled at parked head`);
       }
       case "ci-failed": {
         const targets = yield* readRunJournal(
