@@ -36,6 +36,15 @@ will not load.
 (#240) found one more, below as 7: an answer the engine has not processed yet is read early,
 and still wakes the Run later.
 
+**Amended 2026-11-24: Effect 4.1.5, and no patch.** The proof was rerun on 4.1.5
+(`test/engine.test.ts`, `test/child-execution.test.ts`, `test/resume.test.ts` and the
+release-set scenarios) and the seven behaviours above still hold. The three runtime packages
+move together, as the Consequences say. A state directory a 4.1.4 host wrote is read as it
+is: every `CREATE` and `ALTER` statement in `cluster/SqlMessageStorage.js` and
+`cluster/SqlRunnerStorage.js` is unchanged, and `ShardingConfig`'s fields are the same set.
+The upgrade also took away Collie's checked-in `effect` patch: 4.1.5 guards a stale activity
+reset itself, but keeps the interrupts no reply has stamped, so a resumed attempt replays
+them (behaviour 8, below). Collie resets the whole family itself, in its own storage layer.
 A workflow will be a TypeScript file an author writes, outside this repository, and Collie
 will run it. That means Collie either builds durability, replay, suspension and recovery,
 or it uses Effect's. This says it uses Effect's, records exactly which settings that takes,
@@ -144,6 +153,14 @@ Six things the proof measured rather than assumed, and a seventh a Flake found. 
    that Activity again. So `answerDecision` completes a question only once its Run has
    stopped to wait on it. The baseline scenarios that answer before the Run awaits are the
    test.
+
+8. **A guarded Activity reset keeps the interrupts no reply has stamped.** `clearReplies`
+   with `expectedReplyId` deletes the replies and the interrupt rows stamped by that reply,
+   and keeps the interrupts that arrived after it for the next attempt. A resumed attempt
+   that replays the interrupt meant for the parked one makes no progress, so Collie resets
+   the whole family once the expected reply is the latest one — `resetReplies` in
+   `src/engine-touches.ts`, in one transaction — and `test/effect-sql-reset.test.ts` holds
+   it.
 
 ## What this does not decide
 

@@ -214,10 +214,13 @@ the relaunch records and the running checks' records are rows of `collie_control
 them, imported from and rolled back to the files an older build kept. A board build reads each
 journal, fact and activity it uses for all its Runs in one query.
 
-`patches/effect@4.1.4.patch` prevents a conditional SQL activity reset from replaying the
-interrupt that suspended it. The existing transaction protects the reply check and cleanup;
-a stale reset leaves newer replies and interrupts intact. Remove the patch only when an
-upstream release passes `test/effect-sql-reset.test.ts` and the release-set scenarios.
+Effect's own `clearReplies` guards a conditional SQL activity reset against a _stale_ one: the
+reply check and the cleanup share a transaction, so a newer reply survives untouched. It
+also keeps the interrupts no reply has stamped — those that arrived while the attempt was
+parked — and a resumed attempt would replay them, so Collie's storage layer resets the
+whole family once the expected reply is the latest one (`resetReplies` in
+`src/engine-touches.ts`). `test/effect-sql-reset.test.ts` and the release-set scenarios hold
+both halves.
 
 Once it answers, a starting host ends every check a previous host left running in its
 state directory: one with a running-check record in `host.db`, or a process marked with this

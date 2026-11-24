@@ -1,6 +1,7 @@
 // WARNING: each engine write moves the count, so an unchanged count means the Run's engine state is unchanged.
 import { Context, Effect, Layer } from "effect";
 import type * as MessageStorage from "effect/cluster/MessageStorage";
+import type * as Snowflake from "effect/cluster/Snowflake";
 import type * as SqlClient from "effect/sql/SqlClient";
 
 export class EngineTouches extends Context.Service<
@@ -21,6 +22,30 @@ export const engineTouchesLayer = Layer.sync(EngineTouches)(() => {
     forget: () => void epoch++,
   };
 });
+
+// WARNING: 4.1.5's guarded reset keeps the interrupts no reply stamped, and a resumed attempt replays them.
+// WARNING: the reply check and the reset share one transaction, because the reset it guards is unconditional.
+const resetReplies = (
+  inner: MessageStorage.MessageStorage["Service"],
+  requestId: Snowflake.Snowflake,
+  options?: { readonly expectedReplyId?: Snowflake.Snowflake | undefined },
+) => {
+  const expected = options?.expectedReplyId;
+  if (expected === undefined) {
+    return inner.clearReplies(requestId, options);
+  }
+  return inner.withTransaction(
+    inner.repliesForUnfiltered([requestId]).pipe(
+      Effect.map((replies) => replies.at(-1)),
+      Effect.orElseSucceed(() => undefined),
+      Effect.flatMap((last) =>
+        last?.id === String(expected)
+          ? inner.clearReplies(requestId)
+          : inner.clearReplies(requestId, options),
+      ),
+    ),
+  );
+};
 
 export const touching: (
   inner: MessageStorage.MessageStorage["Service"],
@@ -72,7 +97,7 @@ export const touching: (
         touchOwner(reply.reply.requestId, reply.reply._tag === "WithExit"),
       ),
     clearReplies: (requestId, options) =>
-      Effect.tap(inner.clearReplies(requestId, options), () => touchOwner(requestId, false)),
+      Effect.tap(resetReplies(inner, requestId, options), () => touchOwner(requestId, false)),
     clearAddress: (address) =>
       Effect.tap(inner.clearAddress(address), () => Effect.sync(touches.forget)),
   };
