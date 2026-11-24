@@ -1373,17 +1373,21 @@ from `terminal.list`, with its start time). Before the close, `paneProcesses` ta
 whose pid is another process, and notes each one's session with `sessionOf`, so a pane that
 already died still has its processes checked. After the close, `settled` waits up to two seconds
 for what the hang-up ends, sends each process still running one SIGTERM, and waits out the
-stop's budget. What is left makes the end `NotQuiet` with `left`; the Fallback's
-retirement records the agent and `left` in the Run's `not-quiet.jsonl` journal and parks
-with the cause `predecessor-not-quiet`, whose recheck clears once none of `left` is still
-the process noted and `keptFor` keeps no control record of the agent. Where no root can be
+stop's budget. What is left makes the end `NotQuiet` with `left`; every `NotQuiet` — a
+Fallback's retirement, `installControls` meeting a record it cannot stop, a compaction alike —
+records the agent and `left` in the Run's `not-quiet.jsonl` journal and parks with the cause
+`predecessor-not-quiet`, whose recheck clears once none of `left` is still the process noted
+and `keptFor` keeps no control record of the agent. Where no root can be
 named, the end logs `<agent>: Quiet not confirmed: <why>` and the close stands as the stop.
 
 Every path that replaces an agent or releases what it worked in goes through the same stop
 first. `installControls` stops a record left under the name it installs and fails
 `NotQuiet` rather than delete it; the Agents service turns that into a parked launch. A
 Fallback's retirement stops the agent that ran out whether or not core lists it, and parks
-where it cannot prove the agent is its own. A launch
+where it cannot prove the agent is its own: `herdr-unavailable` where core cannot list it,
+`predecessor-unproven` where its pane would not close or its identity cannot be proved, and
+`predecessor-locked` where a lock kept it from being stopped, which its recheck clears once
+that agent's controls are free. A launch
 checks for a stop before it starts an agent and again after, and starts it and writes its
 launch record as one uninterruptible step, so a stop that lands in between finds the agent
 and stops it. The stale-controls put-down at launch and the Cleanup sweep run the stop for

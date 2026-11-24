@@ -1,7 +1,7 @@
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { Config, Effect, FileSystem, Schema, flow, Result } from "effect";
+import { Config, Effect, FileSystem, PlatformError, Schema, flow, Result } from "effect";
 import { connect, frontDoor, ownerOf, socketOf } from "../src/host";
 import { collie, proves } from "./support/world";
 import type { World } from "./support/world";
@@ -35,7 +35,7 @@ import {
   rememberNotQuiet,
   rememberStaleHandOver,
 } from "../src/park-recheck";
-import { processOf, startedOf } from "../src/processes";
+import { processAbsent, processOf, startedOf } from "../src/processes";
 import { SURVIVES_HANGUP, paneTree } from "./support/pane-tree";
 
 const idOf = flow(
@@ -1244,10 +1244,71 @@ test("a predecessor-not-quiet park clears once nothing its predecessor left is r
         error: false,
       });
       process.kill(pid, "SIGKILL");
-      while ((yield* processOf(pid)) !== null) {
+      for (let tries = 0; !(yield* processAbsent(pid)); tries++) {
+        if (tries === 1000) {
+          return yield* Effect.die(new Error(`pid ${pid} never went absent`));
+        }
         yield* Effect.sleep(10);
       }
       expect(yield* recheck).toEqual({ cleared: true, note: "r1-build is Quiet", error: false });
+    }).pipe(Effect.scoped, Effect.provide(forgeHttpOnPath)),
+  ));
+
+test("a predecessor-not-quiet park stays while its process is alive or cannot be read, and clears only once it is gone", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "collie-not-quiet-unreadable-" });
+      const { child: pid } = yield* paneTree(SURVIVES_HANGUP);
+      yield* rememberNotQuiet(`${root}/runs/r1`, {
+        agent: "r1-build",
+        left: [{ pid, started: (yield* startedOf(pid))! }],
+      });
+      const recheck = () =>
+        recheckPark(
+          {
+            runId: "r1",
+            cwd: root,
+            branch: null,
+            mr: null,
+            park: { cause: "predecessor-not-quiet", kind: "rechecks" },
+          },
+          root,
+          { agentList: () => Effect.die("a predecessor's recheck asks core nothing") },
+        );
+      const unreadable = {
+        ...fs,
+        readFileString: (path: string) =>
+          Str.startsWith(`/proc/${pid}/`)(path)
+            ? Effect.fail(
+                PlatformError.systemError({
+                  _tag: "PermissionDenied",
+                  module: "FileSystem",
+                  method: "read",
+                  pathOrDescriptor: path,
+                }),
+              )
+            : fs.readFileString(path),
+      };
+      expect(
+        yield* recheck().pipe(Effect.provideService(FileSystem.FileSystem, unreadable)),
+      ).toEqual({
+        cleared: false,
+        note: `r1-build's pid ${pid} could not be read, so it is not proven stopped`,
+        error: false,
+      });
+      expect(yield* recheck()).toMatchObject({
+        cleared: false,
+        note: `r1-build's pid ${pid} is still running`,
+      });
+      process.kill(pid, "SIGKILL");
+      for (let tries = 0; !(yield* processAbsent(pid)); tries++) {
+        if (tries === 1000) {
+          return yield* Effect.die(new Error(`pid ${pid} never went absent`));
+        }
+        yield* Effect.sleep(10);
+      }
+      expect(yield* recheck()).toEqual({ cleared: true, note: "r1-build is Quiet", error: false });
     }).pipe(Effect.scoped, Effect.provide(forgeHttpOnPath)),
   ));
 

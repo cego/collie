@@ -13,8 +13,8 @@ import { parkText } from "./park-cause";
 import type { ParkCause } from "./park-cause";
 import { readStepLines } from "./steps";
 import { isSettledDelivery, newestById, readLedger } from "./steering";
-import { keptFor, readControl } from "./compaction";
-import { stillRunning } from "./processes";
+import { keptFor, readControl, withControlLock } from "./compaction";
+import { processAbsent, processOf } from "./processes";
 import { planRevision } from "./hand-over";
 
 const CiTarget = Schema.fromJsonString(
@@ -96,6 +96,12 @@ const lastFailedCi = (dir: string) =>
   Effect.map(
     readRunJournal(failedCiJournal(dir), FailedCi).pipe(Effect.orElseSucceed(() => [])),
     (targets) => targets.at(-1),
+  );
+
+const lastNotQuiet = (dir: string) =>
+  Effect.map(
+    readRunJournal(notQuietJournal(dir), NotQuiet).pipe(Effect.orElseSucceed(() => [])),
+    (held) => held.at(-1),
   );
 
 export const parkEvidence = (
@@ -277,16 +283,21 @@ export const recheckPark = (
         return read.ok ? reply(true, "forge answered") : reply(false, read.reason, true);
       }
       case "predecessor-not-quiet": {
-        const last = (yield* readRunJournal(
-          notQuietJournal(`${stateDir}/runs/${view.runId}`),
-          NotQuiet,
-        ).pipe(Effect.orElseSucceed(() => []))).at(-1);
+        const last = yield* lastNotQuiet(`${stateDir}/runs/${view.runId}`);
         if (last === undefined) {
           return reply(false, "no predecessor recorded");
         }
         for (const one of last.left) {
-          if (yield* stillRunning(one)) {
+          const now = yield* processOf(one.pid);
+          if (now !== null && now.started === one.started) {
             return reply(false, `${last.agent}'s pid ${one.pid} is still running`);
+          }
+          // WARNING: #412: a process nobody could inspect is never taken for one that stopped.
+          if (now === null && !(yield* processAbsent(one.pid))) {
+            return reply(
+              false,
+              `${last.agent}'s pid ${one.pid} could not be read, so it is not proven stopped`,
+            );
           }
         }
         const kept = yield* readControl(stateDir, last.agent).pipe(
@@ -299,6 +310,18 @@ export const recheckPark = (
         return kept.success === null
           ? reply(true, `${last.agent} is Quiet`)
           : reply(false, `${last.agent}: ${kept.success}`);
+      }
+      case "predecessor-locked": {
+        const last = yield* lastNotQuiet(`${stateDir}/runs/${view.runId}`);
+        if (last === undefined) {
+          return reply(false, "no predecessor recorded");
+        }
+        const taken = yield* withControlLock(stateDir, last.agent, Effect.succeed(true), 0).pipe(
+          Effect.result,
+        );
+        return taken._tag === "Success"
+          ? reply(true, `${last.agent}'s controls are free`)
+          : reply(false, `${last.agent}'s controls are still in use`);
       }
       case "hand-over-stale": {
         const dir = `${stateDir}/runs/${view.runId}`;

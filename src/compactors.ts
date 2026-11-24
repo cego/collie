@@ -28,7 +28,6 @@ import {
   boundThread,
   compactionItems,
   interruptTurn,
-  runningTurns,
   currentContext as codexContext,
   startCompaction,
   turnOutcome,
@@ -1360,7 +1359,6 @@ const stopCodex = (
           }
           yield* interrupt(one);
         }
-        const busy = Arr.filter(threads, (thread) => thread.running.length > 0);
         for (;;) {
           if (!(yield* stillRunning(server))) {
             return yield* survivors(
@@ -1374,29 +1372,29 @@ const stopCodex = (
               inspected,
             );
           }
-          // WARNING: read back rather than assumed: a lost connection is not a turn that ended.
+          // WARNING: read back rather than assumed, every thread again: a lost connection is not a turn that ended, and a sub-agent's turn starts after the first listing.
           let unread: string | null = null;
           const unended: typeof running = [];
-          for (const thread of busy) {
-            const now = yield* runningTurns(client, thread.id).pipe(Effect.result);
-            if (now._tag === "Failure") {
-              unread = reason(now.failure);
-              unended.push(...Arr.filter(running, (one) => one.thread === thread.id));
-              continue;
-            }
-            for (const turn of now.success) {
-              let one = Option.getOrUndefined(
-                Arr.findFirst(
-                  running,
-                  (asked) => asked.thread === thread.id && asked.turn === turn,
-                ),
-              );
-              if (one === undefined) {
-                one = { thread: thread.id, turn, transcript: thread.transcript };
-                running.push(one);
-                yield* interrupt(one);
+          const listed = yield* agentThreads(client, target.cwd).pipe(Effect.result);
+          if (listed._tag === "Failure") {
+            unread = reason(listed.failure);
+            unended.push(...running);
+          } else {
+            for (const thread of listed.success) {
+              for (const turn of thread.running) {
+                let one = Option.getOrUndefined(
+                  Arr.findFirst(
+                    running,
+                    (asked) => asked.thread === thread.id && asked.turn === turn,
+                  ),
+                );
+                if (one === undefined) {
+                  one = { thread: thread.id, turn, transcript: thread.transcript };
+                  running.push(one);
+                  yield* interrupt(one);
+                }
+                unended.push(one);
               }
-              unended.push(one);
             }
           }
           if ((yield* Clock.currentTimeMillis) >= deadline) {

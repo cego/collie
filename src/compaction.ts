@@ -344,7 +344,10 @@ export const installControls = Effect.fn("Compaction.installControls")(function*
   const reached =
     prior === null ? null : yield* stopRecord(deps, prior, deps.stopMs ?? STOP_WAIT_MS);
   if (reached !== null && reached.state !== "quiet") {
-    return yield* new NotQuiet({ message: notStopped(agent.agent, reached, reached.target) });
+    return yield* new NotQuiet({
+      message: notStopped(agent.agent, reached, reached.target),
+      left: reached.left,
+    });
   }
   if (reached === null) {
     yield* putDownServer(deps, prior);
@@ -431,7 +434,10 @@ export interface StopReached extends Stopped {
   readonly target: StopTarget;
 }
 
-export class NotQuiet extends Data.TaggedError("NotQuiet")<{ readonly message: string }> {}
+export class NotQuiet extends Data.TaggedError("NotQuiet")<{
+  readonly message: string;
+  readonly left: ReadonlyArray<SeenProcess>;
+}> {}
 
 // WARNING: the record goes only once its agent is Quiet.
 const stopRecord = Effect.fn("Compaction.stopRecord")(function* (

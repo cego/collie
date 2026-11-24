@@ -21,6 +21,8 @@ export const ParkCause = Schema.Literals([
   "gate-fix-unproved",
   "step-failed",
   "predecessor-not-quiet",
+  "predecessor-locked",
+  "predecessor-unproven",
   "hand-over-stale",
   "unknown",
 ]);
@@ -91,6 +93,12 @@ export const PARK_CAUSES: Readonly<Record<ParkCause, Entry>> = {
     reason: "a Step failed on something to correct, and a resume enters it again",
   },
   "predecessor-not-quiet": { kind: "rechecks", neverHeals: true },
+  "predecessor-locked": { kind: "rechecks", neverHeals: true },
+  "predecessor-unproven": {
+    kind: "needs-you",
+    reason: "an agent that had to stop could not be proven stopped, and was left running",
+    neverHeals: true,
+  },
   "hand-over-stale": { kind: "rechecks", neverHeals: true },
   unknown: { kind: "needs-you", reason: "nothing names why it parked" },
 };

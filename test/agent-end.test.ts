@@ -6,10 +6,13 @@ import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { endAgent } from "../src/agent-end";
 import type { EndDeps } from "../src/agent-end";
 import { Agents, agentsLayer } from "../src/agents";
+import type { AgentHost } from "../src/agents";
 import { foundationLayer } from "../src/engine";
 import { Herdr, HerdrError } from "../src/herdr";
 import type { CompactionPorts, Stopped } from "../src/compaction";
-import { runEffect } from "./support/effect";
+import { withControlLock } from "../src/compaction";
+import { recheckPark } from "../src/park-recheck";
+import { fastForward, runEffect, runEffect as runLive } from "./support/effect";
 import { Rig } from "./support/recorder";
 import * as Layer from "effect/Layer";
 import { IGNORES_TERM, SURVIVES_HANGUP, paneTree } from "./support/pane-tree";
@@ -411,11 +414,111 @@ test("a Fallback's close parks on an agent it cannot prove is this Run's, and cl
         ),
         Effect.scoped,
       );
+      expect(retired.cause).toBe("predecessor-unproven");
       expect(retired.reason).toBe(
         "impl ran out and must stop before another agent takes its work, but it cannot be proven to be this Run's, so it was left running. Close it and resume.",
       );
       expect(yield* terminalKills).toEqual([]);
     }),
+  ));
+
+const retireLayer = (over: Partial<AgentHost> = {}) =>
+  agentsLayer({
+    dir: rig.stateDir,
+    env: rig.pluginEnv(),
+    herdr: over.herdr ?? new Herdr(rig.pluginEnv()),
+    harness: "claude",
+    model: "opus",
+    permissions: "auto",
+    compactAtTokens: 0,
+    help: () => Effect.succeed(""),
+    stopMs: 500,
+    ...over,
+  }).pipe(Layer.provideMerge(foundationLayer({ dir: rig.stateDir })));
+
+const retireFlipped = (
+  launched: { readonly terminalId?: string; readonly harness?: string },
+  over?: Partial<AgentHost>,
+) =>
+  Agents.pipe(
+    Effect.flatMap((agents) =>
+      agents.retire({ ...launchedImpl, ...launched }, "build: impl ran out"),
+    ),
+    Effect.flip,
+    Effect.provide(retireLayer(over)),
+    Effect.scoped,
+  );
+
+class Unlisting extends Herdr {
+  constructor() {
+    super(rig.pluginEnv());
+  }
+  override agentList() {
+    const refused: ReturnType<Herdr["agentList"]> = Effect.fail(
+      new HerdrError({ message: "core is down", detail: "no answer", code: "unavailable" }),
+    );
+    return refused;
+  }
+}
+
+test("a Fallback's close parks herdr-unavailable when core cannot list its agents", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const retired = yield* retireFlipped({ terminalId: "term-impl" }, { herdr: new Unlisting() });
+      expect(retired.cause).toBe("herdr-unavailable");
+      expect(retired.reason).toContain("core cannot say whether it is running");
+      expect(yield* terminalKills).toEqual([]);
+    }),
+  ));
+
+test("a Fallback's close parks on a pane that will not close with a cause that needs you, and never unknown", () =>
+  runEffect(
+    Effect.gen(function* () {
+      (yield* rig.startCore()).refuse("terminal.kill", "unavailable", "core refused the kill");
+      const terminalId = yield* arranged("impl");
+      const stopped = yield* retireFlipped({ terminalId });
+      expect(stopped.cause).toBe("predecessor-unproven");
+      expect(stopped.reason).toContain("would not close");
+    }),
+  ));
+
+test("a Fallback's close parks on locked controls, which its recheck clears once they are free", () =>
+  runLive(
+    fastForward(
+      Effect.gen(function* () {
+        const terminalId = yield* arranged("impl");
+        yield* serverFor("impl");
+        const ports = served("quiet", []);
+        const view = {
+          runId: "r1",
+          cwd: rig.projectDir,
+          branch: null,
+          mr: null,
+          park: { cause: "predecessor-locked" as const, kind: "rechecks" as const },
+        };
+        const recheck = {
+          agentList: () => Effect.die("a predecessor's recheck asks core nothing"),
+        };
+        const held = yield* withControlLock(
+          rig.stateDir,
+          "impl",
+          Effect.gen(function* () {
+            const retired = yield* retireFlipped({ terminalId }, { ports });
+            return {
+              retired,
+              whileHeld: yield* recheckPark(view, rig.stateDir, recheck).pipe(
+                Effect.provide(retireLayer()),
+              ),
+            };
+          }),
+        );
+        expect(held.retired.cause).toBe("predecessor-locked");
+        expect(held.whileHeld).toMatchObject({ cleared: false });
+        expect(
+          yield* recheckPark(view, rig.stateDir, recheck).pipe(Effect.provide(retireLayer())),
+        ).toMatchObject({ cleared: true });
+      }),
+    ),
   ));
 
 test("a ticket's agent whose pane leaves a child that will not stop parks its boundary on predecessor-not-quiet, saying it finished its ticket", () =>

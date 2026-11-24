@@ -9,7 +9,17 @@ import * as Rec from "effect/Record";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
 import type { Path } from "effect";
-import { Duration, Effect, FileSystem, PlatformError, Schema, flow, Result, Struct } from "effect";
+import {
+  ConfigProvider,
+  Duration,
+  Effect,
+  FileSystem,
+  PlatformError,
+  Schema,
+  flow,
+  Result,
+  Struct,
+} from "effect";
 import { TestClock } from "effect/testing";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import { Rig } from "./support/recorder";
@@ -17,13 +27,16 @@ import { fastForward, runEffect as runLive } from "./support/effect";
 import { Agents, agentWork, agentsLayer } from "../src/agents";
 import type { AgentHost } from "../src/agents";
 import { asRun, enveloped } from "./support/enveloped";
-import { PARKED, STOP, foundationLayer, pollStatus } from "../src/engine";
+import { PARKED, PARK_CAUSE, STOP, foundationLayer, pollStatus } from "../src/engine";
 import { compactionSweeper, sweep } from "../src/cleanup";
 import { Herdr, HerdrError } from "../src/herdr";
 import { isString } from "../src/schema";
 import { recordClaudeEvent } from "../src/compactors";
 import { installControls, readControl, withControlLock } from "../src/compaction";
 import { processAbsent, processOf } from "../src/processes";
+import { recoverParks } from "../src/park-recovery";
+import { forgeHttpLayer } from "../src/forge/http";
+import { recheckPark } from "../src/park-recheck";
 
 import { agentName } from "../src/naming";
 import { COMPACTION_PORTS, codexPort } from "../src/compactors";
@@ -307,6 +320,25 @@ test("a sub-agent's running turn on the same server is interrupted too", () =>
         ],
       });
       expect(yield* halted()).toEqual({ stopped: [agent], left: [] });
+      const interrupts = Arr.filter(yield* events(), (one) => one.method === "turn/interrupt");
+      expect(Arr.map(interrupts, (one) => one.params)).toEqual([
+        { threadId: THREAD, turnId: TURN },
+        { threadId: SUB_THREAD, turnId: SUB_TURN },
+      ]);
+    }),
+  ));
+
+test("a sub-agent's turn that starts after the stop's first listing is interrupted too, and the server goes quiet", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* working({
+        threads: [
+          { id: THREAD, cwd: rig.projectDir, turn: { id: TURN } },
+          { id: SUB_THREAD, cwd: "/elsewhere", parent: THREAD },
+        ],
+        startsOnInterrupt: [{ thread: SUB_THREAD, turn: SUB_TURN }],
+      });
+      expect(yield* halted({ stopMs: 25_000 })).toEqual({ stopped: [agent], left: [] });
       const interrupts = Arr.filter(yield* events(), (one) => one.method === "turn/interrupt");
       expect(Arr.map(interrupts, (one) => one.params)).toEqual([
         { threadId: THREAD, turnId: TURN },
@@ -1396,5 +1428,197 @@ test("a Codex agent whose paginated thread with no user message cannot list its 
       expect(alive(yield* serverPid())).toBe(false);
       expect(yield* agentsLog()).toContain(`${agent}: quiet`);
       expect(yield* recorded()).toBeNull();
+    }),
+  ));
+
+const launchAsk = () => ({
+  runId: "r1",
+  operation: "build",
+  role: "implementer",
+  workflow: "agent-work",
+  task: null,
+  agent: null,
+  cwd: rig.projectDir,
+  prompt: "Build it.",
+  output: `${dir}/output.json`,
+  skill: null,
+  harness: "codex",
+  model: null,
+  effort: null,
+  permissions: null,
+});
+
+const NotQuietLeft = Schema.fromJsonString(
+  Schema.Struct({
+    left: Schema.Array(Schema.Struct({ pid: Schema.Finite, started: Schema.String })),
+  }),
+);
+const parkCause = () =>
+  hostRecords(
+    dir,
+    RunRecords.use((records) => records.control(PARK_CAUSE, "r1")),
+  ).pipe(
+    Effect.map((cause) => cause ?? ""),
+    Effect.orElseSucceed(() => ""),
+  );
+
+const notQuietLeft = () =>
+  hostRecords(
+    dir,
+    RunRecords.use((records) => records.lines("r1", "not-quiet.jsonl")),
+  ).pipe(
+    Effect.map((lines) =>
+      Arr.flatMap(lines, (line) =>
+        Option.match(Schema.decodeOption(NotQuietLeft)(line), {
+          onNone: () => [],
+          onSome: (held) => held.left,
+        }),
+      ),
+    ),
+    Effect.orElseSucceed(() => []),
+  );
+
+test("a launch whose predecessor's server outlived the stop budget parks predecessor-not-quiet, and the host's recovery goes on at that Step once it is gone", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* serve({ ignoreInterrupt: true });
+      const payload = { runId: "r1", input: { skip: false } };
+      yield* Effect.gen(function* () {
+        // WARNING: the record a stop that gave up leaves, with its server still writing.
+        yield* Agents.pipe(Effect.flatMap((agents) => agents.launch(launchAsk())));
+        const stranded = yield* serverPid();
+        yield* closedByHand;
+        yield* rig.queueOutputs([{ verdict: "clean", note: "went on" }]);
+
+        const engine = yield* WorkflowEngine.WorkflowEngine;
+        const id = yield* work.executionId(payload);
+        const statusNow = Effect.gen(function* () {
+          const running = yield* WorkflowEngine.WorkflowEngine;
+          return pollStatus(yield* running.poll(work, id), "agent-work");
+        });
+        yield* work.execute(payload, { discard: true });
+        for (let tries = 0; (yield* statusNow).status !== "suspended"; tries++) {
+          if (tries === 30_000) {
+            return yield* Effect.die(new Error("r1 never parked"));
+          }
+          yield* Effect.sleep("20 millis");
+        }
+        expect(yield* parkCause()).toBe("predecessor-not-quiet");
+        expect(yield* agentStarts()).toEqual(["codex"]);
+        expect(alive(stranded)).toBe(true);
+        expect(Arr.map(yield* notQuietLeft(), (one) => one.pid)).toContain(stranded);
+
+        const view = {
+          runId: "r1",
+          workflow: "agent-work",
+          project: rig.projectDir,
+          task: null,
+          parent: null,
+          registration: "agent-work@1",
+          entry: "agent-work.workflow.ts",
+          input: { skip: false },
+          provenance: {},
+          strategies: {},
+          options: {},
+          cwd: rig.projectDir,
+          branch: null,
+          workspace: null,
+          worktree: null,
+          outcome: "feature",
+          created: "2026-01-01T00:00:00.000Z",
+          status: { status: "suspended" },
+          waiting: [],
+          controls: [],
+          diagnostic: null,
+          parked: "the predecessor's server is not stopped",
+          park: {
+            id: "p1",
+            since: "2026-01-01T00:00:00.000Z",
+            cause: "predecessor-not-quiet" as const,
+            kind: "rechecks" as const,
+          },
+          awaiting: null,
+          mr: null,
+          landing: null,
+        };
+        yield* Effect.forkScoped(
+          recoverParks({
+            env: rig.pluginEnv(),
+            herdr: new Herdr(rig.pluginEnv()),
+            views: Effect.map(statusNow, (status) => [{ ...view, status }]),
+            reconnects: Effect.succeed(0),
+            panels: new Map(),
+            resume: () =>
+              Effect.gen(function* () {
+                yield* engine.resume(work, id);
+                yield* work.execute(payload, { discard: true });
+                return { applied: true };
+              }),
+          }).pipe(
+            Effect.provide(
+              ConfigProvider.layerAdd(
+                ConfigProvider.fromUnknown({ COLLIE_RECOVERY_EVERY: "50 millis" }),
+              ),
+            ),
+          ),
+        );
+
+        // WARNING: nothing resumes while the server the predecessor left is still writing.
+        yield* Effect.sleep("1 seconds");
+        expect((yield* statusNow).status).toBe("suspended");
+        expect(yield* agentStarts()).toEqual(["codex"]);
+
+        yield* release();
+        for (let tries = 0; (yield* statusNow).status !== "complete"; tries++) {
+          if (tries === 60_000) {
+            return yield* Effect.die(new Error("r1 never went on at its Step"));
+          }
+          yield* TestClock.withLive(Effect.sleep("20 millis"));
+        }
+        expect(yield* agentStarts()).toEqual(["codex", "codex"]);
+      }).pipe(
+        Effect.provide(
+          body.pipe(
+            Layer.provideMerge(agentsLayer(hostOf({ stopMs: 25_000 }))),
+            Layer.provideMerge(foundationLayer({ dir })),
+          ),
+        ),
+        Effect.scoped,
+        Effect.orDie,
+      );
+    }),
+  ));
+
+test("the park a launch that met a record its predecessor left makes records the processes left, and clears only once they are gone", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* serve({ ignoreInterrupt: true });
+      yield* session(Agents.pipe(Effect.flatMap((agents) => agents.launch(launchAsk()))));
+      const stranded = yield* serverPid();
+      yield* closedByHand;
+      yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
+      yield* until(suspended, { stopMs: 300 });
+      expect(yield* parkCause()).toBe("predecessor-not-quiet");
+      expect(Arr.map(yield* notQuietLeft(), (one) => one.pid)).toContain(stranded);
+
+      const recheck = () =>
+        recheckPark(
+          {
+            runId: "r1",
+            cwd: rig.projectDir,
+            branch: null,
+            mr: null,
+            park: { cause: "predecessor-not-quiet", kind: "rechecks" },
+          },
+          rig.pluginEnv().stateDir,
+          { agentList: () => Effect.die("a predecessor's recheck asks core nothing") },
+        ).pipe(Effect.provide(Layer.mergeAll(recordsAt(dir), forgeHttpLayer)));
+      expect(yield* recheck()).toMatchObject({ cleared: false });
+
+      yield* release();
+      while (alive(stranded)) {
+        yield* TestClock.withLive(Effect.sleep("20 millis"));
+      }
+      expect(yield* recheck()).toMatchObject({ cleared: true });
     }),
   ));

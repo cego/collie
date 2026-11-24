@@ -42,6 +42,8 @@ export interface StandIn {
     items?: ReadonlyArray<unknown>;
   }>;
   ignoreInterrupt?: boolean;
+  // WARNING: turns that start when an interrupt is answered, as a sub-agent's does after the stop's listing.
+  startsOnInterrupt?: ReadonlyArray<{ thread: string; turn: string }>;
   neverExit?: boolean;
   dropOn?: string;
   continuation?: boolean;
@@ -73,6 +75,9 @@ const StandInFile = Schema.fromJsonString(
     events: Schema.String,
     threads: Schema.Array(Thread),
     ignoreInterrupt: Schema.optionalKey(Schema.Boolean),
+    startsOnInterrupt: Schema.optionalKey(
+      Schema.Array(Schema.Struct({ thread: Schema.String, turn: Schema.String })),
+    ),
     neverExit: Schema.optionalKey(Schema.Boolean),
     dropOn: Schema.optionalKey(Schema.String),
     continuation: Schema.optionalKey(Schema.Boolean),
@@ -140,6 +145,7 @@ const main = Effect.gen(function* () {
     Arr.filter(Arr.flatten([...turns.values()]), (turn) => turn.status === "inProgress");
   let draining = false;
   let drainPending = false;
+  let lateStarted = false;
   let interrupted = 0;
   const begin = (threadId: string, id: string, writes?: string) =>
     Effect.gen(function* () {
@@ -298,6 +304,12 @@ const main = Effect.gen(function* () {
             return refuse("no active turn to interrupt");
           }
           reply({});
+          if (!lateStarted) {
+            lateStarted = true;
+            for (const one of config.startsOnInterrupt ?? []) {
+              yield* begin(one.thread, one.turn);
+            }
+          }
           if (config.ignoreInterrupt) {
             return;
           }

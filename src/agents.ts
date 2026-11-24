@@ -2587,12 +2587,17 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           session?.resumed === true ? { session: session.id, keep: [QUESTIONS] } : undefined,
         ).pipe(
           Effect.catchIf(isNotQuiet, (refused) =>
-            Effect.fail(
-              new AgentParked({
+            Effect.gen(function* () {
+              yield* rememberNotQuiet(`${host.dir}/runs/${ask.runId}`, {
+                agent,
+                left: refused.left,
+              });
+              return yield* new AgentParked({
                 operation: ask.operation,
                 reason: `${refused.message}. Nothing was started in its place; once it has stopped, \`collie run resume ${ask.runId}\``,
-              }),
-            ),
+                cause: "predecessor-not-quiet",
+              });
+            }),
           ),
         );
         const settingsArgs =
@@ -4220,33 +4225,36 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
   const retire = (launched: Launched, line: string, done = "ran out") =>
     under(
       Effect.gen(function* () {
-        const parked = (why: string) =>
+        const parked = (why: string, cause?: ParkCause) =>
           new AgentParked({
             operation: launched.operation,
             reason: `${launched.agent} ${done} and must stop before another agent takes its work, but ${why}. Close it and resume.`,
+            cause,
           });
         const ended = yield* endAgent(endsOf(launched.runId), launched, `it ${done}`, "close").pipe(
           Effect.mapError((failure) =>
             failure._tag === "AgentsUnlisted"
               ? parked(
                   `core cannot say whether it is running (${herdrFailureReason(failure.cause)})`,
+                  "herdr-unavailable",
                 )
               : parked(
                   `its pane ${failure.paneId} would not close (${herdrFailureReason(failure.cause)})`,
+                  "predecessor-unproven",
                 ),
           ),
         );
         if (ended._tag === "Unprovable") {
-          return yield* parked(`it ${UNPROVABLE}`);
+          return yield* parked(`it ${UNPROVABLE}`, "predecessor-unproven");
         }
         if (ended._tag === "NotQuiet") {
-          if (ended.locked !== undefined) {
-            return yield* parked(`it could not be stopped (${ended.locked})`);
-          }
           yield* rememberNotQuiet(`${host.dir}/runs/${launched.runId}`, {
             agent: launched.agent,
             left: ended.left ?? [],
           });
+          if (ended.locked !== undefined) {
+            return yield* parked(`it could not be stopped (${ended.locked})`, "predecessor-locked");
+          }
           return yield* new AgentParked({
             operation: launched.operation,
             reason: `${ended.reason}. It ${done}, and no agent takes its work until it has stopped; this Run goes on once it has`,

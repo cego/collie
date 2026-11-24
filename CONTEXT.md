@@ -490,9 +490,12 @@ needs you and says why. An unclassified park is `unknown`, never a guess. A park
 derived from the Run, its cause and the evidence that cause is about, so parking again on the
 same evidence after a restart, resume or hand-over is the same park. `delivery-unsettled` is a
 reminder held behind an earlier delivery nobody can settle; it rechecks and never heals.
-`predecessor-not-quiet` is an agent that had to stop before another took its work, and was not
-**Quiet** within the stop's wait: it rechecks that nothing it left is still running, and never
-starts a Heal. `hand-over-stale` is a **Hand-over** whose checkout moved again after it was
+`predecessor-not-quiet` is an agent that had to stop before another took its work, or before a
+launch installed its controls, and was not **Quiet** within the stop's wait: it
+rechecks that nothing it left is still running, and never starts a Heal. `predecessor-locked` is
+such an agent where a lock kept it from being stopped at all: it rechecks that the agent's
+controls are free. `predecessor-unproven` is one Collie could not close or could not prove was
+its own: it needs you, and its reason says what could not be proved. `hand-over-stale` is a **Hand-over** whose checkout moved again after it was
 rebuilt: it rechecks that the head and plan revision hold still between two readings, and never
 starts a Heal. Counted per cause in `collie run report` (ADR-draft-a-run-recovers-where-it-parks).
 
