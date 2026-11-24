@@ -379,14 +379,19 @@ const printJson = flow(
   Result.getOrThrow,
 );
 
-export const outputsIn = Effect.fn("Drift.outputsIn")(function* (agentsDir: string) {
+export const outputsIn = Effect.fn("Drift.outputsIn")(function* (
+  agentsDir: string,
+  limit?: number,
+) {
   const fs = yield* FileSystem.FileSystem;
   const names = Arr.filter(
     yield* fs.readDirectory(agentsDir).pipe(Effect.orElseSucceed(() => [])),
     (name) =>
       pipe(name, Str.endsWith(".json")) &&
       !Arr.some(NOT_OUTPUTS, (not) => pipe(name, Str.endsWith(not))),
-  ).sort();
+  )
+    .sort()
+    .slice(0, limit ?? Number.POSITIVE_INFINITY);
   const outputs: Array<ShownOutput> = [];
   for (const name of names) {
     const operation = pipe(name, Str.slice(0, -".json".length));
@@ -503,10 +508,26 @@ export interface Judged {
   readonly semantic: boolean;
   readonly truncated: boolean;
   readonly cut?: ReadonlyArray<string>;
+  readonly missed?: ReadonlyArray<string>;
   readonly at?: string;
 }
 
 export const NOT_JUDGED: Judged = { semantic: false, truncated: false };
+
+// WARNING: a clean finish does not undo a boundary's cut or a batch nobody judged; the Run's proof is cumulative.
+export function judgedTogether(before: Judged, now: Judged) {
+  const cut = [...new Set([...(before.cut ?? []), ...(now.cut ?? [])])];
+  const missed = [...new Set([...(before.missed ?? []), ...(now.missed ?? [])])];
+  const unjudged = before.at !== undefined && !before.semantic;
+  const merged: Judged = {
+    semantic: now.semantic && !unjudged,
+    truncated: now.truncated || before.truncated,
+    ...(cut.length > 0 && { cut }),
+    ...(missed.length > 0 && { missed }),
+    ...(now.at !== undefined && { at: now.at }),
+  };
+  return merged;
+}
 
 export interface Judgement {
   readonly judged: Judged;
@@ -615,6 +636,7 @@ export function judgedReport(
   roots: ReadonlyArray<string>,
   truncated: boolean,
   cited: (ref: Ref) => Ref | null = () => null,
+  batch?: string,
 ) {
   const evidence = Arr.flatMap(report.evidence, (ref) => {
     const work = cited(ref);
@@ -633,6 +655,7 @@ export function judgedReport(
     severity: report.severity,
     evidence,
     evidence_truncated: truncated,
+    ...(batch !== undefined && { batch }),
     resolution: "open",
   };
   return returned;
@@ -719,6 +742,7 @@ export const judge = Effect.fn("Drift.judge")(function* (
   const batches = batchesOf(evidence.blocks, evidence.outputs);
   const known = new Set(Arr.map(semantic, (constraint) => constraint.id));
   const reports: Array<DriftReport> = [];
+  const missed: Array<string> = [];
   let whole = true;
   for (const batch of batches) {
     const batchCut = cutIn(batch.blocks, batch.outputs);
@@ -734,6 +758,11 @@ export const judge = Effect.fn("Drift.judge")(function* (
     );
     if (asked.refused !== null) {
       whole = false;
+      missed.push(
+        batches.length === 1
+          ? "the whole change"
+          : `batch ${batch.at} of ${batches.length} (${Arr.join(namesOf(batch), ", ")})`,
+      );
       yield* recordSkipped(
         what.runDir,
         intent.run,
@@ -753,6 +782,10 @@ export const judge = Effect.fn("Drift.judge")(function* (
       (report) =>
         known.has(report.constraint) && Arr.some(report.evidence, (ref) => cited(ref) !== null),
     );
+    const part =
+      batches.length === 1
+        ? undefined
+        : `batch ${batch.at} of ${batches.length} (${Arr.join(namesOf(batch), ", ")})`;
     for (const report of found) {
       reports.push(
         judgedReport(
@@ -762,6 +795,7 @@ export const judge = Effect.fn("Drift.judge")(function* (
           [what.runDir, what.worktree],
           batchCut.length > 0,
           cited,
+          part,
         ),
       );
     }
@@ -775,7 +809,12 @@ export const judge = Effect.fn("Drift.judge")(function* (
     );
   }
   return {
-    judged: { semantic: whole, truncated: cut.length > 0, ...(cut.length > 0 && { cut }) },
+    judged: {
+      semantic: whole,
+      truncated: cut.length > 0,
+      ...(cut.length > 0 && { cut }),
+      ...(missed.length > 0 && { missed }),
+    },
     reports,
   };
 });
@@ -905,6 +944,13 @@ export function alignment(intent: Intent | null, lines: ReadonlyArray<DriftLine>
     const returned: Alignment = {
       aligned: "unverified",
       why: `a judgement was skipped: ${skippedReasons.at(-1) ?? ""}`,
+    };
+    return returned;
+  }
+  if ((judged.missed ?? []).length > 0) {
+    const returned: Alignment = {
+      aligned: "unverified",
+      why: `a judgement did not read: ${Arr.join(judged.missed ?? [], ", ")}`,
     };
     return returned;
   }

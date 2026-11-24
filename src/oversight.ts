@@ -14,6 +14,7 @@ import {
   EXTRA_PASSES,
   MAX_FILES,
   NOT_JUDGED,
+  judgedTogether,
   PLAN_NARROWS_GOAL,
   alignment,
   alreadyStood,
@@ -240,6 +241,7 @@ const JudgedJson = Schema.fromJsonString(
     semantic: Schema.Boolean,
     truncated: Schema.Boolean,
     cut: Schema.optionalKey(Schema.Array(Schema.String)),
+    missed: Schema.optionalKey(Schema.Array(Schema.String)),
     at: Schema.optionalKey(Schema.String),
   }),
 );
@@ -360,11 +362,14 @@ const judgeDrift = Effect.fn("Oversight.judgeDrift")(function* (
       ),
     ),
   );
-  const answeredAt = outcome.judged.semantic ? judgedAt : (yield* judgedOf(at)).at;
-  const judged = yield* Schema.encodeEffect(JudgedJson)({
-    ...outcome.judged,
-    ...(answeredAt !== undefined && { at: answeredAt }),
-  }).pipe(Effect.orDie);
+  const previous = yield* judgedOf(at);
+  const answeredAt = outcome.judged.semantic ? judgedAt : previous.at;
+  const judged = yield* Schema.encodeEffect(JudgedJson)(
+    judgedTogether(previous, {
+      ...outcome.judged,
+      ...(answeredAt !== undefined && { at: answeredAt }),
+    }),
+  ).pipe(Effect.orDie);
   yield* RunRecords.use((records) => records.put(runOfDir(at.runDir), JUDGED, judged));
   const before = yield* readDrift(at.runDir).pipe(Effect.orElseSucceed(() => []));
   for (const report of newReports(outcome.reports, before)) {
@@ -681,8 +686,7 @@ const versionVector = Effect.fn("Oversight.versionVector")(function* (
         : yield* committedWork(cwd, card.revision.head_sha);
     const diff =
       read.kind === "shown" ? { ...read, blocks: read.blocks.slice(0, MAX_FILES) } : read;
-    const shownOutputs = yield* outputsIn(`${at.stateDir}/agents/${id}`);
-    const outputs = shownOutputs.outputs.slice(0, MAX_FILES);
+    const shownOutputs = yield* outputsIn(`${at.stateDir}/agents/${id}`, MAX_FILES);
     targets.push({
       id,
       dir,
@@ -695,10 +699,9 @@ const versionVector = Effect.fn("Oversight.versionVector")(function* (
       ),
       constraintIds: Arr.map(intent?.constraints ?? [], (one) => one.id),
       diff,
-      outputs,
+      outputs: shownOutputs.outputs,
       replies: yield* readReplies(dir).pipe(Effect.orElseSucceed(() => [])),
       truncated:
-        shownOutputs.outputs.length > MAX_FILES ||
         shownOutputs.truncated ||
         (read.kind === "shown" &&
           (read.blocks.length > MAX_FILES || Arr.some(read.blocks, (block) => block.truncated))),

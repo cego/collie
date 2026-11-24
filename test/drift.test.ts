@@ -15,6 +15,7 @@ import {
   driftSaid,
   evaluatedFor,
   judge,
+  judgedTogether,
   currentReports,
   evidenceFor,
   fileReport,
@@ -24,12 +25,13 @@ import {
   matchesGlob,
   newReports,
   openReports,
+  outputsIn,
   readDrift,
   recordSkipped,
   splitDiff,
   supersededBy,
 } from "../src/drift";
-import type { RuleFacts } from "../src/drift";
+import type { Judged, RuleFacts } from "../src/drift";
 import { seedIntent } from "../src/intent";
 import type { Constraint, Intent } from "../src/intent";
 import { EvaluatorUnavailable } from "../src/evaluator";
@@ -1042,3 +1044,86 @@ test("a card says a cross-run check happened, and stops saying so when it goes s
     ),
   ).toBe(false);
 });
+
+test("a drifting report names the batch it came from and what that batch held", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, base, evaluator } = yield* capped(MAX_FILES + 2);
+      yield* evaluator.replyFor(
+        2,
+        envelope({
+          result: {
+            reports: [
+              {
+                id: "x",
+                at: "t",
+                run: "r1",
+                intent_version: 1,
+                constraint: "no-new-deps",
+                kind: "semantic",
+                severity: "block",
+                evidence: [{ kind: "diff", path: "src/f21.ts" }],
+                evidence_truncated: false,
+                resolution: "open",
+              },
+            ],
+          },
+        }),
+      );
+      const out = yield* judge(judgementDeps(dir), semanticIntent(), {
+        runDir: dir,
+        worktree: dir,
+        base,
+        at: "t0",
+        boundary: "build-1",
+      });
+      evaluator.restore();
+      expect(Arr.map(out.reports, (one) => one.batch)).toEqual([
+        "batch 2 of 2 (src/f20.ts, src/f21.ts)",
+      ]);
+    }),
+  ));
+
+test("a finish does not undo what an earlier judgement cut or never judged", () => {
+  const boundary: Judged = { semantic: false, truncated: true, cut: ["src/a.ts"], at: "T1" };
+  const finish: Judged = { semantic: true, truncated: false, at: "T2" };
+  expect(judgedTogether(boundary, finish)).toEqual({
+    semantic: false,
+    truncated: true,
+    cut: ["src/a.ts"],
+    at: "T2",
+  });
+  expect(judgedTogether({ semantic: true, truncated: false, at: "T0" }, finish)).toEqual({
+    semantic: true,
+    truncated: false,
+    at: "T2",
+  });
+});
+
+test("a batch nobody judged keeps the Run unverified, even after a later judgement", () => {
+  const judged = judgedTogether(
+    { semantic: false, truncated: false, missed: ["batch 2 of 3 (src/a.ts)"], at: "T1" },
+    { semantic: true, truncated: false, at: "T2" },
+  );
+  expect(alignment(semanticIntent(), [], judged)).toEqual({
+    aligned: "unverified",
+    why: "a judgement did not read: batch 2 of 3 (src/a.ts)",
+  });
+});
+
+test("reading an Outputs folder for a cross-run look stops at the cap", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* checkout("hw-outputs-");
+      const agentsDir = `${dir}/agents`;
+      yield* fs.makeDirectory(agentsDir, { recursive: true });
+      for (let at = 0; at < MAX_FILES + 5; at += 1) {
+        yield* fs.writeFileString(`${agentsDir}/op-${at}.json`, `{"summary":"part ${at}"}`);
+      }
+      const all = yield* outputsIn(agentsDir);
+      const capped = yield* outputsIn(agentsDir, MAX_FILES);
+      expect(all.outputs).toHaveLength(MAX_FILES + 5);
+      expect(capped.outputs).toHaveLength(MAX_FILES);
+    }),
+  ));

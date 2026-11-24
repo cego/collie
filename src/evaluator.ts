@@ -30,6 +30,7 @@ export const DriftReportSchema = Schema.Struct({
   severity: Schema.Literals(["block", "warn"]),
   evidence: Schema.Array(RefSchema),
   evidence_truncated: Schema.Boolean,
+  batch: Schema.optionalKey(Schema.String),
   correction: Schema.optionalKey(Schema.String),
   resolution: Schema.Literals([
     "open",
