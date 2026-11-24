@@ -166,12 +166,27 @@ export const recheckPark = (
           ["status", "--porcelain", "--untracked-files=all"],
           view.cwd,
         );
-        return read.code !== 0
-          ? reply(false, whatItSaid(read), true)
-          : reply(
-              Str.trim(read.stdout) === "",
-              Str.trim(read.stdout) === "" ? "checkout clean" : "checkout still dirty",
-            );
+        if (read.code !== 0) {
+          return reply(false, whatItSaid(read), true);
+        }
+        if (Str.trim(read.stdout) !== "") {
+          return reply(false, "checkout still dirty");
+        }
+        const head = yield* shell("git", ["rev-parse", "HEAD"], view.cwd);
+        const branch = yield* shell("git", ["rev-parse", "--abbrev-ref", "HEAD"], view.cwd);
+        if (head.code !== 0 || branch.code !== 0) {
+          return reply(false, whatItSaid(head.code !== 0 ? head : branch), true);
+        }
+        const named = Str.trim(branch.stdout);
+        yield* shell("git", ["fetch", "--quiet", "origin"], view.cwd);
+        const carried = yield* shell(
+          "git",
+          ["merge-base", "--is-ancestor", Str.trim(head.stdout), `refs/remotes/origin/${named}`],
+          view.cwd,
+        );
+        return carried.code === 0
+          ? reply(true, `checkout clean and pushed to origin's ${named}`)
+          : reply(false, `checkout clean, but origin's ${named} does not carry its head yet`);
       }
       case "target-red": {
         const latest = yield* lastCiTargets(stateDir, view.runId);

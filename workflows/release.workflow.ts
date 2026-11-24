@@ -6,6 +6,7 @@ import {
   CONFLICTS,
   FindingSchema,
   FixOutputSchema,
+  FastForwardSchema,
   Host,
   MergeOutcomeSchema,
   ProductionReadSchema,
@@ -88,6 +89,7 @@ const stepsOf = (markdown: string) => {
   return {
     assess: content.template("assess", ReleaseInput.fields),
     answer: content.template("answer", ReleaseInput.fields),
+    checkout: content.template("checkout", ReleaseInput.fields),
     fix: content.template("fix", ReleaseInput.fields),
     stageMergeRequest: content.template("stage-merge-request", ReleaseInput.fields),
     unstage: content.template("unstage", ReleaseInput.fields),
@@ -976,17 +978,32 @@ export default defineWorkflow({
           production: null,
         };
       } else {
-        const moveTo = (name: string, head: string, branch?: string) =>
+        const moving = (name: string, head: string, branch?: string) =>
           Activity.make({
             name,
-            success: Schema.String,
-            execute: Effect.gen(function* () {
-              const moved = yield* host.fastForward({ runId, cwd, head, branch });
-              if (moved._tag === "Refused") {
+            success: FastForwardSchema,
+            error: WorkflowError,
+            execute: host.fastForward({ runId, cwd, head, branch }),
+          });
+        const moveTo = (name: string, head: string, branch?: string) =>
+          Effect.gen(function* () {
+            let fixed = false;
+            for (let attempt = 0; ; attempt++) {
+              const moved = yield* moving(attempt === 0 ? name : `${name}.again`, head, branch);
+              if (moved._tag === "At") {
+                return moved.head;
+              }
+              if (moved.cause !== "checkout-dirty-collie" || fixed) {
                 return yield* park(moved.why, moved.cause);
               }
-              return moved.head;
-            }),
+              fixed = true;
+              yield* agentWork({
+                ...as(`${name}.commit`),
+                pushes: true,
+                instructions: steps.checkout,
+                input: { ...input, findings: moved.why },
+              });
+            }
           });
         const checksNow = Effect.map(host.approved(runId), renderApproved);
         const checksAt = (

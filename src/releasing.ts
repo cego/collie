@@ -15,6 +15,32 @@ import { ParkCause } from "./park-cause";
 
 const short = (sha: string) => pipe(sha, Str.slice(0, 8));
 
+const NAMED = 10;
+
+const atMost = (named: ReadonlyArray<string>) =>
+  `${Arr.join(Arr.take(named, NAMED), ", ")}${
+    named.length > NAMED ? ` and ${named.length - NAMED} more` : ""
+  }`;
+
+const changedFiles = (porcelain: string) =>
+  atMost(
+    Arr.map(
+      Arr.filter(Str.split(porcelain, "\n"), (one) => Str.trim(one) !== ""),
+      (one) => pipe(one, Str.replace(/^..\s+/, "")),
+    ),
+  );
+
+const commitsLike = (log: string) =>
+  atMost(
+    Arr.map(
+      Arr.filter(Str.split(Str.trim(log), "\n"), (one) => Str.trim(one) !== ""),
+      (one) => {
+        const [sha, ...subject] = Str.split(one, " ");
+        return `${short(sha)} ${Arr.join(subject, " ")}`;
+      },
+    ),
+  );
+
 const HeadJson = Schema.fromJsonString(Schema.String);
 
 export const FastForwardSchema = Schema.Union([
@@ -29,10 +55,13 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
   readonly cwd: string;
   readonly head: string;
   readonly branch?: string;
+  readonly createdByCollie?: boolean;
   readonly run: Runner<R>;
 }) {
   const git = (args: Array<string>) => opts.run("git", args, opts.cwd);
   const heads = runJournal(opts.runDir, "heads.jsonl");
+  const dirty: ParkCause =
+    opts.createdByCollie === true ? "checkout-dirty-collie" : "checkout-dirty-human";
   const refused: (why: string, cause?: ParkCause) => FastForward = (
     why,
     cause = "release-failed",
@@ -56,7 +85,8 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
   }
   if (Str.trim(status.stdout) !== "") {
     return refused(
-      `the checkout at ${opts.cwd} has uncommitted changes, so it is not taken as ${short(opts.head)}`,
+      `the checkout at ${opts.cwd} has uncommitted changes, so it is not taken as ${short(opts.head)}: ${changedFiles(status.stdout)}`,
+      dirty,
     );
   }
   if (from === opts.head) {
@@ -67,8 +97,6 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
     return refused(`origin does not have ${short(opts.head)}`);
   }
   if ((yield* git(["merge-base", "--is-ancestor", from, opts.head])).code !== 0) {
-    // WARNING: a head that is an ancestor of the checkout is a stale journal, not a force push.
-    const carries = (yield* git(["merge-base", "--is-ancestor", opts.head, from])).code === 0;
     const branch = Str.trim((yield* git(["rev-parse", "--abbrev-ref", "HEAD"])).stdout);
     const named = branch === "" || branch === "HEAD" ? null : branch;
     const where = named === null ? "origin" : `origin's ${named}`;
@@ -76,12 +104,19 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
       named !== null &&
       Str.trim((yield* git(["rev-parse", "--verify", `refs/remotes/origin/${named}`])).stdout) ===
         from;
-    if (carries && atOrigin) {
-      yield* appendLog(
-        opts.runDir,
-        `the checkout already carries ${short(opts.head)} and sits at ${short(from)}, where origin's ${named} points`,
+    if ((yield* git(["merge-base", "--is-ancestor", opts.head, from])).code === 0) {
+      if (atOrigin) {
+        yield* appendLog(
+          opts.runDir,
+          `the checkout already carries ${short(opts.head)} and sits at ${short(from)}, where origin's ${named} points`,
+        );
+        return yield* at(from, from);
+      }
+      const ahead = yield* git(["log", "--format=%H %s", `${opts.head}..${from}`]);
+      return refused(
+        `the checkout at ${opts.cwd} is ahead of ${where}: ${commitsLike(ahead.stdout)}, so it is not taken as ${short(opts.head)}`,
+        dirty,
       );
-      return yield* at(from, from);
     }
     const reflog =
       named === null
@@ -105,13 +140,7 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
     );
     if (lost.length > 0) {
       return refused(
-        `the checkout at ${opts.cwd} holds commits ${where} never carried, so it is not taken as ${short(opts.head)}: ${Arr.join(
-          Arr.map(lost, (one) => {
-            const [sha, ...subject] = Str.split(one, " ");
-            return `${short(sha)} ${Arr.join(subject, " ")}`;
-          }),
-          "; ",
-        )}`,
+        `the checkout at ${opts.cwd} holds commits ${where} never carried, so it is not taken as ${short(opts.head)}: ${commitsLike(Arr.join(lost, "\n"))}`,
         "branch-force-pushed",
       );
     }

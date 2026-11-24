@@ -163,6 +163,9 @@ import {
   readTag,
 } from "./releasing";
 import type { MergeRequestRead, ProductionRead, RollbackRead, StageRead } from "./releasing";
+import { everyRegistered } from "./registry";
+import type { AgentEntry } from "./registry";
+import type { AgentInfo } from "./herdr";
 import { blockedLine, conflictsWithTarget, reviewWaitOf, standingOf } from "./review-wait";
 import type { ReviewStanding } from "./review-wait";
 import { NOTHING_TO_LAND } from "./standing";
@@ -1328,7 +1331,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly head: string;
       /** Where supplied, require this source branch before moving the checkout. */
       readonly branch?: string;
-    }) => Effect.Effect<FastForward>;
+    }) => Effect.Effect<FastForward, WorkflowError>;
     /** Reads \`tag\` back from origin and the forge against what it must prove. Take it inside an Activity. */
     readonly readTag: (options: {
       readonly runId: string;
@@ -4068,6 +4071,7 @@ export const hostLayer: (options: {
   readonly productionPoll?: Duration.Input;
   readonly issuePrivacyBudget?: Duration.Input;
   readonly reviewPoll?: Duration.Input;
+  readonly collectMs?: Duration.Input;
 }) => Layer.Layer<
   Host | Notifier | Oversight | Reliance,
   never,
@@ -4459,6 +4463,62 @@ export const hostLayer: (options: {
           return bound === COLLIE_REPOSITORY || bound === ownRepository(releasesOf(env.raw))
             ? null
             : refusal(leaks);
+        });
+      const waitingForAgents = (runId: string, cwd: string) =>
+        Effect.gen(function* () {
+          const mine = Arr.filter(yield* under(everyRegistered), (one) => one.runId === runId);
+          if (mine.length === 0) {
+            return "clear" as const;
+          }
+          const { herdr } = yield* placing;
+          const deadline =
+            (yield* Clock.currentTimeMillis) +
+            Duration.toMillis(options.collectMs ?? Duration.minutes(120));
+          let told = false;
+          for (;;) {
+            const alive = yield* herdr.agentList().pipe(
+              Effect.orElseSucceed(() => []),
+              Effect.provideContext(bun),
+            );
+            const busy = Arr.filter(mine, (one) => workingIn(one, alive, cwd));
+            if (busy.length === 0) {
+              return "clear" as const;
+            }
+            if (!told) {
+              told = true;
+              yield* under(
+                appendLog(
+                  runDir(dir, runId),
+                  `waiting for ${Arr.join(
+                    Arr.map(busy, (one) => one.agent),
+                    ", ",
+                  )} to stop working in ${cwd}`,
+                ),
+              );
+            }
+            if (yield* set(STOP, runId)) {
+              return "stopped" as const;
+            }
+            if ((yield* Clock.currentTimeMillis) >= deadline) {
+              return "overrun" as const;
+            }
+            yield* Effect.sleep(AGENT_WAIT_POLL);
+          }
+        });
+      const madeByCollie = (runId: string, cwd: string) =>
+        Effect.gen(function* () {
+          const row = yield* store.run(runId);
+          if (row === null) {
+            return false;
+          }
+          const launch = yield* decodeStrings(row.options ?? "{}").pipe(
+            Effect.orElseSucceed(() => {
+              const none: Record<string, string> = {};
+              return none;
+            }),
+          );
+          const worktree = placedOf(row, launch).worktree;
+          return worktree !== null && worktree.created_by_collie && worktree.path === cwd;
         });
       const reviewing = (runId: string) =>
         Effect.gen(function* () {
@@ -6360,15 +6420,23 @@ export const hostLayer: (options: {
             };
           }),
         fastForward: (asked) =>
-          under(
-            fastForward({
-              runDir: runDir(dir, asked.runId),
-              cwd: asked.cwd,
-              head: asked.head,
-              branch: asked.branch,
-              run: runShell,
-            }),
-          ).pipe(Effect.orDie),
+          Effect.gen(function* () {
+            if ((yield* waitingForAgents(asked.runId, asked.cwd)) === "stopped") {
+              return yield* new WorkflowError({
+                reason: `the checkout at ${asked.cwd} was not read: the Run was stopped while its agent was working there`,
+              });
+            }
+            return yield* under(
+              fastForward({
+                runDir: runDir(dir, asked.runId),
+                cwd: asked.cwd,
+                head: asked.head,
+                branch: asked.branch,
+                createdByCollie: yield* madeByCollie(asked.runId, asked.cwd),
+                run: runShell,
+              }),
+            );
+          }).pipe(Effect.orDie),
         readTag: (asked) =>
           Effect.gen(function* () {
             const read = yield* under(
@@ -7492,6 +7560,25 @@ const reviewFacts = <R>(
       following: Arr.some(yield* store.watches([mrId(target)!]), (one) => one.run === runId),
     };
   });
+
+const AGENT_WAIT_POLL = Duration.millis(100);
+
+const workingIn = (entry: AgentEntry, alive: ReadonlyArray<AgentInfo>, cwd: string) => {
+  const at = Option.getOrUndefined(
+    Arr.findFirst(
+      alive,
+      (one) =>
+        one.terminalId === entry.incarnation?.terminalId ||
+        one.paneId === entry.paneId ||
+        one.name === entry.agent,
+    ),
+  );
+  return (
+    at !== undefined &&
+    (at.status === "working" || at.status === "blocked") &&
+    (at.cwd === cwd || at.foregroundCwd === cwd)
+  );
+};
 
 const placedOf: (row: RunRow, options: Readonly<Record<string, string>>) => Placed = (
   row,

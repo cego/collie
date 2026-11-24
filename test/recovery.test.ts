@@ -46,11 +46,21 @@ const idOf = flow(
 const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const quote = (word: string) => Result.getOrThrow(CommandLine.quote(word));
 
-test("the host resumes a clean checkout park under its own recover request", () =>
+test("a clean checkout whose head origin does not carry stays parked, and resumes by itself once it is pushed", () =>
   proves(
     "collie-recovery-clean-",
     (world) =>
       Effect.gen(function* () {
+        const git = (...args: Array<string>) => exec(["git", ...args], { cwd: world.project });
+        const commit = (...args: Array<string>) =>
+          git("-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-qm", ...args);
+        yield* commit("initial", "--allow-empty");
+        const origin = `${world.home}/origin.git`;
+        yield* git("init", "-q", "--bare", origin);
+        const branch = Str.trim((yield* git("rev-parse", "--abbrev-ref", "HEAD")).stdout);
+        yield* git("remote", "add", "origin", origin);
+        yield* git("push", "-q", "origin", `HEAD:refs/heads/${branch}`);
+        yield* commit("unpushed", "--allow-empty");
         const started = yield* collie(
           world,
           [
@@ -74,6 +84,18 @@ test("the host resumes a clean checkout park under its own recover request", () 
           () => client.run({ runId }).pipe(Effect.orDie),
           (view) => view?.parked !== null,
         );
+        const rechecked = yield* until(
+          () => client.runMetrics({ runId }).pipe(Effect.orDie),
+          (lines) => Arr.some(lines, (line) => line.action === "rechecked"),
+        );
+        expect(
+          Arr.map(
+            Arr.filter(rechecked, (line) => line.action === "rechecked"),
+            (line) => line.outcome,
+          ),
+        ).toEqual(["uncleared"]);
+        expect(Arr.some(rechecked, (line) => line.action === "resumed")).toBe(false);
+        yield* git("push", "-q", "origin", `HEAD:refs/heads/${branch}`);
         yield* (yield* FileSystem.FileSystem)
           .writeFileString(`${world.home}/fact`, "ready")
           .pipe(Effect.orDie);
@@ -96,6 +118,8 @@ test("the host resumes a clean checkout park under its own recover request", () 
           request: expect.stringMatching(/^recover:/),
           actor: { origin: "host" },
         });
+        const healed = yield* client.runMetrics({ runId }).pipe(Effect.orDie);
+        expect(Arr.filter(healed, (line) => line.action === "healed")).toEqual([]);
       }),
     ["rechecks.workflow.ts"],
   ));
@@ -270,7 +294,7 @@ test("clearing rechecks never answer Decisions, release Holds or Stops, or resum
               project: world.project,
               id: "rechecks",
               request: kind,
-              input: { cause: "checkout-dirty-collie", file, mr: "" },
+              input: { cause: "herdr-unavailable", file, mr: "" },
             })
             .pipe(Effect.orDie);
           ids.push(runId);
@@ -449,7 +473,7 @@ test("uncleared rechecks back off and the shared off setting still records check
           "start",
           "rechecks",
           "--input",
-          "cause=checkout-dirty-collie",
+          "cause=herdr-unavailable",
           "--input",
           "mr=",
           "--input",
@@ -506,7 +530,7 @@ test("ten cleared parks wait for memory and at most two resumes are in flight", 
             "start",
             "rechecks",
             "--input",
-            "cause=checkout-dirty-collie",
+            "cause=herdr-unavailable",
             "--input",
             "mr=",
             "--input",
@@ -525,7 +549,7 @@ test("ten cleared parks wait for memory and at most two resumes are in flight", 
                 id: "rechecks",
                 request: `start-${i}`,
                 input: {
-                  cause: "checkout-dirty-collie",
+                  cause: "herdr-unavailable",
                   mr: "",
                   file: `${world.home}/fact-${i}`,
                 },
@@ -604,7 +628,7 @@ test("the fourth park needs you and names the three automatic tries", () =>
             "start",
             "rechecks",
             "--input",
-            "cause=checkout-dirty-collie",
+            "cause=herdr-unavailable",
             "--input",
             "mr=",
             "--input",
@@ -644,14 +668,14 @@ test("the fourth park needs you and names the three automatic tries", () =>
             Arr.map(notices, (row) => row.key),
             (line) => Str.includes("parked:")(line),
           ),
-        ).toEqual(["needs-you:parked:checkout-dirty-collie"]);
+        ).toEqual(["needs-you:parked:herdr-unavailable"]);
         const report = yield* collie(world, ["run", "report"]);
         expect(report.envelope.data).toMatchObject({
           measures: {
             recoveries: {
               byCause: expect.arrayContaining([
                 {
-                  cause: "checkout-dirty-collie",
+                  cause: "herdr-unavailable",
                   action: "resumed",
                   count: 3,
                   runs: [runId],
@@ -688,7 +712,7 @@ for (const point of ["claimed", "recovery-park-cleared", "recovery-entered"] as 
               "start",
               "rechecks",
               "--input",
-              "cause=checkout-dirty-collie",
+              "cause=herdr-unavailable",
               "--input",
               "mr=",
               "--input",

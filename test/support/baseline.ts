@@ -120,6 +120,7 @@ import type { ShippingGo } from "../../src/shipping";
 import { recordsAt } from "../../src/records";
 import type { Records } from "../../src/records";
 import { registerAgent, scopeFor } from "../../src/registry";
+import type { Registered } from "../../src/registry";
 import { deliveriesOf, SENT_STATES } from "../../src/steering";
 import { fixtures, until } from "./host";
 import { BUILD } from "../../src/host";
@@ -278,7 +279,11 @@ const children = Layer.succeed(Children)(
   }),
 );
 
-type HostOverride = Layer.Layer<Host, never, Host | PlatformServices | ForgeHttp | RunRecords>;
+type HostOverride = Layer.Layer<
+  Host,
+  never,
+  Host | PlatformServices | ForgeHttp | RunRecords | Registered
+>;
 
 const foundation = () => ({
   dir,
@@ -287,6 +292,7 @@ const foundation = () => ({
   productionPoll,
   reviewPoll,
   terminationTimeout,
+  collectMs: hostOver.collectMs,
   slack: (token: string) => slackApi(token, slack.client),
 });
 
@@ -14556,17 +14562,35 @@ const refusedBack: Array<ReadonlyArray<string>> = [];
 
 const releaseHost = <E = never>(
   ends: Ends = {},
-  whileClaiming: Effect.Effect<void, E, FileSystem.FileSystem> = Effect.void,
+  whileClaiming: Effect.Effect<void, E, FileSystem.FileSystem | Path.Path> = Effect.void,
   stallAfterReplies = Infinity,
   helle?: () => HelleSays,
+  beforeAlignment: Effect.Effect<void, E, FileSystem.FileSystem | Path.Path> = Effect.void,
 ) =>
   Layer.effect(Host)(
     Effect.gen(function* () {
       const host = yield* Host;
-      const services = yield* Effect.context<PlatformServices | ForgeHttp | RunRecords>();
+      const services = yield* Effect.context<
+        PlatformServices | ForgeHttp | RunRecords | Registered
+      >();
       let replies = 0;
+      let aligned = false;
       return Host.of({
         ...host,
+        evidence: (runId, cwd) =>
+          host.evidence(runId, cwd).pipe(
+            Effect.tap(() =>
+              aligned
+                ? Effect.void
+                : Effect.sync(() => {
+                    aligned = true;
+                  }).pipe(
+                    Effect.andThen(
+                      beforeAlignment.pipe(Effect.orDie, Effect.provideContext(services)),
+                    ),
+                  ),
+            ),
+          ),
         reply: (asked) =>
           host
             .reply(asked)
@@ -14790,6 +14814,31 @@ const healStarted = (runId: string) =>
   Effect.map(readMetrics(evidenceDir(dir, runId)), (lines) =>
     Arr.filter(lines, (line) => line.action === "healed" && line.outcome !== "skipped"),
   );
+
+const workingIn = (
+  owned: string,
+  runId: string,
+  core: { report: (name: string, state: string) => Effect.Effect<void> },
+  dirty: boolean,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const paneId = yield* rig.addAgent("helper", owned, { run: runId });
+    yield* registerAgent(scopeFor(owned), {
+      role: "implementer",
+      agent: "helper",
+      paneId,
+      workspaceId: null,
+      runId,
+      workflow: "release",
+      at: yield* nowIso,
+      incarnation: { terminalId: paneId, agentSession: null, backend: "core" },
+    }).pipe(Effect.provide(recordsAt(dir)), Effect.orDie);
+    yield* core.report("helper", "working");
+    if (dirty) {
+      yield* fs.writeFileString(`${owned}/notes.txt`, "work in progress\n");
+    }
+  });
 
 const checkedBy = (runId: string, name: string, executable = "true", argv: Array<string> = []) =>
   FileSystem.FileSystem.pipe(
@@ -16510,6 +16559,156 @@ for (const name of ["gitlab", "github"] as const) {
           expect(yield* revParse("HEAD", reviewed)).toBe(local);
           expect(yield* wasAsked(runId, "tag")).toBe(false);
           expect((yield* forge.model()).merges ?? []).toEqual([]);
+        }),
+      ),
+  );
+
+  scenario(
+    `release on ${name}: an agent of the Run still working in the checkout is waited for, and Prove reads it only after the turn ends`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const { bin, reviewed, changed } = yield* releasable(name);
+          const runId = `r-midturn-${name}`;
+          const healed = healStarted(runId);
+          const core = yield* rig.startCore();
+          const paneId = yield* rig.addAgent("helper", reviewed, { run: runId });
+          yield* registerAgent(scopeFor(reviewed), {
+            role: "implementer",
+            agent: "helper",
+            paneId,
+            workspaceId: null,
+            runId,
+            workflow: "release",
+            at: yield* nowIso,
+            incarnation: { terminalId: paneId, agentSession: null, backend: "core" },
+          }).pipe(Effect.provide(recordsAt(dir)), Effect.orDie);
+          yield* core.report("helper", "working");
+          yield* fs.writeFileString(`${reviewed}/half-written.txt`, "mid-turn").pipe(Effect.orDie);
+          yield* rig.queueOutputs([PACKAGED]);
+          yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                yield* until(
+                  () => runLog(runId),
+                  (log) => pipe(log, Str.includes("to stop working in")),
+                );
+                expect(yield* parkedWhy(runId)).toBe("");
+                expect(yield* wasAsked(runId, "go-1")).toBe(false);
+                yield* exec(["git", "add", "half-written.txt"], { cwd: reviewed });
+                yield* exec(["git", "commit", "-qm", "the mid-turn fix"], { cwd: reviewed });
+                yield* exec(["git", "push", "-q", "origin", "HEAD:refs/heads/feature"], {
+                  cwd: reviewed,
+                });
+                const fixed = yield* revParse("HEAD", reviewed);
+                yield* changed({ head: fixed });
+                yield* core.report("helper", "idle");
+                yield* goAsked(run.asked, "go-1");
+                yield* run.answer("go-1", "Finish");
+                return yield* ended(run.status);
+              }),
+          );
+          yield* bin.restore();
+          expect(yield* parkedCause(runId)).toBe("");
+          expect(yield* healed).toEqual([]);
+        }),
+      ),
+  );
+
+  scenario(
+    `release on ${name}: a wait that outlives the collect budget hands the checkout to its one commit-and-push round, then parks`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const { bin, reviewed } = yield* releasable(name);
+          yield* exec(["git", "worktree", "remove", "--force", reviewed], { cwd: rig.projectDir });
+          const owned = `${rig.root}/.collie/worktrees/project/feature`;
+          const runId = `r-bound-${name}`;
+          const healed = healStarted(runId);
+          const core = yield* rig.startCore();
+          hostOver = { collectMs: 300 };
+          yield* rig.queueOutputs([PACKAGED, "committed and pushed nothing"]);
+          const why = yield* driven(
+            {
+              entry: shipped("release"),
+              runId,
+              input: { mr: target },
+              host: releaseHost(
+                {},
+                undefined,
+                Infinity,
+                undefined,
+                workingIn(owned, runId, core, true),
+              ),
+            },
+            () =>
+              Effect.gen(function* () {
+                yield* until(
+                  () => wasAsked(runId, "conflict-0.fast-forward.commit"),
+                  (asked) => asked,
+                );
+                yield* core.report("helper", "idle");
+                return yield* until(
+                  () => parkedWhy(runId),
+                  (said) => said !== "",
+                );
+              }),
+          );
+          yield* bin.restore();
+          expect(yield* parkedCause(runId)).toBe("checkout-dirty-collie");
+          expect(why).toContain("notes.txt");
+          expect(yield* wasAsked(runId, "conflict-0.fast-forward.commit")).toBe(true);
+          expect(yield* fs.readFileString(`${owned}/notes.txt`)).toBe("work in progress\n");
+          expect(yield* healed).toEqual([]);
+        }),
+      ),
+  );
+
+  scenario(
+    `release on ${name}: a stop sent while it waits for its agent ends the wait at once and starts no commit-and-push round`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, reviewed } = yield* releasable(name);
+          yield* exec(["git", "worktree", "remove", "--force", reviewed], { cwd: rig.projectDir });
+          const owned = `${rig.root}/.collie/worktrees/project/feature`;
+          const runId = `r-stopped-wait-${name}`;
+          const core = yield* rig.startCore();
+          hostOver = { collectMs: 600_000 };
+          yield* rig.queueOutputs([PACKAGED, "committed and pushed nothing"]);
+          const running = yield* Effect.forkChild(
+            driven(
+              {
+                entry: shipped("release"),
+                runId,
+                input: { mr: target },
+                host: releaseHost(
+                  {},
+                  undefined,
+                  Infinity,
+                  undefined,
+                  workingIn(owned, runId, core, true),
+                ),
+              },
+              (run) =>
+                until(
+                  () => run.status,
+                  (status) => status.status !== "pending" && status.status !== "suspended",
+                ),
+            ),
+          );
+          yield* until(
+            () => runLog(runId),
+            (log) => pipe(log, Str.includes("to stop working in")),
+          );
+          yield* setControl(STOP, runId);
+          const status = yield* Fiber.join(running);
+          yield* bin.restore();
+          expect(["ended", "failed"]).toContain(status.status);
+          expect(yield* wasAsked(runId, "conflict-0.fast-forward.commit")).toBe(false);
         }),
       ),
   );

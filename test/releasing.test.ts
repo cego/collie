@@ -218,6 +218,64 @@ test("a head this Run recorded is published even where origin's reflog never car
     }).pipe(Effect.scoped),
   ));
 
+const aheadByOne = (cwd: string, file: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.writeFileString(`${cwd}/${file}`, file);
+    yield* git(cwd, "add", file);
+    yield* git(cwd, "commit", "-q", "-m", file);
+    return yield* git(cwd, "rev-parse", "HEAD");
+  });
+
+for (const createdByCollie of [true, false]) {
+  const cause = createdByCollie ? "checkout-dirty-collie" : "checkout-dirty-human";
+  const whose = createdByCollie ? "a Collie worktree" : "a plain checkout";
+
+  test(`${whose} with an uncommitted file is refused under ${cause}, naming the file`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { fs, root, cwd, first } = yield* repository;
+        yield* fs.writeFileString(`${cwd}/uncommitted.ts`, "work in progress");
+        const moved = yield* fastForward({
+          runDir: `${root}/run`,
+          cwd,
+          head: first,
+          createdByCollie,
+          run: runner(),
+        });
+        expect(moved._tag).toBe("Refused");
+        if (moved._tag === "Refused") {
+          expect(moved.cause).toBe(cause);
+          expect(moved.why).toContain("uncommitted.ts");
+        }
+        expect(yield* git(cwd, "status", "--porcelain")).toBe("?? uncommitted.ts");
+      }).pipe(Effect.scoped),
+    ));
+
+  test(`${whose} one unpushed commit ahead of the requested head is refused under ${cause}, naming the commit`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { root, cwd, first } = yield* repository;
+        const local = yield* aheadByOne(cwd, "a-local-fix.ts");
+        expect(local).not.toBe(first);
+        const moved = yield* fastForward({
+          runDir: `${root}/run`,
+          cwd,
+          head: first,
+          createdByCollie,
+          run: runner(),
+        });
+        expect(moved._tag).toBe("Refused");
+        if (moved._tag === "Refused") {
+          expect(moved.cause).toBe(cause);
+          expect(moved.why).toContain(pipe_(local, Str.slice(0, 8)));
+          expect(moved.why).toContain("a-local-fix.ts");
+        }
+        expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(local);
+      }).pipe(Effect.scoped),
+    ));
+}
+
 const onGitlab = (runs: ForgeModel["runs"], over: Partial<ForgeModel> = {}) => {
   const fake = fakeForge("gitlab", {
     installed: true,

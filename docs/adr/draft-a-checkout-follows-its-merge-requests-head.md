@@ -44,12 +44,38 @@ tree — keep `release-failed`.
 **D4. What still fast-forwards still does.** A checkout behind the head fast-forwards as
 before, and a stale journaled head the checkout already carries still answers `At`.
 
+**D5. A dirty or unpushed checkout is named, and only Collie's own is touched.** Before it
+is read, the host waits for every agent of the Run placed in that checkout to stop working,
+bounded by the collection budget, and a Stop ends the wait at once. After the wait, a
+checkout with uncommitted changes, or one whose head is ahead of the requested head while
+origin's branch does not carry it, is refused under `checkout-dirty-collie` where Collie
+made the worktree and `checkout-dirty-human` where it did not, naming the files or commits.
+Collie resets neither, and a human's checkout it never touches at all.
+
+**D6. A Collie-made checkout gets one round before it parks.** Release asks the Run's own
+agent to commit the work and push it with a plain push, reads the checkout again, and parks
+`checkout-dirty-collie` only when that leaves it dirty or ahead. The park's recheck is
+the tree being clean **and** origin's branch carrying its head, so a clean checkout whose
+commit was never pushed stays parked and resumes by itself once the push lands.
+
 ## Alternatives rejected
 
 **Always refusing, and healing every rebase.** This was the behaviour, and it is what
 #542 reported: the forge and the Run could settle it, and instead a person had to reset a
 worktree and a Heal had to diagnose a park with no defect in it. A Heal is for what only a
 diagnosis can settle.
+
+**Reading a checkout while the Run's agent is still working in it.** #508: the agent's
+half-written fix was judged dirty, and the Release parked on its own agent's work. The wait
+is bounded, so an agent that never ends its turn still hands the checkout on.
+
+**Pushing or resetting a checkout Collie did not make.** A person's uncommitted work and
+unpushed commits are theirs to keep or drop, so that checkout parks `checkout-dirty-human`
+and is not touched.
+
+**Clearing a clean checkout park on the tree being clean alone.** A clean checkout whose
+commit was never pushed is not proof of anything at the forge, so the recheck reads origin
+too.
 
 **Resetting whenever the tree is clean.** Without the published test, a rebase would drop
 a commit the Run had never pushed. The published test is what lets the reset be silent and
@@ -69,3 +95,5 @@ would miss a commit published by another Run in the same worktree, so both are r
   decision about a force push does not depend on what this clone's reflog remembers.
 - The move of a checkout to a head origin no longer carries is on the Run's log, so a
   person can see why the tree changed.
+- A Run's own agent finishing its turn no longer parks its Release: the checkout is read
+  afterwards, and one bounded commit-and-push round repairs what it left behind.

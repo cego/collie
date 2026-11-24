@@ -345,6 +345,7 @@ export default defineWorkflow({
         Activity.make({
           name,
           success: Schema.String,
+          error: WorkflowError,
           execute: Effect.gen(function* () {
             const moved = yield* host.fastForward({ runId, cwd, head });
             if (moved._tag === "Refused") {
