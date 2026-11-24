@@ -895,7 +895,9 @@ export const agentWork: <
               (text) => text !== null,
               () =>
                 pastBudget(on, waiting).pipe(
-                  Effect.flatMap((why) => host.parked(runId, why, "idle-budget")),
+                  Effect.flatMap((why) =>
+                    host.parked(runId, why, waiting === undefined ? "idle-budget" : "usage-wait"),
+                  ),
                   Effect.andThen(untilWritten(on, from, waiting === undefined)),
                 ),
             ),
@@ -1160,6 +1162,9 @@ export const agentWork: <
         execute: agents.choose(layers, work, spent),
       });
       if (nothingHasRoom(next)) {
+        const account = subscriptionOf(on) ?? on.harness;
+        const resetsAt = out.resetsAt ?? null;
+        const waiting = `${current.agent} ran out (${out.why}) before writing ${output}; ${next.why}; waiting for room on ${account}${resetsAt === null ? "" : `, which resets ${resetsAt}`}`;
         const room = Effect.gen(function* () {
           while (nothingHasRoom(yield* agents.choose(layers, work, spent))) {
             yield* Effect.sleep(READING_EVERY_MS);
@@ -1173,20 +1178,10 @@ export const agentWork: <
           execute: agents
             .say(runId, `${work.operation}: ${said(on)} ran out (${out.why}); ${next.why}`)
             .pipe(
+              Effect.andThen(host.usageWait(runId, { account, resetsAt })),
               Effect.andThen(
-                host.usageWait(runId, {
-                  account: subscriptionOf(on) ?? on.harness,
-                  resetsAt: out.resetsAt ?? null,
-                }),
-              ),
-              Effect.andThen(
-                Effect.raceFirst(
-                  collecting(
-                    current,
-                    currentAsk,
-                    `${current.agent} ran out (${out.why}) before writing ${output}; ${next.why}`,
-                  ),
-                  room,
+                Effect.raceFirst(collecting(current, currentAsk, waiting), room).pipe(
+                  Effect.tap(() => host.parked(runId, null)),
                 ),
               ),
               Effect.ensuring(host.usageWait(runId, null)),

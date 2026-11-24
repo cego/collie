@@ -174,6 +174,7 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
         views: registry.views(null),
         reconnects: Effect.succeed(0),
         panels: new Map(),
+        hasRoom: Effect.succeed(true),
         resume: (view, _request, park) => registry.resume(view.runId, park),
       }).pipe(Effect.provideContext(services)),
     );

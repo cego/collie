@@ -4129,6 +4129,68 @@ test("an agent that ran out and stays idle past its budget parks the Run, and on
     }),
   ));
 
+const spentReading: (subscription: "claude" | "chatgpt", usedPercent: number) => UsageReading = (
+  subscription,
+  usedPercent,
+) => ({
+  subscription,
+  account: subscription === "claude" ? "org:acct" : "acct",
+  accountLabel: null,
+  plan: null,
+  windows: [
+    {
+      kind: "session",
+      label: "Session",
+      model: null,
+      usedPercent,
+      resetsAt: "2099-01-01T15:45:00Z",
+      reached: false,
+    },
+  ],
+  at: "2026-10-08T08:00:00Z",
+  source: subscription === "claude" ? "claude-usage" : "codex-app-server",
+  problem: null,
+});
+
+test("an agent that ran out while every choice is spent parks under the usage cause, and takes the work on a choice given room with no resume", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null, { verdict: "clean", note: "room came" }]);
+      let readings: ReadonlyArray<UsageReading> = [
+        spentReading("claude", 100),
+        spentReading("chatgpt", 100),
+      ];
+      const result = yield* session(
+        Effect.gen(function* () {
+          yield* Effect.forkChild(runsOut(agentFor("r1")));
+          const fiber = yield* Effect.forkChild(started("r1"));
+          yield* until(parked("r1"));
+          expect(yield* controlOf(PARK_CAUSE, "r1")).toBe("usage-wait");
+          const why = yield* controlOf(PARKED, "r1");
+          expect(why).toContain("waiting for room on claude");
+          expect(why).toContain("2099-01-01T15:45:00Z");
+          expect(
+            Arr.filter(
+              yield* readMetrics(evidenceDir(dir, "r1")).pipe(Effect.provide(recordsAt(dir))),
+              (line) => line.action === "healed",
+            ),
+          ).toEqual([]);
+          readings = [spentReading("claude", 100), spentReading("chatgpt", 5)];
+          yield* TestClock.adjust("1 minute");
+          return yield* Fiber.join(fiber);
+        }),
+        {
+          fallbacks: Effect.succeed(["codex/gpt-6.1-sol"]),
+          readings: Effect.sync(() => readings),
+          collectMs: 2000,
+        },
+      );
+      expect(result._tag === "Success" && result.success.note).toBe("room came");
+      expect(harnessesStarted(yield* rig.calls())).toEqual(["claude", "codex"]);
+      expect(yield* isSet(PARKED, "r1")).toBe(false);
+    }),
+  ));
+
 const EXPIRED = "CodexApiError: Your authentication token has expired";
 const onPi = { harness: "pi", model: "openai-codex/gpt-5.5" };
 

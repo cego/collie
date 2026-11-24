@@ -35,7 +35,7 @@ import {
   rememberNotQuiet,
   rememberStaleHandOver,
 } from "../src/park-recheck";
-import { processAbsent, processOf, startedOf } from "../src/processes";
+import { processAbsent, startedOf } from "../src/processes";
 import { SURVIVES_HANGUP, paneTree } from "./support/pane-tree";
 
 const idOf = flow(
@@ -1215,6 +1215,32 @@ test("a ci-failed park with no failed head recorded stays, saying so", () =>
       note: expect.stringContaining("no failed pipeline recorded"),
     }),
   ));
+
+test("a usage-wait park rechecks room, naming the Subscription and when it resets", () => {
+  const view = {
+    runId: "r1",
+    cwd: "/nowhere",
+    branch: null,
+    mr: null,
+    park: { cause: "usage-wait" as const, kind: "rechecks" as const },
+    usage: { account: "claude", resetsAt: "2099-01-01T15:45:00Z" },
+  };
+  const herdr = { agentList: () => Effect.die("a usage wait asks core nothing") };
+  return runEffect(
+    Effect.gen(function* () {
+      expect(yield* recheckPark(view, "/nowhere", herdr, Effect.succeed(false))).toEqual({
+        cleared: false,
+        note: "claude has no room until 2099-01-01T15:45:00Z",
+        error: false,
+      });
+      expect(yield* recheckPark(view, "/nowhere", herdr, Effect.succeed(true))).toEqual({
+        cleared: true,
+        note: "claude has room",
+        error: false,
+      });
+    }).pipe(Effect.scoped, Effect.provide(forgeHttpOnPath)),
+  );
+});
 
 test("a predecessor-not-quiet park clears once nothing its predecessor left is running, and starts no agent", () =>
   runEffect(

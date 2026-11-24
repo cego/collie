@@ -11,8 +11,10 @@ import { autoCompactWindowOf, PERMISSION_MODES } from "./settings";
 import type { AutoCompactWindow } from "./settings";
 import { claudeTrust } from "./trust";
 import type { Trust } from "./trust";
-import { DEFAULT_MODEL, HARNESS_MODELS } from "./harness-choice";
-import type { HarnessModels } from "./harness-choice";
+import { DEFAULT_MODEL, HARNESS_MODELS, resolveWithRoom } from "./harness-choice";
+import type { HarnessModels, Preferences } from "./harness-choice";
+import { roomFor } from "./usage-model";
+import type { UsageReading } from "./usage-model";
 import type { YamlValue } from "./yaml";
 import { stringifyJson } from "./json";
 
@@ -38,6 +40,30 @@ export {
 } from "./harness-choice";
 
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
+
+// WARNING: a configuration Collie cannot resolve is not known to be spent, so it counts as room.
+export const hasAnyRoom = (
+  defaults: {
+    readonly harness?: string | undefined;
+    readonly model?: string | undefined;
+    readonly effort?: string | undefined;
+    readonly fallbacks?: ReadonlyArray<string> | undefined;
+    readonly models?: Readonly<Record<string, ReadonlyArray<string>>> | undefined;
+  },
+  readings: ReadonlyArray<UsageReading>,
+  now: number,
+) => {
+  const layers: ReadonlyArray<Preferences> = [
+    { harness: defaults.harness, model: defaults.model, effort: defaults.effort },
+  ];
+  const resolved = resolveWithRoom(
+    layers,
+    defaults.fallbacks ?? [],
+    roomFor(readings, now),
+    defaults.models,
+  );
+  return !resolved.ok || resolved.chosen.from !== null || resolved.chosen.why === null;
+};
 
 const PERMISSION_MODE_SET: ReadonlySet<string> = new Set(PERMISSION_MODES);
 

@@ -62,6 +62,7 @@ test("unchanged panel refreshes preserve backoff while changed facts reset it", 
           herdr: new Herdr(env),
           reconnects: Effect.succeed(0),
           panels,
+          hasRoom: Effect.succeed(true),
           views: Effect.sync(() => {
             panels.set(mrId(mr)!, { at: ++refreshes, panel: { _tag: "Unavailable", reason } });
             return [view];
@@ -148,6 +149,7 @@ const rechecksUnderRateLimit = (cause: ParkCause) =>
         herdr: new Herdr(env),
         reconnects: Effect.succeed(0),
         panels,
+        hasRoom: Effect.succeed(true),
         views: Effect.succeed([view]),
         resume: () => Effect.die("an absent CI job must not resume"),
       }).pipe(

@@ -160,9 +160,10 @@ const lastCiTargets = (stateDir: string, runId: string) =>
 
 export const recheckPark = (
   view: Pick<RunView, "park" | "cwd" | "runId" | "mr" | "branch"> &
-    Partial<Pick<RunView, "input" | "strategies">>,
+    Partial<Pick<RunView, "input" | "strategies" | "usage">>,
   stateDir: string,
   herdr: Pick<Herdr, "agentList">,
+  hasRoom?: Effect.Effect<boolean>,
 ) =>
   Effect.gen(function* () {
     switch (view.park?.cause) {
@@ -322,6 +323,16 @@ export const recheckPark = (
         return taken._tag === "Success"
           ? reply(true, `${last.agent}'s controls are free`)
           : reply(false, `${last.agent}'s controls are still in use`);
+      }
+      case "usage-wait": {
+        if (hasRoom === undefined) {
+          return reply(false, "no usage reader here");
+        }
+        const account = view.usage?.account ?? "an account";
+        const resetsAt = view.usage?.resetsAt ?? null;
+        return (yield* hasRoom)
+          ? reply(true, `${account} has room`)
+          : reply(false, `${account} has no room${resetsAt === null ? "" : ` until ${resetsAt}`}`);
       }
       case "hand-over-stale": {
         const dir = `${stateDir}/runs/${view.runId}`;

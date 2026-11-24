@@ -4322,8 +4322,12 @@ server error after the harness's own retries — parks the Run at once, quoting 
 harness's message, and leaves the agent open. Fix the harness and tell the agent to carry
 on; Collie keeps collecting its Output, and the Run goes on when it is written. pi and
 Claude Code report such a stop; Codex and OpenCode do not yet. Where nothing has room, the
-agent is left where it is, and the Run waits for it, parking after its collection time with
-when each Subscription resets.
+agent is left where it is, and the Run waits for it: after its collection time it parks as
+`usage-wait`, which names the Subscription the work was on and when it resets, and the room
+poll is what rechecks it. That park resumes the Run by itself once a choice has room, and it
+starts no Heal. No Heal starts at all while no harness choice has room: one held back for
+room waits, and is started once a choice has it, so a Heal neither spends usage that is not
+there nor is lost while it waits.
 
 That wait rechecks the fallback chain. A Subscription that ran out becomes eligible again
 when its recorded limits reset, or when a reading no more than five minutes old for the same

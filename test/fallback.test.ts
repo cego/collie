@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Schema, flow, Result } from "effect";
 import { AgentChoiceSchema } from "../src/agents";
-import { foldCeiling, resolveWithRoom } from "../src/harness";
+import { foldCeiling, hasAnyRoom, resolveWithRoom } from "../src/harness";
 import type { Preferences } from "../src/harness";
 import { parseSetting } from "../src/settings";
 import { epochMs } from "../src/time";
@@ -201,6 +201,20 @@ describe("resolveWithRoom", () => {
     expect(chosen.from).toBeNull();
     expect(chosen.why).toMatch(
       /^nothing has room; claude\/opus xhigh: session 100%, resets \S+; codex\/default: session 100%, resets \S+$/,
+    );
+  });
+
+  test("any room is a choice with room, the primary's or a fallback's", () => {
+    const defaults = { harness: "claude", model: "opus", effort: "xhigh", fallbacks: ["codex"] };
+    expect(hasAnyRoom(defaults, [claudeOut, chatgptOut], NOW)).toBe(false);
+    expect(hasAnyRoom(defaults, [claudeOut], NOW)).toBe(true);
+    expect(hasAnyRoom(defaults, [chatgptOut], NOW)).toBe(true);
+    expect(hasAnyRoom({ harness: "codex", model: "default" }, [chatgptOut], NOW)).toBe(false);
+    expect(
+      hasAnyRoom({ harness: "codex", model: "default", fallbacks: ["claude"] }, [chatgptOut], NOW),
+    ).toBe(true);
+    expect(hasAnyRoom({ ...defaults, harness: "codex", model: "default" }, [chatgptOut], NOW)).toBe(
+      true,
     );
   });
 

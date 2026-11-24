@@ -385,6 +385,7 @@ test("report retries keep distinct Heals without repeating refusals while judgin
         healParks({
           env,
           host,
+          hasRoom: Effect.succeed(true),
           herdr: new Herdr(env),
           views: Effect.suspend(() =>
             snapshots++ === 0

@@ -6,6 +6,7 @@ import type { Metric } from "./metrics";
 export const ParkCause = Schema.Literals([
   "output-absent",
   "idle-budget",
+  "usage-wait",
   "ci-job-absent",
   "ci-failed",
   "target-red",
@@ -55,6 +56,7 @@ export const PARK_CAUSES: Readonly<Record<ParkCause, Entry>> = {
     kind: "needs-you",
     reason: "its agent went quiet for longer than its idle budget, and nothing says why",
   },
+  "usage-wait": { kind: "rechecks", neverHeals: true },
   "ci-job-absent": { kind: "rechecks" },
   "ci-failed": { kind: "rechecks", neverHeals: true },
   "target-red": { kind: "rechecks" },

@@ -1548,6 +1548,7 @@ test("a launch whose predecessor's server outlived the stop budget parks predece
             views: Effect.map(statusNow, (status) => [{ ...view, status }]),
             reconnects: Effect.succeed(0),
             panels: new Map(),
+            hasRoom: Effect.succeed(true),
             resume: () =>
               Effect.gen(function* () {
                 yield* engine.resume(work, id);

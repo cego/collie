@@ -141,6 +141,7 @@ import { ChangedIntent } from "./intent-model";
 import { donePasses, markersOf, runningCheck, followLog } from "./checks";
 import { startCheckout } from "./agent-start";
 import { configuredAgents } from "./agents";
+import { hasAnyRoom } from "./harness";
 import { Collecting } from "./collecting";
 import { memoryWaitOf, waitForMemory, waitLine } from "./memory-wait";
 import { runLog } from "./agent-end";
@@ -303,6 +304,7 @@ import {
   configValue,
   readConfig,
   loadDefaults,
+  FALLBACK_DEFAULTS,
   SettingRefused,
   sharedSettings,
   takeShared,
@@ -2678,6 +2680,13 @@ const frontDoorHandlers = (
             mrs: card?.mrs,
           };
         }).pipe(Effect.provideContext(bun));
+      const roomHere = Effect.gen(function* () {
+        const defaults = yield* loadDefaults(env.userDir).pipe(
+          Effect.orElseSucceed(() => FALLBACK_DEFAULTS),
+        );
+        const readings = yield* usage.readings;
+        return hasAnyRoom(defaults, readings, yield* Clock.currentTimeMillis);
+      }).pipe(Effect.provideContext(hosted));
       yield* Effect.forkScoped(
         recoverParks({
           env,
@@ -2685,6 +2694,7 @@ const frontDoorHandlers = (
           views: registry.views(null),
           reconnects,
           panels,
+          hasRoom: roomHere,
           resume: (view, request, park) =>
             auditedControl(view.runId, "resume", request, { origin: "host" })(
               Effect.gen(function* () {
@@ -2746,6 +2756,7 @@ const frontDoorHandlers = (
               ),
             ),
           host: Context.get(hosted, Host),
+          hasRoom: roomHere,
         }).pipe(Effect.provideContext(hosted)),
       );
       return FrontDoorRpcs.of({

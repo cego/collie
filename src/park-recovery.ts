@@ -99,6 +99,7 @@ export const recoverParks = <E, R>(opts: {
     request: string,
     park: string,
   ) => Effect.Effect<{ readonly applied: boolean }, E, R>;
+  readonly hasRoom: Effect.Effect<boolean>;
 }) =>
   Effect.gen(function* () {
     const every = yield* Config.Duration("COLLIE_RECOVERY_EVERY").pipe(
@@ -201,6 +202,7 @@ export const recoverParks = <E, R>(opts: {
                 view,
                 opts.env.stateDir,
                 opts.herdr,
+                opts.hasRoom,
               );
               failed ||= error;
               const line: Metric = {
@@ -348,6 +350,7 @@ export const healParks = <E, R, E2, R2>(opts: {
     key: string,
   ) => Effect.Effect<void>;
   readonly host: HostApi;
+  readonly hasRoom: Effect.Effect<boolean>;
 }) =>
   Effect.gen(function* () {
     const every = yield* Config.Duration("COLLIE_RECOVERY_EVERY").pipe(
@@ -511,6 +514,10 @@ export const healParks = <E, R, E2, R2>(opts: {
         }
         if (waitsOnYou(current)) {
           continue;
+        }
+        // WARNING: a Heal held back for room is not closed, so its park is still owed one.
+        if (!(yield* opts.hasRoom)) {
+          return;
         }
         const healer = (yield* healOn(opts.env.userDir))
           ? yield* healerFor(opts.env, current.project)
