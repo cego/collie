@@ -2018,7 +2018,7 @@ The reason is exactly one of these, checked in this order:
 - `the environment differs from verification <id>'s`;
 - `verification <id> was collected before this host started`. A pass counts only if this
   host collected it, because a restart is when a human may have repaired something outside
-  the tree, so a restarted host runs the check again, and this line says why.
+  the tree, so a check the host did not collect runs again, and this line says why.
 
 The gate says the same in the Run's log, `<pass>: <check> runs: <reason>`, before it runs a
 check it could not rely on.
@@ -3158,10 +3158,14 @@ never answered is named with its pid and `build unknown`. Nothing about a Run is
 new host recovers what the old one was doing, exactly as on any start, so a parked Run is
 still parked and a step that was cut short runs again. A check the old host was running is
 handed over to the new host, which collects it and writes its one Verification: the check's
-process runs on. One a host left without ending it, because it was killed or crashed, is
-ended by the next host to start, named in the Run's log, and runs once more. A restart asked
-for by a client older than the host is refused, naming the build the host runs, and changes
-nothing.
+process runs on. That is only when this install's build is at least the host's own, and only
+for the checks the host supervises — the ones Collie runs for a Run's gate. At the host's own
+build only a client of the host's own installation hands over; a same-build restart from
+another installation, or from a development checkout, ends the check, and it runs again.
+A check the host does not supervise, such as a measurement's, is ended by any stop and runs
+again. One a host left without ending it, because it was killed or crashed, is ended by the
+next host to start, named in the Run's log, and runs once more. A restart asked for by a
+client older than the host is refused, naming the build the host runs, and changes nothing.
 
 `host rollback` is for going back to an older build. A Run's own records, such as its
 Steps, its audit trail, its Intent and its steering cards, are rows in the state
@@ -3421,9 +3425,10 @@ from the same installation (after `collie upgrade`), stops it and starts itself 
 place; a host still there five seconds past its stop grace is killed, and its work is
 recovered by the one that replaces it. A host that does not answer is replaced the same way
 when the build it recorded in `host.build` is older. A client older than the host is refused,
-naming the build the host runs, and sends nothing: an old shell never downgrades the host.
-Any other client of another build is told which build is running and to run
-`collie host restart`, and sends nothing else. That includes a checkout under development, which is pointed
+naming the build the host runs — the build the host recorded in `host.build` when it does not
+answer — and sends nothing: an old shell never downgrades the host. A client of another
+installation is told which build is running and to point `COLLIE_STATE_DIR` at a directory of
+its own, and sends nothing else. That includes a checkout under development, which is pointed
 at a state directory of its own rather than replacing the installed host. Such a
 checkout's host also says `development: "<version>+<sha>"`; a release's does not.
 A host that cannot be started at all, or that takes a connection and does not answer within
