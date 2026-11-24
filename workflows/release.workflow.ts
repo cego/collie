@@ -983,7 +983,7 @@ export default defineWorkflow({
             execute: Effect.gen(function* () {
               const moved = yield* host.fastForward({ runId, cwd, head, branch });
               if (moved._tag === "Refused") {
-                return yield* park(moved.why);
+                return yield* park(moved.why, moved.cause);
               }
               return moved.head;
             }),

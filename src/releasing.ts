@@ -7,15 +7,19 @@ import { waitsOnOf } from "./board-model";
 import type { MrRef } from "./board-model";
 import { forgeOf, forgeOfUrl } from "./forge/forge";
 import type { DeployTier } from "./forge/forge";
+import { appendRunJournal, readRunJournal, runJournal } from "./journal";
 import { whatItSaid } from "./mr";
 import type { Ran, Runner } from "./mr";
 import { appendLog } from "./oversight";
+import { ParkCause } from "./park-cause";
 
 const short = (sha: string) => pipe(sha, Str.slice(0, 8));
 
+const HeadJson = Schema.fromJsonString(Schema.String);
+
 export const FastForwardSchema = Schema.Union([
   Schema.TaggedStruct("At", { head: Schema.String, from: Schema.String }),
-  Schema.TaggedStruct("Refused", { why: Schema.String }),
+  Schema.TaggedStruct("Refused", { why: Schema.String, cause: ParkCause }),
 ]);
 export type FastForward = typeof FastForwardSchema.Type;
 
@@ -28,7 +32,15 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
   readonly run: Runner<R>;
 }) {
   const git = (args: Array<string>) => opts.run("git", args, opts.cwd);
-  const refused: (why: string) => FastForward = (why) => ({ _tag: "Refused", why });
+  const heads = runJournal(opts.runDir, "heads.jsonl");
+  const refused: (why: string, cause?: typeof ParkCause.Type) => FastForward = (
+    why,
+    cause = "release-failed",
+  ) => ({ _tag: "Refused", why, cause });
+  const at = (head: string, from: string) =>
+    appendRunJournal(heads, HeadJson, head).pipe(
+      Effect.as({ _tag: "At", head, from } satisfies FastForward),
+    );
   if (opts.branch !== undefined) {
     const branch = yield* git(["symbolic-ref", "--quiet", "--short", "HEAD"]);
     if (branch.code !== 0 || Str.trim(branch.stdout) !== opts.branch) {
@@ -48,7 +60,7 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
     );
   }
   if (from === opts.head) {
-    return { _tag: "At", head: opts.head, from } satisfies FastForward;
+    return yield* at(opts.head, from);
   }
   yield* git(["fetch", "--quiet", "origin"]);
   if ((yield* git(["cat-file", "-e", `${opts.head}^{commit}`])).code !== 0) {
@@ -58,28 +70,67 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
     // WARNING: a head that is an ancestor of the checkout is a stale journal, not a force push.
     const carries = (yield* git(["merge-base", "--is-ancestor", opts.head, from])).code === 0;
     const branch = Str.trim((yield* git(["rev-parse", "--abbrev-ref", "HEAD"])).stdout);
+    const named = branch === "" || branch === "HEAD" ? null : branch;
+    const where = named === null ? "origin" : `origin's ${named}`;
     const atOrigin =
-      branch !== "" &&
-      branch !== "HEAD" &&
-      Str.trim((yield* git(["rev-parse", "--verify", `refs/remotes/origin/${branch}`])).stdout) ===
+      named !== null &&
+      Str.trim((yield* git(["rev-parse", "--verify", `refs/remotes/origin/${named}`])).stdout) ===
         from;
     if (carries && atOrigin) {
       yield* appendLog(
         opts.runDir,
-        `the checkout already carries ${short(opts.head)} and sits at ${short(from)}, where origin's ${branch} points`,
+        `the checkout already carries ${short(opts.head)} and sits at ${short(from)}, where origin's ${named} points`,
       );
-      return { _tag: "At", head: from, from } satisfies FastForward;
+      return yield* at(from, from);
     }
-    return refused(
-      `${short(opts.head)} does not fast-forward ${short(from)} in ${opts.cwd}, as after a force push`,
+    const reflog =
+      named === null
+        ? ""
+        : (yield* git(["reflog", "show", "--format=%H", `refs/remotes/origin/${named}`])).stdout;
+    const recorded = yield* readRunJournal(heads, HeadJson).pipe(Effect.orElseSucceed(() => []));
+    const tips = Arr.dedupe([
+      ...Arr.filter(Str.split(reflog, "\n"), (one) => Str.trim(one) !== ""),
+      ...recorded,
+    ]);
+    const reachable = tips.length === 0 ? null : yield* git(["rev-list", ...tips]);
+    const published = new Set(
+      reachable !== null && reachable.code === 0
+        ? [...tips, ...Str.split(Str.trim(reachable.stdout), "\n")]
+        : tips,
     );
+    const risky = yield* git(["log", "--format=%H %s", from, "--not", opts.head]);
+    const lost = Arr.filter(
+      Str.split(Str.trim(risky.stdout), "\n"),
+      (one) => Str.trim(one) !== "" && !published.has(pipe(one, Str.split(" "))[0] ?? ""),
+    );
+    if (lost.length > 0) {
+      return refused(
+        `the checkout at ${opts.cwd} holds commits ${where} never carried, so it is not taken as ${short(opts.head)}: ${Arr.join(
+          Arr.map(lost, (one) => {
+            const [sha = "", ...subject] = Str.split(one, " ");
+            return `${short(sha)} ${Arr.join(subject, " ")}`;
+          }),
+          "; ",
+        )}`,
+        "branch-force-pushed",
+      );
+    }
+    const reset = yield* git(["reset", "--hard", "--quiet", opts.head]);
+    if (reset.code !== 0) {
+      return refused(`git reset --hard ${short(opts.head)} failed: ${whatItSaid(reset)}`);
+    }
+    yield* appendLog(
+      opts.runDir,
+      `moved the checkout from ${from} to ${opts.head}, which ${where} no longer carries`,
+    );
+    return yield* at(opts.head, from);
   }
   const moved = yield* git(["merge", "--ff-only", "--quiet", opts.head]);
   if (moved.code !== 0) {
     return refused(`git merge --ff-only ${short(opts.head)} failed: ${whatItSaid(moved)}`);
   }
   yield* appendLog(opts.runDir, `moved the checkout from ${from} to ${opts.head}`);
-  return { _tag: "At", head: opts.head, from } satisfies FastForward;
+  return yield* at(opts.head, from);
 });
 
 export const carried = Effect.fn("Releasing.carried")(function* <R>(opts: {

@@ -776,10 +776,10 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly open: ReadonlyArray<string>;
   }): SettledAnswers;
 
-  /** Where a fast-forward left the checkout, or why it left it alone. */
+  /** Where a fast-forward left the checkout, or why it left it alone and under which park cause. */
   export type FastForward =
     | { readonly _tag: "At"; readonly head: string; readonly from: string }
-    | { readonly _tag: "Refused"; readonly why: string };
+    | { readonly _tag: "Refused"; readonly why: string; readonly cause: ParkCause };
   export const FastForwardSchema: Schema.Codec<FastForward, unknown, never, never>;
 
   /** A job of a tag's pipeline, at the address the forge gives it. */

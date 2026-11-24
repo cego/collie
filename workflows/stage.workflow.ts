@@ -18,7 +18,7 @@ import {
   readMrRef,
   step,
 } from "collie";
-import type { Holders } from "collie";
+import type { Holders, ParkCause } from "collie";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import * as Workflow from "effect/workflow/Workflow";
@@ -248,11 +248,11 @@ export default defineWorkflow({
       const host = yield* Host;
       const runId = (yield* Run).id;
       const fail = (reason: string) => new WorkflowError({ reason });
-      const park = (reason: string) =>
+      const park = (reason: string, cause?: ParkCause) =>
         Effect.gen(function* () {
           const why = `${reason}. Repair it, then resume ${runId}.`;
           yield* host.record(runId, why);
-          yield* host.parked(runId, why);
+          yield* host.parked(runId, why, cause);
           return yield* Workflow.suspend(yield* WorkflowInstance);
         });
 
@@ -348,7 +348,7 @@ export default defineWorkflow({
           execute: Effect.gen(function* () {
             const moved = yield* host.fastForward({ runId, cwd, head });
             if (moved._tag === "Refused") {
-              return yield* park(moved.why);
+              return yield* park(moved.why, moved.cause);
             }
             return moved.head;
           }),

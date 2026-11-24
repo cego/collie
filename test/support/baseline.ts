@@ -14460,6 +14460,22 @@ const pushedBySomebody = (parent: string, force = false) =>
   });
 
 const tagRun = (merged: string) => ({ ref: "v1.2.0", sha: merged });
+// WARNING: a rebase keeps the tree and changes the parent, so the new head descends from neither the old head nor the target.
+const rebasedBySomebody = (parent: string) =>
+  Effect.gen(function* () {
+    const cwd = rig.projectDir;
+    const tree = `${parent}^{tree}`;
+    const target = Str.trim(
+      (yield* exec(["git", "commit-tree", tree, "-m", "the newer target"], { cwd })).stdout,
+    );
+    const rebased = Str.trim(
+      (yield* exec(["git", "commit-tree", tree, "-p", target, "-m", "rebased onto the target"], {
+        cwd,
+      })).stdout,
+    );
+    yield* exec(["git", "push", "-q", "-f", "origin", `${rebased}:refs/heads/feature`], { cwd });
+    return rebased;
+  });
 
 const tagOnOrigin = (sha: string) =>
   Effect.gen(function* () {
@@ -14768,6 +14784,11 @@ const runLog = (runId: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(`${runDir(dir, runId)}/log.txt`)),
     Effect.orElseSucceed(() => ""),
+  );
+
+const healStarted = (runId: string) =>
+  Effect.map(readMetrics(evidenceDir(dir, runId)), (lines) =>
+    Arr.filter(lines, (line) => line.action === "healed" && line.outcome !== "skipped"),
   );
 
 const checkedBy = (runId: string, name: string, executable = "true", argv: Array<string> = []) =>
@@ -16386,6 +16407,109 @@ for (const name of ["gitlab", "github"] as const) {
           );
           expect(proved).toEqual([head, moved]);
           expect(yield* runLog(runId)).toContain(`moved the checkout from ${head} to ${moved}`);
+        }),
+      ),
+  );
+
+  scenario(
+    `release on ${name}: a merge request rebased on the forge before the Release starts takes its checkout to the new head and asks its go`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, head, reviewed, changed } = yield* releasable(name);
+          const rebased = yield* rebasedBySomebody(head);
+          yield* changed({ head: rebased });
+          const runId = `r-rebased-before-${name}`;
+          const healed = healStarted(runId);
+          yield* rig.queueOutputs([PACKAGED]);
+          yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                const go = yield* goAsked(run.asked, "go-1");
+                expect(go.prompt).toContain(pipe(rebased, Str.slice(0, 8)));
+                yield* run.answer("go-1", "Finish");
+                return yield* ended(run.status);
+              }),
+          );
+          yield* bin.restore();
+          expect(yield* revParse("HEAD", reviewed)).toBe(rebased);
+          expect(yield* parkedCause(runId)).toBe("");
+          expect(yield* healed).toEqual([]);
+          expect(yield* runLog(runId)).toContain(
+            `moved the checkout from ${head} to ${rebased}, which origin's feature no longer carries`,
+          );
+        }),
+      ),
+  );
+
+  scenario(
+    `release on ${name}: a merge request rebased on the forge during the review wait proves the new head and asks its go`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, head, reviewed, changed } = yield* releasable(name, UNAPPROVED[name]);
+          const runId = `r-rebased-wait-${name}`;
+          let rebased = "";
+          const healed = healStarted(runId);
+          yield* rig.queueOutputs([PACKAGED]);
+          yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                yield* until(
+                  () => awaitingOn(runId),
+                  (on) => pipe(on, Str.includes("approval")),
+                );
+                rebased = yield* rebasedBySomebody(head);
+                yield* changed({ head: rebased });
+                yield* until(
+                  () => runLog(runId),
+                  (log) => pipe(log, Str.includes(`moved the checkout from ${head} to ${rebased}`)),
+                );
+                yield* changed({ head: rebased, ...approvedBy(name, "alice") });
+                const go = yield* goAsked(run.asked, "go-1");
+                expect(go.prompt).toContain(pipe(rebased, Str.slice(0, 8)));
+                yield* run.answer("go-1", "Finish");
+                return yield* ended(run.status);
+              }),
+          );
+          yield* bin.restore();
+          expect(yield* revParse("HEAD", reviewed)).toBe(rebased);
+          expect(yield* parkedCause(runId)).toBe("");
+          expect(yield* healed).toEqual([]);
+        }),
+      ),
+  );
+
+  scenario(
+    `release on ${name}: a checkout holding a commit the forge never had parks branch-force-pushed, naming it, with no Heal`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin, forge, head, reviewed, changed } = yield* releasable(name);
+          yield* exec(["git", "commit", "-qm", "a local fix", "--allow-empty"], { cwd: reviewed });
+          const local = yield* revParse("HEAD", reviewed);
+          const rebased = yield* rebasedBySomebody(head);
+          yield* changed({ head: rebased });
+          const runId = `r-rebased-unpushed-${name}`;
+          const healed = healStarted(runId);
+          yield* rig.queueOutputs([PACKAGED]);
+          const why = yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            () =>
+              until(
+                () => parkedWhy(runId),
+                (said) => said !== "",
+              ),
+          );
+          yield* bin.restore();
+          expect(yield* parkedCause(runId)).toBe("branch-force-pushed");
+          expect(why).toContain(pipe(local, Str.slice(0, 8)));
+          expect(yield* healed).toEqual([]);
+          expect(yield* revParse("HEAD", reviewed)).toBe(local);
+          expect(yield* wasAsked(runId, "tag")).toBe(false);
+          expect((yield* forge.model()).merges ?? []).toEqual([]);
         }),
       ),
   );
@@ -21738,15 +21862,18 @@ for (const name of ["gitlab", "github"] as const) {
   );
 
   scenario(
-    `stage on ${name}: a head the checkout does not fast-forward to parks the Run before any claim`,
+    `stage on ${name}: a checkout holding a commit the forge never had parks branch-force-pushed before any claim`,
     () =>
       runEffect(
         Effect.gen(function* () {
-          const { bin, forge, base, onStage } = yield* stageOn();
+          const { bin, forge, base, reviewed, onStage } = yield* stageOn();
           claimed.length = 0;
           const runId = `r-stage-forced-${name}`;
+          yield* exec(["git", "commit", "-qm", "a local fix", "--allow-empty"], { cwd: reviewed });
+          const local = yield* revParse("HEAD", reviewed);
           const forced = yield* pushedBySomebody(base, true);
           yield* forge.set({ ...(yield* forge.model()), mrs: onStage(forced).mrs });
+          const healed = healStarted(runId);
           yield* rig.queueOutputs([MR_STAGED]);
           const why = yield* driven(options(runId), () =>
             until(
@@ -21755,7 +21882,9 @@ for (const name of ["gitlab", "github"] as const) {
             ),
           );
           yield* bin.restore();
-          expect(why).toContain("does not fast-forward");
+          expect(yield* parkedCause(runId)).toBe("branch-force-pushed");
+          expect(why).toContain(pipe(local, Str.slice(0, 8)));
+          expect(yield* healed).toEqual([]);
           expect(claimed).toEqual([]);
           expect(yield* wasAsked(runId, "stage")).toBe(false);
         }),

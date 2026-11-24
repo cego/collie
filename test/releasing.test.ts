@@ -116,24 +116,105 @@ test("a plain push past the journaled head is not refused; the checkout is taken
     }).pipe(Effect.scoped),
   ));
 
-test("a true force push (a head the checkout neither is at nor sits behind) is still refused", () =>
+// WARNING: a target that does not carry `onto` is what makes the new head a rebase rather than a descent from it.
+const rebaseOnto = (cwd: string, onto: string, target: string) =>
+  Effect.gen(function* () {
+    const tree = yield* git(cwd, "rev-parse", `${onto}^{tree}`);
+    const rebased = yield* git(
+      cwd,
+      "commit-tree",
+      tree,
+      "-p",
+      target,
+      "-m",
+      "rebased onto the target",
+    );
+    yield* git(cwd, "push", "-q", "--force", "origin", `${rebased}:refs/heads/main`);
+    return rebased;
+  });
+
+const newerTarget = (cwd: string) =>
+  Effect.gen(function* () {
+    const tree = yield* git(cwd, "rev-parse", "HEAD^{tree}");
+    const target = yield* git(cwd, "commit-tree", tree, "-m", "the newer target");
+    yield* git(cwd, "push", "-q", "--force", "origin", `${target}:refs/heads/main`);
+    return target;
+  });
+
+test("a clean checkout at a published head is reset to the head the forge moved to, as after a rebase", () =>
   runEffect(
     Effect.gen(function* () {
       const { fs, root, cwd, first } = yield* repository;
-      // WARNING: the first head stays a loose object so the journaled head still resolves, as a rewritten remote leaves it.
-      yield* git(cwd, "update-ref", "-d", "refs/heads/main");
-      yield* git(cwd, "checkout", "-q", "--orphan", "main");
-      yield* fs.writeFileString(`${cwd}/rewrite.ts`, "rewrite.ts");
-      yield* git(cwd, "add", "rewrite.ts");
-      yield* git(cwd, "commit", "-q", "-m", "rewrite");
-      const rewritten = yield* git(cwd, "rev-parse", "HEAD");
-      yield* git(cwd, "push", "-q", "--force", "origin", "main");
-      expect(rewritten).not.toBe(first);
-      const moved = yield* fastForward({ runDir: `${root}/run`, cwd, head: first, run: runner() });
+      const target = yield* newerTarget(cwd);
+      const rebased = yield* rebaseOnto(cwd, first, target);
+      yield* git(cwd, "reset", "-q", "--hard", first);
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: rebased,
+        run: runner(),
+      });
+      expect(moved._tag).toBe("At");
+      if (moved._tag === "At") {
+        expect(moved.head).toBe(rebased);
+        expect(moved.from).toBe(first);
+      }
+      expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(rebased);
+      const log = yield* fs.readFileString(`${root}/run/log.txt`);
+      expect(log).toContain(
+        `moved the checkout from ${first} to ${rebased}, which origin's main no longer carries`,
+      );
+    }).pipe(Effect.scoped),
+  ));
+
+test("a checkout holding a commit origin never had is refused with its cause, naming the commit and leaving it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { fs, root, cwd, first } = yield* repository;
+      const target = yield* newerTarget(cwd);
+      const rebased = yield* rebaseOnto(cwd, first, target);
+      yield* git(cwd, "reset", "-q", "--hard", first);
+      yield* fs.writeFileString(`${cwd}/local.ts`, "local");
+      yield* git(cwd, "add", "local.ts");
+      yield* git(cwd, "commit", "-q", "-m", "a local fix origin never had");
+      const local = yield* git(cwd, "rev-parse", "HEAD");
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: rebased,
+        run: runner(),
+      });
       expect(moved._tag).toBe("Refused");
       if (moved._tag === "Refused") {
-        expect(moved.why).toContain("force push");
+        expect(moved.cause).toBe("branch-force-pushed");
+        expect(moved.why).toContain(pipe_(local, Str.slice(0, 8)));
+        expect(moved.why).toContain("a local fix origin never had");
       }
+      expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(local);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a head this Run recorded is published even where origin's reflog never carried it, so the checkout is reset", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { fs, root, cwd, first } = yield* repository;
+      const runDir = `${root}/run`;
+      const recorded = yield* fastForward({ runDir, cwd, head: first, run: runner() });
+      expect(recorded._tag).toBe("At");
+      yield* git(cwd, "reflog", "expire", "--expire=now", "--all");
+      const target = yield* newerTarget(cwd);
+      const rebased = yield* rebaseOnto(cwd, first, target);
+      yield* git(cwd, "reset", "-q", "--hard", first);
+      const moved = yield* fastForward({ runDir, cwd, head: rebased, run: runner() });
+      expect(moved._tag).toBe("At");
+      if (moved._tag === "At") {
+        expect(moved.head).toBe(rebased);
+        expect(moved.from).toBe(first);
+      }
+      const log = yield* fs.readFileString(`${runDir}/log.txt`);
+      expect(log).toContain(
+        `moved the checkout from ${first} to ${rebased}, which origin's main no longer carries`,
+      );
     }).pipe(Effect.scoped),
   ));
 

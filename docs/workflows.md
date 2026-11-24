@@ -716,9 +716,12 @@ its tags, and nothing tags it afterwards. It is refused with several merge reque
 
 **Checkout:** its own, of the merge request's source branch (the pull request's head
 branch on GitHub): the one git already has for it, which is the implement Run's worktree
-for a release that Run started, or one cut from the branch. Collie only ever fast-forwards it. A checkout with uncommitted
-changes, or a head that does not fast-forward it, as after a force push, parks the Run
-with why: nothing is reset or discarded.
+for a release that Run started, or one cut from the branch. It is brought to the forge's
+head before anything proves it. A checkout behind it fast-forwards. A clean checkout whose
+own head was published — origin carried it, or this Run recorded it — is reset to the
+forge's head, and the move is logged. One holding commits origin never carried parks
+`branch-force-pushed`, naming each: nothing is discarded silently. A checkout with
+uncommitted changes parks the Run too, with why.
 
 **What happens:** one agent assesses, read only, whether the repository is a package or an
 application, by renovate's own rule, and for an application names the stage deploy jobs of
@@ -986,8 +989,9 @@ that stage under one project wait on each other's claim as any two Stage Runs do
 ends saying how many staged and how many failed, naming each, and fails where one failed. A
 failed child offers **Stage again** with its one merge request.
 
-**Checkout:** the merge request's source branch, as `release`'s, only ever fast-forwarded. A
-refusal parks the Run with why.
+**Checkout:** the merge request's source branch, brought to the forge's head as `release`'s
+is: fast-forwarded when behind, reset to it when the checkout is clean and its own head was
+published, and parked as `branch-force-pushed` when it holds commits origin never carried.
 
 **What happens:** it reads the merge request once: a merged one fails, saying its stage is
 its release's, and a closed one fails. One agent assesses, read only and by release's own

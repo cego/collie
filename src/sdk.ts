@@ -1274,10 +1274,12 @@ export interface HostApi {
     readonly commits: ReadonlyArray<string>;
   }) => Effect.Effect<ReviewHead, WorkflowError>;
   /**
-   * Fetches origin and fast-forwards the checkout at `cwd` to `head`, recording the move in
-   * the Run log. A checkout with uncommitted changes, or one `head` does not fast-forward
-   * (a force push), is `Refused` with why: nothing is reset or discarded. Take it inside an
-   * Activity.
+   * Fetches origin and brings the checkout at `cwd` to `head`, recording the move in the Run
+   * log. Behind, it fast-forwards. Divergent, it resets a clean checkout whose own head was
+   * published — origin's ref for the branch carried it, or this Run recorded it — and is
+   * `Refused` under `branch-force-pushed`, naming the commits origin never carried, when it
+   * holds any: nothing is discarded silently. A checkout with uncommitted changes is `Refused`
+   * as `release-failed`. Take it inside an Activity.
    */
   readonly fastForward: (options: {
     readonly runId: string;
