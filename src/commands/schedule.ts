@@ -2,10 +2,11 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
-import { Effect, Option } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
-import { agentStartRefusal, asOptionText, insideCheckout } from "../agent-start";
+import { agentStartRefusal, insideCheckout } from "../agent-start";
 import { mutation } from "../envelope";
+import { canonical } from "../canonical";
 import type { Given } from "../canonical";
 import type { PluginEnv } from "../env";
 
@@ -85,6 +86,9 @@ const changing = (
     ),
   );
 
+const savedText = (value: Schema.Json) =>
+  Schema.is(Schema.String)(value) ? value : canonical(value);
+
 const scheduleAdd = Command.make(
   "add",
   {
@@ -140,7 +144,7 @@ const scheduleAdd = Command.make(
           ...Rec.toEntries(parsed.given.text),
           ...Arr.map(
             Rec.toEntries(parsed.given.json),
-            ([key, value]) => [key, asOptionText(value)] as const,
+            ([key, value]) => [key, savedText(value)] as const,
           ),
         ]);
         const where = Str.trim(Option.getOrUndefined(global.workspace) ?? given.workspace ?? "");
@@ -155,12 +159,7 @@ const scheduleAdd = Command.make(
             cron,
             tz: Option.getOrNull(tz),
             paused,
-            inputs: {
-              text: parsed.given.text,
-              json: Rec.fromEntries(
-                Arr.filter(Rec.toEntries(parsed.given.json), ([key]) => key !== "workspace"),
-              ),
-            },
+            inputs,
             workspace: where,
             verify: checks.specs,
           },

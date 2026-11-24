@@ -368,7 +368,7 @@ const runStart = Command.make(
                       : { constraints: named.constraints },
                     title: Option.getOrUndefined(title),
                     verify: given.specs.length > 0 ? given.specs : undefined,
-                    attachments: yield* absolute(resolved.env, attach),
+                    attachments: yield* absolute(base.env, attach),
                   });
                   if (!started.ok) {
                     return started;
@@ -2541,6 +2541,7 @@ const artefactResult = (read: {
           const input = { ...read.registration, metadata: metadata.value };
           const path = input.path;
           const files = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
+          const pathSvc = yield* Path.Path;
           return yield* mutation(
             resolved.env,
             {
@@ -2548,7 +2549,7 @@ const artefactResult = (read: {
               run: runId,
               files: path === undefined ? [] : [path],
               args: {
-                registration: read.registration,
+                registration: { ...read.registration, path: undefined },
                 metadata: metadata.value ?? null,
                 upload: read.upload === true,
               },
@@ -2564,7 +2565,13 @@ const artefactResult = (read: {
                     Effect.gen(function* () {
                       const sent =
                         read.upload === true && path !== undefined
-                          ? { path: yield* uploadArtefact(client, path), snapshot: true }
+                          ? {
+                              path: yield* uploadArtefact(
+                                client,
+                                pathSvc.resolve(resolved.env.cwd, path),
+                              ),
+                              snapshot: true,
+                            }
                           : {};
                       return yield* client.artefactRegister({ runId, request, ...input, ...sent });
                     }).pipe(Effect.provideContext(files)),
