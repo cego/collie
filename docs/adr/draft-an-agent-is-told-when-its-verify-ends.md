@@ -40,3 +40,9 @@ agent is woken when the verify ends. A verify that waits for memory has not star
 its wait has no bound, so the budget does not run while it waits
 ([ADR-draft-new-work-waits-while-its-machine-is-short-of-memory](draft-new-work-waits-while-its-machine-is-short-of-memory.md)
 D7).
+
+**D5. An Output waits on the asker's own verify.** An Output an agent writes while a
+`collie verify` it asked for on the Run is under way on this host is not taken yet.
+Collie waits for the verify to end and tells the agent as in D1. When the agent next
+ends its turn, Collie takes its newest Output, which is the earlier one if the agent let
+it stand. A verify no longer under way, such as one a host swap ended, holds nothing.

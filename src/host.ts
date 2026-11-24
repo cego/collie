@@ -142,6 +142,7 @@ import { donePasses, markersOf, runningCheck, followLog } from "./checks";
 import { startCheckout } from "./agent-start";
 import { configuredAgents } from "./agents";
 import { Collecting } from "./collecting";
+import { tellVerifyEnded } from "./verify-tell";
 import { memoryWaitOf, waitForMemory, waitLine } from "./memory-wait";
 import { runLog } from "./agent-end";
 import { hostLogger, rotateInPlace } from "./host-log";
@@ -2274,21 +2275,28 @@ const frontDoorHandlers = (
         if (asker.origin !== "agent" || run === undefined || agent === undefined) {
           return Effect.void;
         }
-        return Effect.gen(function* () {
-          if (!(yield* collecting.has(run, agent))) {
-            return;
-          }
-          if (!isSettled(yield* herdr.agentStatus(agent).pipe(Effect.provideContext(bun)))) {
-            return;
-          }
-          yield* registry.steer({
-            runId: run,
-            agent,
-            mode: "boundary",
-            request: `verify-${verified.id}`,
-            text: `Your collie verify "${verified.name}" ended: ${verified.result} (exit ${verified.exit}) at ${verified.end.head_sha}. Its log: ${verified.log ?? "none kept"}`,
-          });
-        }).pipe(
+        return tellVerifyEnded(
+          {
+            collecting,
+            settled: (named) =>
+              Effect.map(
+                Effect.suspend(() => herdr.agentStatus(named)).pipe(Effect.provideContext(bun)),
+                isSettled,
+              ),
+            steer: (tell) =>
+              Effect.asVoid(
+                registry.steer({
+                  runId: tell.run,
+                  agent: tell.agent,
+                  mode: "boundary",
+                  request: tell.request,
+                  text: tell.text,
+                }),
+              ),
+          },
+          { run, agent },
+          verified,
+        ).pipe(
           Effect.catch((cause) =>
             runLog(
               env.stateDir,
@@ -2299,6 +2307,16 @@ const frontDoorHandlers = (
           ),
         );
       };
+      // WARNING: Held for as long as the verify runs, so an Output its agent writes meanwhile is not taken.
+      const whileVerifying =
+        (client: { readonly id: number }, runId: string) =>
+        <A, E, R>(effect: Effect.Effect<A, E, R>) => {
+          const who = whoOf(client);
+          const { run, agent } = who.from ?? {};
+          return who.origin === "agent" && run === runId && agent !== undefined
+            ? collecting.duringVerify(run, agent, effect)
+            : effect;
+        };
       type Carrying = ReturnType<typeof carryOut>;
       type Carried = Exit.Exit<Effect.Success<Carrying>, Effect.Error<Carrying>>;
       const carrying = new Map<string, Deferred.Deferred<Carried>>();
@@ -3734,7 +3752,7 @@ const frontDoorHandlers = (
                           ),
                         ),
                       ),
-                    );
+                    ).pipe(whileVerifying(client, runId));
                     if (collected._tag === "Failure") {
                       yield* Queue.fail(queue, collected.failure);
                       return;

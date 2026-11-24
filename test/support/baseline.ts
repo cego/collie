@@ -121,6 +121,8 @@ import { recordsAt } from "../../src/records";
 import type { Records } from "../../src/records";
 import { registerAgent, scopeFor } from "../../src/registry";
 import { deliveriesOf, SENT_STATES } from "../../src/steering";
+import { Collecting } from "../../src/collecting";
+import { tellVerifyEnded } from "../../src/verify-tell";
 import { fixtures, until } from "./host";
 import { BUILD } from "../../src/host";
 import { metricsOf, readMetrics } from "../../src/metrics";
@@ -297,6 +299,7 @@ const terminationTimeout: Duration.Input = "1 second";
 type SessionServices =
   | WorkflowEngine.WorkflowEngine
   | Agents
+  | Collecting
   | Children
   | Host
   | Store
@@ -8350,6 +8353,163 @@ scenario(
     ),
 );
 
+const ownVerifyScenario = (runId: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const bin = yield* FakeBin.make(`${rig.root}/bin`);
+    yield* noGitlabMrs(bin);
+    yield* repository();
+    const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+    const underway = `${rig.root}/check-underway`;
+    const go = `${rig.root}/check-go`;
+    const waiting = `${rig.root}/fixer-waiting`;
+    const proved = `${rig.root}/unit-proved`;
+    yield* freeze(runId, [
+      {
+        name: "unit",
+        executable: "sh",
+        argv: ["-c", `touch '${underway}'; until [ -f '${go}' ]; do sleep 0.02; done`],
+        cwd: rig.projectDir,
+      },
+    ]);
+    const finding = {
+      severity: "blocker",
+      title: "check unit has no passing record",
+      file: "src/guard.ts",
+      detail: "the gate would refuse this tree",
+    };
+    const fixed = (note: string) => ({
+      verdict: "clean",
+      findings: [],
+      fixed: [{ title: finding.title, file: finding.file }],
+      disputed: [],
+      checks: [{ name: "unit", note }],
+    });
+    const fixer = agentName(runId, "build", null, 1);
+    const blocker = asJson({ ...CLEAN_SYNTHESIS, verdict: "findings", findings: [finding] });
+    const clean = asJson(CLEAN_SYNTHESIS);
+    yield* rig.queueOutputs([
+      BUILT,
+      { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [finding], scope_met: true },
+      {
+        writes: [],
+        // WARNING: the fix itself lands before its verify, so the record it collects is on the tree the review reads.
+        sh: `${inCheckout(
+          `mkdir -p src && printf 'export const guard = true;\\n' > src/guard.ts && git add -A && git commit -qm 'the guard'`,
+        )}; touch '${waiting}'; until [ -f '${underway}' ]; do sleep 0.02; done`,
+        output: fixed("the verify is still running"),
+      },
+      {
+        writes: [],
+        sh: `if [ -f '${proved}' ]; then printf '%s' '${clean}'; else printf '%s' '${blocker}'; fi > "$OUTPUT_PATH"`,
+        output: null,
+      },
+      OPENED,
+    ]);
+    const core = yield* rig.startCore();
+    return yield* driven(
+      {
+        entry: shipped("implement"),
+        runId,
+        input: { plan, ...FINISH },
+        agents: { collectMs: 60_000 },
+      },
+      (one) =>
+        Effect.gen(function* () {
+          const collecting = yield* Collecting;
+          const agents = yield* Agents;
+          const host = yield* Host;
+          // WARNING: the driver stands in for the host's front door, which an in-process Run has not.
+          const verifying = yield* Effect.forkDetach(
+            Effect.gen(function* () {
+              yield* until(
+                () => fs.exists(waiting),
+                (there) => there,
+              );
+              yield* collecting.duringVerify(
+                runId,
+                fixer,
+                host.verify({ runId, name: "unit", cwd: rig.projectDir }).pipe(
+                  Effect.tap((done) =>
+                    tellVerifyEnded(
+                      {
+                        collecting,
+                        settled: (named) =>
+                          Effect.map(
+                            agents.statusOf(named),
+                            (status) => status === "idle" || status === "done",
+                          ),
+                        steer: (tell) =>
+                          Effect.asVoid(
+                            agents.steer({
+                              runId: tell.run,
+                              agent: tell.agent,
+                              mode: "boundary",
+                              request: tell.request,
+                              text: tell.text,
+                            }),
+                          ),
+                      },
+                      { run: runId, agent: fixer },
+                      done,
+                    ),
+                  ),
+                ),
+              );
+            }),
+          );
+          yield* until(
+            () => fs.exists(underway),
+            (there) => there,
+          );
+          // WARNING: the fixer's turn has to end before its verify does, or the host has no settled agent to tell.
+          yield* until(
+            () => fs.exists(agents.outputFor(runId, "fix-1")),
+            (there) => there,
+          );
+          yield* until(
+            () => agents.statusOf(fixer),
+            (status) => status === "idle" || status === "done",
+          );
+          yield* Effect.sleep("300 millis");
+          yield* fs.writeFileString(go, "");
+          yield* Fiber.join(verifying);
+          const heard = yield* until(
+            () => agents.statusOf(fixer),
+            (status) => status === "working",
+          ).pipe(Effect.timeoutOption("10 seconds"));
+          if (Option.isSome(heard)) {
+            yield* fs.writeFileString(proved, "");
+            yield* fs.writeFileString(agents.outputFor(runId, "fix-1"), asJson(fixed("it passed")));
+            yield* core.report(fixer, "idle");
+          }
+          return yield* until(
+            () => Effect.zip(one.status, parkedWhy(runId)),
+            ([status, why]) =>
+              status.status === "complete" ||
+              status.status === "failed" ||
+              (status.status === "suspended" && why !== ""),
+          ).pipe(Effect.map(([status, why]) => ({ status, why })));
+        }),
+    );
+  });
+
+scenario(
+  "a fixer's interim Output waits for its own verify, so the next review is given the passing record and the rally does not halt",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-impl-own-verify";
+        const { status, why } = yield* ownVerifyScenario(runId);
+        expect({ status: status.status, parked: why }).toEqual({ status: "complete", parked: "" });
+        expect(yield* halts(runId)).toEqual([]);
+        expect(yield* asked(runId, "review-2-1")).toMatch(
+          /- unit: pass \(by collie\), on this tree, at \d{4}-/,
+        );
+      }),
+    ),
+);
+
 const fixedOnce = (runId: string) =>
   Effect.gen(function* () {
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
@@ -14620,6 +14780,7 @@ const driven = <A, E>(
     readonly restarted?: boolean;
     readonly reached?: Deferred.Deferred<void>;
     readonly runsChildren?: boolean | "tags";
+    readonly agents?: Partial<AgentHost>;
   },
   drive: (run: {
     readonly status: Effect.Effect<typeof RunStatus.Type>;
@@ -14635,7 +14796,7 @@ const driven = <A, E>(
     readonly answer: (decision: string, value: string) => Effect.Effect<void>;
     readonly taken: (decision: string) => Effect.Effect<boolean>;
     readonly resume: Effect.Effect<void>;
-  }) => Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | Records>,
+  }) => Effect.Effect<A, E, SessionServices>,
 ) =>
   session(
     Effect.gen(function* () {
@@ -14696,6 +14857,7 @@ const driven = <A, E>(
       );
     }),
     options.host,
+    options.agents,
   );
 
 const answeredEarly = (question: string, over: HostOverride) => {

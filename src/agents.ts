@@ -3420,6 +3420,24 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       }),
     );
 
+  // WARNING: the tell is a delivery, so only the ledger says whether its prompt was taken.
+  const tellTaken = (launched: Launched, since: number) =>
+    launched.terminalId === undefined
+      ? Effect.succeed(true)
+      : readLedger(launched.terminalId).pipe(
+          Effect.map((lines) =>
+            Arr.some(
+              [...newestById(lines).values()],
+              (one) =>
+                one.cause.kind === "steer" &&
+                pipe(one.cause.ref, Str.startsWith("verify-")) &&
+                isSettledDelivery(one) &&
+                epochMs(one.at) >= since,
+            ),
+          ),
+          Effect.orElseSucceed(() => true),
+        );
+
   const collect = (
     launched: Launched,
     unless?: string | null,
@@ -3452,6 +3470,8 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               }),
               usable: usable ?? (() => true),
               settled: turnOver,
+              held: collecting.verifying(launched.runId, launched.agent),
+              told: (since) => tellTaken(launched, since),
             }),
             confirmed(launched, unless ?? null).pipe(Effect.andThen(Effect.never)),
           );
@@ -5072,16 +5092,38 @@ const waitForOutput = <R>(
     readonly counts: Effect.Effect<boolean, never, R>;
     readonly usable: (text: string) => boolean;
     readonly settled: Effect.Effect<boolean, never, R>;
+    readonly held?: Effect.Effect<boolean, never, R>;
+    readonly told?: (since: number) => Effect.Effect<boolean, never, R>;
   },
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const read = fs.readFileString(path).pipe(Effect.orElseSucceed(() => ""));
     const fresh = (text: string) => Str.trim(text) !== "" && text !== unless;
+    // WARNING: an Output is not taken while its agent's own verify runs, nor before the turn its tell starts ends.
+    let held = false;
+    let heldAt = 0;
+    let turning = false;
+    const free = Effect.gen(function* () {
+      if (every.held !== undefined && (yield* every.held)) {
+        held = true;
+        heldAt = yield* Clock.currentTimeMillis;
+        turning = false;
+        return false;
+      }
+      if (!held) {
+        return true;
+      }
+      if (!(yield* every.settled)) {
+        turning = true;
+        return false;
+      }
+      return turning || every.told === undefined || (yield* every.told(heldAt));
+    });
     let spent = 0;
     for (;;) {
       const text = yield* read;
-      if (fresh(text)) {
+      if (fresh(text) && (yield* free)) {
         if (every.usable(text)) {
           return text;
         }
