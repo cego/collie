@@ -1,6 +1,5 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import * as Order from "effect/Order";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import {
@@ -171,6 +170,7 @@ export interface Reviewed {
   readonly disputes: ReadonlyArray<Finding>;
   readonly reviewed: SynthesisReport;
   readonly on?: Snapshot;
+  readonly fixed?: ReadonlyArray<string>;
 }
 
 export interface Delivery<I extends Told, O extends Opened> {
@@ -256,15 +256,7 @@ const deliveredBy = (ask: Pick<Delivery<Told, Opened>, "agent" | "takesOver" | "
   return on;
 };
 
-const FIX_FILE = /^(fix|gate-fix|ci-fix)-(\d+)\.json$/;
-// WARNING: the phases are ordered as the Run reaches them, so the last fix's name is the newest.
-const FIX_PHASES = ["fix", "gate-fix", "ci-fix"];
 const parseJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
-
-const fixPhase = (file: string) => {
-  const match = FIX_FILE.exec(file);
-  return match === null ? 0 : FIX_PHASES.indexOf(match[1] ?? "") * 1000 + Number(match[2] ?? 0);
-};
 
 export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =>
   Effect.gen(function* () {
@@ -275,30 +267,17 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
     let latest: Pick<Reviewed, "reviewed" | "on"> = rallied;
     const { dir } = yield* host.place(runId);
     // WARNING: a fix may name the reproduction the build did not, so the gate reads every fix's Output.
+    const fixers: Array<string> = [];
     const fixes = Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const folder = pipe_(agents.outputFor(runId, "build"), Str.replace(/\/[^/]*$/, ""));
-      const none: ReadonlyArray<string> = [];
-      const found = yield* fs.readDirectory(folder).pipe(Effect.orElseSucceed(() => none));
-      const read = yield* Effect.forEach(
-        Arr.sort(
-          Arr.filter(found, (file) => FIX_FILE.test(file)),
-          Order.mapInput(Order.Number, fixPhase),
-        ),
-        (file) =>
-          fs.readFileString(`${folder}/${file}`).pipe(
-            Effect.flatMap((text) => Effect.fromOption(parseJson(text))),
-            Effect.map((output) => ({
-              operation: pipe_(file, Str.replace(/\.json$/, "")),
-              output,
-            })),
-            Effect.orElseSucceed(() => null),
-          ),
-      );
       const outputs: Record<string, Schema.Json> = {};
-      for (const one of read) {
-        if (one !== null) {
-          outputs[one.operation] = one.output;
+      for (const operation of [...(rallied.fixed ?? []), ...fixers]) {
+        const text = yield* fs
+          .readFileString(agents.outputFor(runId, operation))
+          .pipe(Effect.orElseSucceed(() => ""));
+        const output = parseJson(text);
+        if (Option.isSome(output)) {
+          outputs[operation] = output.value;
         }
       }
       return outputs;
@@ -456,6 +435,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
                 : ` These also fail where this branch leaves the default branch, so they are not yours to fix: ${Arr.join(atBase, "; ")}.`
             }`,
           }));
+          fixers.push(`gate-fix-${at}`);
           const fixed = yield* agentWork({
             operation: `gate-fix-${at}`,
             ...deliveredBy(ask),
@@ -911,6 +891,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         title: `${one.name}: its CI job ${one.job} failed`,
         detail: `${one.unproved}. On ${pipe_(read.tree.head, Str.slice(0, 12))}, the merge request's head: ${one.url ?? "the forge gave no URL"}. Its log: ${one.log ?? "the forge gave no command for it"}`,
       }));
+      fixers.push(`ci-fix-${at}`);
       const fixed = yield* ciFix(
         agentWork({
           operation: `ci-fix-${at}`,

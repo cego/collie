@@ -9834,11 +9834,19 @@ scenario("a gate fix runs without asking, and reaches the merge request as not r
   ),
 );
 
+const bugReproduction = () => ({
+  name: "regression",
+  executable: "sh",
+  argv: ["-c", "test -f fixed"],
+  cwd: rig.projectDir,
+});
+
 scenario(
-  "a bug whose gate fix names the reproduction it recorded reaches its merge request, instead of failing at Checks",
+  "a bug whose build records its own reproduction, and whose gate fix names it, reaches its merge request instead of failing at Checks",
   () =>
     runEffect(
       Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
         yield* noGitlabMrs(bin);
         yield* ahead();
@@ -9848,22 +9856,22 @@ scenario(
         yield* freeze(runId, [
           { name: "unit", executable: "sh", argv: ["-c", "true"], cwd: rig.projectDir },
         ]);
-        const regression = {
-          name: "regression",
-          executable: "sh",
-          argv: ["-c", "test -f fixed"],
-          cwd: rig.projectDir,
-        };
-        yield* collect(evidenceDir(dir, runId), {
-          ...regression,
-          run: runId,
-          by: "agent",
-          expect: "fail",
-        });
-        yield* (yield* FileSystem.FileSystem).writeFileString(`${rig.projectDir}/fixed`, "fixed\n");
-        yield* exec(["git", "add", "fixed"], { cwd: rig.projectDir });
-        yield* exec(["git", "commit", "-qm", "the fix"], { cwd: rig.projectDir });
-        yield* collect(evidenceDir(dir, runId), { ...regression, run: runId, by: "agent" });
+        const waits = (what: string) => `${rig.root}/r-bug-named-${what}`;
+        const touched = (what: string) => `touch '${waits(what)}'`;
+        const held = (what: string) =>
+          `while [ ! -f '${waits(`${what}-done`)}' ]; do sleep 0.05; done`;
+        // WARNING: the pair is recorded while the builder holds its turn, so the gate reads an agent's own record.
+        const script = Arr.join(
+          [
+            touched("red"),
+            held("red"),
+            `printf 'fixed\\n' > '${rig.projectDir}/fixed'`,
+            `cd '${rig.projectDir}' && git add fixed && git commit -qm 'the fix'`,
+            touched("green"),
+            held("green"),
+          ],
+          " && ",
+        );
         const named = {
           verdict: "clean",
           findings: [],
@@ -9872,13 +9880,43 @@ scenario(
           checks: [{ name: "unit" }],
           reproduced: "regression",
         };
-        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, named, OPENED]);
+        yield* rig.queueOutputs([
+          { writes: [], sh: script, output: BUILT },
+          CLEAN_SYNTHESIS,
+          named,
+          OPENED,
+        ]);
+        const reached = (what: string) =>
+          until(
+            () => fs.exists(waits(what)).pipe(Effect.orElseSucceed(() => false)),
+            (there) => there,
+          );
+        const recording = yield* Effect.forkChild(
+          Effect.gen(function* () {
+            yield* reached("red");
+            yield* collect(evidenceDir(dir, runId), {
+              ...bugReproduction(),
+              run: runId,
+              by: "agent",
+              expect: "fail",
+            });
+            yield* fs.writeFileString(waits("red-done"), "");
+            yield* reached("green");
+            yield* collect(evidenceDir(dir, runId), {
+              ...bugReproduction(),
+              run: runId,
+              by: "agent",
+            });
+            yield* fs.writeFileString(waits("green-done"), "");
+          }),
+        );
         const result = yield* ran({
           entry: shipped("implement"),
           runId,
           input: { plan, ...FINISH },
           options: { outcome: "bug" },
         });
+        yield* Fiber.join(recording);
         yield* bin.restore();
 
         expect(said(result)).toBe(OPENED.mr_url);
@@ -9886,6 +9924,96 @@ scenario(
           '"regression" failed before the fix and passes on this tree',
         );
         expect(yield* wasAsked(runId, "gate-fix-2")).toBe(false);
+      }),
+    ),
+);
+
+scenario(
+  "a reproduction named only by a rally fixer's Output is read, so the gate asks for nothing",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* ahead();
+        const runId = "r-bug-per-ticket";
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve(runId, ["unit"]);
+        yield* freeze(runId, [
+          { name: "unit", executable: "sh", argv: ["-c", "true"], cwd: rig.projectDir },
+        ]);
+        const waits = (what: string) => `${rig.root}/r-bug-per-ticket-${what}`;
+        const touched = (what: string) => `touch '${waits(what)}'`;
+        const held = (what: string) =>
+          `while [ ! -f '${waits(`${what}-done`)}' ]; do sleep 0.05; done`;
+        const script = Arr.join(
+          [
+            touched("red"),
+            held("red"),
+            `printf 'fixed\\n' > '${rig.projectDir}/fixed'`,
+            `cd '${rig.projectDir}' && git add fixed && git commit -qm 'the fix'`,
+            touched("green"),
+            held("green"),
+          ],
+          " && ",
+        );
+        const blocker = {
+          severity: "blocker",
+          title: "The reproduction is not named",
+          file: "src/index.ts",
+        };
+        const names = {
+          verdict: "clean",
+          findings: [],
+          fixed: [blocker],
+          disputed: [],
+          checks: [{ name: "unit" }],
+          reproduced: "regression",
+        };
+        yield* rig.queueOutputs([
+          { writes: [], sh: script, output: BUILT },
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [blocker] },
+          names,
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+        const reached = (what: string) =>
+          until(
+            () => fs.exists(waits(what)).pipe(Effect.orElseSucceed(() => false)),
+            (there) => there,
+          );
+        const recording = yield* Effect.forkChild(
+          Effect.gen(function* () {
+            yield* reached("red");
+            yield* collect(evidenceDir(dir, runId), {
+              ...bugReproduction(),
+              run: runId,
+              by: "agent",
+              expect: "fail",
+            });
+            yield* fs.writeFileString(waits("red-done"), "");
+            yield* reached("green");
+            yield* collect(evidenceDir(dir, runId), {
+              ...bugReproduction(),
+              run: runId,
+              by: "agent",
+            });
+            yield* fs.writeFileString(waits("green-done"), "");
+          }),
+        );
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+          options: { outcome: "bug" },
+        });
+        yield* Fiber.join(recording);
+        yield* bin.restore();
+
+        expect(Arr.map(yield* launchesAt(dir, runId), (one) => one.operation)).toContain("fix-1");
+        expect(yield* wasAsked(runId, "gate-fix-1")).toBe(false);
+        expect(said(result)).toBe(OPENED.mr_url);
       }),
     ),
 );

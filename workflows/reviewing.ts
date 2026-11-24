@@ -536,6 +536,7 @@ export const rally = (ask: {
       ask.resume === undefined && (yield* host.place(runId)).features?.review_delta === true;
     let prior: { readonly head: string; readonly open: ReadonlyArray<Finding> } | null = null;
     let ledger = ask.ledger;
+    const fixes: Array<string> = [];
 
     const repair = Effect.gen(function* () {
       const resumed = ask.resume;
@@ -553,6 +554,7 @@ export const rally = (ask: {
         ),
         ...resumed.previous.disputes,
       ];
+      fixes.push(`${prefix}fix`);
       const fixed = yield* ask.fix({
         operation: `${prefix}fix`,
         at: 1,
@@ -577,7 +579,10 @@ export const rally = (ask: {
           const unopened = yield* checkedBeforeReview({
             name: `${prefix}before-review-${at}`,
             cwd: ask.cwd,
-            fix: (operation, findings, open) => ask.fix({ operation, at, proves, findings, open }),
+            fix: (operation, findings, open) => {
+              fixes.push(operation);
+              return ask.fix({ operation, at, proves, findings, open });
+            },
           });
           if (unopened !== null) {
             return {
@@ -704,6 +709,7 @@ export const rally = (ask: {
           }
           seen = { at, keys: round.keys };
 
+          fixes.push(`${prefix}fix-${at}`);
           const fixed = yield* ask.fix({
             operation: `${prefix}fix-${at}`,
             at,
@@ -760,7 +766,7 @@ export const rally = (ask: {
             ...ended.disputes,
           ]);
         }
-        return ended;
+        return { ...ended, fixed: [...fixes] };
       }
     }
     return yield* new WorkflowError({ reason: "the rally ran no rounds at all" });
