@@ -1009,7 +1009,7 @@ export default defineWorkflow({
           });
         const moveTo = (name: string, head: string, branch: string) =>
           Effect.gen(function* () {
-            const first = yield* alignment(`${name}.fast-forward`, head, branch);
+            const first = yield* alignment(name, head, branch);
             const already = savedHead(first);
             if (already !== null) {
               return already;
@@ -1023,7 +1023,7 @@ export default defineWorkflow({
                 findings: savedRefusalWhy(first) ?? "the checkout is not on its head",
               },
             });
-            return yield* settled(`${name}.fast-forward.again`, head, branch);
+            return yield* settled(`${name}.again`, head, branch);
           });
         const targetOf = (name: string) =>
           Activity.make({

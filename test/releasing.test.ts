@@ -257,7 +257,7 @@ test("a reset that would overwrite a file the checkout keeps out of git is refus
 test("a checkout carrying a commit origin has moved past is taken as it is, not reported as unpushed", () =>
   runEffect(
     Effect.gen(function* () {
-      const { root, cwd, first, commit } = yield* repository;
+      const { fs, root, cwd, first, commit } = yield* repository;
       const carried = yield* commit("two.ts");
       yield* commit("three.ts");
       yield* git(cwd, "reset", "-q", "--hard", carried);
@@ -271,6 +271,76 @@ test("a checkout carrying a commit origin has moved past is taken as it is, not 
       if (moved._tag === "At") {
         expect(moved.head).toBe(carried);
         expect(moved.from).toBe(carried);
+      }
+      expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(carried);
+      const log = yield* fs.readFileString(`${root}/run/log.txt`);
+      expect(log).toContain(
+        `the checkout already carries ${pipe_(first, Str.slice(0, 8))} and sits at ${pipe_(carried, Str.slice(0, 8))}, which origin's main carries`,
+      );
+    }).pipe(Effect.scoped),
+  ));
+
+test("a reset that would write a file over a directory the checkout keeps out of git is refused, naming what it holds", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { fs, root, cwd, first } = yield* repository;
+      yield* fs.writeFileString(`${cwd}/.git/info/exclude`, "local/\n");
+      yield* fs.makeDirectory(`${cwd}/local`, { recursive: true });
+      yield* fs.writeFileString(`${cwd}/local/settings`, "the local one");
+      const target = yield* newerTarget(cwd);
+      const forge = `${root}/forge`;
+      yield* git(root, "clone", "-q", `${root}/origin.git`, forge);
+      for (const [key, value] of [
+        ["user.name", "Test"],
+        ["user.email", "test@example.com"],
+        ["commit.gpgsign", "false"],
+      ] as const) {
+        yield* git(forge, "config", key, value);
+      }
+      yield* git(forge, "reset", "-q", "--hard", target);
+      yield* fs.writeFileString(`${forge}/local`, "the forge's");
+      yield* git(forge, "add", "-f", "local");
+      yield* git(forge, "commit", "-q", "-m", "track a file named local");
+      const incoming = yield* git(forge, "rev-parse", "HEAD");
+      yield* git(forge, "push", "-q", "-f", "origin", `${incoming}:refs/heads/main`);
+      expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(first);
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: incoming,
+        run: runner(),
+      });
+      expect(moved._tag).toBe("Refused");
+      if (moved._tag === "Refused") {
+        expect(moved.cause).toBe("branch-force-pushed");
+        expect(moved.why).toContain("local/settings");
+      }
+      expect(yield* fs.readFileString(`${cwd}/local/settings`)).toBe("the local one");
+      expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(first);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a checkout ahead of a cached origin tip is refused once origin's branch is gone", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { root, cwd, first } = yield* repository;
+      yield* git(cwd, "checkout", "-q", "-b", "feature");
+      yield* (yield* FileSystem.FileSystem).writeFileString(`${cwd}/two.ts`, "two");
+      yield* git(cwd, "add", "two.ts");
+      yield* git(cwd, "commit", "-q", "-m", "two.ts");
+      yield* git(cwd, "push", "-q", "origin", "HEAD:refs/heads/feature");
+      const carried = yield* git(cwd, "rev-parse", "HEAD");
+      yield* git(root, "--git-dir", `${root}/origin.git`, "update-ref", "-d", "refs/heads/feature");
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: first,
+        run: runner(),
+      });
+      expect(moved._tag).toBe("Refused");
+      if (moved._tag === "Refused") {
+        expect(moved.cause).toBe("checkout-dirty-human");
+        expect(moved.why).toContain("ahead of origin's feature");
       }
       expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(carried);
     }).pipe(Effect.scoped),

@@ -95,22 +95,24 @@ test("a clean checkout whose head origin does not carry stays parked, and resume
           )[0],
         ).toBe("uncleared");
         expect(Arr.some(rechecked, (line) => line.action === "resumed")).toBe(false);
-        const counted = () =>
-          client.runMetrics({ runId }).pipe(
-            Effect.orDie,
-            Effect.map((lines) => Arr.filter(lines, (line) => line.action === "rechecked")),
-          );
-        const before = (yield* counted()).length;
+        const seen = () => client.runMetrics({ runId }).pipe(Effect.orDie);
+        const before = (yield* seen()).length;
         yield* git("remote", "set-url", "origin", `${world.home}/gone.git`);
-        const unread = yield* until(counted, (lines) => lines.length >= before + 2);
+        const unread = yield* until(
+          seen,
+          (lines) =>
+            Arr.filter(lines, (line) => line.action === "rechecked").length >=
+            Arr.filter(rechecked, (line) => line.action === "rechecked").length + 2,
+        );
+        const fresh = Arr.drop(unread, before);
         expect(
           Arr.some(
-            Arr.drop(unread, before),
+            Arr.filter(fresh, (line) => line.action === "rechecked"),
             (line) => line.outcome === "error" || line.outcome === "uncleared",
           ),
         ).toBe(true);
-        expect(Arr.some(unread, (line) => line.outcome === "cleared")).toBe(false);
-        expect(Arr.some(unread, (line) => line.action === "resumed")).toBe(false);
+        expect(Arr.some(fresh, (line) => line.outcome === "cleared")).toBe(false);
+        expect(Arr.some(fresh, (line) => line.action === "resumed")).toBe(false);
         yield* git("remote", "set-url", "origin", origin);
         yield* git("push", "-q", "origin", `HEAD:refs/heads/${branch}`);
         yield* (yield* FileSystem.FileSystem)

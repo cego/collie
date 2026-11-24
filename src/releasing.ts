@@ -24,6 +24,10 @@ const atMost = (named: ReadonlyArray<string>) =>
 
 const nul = (text: string) => Arr.filter(Str.split(text, "\0"), (one) => one !== "");
 
+// WARNING: git writes a tracked file over an ignored directory at the same path, taking what it held with it.
+const overlapping = (one: string, path: string) =>
+  one === path || pipe(one, Str.startsWith(`${path}/`)) || pipe(path, Str.startsWith(`${one}/`));
+
 const changedFiles = (porcelain: string) =>
   atMost(
     Arr.map(
@@ -116,7 +120,10 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
   if (from === opts.head) {
     return yield* at(opts.head, from);
   }
-  yield* git(["fetch", "--quiet", "origin"]);
+  const fetched = yield* git(["fetch", "--prune", "--quiet", "origin"]);
+  if (fetched.code !== 0) {
+    return refused(`origin could not be read for ${opts.cwd}: ${whatItSaid(fetched)}`);
+  }
   if ((yield* git(["cat-file", "-e", `${opts.head}^{commit}`])).code !== 0) {
     return refused(`origin does not have ${short(opts.head)}`);
   }
@@ -132,7 +139,7 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
       if (atOrigin) {
         yield* appendLog(
           opts.runDir,
-          `the checkout already carries ${short(opts.head)} and sits at ${short(from)}, where origin's ${named} points`,
+          `the checkout already carries ${short(opts.head)} and sits at ${short(from)}, which origin's ${named} carries`,
         );
         return yield* at(from, from);
       }
@@ -170,8 +177,10 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
     }
     const ignored = yield* git(["ls-files", "--others", "--ignored", "--exclude-standard", "-z"]);
     const tracked = yield* git(["ls-tree", "-r", "--name-only", "-z", opts.head]);
-    const carried = new Set(nul(tracked.stdout));
-    const replaced = Arr.filter(nul(ignored.stdout), (one) => carried.has(one));
+    const carried = nul(tracked.stdout);
+    const replaced = Arr.filter(nul(ignored.stdout), (one) =>
+      Arr.some(carried, (path) => overlapping(one, path)),
+    );
     if (replaced.length > 0) {
       return refused(
         `the reset to ${short(opts.head)} would overwrite files the checkout keeps out of git: ${atMost(replaced)}`,

@@ -786,6 +786,12 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | { readonly _tag: "Refused"; readonly why: string; readonly cause: ParkCause };
   export const FastForwardSchema: Schema.Codec<FastForward, unknown, never, never>;
 
+  /** A checkout's alignment as a Release saved it, and the head it took. */
+  export type SavedAlignment = FastForward | string;
+  export const SavedAlignmentSchema: Schema.Codec<SavedAlignment, unknown, never, never>;
+  export const savedHead: (saved: SavedAlignment) => string | null;
+  export const savedRefusalWhy: (saved: SavedAlignment) => string | null;
+
   /** A job of a tag's pipeline, at the address the forge gives it. */
   export interface JobLink { readonly name: string; readonly url: string; }
   export const JobLinkSchema: Schema.Codec<JobLink, unknown, never, never>;
@@ -4476,15 +4482,18 @@ export const hostLayer: (options: {
             Duration.toMillis(options.collectMs ?? Duration.minutes(120));
           let told = false;
           for (;;) {
-            const listed = yield* Effect.result(herdr.agentList().pipe(Effect.provideContext(bun)));
+            const listed = yield* Effect.result(
+              herdr
+                .agentList()
+                .pipe(Effect.provideContext(bun), Effect.timeoutOption(AGENT_LIST_BUDGET)),
+            );
+            const roster = listed._tag === "Success" ? Option.getOrNull(listed.success) : null;
             const busy =
-              listed._tag === "Failure"
-                ? mine
-                : Arr.filter(mine, (one) => workingIn(one, listed.success, cwd));
+              roster === null ? mine : Arr.filter(mine, (one) => workingIn(one, roster, cwd));
             if (yield* set(STOP, runId)) {
               return "stopped" as const;
             }
-            if (listed._tag === "Success" && busy.length === 0) {
+            if (roster !== null && busy.length === 0) {
               return "clear" as const;
             }
             if (!told) {
@@ -4493,10 +4502,10 @@ export const hostLayer: (options: {
                 appendLog(
                   runDir(dir, runId),
                   `waiting for ${Arr.join(
-                    Arr.map(listed._tag === "Failure" ? mine : busy, (one) => one.agent),
+                    Arr.map(roster === null ? mine : busy, (one) => one.agent),
                     ", ",
                   )} to stop working in ${cwd}${
-                    listed._tag === "Failure" ? `, where core cannot list its agents yet` : ""
+                    roster === null ? `, where core cannot list its agents yet` : ""
                   }`,
                 ),
               );
@@ -7563,6 +7572,9 @@ const reviewFacts = <R>(
   });
 
 const AGENT_WAIT_POLL = Duration.millis(100);
+
+// WARNING: core answers a terminal.list with no deadline of its own, so a silent socket must not hold the wait.
+const AGENT_LIST_BUDGET = Duration.seconds(10);
 
 const workingIn = (entry: AgentEntry, alive: ReadonlyArray<AgentInfo>, cwd: string) => {
   const at = Option.getOrUndefined(

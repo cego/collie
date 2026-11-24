@@ -1042,9 +1042,9 @@ the next round: a `fixed` answer counts only where the head carries its commit.
 
 `host.fastForward({ runId, cwd, head, branch })` brings the checkout to `head`, writing
 the move to the Run's log. It first waits for every agent of the Run working in that
-checkout to stop — bounded by the collection budget and ended at once by a Stop — so
-Prove never reads a turn still being written. It answers `At` with the `head` and where it
-moved `from`:
+checkout to stop — bounded by the collection budget, by a roster that does not answer, and
+ended at once by a Stop — so Prove never reads a turn still being written. It answers `At`
+with the `head` and where it moved `from`:
 
 - a checkout behind `head` fast-forwards to it;
 - a clean, divergent checkout whose own head origin carried resets to `head`, and the log
@@ -1058,10 +1058,13 @@ Otherwise it answers `Refused` with a `why` and a park `cause`, naming what it p
 did not, each naming the changed files or the unpushed commits; `branch-force-pushed` for
 a checkout holding commits origin never carried, naming every one by short sha and
 subject, and for a reset that would overwrite a file the checkout keeps out of git; and
-`release-failed` for a wrong branch, an unreadable checkout, a head origin lacks or a
-failed merge. Nothing is reset or discarded while anything at risk is unpublished. With
-optional `branch`, it refuses a detached checkout or a different source branch before
-moving anything, even when already at `head`.
+`release-failed` for a wrong branch, an unreadable checkout, an unreadable origin, a head
+origin lacks or a failed merge. Nothing is reset or discarded while anything at risk is
+unpublished. With optional `branch`, it refuses a detached checkout or a different source
+branch before moving anything, even when already at `head`. An Activity that parks on a
+refusal must leave its own read unfinished, so a resume reads Git again: `SavedAlignment`
+and its schema accept a head a Release saved before refusals carried a cause, and
+`savedHead`/`savedRefusalWhy` read whichever one a registration holds.
 
 `host.readTag({ runId, cwd, tag, merged, pipeline, proves, stage, production })` reads a
 tag back from origin and the forge rather than from an Output, against what it must prove.
