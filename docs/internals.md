@@ -78,7 +78,10 @@ nor anything it starts preloads CEF. Without Desktop's `bin` to match, a host ke
 
 The host writes what it does to `host.log` in its state directory — its start, a stop and
 whether the grace ran out, every warning the engine and the registry log, and a board build
-or an RPC answer that took over 2 s, with which RPC and how long it took. A write that
+or an RPC answer that took over 2 s, with which RPC and how long it took. A request a door
+proposed that a step would not carry out is a warning naming its request id and the step's
+refusal — `the request <id> was refused: 0 <kind>: failed — <why>` — so a request answered
+only to the caller can still be found afterwards. A write that
 fails and leaves part of a Run's record missing (its final card, frozen checks, intent seed
 or oversight audit), or that leaves the host's shutdown or pairing unfinished, is an Error
 line with its cause; the Run carries on as it would have. A failed dial-back from a paired

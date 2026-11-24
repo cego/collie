@@ -80,6 +80,7 @@ import { ProposalRefused } from "./board-model";
 import type { ProposalCarried, StepResult } from "./board-model";
 import { fingerprint } from "./verify";
 import { findRun } from "./runs";
+import { stringifyJson } from "./json";
 
 const takesFields = Schema.decodeUnknownOption(
   Schema.Struct({
@@ -208,6 +209,9 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   );
   registerExecutor("update_intent", (action, by, env) =>
     Effect.gen(function* () {
+      if (action.change === "add-constraint" && Str.trim(action.patch) === "") {
+        return failed(`the constraint ${stringifyJson(action.patch)} says nothing to add`);
+      }
       const dir = runDir(env.stateDir, action.run);
       if (action.change === "set-outcome") {
         const changed = yield* changeIntentRun(env, {

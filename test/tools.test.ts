@@ -105,6 +105,37 @@ const call = (name: string, input: JsonObject = {}) =>
     return tool.call(env, input);
   });
 
+const callAs = (seated: PluginEnv, name: string, input: JsonObject = {}) =>
+  Effect.suspend(() => {
+    const tool = toolNamed(name);
+    if (tool === null) {
+      throw new Error(`no tool ${name}`);
+    }
+    return tool.call(seated, input);
+  });
+
+const healerSeat = Effect.fn("ToolsTest.healerSeat")(function* () {
+  const heal = yield* aRun("heal the flock");
+  yield* registerAgent(
+    { session: null, workspaceId: null, cwd: project },
+    {
+      role: "healer",
+      agent: "mender",
+      paneId: "p-heal",
+      workspaceId: null,
+      runId: heal.id,
+      workflow: "heal",
+      at: "2026-11-13T00:00:00.000Z",
+    },
+  );
+  return {
+    ...env,
+    asker: { origin: "agent" as const, from: { run: heal.id, agent: "mender" } },
+  };
+});
+
+const constraintPatch = "keep the picker behind a flag";
+
 const inWorld = <A, E>(body: Effect.Effect<A, E, PlatformServices | Records | Scope.Scope>) =>
   hosted("hw-tools-", (herd) =>
     Effect.gen(function* () {
@@ -2271,5 +2302,96 @@ test("collie_do disposes of a merge request of several on the Run that owns it, 
       });
       expect(refused).toContain("disposition: failed");
       expect(refused).toMatch(/cego\/api!3.*cego\/web!8/);
+    }),
+  ));
+
+test("a Heal Run's agent adds a constraint to another Run, which applies", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const target = yield* aRun("the Run a heal is looking at");
+      const seated = yield* healerSeat();
+      const said = yield* callAs(seated, "collie_propose", {
+        interpretation: "the heal found a constraint worth keeping",
+        actions: [
+          {
+            kind: "update_intent",
+            run: target.id,
+            change: "add-constraint",
+            patch: constraintPatch,
+            base_version: 1,
+          },
+        ],
+      });
+      expect(said).toContain("update_intent: applied");
+      const intent = yield* readIntent(target.dir);
+      expect(intent?.version).toBe(2);
+      expect(Arr.map(intent?.constraints ?? [], (one) => one.text)).toContain(constraintPatch);
+    }),
+  ));
+
+test("a Heal Run's agent's change against a version since amended is refused naming both, and the host logs it under the request", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const target = yield* aRun("the Run a heal is looking at");
+      const seated = yield* healerSeat();
+      const intent = yield* readIntent(target.dir);
+      if (intent === null) {
+        return yield* Effect.die(new Error("the Run has no Intent"));
+      }
+      yield* writeIntent(
+        target.dir,
+        amend(intent, { kind: "set-goal", goal: "a wider picker" }, "human:test", yield* nowIso),
+      );
+      const said = yield* callAs(seated, "collie_propose", {
+        request_id: "heal-stale-1",
+        interpretation: "the heal found a constraint worth keeping",
+        actions: [
+          {
+            kind: "update_intent",
+            run: target.id,
+            change: "add-constraint",
+            patch: constraintPatch,
+            base_version: 1,
+          },
+        ],
+      });
+      expect(said).toContain("failed");
+      expect(said).toContain("v1");
+      expect(said).toContain("which is now v2");
+      const after = yield* readIntent(target.dir);
+      expect(after?.version).toBe(2);
+      expect(Arr.map(after?.constraints ?? [], (one) => one.text)).not.toContain(constraintPatch);
+      const log = yield* until(
+        () => fs.readFileString(`${stateDir}/host.log`).pipe(Effect.orElseSucceed(() => "")),
+        (text) => pipe_(text, Str.includes("heal-stale-1")),
+      );
+      expect(log).toContain("heal-stale-1");
+      expect(log).toContain("which is now v2");
+    }),
+  ));
+
+test("a Heal Run's agent's constraint that says nothing is refused, naming the patch, and the Intent is unchanged", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const target = yield* aRun("the Run a heal is looking at");
+      const seated = yield* healerSeat();
+      const said = yield* callAs(seated, "collie_propose", {
+        interpretation: "the heal found a constraint worth keeping",
+        actions: [
+          {
+            kind: "update_intent",
+            run: target.id,
+            change: "add-constraint",
+            patch: "   ",
+            base_version: 1,
+          },
+        ],
+      });
+      expect(said).toContain("update_intent: failed");
+      expect(said).toContain('"   "');
+      const after = yield* readIntent(target.dir);
+      expect(after?.version).toBe(1);
+      expect(after?.constraints).toEqual([]);
     }),
   ));

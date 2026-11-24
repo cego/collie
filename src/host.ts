@@ -3458,6 +3458,13 @@ const frontDoorHandlers = (
               },
               // WARNING: A refusal is not kept against its request, so it can be asked again corrected.
               request(asker, key, { interpretation, actions: decoded.value, actor }).pipe(
+                Effect.tap((result) =>
+                  result.ok
+                    ? Effect.void
+                    : Effect.logWarning(
+                        `the request ${requestId} was refused: ${result.error.message}`,
+                      ),
+                ),
                 Effect.flatMap((result) =>
                   !result.ok && REJECTED.includes(result.error.code)
                     ? Effect.fail(new SteerUnanswered({ outcome: outcomeOf(result) }))

@@ -20,7 +20,8 @@ import manifest from "../package.json";
 import type { JsonObject } from "../src/schema";
 import { rebuiltAnswer } from "../src/mcp";
 import { connect } from "../src/host";
-import { readAudit } from "../src/audit";
+import { readAudit, recordAudit } from "../src/audit";
+import { recordsAt } from "./support/records";
 import { recordsReadLayer } from "../src/records";
 import { runDir } from "../src/engine";
 import { until } from "./support/host";
@@ -119,6 +120,7 @@ const openServer = Effect.fn("McpTest.open")(function* (
   return {
     request,
     child,
+    diagnostics,
     close: Effect.gen(function* () {
       yield* Queue.end(input);
       expect(Number(yield* child.exitCode.pipe(Effect.timeout("5 seconds")))).toBe(0);
@@ -372,6 +374,67 @@ test("a Run agent's stdio MCP records the launched address and refuses a forged 
             },
           });
           yield* server.close;
+        }),
+      ["attended.workflow.ts"],
+    ),
+  ));
+
+test("a tool whose answer dies says what broke and under which request, not a bare Internal error", () =>
+  runEffect(
+    twoMachines(
+      "collie-mcp-defect-",
+      (first) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const outputs = `${first.world.home}/outputs.json`;
+          yield* fs.writeFileString(outputs, encodeValue([{ verdict: "done" }]));
+          const started = yield* first.cli(["run", "start", "attended", "--input", "work=MCP"]);
+          const { runId } = yield* Schema.decodeUnknownEffect(
+            Schema.Struct({ runId: Schema.String }),
+          )(started.envelope.data).pipe(Effect.orDie);
+          const launch = yield* until(
+            () => launchOf(first.world.state, runId, "build"),
+            (one) => one !== undefined,
+          );
+          const herds = yield* fs.readDirectory(`${first.world.state}/herd`);
+          yield* recordAudit(`${first.world.state}/herd/${herds[0]!}`, {
+            operation: "propose",
+            request: "defect-1",
+            origin: "desktop",
+            result: Schema.String,
+            value: "",
+          }).pipe(Effect.provide(recordsAt(first.world.state)));
+          const server = yield* openServer({
+            ...first.env,
+            COLLIE_RUN: runId,
+            COLLIE_AGENT: launch!.agent,
+          });
+          const answered = yield* server.request("tools/call", {
+            name: "collie_propose",
+            arguments: {
+              request_id: "defect-1",
+              interpretation: "the heal found a constraint worth keeping",
+              actions: [
+                {
+                  kind: "update_intent",
+                  run: runId,
+                  change: "add-constraint",
+                  patch: "keep the picker behind a flag",
+                  base_version: 1,
+                },
+              ],
+            },
+          });
+          expect(answered.error).toBeUndefined();
+          const text = encodeValue(answered.result);
+          expect(text).toContain("Collie could not answer");
+          expect(text).toContain("Expected object");
+          expect(text).toContain("defect-1");
+          yield* server.child.kill({ killSignal: "SIGINT" });
+          expect(Number(yield* server.child.exitCode.pipe(Effect.timeout("5 seconds")))).toBe(130);
+          expect(yield* Fiber.join(server.diagnostics)).toContain(
+            "collie tool collie_propose died",
+          );
         }),
       ["attended.workflow.ts"],
     ),

@@ -9,7 +9,7 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Option from "effect/Option";
 import type { PlatformServices } from "./platform";
-import { Clock, Effect, Result, Schema, flow as Schemaflow } from "effect";
+import { Cause, Clock, Effect, Result, Schema, flow as Schemaflow } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import type { ChildProcessSpawner } from "effect/process";
 import type * as Tool from "effect/ai/Tool";
@@ -129,6 +129,21 @@ const said = <E, R>(effect: Effect.Effect<string, E, R>) =>
   effect.pipe(
     Effect.catch((cause) => Effect.succeed(`Collie could not read that: ${String(cause)}`)),
   );
+
+const whyBroken = (cause: Cause.Cause<unknown>) => {
+  const squashed: unknown = Cause.squash(cause);
+  return squashed instanceof Error ? squashed.message : String(squashed);
+};
+
+// WARNING: a defect that escapes a tool is the MCP server's bare "Internal error", which a model cannot act on.
+const broken = (name: string, cause: Cause.Cause<unknown>, request?: string) =>
+  Cause.hasInterruptsOnly(cause)
+    ? Effect.interrupt
+    : Effect.gen(function* () {
+        yield* Effect.logError(`collie tool ${name} died`, cause);
+        const answered = `Collie could not answer: ${whyBroken(cause)}`;
+        return request === undefined ? answered : `${answered}\nRequest: ${request}`;
+      });
 
 const toolDoor = Effect.fn("Tools.door")(function* (env: PluginEnv) {
   if (env.asker !== undefined) {
@@ -326,37 +341,39 @@ const handlersFor = Effect.fn("Tools.handlers")(function* (
     collie_do: (input) => answer(carryOut(env, input)),
     collie_propose: (input) =>
       answer(
-        Effect.gen(function* () {
-          const herd = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
-          const requestId = input.request_id ?? (yield* newRequestId());
-          const done = yield* proposeActions(env, {
-            door: yield* toolDoor(env),
-            herd,
-            interpretation: input.interpretation,
-            actions: input.actions,
-            request: requestId,
-          }).pipe(Effect.map((result) => (result.ok ? result.human : result.error.message)));
-          return `Request: ${requestId}\n${done}`;
-        }),
+        Effect.flatMap(
+          input.request_id === undefined ? newRequestId() : Effect.succeed(input.request_id),
+          (requestId) =>
+            Effect.gen(function* () {
+              const herd = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
+              const done = yield* proposeActions(env, {
+                door: yield* toolDoor(env),
+                herd,
+                interpretation: input.interpretation,
+                actions: input.actions,
+                request: requestId,
+              }).pipe(Effect.map((result) => (result.ok ? result.human : result.error.message)));
+              return `Request: ${requestId}\n${done}`;
+            }).pipe(Effect.catchCause((cause) => broken("collie_propose", cause, requestId))),
+        ),
       ),
   });
 });
 
-const answered = Effect.fn("Tools.answered")(
-  function* (
-    env: PluginEnv,
-    name: ToolName,
-    input: JsonObject,
-    selected: boolean,
-    reads?: RunAnswerReads,
-  ) {
-    const toolkit = yield* CollieTools.pipe(
-      Effect.provide(CollieTools.toLayer(handlersFor(env, selected, reads))),
-    );
-    return yield* answerWith(toolkit, name, input);
-  },
-  Effect.catch((cause) => Effect.succeed(`Collie could not answer: ${String(cause)}`)),
-);
+const answered = Effect.fn("Tools.answered")(function* (
+  env: PluginEnv,
+  name: ToolName,
+  input: JsonObject,
+  selected: boolean,
+  reads?: RunAnswerReads,
+) {
+  const toolkit = yield* CollieTools.pipe(
+    Effect.provide(CollieTools.toLayer(handlersFor(env, selected, reads))),
+  );
+  return yield* answerWith(toolkit, name, input).pipe(
+    Effect.catchCause((cause) => broken(name, cause)),
+  );
+});
 
 export const callTool = (env: PluginEnv, name: string, input: JsonObject) =>
   name === SubmitTool.name

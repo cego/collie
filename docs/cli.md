@@ -1147,6 +1147,9 @@ way at every work boundary: new bullets are added, dropped ones are removed, and
 constraint anyone but the plan removed stays removed. **No text ever grants authority** —
 not a plan, not the repository, not a prompt.
 
+A constraint is refused when its patch is empty or only spaces: a rule nothing can quote or
+check is not one, and the Intent stays where it was.
+
 `set-outcome` changes the [outcome](#outcomes) a live Run is held to: `feature`, `bug`,
 `refactor`, `investigation`, `docs` or `migration`, or `unspecified` to clear it. Any other
 word is refused with `invalid_input`, and so is a Run whose workflow always proves one kind.
@@ -1273,6 +1276,11 @@ conversation, at once ([ADR-0011](adr/0011-the-conversation-is-a-native-harness.
 chat may do what they could do on the board themselves, because sending them to the UI for
 it is chat obstructing the person it serves. What Collie wants of its own accord never
 comes through these: the evaluator's proposals wait on the board, and chat asks in words.
+
+Every answer is text the model can act on: a tool whose handler dies answers
+`Collie could not answer: <what broke>`, and `collie_propose` adds `Request: <id>` so the
+same request can be retried, rather than the call ending as the MCP server's bare
+`Internal error`. The defect is logged where the server's own log goes.
 
 `collie_do` takes the board's own actions on a named run — `stop`, `resume`, `release`,
 `answer`, `deliver`, `followup`, `take_offer` and `start` — through the same closed union, the same
