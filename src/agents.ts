@@ -383,7 +383,6 @@ const answerTitle = (asked: AskedQuestion | undefined) =>
 export interface AgentsApi {
   readonly outputFor: (runId: string, operation: string) => string;
   readonly skills: (names: ReadonlyArray<string>) => Effect.Effect<ReadonlyMap<string, string>>;
-  readonly outputSubmit: Effect.Effect<"file" | "tool">;
   readonly attachments: (runId: string) => Effect.Effect<ReadonlyArray<Attachment>>;
   readonly handOver: (
     about: Omit<
@@ -660,7 +659,7 @@ export const agentWork: <
     const role = work.role ?? work.operation;
     const skills = yield* agents.skills(skillsIn(work.instructions));
     const held = work.agent === undefined ? null : yield* agents.choiceOf(runId, work.agent);
-    const outputSubmit = held?.outputSubmit ?? (yield* agents.outputSubmit);
+    const outputSubmit = held?.outputSubmit ?? "tool";
     const parts: PromptParts = {
       role,
       instructions: work.instructions,
@@ -1611,9 +1610,9 @@ function renderPrompt(parts: PromptParts) {
         Str.trim(rendered.text),
         attachmentsSection(parts.attachments ?? []),
         parts.handover ?? "",
-        parts.outputSubmit === "tool"
-          ? `When you are done, submit your result ${parts.contract === null ? "as plain text" : "as JSON"} with the collie_submit Collie tool, as its \`output\`. It answers "accepted", or with every problem it found and nothing kept: correct them and submit again.`
-          : `When you are done, write your result ${parts.contract === null ? "as plain text" : "as JSON"} to the path below. Nothing else may go in that file.\nOUTPUT_PATH: ${parts.output}`,
+        parts.outputSubmit === "file"
+          ? `When you are done, write your result ${parts.contract === null ? "as plain text" : "as JSON"} to the path below. Nothing else may go in that file.\nOUTPUT_PATH: ${parts.output}`
+          : `When you are done, submit your result ${parts.contract === null ? "as plain text" : "as JSON"} with the collie_submit Collie tool, as its \`output\`. It answers "accepted", or with every problem it found and nothing kept: correct them and submit again.`,
         parts.contract === null ? "" : contractSection(parts.contract),
       ],
       (part) => part !== "",
@@ -1645,9 +1644,9 @@ function contractSection(contract: Projection) {
       ? ""
       : `\n\nThe drawing says less than the contract does at: ${Arr.join(contract.limits, "; ")}. Those are still checked.`;
   if (contract.document === null) {
-    return `That file is checked against a schema this build cannot draw${limits || "."}`;
+    return `Your Output is checked against a schema this build cannot draw${limits || "."}`;
   }
-  return `That file must match this contract. Where a field carries a description, it is asking for your judgment — answer it, do not fill it in.\n\n\`\`\`json\n${stringifyJson(contract.document, 2)}\n\`\`\`${limits}`;
+  return `Your Output must match this contract. Where a field carries a description, it is asking for your judgment — answer it, do not fill it in.\n\n\`\`\`json\n${stringifyJson(contract.document, 2)}\n\`\`\`${limits}`;
 }
 
 type DeliveringHerdr = Pick<Herdr, "agentPrompt" | "agentList" | "agentSendKeys" | "agentStatus">;
@@ -2517,11 +2516,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       COLLIE_AGENT: agent,
     };
     const roleEnv = roleTools === undefined ? runEnv : { ...runEnv, COLLIE_TOOLS_ROLE: ask.role };
-    const submits = (ask.outputSubmit ?? config.output_submit) === "tool";
-    const serverEnv = submits ? { ...roleEnv, COLLIE_OUTPUT_SUBMIT: "tool" } : roleEnv;
     const configFile = `${dirFor(ask.runId)}/${stemOf(ask)}.mcp.json`;
     const extension = `${dirFor(ask.runId)}/${stemOf(ask)}.tools.ts`;
-    yield* write(configFile, mcpConfig(command, serverEnv));
+    yield* write(configFile, mcpConfig(command, roleEnv));
     if (adapter.id === "pi") {
       yield* write(
         extension,
@@ -2529,7 +2526,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           command,
           Arr.map(
             Arr.filter(
-              submits ? [...TOOLS, SUBMIT] : TOOLS,
+              [...TOOLS, SUBMIT],
               (tool) =>
                 tool === SUBMIT ||
                 roleTools === undefined ||
@@ -2542,7 +2539,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               parameters: tool.input,
             }),
           ),
-          serverEnv,
+          roleEnv,
           "",
           "",
           piQuestionTool(command, yield* controlDir(host.env.stateDir, agent)),
@@ -2563,7 +2560,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       adapter.id === "opencode" ? yield* withUsage(ask, agent, reported ?? {}) : reported;
     const mcp = adapter.mcp({
       command,
-      env: serverEnv,
+      env: roleEnv,
       config: configFile,
       extension,
       settings,
@@ -2656,7 +2653,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             ],
             cwd: ask.cwd,
             env: {
-              ...serverEnv,
+              ...roleEnv,
               ...mcp.env,
               ...(yield* envValues(profile.env ?? {}, host.env.home)),
             },
@@ -2840,9 +2837,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             if (ask.step !== undefined) {
               landed.step = ask.step;
             }
-            if (ask.outputSubmit !== undefined) {
-              landed.outputSubmit = ask.outputSubmit;
-            }
+            landed.outputSubmit = ask.outputSubmit ?? "tool";
             landed.at = yield* Clock.currentTimeMillis;
             fellBack(landed, ask.from, ask.why);
             if (ask.next !== undefined) {
@@ -3472,7 +3467,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         if (Str.trim(now) !== "" && now !== unusable) {
           return true;
         }
-        const text = repairText(launched.output, problem);
+        const text = repairText(launched, problem);
         const file = sentPath(launched, "repair");
         yield* write(file, text);
         const sent = yield* deliver(launched, text, {
@@ -3575,7 +3570,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
   const remind = (launched: Launched, ordinal: number) =>
     under(
       Effect.gen(function* () {
-        const sent = yield* deliver(launched, reminderText(launched.output), {
+        const sent = yield* deliver(launched, reminderText(launched), {
           kind: "repair",
           ref: `${stemOf(launched)}.remind-${ordinal}`,
         });
@@ -4574,10 +4569,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       return { typed: dispatch.marked(text, `${ask.runId}-${stemOf(ask)}-step-1`), prompt };
     },
     skills: (names) => under(skills(names)),
-    outputSubmit: under(readConfig(host.env.userDir)).pipe(
-      Effect.map((config) => (config.output_submit === "tool" ? "tool" : "file")),
-      Effect.orElseSucceed(() => "file" as const),
-    ),
     attachments: (runId) =>
       under(listAttachments(attachmentsDir(`${host.dir}/runs/${runId}`))).pipe(
         Effect.orElseSucceed(() => []),
@@ -5025,12 +5016,23 @@ const roleBody = (role: string) => `You are the ${role}.`;
 
 const OUTPUT_REMINDERS = 2;
 
-const reminderText: (output: string) => string = (output) =>
-  `${REMINDER_OPENING} A chat message is not the Output: write ${output}, the JSON the contract described and nothing else.\nOUTPUT_PATH: ${output}`;
+const submitsOnly = (launched: Pick<Launched, "outputSubmit">) => launched.outputSubmit === "tool";
+
+export const reminderText: (launched: Pick<Launched, "output" | "outputSubmit">) => string = (
+  launched,
+) =>
+  submitsOnly(launched)
+    ? `${REMINDER_OPENING} A chat message is not the Output, and neither is a file: submit it with the collie_submit Collie tool, as its \`output\`.`
+    : `${REMINDER_OPENING} A chat message is not the Output: write ${launched.output}, the JSON the contract described and nothing else.\nOUTPUT_PATH: ${launched.output}`;
 
 // WARNING: the Output goes back to the same agent, which still holds the work; restarting would throw a whole round away over a write.
-export const repairText: (output: string, problem: string) => string = (output, problem) =>
-  `${REPAIR_OPENING} ${problem}\n\nWrite ${output} again — the JSON the contract described, nothing else. Do not redo the work, do not explain, do not write anything outside that file. It is the only thing missing.\nOUTPUT_PATH: ${output}`;
+export const repairText: (
+  launched: Pick<Launched, "output" | "outputSubmit">,
+  problem: string,
+) => string = (launched, problem) =>
+  submitsOnly(launched)
+    ? `${REPAIR_OPENING} ${problem}\n\nSubmit the corrected Output with the collie_submit Collie tool, as its \`output\`. Do not redo the work, do not explain: it is the only thing missing.`
+    : `${REPAIR_OPENING} ${problem}\n\nWrite ${launched.output} again — the JSON the contract described, nothing else. Do not redo the work, do not explain, do not write anything outside that file. It is the only thing missing.\nOUTPUT_PATH: ${launched.output}`;
 
 const ledgerDeps = (host: AgentHost) => ({
   dir: host.dir,

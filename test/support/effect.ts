@@ -10,6 +10,7 @@ import { Clock, Config, Duration, Effect, Layer, ManagedRuntime } from "effect";
 import { ConnectionDeadline } from "../../src/connections";
 import { ServerStartDeadline } from "../../src/compactors";
 import { TestClock } from "effect/testing";
+import { forgetAwaited } from "../../src/output-submit";
 import { GIT_QUIET } from "./git-quiet";
 
 const runtime = ManagedRuntime.make(platformLayer);
@@ -23,7 +24,10 @@ export const memoryRecords = recordsLayer.pipe(
 export function runEffect<A, E>(
   effect: Effect.Effect<A, E, PlatformServices | Records | Scope.Scope>,
 ) {
-  return runtime.runPromise(Effect.scoped(Effect.provide(effect, memoryRecords)));
+  // WARNING: Two tests in one process reuse a Run's and its agents' names, which only a test ever does.
+  return runtime.runPromise(
+    Effect.scoped(Effect.andThen(forgetAwaited, Effect.provide(effect, memoryRecords))),
+  );
 }
 
 export const suiteEnv = Config.all({

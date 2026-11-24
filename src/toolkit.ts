@@ -511,9 +511,9 @@ export const SubmitTool = collieTool("collie_submit", {
   readOnly: false,
   title: "Hand in your Output",
   description:
-    "Submit the Output your step's contract describes, as `output`: the same JSON you would " +
-    'write to its file. It is decoded as the file is, and answers "accepted" or every problem ' +
-    "it found, with nothing written: correct them and submit again. Writing the file still works.",
+    "Submit the Output your step's contract describes, as `output`. It is decoded " +
+    'against the contract, and answers "accepted" or every problem it found, with nothing ' +
+    "written: correct them and submit again.",
   parameters: SubmitInput,
 });
 

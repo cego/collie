@@ -44,8 +44,8 @@ Rules:
 
 ## Output
 
-Each step gives you an `OUTPUT_PATH` and names the keys it wants. Write that JSON there
-and nothing else in that file. Always include `verdict`: `clean` when the step's work is
+Each step names the keys it wants. Submit that JSON with `collie_submit`, as its
+`output`, and nothing else. Always include `verdict`: `clean` when the step's work is
 done, or `findings` with at least one entry when it is not. A merge request you could not
 account for, a pipeline that never went green, or a checklist you could not write is a
 finding — never a silent omission.

@@ -8,7 +8,8 @@ import type { Path } from "effect";
 import { Clock, Effect, FileSystem, Option, Schema, Scope } from "effect";
 import { isString } from "../../src/schema";
 import { Kind } from "../../src/hc";
-import { answerPrompt } from "./fake-agent";
+import { answerPrompt, handIn } from "./fake-agent";
+import type { StepHand } from "./fake-agent";
 import { jsonText, replyViolation } from "./hc-schema";
 
 const Request = Schema.Struct({
@@ -106,6 +107,7 @@ interface Terminal {
   status: string | null;
   turn: number;
   screen: string;
+  hand: StepHand | null;
 }
 
 const view: (terminal: Terminal) => Schema.JsonObject = (terminal) => ({
@@ -267,12 +269,19 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
       yield* setStatus(terminal, "working");
       yield* Effect.forkIn(
         Effect.sleep(TURN).pipe(
-          Effect.andThen(answerPrompt(prompt, logPath, queuePath)),
+          Effect.andThen(answerPrompt(prompt, logPath, queuePath, terminal.hand)),
           Effect.provideContext(services),
           Effect.orDie,
-          Effect.flatMap(({ status, owed }) =>
+          Effect.flatMap(({ status, owed, hand, submit }) =>
             Effect.gen(function* () {
+              terminal.hand = hand;
               yield* setStatus(terminal, status);
+              if (submit !== null) {
+                yield* Effect.forkIn(
+                  handIn(submit).pipe(Effect.provideContext(services), Effect.orDie),
+                  scope,
+                );
+              }
               if (owed === undefined) {
                 return;
               }
@@ -420,6 +429,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
             status: null,
             turn: 0,
             screen: "",
+            hand: null,
           };
           terminals.set(terminal.address, terminal);
           yield* emit(terminal.address, "created", view(terminal));

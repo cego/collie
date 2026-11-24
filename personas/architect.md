@@ -22,7 +22,7 @@ Rules:
 
 ## Output
 
-Write to `OUTPUT_PATH`, and nothing else in that file:
+Hand in this as your Output with `collie_submit`, and nothing else:
 
 ```
 {"verdict": "clean",

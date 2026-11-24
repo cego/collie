@@ -47,7 +47,10 @@ import {
   everyAgentText,
   personaText,
   promptFor,
+  reminderText,
+  repairText,
 } from "../src/agents";
+import { awaitOutput, submitOutput } from "../src/output-submit";
 import type { AgentHost, RanOut, RunNow } from "../src/agents";
 import { Children, Host, Run, WorkflowAgents, jsonSchemaFor, step, withAgents } from "../src/sdk";
 import { asRun, enveloped } from "./support/enveloped";
@@ -449,7 +452,7 @@ const sentTexts = (calls: ReadonlyArray<Call>) =>
 const sent = (calls: ReadonlyArray<Call>, about: string) =>
   Arr.filter(sentTexts(calls), Str.includes(about)).length;
 
-test("the contract an agent is held to is in the prompt it is sent, with the judgment asked for", () => {
+test("a new step's prompt names collie_submit, keeps the whole contract, and names no path to write", () => {
   const prompt = promptFor({
     role: "reviewer",
     instructions: "Review {{target}} as the {{role}}.",
@@ -458,26 +461,35 @@ test("the contract an agent is held to is in the prompt it is sent, with the jud
     contract: jsonSchemaFor(Verdict),
   });
   expect(prompt).toContain("Review the diff as the reviewer.");
-  expect(prompt).toContain("OUTPUT_PATH: /state/agents/r1/review.json");
-  expect(prompt).toContain("clean only when there is nothing left for the implementer");
-  expect(prompt).toContain("one sentence a human reads");
-  expect(prompt).toContain("it is asking for your judgment");
-});
-
-test("under output_submit: tool the prompt names collie_submit and keeps the whole contract, with no path to write", () => {
-  const prompt = promptFor({
-    role: "reviewer",
-    instructions: "Review the diff.",
-    output: "/state/agents/r1/review.json",
-    contract: jsonSchemaFor(Verdict),
-    outputSubmit: "tool",
-  });
   expect(prompt).toContain("collie_submit");
   expect(prompt).toContain("clean only when there is nothing left for the implementer");
   expect(prompt).toContain("one sentence a human reads");
   expect(prompt).toContain("it is asking for your judgment");
   expect(prompt).not.toContain("OUTPUT_PATH");
   expect(prompt).not.toContain("/state/agents/r1/review.json");
+});
+
+test("a step an older build dispatched is still told the path to write its Output", () => {
+  const prompt = promptFor({
+    role: "reviewer",
+    instructions: "Review the diff.",
+    output: "/state/agents/r1/review.json",
+    contract: jsonSchemaFor(Verdict),
+    outputSubmit: "file",
+  });
+  expect(prompt).toContain("OUTPUT_PATH: /state/agents/r1/review.json");
+  expect(prompt).not.toContain("collie_submit");
+});
+
+test("a step with no contract asks for plain text through collie_submit", () => {
+  const prompt = promptFor({
+    role: "implementer",
+    instructions: "Fix the picker.",
+    output: "/state/agents/r1/build.json",
+    contract: null,
+  });
+  expect(prompt).toContain("submit your result as plain text with the collie_submit");
+  expect(prompt).not.toContain("OUTPUT_PATH");
 });
 
 test("self-improve's triager is shown that an Improvement's name and keys are kebab-case", () => {
@@ -521,7 +533,7 @@ test("a Run's attachments are listed between the instructions and the Output, an
     Option.getOrElse(pipe(prompt, Str.indexOf("Fix the picker.")), () => -1),
   );
   expect(listed).toBeLessThan(
-    Option.getOrElse(pipe(prompt, Str.indexOf("OUTPUT_PATH:")), () => -1),
+    Option.getOrElse(pipe(prompt, Str.indexOf("When you are done")), () => -1),
   );
   expect(promptFor(parts)).not.toContain("attachments");
   expect(promptFor({ ...parts, attachments: [] })).toBe(promptFor(parts));
@@ -582,7 +594,8 @@ test("a valid Output reaches the workflow as a typed value, from a real launch",
 
       const cmds = yield* rig.cmds();
       expect(Arr.filter(cmds, (cmd) => cmd === "terminal.run")).toHaveLength(1);
-      expect(yield* read(promptPath("r1"))).toContain("OUTPUT_PATH: ");
+      expect(yield* read(promptPath("r1"))).toContain("collie_submit");
+      expect(yield* read(promptPath("r1"))).not.toContain("OUTPUT_PATH");
       expect(yield* read(outputPath("r1"))).toContain("two things");
     }),
   ));
@@ -626,7 +639,13 @@ test("work asked for inside a Run needs no run id, checkout or contract, and ans
 test("an Output the schema refuses buys one repair, and the rewritten one is the answer", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* rig.queueOutputs([{ verdict: "maybe" }, { verdict: "clean", note: "fixed" }]);
+      yield* rig.queueOutputs([
+        {
+          writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }],
+          output: null,
+        },
+        { verdict: "clean", note: "fixed" },
+      ]);
       const result = yield* session(started("r1"));
       expect(result._tag === "Success" && result.success).toEqual({
         verdict: "clean",
@@ -641,7 +660,10 @@ test("an Output the schema refuses buys one repair, and the rewritten one is the
 test("a step's message and its repair are Collie's own and carry no sender line, and its prompt says how to read one", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* rig.queueOutputs([{ verdict: "maybe" }, { verdict: "clean", note: "fixed" }]);
+      yield* rig.queueOutputs([
+        { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
+        { verdict: "clean", note: "fixed" },
+      ]);
       yield* session(started("r1"));
       const typed = Arr.map(sentTexts(yield* rig.calls()), Str.split("\n"));
       expect(typed).toHaveLength(2);
@@ -866,7 +888,10 @@ const starts = () =>
 test("an Output still unusable after its repair parks the Step, saying what to correct", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* rig.queueOutputs([{ verdict: "maybe" }, { verdict: "still maybe" }]);
+      yield* rig.queueOutputs([
+        { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
+        { writes: [{ path: outputPath("r1"), text: `{"verdict":"still maybe"}` }], output: null },
+      ]);
       yield* parkedOnOutput("r1", 1);
       const why = yield* controlOf(PARKED, "r1");
       expect(why).toContain(agentFor("r1"));
@@ -885,7 +910,10 @@ test("a parked Output corrected by hand is taken on resume, with no launch or re
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      yield* rig.queueOutputs([{ verdict: "maybe" }, { verdict: "still maybe" }]);
+      yield* rig.queueOutputs([
+        { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
+        { writes: [{ path: outputPath("r1"), text: `{"verdict":"still maybe"}` }], output: null },
+      ]);
       yield* parkedOnOutput("r1", 1);
       yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"by hand"}`);
       const result = yield* resumedStepped("r1");
@@ -899,8 +927,8 @@ test("a parked Output still unusable on resume gets one more repair, and a good 
   runEffect(
     Effect.gen(function* () {
       yield* rig.queueOutputs([
-        { verdict: "maybe" },
-        { verdict: "still maybe" },
+        { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
+        { writes: [{ path: outputPath("r1"), text: `{"verdict":"still maybe"}` }], output: null },
         { verdict: "clean", note: "repaired again" },
       ]);
       yield* parkedOnOutput("r1", 1);
@@ -915,9 +943,9 @@ test("a parked Output whose next repair is unusable too parks again, launching n
   runEffect(
     Effect.gen(function* () {
       yield* rig.queueOutputs([
-        { verdict: "maybe" },
-        { verdict: "still maybe" },
-        { verdict: "maybe again" },
+        { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
+        { writes: [{ path: outputPath("r1"), text: `{"verdict":"still maybe"}` }], output: null },
+        { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe again"}` }], output: null },
       ]);
       yield* parkedOnOutput("r1", 1);
       yield* parkedOnOutput("r1", 2, true);
@@ -1974,7 +2002,12 @@ test.each(["before detection", "repair collection"] as const)(
           }
         })(rig.pluginEnv());
         yield* rig.queueOutputs(
-          when === "repair collection" ? [{ verdict: "wrong" }, null] : [null],
+          when === "repair collection"
+            ? [
+                { writes: [{ path: outputPath("r1"), text: `{"verdict":"wrong"}` }], output: null },
+                null,
+              ]
+            : [null],
         );
         const result = yield* session(
           Effect.gen(function* () {
@@ -2060,7 +2093,10 @@ test.each(["before retirement", "during retirement"] as const)(
               ).pipe(Effect.andThen(COMPACTION_PORTS.codex!.stop!(target, note, budget))),
           },
         };
-        yield* rig.queueOutputs([{ verdict: "wrong" }, null]);
+        yield* rig.queueOutputs([
+          { writes: [{ path: outputPath("r1"), text: `{"verdict":"wrong"}` }], output: null },
+          null,
+        ]);
         const result = yield* session(
           Effect.gen(function* () {
             const fiber = yield* Effect.forkChild(started("r1"));
@@ -2434,7 +2470,10 @@ test("a repaired Output caught half rewritten is judged when the agent's turn en
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      yield* rig.queueOutputs([{ verdict: "maybe" }, null]);
+      yield* rig.queueOutputs([
+        { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
+        null,
+      ]);
       const herdr = new RewritingAfterRepair();
       const rewrites = Effect.gen(function* () {
         while (!(yield* prompted("not usable"))) {
@@ -2481,7 +2520,10 @@ class FinishingWhileAsked extends Herdr {
 test("a repaired Output finished between its read and the turn ending is read again", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* rig.queueOutputs([{ verdict: "maybe" }, null]);
+      yield* rig.queueOutputs([
+        { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
+        null,
+      ]);
       const herdr = new FinishingWhileAsked(yield* FileSystem.FileSystem);
       const repairing = Effect.gen(function* () {
         while (!(yield* prompted("not usable"))) {
@@ -2568,7 +2610,11 @@ const halts = (runId: string) =>
 test("a reminder counts as recovered once the Output decodes, including after its existing repair", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* rig.queueOutputs([null, { verdict: "maybe" }, { verdict: "clean", note: "repaired" }]);
+      yield* rig.queueOutputs([
+        null,
+        { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
+        { verdict: "clean", note: "repaired" },
+      ]);
       const result = yield* session(started("r1"), { herdr: new Turns(), collectMs: 60_000 });
       expect(result._tag === "Success" && result.success.note).toBe("repaired");
       expect(yield* reminders).toHaveLength(1);
@@ -2590,7 +2636,7 @@ test("a reminder counts as recovered once the Output decodes, including after it
     }),
   ));
 
-test("an agent whose turn ends without its Output is reminded at once, and the Output of its next turn is collected", () =>
+test("an agent whose turn ends without its Output is reminded to submit it with collie_submit, naming no file", () =>
   runEffect(
     Effect.gen(function* () {
       yield* rig.queueOutputs([null, { verdict: "clean", note: "after the reminder" }]);
@@ -2603,11 +2649,37 @@ test("an agent whose turn ends without its Output is reminded at once, and the O
       );
       const sent = yield* reminders;
       expect(sent).toHaveLength(1);
-      expect(sent[0]).toContain(`OUTPUT_PATH: ${outputPath("r1")}`);
-      expect(sent[0]).toContain("A chat message is not the Output");
+      expect(sent[0]).toContain("collie_submit");
+      expect(sent[0]).toContain("A chat message is not the Output, and neither is a file");
+      expect(sent[0]).not.toContain("OUTPUT_PATH");
       expect(yield* halts("r1")).toEqual([]);
     }),
   ));
+
+test("a new step's repair quotes the problems and names collie_submit, and an older step's names its file", () => {
+  const step = (outputSubmit: "file" | "tool") => ({
+    agent: "worker",
+    output: "/state/agents/r1/review.json",
+    reused: false,
+    runId: "r1",
+    operation: "review",
+    role: "reviewer",
+    workflow: "w",
+    harness: "claude",
+    outputSubmit,
+  });
+  const problems = `Missing key\n  at ["verdict"]`;
+  const fresh = repairText(step("tool"), problems);
+  expect(fresh).toContain(problems);
+  expect(fresh).toContain("collie_submit");
+  expect(fresh).not.toContain("OUTPUT_PATH");
+  expect(reminderText(step("tool"))).toContain("collie_submit");
+  expect(reminderText(step("tool"))).not.toContain("OUTPUT_PATH");
+  const legacy = repairText(step("file"), problems);
+  expect(legacy).toContain(problems);
+  expect(legacy).toContain("OUTPUT_PATH: /state/agents/r1/review.json");
+  expect(legacy).not.toContain("collie_submit");
+});
 
 test("an agent that writes no Output after two reminders parks its step as output-absent, and is not reminded again", () =>
   runEffect(
@@ -3199,7 +3271,10 @@ test("a restart between the attempts hands out no second repair", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      yield* rig.queueOutputs([{ verdict: "maybe" }, null]);
+      yield* rig.queueOutputs([
+        { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
+        null,
+      ]);
       yield* interrupted("r1", prompted("not usable"));
       expect(sent(yield* rig.calls(), "not usable")).toBe(1);
 
@@ -4247,7 +4322,10 @@ test("an agent whose harness stopped and that stays idle past its budget is park
 test("a turn its harness will not retry while it repairs its Output parks the Run within a poll, quoting the harness", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* rig.queueOutputs([{ verdict: "maybe" }, null]);
+      yield* rig.queueOutputs([
+        { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
+        null,
+      ]);
       yield* session(
         Effect.gen(function* () {
           yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
@@ -4265,7 +4343,10 @@ test("a harness stop during a repair still parks its wait after a restart, and a
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const over = { ...onPi, collectMs: 3_600_000, pollMs: 1000 };
-      yield* rig.queueOutputs([{ verdict: "maybe" }, null]);
+      yield* rig.queueOutputs([
+        { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
+        null,
+      ]);
       yield* session(
         Effect.gen(function* () {
           yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
@@ -4366,7 +4447,7 @@ test("an agent that runs out mid-work is closed and replaced by one on the next 
       );
       expect(handed).toBeGreaterThan(-1);
       expect(handed).toBeLessThan(
-        Option.getOrElse(pipe(prompt, Str.indexOf("OUTPUT_PATH:")), () => -1),
+        Option.getOrElse(pipe(prompt, Str.indexOf("When you are done")), () => -1),
       );
       expect(prompt).toContain("its subscription ran out (rate_limit) on claude/opus");
       expect(prompt).toContain("Its conversation is at /home/mk/.claude/projects/p/s-out.jsonl");
@@ -4388,7 +4469,11 @@ test("an agent that runs out mid-work is closed and replaced by one on the next 
 test("a repair after a Fallback goes to the agent that took over, and starts no other", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* rig.queueOutputs([null, { verdict: "maybe" }, { verdict: "clean", note: "repaired" }]);
+      yield* rig.queueOutputs([
+        null,
+        { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
+        { verdict: "clean", note: "repaired" },
+      ]);
       yield* Effect.forkScoped(runsOut(agentFor("r1")));
       const result = yield* session(started("r1"), { ...chain, collectMs: 30_000 });
 
@@ -7562,7 +7647,11 @@ class StopsAtRepair extends Herdr {
 test("a stop while the repair is awaited parks the wait, and the resume starts the halted agent again", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* rig.queueOutputs([{ verdict: "maybe" }, null, { verdict: "clean", note: "again" }]);
+      yield* rig.queueOutputs([
+        { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
+        null,
+        { verdict: "clean", note: "again" },
+      ]);
       yield* interrupted(
         "r1",
         Effect.zipWith(prompted("not usable"), suspended("r1"), (one, other) => one && other),
@@ -7599,7 +7688,10 @@ class ClosedAtRepair extends Herdr {
 test("a stop while the repair waits on a blocked pane parks the work, and the resume starts the halted agent again", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* rig.queueOutputs([{ verdict: "maybe" }, { verdict: "clean", note: "after the stop" }]);
+      yield* rig.queueOutputs([
+        { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
+        { verdict: "clean", note: "after the stop" },
+      ]);
       yield* interrupted("r1", suspended("r1"), {
         herdr: new ClosedAtRepair(rig.pluginEnv()),
         patience: { firstMs: 10, maxMs: 20, forMs: 30_000 },
@@ -7619,7 +7711,9 @@ test("an Output made good while the Run was stopping is the answer on resume, wi
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      yield* rig.queueOutputs([{ verdict: "maybe" }]);
+      yield* rig.queueOutputs([
+        { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
+      ]);
       yield* interrupted("r1", suspended("r1"), {
         herdr: new ClosedAtRepair(rig.pluginEnv()),
         patience: { firstMs: 10, maxMs: 20, forMs: 30_000 },
@@ -9193,38 +9287,152 @@ test("under role_tools: role a reviewer's Claude launch names its role to the Co
     }),
   ));
 
-test("under output_submit: tool a Claude launch offers collie_submit, and its Output file still counts", () =>
+test("a clean install's Claude launch names collie_submit, and its tool server is told the Run and the agent but no submit mode", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      yield* configured(encodeJson({ output_submit: "tool" }));
-      const result = yield* session(
-        Effect.gen(function* () {
-          const fiber = yield* Effect.forkChild(started("r1"));
-          yield* rig.calls().pipe(
-            Effect.repeat({
-              until: (calls) => launchArgs(calls).length > 0,
-              schedule: Schedule.spaced("20 millis"),
-            }),
-          );
-          yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"written"}`);
-          return yield* Fiber.join(fiber);
-        }),
-      );
-      expect((yield* collieServerOf()).env.COLLIE_OUTPUT_SUBMIT).toBe("tool");
-      expect(yield* read(promptPath("r1"))).toContain("collie_submit");
-      expect(result._tag === "Success" && result.success.note).toBe("written");
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      const result = yield* session(started("r1"));
+      const { env } = yield* collieServerOf();
+      expect(env.COLLIE_RUN).toBe("r1");
+      expect(env.COLLIE_AGENT).toBeDefined();
+      expect(env).not.toHaveProperty("COLLIE_OUTPUT_SUBMIT");
+      const prompt = yield* read(promptPath("r1"));
+      expect(prompt).toContain("collie_submit");
+      expect(prompt).toContain("clean only when there is nothing left for the implementer");
+      expect(prompt).not.toContain("OUTPUT_PATH");
+      expect(result._tag === "Success" && result.success.note).toBe("done");
     }),
   ));
 
-test("an agent launched under output_submit: file is still told its Output's path after the setting becomes tool", () =>
+test("a reviewer under role_tools: role is offered collie_submit as well, and told no path to write", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* configured(encodeJson({ role_tools: "role" }));
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      const result = yield* session(started("r1"));
+      const { env } = yield* collieServerOf();
+      expect(env.COLLIE_TOOLS_ROLE).toBe("reviewer");
+      expect(env).not.toHaveProperty("COLLIE_OUTPUT_SUBMIT");
+      const prompt = yield* read(promptPath("r1"));
+      expect(prompt).toContain("collie_submit");
+      expect(prompt).not.toContain("OUTPUT_PATH");
+      expect(result._tag === "Success" && result.success.note).toBe("done");
+    }),
+  ));
+
+test("a config.json still holding output_submit: file launches as a clean install does", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* configured(encodeJson({ output_submit: "file" }));
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      const result = yield* session(started("r1"));
+      const { env } = yield* collieServerOf();
+      expect(env).not.toHaveProperty("COLLIE_OUTPUT_SUBMIT");
+      const prompt = yield* read(promptPath("r1"));
+      expect(prompt).toContain("collie_submit");
+      expect(prompt).not.toContain("OUTPUT_PATH");
+      expect(result._tag === "Success" && result.success.note).toBe("done");
+    }),
+  ));
+
+test("a plain-text step is submitted with collie_submit, and its result is that text", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const plain = enveloped({ name: "plain-work", input: {}, success: Schema.String });
+      const body = plain.toLayer((payload) =>
+        agentWork({ operation: "plain", instructions: "Say it." }).pipe(asRun(payload)),
+      );
+      yield* rig.queueOutputs(["the whole answer"]);
+      const result = yield* plain
+        .execute({ runId: "r1", input: {} })
+        .pipe(
+          Effect.result,
+          Effect.provide(
+            body.pipe(
+              Layer.provideMerge(agentsLayer(hostOf())),
+              Layer.provideMerge(foundationLayer({ dir })),
+            ),
+          ),
+          Effect.scoped,
+        );
+      expect(result).toMatchObject({ _tag: "Success", success: "the whole answer" });
+      expect(yield* read(`${dir}/agents/r1/plain.prompt.md`)).not.toContain("OUTPUT_PATH");
+    }),
+  ));
+
+test.each(["all", "role"])(
+  "under role_tools: %s a pi launch's written tools.ts offers collie_submit",
+  (roleTools) =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* configured(encodeJson({ role_tools: roleTools }));
+        yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+        yield* session(started("r1"), { harness: "pi", model: "default" });
+        const written = yield* read(`${dir}/agents/r1/review.tools.ts`);
+        expect(written).toContain(`"name": "collie_submit"`);
+        expect(written).toContain(`"name": "collie_run"`);
+        expect(written).toContain("COLLIE_RUN");
+        expect(written).not.toContain("COLLIE_OUTPUT_SUBMIT");
+      }),
+    ),
+);
+
+test("an opencode launch's written MCP config is told the Run and the agent, so its tool server offers collie_submit", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      const result = yield* session(started("r1"), {
+        harness: "opencode",
+        model: "anthropic/claude-opus-4-1",
+      });
+      const config = yield* Schema.decodeUnknownEffect(
+        Schema.fromJsonString(
+          Schema.Struct({
+            mcpServers: Schema.Struct({
+              collie: Schema.Struct({ env: Schema.Record(Schema.String, Schema.String) }),
+            }),
+          }),
+        ),
+      )(yield* read(`${dir}/agents/r1/review.mcp.json`));
+      expect(config.mcpServers.collie.env).toMatchObject({ COLLIE_RUN: "r1" });
+      expect(config.mcpServers.collie.env).not.toHaveProperty("COLLIE_OUTPUT_SUBMIT");
+      expect(yield* read(promptPath("r1"))).not.toContain("OUTPUT_PATH");
+      expect(result._tag === "Success" && result.success.note).toBe("done");
+    }),
+  ));
+
+test("a submit that does not decode is answered with every problem, and writes nothing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const output = `${dir}/agents/r1/review.json`;
+      yield* fs.makeDirectory(`${dir}/agents/r1`, { recursive: true });
+      const asked = (text: string) => {
+        const read = decodeOutput(Verdict, text);
+        return read.ok ? null : read.problem;
+      };
+      yield* awaitOutput("r1", "one", output, asked);
+      const answer = yield* submitOutput("r1", "one", { verdict: "maybe" });
+      expect(answer).toContain(`["verdict"]`);
+      expect(answer).toContain(`["note"]`);
+      expect(answer).toContain("Nothing was written");
+      expect(yield* read(output)).toBe("");
+      expect(yield* submitOutput("r1", "one", { verdict: "clean", note: "kept" })).toBe("accepted");
+      expect(yield* read(output)).toContain("kept");
+    }),
+  ));
+
+test("an agent launched before the upgrade is still told its Output's path", () =>
   runEffect(
     Effect.gen(function* () {
       const continued = enveloped({ name: "submit-reuse", input: {}, success: Schema.String });
       const body = continued.toLayer((payload) =>
         Effect.gen(function* () {
           yield* agentWork({ operation: "first", agent: "worker", instructions: "One." });
-          yield* configured(encodeJson({ output_submit: "tool" })).pipe(Effect.orDie);
+          const held = yield* launchedAt(dir, "r1", "first");
+          yield* recordLaunch({ ...held, outputSubmit: "file" }).pipe(
+            Effect.provide(recordsAt(dir)),
+          );
           return yield* agentWork({ operation: "second", agent: "worker", instructions: "Two." });
         }).pipe(asRun(payload)),
       );

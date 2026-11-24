@@ -3392,9 +3392,9 @@ own and delivery another; `round` also gives each review-fix round a fresh fixer
 keeps the value it started with. See
 [Which agent does a Run's work](#which-agent-does-a-runs-work).
 
-`output_submit` says how an agent hands in its Output: `file`, the default, or `tool`, which
-also offers it the `collie_submit` tool. See
-[Having an agent do the work](sdk.md#having-an-agent-do-the-work).
+`output_submit` no longer decides anything: every new agent hands its Output in with
+`collie_submit`. A value already saved is ignored, and the setting is removed in a later
+change. See [Having an agent do the work](sdk.md#having-an-agent-do-the-work).
 
 `gitlab_host` is the one GitLab this Machine works against, `gitlab.cego.dk` unless you
 change it under Settings, which refuses anything that is not a host name. `collie doctor`

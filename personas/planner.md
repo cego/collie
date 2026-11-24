@@ -35,8 +35,8 @@ requirement it was not told about is one it will not build.
 
 ## Output
 
-Each step gives you an `OUTPUT_PATH` and names the keys it wants. Write that JSON there
-and nothing else in that file. Always include `verdict`: `clean` when you did what the
+Each step names the keys it wants. Submit that JSON with `collie_submit`, as its
+`output`, and nothing else. Always include `verdict`: `clean` when you did what the
 step asked, or `findings` with at least one entry when something stopped you (each entry
 has `severity` and `title`, plus `file` and `line` where there is one).
 

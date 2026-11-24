@@ -176,6 +176,31 @@ test("stdio MCP preserves discovery, tool responses, errors, and shutdown", () =
     }).pipe(Effect.scoped),
   ));
 
+test("a Run agent's tool server lists collie_submit, and the Home chat's does not", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const chat = yield* openServer();
+      expect(encodeValue((yield* chat.request("tools/list", {})).result)).not.toContain(
+        `"collie_submit"`,
+      );
+      yield* chat.close;
+      const agent = yield* openServer({ COLLIE_RUN: "r1", COLLIE_AGENT: "one" });
+      expect(encodeValue((yield* agent.request("tools/list", {})).result)).toContain(
+        `"collie_submit"`,
+      );
+      yield* agent.close;
+      const reviewer = yield* openServer({
+        COLLIE_RUN: "r1",
+        COLLIE_AGENT: "one",
+        COLLIE_TOOLS_ROLE: "reviewer",
+      });
+      const listed = encodeValue((yield* reviewer.request("tools/list", {})).result);
+      expect(listed).toContain(`"collie_submit"`);
+      expect(listed).not.toContain(`"collie_hold"`);
+      yield* reviewer.close;
+    }).pipe(Effect.scoped),
+  ));
+
 test("the Collie server started for a reviewer under role_tools: role lists and accepts only the reviewer's tools", () =>
   runEffect(
     Effect.gen(function* () {
@@ -237,7 +262,6 @@ test("collie_submit decodes an agent's Output as the file does, and writes only 
             ...first.env,
             COLLIE_RUN: runId,
             COLLIE_AGENT: launch!.agent,
-            COLLIE_OUTPUT_SUBMIT: "tool",
           });
           const submit = (output: JsonObject) =>
             server.request("tools/call", { name: "collie_submit", arguments: { output } });
@@ -246,6 +270,17 @@ test("collie_submit decodes an agent's Output as the file does, and writes only 
             () => submit({}),
             (answer) => !Str.includes("No step of")(encodeValue(answer.result)),
           );
+          // WARNING: `until` above may still have seen a submit answered before the step registered.
+          expect((yield* submit({ verdict: 7 })).result).toMatchObject({
+            content: [
+              {
+                type: "text",
+                text: expect.stringMatching(
+                  /^Your Output is not usable:[\s\S]*Nothing was written/,
+                ),
+              },
+            ],
+          });
           expect(missing.result).toMatchObject({
             content: [
               { type: "text", text: expect.stringContaining('Missing key\n  at ["verdict"]') },

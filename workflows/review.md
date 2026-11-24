@@ -162,7 +162,7 @@ that is the point of the field. Never omit it to be kind.
 
 {{obstacle}}
 
-Change nothing outside your Output file.
+Change nothing outside your Output.
 
 ## synthesize
 

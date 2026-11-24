@@ -67,8 +67,8 @@ human asked to keep it. Say in your reply what you left running.
 
 ## Output
 
-Each step gives you an `OUTPUT_PATH` and names the keys it wants. Write that JSON there
-and nothing else in that file. Always include `verdict`: `clean` when the step's whole
+Each step names the keys it wants. Submit that JSON with `collie_submit`, as its
+`output`, and nothing else. Always include `verdict`: `clean` when the step's whole
 scope is done and the checks you ran passed, or `findings` with at least one entry when
 it is not — never `clean` because the step is over. Include `disputed` for every review
 finding you did not apply — `{"file", "line", "severity", "title", "detail"}` where the

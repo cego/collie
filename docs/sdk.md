@@ -332,25 +332,25 @@ const verdict =
   it has to be stable within the run and different from every other operation in it.
 - **`instructions` is a template or text of your own**, rendered with `{{name}}` from
   `input`, plus `{{role}}`, `{{cwd}}` and `{{output_path}}`, which every piece of work is
-  given. The prompt then names where the Output goes and carries the JSON Schema `output`
-  draws to. A field's `description` is the judgment being asked for, so write it as one.
+  given. The prompt then names `collie_submit` and carries the JSON Schema `output` draws
+  to. `{{output_path}}` still renders, so a Workflow that names it loads, but it names the
+  file an accepted submit writes, not a path to hand anything in by. A field's
+  `description` is the judgment being asked for, so write it as one.
 - **`output` decides.** A file that does not decode is unusable however plausible it reads,
   and every issue with it is reported at once. Leave `output` out and the agent answers in
   plain text, which is what you are handed; a schema is how you opt into a structured,
   validated answer.
-- **An agent hands its Output in one of two ways.** It writes the file, or, under the
-  setting `output_submit: tool` (default `file`), it may submit it with the `collie_submit`
-  Collie tool instead. Both go through one decoder: a submit is decoded exactly as the file
-  is, and is answered at once with every issue, writing nothing, or with "accepted", which
-  writes the file the step is collecting. So collection, the reminders, the repairs and the
-  park below are the same either way, and a second submit of the same Output is collected
-  once. Under `tool` the prompt names the tool instead of the file's path and keeps the
-  whole contract, every field's description included; the reminders and repairs still name
-  the file, which stays valid. The tool is offered when an agent is launched, so an agent a
-  later step reuses is told the way it was launched with, whatever the setting is by then.
-  Pi has no Collie MCP server, so its agents reach the tool
-  through `collie tools call collie_submit`. An Output that decodes is never proof of the
-  work: the gate still reads the Run's journal ([proving it](#proving-it-rather-than-saying-so)).
+- **An agent hands its Output in with `collie_submit`.** The Collie tool is offered to every
+  agent launched for a Run, and a submit is decoded at once and answered with every issue,
+  writing nothing, or with "accepted", which writes the file the step is collecting. So
+  collection, the reminders, the repairs and the park below are the same either way, and a
+  second submit of the same Output is collected once. The prompt names the tool instead of a
+  path and keeps the whole contract, every field's description included; the reminders and
+  the repairs name the tool too. A step an older build dispatched still keeps its file
+  wording, and that file is still collected. Pi has no Collie MCP server, so its agents
+  reach the tool through `collie tools call collie_submit`. An Output that decodes is never
+  proof of the work: the gate still reads the Run's journal
+  ([proving it](#proving-it-rather-than-saying-so)).
 - **One unusable Output buys one repair**, sent back to the agent that wrote it, with the
   schema's own issues. A rewrite the schema still refuses is judged once the agent's turn
   has ended, so a file caught half rewritten is not the answer; one still unusable then parks
@@ -383,7 +383,8 @@ const verdict =
   Run parks. A stop still ends the wait.
 - **A turn that ends without the Output gets a reminder at once.** Where core reports the
   agent `working` and then `idle` or `done` while its Output is still absent, Collie sends it
-  a reminder naming the Output file and saying that a chat message is not the Output. Each
+  a reminder naming `collie_submit` and saying that neither a chat message nor a file is the
+  Output; a step an older build dispatched is told to write its Output file instead. Each
   agent launch gets at most two. If the turn after the second also ends without the Output,
   the Run parks as `output-absent`, saying when both reminders went, and Collie keeps
   collecting. An agent core reports `blocked` is not reminded, and neither is one whose Run

@@ -6,6 +6,29 @@ import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
 import { root } from "./support/host";
 
+test("no shipped persona, and not the review prompt, tells an agent to write an Output file", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const flat = (text: string) => pipe(text, Str.replaceAll(/\s+/g, " "));
+      const personas = yield* fs.readDirectory(`${root}personas`);
+      for (const file of personas) {
+        const text = flat(yield* fs.readFileString(`${root}personas/${file}`));
+        expect({ file, path: Str.includes("OUTPUT_PATH")(text) }).toEqual({ file, path: false });
+        expect({ file, file_: Str.includes("Output file")(text) }).toEqual({ file, file_: false });
+        if (Str.includes("## Output")(text)) {
+          expect({ file, submits: Str.includes("collie_submit")(text) }).toEqual({
+            file,
+            submits: true,
+          });
+        }
+      }
+      const review = flat(yield* fs.readFileString(`${root}workflows/review.md`));
+      expect(Str.includes("OUTPUT_PATH")(review)).toBe(false);
+      expect(Str.includes("Output file")(review)).toBe(false);
+    }),
+  ));
+
 test("the implementer, generalist and investigator say to take down the stack they bring up", () =>
   runEffect(
     Effect.gen(function* () {

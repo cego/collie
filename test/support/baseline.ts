@@ -3386,7 +3386,7 @@ scenario("a review's fix works in the reviewed branch's own checkout, and is ver
         fix,
         Str.slice(
           Option.getOrElse(pipe(fix, Str.indexOf("The review is written")), () => -1),
-          Option.getOrElse(pipe(fix, Str.indexOf("OUTPUT_PATH")), () => -1),
+          Option.getOrElse(pipe(fix, Str.indexOf("collie_submit")), () => -1),
         ),
       );
       expect(section).not.toMatch(/\b(glab|gh) /);
@@ -8267,7 +8267,7 @@ scenario(
           "`summary` — two sentences",
           "Every `blocker` and `major`",
           "`minor` (worth fixing, not worth blocking)",
-          "Change nothing outside your Output file",
+          "Change nothing outside your Output",
           "```json",
         ];
         expect(Arr.map(rules, (rule) => [rule, Str.split(both, rule).length - 1])).toEqual(
@@ -13452,7 +13452,7 @@ const buildAsked = (options: ShippedRun) =>
           ),
           Effect.orElseSucceed(() => ""),
         ),
-      (text) => pipe(text, Str.includes("OUTPUT_PATH")),
+      (text) => pipe(text, Str.includes("collie_submit")),
     ),
   );
 

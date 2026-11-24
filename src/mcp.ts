@@ -45,8 +45,8 @@ export const serveMcp = Effect.fn("Mcp.serve")(
       McpServer.visibility(({ method }) => Effect.succeed(method !== "tools/list")).layer,
     );
     // WARNING: Not McpServer.toolkit: it answers in JSON and protocol errors, not sentences.
-    const submits = env.raw.COLLIE_OUTPUT_SUBMIT === "tool";
-    for (const tool of submits ? [...TOOLS, SUBMIT] : TOOLS) {
+    const runAgent = env.raw.COLLIE_RUN !== undefined && env.raw.COLLIE_AGENT !== undefined;
+    for (const tool of runAgent ? [...TOOLS, SUBMIT] : TOOLS) {
       const listed =
         tool === SUBMIT || offered === undefined || Arr.some(offered, (name) => name === tool.name);
       const descriptor = yield* Schema.decodeUnknownEffect(McpSchema.Tool)({

@@ -125,10 +125,9 @@ the whole scope is built and the tests pass; anything else is `findings`, one en
 thing that is not, each with a `severity` of `blocker`, `major` or `minor` — a failure
 that pre-dates this branch is `minor`.
 
-When you are done, write your result as JSON to the path below. Nothing else may go in that file.
-OUTPUT_PATH: <state>/agents/r-plan-speed-implement/02-plain.md.json
+When you are done, submit your result as JSON with the collie_submit Collie tool, as its `output`. It answers "accepted", or with every problem it found and nothing kept: correct them and submit again.
 
-That file must match this contract. Where a field carries a description, it is asking for your judgment — answer it, do not fill it in.
+Your Output must match this contract. Where a field carries a description, it is asking for your judgment — answer it, do not fill it in.
 
 ```json
 {

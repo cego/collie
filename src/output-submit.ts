@@ -17,6 +17,9 @@ export const awaitOutput = (
   problem: (text: string) => string | null,
 ) => Effect.sync(() => void awaiting.set(keyOf(runId, agent), { output, problem }));
 
+/** Only a test can start a second Run on one process's agent names, and no host ever does. */
+export const forgetAwaited = Effect.sync(() => awaiting.clear());
+
 export const outputCollected = (runId: string, agent: string, text: string) =>
   Effect.sync(() => {
     const entry = awaiting.get(keyOf(runId, agent));
@@ -34,7 +37,7 @@ export const submitOutput = Effect.fn("OutputSubmit.submit")(function* (
 ) {
   const entry = awaiting.get(keyOf(runId, agent));
   if (entry === undefined) {
-    return `No step of ${runId} is waiting for ${agent}'s Output. Nothing was written.`;
+    return `No step of ${runId} is waiting for ${agent}'s Output yet. Nothing was written: submit it again.`;
   }
   const text = isString(output) ? output : asText(output);
   if (entry.collected !== undefined) {

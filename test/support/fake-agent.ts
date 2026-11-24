@@ -10,7 +10,9 @@ import {
   flow,
   Result,
 } from "effect";
+import { TestClock } from "effect/testing";
 import { exec } from "./command";
+import { submitOutput } from "../../src/output-submit";
 
 const QueuedOutputJson = Schema.Union([Schema.String, Schema.Null, Schema.JsonObject]);
 const QueueJson = Schema.fromJsonString(Schema.Array(QueuedOutputJson));
@@ -34,20 +36,112 @@ const readQueue = (file: string) =>
     );
   });
 
+// WARNING: the tool server a launch wrote beside its prompt is the only place an agent finds its Run.
+const ToolServer = Schema.Struct({
+  command: Schema.String,
+  args: Schema.Array(Schema.String),
+  env: Schema.Record(Schema.String, Schema.String),
+});
+const McpConfig = Schema.fromJsonString(
+  Schema.Struct({ mcpServers: Schema.Struct({ collie: ToolServer }) }),
+);
+
+export type ToolServer = typeof ToolServer.Type;
+
+export interface StepHand {
+  readonly tool: ToolServer | null;
+  readonly output: string | null;
+}
+
+const toolServerOf = (prompt: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const read = yield* fs
+      .readFileString(prompt.replace(/\.prompt\.md$/, ".mcp.json"), "utf8")
+      .pipe(Effect.option);
+    const found = Option.flatMap(read, (text) => Schema.decodeOption(McpConfig)(text));
+    return Option.map(found, (one) => one.mcpServers.collie).pipe(Option.getOrNull);
+  });
+
+// WARNING: the prompt no longer names the Output; the step's file keeps the prompt's name.
+const outputOfPrompt = (prompt: string) =>
+  prompt.replace(/\.prompt\.md$/, ".json").replace(/\.r\d+\.json$/, ".json");
+
+export interface HandIn {
+  readonly server: ToolServer;
+  readonly output: Schema.Json;
+  readonly at: string | null;
+}
+
+// WARNING: The host keeps the last step's entry until the next one registers, so a submit is this step's only once its Output file is there.
+const ours = (answer: string, at: string | null) =>
+  answer !== "accepted"
+    ? Effect.succeed(
+        !Str.startsWith("No step of")(answer) && !Str.includes("was already collected")(answer),
+      )
+    : at === null
+      ? Effect.succeed(false)
+      : FileSystem.FileSystem.pipe(
+          Effect.flatMap((fs) => fs.exists(at)),
+          Effect.orElseSucceed(() => false),
+        );
+
+// WARNING: A launch can take a while before the host registers its step for a submit.
+const RETRIES = 6000;
+
+// WARNING: The host that collects a step is in this process, as a test drives it.
+export const handIn = ({ server, output, at }: HandIn) => {
+  const run = server.env.COLLIE_RUN;
+  const agent = server.env.COLLIE_AGENT;
+  return run === undefined || agent === undefined
+    ? Effect.void
+    : Effect.gen(function* () {
+        for (let tries = 0; tries < RETRIES; tries++) {
+          if (yield* ours(yield* submitOutput(run, agent, output), at)) {
+            return;
+          }
+          // WARNING: Live, never the test's clock: waiting on that one would spend the very budget the host is using.
+          yield* TestClock.withLive(Effect.sleep("5 millis"));
+        }
+      });
+};
+
 const answerFrom = Effect.fn("fakeAgent.answer")(function* (
   answered: number,
   line: string,
   queuePath: string,
+  known: StepHand | null,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const ref = /is in (\S+\.md)(?: |\. )/.exec(line);
+  const prompt = ref?.[1];
   const text =
-    ref && (yield* fs.exists(ref[1]!)) ? yield* fs.readFileString(ref[1]!, "utf8") : line;
+    prompt && (yield* fs.exists(prompt)) ? yield* fs.readFileString(prompt, "utf8") : line;
   const match = /^OUTPUT_PATH: (.+)$/m.exec(text);
+  // WARNING: A reminder or a repair names no prompt, so what the last turn was given stands in for it.
+  const server =
+    match !== null
+      ? null
+      : prompt === undefined
+        ? (known?.tool ?? null)
+        : ((yield* toolServerOf(prompt)) ?? known?.tool ?? null);
+  const written = match === null ? null : Str.trim(match[1]!);
+  const outputPath =
+    written ?? (prompt === undefined ? (known?.output ?? null) : outputOfPrompt(prompt));
+  const hand: StepHand = { tool: server, output: outputPath };
+  let submit: HandIn | null = null;
+  // WARNING: An agent no launch of this build started has no Collie tool server, so the file is all it has.
+  const byFile = written !== null || server === null;
   const owes: string | undefined = undefined;
-  const unanswered = { answered, status: "idle", owed: owes };
-  if (!match || queuePath === "" || !(yield* fs.exists(queuePath))) {
+  const unanswered = {
+    answered,
+    status: "idle",
+    owed: owes,
+    hand: known,
+    submit: null as HandIn | null,
+  };
+  if (outputPath === null || queuePath === "" || !(yield* fs.exists(queuePath))) {
     return unanswered;
   }
   const next = (yield* readQueue(queuePath))[answered];
@@ -59,30 +153,44 @@ const answerFrom = Effect.fn("fakeAgent.answer")(function* (
   if (scripted?.sh !== undefined) {
     const ran = yield* exec(["sh", "-c", scripted.sh], {
       cwd: path.dirname(queuePath),
-      env: { ...process.env, OUTPUT_PATH: Str.trim(match[1]!), PROMPT_PATH: ref?.[1] ?? "" },
+      env: { ...process.env, OUTPUT_PATH: outputPath ?? "", PROMPT_PATH: prompt ?? "" },
     });
     if (ran.exitCode !== 0) {
       return yield* Effect.die(`the agent's sh failed: ${ran.stderr}`);
     }
   }
   const output = scripted === null ? next : scripted.output;
-  const outputPath = Str.trim(match[1]!);
   if (output !== undefined && output !== null) {
-    yield* fs.makeDirectory(path.dirname(outputPath), { recursive: true });
-    const plain = Schema.decodeUnknownOption(Schema.String)(output);
-    yield* fs.writeFileString(outputPath, Option.isSome(plain) ? plain.value : encodeJson(output));
+    if (byFile) {
+      yield* fs.makeDirectory(path.dirname(outputPath), { recursive: true });
+      const plain = Schema.decodeUnknownOption(Schema.String)(output);
+      yield* fs.writeFileString(
+        outputPath,
+        Option.isSome(plain) ? plain.value : encodeJson(output),
+      );
+    } else if (server !== null) {
+      // WARNING: The caller forks the submit: a host that waits for the turn to end before collecting would never register the step.
+      submit = { server, output, at: outputPath };
+    }
   }
   return {
     answered: answered + 1,
     status: scripted?.owed === true ? "working" : (scripted?.status ?? "idle"),
-    owed: scripted?.owed === true ? outputPath : undefined,
+    owed: scripted?.owed === true ? (outputPath ?? undefined) : undefined,
+    hand,
+    submit,
   };
 });
 
 // WARNING: Agents answer one prompt at a time, so two never take the same queue entry.
 const turn = Semaphore.makeUnsafe(1);
 
-export const answerPrompt = (text: string, log: string, queuePath: string) =>
+export const answerPrompt = (
+  text: string,
+  log: string,
+  queuePath: string,
+  known: StepHand | null = null,
+) =>
   turn.withPermits(1)(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -102,9 +210,9 @@ export const answerPrompt = (text: string, log: string, queuePath: string) =>
               onNone: () => 0,
               onSome: (one) => one.outputs,
             });
-            const now = yield* answerFrom(answered, text, queuePath);
+            const now = yield* answerFrom(answered, text, queuePath, known);
             yield* fs.writeFileString(countPath, `${encodeAnswered({ outputs: now.answered })}\n`);
-            return { status: now.status, owed: now.owed };
+            return { status: now.status, owed: now.owed, hand: now.hand, submit: now.submit };
           }),
         () => fs.remove(lock, { recursive: true }).pipe(Effect.ignore),
       );

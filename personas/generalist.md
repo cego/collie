@@ -25,5 +25,5 @@ human asked to keep it. Say in your reply what you left running.
 
 ## Output
 
-Each step gives you an `OUTPUT_PATH` and names the keys it wants. Write that JSON there
-and nothing else in that file.
+Each step names the keys it wants. Submit that JSON with `collie_submit`, as its
+`output`, and nothing else.
