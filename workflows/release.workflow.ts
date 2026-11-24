@@ -35,7 +35,7 @@ import {
   waitsOnApproval,
 } from "collie";
 import type { ParkCause, Finding, JobLink, OpenComment, ReviewStanding } from "collie";
-import { Effect, Option, Schema } from "effect";
+import { Effect, FileSystem, Option, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import * as DurableDeferred from "effect/workflow/DurableDeferred";
 import { connection } from "./connections.ts";
@@ -1432,9 +1432,20 @@ export default defineWorkflow({
             execute: reviewAt(proved),
           });
 
+        const fs = yield* FileSystem.FileSystem;
+        // WARNING: a resume must ask a new round, so the round that parked it is not counted again.
+        const parkedRound =
+          Number(
+            Str.trim(
+              yield* fs
+                .readFileString(`${place.dir}/answer-parked`)
+                .pipe(Effect.orElseSucceed(() => "")),
+            ),
+          ) || 0;
         let proved = yield* proveHead(proving("checks.0", null));
         let waits = 0;
         let rounds = 0;
+        let unanswered = 0;
         let gos = 0;
         let stagings = 0;
         let merged: Omit<Landed, "recovery"> | null = null;
@@ -1546,7 +1557,7 @@ export default defineWorkflow({
             rounds += 1;
             const n = rounds;
             const given = standing.comments;
-            const head = yield* comments(
+            const round = yield* comments(
               Effect.gen(function* () {
                 const answered = yield* agentWork({
                   ...as(`answer-${n}`),
@@ -1573,21 +1584,15 @@ export default defineWorkflow({
                         one.commit === undefined ? [] : [one.commit],
                       ),
                     });
-                    const answers = settleAnswers({
-                      given,
-                      answers: answered.answers,
-                      onHead: read.carries,
-                      open: read.open,
-                    });
-                    if (answers.replies.length === 0 && answers.carried.length > 0) {
-                      return yield* park(
-                        `answer-${n} answered none of the comments it was given: ${Arr.join(
-                          Arr.map(answers.carried, (one) => one.url),
-                          ", ",
-                        )}`,
-                      );
-                    }
-                    return { head: read.head, answers };
+                    return {
+                      head: read.head,
+                      answers: settleAnswers({
+                        given,
+                        answers: answered.answers,
+                        onHead: read.carries,
+                        open: read.open,
+                      }),
+                    };
                   }),
                 });
                 for (const reply of settled.answers.replies) {
@@ -1604,12 +1609,28 @@ export default defineWorkflow({
                     }),
                   });
                 }
-                return settled.head;
+                return settled;
               }),
               { round: n },
             );
-            if (head !== proved) {
+            if (round.head !== proved) {
               proved = yield* proveHead(proving(`answer-${n}.checks`, { pass: "fix", round: n }));
+            }
+            if (n > parkedRound) {
+              const none = round.answers.replies.length === 0 && round.answers.carried.length > 0;
+              unanswered = none ? unanswered + 1 : 0;
+              if (unanswered >= 2) {
+                yield* fs
+                  .writeFileString(`${place.dir}/answer-parked`, String(n))
+                  .pipe(Effect.orDie);
+                return yield* park(
+                  `The last two answer rounds answered none of the comments they were given: ${Arr.join(
+                    Arr.map(round.answers.carried, (one) => one.url),
+                    ", ",
+                  )}`,
+                  "step-failed",
+                );
+              }
             }
             continue;
           }

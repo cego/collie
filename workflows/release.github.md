@@ -66,9 +66,12 @@ Run the typecheck and the test files you touched, each through `collie verify`, 
 the whole suite.
 
 Then write your Output: one entry in `answers` per comment, by its id. `fixed` names in
-`commit` the pushed commit that fixes it, and `note` says what changed; `disputed` says in
-`note` why nothing changed. Collie counts a fix only once the pull request's head carries its
-commit, and a comment you leave out goes to the next round.
+`commit` the pushed commit that fixes it, and `note` says what changed; where you fixed it
+on the forge itself rather than in the branch, such as by editing the pull request's description,
+answer `fixed` with no `commit` and a `note` saying where: Collie replies that it was
+addressed outside the branch, and leaves that thread for the reviewer. `disputed` says in
+`note` why nothing changed. A fix is proved only by a commit the pull request's head carries, and a
+comment you leave out goes to the next round.
 
 ## fix
 

@@ -768,7 +768,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly carried: ReadonlyArray<OpenComment>;
   }
   export const SettledAnswersSchema: Schema.Codec<SettledAnswers, unknown, never, never>;
-  /** A fixed answer counts only where the head carries its commit; a comment answered meanwhile is dropped. */
+  /** A fixed answer counts only where the head carries its commit, or says where it was fixed on the forge; a comment answered meanwhile is dropped. */
   export function settleAnswers(round: {
     readonly given: ReadonlyArray<OpenComment>;
     readonly answers: ReadonlyArray<Answer>;

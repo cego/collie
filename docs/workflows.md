@@ -776,7 +776,9 @@ new external comment, or a reply in a thread after Collie's, starts a comment ro
 `answer-<n>`: the agent checks each against the code, fixes what holds test first and
 pushes with a plain push, and disputes what it judges wrong, with a reason. Collie then
 replies to each comment on the forge, linking it: "Fixed in `<sha>`: …" once the merge
-request's head carries that commit, or "Not changed: …" with the reason. A reply reads as
+request's head carries that commit, "Addressed outside the branch: …" where the agent
+fixed it on the forge itself and there is no commit to carry, or "Not changed: …" with the
+reason; that last one and a fix outside the branch leave the thread for the reviewer. A reply reads as
 yours: nothing on the page names Collie. Its raw text ends with a hidden marker,
 `<!-- collie:<run> -->`, by which Collie finds its own reply after a crash and chat tells you
 which replies a Run posted. The host refuses a reply, note, review, issue or Slack share
@@ -785,9 +787,12 @@ found; nothing is rewritten, and Collie's own repository takes any text. The hos
 reply on the Run, where `collie run show`, the drawer and Desktop's record list it, and a
 reply that disputes a comment reaches the board and chat as News; nothing waits for you. It
 never resolves a thread, and a restart never posts a reply twice. A comment a round left out,
-or whose commit the head does not carry, goes to the next round, and a round that
-answers none of its comments parks the Run, naming them. Comment rounds are not bounded:
-they follow the reviewers.
+or whose commit the head does not carry, goes to the next round unanswered on the forge,
+so the next read asks it again in a round of its own. Two answer rounds in a row that
+answer none of their comments park the Run as `step-failed`, naming them, and may start a
+Heal: by then its agent has been asked twice and failed both times. A resume starts a new
+answer round rather than replaying the one that parked, and comment rounds are not
+otherwise bounded: they follow the reviewers.
 
 **Sharing for approval** is off until you turn on `release.share_for_approval` and name a
 Slack channel in `release.approval_channel` ([Your defaults](using.md#your-defaults)); the

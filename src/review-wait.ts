@@ -170,7 +170,7 @@ export const SettledAnswersSchema = Schema.Struct({
 });
 export type SettledAnswers = typeof SettledAnswersSchema.Type;
 
-// WARNING: a fixed answer counts only where its commit is on the head: a commit that left the head proves nothing.
+// WARNING: a commit the head does not carry proves nothing, so that comment goes to the next round.
 export function settleAnswers(round: {
   readonly given: ReadonlyArray<OpenComment>;
   readonly answers: ReadonlyArray<Answer>;
@@ -183,20 +183,27 @@ export function settleAnswers(round: {
     const answer = Option.getOrUndefined(
       Arr.findFirst(round.answers, (one) => one.id === comment.id),
     );
-    const says =
-      answer?.answer === "disputed"
-        ? `Not changed: ${answer.note}`
-        : answer?.commit !== undefined && round.onHead.includes(answer.commit)
-          ? `Fixed in \`${pipe(answer.commit, Str.slice(0, 8))}\`: ${answer.note}`
-          : null;
-    if (says === null) {
+    if (answer === undefined) {
       carried.push(comment);
-    } else {
+    } else if (answer.answer === "disputed") {
       replies.push({
         id: comment.id,
-        kind: answer!.answer,
-        body: `${comment.url}\n\n${says}`,
+        kind: "disputed",
+        body: `${comment.url}\n\nNot changed: ${answer.note}`,
       });
+    } else if (answer.commit === undefined) {
+      replies.push({
+        id: comment.id,
+        body: `${comment.url}\n\nAddressed outside the branch: ${answer.note}`,
+      });
+    } else if (round.onHead.includes(answer.commit)) {
+      replies.push({
+        id: comment.id,
+        kind: "fixed",
+        body: `${comment.url}\n\nFixed in \`${pipe(answer.commit, Str.slice(0, 8))}\`: ${answer.note}`,
+      });
+    } else {
+      carried.push(comment);
     }
   }
   return { replies, carried };

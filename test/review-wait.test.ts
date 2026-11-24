@@ -384,6 +384,23 @@ test("a fixed answer is replied to with its commit only where the head carries i
   expect(Arr.map(settled.carried, (one) => one.id)).toEqual(["2"]);
 });
 
+test("a commitless fixed answer is replied to as addressed outside the branch, and its thread stays open", () => {
+  const given = [open("1")];
+  const settled = settleAnswers({
+    given,
+    answers: [{ id: "1", answer: "fixed", note: "edited the merge request's description" }],
+    onHead: [],
+    open: ["1"],
+  });
+  expect(settled.replies).toEqual([
+    {
+      id: "1",
+      body: `${given[0]!.url}\n\nAddressed outside the branch: edited the merge request's description`,
+    },
+  ]);
+  expect(settled.carried).toEqual([]);
+});
+
 test("a disputed answer is replied to with its reason, and one left out is carried", () => {
   const given = [open("1"), open("2")];
   const settled = settleAnswers({

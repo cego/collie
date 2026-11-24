@@ -1038,7 +1038,9 @@ reply inside an Activity of its own. `host.reviewHead({ runId, cwd, commits })` 
 merge request's `head` as the forge reports it, which of `commits` it `carries` once
 origin is fetched, and the ids of its external comments still `open`. `settleAnswers`
 turns a comment round's answers into the replies they earn and the comments `carried` to
-the next round: a `fixed` answer counts only where the head carries its commit.
+the next round: a `fixed` answer counts only where the head carries its commit, and one
+with no commit is a fix made on the forge itself, replied to as addressed outside the
+branch and left open for the reviewer.
 
 `host.fastForward({ runId, cwd, head })` fetches origin and fast-forwards the checkout to
 `head`, writing the move to the Run's log. It answers `At` with the `head` and where it

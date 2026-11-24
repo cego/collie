@@ -19061,39 +19061,140 @@ for (const name of ["gitlab", "github"] as const) {
       ),
   );
 
+  scenario(`release on ${name}: a comment left out of a round is carried into the next round`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const comments = [
+          { id: 71, author: "bob", at: "2026-10-20T11:01:00Z", body: "rename this" },
+          { id: 72, author: "carol", at: "2026-10-20T11:02:00Z", body: "split that" },
+        ];
+        const { bin, forge } = yield* releasable(name, { comments });
+        const runId = `r-carried-${name}`;
+        yield* rig.queueOutputs([
+          PACKAGED,
+          { verdict: "clean", answers: [{ id: "71", answer: "disputed", note: "kept" }] },
+          { verdict: "clean", answers: [{ id: "72", answer: "disputed", note: "it holds" }] },
+        ]);
+        const status = yield* driven(
+          { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+          (run) =>
+            Effect.gen(function* () {
+              yield* until(
+                () => wasAsked(runId, "answer-2"),
+                (asked) => asked,
+              );
+              yield* goAsked(run.asked, "go-1");
+              yield* run.answer("go-1", "Finish");
+              return yield* ended(run.status);
+            }),
+        );
+        const model = yield* forge.model();
+        const healed = yield* recoveriesHealed(runId);
+        yield* bin.restore();
+        expect(outcomeText(status)).toBe(`${mr} was left open`);
+        expect(Arr.map(repliesOf(model), (one) => one.body)).toEqual([
+          `${commentUrl(name, 71)}\n\nNot changed: kept${signed(runId)}`,
+          `${commentUrl(name, 72)}\n\nNot changed: it holds${signed(runId)}`,
+        ]);
+        const second = yield* asked(runId, "answer-2");
+        expect(second).toContain("split that");
+        expect(second).not.toContain("rename this");
+        expect(healed).toEqual([]);
+        expect(yield* parkedWhy(runId)).toBe("");
+      }),
+    ),
+  );
+
   scenario(
-    `release on ${name}: a comment left out of a round is carried into the next, and a round that answers nothing parks the Run`,
+    `release on ${name}: a comment fixed on the forge without a commit is replied to as addressed outside the branch`,
     () =>
       runEffect(
         Effect.gen(function* () {
-          const comments = [
-            { id: 71, author: "bob", at: "2026-10-20T11:01:00Z", body: "rename this" },
-            { id: 72, author: "carol", at: "2026-10-20T11:02:00Z", body: "split that" },
-          ];
-          const { bin, forge } = yield* releasable(name, { comments });
-          const runId = `r-carried-${name}`;
+          const comment = { id: 91, author: "bob", at: "2026-10-20T11:00:00Z", body: "rename" };
+          const { bin, forge } = yield* releasable(name, { comments: [comment] });
+          const runId = `r-outside-${name}`;
           yield* rig.queueOutputs([
             PACKAGED,
-            { verdict: "clean", answers: [{ id: "71", answer: "disputed", note: "kept" }] },
-            { verdict: "clean", answers: [] },
+            {
+              verdict: "clean",
+              answers: [
+                { id: "91", answer: "fixed", note: "edited the merge request's description" },
+              ],
+            },
           ]);
-          const why = yield* driven(
+          const status = yield* driven(
             { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
-            () =>
-              until(
-                () => parkedWhy(runId),
-                (why) => pipe(why, Str.includes("answered none")),
-              ),
+            (run) =>
+              Effect.gen(function* () {
+                yield* goAsked(run.asked, "go-1");
+                yield* run.answer("go-1", "Finish");
+                return yield* ended(run.status);
+              }),
+          );
+          const model = yield* forge.model();
+          const healed = yield* recoveriesHealed(runId);
+          yield* bin.restore();
+          expect(outcomeText(status)).toBe(`${mr} was left open`);
+          expect(Arr.map(repliesOf(model), (one) => one.body)).toEqual([
+            `${commentUrl(name, 91)}\n\nAddressed outside the branch: edited the merge request's description${signed(runId)}`,
+          ]);
+          expect(healed).toEqual([]);
+          expect(yield* parkedWhy(runId)).toBe("");
+        }),
+      ),
+  );
+
+  scenario(
+    `release on ${name}: two answer rounds in a row that answer nothing park the Run as step-failed, and a resume asks a new round`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const comment = { id: 92, author: "bob", at: "2026-10-20T11:00:00Z", body: "split that" };
+          const { bin, forge } = yield* releasable(name, { comments: [comment] });
+          const runId = `r-reasked-${name}`;
+          yield* rig.queueOutputs([
+            PACKAGED,
+            { verdict: "clean", answers: [] },
+            { verdict: "clean", answers: [] },
+            { verdict: "clean", answers: [{ id: "92", answer: "disputed", note: "it holds" }] },
+          ]);
+          const status = yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                yield* until(
+                  () => wasAsked(runId, "answer-2"),
+                  (asked) => asked,
+                );
+                expect(yield* parkedWhy(runId)).toBe("");
+                expect(yield* recoveriesHealed(runId)).toEqual([]);
+                const [, why] = yield* until(
+                  () => Effect.zip(run.status, parkedWhy(runId)),
+                  ([got, why]) => got.status === "suspended" && why !== "",
+                );
+                expect(why).toBe(
+                  `The last two answer rounds answered none of the comments they were given: ${commentUrl(name, 92)}. Repair it, then resume ${runId}.`,
+                );
+                expect(yield* parkedCause(runId)).toBe("step-failed");
+                expect(Arr.map(yield* recoveriesHealed(runId), (one) => one.outcome)).toEqual([
+                  "claimed",
+                ]);
+                yield* run.resume;
+                yield* until(
+                  () => wasAsked(runId, "answer-3"),
+                  (asked) => asked,
+                );
+                yield* goAsked(run.asked, "go-1");
+                yield* run.answer("go-1", "Finish");
+                return yield* ended(run.status);
+              }),
           );
           const model = yield* forge.model();
           yield* bin.restore();
-          expect(why).toBe(
-            `answer-2 answered none of the comments it was given: ${commentUrl(name, 72)}. Repair it, then resume ${runId}.`,
-          );
-          expect(repliesOf(model)).toHaveLength(1);
-          const second = yield* asked(runId, "answer-2");
-          expect(second).toContain("split that");
-          expect(second).not.toContain("rename this");
+          expect(outcomeText(status)).toBe(`${mr} was left open`);
+          expect(Arr.map(repliesOf(model), (one) => one.body)).toEqual([
+            `${commentUrl(name, 92)}\n\nNot changed: it holds${signed(runId)}`,
+          ]);
         }),
       ),
   );
