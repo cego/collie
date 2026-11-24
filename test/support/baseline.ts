@@ -4959,6 +4959,30 @@ scenario("an empty recovery is new work, built as an ordinary start", () =>
   ),
 );
 
+scenario("a recovery of only spaces is new work, built as an ordinary start", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const bin = yield* FakeBin.make(`${rig.root}/bin`);
+      yield* noGitlabMrs(bin);
+      yield* repository();
+      const plan = yield* planOf([{ file: "01-work.md", title: "work", checks: "unit" }]);
+      yield* approve("r-blank-recovery", ["unit"]);
+      yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+
+      const result = yield* ran({
+        entry: shipped("implement"),
+        runId: "r-blank-recovery",
+        input: { plan, recovery: "  \n", ...FINISH },
+      });
+      yield* bin.restore();
+
+      expect(said(result)).toBe(OPENED.mr_url);
+      const launches = yield* launchesAt(dir, "r-blank-recovery");
+      expect(Arr.map(launches, (launch) => launch.operation)).toEqual(["build", "review-1", "mr"]);
+    }),
+  ),
+);
+
 scenario(
   "implement builds a plan one ticket at a time on one implementer, then reviews what it built",
   () =>

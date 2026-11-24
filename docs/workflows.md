@@ -171,7 +171,9 @@ the original requirements, and any additional work you requested. A missing requ
 goes to the builder as a finding. With no established implementation, it starts at Build.
 The host reads the facts again when you take the offer. A clean checkout behind the
 pushed branch fast-forwards; divergent history or unpublished work refuses that checkout
-change. Changed requirements, head, outcome, or target require review again. Checks still
+change. A branch `origin` does not have is refused as never pushed, where a remote that
+cannot answer is refused as unreadable with git's own words, so an unpushed branch is never
+mistaken for a broken remote. Changed requirements, head, outcome, or target require review again. Checks still
 prove the current revision, and delivery updates the branch's existing merge request.
 Repeated recoveries retain verification records from the full chain of established
 recoveries, including the original bug reproduction. Each record keeps its Run and

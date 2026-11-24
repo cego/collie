@@ -620,7 +620,9 @@ collie run start plan --input goal="one registry" --input then= --input workspac
 `plan` takes `goal` and `then`. `then=implement` builds the plan as soon as its tickets are
 written, with nothing asked of anyone; empty, its end menu is asked
 ([`plan`](workflows.md#plan)). `implement` takes `plan`, `recovery`, and `then`. Leave
-`recovery=` empty for new work; an explicit follow-up supplies the finished Run it recovers.
+`recovery=` empty for new work — empty once trimmed, so a value of only spaces is new work
+too. An explicit follow-up supplies the finished Run it recovers, and one naming a Run this
+host does not know is refused, naming the reference, before the checkout's branch is read.
 `then=release` releases
 its merge request on a human's go, `finish` ends at the merge request, and empty asks
 ([`implement`](workflows.md#implement)). A typed start neither reads nor saves the

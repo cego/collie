@@ -9,7 +9,8 @@ import { readVerifications, sameAsked, sameTree, treeOf } from "./verify";
 import type { Verification } from "./verify";
 import { appendRunJournal, readRunJournalWhole, runJournal } from "./journal";
 import { readCards, readFinalCard } from "./cards";
-import { shell } from "./mr";
+import { shell, whatItSaid } from "./mr";
+import type { Ran } from "./mr";
 import { nowIso } from "./time";
 
 export const ReviewScope = Schema.Struct({
@@ -129,6 +130,18 @@ export const recordReview = Effect.fn("Recovery.recordReview")(function* (
   });
 });
 
+// WARNING: ls-remote --exit-code exits 2 when the remote answers and has no such ref; any other exit says nothing.
+export function unreadableBranch(branch: string, read: Ran) {
+  if (read.code === 0) {
+    return null;
+  }
+  const said = whatItSaid(read);
+  const tail = said === "" ? "" : ` ${said}`;
+  return read.code === 2
+    ? `The branch ${branch} was never pushed to origin.${tail}`
+    : `The pushed branch cannot be read.${tail}`;
+}
+
 export const takePushed = Effect.fn("Recovery.takePushed")(function* (cwd: string) {
   const tree = yield* treeOf(cwd);
   if (tree.dirty || tree.branch === null || tree.branch === "HEAD") {
@@ -136,8 +149,9 @@ export const takePushed = Effect.fn("Recovery.takePushed")(function* (cwd: strin
   }
   const git = (...args: Array<string>) => shell("git", args, cwd);
   const read = yield* git("ls-remote", "--exit-code", "origin", `refs/heads/${tree.branch}`);
-  if (read.code !== 0) {
-    return "The pushed branch cannot be read.";
+  const unread = unreadableBranch(tree.branch, read);
+  if (unread !== null) {
+    return unread;
   }
   const head = Str.split(Str.trim(read.stdout), /\s/)[0] ?? "";
   if (head === tree.head_sha) {
@@ -170,6 +184,14 @@ export const recoveryFrom = Effect.fn("Recovery.from")(
       commits: "",
       review: null,
     };
+    const git = (...args: Array<string>) => shell("git", args, options.cwd);
+    const branch = Str.trim((yield* git("branch", "--show-current")).stdout);
+    const pushed = yield* git("ls-remote", "--exit-code", "origin", `refs/heads/${branch}`);
+    const unread = unreadableBranch(branch, pushed);
+    if (unread !== null) {
+      return { ...build, reason: unread };
+    }
+    const remote = Str.split(Str.trim(pushed.stdout), /\s/)[0] ?? "";
     let current = yield* reviewScope(
       options.cwd,
       options.dir,
@@ -179,17 +201,6 @@ export const recoveryFrom = Effect.fn("Recovery.from")(
     );
     if (current === null) {
       return build;
-    }
-    const git = (...args: Array<string>) => shell("git", args, options.cwd);
-    const pushed = yield* git(
-      "ls-remote",
-      "--exit-code",
-      "origin",
-      `refs/heads/${Str.trim((yield* git("branch", "--show-current")).stdout)}`,
-    );
-    const remote = Str.split(Str.trim(pushed.stdout), /\s/)[0] ?? "";
-    if (pushed.code !== 0) {
-      return { ...build, reason: "The pushed branch cannot be read." };
     }
     if (remote !== current.head) {
       if (

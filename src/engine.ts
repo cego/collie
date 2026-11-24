@@ -5183,13 +5183,18 @@ export const hostLayer: (options: {
           under(
             Effect.gen(function* () {
               const row = yield* store.run(runId);
+              const id = Str.split(parent, "/").at(-1) ?? parent;
+              const from = yield* store.run(id);
+              if (from === null) {
+                return yield* new WorkflowError({
+                  reason: `the recovery names Run ${parent}, which this host does not know`,
+                });
+              }
               const why = yield* takePushed(row === null ? dir : workingPlace(row).cwd);
               if (why !== null) {
                 return yield* new WorkflowError({ reason: why });
               }
               const facts = yield* recoveryFor(store, dir, runId, parent, source);
-              const id = Str.split(parent, "/").at(-1) ?? parent;
-              const from = yield* store.run(id);
               if (
                 facts.implementation &&
                 row !== null &&

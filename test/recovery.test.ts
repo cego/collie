@@ -36,6 +36,7 @@ import {
   rememberStaleHandOver,
 } from "../src/park-recheck";
 import { processOf, startedOf } from "../src/processes";
+import { recoveryFrom, takePushed } from "../src/recovery";
 import { SURVIVES_HANGUP, paneTree } from "./support/pane-tree";
 
 const idOf = flow(
@@ -1512,4 +1513,132 @@ test("the same cause parked in two steps at one head is two parks", () =>
         expect(parks[1]!.park).not.toBe(parks[0]!.park);
       }),
     ["parks-in-steps.workflow.ts"],
+  ));
+
+const checkoutOriginLacks = (prefix: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const home = yield* fs.makeTempDirectoryScoped({ prefix });
+    const repo = `${home}/repo`;
+    const origin = `${home}/origin.git`;
+    yield* fs.makeDirectory(repo, { recursive: true });
+    yield* exec(["git", "init", "--bare", "-q", origin], { cwd: home });
+    for (const args of [
+      ["init", "-q", "--initial-branch=master"],
+      ["config", "user.name", "test"],
+      ["config", "user.email", "test@example.com"],
+      ["remote", "add", "origin", origin],
+      ["commit", "--allow-empty", "-qm", "base"],
+      ["push", "-qu", "origin", "master"],
+      ["remote", "set-head", "origin", "-a"],
+      ["checkout", "-q", "-b", "feature"],
+    ]) {
+      yield* exec(["git", ...args], { cwd: repo });
+    }
+    return repo;
+  });
+
+const brokenOrigin = (repo: string) =>
+  exec(["git", "remote", "set-url", "origin", `${repo}/../gone.git`], { cwd: repo });
+
+test("the recovery check says a branch origin does not have was never pushed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const repo = yield* checkoutOriginLacks("collie-recovery-unpushed-");
+      const why = yield* takePushed(repo);
+      expect(why).toContain("feature");
+      expect(why).toContain("never pushed");
+      expect(why).not.toContain("cannot be read");
+    }),
+  ));
+
+test("the recovery check says a pushed branch cannot be read, and carries what git said", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const repo = yield* checkoutOriginLacks("collie-recovery-broken-");
+      yield* brokenOrigin(repo);
+      const why = yield* takePushed(repo);
+      expect(why).toContain("The pushed branch cannot be read.");
+      expect(why).toContain("does not appear to be a git repository");
+    }),
+  ));
+
+const deliveredFrom = (repo: string, dir: string) =>
+  recoveryFrom({
+    cwd: repo,
+    dir,
+    parent: `${dir}/runs/absent`,
+    candidates: [],
+    source: "the work the parent did",
+    outcome: "",
+    risks: "",
+  });
+
+test("delivery says a branch origin does not have was never pushed, as the recovery check does", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const repo = yield* checkoutOriginLacks("collie-recovery-deliver-unpushed-");
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-recovery-deliver-" });
+      const why = (yield* deliveredFrom(repo, dir)).reason;
+      expect(why).toContain("feature");
+      expect(why).toContain("never pushed");
+      expect(why).not.toContain("cannot be read");
+    }),
+  ));
+
+test("delivery keeps git's word when the pushed branch cannot be read, as the recovery check does", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const repo = yield* checkoutOriginLacks("collie-recovery-deliver-broken-");
+      yield* brokenOrigin(repo);
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-recovery-deliver-" });
+      const why = (yield* deliveredFrom(repo, dir)).reason;
+      expect(why).toContain("The pushed branch cannot be read.");
+      expect(why).toContain("does not appear to be a git repository");
+    }),
+  ));
+
+test("a recovery naming a Run this host does not know is refused before the pushed branch is read", () =>
+  proves(
+    "collie-recovery-parent-",
+    (world) =>
+      Effect.gen(function* () {
+        const origin = `${world.home}/origin.git`;
+        yield* exec(["git", "init", "--bare", "-q", origin], { cwd: world.project });
+        for (const args of [
+          ["init", "-q"],
+          ["config", "user.name", "test"],
+          ["config", "user.email", "test@example.com"],
+          ["remote", "add", "origin", origin],
+          ["remote", "add", "upstream", "https://gitlab.example.com/group/project.git"],
+          ["commit", "--allow-empty", "-qm", "base"],
+          ["push", "-qu", "origin", "HEAD"],
+          ["remote", "set-head", "origin", "-a"],
+        ]) {
+          yield* exec(["git", ...args], { cwd: world.project });
+        }
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const { runId } = yield* client
+          .start({
+            project: world.project,
+            id: "recovery",
+            request: "unknown-parent",
+            input: { goal: "recover the work", recovery: "r-never-started" },
+            options: { branch: "feature" },
+          })
+          .pipe(Effect.orDie);
+        const view = yield* until(
+          () => client.run({ runId }).pipe(Effect.orDie),
+          (one) => one?.status.status === "failed",
+        );
+        const status = view?.status;
+        if (status?.status !== "failed") {
+          return yield* Effect.die(new Error("the Run did not fail"));
+        }
+        expect(status.reason).toContain("r-never-started");
+        expect(status.reason).not.toContain("pushed");
+      }),
+    ["recovery.workflow.ts"],
   ));
