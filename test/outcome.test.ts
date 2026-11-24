@@ -338,8 +338,12 @@ test("a red then green pair no Output names is a gap the gate fix is asked to cl
   const paired = collected({
     verifications: [record({ name: "tests" }), reproduced, record({ name: "regression" })],
   });
-  expect(checkGaps("bug", paired)).toEqual([UNNAMED_REPRODUCTION]);
-  expect(UNNAMED_REPRODUCTION).toContain("regression");
+  const gaps = checkGaps("bug", paired);
+  expect(gaps).toHaveLength(1);
+  expect(gaps[0]).toContain("regression");
+  expect(evidenceGaps("bug", paired)).not.toContain(
+    "the Output does not name the verification that reproduced the bug",
+  );
   expect(
     checkGaps(
       "bug",
