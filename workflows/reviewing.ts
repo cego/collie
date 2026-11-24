@@ -17,6 +17,7 @@ import {
   panelOf,
   formatFindings,
   isBlocking,
+  isSameFinding,
   leaveOutstanding,
   leaveReview,
   mrForgeFacts,
@@ -120,8 +121,6 @@ export interface ReviewAsk {
   readonly proves: string;
   readonly previous: string;
   readonly ledger?: ReadonlyArray<Finding>;
-  // WARNING: a new finding never takes an id this Run already gave outside `ledger`.
-  readonly taken?: ReadonlyArray<string>;
   readonly head?: string;
   readonly stamped?: string;
   readonly changes?: string;
@@ -212,59 +211,32 @@ export const reviewPass = (ask: ReviewAsk) =>
           return report;
         }
         const before = ask.ledger;
-        const findings: Array<Finding> = [];
-        const ids = new Set<string>();
-        const reserved = new Set([
-          ...Arr.map([...before, ...report.findings], (one) => one.id),
-          ...(ask.taken ?? []),
-        ]);
-        let next = 1;
-        for (const finding of report.findings) {
+        const head = ask.head ?? ask.stamped ?? "";
+        const reported: Array<Finding> = Arr.map(report.findings, (finding) => {
           const earlier = Option.getOrUndefined(
-            Arr.findFirst(before, (one) =>
-              finding.id === undefined
-                ? findingKey(one) === findingKey(finding)
-                : one.id === finding.id,
-            ),
+            Arr.findFirst(before, (one) => isSameFinding(one, finding)),
           );
-          let identity = finding.id ?? earlier?.id;
-          if (identity === undefined) {
-            while (reserved.has(`${id}-F${next}`)) {
-              next += 1;
-            }
-            identity = `${id}-F${next}`;
-          }
-          if (ids.has(identity)) {
-            return yield* new WorkflowError({ reason: `duplicate finding id ${identity}` });
-          }
-          ids.add(identity);
-          reserved.add(identity);
           const status = finding.status ?? "open";
-          findings.push({
+          return {
             ...finding,
-            id: identity,
             status,
-            head: ask.head ?? ask.stamped ?? "",
+            head,
             note: status === earlier?.status ? (earlier.note ?? "") : "",
-          });
-        }
+          };
+        });
         for (const earlier of before) {
-          if (Arr.some(findings, (one) => one.id === earlier.id)) {
+          if (Arr.some(reported, (one) => isSameFinding(earlier, one))) {
             continue;
           }
           if (Arr.some(report.fixed, (one) => findingKey(one) === findingKey(earlier))) {
-            findings.push({
-              ...earlier,
-              status: "fixed",
-              head: ask.head ?? ask.stamped ?? "",
-              note: "",
-            });
+            reported.push({ ...earlier, status: "fixed", head, note: "" });
           } else {
             return yield* new WorkflowError({
               reason: `review omitted earlier finding ${earlier.id ?? earlier.title}; return its status`,
             });
           }
         }
+        const findings = yield* leaveReview(dir, { ...report, findings: reported }, before);
         const recorded: SynthesisReport = {
           ...report,
           findings,
@@ -272,7 +244,6 @@ export const reviewPass = (ask: ReviewAsk) =>
             ? "findings"
             : "clean",
         };
-        yield* leaveReview(dir, recorded);
         yield* (yield* FileSystem.FileSystem)
           .writeFileString(`${dir}/review-head`, ask.head ?? "")
           .pipe(Effect.orDie);
@@ -511,7 +482,6 @@ export const rally = (ask: {
   readonly obstacle: string;
   readonly resume?: { readonly previous: Rallied; readonly reviewers: string };
   readonly ledger?: ReadonlyArray<Finding>;
-  readonly taken?: ReadonlyArray<string>;
   readonly integrate: (
     operation: string,
   ) => Effect.Effect<Integration & { readonly base: string }, WorkflowError, Needs>;
@@ -631,7 +601,6 @@ export const rally = (ask: {
             prefix,
             ledger,
             stamped: head,
-            taken: ask.taken,
             reviewers: ask.resume?.reviewers,
             obstacle: ask.obstacle,
             risks: ask.risks,

@@ -560,6 +560,9 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
       file: finding.file ?? null,
       line: finding.line ?? null,
       detail: finding.detail ?? null,
+      basis: finding.basis ?? null,
+      evidence: finding.evidence ?? null,
+      suggested: finding.suggested ?? null,
     })),
     verifications: Arr.map(
       yield* readVerifications(run.evidence).pipe(Effect.orElseSucceed(() => [])),

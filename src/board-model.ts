@@ -596,6 +596,9 @@ export const ReviewFinding = Schema.Struct({
   file: Schema.NullOr(Schema.String),
   line: Schema.NullOr(Schema.Finite),
   detail: Schema.NullOr(Schema.String),
+  basis: Schema.NullOr(Schema.Literals(["fact", "inference"])),
+  evidence: Schema.NullOr(Schema.String),
+  suggested: Schema.NullOr(Schema.Literals(["fix", "ticket", "investigate", "plan", "none"])),
 });
 export type ReviewFinding = typeof ReviewFinding.Type;
 

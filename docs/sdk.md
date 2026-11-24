@@ -743,7 +743,12 @@ as unavailable while the same resolution would still refuse.
 `place.dir` is where what a Run produces belongs, and where the things that read a Run look:
 a plan's tickets under `plan/issues/`, a review's prose in `review.md` and its findings in
 `findings.json` — `leaveReview` writes both. A card counts those; nothing counts a Run's
-prose. `findingsIn(dir)` reads the findings back. After a last fix `settleFinalFix`
+prose. `leaveFindings(dir, findings)` is the one path findings are written by: it gives each
+the id it keeps, `<run>-F<n>`, taken from the run directory's own name. A finding matched by
+id or by place and title keeps the id it had, an id an agent invented is replaced, and no id
+a removed finding had is given again. `findingsIn(dir)` reads the findings back, giving a
+file written before ids its ids by position; it needs no `review.md` beside them.
+After a last fix `settleFinalFix`
 accepted, `leaveOutstanding(dir, outstanding)` leaves the findings it says still stand, and
 the review's prose as it was. Shipped `implement` also leaves every blocking dispute still
 the human's among them at its own severity, whichever review wrote last, so the card counts

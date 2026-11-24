@@ -102,11 +102,12 @@ newest finished `plan` runs for this repo and a Linear issue id in the branch na
 candidate is taken as the answer; none or several bring up a menu of them plus **Type it…**,
 which accepts a Linear id or URL, a path to a plan directory, or a plain description of the
 work. What was resolved is recorded with its kind, and the build prompt reads both
-`{{inputs.plan}}` and `{{inputs.plan_kind}}` (`plan-dir`, `linear`, `review`, `followup` or
-`text`). It carries only that kind's instructions, its `## source.<kind>` section of
+`{{inputs.plan}}` and `{{inputs.plan_kind}}` (`plan-dir`, `linear`, `review`, `findings`,
+`followup` or `text`). It carries only that kind's instructions, its `## source.<kind>` section of
 [`implement.md`](../workflows/implement.md), and only the outcome's, its
 `## outcome.<kind>` section; a Run with no outcome kind is told only its checks have to pass.
-`review` is what a run chained from a review carries: the findings are the tickets. For
+`review` is what a run chained from a review carries: the findings are the tickets. Any other
+directory with a `findings.json` is `findings`, and it is built on a branch of its own. For
 `linear` and `text` the implementer writes the spec and a task list into the run's `plan/`
 before it builds, so every run leaves the same audit trail.
 

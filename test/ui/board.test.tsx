@@ -1503,7 +1503,16 @@ test("Review lists the findings, the files the Run changed and its verifications
           tasks: [task()],
           detail: record({
             findings: [
-              { severity: "major", title: "Seeds twice", file: "seed.ts", line: 12, detail: null },
+              {
+                severity: "major",
+                title: "Seeds twice",
+                file: "seed.ts",
+                line: 12,
+                detail: null,
+                basis: null,
+                evidence: null,
+                suggested: null,
+              },
             ],
             diff: {
               base: "abc",

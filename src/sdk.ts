@@ -192,6 +192,7 @@ export {
   blockingKeys,
   conflictingDispositions,
   findingKey,
+  isSameFinding,
   sameFinding,
   formatFindings,
   isBlocking,
@@ -220,16 +221,17 @@ export {
 } from "./output";
 
 /**
- * What a Run leaves behind about a review, and where. `leaveReview` writes both halves —
- * the prose a human reads and the findings whatever comes next counts, read back by
- * `findingsIn` — `leaveOutstanding`
- * the findings still standing after a last fix `settleFinalFix` accepted, and `riskLine`
+ * What a Run leaves behind about a review, and where. `leaveFindings` is the one path a
+ * Run's findings are written by, giving each the id it keeps — beside a review's prose
+ * with `leaveReview`, or alone with `leaveOutstanding` (the findings still standing after
+ * a last fix `settleFinalFix` accepted). `findingsIn` reads them back, and `riskLine` is
  * the paragraph an extra axis adds to what a reviewer is asked.
  */
 export {
   FINDINGS_FILE,
   REVIEW_FILE,
   findingsIn,
+  leaveFindings,
   leaveOutstanding,
   leaveReview,
   openFindingsIn,

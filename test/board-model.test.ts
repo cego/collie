@@ -456,7 +456,18 @@ test("a TaskView and a RunDetail survive a round trip through JSON", () => {
     },
     finishedAt: 0,
     mr: { _tag: "Unavailable", reason: "no glab" },
-    findings: [{ severity: "major", title: "Off by one", file: "a.ts", line: 3, detail: null }],
+    findings: [
+      {
+        severity: "major",
+        title: "Off by one",
+        file: "a.ts",
+        line: 3,
+        detail: null,
+        basis: null,
+        evidence: null,
+        suggested: null,
+      },
+    ],
     verifications: [
       { id: "v1", name: "test", result: "pass", expect: "pass", exit: 0, at: "t", by: "collie" },
     ],

@@ -1928,6 +1928,31 @@ pub struct Finding {
     pub file: Option<String>,
     pub line: Option<f64>,
     pub detail: Option<String>,
+    pub basis: Option<Basis>,
+    pub evidence: Option<String>,
+    pub suggested: Option<Suggested>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Basis {
+    #[serde(rename = "fact")]
+    Fact,
+    #[serde(rename = "inference")]
+    Inference,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Suggested {
+    #[serde(rename = "fix")]
+    Fix,
+    #[serde(rename = "ticket")]
+    Ticket,
+    #[serde(rename = "investigate")]
+    Investigate,
+    #[serde(rename = "plan")]
+    Plan,
+    #[serde(rename = "none")]
+    None,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

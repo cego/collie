@@ -447,6 +447,13 @@ and write one ticket per finding still open, worst severity first, naming the fi
 title word for word. The fixes land on the branch that was reviewed, which this checkout
 is already on.
 
+## plan.findings
+
+A Run left findings for a human. `{{inputs.plan}}/findings.json` is what it found, and the
+report beside it is the one a human reads. Copy its findings into the spec and write one
+ticket per finding still open, worst severity first, naming the finding's title word for
+word.
+
 ## plan.linear
 
 A Linear issue id. Fetch it with the Linear MCP (`get_issue`) and copy its description into
@@ -484,6 +491,15 @@ the findings you are working from to `{{run.dir}}/plan/SPEC.md` and one ticket p
 under `{{run.dir}}/plan/issues/`, so this run records what it set out to fix. A finding you
 disagree with is `disputed` with a reason, exactly as in a fix round — never silently
 skipped.
+
+## source.findings
+
+A Run left findings for a human. `{{inputs.plan}}/findings.json` is what it found, and the
+report beside it is the one a human reads. The tickets are those findings, worst severity
+first. Write the findings you are working from to `{{run.dir}}/plan/SPEC.md` and one ticket
+per finding under `{{run.dir}}/plan/issues/`, so this run records what it set out to fix. A
+finding you disagree with is `disputed` with a reason, exactly as in a fix round — never
+silently skipped.
 
 ## source.linear
 

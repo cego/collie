@@ -42,6 +42,30 @@ const listed = <
     },
   );
 
+export const FindingSuggestions = Schema.Literals(["fix", "ticket", "investigate", "plan", "none"]);
+
+export type FindingBasis = "fact" | "inference";
+
+export type FindingSuggestion = typeof FindingSuggestions.Type;
+
+export interface Finding {
+  id?: string;
+  status?: "open" | "fixed" | "disputed" | "obsolete";
+  head?: string;
+  note?: string;
+  file?: string;
+  line?: number;
+  severity: string;
+  title: string;
+  detail?: string;
+  basis?: FindingBasis;
+  evidence?: string;
+  suggested?: FindingSuggestion;
+  internal?: boolean;
+  rebuttal?: string;
+  reason?: string;
+}
+
 // WARNING: severity is free text: only minor is non-blocking, so a closed union would throw reviews away.
 export const FindingSchema = Schema.Struct({
   id: Schema.optionalKey(Schema.String.pipe(said("id"))),
@@ -55,27 +79,15 @@ export const FindingSchema = Schema.Struct({
   }).pipe(said("severity")),
   title: Schema.String.pipe(said("title")),
   detail: Schema.optionalKey(Schema.String),
+  basis: Schema.optionalKey(Schema.Literals(["fact", "inference"])),
+  evidence: Schema.optionalKey(Schema.String),
+  suggested: Schema.optionalKey(FindingSuggestions),
   internal: Schema.optionalKey(
     Schema.Boolean.annotate({ description: "true only for a finding about Collie's own process" }),
   ),
   rebuttal: Schema.optionalKey(Schema.String),
   reason: Schema.optionalKey(Schema.String),
 });
-
-export interface Finding {
-  id?: string;
-  status?: "open" | "fixed" | "disputed" | "obsolete";
-  head?: string;
-  note?: string;
-  file?: string;
-  line?: number;
-  severity: string;
-  title: string;
-  detail?: string;
-  internal?: boolean;
-  rebuttal?: string;
-  reason?: string;
-}
 
 export interface ReviewOutput {
   verdict: "clean" | "findings";
@@ -279,30 +291,100 @@ export const REVIEW_FILE = "review.md";
 // WARNING: the JSON a card counts; review.md is prose for the human and is never counted.
 export const FINDINGS_FILE = "findings.json";
 
+const FINDINGS_NEXT = "findings-next";
+
 const FindingsJson = Schema.fromJsonString(Schema.Array(FindingSchema));
 const decodeFindings = Schema.decodeUnknownEffect(FindingsJson);
 const encodeFindings = flow(Schema.encodeResult(FindingsJson), Result.getOrThrow);
 
-// WARNING: written together: a review with no findings file is one nothing can count.
-export const leaveReview = (dir: string, synthesis: typeof SynthesisSchema.Type) =>
-  FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) =>
-      Effect.all([
-        fs.writeFileString(`${dir}/${REVIEW_FILE}`, renderReview(synthesis)),
-        fs.writeFileString(`${dir}/${FINDINGS_FILE}`, encodeFindings(synthesis.findings)),
-      ]),
-    ),
-    Effect.asVoid,
-    Effect.orDie,
+// WARNING: the Run's directory is named for it, so an id needs no argument and a copied directory keeps its owner's.
+const runOf = (dir: string) =>
+  Option.getOrElse(pipe(dir, Str.replaceAll(/\/+$/g, ""), Str.split("/"), Arr.last), () => "");
+
+const findingByPosition = (run: string, findings: ReadonlyArray<Finding>) =>
+  Arr.map(findings, (finding, index) =>
+    finding.id === undefined ? { ...finding, id: `${run}-F${index + 1}` } : finding,
   );
 
+const numberIn = (run: string, id: string | undefined) => {
+  const found =
+    id === undefined
+      ? null
+      : new RegExp(
+          `^${pipe(run, Str.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`))}-F(\\d+)$`,
+        ).exec(id);
+  return found === null ? 0 : Number(found[1]);
+};
+
+const highest = (run: string, ids: ReadonlyArray<string | undefined>) =>
+  Arr.reduce(ids, 0, (top, id) => Math.max(top, numberIn(run, id)));
+
+export const isSameFinding = (earlier: Finding, finding: Finding) =>
+  (earlier.id !== undefined && earlier.id === finding.id) ||
+  findingKey(earlier) === findingKey(finding);
+
+const earlierOf = (earlier: ReadonlyArray<Finding>, finding: Finding) =>
+  Option.getOrUndefined(Arr.findFirst(earlier, (one) => isSameFinding(one, finding)));
+
+// WARNING: an id is never given twice, so a removed finding's status is never inherited by another.
+const withIds = (
+  run: string,
+  earlier: ReadonlyArray<Finding>,
+  findings: ReadonlyArray<Finding>,
+  from: number,
+) => {
+  const earlierIds = new Set(Arr.flatMap(earlier, (one) => (one.id === undefined ? [] : [one.id])));
+  const assigned = new Set<string>();
+  let next = Math.max(from, highest(run, [...earlierIds]));
+  let handed = next;
+  const written = Arr.map(findings, (finding) => {
+    const matched = earlierOf(earlier, finding)?.id;
+    if (matched !== undefined && !assigned.has(matched)) {
+      assigned.add(matched);
+      return { ...finding, id: matched };
+    }
+    next += 1;
+    handed = next;
+    assigned.add(`${run}-F${next}`);
+    return { ...finding, id: `${run}-F${next}` };
+  });
+  return { written, handed };
+};
+
+export const leaveFindings = (
+  dir: string,
+  findings: ReadonlyArray<Finding>,
+  ledger: ReadonlyArray<Finding> = [],
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const run = runOf(dir);
+    const counted = yield* fs.readFileString(`${dir}/${FINDINGS_NEXT}`).pipe(
+      Effect.orElseSucceed(() => "0"),
+      Effect.map((text) => Number(Str.trim(text)) || 0),
+    );
+    const earlier = [...(yield* findingsIn(dir)), ...ledger];
+    const { written, handed } = withIds(run, earlier, findings, counted);
+    yield* fs.writeFileString(`${dir}/${FINDINGS_FILE}`, encodeFindings(written));
+    yield* fs.writeFileString(`${dir}/${FINDINGS_NEXT}`, String(Math.max(counted, handed)));
+    return written;
+  }).pipe(Effect.orDie);
+
+// WARNING: written together: a review with no findings file is one nothing can count.
+export const leaveReview = (
+  dir: string,
+  synthesis: typeof SynthesisSchema.Type,
+  ledger: ReadonlyArray<Finding> = [],
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const findings = yield* leaveFindings(dir, synthesis.findings, ledger);
+    yield* fs.writeFileString(`${dir}/${REVIEW_FILE}`, renderReview({ ...synthesis, findings }));
+    return findings;
+  }).pipe(Effect.orDie);
+
 export const leaveOutstanding = (dir: string, outstanding: ReadonlyArray<Finding>) =>
-  FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) =>
-      fs.writeFileString(`${dir}/${FINDINGS_FILE}`, encodeFindings(outstanding)),
-    ),
-    Effect.orDie,
-  );
+  leaveFindings(dir, outstanding);
 
 export function riskLine(risks: string) {
   const asked = Str.trim(risks);
@@ -320,10 +402,13 @@ export function riskLine(risks: string) {
 export const findingsIn = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    if (!(yield* fs.exists(`${dir}/${REVIEW_FILE}`))) {
+    if (!(yield* fs.exists(`${dir}/${FINDINGS_FILE}`))) {
       return [];
     }
-    return yield* decodeFindings(yield* fs.readFileString(`${dir}/${FINDINGS_FILE}`));
+    return findingByPosition(
+      runOf(dir),
+      yield* decodeFindings(yield* fs.readFileString(`${dir}/${FINDINGS_FILE}`)),
+    );
   }).pipe(Effect.orElseSucceed(() => []));
 
 export const openFindingsIn = (dir: string) =>
@@ -471,6 +556,35 @@ export function parseFindings(raw: YamlValue | undefined, where: string) {
     }
     if (isString(item.detail)) {
       finding.detail = item.detail;
+    }
+    if (item.basis !== undefined) {
+      if (item.basis !== "fact" && item.basis !== "inference") {
+        const returned: Parsed<Array<Finding>> = {
+          ok: false,
+          error: `${where}[${index}].basis must be fact or inference`,
+        };
+        return returned;
+      }
+      finding.basis = item.basis;
+    }
+    if (isString(item.evidence)) {
+      finding.evidence = item.evidence;
+    }
+    if (item.suggested !== undefined) {
+      if (
+        item.suggested !== "fix" &&
+        item.suggested !== "ticket" &&
+        item.suggested !== "investigate" &&
+        item.suggested !== "plan" &&
+        item.suggested !== "none"
+      ) {
+        const returned: Parsed<Array<Finding>> = {
+          ok: false,
+          error: `${where}[${index}].suggested must be fix, ticket, investigate, plan or none`,
+        };
+        return returned;
+      }
+      finding.suggested = item.suggested;
     }
     if (item.internal !== undefined) {
       if (!isBoolean(item.internal)) {
@@ -1035,8 +1149,18 @@ function reviewBullet(finding: Finding) {
   );
   const detail = text ? `\n  ${pipe(text, Str.replaceAll(/\s*\n\s*/g, " "))}` : "";
   const identity = finding.id ? `${finding.id}: ${finding.status ?? "open"} — ` : "";
-  return `- ${identity}${at}${Str.trim(finding.title)}${detail}`;
+  return `- ${identity}${at}${Str.trim(finding.title)}${detail}${findingTraits(finding)}`;
 }
+
+const findingTraits = (finding: Finding) => {
+  const traits = [
+    finding.basis === undefined ? "" : `basis: ${finding.basis}`,
+    finding.evidence === undefined ? "" : `evidence: ${Str.trim(finding.evidence)}`,
+    finding.suggested === undefined ? "" : `suggested: ${finding.suggested}`,
+  ];
+  const lines = Arr.filter(traits, (one) => one !== "");
+  return lines.length === 0 ? "" : `\n  ${Arr.join(lines, "; ")}`;
+};
 
 export interface Split {
   live: Array<Finding>;
@@ -1132,7 +1256,7 @@ export function formatFindings(findings: ReadonlyArray<Finding>) {
         ? `\n  answers your dispute: ${pipe(f.rebuttal, Str.replaceAll("\n", "\n  "))}`
         : "";
       const identity = f.id ? `${f.id}: ${f.status ?? "open"} — ` : "";
-      return `- ${identity}[${f.severity}] ${f.title}${at}${detail}${rebuttal}`;
+      return `- ${identity}[${f.severity}] ${f.title}${at}${detail}${rebuttal}${findingTraits(f)}`;
     }),
     "\n",
   );

@@ -46,7 +46,8 @@ const PHRASES: ReadonlyArray<{ readonly pattern: RegExp; readonly reason: string
     ),
     reason: "is a collie command",
   },
-  { pattern: /\brun-[0-9a-f]{8}(?:\.[\w.-]+)?/g, reason: "is a Run id" },
+  // WARNING: a finding's id is its Run's with -F<n>, and a review's note names the findings it reports.
+  { pattern: /\brun-[0-9a-f]{8}(?:\.[\w.-]+)?(?!-F\d+\b)/g, reason: "is a Run id" },
   { pattern: /\b(?:[Tt]his|[Tt]he|[Aa]) Run\b/g, reason: "names a Run" },
   { pattern: /\btautolog\w*/gi, reason: "is Collie's review vocabulary" },
   { pattern: /\breview-step\b/gi, reason: "names a Collie step" },

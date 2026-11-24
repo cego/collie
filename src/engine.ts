@@ -2161,6 +2161,12 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     severity: string;
     title: string;
     detail?: string;
+    /** Whether the finding was seen or reasoned to. */
+    basis?: "fact" | "inference";
+    /** What shows it, in the finder's own words. */
+    evidence?: string;
+    /** What the finder would do about it. */
+    suggested?: "fix" | "ticket" | "investigate" | "plan" | "none";
     internal?: boolean;
     /** A reviewer's answer to the implementer's reason for disputing this finding. */
     rebuttal?: string;
@@ -2288,6 +2294,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export function isBlocking(finding: Finding): boolean;
   export function findingKey(finding: Pick<Finding, "file" | "title">): string;
   export function sameFinding(left: Finding, right: Finding): boolean;
+  /** One finding is another's by the id both give, or by the place and title they share. */
+  export function isSameFinding(earlier: Finding, finding: Finding): boolean;
   export function blockingKeys(findings: ReadonlyArray<Finding>): string[];
   /** Whether a blocking finding says where and why, so it can be acted on. */
   export function substantiated(finding: Finding): boolean;
@@ -2343,16 +2351,26 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** The prose a human reads, and the findings a card counts, where both are looked for. */
   export const REVIEW_FILE: string;
   export const FINDINGS_FILE: string;
+  /**
+   * The one place a Run's findings are left: the ids already given are kept, and every
+   * other finding takes the next free \`<run>-F<n>\`, never one a removed finding had.
+   */
+  export function leaveFindings(
+    dir: string,
+    findings: ReadonlyArray<Finding>,
+    ledger?: ReadonlyArray<Finding>,
+  ): Effect.Effect<ReadonlyArray<Finding>, never, FileSystem.FileSystem>;
   export function leaveReview(
     dir: string,
     synthesis: SynthesisReport,
-  ): Effect.Effect<void, never, FileSystem.FileSystem>;
+    ledger?: ReadonlyArray<Finding>,
+  ): Effect.Effect<ReadonlyArray<Finding>, never, FileSystem.FileSystem>;
 
   /** The findings still standing after a last fix settleFinalFix accepted; the prose stays. */
   export function leaveOutstanding(
     dir: string,
     outstanding: ReadonlyArray<Finding>,
-  ): Effect.Effect<void, never, FileSystem.FileSystem>;
+  ): Effect.Effect<ReadonlyArray<Finding>, never, FileSystem.FileSystem>;
 
   /** The findings of the review the Run that owns this directory left, or none. */
   export function findingsIn(

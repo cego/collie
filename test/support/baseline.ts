@@ -2590,7 +2590,12 @@ for (const name of ["gitlab", "github"] as const) {
               sourceBranch: "feature",
             })),
           });
-          const finding = { id: "F1", severity: "major", file: "src/old.ts", title: "guard input" };
+          const finding = {
+            id: `r-dispute-id-${name}-F1`,
+            severity: "major",
+            file: "src/old.ts",
+            title: "guard input",
+          };
           yield* rig.queueOutputs([
             { ...SYNTHESIS, findings: [finding] },
             {
@@ -2677,8 +2682,8 @@ for (const name of ["gitlab", "github"] as const) {
                 expect(status.status).not.toBe("failed");
                 expect(optionsOf(rows, "post-2")).toContain("Post");
                 expect(yield* findingsIn(runDir(dir, runId))).toMatchObject([
-                  { id: `${runId}-F3`, title: "close handle", status: "open" },
-                  { id: `${runId}-F2`, title: "check response", status: "open" },
+                  { id: `${runId}-F2`, title: "close handle", status: "open" },
+                  { id: `${runId}-F3`, title: "check response", status: "open" },
                   { id: `${runId}-F1`, title: "guard input", status: "fixed" },
                 ]);
               }),
@@ -2707,7 +2712,7 @@ for (const name of ["gitlab", "github"] as const) {
             const next = `r-ledger-${name}-next`;
             const findings = [
               {
-                id: "F1",
+                id: `${first}-F1`,
                 status: "open",
                 severity: "major",
                 file: "src/a.ts",
@@ -2715,7 +2720,7 @@ for (const name of ["gitlab", "github"] as const) {
                 detail: "An empty input crashes the request.",
               },
               {
-                id: "F2",
+                id: `${first}-F2`,
                 status: "open",
                 severity: "major",
                 file: "src/b.ts",
@@ -2734,7 +2739,7 @@ for (const name of ["gitlab", "github"] as const) {
                 findings: Arr.map(findings, (one) => ({
                   ...one,
                   status:
-                    one.id === "F1"
+                    one.id === `${first}-F1`
                       ? mode === "force push"
                         ? "obsolete"
                         : mode === "unchanged" || mode === "clean start" || mode === "unposted"
@@ -2766,7 +2771,7 @@ for (const name of ["gitlab", "github"] as const) {
                 ? []
                 : [
                     {
-                      id: "F1",
+                      id: `${first}-F1`,
                       status: "open",
                       head: REVIEW_HEAD,
                       note:
@@ -2775,7 +2780,7 @@ for (const name of ["gitlab", "github"] as const) {
                           : `<!-- collie:${first} round 1 at ${REVIEW_HEAD} by tester -->`,
                     },
                     {
-                      id: "F2",
+                      id: `${first}-F2`,
                       status: "open",
                       head: REVIEW_HEAD,
                       note:
@@ -2836,8 +2841,8 @@ for (const name of ["gitlab", "github"] as const) {
             if (mode === "clean start") {
               expect(prompt).toContain("Earlier findings ledger:\n[]");
             } else {
-              expect(prompt).toContain('"id": "F1"');
-              expect(prompt).toContain('"id": "F2"');
+              expect(prompt).toContain(`"id": "${first}-F1"`);
+              expect(prompt).toContain(`"id": "${first}-F2"`);
               expect(prompt).toContain('"status": "open"');
             }
             if (mode === "force push") {
@@ -2867,15 +2872,19 @@ for (const name of ["gitlab", "github"] as const) {
               expect(notes[0]).toContain("The unchanged handle leaks after every request.");
               expect(notes[0]).toContain(`<!-- collie:${next} round 1 at ${head} by tester -->`);
             } else if (mode === "clean start") {
-              expect(notes[1]).toContain("F1: open");
+              expect(notes[1]).toContain(`${next}-F1: open`);
               expect(notes[1]).toContain("An empty input crashes the request.");
             } else if (mode !== "unchanged") {
-              expect(notes[1]).toContain(mode === "force push" ? "F1: obsolete" : "F1: fixed");
-              expect(notes[1]).toContain(mode === "resolved" ? "F2: obsolete" : "F2: still open");
+              expect(notes[1]).toContain(
+                mode === "force push" ? `${first}-F1: obsolete` : `${first}-F1: fixed`,
+              );
+              expect(notes[1]).toContain(
+                mode === "resolved" ? `${first}-F2: obsolete` : `${first}-F2: still open`,
+              );
               expect(notes[1]).not.toContain("The unchanged handle leaks");
               expect(notes[1]).not.toContain("close the handle");
               if (mode === "force push") {
-                expect(notes[1]).not.toContain("F1: fixed");
+                expect(notes[1]).not.toContain(`${first}-F1: fixed`);
               }
               if (mode === "resolved") {
                 expect(notes[1]).toContain(`all findings fixed at \`${head}\``);
@@ -9266,6 +9275,43 @@ scenario("a review module's own directory is a review to build from, not a wall 
       expect(building).toContain(`\`${reviewed}/review.md\` is the spec`);
     }),
   ),
+);
+
+scenario(
+  "an investigate module's own directory is findings to build from, and no review's branch",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const fs = yield* FileSystem.FileSystem;
+        const found = `${rig.root}/investigated`;
+        yield* fs.makeDirectory(found, { recursive: true });
+        yield* fs.writeFileString(
+          `${found}/investigation.md`,
+          "# Investigation\n\nThe guard is wrong.\n",
+        );
+        yield* fs.writeFileString(
+          `${found}/findings.json`,
+          asJson([{ id: "r-investigate-F1", severity: "major", title: "the guard" }]),
+        );
+        yield* approve("r-impl-findings", ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+
+        yield* ran({
+          entry: shipped("implement"),
+          runId: "r-impl-findings",
+          input: { plan: found, ...FINISH },
+        });
+        yield* bin.restore();
+
+        const building = yield* asked("r-impl-findings", "build");
+        expect(building).toContain(`Work source (findings): ${found}`);
+        expect(building).toContain(`\`${found}/findings.json\` is what it found`);
+        expect(building).not.toContain("fixes land on the branch that was reviewed");
+      }),
+    ),
 );
 
 scenario(

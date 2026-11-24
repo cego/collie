@@ -25,7 +25,7 @@ export interface PickItem {
   subtitle?: string;
 }
 
-export type WorkSourceKind = "plan-dir" | "linear" | "text" | "review" | "followup";
+export type WorkSourceKind = "plan-dir" | "linear" | "text" | "review" | "findings" | "followup";
 
 export { targetKind, type TargetKind };
 
@@ -561,6 +561,10 @@ export function classifyWorkSource(typed: string) {
       return { kind: "review", value: text, source, label: textLabel(path.basename(text)) };
     }
 
+    if (yield* isFindingsDir(text)) {
+      return { kind: "findings", value: text, source, label: textLabel(path.basename(text)) };
+    }
+
     if (yield* isPlanDir(text)) {
       return { kind: "plan-dir", value: text, source, label: textLabel(path.basename(text)) };
     }
@@ -580,6 +584,17 @@ function isReviewRun(dir: string) {
         (yield* fs.exists(path.join(dir, REVIEW_FILE))) &&
         (yield* fs.exists(path.join(dir, FINDINGS_FILE)))
       );
+    });
+  return returned;
+}
+
+// WARNING: any Run directory with findings is work to build, whatever report sits beside them.
+function isFindingsDir(dir: string) {
+  const returned: Effect.Effect<boolean, PlatformError, FileSystem.FileSystem | Path.Path> =
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      return dir !== "" && (yield* fs.exists(path.join(dir, FINDINGS_FILE)));
     });
   return returned;
 }

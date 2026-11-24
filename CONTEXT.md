@@ -61,8 +61,12 @@ working or blocked does not pause that deadline while its server remains unhealt
 A health park keeps collecting usable Output. Recovery requires proof that the
 owned predecessor is Quiet and preserves unresolved Delivery receipts.
 
-**Finding status** — `open`, `fixed`, `disputed` or `obsolete`, for one finding with a stable
-id, anchored to the head it was judged at and the note that posted it.
+**Finding status** — What became of one finding, by its id: `open`, `fixed`, `disputed`
+or `obsolete` as the rally judged it, anchored to the head it was judged at and the note
+that posted it; or, set through the host by a human or an agent, `dismissed` with a reason
+or `taken` by the Selecting offer and the Run it started, or back to `open`. The latest one
+counts. A finding is open while its status is `open` or `disputed`
+(ADR-draft-a-findings-fate-is-set-beside-it).
 
 **Herd** — One herdr-core session: every terminal in it. The scope of the board, the
 conversation, proposals, the budget and elections. Keyed by the canonical path of core's
@@ -814,6 +818,19 @@ not one: a **Stage Run** asks for no Go, because its rollback takes it back.
 
 **Public text** — What Collie sends outside Collie in the human's name: MR/PR notes, replies, titles and descriptions, commit messages, and issue comments outside Collie's own repository. It reads as the human's, for that repository's audience. It never names Collie, a Run, a step, an agent, a card or a `collie` command, and never states a rule only Collie's process has. The host checks it before sending it, and marks Collie's own posts only with a hidden HTML comment ([ADR-draft-public-text-reads-as-the-humans](docs/adr/draft-public-text-reads-as-the-humans.md)).
 
+**Finding** — One thing a review, an investigation, an architecture pass or an implement
+rally left for a human: a severity, a title and, optionally, a place, detail, `basis`
+(`fact` or `inference`), `evidence` and `suggested` (`fix`, `ticket`, `investigate`,
+`plan` or `none`). A Run's findings are its `findings.json`, beside the report a human
+reads. Collie gives each the id `<run>-F<n>` when it is left, and a finding keeps its id
+across rewrites (ADR-draft-a-findings-fate-is-set-beside-it).
+
+**Selecting offer** — An Offer that acts on a Run's chosen findings: `many` (Improve,
+Implement selected) or `one` (Investigate further, Plan this, File to Linear). The caller
+names the ids, the child is given only those, and each is then `taken` by it. A settled
+Run waits on a human while it has an open finding and an eligible `many` offer
+(ADR-draft-a-findings-fate-is-set-beside-it).
+
 **Disputed** — A finding the implementer declined, with its reason. The reviewers are shown the reason, and a disputed finding no longer drives the loop, so the Run converges and the human decides. A reviewer who can answer the reason raises it again with a `rebuttal`, which puts the finding back in front of the implementer.
 
 ## Baseline Workflows
@@ -829,7 +846,12 @@ What each is for, what it needs, and how they chain: `docs/workflows.md`.
 - `renovate` — claims the repository in Helle, merges or accounts for every Renovate Bot merge request, tags and watches the release, and records the result on the team's Renovate issue.
 - `general` — one agent does one ad-hoc task in place, in the checkout it was started for or at the Projects root, and the Run ends with the agent's summary. It is for whatever is not planning, building to a merge request, reviewing, renovating or surveying architecture. Work that should land as a merge request is `implement`'s (ADR-0056).
 
-- `investigate` — one investigator reproduces a goal on its Machine, returns findings and closes after its host reports to the requester.
+- `investigate` — one investigator reproduces a goal on its Machine, writes
+  `investigation.md` (the answer first, then the cause, then the findings) and
+  `findings.json`, and closes after its host reports to the requester. Its card waits on a
+  human while a finding is open.
+- `file-issue` — one agent files one finding to Linear through its Linear MCP and returns
+  the issue it made.
 
 **Requester** — The agent Actor that started a Run, recorded as `requestedBy`: its Run, agent and Machine. Once the started Run settles, its host reports its status, summary or failure and where its full Output is to that address. The report records delivery or why it could not be delivered, without queuing later delivery. A Workflow declaring `closes: "reported"` then closes its own agents and its Task workspace when nothing else needs it.
 
