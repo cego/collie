@@ -10992,12 +10992,18 @@ const makeRegistry: (
       };
       const chosen =
         offer.selects === undefined ? [] : yield* chosenFor(offer, given.findings, where);
+      const selecting = Arr.filter(
+        Rec.toEntries(offer.inputs),
+        ([, source]) => source === "findings",
+      );
       const filled: Record<string, Schema.Json> = Rec.filter(
         given,
-        (_, name) => name !== "findings" || offer.inputs.findings === "findings",
+        (_, name) => name !== "findings" && !Arr.some(selecting, ([field]) => field === name),
       );
-      if (chosen.length > 0 && offer.inputs.findings === "findings") {
-        filled.findings = chosen;
+      if (chosen.length > 0) {
+        for (const [name] of selecting) {
+          filled[name] = chosen;
+        }
       }
       for (const [name, source] of Rec.toEntries(offer.inputs)) {
         const text = source === "finding" ? yield* findingFor(where, chosen[0] ?? "") : undefined;

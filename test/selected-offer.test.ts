@@ -94,7 +94,7 @@ const install = (world: {
 const started = (
   state: string,
   project: string,
-  id: "investigate" | "submits",
+  id: string,
   input: Readonly<Record<string, Schema.Json>>,
   options?: Readonly<Record<string, string>>,
 ) =>
@@ -516,6 +516,29 @@ test("Investigate further starts an investigate Run told the one finding it was 
         ]);
       }),
     [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
+  ));
+
+test("an offer that names its selection something else launches with the ids chosen", () =>
+  hosted(
+    "hw-choose-selected-",
+    ({ world }) =>
+      Effect.gen(function* () {
+        yield* install(world);
+        const run = yield* started(world.state, world.project, "chooses", { note: "two" });
+        const [first, second] = idsOf(run.id);
+        const child = yield* run.client
+          .invoke({
+            runId: run.id,
+            offer: "choose-selected",
+            input: { findings: [first, second] },
+            request: "choose-given",
+          })
+          .pipe(Effect.orDie);
+        expect(
+          (yield* run.client.run({ runId: child.runId }).pipe(Effect.orDie))?.input,
+        ).toMatchObject({ selected: [first, second] });
+      }),
+    [...MODULES, "chooses.workflow.ts", "given.workflow.ts"],
   ));
 
 const filed = { identifier: "CEGO-12", url: "https://linear.app/cego/issue/CEGO-12/one-issue" };
