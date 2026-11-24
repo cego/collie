@@ -860,7 +860,7 @@ test.skipIf(process.platform !== "linux")(
         const written = yield* hostRecords(
           `${removed.state}.gone`,
           readVerifications(evidenceDir(`${removed.state}.gone`, removed.runId)),
-        ).pipe(Effect.orElseSucceed(() => []));
+        ).pipe(Effect.orDie);
         expect(Arr.filter(written, (one) => one.name === "held")).toEqual([]);
 
         const outlived = yield* watchable;
@@ -1645,6 +1645,38 @@ test("a live owner that has not said which build it is is left alone rather than
       yield* fs.writeFileString(
         `${state}/host.lock`,
         `{"pid":${owner.pid},"start":${stringifyJson(yield* startedOf(owner.pid))}}\n`,
+      );
+
+      const refused = yield* restartHost(state).pipe(
+        (effect) => fastForward(effect, 5),
+        Effect.flip,
+      );
+      if (refused._tag !== "HostUnavailable") {
+        throw new Error(`restarted, or refused with ${refused._tag}`);
+      }
+      expect(refused.reason).toContain(`pid ${owner.pid} owns the directory`);
+      expect(yield* signalProcess(owner.pid)).toBe(true);
+      expect((yield* ownerOf(state))?.pid).toBe(owner.pid);
+    }),
+  ));
+
+test("a record left by the owner whose pid this one took is not read as this owner's", () =>
+  proves(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { state } = yield* workspace("collie-host-reused-pid-");
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const owner = yield* spawner.spawn(
+        ChildProcess.make("sleep", ["30"], { stdout: "ignore", stderr: "ignore" }),
+      );
+      yield* Effect.addFinalizer(() => signalProcess(owner.pid, "SIGKILL"));
+      yield* fs.writeFileString(
+        `${state}/host.lock`,
+        `{"pid":${owner.pid},"start":${stringifyJson(yield* startedOf(owner.pid))}}\n`,
+      );
+      yield* fs.writeFileString(
+        `${state}/host.build`,
+        `{"pid":${owner.pid},"build":${stringifyJson(OLDER)},"root":${stringifyJson(root)},"started":"0"}\n`,
       );
 
       const refused = yield* restartHost(state).pipe(

@@ -356,6 +356,8 @@ const HostRecord = Schema.fromJsonString(
     build: Schema.String,
     root: Schema.String,
     herd: Schema.optionalKey(Schema.NullOr(Schema.String)),
+    // WARNING: A pid is reused; the start token is what tells this owner's record from the last one's.
+    started: Schema.optionalKey(Schema.NullOr(Schema.String)),
   }),
 );
 const encodeRecord = Schemaflow(Schema.encodeResult(HostRecord), Result.getOrThrow);
@@ -4981,10 +4983,11 @@ const own = (
     yield* fs.remove(socketOf(dir), { force: true }).pipe(Effect.orDie);
     yield* Effect.addFinalizer(() => fs.remove(socketOf(dir), { force: true }).pipe(Effect.ignore));
     const pid = yield* currentPid;
+    const started = yield* processStarted(pid);
     const record = (herd: string | null) =>
       fs.writeFileString(
         recordOf(dir),
-        encodeRecord({ pid, build: BUILD, root: env.pluginRoot, herd }),
+        encodeRecord({ pid, build: BUILD, root: env.pluginRoot, herd, started }),
       );
     const herdSocket = yield* coreSocket(env.raw);
     yield* record(herdSocket).pipe(Effect.orDie);
@@ -5205,7 +5208,7 @@ export const restartHost = Effect.fn("Host.restart")(function* (
       Option.match(answered, {
         onNone: () => null,
         onSome: (who) => ({ build: who.build, root: who.root }),
-      }) ?? (yield* recordedOwnerWithin(dir, owner.pid));
+      }) ?? (yield* recordedOwnerWithin(dir, owner));
     before = { pid: owner.pid, build: seen?.build ?? null };
     if (seen === null) {
       return yield* unavailable(
@@ -5522,19 +5525,23 @@ const REACH_TIMEOUT = Duration.sum(
   Duration.fromInputUnsafe(ASK_TIMEOUT),
 );
 
-const recordedOwnerOf = Effect.fn("Host.recordedOwner")(function* (dir: string, pid: number) {
+const recordedOwnerOf = Effect.fn("Host.recordedOwner")(function* (dir: string, owner: LockHolder) {
   const fs = yield* FileSystem.FileSystem;
   const recorded = yield* fs
     .readFileString(recordOf(dir))
     .pipe(Effect.flatMap(Schema.decodeUnknownEffect(HostRecord)), Effect.option);
-  return Option.isSome(recorded) && recorded.value.pid === pid
-    ? { build: recorded.value.build, root: recorded.value.root }
-    : null;
+  if (Option.isNone(recorded)) {
+    return null;
+  }
+  const { pid, build, root, started } = recorded.value;
+  const ours =
+    pid === owner.pid && (started === undefined || started === null || started === owner.start);
+  return ours ? { build, root } : null;
 });
 
 // WARNING: A successor takes the lock before it writes its record, and may already have adopted a check.
-const recordedOwnerWithin = (dir: string, pid: number) =>
-  recordedOwnerOf(dir, pid).pipe(
+const recordedOwnerWithin = (dir: string, owner: LockHolder) =>
+  recordedOwnerOf(dir, owner).pipe(
     Effect.repeat({
       until: (seen) => seen !== null,
       schedule: Schedule.spaced("100 millis"),
@@ -5557,7 +5564,7 @@ const ensureRunning = Effect.fn("Host.ensureRunning")(function* (
     return first.success;
   }
   const owner = yield* liveOwner(dir);
-  const silent = owner === null ? null : yield* recordedOwnerOf(dir, owner.pid);
+  const silent = owner === null ? null : yield* recordedOwnerOf(dir, owner);
   if (owner !== null && silent !== null) {
     if (newer(silent.build, build)) {
       return yield* new HostVersionMismatch({

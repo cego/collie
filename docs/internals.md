@@ -64,10 +64,12 @@ asked a host to stop kills it five seconds after its grace. A host that does not
 is within five seconds is replaced too when `host.build`, which it writes as it starts,
 names an older build of the same installation; a newer one is refused as above; otherwise
 the client reports it as
-`HostUnavailable` with its pid. A client is not signalled before the owner has said which
-build it is: a successor holds the lock before it writes `host.build`, so the client waits
-for that record up to five seconds and then reports `HostUnavailable` rather than end a
-check the successor may already have adopted. That host is asked for the same handover
+`HostUnavailable` with its pid. No host is signalled before it has said which build it is: a
+successor holds the lock before it writes `host.build`, so the client waits up to five
+seconds for that record and signals nothing if it never comes, reporting `HostUnavailable`
+rather than end a check the successor may already have adopted. One that arrives in the wait
+is judged as any other. The record names the pid, the start token, the build and the
+installation it serves, because a pid alone is reused. That host is asked for the same handover
 before it is
 signalled: one too slow to answer still hears its signal and hands its checks over, and one
 that never hears it is killed and hands over nothing.

@@ -3167,8 +3167,10 @@ A check the host does not supervise, such as a measurement's, is ended by any st
 again. One a host left without ending it, because it was killed or crashed, is ended by the
 next host to start, named in the Run's log, and runs once more. A restart asked for by a
 client older than the host is refused, naming the build the host runs, and changes nothing. It
-signals nothing while an owner has not said which build it is: it waits for `host.build` and
-then reports `HostUnavailable` with the owner's pid.
+signals nothing while an owner has not said which build it is: it waits up to five seconds
+for `host.build`, and reports `HostUnavailable` with the owner's pid if that record never
+names it — one that arrives in the wait is judged by the version and installation rules like
+any other.
 
 `host rollback` is for going back to an older build. A Run's own records, such as its
 Steps, its audit trail, its Intent and its steering cards, are rows in the state
@@ -3435,8 +3437,9 @@ must honour: it ends the running check, and the older build serves until a clien
 build replaces it again. A client of another
 installation is told the installation that host serves and to point `COLLIE_STATE_DIR` at a
 directory of its own, and sends nothing else; the host's build is in the refusal's
-`data.host`. A host there that does not answer has published no build to name, and it is
-`HostUnavailable` with whether anything owns the directory. That includes a checkout under
+`data.host`. A host of another installation that does not answer is `HostUnavailable` with
+whether anything owns the directory: only this installation's host is replaced on what it
+recorded, so a silent older one elsewhere is left running. That includes a checkout under
 development, which is pointed
 at a state directory of its own rather than replacing the installed host. Such a
 checkout's host also says `development: "<version>+<sha>"`; a release's does not.
