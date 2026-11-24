@@ -665,7 +665,7 @@ for (const evidence of ["no-submit", "another-delivery", "another-incarnation"] 
               Effect.map((rows) => Arr.filter(rows, (one) => one.cause.kind === "steer")),
               Effect.orElseSucceed(() => []),
             ),
-          (rows) => rows.some((one) => one.state === "unknown"),
+          (rows) => Arr.some(rows, (one) => one.state === "unknown"),
         ).pipe(Effect.map((rows) => Arr.findFirst(rows, (one) => one.state === "unknown")));
         core.restore("terminal.send");
         const delivery = Option.getOrThrow(lost);
