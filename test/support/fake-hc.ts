@@ -275,13 +275,10 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
           Effect.flatMap(({ status, owed, hand, submit }) =>
             Effect.gen(function* () {
               terminal.hand = hand;
-              yield* setStatus(terminal, status);
               if (submit !== null) {
-                yield* Effect.forkIn(
-                  handIn(submit).pipe(Effect.provideContext(services), Effect.orDie),
-                  scope,
-                );
+                yield* handIn(submit).pipe(Effect.provideContext(services), Effect.orDie);
               }
+              yield* setStatus(terminal, status);
               if (owed === undefined) {
                 return;
               }

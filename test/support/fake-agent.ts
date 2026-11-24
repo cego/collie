@@ -111,10 +111,8 @@ export const handIn = ({ server, output, at }: HandIn) => {
               Effect.gen(function* () {
                 const client = yield* connect(stateDir);
                 yield* client.declare({ frontDoor: "agent", from: { run, agent } });
-                return yield* client
-                  .submitOutput({ runId: run, output })
-                  .pipe(Effect.orElseSucceed(() => ""));
-              }),
+                return yield* client.submitOutput({ runId: run, output });
+              }).pipe(Effect.orElseSucceed(() => "")),
             ),
           ),
         )
@@ -194,7 +192,7 @@ const answerFrom = Effect.fn("fakeAgent.answer")(function* (
         Option.isSome(plain) ? plain.value : encodeJson(output),
       );
     } else if (server !== null) {
-      // WARNING: The caller forks the submit: a host that waits for the turn to end before collecting would never register the step.
+      // WARNING: The caller submits it before reporting the turn over, so what it wrote is there when the host reads.
       submit = { server, output, at: outputPath };
     }
   }

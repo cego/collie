@@ -1028,6 +1028,8 @@ export const agentWork: <
           yield* haltLate;
           return yield* Workflow.suspend(instance);
         }
+        // WARNING: before its prompt, so an agent that submits as it finishes is not told no step is waiting.
+        yield* awaitOutput(runId, launched.agent, launched.output, problemIn);
         return launched;
       });
     const handOverFrom = (outgoing: Launched, transcript: string | null) =>

@@ -9360,6 +9360,30 @@ test("a plain-text step is submitted with collie_submit, and its result is that 
     }),
   ));
 
+test("a submit that lands while its agent still works is taken, and the step ends on it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const held = enveloped({ name: "held-work", input: {}, success: Schema.String });
+      const body = held.toLayer((payload) =>
+        agentWork({ operation: "held", instructions: "Say it." }).pipe(asRun(payload)),
+      );
+      yield* rig.queueOutputs([{ writes: [], output: "while it worked", owed: true }]);
+      const result = yield* held
+        .execute({ runId: "r1", input: {} })
+        .pipe(
+          Effect.result,
+          Effect.provide(
+            body.pipe(
+              Layer.provideMerge(agentsLayer(hostOf())),
+              Layer.provideMerge(foundationLayer({ dir })),
+            ),
+          ),
+          Effect.scoped,
+        );
+      expect(result).toMatchObject({ _tag: "Success", success: "while it worked" });
+    }),
+  ));
+
 test.each(["all", "role"])(
   "under role_tools: %s a pi launch's written tools.ts offers collie_submit",
   (roleTools) =>
