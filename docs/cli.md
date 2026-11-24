@@ -1526,7 +1526,9 @@ collie --json run drift <run-id>
 What this run has drifted from, and the evidence for each. Two kinds, and the difference
 matters: a **rule** constraint is one Collie checks itself — which paths changed, which
 branch, which exit code — with no model involved at all; a **semantic** one is judged, and
-judged against a capped diff of the files it names rather than a summary of them.
+judged against the diff of the files it names rather than a summary of them, in batches of
+at most 20 files and Outputs each. Only a file too long for the cap on its own leaves the
+judgement truncated, and the finish says which one.
 
 A rule check never passes on an absence. A `command_exit` rule whose verification nobody
 ran is a breach, not a pass; so is an `output_field` rule against a step that wrote

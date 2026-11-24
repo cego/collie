@@ -659,7 +659,7 @@ test("a Run that finishes with a semantic constraint asks for its one judgement"
     }),
   ));
 
-test("a branch past the cap is judged once, at the finish, and each boundary says so", () =>
+test("a branch past the item cap is judged at every boundary too, in batches each fitting it", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -687,9 +687,10 @@ test("a branch past the cap is judged once, at the finish, and each boundary say
         { socketPath: `${rig.root}/herd.sock`, pluginRoot: rig.root },
       );
       const asked = yield* fs.readFileString(calls).pipe(Effect.orElseSucceed(() => ""));
-      expect(Arr.filter(Str.split(asked, "\n"), (line) => line === "asked")).toHaveLength(1);
+      expect(Arr.filter(Str.split(asked, "\n"), (line) => line === "asked")).toHaveLength(8);
       const log = yield* fs.readFileString(`${runDir(dir, "r1")}/log.txt`);
-      expect(log).toContain("not judged at build-2: evidence past the cap; judged at the finish");
+      expect(log).not.toContain("not judged at");
+      expect(log).toContain("judged 1 semantic constraint(s) at ");
     }),
   ));
 

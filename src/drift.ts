@@ -328,10 +328,7 @@ export const evidenceFor = Effect.fn("Drift.evidenceFor")(function* (
         "\n",
       );
   const blocks = splitDiff(diff);
-  return {
-    blocks: blocks.slice(0, MAX_FILES),
-    truncated: blocks.length > MAX_FILES || Arr.some(blocks, (block) => block.truncated),
-  };
+  return { blocks, truncated: Arr.some(blocks, (block) => block.truncated) };
 });
 
 export function splitDiff(diff: string) {
@@ -371,6 +368,7 @@ export function splitDiff(diff: string) {
 export interface ShownOutput {
   readonly operation: string;
   readonly text: string;
+  readonly truncated: boolean;
 }
 
 const NOT_OUTPUTS = [".launch.json", ".mcp.json", ".settings.json"];
@@ -389,8 +387,8 @@ export const outputsIn = Effect.fn("Drift.outputsIn")(function* (agentsDir: stri
       pipe(name, Str.endsWith(".json")) &&
       !Arr.some(NOT_OUTPUTS, (not) => pipe(name, Str.endsWith(not))),
   ).sort();
-  const outputs: Array<ShownOutput & { readonly truncated: boolean }> = [];
-  for (const name of names.slice(0, MAX_FILES)) {
+  const outputs: Array<ShownOutput> = [];
+  for (const name of names) {
     const operation = pipe(name, Str.slice(0, -".json".length));
     if (looksSecret(name)) {
       outputs.push({ operation, text: "<redacted>", truncated: false });
@@ -408,11 +406,44 @@ export const outputsIn = Effect.fn("Drift.outputsIn")(function* (agentsDir: stri
       truncated: lines.length > MAX_LINES_PER_FILE,
     });
   }
-  return {
-    outputs: Arr.map(outputs, ({ operation, text }) => ({ operation, text })),
-    truncated: names.length > MAX_FILES || Arr.some(outputs, (one) => one.truncated),
-  };
+  return { outputs, truncated: Arr.some(outputs, (one) => one.truncated) };
 });
+
+export interface Batch {
+  readonly at: number;
+  readonly blocks: ReadonlyArray<EvidenceBlock>;
+  readonly outputs: ReadonlyArray<ShownOutput>;
+}
+
+// WARNING: an item is never split across batches; only one longer than the line cap is cut.
+export function batchesOf(
+  blocks: ReadonlyArray<EvidenceBlock>,
+  outputs: ReadonlyArray<ShownOutput>,
+) {
+  const count = blocks.length + outputs.length;
+  const batches: Array<Batch> = [];
+  for (let at = 0; at < count; at += MAX_FILES) {
+    const to = Math.min(at + MAX_FILES, count);
+    batches.push({
+      at: batches.length + 1,
+      blocks: blocks.slice(at, Math.min(to, blocks.length)),
+      outputs: outputs.slice(Math.max(0, at - blocks.length), Math.max(0, to - blocks.length)),
+    });
+  }
+  return batches;
+}
+
+const outputName = (output: ShownOutput) => `output ${output.operation}`;
+
+const cutIn = (blocks: ReadonlyArray<EvidenceBlock>, outputs: ReadonlyArray<ShownOutput>) => [
+  ...Arr.flatMap(blocks, (block) => (block.truncated ? [block.path] : [])),
+  ...Arr.flatMap(outputs, (output) => (output.truncated ? [outputName(output)] : [])),
+];
+
+const namesOf = (batch: Batch) => [
+  ...Arr.map(batch.blocks, (block) => block.path),
+  ...Arr.map(batch.outputs, outputName),
+];
 
 export function newReports(found: ReadonlyArray<DriftReport>, existing: ReadonlyArray<DriftLine>) {
   const known = new Map(
@@ -471,6 +502,7 @@ export const recordSkipped = Effect.fn("Drift.recordSkipped")(function* (
 export interface Judged {
   readonly semantic: boolean;
   readonly truncated: boolean;
+  readonly cut?: ReadonlyArray<string>;
   readonly at?: string;
 }
 
@@ -512,9 +544,20 @@ export function judgementPack(
     readonly blocks: ReadonlyArray<EvidenceBlock>;
     readonly outputs: ReadonlyArray<ShownOutput>;
     readonly truncated: boolean;
+    readonly part?: { readonly at: number; readonly of: number };
   },
 ) {
   const semantic = Arr.filter(intent.constraints, (constraint) => constraint.kind === "semantic");
+  const header =
+    evidence.part === undefined
+      ? evidence.truncated
+        ? "evidence (TRUNCATED to the cap; judge only what is here):"
+        : "evidence (the whole change):"
+      : `evidence (part ${evidence.part.at} of ${evidence.part.of} of the change${
+          evidence.truncated
+            ? ", TRUNCATED where an item passes the cap; judge only what is here"
+            : ""
+        }):`;
   return Arr.join(
     Arr.filter(
       [
@@ -530,9 +573,7 @@ export function judgementPack(
           (constraint) => `- ${constraint.id} (${constraint.severity}): ${constraint.text}`,
         ),
         "",
-        evidence.truncated
-          ? "evidence (TRUNCATED to the cap; judge only what is here):"
-          : "evidence (the whole change):",
+        header,
         ...Arr.map(evidence.blocks, (block) => `--- ${block.path}\n${block.diff}`),
         ...Arr.map(evidence.outputs, (output) => `--- output ${output.operation}\n${output.text}`),
         evidence.blocks.length === 0 && evidence.outputs.length === 0
@@ -668,58 +709,73 @@ export const judge = Effect.fn("Drift.judge")(function* (
     what.agentsDir === undefined
       ? { outputs: [], truncated: false }
       : yield* outputsIn(what.agentsDir);
-  const evidence = {
-    blocks: diff.blocks,
-    outputs: shown.outputs,
-    truncated: diff.truncated || shown.truncated,
-  };
+  const evidence = { blocks: diff.blocks, outputs: shown.outputs };
   // WARNING: a report must cite shown work, so with none the call could find nothing.
   if (evidence.blocks.length === 0 && evidence.outputs.length === 0) {
     yield* recordSkipped(what.runDir, intent.run, unread ?? "no change to judge");
     return NOTHING;
   }
-  if (evidence.truncated && what.boundary !== undefined) {
-    yield* deps.log(`not judged at ${what.boundary}: evidence past the cap; judged at the finish`);
-    return NOTHING;
-  }
 
-  const asked = yield* askJudgement(deps, intent.run, judgementPack(intent, evidence));
-  if (asked.refused !== null) {
-    yield* recordSkipped(what.runDir, intent.run, asked.refused);
-    return NOTHING;
-  }
-
+  const batches = batchesOf(evidence.blocks, evidence.outputs);
   const known = new Set(Arr.map(semantic, (constraint) => constraint.id));
-  const cited = citedIn(
-    {
-      files: Arr.map(evidence.blocks, (block) => block.path),
-      outputs: Arr.map(evidence.outputs, (output) => output.operation),
-    },
-    what.worktree,
-  );
-  const reports = Arr.map(
-    Arr.filter(
+  const reports: Array<DriftReport> = [];
+  let whole = true;
+  for (const batch of batches) {
+    const batchCut = cutIn(batch.blocks, batch.outputs);
+    const asked = yield* askJudgement(
+      deps,
+      intent.run,
+      judgementPack(intent, {
+        blocks: batch.blocks,
+        outputs: batch.outputs,
+        truncated: batchCut.length > 0,
+        ...(batches.length > 1 && { part: { at: batch.at, of: batches.length } }),
+      }),
+    );
+    if (asked.refused !== null) {
+      whole = false;
+      yield* recordSkipped(
+        what.runDir,
+        intent.run,
+        `${asked.refused}${batches.length === 1 ? "" : `; batch ${batch.at} of ${batches.length} (${Arr.join(namesOf(batch), ", ")}) was not judged`}`,
+      );
+      continue;
+    }
+    const cited = citedIn(
+      {
+        files: Arr.map(batch.blocks, (block) => block.path),
+        outputs: Arr.map(batch.outputs, (output) => output.operation),
+      },
+      what.worktree,
+    );
+    const found = Arr.filter(
       asked.reports,
       (report) =>
         known.has(report.constraint) && Arr.some(report.evidence, (ref) => cited(ref) !== null),
-    ),
-    (report) =>
-      judgedReport(
-        report,
-        intent,
-        what.at,
-        [what.runDir, what.worktree],
-        evidence.truncated,
-        cited,
-      ),
-  );
-  yield* deps.log(
-    `judged ${semantic.length} semantic constraint(s) at ${what.at}: ${reports.length} report(s)${
-      evidence.truncated ? ", on truncated evidence" : ""
-    }`,
-  );
+    );
+    for (const report of found) {
+      reports.push(
+        judgedReport(
+          report,
+          intent,
+          what.at,
+          [what.runDir, what.worktree],
+          batchCut.length > 0,
+          cited,
+        ),
+      );
+    }
+  }
+  const cut = cutIn(evidence.blocks, evidence.outputs);
+  if (whole) {
+    yield* deps.log(
+      `judged ${semantic.length} semantic constraint(s) at ${what.at}${
+        batches.length > 1 ? ` in ${batches.length} batch(es)` : ""
+      }: ${reports.length} report(s)${cut.length > 0 ? ", on evidence cut at the cap" : ""}`,
+    );
+  }
   return {
-    judged: { semantic: true, truncated: evidence.truncated },
+    judged: { semantic: whole, truncated: cut.length > 0, ...(cut.length > 0 && { cut }) },
     reports,
   };
 });
@@ -861,9 +917,13 @@ export function alignment(intent: Intent | null, lines: ReadonlyArray<DriftLine>
     return returned;
   }
   if (judged.truncated) {
+    const named = judged.cut ?? [];
     const returned: Alignment = {
       aligned: "unverified",
-      why: "the evidence a judgement saw was truncated",
+      why:
+        named.length === 0
+          ? "the evidence a judgement saw was truncated"
+          : `the evidence was cut at the cap: ${Arr.join(named, ", ")}`,
     };
     return returned;
   }

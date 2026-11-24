@@ -239,6 +239,7 @@ const JudgedJson = Schema.fromJsonString(
   Schema.Struct({
     semantic: Schema.Boolean,
     truncated: Schema.Boolean,
+    cut: Schema.optionalKey(Schema.Array(Schema.String)),
     at: Schema.optionalKey(Schema.String),
   }),
 );
@@ -680,7 +681,8 @@ const versionVector = Effect.fn("Oversight.versionVector")(function* (
         : yield* committedWork(cwd, card.revision.head_sha);
     const diff =
       read.kind === "shown" ? { ...read, blocks: read.blocks.slice(0, MAX_FILES) } : read;
-    const outputs = yield* outputsIn(`${at.stateDir}/agents/${id}`);
+    const shownOutputs = yield* outputsIn(`${at.stateDir}/agents/${id}`);
+    const outputs = shownOutputs.outputs.slice(0, MAX_FILES);
     targets.push({
       id,
       dir,
@@ -693,10 +695,11 @@ const versionVector = Effect.fn("Oversight.versionVector")(function* (
       ),
       constraintIds: Arr.map(intent?.constraints ?? [], (one) => one.id),
       diff,
-      outputs: outputs.outputs,
+      outputs,
       replies: yield* readReplies(dir).pipe(Effect.orElseSucceed(() => [])),
       truncated:
-        outputs.truncated ||
+        shownOutputs.outputs.length > MAX_FILES ||
+        shownOutputs.truncated ||
         (read.kind === "shown" &&
           (read.blocks.length > MAX_FILES || Arr.some(read.blocks, (block) => block.truncated))),
       finished: Arr.some(cards, (one) => one.kind === "final"),

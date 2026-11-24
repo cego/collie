@@ -2,6 +2,7 @@
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
+import { pipe as pipe_ } from "effect/Function";
 import * as Rec from "effect/Record";
 import { Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import { expect, test } from "bun:test";
@@ -353,15 +354,33 @@ const fakeEvaluator = Effect.fn("test.fakeEvaluator")(function* (dir: string) {
   const bin = path.join(dir, "bin");
   yield* fs.makeDirectory(bin, { recursive: true });
   const replyFile = path.join(dir, "reply.json");
-  yield* fs.writeFileString(
-    path.join(bin, "claude"),
-    `#!/bin/sh\ncat > ${path.join(dir, "pack.txt")}\ncat ${replyFile}\n`,
-  );
+  const script = [
+    "#!/bin/sh",
+    `n=$(cat ${dir}/calls 2>/dev/null || echo 0)`,
+    "n=$((n+1))",
+    `echo $n > ${dir}/calls`,
+    `cat > ${dir}/pack-$n.txt`,
+    `cat ${dir}/pack-$n.txt >> ${dir}/pack.txt`,
+    `if [ -f ${dir}/reply-$n.json ]; then cat ${dir}/reply-$n.json; else cat ${replyFile}; fi`,
+  ];
+  yield* fs.writeFileString(path.join(bin, "claude"), Arr.join(script, "\n"));
   yield* fs.chmod(path.join(bin, "claude"), 0o755);
   const before = Bun.env.PATH ?? "";
   Bun.env.PATH = `${bin}:${before}`;
+  const callCount = fs.readFileString(`${dir}/calls`).pipe(
+    Effect.orElseSucceed(() => "0"),
+    Effect.map((text) => Number(Str.trim(text))),
+  );
   return {
     reply: (text: string) => fs.writeFileString(replyFile, text),
+    replyFor: (at: number, text: string) => fs.writeFileString(`${dir}/reply-${at}.json`, text),
+    calls: callCount,
+    packs: Effect.gen(function* () {
+      const count = yield* callCount;
+      return yield* Effect.forEach(Arr.range(1, count), (at) =>
+        fs.readFileString(`${dir}/pack-${at}.txt`),
+      );
+    }),
     pack: fs.readFileString(path.join(dir, "pack.txt")),
     restore: () => {
       Bun.env.PATH = before;
@@ -779,6 +798,181 @@ test("a Run's own report is filed only when it cites a file whose diff the pack 
       expect(Arr.map(out.reports, (report) => report.evidence)).toEqual([
         [{ kind: "diff", path: "a.ts", line: 1 }],
       ]);
+    }),
+  ));
+
+const manyFiles = (count: number) => {
+  const files: Record<string, string> = {};
+  for (let at = 0; at < count; at += 1) {
+    files[`src/f${pipe_(String(at), Str.padStart(2, "0"))}.ts`] = `export const f${at} = ${at};\n`;
+  }
+  return files;
+};
+
+const capped = Effect.fn("DriftTest.capped")(function* (count: number) {
+  const fs = yield* FileSystem.FileSystem;
+  const dir = yield* checkout("hw-batches-");
+  yield* fs.makeDirectory(`${dir}/src`, { recursive: true });
+  const base = yield* committed(dir, manyFiles(count));
+  const evaluator = yield* fakeEvaluator(dir);
+  yield* evaluator.reply(envelope({ result: { reports: [] } }));
+  return { dir, base, evaluator };
+});
+
+test("a boundary whose diff passes the item cap is judged in batches, and nothing is skipped", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, base, evaluator } = yield* capped(MAX_FILES + 5);
+      const log: Array<string> = [];
+      const deps = {
+        ...judgementDeps(dir),
+        log: (line: string) =>
+          Effect.sync(() => {
+            log.push(line);
+          }),
+      };
+      const out = yield* judge(deps, semanticIntent(), {
+        runDir: dir,
+        worktree: dir,
+        base,
+        at: "t0",
+        boundary: "build-1",
+      });
+      const packs = yield* evaluator.packs;
+      evaluator.restore();
+      expect(out.judged).toEqual({ semantic: true, truncated: false });
+      expect(packs).toHaveLength(2);
+      for (const pack of packs) {
+        const shown = Arr.filter(Str.split(pack, "\n"), (line) => Str.startsWith("--- src/")(line));
+        expect(shown.length).toBeGreaterThan(0);
+        expect(shown.length).toBeLessThanOrEqual(MAX_FILES);
+      }
+      expect(Arr.filter(yield* readDrift(dir), (line) => line.kind === "skipped")).toEqual([]);
+      expect(Arr.some(log, (line) => Str.includes("not judged")(line))).toBe(false);
+      expect(
+        Arr.filter(yield* readBudget(deps.budgetFile), (line) => line.kind === "reserve"),
+      ).toHaveLength(2);
+    }),
+  ));
+
+test("a finish whose Outputs pass the item cap is judged in batches, and reads aligned", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* checkout("hw-batches-");
+      const agentsDir = `${dir}/agents`;
+      yield* fs.makeDirectory(agentsDir, { recursive: true });
+      for (let at = 0; at < MAX_FILES + 3; at += 1) {
+        yield* fs.writeFileString(`${agentsDir}/op-${at}.json`, `{"summary":"part ${at}"}`);
+      }
+      const evaluator = yield* fakeEvaluator(dir);
+      yield* evaluator.reply(envelope({ result: { reports: [] } }));
+      const out = yield* judge(judgementDeps(dir), semanticIntent(), {
+        runDir: dir,
+        worktree: dir,
+        agentsDir,
+        base: "HEAD",
+        at: "t0",
+      });
+      const packs = yield* evaluator.packs;
+      evaluator.restore();
+      expect(out.judged).toEqual({ semantic: true, truncated: false });
+      expect(packs).toHaveLength(2);
+      expect(alignment(semanticIntent(), yield* readDrift(dir), out.judged)).toEqual({
+        aligned: "true",
+        why: "every constraint was checked and none is open",
+      });
+    }),
+  ));
+
+test("a boundary's drift is what one of its batches found, and it names that batch's files", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, base, evaluator } = yield* capped(MAX_FILES + 2);
+      yield* evaluator.replyFor(
+        2,
+        envelope({
+          result: {
+            reports: [
+              {
+                id: "x",
+                at: "t",
+                run: "r1",
+                intent_version: 1,
+                constraint: "no-new-deps",
+                kind: "semantic",
+                severity: "block",
+                evidence: [
+                  { kind: "diff", path: "src/f21.ts" },
+                  { kind: "diff", path: "src/f00.ts" },
+                ],
+                evidence_truncated: false,
+                resolution: "open",
+              },
+            ],
+          },
+        }),
+      );
+      const out = yield* judge(judgementDeps(dir), semanticIntent(), {
+        runDir: dir,
+        worktree: dir,
+        base,
+        at: "t0",
+        boundary: "build-1",
+      });
+      evaluator.restore();
+      expect(out.judged).toEqual({ semantic: true, truncated: false });
+      expect(Arr.map(out.reports, (report) => [report.severity, report.evidence])).toEqual([
+        ["block", [{ kind: "diff", path: "src/f21.ts" }]],
+      ]);
+    }),
+  ));
+
+test("a file longer than the line cap is what leaves the finish unverified, and it is named", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const dir = yield* checkout("hw-batches-");
+      const long = Arr.join(
+        Array.from({ length: MAX_LINES_PER_FILE + 20 }, (_, at) => `line ${at}`),
+        "\n",
+      );
+      const base = yield* committed(dir, { "big.ts": `${long}\n`, "small.ts": "one\n" });
+      const evaluator = yield* fakeEvaluator(dir);
+      yield* evaluator.reply(envelope({ result: { reports: [] } }));
+      const out = yield* judge(judgementDeps(dir), semanticIntent(), {
+        runDir: dir,
+        worktree: dir,
+        base,
+        at: "t0",
+      });
+      evaluator.restore();
+      expect(out.judged.truncated).toBe(true);
+      const verdict = alignment(semanticIntent(), yield* readDrift(dir), out.judged);
+      expect(verdict.aligned).toBe("unverified");
+      expect(verdict.why).toContain("big.ts");
+    }),
+  ));
+
+test("a batch the budget refuses is skipped, so the finish is unverified and names it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, base, evaluator } = yield* capped(MAX_FILES + 2);
+      yield* evaluator.replyFor(2, "not a judgement");
+      const out = yield* judge(judgementDeps(dir), semanticIntent(), {
+        runDir: dir,
+        worktree: dir,
+        base,
+        at: "t0",
+      });
+      evaluator.restore();
+      const lines = yield* readDrift(dir);
+      const skipped = Arr.flatMap(lines, (line) => (line.kind === "skipped" ? [line.reason] : []));
+      expect(skipped).toHaveLength(1);
+      expect(skipped[0]).toContain("batch 2 of 2");
+      expect(out.judged.semantic).toBe(false);
+      const verdict = alignment(semanticIntent(), lines, out.judged);
+      expect(verdict.aligned).toBe("unverified");
+      expect(verdict.why).toContain("batch 2 of 2");
     }),
   ));
 

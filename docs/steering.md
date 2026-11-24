@@ -347,14 +347,16 @@ boundary, and at `finish` — a fact that costs nothing to check should never be
 
 A **semantic** constraint is a judgement, so it costs money and can be wrong. It is made
 at boundaries and at `finish` only, and against **bounded actual evidence**: the real
-unified diff of the files the constraint names, capped at 200 lines per file and 20 files,
-with the truncation recorded on the report, and the Run's Outputs under the same caps and
-redaction the [cross-run check](#cross-run-checks) uses. Evidence past the cap is not judged
-at a boundary, since each call would judge the same cut-off part: the Run log says `not judged
-at <where>: evidence past the cap; judged at the finish`, nothing is recorded as skipped, and
-the finish judges it once. A summary of a change would be a second thing
-to be wrong about. Files whose _names_ look like credentials — `.env`, `*.pem`, anything
-with `token` or `secret` in it — are listed by name with `<redacted>` rather than quoted.
+unified diff of the files the constraint names, and the Run's Outputs, each file and Output
+whole. The evidence is split into batches of at most 20 items, files in diff order and then
+Outputs, and each batch is one call; so a change too large for one call is judged in pieces
+rather than skipped, and the judgement's verdict is what all of its batches found. A
+judgement is truncated only when one item alone passes the line cap of 200 lines, and the
+finish then names it as the reason it is unverified; a batch whose call does not answer is
+`skipped` by the rule below, naming that batch. A summary of a change would be a second
+thing to be wrong about. Files whose _names_ look like credentials — `.env`, `*.pem`,
+anything with `token` or `secret` in it — are listed by name with `<redacted>` rather than
+quoted.
 The judgement is told that a constraint read from the plan narrows the goal it was cut
 from: the goal is what was asked, never evidence of drift. A report is filed only when it
 cites a file whose diff or an Output the judgement was shown, and it keeps that file as the
