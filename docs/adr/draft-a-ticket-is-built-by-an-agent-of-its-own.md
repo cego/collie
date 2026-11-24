@@ -65,11 +65,12 @@ Twelve implement Runs of build 150c5346 ran against the test fake GitLab. Every 
 Claude, Opus, high, and the shipped reviewer, with the same settings, audited each Run's
 merge request. Every Run's Checks were `static` and one `bun test` of its case's files,
 identical within a case. Case C restarted its host once, on ticket 8's build delivery,
-named by its delivery id in `trial/logs/restart-<cell>.json`. The board seq recorded beside
-each (c-run-off-1 730, c-ticket-on-1 8096, c-round-on-1 669) is the board change on which
-the operator first read that delivery as sent. c-round-on-1 had a host of its own, but the
-other two shared one, so their seq may be another card's change. `tools/trial-restart.ts`
-now takes only the Run's own card's change. c-ticket-on-1's `collie host restart` answered
+named by its delivery id in `trial/logs/restart-<cell>.json`. That delivery's event is its
+first `submitted` row in its host's delivery ledger: seq 182 for c-run-off-1, 416 for
+c-ticket-on-1 and 5 for c-round-on-1, each written before its restart was requested
+(`trial/logs/delivery-seqs.txt`). The seq the operator recorded at the time, 730, 8096
+and 669, was a board change, not that event. `tools/trial-restart.ts` now records the
+ledger's seq, and the board stream only wakes it. c-ticket-on-1's `collie host restart` answered
 with the old pid, because that host took 5 s to stop. Its log shows the restart: pid
 853294 stopped at 01:48:31Z and 3927688 started at 01:48:36Z. The tool now confirms a
 restart only once the host lock has a new owner. The records are in the

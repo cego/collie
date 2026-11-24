@@ -5,29 +5,23 @@ import { Data, DateTime, Effect, FileSystem, Layer, Schedule, Schema, Stream } f
 import type { Duration } from "effect";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
+import * as SqlClient from "effect/sql/SqlClient";
 import { FrontDoorRpcs } from "../src/board-model";
 import type { BoardMessage, TaskUpserted } from "../src/board-model";
 import { hostLockOf } from "../src/lock";
+import { hostDatabase } from "../src/records";
+import { DeliverySchema } from "../src/steering";
 import { exec } from "../test/support/command";
 import { runEffect } from "../test/support/effect";
 
-const Delivery = Schema.Struct({
-  id: Schema.String,
-  at: Schema.String,
-  state: Schema.String,
-  cause: Schema.Struct({ kind: Schema.String, ref: Schema.String }),
-});
-type Delivery = typeof Delivery.Type;
-const Deliveries = Schema.fromJsonString(
-  Schema.Struct({ data: Schema.Struct({ deliveries: Schema.Array(Delivery) }) }),
-);
+const LedgerLine = Schema.fromJsonString(DeliverySchema);
 const HostSeen = Schema.Struct({ pid: Schema.Int });
 const Restart = Schema.fromJsonString(
   Schema.Struct({
     run: Schema.String,
     step: Schema.String,
     seq: Schema.Int,
-    delivery: Delivery,
+    delivery: DeliverySchema,
     requestedAt: Schema.String,
     confirmed: Schema.optionalKey(
       Schema.Struct({ at: Schema.String, before: Schema.Int, after: Schema.Int }),
@@ -51,10 +45,26 @@ const lockOwner = (stateDir: string) =>
     Effect.orElseSucceed(() => null),
   );
 
-export const sentOnRunCard = <E, R>(
+export const ledgerDelivery = (run: string, step: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const rows = yield* sql<{ readonly seq: number; readonly line: string }>`
+      SELECT seq, line FROM collie_deliveries
+      WHERE run = ${run} AND state IN ('submitted', 'acknowledged') ORDER BY seq
+    `.pipe(Effect.orDie);
+    return Arr.findFirst(rows, (row) =>
+      Option.flatMap(Schema.decodeOption(LedgerLine)(row.line), (delivery) =>
+        delivery.cause.kind === "step" && delivery.cause.ref === step
+          ? Option.some({ seq: row.seq, delivery })
+          : Option.none(),
+      ),
+    );
+  });
+
+export const sentOnRunCard = <A, E, R>(
   board: Stream.Stream<BoardMessage, E, R>,
   run: string,
-  sent: Effect.Effect<Option.Option<Delivery>, E, R>,
+  sent: Effect.Effect<Option.Option<A>, E, R>,
 ) =>
   board.pipe(
     Stream.filter(
@@ -62,12 +72,7 @@ export const sentOnRunCard = <E, R>(
         message._tag === "Upsert" &&
         (message.task.run === run || Arr.contains(message.task.runs, run)),
     ),
-    Stream.mapEffect((message) =>
-      Effect.map(
-        sent,
-        Option.map((delivery) => ({ seq: message.seq, delivery })),
-      ),
-    ),
+    Stream.mapEffect(() => sent),
     Stream.filter(Option.isSome),
     Stream.map((found) => found.value),
     Stream.runHead,
@@ -95,19 +100,6 @@ export const restartConfirmed = (stateDir: string, within: Duration.Input) =>
     return { before, after: after.value, said };
   });
 
-const sentDelivery = (stateDir: string, run: string, step: string) =>
-  Effect.gen(function* () {
-    const ran = yield* collieAt(stateDir, ["--json", "run", "deliveries", run]);
-    const read = yield* Schema.decodeEffect(Deliveries)(ran.stdout).pipe(Effect.orDie);
-    return Arr.findFirst(
-      read.data.deliveries,
-      (one) =>
-        one.cause.kind === "step" &&
-        one.cause.ref === step &&
-        (one.state === "submitted" || one.state === "acknowledged"),
-    );
-  });
-
 if (import.meta.main) {
   const [stateDir, run, step, out] = Bun.argv.slice(2);
   if (stateDir === undefined || run === undefined || step === undefined || out === undefined) {
@@ -124,7 +116,9 @@ if (import.meta.main) {
           ),
         );
         const door = yield* RpcClient.make(FrontDoorRpcs).pipe(Effect.provideContext(context));
-        const found = yield* sentOnRunCard(door.board(), run, sentDelivery(stateDir, run, step));
+        const found = yield* sentOnRunCard(door.board(), run, ledgerDelivery(run, step)).pipe(
+          Effect.provide(Layer.orDie(hostDatabase(stateDir, { readonly: true }))),
+        );
         if (Option.isNone(found)) {
           throw new Error("the board stream ended before the delivery was sent");
         }
