@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Schema, flow, Result } from "effect";
 import { AgentChoiceSchema } from "../src/agents";
-import { foldCeiling, hasAnyRoom, resolveWithRoom } from "../src/harness";
+import { foldCeiling, hasAnyRoom, hasRoomFor, resolveWithRoom } from "../src/harness";
 import type { Preferences } from "../src/harness";
 import { parseSetting } from "../src/settings";
 import { epochMs } from "../src/time";
@@ -216,6 +216,17 @@ describe("resolveWithRoom", () => {
     expect(hasAnyRoom({ ...defaults, harness: "codex", model: "default" }, [chatgptOut], NOW)).toBe(
       true,
     );
+  });
+
+  test("a Run is owed room on the agents it ran, not on the Machine's defaults", () => {
+    const defaults = { harness: "codex", model: "default" };
+    const ranOn = { harness: "claude", model: "opus" };
+    // WARNING: the Machine's own Codex account has room, which is not this Claude Run's to spend.
+    expect(hasAnyRoom(defaults, [claudeOut], NOW)).toBe(true);
+    expect(hasRoomFor(defaults, ranOn, [claudeOut], NOW)).toBe(false);
+    expect(hasRoomFor(defaults, ranOn, [chatgptOut], NOW)).toBe(true);
+    // WARNING: a Run with no launch yet is judged on the defaults, since that is what its first agent gets.
+    expect(hasRoomFor(defaults, null, [chatgptOut], NOW)).toBe(false);
   });
 
   test("a default model is judged as the model it pins", () => {

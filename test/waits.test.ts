@@ -17,7 +17,6 @@ import { COMPACTION_PORTS, codexPort, servedEndpoint } from "../src/compactors";
 import type { Channel } from "../src/dispatcher";
 import { handOverClaim } from "../src/engine";
 import { rememberCompactionWait, recheckPark } from "../src/park-recheck";
-import { parkIdentity, parkText } from "../src/park-cause";
 import { fastForward, runEffect } from "./support/effect";
 import { forgeHttpOnPath } from "./support/forge";
 import { fakeChannel } from "./support/compaction";
@@ -685,9 +684,8 @@ test("a restart keeps the request it marked, its bound and its park, and a match
         cause: "compaction-unsettled",
       });
       expect(saidBy(again)).toBe(saidBy(result.first));
-      expect(parkIdentity("r1", "compaction-unsettled", [parkText(saidBy(again))])).toBe(
-        parkIdentity("r1", "compaction-unsettled", [parkText(saidBy(result.first))]),
-      );
+      // WARNING: what a restart reads is the stored attempt, whole; a park identity derived from it follows.
+      expect(still?.attempt).toEqual(marked?.attempt);
       expect(resumed).toEqual({ dispatch: true });
     }).pipe(Effect.provide(forgeHttpOnPath)),
   ));

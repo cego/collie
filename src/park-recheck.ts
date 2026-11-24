@@ -77,7 +77,7 @@ const compactionWaitJournal = (dir: string) => runJournal(dir, "compaction-wait.
 export const rememberCompactionWait = (dir: string, waiting: typeof CompactionWait.Type) =>
   appendRunJournal(compactionWaitJournal(dir), CompactionWait, waiting);
 
-const lastCompactionWait = (dir: string) =>
+export const lastCompactionWait = (dir: string) =>
   Effect.map(
     readRunJournal(compactionWaitJournal(dir), CompactionWait).pipe(Effect.orElseSucceed(() => [])),
     (waiting) => waiting.at(-1),

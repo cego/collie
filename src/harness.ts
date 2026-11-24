@@ -65,6 +65,24 @@ export const hasAnyRoom = (
   return !resolved.ok || resolved.chosen.from !== null || resolved.chosen.why === null;
 };
 
+// WARNING: a Run is owed room on the agents it runs, not on the Machine's defaults, or another account's room clears it.
+export const hasRoomFor = (
+  defaults: Parameters<typeof hasAnyRoom>[0],
+  ranOn: { readonly harness?: string; readonly model?: string; readonly effort?: string } | null,
+  readings: ReadonlyArray<UsageReading>,
+  now: number,
+) =>
+  hasAnyRoom(
+    {
+      ...defaults,
+      harness: ranOn?.harness ?? defaults.harness,
+      model: ranOn?.model ?? defaults.model,
+      effort: ranOn?.effort ?? defaults.effort,
+    },
+    readings,
+    now,
+  );
+
 const PERMISSION_MODE_SET: ReadonlySet<string> = new Set(PERMISSION_MODES);
 
 export function isPermissionMode(value: string | undefined): value is PermissionMode {

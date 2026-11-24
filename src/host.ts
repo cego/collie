@@ -141,7 +141,7 @@ import { ChangedIntent } from "./intent-model";
 import { donePasses, markersOf, runningCheck, followLog } from "./checks";
 import { startCheckout } from "./agent-start";
 import { configuredAgents } from "./agents";
-import { hasAnyRoom } from "./harness";
+import { hasAnyRoom, hasRoomFor } from "./harness";
 import { Collecting } from "./collecting";
 import { memoryWaitOf, waitForMemory, waitLine } from "./memory-wait";
 import { runLog } from "./agent-end";
@@ -2697,13 +2697,15 @@ const frontDoorHandlers = (
             Arr.last(yield* readLaunches(view.runId).pipe(Effect.orElseSucceed(() => []))),
           );
           const readings = yield* usage.readings;
-          return hasAnyRoom(
-            {
-              ...defaults,
-              harness: latest?.harness ?? defaults.harness,
-              model: latest?.model ?? defaults.model,
-              effort: latest?.effort ?? defaults.effort,
-            },
+          return hasRoomFor(
+            defaults,
+            latest === undefined
+              ? null
+              : {
+                  harness: latest.harness,
+                  model: latest.model,
+                  effort: latest.effort ?? undefined,
+                },
             readings,
             yield* Clock.currentTimeMillis,
           );

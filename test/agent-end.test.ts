@@ -164,6 +164,55 @@ test("an agent ended before its compaction completes records it cancelled, and n
     }),
   ));
 
+test("a close that fails leaves the agent's compaction as it found it, so nothing is cancelled that may still finish", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const terminalId = yield* arranged("impl");
+      const fs = yield* FileSystem.FileSystem;
+      const dir = `${rig.stateDir}/compaction/impl`;
+      yield* fs.makeDirectory(dir, { recursive: true });
+      yield* fs.writeFileString(
+        `${dir}/control.json`,
+        asJson({
+          agent: "impl",
+          harness: "claude",
+          cwd: rig.projectDir,
+          dir,
+          attempt: {
+            id: "impl-1",
+            run: "r1",
+            step: "02-ui",
+            deadline: 1,
+            asked: 1,
+            session: "s-1",
+          },
+        }),
+      );
+      const { deps } = depsOf({
+        ports: { claude: COMPACTION_PORTS.claude! },
+        herdr: {
+          agentList: () => new Herdr(rig.pluginEnv()).agentList(),
+          terminalRoot: (pane) => new Herdr(rig.pluginEnv()).terminalRoot(pane),
+          terminalKill: () =>
+            Effect.fail(new HerdrError({ message: "the pane refused", detail: "" })),
+        },
+      });
+      const ended = yield* endAgent(
+        deps,
+        { agent: "impl", terminalId },
+        "its Run was stopped",
+        "close",
+      ).pipe(Effect.result);
+      expect(ended._tag).toBe("Failure");
+      const record = yield* readControl(rig.stateDir, "impl");
+      expect(record?.attempt?.id).toBe("impl-1");
+      const events = yield* fs
+        .readFileString(`${dir}/events.jsonl`)
+        .pipe(Effect.orElseSucceed(() => ""));
+      expect(events).not.toContain('"kind":"cancelled"');
+    }),
+  ));
+
 test("a Codex agent that does not become Quiet keeps its terminal, in ADR-0059's words", () =>
   runEffect(
     Effect.gen(function* () {
