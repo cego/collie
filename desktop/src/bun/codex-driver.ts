@@ -27,7 +27,15 @@ import { isNumber, isString } from "../../../src/schema";
 import type { JsonObject } from "../../../src/schema";
 import { standingDirectionContext } from "../../../src/standing-direction";
 import type { ChatEndpoint } from "./chat-endpoint";
-import { CodexStatus, codexConfigured, codexConnections, codexServers } from "./codex-servers";
+import {
+  CodexStatus,
+  NO_SERVERS,
+  codexConfigured,
+  codexConnections,
+  codexServers,
+  codexUnsettled,
+} from "./codex-servers";
+import type { CodexServers } from "./codex-servers";
 import type { ListedModel } from "./claude-models";
 import type { ChatDriver, ContentBlock, DriverContext, TurnCost } from "./driver";
 import { listedIn } from "./harness-lists";
@@ -613,6 +621,7 @@ export const readCodexModels: (
 
 const decodeStatuses = decoded(Schema.Struct({ data: Schema.Array(CodexStatus) }));
 const NO_STATUS: ReadonlyArray<CodexStatus> = [];
+const instructions = (said: string) => `${systemPrompt(hostname())}\n\n${said}`;
 
 const noThreads: Readonly<Record<string, string>> = {};
 
@@ -707,14 +716,45 @@ export const codexDriver: (
           ),
           Effect.catch(({ message }) => Queue.fail(output, message)),
         );
+      let given: CodexServers = NO_SERVERS;
+      let told = "";
+      let unsettled = false;
+      const statusesOf = (server: AppServer) =>
+        server.call("mcpServerStatus/list", {}).pipe(
+          Effect.flatMap(decodeStatuses),
+          Effect.map(({ data }) => data),
+          Effect.orElseSucceed(() => NO_STATUS),
+        );
+      const refresh = (server: AppServer, thread: string) =>
+        Effect.gen(function* () {
+          if (!unsettled) {
+            return;
+          }
+          const statuses = yield* statusesOf(server);
+          const said = codexConnections(given, statuses);
+          unsettled = codexUnsettled(statuses);
+          if (said === told) {
+            return;
+          }
+          told = said;
+          yield* server
+            .call("thread/resume", {
+              threadId: thread,
+              ...setting,
+              developerInstructions: instructions(said),
+            })
+            .pipe(Effect.ignore);
+        });
       const connect = Effect.gen(function* () {
         if (command === null) {
           return yield* new CodexError({ message: NOT_INSTALLED });
         }
         const { url, token } = yield* endpoint.start;
-        const given = codexServers(
+        given = codexServers(
           yield* Effect.tryPromise(userServers).pipe(Effect.orElseSucceed(() => ({}))),
-          yield* Effect.tryPromise(codexConfigured).pipe(Effect.orElseSucceed(() => [])),
+          yield* Effect.tryPromise(() => codexConfigured(context.dir)).pipe(
+            Effect.orElseSucceed(() => []),
+          ),
         );
         const server = yield* appServer(
           command,
@@ -738,15 +778,10 @@ export const codexDriver: (
         if (account === null && requiresOpenaiAuth) {
           return yield* new CodexError({ message: SIGNED_OUT });
         }
-        const statuses = yield* server.call("mcpServerStatus/list", {}).pipe(
-          Effect.flatMap(decodeStatuses),
-          Effect.map(({ data }) => data),
-          Effect.orElseSucceed(() => NO_STATUS),
-        );
-        const started = {
-          ...setting,
-          developerInstructions: `${systemPrompt(hostname())}\n\n${codexConnections(given, statuses)}`,
-        };
+        const statuses = yield* statusesOf(server);
+        told = codexConnections(given, statuses);
+        unsettled = codexUnsettled(statuses);
+        const started = { ...setting, developerInstructions: instructions(told) };
         const resumed = yield* server
           .call("thread/resume", { threadId: yield* threadOf(id), ...started })
           .pipe(
@@ -795,6 +830,7 @@ export const codexDriver: (
             if (Option.isNone(on)) {
               return;
             }
+            yield* refresh(on.value.server, on.value.thread);
             const asked = yield* on.value.server
               .call("turn/start", {
                 threadId: on.value.thread,

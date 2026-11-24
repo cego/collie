@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
@@ -90,7 +91,7 @@ const Inspected = Schema.fromJsonString(
     args: Schema.Array(Schema.String),
     cwd: Schema.String,
     hasToken: Schema.Boolean,
-    env: Schema.Array(Schema.String),
+    env: Schema.Record(Schema.String, Schema.String),
     thread: Schema.String,
     start: Schema.Record(Schema.String, Schema.Json),
     turn: Schema.Record(Schema.String, Schema.Json),
@@ -426,7 +427,12 @@ test("Codex can be chosen for the chat, offering its own models, and opens on th
     }).pipe(Effect.scoped, Effect.provide(platformLayer)),
   ));
 
-const serveDocs = (options: { readonly tool: string; readonly token?: string }) => {
+const serveDocs = (options: {
+  readonly tool: string;
+  readonly header?: string;
+  readonly token?: string;
+}) => {
+  const header = options.header ?? "Authorization";
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -434,7 +440,7 @@ const serveDocs = (options: { readonly tool: string; readonly token?: string }) 
     fetch: (request) => {
       if (
         options.token !== undefined &&
-        request.headers.get("Authorization") !== `Bearer ${options.token}`
+        request.headers.get(header) !== `Bearer ${options.token}`
       ) {
         return new Response("Unauthorized", { status: 401 });
       }
@@ -500,11 +506,12 @@ test("Codex gets a server's token through its environment, never its command lin
         yield* Effect.addFinalizer(() => session.close);
         yield* session.offer("inspect");
         const details = inspected(yield* turn(session));
-        expect(details.args).toContain(
-          'mcp_servers.docs.env_http_headers.Authorization="COLLIE_CHAT_MCP_docs_Authorization"',
-        );
-        expect(details.env).toContain("COLLIE_CHAT_MCP_docs_Authorization");
-        expect(Arr.join(details.args, " ")).not.toContain(token);
+        const given = Arr.join(details.args, " ");
+        const [variable, carried] = Rec.toEntries(details.env)[0] ?? ["", ""];
+        expect(given).toContain("mcp_servers.docs.env_http_headers={");
+        expect(given).toContain(`= "${variable}"`);
+        expect(given).not.toContain(token);
+        expect(carried).toBe(`Bearer ${token}`);
         expect(details.start.developerInstructions).toEqual(expect.not.stringContaining(token));
         yield* session.offer("servers");
         expect(called(yield* turn(session))).toEqual(["mcp__docs__read_doc"]);
@@ -515,35 +522,37 @@ test("Codex gets a server's token through its environment, never its command lin
   });
 });
 
-test("A server Codex holds no login for is said to need `codex mcp login`, and reads once it holds one", () => {
+test("A server Codex holds no login for is said to need `codex mcp login`, and the same chat reads through it once signed in", () => {
   const fixture = serveDocs({ tool: "linear_read", token: "linear-token" });
-  return withServers({ "linear-server": { type: "http", url: fixture.url } }, (driver) =>
+  return withServers({ "linear-server": { type: "http", url: fixture.url } }, (driver, context) =>
     Effect.gen(function* () {
-      const signedOut = yield* driver.open("codex-linear-out", "default", null);
-      yield* Effect.addFinalizer(() => signedOut.close);
-      yield* signedOut.offer("inspect");
-      const before = inspected(yield* turn(signedOut)).start.developerInstructions;
-      expect(before).toEqual(expect.stringContaining("linear-server (no tools)"));
-      expect(before).toEqual(expect.stringContaining("linear-server is not signed in to Codex"));
-      expect(before).toEqual(expect.stringContaining("codex mcp login linear-server"));
-      Bun.env.FAKE_CODEX_MCP_LOGIN = "linear-server";
-      Bun.env.FAKE_CODEX_MCP_LOGIN_TOKEN = "linear-token";
-      const signedIn = yield* driver.open("codex-linear-in", "default", null);
-      yield* Effect.addFinalizer(() => signedIn.close);
-      yield* signedIn.offer("inspect");
-      const details = inspected(yield* turn(signedIn));
-      expect(details.start.developerInstructions).toEqual(
-        expect.stringContaining("linear-server (linear_read)"),
+      const fs = yield* FileSystem.FileSystem;
+      const session = yield* driver.open("codex-linear", "default", null);
+      yield* Effect.addFinalizer(() => session.close);
+      yield* session.offer("inspect");
+      const before = inspected(yield* turn(session));
+      expect(instruct(before)).toEqual(expect.stringContaining("linear-server (no tools)"));
+      expect(instruct(before)).toEqual(
+        expect.stringContaining("linear-server is not signed in to Codex"),
       );
-      expect(Arr.join(details.args, " ")).not.toContain("linear-token");
-      yield* signedIn.offer("servers");
-      expect(called(yield* turn(signedIn))).toEqual(["mcp__linear-server__linear_read"]);
+      expect(instruct(before)).toEqual(
+        expect.stringContaining(
+          `codex mcp login linear-server -c 'mcp_servers.linear-server.url="${fixture.url}"'`,
+        ),
+      );
+      yield* fs.writeFileString(
+        `${context.dir}/codex-home/mcp-logins.json`,
+        `{"linear-server":"linear-token"}`,
+      );
+      yield* session.offer("inspect");
+      const after = inspected(yield* turn(session));
+      expect(after.thread).toBe(before.thread);
+      expect(instruct(after)).toEqual(expect.stringContaining("linear-server (linear_read)"));
+      expect(Arr.join(after.args, " ")).not.toContain("linear-token");
+      yield* session.offer("servers");
+      expect(called(yield* turn(session))).toEqual(["mcp__linear-server__linear_read"]);
     }),
-  ).finally(() => {
-    void fixture.stop();
-    delete Bun.env.FAKE_CODEX_MCP_LOGIN;
-    delete Bun.env.FAKE_CODEX_MCP_LOGIN_TOKEN;
-  });
+  ).finally(() => void fixture.stop());
 });
 
 const instruct = (details: ReturnType<typeof inspected>) =>
@@ -579,6 +588,96 @@ test("A server Codex itself configures keeps Codex's entry, shown once, and its 
   });
 });
 
+test("A server a trusted working directory's Codex config names keeps Codex's entry, shown once", () => {
+  const mine = serveDocs({ tool: "user_read" });
+  const codex = serveDocs({ tool: "codex_read" });
+  return withServers({ docs: { type: "http", url: mine.url } }, (driver, context) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(`${context.dir}/.codex`, { recursive: true });
+      yield* fs.writeFileString(
+        `${context.dir}/.codex/config.toml`,
+        `[mcp_servers.docs]\nurl = "${codex.url}"\n`,
+      );
+      const session = yield* driver.open("codex-project", "default", null);
+      yield* Effect.addFinalizer(() => session.close);
+      yield* session.offer("inspect");
+      const details = inspected(yield* turn(session));
+      expect(Arr.join(details.args, " ")).not.toContain("mcp_servers.docs.");
+      const told = instruct(details);
+      expect(Str.split(told, "docs (").length - 1).toBe(1);
+      expect(told).toContain("docs (codex_read)");
+      expect(told).not.toContain("user_read");
+      yield* session.offer("servers");
+      expect(called(yield* turn(session))).toEqual(["mcp__docs__codex_read"]);
+    }),
+  ).finally(() => {
+    void mine.stop();
+    void codex.stop();
+  });
+});
+
+test("Two servers' headers get an environment variable each, and a header keeps its dots", () => {
+  const first = serveDocs({ tool: "first_read", header: "X.Api.Key", token: "first" });
+  const second = serveDocs({ tool: "second_read", header: "Api.Key", token: "second" });
+  return withServers(
+    {
+      one: { type: "http", url: first.url, headers: { "X.Api.Key": "Bearer first" } },
+      one_X: { type: "http", url: second.url, headers: { "Api.Key": "Bearer second" } },
+    },
+    (driver) =>
+      Effect.gen(function* () {
+        const session = yield* driver.open("codex-alias", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("inspect");
+        const details = inspected(yield* turn(session));
+        const given = Arr.join(details.args, " ");
+        expect(Rec.size(details.env)).toBe(2);
+        expect(Rec.values(details.env)).toContain("Bearer first");
+        expect(Rec.values(details.env)).toContain("Bearer second");
+        expect(given).toContain("mcp_servers.one.env_http_headers={");
+        expect(given).toContain('"X.Api.Key" = ');
+        expect(given).toContain("mcp_servers.one_X.env_http_headers={");
+        yield* session.offer("servers");
+        expect(called(yield* turn(session))).toEqual([
+          "mcp__one__first_read",
+          "mcp__one_X__second_read",
+        ]);
+      }),
+  ).finally(() => {
+    void first.stop();
+    void second.stop();
+  });
+});
+
+test("A stdio server's environment reaches it through the process, never the arguments", () => {
+  const secret = "stdio-secret-value";
+  return withServers(
+    {
+      tool: {
+        command: process.execPath,
+        args: [`${import.meta.dir}/fixtures/mcp-stdio-echo.ts`],
+        env: { API_TOKEN: secret },
+      },
+    },
+    (driver) =>
+      Effect.gen(function* () {
+        const session = yield* driver.open("codex-stdio", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("inspect");
+        const given = Arr.join(inspected(yield* turn(session)).args, " ");
+        expect(given).toContain('mcp_servers.tool.env_vars=["API_TOKEN"]');
+        expect(given).not.toContain(secret);
+        yield* session.offer("servers");
+        const events = yield* turn(session);
+        expect(called(events)).toEqual(["mcp__tool__read_token"]);
+        expect(Arr.filter(events, (event) => event.type === "TOOL_CALL_RESULT")).toMatchObject([
+          { content: secret },
+        ]);
+      }),
+  );
+});
+
 test("A user server named collie_desktop does not replace Collie's own", () => {
   const mine = serveDocs({ tool: "hijack" });
   return withServers({ collie_desktop: { type: "http", url: mine.url } }, (driver) =>
@@ -607,7 +706,7 @@ test("A server Codex could not connect is said so, with how to look", () => {
       yield* session.offer("inspect");
       const told = instruct(inspected(yield* turn(session)));
       expect(told).toContain("Codex did not connect docs");
-      expect(told).toContain("codex mcp list");
+      expect(told).toContain("claude mcp list");
       expect(told).not.toContain("not signed in to Codex");
     }),
   );

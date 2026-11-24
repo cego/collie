@@ -7,6 +7,7 @@ import { pipe } from "effect/Function";
 import * as Option from "effect/Option";
 import { Schema, flow, Result } from "effect";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { homedir } from "node:os";
 import { childEnv } from "../../desktop/src/bun/login-env";
@@ -31,15 +32,16 @@ const OwnConfig = Schema.Struct({
   mcp_servers: Schema.optionalKey(Schema.Record(Schema.String, ServerSchema)),
 });
 const codexHome = childEnv().CODEX_HOME ?? `${homedir()}/.codex`;
-const ownPath = `${codexHome}/config.toml`;
-const own = (await Bun.file(ownPath).exists())
-  ? Option.getOrElse(
-      Schema.decodeOption(OwnConfig)(Bun.TOML.parse(await Bun.file(ownPath).text())),
-      () => ({ mcp_servers: {} }),
-    )
-  : { mcp_servers: {} };
+const configAt = async (path: string) =>
+  (await Bun.file(path).exists())
+    ? Option.getOrElse(
+        Schema.decodeOption(OwnConfig)(Bun.TOML.parse(await Bun.file(path).text())),
+        () => ({ mcp_servers: {} }),
+      )
+    : { mcp_servers: {} };
+const own = await configAt(`${codexHome}/config.toml`);
+const project = await configAt(`${process.cwd()}/.codex/config.toml`);
 
-// WARNING: a `-c` value is a table only when it decoded to a JSON object.
 const tableOf: (value: Schema.Json | undefined) => Server = (value) =>
   Schema.is(ServerSchema)(value) ? value : {};
 
@@ -56,7 +58,7 @@ const put = (into: Server, path: ReadonlyArray<string>, value: Schema.Json) => {
 // WARNING: Codex's `-c` overrides layer over the config.toml its own servers come from.
 const servers = () => {
   const merged: Record<string, Server> = {};
-  const configured: Readonly<Record<string, Server>> = own.mcp_servers ?? {};
+  const configured = { ...own.mcp_servers, ...project.mcp_servers };
   for (const [name, cfg] of Rec.toEntries(configured)) {
     merged[name] = { ...cfg };
   }
@@ -69,18 +71,27 @@ const servers = () => {
     if (head !== "mcp_servers" || name === undefined || field === undefined) {
       continue;
     }
-    put(
-      (merged[name] ??= {}),
-      [field, ...rest],
-      flow(Schema.decodeResult(Json), Result.getOrThrow)(Arr.join(held, "=")),
-    );
+    put((merged[name] ??= {}), [field, ...rest], tomlValue(Arr.join(held, "=")));
   }
   return merged;
 };
 const server = "collie_desktop";
 
-const login = (name: string) =>
-  childEnv().FAKE_CODEX_MCP_LOGIN === name ? childEnv().FAKE_CODEX_MCP_LOGIN_TOKEN : undefined;
+const tomlValue: (raw: string) => Schema.Json = (raw) =>
+  flow(
+    Schema.decodeUnknownResult(Schema.Record(Schema.String, Schema.Json)),
+    Result.getOrThrow,
+  )(Bun.TOML.parse(`value = ${raw}`)).value ?? "";
+
+const logins: () => Promise<Readonly<Record<string, string>>> = async () =>
+  Option.getOrElse(
+    Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.String))(
+      await Bun.file(`${codexHome}/mcp-logins.json`)
+        .json()
+        .catch(() => ({})),
+    ),
+    () => ({}),
+  );
 
 const headersOf = (cfg: Server) => {
   const headers: Record<string, string> = {};
@@ -107,19 +118,48 @@ const headersOf = (cfg: Server) => {
   return headers;
 };
 
+const forwarded = (cfg: Server) => {
+  const env: Record<string, string> = {};
+  const held = Arr.isArray(cfg.env_vars) ? cfg.env_vars : [];
+  for (const one of held) {
+    const variable = Str.isString(one)
+      ? one
+      : Schema.is(Schema.Struct({ name: Schema.String }))(one)
+        ? one.name
+        : undefined;
+    const value = variable === undefined ? undefined : childEnv()[variable];
+    if (variable !== undefined && value !== undefined) {
+      env[variable] = value;
+    }
+  }
+  return env;
+};
+
 const connect = async (name: string) => {
-  const url = servers()[name]?.url;
-  if (!Str.isString(url)) {
+  const cfg = servers()[name] ?? {};
+  const client = new Client({ name: "codex-stand-in", version: "1" });
+  if (Str.isString(cfg.url)) {
+    const headers = headersOf(cfg);
+    const held = (await logins())[name];
+    if (headers.Authorization === undefined && held !== undefined) {
+      headers.Authorization = `Bearer ${held}`;
+    }
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(cfg.url), { requestInit: { headers } }),
+    );
+    return client;
+  }
+  if (!Str.isString(cfg.command)) {
     return undefined;
   }
-  const headers = headersOf(servers()[name] ?? {});
-  const held = login(name);
-  if (headers.Authorization === undefined && held !== undefined) {
-    headers.Authorization = `Bearer ${held}`;
-  }
-  const client = new Client({ name: "codex-stand-in", version: "1" });
   await client.connect(
-    new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers } }),
+    new StdioClientTransport({
+      command: cfg.command,
+      args: Arr.filter(Arr.isArray(cfg.args) ? cfg.args : [], Str.isString),
+      env: { PATH: childEnv().PATH ?? "", ...forwarded(cfg) },
+      cwd: process.cwd(),
+      stderr: "ignore",
+    }),
   );
   return client;
 };
@@ -144,7 +184,7 @@ interface Turn {
 interface Thread {
   readonly id: string;
   readonly cwd: string;
-  readonly params: JsonObject;
+  params: JsonObject;
   readonly turns: Array<Turn>;
   updatedAt: number;
 }
@@ -230,8 +270,9 @@ const play = async (turn: Turn, params: JsonObject) => {
         args: Bun.argv.slice(2),
         cwd: process.cwd(),
         hasToken: childEnv().COLLIE_CHAT_MCP_TOKEN !== undefined,
-        env: Arr.filter(Rec.keys(childEnv()), (key) =>
-          pipe(key, Str.startsWith("COLLIE_CHAT_MCP_")),
+        env: Rec.filter(
+          Rec.getSomes(Rec.map(childEnv(), (value) => Option.fromUndefinedOr(value))),
+          (_value, key) => pipe(key, Str.startsWith("COLLIE_CHAT_SERVER_")),
         ),
         thread: loaded!.id,
         start: loaded!.params,
@@ -444,7 +485,9 @@ for await (const chunk of Bun.stdin.stream()) {
           });
           break;
         }
+        known.params = { ...known.params, ...params };
         loaded = known;
+        await save();
         answer({ thread: { id: known.id } });
         break;
       }
@@ -513,7 +556,7 @@ for await (const chunk of Bun.stdin.stream()) {
               );
               authStatus = credential
                 ? "bearerToken"
-                : login(name) === undefined
+                : (await logins())[name] === undefined
                   ? "unsupported"
                   : "oAuth";
               await client.close();
@@ -523,6 +566,7 @@ for await (const chunk of Bun.stdin.stream()) {
             // WARNING: 401 to a server holding no credential is Codex's sign-in to do, not a failure.
             if (!credential && /401|Unauthorized/.test(message)) {
               authStatus = "notLoggedIn";
+              toolsError = `auth required: ${message}`;
             } else {
               authStatus = credential ? "bearerToken" : "unsupported";
               toolsError = message;

@@ -2360,14 +2360,19 @@ sandbox, which needs user namespaces this computer may not give it.
 On Codex the chat has your Claude Code user-scope MCP servers too, as Pi and Claude Code do:
 Desktop reads the same list and passes each one to the App Server as
 `-c mcp_servers.<name>.*` when the conversation starts. A server name Codex already has in
-its own `config.toml` keeps Codex's entry, and the chat names it once; `collie_desktop` is
-Collie's own and no server of yours takes its place. A server's static headers, such as a
-bearer token, reach Codex through the child's environment, never its command line, and never
-the chat. Codex keeps its own sign-ins: a server that needs a browser login, such as Linear,
-works once you run `codex mcp login <server>` in a terminal, and until then the chat says the
-server is not signed in and names that command. A server Codex could not start is said too,
-with `codex mcp list` in a terminal as the way to see why. A server added while a conversation
-is open reaches the next one, as on Pi.
+its own `config.toml`, or in a trusted project's `.codex/config.toml`, keeps Codex's entry,
+and the chat names it once; `collie_desktop` is Collie's own and no server of yours takes its
+place. A server's static headers, such as a bearer token, and a stdio server's environment
+reach Codex through the App Server's own environment, never its command line, and never the
+chat. Codex keeps its own sign-ins: a server that needs a browser login, such as Linear,
+works once you run, in a terminal,
+`codex mcp login <server> -c 'mcp_servers.<server>.url="<the server's url>"'` — the `-c` is
+what shows a standalone `codex` a server Desktop passes it at launch — and until then the
+chat says the server is not signed in and names that command. A message sent after you sign
+in picks the server up in the same conversation. A server Codex could not connect is said
+too, with the error Codex gave for it: one you added to Claude Code is defined there, which
+`claude mcp list` shows. A server added while a conversation is open reaches the next one,
+as on Pi.
 
 The effort is chosen in its select, or by asking the chat, for example "answer at high
 effort from now on", which `collie_chat_harness` saves. Claude's levels range from `low` to
