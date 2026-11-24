@@ -256,6 +256,42 @@ test("a request is the same however its structured inputs are written", () =>
           '{"spec":"","ref":"r","mode":"fast","ticket":"","labels":[],"draft":true,"count":1,"note":"n"}',
         );
         expect(reordered.envelope).toEqual(first.envelope);
+        const nested = (spec: string) =>
+          collie(world, [
+            "schedule",
+            "add",
+            "nested",
+            "typed",
+            "--cron",
+            "0 7 * * *",
+            "--paused",
+            "--inputs-json",
+            `{"note":"n","count":1,"draft":true,"labels":[],"ticket":"","mode":"fast","ref":"r","spec":${spec}}`,
+            "--request-id",
+            "sched-nested",
+          ]);
+        const object = yield* nested('{"b":1,"a":2}');
+        expect(object.envelope.ok).toBe(true);
+        expect((yield* nested('{"a":2,"b":1}')).envelope).toEqual(object.envelope);
+        const where = (selector: string) =>
+          collie(world, [
+            "schedule",
+            "add",
+            "placed",
+            "typed",
+            "--cron",
+            "0 7 * * *",
+            "--paused",
+            "--workspace",
+            selector,
+            "--inputs-json",
+            '{"note":"n","count":1,"draft":true,"labels":[],"ticket":"","mode":"fast","ref":"r","spec":""}',
+            "--request-id",
+            "sched-placed",
+          ]);
+        const placed = yield* where(world.project);
+        expect(placed.envelope.ok).toBe(true);
+        expect((yield* where(`  ${world.project}  `)).envelope).toEqual(placed.envelope);
         const set = (value: string) =>
           collie(world, ["settings", "set", "effort", value, "--request-id", "effort-form"]);
         const spaced = yield* set(" low ");
@@ -566,4 +602,105 @@ test("a request meeting another Run's in-progress receipt neither replays nor ov
         }).pipe(Effect.ensuring(fs.writeFileString(letGo, "").pipe(Effect.ignore)));
       }),
     ["plain.workflow.ts"],
+  ));
+test("a start's decision and workspace are part of its request", () =>
+  proves(
+    "collie-receipt-scope-start-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const elsewhere = `${world.home}/elsewhere`;
+        yield* fs.makeDirectory(elsewhere, { recursive: true });
+        const start = (extra: ReadonlyArray<string>) =>
+          collie(world, [
+            "run",
+            "start",
+            "lingers",
+            "--input",
+            "note=cache",
+            ...extra,
+            "--request-id",
+            "start-once",
+          ]);
+        expect((yield* start([])).envelope.ok).toBe(true);
+        const decided = yield* start(["--decide", "step=a title"]);
+        expect(decided.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+        expect(decided.envelope.data).toBeUndefined();
+        const moved = yield* start(["--workspace", elsewhere]);
+        expect(moved.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+        expect(moved.envelope.data).toBeUndefined();
+        expect(moved.envelope.error?.message).toContain("start-once");
+        expect((yield* start([])).envelope.ok).toBe(true);
+      }),
+    ["lingers.workflow.ts"],
+  ));
+test("an artefact's whole registration is part of its request", () =>
+  proves(
+    "collie-receipt-scope-artefact-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const runId = yield* started(world, { workflow: "plain" });
+        yield* collie(world, ["run", "wait", runId]);
+        const file = `${world.project}/answer.md`;
+        yield* fs.writeFileString(file, "# Delivered\n");
+        const register = (extra: ReadonlyArray<string>) =>
+          collie(world, [
+            "run",
+            "artefact",
+            "register",
+            runId,
+            "--path",
+            file,
+            "--title",
+            "The answer",
+            ...extra,
+            "--request-id",
+            "register-once",
+          ]);
+        expect((yield* register([])).envelope.ok).toBe(true);
+        const snapshot = yield* register(["--snapshot"]);
+        expect(snapshot.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+        expect(snapshot.envelope.data).toBeUndefined();
+        expect((yield* register([])).envelope.ok).toBe(true);
+      }),
+    ["plain.workflow.ts"],
+  ));
+test("an attachment is the file it names, not the way it is written", () =>
+  proves(
+    "collie-receipt-scope-files-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const elsewhere = `${world.home}/elsewhere`;
+        yield* fs.makeDirectory(elsewhere, { recursive: true });
+        yield* fs.writeFileString(`${world.project}/note.md`, "one\n");
+        yield* fs.writeFileString(`${elsewhere}/note.md`, "two\n");
+        const start = (file: string, dir: string) =>
+          collie(
+            world,
+            [
+              "run",
+              "start",
+              "lingers",
+              "--input",
+              "note=cache",
+              "--attach",
+              file,
+              "--request-id",
+              "start-files",
+            ],
+            { COLLIE_CWD: dir },
+          );
+        const first = yield* start("note.md", world.project);
+        expect(first.envelope.ok).toBe(true);
+        expect((yield* start(`${world.project}/note.md`, world.project)).envelope).toEqual(
+          first.envelope,
+        );
+        const other = yield* start("note.md", elsewhere);
+        expect(other.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+        expect(other.envelope.data).toBeUndefined();
+        expect(other.envelope.error?.message).toContain("start-files");
+      }),
+    ["lingers.workflow.ts"],
   ));

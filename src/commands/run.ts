@@ -189,9 +189,9 @@ const attachFlag = Flag.String("attach").pipe(
   Flag.atLeast(0),
 );
 
-const absolute = (files: ReadonlyArray<string>) =>
+const absolute = (env: PluginEnv, files: ReadonlyArray<string>) =>
   Effect.map(Path.Path, (path) =>
-    files.length === 0 ? undefined : Arr.map(files, (file) => path.resolve(file)),
+    files.length === 0 ? undefined : Arr.map(files, (file) => path.resolve(env.cwd, file)),
   );
 
 const runStart = Command.make(
@@ -304,9 +304,11 @@ const runStart = Command.make(
               operation: "run-start",
               run: null,
               destination: "cwd",
+              files: attach,
               args: {
                 workflow,
                 input: { json: explicit.given.json, text: explicit.given.text },
+                decide: [...decide],
                 task: Option.getOrNull(taskId),
                 title: Option.getOrNull(title),
                 goal: Option.getOrNull(goal),
@@ -315,7 +317,6 @@ const runStart = Command.make(
                 harness: Option.getOrNull(harness),
                 model: Option.getOrNull(model),
                 effort: Option.getOrNull(effort),
-                attach: [...attach],
               },
             },
             request,
@@ -367,7 +368,7 @@ const runStart = Command.make(
                       : { constraints: named.constraints },
                     title: Option.getOrUndefined(title),
                     verify: given.specs.length > 0 ? given.specs : undefined,
-                    attachments: yield* absolute(attach),
+                    attachments: yield* absolute(resolved.env, attach),
                   });
                   if (!started.ok) {
                     return started;
@@ -1449,19 +1450,19 @@ const runSteer = Command.make(
             return resolved.result;
           }
           const door = yield* cliDoor(resolved.env);
-          const attachments = yield* absolute(attach);
+          const attachments = yield* absolute(resolved.env, attach);
           return yield* mutation(
             resolved.env,
             {
               operation: "run-steer",
               run: runId,
+              files: attach,
               args: {
                 runId,
                 text,
                 to: Option.getOrNull(to),
                 operation: Option.getOrNull(operation),
                 step: Option.getOrNull(step),
-                attach: [...attach],
               },
             },
             requestId,
@@ -1979,11 +1980,12 @@ const runAction = Command.make(
       {
         operation: "run-action",
         run: runId,
-        args: { runId, offer, inputs, attach: [...attach] },
+        files: attach,
+        args: { runId, offer, inputs },
       },
       requestId,
       (env, id) =>
-        Effect.flatMap(Effect.zip(cliDoor(env), absolute(attach)), ([door, attachments]) =>
+        Effect.flatMap(Effect.zip(cliDoor(env), absolute(env, attach)), ([door, attachments]) =>
           invokeOffer(env, {
             attachments,
             door,
@@ -2544,11 +2546,9 @@ const artefactResult = (read: {
             {
               operation: "artefact-register",
               run: runId,
+              files: path === undefined ? [] : [path],
               args: {
-                path: path ?? null,
-                id: read.registration.id ?? null,
-                url: read.registration.url ?? null,
-                title: read.registration.title ?? null,
+                registration: read.registration,
                 metadata: metadata.value ?? null,
                 upload: read.upload === true,
               },

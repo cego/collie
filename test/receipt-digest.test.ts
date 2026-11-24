@@ -62,6 +62,32 @@ test("a receipt is one operation, one caller, one destination and one set of arg
     }),
   ));
 
+test("a file argument is the path it names, not the way it is written", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped();
+      yield* fs.writeFileString(`${dir}/note.md`, "read me\n");
+      const call: Call = {
+        operation: "attach",
+        run: null,
+        files: ["note.md"],
+        args: { text: "the note" },
+      };
+      const first = yield* asked(call, envIn(dir), "files-once");
+      expect(first).toMatchObject({ ok: true });
+      expect(
+        yield* asked({ ...call, files: [`${dir}/note.md`] }, envIn(dir), "files-once"),
+      ).toEqual(first);
+      expect(
+        yield* asked(call, envIn(dir, { cwd: `${dir}/elsewhere` }), "files-once"),
+      ).toMatchObject(refused);
+      yield* fs.writeFileString(`${dir}/other.md`, "another\n");
+      expect(
+        yield* asked({ ...call, files: [`${dir}/other.md`] }, envIn(dir), "files-once"),
+      ).toMatchObject(refused);
+    }),
+  ));
 test("a receipt written before receipts were scoped is read by operation alone", () =>
   runEffect(
     Effect.gen(function* () {

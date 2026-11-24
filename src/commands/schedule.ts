@@ -143,7 +143,7 @@ const scheduleAdd = Command.make(
             ([key, value]) => [key, asOptionText(value)] as const,
           ),
         ]);
-        const where = Option.getOrUndefined(global.workspace) ?? given.workspace ?? "";
+        const where = Str.trim(Option.getOrUndefined(global.workspace) ?? given.workspace ?? "");
         const inputs = Rec.fromEntries(
           Arr.filter(Rec.toEntries(given), ([key]) => key !== "workspace"),
         );
@@ -155,7 +155,12 @@ const scheduleAdd = Command.make(
             cron,
             tz: Option.getOrNull(tz),
             paused,
-            inputs,
+            inputs: {
+              text: parsed.given.text,
+              json: Rec.fromEntries(
+                Arr.filter(Rec.toEntries(parsed.given.json), ([key]) => key !== "workspace"),
+              ),
+            },
             workspace: where,
             verify: checks.specs,
           },

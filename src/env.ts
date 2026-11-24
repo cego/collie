@@ -22,6 +22,7 @@ export interface PluginEnv {
   raw: Record<string, string>;
   machine?: string;
   caller?: string | null;
+  asked?: string | null;
   hostStamp?: string;
   asker?: Asker;
   pairs?: boolean;

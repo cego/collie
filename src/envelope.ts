@@ -114,7 +114,6 @@ const requestId = Effect.fn("collie.requestId")(function* (value: Option.Option<
 
 const NO_DIRECTORIES: Array<string> = [];
 
-// WARNING: a receipt is found by its id alone, so the same id under another operation is the same request.
 const receiptPath = Effect.fn("collie.receiptPath")(function* (env: PluginEnv, id: string) {
   const path = yield* Path.Path;
   return path.join(env.stateDir, "requests", "by-id", `${encodeURIComponent(id)}.json`);
@@ -167,6 +166,7 @@ export type Call = {
   readonly operation: string;
   readonly run: string | null;
   readonly destination?: "cwd";
+  readonly files?: ReadonlyArray<string>;
   readonly args: Given;
 };
 
@@ -195,13 +195,17 @@ const scopeRefusal = (id: string, unscoped: boolean) =>
     { requestId: id },
   );
 
-const digestOf = (call: Call, env: PluginEnv) =>
+const digestOf = (call: Call, env: PluginEnv, files: ReadonlyArray<string>) =>
   sha256Hex(
     canonical({
       operation: call.operation,
       caller: env.caller ?? null,
       run: call.run,
-      where: { machine: env.machine ?? null, cwd: call.destination === "cwd" ? env.cwd : null },
+      where:
+        call.destination === "cwd"
+          ? { machine: env.machine ?? null, cwd: env.cwd, asked: env.asked ?? null }
+          : { machine: env.machine ?? null },
+      files,
       args: call.args,
     }),
   );
@@ -249,7 +253,11 @@ export const mutation = Effect.fn("collie.mutation")(function* (
   const pathSvc = yield* Path.Path;
   const id = yield* requestId(requested);
   const path = yield* receiptPath(env, id);
-  const digest = digestOf(call, env);
+  const digest = digestOf(
+    call,
+    env,
+    Arr.map(call.files ?? [], (one) => pathSvc.resolve(env.cwd, one)),
+  );
   const replay = replayOf(call, id, env.caller ?? null, digest);
   const recorded = Effect.gen(function* () {
     const found = yield* receiptFound(env, call.operation, id);

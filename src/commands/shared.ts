@@ -94,8 +94,12 @@ export const context = Effect.fn("collie.context")(function* (
   const reach = Option.isSome(global.machine)
     ? { pairs: true, machine: global.machine.value }
     : { pairs: true };
-  // WARNING: who asked comes from the front door, so a receipt scopes to the Run the agent claim resolves to.
-  const base = { ...baseEnv, ...reach, caller: yield* callerIn(baseEnv) };
+  const base = {
+    ...baseEnv,
+    ...reach,
+    caller: yield* callerIn(baseEnv),
+    asked: id === null ? null : Str.trim(id),
+  };
   if (!id) {
     return requireScope
       ? contextFailure(err("workspace_required", "This operation requires a workspace."))

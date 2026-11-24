@@ -17,7 +17,6 @@ export type Given =
 const isJson = Schema.is(Schema.Json);
 const kept = <A>(one: A | undefined) => (one === undefined ? [] : [one]);
 
-// WARNING: an absent value has no JSON form, so it is dropped rather than written as null.
 const plain: (value: Given) => Schema.Json | undefined = (value) => {
   if (value === undefined) {
     return undefined;
@@ -37,7 +36,6 @@ const plain: (value: Given) => Schema.Json | undefined = (value) => {
   return isJson(value) ? value : String(value);
 };
 
-// WARNING: key order is ignored: two objects that differ only in key order are one value.
 export const canonical = (value: Given) => asJsonText(ordered(plain(value) ?? null));
 
 const ordered: (value: Schema.Json) => Schema.Json = (value) => {
