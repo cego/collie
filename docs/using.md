@@ -3382,12 +3382,16 @@ See [Claude subagents](#claude-subagents).
 
 `inline_plan` says whether an implement Run given anything but a plan writes one into its
 own directory before building: `off`, the default, or `on`. A Run keeps the value it started
-with. See [`implement`](workflows.md#implement).
+with. The default is the matched trial's result: one repeat did not show `on` letting no
+more defects reach the audit. See [`implement`](workflows.md#implement) and
+[ADR-draft-a-ticket-is-built-by-an-agent-of-its-own](adr/draft-a-ticket-is-built-by-an-agent-of-its-own.md).
 
 `agent_sessions` says which agents an implement Run's work runs on: `run`, the default,
 builds everything on one agent; `ticket` gives each ticket after the first an agent of its
 own and delivery another; `round` also gives each review-fix round a fresh fixer. A Run
-keeps the value it started with. See
+keeps the value it started with. The default is the matched trial's result: `round` cost
+fewer tokens, but one repeat did not show either `ticket` or `round` letting no more defects
+reach the audit. See
 [Which agent does a Run's work](#which-agent-does-a-runs-work).
 
 `output_submit` says how an agent hands in its Output: `file`, the default, or `tool`, which
