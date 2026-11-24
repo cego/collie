@@ -1135,8 +1135,10 @@ A card on the board says there is something here to see without your opening the
 drift is one amber `↯` line in the task's own words, and a held task carries its `⏸` line
 under the sentence. A finished Run whose pushed branch has moved past the head it recorded
 carries a dim `⤴` line instead: the new head, how many commits came after the end, and its
-follow-up offer with the step that offer enters at. A branch that diverged or was
-force-pushed says so and offers its follow-up at Build. This is not drift: nothing it was
+follow-up offer with the step that offer enters at. Two Runs that ended at the same head
+each read the line about their own ending, and a card that changed has the whole branch
+read again, so no card keeps a line about a head the branch has left. A branch that
+diverged or was force-pushed says so and offers its follow-up at Build. This is not drift: nothing it was
 asked for changed, and the finished record is left as it was. Nothing about any of this takes your focus — only a pending question
 does that.
 
