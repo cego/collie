@@ -569,6 +569,12 @@ else is silently dropped. Taken with no ids — an older start, or a plain
 no Improve for somebody else's merge request: Collie never pushes to a branch that is not
 yours.
 
+**Investigate further** and **Plan this** are the other two offers a finished review makes,
+each over one open finding somebody chooses: an `investigate` Run whose goal is that finding
+— its title, location, detail, evidence and basis, and the path of `review.md` it came from
+— or a `plan` Run whose goal is the same text. Taking one records the finding `taken` by
+the Run it started, so it is not offered twice.
+
 Its Flow forecasts Review and What next, with Synthesis between them when a fork seats
 multiple reviewers. Fix findings is drawn off the path; each review and menu round keeps
 its own run. Implement starts a separate row in the same Task.
@@ -1248,8 +1254,12 @@ cards and a `findings` work source read an investigation's findings with nothing
 When the investigator's Output is collected, the Run writes `findings.json` and
 `investigation.md` — the answer as its first paragraph, then its Cause, then each finding
 with its location, basis, evidence and suggestion — into the Run's directory, through the
-same leave path a review uses. It changes only what the goal asks, has no proof gate and
-offers no next steps. The host reports the result to the agent that started it, then
+same leave path a review uses. It changes only what the goal asks and has no proof gate.
+What it found is what it offers next: **Implement selected** builds the findings you choose,
+**Investigate further** investigates one of them, and **Plan this** plans it — the child's
+goal is that finding as text, with the path of `investigation.md` it came from, and it reads
+`taken` by the Run that was started for it. The host reports the result to the agent that
+started it, then
 closes the investigator and its Task workspace unless another Run or a human pane needs it
 (`closes: "reported"`).
 

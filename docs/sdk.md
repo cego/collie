@@ -2019,8 +2019,9 @@ export default defineWorkflow({
   title would start a different one. `workflow` is a public id or `"self"` for the one
   declaring it; `inputs` names what Collie fills in from the Run — `run-id`, `run-dir`, `plan-dir`,
   `diff-target`, `branch`, `merge-request`, `findings` for the open findings whoever takes
-  the offer chose, or `started-with` for what the Run was started with under the same input
-  name — so a card makes the offer without asking a human to type a path. `arguments` is the child's schema; eligibility is decided from facts, never from a
+  the offer chose, `finding` for the one finding it chose as text — its title, severity,
+  location, detail, evidence, basis, and the path of the report it came from — or
+  `started-with` for what the Run was started with under the same input name — so a card makes the offer without asking a human to type a path. `arguments` is the child's schema; eligibility is decided from facts, never from a
   workflow's name, and `facts.claim` is the shared claim a Run still holds. A follow-up says `when` — `succeeded`, `failed` or
   `always` — and may add an `eligible` of its own where how it ended is not the whole of
   it: an offer to carry on with a branch is not an offer where there is no branch. A
@@ -2032,8 +2033,8 @@ export default defineWorkflow({
   `inputs` does not fill, and a front door asks for those.
 - **`selects`** makes a follow-up one taken over the Run's findings: `"many"` for a list of
   ids, `"one"` for exactly one. Its `findings` input is filled by whoever takes it, never by
-  Collie, so the offer must list `findings: "findings"` in `inputs` — a definition that
-  selects without it is refused at load. Taking one refuses any id that is not open on the
+  Collie, so a `"many"` offer must list `findings: "findings"` in `inputs` and a `"one"`
+  offer `finding: "finding"` — a definition that selects without it is refused at load. Taking one refuses any id that is not open on the
   Run, or the wrong number for `"one"`, and starts nothing; otherwise it starts the child and
   records each chosen id `taken` with the offer and the child Run. A settled Run with an open
   finding and an eligible `many` such offer waits on the human instead of landing.

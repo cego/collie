@@ -143,6 +143,7 @@ export const SOURCES = {
   branch: "the branch its checkout is on",
   "merge-request": "the merge request it opened or was given",
   findings: "the open findings whoever invokes it chose",
+  finding: "the one finding whoever invokes it chose, as text",
   "started-with": "what the Run was started with for the same input",
 } as const;
 export type Source = keyof typeof SOURCES;
@@ -154,6 +155,7 @@ export const SOURCE_NAMES: ReadonlyArray<Source> = [
   "branch",
   "merge-request",
   "findings",
+  "finding",
   "started-with",
 ];
 export const isSource = (value: string): value is Source => value in SOURCES;
@@ -229,6 +231,7 @@ export function inputsFor(
         return from.facts.mrUrl ?? undefined;
       // WARNING: the chosen findings are the caller's to give, never the Run's to fill in.
       case "findings":
+      case "finding":
         return undefined;
       case "started-with":
         return from.input[name];

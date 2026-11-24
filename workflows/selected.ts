@@ -10,3 +10,25 @@ export const implementSelected: FollowUp = {
   inputs: { plan: "run-dir", findings: "findings" },
   eligible: (facts) => facts.openFindings > 0,
 };
+
+export const investigateFurther: FollowUp = {
+  id: "investigate-further",
+  title: "Investigate further",
+  workflow: "investigate",
+  when: "succeeded",
+  selects: "one",
+  inputs: { goal: "finding" },
+  eligible: (facts) => facts.openFindings > 0,
+};
+
+export const planThis: FollowUp = {
+  id: "plan-this",
+  title: "Plan this",
+  workflow: "plan",
+  when: "succeeded",
+  selects: "one",
+  inputs: { goal: "finding" },
+  eligible: (facts) => facts.openFindings > 0,
+};
+
+export const selected: ReadonlyArray<FollowUp> = [implementSelected, investigateFurther, planThis];

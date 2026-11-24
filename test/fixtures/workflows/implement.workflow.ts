@@ -8,6 +8,7 @@ export default defineWorkflow({
   input: Schema.Struct({
     plan: Schema.String,
     findings: Schema.optionalKey(Schema.Array(Schema.String)),
+    goal: Schema.optionalKey(Schema.String),
   }),
   hints: { plan: "work-source" },
   output: Schema.String,

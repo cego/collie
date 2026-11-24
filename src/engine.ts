@@ -261,11 +261,13 @@ import {
 import type { IntentSeed } from "./intent";
 import { latest, readDispositions } from "./disposition";
 import {
+  findingText,
   findingsWithStatus,
   idsIn,
   isOpenFinding,
   markTaken,
   openFindingsRead,
+  reportIn,
   storeOpenCount,
 } from "./finding-status";
 import {
@@ -10136,6 +10138,14 @@ const makeRegistry: (
     return ids;
   });
 
+  // WARNING: a child is told what the finding says, and where its report is, so it need not go looking.
+  const findingFor = Effect.fn("Engine.Registry.finding")(function* (runDir: string, id: string) {
+    const found = Option.getOrUndefined(
+      Arr.findFirst(yield* findingsWithStatus(runDir), (one) => one.id === id),
+    );
+    return found === undefined ? undefined : findingText(found, yield* reportIn(runDir));
+  });
+
   const recoveryNow = (runId: string, workSource: string) =>
     recoveryFor(store, dir, runId, runId, workSource).pipe(
       Effect.tap((recovery) =>
@@ -10979,15 +10989,25 @@ const makeRegistry: (
         });
       }
       // WARNING: the caller's own values win over an offer's fill-ins.
-      const filled = {
+      const given = {
         ...inputsFor(offer, { runId: row.run, runDir: where, facts, input }),
         ...options.input,
       };
       const chosen =
-        offer.selects === undefined ? [] : yield* chosenFor(offer, filled.findings, where);
-      // WARNING: the child is given the ids, however they were typed, and none means every open one.
-      if (offer.selects !== undefined && chosen.length > 0) {
+        offer.selects === undefined ? [] : yield* chosenFor(offer, given.findings, where);
+      // WARNING: the ids are the selection, so only an offer that asks for them passes them on.
+      const filled: Record<string, Schema.Json> = Rec.filter(
+        given,
+        (_, name) => name !== "findings" || offer.inputs.findings === "findings",
+      );
+      if (chosen.length > 0 && offer.inputs.findings === "findings") {
         filled.findings = chosen;
+      }
+      for (const [name, source] of Rec.toEntries(offer.inputs)) {
+        const text = source === "finding" ? yield* findingFor(where, chosen[0] ?? "") : undefined;
+        if (text !== undefined) {
+          filled[name] = text;
+        }
       }
       const inherited = yield* approvedOf(dir, row.run);
       const launch = Rec.map(

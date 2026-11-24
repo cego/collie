@@ -255,6 +255,25 @@ test("an offer that selects findings fills them from the findings Source, or it 
   ).toEqual(['offer "implement-selected" selects findings without the "findings" Source']);
 });
 
+test("an offer that takes exactly one finding fills it from the finding Source, or it is refused", () => {
+  const one: (over: Partial<FollowUp>) => FollowUp = (over) => ({
+    id: "plan-this",
+    title: "Plan this",
+    workflow: "plan",
+    when: "succeeded",
+    selects: "one",
+    inputs: { goal: "finding" },
+    ...over,
+  });
+  expect(checkEntry(entry({ metadata: { followUps: [one({})] } }))).toEqual([]);
+  expect(
+    checkEntry(entry({ metadata: { followUps: [one({ inputs: { goal: "run-id" } })] } })),
+  ).toEqual(['offer "plan-this" takes one finding without the "finding" Source']);
+  expect(
+    checkEntry(entry({ metadata: { followUps: [one({ inputs: { goal: "findings" } })] } })),
+  ).toEqual(['offer "plan-this" takes one finding without the "finding" Source']);
+});
+
 test("every conflict is reported, not the first one", () => {
   const problems = checkEntry(
     entry({

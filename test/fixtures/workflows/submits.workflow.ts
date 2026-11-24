@@ -17,7 +17,7 @@ export default defineWorkflow({
       workflow: "implement",
       when: "succeeded",
       selects: "one",
-      inputs: { plan: "run-dir", findings: "findings" },
+      inputs: { plan: "run-dir", goal: "finding" },
       eligible: (facts) => facts.openFindings > 0,
     },
   ],

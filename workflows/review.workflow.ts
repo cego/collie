@@ -42,6 +42,7 @@ import {
 import type { Finding, SynthesisReport, Woke, Answered } from "collie";
 import { Effect, FileSystem, Schema } from "effect";
 import { connection } from "./connections.ts";
+import { investigateFurther, planThis } from "./selected.ts";
 import { reassess, repliesTo, formatReplies } from "./reassessment.ts";
 import * as Activity from "effect/workflow/Activity";
 import {
@@ -142,6 +143,7 @@ export default defineWorkflow({
   hints: { target: "diff-target", slack: "internal", improving: "internal" },
   follows: FOLLOW,
   outcome: { fixed: "review" },
+  followUps: [investigateFurther, planThis],
   actions: [
     {
       id: "improve",

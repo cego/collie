@@ -1,11 +1,11 @@
 // WARNING: a status is a line, so the latest word wins over the file and nothing believed before is lost.
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import { Effect, Schema } from "effect";
+import { Effect, FileSystem, Schema } from "effect";
 import type { ReviewFinding } from "./board-model";
 import { FindingStatus } from "./board-model";
 import type { Finding } from "./output";
-import { findingsIn } from "./output";
+import { FINDINGS_FILE, REVIEW_FILE, findingsIn } from "./output";
 import { appendRunJournal, readRunJournal, runJournal } from "./journal";
 import { RunRecords, runOfDir } from "./run-records";
 import { nowIso } from "./time";
@@ -107,6 +107,38 @@ export const findingsWithStatus = Effect.fn("FindingStatus.findings")(function* 
   });
   return returned;
 });
+
+const REPORT_FILES = [REVIEW_FILE, "investigation.md"];
+
+// WARNING: findings.json is the fallback, so a Run that left no report still names a path.
+export const reportIn = Effect.fn("FindingStatus.report")(function* (runDir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  for (const name of REPORT_FILES) {
+    const there = yield* fs.exists(`${runDir}/${name}`).pipe(Effect.orElseSucceed(() => false));
+    if (there) {
+      return `${runDir}/${name}`;
+    }
+  }
+  return `${runDir}/${FINDINGS_FILE}`;
+});
+
+export const findingText = (finding: ReviewFinding, report: string) =>
+  Arr.join(
+    Arr.filter(
+      [
+        `${finding.title} (${finding.severity})`,
+        finding.file === null
+          ? ""
+          : `Where: ${finding.file}${finding.line === null ? "" : `:${finding.line}`}`,
+        finding.detail === null ? "" : `Detail: ${finding.detail}`,
+        finding.evidence === null ? "" : `Evidence: ${finding.evidence}`,
+        finding.basis === null ? "" : `Basis: ${finding.basis}`,
+        `From: ${report}`,
+      ],
+      (one) => one !== "",
+    ),
+    "\n",
+  );
 
 export const openCountIn = Effect.fn("FindingStatus.count")(function* (runDir: string) {
   return openFindingsOf(yield* findingsIn(runDir), yield* readFindingStatuses(runDir));

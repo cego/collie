@@ -1452,6 +1452,74 @@ test("Improve builds only the findings it was given, and the rest stay open on t
     }),
   ));
 
+test("Plan this starts a plan Run told the one finding of a review Run it was chosen for", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      yield* repository;
+      yield* git(["checkout", "-q", "-b", "feature"]);
+      const first = yield* pushed("needs a guard");
+      yield* git(["push", "-q", "origin", "feature"]);
+      yield* git(["config", "--unset-all", `url.${rig.root}/origin.git.insteadOf`]);
+      yield* git(["remote", "set-url", "origin", `https://${PROJECT}.git`]);
+      yield* git(["remote", "set-url", "--push", "origin", `${rig.root}/origin.git`]);
+      const forge = yield* host.gitlab(model(first, { mrs: [mr(first, { author: "mk" })] }));
+      const detail = "The input is trusted without a guard.";
+      yield* rig.queueOutputs([review([{ ...F1, detail }, F2, F3])]);
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          const registry = yield* Registry;
+          yield* registry.load(`${ROOT}workflows/plan.workflow.ts`);
+          yield* registry.load(`${ROOT}workflows/review.workflow.ts`);
+          const parent = yield* host.started(yield* entryOf("review"), "review-plan", {
+            target: TARGET,
+          });
+          const rows = yield* until(
+            () => asked(parent.runId),
+            (rows) => rows.length > 0,
+          );
+          const reviewed = `${host.dir()}/runs/${parent.runId}`;
+          const ids = Arr.map(yield* findingsIn(reviewed), (one) => one.id ?? "");
+          expect(ids).toHaveLength(3);
+          yield* host.mergeWatched;
+          // WARNING: a follow-up is a child of a finished Run, so the review is answered before it offers one.
+          yield* (yield* Registry).answer({
+            runId: parent.runId,
+            decision: Option.getOrThrow(Arr.head(rows)).decision,
+            value: "Don't post",
+            request: "done-reviewing",
+          });
+          yield* until(
+            () => host.status(parent.runId),
+            (row) => row?.status.status === "complete",
+          );
+          const offered = Option.getOrThrow(
+            Arr.findFirst(yield* registry.offers(parent.runId), (one) => one.id === "plan-this"),
+          );
+          expect({ selects: offered.selects, unavailable: offered.unavailable }).toEqual({
+            selects: "one",
+            unavailable: null,
+          });
+
+          const child = yield* registry.invoke({
+            runId: parent.runId,
+            offer: "plan-this",
+            input: givenOfferInput(null, { findings: ids[0] ?? "" }),
+            request: "plan-first",
+          });
+          const goal = String((yield* host.status(child.runId))?.input.goal);
+          expect(goal).toContain(F1.title);
+          expect(goal).toContain(detail);
+          expect(yield* findingsWithStatus(reviewed)).toMatchObject([
+            { id: ids[0], status: "taken", offer: "plan-this", run: child.runId },
+            { id: ids[1], status: "open", run: null },
+            { id: ids[2], status: "open", run: null },
+          ]);
+        }),
+      );
+    }),
+  ));
+
 test("Slack permalink admission validates the linked MR and joins its follow claim", () =>
   host.runEffect(
     Effect.gen(function* () {

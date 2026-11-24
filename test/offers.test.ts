@@ -80,6 +80,24 @@ test("Improve is taken over the findings chosen, so its findings input is the ca
   });
 });
 
+test("a one-finding offer takes its text from the Run's findings, so it is the caller's to fill", () => {
+  const further = Option.getOrThrow(
+    Arr.findFirst(
+      offersFrom(declaredByModule(reviewWorkflow), facts({ openFindings: 2 }), {
+        keepUnavailable: true,
+      }),
+      (one) => one.id === "investigate-further",
+    ),
+  );
+  expect({ selects: further.selects, goal: further.inputs.goal }).toEqual({
+    selects: "one",
+    goal: "finding",
+  });
+  expect(
+    inputsFor(further, { runId: "run-a", runDir: "/state/runs/run-a", facts: facts(), input: {} }),
+  ).toEqual({});
+});
+
 test("an offer whose facts are met is offered, with the first eligible one as the primary", () => {
   const offers = offersFrom(
     [offer({ id: "one" }), offer({ id: "two" }), offer({ id: "three", eligible: () => false })],

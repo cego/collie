@@ -30,6 +30,21 @@ const investigation = {
   findings,
   summary: "The Machines page uses the last peer build.",
 };
+const told = {
+  ...investigation,
+  findings: [
+    {
+      severity: "major",
+      title: "The Machines page uses a stale bundle",
+      file: "desktop/src/bun/chat.ts",
+      line: 12,
+      detail: "The peer's bundle is never rebuilt after it changes.",
+      evidence: "peers.test.ts rebuilds it; nothing else does",
+      basis: "fact",
+    },
+    ...findings.slice(1),
+  ],
+};
 
 // WARNING: these modules are the repository's own, copied in, since a Run reads them from the install.
 const install = (world: {
@@ -344,7 +359,7 @@ test("invoking the offer once per id starts two Runs, each given the one finding
     [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
   ));
 
-test("a one-finding offer is refused two ids, and starts nothing on the refusal", () =>
+test("a one-finding offer is refused two ids or none, and starts nothing on the refusal", () =>
   hosted(
     "hw-selected-one-",
     ({ world }) =>
@@ -371,6 +386,14 @@ test("a one-finding offer is refused two ids, and starts nothing on the refusal"
           "exactly one finding",
         );
         expect((yield* registeredAt(world.state)).length).toBe(before);
+        const none = yield* run.client
+          .invoke({ runId: run.id, offer: "build-one", input: {}, request: "choose-none" })
+          .pipe(Effect.flip);
+        expect(none._tag === "HostRefused" ? none.reason : "").toContain("exactly one finding");
+        expect((yield* registeredAt(world.state)).length).toBe(before);
+        expect(
+          Arr.map(yield* run.client.runFindings({ runId: run.id }), (one) => one.status),
+        ).toEqual(["open", "open", "open"]);
 
         const child = yield* run.client
           .invoke({
@@ -380,11 +403,11 @@ test("a one-finding offer is refused two ids, and starts nothing on the refusal"
             request: "choose-one",
           })
           .pipe(Effect.orDie);
-        expect(
-          (yield* run.client.run({ runId: child.runId }).pipe(Effect.orDie))?.input,
-        ).toMatchObject({
-          findings: [only],
-        });
+        const goal = String(
+          (yield* run.client.run({ runId: child.runId }).pipe(Effect.orDie))?.input.goal,
+        );
+        expect(goal).toContain("The first");
+        expect(goal).toContain(`${run.dir}/findings.json`);
       }),
     [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
   ));
@@ -434,6 +457,60 @@ test("the CLI invokes a selecting offer given its ids as comma-separated text", 
         expect(out).toContain("implement-selected");
         const read = yield* run.client.runFindings({ runId: run.id });
         expect(Arr.map(read, (one) => one.status)).toEqual(["taken", "taken", "open"]);
+      }),
+    [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
+  ));
+
+test("Investigate further starts an investigate Run told the one finding it was chosen for", () =>
+  hosted(
+    "hw-selected-further-",
+    ({ world }) =>
+      Effect.gen(function* () {
+        const run = yield* Effect.gen(function* () {
+          yield* install(world);
+          yield* (yield* FileSystem.FileSystem).writeFileString(
+            `${world.home}/outputs.json`,
+            encode([told, told]),
+          );
+          return yield* started(
+            world.state,
+            world.project,
+            "investigate",
+            { goal: "Why is the Machines page behind?" },
+            { workspace: world.project, branch: "topic" },
+          );
+        });
+        const [first] = idsOf(run.id);
+        const offered = Option.getOrThrow(
+          Arr.findFirst(
+            yield* run.client.offers({ runId: run.id }),
+            (one) => one.id === "investigate-further",
+          ),
+        );
+        expect({ selects: offered.selects, unavailable: offered.unavailable }).toEqual({
+          selects: "one",
+          unavailable: null,
+        });
+
+        const child = yield* run.client
+          .invoke({
+            runId: run.id,
+            offer: "investigate-further",
+            input: { findings: first },
+            request: "further-first",
+          })
+          .pipe(Effect.orDie);
+        const goal = String(
+          (yield* run.client.run({ runId: child.runId }).pipe(Effect.orDie))?.input.goal,
+        );
+        expect(goal).toContain("The Machines page uses a stale bundle");
+        expect(goal).toContain("peers.test.ts rebuilds it; nothing else does");
+        expect(goal).toContain(`${run.dir}/investigation.md`);
+        expect(yield* run.client.runFindings({ runId: run.id })).toMatchObject([
+          { id: first, status: "taken", offer: "investigate-further", run: child.runId },
+          { id: `${run.id}-F2`, status: "open", run: null },
+          { id: `${run.id}-F3`, status: "open", run: null },
+        ]);
       }),
     [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
   ));

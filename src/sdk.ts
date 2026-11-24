@@ -2328,12 +2328,13 @@ function offerProblems(metadata: WorkflowMetadata | undefined, workflow: string)
         problems.push(`offer "${offer.id}" both fills "${name}" from the Run and gives it`);
       }
     }
-    if (
-      "selects" in offer &&
-      offer.selects !== undefined &&
-      !Rec.some(offer.inputs ?? {}, (source) => source === "findings")
-    ) {
+    const selecting = "selects" in offer ? offer.selects : undefined;
+    const used = (source: Source) => Rec.some(offer.inputs ?? {}, (one) => one === source);
+    if (selecting === "many" && !used("findings")) {
       problems.push(`offer "${offer.id}" selects findings without the "findings" Source`);
+    }
+    if (selecting === "one" && !used("finding")) {
+      problems.push(`offer "${offer.id}" takes one finding without the "finding" Source`);
     }
   }
   return problems;

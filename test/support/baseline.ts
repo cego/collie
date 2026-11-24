@@ -3970,42 +3970,48 @@ scenario("Flow: investigate's reported work is one completed Investigate Step", 
   ),
 );
 
-scenario("investigate asks one investigator and returns findings without proof or offers", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const output = {
-        answer: "The peer's bundle is stale.",
-        cause: "Its watcher ignores the bundle's directory.",
-        summary: "The peer build is stale",
-        findings: [
-          {
-            severity: "major",
-            title: "A cached build",
-            file: "MachinesPage.vue",
-            line: 12,
-            basis: "fact",
-            evidence: "the pane shows an older commit",
-            suggested: "fix",
-          },
-        ],
-      };
-      yield* rig.queueOutputs([output]);
-      const result = yield* ran({
-        entry: shipped("investigate"),
-        runId: "r-investigate",
-        input: { goal: "Why is the peer behind?" },
-      });
-      expect(result).toMatchObject({ _tag: "Success", success: output });
-      const messages = yield* prompts();
-      expect(messages).toHaveLength(1);
-      expect(yield* asked("r-investigate", "investigate")).toContain("Why is the peer behind?");
-      expect(yield* persona("r-investigate", "investigate")).toContain("investigator");
-      const entry = yield* loadEntry(shipped("investigate"));
-      expect(entry.metadata?.closes).toBe("reported");
-      expect(entry.metadata?.outcome).toBeUndefined();
-      expect(entry.metadata?.followUps ?? []).toHaveLength(0);
-    }),
-  ),
+scenario(
+  "investigate asks one investigator and returns findings without proof, offering what it found",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const output = {
+          answer: "The peer's bundle is stale.",
+          cause: "Its watcher ignores the bundle's directory.",
+          summary: "The peer build is stale",
+          findings: [
+            {
+              severity: "major",
+              title: "A cached build",
+              file: "MachinesPage.vue",
+              line: 12,
+              basis: "fact",
+              evidence: "the pane shows an older commit",
+              suggested: "fix",
+            },
+          ],
+        };
+        yield* rig.queueOutputs([output]);
+        const result = yield* ran({
+          entry: shipped("investigate"),
+          runId: "r-investigate",
+          input: { goal: "Why is the peer behind?" },
+        });
+        expect(result).toMatchObject({ _tag: "Success", success: output });
+        const messages = yield* prompts();
+        expect(messages).toHaveLength(1);
+        expect(yield* asked("r-investigate", "investigate")).toContain("Why is the peer behind?");
+        expect(yield* persona("r-investigate", "investigate")).toContain("investigator");
+        const entry = yield* loadEntry(shipped("investigate"));
+        expect(entry.metadata?.closes).toBe("reported");
+        expect(entry.metadata?.outcome).toBeUndefined();
+        expect(Arr.map(entry.metadata?.followUps ?? [], (one) => one.id)).toEqual([
+          "implement-selected",
+          "investigate-further",
+          "plan-this",
+        ]);
+      }),
+    ),
 );
 
 scenario(
