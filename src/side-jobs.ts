@@ -192,9 +192,18 @@ export const gitSync = <E, R>(
       }
       const byId = new Map(Arr.map(runs, (run) => [run.id, run] as const));
       const branches = yield* Branches;
-      const due = new Map<string, BranchRun>(
-        Arr.map(yield* branches.wanted, (run) => [branchKey(run.cwd, run.branch), run]),
-      );
+      const due = new Map<string, Array<BranchRun>>();
+      const dueAt = (run: BranchRun) => {
+        const key = branchKey(run.cwd, run.branch);
+        const runs = due.get(key) ?? [];
+        if (!Arr.some(runs, (one) => one.dir === run.dir)) {
+          runs.push(run);
+        }
+        due.set(key, runs);
+      };
+      for (const run of yield* branches.wanted) {
+        dueAt(run);
+      }
       const moved = new Set<string>();
       for (const view of views) {
         const at = `${view.revision?.epoch ?? ""}:${view.revision?.seq ?? ""}`;
@@ -207,7 +216,7 @@ export const gitSync = <E, R>(
           if (run === undefined) {
             continue;
           }
-          due.set(branchKey(run.cwd, run.branch), run);
+          dueAt(run);
           moved.add(run.id);
         }
       }
@@ -216,8 +225,8 @@ export const gitSync = <E, R>(
       }
       const read = new Map<string, Branch>();
       const known = yield* branches.all;
-      for (const [key, run] of due) {
-        read.set(key, yield* readBranch(run, known.get(key)?.movements ?? []));
+      for (const [key, runs] of due) {
+        read.set(key, yield* readBranch(runs, known.get(key)?.movements ?? []));
       }
       yield* branches.put(read);
       for (const run of moved) {

@@ -110,37 +110,42 @@ export const branchesLayer = Layer.effect(Branches)(
 );
 
 export const readBranch = Effect.fn("Branches.read")(function* (
-  run: BranchRun,
+  runs: ReadonlyArray<BranchRun>,
   kept: ReadonlyArray<Movement> = [],
 ) {
-  const project = yield* projectHere(run.cwd, shell);
-  if (run.branch === null) {
+  const first = Arr.head(runs).pipe(Option.getOrThrow);
+  const project = yield* projectHere(first.cwd, shell);
+  if (first.branch === null) {
     return { head: null, project, movements: [] } satisfies Branch;
   }
   const read = yield* shell(
     "git",
-    ["rev-parse", "--verify", "--quiet", `${run.branch}^{commit}`],
-    run.cwd,
+    ["rev-parse", "--verify", "--quiet", `${first.branch}^{commit}`],
+    first.cwd,
   );
-  const sha = Str.trim(read.stdout);
-  const final = yield* readFinalCard(run.dir).pipe(Effect.orElseSucceed(() => Option.none()));
-  const finished = Option.match(final, {
-    onNone: () => "",
-    onSome: (card) => card.revision.head_sha,
-  });
-  if (finished === "") {
-    return {
-      head: read.code === 0 && sha !== "" ? sha : null,
-      project,
-      movements: [],
-    } satisfies Branch;
-  }
+  const head = read.code === 0 && Str.trim(read.stdout) !== "" ? Str.trim(read.stdout) : null;
+  const fresh = yield* Effect.forEach(runs, (run) =>
+    readFinalCard(run.dir).pipe(
+      Effect.orElseSucceed(() => Option.none()),
+      Effect.flatMap((final) =>
+        Option.match(final, {
+          onNone: () => Effect.succeed([]),
+          onSome: (card) =>
+            branchMovement(run).pipe(
+              Effect.orElseSucceed(() => null),
+              Effect.map((said) => [{ finished: card.revision.head_sha, said }]),
+            ),
+        }),
+      ),
+    ),
+  );
+  const finished = Arr.map(Arr.flatten(fresh), (one) => one.finished);
   return {
-    head: read.code === 0 && sha !== "" ? sha : null,
+    head,
     project,
     movements: [
-      { finished, said: yield* branchMovement(run).pipe(Effect.orElseSucceed(() => null)) },
-      ...Arr.filter(kept, (one) => one.finished !== finished),
+      ...Arr.flatten(fresh),
+      ...Arr.filter(kept, (one) => !Arr.contains(finished, one.finished)),
     ].slice(0, KEPT_MOVEMENTS),
   } satisfies Branch;
 });

@@ -162,6 +162,86 @@ test("Git sync reads a branch a build asked for on its next round", () =>
     }),
   ));
 
+test("Git sync reads every Run that ended on a branch, not only the last of them it saw", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "collie-git-sync-two-" });
+      const repo = `${root}/repo`;
+      const origin = `${root}/origin.git`;
+      const git = (...args: Array<string>) => shell("git", args, repo);
+      yield* fs.makeDirectory(repo);
+      expect((yield* shell("git", ["init", "-q", "--bare", origin], root)).code).toBe(0);
+      expect((yield* git("init", "-q", "-b", "feature")).code).toBe(0);
+      expect((yield* git("remote", "add", "origin", origin)).code).toBe(0);
+      const heads: Array<string> = [];
+      for (const message of ["one", "two"]) {
+        expect(
+          (yield* git(
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            message,
+          )).code,
+        ).toBe(0);
+        heads.push(Str.trim((yield* git("rev-parse", "HEAD")).stdout));
+        expect((yield* git("push", "-qu", "origin", "HEAD")).code).toBe(0);
+      }
+      const [older, later] = [
+        yield* madeRun(`${root}/older`, {
+          id: "older",
+          state: "succeeded",
+          branch: "feature",
+          cwd: repo,
+          created: "2026-10-30T09:00:00Z",
+          finished: AT,
+        }),
+        yield* madeRun(`${root}/later`, {
+          id: "later",
+          state: "succeeded",
+          branch: "feature",
+          cwd: repo,
+          created: "2026-10-30T09:10:00Z",
+          finished: AT,
+        }),
+      ];
+      yield* writeFinal(older.dir, older.id, heads[0]!);
+      yield* writeFinal(later.dir, later.id, heads[1]!);
+      const views = yield* buildBoard({
+        env: readEnv({ COLLIE_STATE_DIR: root, COLLIE_CWD: repo }),
+        runs: [older, later],
+        registered: [],
+        now: NOW,
+        offers: () => Effect.succeed([]),
+      });
+      yield* Effect.forkScoped(gitSync(Effect.succeed({ runs: [older, later], views })));
+      const row = yield* Branches.use((branches) => branches.all).pipe(
+        Effect.map((rows) => rows.get(branchKey(repo, "feature"))),
+        Effect.filterOrFail(
+          (found) => Arr.length(found?.movements ?? []) >= 2,
+          () => "both Runs' lines were read",
+        ),
+        Effect.retry({ times: 200, schedule: Schedule.spaced("25 millis") }),
+      );
+      expect(Arr.map(row?.movements ?? [], (one) => one.finished)).toEqual(heads);
+      expect(Arr.findFirst(row?.movements ?? [], (one) => one.finished === heads[0])).toMatchObject(
+        {
+          value: { said: expect.stringContaining("moved past") },
+        },
+      );
+      expect(Arr.findFirst(row?.movements ?? [], (one) => one.finished === heads[1])).toMatchObject(
+        {
+          value: { said: null },
+        },
+      );
+    }),
+  ));
+
 test("a card reads the line about the Run it shows, not another Run's on the same branch", () =>
   runEffect(
     Effect.gen(function* () {
@@ -249,7 +329,7 @@ test("a head its recorded commit is not in the checkout says the history could n
       const absent = "0123456789abcdef0123456789abcdef01234567";
       yield* writeFinal(`${root}/run`, "r1", absent);
       const row = yield* readBranch(
-        { cwd: repo, dir: `${root}/run`, branch: "feature", state: "failed" },
+        [{ cwd: repo, dir: `${root}/run`, branch: "feature", state: "failed" }],
         [{ finished: absent, said: "earlier" }],
       );
       const said = row.movements[0]?.said ?? "";
