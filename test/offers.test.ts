@@ -59,6 +59,27 @@ test("Improve is available only for owned merge requests with open findings at t
   );
 });
 
+test("Improve is taken over the findings chosen, so its findings input is the caller's", () => {
+  const improve = Option.getOrThrow(
+    Arr.findFirst(
+      offersFrom(
+        declaredByModule(reviewWorkflow),
+        facts({
+          openFindings: 3,
+          diffTarget: "mr:gitlab.cego.dk/mk/collie!7",
+          review: { head: "H1", reviewed: "H1", owned: true },
+        }),
+        { keepUnavailable: true },
+      ),
+      (one) => one.id === "improve",
+    ),
+  );
+  expect({ selects: improve.selects, findings: improve.inputs.findings }).toEqual({
+    selects: "many",
+    findings: "findings",
+  });
+});
+
 test("an offer whose facts are met is offered, with the first eligible one as the primary", () => {
   const offers = offersFrom(
     [offer({ id: "one" }), offer({ id: "two" }), offer({ id: "three", eligible: () => false })],

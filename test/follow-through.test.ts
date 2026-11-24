@@ -23,6 +23,8 @@ import { machineHerd } from "../src/steering";
 import { fakeSlack, signedInToSlack } from "./support/slack";
 import { slackApi } from "../src/slack";
 import { findingsIn } from "../src/output";
+import { findingsWithStatus, openCountIn, recordFindingStatus } from "../src/finding-status";
+import { givenOfferInput } from "../src/board-model";
 import { writeTask } from "../src/task";
 import { registerAgent, scopeFor } from "../src/registry";
 import { isString } from "../src/schema";
@@ -130,6 +132,11 @@ const F2 = {
   severity: "major",
   file: "src/b.ts",
   title: "close the handle",
+};
+const F3 = {
+  severity: "minor",
+  file: "src/c.ts",
+  title: "name the log line",
 };
 const review = (findings: ReadonlyArray<Schema.Json>) => ({
   verdict: findings.length === 0 ? "clean" : "findings",
@@ -1339,6 +1346,111 @@ test.each(["major", "minor"] as const)(
       }),
     ),
 );
+
+test("Improve builds only the findings it was given, and the rest stay open on the reviewed Run", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      yield* repository;
+      yield* git(["checkout", "-q", "-b", "feature"]);
+      const first = yield* pushed("needs a guard");
+      yield* git(["push", "-q", "origin", "feature"]);
+      yield* git(["config", "--unset-all", `url.${rig.root}/origin.git.insteadOf`]);
+      yield* git(["remote", "set-url", "origin", `https://${PROJECT}.git`]);
+      yield* git(["remote", "set-url", "--push", "origin", `${rig.root}/origin.git`]);
+      const forge = yield* host.gitlab(model(first, { mrs: [mr(first, { author: "mk" })] }));
+      yield* rig.queueOutputs([
+        review([F1, F2, F3]),
+        { writes: [], output: null, status: "working" },
+        review([
+          { ...F1, status: "fixed" },
+          { ...F3, status: "fixed" },
+        ]),
+      ]);
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          const registry = yield* Registry;
+          yield* registry.load(`${ROOT}workflows/review-improve.workflow.ts`);
+          const parent = yield* host.started(yield* entryOf("review"), "review-selected", {
+            target: TARGET,
+          });
+          yield* until(
+            () => asked(parent.runId),
+            (rows) => rows.length > 0,
+          );
+          const reviewed = `${host.dir()}/runs/${parent.runId}`;
+          const ids = Arr.map(yield* findingsIn(reviewed), (one) => one.id);
+          expect(ids).toHaveLength(3);
+          const improved = yield* registry.invoke({
+            runId: parent.runId,
+            offer: "improve",
+            input: givenOfferInput(null, { findings: `${ids[0]}, ${ids[2]}` }),
+            request: "improve-two",
+          });
+          const fs = yield* FileSystem.FileSystem;
+          const promptFile = `${host.dir()}/agents/${improved.runId}/fix.prompt.md`;
+          yield* until(
+            () => fs.exists(promptFile),
+            (exists) => exists,
+          );
+          const prompt = yield* fs.readFileString(promptFile);
+          expect(prompt).toContain(F1.title);
+          expect(prompt).toContain(F3.title);
+          expect(prompt).not.toContain(F2.title);
+          expect(yield* findingsIn(`${host.dir()}/runs/${improved.runId}`)).toMatchObject([
+            { id: ids[0], title: F1.title },
+            { id: ids[2], title: F3.title },
+          ]);
+          expect(yield* findingsWithStatus(reviewed)).toMatchObject([
+            { id: ids[0], status: "taken", offer: "improve", run: improved.runId },
+            { id: ids[1], status: "open", run: null },
+            { id: ids[2], status: "taken", offer: "improve", run: improved.runId },
+          ]);
+          yield* recordFindingStatus(reviewed, {
+            id: ids[1]!,
+            status: "dismissed",
+            reason: "not worth it",
+            offer: null,
+            run: null,
+            by: "mk",
+            at: "2026-11-24T10:00:00.000Z",
+          });
+          expect(yield* openCountIn(reviewed)).toBe(0);
+          const checkout = yield* (yield* Host).place(improved.runId);
+          yield* git(["commit", "-q", "--allow-empty", "-m", "guard the input"], checkout.cwd);
+          yield* git(
+            ["push", "-q", "origin", `HEAD:refs/heads/feature`, `HEAD:${MR_REF}`],
+            checkout.cwd,
+          );
+          const second = Str.trim((yield* git(["rev-parse", "HEAD"], checkout.cwd)).stdout);
+          yield* forge.set(
+            model(second, { mrs: [mr(second, { author: "mk" })], ancestry: { [second]: [first] } }),
+          );
+          yield* fs.writeFileString(
+            `${host.dir()}/agents/${improved.runId}/fix.json`,
+            yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+              verdict: "clean",
+              fixed: [F1, F3],
+              disputed: [],
+              checks: [],
+            }),
+          );
+          const fixer = Arr.findLast(yield* rig.calls(), (one) => one.cmd === "terminal.run").pipe(
+            Option.getOrThrow,
+          );
+          yield* (yield* rig.startCore()).report(
+            Option.getOrThrow(Schema.decodeUnknownOption(Schema.String)(fixer.params?.name)),
+            "idle",
+          );
+          const done = yield* until(
+            () => host.status(improved.runId),
+            (view) => view?.status.status === "complete" || view?.status.status === "failed",
+          );
+          expect(done?.status.status).toBe("complete");
+        }),
+      );
+    }),
+  ));
 
 test("Slack permalink admission validates the linked MR and joins its follow claim", () =>
   host.runEffect(

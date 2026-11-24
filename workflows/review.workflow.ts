@@ -123,6 +123,7 @@ export default defineWorkflow({
     target: Schema.String,
     slack: Schema.optionalKey(Schema.String),
     improving: Schema.optionalKey(Schema.Boolean),
+    findings: Schema.optionalKey(Schema.Array(Schema.String)),
     plan: Schema.optionalKey(
       Schema.String.annotate({
         description: "The spec the change is held to; empty where there is none",
@@ -147,7 +148,8 @@ export default defineWorkflow({
       title: "Improve",
       workflow: "review-improve",
       arguments: {},
-      inputs: { target: "diff-target", previous: "run-id" },
+      inputs: { target: "diff-target", previous: "run-id", findings: "findings" },
+      selects: "many",
       eligible: (facts) => {
         if (facts.review?.owned !== true) {
           throw new Error("Collie never pushes to someone else's branch");
@@ -236,6 +238,12 @@ export default defineWorkflow({
               .readFileString(`${earlierPlace.dir}/review-head`)
               .pipe(Effect.orElseSucceed(() => ledger?.[0]?.head ?? ""));
       const improving = requested.improving === true;
+      // WARNING: an Improve Run taken for ids is told only those findings, and keeps their ids.
+      const chosen = improving ? (requested.findings ?? []) : [];
+      const selected = chosen.length > 0 ? (ledger ?? []) : [];
+      if (chosen.length > 0) {
+        ledger = Arr.filter(selected, (one) => Arr.contains(chosen, one.id ?? ""));
+      }
       const fixContext =
         kind === "mr"
           ? yield* Activity.make({
@@ -690,7 +698,7 @@ export default defineWorkflow({
           )));
 
       if (improving) {
-        yield* leaveReview(place.dir, synthesis);
+        yield* leaveReview(place.dir, synthesis, chosen.length > 0 ? selected : []);
         yield* fs.writeFileString(`${place.dir}/review-head`, head).pipe(Effect.orDie);
       }
 

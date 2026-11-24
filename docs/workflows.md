@@ -557,6 +557,18 @@ change breaks is exactly the blocker worth raising. Minor findings are exempt.
   left to fix. Offered only where the target is a merge request, on either forge.
 - **Don't post** — ends the run.
 
+**Improve** is the offer beside that question, for a merge request of your own whose
+findings are still open at the head it reviewed: another Run fixes them and reviews the
+pushed head again, so the review Rally does not hold this one open. It is taken over the
+findings somebody chose — `collie run action <run> improve --input findings=<id>,<id>`, or
+the list a board fills in — and the Improve Run's `findings.json` and its fix rounds hold
+only those, under the ids they already had. Both read `taken` by it on the reviewed Run,
+where an unchosen finding stays `open` until somebody improves or dismisses it: nothing
+else is silently dropped. Taken with no ids — an older start, or a plain
+`collie run action <run> improve` — it takes every open finding, as it always has. There is
+no Improve for somebody else's merge request: Collie never pushes to a branch that is not
+yours.
+
 Its Flow forecasts Review and What next, with Synthesis between them when a fork seats
 multiple reviewers. Fix findings is drawn off the path; each review and menu round keeps
 its own run. Implement starts a separate row in the same Task.

@@ -2822,6 +2822,7 @@ export function declaredByModule(metadata: WorkflowMetadata | undefined) {
     arguments: jsonSchemaFor(Schema.Struct(action.arguments)).document,
     kind: "action" as const,
     inputs: action.inputs ?? {},
+    selects: action.selects,
     given: action.given,
     ships: action.ships,
     confirm: action.confirm,
@@ -10170,6 +10171,7 @@ const makeRegistry: (
   const offeredBy = Effect.fn("Engine.Registry.offeredBy")(function* (
     runId: string,
     request?: string,
+    given: Readonly<Record<string, Schema.Json>> = {},
   ) {
     const row = yield* store.run(runId);
     if (row === null) {
@@ -10368,8 +10370,8 @@ const makeRegistry: (
         refused.set(offer.id, `${mr} is merged`);
       }
       const workflow = offer.workflow === SELF ? generation.id : offer.workflow;
-      // WARNING: a selecting offer is taken once per finding, so its children may go on at once.
-      const oneAtATime = offer.selects === undefined;
+      // WARNING: a selecting offer taken over ids goes on beside its siblings; one taken for every finding does not.
+      const oneAtATime = offer.selects === undefined || (idsIn(given.findings) ?? []).length === 0;
       for (const candidate of oneAtATime ? runs : []) {
         if (candidate.workflow !== workflow || candidate.request === request) {
           continue;
@@ -10947,6 +10949,7 @@ const makeRegistry: (
       const { row, generation, facts, where, refused, input } = yield* offeredBy(
         options.runId,
         options.request,
+        options.input,
       );
       // WARNING: a card is not authority; the offer is asked again of the module as it is now.
       const offer = Option.getOrUndefined(
@@ -10982,8 +10985,8 @@ const makeRegistry: (
       };
       const chosen =
         offer.selects === undefined ? [] : yield* chosenFor(offer, filled.findings, where);
-      // WARNING: the child is given the ids, however they were typed.
-      if (offer.selects !== undefined) {
+      // WARNING: the child is given the ids, however they were typed, and none means every open one.
+      if (offer.selects !== undefined && chosen.length > 0) {
         filled.findings = chosen;
       }
       const inherited = yield* approvedOf(dir, row.run);

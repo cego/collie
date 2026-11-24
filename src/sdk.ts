@@ -2091,6 +2091,8 @@ export interface ActionProvider {
   readonly eligible: (facts: ActionFacts) => boolean;
   /** What Collie fills in from the Run itself; the rest is the caller's to give. */
   readonly inputs?: Readonly<Record<string, Source>>;
+  /** `many` ids or exactly one of the Run's open findings, which whoever invokes it chooses. */
+  readonly selects?: "many" | "one";
   readonly given?: OfferGiven;
   readonly ships?: Ships;
   /** What taking it does, which a front door shows and asks about before taking it. */
