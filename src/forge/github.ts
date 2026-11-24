@@ -511,8 +511,13 @@ const CheckRuns = Schema.Struct({
       status: Schema.String,
       conclusion: optionalText,
       html_url: optionalText,
+      app: Schema.optional(Schema.Struct({ slug: optionalText })),
     }),
   ),
+});
+const WorkflowRun = Schema.Struct({
+  run_attempt: Schema.Finite,
+  status: Schema.String,
 });
 const PullRefs = Schema.Struct({
   head: Schema.Struct({ sha: Schema.String }),
@@ -582,36 +587,42 @@ function job(ref: MrRef, name: string, cwd: string) {
     }
     const [found, ...before] = named;
     const failed = Arr.filter(before, (one) => stateOf(one) === "failed");
-    let absent: JobState = "missing";
+    let state: JobState = found === undefined ? "missing" : stateOf(found);
+    const id = actionsJob(found?.html_url);
     if (found === undefined) {
       // WARNING: GitHub creates a job behind `needs` only once its needs finish.
-      let listed = 0;
-      for (let page = 1; absent === "missing"; page++) {
+      let ofActions = false;
+      for (let page = 1; state === "missing"; page++) {
         const some = yield* checkRuns(repo, head, `per_page=100&page=${page}`, cwd);
         if (!some.ok) {
           return unread(some.reason);
         }
-        listed += some.value.length;
+        ofActions ||= Arr.some(some.value, (one) => one.app?.slug === "github-actions");
         if (Arr.some(some.value, (one) => one.status !== "completed")) {
-          absent = "pending";
+          state = "pending";
         } else if (some.value.length < 100) {
           break;
         }
       }
-      if (listed === 0) {
-        absent = "pending";
+      if (!ofActions) {
+        state = "pending";
       }
     }
+    // WARNING: a gated job's rerun creates its new check run only once its needs finish.
+    const rerunning =
+      state === "failed" && id !== null ? yield* rerunInProgress(repo, id, cwd) : false;
     return {
       ok: true,
       head,
-      state: found === undefined ? absent : stateOf(found),
+      state: rerunning ? "running" : state,
       url: found?.html_url ?? null,
-      id: actionsJob(found?.html_url),
+      id,
       merge: null,
       retryOf: Arr.filter(
-        Arr.map(failed, (one) => actionsJob(one.html_url)),
-        (id) => id !== null,
+        Arr.map(rerunning && found !== undefined ? [...failed, found] : failed, (one) =>
+          actionsJob(one.html_url),
+        ),
+        (one) => one !== null,
       ),
       target: pull.value.base.ref,
     };
@@ -623,6 +634,18 @@ const actionsJob = (url: string | null | undefined) => {
   const [, run, job] = /\/actions\/runs\/(\d+)\/job\/(\d+)/.exec(url ?? "") ?? [];
   return run === undefined ? null : `${run}/${job}`;
 };
+
+const rerunInProgress = (repo: string, id: string, cwd: string) =>
+  Effect.gen(function* () {
+    const ran = yield* rest(AttemptJob, cwd, `repos/${repo}/actions/jobs/${Str.split(id, "/")[1]}`);
+    if (!ran.ok) {
+      return false;
+    }
+    const run = yield* rest(WorkflowRun, cwd, `repos/${repo}/actions/runs/${ran.value.run_id}`);
+    return (
+      run.ok && run.value.run_attempt > ran.value.run_attempt && run.value.status !== "completed"
+    );
+  });
 
 const checkRun = (repo: string, ref: string, name: string, cwd: string) =>
   Effect.map(checkRuns(repo, ref, `check_name=${encodeURIComponent(name)}`, cwd), (runs) => {

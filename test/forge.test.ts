@@ -4165,6 +4165,63 @@ test("GitLab identifies a retry from job IDs without a retried response field", 
   );
 });
 
+test("GitHub reads a job whose workflow run is being rerun as running, and a failure at the run's own attempt as failed", () => {
+  const read = (over: Partial<FakeMr>) => {
+    const fake = fakeForge("github", model("github", { mrs: [mr("github", over)] }));
+    return FORGES.github
+      .job(ref("github"), "test", "/w", fake.run)
+      .pipe(Effect.provide(fake.layer));
+  };
+  return runEffect(
+    Effect.gen(function* () {
+      expect(
+        yield* read({
+          jobs: [{ name: "test", state: "failed" }],
+          workflowRun: { attempt: 2, status: "in_progress" },
+        }),
+      ).toMatchObject({ ok: true, state: "running", retryOf: ["4030/1"] });
+      expect(
+        yield* read({
+          jobs: [{ name: "test", state: "failed" }],
+          workflowRun: { attempt: 1, status: "in_progress" },
+        }),
+      ).toMatchObject({ ok: true, state: "failed", retryOf: [] });
+      expect(
+        yield* read({
+          jobs: [{ name: "test", state: "failed" }],
+          workflowRun: { attempt: 2, status: "completed" },
+        }),
+      ).toMatchObject({ ok: true, state: "failed", retryOf: [] });
+    }),
+  );
+});
+
+test("GitHub reads a head it has not started Actions on as pending, and one it ran without the job as missing", () => {
+  const read = (over: Partial<FakeMr>) => {
+    const fake = fakeForge("github", model("github", { mrs: [mr("github", over)] }));
+    return FORGES.github
+      .job(ref("github"), "test", "/w", fake.run)
+      .pipe(Effect.provide(fake.layer));
+  };
+  return runEffect(
+    Effect.gen(function* () {
+      expect(
+        yield* read({ jobs: [{ name: "vercel", state: "passed", app: "vercel" }] }),
+      ).toMatchObject({
+        ok: true,
+        state: "pending",
+        id: null,
+      });
+      expect(yield* read({ jobs: [] })).toMatchObject({ ok: true, state: "pending", id: null });
+      expect(yield* read({ jobs: [{ name: "static", state: "passed" }] })).toMatchObject({
+        ok: true,
+        state: "missing",
+        id: null,
+      });
+    }),
+  );
+});
+
 test("GitHub finds a failed attempt beyond a page of passing reruns", () => {
   const fake = fakeForge(
     "github",

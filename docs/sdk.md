@@ -1808,8 +1808,11 @@ built from it; on GitHub it is the check run of that name on the head commit. Th
 answers `passed`, `pending`, `running`, `failed`, `skipped`, `cancelled` or `missing`, with
 the job's URL, or why the forge could not say. GitHub creates a job behind `needs` only
 once its needs finish, so a GitHub job with no check run yet is `pending` while the head
-has no check runs or any of them is still queued or in progress, and `missing` only once
-every check run on the head has completed; GitLab creates every job up front. A pass is recorded once per tree as the
+has no check runs, any of them is still queued or in progress, or every one of them belongs
+to another app, and `missing` only once Actions has run on the head and all its check runs
+have completed; a failed job whose workflow run is at a newer attempt that is still going
+reads `running`, with the failed attempt in `retryOf` so its pass is a Flake; GitLab
+creates every job up front. A pass is recorded once per tree as the
 check's `ci` pass, with `job` (`{ name, url, merge? }`, `merge` being the merged-results
 commit) beside its command, start and end tree. That Verification answers `{ proved }`; anything
 else answers `{ unproved, state, url }`, the sentence naming the check, the job and the
@@ -1837,7 +1840,9 @@ head failed there, it answers with `before: { at, url, jobs }`, with `branch` fo
 target's newest commit, and is not retried. Where only some of its failed tests failed on
 the target's newest commit, the unproved sentence names them.
 Otherwise the adapter retries it once — GitLab's job retry, GitHub's rerun of that job —
-and waits on it; a pass then answers `{ proved, retried: true }`, a Flake. Name either on
+and waits on it; a refused retry is read again before the job is called failed, since a
+rerun someone else already started is the same wait. A pass then answers
+`{ proved, retried: true }`, a Flake. Name either on
 the merge request with `host.note({ runId, cwd, body })`, which puts a note on the merge
 request the Run recorded.
 

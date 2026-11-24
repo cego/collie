@@ -242,6 +242,7 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
   const poll = asked.poll ?? CI_POLL;
   let waiting = false;
   let retried: string | null = null;
+  let reread = false;
   return yield* Effect.gen(function* () {
     for (;;) {
       const read = yield* forge.job(ref, job, cwd, asked.run);
@@ -290,6 +291,11 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
           yield* appendLog(asked.runDir, `ci: retried job ${job} for ${spec.name} on ${head}`).pipe(
             Effect.ignore,
           );
+          continue;
+        }
+        // WARNING: a refused retry is often a rerun someone else already started; read again before calling it failed.
+        if (read.id !== null && !reread) {
+          reread = true;
           continue;
         }
       }

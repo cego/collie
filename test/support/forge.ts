@@ -55,6 +55,7 @@ export const FakeJob = Schema.Struct({
   retried: Schema.optionalKey(JobStates),
   id: Schema.optionalKey(Schema.Finite),
   trace: Schema.optionalKey(Schema.String),
+  app: Schema.optionalKey(Schema.String),
   attempts: Schema.optionalKey(
     Schema.Array(
       Schema.Struct({
@@ -114,6 +115,8 @@ export const FakeMr = Schema.Struct({
   mergedSha: Schema.optionalKey(Schema.String),
   checks: Schema.optionalKey(Schema.Array(Check)),
   jobs: Schema.optionalKey(Schema.Array(FakeJob)),
+  workflowRun: Schema.optionalKey(Schema.Struct({ attempt: Schema.Finite, status: Schema.String })),
+  rerunRefused: Schema.optionalKey(Schema.String),
   base: Schema.optionalKey(
     Schema.Struct({ at: Schema.String, jobs: Schema.optionalKey(Schema.Array(FakeJob)) }),
   ),
@@ -2212,6 +2215,7 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>) {
                   id: job.id,
                   name: job.name,
                   head_sha: at,
+                  app: { slug: job.app ?? "github-actions" },
                   ...GITHUB_RUN[job.state],
                   html_url: `https://github.com/${repo}/actions/runs/${run}/job/${job.id}`,
                 },
@@ -2295,7 +2299,11 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>) {
     );
     const at = Arr.flatMap(mr?.jobs ?? [], (job, n) => (job.state === "failed" ? [n] : []));
     const returned: Answer =
-      mr === undefined || at.length === 0 ? no() : { ...ok(), retried: { mr, at } };
+      mr?.rerunRefused !== undefined
+        ? refused(mr.rerunRefused)
+        : mr === undefined || at.length === 0
+          ? no()
+          : { ...ok(), retried: { mr, at } };
     return returned;
   }
   const runJobs = /^repos\/(.+)\/actions\/runs\/(\d+)\/jobs/.exec(route);
@@ -2322,18 +2330,34 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>) {
     const returned: Answer = json(args.includes("--slurp") ? pages : pages[0]!);
     return returned;
   }
-  const runs = /\/actions\/runs\/(\d+)$/.exec(route);
+  const runs = /^repos\/(.+)\/actions\/runs\/(\d+)$/.exec(route);
   if (runs) {
-    const said = model.runs?.[runs[1]!];
+    const [, repo = "", run = ""] = runs;
+    const mr = Option.getOrUndefined(
+      Arr.findFirst(
+        model.mrs,
+        (one) =>
+          one.project === `github.com/${repo}` &&
+          (actionsRun(one) === Number(run) ||
+            Arr.some(actionsAttempts(one), (job) => job.run === Number(run))),
+      ),
+    );
+    const said = model.runs?.[run];
     const returned: Answer =
-      said === undefined
-        ? no()
-        : json({
+      said !== undefined
+        ? json({
             status: said.status,
             conclusion: said.conclusion ?? null,
             head_branch: said.ref ?? "main",
             head_sha: said.sha ?? "",
-          });
+          })
+        : mr === undefined
+          ? no()
+          : json({
+              id: Number(run),
+              run_attempt: mr.workflowRun?.attempt ?? 1,
+              status: mr.workflowRun?.status ?? "completed",
+            });
     return returned;
   }
   const byBranch = /^repos\/(.+)\/actions\/runs\?.*\bbranch=([^&]+)/.exec(route);

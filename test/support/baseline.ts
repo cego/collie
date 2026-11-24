@@ -15939,11 +15939,6 @@ for (const [state, jobs] of [
   );
 }
 
-const rechecksOf = (runId: string) =>
-  Effect.map(readMetrics(evidenceDir(dir, runId)), (lines) =>
-    Arr.filter(lines, (line) => line.action === "rechecked"),
-  );
-
 const rechecking = (
   run: {
     readonly status: Effect.Effect<typeof RunStatus.Type>;
@@ -16081,7 +16076,7 @@ scenario(
               expect(yield* healed).toEqual([]);
               limited = false;
               yield* changed({ jobs: [{ name: "test", state: "passed" }] });
-              const host = yield* rechecking(run, runId, RELEASING.github.mr, reviewed);
+              yield* rechecking(run, runId, RELEASING.github.mr, reviewed);
               const go = yield* goAsked(run.asked, "go-1");
               expect(go.shipping).toEqual({ action: "merge", head });
               yield* run.answer("go-1", "Finish");

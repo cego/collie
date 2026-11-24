@@ -19,7 +19,7 @@ import { exec } from "./support/command";
 import { fastForward, runEffect } from "./support/effect";
 import { forgeHttpTest } from "../src/forge/http";
 import { FORGE_HOST, PROJECT, fakeForge } from "./support/forge";
-import type { FakeJob, FakeMr, FakeRequest } from "./support/forge";
+import type { FakeJob, FakeMr, FakeRequest, ForgeModel } from "./support/forge";
 
 const NUXI: VerifySpec = {
   name: "nuxi",
@@ -962,6 +962,84 @@ test("a GitHub job missing right after its retry is waited on, and its pass is a
             Arr.filter(one.requests, (request) =>
               pipe_(request.url, Str.endsWith("/rerun-failed-jobs")),
             ),
+          ),
+        ).toHaveLength(1);
+      }),
+      1000,
+    ),
+  ));
+
+test("a GitHub job whose rerun the forge refuses is read again, and a rerun already going is its pass", () =>
+  runEffect(
+    fastForward(
+      Effect.gen(function* () {
+        const { asked, at, forge } = yield* waiting(
+          "failed",
+          PULL,
+          undefined,
+          {
+            jobs: [{ name: "test", state: "failed" }],
+            workflowRun: { attempt: 1, status: "in_progress" },
+            rerunRefused: "403 Already running",
+          },
+          "github",
+        );
+        const stage = (over: Partial<FakeMr>) =>
+          ({
+            installed: true,
+            loggedIn: [FORGE_HOST.github],
+            login: "me",
+            mrs: [{ project: PROJECT.github, iid: "31", state: "open", head: at, ...over }],
+          }) satisfies ForgeModel;
+        let refused = false;
+        let reread = 0;
+        const fetch: FetchLike = (input, init) => {
+          const answered = forge.fetch(input, init);
+          if (pipe_(input, Str.endsWith("/rerun-failed-jobs"))) {
+            return answered.then((response) => {
+              refused = true;
+              forge.set(
+                stage({
+                  jobs: [{ name: "test", state: "failed" }],
+                  workflowRun: { attempt: 2, status: "in_progress" },
+                }),
+              );
+              return response;
+            });
+          }
+          if (refused && pipe_(input, Str.includes("check_name=test"))) {
+            return answered.then((response) => {
+              reread += 1;
+              return response;
+            });
+          }
+          if (refused && reread > 0 && pipe_(input, Str.endsWith("/pulls/31"))) {
+            return answered.then((response) => {
+              reread = 0;
+              forge.set(
+                stage({
+                  jobs: [
+                    {
+                      name: "test",
+                      state: "passed",
+                      id: 101,
+                      attempts: [{ id: 1, state: "failed" }],
+                    },
+                  ],
+                }),
+              );
+              return response;
+            });
+          }
+          return answered;
+        };
+        expect(yield* read({ ...asked, spec: GATE, settle: true }, { fetch })).toMatchObject({
+          proved: { pass: "ci", name: "nuxi", job: { name: "test" } },
+          retried: true,
+        });
+        expect(
+          Arr.filter(forge.requests, (request) =>
+            pipe_(request.url, Str.endsWith("/rerun-failed-jobs")),
           ),
         ).toHaveLength(1);
       }),
