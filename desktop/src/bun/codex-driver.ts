@@ -8,6 +8,7 @@ import {
   Clock,
   Deferred,
   Effect,
+  Exit,
   Fiber,
   FileSystem,
   Option,
@@ -33,7 +34,6 @@ import {
   codexConfigured,
   codexConnections,
   codexServers,
-  codexUnsettled,
 } from "./codex-servers";
 import type { CodexServers } from "./codex-servers";
 import type { ListedModel } from "./claude-models";
@@ -619,6 +619,12 @@ export const readCodexModels: (
     ),
   );
 
+type Live = {
+  readonly scope: Scope.Closeable;
+  readonly server: AppServer;
+  readonly thread: string;
+};
+
 const decodeStatuses = decoded(Schema.Struct({ data: Schema.Array(CodexStatus) }));
 const NO_STATUS: ReadonlyArray<CodexStatus> = [];
 const instructions = (said: string) => `${systemPrompt(hostname())}\n\n${said}`;
@@ -675,10 +681,8 @@ export const codexDriver: (
   return {
     installed: command !== null,
     open: Effect.fnUntraced(function* (id, model, effort) {
-      const scope = yield* Effect.scope;
       const output = yield* Queue.unbounded<AguiEvent, string | Cause.Done>();
       const state = codexEvents(id);
-      let kill = () => {};
       let started = 0;
       let lastTurn: TurnCost | undefined;
       const pump = (server: AppServer) =>
@@ -717,93 +721,98 @@ export const codexDriver: (
           Effect.catch(({ message }) => Queue.fail(output, message)),
         );
       let given: CodexServers = NO_SERVERS;
-      let told = "";
-      let unsettled = false;
-      const statusesOf = (server: AppServer) =>
-        server.call("mcpServerStatus/list", {}).pipe(
+      let configured: ReadonlyArray<string> = [];
+      let signingIn = false;
+      let live: Live | undefined;
+      let owned: Scope.Closeable | undefined;
+      const statusesOf = (server: AppServer, thread?: string) =>
+        server.call("mcpServerStatus/list", thread === undefined ? {} : { threadId: thread }).pipe(
           Effect.flatMap(decodeStatuses),
           Effect.map(({ data }) => data),
           Effect.orElseSucceed(() => NO_STATUS),
         );
-      const refresh = (server: AppServer, thread: string) =>
+      const connect = (own: Scope.Scope) =>
         Effect.gen(function* () {
-          if (!unsettled) {
-            return;
+          if (command === null) {
+            return yield* new CodexError({ message: NOT_INSTALLED });
           }
-          const statuses = yield* statusesOf(server);
-          const said = codexConnections(given, statuses);
-          unsettled = codexUnsettled(statuses);
-          if (said === told) {
-            return;
-          }
-          told = said;
-          yield* server
-            .call("thread/resume", {
-              threadId: thread,
-              ...setting,
-              developerInstructions: instructions(said),
-            })
-            .pipe(Effect.ignore);
-        });
-      const connect = Effect.gen(function* () {
-        if (command === null) {
-          return yield* new CodexError({ message: NOT_INSTALLED });
-        }
-        const { url, token } = yield* endpoint.start;
-        given = codexServers(
-          yield* Effect.tryPromise(userServers).pipe(Effect.orElseSucceed(() => ({}))),
-          yield* Effect.tryPromise(() => codexConfigured(context.dir)).pipe(
+          const { url, token } = yield* endpoint.start;
+          configured = yield* Effect.tryPromise(() => codexConfigured(context.dir)).pipe(
             Effect.orElseSucceed(() => []),
-          ),
-        );
-        const server = yield* appServer(
-          command,
-          context.dir,
-          [
-            ...given.args,
-            "-c",
-            `mcp_servers.${SERVER}.url=${encodeLine(url)}`,
-            "-c",
-            `mcp_servers.${SERVER}.bearer_token_env_var=${encodeLine(TOKEN_ENV)}`,
-            "-c",
-            `mcp_servers.${SERVER}.tool_timeout_sec=${TOOL_TIMEOUT}`,
-          ],
-          { ...childEnv(), ...given.env, [TOKEN_ENV]: token },
-        );
-        kill = server.kill;
-        yield* Effect.forkScoped(pump(server));
-        const { account, requiresOpenaiAuth } = yield* server
-          .call("account/read", {})
-          .pipe(Effect.flatMap(decodeAccount));
-        if (account === null && requiresOpenaiAuth) {
-          return yield* new CodexError({ message: SIGNED_OUT });
-        }
-        const statuses = yield* statusesOf(server);
-        told = codexConnections(given, statuses);
-        unsettled = codexUnsettled(statuses);
-        const started = { ...setting, developerInstructions: instructions(told) };
-        const resumed = yield* server
-          .call("thread/resume", { threadId: yield* threadOf(id), ...started })
-          .pipe(
-            Effect.flatMap(decodeThreadRef),
-            Effect.asSome,
-            Effect.catchIf(unknownThread, () => Effect.succeedNone),
           );
-        if (Option.isSome(resumed)) {
-          return { server, thread: resumed.value.thread.id };
-        }
-        const { thread } = yield* server
-          .call("thread/start", started)
-          .pipe(Effect.flatMap(decodeThreadRef));
-        yield* remember(id, thread.id);
-        return { server, thread: thread.id };
-      }).pipe(Scope.provide(scope));
-      const ready = yield* Effect.cached(connect);
+          given = codexServers(
+            yield* Effect.tryPromise(userServers).pipe(Effect.orElseSucceed(() => ({}))),
+            configured,
+          );
+          const server = yield* appServer(
+            command,
+            context.dir,
+            [
+              ...given.args,
+              "-c",
+              `mcp_servers.${SERVER}.url=${encodeLine(url)}`,
+              "-c",
+              `mcp_servers.${SERVER}.bearer_token_env_var=${encodeLine(TOKEN_ENV)}`,
+              "-c",
+              `mcp_servers.${SERVER}.tool_timeout_sec=${TOOL_TIMEOUT}`,
+            ],
+            { ...childEnv(), ...given.env, [TOKEN_ENV]: token },
+          );
+          yield* Effect.forkScoped(pump(server));
+          const { account, requiresOpenaiAuth } = yield* server
+            .call("account/read", {})
+            .pipe(Effect.flatMap(decodeAccount));
+          if (account === null && requiresOpenaiAuth) {
+            return yield* new CodexError({ message: SIGNED_OUT });
+          }
+          const told = codexConnections(given, yield* statusesOf(server), configured);
+          const started = { ...setting, developerInstructions: instructions(told) };
+          const resumed = yield* server
+            .call("thread/resume", { threadId: yield* threadOf(id), ...started })
+            .pipe(
+              Effect.flatMap(decodeThreadRef),
+              Effect.asSome,
+              Effect.catchIf(unknownThread, () => Effect.succeedNone),
+            );
+          const thread = Option.isSome(resumed)
+            ? resumed.value.thread.id
+            : (yield* server.call("thread/start", started).pipe(Effect.flatMap(decodeThreadRef)))
+                .thread.id;
+          if (Option.isNone(resumed)) {
+            yield* remember(id, thread);
+          }
+          // WARNING: a trusted project's servers arrive only from the thread-scoped call.
+          const scoped = yield* statusesOf(server, thread);
+          signingIn = Arr.some(scoped, (one) => one.authStatus === "notLoggedIn");
+          return { server, thread };
+        }).pipe(Scope.provide(own));
+      const establish = () =>
+        Effect.gen(function* () {
+          const own = yield* Scope.make();
+          owned = own;
+          const built = yield* connect(own);
+          const made: Live = { scope: own, ...built };
+          live = made;
+          return made;
+        });
+      const ready = yield* Effect.cached(establish());
       yield* ready.pipe(
         Effect.catch(({ message }) => Queue.fail(output, message)),
         Effect.forkScoped,
       );
-      const connected = ready.pipe(Effect.option);
+      const settle = Effect.gen(function* () {
+        if (live === undefined) {
+          return Option.getOrUndefined(yield* ready.pipe(Effect.option));
+        }
+        if (!signingIn) {
+          return live;
+        }
+        const stale = live;
+        live = undefined;
+        signingIn = false;
+        yield* Scope.close(stale.scope, Exit.void).pipe(Effect.ignore);
+        return Option.getOrUndefined(yield* establish().pipe(Effect.option));
+      });
       const note = () => {
         const placement = context.placement();
         const noticed = context.noticed();
@@ -826,14 +835,13 @@ export const codexDriver: (
             yield* endpoint.begin;
             started = yield* Clock.currentTimeMillis;
             yield* Queue.offer(output, state.begin());
-            const on = yield* connected;
-            if (Option.isNone(on)) {
+            live = yield* settle.pipe(Effect.orElseSucceed(() => live));
+            if (live === undefined) {
               return;
             }
-            yield* refresh(on.value.server, on.value.thread);
-            const asked = yield* on.value.server
+            const asked = yield* live.server
               .call("turn/start", {
-                threadId: on.value.thread,
+                threadId: live.thread,
                 input: inputOf(content, note()),
                 ...(model !== "default" && { model }),
                 ...(effort !== null && { effort }),
@@ -851,16 +859,20 @@ export const codexDriver: (
           }),
         events: Stream.fromQueue(output),
         interrupt: Effect.gen(function* () {
-          const on = yield* connected;
           const turnId = state.turnId();
-          if (Option.isNone(on) || turnId === undefined) {
+          if (live === undefined || turnId === undefined) {
             return;
           }
-          yield* on.value.server
-            .call("turn/interrupt", { threadId: on.value.thread, turnId })
+          yield* live.server
+            .call("turn/interrupt", { threadId: live.thread, turnId })
             .pipe(Effect.ignore);
         }).pipe(Effect.andThen(endpoint.finish)),
-        close: Effect.sync(() => kill()).pipe(Effect.andThen(endpoint.finish)),
+        close: Effect.sync(() => {
+          const ending = owned;
+          live = undefined;
+          owned = undefined;
+          return ending === undefined ? Effect.void : Scope.close(ending, Exit.void);
+        }).pipe(Effect.flatten, Effect.andThen(endpoint.finish)),
         lastTurn: () => lastTurn,
         limited: state.limited,
       };

@@ -2360,19 +2360,22 @@ sandbox, which needs user namespaces this computer may not give it.
 On Codex the chat has your Claude Code user-scope MCP servers too, as Pi and Claude Code do:
 Desktop reads the same list and passes each one to the App Server as
 `-c mcp_servers.<name>.*` when the conversation starts. A server name Codex already has in
-its own `config.toml`, or in a trusted project's `.codex/config.toml`, keeps Codex's entry,
-and the chat names it once; `collie_desktop` is Collie's own and no server of yours takes its
-place. A server's static headers, such as a bearer token, and a stdio server's environment
-reach Codex through the App Server's own environment, never its command line, and never the
-chat. Codex keeps its own sign-ins: a server that needs a browser login, such as Linear,
-works once you run, in a terminal,
+its own `config.toml`, or in a project's `.codex/config.toml` that Codex trusts, keeps
+Codex's entry, and the chat names it once; `collie_desktop` is Collie's own and no server of
+yours takes its place. A server's static headers, such as a bearer token, and a stdio
+server's environment reach Codex through the App Server's own environment, never its
+command line, and never the chat. Codex forwards an environment variable to a stdio server
+under the same name, so two such servers wanting different values for one name cannot both
+be given it: the first is, and the chat says the second was left out and why. Codex keeps
+its own sign-ins: a server that needs a browser login, such as Linear, works once you run,
+in a terminal,
 `codex mcp login <server> -c 'mcp_servers.<server>.url="<the server's url>"'` — the `-c` is
 what shows a standalone `codex` a server Desktop passes it at launch — and until then the
-chat says the server is not signed in and names that command. A message sent after you sign
-in picks the server up in the same conversation. A server Codex could not connect is said
-too, with the error Codex gave for it: one you added to Claude Code is defined there, which
-`claude mcp list` shows. A server added while a conversation is open reaches the next one,
-as on Pi.
+chat says the server is not signed in and names that command. Your next message starts Codex
+again on the same thread, so signing in takes effect in the same conversation. Codex's own
+words for a server it could not connect stay out of what the chat is told: the chat says it
+did not connect, and one you added to Claude Code is defined there, which `claude mcp list`
+shows. A server added while a conversation is open reaches the next one, as on Pi.
 
 The effort is chosen in its select, or by asking the chat, for example "answer at high
 effort from now on", which `collie_chat_harness` saves. Claude's levels range from `low` to

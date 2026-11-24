@@ -30,17 +30,23 @@ const ServerSchema = Schema.Record(Schema.String, Schema.Json);
 type Server = Record<string, Schema.Json>;
 const OwnConfig = Schema.Struct({
   mcp_servers: Schema.optionalKey(Schema.Record(Schema.String, ServerSchema)),
+  projects: Schema.optionalKey(
+    Schema.Record(Schema.String, Schema.Struct({ trust_level: Schema.optionalKey(Schema.String) })),
+  ),
 });
 const codexHome = childEnv().CODEX_HOME ?? `${homedir()}/.codex`;
+const emptyConfig: typeof OwnConfig.Type = { mcp_servers: {}, projects: {} };
 const configAt = async (path: string) =>
   (await Bun.file(path).exists())
     ? Option.getOrElse(
         Schema.decodeOption(OwnConfig)(Bun.TOML.parse(await Bun.file(path).text())),
-        () => ({ mcp_servers: {} }),
+        () => emptyConfig,
       )
-    : { mcp_servers: {} };
+    : emptyConfig;
 const own = await configAt(`${codexHome}/config.toml`);
-const project = await configAt(`${process.cwd()}/.codex/config.toml`);
+const trusted = own.projects?.[process.cwd()]?.trust_level === "trusted";
+const fromProject = trusted ? await configAt(`${process.cwd()}/.codex/config.toml`) : undefined;
+const project = { mcp_servers: fromProject?.mcp_servers ?? {} };
 
 const tableOf: (value: Schema.Json | undefined) => Server = (value) =>
   Schema.is(ServerSchema)(value) ? value : {};
@@ -135,7 +141,7 @@ const forwarded = (cfg: Server) => {
   return env;
 };
 
-const connect = async (name: string) => {
+const openConnection = async (name: string) => {
   const cfg = servers()[name] ?? {};
   const client = new Client({ name: "codex-stand-in", version: "1" });
   if (Str.isString(cfg.url)) {
@@ -162,6 +168,18 @@ const connect = async (name: string) => {
     }),
   );
   return client;
+};
+
+// WARNING: Codex connects a server once for the thread it has loaded, so a later login is not picked up.
+const connections = new Map<string, Promise<Client | undefined>>();
+const connect = (name: string) => {
+  const held = connections.get(name);
+  if (held !== undefined) {
+    return held;
+  }
+  const made = openConnection(name);
+  connections.set(name, made);
+  return made;
 };
 
 const JsonObject = Schema.Record(Schema.String, Schema.Json);
@@ -202,6 +220,7 @@ const save = () =>
   Bun.write(storePath, flow(Schema.encodeResult(Store), Result.getOrThrow)(threads));
 
 let loaded: Thread | undefined;
+const resumedHere = new Set<string>();
 let running: { turn: Turn; release: () => void } | undefined;
 const answers = new Map<string | number, (result: Schema.Json) => void>();
 const ask = (method: string, params: JsonObject) =>
@@ -275,6 +294,7 @@ const play = async (turn: Turn, params: JsonObject) => {
           (_value, key) => pipe(key, Str.startsWith("COLLIE_CHAT_SERVER_")),
         ),
         thread: loaded!.id,
+        pid: process.pid,
         start: loaded!.params,
         turn: params,
       }),
@@ -485,6 +505,12 @@ for await (const chunk of Bun.stdin.stream()) {
           });
           break;
         }
+        if (resumedHere.has(known.id)) {
+          loaded = known;
+          answer({ thread: { id: known.id } });
+          break;
+        }
+        resumedHere.add(known.id);
         known.params = { ...known.params, ...params };
         loaded = known;
         await save();
@@ -543,7 +569,21 @@ for await (const chunk of Bun.stdin.stream()) {
       }
       case "mcpServerStatus/list": {
         const data = [];
+        const scoped = Str.isString(params.threadId);
+        const overridden = new Set<string>();
+        for (const [at, arg] of Bun.argv.entries()) {
+          if (Bun.argv[at - 1] !== "-c") {
+            continue;
+          }
+          const key = Str.split(arg, "=")[0] ?? "";
+          if (pipe(key, Str.startsWith("mcp_servers."))) {
+            overridden.add(Str.split(key, ".")[1] ?? "");
+          }
+        }
         for (const [name, cfg] of Rec.toEntries(servers())) {
+          if (!scoped && project.mcp_servers[name] !== undefined && !overridden.has(name)) {
+            continue;
+          }
           const credential = Rec.keys(headersOf(cfg)).length > 0;
           let tools: Record<string, Schema.Json> = {};
           let authStatus = "unsupported";
@@ -559,7 +599,6 @@ for await (const chunk of Bun.stdin.stream()) {
                 : (await logins())[name] === undefined
                   ? "unsupported"
                   : "oAuth";
-              await client.close();
             }
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);

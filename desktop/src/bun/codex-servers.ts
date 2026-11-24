@@ -8,6 +8,7 @@ import { childEnv } from "./login-env";
 import type { UserMcpServers } from "./session";
 
 const RESERVED = "collie_desktop";
+const OWN = "COLLIE_CHAT_";
 const NAME = /^[A-Za-z0-9_-]+$/;
 const REFERENCE = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 const Strings = Schema.Record(Schema.String, Schema.String);
@@ -24,6 +25,9 @@ const Http = Schema.Struct({
 
 const CodexConfig = Schema.Struct({
   mcp_servers: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+  projects: Schema.optionalKey(
+    Schema.Record(Schema.String, Schema.Struct({ trust_level: Schema.optionalKey(Schema.String) })),
+  ),
 });
 const decodeConfig = Schema.decodeUnknownOption(CodexConfig);
 const NO_CONFIG: typeof CodexConfig.Type = { mcp_servers: {} };
@@ -83,6 +87,7 @@ export const codexServers: (
   const env: Record<string, string> = {};
   const given: Array<{ name: string; url?: string }> = [];
   const left: Array<{ name: string; why: string }> = [];
+  const claimed: Record<string, { name: string; value: string }> = {};
   let carried = 0;
   for (const [name, server] of Rec.toEntries(servers)) {
     if (name === RESERVED) {
@@ -101,14 +106,34 @@ export const codexServers: (
       continue;
     }
     if (Schema.is(Stdio)(server)) {
+      const variables: Array<string> = [];
+      let why: string | undefined;
+      for (const [key, value] of Rec.toEntries(server.env ?? {})) {
+        const held = claimed[key];
+        const resolved = referenced(value, childEnv());
+        if (pipe(key, Str.startsWith(OWN))) {
+          why = `${key} is in Collie's own namespace`;
+          break;
+        }
+        if (held !== undefined && held.value !== resolved) {
+          why = `it needs a different ${key} than ${held.name}, and Codex gives every server one variable of that name`;
+          break;
+        }
+      }
+      if (why !== undefined) {
+        left.push({ name, why });
+        continue;
+      }
+      for (const [key, value] of Rec.toEntries(server.env ?? {})) {
+        const resolved = referenced(value, childEnv());
+        env[key] = resolved;
+        claimed[key] = { name, value: resolved };
+        variables.push(key);
+      }
       args.push(...setting(`mcp_servers.${name}.command`, server.command));
       if (server.args !== undefined) {
         args.push(...list(`mcp_servers.${name}.args`, server.args));
       }
-      const variables = Arr.map(Rec.toEntries(server.env ?? {}), ([key, value]) => {
-        env[key] = referenced(value, childEnv());
-        return key;
-      });
       args.push(...list(`mcp_servers.${name}.env_vars`, variables));
       given.push({ name });
       continue;
@@ -121,7 +146,7 @@ export const codexServers: (
     const headers: Record<string, string> = {};
     for (const [header, value] of Rec.toEntries(server.headers ?? {})) {
       carried += 1;
-      const variable = `COLLIE_CHAT_SERVER_${carried}`;
+      const variable = `${OWN}SERVER_${carried}`;
       env[variable] = referenced(value, childEnv());
       headers[header] = variable;
     }
@@ -131,28 +156,32 @@ export const codexServers: (
   return { args, env, given, left };
 };
 
-const namesIn = (path: string) =>
+const readConfig = (path: string) =>
   Bun.file(path)
     .text()
     .then((text) => Option.getOrElse(decodeConfig(Bun.TOML.parse(text)), () => NO_CONFIG))
-    .then((config) => Rec.keys(config.mcp_servers ?? {}))
-    .catch(() => []);
+    .catch(() => NO_CONFIG);
 
-const configPaths = (dir: string) => {
+const namesIn = (path: string) =>
+  readConfig(path).then((config) => Rec.keys(config.mcp_servers ?? {}));
+
+const parentOf = (path: string) =>
+  pipe(
+    path,
+    Str.slice(
+      0,
+      Option.getOrElse(pipe(path, Str.lastIndexOf("/")), () => 0),
+    ),
+  );
+
+// WARNING: Codex ignores a project's .codex/config.toml unless that project is trusted.
+const configPaths = (dir: string, projects: Readonly<Record<string, { trust_level?: string }>>) => {
   const home = homedir();
-  const paths: Array<string> = [`${childEnv().CODEX_HOME ?? `${home}/.codex`}/config.toml`];
-  for (
-    let at = dir;
-    at.length > 1;
-    at = pipe(
-      at,
-      Str.slice(
-        0,
-        Option.getOrElse(pipe(at, Str.lastIndexOf("/")), () => 0),
-      ),
-    )
-  ) {
-    paths.push(`${at}/.codex/config.toml`);
+  const paths: Array<string> = [];
+  for (let at = dir; at.length > 1; at = parentOf(at)) {
+    if (projects[at]?.trust_level === "trusted") {
+      paths.push(`${at}/.codex/config.toml`);
+    }
     if (at === home) {
       break;
     }
@@ -160,21 +189,24 @@ const configPaths = (dir: string) => {
   return paths;
 };
 
+const config = () => `${childEnv().CODEX_HOME ?? `${homedir()}/.codex`}/config.toml`;
+
 export const codexConfigured: (dir: string) => Promise<ReadonlyArray<string>> = (dir) =>
-  Promise.all(Arr.map(configPaths(dir), namesIn)).then((found) => Arr.dedupe(Arr.flatten(found)));
+  readConfig(config()).then((user) =>
+    Promise.all(Arr.map(configPaths(dir, user.projects ?? {}), namesIn)).then((found) =>
+      Arr.dedupe([...Rec.keys(user.mcp_servers ?? {}), ...Arr.flatten(found)]),
+    ),
+  );
 
 const toolsOf = (status: CodexStatus | undefined) => Rec.keys(status?.tools ?? {});
 
-export const codexUnsettled: (statuses: ReadonlyArray<CodexStatus>) => boolean = (statuses) =>
-  Arr.some(
-    statuses,
-    (one) => one.authStatus === "notLoggedIn" || (one.toolsError ?? null) !== null,
-  );
+const shQuote = (word: string) => `'${pipe(word, Str.replaceAll("'", String.raw`'\''`))}'`;
 
 export const codexConnections: (
   servers: CodexServers,
   statuses: ReadonlyArray<CodexStatus>,
-) => string = (servers, statuses) => {
+  configured: ReadonlyArray<string>,
+) => string = (servers, statuses, configured) => {
   const reported: Record<string, CodexStatus> = {};
   for (const one of statuses) {
     if (one.name !== RESERVED) {
@@ -187,33 +219,29 @@ export const codexConnections: (
       urls[one.name] = one.url;
     }
   }
-  const names = Arr.dedupe([...Arr.map(servers.given, (one) => one.name), ...Rec.keys(reported)]);
+  const imported = Arr.map(servers.given, (one) => one.name);
+  const own = Arr.filter(configured, (name) => !imported.includes(name));
+  const names = Arr.dedupe([...imported, ...own, ...Rec.keys(reported)]);
   const signingIn = Arr.filter(names, (name) => reported[name]?.authStatus === "notLoggedIn");
   const failed = Arr.filter(
-    names,
-    (name) =>
-      reported[name] === undefined ||
-      (!signingIn.includes(name) && (reported[name]?.toolsError ?? null) !== null),
+    imported,
+    (name) => reported[name] === undefined || (reported[name]?.toolsError ?? null) !== null,
   );
+  const broken = Arr.filter(own, (name) => (reported[name]?.toolsError ?? null) !== null);
   const described = Arr.map(names, (name) => {
-    const tools = toolsOf(reported[name]);
+    const one = reported[name];
+    if (one === undefined) {
+      return name;
+    }
+    const tools = toolsOf(one);
     return `${name} (${tools.length === 0 ? "no tools" : Arr.join(tools, ", ")})`;
   });
   const login = (name: string) => {
     const url = urls[name];
-    return `codex mcp login ${name}${
-      url === undefined ? "" : ` -c 'mcp_servers.${name}.url=${quoted(url)}'`
+    return `codex mcp login ${shQuote(name)}${
+      url === undefined ? "" : ` -c ${shQuote(`mcp_servers.${name}.url=${quoted(url)}`)}`
     }`;
   };
-  const errors: Array<string> = [];
-  for (const name of failed) {
-    const said = reported[name]?.toolsError ?? "";
-    if (said !== "") {
-      errors.push(said);
-    }
-  }
-  const fromCollie = Arr.filter(failed, (name) => urls[name] !== undefined);
-  const fromCodex = Arr.filter(failed, (name) => urls[name] === undefined);
   return Arr.join(
     Arr.filter(
       [
@@ -233,18 +261,12 @@ export const codexConnections: (
             )} in a terminal, then send their message again, rather than start a Run to do what the tool would.`,
         failed.length === 0
           ? ""
-          : `Codex did not connect ${Arr.join(failed, ", ")}: ${
-              errors.length === 0 ? "it reported nothing of it" : Arr.join(errors, "; ")
-            }.`,
-        fromCollie.length === 0
+          : `Codex did not connect ${Arr.join(failed, ", ")}: the human's definition of ${
+              failed.length === 1 ? "it" : "them"
+            } is in Claude Code, which \`claude mcp list\` shows.`,
+        broken.length === 0
           ? ""
-          : `The definition of ${Arr.join(
-              fromCollie,
-              ", ",
-            )} is the human's own, in Claude Code, which \`claude mcp list\` shows.`,
-        fromCodex.length === 0
-          ? ""
-          : `Codex configures ${Arr.join(fromCodex, ", ")} itself, and \`codex mcp list\` shows it.`,
+          : `Codex did not connect ${Arr.join(broken, ", ")}: \`codex mcp list\` shows what Codex says of it.`,
         servers.left.length === 0
           ? ""
           : `Left out: ${Arr.join(
