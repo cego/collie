@@ -45,6 +45,9 @@ is: every `CREATE` and `ALTER` statement in `cluster/SqlMessageStorage.js` and
 The upgrade also took away Collie's checked-in `effect` patch: 4.1.5 guards a stale activity
 reset itself, but keeps the interrupts no reply has stamped, so a resumed attempt replays
 them (behaviour 8, below). Collie resets the whole family itself, in its own storage layer.
+`tools/migrate-effect.ts up|down` proves the move both ways, each time installing a throwaway
+copy's lockfile and running the regression test there: one of this tree, one of the
+merge-base's.
 A workflow will be a TypeScript file an author writes, outside this repository, and Collie
 will run it. That means Collie either builds durability, replay, suspension and recovery,
 or it uses Effect's. This says it uses Effect's, records exactly which settings that takes,
