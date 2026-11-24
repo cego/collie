@@ -180,6 +180,26 @@ That file must match this contract. Where a field carries a description, it is a
           "detail": {
             "type": "string"
           },
+          "basis": {
+            "type": "string",
+            "enum": [
+              "fact",
+              "inference"
+            ]
+          },
+          "evidence": {
+            "type": "string"
+          },
+          "suggested": {
+            "type": "string",
+            "enum": [
+              "fix",
+              "ticket",
+              "investigate",
+              "plan",
+              "none"
+            ]
+          },
           "internal": {
             "type": "boolean",
             "description": "true only for a finding about Collie's own process"
