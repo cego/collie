@@ -5827,10 +5827,10 @@ scenario(
               expect(again).toHaveLength(1);
               expect(optionsOf(again, "build.dispute-2")).toEqual(WAIVE_IT_OPTIONS);
               yield* run.answer("build.dispute-2", "Stop");
-              return yield* stepPark(run, runId, "dependency unavailable");
+              return yield* ended(run.status);
             }),
         );
-        expect(why).toContain("a person answered Stop to build.dispute-2");
+        expect(outcomeText(why)).toContain("a person answered Stop to build.dispute-2");
         expect(yield* asked(runId, "build.fix-2-back-1")).toContain(
           "A person declined the dispute on these findings",
         );
@@ -5849,16 +5849,20 @@ scenario("Stop on a dispute ends the Run with it named, and no review starts aft
       const runId = "r-dispute-stop";
       yield* approve(runId, ["unit"]);
       yield* rig.queueOutputs([BLOCKED_BUILD, disputedReview, disputedFix, disputedReview]);
-      const why = yield* driven(
+      const stopped = yield* driven(
         { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
         (run) =>
           Effect.gen(function* () {
             yield* stallAsked(run, "build.dispute-1");
             yield* run.answer("build.dispute-1", "Stop");
-            return yield* stepPark(run, runId, "dependency unavailable");
+            return yield* ended(run.status);
           }),
       );
-      expect(why).toContain("disputed blocking finding: [blocker] dependency unavailable (db)");
+      expect(stopped.status).toBe("failed");
+      expect(outcomeText(stopped)).toContain(
+        "a person answered Stop to build.dispute-1: disputed blocking finding: [blocker] dependency unavailable (db)",
+      );
+      expect(yield* parkedMarkers(runId)).toEqual([]);
       expect(yield* wasAsked(runId, "build.review-3")).toBe(false);
     }),
   ),

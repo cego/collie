@@ -71,7 +71,7 @@ export const startedBy = (
   return `Started by ${run.parent} as ${invocation}`;
 };
 
-export const whoActed = (actor: AuditLine["actor"]) =>
+export const whoActed = (actor: Pick<AuditLine["actor"], "origin" | "from">) =>
   actor.from?.agent ?? STARTED_FROM[actor.origin] ?? actor.origin;
 
 const AuditJson = Schema.fromJsonString(AuditLine);

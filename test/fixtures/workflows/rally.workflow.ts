@@ -4,8 +4,7 @@
 // Nothing here is a repeat declaration or a scheduler. `splitDisputed` decides what is
 // still the implementer's, `settleRound` decides where the round goes, and
 // `settleFinalFix` decides whether the last fix stands — with the checks it names read
-// from the verification journal rather than from its own word for them. A halt a person
-// would have to settle is a Choice here too, answered from the input's script.
+// from the verification journal rather than from its own word for them.
 
 import {
   FixOutputSchema,

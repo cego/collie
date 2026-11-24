@@ -32,6 +32,7 @@ import {
   step,
   targetKind,
   waiveFindings,
+  whoActed,
 } from "collie";
 import type { Finding, Fixed, Integration, SynthesisReport } from "collie";
 import { Effect, FileSystem, Option, Result, Schema } from "effect";
@@ -431,7 +432,6 @@ const WAIVE_IT = "Waive it";
 const SEND_IT_BACK = "Send it back";
 const STOP = "Stop";
 
-// WARNING: a waiver settles a finding in the rally and nothing else: the gate is never told about it.
 const WAIVER_IS_NOT_PROOF =
   "A waiver settles the finding in this rally and nothing else: the outcome gate is not told about it, " +
   "so an acceptance criterion this Run cannot prove still stops it there. Decide to ship without that " +
@@ -464,14 +464,6 @@ const AGAIN_OPTIONS = [
   { id: SEND_IT_BACK, detail: "One more fix round with it left open.", recommended: true },
   { id: STOP, detail: "Ends the Run, naming what it could not settle; no review starts." },
 ];
-
-const DOORS = new Map<string, string>([
-  ["board", "the board"],
-  ["chat", "chat"],
-  ["cli", "the CLI"],
-  ["cli-tty", "the CLI"],
-  ["desktop", "Desktop"],
-]);
 
 const titled = (findings: ReadonlyArray<Finding>) =>
   Arr.join(
@@ -561,7 +553,6 @@ const waiverNote = (one: Finding) =>
         detail: `${Str.trim(one.detail ?? "")}\nWaived by ${one.waived.by} to ${one.waived.choice}: do not raise it again.`,
       };
 
-// WARNING: the last fix has no review after it, so its account is judged against the journal, not taken on its word.
 export const rally = (ask: {
   readonly rounds: { n: number };
   readonly cwd: string;
@@ -575,6 +566,7 @@ export const rally = (ask: {
   readonly resume?: { readonly previous: Rallied; readonly reviewers: string };
   readonly ledger?: ReadonlyArray<Finding>;
   readonly taken?: ReadonlyArray<string>;
+  readonly waived?: ReadonlyArray<Finding>;
   readonly integrate: (
     operation: string,
   ) => Effect.Effect<Integration & { readonly base: string }, WorkflowError, Needs>;
@@ -596,7 +588,8 @@ export const rally = (ask: {
     const { prefix } = ask;
     const dir = (yield* host.place(runId)).dir;
     let disputed: Array<Finding> = [];
-    let waived: Array<Finding> = [];
+    let waived: Array<Finding> = [...(ask.waived ?? [])];
+    let lastFix = "";
     let disputeAsks = 0;
     let progressAsks = 0;
     let unverifiedAsks = 0;
@@ -629,8 +622,9 @@ export const rally = (ask: {
         ),
         ...resumed.previous.disputes,
       ];
+      lastFix = `${prefix}fix`;
       const fixed = yield* ask.fix({
-        operation: `${prefix}fix`,
+        operation: lastFix,
         at: 1,
         proves: yield* ask.proves,
         findings: formatFindings(open),
@@ -646,7 +640,7 @@ export const rally = (ask: {
     const answererOf = (name: string) =>
       Effect.map(host.asked(runId), (rows) => {
         const by = Option.getOrUndefined(Arr.findLast(rows, (row) => row.name === name))?.by;
-        return by === undefined ? "a person" : (DOORS.get(by.origin) ?? by.origin);
+        return by === undefined ? "a person" : whoActed(by);
       });
 
     const waiveAll = (name: string, standing: ReadonlyArray<Finding>) =>
@@ -670,11 +664,9 @@ export const rally = (ask: {
         return;
       }
       const onFile = yield* findingsIn(dir);
-      const known = new Set(Arr.map(onFile, findingKey));
-      const missing = Arr.filter(waived, (one) => !known.has(findingKey(one)));
-      if (missing.length > 0) {
-        yield* leaveOutstanding(dir, [...onFile, ...missing]);
-      }
+      const keys = new Set(Arr.map(waived, findingKey));
+      const merged = [...Arr.filter(onFile, (one) => !keys.has(findingKey(one))), ...waived];
+      yield* leaveOutstanding(dir, merged);
     });
 
     const cleaned: (reviewed: SynthesisReport, unreviewed?: string) => Rallied = (
@@ -704,7 +696,6 @@ export const rally = (ask: {
     const declinedLine =
       "A person declined the dispute on these findings, so they are open again: fix them, or answer each with new evidence or a dispute.";
 
-    // WARNING: a fix a person sent back is told so, or it reads as a rerun of the argument that was already declined.
     const sendBack = (
       line: string,
       open: ReadonlyArray<Finding>,
@@ -714,8 +705,9 @@ export const rally = (ask: {
     ) =>
       Effect.gen(function* () {
         sentBack += 1;
+        lastFix = `${prefix}fix-${at}-back-${sentBack}`;
         const fixed = yield* ask.fix({
-          operation: `${prefix}fix-${at}-back-${sentBack}`,
+          operation: lastFix,
           at,
           proves,
           findings: `${line}\n\n${formatFindings(open)}`,
@@ -739,6 +731,11 @@ export const rally = (ask: {
     ) =>
       Effect.gen(function* () {
         let report = first;
+        let open: ReadonlyArray<Finding> = live;
+        const shrink = (fixed: typeof FixOutputSchema.Type) => {
+          const settled = new Set(Arr.map([...fixed.fixed, ...fixed.disputed], findingKey));
+          return Arr.filter(live, (one) => !settled.has(findingKey(one)));
+        };
         for (;;) {
           const standing = Arr.filter(disputed, isBlocking);
           if (standing.length > 0) {
@@ -757,13 +754,14 @@ export const rally = (ask: {
               );
             } else {
               report = yield* sendBack(declinedLine, standing, ROUNDS + 1, yield* ask.proves, head);
+              open = shrink(report);
               continue;
             }
           }
           // WARNING: a waiver settles the finding for the last fix too, or its own dispute record asks again.
           const gone = new Set(Arr.map(waived, findingKey));
           const judged = settleFinalFix(
-            Arr.filter(live, (one) => !gone.has(findingKey(one))),
+            Arr.filter(open, (one) => !gone.has(findingKey(one))),
             {
               ...report,
               disputed: Arr.filter(report.disputed, (one) => !gone.has(findingKey(one))),
@@ -793,6 +791,7 @@ export const rally = (ask: {
               );
             }
             report = yield* sendBack(declinedLine, standing, ROUNDS + 1, yield* ask.proves, head);
+            open = shrink(report);
             continue;
           }
           if (!handedUnverified) {
@@ -805,9 +804,11 @@ export const rally = (ask: {
                 Arr.map(judged.reasons, (one) => `- ${one}`),
                 "\n",
               )}\n\nRun each check you name through \`collie verify\`, and answer every blocking finding above with a fix or a dispute.`,
-              open: live,
+              open,
               head,
             });
+            lastFix = `${prefix}fix-${ROUNDS + 1}`;
+            open = shrink(report);
             continue;
           }
           const name = `${prefix}fix-unverified-${++unverifiedAsks}`;
@@ -827,11 +828,12 @@ export const rally = (ask: {
           }
           report = yield* sendBack(
             "A person sent this fix back rather than stop the Run: the evidence its checks need is still missing.",
-            live,
+            open,
             ROUNDS + 1,
             yield* ask.proves,
             head,
           );
+          open = shrink(report);
         }
       });
 
@@ -891,12 +893,7 @@ export const rally = (ask: {
             proves,
             previous: "",
             delta: given,
-            answered:
-              ask.resume !== undefined
-                ? agents.outputFor(runId, `${prefix}fix`)
-                : at === 1
-                  ? ""
-                  : agents.outputFor(runId, `${prefix}fix-${at - 1}`),
+            answered: lastFix === "" ? "" : agents.outputFor(runId, lastFix),
             prefix,
             ledger,
             stamped: head,
@@ -996,8 +993,9 @@ export const rally = (ask: {
               reviewed: synthesis,
             };
           }
+          lastFix = `${prefix}fix-${at}`;
           const fixed = yield* ask.fix({
-            operation: `${prefix}fix-${at}`,
+            operation: lastFix,
             at,
             proves,
             findings: formatFixBrief(round.live, round.handedBack),

@@ -30,6 +30,7 @@ import {
   PlanOutputSchema,
   defineWorkflow,
   evidenceRoots,
+  findingKey,
   findingsIn,
   formatFindings,
   identityProblem,
@@ -500,6 +501,13 @@ export default defineWorkflow({
             return yield* Workflow.suspend(yield* WorkflowInstance);
           }),
         });
+      // WARNING: a person's Stop ends the Run: nothing is parked, so no Heal is started for it.
+      const endedAt = (reason: string) =>
+        Effect.gen(function* () {
+          const why = Str.replace(/^stopped: /, "")(reason);
+          yield* host.record(runId, why);
+          return yield* new WorkflowError({ reason: why });
+        });
       const checksNow = Effect.map(host.approved(runId), renderApproved);
 
       let input: typeof Implementing.Type = {
@@ -696,6 +704,14 @@ export default defineWorkflow({
         }));
       });
       let tickets: ReadonlyArray<Slice> = yield* ticketsNow;
+      const measureFor = (benchmark: string | null | undefined) =>
+        work.kind !== "plan-dir"
+          ? measuredBy("measure.own", `${place.dir}/plan/issues/NN-<slug>.benchmark.json`)
+          : benchmark === undefined || benchmark === null
+            ? ""
+            : measuredBy("measure", benchmarkFile(work.value, benchmark));
+      const measuredTicket = () =>
+        Option.getOrUndefined(Arr.findFirst(tickets, (one) => one.benchmark !== null))?.benchmark;
       // WARNING: read only after the build, which is what writes SPEC.md for any source but a plan.
       let specReadings = 0;
       const specNow = Effect.gen(function* () {
@@ -730,6 +746,7 @@ export default defineWorkflow({
       const answeredFor: Array<Answered> = [];
       let build: typeof Built.Type | null = null;
       let rallied: Rallied | null = null;
+      let waived: Array<Finding> = [];
       const ledgered = place.features?.findings_ledger === true;
       const ledger = new Map<string, Finding>();
       const ledgering = (given: ReadonlyArray<Finding>) =>
@@ -740,6 +757,8 @@ export default defineWorkflow({
             ledger.set(one.id, one);
           }
         }
+        const again = new Set(Arr.map(done.waived, findingKey));
+        waived = [...Arr.filter(waived, (one) => !again.has(findingKey(one))), ...done.waived];
         return done;
       };
       let parentDir = "";
@@ -925,11 +944,9 @@ export default defineWorkflow({
             yield* restateKind;
             handing.ticket = ticket?.file ?? null;
             const measure =
-              work.kind !== "plan-dir"
-                ? measuredBy("measure.own", `${place.dir}/plan/issues/NN-<slug>.benchmark.json`)
-                : ticket?.benchmark != null
-                  ? measuredBy("measure", benchmarkFile(work.value, ticket.benchmark))
-                  : "";
+              ticket === null
+                ? measureFor(measuredTicket())
+                : measureFor(ticket.benchmark ?? undefined);
             build = yield* agentWork({
               operation,
               ...onHolder(handing),
@@ -970,9 +987,7 @@ export default defineWorkflow({
             });
             handing.said = build;
             handing.last = operation;
-            if (measure !== "") {
-              input = { ...input, measure };
-            }
+            input = { ...input, measure };
             let spec: ReadonlyArray<string> | null = given;
             for (let reading = 1; ; reading++) {
               spec =
@@ -1211,6 +1226,7 @@ export default defineWorkflow({
                 completed: Arr.map(handed, (one) => one.item),
                 findings: blocking,
               },
+              waived,
             }),
           );
           for (let attempt = 1; ; attempt++) {
@@ -1218,10 +1234,12 @@ export default defineWorkflow({
             if (unresolved === "") {
               break;
             }
-            yield* reviewRound(
-              unbuilt(`${done.item}.rally-${attempt}`, `${done.item}: ${unresolved}`),
-              { round: rallyAsk.rounds.n },
-            );
+            yield* Str.startsWith("stopped: ")(unresolved)
+              ? endedAt(unresolved)
+              : reviewRound(
+                  unbuilt(`${done.item}.rally-${attempt}`, `${done.item}: ${unresolved}`),
+                  { round: rallyAsk.rounds.n },
+                );
             rallied = kept(
               yield* builderRally({
                 ...rallyAsk,
@@ -1235,6 +1253,7 @@ export default defineWorkflow({
                   findings: blocking,
                 },
                 resume: { attempt, previous: rallied },
+                waived,
               }),
             );
           }
@@ -1251,6 +1270,8 @@ export default defineWorkflow({
         handTo(handing, DELIVERER);
       }
 
+      // WARNING: the last ticket built is not the Run's Measurement, which is the one its tickets name.
+      input = { ...input, measure: measureFor(measuredTicket()) };
       if (rallied === null || rallied.unreviewed !== "") {
         rallied = kept(
           yield* builderRally({
@@ -1264,6 +1285,7 @@ export default defineWorkflow({
             plan: yield* specNow,
             criteria: reviewerCriteria(answeredFor),
             input,
+            waived,
             obstacle:
               recovery.entry === "Review"
                 ? `Recover the existing implementation. Review the whole requested outcome, including the current work source ${asked.plan} and any added requirements; an unbuilt requirement is a blocking finding for the builder. Previous head: ${recovery.previous || "unrecorded"}. Commits since that head:\n${recovery.commits || "(none or unavailable)"}\nThe original requirements and review associations this recovery weighed are in ${place.dir}/recovery-reviews.jsonl. Read its open findings at ${parentDir}/findings.json, and its spec at ${parentDir}/plan where present.`
@@ -1276,7 +1298,9 @@ export default defineWorkflow({
         if (unresolved === "") {
           break;
         }
-        yield* reviewRound(unbuilt(`rally-${attempt}`, unresolved), { round: rallyAsk.rounds.n });
+        yield* Str.startsWith("stopped: ")(unresolved)
+          ? endedAt(unresolved)
+          : reviewRound(unbuilt(`rally-${attempt}`, unresolved), { round: rallyAsk.rounds.n });
         rallied = kept(
           yield* builderRally({
             ...rallyAsk,
@@ -1285,6 +1309,7 @@ export default defineWorkflow({
             criteria: reviewerCriteria(answeredFor),
             input,
             resume: { attempt, previous: rallied },
+            waived,
           }),
         );
       }
@@ -1633,6 +1658,7 @@ const builderRally = (ask: {
   readonly resume?: { readonly attempt: number; readonly previous: Rallied };
   readonly ledger?: ReadonlyArray<Finding>;
   readonly taken?: ReadonlyArray<string>;
+  readonly waived?: ReadonlyArray<Finding>;
   readonly handing: Handing;
   readonly integrate: (
     operation: string,

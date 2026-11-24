@@ -93,6 +93,7 @@ export { SOURCES, SOURCE_NAMES, isSource, type Source } from "./offers";
  * arguments that point a command at its project from anywhere.
  */
 export { targetKind } from "./mr";
+export { whoActed } from "./audit";
 export { ParkCause } from "./park-cause";
 export { repoArgs } from "./forge/gitlab";
 export { mrForgeFacts } from "./forge/forge";

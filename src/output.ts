@@ -788,6 +788,20 @@ export type Rally =
       readonly outstanding: Array<Finding>;
     };
 
+// WARNING: the Choice shows the reviewer's latest word on a finding beside the fixer's reason, which only its own entry carries.
+function mergeDisputes(findings: ReadonlyArray<Finding>) {
+  return Arr.reduce(findings, Arr.empty<Finding>(), (kept, one) => {
+    const at = Arr.findFirstIndex(kept, (other) => sameFinding(other, one));
+    if (Option.isNone(at)) {
+      return [...kept, one];
+    }
+    // WARNING: the index comes from findFirstIndex on this same array.
+    const earlier = kept[at.value]!;
+    const merged = { ...one, reason: one.reason ?? earlier.reason };
+    return Arr.map(kept, (other, index) => (index === at.value ? merged : other));
+  });
+}
+
 // WARNING: a repeat goes back to the fixer once; only a set it has already answered halts the rally.
 export function settleRound(round: {
   readonly live: ReadonlyArray<Finding>;
@@ -805,20 +819,18 @@ export function settleRound(round: {
   const live = Arr.filter(round.live, (f) => f.status !== "fixed" && f.status !== "obsolete");
   const reopened = [...(round.reopened ?? [])];
   const blocking = [...Arr.filter(live, isBlocking), ...reopened];
+  // WARNING: a disputed blocker is the person's call whatever else the review raised.
+  const standing = mergeDisputes(Arr.filter(round.disputed, isBlocking));
+  if (standing.length > 0) {
+    const returned: Rally = {
+      go: "halt",
+      halt: "dispute_unresolved",
+      reason: `${standing.length} disputed blocking finding(s) stand unanswered — your call, not the loop's`,
+      outstanding: [...standing, ...live],
+    };
+    return returned;
+  }
   if (blocking.length === 0) {
-    const standing = Arr.dedupeWith(
-      Arr.filter(round.disputed, isBlocking),
-      (left: Finding, right: Finding) => sameFinding(left, right),
-    );
-    if (standing.length > 0) {
-      const returned: Rally = {
-        go: "halt",
-        halt: "dispute_unresolved",
-        reason: `${standing.length} disputed blocking finding(s) stand unanswered — your call, not the loop's`,
-        outstanding: [...standing, ...live],
-      };
-      return returned;
-    }
     const returned: Rally = { go: "clean", remaining: live };
     return returned;
   }
@@ -827,11 +839,12 @@ export function settleRound(round: {
   const previous = seen !== null && seen !== undefined && seen.at < round.at ? seen : null;
   const handed = new Set(previous?.handed ?? []);
   const repeated = previous === null ? [] : Arr.filter(keys, (key) => previous.keys.includes(key));
-  if (
+  const sameSet =
+    previous !== null &&
     keys.length > 0 &&
     repeated.length === keys.length &&
-    Arr.every(repeated, (key) => handed.has(key))
-  ) {
+    previous.keys.length === keys.length;
+  if (sameSet && Arr.every(repeated, (key) => handed.has(key))) {
     const returned: Rally = {
       go: "halt",
       halt: "no_progress",
@@ -1209,7 +1222,6 @@ export function formatFindings(findings: ReadonlyArray<Finding>) {
 export const waivedIn = (findings: ReadonlyArray<Finding>) =>
   Arr.filter(findings, (one) => one.waived !== undefined);
 
-// WARNING: a waiver settles a finding in the rally only; it is never proof of one.
 function waivedLine(finding: Finding, waiver: Waiver) {
   const at = finding.file ? ` (${finding.file})` : "";
   return `${finding.title}${at} — waived by ${waiver.by} to ${waiver.choice}, and nothing verifies it`;

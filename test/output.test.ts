@@ -70,11 +70,60 @@ test("a dispute survives a rename by id and counts once across ledger versions",
     settleRound({ live: split.live, disputed: [before, ...split.settled], at: 2 }),
   ).toMatchObject({
     reason: "1 disputed blocking finding(s) stand unanswered — your call, not the loop's",
-    outstanding: [before],
+    outstanding: [renamed],
   });
   expect(splitDisputed([{ ...renamed, id: "F2" }], [renamed]).live).toHaveLength(1);
   const legacy = { file: renamed.file, title: renamed.title, severity: "major" };
   expect(splitDisputed([renamed], [legacy]).settled).toEqual([renamed]);
+});
+
+const GUARD: Finding = {
+  file: "src/guard.ts",
+  severity: "blocker",
+  title: "guard the input",
+  reason: "the caller already validates it",
+};
+const GUARD_LATEST: Finding = {
+  ...GUARD,
+  detail: "the CLI path does not validate it",
+};
+
+test("a disputed blocker is the person's call even when the review also raised a live one", () => {
+  expect(settleRound({ live: [LIST], disputed: [GUARD], at: 2 })).toMatchObject({
+    go: "halt",
+    halt: "dispute_unresolved",
+    outstanding: [GUARD, LIST],
+  });
+});
+
+test("a kept dispute carries the reviewer's latest detail beside the fixer's reason", () => {
+  const standing = { ...GUARD_LATEST, status: "disputed" as const };
+  expect(settleRound({ live: [], disputed: [GUARD, standing], at: 2 })).toMatchObject({
+    outstanding: [
+      { detail: "the CLI path does not validate it", reason: "the caller already validates it" },
+    ],
+  });
+});
+
+test("a blocker resolved beside a repeated one is progress, not no progress", () => {
+  const guardAgain: Finding = { ...GUARD_LATEST, status: undefined };
+  const keys = keysOf([LIST, GUARD_LATEST]);
+  expect(
+    settleRound({
+      live: [LIST, guardAgain],
+      disputed: [],
+      at: 2,
+      seen: { at: 1, keys, handed: keys },
+    }),
+  ).toMatchObject({ go: "halt", halt: "no_progress" });
+  expect(
+    settleRound({
+      live: [guardAgain],
+      disputed: [],
+      at: 3,
+      seen: { at: 2, keys, handed: keys },
+    }),
+  ).toMatchObject({ go: "fix" });
 });
 
 test("resolved ledger findings leave the rally clean and a dispute remains the human's call", () => {

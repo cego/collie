@@ -2375,6 +2375,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     handedBack: ReadonlyArray<HandedBack>,
   ): string;
   export function formatFindings(findings: ReadonlyArray<Finding>): string;
+  /** Who acted, naming the agent where the audit recorded one, else the door it came from. */
+  export function whoActed(actor: {
+    readonly origin: string;
+    readonly from?: { readonly agent?: string } | undefined;
+  }): string;
 
   /** The prose a human reads, and the findings a card counts, where both are looked for. */
   export const REVIEW_FILE: string;
