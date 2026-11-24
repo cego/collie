@@ -608,6 +608,50 @@ test("a Run stopped while its agent works on the message does not ask the questi
     }),
   ));
 
+for (const evidence of ["no-submit", "another-delivery", "another-incarnation"] as const) {
+  test(`an answered Choice is not asked again after a restart, with ${evidence} for its delivery`, () =>
+    atQuestion(`collie-answered-restart-${evidence}-`, (at) =>
+      Effect.gen(function* () {
+        const asked = yield* until(
+          () => waitingOf(at),
+          (rows) => rowOf(rows, "go")?.answer === null,
+        );
+        expect(rowOf(asked, "go")?.answer).toBeNull();
+        expect((yield* answer(at, "yes", "go")).envelope).toMatchObject({ ok: true });
+        yield* Effect.sleep("2 seconds");
+        const sent = yield* deliveredTo(at.world.state, at.runId).pipe(
+          Effect.orElseSucceed(() => []),
+        );
+        const delivery = Option.getOrUndefined(Arr.last(sent));
+        expect(delivery).toBeDefined();
+        if (evidence !== "no-submit") {
+          yield* recordClaudeEvent(
+            yield* controlDir(at.world.state, at.agent),
+            encode({
+              session_id: "s-1",
+              hook_event_name: "UserPromptSubmit",
+              prompt: `collie-delivery:${
+                evidence === "another-delivery" ? `${delivery?.id}-elsewhere` : delivery?.id
+              }\nYour task for this step is next.`,
+            }),
+            evidence === "another-incarnation"
+              ? "not-its-terminal"
+              : (delivery?.incarnation ?? null),
+          ).pipe(Effect.orDie);
+        }
+        const settled = Effect.gen(function* () {
+          yield* Effect.sleep("2 seconds");
+          expect(rowOf(yield* waitingOf(at), "go")?.answer).toBe("yes");
+          expect((yield* cardOf(at))?.questions ?? []).toEqual([]);
+        });
+        yield* settled;
+        yield* stopHost(at.world.state);
+        yield* startHost(at.world);
+        yield* settled;
+      }),
+    ));
+}
+
 const revised = (at: AtQuestion, of = "go") =>
   Effect.map(
     until(
