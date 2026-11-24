@@ -130,6 +130,9 @@ export const readBranch = Effect.fn("Branches.read")(function* (runs: ReadonlyAr
       onSome: (card) => [card.revision.head_sha],
     }),
   );
+  if (finished.length === 0) {
+    return { head, project, movements: [] } satisfies Branch;
+  }
   const remote = yield* readRemote(first.cwd, first.branch, finished);
   const movements = yield* Effect.forEach(runs, (run, index) =>
     Option.match(finals[index] ?? Option.none(), {

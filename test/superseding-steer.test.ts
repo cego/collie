@@ -1,7 +1,9 @@
 import type { Records } from "../src/records";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
-import { expect, test } from "bun:test";
+import * as Str from "effect/String";
+import { pipe } from "effect";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
 import { Config, Duration, Effect, FileSystem, Option, Schema, flow, Result } from "effect";
 import type { Scope } from "effect";
@@ -30,6 +32,8 @@ import type { World } from "./support/world";
 import type { FakeHc } from "./support/fake-hc";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
+// WARNING: a restart runs the host's own recovery, which outlasts the default timeout.
+setDefaultTimeout(90_000);
 const Board = Schema.Struct({ tasks: Schema.Array(TaskView) });
 
 const PICKS = [{ label: "Postgres (Recommended)" }, { label: "SQLite" }, { label: "JSONL" }];
@@ -608,6 +612,29 @@ test("a Run stopped while its agent works on the message does not ask the questi
     }),
   ));
 
+const runLog = (at: AtQuestion) =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) =>
+    fs
+      .readFileString(`${at.world.state}/runs/${at.runId}/agents.log`)
+      .pipe(Effect.orElseSucceed(() => "")),
+  );
+
+const answerSends = (at: AtQuestion, needle: string) =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) =>
+    fs.readFileString(core.logPath).pipe(
+      Effect.orElseSucceed(() => ""),
+      Effect.map((text) =>
+        Arr.length(
+          Arr.filter(
+            Str.split(text, "\n"),
+            (line) =>
+              pipe(line, Str.includes('"cmd":"terminal.send"')) && pipe(line, Str.includes(needle)),
+          ),
+        ),
+      ),
+    ),
+  );
+
 for (const evidence of ["no-submit", "another-delivery", "another-incarnation"] as const) {
   test(`an agent-owned question stays answered across a restart, with ${evidence} for its delivery`, () =>
     atQuestion(`collie-answered-restart-${evidence}-`, (at) =>
@@ -625,25 +652,29 @@ for (const evidence of ["no-submit", "another-delivery", "another-incarnation"] 
           }),
           null,
         ).pipe(Effect.orDie);
-        const asked = yield* until(
+        yield* until(
           () => waitingOf(at),
           (rows) => rowOf(rows, "ask-build-1")?.answer === null,
         );
-        expect(rowOf(asked, "ask-build-1")?.answer).toBeNull();
 
         core.refuse("terminal.send", "unreachable", "the core did not answer");
         expect((yield* answer(at, "SQLite", "ask-build-1")).envelope).toMatchObject({ ok: true });
-        const sent = yield* until(
+        const lost = yield* until(
           () =>
             deliveredTo(at.world.state, at.runId).pipe(
-              Effect.map((rows) => Arr.filter(rows, (one) => one.state === "unknown")),
+              Effect.map((rows) => Arr.filter(rows, (one) => one.cause.kind === "steer")),
               Effect.orElseSucceed(() => []),
             ),
-          (rows) => rows.length > 0,
-        );
+          (rows) => rows.some((one) => one.state === "unknown"),
+        ).pipe(Effect.map((rows) => Arr.findFirst(rows, (one) => one.state === "unknown")));
         core.restore("terminal.send");
-        const lost = Option.getOrUndefined(Arr.last(sent));
-        expect(lost?.state).toBe("unknown");
+        const delivery = Option.getOrThrow(lost);
+        const answered = yield* until(
+          () => waitingOf(at),
+          (rows) => rowOf(rows, "ask-build-1")?.answer !== null,
+        );
+        const held = rowOf(answered, "ask-build-1")?.answer;
+        expect(held).toBe("2");
 
         if (evidence !== "no-submit") {
           yield* recordClaudeEvent(
@@ -652,30 +683,32 @@ for (const evidence of ["no-submit", "another-delivery", "another-incarnation"] 
               session_id: at.agent,
               hook_event_name: "UserPromptSubmit",
               prompt: `collie-delivery:${
-                evidence === "another-delivery" ? `${lost?.id}-elsewhere` : lost?.id
+                evidence === "another-delivery" ? `${delivery.id}-elsewhere` : delivery.id
               }\nYour task for this step is next.`,
             }),
-            evidence === "another-incarnation" ? "not-its-terminal" : (lost?.incarnation ?? null),
+            evidence === "another-incarnation" ? "not-its-terminal" : delivery.incarnation,
           ).pipe(Effect.orDie);
         }
+        yield* answer(at, "yes", "go");
 
         yield* stopHost(at.world.state);
         const again = yield* startHost(at.world);
         const after = yield* until(
           () => again.run({ runId: at.runId }).pipe(Effect.orDie),
-          (view) => view?.waiting !== undefined && view.waiting.length > 0,
+          (view) => view?.status.status === "complete" || view?.parked != null,
         );
-        expect(rowOf(after?.waiting ?? [], "ask-build-1")?.answer).not.toBeNull();
-        const afterRestart = yield* deliveredTo(at.world.state, at.runId).pipe(
+        expect(Arr.filter(after?.waiting ?? [], (one) => one.name === "ask-build-1")).toHaveLength(
+          1,
+        );
+        expect(revisionOf(after?.waiting ?? [], "ask-build-1")).toBeUndefined();
+        expect(rowOf(after?.waiting ?? [], "ask-build-1")?.answer).toBe(held);
+        expect(yield* answerSends(at, "SQLite")).toBe(1);
+        const ledger = yield* deliveredTo(at.world.state, at.runId).pipe(
           Effect.orElseSucceed(() => []),
         );
-        expect(Arr.filter(afterRestart, (one) => one.id === lost?.id)).toMatchObject([
-          { state: "unknown" },
-        ]);
-        const still = yield* deliveredTo(at.world.state, at.runId).pipe(
-          Effect.orElseSucceed(() => []),
+        expect(Arr.findFirst(ledger, (one) => one.id === delivery.id)).toMatchObject(
+          Option.some({ state: "unknown" }),
         );
-        expect(Arr.length(Arr.filter(still, (one) => one.id === lost?.id))).toBe(1);
       }),
     ));
 }

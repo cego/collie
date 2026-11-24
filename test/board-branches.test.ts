@@ -369,13 +369,12 @@ test("an incremental sync re-reads every Run on a branch a changed card put back
       expect((yield* git("push", "-qu", "origin", "HEAD")).code).toBe(0);
       const pushed = Str.trim((yield* git("rev-parse", "HEAD")).stdout);
       yield* Ref.set(phase, 2);
-      const after = yield* until(
+      yield* until(
         () => rows,
         (all) =>
           Arr.length(lines(all)) === 2 &&
           Arr.every(lines(all), (line) => pipe(line, Str.includes(pushed))),
       );
-      expect(Arr.length(lines(after))).toBe(2);
     }),
   ));
 
