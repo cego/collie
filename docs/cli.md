@@ -518,8 +518,11 @@ collie --json run steer <run-id> "check the migration too" [--to builder] [--req
 
 - **`run steer` says something to the Run's agent** through the one sender, with the same
   incarnation and harness-capability checks as every other delivery. With no `--to`, it
-  goes to the agent whose step is active, else the builder; `--to builder|reviewer|planner`
-  names a role and `--to <agent>` an agent, and `--operation` still names one by its
+  goes to the agent whose step is active, else the builder; `--to` names a role — `builder`,
+  `reviewer`, `planner`, or any other role a launch recorded (`implementer`,
+  `investigator`, `healer`, `architect`, `generalist`, `renovate`, `retrospective`,
+  `tuner`) — and
+  `--to <agent>` an agent, and `--operation` still names one by its
   operation ([steering](steering.md#who-a-steer-reaches-and-what-it-says-came-of-it)). It
   tells you whether the agent was seen to take it: `Delivered to <agent> (observed: <how>).`,
   or `Sent to <agent>, not observed.` with how to go to its pane, and `data.observed` and

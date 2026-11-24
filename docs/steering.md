@@ -193,9 +193,15 @@ agent whose step is active — its newest launch has no Output yet — and with 
 the Run's builder (its `implementer`), else whoever was launched last — a Run with no
 implementer, such as an investigation, has no builder, and `--to builder` there says no
 agent was launched for it. A busy builder is reached even when an idle reviewer was
-launched after it. `--to builder|reviewer|planner` names a role, `--to <agent>` an agent or
-an operation, and `--operation` still works; where both are given, an agent's name wins,
-then `--operation`, then `--to`. An agent is also named by the short name it was launched
+launched after it. `--to` names a role — `builder`, `reviewer`, `planner`, or any other
+role a launch recorded, today `architect`, `generalist`, `healer`, `implementer`,
+`investigator`, `renovate`, `retrospective` and `tuner` — and `builder` still means the
+Run's implementer; the roles are read from what launches record, so a role added to a
+workflow is addressed without Collie being taught it. `--to <agent>` names an agent or an
+operation, and `--operation` still works; where both are given, an agent's name wins, then
+`--operation`, then `--to`. A `--to` no live agent of the Run has is refused with the live
+agents and their roles, and the refusal says the Run is gone only when none is live. An
+agent is also named by the short name it was launched
 under, such as `build` for `run-…-build-r1`, which reaches it in a Run whose operations are
 its tickets, finished or not.
 

@@ -4394,18 +4394,23 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         if (queued?.result != null) {
           return queued.result;
         }
-        const launched = steerTarget(
-          yield* candidatesOf(options.runId),
-          queued ?? { to, operation, agent },
-          launchedAs,
-        );
+        const candidates = yield* candidatesOf(options.runId);
+        const launched = steerTarget(candidates, queued ?? { to, operation, agent }, launchedAs);
         if (launched === undefined) {
+          const live = Arr.filter(candidates, (one) => !one.done);
           const named = agent ?? operation ?? to;
           return {
             agent: "",
             delivered: false,
-            detail: `${options.runId} has launched no agent${named === undefined ? "" : ` for "${named}"`}`,
-            gone: true,
+            detail: `${options.runId} has launched no agent${named === undefined ? "" : ` for "${named}"`}${
+              live.length === 0
+                ? ""
+                : `; live: ${Arr.join(
+                    Arr.map(live, (one) => `${one.agent} (${one.role})`),
+                    ", ",
+                  )}`
+            }`,
+            gone: live.length === 0,
           };
         }
         const out = stepsGoingOut.get(launched.agent);

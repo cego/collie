@@ -52,6 +52,14 @@ test("--to names a role, an agent or an operation", () => {
   expect(steerTarget(both, { to: "planner" })).toBeUndefined();
 });
 
+test("--to takes every role a launch records, not only the three names it knew", () => {
+  const healer = { agent: "r1-heal-r1", operation: "heal", role: "healer", done: false };
+  const both = [builder(true), healer];
+  expect(steerTarget(both, { to: "healer" })).toMatchObject({ agent: "r1-heal-r1" });
+  expect(steerTarget(both, { to: "implementer" })).toMatchObject({ agent: "r1-build-r1" });
+  expect(steerTarget(both, { to: "tuner" })).toBeUndefined();
+});
+
 test("--operation and an agent's name behave as before", () => {
   const both = [builder(false), reviewer(true)];
   expect(steerTarget(both, { operation: "review-1" })).toMatchObject({ agent: "r1-review-r1" });

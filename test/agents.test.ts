@@ -7627,6 +7627,73 @@ test("a run that has launched no agent is told so rather than told its message l
     }),
   ));
 
+const implementerAsk = () => ({
+  runId: "r1",
+  operation: "build",
+  role: "implementer",
+  workflow: "implement",
+  harness: "codex",
+  agent: null,
+  model: null,
+  effort: null,
+  permissions: null,
+  task: null,
+  cwd: rig.projectDir,
+  prompt: "Build it.",
+  output: `${dir}/build.json`,
+  skill: null,
+});
+
+test("a Delivery addressed to a role a launch recorded reaches that agent", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null]);
+      const launched = yield* session(
+        Agents.pipe(Effect.flatMap((agents) => agents.launch(implementerAsk()))),
+      );
+      const told = yield* session(
+        Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.steer({
+              runId: "r1",
+              to: "implementer",
+              text: "Take this too",
+              request: "to-role-1",
+            }),
+          ),
+        ),
+      );
+      expect(told).toMatchObject({ agent: launched.agent, delivered: true });
+      expect(sent(yield* rig.calls(), "Take this too")).toBe(1);
+    }),
+  ));
+
+test("a role no live agent of the Run has is refused, naming the live agents and their roles", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null]);
+      const launched = yield* session(
+        Agents.pipe(Effect.flatMap((agents) => agents.launch(implementerAsk()))),
+      );
+      const refused = yield* session(
+        Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.steer({
+              runId: "r1",
+              to: "healer",
+              text: "Look at this",
+              request: "to-healer-1",
+            }),
+          ),
+        ),
+      );
+      expect(refused).toMatchObject({ agent: "", delivered: false, gone: false });
+      expect(refused.detail).toContain(launched.agent);
+      expect(refused.detail).toContain("implementer");
+      expect(sent(yield* rig.calls(), "Look at this")).toBe(0);
+    }),
+  ));
+
 test("a held run parks before it starts an agent, and carries on once it is released", () =>
   runEffect(
     Effect.gen(function* () {
