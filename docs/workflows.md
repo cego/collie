@@ -1228,11 +1228,18 @@ child's result or ask what next again.
 optionally, the branch with `branch`. A remote start can name the repository by URL or
 `owner/name`; push the named branch first.
 
-**What happens:** one investigator works in the Run's own checkout and returns
-`{ summary, findings: [{ what, evidence }] }`. It changes only what the goal asks,
-has no proof gate and offers no next steps. The host reports
-the result to the agent that started it, then closes the investigator and its Task
-workspace unless another Run or a human pane needs it (`closes: "reported"`).
+**What happens:** one investigator works in the Run's own checkout and returns `answer`,
+`cause` and at most seven `findings`, at most one of them `minor`. A finding is the
+shape a review's is, with a `basis` (`fact` or `inference`), the `evidence` that shows it
+and a `suggested` fate (`fix`, `ticket`, `investigate`, `plan` or `none`), so Desktop
+cards and a `findings` work source read an investigation's findings with nothing added.
+When the investigator's Output is collected, the Run writes `findings.json` and
+`investigation.md` — the answer as its first paragraph, then its Cause, then each finding
+with its location, basis, evidence and suggestion — into the Run's directory, through the
+same leave path a review uses. It changes only what the goal asks, has no proof gate and
+offers no next steps. The host reports the result to the agent that started it, then
+closes the investigator and its Task workspace unless another Run or a human pane needs it
+(`closes: "reported"`).
 
 For a speed comparison, the investigator takes a Measurement. It writes the benchmark
 plan in the Run's `handoffs/<slug>.benchmark.json`, calibrates the base against itself

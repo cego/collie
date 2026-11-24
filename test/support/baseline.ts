@@ -70,6 +70,7 @@ import { COMPACTION_PORTS, recordClaudeEvent } from "../../src/compactors";
 import { Children, Host, Run, WorkflowError, evidenceGapsOf } from "../../src/sdk";
 import type { ActionFacts, ChildAsk, Claimed, Issue } from "../../src/sdk";
 import { readStepLines } from "../../src/steps";
+import { buildRunDetail } from "../../src/views";
 import { measuresOf } from "../../src/outcomes";
 import { redact } from "../../src/redact";
 import { leaksIn } from "../../src/public-text";
@@ -3948,7 +3949,14 @@ const ran = (options: {
 scenario("Flow: investigate's reported work is one completed Investigate Step", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* rig.queueOutputs([{ summary: "The peer build is stale", findings: [] }]);
+      yield* rig.queueOutputs([
+        {
+          answer: "The peer's bundle is stale.",
+          cause: "Its watcher ignores the bundle's directory.",
+          summary: "The peer build is stale",
+          findings: [],
+        },
+      ]);
       yield* ran({
         entry: shipped("investigate"),
         runId: "r-investigate-flow",
@@ -3966,8 +3974,20 @@ scenario("investigate asks one investigator and returns findings without proof o
   runEffect(
     Effect.gen(function* () {
       const output = {
+        answer: "The peer's bundle is stale.",
+        cause: "Its watcher ignores the bundle's directory.",
         summary: "The peer build is stale",
-        findings: [{ what: "A cached build", evidence: "MachinesPage.vue:12" }],
+        findings: [
+          {
+            severity: "major",
+            title: "A cached build",
+            file: "MachinesPage.vue",
+            line: 12,
+            basis: "fact",
+            evidence: "the pane shows an older commit",
+            suggested: "fix",
+          },
+        ],
       };
       yield* rig.queueOutputs([output]);
       const result = yield* ran({
@@ -3986,6 +4006,86 @@ scenario("investigate asks one investigator and returns findings without proof o
       expect(entry.metadata?.followUps ?? []).toHaveLength(0);
     }),
   ),
+);
+
+scenario(
+  "an investigate Run leaves its answer as the report's first paragraph and its findings with ids",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const answer =
+          "The peer's bundle is stale because its watcher ignores the bundle's directory. Rebuilding the peer fixed it.";
+        const findings: ReadonlyArray<Schema.Json> = [
+          {
+            severity: "major",
+            title: "The watcher ignores the bundle's directory",
+            file: "peer/watch.ts",
+            line: 40,
+            basis: "fact",
+            evidence: "`run watch --dry` lists no path under dist",
+            suggested: "fix",
+          },
+          {
+            severity: "major",
+            title: "Which paths are ignored is written down nowhere",
+            basis: "inference",
+            suggested: "ticket",
+          },
+          {
+            severity: "minor",
+            title: "the dry run's output is unsorted",
+            file: "peer/watch.ts",
+            line: 8,
+            basis: "fact",
+            evidence: "`run watch --dry` prints z before a",
+            suggested: "none",
+          },
+        ];
+        yield* rig.queueOutputs([
+          {
+            answer,
+            cause: "The watcher's ignore list holds the directory the bundle is written to.",
+            summary: "The peer build is stale",
+            findings,
+          },
+        ]);
+        yield* ran({
+          entry: shipped("investigate"),
+          runId: "r-investigate-leaves",
+          input: { goal: "Why is the peer behind?" },
+        });
+        const where = runDir(dir, "r-investigate-leaves");
+        const report = yield* fs.readFileString(`${where}/investigation.md`);
+        expect(Str.split(report, "\n\n")[0]).toBe(answer);
+        expect(report).toContain("## Cause");
+        expect(
+          Arr.map(yield* findingsIn(where), (one) => [one.id, one.severity, one.suggested]),
+        ).toEqual([
+          ["r-investigate-leaves-F1", "major", "fix"],
+          ["r-investigate-leaves-F2", "major", "ticket"],
+          ["r-investigate-leaves-F3", "minor", "none"],
+        ]);
+        const facts = runFacts({
+          id: "r-investigate-leaves",
+          dir: where,
+          evidence: evidenceDir(dir, "r-investigate-leaves"),
+          state: "succeeded",
+        });
+        const detail = yield* buildRunDetail({
+          env: rig.pluginEnv({ COLLIE_ROOT: ROOT }),
+          runId: "r-investigate-leaves",
+          runs: [facts],
+          mr: null,
+          parts: false,
+        });
+        expect(Arr.map(detail?.findings ?? [], (one) => one.title)).toEqual([
+          "The watcher ignores the bundle's directory",
+          "Which paths are ignored is written down nowhere",
+          "the dry run's output is unsorted",
+        ]);
+      }),
+    ),
 );
 
 const HEALED = {
@@ -6786,7 +6886,16 @@ for (const workflow of ["general", "investigate"] as const) {
       runEffect(
         Effect.gen(function* () {
           const runId = `r-measure-${workflow}`;
-          yield* rig.queueOutputs([{ summary: "Search measured", findings: [] }]);
+          yield* rig.queueOutputs([
+            workflow === "investigate"
+              ? {
+                  answer: "Search answers slower.",
+                  cause: "It sorts before it filters.",
+                  summary: "Search measured",
+                  findings: [],
+                }
+              : { summary: "Search measured", findings: [] },
+          ]);
           yield* ran({
             entry: shipped(workflow),
             runId,

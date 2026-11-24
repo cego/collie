@@ -19,8 +19,19 @@ import { recordIn } from "../src/board-model";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const result = {
+  answer: "The Machines page uses the last peer build.",
+  cause: "The peer's bundle is never rebuilt after it changes.",
   summary: "The Machines page uses the last peer build.",
-  findings: [{ what: "The cached build is stale", evidence: "desktop/src/shared/in-sync.ts" }],
+  findings: [
+    {
+      severity: "major",
+      title: "The cached build is stale",
+      file: "desktop/src/shared/in-sync.ts",
+      basis: "fact",
+      evidence: "the page shows the bundle's first build",
+      suggested: "fix",
+    },
+  ],
 };
 const root = new URL("../", import.meta.url).pathname;
 
