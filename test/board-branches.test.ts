@@ -3,12 +3,13 @@ import * as Str from "effect/String";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schedule } from "effect";
 import { ChildProcessSpawner } from "effect/process";
-import { buildBoard } from "../src/board";
-import { Branches, branchKey } from "../src/branches";
+import { boardLines, buildBoard } from "../src/board";
+import { Branches, branchKey, readBranch } from "../src/branches";
 import { appendCard, buildCard } from "../src/cards";
 import { readEnv } from "../src/env";
 import { shell } from "../src/mr";
 import type { RunFacts } from "../src/runs";
+import type { TaskView } from "../src/board-model";
 import { gitSync } from "../src/side-jobs";
 import { epochMs } from "../src/time";
 import { runEffect } from "./support/effect";
@@ -27,16 +28,21 @@ const finishedOnFeature = Effect.gen(function* () {
     created: "2026-10-30T09:00:00Z",
     finished: AT,
   });
-  yield* appendCard(
-    run.dir,
+  yield* writeFinal(run.dir, run.id, "abc");
+  return { env: readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" }), run };
+});
+
+const writeFinal = (dir: string, id: string, head: string) =>
+  appendCard(
+    dir,
     buildCard({
-      run: run.id,
+      run: id,
       kind: "final",
       step: "finish",
       iteration: 1,
       at: AT,
       intentVersion: 1,
-      revision: { branch: "feature", head_sha: "abc", fingerprint: "f1", dirty: false },
+      revision: { branch: "feature", head_sha: head, fingerprint: "f1", dirty: false },
       changes: { files: [], commits: [] },
       requested: { goal: null, constraints: [] },
       verifications: [],
@@ -63,8 +69,6 @@ const finishedOnFeature = Effect.gen(function* () {
       },
     }),
   );
-  return { env: readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" }), run };
-});
 
 const drawn = (env: ReturnType<typeof readEnv>, run: RunFacts) =>
   Effect.gen(function* () {
@@ -112,7 +116,7 @@ test("a card whose synced row records the branch moving says so", () =>
           new Map([
             [
               branchKey("/project", "feature"),
-              { head: "def", project: null, movement: { finished: "abc", said } },
+              { head: "def", project: null, movements: [{ finished: "abc", said }] },
             ],
           ]),
         ),
@@ -155,5 +159,124 @@ test("Git sync reads a branch a build asked for on its next round", () =>
         Effect.retry({ times: 200, schedule: Schedule.spaced("25 millis") }),
       );
       expect(row?.head).toBe(head);
+    }),
+  ));
+
+test("a card reads the line about the Run it shows, not another Run's on the same branch", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { env, run } = yield* finishedOnFeature;
+      yield* Branches.use((branches) =>
+        branches.put(
+          new Map([
+            [
+              branchKey("/project", "feature"),
+              {
+                head: "def",
+                project: null,
+                movements: [
+                  { finished: "abc", said: "this Run's line" },
+                  { finished: "older", said: "an earlier Run's line" },
+                ],
+              },
+            ],
+          ]),
+        ),
+      );
+      const { views, started } = yield* drawn(env, run);
+      expect(started).toEqual([]);
+      expect(views[0]?.moved).toBe("this Run's line");
+    }),
+  ));
+
+test("a row that has not read the Run's own head shows no line and asks Git sync for it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { env, run } = yield* finishedOnFeature;
+      yield* Branches.use((branches) =>
+        branches.put(
+          new Map([
+            [
+              branchKey("/project", "feature"),
+              {
+                head: "def",
+                project: null,
+                movements: [{ finished: "older", said: "an earlier Run's line" }],
+              },
+            ],
+          ]),
+        ),
+      );
+      const { views } = yield* drawn(env, run);
+      expect(views[0]?.moved ?? null).toBeNull();
+      const wanted = yield* Branches.use((branches) => branches.wanted);
+      expect(Arr.map(wanted, (one) => branchKey(one.cwd, one.branch))).toContain(
+        branchKey("/project", "feature"),
+      );
+    }),
+  ));
+
+test("a head its recorded commit is not in the checkout says the history could not be compared, not that it diverged", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "collie-branch-unchecked-" });
+      const repo = `${root}/repo`;
+      const origin = `${root}/origin.git`;
+      const git = (cwd: string, ...args: Array<string>) => shell("git", args, cwd);
+      yield* fs.makeDirectory(repo);
+      expect((yield* git(root, "init", "-q", "--bare", origin)).code).toBe(0);
+      expect((yield* git(repo, "init", "-q", "-b", "feature")).code).toBe(0);
+      expect((yield* git(repo, "remote", "add", "origin", origin)).code).toBe(0);
+      for (const message of ["one", "two"]) {
+        expect(
+          (yield* git(
+            repo,
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            message,
+          )).code,
+        ).toBe(0);
+        expect((yield* git(repo, "push", "-qu", "origin", "HEAD")).code).toBe(0);
+      }
+      const head = Str.trim((yield* git(repo, "rev-parse", "HEAD")).stdout);
+      const absent = "0123456789abcdef0123456789abcdef01234567";
+      yield* writeFinal(`${root}/run`, "r1", absent);
+      const row = yield* readBranch(
+        { cwd: repo, dir: `${root}/run`, branch: "feature", state: "failed" },
+        [{ finished: absent, said: "earlier" }],
+      );
+      const said = row.movements[0]?.said ?? "";
+      expect(said).toContain("could not be compared");
+      expect(said).not.toContain("diverged");
+      expect(row.head).toBe(head);
+    }),
+  ));
+
+test("a finished Run's card shows its follow-up beside the line that moved, without opening a menu", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { env, run } = yield* finishedOnFeature;
+      yield* Branches.use((branches) =>
+        branches.put(
+          new Map([
+            [
+              branchKey("/project", "feature"),
+              { head: "def", project: null, movements: [{ finished: "abc", said: "moved on" }] },
+            ],
+          ]),
+        ),
+      );
+      const { views } = yield* drawn(env, run);
+      const shown: Array<TaskView> = [
+        { ...views[0]!, offers: [{ id: "recover", title: "Recover — Review", run: run.id }] },
+      ];
+      expect(Arr.join(boardLines(shown), "\n")).toContain("moved on\n    ↪ Recover — Review");
     }),
   ));

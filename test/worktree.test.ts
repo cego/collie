@@ -3330,7 +3330,7 @@ test("a legacy bare mr: target is settled as the merge request of its checkout's
           new Map(
             Arr.map(recorded, (run) => [
               branchKey(run.cwd, run.branch),
-              { head: null, project: "gitlab.example.com/group/app", movement: null },
+              { head: null, project: "gitlab.example.com/group/app", movements: [] },
             ]),
           ),
         ),

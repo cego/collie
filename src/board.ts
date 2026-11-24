@@ -74,7 +74,7 @@ import { Foreground } from "./foreground";
 import { flowInputsFor, taskFlowFor } from "./flow-read";
 import { machineName, peersOf } from "./peers";
 import { Deliveries, deliveriesAhead, deliveriesOf, SENT_STATES, toldIn } from "./steering";
-import { finishedOnRecord } from "./cards";
+import { finishedOnRecord, readFinalCard } from "./cards";
 import { owedLocally } from "./check-proof";
 import {
   Answered,
@@ -946,6 +946,29 @@ const syncedBranch = (run: RunFacts, wanted = false) =>
     return row ?? null;
   });
 
+// WARNING: the synced line is about the head a Run ended on, so a Run that shares a branch with another reads only its own.
+const movedOn = (run: RunFacts) =>
+  Effect.gen(function* () {
+    const card = yield* readFinalCard(run.dir).pipe(Effect.orElseSucceed(() => Option.none()));
+    const finished = Option.match(card, {
+      onNone: () => "",
+      onSome: (one) => one.revision.head_sha,
+    });
+    if (finished === "") {
+      return null;
+    }
+    const synced = yield* SyncedBranches;
+    const row = yield* syncedBranch(run);
+    const line = Option.getOrUndefined(
+      Arr.findFirst(row?.movements ?? [], (one) => one.finished === finished),
+    );
+    if (line === undefined) {
+      yield* synced.want(run);
+      return null;
+    }
+    return line.said;
+  });
+
 const mrIdAt = (mr: string, run: RunFacts) =>
   Effect.map(syncedBranch(run, needsProject(mr)), (row) => mrIdWith(mr, row?.project ?? null));
 
@@ -1644,7 +1667,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           disposed: disposition !== null,
           asking: decision !== null,
         });
-        const moved = landed ? null : ((yield* syncedBranch(leader, true))?.movement?.said ?? null);
+        const moved = landed ? null : yield* movedOn(leader);
         const judged = Effect.fnUntraced(function* (
           id: string | null,
           mr: string | null,
@@ -2259,6 +2282,7 @@ function textSection(
   const rows = Arr.flatMap(views, (view) => [
     `  ${GLYPH_FOR[view.state]} ${view.name} · ${view.project} — ${shippingLabel(view)}${view.sentence}`,
     ...(view.moved == null ? [] : [`    ⤴ ${view.moved}`]),
+    ...Arr.map(view.offers ?? [], (offer) => `    ↪ ${offer.title}`),
     ...(view.drift === null ? [] : [`    ↯ ${view.drift}`]),
     ...(view.held === null ? [] : [`    ${view.held}`]),
     ...(under !== null && under.run === view.run ? under.lines : []),

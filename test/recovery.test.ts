@@ -1276,6 +1276,81 @@ test("a delivery-unsettled park clears once the agent's submit hook records the 
     }).pipe(Effect.scoped, Effect.provide(forgeHttpOnPath)),
   ));
 
+const unsettledRecheck = (root: string) =>
+  recheckPark(
+    {
+      runId: "r1",
+      cwd: root,
+      branch: null,
+      mr: null,
+      park: { cause: "delivery-unsettled", kind: "rechecks" },
+    },
+    root,
+    { agentList: () => Effect.die("a delivery's recheck asks core nothing") },
+  );
+
+const heldUnknown = (root: string) =>
+  Effect.gen(function* () {
+    yield* appendLine({
+      id: "r1-q-steer-1",
+      at: "2026-11-20T10:00:00Z",
+      run: "r1",
+      incarnation: "term-1",
+      agent: "r1-review",
+      causal_key: "answer-question",
+      request_id: "r1-q-steer",
+      cause: { kind: "steer", ref: "q" },
+      mode: "now",
+      text_hash: "the-answer",
+      intent_version: 0,
+      attempt: 1,
+      state: "unknown",
+    });
+    yield* rememberUnsettled(`${root}/runs/r1`, { terminal: "term-1", delivery: "r1-q-steer-1" });
+  });
+
+const submit = (
+  root: string,
+  event: { session: string; delivery: string; incarnation: string | null },
+) =>
+  Effect.gen(function* () {
+    yield* writeEvent(yield* controlDir(root, "r1-review"), {
+      session: event.session,
+      kind: "submit",
+      reason: "collie",
+      delivery: event.delivery,
+      incarnation: event.incarnation,
+    });
+  });
+
+test("a delivery-unsettled park settles only on its own delivery and incarnation, even after the agent rebinds its session", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "collie-unsettled-rebind-" });
+      yield* heldUnknown(root);
+      yield* submit(root, { session: "s1", delivery: "r1-q-steer-2", incarnation: "term-1" });
+      yield* submit(root, { session: "s1", delivery: "r1-q-steer-1", incarnation: "term-9" });
+      expect(yield* unsettledRecheck(root)).toEqual({
+        cleared: false,
+        note: "delivery r1-q-steer-1 is unknown",
+        error: false,
+      });
+      yield* submit(root, { session: "s1", delivery: "r1-q-steer-1", incarnation: "term-1" });
+      yield* submit(root, { session: "s2", delivery: "r1-q-steer-3", incarnation: "term-2" });
+      expect(yield* unsettledRecheck(root)).toEqual({
+        cleared: true,
+        note: "delivery r1-q-steer-1 is acknowledged",
+        error: false,
+      });
+      expect(yield* unsettledRecheck(root)).toEqual({
+        cleared: true,
+        note: "delivery r1-q-steer-1 is acknowledged",
+        error: false,
+      });
+    }).pipe(Effect.scoped, Effect.provide(forgeHttpOnPath)),
+  ));
+
 test("a predecessor-not-quiet park clears once nothing its predecessor left is running, and starts no agent", () =>
   runEffect(
     Effect.gen(function* () {

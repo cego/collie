@@ -359,11 +359,14 @@ export const branchMovement = Effect.fn("Recovery.branchMovement")(function* (ru
     return null;
   }
   const fetched = yield* shell("git", ["fetch", "-q", "origin", head], run.cwd);
-  const ancestry =
-    fetched.code === 0
-      ? yield* shell("git", ["merge-base", "--is-ancestor", finished, head], run.cwd)
-      : fetched;
-  if (ancestry.code !== 0) {
+  if (fetched.code !== 0) {
+    return `Pushed branch at ${head} could not be read; whether it holds ${finished} is unknown.`;
+  }
+  const ancestry = yield* shell("git", ["merge-base", "--is-ancestor", finished, head], run.cwd);
+  if (ancestry.code !== 0 && ancestry.code !== 1) {
+    return `Pushed branch at ${head} could not be compared with ${finished}; forward progress is unproved.`;
+  }
+  if (ancestry.code === 1) {
     return `Pushed branch diverged from ${finished} to ${head}; forward progress is unproved.`;
   }
   const count = yield* shell("git", ["rev-list", "--count", `${finished}..${head}`], run.cwd);

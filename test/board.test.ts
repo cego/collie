@@ -4052,7 +4052,7 @@ test("a succeeded Run's open merge request is ready only on checks at its branch
       });
       yield* Branches.use((branches) =>
         branches.put(
-          new Map([[branchKey(repo, "mk/ship"), { head, project: null, movement: null }]]),
+          new Map([[branchKey(repo, "mk/ship"), { head, project: null, movements: [] }]]),
         ),
       );
       const view = Effect.map(board(env, [run]), (views) => views[0]!);

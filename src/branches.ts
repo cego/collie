@@ -7,15 +7,22 @@ import { readFinalCard } from "./cards";
 import { projectHere, shell } from "./mr";
 import { branchMovement } from "./recovery";
 
+export const Movement = Schema.Struct({
+  finished: Schema.String,
+  said: Schema.NullOr(Schema.String),
+});
+export type Movement = typeof Movement.Type;
+
 export const Branch = Schema.Struct({
   head: Schema.NullOr(Schema.String),
   // WARNING: a bare or legacy merge request reference resolves against this project.
   project: Schema.NullOr(Schema.String),
-  movement: Schema.NullOr(
-    Schema.Struct({ finished: Schema.String, said: Schema.NullOr(Schema.String) }),
-  ),
+  // WARNING: kept per Run that ended on this branch, so a card reads the line about its own head.
+  movements: Schema.Array(Movement),
 });
 export type Branch = typeof Branch.Type;
+
+const KEPT_MOVEMENTS = 8;
 
 const BranchJson = Schema.fromJsonString(Branch);
 const encodeBranch = flow(Schema.encodeResult(BranchJson), Result.getOrThrow);
@@ -102,10 +109,13 @@ export const branchesLayer = Layer.effect(Branches)(
   }),
 );
 
-export const readBranch = Effect.fn("Branches.read")(function* (run: BranchRun) {
+export const readBranch = Effect.fn("Branches.read")(function* (
+  run: BranchRun,
+  kept: ReadonlyArray<Movement> = [],
+) {
   const project = yield* projectHere(run.cwd, shell);
   if (run.branch === null) {
-    return { head: null, project, movement: null } satisfies Branch;
+    return { head: null, project, movements: [] } satisfies Branch;
   }
   const read = yield* shell(
     "git",
@@ -118,12 +128,19 @@ export const readBranch = Effect.fn("Branches.read")(function* (run: BranchRun) 
     onNone: () => "",
     onSome: (card) => card.revision.head_sha,
   });
+  if (finished === "") {
+    return {
+      head: read.code === 0 && sha !== "" ? sha : null,
+      project,
+      movements: [],
+    } satisfies Branch;
+  }
   return {
     head: read.code === 0 && sha !== "" ? sha : null,
     project,
-    movement:
-      finished === ""
-        ? null
-        : { finished, said: yield* branchMovement(run).pipe(Effect.orElseSucceed(() => null)) },
+    movements: [
+      { finished, said: yield* branchMovement(run).pipe(Effect.orElseSucceed(() => null)) },
+      ...Arr.filter(kept, (one) => one.finished !== finished),
+    ].slice(0, KEPT_MOVEMENTS),
   } satisfies Branch;
 });

@@ -44,8 +44,7 @@ export function steerTarget<C extends Candidate>(
   const roles =
     to === undefined
       ? undefined
-      : // WARNING: a role is whatever a launch recorded, so a new one is taken without a second list.
-        (rolesFor(to) ?? (Arr.some(launches, (one) => one.role === to) ? [to] : undefined));
+      : (rolesFor(to) ?? (Arr.some(launches, (one) => one.role === to) ? [to] : undefined));
   if (to !== undefined && roles === undefined) {
     return Option.getOrUndefined(Arr.findLast(launches, (one) => named(one, to)));
   }

@@ -987,6 +987,16 @@ fn card(
                 .w_full(),
         );
     }
+    for offer in task.offers.iter().flatten() {
+        card = card.child(
+            text(format!("\u{21aa} {}", offer.title))
+                .key(format!("offer-{}", offer.id))
+                .font(k.ty.small)
+                .color(c.text_muted)
+                .wrap()
+                .w_full(),
+        );
+    }
     if let Some(drift) = &task.drift {
         card = card.child(
             text(drift.clone())

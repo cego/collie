@@ -215,8 +215,9 @@ export const gitSync = <E, R>(
         return;
       }
       const read = new Map<string, Branch>();
+      const known = yield* branches.all;
       for (const [key, run] of due) {
-        read.set(key, yield* readBranch(run));
+        read.set(key, yield* readBranch(run, known.get(key)?.movements ?? []));
       }
       yield* branches.put(read);
       for (const run of moved) {

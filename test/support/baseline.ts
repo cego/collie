@@ -4727,7 +4727,7 @@ scenario("a follow-up on a reviewed pushed head starts at Checks", () =>
 scenario("a follow-up on a moved pushed head starts at Review", () =>
   runEffect(
     Effect.gen(function* () {
-      const { bin, plan, parent, opened } = yield* reviewedRecovery("pushed head");
+      const { bin, plan, parent, finished, head, opened } = yield* reviewedRecovery("pushed head");
       const child = "r-moved-head-recovery";
       yield* approve(child, ["unit"]);
       yield* rig.queueOutputs([null, null, CLEAN_SYNTHESIS, opened]);
@@ -4744,7 +4744,9 @@ scenario("a follow-up on a moved pushed head starts at Review", () =>
       expect(log).toContain("Follow-up enters at Review");
       expect(log).not.toContain("── Build");
       const prompt = yield* asked(child, "review-1");
+      expect(prompt).toContain(head);
       expect(prompt).toContain("work the waiting review never saw");
+      expect(prompt).not.toContain(finished);
       yield* bin.restore();
     }),
   ),

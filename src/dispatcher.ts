@@ -10,6 +10,7 @@ import type { Herdr, Submission } from "./herdr";
 import { verifyIncarnation } from "./registry";
 import type { AgentEntry, Incarnation } from "./registry";
 import { controlDir } from "./compaction";
+import { DELIVERY_TOKEN } from "./delivery-marker";
 import { submittedDelivery } from "./compactors";
 import {
   appendLine,
@@ -340,7 +341,6 @@ function refuse(id: string | null, reason: Refusal, detail: string) {
 
 export const SUBMIT_RECORDED = "taken: its submit hook recorded it";
 
-// WARNING: only the incarnation it went to settles it; absent, another incarnation's or another delivery's record leaves it unknown.
 export const settleFromSubmit = Effect.fn("Dispatcher.settleFromSubmit")(function* (
   stateDir: string,
   delivery: Delivery,
@@ -630,8 +630,6 @@ const settlePending = Effect.fn("Dispatcher.settlePending")(function* (
   }
 });
 
-export const DELIVERY_TOKEN = "collie-delivery:";
-
 // WARNING: herdr sees a prompt's first few hundred bytes and a slash command keeps its first line, so the token goes on its own line near the top.
 export function marked(text: string, id: string) {
   const token = `${DELIVERY_TOKEN}${id}`;
@@ -645,9 +643,7 @@ export function marked(text: string, id: string) {
   return Arr.join([command, token, ...rest], "\n");
 }
 
-export function carriedDelivery(prompt: string) {
-  return new RegExp(`${DELIVERY_TOKEN}(\\S+)`).exec(prompt)?.[1] ?? null;
-}
+export { DELIVERY_TOKEN, carriedDelivery } from "./delivery-marker";
 
 export const entryFromLive = Effect.fn("Dispatcher.entryFromLive")(function* (
   deps: DispatcherDeps,

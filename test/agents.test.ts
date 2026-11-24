@@ -2988,6 +2988,7 @@ test("an answer whose submit hook recorded it settles and reaches the agent, so 
       const fs = yield* FileSystem.FileSystem;
       yield* rig.queueOutputs([null]);
       const herdr = new LostAnswers();
+      const recorded: Array<Array<string | null>> = [];
       const result = yield* session(
         Effect.gen(function* () {
           const fiber = yield* Effect.forkChild(started("r1"));
@@ -3007,7 +3008,11 @@ test("an answer whose submit hook recorded it settles and reaches the agent, so 
             incarnation: Option.getOrThrow(lost).incarnation,
           });
           yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"answered"}`);
-          return yield* Fiber.join(fiber);
+          const done = yield* Fiber.join(fiber);
+          recorded.push(
+            ...Arr.map(yield* (yield* Store).asked("r1"), (one) => [one.decision, one.answer]),
+          );
+          return done;
         }),
         { herdr, collectMs: 600_000, pollMs: 100 },
       );
@@ -3015,6 +3020,10 @@ test("an answer whose submit hook recorded it settles and reaches the agent, so 
       expect(yield* controlOf(PARK_CAUSE, "r1")).not.toBe("delivery-unsettled");
       expect(Option.getOrThrow(yield* answerDelivery).state).toBe("acknowledged");
       expect(herdr.answers).toBe(1);
+      expect(recorded).toEqual([
+        ["ask-review-1", "SQLite"],
+        ["ask-review-2", "lint"],
+      ]);
     }),
   ));
 
@@ -7691,6 +7700,33 @@ test("a role no live agent of the Run has is refused, naming the live agents and
       expect(refused.detail).toContain(launched.agent);
       expect(refused.detail).toContain("implementer");
       expect(sent(yield* rig.calls(), "Look at this")).toBe(0);
+    }),
+  ));
+
+test("a launch that has written its Output is still an agent the Run can reach, so a refusal names it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* rig.queueOutputs([null]);
+      const launched = yield* session(
+        Agents.pipe(Effect.flatMap((agents) => agents.launch(implementerAsk()))),
+      );
+      yield* fs.writeFileString(launched.output, `{"verdict":"clean","note":"finished"}`);
+      const refused = yield* session(
+        Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.steer({
+              runId: "r1",
+              to: "healer",
+              text: "Look at this",
+              request: "to-healer-2",
+            }),
+          ),
+        ),
+      );
+      expect(refused).toMatchObject({ agent: "", delivered: false, gone: false });
+      expect(refused.detail).toContain(launched.agent);
+      expect(refused.detail).toContain("implementer");
     }),
   ));
 

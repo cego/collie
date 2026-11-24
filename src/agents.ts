@@ -4371,6 +4371,12 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       );
     });
 
+  const stillListed = <A extends { readonly agent: string }>(agents: ReadonlyArray<A>) =>
+    Effect.gen(function* () {
+      const listed = yield* host.herdr.agentList().pipe(Effect.orElseSucceed(() => []));
+      return Arr.filter(agents, (one) => Arr.some(listed, (live) => live.name === one.agent));
+    });
+
   const steer = (options: {
     readonly runId: string;
     readonly text: string;
@@ -4397,7 +4403,8 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         const candidates = yield* candidatesOf(options.runId);
         const launched = steerTarget(candidates, queued ?? { to, operation, agent }, launchedAs);
         if (launched === undefined) {
-          const live = Arr.filter(candidates, (one) => !one.done);
+          // WARNING: an agent whose Output exists is not gone; herdr still lists it while its pane lives.
+          const live = yield* stillListed(candidates);
           const named = agent ?? operation ?? to;
           return {
             agent: "",
@@ -4535,11 +4542,16 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           };
         }
         const alive = yield* host.herdr.agentList().pipe(Effect.orElseSucceed(() => []));
+        const others = Arr.filter(
+          candidates,
+          (one) =>
+            one.agent !== launched.agent && Arr.some(alive, (live) => live.name === one.agent),
+        );
         return {
           agent: launched.agent,
           delivered: false,
           detail: sent.why,
-          gone: isGone(launched.agent, alive, sent.why),
+          gone: others.length === 0 && isGone(launched.agent, alive, sent.why),
         };
       }).pipe(
         Effect.catch((cause) =>

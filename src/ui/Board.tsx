@@ -494,6 +494,10 @@ function Card(props: {
         <text fg={C.dim}>{`⤴ ${props.view.moved}`}</text>
       </Show>
 
+      <For each={props.view.offers ?? []}>
+        {(offer) => <text fg={C.dim}>{`↪ ${offer.title}`}</text>}
+      </For>
+
       <Show when={props.view.drift !== null}>
         <text fg={C.amber}>{`↯ ${props.view.drift}`}</text>
       </Show>

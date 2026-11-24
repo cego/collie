@@ -69,7 +69,7 @@ import {
 import type { ProcessInfo } from "./processes";
 import { holderLives, hostLockOf, lockHolder, withLock } from "./lock";
 import { tellHost } from "./tell-host";
-import { carriedDelivery } from "./dispatcher";
+import { carriedDelivery } from "./delivery-marker";
 import { epochMs } from "./time";
 import { stringifyJson } from "./json";
 
@@ -169,17 +169,20 @@ const lostSince = Effect.fn("Compactors.lostSince")(function* (dir: string, sinc
   });
 });
 
-// WARNING: the newest session line binds; an older session's samples and outcomes are stale, not merely old.
-const readEvents = Effect.fn("Compactors.readEvents")(function* (dir: string) {
+const telemetryLines = Effect.fn("Compactors.telemetryLines")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const file = path.join(dir, TELEMETRY);
   if (!(yield* fs.exists(file))) {
     return [];
   }
-  const lines = yield* fs
-    .readFileString(file)
-    .pipe(Effect.map((text) => Arr.filter(Str.split(text, "\n"), (line) => Str.trim(line) !== "")));
+  const text = yield* fs.readFileString(file);
+  return Arr.filter(Str.split(text, "\n"), (line) => Str.trim(line) !== "");
+});
+
+// WARNING: the newest session line binds; an older session's samples and outcomes are stale, not merely old.
+const readEvents = Effect.fn("Compactors.readEvents")(function* (dir: string) {
+  const lines = yield* telemetryLines(dir);
   const bound = boundSession(lines);
   if (bound === undefined) {
     return [];
@@ -1825,9 +1828,14 @@ export const submittedDelivery = Effect.fn("Compactors.submittedDelivery")(funct
   delivery: string,
   incarnation: string | null,
 ) {
-  return Arr.some(
-    yield* readEvents(dir),
-    (event) =>
-      event.kind === "submit" && event.delivery === delivery && event.incarnation === incarnation,
-  );
+  const lines = yield* telemetryLines(dir);
+  return Arr.some(lines, (line) => {
+    const decoded = decodeEvent(line);
+    return (
+      decoded._tag === "Some" &&
+      decoded.value.kind === "submit" &&
+      decoded.value.delivery === delivery &&
+      decoded.value.incarnation === incarnation
+    );
+  });
 });
