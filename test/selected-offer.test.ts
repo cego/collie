@@ -183,6 +183,12 @@ test("an investigate Run's findings hold the card, and choosing two of them star
           ).unavailable,
         ).not.toBeNull();
         expect(yield* openCount(world.state, run.id)).toBe(0);
+        // WARNING: an investigate Run owes a merge request for the branch it checked out, so its card waits whatever its findings say; the hold lifting is the next test's.
+        const settledAll = yield* cardOf(world.state, run.id);
+        expect({ landed: settledAll.landed, section: sectionOf(settledAll) }).toEqual({
+          landed: false,
+          section: "waiting",
+        });
       }),
     [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
   ));
