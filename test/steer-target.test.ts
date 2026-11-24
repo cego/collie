@@ -84,3 +84,15 @@ test("an agent is found by the name it was launched under, though its operations
   }
   expect(steerTarget(tickets, { agent: "review" }, launchedAs)).toBeUndefined();
 });
+
+test("a role goes to an agent herdr lists, not a later launch that has exited", () => {
+  const gone = { agent: "r1-fix-r1", operation: "fix-1", role: "implementer", done: false };
+  const launches = [builder(true), gone];
+  expect(steerTarget(launches, { to: "implementer" })).toMatchObject({ agent: "r1-fix-r1" });
+  expect(
+    steerTarget(launches, { to: "implementer" }, undefined, (one) => one.agent !== "r1-fix-r1"),
+  ).toMatchObject({ agent: "r1-build-r1" });
+  expect(steerTarget(launches, { agent: "r1-fix-r1" }, undefined, () => false)).toMatchObject({
+    agent: "r1-fix-r1",
+  });
+});

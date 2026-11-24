@@ -29,6 +29,7 @@ export function steerTarget<C extends Candidate>(
   launches: ReadonlyArray<C>,
   asked: Asked,
   launchedAs: (one: C, name: string) => boolean = () => false,
+  live: (one: C) => boolean = () => true,
 ) {
   const { agent, operation, to } = asked;
   const named = (one: C, name: string) =>
@@ -54,9 +55,12 @@ export function steerTarget<C extends Candidate>(
   );
   const among =
     roles === undefined ? newest : Arr.filter(newest, (one) => roles.includes(one.role));
-  const active = Option.getOrUndefined(Arr.findLast(among, (one) => !one.done));
+  // WARNING: a role goes to an agent herdr still lists, since an exited one recorded later is not a target at all.
+  const stillThere = Arr.filter(among, live);
+  const pool = stillThere.length === 0 ? among : stillThere;
+  const active = Option.getOrUndefined(Arr.findLast(pool, (one) => !one.done));
   if (active !== undefined || roles !== undefined) {
-    return active ?? among.at(-1);
+    return active ?? pool.at(-1);
   }
   return (
     Option.getOrUndefined(Arr.findLast(among, (one) => BUILDER_ROLES.includes(one.role))) ??

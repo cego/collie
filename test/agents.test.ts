@@ -7715,6 +7715,100 @@ class Hides extends Herdr {
   }
 }
 
+class Exits extends Herdr {
+  private listed = 0;
+  constructor(
+    env: ConstructorParameters<typeof Herdr>[0],
+    private readonly hidden: ReadonlyArray<string>,
+    private readonly after: number,
+  ) {
+    super(env);
+  }
+  override agentList() {
+    return Effect.map(super.agentList(), (all) => {
+      this.listed += 1;
+      return this.listed <= this.after
+        ? all
+        : Arr.filter(all, (one) => !this.hidden.includes(one.name));
+    });
+  }
+  override agentPrompt() {
+    return Effect.fail(
+      new HerdrError({ message: "core terminal.send failed", detail: "socket closed" }),
+    );
+  }
+}
+
+test("a role reaches the live agent of it, not the exited one launched later", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null, null]);
+      const older = yield* session(
+        Agents.pipe(Effect.flatMap((agents) => agents.launch(implementerAsk()))),
+      );
+      const later = yield* session(
+        Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.launch({
+              ...implementerAsk(),
+              operation: "fix",
+              output: `${dir}/fix.json`,
+            }),
+          ),
+        ),
+      );
+      const reached = yield* session(
+        Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.steer({
+              runId: "r1",
+              to: "implementer",
+              text: "Look at this",
+              request: "to-live-implementer",
+            }),
+          ),
+        ),
+        { herdr: new Hides(rig.pluginEnv(), later.agent) },
+      );
+      expect(reached).toMatchObject({ agent: older.agent, delivered: true });
+      expect(sent(yield* rig.calls(), "Look at this")).toBe(1);
+    }),
+  ));
+
+test("a send that failed reads liveness again, so a Run whose agents all exited is gone", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null, null]);
+      const leaving = yield* session(
+        Agents.pipe(Effect.flatMap((agents) => agents.launch(implementerAsk()))),
+      );
+      const reviewer = yield* session(
+        Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.launch({ ...implementerAsk(), operation: "review", role: "reviewer" }),
+          ),
+        ),
+      );
+      const failed = yield* session(
+        Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.steer({
+              runId: "r1",
+              to: "implementer",
+              text: "Look at this",
+              request: "to-leaving-implementer",
+            }),
+          ),
+        ),
+        {
+          herdr: new Exits(rig.pluginEnv(), [leaving.agent, reviewer.agent], 2),
+        },
+      );
+      expect(failed).toMatchObject({ agent: leaving.agent, delivered: false, gone: true });
+      expect(failed.detail).not.toContain("live:");
+    }),
+  ));
+
 test("a role whose only terminal has exited is refused, naming the agent that is live", () =>
   runEffect(
     Effect.gen(function* () {
