@@ -38,7 +38,7 @@ and still wakes the Run later.
 
 **Amended 2026-11-24: Effect 4.1.5, and no patch.** The proof was rerun on 4.1.5
 (`test/engine.test.ts`, `test/child-execution.test.ts`, `test/resume.test.ts` and the
-release-set scenarios) and the seven behaviours above still hold. The three runtime packages
+release-set scenarios) and the seven behaviours below still hold. The three runtime packages
 move together, as the Consequences say. A state directory a 4.1.4 host wrote is read as it
 is: every `CREATE` and `ALTER` statement in `cluster/SqlMessageStorage.js` and
 `cluster/SqlRunnerStorage.js` is unchanged, and `ShardingConfig`'s fields are the same set.
@@ -49,6 +49,7 @@ that resumes (behaviour 8, below). None of that is Collie's code any more.
 `tools/migrate-effect.ts up|down` proves the move both ways, each time installing a throwaway
 copy's lockfile and running the regression test there: one of this tree, one of the
 merge-base's.
+
 A workflow will be a TypeScript file an author writes, outside this repository, and Collie
 will run it. That means Collie either builds durability, replay, suspension and recovery,
 or it uses Effect's. This says it uses Effect's, records exactly which settings that takes,
