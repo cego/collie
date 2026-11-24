@@ -946,7 +946,6 @@ const syncedBranch = (run: RunFacts, wanted = false) =>
     return row ?? null;
   });
 
-// WARNING: the synced line is about the head a Run ended on, so a Run that shares a branch with another reads only its own.
 const movedOn = (run: RunFacts) =>
   Effect.gen(function* () {
     const card = yield* readFinalCard(run.dir).pipe(Effect.orElseSucceed(() => Option.none()));

@@ -17,7 +17,6 @@ export const Branch = Schema.Struct({
   head: Schema.NullOr(Schema.String),
   // WARNING: a bare or legacy merge request reference resolves against this project.
   project: Schema.NullOr(Schema.String),
-  // WARNING: kept per Run that ended on this branch, so a card reads the line about its own head.
   movements: Schema.Array(Movement),
 });
 export type Branch = typeof Branch.Type;
