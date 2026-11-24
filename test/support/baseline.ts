@@ -9077,6 +9077,58 @@ for (const unbuildable of [
 }
 
 scenario(
+  "under inline_plan: on, a plan that stays unbuildable parks, and a resume reads the corrected plan",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-inline-repark-resume";
+        yield* repository();
+        yield* approve(runId, ["unit"]);
+        yield* plansFirst(runId);
+        const good = plannedAs(runId, [
+          { file: "01-first.md", title: "the first one", blockedBy: "None" },
+        ]);
+        yield* rig.queueOutputs([
+          plannedAs(runId, []),
+          plannedAs(runId, []),
+          good,
+          BUILT,
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+        yield* driven(
+          { entry: shipped("implement"), runId, input: { plan: "Count.", ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              const [parked] = yield* until(
+                () => Effect.zip(run.status, parkedWhy(runId)),
+                ([got, why]) =>
+                  got.status === "failed" || (got.status === "suspended" && why !== ""),
+              );
+              expect(parked.status).toBe("suspended");
+              expect(yield* parkedCause(runId)).toBe("step-failed");
+              expect(yield* operationsOf(runId)).toEqual(["plan", "plan-2"]);
+              yield* run.resume;
+              const [done] = yield* until(
+                () => Effect.zip(run.status, parkedWhy(runId)),
+                ([got]) => got.status === "failed" || got.status === "complete",
+              );
+              expect(done.status).toBe("complete");
+            }),
+        );
+        expect(yield* operationsOf(runId)).toEqual([
+          "plan",
+          "plan-2",
+          "plan-3",
+          "build",
+          "review-1",
+          "mr",
+        ]);
+      }),
+    ),
+);
+
+scenario(
   "under inline_plan: on, a Run restarted after planning builds from the recorded plan and plans nothing again",
   () =>
     runEffect(

@@ -416,6 +416,19 @@ export default defineWorkflow({
       if ((asked.then ?? "") !== "") {
         yield* forecast(delivery);
       }
+      const unbuilt = (name: string, reason: string) =>
+        Activity.make({
+          name: `${name}.park`,
+          execute: Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const marker = `${place.dir}/${name}.parked`;
+            if (yield* fs.exists(marker).pipe(Effect.orDie)) {
+              return yield* host.parked(runId, null);
+            }
+            yield* fs.writeFileString(marker, "").pipe(Effect.orDie);
+            return yield* parkStep(`${reason}. Correct it, then resume ${runId}.`);
+          }),
+        });
       const source = yield* Activity.make({
         name: "work-source",
         success: Schema.Struct({ kind: Schema.String, value: Schema.String }),
@@ -433,33 +446,42 @@ export default defineWorkflow({
         }
       }
       if (source.kind === "plan-dir" && share === "") {
-        const plan = yield* Activity.make({
-          name: "repos",
-          success: Reading,
-          execute: planReposOf(source.value, cwd).pipe(
-            Effect.map((read) => ({
-              single: isSingleRepo(read),
-              waves: Arr.map(read.waves, (wave) => [...wave]),
-              changes: Arr.map(read.repos, ({ path, change, stacked }) => ({
-                key: changeKey({ path, change }),
-                repo: path,
-                change,
-                stacked,
+        let planReads = 0;
+        let refusals = 0;
+        const readPlan = () => {
+          planReads += 1;
+          return Activity.make({
+            name: planReads === 1 ? "repos" : `repos-${planReads}`,
+            success: Reading,
+            execute: planReposOf(source.value, cwd).pipe(
+              Effect.map((read) => ({
+                single: isSingleRepo(read),
+                waves: Arr.map(read.waves, (wave) => [...wave]),
+                changes: Arr.map(read.repos, ({ path, change, stacked }) => ({
+                  key: changeKey({ path, change }),
+                  repo: path,
+                  change,
+                  stacked,
+                })),
+                refusal: read.refusal?.message ?? null,
               })),
-              refusal: read.refusal?.message ?? null,
-            })),
-            // WARNING: a plan that cannot be read is refused by name, not a defect the Run dies of.
-            Effect.catch((cause) =>
-              Effect.succeed({
-                single: false,
-                waves: [],
-                refusal: `the plan at ${source.value} could not be read: ${cause.message}`,
-              }),
+              // WARNING: a plan that cannot be read is refused by name, not a defect the Run dies of.
+              Effect.catch((cause) =>
+                Effect.succeed({
+                  single: false,
+                  waves: [],
+                  refusal: `the plan at ${source.value} could not be read: ${cause.message}`,
+                }),
+              ),
             ),
-          ),
-        });
-        if (plan.refusal !== null) {
-          return yield* parkStep(`${plan.refusal}. Correct it, then resume ${runId}.`);
+          });
+        };
+        let plan = yield* readPlan();
+        // WARNING: a resumed attempt reads the plan again, since correcting it is the whole fix.
+        while (plan.refusal !== null) {
+          refusals += 1;
+          yield* unbuilt(`plan-refused-${refusals}`, plan.refusal);
+          plan = yield* readPlan();
         }
         if (!plan.single) {
           yield* forecast([repoRuns]);
@@ -481,19 +503,6 @@ export default defineWorkflow({
           });
         }
       }
-      const unbuilt = (name: string, reason: string) =>
-        Activity.make({
-          name: `${name}.park`,
-          execute: Effect.gen(function* () {
-            const fs = yield* FileSystem.FileSystem;
-            const marker = `${place.dir}/${name}.parked`;
-            if (yield* fs.exists(marker).pipe(Effect.orDie)) {
-              return yield* host.parked(runId, null);
-            }
-            yield* fs.writeFileString(marker, "").pipe(Effect.orDie);
-            return yield* parkStep(`${reason}. Correct it, then resume ${runId}.`);
-          }),
-        });
       const checksNow = Effect.map(host.approved(runId), renderApproved);
 
       let input: typeof Implementing.Type = {
@@ -648,12 +657,14 @@ export default defineWorkflow({
               if (refused === null) {
                 break;
               }
-              if (attempt === PLAN_TRIES) {
-                return yield* parkStep(
-                  `the plan at ${planDir} cannot be built: ${refused}. Correct it, then resume ${runId}.`,
+              refusal = `The plan you wrote cannot be built: ${pipe_(refused, Str.replace(/\.+$/, ""))}. Correct it in place.`;
+              if (attempt >= PLAN_TRIES) {
+                // WARNING: the next attempt is a new pair of Activities, so a corrected plan is read.
+                yield* unbuilt(
+                  `plan-unbuildable-${attempt}`,
+                  `the plan at ${planDir} cannot be built: ${refused}`,
                 );
               }
-              refusal = `The plan you wrote cannot be built: ${pipe_(refused, Str.replace(/\.+$/, ""))}. Correct it in place.`;
             }
             input = { ...input, inputs: { ...input.inputs, plan: planDir, plan_kind: "plan-dir" } };
           }),
