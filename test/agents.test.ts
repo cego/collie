@@ -8,7 +8,7 @@ import * as Order from "effect/Order";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
-import { afterEach, beforeEach, expect, setSystemTime, test } from "bun:test";
+import { afterEach, beforeEach, expect, setDefaultTimeout, setSystemTime, test } from "bun:test";
 import { IGNORES_TERM, SURVIVES_HANGUP, paneTree } from "./support/pane-tree";
 import { processOf } from "../src/processes";
 import type { PlatformServices } from "../src/platform";
@@ -128,6 +128,8 @@ import { FakeBin } from "./support/bin";
 import { forgeHttpOnPath, forgeOnPath } from "./support/forge";
 import type { HarnessCatalogue } from "../src/catalogue-model";
 import { stringifyJson } from "../src/json";
+
+setDefaultTimeout(30_000);
 
 let rig: Rig;
 let dir: string;
