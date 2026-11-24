@@ -2018,9 +2018,9 @@ export default defineWorkflow({
   Two fields, because a retitled action is the same action and a card matching on the
   title would start a different one. `workflow` is a public id or `"self"` for the one
   declaring it; `inputs` names what Collie fills in from the Run — `run-id`, `run-dir`, `plan-dir`,
-  `diff-target`, `branch`, `merge-request`, or `started-with` for what the Run was started
-  with under the same input name — so a card makes the offer without asking a human to type
-  a path. `arguments` is the child's schema; eligibility is decided from facts, never from a
+  `diff-target`, `branch`, `merge-request`, `findings` for the open findings whoever takes
+  the offer chose, or `started-with` for what the Run was started with under the same input
+  name — so a card makes the offer without asking a human to type a path. `arguments` is the child's schema; eligibility is decided from facts, never from a
   workflow's name, and `facts.claim` is the shared claim a Run still holds. A follow-up says `when` — `succeeded`, `failed` or
   `always` — and may add an `eligible` of its own where how it ended is not the whole of
   it: an offer to carry on with a branch is not an offer where there is no branch. A
@@ -2030,6 +2030,13 @@ export default defineWorkflow({
   checkout. A
   follow-up declares no `arguments`: it takes whatever inputs its workflow has that
   `inputs` does not fill, and a front door asks for those.
+- **`selects`** makes a follow-up one taken over the Run's findings: `"many"` for a list of
+  ids, `"one"` for exactly one. Its `findings` input is filled by whoever takes it, never by
+  Collie, so the offer must list `findings: "findings"` in `inputs` — a definition that
+  selects without it is refused at load. Taking one refuses any id that is not open on the
+  Run, or the wrong number for `"one"`, and starts nothing; otherwise it starts the child and
+  records each chosen id `taken` with the offer and the child Run. A settled Run with an open
+  finding and an eligible `many` such offer waits on the human instead of landing.
   `given` binds inputs to fixed values, so two offers can start the same workflow
   differently: implement's **Merge** and **Release** both start `release`, one with
   `ship: "merge"` and one with `ship: "release"`. A given input is never asked for, and an
@@ -2091,9 +2098,13 @@ pieces they are built from.
 
 A standalone MR review keeps its findings ledger in `findings.json`, including resolved
 findings. Each finding carries a stable `id`, a [Finding status](../CONTEXT.md), the reviewed
-`head`, and the posted note's `note` signature. Before posting, `note` is empty for new
-findings and changed statuses. These fields are optional in the shared Output schema so
-older Outputs remain readable; a supplied status outside the four values is refused.
+`head`, and the posted note's `note` signature. A finding may also say where it stands —
+`basis` as `fact` or `inference`, `evidence` for what shows it, and `suggested` for the fate
+its writer recommends: `fix`, `ticket`, `investigate`, `plan` or `none`. `basis`, `evidence`
+and `suggested` are what an investigation reports; a review need not. Before posting,
+`note` is empty for new findings and changed statuses. These fields are optional in the
+shared Output schema so older Outputs remain readable; a supplied status outside the four
+values is refused.
 The reviewer returns every earlier id with its current status, plus new findings.
 Disputes match by id across file and title changes. Older records without ids still
 match by file and title.

@@ -23,6 +23,8 @@ export const MODULES = [
   "hello.workflow.ts",
   "retains.workflow.ts",
   "leaves.workflow.ts",
+  "implement.workflow.ts",
+  "submits.workflow.ts",
 ];
 
 export const hosted = <A, E>(

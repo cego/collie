@@ -1503,6 +1503,29 @@ settles and after every line. An offer that needs something open — a review's
 **Improve** — reads that count, so dismissing the last open finding takes the offer away
 until one is reopened.
 
+## Building what a Run found
+
+An offer may be taken over the Run's own findings, and then it asks which ones:
+
+```sh
+collie --json run action <run-id> implement-selected --input findings=<run>-F1,<run>-F3
+```
+
+`--input` takes a list argument as a JSON array, as comma-separated text, or one id per
+line: `findings=a,b`, `findings=["a","b"]` and a file's worth of newline-separated ids all
+say the same thing. An offer taken for exactly one finding refuses a list that is not one id.
+
+Every id must be one of the Run's open findings. One that is dismissed, already taken or
+not this Run's is refused with `invalid_input` naming it, and no Run starts and no line is
+recorded. Otherwise the child Run starts with those ids as its `findings` input, and each
+one is recorded `taken` with the offer that took it and the Run that now holds it — which is
+also what reads beside it in `run findings` and in `run show`.
+
+A settled Run with an open finding and an eligible offer that selects many waits on you
+instead of landing, so a review of your own branch or an investigation holds the card until
+you choose what to build or dismiss the rest. An offer taken once per id starts one Run per
+finding: two ids are two invocations, each with one id.
+
 ## Acknowledging a finished Run
 
 ```sh

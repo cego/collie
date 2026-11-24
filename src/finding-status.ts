@@ -8,6 +8,8 @@ import type { Finding } from "./output";
 import { findingsIn } from "./output";
 import { appendRunJournal, readRunJournal, runJournal } from "./journal";
 import { RunRecords, runOfDir } from "./run-records";
+import { nowIso } from "./time";
+import * as Str from "effect/String";
 
 const STATUS_JOURNAL = "findings/status.jsonl";
 
@@ -32,7 +34,46 @@ const saidAbout = (lines: ReadonlyArray<FindingStatus>, id: string | undefined) 
   id === undefined ? undefined : Option.getOrUndefined(Arr.findLast(lines, (one) => one.id === id));
 
 // WARNING: a dispute is someone's still to answer, so it counts as open.
-const isOpenFinding = (status: string) => status === "open" || status === "disputed";
+export const isOpenFinding = (status: string) => status === "open" || status === "disputed";
+
+const isIds = Schema.is(Schema.Array(Schema.String));
+const isText = Schema.is(Schema.String);
+
+// WARNING: an id list arrives as JSON or as text somebody typed, and anything else is nothing.
+export const idsIn: (given: Schema.Json | undefined) => ReadonlyArray<string> | null = (given) => {
+  if (given === undefined) {
+    return [];
+  }
+  if (isIds(given)) {
+    return given;
+  }
+  if (!isText(given)) {
+    return null;
+  }
+  return Arr.filter(Arr.map(Str.split(given, /[\n,]/), Str.trim), (one) => one !== "");
+};
+
+export const markTaken = Effect.fn("FindingStatus.taken")(function* (
+  runDir: string,
+  ids: ReadonlyArray<string>,
+  offer: string,
+  child: string,
+  by: string,
+) {
+  const at = yield* nowIso;
+  for (const id of ids) {
+    yield* recordFindingStatus(runDir, {
+      id,
+      status: "taken",
+      reason: null,
+      offer,
+      run: child,
+      by,
+      at,
+    });
+  }
+  yield* storeOpenCount(runDir);
+});
 
 export const effectiveStatusOf: (
   finding: Finding,
@@ -75,6 +116,13 @@ export const storeOpenCount = Effect.fn("FindingStatus.storeCount")(function* (r
   const count = yield* openCountIn(runDir);
   yield* RunRecords.use((records) => records.put(runOfDir(runDir), OPEN_FINDINGS, String(count)));
   return count;
+});
+
+// WARNING: a reader that must not move a card writes nothing, so the count is computed and not kept.
+export const openFindingsRead = Effect.fn("FindingStatus.readCount")(function* (runDir: string) {
+  const kept = yield* RunRecords.use((records) => records.fact(runOfDir(runDir), OPEN_FINDINGS));
+  const count = kept === null ? Number.NaN : Number(kept);
+  return Number.isFinite(count) ? count : yield* openCountIn(runDir);
 });
 
 // WARNING: a Run settled before this fact existed has its count computed and kept the first time it is read.

@@ -3016,6 +3016,8 @@ pub struct OffersSuccessItem {
     pub ships: Option<Ships>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confirm: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selects: Option<Selects>,
     pub primary: bool,
     pub unavailable: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3036,6 +3038,14 @@ pub enum Ships {
     Merge,
     #[serde(rename = "release")]
     Release,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Selects {
+    #[serde(rename = "many")]
+    Many,
+    #[serde(rename = "one")]
+    One,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

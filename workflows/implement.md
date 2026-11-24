@@ -450,9 +450,12 @@ is already on.
 ## plan.findings
 
 A Run left findings for a human. `{{inputs.plan}}/findings.json` is what it found, and the
-report beside it is the one a human reads. Copy its findings into the spec and write one
-ticket per finding still open, worst severity first, naming the finding's title word for
-word.
+report beside it is the one a human reads. These are the ones you are building:
+
+{{inputs.findings}}
+
+Copy those into the spec and write one ticket per finding, worst severity first, naming the
+finding's title word for word. The others are somebody else's to choose.
 
 ## plan.linear
 
@@ -495,11 +498,14 @@ skipped.
 ## source.findings
 
 A Run left findings for a human. `{{inputs.plan}}/findings.json` is what it found, and the
-report beside it is the one a human reads. The tickets are those findings, worst severity
-first. Write the findings you are working from to `{{run.dir}}/plan/SPEC.md` and one ticket
-per finding under `{{run.dir}}/plan/issues/`, so this run records what it set out to fix. A
-finding you disagree with is `disputed` with a reason, exactly as in a fix round — never
-silently skipped.
+report beside it is the one a human reads. These are the ones you are building:
+
+{{inputs.findings}}
+
+Write those to `{{run.dir}}/plan/SPEC.md` and one ticket per finding under
+`{{run.dir}}/plan/issues/`, worst severity first, so this run records what it set out to
+fix. The others are somebody else's to choose. A finding you disagree with is `disputed`
+with a reason, exactly as in a fix round — never silently skipped.
 
 ## source.linear
 

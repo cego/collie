@@ -14,6 +14,8 @@ export interface WorkFacts {
   readonly planIssues: number;
   readonly disposed: boolean;
   readonly asking: boolean;
+  // WARNING: an open finding an eligible offer would build is somebody's to choose.
+  readonly choosing: boolean;
 }
 
 export function filed(facts: Pick<WorkFacts, "branch" | "mr" | "planIssues">) {
@@ -27,7 +29,9 @@ export interface Standing {
 }
 
 export function standingOf(facts: WorkFacts) {
-  const unfiled = facts.settled && !filed(facts) && !facts.asking;
+  // WARNING: a Run holding findings it offers to build waits, however else it filed them.
+  const choosing = facts.settled && facts.choosing;
+  const unfiled = !choosing && facts.settled && !filed(facts) && !facts.asking;
   const planReady =
     facts.succeeded &&
     facts.planIssues > 0 &&
@@ -36,7 +40,12 @@ export function standingOf(facts: WorkFacts) {
     !facts.disposed;
   // WARNING: a plan owes nothing to a forge: somebody saying what became of it settles it.
   const answered = facts.branch !== null || facts.mr !== null || facts.disposed;
-  return { unfiled, planReady, landed: unfiled || (facts.settled && !facts.owing && answered) };
+  const returned: Standing = {
+    unfiled,
+    planReady,
+    landed: !choosing && (unfiled || (facts.settled && !facts.owing && answered)),
+  };
+  return returned;
 }
 
 export interface Owed {

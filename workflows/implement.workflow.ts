@@ -72,7 +72,7 @@ const recoveryEntry = (facts: Recovery | undefined) =>
   facts?.review != null ? "Checks" : facts?.implementation === true ? "Review" : "Build";
 
 const Implementing = Schema.Struct({
-  inputs: Schema.Struct({ plan: text, plan_kind: text, repo: text, outcome: text }),
+  inputs: Schema.Struct({ plan: text, plan_kind: text, repo: text, outcome: text, findings: text }),
   run: Schema.Struct({ dir: text, id: text }),
   verify: text,
 });
@@ -81,6 +81,7 @@ const sectionOf = (section: string, input: typeof Implementing.Type) =>
   pipe_(
     content.sections.get(section) ?? "",
     Str.replaceAll("{{inputs.plan}}", input.inputs.plan),
+    Str.replaceAll("{{inputs.findings}}", input.inputs.findings),
     Str.replaceAll("{{run.dir}}", input.run.dir),
   );
 
@@ -133,6 +134,31 @@ const inlinePlanRefusal = (
           "; ",
         )}. Name each, word for word, in the ticket that fixes it`;
   }).pipe(Effect.catch((cause) => Effect.succeed(`${plan} cannot be read: ${cause.message}`)));
+
+// WARNING: only the findings somebody chose are the work, so the others are never named to the agent.
+const chosenFindingsOf = (
+  source: { readonly kind: string; readonly value: string },
+  ids: ReadonlyArray<string>,
+) =>
+  Effect.gen(function* () {
+    if (source.kind !== "findings" && source.kind !== "review") {
+      return "(none)";
+    }
+    const all = yield* findingsIn(source.value);
+    if (ids.length === 0) {
+      return formatFindings(
+        Arr.filter(all, (one) => one.status !== "fixed" && one.status !== "obsolete"),
+      );
+    }
+    const chosen = Arr.filter(all, (one) => one.id !== undefined && Arr.contains(ids, one.id));
+    const unknown = Arr.filter(ids, (id) => !Arr.some(chosen, (one) => one.id === id));
+    if (unknown.length > 0) {
+      return yield* new WorkflowError({
+        reason: `${source.value}/findings.json holds none of ${Arr.join(unknown, ", ")}`,
+      });
+    }
+    return formatFindings(chosen);
+  });
 
 const prompts = {
   build: content.template("build", {
@@ -333,6 +359,11 @@ export default defineWorkflow({
       description:
         "Where the work is written down: a plan, a review, an issue, a follow-up, or words",
     }),
+    findings: Schema.optionalKey(
+      Schema.Array(Schema.String).annotate({
+        description: "The findings to build, by id; every open one where none is given",
+      }),
+    ),
     recovery: Schema.optionalKey(
       Schema.String.annotate({
         description: "The finished Run whose existing work this explicit follow-up recovers",
@@ -423,6 +454,12 @@ export default defineWorkflow({
           Effect.orElseSucceed(() => ({ kind: "text", value: asked.plan })),
         ),
       });
+      const findingsText = yield* Activity.make({
+        name: "findings",
+        success: text,
+        error: WorkflowError,
+        execute: chosenFindingsOf(source, asked.findings ?? []),
+      });
       const share = place.options.repo ?? "";
       if (source.kind === "linear") {
         const linear = yield* connection("linear");
@@ -506,6 +543,7 @@ export default defineWorkflow({
           plan_kind: source.kind,
           repo: place.options.repo ?? "",
           outcome: place.options.outcome ?? "",
+          findings: findingsText,
         },
         run: { dir: place.dir, id: runId },
         verify: yield* checksNow,

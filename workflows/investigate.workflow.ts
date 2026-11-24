@@ -14,6 +14,7 @@ import * as Str from "effect/String";
 import { Effect, FileSystem, Schema } from "effect";
 import markdown from "./investigate.md" with { type: "text" };
 import { measuredBy } from "./measuring.ts";
+import { implementSelected } from "./selected.ts";
 import type { Finding } from "collie";
 
 const MAX_FINDINGS = 7;
@@ -89,6 +90,7 @@ export default defineWorkflow({
   hints: { goal: "goal" },
   checkout: "branch",
   closes: "reported",
+  followUps: [implementSelected],
   run: ({ input }) =>
     Effect.gen(function* () {
       const run = yield* Run;

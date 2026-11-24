@@ -9423,6 +9423,46 @@ scenario(
     ),
 );
 
+scenario("implement is asked to build only the findings whose ids it was given", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const bin = yield* FakeBin.make(`${rig.root}/bin`);
+      yield* noGitlabMrs(bin);
+      yield* repository();
+      const fs = yield* FileSystem.FileSystem;
+      const found = `${rig.root}/chosen`;
+      yield* fs.makeDirectory(found, { recursive: true });
+      yield* fs.writeFileString(
+        `${found}/findings.json`,
+        asJson([
+          { id: "r-investigated-F1", severity: "major", title: "the guard", suggested: "fix" },
+          { id: "r-investigated-F2", severity: "major", title: "the retry", suggested: "fix" },
+          {
+            id: "r-investigated-F3",
+            severity: "minor",
+            title: "the log line",
+            suggested: "ticket",
+          },
+        ]),
+      );
+      yield* approve("r-impl-chosen", ["unit"]);
+      yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+
+      yield* ran({
+        entry: shipped("implement"),
+        runId: "r-impl-chosen",
+        input: { plan: found, findings: ["r-investigated-F1", "r-investigated-F3"], ...FINISH },
+      });
+      yield* bin.restore();
+
+      const building = yield* asked("r-impl-chosen", "build");
+      expect(building).toContain("the guard");
+      expect(building).toContain("the log line");
+      expect(building).not.toContain("the retry");
+    }),
+  ),
+);
+
 scenario(
   "a gate the fixes cannot satisfy resumes after a repair that leaves the tree unchanged",
   () =>

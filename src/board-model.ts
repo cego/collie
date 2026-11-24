@@ -953,6 +953,7 @@ export const OfferView = Schema.Struct({
   kind: Schema.Literals(["action", "follow-up"]),
   ships: Schema.optionalKey(Schema.Literals(["merge", "release"])),
   confirm: Schema.optionalKey(Schema.String),
+  selects: Schema.optionalKey(Schema.Literals(["many", "one"])),
   primary: Schema.Boolean,
   unavailable: Schema.NullOr(Schema.String),
   run: Schema.optionalKey(Schema.String),
@@ -2070,6 +2071,18 @@ export const offerInput: (
   return Rec.isEmptyRecord(errors) ? { _tag: "Valid", input } : { _tag: "Invalid", errors };
 };
 
+// WARNING: text that opens a list is JSON, so broken JSON stays text and is refused as the caller typed it.
+const listFrom = (text: string) => {
+  const parsed = parseJson(text);
+  if (Option.isSome(parsed)) {
+    return parsed.value;
+  }
+  if (pipe(text, Str.trim, Str.startsWith("["))) {
+    return text;
+  }
+  return Arr.filter(Arr.map(Str.split(text, /[\n,]/), Str.trim), (one) => one !== "");
+};
+
 export const givenOfferInput = (
   drawn: Schema.Json | null,
   given: Readonly<Record<string, string>>,
@@ -2079,7 +2092,7 @@ export const givenOfferInput = (
     Arr.map(Rec.toEntries(given), ([name, text]) => {
       const field = fields.get(name);
       if (field?.control.kind === "list") {
-        return [name, Option.getOrElse(parseJson(text), () => text)] as const;
+        return [name, listFrom(text)] as const;
       }
       const read = field === undefined ? null : readEntry(field, text);
       return [name, read?._tag === "Read" ? read.value : text] as const;

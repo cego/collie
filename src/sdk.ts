@@ -2037,6 +2037,11 @@ export interface FollowUp {
   readonly when: "succeeded" | "failed" | "always";
   /** What Collie fills in from the Run itself; the rest is the caller's to give. */
   readonly inputs?: Readonly<Record<string, Source>>;
+  /**
+   * What the offer takes from the Run's open findings: `many` ids, or exactly one. A
+   * selecting offer's `findings` input is filled by whoever invokes it, never by Collie.
+   */
+  readonly selects?: "many" | "one";
   /** A further condition on the facts, where how it ended is not the whole of it. */
   readonly eligible?: (facts: ActionFacts) => boolean;
   readonly given?: OfferGiven;
@@ -2320,6 +2325,13 @@ function offerProblems(metadata: WorkflowMetadata | undefined, workflow: string)
       if (name in (offer.inputs ?? {})) {
         problems.push(`offer "${offer.id}" both fills "${name}" from the Run and gives it`);
       }
+    }
+    if (
+      "selects" in offer &&
+      offer.selects !== undefined &&
+      !Rec.some(offer.inputs ?? {}, (source) => source === "findings")
+    ) {
+      problems.push(`offer "${offer.id}" selects findings without the "findings" Source`);
     }
   }
   return problems;

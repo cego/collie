@@ -260,7 +260,14 @@ import {
 } from "./intent";
 import type { IntentSeed } from "./intent";
 import { latest, readDispositions } from "./disposition";
-import { openFindingsFact, storeOpenCount } from "./finding-status";
+import {
+  findingsWithStatus,
+  idsIn,
+  isOpenFinding,
+  markTaken,
+  openFindingsRead,
+  storeOpenCount,
+} from "./finding-status";
 import {
   changeKey,
   changeOfKey,
@@ -2830,6 +2837,7 @@ export function declaredByModule(metadata: WorkflowMetadata | undefined) {
     entry: offer.entry,
     inputs: offer.inputs ?? {},
     given: offer.given,
+    selects: offer.selects,
     ships: offer.ships,
     confirm: offer.confirm,
     connections: offer.connections,
@@ -7900,6 +7908,7 @@ export interface RegistryApi {
     readonly request: string;
     readonly attachments?: ReadonlyArray<string> | undefined;
     readonly started?: Started | undefined;
+    readonly by?: string | undefined;
   }) => Effect.Effect<Admitted, HostRefused | RequestConflict, HostServices>;
   readonly routed: (
     runId: string,
@@ -10099,6 +10108,33 @@ const makeRegistry: (
       })),
     );
 
+  // WARNING: a selecting offer starts nothing until every id agrees with the Run's own findings.
+  const chosenFor = Effect.fn("Engine.Registry.chosen")(function* (
+    offer: Offer,
+    given: Schema.Json | undefined,
+    runDir: string,
+  ) {
+    const ids = idsIn(given);
+    if (ids === null) {
+      return yield* new HostRefused({
+        reason: `"${offer.id}" takes its findings as ids, given as a list`,
+      });
+    }
+    if (offer.selects === "one" && ids.length !== 1) {
+      return yield* new HostRefused({
+        reason: `"${offer.id}" is taken for exactly one finding, not ${ids.length}`,
+      });
+    }
+    const open = Arr.filter(yield* findingsWithStatus(runDir), (one) => isOpenFinding(one.status));
+    const unknown = Arr.findFirst(ids, (id) => !Arr.some(open, (one) => one.id === id));
+    if (Option.isSome(unknown)) {
+      return yield* new HostRefused({
+        reason: `"${unknown.value}" is not one of the findings still open on this Run`,
+      });
+    }
+    return ids;
+  });
+
   const recoveryNow = (runId: string, workSource: string) =>
     recoveryFor(store, dir, runId, runId, workSource).pipe(
       Effect.tap((recovery) =>
@@ -10169,7 +10205,7 @@ const makeRegistry: (
       nothingToLand: (yield* runRecords.fact(runId, NOTHING_TO_LAND)) !== null,
       planIssues: yield* planIssuesIn(where),
       disposed: disposition !== null,
-      openFindings: yield* openFindingsFact(where),
+      openFindings: yield* openFindingsRead(where),
       diffTarget: pointedAt(generation, input),
       claim: yield* claimOf(runId),
     };
@@ -10332,7 +10368,9 @@ const makeRegistry: (
         refused.set(offer.id, `${mr} is merged`);
       }
       const workflow = offer.workflow === SELF ? generation.id : offer.workflow;
-      for (const candidate of runs) {
+      // WARNING: a selecting offer is taken once per finding, so its children may go on at once.
+      const oneAtATime = offer.selects === undefined;
+      for (const candidate of oneAtATime ? runs : []) {
         if (candidate.workflow !== workflow || candidate.request === request) {
           continue;
         }
@@ -10896,6 +10934,7 @@ const makeRegistry: (
         onSyncedRevisions,
       ),
 
+    // WARNING: a selecting offer starts nothing until every id it was given is one of the Run's open.
     invoke: Effect.fn("Engine.Registry.invoke")(function* (options: {
       readonly runId: string;
       readonly offer: string;
@@ -10903,6 +10942,7 @@ const makeRegistry: (
       readonly request: string;
       readonly attachments?: ReadonlyArray<string> | undefined;
       readonly started?: Started | undefined;
+      readonly by?: string | undefined;
     }) {
       const { row, generation, facts, where, refused, input } = yield* offeredBy(
         options.runId,
@@ -10940,6 +10980,12 @@ const makeRegistry: (
         ...inputsFor(offer, { runId: row.run, runDir: where, facts, input }),
         ...options.input,
       };
+      const chosen =
+        offer.selects === undefined ? [] : yield* chosenFor(offer, filled.findings, where);
+      // WARNING: the child is given the ids, however they were typed.
+      if (offer.selects !== undefined) {
+        filled.findings = chosen;
+      }
       const inherited = yield* approvedOf(dir, row.run);
       const launch = Rec.map(
         Rec.filter(filled, (_, name) => name in RESERVED_INPUTS),
@@ -10988,7 +11034,15 @@ const makeRegistry: (
         attachments: options.attachments,
         started: options.started,
         options: launch,
-      });
+      }).pipe(
+        Effect.tap((started) =>
+          chosen.length === 0
+            ? Effect.void
+            : markTaken(where, chosen, offer.id, started.runId, options.by ?? options.request).pipe(
+                Effect.provideService(RunRecords, runRecords),
+              ),
+        ),
+      );
     }, invoking.withPermits(1)),
 
     start: startWork,

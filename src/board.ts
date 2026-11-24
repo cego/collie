@@ -75,7 +75,7 @@ import { flowInputsFor, taskFlowFor } from "./flow-read";
 import { machineName, peersOf } from "./peers";
 import { Deliveries, deliveriesAhead, deliveriesOf, SENT_STATES, toldIn } from "./steering";
 import { finishedOnRecord } from "./cards";
-import { openFindingsFact } from "./finding-status";
+import { openFindingsRead } from "./finding-status";
 import { owedLocally } from "./check-proof";
 import {
   Answered,
@@ -1367,7 +1367,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
             cards.content?.([runId]) ?? cards.revision([runId]),
             touched.get(runId) ?? 0,
             yield* planIssuesIn(run.dir),
-            yield* openFindingsFact(run.dir),
+            yield* openFindingsRead(run.dir),
             latest(yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => []))),
             cards.modules ?? "",
             id === null ? null : (mrStates.get(id) ?? null),
@@ -1389,6 +1389,17 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           }
           return view;
         };
+        // WARNING: this is the one place offers are evaluated, so the hold over findings is read here.
+        const choosingOf = Effect.fnUntraced(function* (run: RunFacts) {
+          if ((yield* openFindingsRead(run.dir)) === 0) {
+            return false;
+          }
+          return Arr.some(
+            yield* offersFor(run.id),
+            (one) => one.selects === "many" && one.unavailable === null,
+          );
+        });
+        const choosing = Arr.some(yield* Effect.forEach(everyRun, choosingOf), (one) => one);
         yield* boundary;
         // WARNING: a Run records no end of its own; one that wrote nothing ended no later than it began.
         const endedAt = (run: RunFacts) =>
@@ -1532,6 +1543,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
               planIssues: issues,
               disposed: disposition !== null,
               asking: false,
+              choosing,
             }).landed) &&
           !(yield* unseenReport(leader))
         ) {
@@ -1643,6 +1655,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           planIssues: issues,
           disposed: disposition !== null,
           asking: decision !== null,
+          choosing,
         });
         const movement = landed
           ? null

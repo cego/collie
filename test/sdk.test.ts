@@ -14,7 +14,7 @@ import {
   step,
   template,
 } from "../src/sdk";
-import type { WorkflowEntry, WorkflowMetadata } from "../src/sdk";
+import type { FollowUp, WorkflowEntry, WorkflowMetadata } from "../src/sdk";
 import { REQUESTABLE, isOutcome } from "../src/outcome";
 import type { Outcome } from "../src/outcome";
 import { loadEntry } from "../src/engine";
@@ -237,6 +237,22 @@ test("an offer has a stable id, a title of its own, and a workflow it starts", (
       }),
     ),
   ).toEqual(['two offers are called "fix-open"']);
+});
+
+test("an offer that selects findings fills them from the findings Source, or it is refused", () => {
+  const selecting: (over: Partial<FollowUp>) => FollowUp = (over) => ({
+    id: "implement-selected",
+    title: "Implement selected",
+    workflow: "implement",
+    when: "succeeded",
+    selects: "many",
+    inputs: { plan: "run-dir", findings: "findings" },
+    ...over,
+  });
+  expect(checkEntry(entry({ metadata: { followUps: [selecting({})] } }))).toEqual([]);
+  expect(
+    checkEntry(entry({ metadata: { followUps: [selecting({ inputs: { plan: "run-dir" } })] } })),
+  ).toEqual(['offer "implement-selected" selects findings without the "findings" Source']);
 });
 
 test("every conflict is reported, not the first one", () => {

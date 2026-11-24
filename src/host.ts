@@ -3327,6 +3327,7 @@ const frontDoorHandlers = (
                   input,
                   request,
                   attachments,
+                  by: actorName({ ...whoOf(client), requestId: request }),
                   started: startedOf(whoOf(client).origin, whoOf(client).said, input, undefined),
                 })
                 .pipe(Effect.map(saying(removed))),

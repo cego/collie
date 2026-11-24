@@ -22,6 +22,7 @@ export interface Declared {
   readonly given?: OfferGiven | undefined;
   readonly ships?: Ships | undefined;
   readonly confirm?: string | undefined;
+  readonly selects?: "many" | "one" | undefined;
 }
 
 export interface Offer {
@@ -37,6 +38,7 @@ export interface Offer {
   readonly confirm?: string;
   readonly primary: boolean;
   readonly unavailable: string | null;
+  readonly selects?: "many" | "one";
 }
 
 export interface OfferOptions {
@@ -82,6 +84,9 @@ export function offersFrom(
     }
     if (one.confirm !== undefined) {
       offer.confirm = one.confirm;
+    }
+    if (one.selects !== undefined) {
+      offer.selects = one.selects;
     }
     offers.push(offer);
   }
@@ -137,6 +142,7 @@ export const SOURCES = {
   "diff-target": "what this Run was pointed at",
   branch: "the branch its checkout is on",
   "merge-request": "the merge request it opened or was given",
+  findings: "the open findings whoever invokes it chose",
   "started-with": "what the Run was started with for the same input",
 } as const;
 export type Source = keyof typeof SOURCES;
@@ -147,6 +153,7 @@ export const SOURCE_NAMES: ReadonlyArray<Source> = [
   "diff-target",
   "branch",
   "merge-request",
+  "findings",
   "started-with",
 ];
 export const isSource = (value: string): value is Source => value in SOURCES;
@@ -220,6 +227,9 @@ export function inputsFor(
         return from.facts.branch ?? undefined;
       case "merge-request":
         return from.facts.mrUrl ?? undefined;
+      // WARNING: the chosen findings are the caller's to give, never the Run's to fill in.
+      case "findings":
+        return undefined;
       case "started-with":
         return from.input[name];
     }
