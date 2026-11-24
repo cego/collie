@@ -4482,17 +4482,26 @@ export const hostLayer: (options: {
             Duration.toMillis(options.collectMs ?? Duration.minutes(120));
           let told = false;
           for (;;) {
-            const listed = yield* Effect.result(
-              herdr
+            const listing = Effect.gen(function* () {
+              const left = Math.max(0, deadline - (yield* Clock.currentTimeMillis));
+              const read = yield* herdr
                 .agentList()
-                .pipe(Effect.provideContext(bun), Effect.timeoutOption(AGENT_LIST_BUDGET)),
+                .pipe(
+                  Effect.provideContext(bun),
+                  Effect.timeoutOption(Math.min(AGENT_LIST_BUDGET, left)),
+                );
+              return Option.getOrNull(read);
+            }).pipe(Effect.result, Effect.map(Result.getOrNull));
+            const listed = yield* Effect.raceFirst(
+              listing.pipe(Effect.asSome),
+              untilStopped(runId).pipe(Effect.as(Option.none<ReadonlyArray<AgentInfo> | null>())),
             );
-            const roster = listed._tag === "Success" ? Option.getOrNull(listed.success) : null;
-            const busy =
-              roster === null ? mine : Arr.filter(mine, (one) => workingIn(one, roster, cwd));
-            if (yield* set(STOP, runId)) {
+            if (Option.isNone(listed) || (yield* set(STOP, runId))) {
               return "stopped" as const;
             }
+            const roster = listed.value;
+            const busy =
+              roster === null ? mine : Arr.filter(mine, (one) => workingIn(one, roster, cwd));
             if (roster !== null && busy.length === 0) {
               return "clear" as const;
             }
@@ -7574,7 +7583,7 @@ const reviewFacts = <R>(
 const AGENT_WAIT_POLL = Duration.millis(100);
 
 // WARNING: core answers a terminal.list with no deadline of its own, so a silent socket must not hold the wait.
-const AGENT_LIST_BUDGET = Duration.seconds(10);
+const AGENT_LIST_BUDGET = 10_000;
 
 const workingIn = (entry: AgentEntry, alive: ReadonlyArray<AgentInfo>, cwd: string) => {
   const at = Option.getOrUndefined(

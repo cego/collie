@@ -201,6 +201,67 @@ test("a checkout park does not clear while origin's branch it was pushed to is g
     ["rechecks.workflow.ts"],
   ));
 
+test("a checkout park does not clear on a remote-tracking ref this checkout's fetch never maps", () =>
+  proves(
+    "collie-recovery-unmapped-",
+    (world) =>
+      Effect.gen(function* () {
+        const git = (...args: Array<string>) => exec(["git", ...args], { cwd: world.project });
+        const commit = (...args: Array<string>) =>
+          git("-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-qm", ...args);
+        yield* commit("initial", "--allow-empty");
+        const origin = `${world.home}/origin.git`;
+        yield* git("init", "-q", "--bare", origin);
+        const branch = Str.trim((yield* git("rev-parse", "--abbrev-ref", "HEAD")).stdout);
+        yield* git("remote", "add", "origin", origin);
+        const started = yield* collie(
+          world,
+          [
+            "run",
+            "start",
+            "rechecks",
+            "--input",
+            "cause=checkout-dirty-collie",
+            "--input",
+            "mr=",
+            "--input",
+            `file=${world.home}/fact`,
+          ],
+          { COLLIE_RECOVERY_EVERY: "2 seconds" },
+        );
+        expect(started.envelope).toMatchObject({ ok: true });
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
+        const runId = runs[0]!.runId;
+        yield* until(
+          () => client.run({ runId }).pipe(Effect.orDie),
+          (view) => view?.parked !== null,
+        );
+        yield* git("push", "-q", "origin", `HEAD:refs/heads/${branch}`);
+        yield* git("fetch", "-q", "origin");
+        yield* git("push", "-q", "origin", `HEAD:refs/heads/other`);
+        // WARNING: the fetch is narrowed after that ref exists, so --prune can no longer drop it.
+        yield* git("config", "remote.origin.fetch", "+refs/heads/other:refs/remotes/origin/other");
+        yield* git("--git-dir", origin, "update-ref", "-d", `refs/heads/${branch}`);
+        const rechecked = yield* until(
+          () => client.runMetrics({ runId }).pipe(Effect.orDie),
+          (lines) => Arr.filter(lines, (line) => line.action === "rechecked").length >= 2,
+        );
+        expect(Arr.some(rechecked, (line) => line.outcome === "cleared")).toBe(false);
+        expect(Arr.some(rechecked, (line) => line.action === "resumed")).toBe(false);
+        yield* (yield* FileSystem.FileSystem)
+          .writeFileString(`${world.home}/fact`, "ready")
+          .pipe(Effect.orDie);
+        yield* git("push", "-q", "origin", `HEAD:refs/heads/${branch}`);
+        const done = yield* until(
+          () => client.run({ runId }).pipe(Effect.orDie),
+          (view) => view?.status.status === "complete",
+        );
+        expect(done?.status.status).toBe("complete");
+      }),
+    ["rechecks.workflow.ts"],
+  ));
+
 test("an automatically resumed mr Step repeats neither its push nor its merge request", () =>
   proves(
     "collie-recovery-mr-",

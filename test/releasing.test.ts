@@ -346,6 +346,117 @@ test("a checkout ahead of a cached origin tip is refused once origin's branch is
     }).pipe(Effect.scoped),
   ));
 
+const forgeAt = (root: string, cwd: string, onto: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const forge = `${root}/forge`;
+    yield* git(root, "clone", "-q", `${root}/origin.git`, forge);
+    for (const [key, value] of [
+      ["user.name", "Test"],
+      ["user.email", "test@example.com"],
+      ["commit.gpgsign", "false"],
+    ] as const) {
+      yield* git(forge, "config", key, value);
+    }
+    yield* git(forge, "reset", "-q", "--hard", onto);
+    const track = (file: string) =>
+      Effect.gen(function* () {
+        yield* fs.writeFileString(`${forge}/${file}`, "the forge's");
+        yield* git(forge, "add", "-f", file);
+      });
+    const push = () =>
+      Effect.gen(function* () {
+        yield* git(forge, "commit", "-q", "-m", "a file the forge tracks");
+        const head = yield* git(forge, "rev-parse", "HEAD");
+        yield* git(forge, "push", "-q", "-f", "origin", `${head}:refs/heads/main`);
+        return head;
+      });
+    return { forge, track, push };
+  });
+
+test("a reset does not overwrite an untracked file git status was told to hide", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { fs, root, cwd, first } = yield* repository;
+      yield* git(cwd, "config", "status.showUntrackedFiles", "no");
+      yield* fs.writeFileString(`${cwd}/settings`, "the local one");
+      const target = yield* newerTarget(cwd);
+      const forge = yield* forgeAt(root, cwd, target);
+      yield* forge.track("settings");
+      const incoming = yield* forge.push();
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: incoming,
+        run: runner(),
+      });
+      expect(moved._tag).toBe("Refused");
+      if (moved._tag === "Refused") {
+        expect(moved.cause).toBe("checkout-dirty-human");
+        expect(moved.why).toContain("settings");
+      }
+      expect(yield* fs.readFileString(`${cwd}/settings`)).toBe("the local one");
+      expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(first);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a fast-forward does not overwrite a file the checkout keeps out of git", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { fs, root, cwd, first } = yield* repository;
+      yield* fs.writeFileString(`${cwd}/.git/info/exclude`, "local.env\n");
+      yield* fs.writeFileString(`${cwd}/local.env`, "the local one");
+      const forge = yield* forgeAt(root, cwd, first);
+      yield* forge.track("local.env");
+      const incoming = yield* forge.push();
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: incoming,
+        run: runner(),
+      });
+      expect(moved._tag).toBe("Refused");
+      if (moved._tag === "Refused") {
+        expect(moved.cause).toBe("branch-force-pushed");
+        expect(moved.why).toContain("local.env");
+      }
+      expect(yield* fs.readFileString(`${cwd}/local.env`)).toBe("the local one");
+      expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(first);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a branch origin no longer has is not read from a remote-tracking ref the fetch leaves alone", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { fs, root, cwd, first } = yield* repository;
+      yield* fs.writeFileString(`${cwd}/two.ts`, "two");
+      yield* git(cwd, "add", "two.ts");
+      yield* git(cwd, "commit", "-q", "-m", "two.ts");
+      yield* git(cwd, "push", "-q", "origin", "HEAD:refs/heads/main");
+      const carried = yield* git(cwd, "rev-parse", "HEAD");
+      yield* git(cwd, "push", "-q", "origin", `${first}:refs/heads/feature`);
+      yield* git(
+        cwd,
+        "config",
+        "remote.origin.fetch",
+        "+refs/heads/feature:refs/remotes/origin/feature",
+      );
+      yield* git(root, "--git-dir", `${root}/origin.git`, "update-ref", "-d", "refs/heads/main");
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: first,
+        run: runner(),
+      });
+      expect(moved._tag).toBe("Refused");
+      if (moved._tag === "Refused") {
+        expect(moved.cause).toBe("checkout-dirty-human");
+        expect(moved.why).toContain("ahead of origin's main");
+      }
+      expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(carried);
+    }).pipe(Effect.scoped),
+  ));
+
 test("a force-push refusal names every unpublished commit, past the tenth", () =>
   runEffect(
     Effect.gen(function* () {

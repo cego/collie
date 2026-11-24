@@ -1042,9 +1042,9 @@ the next round: a `fixed` answer counts only where the head carries its commit.
 
 `host.fastForward({ runId, cwd, head, branch })` brings the checkout to `head`, writing
 the move to the Run's log. It first waits for every agent of the Run working in that
-checkout to stop — bounded by the collection budget, by a roster that does not answer, and
-ended at once by a Stop — so Prove never reads a turn still being written. It answers `At`
-with the `head` and where it moved `from`:
+checkout to stop — bounded by the collection budget, with each roster read sized by what is
+left of it and cancelled by a Stop — so Prove never reads a turn still being written. It
+answers `At` with the `head` and where it moved `from`:
 
 - a checkout behind `head` fast-forwards to it;
 - a clean, divergent checkout whose own head origin carried resets to `head`, and the log
@@ -1055,9 +1055,11 @@ with the `head` and where it moved `from`:
 
 Otherwise it answers `Refused` with a `why` and a park `cause`, naming what it protects:
 `checkout-dirty-collie` for a checkout Collie made and `checkout-dirty-human` for one it
-did not, each naming the changed files or the unpushed commits; `branch-force-pushed` for
-a checkout holding commits origin never carried, naming every one by short sha and
-subject, and for a reset that would overwrite a file the checkout keeps out of git; and
+did not, each naming the changed files — an untracked one its own `status` configuration
+hides among them — or the unpushed commits; `branch-force-pushed` for a checkout holding
+commits origin never carried, naming every one by short sha and subject, and for a move
+that would overwrite a file the checkout keeps out of git, on a reset or a fast-forward
+alike; and
 `release-failed` for a wrong branch, an unreadable checkout, an unreadable origin, a head
 origin lacks or a failed merge. Nothing is reset or discarded while anything at risk is
 unpublished. With optional `branch`, it refuses a detached checkout or a different source

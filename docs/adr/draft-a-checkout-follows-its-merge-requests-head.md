@@ -30,15 +30,20 @@ host resets it (`git reset --hard`) and logs
 The commit is not lost: the forge carried it. Published means either of these:
 
 - origin's remote-tracking branch for this branch has carried that commit — the commit is
-  one of that ref's reflog entries, or one of their ancestors — or that ref still carries
-  the checkout's own head, however far past it the forge has since moved the branch;
+  one of that ref's reflog entries, or one of their ancestors — or origin still has the
+  branch and that ref carries the checkout's own head, however far past it the forge has
+  since moved the branch. "Origin still has the branch" is asked of origin
+  (`git ls-remote`), never of the tracking ref, because a fetch refspec can leave a ref
+  behind that `--prune` does not reach;
 - this Run recorded it as a head earlier, journaled in the Run's own `heads.jsonl`, which
   covers a reflog that was expired or a ref fetched fresh.
 
-A reset that would write over a file the checkout keeps out of git — an ignored file at a
-path the new head tracks — is refused instead, naming those files under
-`branch-force-pushed`: `git status --porcelain` does not show them, so only the reset would
-have destroyed them.
+A move that would write over a file the checkout keeps out of git — an ignored file at a
+path the new head tracks, in either direction — is refused instead, naming those files
+under `branch-force-pushed`, before either a reset or a fast-forward runs: `git status`
+does not show them, and both git commands overwrite them. Whether the checkout is dirty is
+read with `--untracked-files=all`, since a person's `status.showUntrackedFiles` would
+otherwise hide a file a reset goes on to replace.
 
 **D3. A checkout holding commits that were never published is not reset.** The refusal
 names every commit at risk that origin never carried, by short sha and subject, and carries
@@ -52,7 +57,8 @@ before, and a stale journaled head the checkout already carries still answers `A
 
 **D5. A dirty or unpushed checkout is named, and only Collie's own is touched.** Before it
 is read, the host waits for every agent of the Run placed in that checkout to stop working,
-bounded by the collection budget, and a Stop ends the wait at once. After the wait, a
+bounded by the collection budget — each roster read sized by what is left of it — and a
+Stop cancels the read in flight. After the wait, a
 checkout with uncommitted changes, or one whose head is ahead of the requested head while
 origin's branch does not carry it, is refused under `checkout-dirty-collie` where Collie
 made the worktree and `checkout-dirty-human` where it did not, naming the files or commits.

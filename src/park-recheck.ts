@@ -182,6 +182,17 @@ export const recheckPark = (
         if (fetched.code !== 0) {
           return reply(false, `origin could not be read: ${whatItSaid(fetched)}`, true);
         }
+        const onOrigin = yield* shell(
+          "git",
+          ["ls-remote", "--exit-code", "--heads", "origin", `refs/heads/${named}`],
+          view.cwd,
+        );
+        if (onOrigin.code === 2) {
+          return reply(false, `origin's ${named} is gone`);
+        }
+        if (onOrigin.code !== 0) {
+          return reply(false, `origin could not be read: ${whatItSaid(onOrigin)}`, true);
+        }
         const carried = yield* shell(
           "git",
           ["merge-base", "--is-ancestor", Str.trim(head.stdout), `refs/remotes/origin/${named}`],

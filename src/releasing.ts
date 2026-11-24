@@ -106,7 +106,7 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
       );
     }
   }
-  const status = yield* git(["status", "--porcelain"]);
+  const status = yield* git(["status", "--porcelain", "--untracked-files=all"]);
   const from = Str.trim((yield* git(["rev-parse", "HEAD"])).stdout);
   if (status.code !== 0 || from === "") {
     return refused(`git could not read the checkout at ${opts.cwd}`);
@@ -127,12 +127,26 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
   if ((yield* git(["cat-file", "-e", `${opts.head}^{commit}`])).code !== 0) {
     return refused(`origin does not have ${short(opts.head)}`);
   }
+  const ignored = yield* git(["ls-files", "--others", "--ignored", "--exclude-standard", "-z"]);
+  const tracked = yield* git(["ls-tree", "-r", "--name-only", "-z", opts.head]);
+  const carried = nul(tracked.stdout);
+  const replaced = Arr.filter(nul(ignored.stdout), (one) =>
+    Arr.some(carried, (path) => overlapping(one, path)),
+  );
+  if (replaced.length > 0) {
+    return refused(
+      `the move to ${short(opts.head)} would overwrite files the checkout keeps out of git: ${atMost(replaced)}`,
+      "branch-force-pushed",
+    );
+  }
   if ((yield* git(["merge-base", "--is-ancestor", from, opts.head])).code !== 0) {
     const branch = Str.trim((yield* git(["rev-parse", "--abbrev-ref", "HEAD"])).stdout);
     const named = branch === "" || branch === "HEAD" ? null : branch;
     const where = named === null ? "origin" : `origin's ${named}`;
     const atOrigin =
       named !== null &&
+      (yield* git(["ls-remote", "--exit-code", "--heads", "origin", `refs/heads/${named}`]))
+        .code === 0 &&
       (yield* git(["merge-base", "--is-ancestor", from, `refs/remotes/origin/${named}`])).code ===
         0;
     if ((yield* git(["merge-base", "--is-ancestor", opts.head, from])).code === 0) {
@@ -175,18 +189,6 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
         "branch-force-pushed",
       );
     }
-    const ignored = yield* git(["ls-files", "--others", "--ignored", "--exclude-standard", "-z"]);
-    const tracked = yield* git(["ls-tree", "-r", "--name-only", "-z", opts.head]);
-    const carried = nul(tracked.stdout);
-    const replaced = Arr.filter(nul(ignored.stdout), (one) =>
-      Arr.some(carried, (path) => overlapping(one, path)),
-    );
-    if (replaced.length > 0) {
-      return refused(
-        `the reset to ${short(opts.head)} would overwrite files the checkout keeps out of git: ${atMost(replaced)}`,
-        "branch-force-pushed",
-      );
-    }
     const reset = yield* git(["reset", "--hard", "--quiet", opts.head]);
     if (reset.code !== 0) {
       return refused(`git reset --hard ${short(opts.head)} failed: ${whatItSaid(reset)}`);
@@ -197,7 +199,7 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
     );
     return yield* at(opts.head, from);
   }
-  const moved = yield* git(["merge", "--ff-only", "--quiet", opts.head]);
+  const moved = yield* git(["merge", "--ff-only", "--no-overwrite-ignore", "--quiet", opts.head]);
   if (moved.code !== 0) {
     return refused(`git merge --ff-only ${short(opts.head)} failed: ${whatItSaid(moved)}`);
   }
