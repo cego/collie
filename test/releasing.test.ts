@@ -2,9 +2,17 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem } from "effect";
+import { Effect, FileSystem, Schema } from "effect";
 import type { Runner } from "../src/mr";
-import { fastForward, readProduction, readTag, stackOrder } from "../src/releasing";
+import {
+  fastForward,
+  readProduction,
+  readTag,
+  SavedAlignmentSchema,
+  savedHead,
+  savedRefusalWhy,
+  stackOrder,
+} from "../src/releasing";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { FORGE_HOST, PROJECT, fakeForge } from "./support/forge";
@@ -65,6 +73,22 @@ const repository = Effect.gen(function* () {
     });
   return { fs, root, cwd, commit, first, tag };
 });
+
+test("an alignment a Release saved as a bare head before the refusal carried a cause still reads as a head", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const saved = yield* Schema.decodeEffect(SavedAlignmentSchema)("a1b2c3d4");
+      expect(savedHead(saved)).toBe("a1b2c3d4");
+      expect(savedRefusalWhy(saved)).toBeNull();
+      const refused = yield* Schema.decodeEffect(SavedAlignmentSchema)({
+        _tag: "Refused",
+        why: "the checkout has uncommitted changes",
+        cause: "checkout-dirty-collie",
+      });
+      expect(savedHead(refused)).toBeNull();
+      expect(savedRefusalWhy(refused)).toBe("the checkout has uncommitted changes");
+    }),
+  ));
 
 test("a checkout with uncommitted changes is refused even where it is already at the head", () =>
   runEffect(
@@ -191,6 +215,95 @@ test("a checkout holding a commit origin never had is refused with its cause, na
         expect(moved.why).toContain("a local fix origin never had");
       }
       expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(local);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a reset that would overwrite a file the checkout keeps out of git is refused, naming it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { fs, root, cwd, first } = yield* repository;
+      yield* fs.writeFileString(`${cwd}/.gitignore`, "local.env\n");
+      yield* git(cwd, "add", ".gitignore");
+      yield* git(cwd, "commit", "-q", "-m", "keep local.env out of git");
+      yield* git(cwd, "push", "-q", "origin", "HEAD:main");
+      const base = yield* git(cwd, "rev-parse", "HEAD");
+      expect(base).not.toBe(first);
+      yield* fs.writeFileString(`${cwd}/local.env`, "the forge's");
+      yield* git(cwd, "add", "-f", "local.env");
+      yield* git(cwd, "commit", "-q", "-m", "track local.env");
+      const tracked = yield* git(cwd, "rev-parse", "HEAD");
+      const target = yield* newerTarget(cwd);
+      const tree = yield* git(cwd, "rev-parse", `${tracked}^{tree}`);
+      const rebased = yield* git(cwd, "commit-tree", tree, "-p", target, "-m", "the forge's head");
+      yield* git(cwd, "push", "-q", "-f", "origin", `${rebased}:refs/heads/main`);
+      yield* git(cwd, "reset", "-q", "--hard", base);
+      yield* fs.writeFileString(`${cwd}/local.env`, "the local one");
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: rebased,
+        run: runner(),
+      });
+      expect(moved._tag).toBe("Refused");
+      if (moved._tag === "Refused") {
+        expect(moved.cause).toBe("branch-force-pushed");
+        expect(moved.why).toContain("local.env");
+      }
+      expect(yield* fs.readFileString(`${cwd}/local.env`)).toBe("the local one");
+      expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(base);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a checkout carrying a commit origin has moved past is taken as it is, not reported as unpushed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { root, cwd, first, commit } = yield* repository;
+      const carried = yield* commit("two.ts");
+      yield* commit("three.ts");
+      yield* git(cwd, "reset", "-q", "--hard", carried);
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: first,
+        run: runner(),
+      });
+      expect(moved._tag).toBe("At");
+      if (moved._tag === "At") {
+        expect(moved.head).toBe(carried);
+        expect(moved.from).toBe(carried);
+      }
+      expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(carried);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a force-push refusal names every unpublished commit, past the tenth", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { fs, root, cwd, first } = yield* repository;
+      const target = yield* newerTarget(cwd);
+      const rebased = yield* rebaseOnto(cwd, first, target);
+      yield* git(cwd, "reset", "-q", "--hard", first);
+      const locals: Array<string> = [];
+      for (let n = 0; n < 12; n++) {
+        yield* fs.writeFileString(`${cwd}/local-${n}.ts`, `local ${n}`);
+        yield* git(cwd, "add", `local-${n}.ts`);
+        yield* git(cwd, "commit", "-q", "-m", `a local fix ${n}`);
+        locals.push(yield* git(cwd, "rev-parse", "HEAD"));
+      }
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: rebased,
+        run: runner(),
+      });
+      expect(moved._tag).toBe("Refused");
+      if (moved._tag === "Refused") {
+        expect(moved.cause).toBe("branch-force-pushed");
+        for (const local of locals) {
+          expect(moved.why).toContain(pipe_(local, Str.slice(0, 8)));
+        }
+      }
+      expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(locals.at(-1)!);
     }).pipe(Effect.scoped),
   ));
 

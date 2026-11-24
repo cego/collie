@@ -347,7 +347,16 @@ export default defineWorkflow({
           success: Schema.String,
           error: WorkflowError,
           execute: Effect.gen(function* () {
-            const moved = yield* host.fastForward({ runId, cwd, head });
+            const read = yield* host.readMergeRequest({ cwd, mr });
+            if (read._tag === "Unreadable") {
+              return yield* park(`Cannot read ${mr}'s branches: ${read.why}`);
+            }
+            if (read.source === "") {
+              return yield* park(
+                `Cannot align ${mr}'s checkout: its source branch is not confirmed`,
+              );
+            }
+            const moved = yield* host.fastForward({ runId, cwd, head, branch: read.source });
             if (moved._tag === "Refused") {
               return yield* park(moved.why, moved.cause);
             }

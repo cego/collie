@@ -149,6 +149,9 @@ export {
  */
 export {
   FastForwardSchema,
+  SavedAlignmentSchema,
+  savedHead,
+  savedRefusalWhy,
   JobLinkSchema,
   MergeRequestReadSchema,
   ProductionReadSchema,

@@ -178,7 +178,10 @@ export const recheckPark = (
           return reply(false, whatItSaid(head.code !== 0 ? head : branch), true);
         }
         const named = Str.trim(branch.stdout);
-        yield* shell("git", ["fetch", "--quiet", "origin"], view.cwd);
+        const fetched = yield* shell("git", ["fetch", "--prune", "--quiet", "origin"], view.cwd);
+        if (fetched.code !== 0) {
+          return reply(false, `origin could not be read: ${whatItSaid(fetched)}`, true);
+        }
         const carried = yield* shell(
           "git",
           ["merge-base", "--is-ancestor", Str.trim(head.stdout), `refs/remotes/origin/${named}`],

@@ -92,9 +92,26 @@ test("a clean checkout whose head origin does not carry stays parked, and resume
           Arr.map(
             Arr.filter(rechecked, (line) => line.action === "rechecked"),
             (line) => line.outcome,
-          ),
-        ).toEqual(["uncleared"]);
+          )[0],
+        ).toBe("uncleared");
         expect(Arr.some(rechecked, (line) => line.action === "resumed")).toBe(false);
+        const counted = () =>
+          client.runMetrics({ runId }).pipe(
+            Effect.orDie,
+            Effect.map((lines) => Arr.filter(lines, (line) => line.action === "rechecked")),
+          );
+        const before = (yield* counted()).length;
+        yield* git("remote", "set-url", "origin", `${world.home}/gone.git`);
+        const unread = yield* until(counted, (lines) => lines.length >= before + 2);
+        expect(
+          Arr.some(
+            Arr.drop(unread, before),
+            (line) => line.outcome === "error" || line.outcome === "uncleared",
+          ),
+        ).toBe(true);
+        expect(Arr.some(unread, (line) => line.outcome === "cleared")).toBe(false);
+        expect(Arr.some(unread, (line) => line.action === "resumed")).toBe(false);
+        yield* git("remote", "set-url", "origin", origin);
         yield* git("push", "-q", "origin", `HEAD:refs/heads/${branch}`);
         yield* (yield* FileSystem.FileSystem)
           .writeFileString(`${world.home}/fact`, "ready")
@@ -120,6 +137,64 @@ test("a clean checkout whose head origin does not carry stays parked, and resume
         });
         const healed = yield* client.runMetrics({ runId }).pipe(Effect.orDie);
         expect(Arr.filter(healed, (line) => line.action === "healed")).toEqual([]);
+      }),
+    ["rechecks.workflow.ts"],
+  ));
+
+test("a checkout park does not clear while origin's branch it was pushed to is gone", () =>
+  proves(
+    "collie-recovery-pruned-",
+    (world) =>
+      Effect.gen(function* () {
+        const git = (...args: Array<string>) => exec(["git", ...args], { cwd: world.project });
+        const commit = (...args: Array<string>) =>
+          git("-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-qm", ...args);
+        yield* commit("initial", "--allow-empty");
+        const origin = `${world.home}/origin.git`;
+        yield* git("init", "-q", "--bare", origin);
+        const branch = Str.trim((yield* git("rev-parse", "--abbrev-ref", "HEAD")).stdout);
+        yield* git("remote", "add", "origin", origin);
+        const started = yield* collie(
+          world,
+          [
+            "run",
+            "start",
+            "rechecks",
+            "--input",
+            "cause=checkout-dirty-collie",
+            "--input",
+            "mr=",
+            "--input",
+            `file=${world.home}/fact`,
+          ],
+          { COLLIE_RECOVERY_EVERY: "2 seconds" },
+        );
+        expect(started.envelope).toMatchObject({ ok: true });
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
+        const runId = runs[0]!.runId;
+        yield* until(
+          () => client.run({ runId }).pipe(Effect.orDie),
+          (view) => view?.parked !== null,
+        );
+        // WARNING: the branch is pushed and then deleted at origin, so this checkout's remote ref is a lie.
+        yield* git("push", "-q", "origin", `HEAD:refs/heads/${branch}`);
+        yield* git("--git-dir", origin, "update-ref", "-d", `refs/heads/${branch}`);
+        const rechecked = yield* until(
+          () => client.runMetrics({ runId }).pipe(Effect.orDie),
+          (lines) => Arr.filter(lines, (line) => line.action === "rechecked").length >= 2,
+        );
+        expect(Arr.some(rechecked, (line) => line.outcome === "cleared")).toBe(false);
+        expect(Arr.some(rechecked, (line) => line.action === "resumed")).toBe(false);
+        yield* (yield* FileSystem.FileSystem)
+          .writeFileString(`${world.home}/fact`, "ready")
+          .pipe(Effect.orDie);
+        yield* git("push", "-q", "origin", `HEAD:refs/heads/${branch}`);
+        const done = yield* until(
+          () => client.run({ runId }).pipe(Effect.orDie),
+          (view) => view?.status.status === "complete",
+        );
+        expect(done?.status.status).toBe("complete");
       }),
     ["rechecks.workflow.ts"],
   ));

@@ -29,17 +29,23 @@ host resets it (`git reset --hard`) and logs
 `moved the checkout from <from> to <head>, which origin's <branch> no longer carries`.
 The commit is not lost: the forge carried it. Published means either of these:
 
-- origin's remote-tracking branch for this branch has carried that commit — it is in that
-  ref's reflog, or it descends from a commit that is;
+- origin's remote-tracking branch for this branch has carried that commit — the commit is
+  one of that ref's reflog entries, or one of their ancestors — or that ref still carries
+  the checkout's own head, however far past it the forge has since moved the branch;
 - this Run recorded it as a head earlier, journaled in the Run's own `heads.jsonl`, which
   covers a reflog that was expired or a ref fetched fresh.
 
+A reset that would write over a file the checkout keeps out of git — an ignored file at a
+path the new head tracks — is refused instead, naming those files under
+`branch-force-pushed`: `git status --porcelain` does not show them, so only the reset would
+have destroyed them.
+
 **D3. A checkout holding commits that were never published is not reset.** The refusal
-names each commit at risk that origin never carried, by short sha and subject, and carries
+names every commit at risk that origin never carried, by short sha and subject, and carries
 the park cause `branch-force-pushed` — a needs-you cause that never heals. Release and
 Stage park under the cause the refusal carries. Refusals this decision does not type — a
-wrong branch, an unreadable checkout, a head origin lacks, a failed merge, an uncommitted
-tree — keep `release-failed`.
+wrong branch, an unreadable checkout, a head origin lacks, a failed merge — keep
+`release-failed`; a dirty or unpushed checkout is typed by D5.
 
 **D4. What still fast-forwards still does.** A checkout behind the head fast-forwards as
 before, and a stale journaled head the checkout already carries still answers `At`.
@@ -56,7 +62,9 @@ Collie resets neither, and a human's checkout it never touches at all.
 agent to commit the work and push it with a plain push, reads the checkout again, and parks
 `checkout-dirty-collie` only when that leaves it dirty or ahead. The park's recheck is
 the tree being clean **and** origin's branch carrying its head, so a clean checkout whose
-commit was never pushed stays parked and resumes by itself once the push lands.
+commit was never pushed stays parked and resumes by itself once the push lands. The read
+that refuses is taken inside the Activity that parks, which never completes: a resume reads
+Git again rather than replaying the refusal and the round that already ran.
 
 ## Alternatives rejected
 

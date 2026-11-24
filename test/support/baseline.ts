@@ -14466,7 +14466,7 @@ const pushedBySomebody = (parent: string, force = false) =>
   });
 
 const tagRun = (merged: string) => ({ ref: "v1.2.0", sha: merged });
-// WARNING: a rebase keeps the tree and changes the parent, so the new head descends from neither the old head nor the target.
+// WARNING: a rebase keeps the tree and changes the parent, so the target must not carry the old head.
 const rebasedBySomebody = (parent: string) =>
   Effect.gen(function* () {
     const cwd = rig.projectDir;

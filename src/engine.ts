@@ -296,6 +296,7 @@ import {
   checkoutFor,
   checkoutRefusal,
   defaultStart,
+  isTheOneMade,
   pinnedCheckout,
   repositoryName,
   workOf,
@@ -1324,14 +1325,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly cwd: string;
       readonly commits: ReadonlyArray<string>;
     }) => Effect.Effect<ReviewHead, WorkflowError>;
-    /** Fast-forwards the checkout to \`head\`, or refuses, resetting nothing. Take it inside an Activity. */
+    /** Brings the checkout to \`head\` after the Run's agents there stop, resetting it only where the checkout's own head was published. Take it inside an Activity. */
     readonly fastForward: (options: {
       readonly runId: string;
       readonly cwd: string;
       readonly head: string;
       /** Where supplied, require this source branch before moving the checkout. */
-      readonly branch?: string;
-    }) => Effect.Effect<FastForward, WorkflowError>;
+      readonly branch?: string;    }) => Effect.Effect<FastForward, WorkflowError>;
     /** Reads \`tag\` back from origin and the forge against what it must prove. Take it inside an Activity. */
     readonly readTag: (options: {
       readonly runId: string;
@@ -4476,12 +4476,15 @@ export const hostLayer: (options: {
             Duration.toMillis(options.collectMs ?? Duration.minutes(120));
           let told = false;
           for (;;) {
-            const alive = yield* herdr.agentList().pipe(
-              Effect.orElseSucceed(() => []),
-              Effect.provideContext(bun),
-            );
-            const busy = Arr.filter(mine, (one) => workingIn(one, alive, cwd));
-            if (busy.length === 0) {
+            const listed = yield* Effect.result(herdr.agentList().pipe(Effect.provideContext(bun)));
+            const busy =
+              listed._tag === "Failure"
+                ? mine
+                : Arr.filter(mine, (one) => workingIn(one, listed.success, cwd));
+            if (yield* set(STOP, runId)) {
+              return "stopped" as const;
+            }
+            if (listed._tag === "Success" && busy.length === 0) {
               return "clear" as const;
             }
             if (!told) {
@@ -4490,14 +4493,13 @@ export const hostLayer: (options: {
                 appendLog(
                   runDir(dir, runId),
                   `waiting for ${Arr.join(
-                    Arr.map(busy, (one) => one.agent),
+                    Arr.map(listed._tag === "Failure" ? mine : busy, (one) => one.agent),
                     ", ",
-                  )} to stop working in ${cwd}`,
+                  )} to stop working in ${cwd}${
+                    listed._tag === "Failure" ? `, where core cannot list its agents yet` : ""
+                  }`,
                 ),
               );
-            }
-            if (yield* set(STOP, runId)) {
-              return "stopped" as const;
             }
             if ((yield* Clock.currentTimeMillis) >= deadline) {
               return "overrun" as const;
@@ -4505,20 +4507,19 @@ export const hostLayer: (options: {
             yield* Effect.sleep(AGENT_WAIT_POLL);
           }
         });
-      const madeByCollie = (runId: string, cwd: string) =>
+      const madeByCollie = (cwd: string) =>
         Effect.gen(function* () {
-          const row = yield* store.run(runId);
-          if (row === null) {
-            return false;
+          for (const row of yield* store.runs) {
+            const worktree = placedOf(row, {}).worktree;
+            if (
+              worktree !== null &&
+              worktree.path === cwd &&
+              (yield* under(isTheOneMade(cwd, worktree)))
+            ) {
+              return true;
+            }
           }
-          const launch = yield* decodeStrings(row.options ?? "{}").pipe(
-            Effect.orElseSucceed(() => {
-              const none: Record<string, string> = {};
-              return none;
-            }),
-          );
-          const worktree = placedOf(row, launch).worktree;
-          return worktree !== null && worktree.created_by_collie && worktree.path === cwd;
+          return false;
         });
       const reviewing = (runId: string) =>
         Effect.gen(function* () {
@@ -6432,7 +6433,7 @@ export const hostLayer: (options: {
                 cwd: asked.cwd,
                 head: asked.head,
                 branch: asked.branch,
-                createdByCollie: yield* madeByCollie(asked.runId, asked.cwd),
+                createdByCollie: yield* madeByCollie(asked.cwd),
                 run: runShell,
               }),
             );

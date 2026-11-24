@@ -22,6 +22,8 @@ const atMost = (named: ReadonlyArray<string>) =>
     named.length > NAMED ? ` and ${named.length - NAMED} more` : ""
   }`;
 
+const nul = (text: string) => Arr.filter(Str.split(text, "\0"), (one) => one !== "");
+
 const changedFiles = (porcelain: string) =>
   atMost(
     Arr.map(
@@ -31,7 +33,7 @@ const changedFiles = (porcelain: string) =>
   );
 
 const commitsLike = (log: string) =>
-  atMost(
+  Arr.join(
     Arr.map(
       Arr.filter(Str.split(Str.trim(log), "\n"), (one) => Str.trim(one) !== ""),
       (one) => {
@@ -39,6 +41,7 @@ const commitsLike = (log: string) =>
         return `${short(sha)} ${Arr.join(subject, " ")}`;
       },
     ),
+    ", ",
   );
 
 const HeadJson = Schema.fromJsonString(Schema.String);
@@ -48,6 +51,27 @@ export const FastForwardSchema = Schema.Union([
   Schema.TaggedStruct("Refused", { why: Schema.String, cause: ParkCause }),
 ]);
 export type FastForward = typeof FastForwardSchema.Type;
+
+// WARNING: a Release started before the refusal carried a cause saved the head alone.
+export const SavedAlignmentSchema = Schema.Union([FastForwardSchema, Schema.String]);
+export type SavedAlignment = typeof SavedAlignmentSchema.Type;
+
+const AtSchema = Schema.TaggedStruct("At", { head: Schema.String, from: Schema.String });
+
+const RefusedSchema = Schema.TaggedStruct("Refused", { why: Schema.String, cause: ParkCause });
+
+const textOf: (saved: SavedAlignment) => string | null = (saved) =>
+  Option.getOrNull(Schema.decodeUnknownOption(Schema.String)(saved));
+
+const atOf: (saved: SavedAlignment) => typeof AtSchema.Type | null = (saved) =>
+  Option.getOrNull(Schema.decodeUnknownOption(AtSchema)(saved));
+
+const refusedOf: (saved: SavedAlignment) => typeof RefusedSchema.Type | null = (saved) =>
+  Option.getOrNull(Schema.decodeUnknownOption(RefusedSchema)(saved));
+
+export const savedHead = (saved: SavedAlignment) => textOf(saved) ?? atOf(saved)?.head ?? null;
+
+export const savedRefusalWhy = (saved: SavedAlignment) => refusedOf(saved)?.why ?? null;
 
 // WARNING: a checkout at origin's tip carrying a stale journaled head answers At, not a refusal.
 export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts: {
@@ -102,8 +126,8 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
     const where = named === null ? "origin" : `origin's ${named}`;
     const atOrigin =
       named !== null &&
-      Str.trim((yield* git(["rev-parse", "--verify", `refs/remotes/origin/${named}`])).stdout) ===
-        from;
+      (yield* git(["merge-base", "--is-ancestor", from, `refs/remotes/origin/${named}`])).code ===
+        0;
     if ((yield* git(["merge-base", "--is-ancestor", opts.head, from])).code === 0) {
       if (atOrigin) {
         yield* appendLog(
@@ -141,6 +165,16 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
     if (lost.length > 0) {
       return refused(
         `the checkout at ${opts.cwd} holds commits ${where} never carried, so it is not taken as ${short(opts.head)}: ${commitsLike(Arr.join(lost, "\n"))}`,
+        "branch-force-pushed",
+      );
+    }
+    const ignored = yield* git(["ls-files", "--others", "--ignored", "--exclude-standard", "-z"]);
+    const tracked = yield* git(["ls-tree", "-r", "--name-only", "-z", opts.head]);
+    const carried = new Set(nul(tracked.stdout));
+    const replaced = Arr.filter(nul(ignored.stdout), (one) => carried.has(one));
+    if (replaced.length > 0) {
+      return refused(
+        `the reset to ${short(opts.head)} would overwrite files the checkout keeps out of git: ${atMost(replaced)}`,
         "branch-force-pushed",
       );
     }
