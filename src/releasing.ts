@@ -33,7 +33,7 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
 }) {
   const git = (args: Array<string>) => opts.run("git", args, opts.cwd);
   const heads = runJournal(opts.runDir, "heads.jsonl");
-  const refused: (why: string, cause?: typeof ParkCause.Type) => FastForward = (
+  const refused: (why: string, cause?: ParkCause) => FastForward = (
     why,
     cause = "release-failed",
   ) => ({ _tag: "Refused", why, cause });
@@ -107,7 +107,7 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
       return refused(
         `the checkout at ${opts.cwd} holds commits ${where} never carried, so it is not taken as ${short(opts.head)}: ${Arr.join(
           Arr.map(lost, (one) => {
-            const [sha = "", ...subject] = Str.split(one, " ");
+            const [sha, ...subject] = Str.split(one, " ");
             return `${short(sha)} ${Arr.join(subject, " ")}`;
           }),
           "; ",
