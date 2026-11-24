@@ -1228,12 +1228,12 @@ test("a usage-wait park rechecks room, naming the Subscription and when it reset
   const herdr = { agentList: () => Effect.die("a usage wait asks core nothing") };
   return runEffect(
     Effect.gen(function* () {
-      expect(yield* recheckPark(view, "/nowhere", herdr, Effect.succeed(false))).toEqual({
+      expect(yield* recheckPark(view, "/nowhere", herdr, () => Effect.succeed(false))).toEqual({
         cleared: false,
         note: "claude has no room until 2099-01-01T15:45:00Z",
         error: false,
       });
-      expect(yield* recheckPark(view, "/nowhere", herdr, Effect.succeed(true))).toEqual({
+      expect(yield* recheckPark(view, "/nowhere", herdr, () => Effect.succeed(true))).toEqual({
         cleared: true,
         note: "claude has room",
         error: false,

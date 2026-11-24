@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -33,7 +34,8 @@ let path: Path.Path;
 let dir: string;
 
 const claude = COMPACTION_PORTS.claude!;
-const marked = (id: string) => ({ id, session: null, transcript: null });
+const marked = (id: string) => ({ id, session: null, launch: null, transcript: null });
+const markedOn = (id: string, launch: string) => ({ id, session: null, launch, transcript: null });
 const prompted: Array<string> = [];
 
 const ctx = () => ({
@@ -681,22 +683,28 @@ test("the StopFailure hook is installed only on a Claude known to have it, for e
 
 const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
-const lostCompletion = (transcript: (askedIso: string) => string) =>
+const lostCompletion = (
+  transcript: (askedIso: string) => string,
+  written: { unmarked?: boolean } = {},
+) =>
   Effect.gen(function* () {
     const control = `${rig.stateDir}/compaction/build-r1`;
     const asked = (yield* Clock.currentTimeMillis) - 11 * 60_000;
     const file = path.join(rig.root, "s-1.jsonl");
     yield* fs.writeFileString(file, transcript(isoAt(asked + 60_000)));
     yield* fs.makeDirectory(control, { recursive: true });
+    const attempt = {
+      id: "req-1",
+      run: "run-1",
+      step: "02-ui",
+      deadline: asked + 5 * 60_000,
+      asked,
+      session: "s-1",
+      transcript: written.unmarked === true ? undefined : file,
+    };
     yield* fs.writeFileString(
       `${control}/control.json`,
-      asJson({
-        agent: "build-r1",
-        harness: "claude",
-        cwd: rig.projectDir,
-        dir: control,
-        attempt: { id: "req-1", run: "run-1", step: "02-ui", deadline: asked + 5 * 60_000, asked },
-      }),
+      asJson({ agent: "build-r1", harness: "claude", cwd: rig.projectDir, dir: control, attempt }),
     );
     yield* recordClaudeEvent(control, asJson({ session_id: "s-1", transcript_path: file }));
     yield* recordClaudeEvent(
@@ -746,8 +754,8 @@ test("a lost completion whose transcript shows no completion of it stays unresol
 const naming = (request: string, at: string) =>
   `{"type":"user","timestamp":"${at}","message":{"role":"user","content":"/compact Keep the work in progress. (collie:${request})"}}`;
 
-const boundaryAt = (at: string) =>
-  `{"type":"system","subtype":"compact_boundary","timestamp":"${at}","compactMetadata":{"trigger":"manual","preTokens":180000}}`;
+const boundaryAt = (at: string, trigger = "manual") =>
+  `{"type":"system","subtype":"compact_boundary","timestamp":"${at}","compactMetadata":{"trigger":"${trigger}","preTokens":180000}}`;
 
 const lostAttempt = (evidence: {
   transcript?: (after: string, asked: string) => string;
@@ -870,6 +878,62 @@ test("two candidate completions settle nothing", () =>
       });
       expect(due).toBeNull();
       expect(left).not.toBeNull();
+    }),
+  ));
+
+test("a lost completion that is an automatic compaction is not the marked request's", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { due, left } = yield* lostAttempt({
+        transcript: (after) => `${naming("req-1", after)}\n${boundaryAt(after, "auto")}\n`,
+      });
+      expect(due).toBeNull();
+      expect(left).not.toBeNull();
+    }),
+  ));
+
+test("the same request named twice in the transcript settles nothing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { due, left } = yield* lostAttempt({
+        transcript: (after) =>
+          `${naming("req-1", after)}\n${naming("req-1", after)}\n${boundaryAt(after)}\n`,
+      });
+      expect(due).toBeNull();
+      expect(left).not.toBeNull();
+    }),
+  ));
+
+test("a transcript the mark did not name is not read, whoever wrote it there", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { due, left } = yield* lostCompletion(
+        (after) => `${naming("req-1", after)}\n${boundaryAt(after)}\n`,
+        { unmarked: true },
+      );
+      expect(due).toBeNull();
+      expect(left).not.toBeNull();
+    }),
+  ));
+
+test("a completion from another launch of the same session does not settle it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const events = [
+        { at: 0, session: "s-1", kind: "session" },
+        { at: 1, session: "s-1", kind: "start", request: "req-1", launch: "l-1" },
+        { at: 2, session: "s-1", kind: "auto", reason: "manual", phase: "post", launch: "l-1" },
+      ];
+      yield* fs.writeFileString(
+        `${dir}/events.jsonl`,
+        `${Arr.join(
+          Arr.map(events, (one) => asJson(one)),
+          "\n",
+        )}\n`,
+      );
+
+      expect(yield* claude.poll(ctx(), markedOn("req-1", "l-1"))).toEqual({ kind: "success" });
+      expect(yield* claude.poll(ctx(), markedOn("req-1", "l-2"))).toBeNull();
     }),
   ));
 

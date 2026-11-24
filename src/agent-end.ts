@@ -145,11 +145,10 @@ const ending = Effect.fnUntraced(function* (
     return {
       _tag: "NotQuiet",
       reason: notStopped(launched.agent, reached.success, reached.success.target),
+      left: reached.success.left,
     } satisfies Ended;
   }
 
-  // WARNING: the incarnation that asked is over, so its compaction can never complete and is cancelled rather than waited on.
-  yield* cancelCompaction(deps, launched.agent, why).pipe(Effect.ignore);
   const pane =
     reached.success === null && closes === "close"
       ? yield* paneProcesses(deps, launched.root, one?.paneId)
@@ -168,6 +167,8 @@ const ending = Effect.fnUntraced(function* (
       .terminalKill(one.paneId)
       .pipe(Effect.mapError((cause) => new PaneOpen({ paneId: one.paneId, cause })));
   }
+  // WARNING: after the close, so a close that failed leaves the agent's compaction exactly as it found it.
+  yield* cancelCompaction(deps, launched.agent, why).pipe(Effect.ignore);
   const stopMs = deps.stopMs ?? STOP_WAIT_MS;
   const left =
     pane === null || "unconfirmed" in pane ? [] : yield* settled(pane.roots, pane.noted, stopMs);

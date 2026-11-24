@@ -2308,7 +2308,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       if (due.dispatch || due.waiting !== true) {
         return due;
       }
-      // WARNING: past its bound the wait parks, and the host's recheck is what reads its completion; polling on would never end.
       yield* note(due.reason);
       const marked = (yield* readControl(host.env.stateDir, launched.agent))?.attempt;
       if (marked !== null && marked !== undefined) {
@@ -2415,6 +2414,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     },
     prompt: string | null,
     session: StartSession | null,
+    label?: string,
   ) {
     const adapter = adapterFor(ask.harness ?? host.harness);
     const wanted = ask.permissions ?? undefined;
@@ -2654,6 +2654,8 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               ...serverEnv,
               ...mcp.env,
               ...(yield* envValues(profile.env ?? {}, host.env.home)),
+              // WARNING: the harness's hooks inherit this, which is how a compaction completion names the launch that asked.
+              COLLIE_LAUNCH: label ?? `${agent}@${yield* Clock.currentTimeMillis}`,
             },
             labels,
           })
@@ -3652,12 +3654,16 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       ),
     );
 
-  const resumable = (adapter: HarnessAdapter, agent: string, id: string, failed: boolean) =>
+  // WARNING: a conversation that took a turn is resumed whatever failed; only the harness saying it has none starts fresh.
+  const resumable = (adapter: HarnessAdapter, agent: string, id: string, noConversation: boolean) =>
     adapter.id === "claude"
       ? Effect.flatMap(controlDir(host.env.stateDir, agent), (dir) =>
-          Effect.map(turnTaken(dir, id), (taken) => taken && !failed),
+          Effect.map(turnTaken(dir, id), (taken) => taken && !noConversation),
         )
       : Effect.succeed(true);
+
+  const noConversation = (why: string | null) =>
+    why !== null && pipe(Str.toLowerCase(why), Str.includes("no conversation found"));
 
   const startedWith = (runId: string, agent: string) =>
     under(RunRecords.use((records) => records.control(RELAUNCH, runId, agent)));
@@ -3771,10 +3777,11 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             : null
           : {
               id: had,
-              resumed: yield* resumable(adapter, agent, had, failures.tried > 0),
+              resumed: yield* resumable(adapter, agent, had, noConversation(failures.last)),
             };
+      const label = `${agent}@${yield* Clock.currentTimeMillis}`;
       const incarnation = yield* Effect.uninterruptible(
-        start(ask, agent, listed, atLaunch ? told : null, session),
+        start(ask, agent, listed, atLaunch ? told : null, session, label),
       );
       if (incarnation === undefined) {
         return [];
@@ -3801,17 +3808,27 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         runId,
         `${agent}: started again on core after core lost it, ${had === null ? "in a new session: none was recorded to resume" : `resuming its ${adapter.id} session ${had}`}`,
       );
-      const late = yield* awaitReady(
+      // WARNING: a launch that came up is no failure; one that never did counts against the cap.
+      const failed = yield* awaitReady(
         compactionDeps(host, runId),
         agent,
         host.readyMs ?? READY_TIMEOUT_MS,
+        { mustStayListed: true, launch: label },
       );
       yield* rememberRelaunch(`${host.dir}/runs/${runId}`, {
         agent,
         at: yield* Clock.currentTimeMillis,
-        why: late ?? "core no longer lists it",
+        why: failed,
       });
       if (told === null || atLaunch) {
+        return [];
+      }
+      if (failed !== null) {
+        // WARNING: text typed before the harness is up is lost, so a launch that never came up is told nothing.
+        yield* log(
+          runId,
+          `${agent}: not told to carry on with ${latest.operation}: it was not ready (${failed})`,
+        );
         return [];
       }
       const tell = Effect.gen(function* () {

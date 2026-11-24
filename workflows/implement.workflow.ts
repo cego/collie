@@ -477,7 +477,6 @@ export default defineWorkflow({
           });
         };
         let plan = yield* readPlan();
-        // WARNING: a resumed attempt reads the plan again, since correcting it is the whole fix.
         while (plan.refusal !== null) {
           refusals += 1;
           yield* unbuilt(`plan-refused-${refusals}`, plan.refusal);
@@ -639,6 +638,8 @@ export default defineWorkflow({
         yield* planning(
           Effect.gen(function* () {
             let refusal = "";
+            let checks = 0;
+            let parks = 0;
             for (let attempt = 1; ; attempt++) {
               const operation = attempt === 1 ? "plan" : `plan-${attempt}`;
               yield* agentWork({
@@ -649,22 +650,28 @@ export default defineWorkflow({
                 input: { ...input, source: sectionOf(`plan.${source.kind}`, input), refusal },
                 output: PlanOutputSchema,
               });
-              const refused = yield* Activity.make({
-                name: `${operation}.check`,
-                success: Schema.NullOr(Schema.String),
-                execute: inlinePlanRefusal(planDir, cwd, source),
-              });
+              const check = () => {
+                checks += 1;
+                return Activity.make({
+                  name: checks === 1 ? `${operation}.check` : `${operation}.check-${checks}`,
+                  success: Schema.NullOr(Schema.String),
+                  execute: inlinePlanRefusal(planDir, cwd, source),
+                });
+              };
+              // WARNING: a corrected plan is read before another planner is asked, which is what the park tells a person to do.
+              let refused = yield* check();
+              while (refused !== null && attempt >= PLAN_TRIES) {
+                parks += 1;
+                yield* unbuilt(
+                  `plan-unbuildable-${parks}`,
+                  `the plan at ${planDir} cannot be built: ${refused}`,
+                );
+                refused = yield* check();
+              }
               if (refused === null) {
                 break;
               }
               refusal = `The plan you wrote cannot be built: ${pipe_(refused, Str.replace(/\.+$/, ""))}. Correct it in place.`;
-              if (attempt >= PLAN_TRIES) {
-                // WARNING: the next attempt is a new pair of Activities, so a corrected plan is read.
-                yield* unbuilt(
-                  `plan-unbuildable-${attempt}`,
-                  `the plan at ${planDir} cannot be built: ${refused}`,
-                );
-              }
             }
             input = { ...input, inputs: { ...input.inputs, plan: planDir, plan_kind: "plan-dir" } };
           }),
@@ -884,7 +891,6 @@ export default defineWorkflow({
                 )}`,
               ),
             );
-            // WARNING: a resumed attempt reads the plan again, since correcting it is the whole fix.
             tickets = yield* ticketsNow;
             continue;
           }
@@ -1244,9 +1250,6 @@ export default defineWorkflow({
           }
         }
         tickets = yield* ticketsNow;
-      }
-      if (build === null && recovery.entry === "Build") {
-        return yield* building(parkStep(`nothing was built. Correct it, then resume ${runId}.`));
       }
       input = { ...input, verify: yield* checksNow };
       // WARNING: work that stayed on its first agent keeps it to the end.

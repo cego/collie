@@ -1468,9 +1468,13 @@ before it, and a path Step the Run expected and never reached ends `not run`.
 The records are Activities, so a replay records nothing twice, and the host is their only
 writer ([ADR-draft-a-step-is-declared-where-its-work-is-written](adr/draft-a-step-is-declared-where-its-work-is-written.md)).
 
-Work that fails in a way a resume can retry parks the Run rather than failing it. Call
-`stepFailed(why)` before parking, and the Step it is in is drawn failed, saying why, until
-the resume enters it again.
+Work that stops on something a person or an agent can correct parks the Run rather than
+failing it: `parkStep(why, cause?)` notes the Step failed with its reason, records the why
+on the Run, and parks under a cause that says who acts (`step-failed` unless the stop is a
+kind of its own), and the Step is drawn failed saying why until a resume enters it again.
+Use it instead of calling `stepFailed`, the host's `parked` and `Workflow.suspend` yourself:
+the order of those three is what makes a park readable, and a park written by hand omits one
+of them.
 
 A module that declares no Steps still runs. Its Run's Flow is what happened — its Operations,
 questions and children, titled by their names — and forecasts nothing.

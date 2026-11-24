@@ -92,7 +92,7 @@ function serve() {
   };
 }
 
-const marked = (id: string) => ({ id, session: null, transcript: null });
+const marked = (id: string) => ({ id, session: null, launch: null, transcript: null });
 
 const ctx = () => ({
   agent: "build-r1",

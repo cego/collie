@@ -1302,14 +1302,6 @@ const killThePane = (herdr: Herdr, runId: string) =>
     }
   });
 
-const exitedAtOnce = (message: string) => ({
-  ...hostOf().ports,
-  claude: {
-    ...claudeControls().claude,
-    ready: () => Effect.fail(new Cause.UnknownError(undefined, message)),
-  },
-});
-
 test("a Claude session that never took a turn is started again under its own id, not resumed, and is given its Step", () =>
   runEffect(
     Effect.gen(function* () {
@@ -1427,7 +1419,7 @@ test("an agent whose harness exits at once is started again only to its cap, and
           const fiber = yield* Effect.forkChild(started("r1"));
           yield* untilStarted;
           yield* acknowledged("r1");
-          for (let tries = 0; tries < 6; tries++) {
+          for (let tries = 1; tries <= RELAUNCH_CAP + 1; tries++) {
             yield* killThePane(herdr, "r1");
             yield* (yield* Agents).resumeLost("r1", runningNow);
           }
@@ -1437,21 +1429,65 @@ test("an agent whose harness exits at once is started again only to its cap, and
           yield* Fiber.interrupt(fiber);
           return yield* controlOf(PARKED, "r1");
         }),
-        {
-          herdr,
-          collectMs: 60_000,
-          readyMs: 200,
-          ports: exitedAtOnce("claude exited 1: No conversation found"),
-        },
+        { herdr, collectMs: 60_000, readyMs: 200, compactAtTokens: 1000 },
       );
       expect(why).toContain("was started again 3 times");
-      expect(why).toContain("core no longer lists it");
-      expect(why).not.toContain("gave no sign");
+      expect(why).toContain("gave no sign");
+      // WARNING: a launch that never came up is not sent the Step, so nothing is lost to its unread prompt.
+      expect(sent(yield* rig.calls(), "Carry on with your step")).toBe(0);
       expect(
         Arr.filter(everyLaunch(yield* rig.calls()), (argv) =>
           Option.contains(Arr.head(argv), "claude"),
         ),
       ).toHaveLength(1 + RELAUNCH_CAP);
+    }),
+  ));
+
+test("a relaunch that comes up is not counted against its cap, however often it is lost", () =>
+  runEffect(
+    Effect.gen(function* () {
+      core.reportedOnly([agentFor("r1")]);
+      yield* rig.queueOutputs([null]);
+      const herdr = new UnseenTurn(rig.pluginEnv());
+      const result = yield* session(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(started("r1"));
+          yield* untilStarted;
+          yield* acknowledged("r1");
+          for (let lost = 1; lost <= RELAUNCH_CAP + 1; lost++) {
+            yield* killThePane(herdr, "r1");
+            yield* (yield* Agents).resumeLost("r1", runningNow);
+            yield* until(
+              rig.cmds().pipe(
+                Effect.orDie,
+                Effect.map(
+                  (cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run").length === lost + 1,
+                ),
+              ),
+            );
+          }
+          const park = yield* controlOf(PARK_CAUSE, "r1");
+          yield* Fiber.interrupt(fiber);
+          return park;
+        }),
+        {
+          herdr,
+          collectMs: 60_000,
+          readyMs: 200,
+          compactAtTokens: 1000,
+          ports: {
+            ...hostOf().ports,
+            // WARNING: the harness of every relaunch comes up, which is what a recovery that worked looks like.
+            claude: { ...claudeControls().claude, ready: () => Effect.succeed(true) },
+          },
+        },
+      );
+      expect(result).not.toBe("relaunch-exhausted");
+      expect(
+        Arr.filter(everyLaunch(yield* rig.calls()), (argv) =>
+          Option.contains(Arr.head(argv), "claude"),
+        ),
+      ).toHaveLength(1 + RELAUNCH_CAP + 1);
     }),
   ));
 
@@ -8380,7 +8416,6 @@ const pastTheWait = <A, E>(
       return { what, result: null };
     }
     yield* until(listingSuspended);
-    // WARNING: past its bound the wait parks, so the host's own resume is what meets the completed compaction.
     const engine = yield* WorkflowEngine.WorkflowEngine;
     yield* engine.resume(listing, yield* listing.executionId({ runId: "r1", input: ITEMS }));
     return { what, result: yield* Fiber.join(fiber) };
@@ -10028,7 +10063,13 @@ test("with no agent profile a launch types and passes what it always has", () =>
             ),
           ],
           (said) =>
-            pipe(said, Str.replaceAll(agentFor(runId), "<agent>"), Str.replaceAll(runId, "<run>")),
+            pipe(
+              said,
+              Str.replaceAll(agentFor(runId), "<agent>"),
+              Str.replaceAll(runId, "<run>"),
+              // WARNING: the launch's own label carries the clock, which two launches never share.
+              Str.replace(/@\d+/, "@<launch>"),
+            ),
         );
       expect(same(after, "r2")).toEqual(same(before, "r1"));
       expect(launchArgs(after)).toContain(`${dir}/agents/r2/review.settings.json`);

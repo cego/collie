@@ -9085,13 +9085,9 @@ scenario(
         yield* repository();
         yield* approve(runId, ["unit"]);
         yield* plansFirst(runId);
-        const good = plannedAs(runId, [
-          { file: "01-first.md", title: "the first one", blockedBy: "None" },
-        ]);
         yield* rig.queueOutputs([
           plannedAs(runId, []),
           plannedAs(runId, []),
-          good,
           BUILT,
           CLEAN_SYNTHESIS,
           OPENED,
@@ -9108,6 +9104,14 @@ scenario(
               expect(parked.status).toBe("suspended");
               expect(yield* parkedCause(runId)).toBe("step-failed");
               expect(yield* operationsOf(runId)).toEqual(["plan", "plan-2"]);
+              // WARNING: the park tells a person to correct the plan in place, which is what a resume must read.
+              const fs = yield* FileSystem.FileSystem;
+              yield* fs.makeDirectory(`${runDir(dir, runId)}/plan/issues`, { recursive: true });
+              yield* fs.writeFileString(`${runDir(dir, runId)}/plan/SPEC.md`, "# The spec\n");
+              yield* fs.writeFileString(
+                `${runDir(dir, runId)}/plan/issues/01-first.md`,
+                "# the first one\n\n**Checks:** unit\n",
+              );
               yield* run.resume;
               const [done] = yield* until(
                 () => Effect.zip(run.status, parkedWhy(runId)),
@@ -9116,14 +9120,7 @@ scenario(
               expect(done.status).toBe("complete");
             }),
         );
-        expect(yield* operationsOf(runId)).toEqual([
-          "plan",
-          "plan-2",
-          "plan-3",
-          "build",
-          "review-1",
-          "mr",
-        ]);
+        expect(yield* operationsOf(runId)).toEqual(["plan", "plan-2", "build", "review-1", "mr"]);
       }),
     ),
 );

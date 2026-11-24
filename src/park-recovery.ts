@@ -99,7 +99,8 @@ export const recoverParks = <E, R>(opts: {
     request: string,
     park: string,
   ) => Effect.Effect<{ readonly applied: boolean }, E, R>;
-  readonly hasRoom: Effect.Effect<boolean>;
+  // WARNING: room is asked for the Run's own agents' accounts, so one account's recovery clears the Run that waits on it.
+  readonly hasRoom: (view: { readonly runId: string }) => Effect.Effect<boolean, never, never>;
 }) =>
   Effect.gen(function* () {
     const every = yield* Config.Duration("COLLIE_RECOVERY_EVERY").pipe(

@@ -21,7 +21,7 @@ let dir: string;
 const pi = COMPACTION_PORTS.pi!;
 
 const prompted: Array<string> = [];
-const marked = (id: string) => ({ id, session: null, transcript: null });
+const marked = (id: string) => ({ id, session: null, launch: null, transcript: null });
 
 const ctx = () => ({
   agent: "reuse-run-two-r1",

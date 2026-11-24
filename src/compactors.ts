@@ -5,6 +5,8 @@ import { pipe } from "effect/Function";
 import {
   Cache,
   Cause,
+  Config,
+  ConfigProvider,
   Clock,
   Context,
   Data,
@@ -139,6 +141,8 @@ const EventSchema = Schema.Struct({
   reason: Schema.optionalKey(Schema.String),
   // WARNING: Claude's PostCompact carries no marker, so a completion is told from its start by position.
   phase: Schema.optionalKey(Schema.Literals(["pre", "post"])),
+  // WARNING: a relaunched agent reuses its session id, so a boundary only counts for the launch it came from.
+  launch: Schema.optionalKey(Schema.NullOr(Schema.String)),
   // WARNING: Codex's compaction endpoint takes only a thread, so this before-list supplies the correlation.
   items: Schema.optionalKey(Schema.Array(Schema.String)),
   limits: Schema.optionalKey(StatusLineLimits),
@@ -194,23 +198,28 @@ const readEvents = Effect.fn("Compactors.readEvents")(function* (dir: string) {
 });
 
 // WARNING: Claude writes a --session-id conversation only on its first submitted turn, so an id with none cannot be resumed.
+// WARNING: the turn record outlives the telemetry cap; a relaunch reads it to know the session has a conversation.
+const TURNS = "turns.jsonl";
+
+// WARNING: the hook runs inside the harness's process, so the launch Collie gave it is in the environment it inherited.
+const launchLabel = Config.String("COLLIE_LAUNCH").pipe(
+  Config.withDefault(""),
+  Effect.map((one) => (one === "" ? null : one)),
+  Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv()),
+);
+
 export const turnTaken = Effect.fn("Compactors.turnTaken")(function* (
   dir: string,
   session: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const file = path.join(dir, TELEMETRY);
-  if (!(yield* fs.exists(file))) {
+  const turns = path.join(dir, TURNS);
+  if (!(yield* fs.exists(turns))) {
     return false;
   }
-  const text = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
-  return Arr.some(Str.split(text, "\n"), (line) => {
-    const event = decodeEvent(line);
-    return (
-      event._tag === "Some" && event.value.kind === "submit" && event.value.session === session
-    );
-  });
+  const taken = yield* fs.readFileString(turns).pipe(Effect.orElseSucceed(() => ""));
+  return Arr.some(Str.split(taken, "\n"), (line) => Str.trim(line) === session);
 });
 
 // WARNING: a status line writes on every event, so an append-only file would be tens of thousands of lines by lunchtime.
@@ -286,6 +295,12 @@ export const writeEvent = Effect.fn("Compactors.writeEvent")(function* (
         KEEP_LINES - 2,
       );
       // WARNING: read from what survives the trim, so a binding the cap removed is put back by this write.
+      // WARNING: the turn record outlives the telemetry cap, which is what a relaunch reads to know a session has a conversation.
+      if (event.kind === "submit" && event.session !== null) {
+        yield* fs.writeFileString(path.join(dir, TURNS), `${event.session}\n`, {
+          flag: "a",
+        });
+      }
       const bound = boundSession(older);
       const rebinds = bound !== event.session && event.kind !== "session";
       const session = rebinds
@@ -343,9 +358,16 @@ function boundSession(lines: ReadonlyArray<string>) {
   return returned;
 }
 
+// WARNING: the telemetry outlives a launch, so a relaunch's readiness is an event of that launch.
 const reported = (ctx: ReadyContext) =>
   readEvents(ctx.dir).pipe(
-    Effect.map((events) => events.length > 0),
+    Effect.map(
+      (events) =>
+        events.length > 0 &&
+        (ctx.launch === null ||
+          ctx.launch === undefined ||
+          Arr.some(events, (one) => one.launch === ctx.launch)),
+    ),
     Effect.orElseSucceed(() => false),
   );
 
@@ -885,6 +907,9 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
   }
   const payload = decoded.value;
   const session = payload.session_id ?? null;
+  const launch = yield* launchLabel;
+  const record = (event: Omit<TelemetryEvent, "at" | "launch">) =>
+    recordEvent(dir, { launch, ...event });
   const window = payload.context_window ?? null;
   const measured = (window?.current_usage ?? null) !== null;
   const tokens = measured
@@ -896,8 +921,7 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
     // WARNING: the prompt is not stored whole; only who submitted it is kept.
     const prompt = payload.prompt ?? "";
     const delivery = carriedDelivery(prompt);
-    yield* recordEvent(
-      dir,
+    yield* record(
       Arr.some(CLAUDE_INJECTED, (tag) => pipe(prompt, Str.startsWith(tag)))
         ? { session, kind: "submit", reason: "harness" }
         : delivery === null
@@ -933,14 +957,14 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
     // WARNING: StopFailure fires once Claude has given up on the turn; an overload stops nothing.
     const error = payload.error ?? "unknown";
     if (error === "rate_limit" || error === "billing_error") {
-      yield* recordEvent(dir, {
+      yield* record({
         session,
         kind: "out",
         reason: (yield* lastFullWindow(dir)) ?? error,
         ...(transcript && { transcript }),
       });
     } else if (error !== "overloaded") {
-      yield* recordEvent(dir, {
+      yield* record({
         session,
         kind: "stopped",
         reason: payload.error_details ?? error,
@@ -954,10 +978,9 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
       event === "PreCompact" && payload.trigger === "manual"
         ? CLAUDE_MARKER.exec(payload.custom_instructions ?? "")?.[1]
         : undefined;
-    yield* recordEvent(
-      dir,
+    yield* record(
       request
-        ? { session, kind: "start", request }
+        ? { session, kind: "start", request, ...(transcript && { transcript }) }
         : {
             session,
             kind: "auto",
@@ -969,7 +992,7 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
   }
 
   const limits = Option.getOrUndefined(decodeLimits(payload.rate_limits));
-  yield* recordEvent(dir, {
+  yield* record({
     session,
     kind: "usage",
     tokens,
@@ -984,7 +1007,7 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
     (one) => one.kind === "out",
   );
   if (full && !told) {
-    yield* recordEvent(dir, {
+    yield* record({
       session,
       kind: "out",
       reason: (yield* lastFullWindow(dir)) ?? "a window at 100%",
@@ -1028,6 +1051,7 @@ export const claudeMark = Effect.fn("Compactors.claudeMark")(function* (dir: str
   );
   return {
     session: bound?.session ?? null,
+    launch: bound?.launch ?? null,
     transcript:
       Option.getOrUndefined(Arr.findLast(events, (event) => event.transcript !== undefined))
         ?.transcript ?? null,
@@ -1037,13 +1061,13 @@ export const claudeMark = Effect.fn("Compactors.claudeMark")(function* (dir: str
 // WARNING: PostCompact carries nothing of the request, so only the marked start's own session finishing it counts.
 const claudeOutcome = Effect.fn("Compactors.claudeOutcome")(function* (dir: string, mark: Marked) {
   const events = yield* readEvents(dir);
+  const fromMarked = (event: TelemetryEvent) =>
+    (mark.session === null || event.session === mark.session) &&
+    (mark.launch === null || event.launch === mark.launch);
   const at = Option.getOrElse(
     Arr.findLastIndex(
       events,
-      (event) =>
-        event.kind === "start" &&
-        event.request === mark.id &&
-        (mark.session === null || event.session === mark.session),
+      (event) => event.kind === "start" && event.request === mark.id && fromMarked(event),
     ),
     () => -1,
   );
@@ -1055,7 +1079,6 @@ const claudeOutcome = Effect.fn("Compactors.claudeOutcome")(function* (dir: stri
     if (event.kind === "cancelled" && event.request === mark.id) {
       return { kind: "failure", reason: event.reason ?? "its compaction was cancelled" } as const;
     }
-    // WARNING: another request's start is not this request's completion, whichever way it ends.
     if (event.kind === "start") {
       return null;
     }
@@ -1065,7 +1088,8 @@ const claudeOutcome = Effect.fn("Compactors.claudeOutcome")(function* (dir: stri
     if (event.phase === "pre") {
       return null;
     }
-    if (event.session !== incarnation) {
+    // WARNING: another launch of the same conversation is another agent's compaction, not this request's.
+    if (event.session !== incarnation || !fromMarked(event)) {
       return null;
     }
     // WARNING: a hole since the request leaves it unresolved, not a success.
@@ -1080,17 +1104,13 @@ const claudeReconcile = Effect.fn("Compactors.claudeReconcile")(function* (
   mark: Marked,
   since: number,
 ) {
-  const transcript =
-    mark.transcript ??
-    Option.getOrUndefined(
-      Arr.findLast(yield* readEvents(dir), (event) => event.transcript !== undefined),
-    )?.transcript;
-  if (transcript === null || transcript === undefined) {
+  if (mark.transcript === null) {
     return null;
   }
-  const text = yield* (yield* FileSystem.FileSystem).readFileString(transcript);
+  const text = yield* (yield* FileSystem.FileSystem).readFileString(mark.transcript);
   const lines = Str.split(text, "\n");
   let named = false;
+  let markers = 0;
   let candidates = 0;
   for (const line of lines) {
     const entry = Option.getOrUndefined(decodeTranscriptLine(line));
@@ -1100,13 +1120,18 @@ const claudeReconcile = Effect.fn("Compactors.claudeReconcile")(function* (
     const request = Str.isEmpty(line) ? null : namedRequest(line);
     if (entry.type === "user" && request !== null) {
       named = request === mark.id;
+      markers += named ? 1 : 0;
       continue;
     }
-    if (named && boundary(entry) && epochMs(entry.timestamp) >= since && (candidates += 1) > 1) {
-      return null;
+    // WARNING: an automatic compaction is the harness tidying itself, never the request Collie made.
+    if (named && manualBoundary(entry) && epochMs(entry.timestamp) >= since) {
+      candidates += 1;
+      if (candidates > 1) {
+        return null;
+      }
     }
   }
-  return candidates === 1 ? ({ kind: "success" } as const) : null;
+  return markers === 1 && candidates === 1 ? ({ kind: "success" } as const) : null;
 });
 
 const lastFullWindow = Effect.fn("Compactors.lastFullWindow")(function* (dir: string) {
@@ -1224,22 +1249,28 @@ const transcriptCompacted = Effect.fn("Compactors.transcriptCompacted")(function
   }
   const text = yield* (yield* FileSystem.FileSystem).readFileString(transcript);
   let named = false;
+  let markers = 0;
+  let candidates = 0;
   for (const line of Str.split(text, "\n")) {
     const entry = Option.getOrUndefined(decodeTranscriptLine(line));
     if (entry === undefined) {
       continue;
     }
-    // WARNING: a boundary the transcript does not tie to this request is time, not proof.
+    // WARNING: a boundary the transcript does not tie to this request is time, not proof; two of either is none.
     const request = namedRequest(line);
     if (request !== null) {
       named = request === mark.id;
+      markers += named ? 1 : 0;
       continue;
     }
     if (named && boundary(entry) && epochMs(entry.timestamp) >= since) {
-      return { kind: "success" } as const;
+      candidates += 1;
+      if (candidates > 1) {
+        return null;
+      }
     }
   }
-  return null;
+  return markers === 1 && candidates === 1 ? ({ kind: "success" } as const) : null;
 });
 
 const MARK_REQUEST = /\(collie:([A-Za-z0-9-]+)\)|\/collie-compact ([A-Za-z0-9-]+)/;
@@ -1252,11 +1283,20 @@ const namedRequest = (line: string) => {
 const boundary = (line: { readonly type?: string; readonly subtype?: string }) =>
   line.type === "system" && line.subtype === "compact_boundary";
 
+const manualBoundary = (line: {
+  readonly type?: string;
+  readonly subtype?: string;
+  readonly compactMetadata?: { readonly trigger?: string };
+}) => boundary(line) && line.compactMetadata?.trigger !== "auto";
+
 const decodeTranscriptLine = Schema.decodeUnknownOption(
   Schema.fromJsonString(
     Schema.Struct({
       type: Schema.optionalKey(Schema.String),
       subtype: Schema.optionalKey(Schema.String),
+      compactMetadata: Schema.optionalKey(
+        Schema.Struct({ trigger: Schema.optionalKey(Schema.String) }),
+      ),
       timestamp: Schema.String,
     }),
   ),

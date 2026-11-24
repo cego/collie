@@ -726,6 +726,7 @@ test("a stopped agent's compaction is recorded as cancelled, no later boundary s
       const settled = yield* COMPACTION_PORTS.claude!.poll(ctx(control), {
         id: "build-r1-1",
         session: null,
+        launch: null,
         transcript: null,
       });
       const cleared = yield* recheckPark(lostPark(stateDir), stateDir, {

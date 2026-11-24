@@ -183,7 +183,7 @@ export const recheckPark = (
     Partial<Pick<RunView, "input" | "strategies" | "usage">>,
   stateDir: string,
   herdr: Pick<Herdr, "agentList">,
-  hasRoom?: Effect.Effect<boolean>,
+  hasRoom?: (view: { readonly runId: string }) => Effect.Effect<boolean, never, never>,
 ) =>
   Effect.gen(function* () {
     switch (view.park?.cause) {
@@ -350,7 +350,7 @@ export const recheckPark = (
         }
         const account = view.usage?.account ?? "an account";
         const resetsAt = view.usage?.resetsAt ?? null;
-        return (yield* hasRoom)
+        return (yield* hasRoom(view))
           ? reply(true, `${account} has room`)
           : reply(false, `${account} has no room${resetsAt === null ? "" : ` until ${resetsAt}`}`);
       }

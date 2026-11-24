@@ -145,7 +145,7 @@ function why<A, E>(result: Result.Result<A, E>) {
   return Result.isFailure(result) ? reason(result.failure) : "";
 }
 
-const marked = (id: string) => ({ id, session: null, transcript: null });
+const marked = (id: string) => ({ id, session: null, launch: null, transcript: null });
 
 const ctx = () => ({
   agent: "build-r1",

@@ -97,6 +97,8 @@ export interface LaunchContext {
 export interface Marked {
   readonly id: string;
   readonly session: string | null;
+  // WARNING: a session id is reused by a relaunch, so the launch is what tells two incarnations apart.
+  readonly launch: string | null;
   readonly transcript: string | null;
 }
 
@@ -132,6 +134,8 @@ export interface Installed {
 
 export interface ReadyContext extends LaunchContext {
   endpoint: string | null;
+  // WARNING: a relaunch's events outlive the last incarnation, so what is ready is the launch that asked.
+  readonly launch?: string | null;
 }
 
 export const StopStates = ["submitted", "acknowledged", "quiet", "failed"] as const;
@@ -202,10 +206,12 @@ export interface CompactionPort {
     mark: Marked,
     since: number,
   ) => Effect.Effect<CompactionOutcome | null, PortError, PortServices>;
-  readonly mark?: (
-    ctx: AgentContext,
-  ) => Effect.Effect<
-    { readonly session: string | null; readonly transcript: string | null },
+  readonly mark?: (ctx: AgentContext) => Effect.Effect<
+    {
+      readonly session: string | null;
+      readonly launch: string | null;
+      readonly transcript: string | null;
+    },
     PortError,
     PortServices
   >;
@@ -235,6 +241,7 @@ const AttemptSchema = Schema.Struct({
   deadline: Schema.Finite,
   asked: Schema.optionalKey(Schema.Finite),
   session: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  launch: Schema.optionalKey(Schema.NullOr(Schema.String)),
   transcript: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 const ControlSchema = Schema.Struct({
@@ -493,6 +500,20 @@ const stopRecord = Effect.fn("Compaction.stopRecord")(function* (
   const reached = now.turns === null ? { ...now, turns: record.stop?.turns ?? null } : now;
   if (reached.state === "quiet") {
     yield* note(`${record.agent}: quiet — ${stopFacts(target, reached.turns)}`);
+    // WARNING: the disposition is written before the controls go, or a stopped agent's attempt is left as if it may finish.
+    const give = deps.ports[record.harness]?.cancel;
+    if (record.attempt !== null && give !== undefined) {
+      yield* give(
+        readingContext(record, record.attempt.run),
+        {
+          id: record.attempt.id,
+          session: record.attempt.session ?? null,
+          launch: record.attempt.launch ?? null,
+          transcript: record.attempt.transcript ?? null,
+        },
+        `${record.agent} was stopped`,
+      ).pipe(Effect.orElseSucceed(() => void 0));
+    }
     const fs = yield* FileSystem.FileSystem;
     yield* fs.remove(record.dir, { recursive: true, force: true });
   } else {
@@ -691,30 +712,49 @@ export const lostServer = Effect.fn("Compaction.lostServer")(function* (
 
 // WARNING: herdr answers agent start before the harness draws its prompt, so text typed early is lost.
 export const awaitReady = Effect.fn("Compaction.awaitReady")(function* (
-  deps: Pick<CompactionDeps, "ports" | "stateDir" | "log" | "pollMs">,
+  deps: Pick<CompactionDeps, "ports" | "stateDir" | "log" | "pollMs" | "herdr">,
   agent: string,
   budgetMs: number,
+  options?: { readonly mustStayListed?: boolean; readonly launch?: string | null },
 ) {
+  // WARNING: a relaunch is asked to stay listed, since a harness that exits at once is gone from core before it is ready.
+  const listed = () =>
+    options?.mustStayListed !== true
+      ? Effect.succeed(true)
+      : deps.herdr.agentList().pipe(
+          Effect.map((agents) => Arr.some(agents, (one) => one.name === agent)),
+          Effect.orElseSucceed(() => true),
+        );
   const record = yield* readControl(deps.stateDir, agent);
   const ready = record === null ? undefined : deps.ports[record.harness]?.ready;
   if (record === null || ready === undefined) {
     yield* deps.log(`${agent}: nothing of Collie's can say its harness is up; core's word stands`);
-    return null;
+    return (yield* listed()) ? null : "core no longer lists it";
   }
   const deadline = (yield* Clock.currentTimeMillis) + budgetMs;
   let why = "";
-  const up = yield* ready(record).pipe(
-    Effect.tap(() => Effect.sync(() => (why = ""))),
-    Effect.catch((cause) => {
-      why = reason(cause);
-      return Effect.succeed(false);
-    }),
+  const asked = yield* Effect.gen(function* () {
+    if (!(yield* listed())) {
+      return { _tag: "Gone" } as const;
+    }
+    const up = yield* ready({ ...record, launch: options?.launch ?? null }).pipe(
+      Effect.tap(() => Effect.sync(() => (why = ""))),
+      Effect.catch((cause) => {
+        why = reason(cause);
+        return Effect.succeed(false);
+      }),
+    );
+    return up ? ({ _tag: "Up" } as const) : ({ _tag: "NotYet" } as const);
+  }).pipe(
     Effect.repeat({
-      until: (up) => up,
+      until: (one) => one._tag !== "NotYet",
       schedule: Schedule.spaced(deps.pollMs).pipe(Schedule.while(({ now }) => now < deadline)),
     }),
   );
-  if (up) {
+  if (asked._tag === "Gone") {
+    return "core no longer lists it";
+  }
+  if (asked._tag === "Up") {
     return null;
   }
   // WARNING: the harness's own words are the exit; the elapsed budget hides which failure it was.
@@ -888,7 +928,9 @@ export const atBoundary = Effect.fn("Compaction.atBoundary")(function* <Submissi
     step: at.step,
     deadline: now + deps.waitMs,
     asked: now,
-    ...(marked === null ? null : { session: marked.session, transcript: marked.transcript }),
+    ...(marked === null
+      ? null
+      : { session: marked.session, launch: marked.launch, transcript: marked.transcript }),
   };
   // WARNING: written before the request is sent, so a crash leaves the attempt visible.
   yield* writeControl(deps.stateDir, { ...record, attempt });
@@ -966,7 +1008,12 @@ export const cancelCompaction = Effect.fn("Compaction.cancelCompaction")(functio
         : ((yield* port.mark(ctx).pipe(Effect.orElseSucceed(() => null)))?.session ?? null));
     yield* cancelling(
       ctx,
-      { id: attempt.id, session, transcript: attempt.transcript ?? null },
+      {
+        id: attempt.id,
+        session,
+        launch: attempt.launch ?? null,
+        transcript: attempt.transcript ?? null,
+      },
       why,
     ).pipe(Effect.orElseSucceed(() => void 0));
   }
@@ -1007,6 +1054,7 @@ const resolved = Effect.fn("Compaction.resolved")(function* (
   const mark: Marked = {
     id: attempt.id,
     session: attempt.session ?? null,
+    launch: attempt.launch ?? null,
     transcript: attempt.transcript ?? null,
   };
   const outcome = yield* port

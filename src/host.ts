@@ -2680,13 +2680,34 @@ const frontDoorHandlers = (
             mrs: card?.mrs,
           };
         }).pipe(Effect.provideContext(bun));
-      const roomHere = Effect.gen(function* () {
+      const machineRoom = Effect.gen(function* () {
         const defaults = yield* loadDefaults(env.userDir).pipe(
           Effect.orElseSucceed(() => FALLBACK_DEFAULTS),
         );
         const readings = yield* usage.readings;
         return hasAnyRoom(defaults, readings, yield* Clock.currentTimeMillis);
       }).pipe(Effect.provideContext(hosted));
+      // WARNING: room is asked of the agents this Run runs on, not of the Machine's defaults, or a Codex account's room clears a Claude Run.
+      const roomHere = (view: { readonly runId: string }) =>
+        Effect.gen(function* () {
+          const defaults = yield* loadDefaults(env.userDir).pipe(
+            Effect.orElseSucceed(() => FALLBACK_DEFAULTS),
+          );
+          const latest = Option.getOrUndefined(
+            Arr.last(yield* readLaunches(view.runId).pipe(Effect.orElseSucceed(() => []))),
+          );
+          const readings = yield* usage.readings;
+          return hasAnyRoom(
+            {
+              ...defaults,
+              harness: latest?.harness ?? defaults.harness,
+              model: latest?.model ?? defaults.model,
+              effort: latest?.effort ?? defaults.effort,
+            },
+            readings,
+            yield* Clock.currentTimeMillis,
+          );
+        }).pipe(Effect.provideContext(hosted));
       yield* Effect.forkScoped(
         recoverParks({
           env,
@@ -2756,7 +2777,7 @@ const frontDoorHandlers = (
               ),
             ),
           host: Context.get(hosted, Host),
-          hasRoom: roomHere,
+          hasRoom: machineRoom,
         }).pipe(Effect.provideContext(hosted)),
       );
       return FrontDoorRpcs.of({
