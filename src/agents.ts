@@ -218,7 +218,7 @@ import type { JsonObject } from "./schema";
 import { awaitOutput, outputCollected } from "./output-submit";
 import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } from "./subagents";
 import { Collecting, collectingLayer } from "./collecting";
-import type { CollectingApi } from "./collecting";
+import type { CollectingApi, VerifyHold } from "./collecting";
 import { holdsBudgetOf, waitForMemory } from "./memory-wait";
 import {
   appendLine,
@@ -3421,20 +3421,24 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     );
 
   // WARNING: the tell is a delivery, so only the ledger says whether its prompt was taken.
-  const tellTaken = (launched: Launched, since: number) =>
+  const tellTaken = (launched: Launched, since: number, verified: string) =>
     launched.terminalId === undefined
       ? Effect.succeed(true)
       : readLedger(launched.terminalId).pipe(
-          Effect.map((lines) =>
-            Arr.some(
+          Effect.map((lines) => {
+            const tells = Arr.filter(
               [...newestById(lines).values()],
               (one) =>
                 one.cause.kind === "steer" &&
-                pipe(one.cause.ref, Str.startsWith("verify-")) &&
-                isSettledDelivery(one) &&
+                one.cause.ref === `verify-${verified}` &&
                 epochMs(one.at) >= since,
-            ),
-          ),
+            );
+            // WARNING: no tell means the agent was working when its verify ended, so that turn ending is enough.
+            return (
+              tells.length === 0 ||
+              Arr.some(tells, (one) => SENT_STATES.has(one.state) && !isUnobserved(one))
+            );
+          }),
           Effect.orElseSucceed(() => true),
         );
 
@@ -3470,8 +3474,8 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               }),
               usable: usable ?? (() => true),
               settled: turnOver,
-              held: collecting.verifying(launched.runId, launched.agent),
-              told: (since) => tellTaken(launched, since),
+              holding: collecting.verifying(launched.runId, launched.agent),
+              told: (since, verified) => tellTaken(launched, since, verified),
             }),
             confirmed(launched, unless ?? null).pipe(Effect.andThen(Effect.never)),
           );
@@ -5092,8 +5096,8 @@ const waitForOutput = <R>(
     readonly counts: Effect.Effect<boolean, never, R>;
     readonly usable: (text: string) => boolean;
     readonly settled: Effect.Effect<boolean, never, R>;
-    readonly held?: Effect.Effect<boolean, never, R>;
-    readonly told?: (since: number) => Effect.Effect<boolean, never, R>;
+    readonly holding?: Effect.Effect<VerifyHold, never, R>;
+    readonly told?: (since: number, verified: string) => Effect.Effect<boolean, never, R>;
   },
 ) =>
   Effect.gen(function* () {
@@ -5104,12 +5108,17 @@ const waitForOutput = <R>(
     let held = false;
     let heldAt = 0;
     let turning = false;
+    let ended: string | null = null;
     const free = Effect.gen(function* () {
-      if (every.held !== undefined && (yield* every.held)) {
-        held = true;
-        heldAt = yield* Clock.currentTimeMillis;
-        turning = false;
-        return false;
+      if (every.holding !== undefined) {
+        const now = yield* every.holding;
+        ended = now.ended ?? ended;
+        if (now.under) {
+          held = true;
+          heldAt = yield* Clock.currentTimeMillis;
+          turning = false;
+          return false;
+        }
       }
       if (!held) {
         return true;
@@ -5118,19 +5127,24 @@ const waitForOutput = <R>(
         turning = true;
         return false;
       }
-      return turning || every.told === undefined || (yield* every.told(heldAt));
+      return (
+        turning || every.told === undefined || ended === null || (yield* every.told(heldAt, ended))
+      );
     });
     let spent = 0;
     for (;;) {
       const text = yield* read;
       if (fresh(text) && (yield* free)) {
-        if (every.usable(text)) {
-          return text;
+        // WARNING: the read came before the status the release was decided on, so the Output is read once more.
+        const after = yield* read;
+        const now = fresh(after) ? after : text;
+        if (every.usable(now)) {
+          return now;
         }
         if (yield* every.settled) {
-          const after = yield* read;
-          if (fresh(after)) {
-            return after;
+          const last = yield* read;
+          if (fresh(last)) {
+            return last;
           }
         }
       }

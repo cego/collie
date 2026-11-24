@@ -1,6 +1,3 @@
-// One agent's Output, and a question that names the one Collie collected: what an
-// Output written while its own verify was under way is held against (ADR-draft-an-agent-is-told-when-its-verify-ends).
-
 import { agentWork, ask, defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
 

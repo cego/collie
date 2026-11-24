@@ -43,6 +43,16 @@ D7).
 
 **D5. An Output waits on the asker's own verify.** An Output an agent writes while a
 `collie verify` it asked for on the Run is under way on this host is not taken yet.
-Collie waits for the verify to end and tells the agent as in D1. When the agent next
-ends its turn, Collie takes its newest Output, which is the earlier one if the agent let
-it stand. A verify no longer under way, such as one a host swap ended, holds nothing.
+Collie waits for the verify to end and tells the agent as in D1, within the same hold, so
+a tell is either in the ledger or was never needed by the time the Output can be taken.
+Collie then takes the Output when the agent's turn has ended after that verify, and the
+release is one of two, both of them proof the agent had its result:
+
+- the tell for **that** verify was sent, and the turn it started has ended — a tell that
+  was refused, or that no turn was observed for, releases nothing;
+- no tell exists, which means the agent was working when its verify ended, so the turn it
+  was in has ended and it let the Output stand.
+
+An Output is read again after the release is decided: the status that releases it is a
+read of its own, and the file may have been written again while it was in flight. A verify
+no longer under way, such as one a host swap ended, holds nothing.

@@ -2307,14 +2307,13 @@ const frontDoorHandlers = (
           ),
         );
       };
-      // WARNING: Held for as long as the verify runs, so an Output its agent writes meanwhile is not taken.
       const whileVerifying =
         (client: { readonly id: number }, runId: string) =>
-        <A, E, R>(effect: Effect.Effect<A, E, R>) => {
+        <A, E, R>(effect: Effect.Effect<A, E, R>, named?: (ran: A) => string | null) => {
           const who = whoOf(client);
           const { run, agent } = who.from ?? {};
           return who.origin === "agent" && run === runId && agent !== undefined
-            ? collecting.duringVerify(run, agent, effect)
+            ? collecting.duringVerify(run, agent, effect, named)
             : effect;
         };
       type Carrying = ReturnType<typeof carryOut>;
@@ -3702,64 +3701,73 @@ const frontDoorHandlers = (
                     }
                     const started = pipe(yield* nowIso, Str.replaceAll(/[:.]/g, "-"));
                     const log = `${evidenceDir(env.stateDir, runId)}/verify/${started}-${pipe(name, Str.replaceAll(/[^\w.-]/g, "_"))}.log`;
-                    const collected = yield* Effect.raceFirst(
-                      collect(
-                        evidenceDir(env.stateDir, runId),
-                        {
-                          run: runId,
-                          name,
-                          executable,
-                          argv,
-                          cwd: where,
-                          by: "agent",
-                          expect,
-                          log,
-                          step: step?.step,
-                          place: step?.place,
-                          ...(isolation !== undefined && {
-                            isolated: {
-                              ...isolation,
-                              checkouts: baseTreesDir(env.stateDir, runId),
+                    const collected = yield* whileVerifying(client, runId)(
+                      Effect.gen(function* () {
+                        const ran = yield* Effect.raceFirst(
+                          collect(
+                            evidenceDir(env.stateDir, runId),
+                            {
+                              run: runId,
+                              name,
+                              executable,
+                              argv,
+                              cwd: where,
+                              by: "agent",
+                              expect,
+                              log,
+                              step: step?.step,
+                              place: step?.place,
+                              ...(isolation !== undefined && {
+                                isolated: {
+                                  ...isolation,
+                                  checkouts: baseTreesDir(env.stateDir, runId),
+                                },
+                              }),
                             },
-                          }),
-                        },
-                        {
-                          stdout: echo("stdout"),
-                          stderr: echo("stderr"),
-                          started: (check) =>
-                            Queue.offer(queue, { _tag: "Started", check }).pipe(Effect.asVoid),
-                          said: (line) =>
-                            echo("stderr")(`${line}\n`).pipe(
-                              Effect.andThen(appendLog(runDir(env.stateDir, runId), line)),
-                              Effect.ignore({ log: "Warn" }),
-                              Effect.provideService(RunRecords, runRecords),
-                              Effect.provideService(FileSystem.FileSystem, fs),
+                            {
+                              stdout: echo("stdout"),
+                              stderr: echo("stderr"),
+                              started: (check) =>
+                                Queue.offer(queue, { _tag: "Started", check }).pipe(Effect.asVoid),
+                              said: (line) =>
+                                echo("stderr")(`${line}\n`).pipe(
+                                  Effect.andThen(appendLog(runDir(env.stateDir, runId), line)),
+                                  Effect.ignore({ log: "Warn" }),
+                                  Effect.provideService(RunRecords, runRecords),
+                                  Effect.provideService(FileSystem.FileSystem, fs),
+                                ),
+                            },
+                          ).pipe(
+                            Effect.mapError(
+                              (cause) =>
+                                new HostRefused({
+                                  reason: `${cause.state ? "invalid_state" : REFUSED_INPUT}: ${cause.why}`,
+                                }),
                             ),
-                        },
-                      ).pipe(
-                        Effect.mapError(
-                          (cause) =>
-                            new HostRefused({
-                              reason: `${cause.state ? "invalid_state" : REFUSED_INPUT}: ${cause.why}`,
-                            }),
-                        ),
-                        Effect.result,
-                      ),
-                      // WARNING: Ending the race ends the command's process group with its scope.
-                      stopped.pipe(
-                        Effect.repeat({
-                          until: (stop) => stop,
-                          schedule: Schedule.spaced("1 second"),
-                        }),
-                        Effect.as(
-                          Result.fail(
-                            new HostRefused({
-                              reason: `invalid_state: run ${runId} was stopped while "${name}" ran, so it was ended and recorded nothing.`,
-                            }),
+                            Effect.result,
                           ),
-                        ),
-                      ),
-                    ).pipe(whileVerifying(client, runId));
+                          // WARNING: Ending the race ends the command's process group with its scope.
+                          stopped.pipe(
+                            Effect.repeat({
+                              until: (stop) => stop,
+                              schedule: Schedule.spaced("1 second"),
+                            }),
+                            Effect.as(
+                              Result.fail(
+                                new HostRefused({
+                                  reason: `invalid_state: run ${runId} was stopped while "${name}" ran, so it was ended and recorded nothing.`,
+                                }),
+                              ),
+                            ),
+                          ),
+                        );
+                        if (ran._tag === "Success") {
+                          yield* toldVerifyEnded(client, ran.success);
+                        }
+                        return ran;
+                      }),
+                      (ran) => (ran._tag === "Success" ? ran.success.id : null),
+                    );
                     if (collected._tag === "Failure") {
                       yield* Queue.fail(queue, collected.failure);
                       return;
@@ -3778,7 +3786,6 @@ const frontDoorHandlers = (
                       verification: collected.success,
                       ran: true,
                     });
-                    yield* toldVerifyEnded(client, collected.success);
                     yield* Queue.end(queue);
                   }).pipe(Effect.provideContext(hosted)),
                 { bufferSize: 16 },

@@ -606,7 +606,6 @@ export default defineWorkflow({
         handing,
       };
 
-      // WARNING: an empty Input is one left out, so an empty recovery is new work, and only spaces is empty.
       const recovers = Str.trim(asked.recovery ?? "") === "" ? undefined : asked.recovery;
       const recovered = yield* Activity.make({
         name: "recovery-entry",

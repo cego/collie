@@ -13,7 +13,7 @@ export interface VerifyTell<Settled, Steered, R> {
   }) => Effect.Effect<void, Steered, R>;
 }
 
-// WARNING: an agent settled while Collie waits on its Output is told its verify ended, or it waits forever.
+// WARNING: an agent working when its verify ends is not told: it has the result in its own turn.
 export const tellVerifyEnded: <Settled, Steered, R>(
   tell: VerifyTell<Settled, Steered, R>,
   asker: { readonly run: string; readonly agent: string },

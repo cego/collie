@@ -375,7 +375,6 @@ function anyField(got: Collected, key: string) {
   return undefined;
 }
 
-// WARNING: the newest Output that names it wins, so a fix's name supersedes the build's.
 function reproducedName(got: Collected) {
   for (const output of [...got.outputs.values()].reverse()) {
     const named = isYamlMap(output) ? output["reproduced"] : undefined;

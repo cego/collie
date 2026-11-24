@@ -43,7 +43,7 @@ const buildOf = (world: World, runId: string, operation = "build") =>
     (one) => one !== undefined,
   ).pipe(Effect.map((one) => one!));
 
-// WARNING: the host runs a verify every 2 seconds while it polls; a check held past that is seen to be under way.
+// WARNING: collection polls every 2 seconds, so a verify held for less than that can be missed.
 const held = (world: World, runId: string, agent: string, operation = "build") =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -178,4 +178,85 @@ test("a verify another agent of the same Run started holds nothing back", () =>
         yield* Fiber.await(running);
       }).pipe(Effect.ensuring(stopHost(world.state))),
     ["attended.workflow.ts"],
+  ));
+
+test("an Output a foreground verify held is taken once the turn it ended in is over", () =>
+  proves(
+    "collie-output-waits-4-",
+    (world, core) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* setUp(world, [{ output: null, status: "idle" }]);
+        const { client, runId } = yield* began(world, "collected", {});
+        const build = yield* buildOf(world, runId);
+        const { go, running } = yield* held(world, runId, build.agent);
+        yield* fs
+          .writeFileString(build.output, encode({ verdict: "foreground" }))
+          .pipe(Effect.orDie);
+        yield* core.report(build.agent, "working");
+        yield* Effect.sleep("2500 millis");
+        yield* fs.writeFileString(go, "").pipe(Effect.orDie);
+        yield* Fiber.await(running);
+        yield* core.report(build.agent, "idle");
+
+        const [asked] = yield* until(
+          () => client.run({ runId }).pipe(Effect.orDie),
+          (view) => prompts(view).length > 0,
+        ).pipe(Effect.map((view) => prompts(view)));
+        expect(asked).toBe("collected foreground");
+      }).pipe(Effect.ensuring(stopHost(world.state))),
+    ["collected.workflow.ts"],
+  ));
+
+test("a tell the agent never received does not release the Output it was about", () =>
+  proves(
+    "collie-output-waits-5-",
+    (world, core) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* setUp(world, [{ output: null, status: "idle" }]);
+        const { client, runId } = yield* began(world, "collected", {});
+        const build = yield* buildOf(world, runId);
+        const { go, running } = yield* held(world, runId, build.agent);
+        yield* fs.writeFileString(build.output, encode({ verdict: "unheard" })).pipe(Effect.orDie);
+        yield* Effect.sleep("2500 millis");
+        core.refuse("terminal.send", "invalid_argument", "the pane refused the prompt");
+        yield* fs.writeFileString(go, "").pipe(Effect.orDie);
+        yield* Fiber.await(running);
+        yield* Effect.sleep("6000 millis");
+
+        expect(prompts(yield* client.run({ runId }).pipe(Effect.orDie))).toEqual([]);
+      }).pipe(Effect.ensuring(stopHost(world.state))),
+    ["collected.workflow.ts"],
+  ));
+
+test("the Output read again after the wait is released is the one taken", () =>
+  proves(
+    "collie-output-waits-6-",
+    (world, core) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* setUp(world, [{ output: null, status: "idle" }]);
+        const { client, runId } = yield* began(world, "collected", {});
+        const build = yield* buildOf(world, runId);
+        const { go, running } = yield* held(world, runId, build.agent);
+        yield* fs.writeFileString(build.output, encode({ verdict: "stale" })).pipe(Effect.orDie);
+        yield* core.report(build.agent, "working");
+        yield* fs.writeFileString(go, "").pipe(Effect.orDie);
+        yield* Fiber.await(running);
+        yield* Effect.sleep("2500 millis");
+
+        const release = core.hold("terminal.get");
+        yield* Effect.sleep("2500 millis");
+        yield* fs.writeFileString(build.output, encode({ verdict: "fresh" })).pipe(Effect.orDie);
+        yield* core.report(build.agent, "idle");
+        release();
+
+        const [asked] = yield* until(
+          () => client.run({ runId }).pipe(Effect.orDie),
+          (view) => prompts(view).length > 0,
+        ).pipe(Effect.map((view) => prompts(view)));
+        expect(asked).toBe("collected fresh");
+      }).pipe(Effect.ensuring(stopHost(world.state))),
+    ["collected.workflow.ts"],
   ));
