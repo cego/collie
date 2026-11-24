@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import * as Str from "effect/String";
-import { Effect, FileSystem } from "effect";
-import { followingFace } from "../tools/trial-forge";
+import { Effect, FileSystem, Schema } from "effect";
+import { branchHeads } from "../tools/trial-forge";
 import { FakeBin } from "./support/bin";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
@@ -12,7 +12,7 @@ const git = (...args: ReadonlyArray<string>) =>
     Effect.map((ran) => Str.trim(ran.stdout)),
   );
 
-test("the forge answers a merge request's head from its branch, even when a writer put an older model back", () =>
+test("both faces of the trial's forge answer a merge request's head from its branch, even when a writer put an older model back", () =>
   runEffect(
     Effect.scoped(
       Effect.gen(function* () {
@@ -22,7 +22,9 @@ test("the forge answers a merge request's head from its branch, even when a writ
         yield* git("-C", `${dir}/work`, "commit", "-q", "--allow-empty", "-m", "moved");
         yield* git("clone", "-q", "--bare", `${dir}/work`, `${dir}/origins/app.git`);
         const moved = yield* git("-C", `${dir}/work`, "rev-parse", "HEAD");
-        const bin = yield* FakeBin.make(`${dir}/bin`);
+        const bin = yield* Effect.acquireRelease(FakeBin.make(`${dir}/bin`), (bin) =>
+          bin.restore(),
+        );
         const stale = {
           installed: true,
           loggedIn: [FORGE_HOST.gitlab],
@@ -37,16 +39,27 @@ test("the forge answers a merge request's head from its branch, even when a writ
             },
           ],
         };
-        const forge = yield* forgeOnPath(bin, "gitlab", stale);
-        const face = followingFace(forge, `${dir}/origins`);
+        const forge = yield* forgeOnPath(bin, "gitlab", stale, branchHeads(`${dir}/origins`));
         yield* forge.set(stale);
-        const answered = yield* Effect.promise(() =>
-          face(`https://${FORGE_HOST.gitlab}/api/v4/projects/trial%2Fapp/merge_requests/1`, {
-            headers: { authorization: `Bearer ${tokenOf("gitlab", stale)}` },
-          }).then((response) => response.json()),
+        const overHttp = yield* Effect.promise(() =>
+          forge
+            .face(`https://${FORGE_HOST.gitlab}/api/v4/projects/trial%2Fapp/merge_requests/1`, {
+              headers: { authorization: `Bearer ${tokenOf("gitlab", stale)}` },
+            })
+            .then((response) => response.json()),
         );
-        yield* bin.restore();
-        expect(answered).toMatchObject({ sha: moved });
+        const overCli = yield* exec([
+          "glab",
+          "api",
+          "--hostname",
+          FORGE_HOST.gitlab,
+          "projects/trial%2Fapp/merge_requests/1",
+        ]).pipe(
+          Effect.flatMap((ran) =>
+            Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(ran.stdout),
+          ),
+        );
+        expect([overHttp, overCli]).toMatchObject([{ sha: moved }, { sha: moved }]);
       }),
     ),
   ));

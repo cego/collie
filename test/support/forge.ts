@@ -3006,10 +3006,12 @@ export const forgeBin = Effect.fn("forge.bin")(function* (
   forge: MrForge,
   file: string,
   args: ReadonlyArray<string>,
+  current: (model: ForgeModel) => Effect.Effect<ForgeModel> = Effect.succeed,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const model = yield* Schema.decodeEffect(ModelJson)(yield* fs.readFileString(file)).pipe(
     Effect.orDie,
+    Effect.flatMap(current),
   );
   yield* fs.writeFileString(`${file}.log`, `${Arr.join([CLI[forge], ...args], " ")}\n`, {
     flag: "a",
@@ -3029,6 +3031,7 @@ export const forgeOnPath = Effect.fn("forge.onPath")(function* (
   bin: FakeBin,
   forge: MrForge,
   model: ForgeModel,
+  current: (model: ForgeModel) => Effect.Effect<ForgeModel> = Effect.succeed,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -3037,7 +3040,7 @@ export const forgeOnPath = Effect.fn("forge.onPath")(function* (
   const binary = yield* Config.String("COLLIE_TEST_FAKE_FORGE").pipe(Config.withDefault(""));
   const line = yield* forwarding(binary, [forge, file], ([, , ...args], env) =>
     recordStart(`forge ${forge}`, args).pipe(
-      Effect.andThen(forgeBin(forge, file, args)),
+      Effect.andThen(forgeBin(forge, file, args, current)),
       Effect.map(({ code, stdout }) => ({ code, stdout, stderr: "" })),
       Effect.provide(
         Layer.mergeAll(BunFileSystem.layer, ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
@@ -3054,7 +3057,7 @@ export const forgeOnPath = Effect.fn("forge.onPath")(function* (
           fs.readFileString(file),
           flow(Schema.decodeResult(ModelJson), Result.getOrThrow),
         ),
-      ),
+      ).pipe(Effect.flatMap(current)),
       write: (next) =>
         Effect.orDie(writeModel(file, next).pipe(Effect.provideService(FileSystem.FileSystem, fs))),
     },

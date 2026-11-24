@@ -1,13 +1,11 @@
-// oxlint-disable-next-line effecttsgo/node-builtin-import -- moveHeads must not yield between its read and write.
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
-import { Effect, FileSystem, Schedule, Schema } from "effect";
+import { Effect, FileSystem, Schema } from "effect";
 import { FakeBin } from "../test/support/bin";
 import { exec } from "../test/support/command";
 import { runEffect } from "../test/support/effect";
-import { FORGE_HOST, ForgeModel, forgeOnPath, httpFace, serveForges } from "../test/support/forge";
+import { FORGE_HOST, ForgeModel, forgeOnPath, serveForges } from "../test/support/forge";
 import type { FakeMr } from "../test/support/forge";
 
 const ModelJson = Schema.fromJsonString(ForgeModel);
@@ -62,34 +60,8 @@ const withHeads = (model: ForgeModel, heads: ReadonlyMap<string, string>) => {
   return returned;
 };
 
-export const followingFace = <E>(
-  forge: {
-    readonly model: () => Effect.Effect<ForgeModel, E>;
-    readonly set: (next: ForgeModel) => Effect.Effect<void, E>;
-  },
-  origins: string,
-) =>
-  httpFace(
-    "gitlab",
-    {
-      read: Effect.orDie(
-        Effect.flatMap(forge.model(), (model) =>
-          Effect.map(headsOf(model, origins), (heads) => withHeads(model, heads)),
-        ),
-      ),
-      write: (next) => Effect.orDie(forge.set(next)),
-    },
-    [],
-    [],
-  );
-
-const moveHeads = (file: string, heads: ReadonlyMap<string, string>) => {
-  // oxlint-disable-next-line effecttsgo/schema-sync -- A yield here would let a write the fake makes for the host be overwritten.
-  const moved = withHeads(Schema.decodeSync(ModelJson)(readFileSync(file, "utf8")), heads);
-  // oxlint-disable-next-line effecttsgo/schema-sync -- See the read above.
-  writeFileSync(`${file}.follow.tmp`, Schema.encodeSync(ModelJson)(moved));
-  renameSync(`${file}.follow.tmp`, file);
-};
+export const branchHeads = (origins: string) => (model: ForgeModel) =>
+  Effect.orDie(Effect.map(headsOf(model, origins), (heads) => withHeads(model, heads)));
 
 if (import.meta.main) {
   const [dir, origins] = Bun.argv.slice(2);
@@ -108,16 +80,11 @@ if (import.meta.main) {
           (yield* fs.exists(kept))
             ? yield* Schema.decodeEffect(ModelJson)(yield* fs.readFileString(kept))
             : { installed: true, loggedIn: [FORGE_HOST.gitlab], login: "trial", mrs: [] },
+          branchHeads(origins),
         );
-        const api = yield* serveForges({ forge: "gitlab", face: followingFace(forge, origins) });
+        const api = yield* serveForges({ forge: "gitlab", face: forge.face });
         yield* fs.writeFileString(`${dir}/api`, `${api}\n`);
-        const follow = Effect.gen(function* () {
-          const heads = yield* headsOf(yield* forge.model(), origins);
-          if (heads.size > 0) {
-            yield* Effect.sync(() => moveHeads(kept, heads));
-          }
-        });
-        yield* Effect.repeat(follow, Schedule.spaced("3 seconds"));
+        return yield* Effect.never;
       }),
     ),
   );
