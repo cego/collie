@@ -1595,6 +1595,18 @@ The shipped workflows' rally is one such loop, `rally` in
 [`workflows/reviewing.ts`](../workflows/reviewing.ts): `implement` and `tune-up` both call
 it, each with its own fix. A module of your own can import it the same way.
 
+A rally never parks on what only a person can settle. `rally` turns each of the three halts
+into a Choice it asks through the `choose` its caller supplies: a disputed blocker the
+reviewers kept asks `<prefix>dispute-<n>`, with Waive it (recommended), Send it back and
+Stop; a repeated blocking set asks `<prefix>no-progress-<n>`, and a last fix the journal
+cannot verify — after one hand-back, `<prefix>fix-<ROUNDS + 1>`, naming the evidence that is
+missing — asks `<prefix>fix-unverified-<n>`, each with Send it back (recommended) and Stop.
+Waiving keeps the finding `disputed` with a `waived` note naming who answered and the
+Choice, tells the next reviewer not to raise it again, and the merge request lists it as
+waived and unverified. A waiver settles nothing outside the rally: the outcome gate is not
+told about it. Sending it back is one more fix, told that a person declined, and a dispute
+that comes back asks the next number. Stop ends the Run naming what it could not settle.
+
 From round 2 on, `rally` tells each round's reviewers what the round before it reviewed,
 through `followUp`: that round's head, the commits and files changed since it as
 `host.reviewChanges` lists them for the checkout, leaving out what the default branch merged

@@ -195,6 +195,7 @@ export {
   sameFinding,
   formatFixBrief,
   formatFindings,
+  formatWaived,
   isBlocking,
   remainingDisputes,
   renderPublicReview,
@@ -205,6 +206,8 @@ export {
   substantiated,
   unmetCriteria,
   unsubstantiated,
+  waivedIn,
+  waiveFindings,
   type Check,
   type CheckEvidence,
   type Criterion,
@@ -219,6 +222,7 @@ export {
   type ReviewOutput,
   type Split,
   type Synthesis,
+  type Waiver,
 } from "./output";
 
 /**

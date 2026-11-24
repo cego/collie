@@ -43,6 +43,16 @@ const listed = <
   );
 
 // WARNING: severity is free text: only minor is non-blocking, so a closed union would throw reviews away.
+export const WaiverSchema = Schema.Struct({
+  by: Schema.String.pipe(said("by")),
+  choice: Schema.String.pipe(said("choice")),
+});
+
+export interface Waiver {
+  by: string;
+  choice: string;
+}
+
 export const FindingSchema = Schema.Struct({
   id: Schema.optionalKey(Schema.String.pipe(said("id"))),
   status: Schema.optionalKey(Schema.Literals(["open", "fixed", "disputed", "obsolete"])),
@@ -60,6 +70,7 @@ export const FindingSchema = Schema.Struct({
   ),
   rebuttal: Schema.optionalKey(Schema.String),
   reason: Schema.optionalKey(Schema.String),
+  waived: Schema.optionalKey(WaiverSchema),
 });
 
 export interface Finding {
@@ -75,6 +86,7 @@ export interface Finding {
   internal?: boolean;
   rebuttal?: string;
   reason?: string;
+  waived?: Waiver;
 }
 
 export interface ReviewOutput {
@@ -1193,3 +1205,25 @@ export function formatFindings(findings: ReadonlyArray<Finding>) {
     "\n",
   );
 }
+
+export const waivedIn = (findings: ReadonlyArray<Finding>) =>
+  Arr.filter(findings, (one) => one.waived !== undefined);
+
+// WARNING: a waiver settles a finding in the rally only; it is never proof of one.
+function waivedLine(finding: Finding, waiver: Waiver) {
+  const at = finding.file ? ` (${finding.file})` : "";
+  return `${finding.title}${at} — waived by ${waiver.by} to ${waiver.choice}, and nothing verifies it`;
+}
+
+export function formatWaived(waived: ReadonlyArray<Finding>) {
+  return Arr.join(
+    Arr.map(waivedIn(waived), (one) => `- ${waivedLine(one, one.waived!)}`),
+    "\n",
+  );
+}
+
+export const waiveFindings: (
+  findings: ReadonlyArray<Finding>,
+  waiver: Waiver,
+) => ReadonlyArray<Finding> = (findings, waiver) =>
+  Arr.map(findings, (one) => ({ ...one, status: "disputed" as const, waived: waiver }));

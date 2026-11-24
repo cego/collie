@@ -1453,22 +1453,28 @@ scenario("a repository's share that stops on a blocking finding parks with its w
         ],
       };
       yield* approve("r-impl-share", ["unit"]);
+      const runId = "r-impl-share";
       const reviewed = { ...CLEAN_SYNTHESIS, verdict: "findings", findings: blocked.findings };
       const fixed = { verdict: "clean", fixed: [], disputed: [], checks: [] };
       yield* rig.queueOutputs([blocked, reviewed, fixed, reviewed, fixed, reviewed]);
 
-      const result = yield* stalled({
-        entry: shipped("implement"),
-        runId: "r-impl-share",
-        input: { plan, ...FINISH },
-        options: { repo: "api" },
-      });
-
-      expect(result).toBe("suspended");
-      expect(yield* parkedWhy("r-impl-share")).toContain("no_progress");
-      expect(yield* asked("r-impl-share", "build.review-1")).toContain(
-        "the schema will not migrate",
+      const why = yield* driven(
+        {
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+          options: { repo: "api" },
+        },
+        (run) =>
+          Effect.gen(function* () {
+            yield* stallAsked(run, "build.no-progress-1");
+            yield* run.answer("build.no-progress-1", "Stop");
+            return yield* stepPark(run, runId, "no progress");
+          }),
       );
+
+      expect(why).toContain("the schema will not migrate");
+      expect(yield* asked(runId, "build.review-1")).toContain("the schema will not migrate");
       expect(yield* prompts()).toHaveLength(6);
     }),
   ),
@@ -1620,6 +1626,7 @@ scenario(
           ],
         };
         yield* approve("r-impl-blocked", ["unit"]);
+        const runId = "r-impl-blocked";
         const reviewed = { ...CLEAN_SYNTHESIS, verdict: "findings", findings: blocked.findings };
         yield* rig.queueOutputs([
           blocked,
@@ -1628,21 +1635,18 @@ scenario(
           reviewed,
           { verdict: "clean", fixed: [], disputed: [], checks: [] },
           reviewed,
-          {
-            verdict: "clean",
-            fixed: [{ title: "the schema will not migrate", file: "db" }],
-            disputed: [],
-            checks: [],
-          },
-          CLEAN_SYNTHESIS,
-          OPENED,
         ]);
-        const options = {
-          entry: shipped("implement"),
-          runId: "r-impl-blocked",
-          input: { plan, ...FINISH },
-        };
-        yield* resumeImplementPark(options, "build: no_progress");
+        const why = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              yield* stallAsked(run, "build.no-progress-1");
+              yield* run.answer("build.no-progress-1", "Stop");
+              return yield* stepPark(run, runId, "no progress");
+            }),
+        );
+        expect(why).toContain("the schema will not migrate");
+        expect(yield* wasAsked(runId, "build.review-4")).toBe(false);
       }),
     ),
 );
@@ -1667,6 +1671,7 @@ scenario(
           disputed: [],
           checks,
         });
+        const runId = "r-impl-unverified";
         yield* rig.queueOutputs([
           BUILT,
           blocking("first"),
@@ -1677,19 +1682,22 @@ scenario(
           fixed("third"),
           blocking("fourth"),
           fixed("fourth", [{ name: "lint" }]),
-          fixed("fourth"),
-          CLEAN_SYNTHESIS,
-          OPENED,
+          fixed("fourth", [{ name: "lint" }]),
         ]);
 
-        yield* resumeImplementPark(
-          {
-            entry: shipped("implement"),
-            runId: "r-impl-unverified",
-            input: { plan, ...FINISH },
-          },
-          `fix_unverified: check "lint" has no verification record — run it through collie verify`,
+        const why = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              yield* stallAsked(run, "fix-unverified-1");
+              const askedFor = yield* asked(runId, "fix-5");
+              expect(askedFor).toContain(`check "lint" has no verification record`);
+              expect(yield* wasAsked(runId, "review-5")).toBe(false);
+              yield* run.answer("fix-unverified-1", "Stop");
+              return yield* stepPark(run, runId, "the last fix is unverified");
+            }),
         );
+        expect(why).toContain(`check "lint" has no verification record`);
       }),
     ),
 );
@@ -5680,49 +5688,346 @@ scenario(
 
 const AMENDED = "**Named.** Each one is named in the audit log.";
 
-scenario("implement parks on a disputed blocker and resumes its fix and review", () =>
+const DISPUTED_FINDING = { severity: "blocker", title: "dependency unavailable", file: "db" };
+const disputedReview = { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [DISPUTED_FINDING] };
+const disputedFix = {
+  verdict: "clean",
+  fixed: [],
+  disputed: [{ ...DISPUTED_FINDING, reason: "upstream must release it" }],
+  checks: [],
+};
+const WAIVE_IT_OPTIONS = ["Waive it", "Send it back", "Stop"];
+const BLOCKED_BUILD = { ...BUILT, verdict: "findings", findings: [DISPUTED_FINDING] };
+
+const parkedMarkers = (runId: string) =>
+  Effect.map(
+    FileSystem.FileSystem.pipe(Effect.flatMap((fs) => fs.readDirectory(runDir(dir, runId)))),
+    (files) => Arr.filter(files, (one) => pipe(one, Str.endsWith(".parked"))),
+  );
+
+scenario(
+  "a disputed blocker asks the dispute Choice instead of parking, and Waive it reaches the gate",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "only", checks: "unit" }]);
+        const runId = "r-disputed-resume";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([
+          BLOCKED_BUILD,
+          disputedReview,
+          disputedFix,
+          disputedReview,
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              const rows = yield* stallAsked(run, "build.dispute-1");
+              expect(rows).toHaveLength(1);
+              expect(rows[0]!.prompt).toContain("dependency unavailable");
+              expect(rows[0]!.prompt).toContain("upstream must release it");
+              expect(optionsOf(rows, "build.dispute-1")).toEqual(WAIVE_IT_OPTIONS);
+              expect(recommendedOf(rows, "build.dispute-1")).toEqual({
+                recommended: "Waive it",
+                shortfall: null,
+              });
+              expect(yield* parkedMarkers(runId)).toEqual([]);
+              expect(
+                Arr.filter(
+                  yield* readStepLines(runDir(dir, runId)),
+                  (line) => line.kind === "fail",
+                ),
+              ).toEqual([]);
+              expect(yield* recoveriesHealed(runId)).toEqual([]);
+              yield* run.answer("build.dispute-1", "Waive it");
+              return yield* ended(run.status);
+            }),
+        );
+        expect(outcomeText(status)).toBe(OPENED.mr_url);
+        expect(yield* parkedWhy(runId)).toBe("");
+      }),
+    ),
+);
+
+scenario(
+  "Waive it keeps the finding disputed with a note, tells the next reviewer, and the merge request lists it waiving and unverifying",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "only", checks: "unit" }]);
+        const runId = "r-waived";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([
+          BLOCKED_BUILD,
+          disputedReview,
+          disputedFix,
+          disputedReview,
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              yield* stallAsked(run, "build.dispute-1");
+              yield* run.answer("build.dispute-1", "Waive it");
+              return yield* ended(run.status);
+            }),
+        );
+
+        expect(outcomeText(status)).toBe(OPENED.mr_url);
+        expect(yield* asked(runId, "build.review-3-1")).toContain("Waived by a person");
+        expect(yield* asked(runId, "build.review-3-1")).toContain("do not raise it again");
+        expect(yield* asked(runId, "mr")).toContain("**Waived and unverified**");
+        expect(yield* asked(runId, "mr")).toContain(
+          "dependency unavailable (db) — waived by a person to build.dispute-1, and nothing verifies it",
+        );
+        const onFile = yield* findingsIn(runDir(dir, runId));
+        const kept = Option.getOrThrow(
+          Arr.findFirst(onFile, (one) => one.title === "dependency unavailable"),
+        );
+        expect(kept.status).toBe("disputed");
+        expect(kept.waived).toEqual({ by: "a person", choice: "build.dispute-1" });
+      }),
+    ),
+);
+
+scenario(
+  "Send it back gives the fixer one more round with the dispute open, and a second dispute asks dispute-2",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "only", checks: "unit" }]);
+        const runId = "r-sent-back";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([
+          BLOCKED_BUILD,
+          disputedReview,
+          disputedFix,
+          disputedReview,
+          disputedFix,
+          disputedReview,
+        ]);
+        const why = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              yield* stallAsked(run, "build.dispute-1");
+              yield* run.answer("build.dispute-1", "Send it back");
+              const again = yield* stallAsked(run, "build.dispute-2");
+              expect(again).toHaveLength(1);
+              expect(optionsOf(again, "build.dispute-2")).toEqual(WAIVE_IT_OPTIONS);
+              yield* run.answer("build.dispute-2", "Stop");
+              return yield* stepPark(run, runId, "dependency unavailable");
+            }),
+        );
+        expect(why).toContain("a person answered Stop to build.dispute-2");
+        expect(yield* asked(runId, "build.fix-2-back-1")).toContain(
+          "A person declined the dispute on these findings",
+        );
+        expect(yield* asked(runId, "build.fix-2-back-1")).toContain("dependency unavailable");
+        expect(yield* wasAsked(runId, "build.review-4")).toBe(false);
+      }),
+    ),
+);
+
+scenario("Stop on a dispute ends the Run with it named, and no review starts after it", () =>
   runEffect(
     Effect.gen(function* () {
       yield* noMergeRequests;
       yield* repository();
       const plan = yield* planOf([{ file: "01-only.md", title: "only", checks: "unit" }]);
-      const runId = "r-disputed-resume";
-      const finding = { severity: "blocker", title: "dependency unavailable", file: "db" };
-      const review = { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [finding] };
+      const runId = "r-dispute-stop";
       yield* approve(runId, ["unit"]);
-      const stopped = [
-        BUILT,
-        review,
-        {
-          verdict: "clean",
-          fixed: [],
-          disputed: [{ ...finding, reason: "upstream must release it" }],
-          checks: [],
-        },
-        review,
-      ];
-      yield* rig.queueOutputs([...stopped, OPENED]);
-      yield* resumeImplementPark(
+      yield* rig.queueOutputs([BLOCKED_BUILD, disputedReview, disputedFix, disputedReview]);
+      const why = yield* driven(
         { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
-        "disputed blocking finding",
-        {
-          beforeResume: rig
-            .queueOutputs([
-              ...stopped,
-              {
-                verdict: "clean",
-                fixed: [{ title: finding.title, file: finding.file }],
-                disputed: [],
-                checks: [],
-              },
-              CLEAN_SYNTHESIS,
-              OPENED,
-            ])
-            .pipe(Effect.orDie),
-        },
+        (run) =>
+          Effect.gen(function* () {
+            yield* stallAsked(run, "build.dispute-1");
+            yield* run.answer("build.dispute-1", "Stop");
+            return yield* stepPark(run, runId, "dependency unavailable");
+          }),
       );
+      expect(why).toContain("disputed blocking finding: [blocker] dependency unavailable (db)");
+      expect(yield* wasAsked(runId, "build.review-3")).toBe(false);
     }),
   ),
+);
+
+scenario("a blocker raised again after its hand-back asks the no-progress Choice, not a park", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* noMergeRequests;
+      yield* repository();
+      const plan = yield* planOf([{ file: "01-only.md", title: "only", checks: "unit" }]);
+      const runId = "r-no-progress";
+      const claimed = {
+        verdict: "clean",
+        fixed: [{ title: DISPUTED_FINDING.title, file: DISPUTED_FINDING.file }],
+        disputed: [],
+        checks: [],
+      };
+      yield* approve(runId, ["unit"]);
+      yield* rig.queueOutputs([
+        BLOCKED_BUILD,
+        disputedReview,
+        claimed,
+        disputedReview,
+        claimed,
+        disputedReview,
+        claimed,
+        CLEAN_SYNTHESIS,
+        OPENED,
+      ]);
+      const status = yield* driven(
+        { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+        (run) =>
+          Effect.gen(function* () {
+            const rows = yield* stallAsked(run, "build.no-progress-1");
+            expect(rows).toHaveLength(1);
+            expect(optionsOf(rows, "build.no-progress-1")).toEqual(["Send it back", "Stop"]);
+            expect(recommendedOf(rows, "build.no-progress-1")).toEqual({
+              recommended: "Send it back",
+              shortfall: null,
+            });
+            expect(yield* parkedMarkers(runId)).toEqual([]);
+            yield* run.answer("build.no-progress-1", "Send it back");
+            return yield* ended(run.status);
+          }),
+      );
+      expect(outcomeText(status)).toBe(OPENED.mr_url);
+      expect(yield* asked(runId, "build.fix-3-back-1")).toContain("A person sent these back");
+    }),
+  ),
+);
+
+scenario(
+  "a last fix whose check has no record goes back to the fixer once, and a second time asks fix-unverified-1",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "only", checks: "unit" }]);
+        const runId = "r-fix-unverified";
+        yield* approve(runId, ["unit"]);
+        const round = (at: number) => {
+          const finding = { severity: "blocker", title: `round ${at} blocks`, file: "db" };
+          return {
+            review: { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [finding] },
+            fix: {
+              verdict: "clean",
+              fixed: [{ title: finding.title, file: finding.file }],
+              disputed: [],
+              checks: [{ name: "manual" }],
+            },
+          };
+        };
+        const one = round(1);
+        const two = round(2);
+        const three = round(3);
+        const four = round(4);
+        yield* rig.queueOutputs([
+          BUILT,
+          one.review,
+          one.fix,
+          two.review,
+          two.fix,
+          three.review,
+          three.fix,
+          four.review,
+          four.fix,
+          four.fix,
+        ]);
+        yield* driven({ entry: shipped("implement"), runId, input: { plan, ...FINISH } }, (run) =>
+          Effect.gen(function* () {
+            const rows = yield* stallAsked(run, "fix-unverified-1");
+            expect(rows).toHaveLength(1);
+            expect(optionsOf(rows, "fix-unverified-1")).toEqual(["Send it back", "Stop"]);
+            expect(recommendedOf(rows, "fix-unverified-1")).toEqual({
+              recommended: "Send it back",
+              shortfall: null,
+            });
+            expect(yield* asked(runId, "fix-5")).toContain(
+              'check "manual" has no verification record',
+            );
+            expect(yield* wasAsked(runId, "review-5")).toBe(false);
+            yield* run.answer("fix-unverified-1", "Stop");
+            return yield* stepPark(run, runId, "the last fix is unverified");
+          }),
+        );
+      }),
+    ),
+);
+
+scenario(
+  "a waiver is not proof of a ticket's check, so the gate still reports that check unproved",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* ahead();
+        const plan = yield* planOf([{ file: "01-only.md", title: "only", checks: "unit" }]);
+        const runId = "r-waived-unproved";
+        const unprovenFinding = {
+          severity: "blocker",
+          title: 'nothing proves check "unit" passes on this tree',
+          file: "01-only.md",
+        };
+        const unproven = {
+          ...CLEAN_SYNTHESIS,
+          verdict: "findings",
+          findings: [unprovenFinding],
+        };
+        yield* approve(runId, ["unit"]);
+        yield* freeze(runId, [counting("unit", `${rig.root}/unit-runs`, "false")]);
+        yield* rig.queueOutputs([
+          BLOCKED_BUILD,
+          unproven,
+          { ...disputedFix, disputed: [{ ...unprovenFinding, reason: "it passes locally" }] },
+          unproven,
+          CLEAN_SYNTHESIS,
+          CLEAN_SYNTHESIS,
+          GATE_FIX,
+          GATE_FIX,
+          GATE_FIX,
+          GATE_FIX,
+        ]);
+        const why = yield* driven(
+          {
+            entry: shipped("implement"),
+            runId,
+            input: { plan, ...FINISH },
+            options: { outcome: "feature" },
+          },
+          (run) =>
+            Effect.gen(function* () {
+              yield* stallAsked(run, "build.dispute-1");
+              yield* run.answer("build.dispute-1", "Waive it");
+              return yield* stepPark(run, runId, "Outcome unproved");
+            }),
+        );
+        yield* bin.restore();
+        expect(why).toContain("unit failed");
+        expect(yield* parkedCause(runId)).toBe("gate-fix-unproved");
+        const onFile = yield* findingsIn(runDir(dir, runId));
+        const kept = Option.getOrThrow(
+          Arr.findFirst(onFile, (one) => one.title === unprovenFinding.title),
+        );
+        expect(kept.waived).toEqual({ by: "a person", choice: "build.dispute-1" });
+      }),
+    ),
 );
 
 scenario("implement parks after its builder stops and resumes under a fresh operation", () =>
@@ -8197,7 +8502,7 @@ scenario("a blocking build finding is reviewed and fixed before the next ticket 
       expect(build).toContain("never the whole suite");
       expect(yield* asked("r-impl-build-findings", "02-second.md")).toContain("the first one");
       expect(yield* asked("r-impl-build-findings", "review-1")).toContain("Iteration 1");
-      expect(yield* prompts()).toHaveLength(7);
+      expect(yield* prompts()).toHaveLength(6);
     }),
   ),
 );
@@ -11935,16 +12240,24 @@ scenario("a blocking dispute the next review repeats as minor stays a blocker on
           verdict: "findings",
           findings: [{ ...finding, severity: "minor" }],
         },
+        CLEAN_SYNTHESIS,
         OPENED,
       ]);
-      const why = yield* driven(
+      const status = yield* driven(
         { entry: shipped("implement"), runId: "r-impl-weakened", input: { plan, ...FINISH } },
-        (run) => stepPark(run, "r-impl-weakened", "disputed blocking finding"),
+        (run) =>
+          Effect.gen(function* () {
+            yield* stallAsked(run, "dispute-1");
+            yield* run.answer("dispute-1", "Waive it");
+            return yield* ended(run.status);
+          }),
       );
       yield* bin.restore();
 
-      expect(why).toContain("disputed blocking finding: [blocker] the guard is on the wrong side");
-      expect(yield* wasAsked("r-impl-weakened", "mr")).toBe(false);
+      expect(outcomeText(status)).toBe(OPENED.mr_url);
+      expect(yield* asked("r-impl-weakened", "mr")).toContain(
+        "the guard is on the wrong side (src/a.ts) — waived by a person to dispute-1",
+      );
       const onFile = yield* findingsIn(runDir(dir, "r-impl-weakened"));
       expect(
         Arr.map(
@@ -12011,15 +12324,20 @@ scenario(
           },
           OPENED,
         ]);
-        const why = yield* driven(
+        const status = yield* driven(
           { entry: shipped("implement"), runId: "r-final-dispute", input: { plan, ...FINISH } },
-          (run) => stepPark(run, "r-final-dispute", "disputed blocking finding"),
+          (run) =>
+            Effect.gen(function* () {
+              const rows = yield* stallAsked(run, "dispute-1");
+              expect(rows[0]!.prompt).toContain("B is by design");
+              expect(rows[0]!.prompt).not.toContain("a reason the reviewer answers");
+              yield* run.answer("dispute-1", "Waive it");
+              return yield* ended(run.status);
+            }),
         );
         yield* bin.restore();
 
-        expect(why).toContain("disputed blocking finding: [blocker] B (src/a.ts): B is by design");
-        expect(why).not.toContain("a reason the reviewer answers");
-        expect(yield* wasAsked("r-final-dispute", "mr")).toBe(false);
+        expect(outcomeText(status)).toBe(OPENED.mr_url);
         expect(yield* readText(`${runDir(dir, "r-final-dispute")}/review.md`)).toContain(
           "- `src/a.ts` — A\n  it breaks",
         );
@@ -12221,65 +12539,80 @@ scenario(
     ),
 );
 
-scenario("a dispute from an early round still parks the Run when the last fix holds", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const bin = yield* FakeBin.make(`${rig.root}/bin`);
-      yield* noGitlabMrs(bin);
-      yield* repository();
-      const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
-      yield* approve("r-early-dispute", ["unit"]);
-      yield* collect(evidenceDir(dir, "r-early-dispute"), {
-        run: "r-early-dispute",
-        name: "unit",
-        executable: "true",
-        argv: [],
-        cwd: rig.projectDir,
-        by: "agent",
-      }).pipe(Effect.orDie);
-      const blocker = (title: string) => ({
-        severity: "blocker",
-        title,
-        file: "src/a.ts",
-        detail: "it breaks",
-      });
-      const review = (title: string) => ({
-        ...CLEAN_SYNTHESIS,
-        verdict: "findings",
-        findings: [blocker(title)],
-      });
-      const fixes = (title: string) => ({
-        verdict: "clean",
-        fixed: [{ title, file: "src/a.ts" }],
-        checks: [{ name: "unit" }],
-      });
-      yield* rig.queueOutputs([
-        BUILT,
-        { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [blocker("X"), blocker("one")] },
-        {
+scenario(
+  "a dispute from an early round asks the dispute Choice in the final rally when the last fix holds",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-early-dispute";
+        yield* approve(runId, ["unit"]);
+        yield* collect(evidenceDir(dir, runId), {
+          run: runId,
+          name: "unit",
+          executable: "true",
+          argv: [],
+          cwd: rig.projectDir,
+          by: "agent",
+        }).pipe(Effect.orDie);
+        const blocker = (title: string) => ({
+          severity: "blocker",
+          title,
+          file: "src/a.ts",
+          detail: "it breaks",
+        });
+        const review = (title: string) => ({
+          ...CLEAN_SYNTHESIS,
+          verdict: "findings",
+          findings: [blocker(title)],
+        });
+        const fixes = (title: string) => ({
           verdict: "clean",
-          fixed: [{ title: "one", file: "src/a.ts" }],
-          disputed: [{ ...blocker("X"), reason: "X is by design" }],
+          fixed: [{ title, file: "src/a.ts" }],
           checks: [{ name: "unit" }],
-        },
-        review("two"),
-        fixes("two"),
-        review("three"),
-        fixes("three"),
-        review("four"),
-        fixes("four"),
-        OPENED,
-      ]);
-      const why = yield* driven(
-        { entry: shipped("implement"), runId: "r-early-dispute", input: { plan, ...FINISH } },
-        (run) => stepPark(run, "r-early-dispute", "disputed blocking finding"),
-      );
-      yield* bin.restore();
+        });
+        yield* rig.queueOutputs([
+          BUILT,
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [blocker("X"), blocker("one")] },
+          {
+            verdict: "clean",
+            fixed: [{ title: "one", file: "src/a.ts" }],
+            disputed: [{ ...blocker("X"), reason: "X is by design" }],
+            checks: [{ name: "unit" }],
+          },
+          review("two"),
+          fixes("two"),
+          review("three"),
+          fixes("three"),
+          review("four"),
+          fixes("four"),
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              const rows = yield* stallAsked(run, "dispute-1");
+              expect(rows).toHaveLength(1);
+              expect(rows[0]!.prompt).toContain("X is by design");
+              expect(yield* parkedMarkers(runId)).toEqual([]);
+              yield* run.answer("dispute-1", "Waive it");
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
 
-      expect(why).toContain("disputed blocking finding: [blocker] X (src/a.ts): X is by design");
-      expect(yield* wasAsked("r-early-dispute", "mr")).toBe(false);
-    }),
-  ),
+        expect(outcomeText(status)).toBe(OPENED.mr_url);
+        expect(yield* wasAsked(runId, "mr")).toBe(true);
+        expect(yield* asked(runId, "mr")).toContain(
+          "X (src/a.ts) — waived by a person to dispute-1",
+        );
+      }),
+    ),
 );
 
 interface ShippedRun {

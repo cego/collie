@@ -151,6 +151,7 @@ const prompts = {
     evidence: text,
     unreviewed: text,
     unsettled: text,
+    waived: text,
     mr: Schema.Struct({
       forge: text,
       noun: text,
@@ -2173,6 +2174,7 @@ export default defineWorkflow({
         criteria: "",
         prefix: "",
         obstacle: REVIEWING,
+        choose: (choice) => ask(choice),
         integrate: (operation) =>
           Effect.gen(function* () {
             const merged = yield* integrated(operation);

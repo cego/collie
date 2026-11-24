@@ -2166,7 +2166,26 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     rebuttal?: string;
     /** Why a synthesis dropped this finding; only a dropped entry carries one. */
     reason?: string;
+    /** Who waived this finding, and the Choice they waived it to; a waiver is never proof. */
+    waived?: Waiver;
   }
+
+  export interface Waiver {
+    by: string;
+    choice: string;
+  }
+
+  /** The findings a person waived, each still disputed and named in the merge request. */
+  export function waiveFindings(
+    findings: ReadonlyArray<Finding>,
+    waiver: Waiver,
+  ): ReadonlyArray<Finding>;
+
+  /** Those of \`findings\` a person waived. */
+  export function waivedIn(findings: ReadonlyArray<Finding>): Finding[];
+
+  /** One line per waived finding, naming who waived it and that nothing proves it. */
+  export function formatWaived(waived: ReadonlyArray<Finding>): string;
 
   /**
    * The one judgement a reviewer gives that nothing else can, named by the kind of result

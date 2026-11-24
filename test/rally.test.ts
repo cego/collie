@@ -61,14 +61,14 @@ const hostOf: () => AgentHost = () => ({
   collectMs: 400,
 });
 
-const rally = (runId: string, rounds: number) =>
+const rally = (runId: string, rounds: number, answers: ReadonlyArray<string> = []) =>
   Effect.gen(function* () {
     const entry = yield* loadEntry(`${fixtures}/rally.workflow.ts`);
     const made = entry.make(`rally@${runId}`);
     const run = Effect.gen(function* () {
       const payload = {
         runId,
-        input: { target: "the diff", cwd: rig.projectDir, rounds },
+        input: { target: "the diff", cwd: rig.projectDir, rounds, answers: [...answers] },
       };
       // oxlint-disable-next-line effecttsgo/any-unknown-in-error-context -- Loaded workflows erase the author-declared error schema; this test inspects the captured result.
       return yield* made.workflow.execute(payload).pipe(Effect.result);
@@ -143,7 +143,28 @@ test("a finding that says only what it is and how bad is still a finding", () =>
     }),
   ));
 
-test("a blocking finding the implementer disputed is the human's call, not another round", () =>
+test("a blocking finding the implementer disputed asks the dispute Choice instead of ending the rally", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([
+        { verdict: "findings", findings: [blocker("empty list")] },
+        {
+          verdict: "clean",
+          disputed: [blocker("empty list")],
+          fixed: [],
+          checks: [],
+        },
+        { verdict: "findings", findings: [blocker("empty list")] },
+        { verdict: "clean" },
+      ]);
+      const waived = yield* rally("r-disputed", 3, ["Waive it"]);
+      expect(said(waived)).toContain("dispute-1: Waive it | Send it back | Stop → Waive it");
+      expect(said(waived)).toContain("waived empty list");
+      expect(said(waived)).toContain("clean after 3 round(s)");
+    }),
+  ));
+
+test("Stop on the dispute Choice ends the rally naming the dispute", () =>
   runEffect(
     Effect.gen(function* () {
       yield* rig.queueOutputs([
@@ -156,9 +177,10 @@ test("a blocking finding the implementer disputed is the human's call, not anoth
         },
         { verdict: "findings", findings: [blocker("empty list")] },
       ]);
-      const result = yield* rally("r-disputed", 3);
-      expect(said(result)).toContain("dispute_unresolved");
-      expect(said(result)).toContain("stand unanswered");
+      const stopped = yield* rally("r-disputed-stop", 3, ["Stop"]);
+      expect(said(stopped)).toContain("dispute-1: Waive it | Send it back | Stop → Stop");
+      expect(said(stopped)).toContain("stopped:");
+      expect(said(stopped)).toContain("empty list");
     }),
   ));
 
@@ -172,9 +194,9 @@ test("a blocking set that comes back once goes to the fixer, and the next time i
         { verdict: "clean", fixed: [], checks: [] },
         { verdict: "findings", findings: [blocker("empty list")] },
       ]);
-      const result = yield* rally("r-stuck", 4);
-      expect(said(result)).toContain("no_progress");
-      expect(said(result)).toContain("raised the same 1 blocking finding(s)");
+      const result = yield* rally("r-stuck", 4, ["Stop"]);
+      expect(said(result)).toContain("no-progress-1: Send it back | Stop → Stop");
+      expect(said(result)).toContain("review 3 raised the same 1 blocking finding(s) as review 2");
       expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.send")).toHaveLength(5);
     }),
   ));
@@ -207,20 +229,24 @@ test("a final review that repeats the review before it hands its blockers back i
     }),
   ));
 
-test("the last fix's checks are read from the journal, not from what it said about them", () =>
+test("the last fix's checks are read from the journal, so an unproved fix goes back once and then asks", () =>
   runEffect(
     Effect.gen(function* () {
+      const unproved = {
+        verdict: "clean",
+        fixed: [{ title: "empty list", file: "src/thing.ts" }],
+        checks: [{ name: "unit" }],
+      };
       yield* rig.queueOutputs([
         { verdict: "findings", findings: [blocker("empty list")] },
-        {
-          verdict: "clean",
-          fixed: [{ title: "empty list", file: "src/thing.ts" }],
-          checks: [{ name: "unit" }],
-        },
+        unproved,
+        unproved,
       ]);
-      const claimed = yield* rally("r-claimed", 1);
-      expect(said(claimed)).toContain("fix_unverified");
+      const claimed = yield* rally("r-claimed", 1, ["Stop"]);
+      expect(said(claimed)).toContain(`fix-2: handed back`);
+      expect(said(claimed)).toContain(`fix-unverified-1: Send it back | Stop → Stop`);
       expect(said(claimed)).toContain(`check "unit" has no verification record`);
+      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.send")).toHaveLength(3);
     }),
   ));
 
@@ -387,6 +413,7 @@ const twoRounds = () =>
       checks: [],
     },
     { verdict: "clean", summary: "settled" },
+    { verdict: "clean", summary: "nothing blocking is left" },
     { verdict: "clean", summary: "the whole change" },
   ]);
 

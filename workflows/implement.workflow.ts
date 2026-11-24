@@ -21,6 +21,7 @@ import {
   agentWork,
   answerFor,
   ask,
+  ask as askPerson,
   benchmarkFile,
   changeKey,
   classifyWorkSource,
@@ -175,6 +176,7 @@ const prompts = {
     evidence: text,
     unreviewed: text,
     unsettled: text,
+    waived: text,
     mr: Schema.Struct({
       forge: text,
       noun: text,
@@ -810,6 +812,7 @@ export default defineWorkflow({
             unreviewed: "",
             unsettled: [],
             disputes: [],
+            waived: [],
             reviewed: recovery.review,
           };
         }
@@ -1639,6 +1642,7 @@ const builderRally = (ask: {
     const runId = (yield* Run).id;
     return yield* rally({
       ...ask,
+      choose: (choice) => askPerson(choice),
       source: ask.build === undefined ? ask.input.inputs.plan : null,
       prefix: `${ask.build === undefined ? "" : `${ask.build.item}.`}${ask.resume === undefined ? "" : `retry-${ask.resume.attempt}.`}`,
       resume:

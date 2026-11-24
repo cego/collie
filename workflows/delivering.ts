@@ -18,6 +18,7 @@ import {
   findingsIn,
   flakesOf,
   formatFindings,
+  formatWaived,
   isBlocking,
   isOutcome,
   leaveOutstanding,
@@ -145,6 +146,7 @@ interface Opening {
   readonly evidence: string;
   readonly unreviewed: string;
   readonly unsettled: string;
+  readonly waived: string;
   readonly mr: {
     readonly forge: string;
     readonly noun: string;
@@ -168,6 +170,7 @@ export interface Reviewed {
   readonly unreviewed: string;
   readonly unsettled: ReadonlyArray<string>;
   readonly disputes: ReadonlyArray<Finding>;
+  readonly waived: ReadonlyArray<Finding>;
   readonly reviewed: SynthesisReport;
   readonly on?: Snapshot;
 }
@@ -685,6 +688,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
               Arr.map(unsettled, (line) => `- ${line}`),
               "\n",
             ),
+            waived: formatWaived(rallied.waived),
             mr: {
               forge: ready.forge ?? "GitLab",
               noun: ready.noun ?? "merge request",
