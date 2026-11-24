@@ -422,7 +422,7 @@ export const sdkModules: () => ReadonlyArray<readonly [string, object]> = () => 
 
 // WARNING: must match package.json; engine.test.ts checks it, or author types are about another Effect.
 export const TOOLCHAIN = {
-  effect: "4.1.4",
+  effect: "4.1.5",
   typescript: "^7.0.2",
 } as const;
 
