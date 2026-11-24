@@ -60,6 +60,7 @@ import { connect as connectCore } from "../src/hc";
 import { selectionPath, writeSelection } from "../src/selection";
 import { newTask, writeTask } from "../src/task";
 import { hosted, hostedRun, settledRun } from "./support/hosted";
+import { openServer } from "./support/mcp";
 import { SETUP } from "./support/fake-hc";
 import type { FakeHc } from "./support/fake-hc";
 import { save } from "./support/world";
@@ -2323,6 +2324,41 @@ test("a Heal Run's agent adds a constraint to another Run, which applies", () =>
         ],
       });
       expect(said).toContain("update_intent: applied");
+      const intent = yield* readIntent(target.dir);
+      expect(intent?.version).toBe(2);
+      expect(Arr.map(intent?.constraints ?? [], (one) => one.text)).toContain(constraintPatch);
+    }),
+  ));
+
+test("a Heal agent's constraint applies when the call is driven over MCP, not only through the tool", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const target = yield* aRun("the Run a heal is looking at");
+      const seated = yield* healerSeat();
+      const server = yield* openServer({
+        ...seated.raw,
+        COLLIE_RUN: seated.asker.from.run,
+        COLLIE_AGENT: seated.asker.from.agent,
+      });
+      const answered = yield* server.request("tools/call", {
+        name: "collie_propose",
+        arguments: {
+          interpretation: "the heal found a constraint worth keeping",
+          actions: [
+            {
+              kind: "update_intent",
+              run: target.id,
+              change: "add-constraint",
+              patch: constraintPatch,
+              base_version: 1,
+            },
+          ],
+        },
+      });
+      expect(encodeJson(answered.result)).toContain("update_intent: applied");
+      expect(answered.error).toBeUndefined();
+      yield* server.close;
+
       const intent = yield* readIntent(target.dir);
       expect(intent?.version).toBe(2);
       expect(Arr.map(intent?.constraints ?? [], (one) => one.text)).toContain(constraintPatch);
