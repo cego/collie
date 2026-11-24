@@ -1543,6 +1543,8 @@ export interface Posted {
   readonly ok: boolean;
   readonly message: string;
   readonly signature?: string;
+  /** True where the note guard refused its wording, rather than the forge refusing the write. */
+  readonly refused?: boolean;
 }
 
 // oxlint-disable-next-line effecttsgo/lazy-effect -- Host serves the published HostApi.usage() method unchanged.

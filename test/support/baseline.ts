@@ -12690,6 +12690,19 @@ const MINOR_FINDINGS = [
   { severity: "minor", title: "the pipeline is still running" },
 ];
 const DELIVERED_WITH_MINOR = { ...OPENED_CI, verdict: "findings", findings: MINOR_FINDINGS };
+const INTERNAL_MINOR = {
+  severity: "minor",
+  internal: true,
+  title: "the `collie verify --name regression` it ran was never seen failing",
+};
+const LEAKING_MINOR = {
+  severity: "minor",
+  title: "the `collie run publish` it cites is not the one it ran",
+};
+const REWORDED_MINOR = {
+  severity: "minor",
+  title: "the publish command it cites is not the one it ran",
+};
 const unsettledOf = (runId: string) =>
   Effect.map(runLog(runId), (log) =>
     Arr.filter(Str.split(log, "\n"), Str.startsWith("unsettled: ")),
@@ -12727,6 +12740,158 @@ scenario(
         ]) {
           expect(prompt).toContain(rule);
         }
+      }),
+    ),
+);
+
+scenario(
+  "a delivery with a minor finding about Collie's own process notes only the others, and records them all",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, forge } = yield* deliveringOn("gitlab", OPEN_MR);
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-impl-delivery-internal-minor";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([
+          BUILT,
+          CLEAN_SYNTHESIS,
+          { ...OPENED_CI, verdict: "findings", findings: [INTERNAL_MINOR, ...MINOR_FINDINGS] },
+        ]);
+        const { status, why } = yield* stoppedAt({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+        });
+        yield* bin.restore();
+        expect(status).toBe("complete");
+        expect(why).toBe("");
+        expect(yield* unsettledOf(runId)).toEqual([
+          `unsettled: ${INTERNAL_MINOR.title}`,
+          ...Arr.map(MINOR_FINDINGS, (one) => `unsettled: ${one.title}`),
+        ]);
+        const [note, ...more] = yield* ciNotes(forge);
+        expect(more).toEqual([]);
+        expect(note).not.toContain("never seen failing");
+        for (const finding of MINOR_FINDINGS) {
+          expect(note).toContain(finding.title);
+        }
+      }),
+    ),
+);
+
+scenario(
+  "a delivery whose only minor findings are about Collie's own process notes none of them, and records each",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, forge } = yield* deliveringOn("gitlab", OPEN_MR);
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-impl-delivery-internal-only";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([
+          BUILT,
+          CLEAN_SYNTHESIS,
+          {
+            ...OPENED_CI,
+            verdict: "findings",
+            findings: [INTERNAL_MINOR, { ...LEAKING_MINOR, internal: true }],
+          },
+        ]);
+        const { status, why } = yield* stoppedAt({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+        });
+        yield* bin.restore();
+        expect(status).toBe("complete");
+        expect(why).toBe("");
+        expect(yield* unsettledOf(runId)).toEqual([
+          `unsettled: ${INTERNAL_MINOR.title}`,
+          `unsettled: ${LEAKING_MINOR.title}`,
+        ]);
+        expect(yield* ciNotes(forge)).toEqual([]);
+      }),
+    ),
+);
+
+scenario(
+  "a delivery whose unsettled note the guard refuses parks note-refused with no Heal, and a resume asks its agent again",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, forge } = yield* deliveringOn("gitlab", OPEN_MR);
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-impl-delivery-note-guard";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([
+          BUILT,
+          CLEAN_SYNTHESIS,
+          { ...OPENED_CI, verdict: "findings", findings: [LEAKING_MINOR] },
+          { ...OPENED_CI, verdict: "findings", findings: [REWORDED_MINOR] },
+        ]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              const [, why] = yield* until(
+                () => Effect.zip(run.status, parkedWhy(runId)),
+                ([got, why]) => got.status === "suspended" && why !== "",
+              );
+              expect(yield* parkedCause(runId)).toBe("note-refused");
+              expect(why).toContain(LEAKING_MINOR.title);
+              expect(why).toEndWith(`resume ${runId}.`);
+              const healed = yield* recoveriesHealed(runId);
+              expect(Arr.map(healed, (line) => line.outcome)).toEqual(["skipped"]);
+              expect(healed[0]?.note).toBe("only a person can act on its cause");
+              expect(yield* parkRecheck(runId, CI_MR, rig.projectDir)).toMatchObject({
+                cleared: false,
+              });
+              yield* run.resume;
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+        expect(status.status).toBe("complete");
+        expect(yield* asked(runId, "mr-2")).toContain(CI_MR);
+        const [note, ...more] = yield* ciNotes(forge);
+        expect(more).toEqual([]);
+        expect(note).toContain(REWORDED_MINOR.title);
+      }),
+    ),
+);
+
+scenario(
+  "a delivery whose unsettled note the forge cannot take parks forge-unavailable, and the forge recheck resumes it once it answers",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, forge } = yield* deliveringOn("gitlab", OPEN_MR);
+        yield* forge.set({ ...(yield* forge.model()), refusesNote: 503 });
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-impl-delivery-note-outage";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, DELIVERED_WITH_MINOR]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              const [, why] = yield* until(
+                () => Effect.zip(run.status, parkedWhy(runId)),
+                ([got, why]) => got.status === "suspended" && why !== "",
+              );
+              expect(why).toContain("503");
+              expect(yield* parkedCause(runId)).toBe("forge-unavailable");
+              const { refusesNote: _, ...answered } = yield* forge.model();
+              yield* forge.set(answered);
+              yield* rechecking(run, runId, CI_MR, rig.projectDir);
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+        expect(status.status).toBe("complete");
+        expect(yield* ciNotes(forge)).toHaveLength(1);
+        expect(yield* prompts()).toHaveLength(3);
       }),
     ),
 );

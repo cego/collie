@@ -836,6 +836,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly ok: boolean;
     readonly message: string;
     readonly signature?: string;
+    /** True where the note guard refused its wording, rather than the forge refusing the write. */
+    readonly refused?: boolean;
   }
 
   /** A pipeline job's state; \`missing\` is a pipeline without it. */
@@ -5849,7 +5851,7 @@ export const hostLayer: (options: {
               const body = redact(asked.body);
               const refused = yield* publicRefusal(body, Effect.succeed(ref.project));
               if (refused !== null) {
-                return { ok: false, message: refused };
+                return { ok: false, message: refused, refused: true };
               }
               return yield* forgeOf(ref).post(ref, body, asked.cwd, runShell);
             }),

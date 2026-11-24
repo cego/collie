@@ -292,6 +292,8 @@ pub enum Cause {
     ReviewBlocked,
     #[serde(rename = "gate-fix-unproved")]
     GateFixUnproved,
+    #[serde(rename = "note-refused")]
+    NoteRefused,
     #[serde(rename = "step-failed")]
     StepFailed,
     #[serde(rename = "predecessor-not-quiet")]

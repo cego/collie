@@ -1060,7 +1060,7 @@ every other operation from it, naming the Run it heals. It never answers a Decis
 a Hold, undoes a Stop, writes code or merges. Three per Run; one runs
 at a time on a Machine and none while it is Short of memory. No Heal starts for a Run with
 a Decision, Hold or Stop, for a cause only a person can act on (`checkout-dirty-human`,
-`login-missing`, `branch-force-pushed`), for a park of a Heal, or with
+`login-missing`, `branch-force-pushed`, `note-refused`), for a park of a Heal, or with
 `collie settings set recovery.heal false`: those parks need you at once. Nor does one start
 for `ci-failed` or `herdr-unavailable` once their three resumes are spent: only the forge
 clears the one, and a Heal's own agent launches through core, so they need you with their

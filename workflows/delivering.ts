@@ -724,32 +724,45 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         yield* host.mergeRequest(runId, opened.mr_url);
         if (minor.length > 0) {
           yield* Activity.make({
-            name: "mr-unsettled",
+            name: attempt === 1 ? "mr-unsettled" : `mr-unsettled-${attempt}`,
             execute: Effect.forEach(minor, (one) => host.record(runId, `unsettled: ${one.title}`), {
               discard: true,
             }),
           });
-          yield* Activity.make({
-            name: "mr-unsettled-note",
-            execute: Effect.gen(function* () {
-              const posted = yield* host.note({
-                runId,
-                cwd,
-                body: `Delivery left these unsettled:\n\n${Arr.join(
-                  Arr.map(minor, (one) => `- ${one.title}${one.detail ? `: ${one.detail}` : ""}`),
-                  "\n",
-                )}`,
-              });
-              if (posted.ok) {
-                return yield* host.parked(runId, null);
-              }
-              const reason = `Cannot note what delivery left unsettled on ${opened.mr_url}: ${posted.message}. Repair it, then resume ${runId}.`;
-              yield* host.record(runId, reason);
-              yield* stepFailed(reason);
-              yield* host.parked(runId, reason, "forge-unavailable");
-              return yield* Workflow.suspend(yield* WorkflowInstance);
-            }),
-          });
+          const noted = Arr.filter(minor, (one) => one.internal !== true);
+          if (noted.length > 0) {
+            yield* Activity.make({
+              name: attempt === 1 ? "mr-unsettled-note" : `mr-unsettled-note-${attempt}`,
+              execute: Effect.gen(function* () {
+                const posted = yield* host.note({
+                  runId,
+                  cwd,
+                  body: `Delivery left these unsettled:\n\n${Arr.join(
+                    Arr.map(noted, (one) => `- ${one.title}${one.detail ? `: ${one.detail}` : ""}`),
+                    "\n",
+                  )}`,
+                });
+                if (posted.ok) {
+                  return yield* host.parked(runId, null);
+                }
+                // WARNING: a refusal by the note guard is a wording only a person may settle; a forge error is not.
+                const refused = posted.refused === true;
+                const reason = refused
+                  ? `Cannot note what delivery left unsettled on ${opened.mr_url}: ${posted.message} The note named ${Arr.join(
+                      Arr.map(noted, (one) => one.title),
+                      "; ",
+                    )}. Reword it, then resume ${runId}.`
+                  : `Cannot note what delivery left unsettled on ${opened.mr_url}: ${posted.message} Repair it, then resume ${runId}.`;
+                yield* host.record(runId, reason);
+                yield* stepFailed(reason);
+                if (refused) {
+                  yield* fs.writeFileString(parkedAt(attempt), "").pipe(Effect.orDie);
+                }
+                yield* host.parked(runId, reason, refused ? "note-refused" : "forge-unavailable");
+                return yield* Workflow.suspend(yield* WorkflowInstance);
+              }),
+            });
+          }
         }
         yield* Activity.make({
           name: "mr-pipeline",
