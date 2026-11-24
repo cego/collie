@@ -1,5 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
+import * as Order from "effect/Order";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import {
@@ -255,6 +256,16 @@ const deliveredBy = (ask: Pick<Delivery<Told, Opened>, "agent" | "takesOver" | "
   return on;
 };
 
+// WARNING: the phases are ordered as the Run reaches them, so the last fix's name is the newest.
+const FIX_PHASES = ["fix", "gate-fix", "ci-fix"];
+const parseJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
+
+const fixPhase = (file: string) => {
+  const match = FIX_FILE.exec(file);
+  return match === null ? 0 : FIX_PHASES.indexOf(match[1] ?? "") * 1000 + Number(match[2]);
+};
+const FIX_FILE = /^(fix|gate-fix|ci-fix)-(\d+)\.json$/;
+
 export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =>
   Effect.gen(function* () {
     const host = yield* Host;
@@ -263,6 +274,35 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
     const { cwd, rallied } = ask;
     let latest: Pick<Reviewed, "reviewed" | "on"> = rallied;
     const { dir } = yield* host.place(runId);
+    // WARNING: a fix may name the reproduction the build did not, so the gate reads every fix's Output.
+    const fixes = Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const folder = pipe_(agents.outputFor(runId, "build"), Str.replace(/\/[^/]*$/, ""));
+      const none: ReadonlyArray<string> = [];
+      const found = yield* fs.readDirectory(folder).pipe(Effect.orElseSucceed(() => none));
+      const read = yield* Effect.forEach(
+        Arr.sort(
+          Arr.filter(found, (file) => FIX_FILE.test(file)),
+          Order.mapInput(Order.Number, fixPhase),
+        ),
+        (file) =>
+          fs.readFileString(`${folder}/${file}`).pipe(
+            Effect.flatMap((text) => Effect.fromOption(parseJson(text))),
+            Effect.map((output) => ({
+              operation: pipe_(file, Str.replace(/\.json$/, "")),
+              output,
+            })),
+            Effect.orElseSucceed(() => null),
+          ),
+      );
+      const outputs: Record<string, Schema.Json> = {};
+      for (const one of read) {
+        if (one !== null) {
+          outputs[one.operation] = one.output;
+        }
+      }
+      return outputs;
+    });
     const treeNow = Effect.map(host.evidence(runId, cwd), ({ final }) => ({
       head: final.head_sha,
       fingerprint: final.fingerprint,
@@ -281,7 +321,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         kind: isOutcome(now) ? now : ("unspecified" as const),
         evidence: yield* host.evidence(runId, cwd),
         approved,
-        outputs: { ...ask.outputs(), synthesize: { ...reviewed } },
+        outputs: { ...ask.outputs(), ...(yield* fixes), synthesize: { ...reviewed } },
         reviewed: ["synthesize"],
         reviewedOn: on === undefined ? undefined : { synthesize: on },
         roots: ask.roots,

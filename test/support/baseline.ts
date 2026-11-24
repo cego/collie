@@ -9811,6 +9811,62 @@ scenario("a gate fix runs without asking, and reaches the merge request as not r
 );
 
 scenario(
+  "a bug whose gate fix names the reproduction it recorded reaches its merge request, instead of failing at Checks",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* ahead();
+        const runId = "r-bug-named";
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve(runId, ["unit"]);
+        yield* freeze(runId, [
+          { name: "unit", executable: "sh", argv: ["-c", "true"], cwd: rig.projectDir },
+        ]);
+        const regression = {
+          name: "regression",
+          executable: "sh",
+          argv: ["-c", "test -f fixed"],
+          cwd: rig.projectDir,
+        };
+        yield* collect(evidenceDir(dir, runId), {
+          ...regression,
+          run: runId,
+          by: "agent",
+          expect: "fail",
+        });
+        yield* (yield* FileSystem.FileSystem).writeFileString(`${rig.projectDir}/fixed`, "fixed\n");
+        yield* exec(["git", "add", "fixed"], { cwd: rig.projectDir });
+        yield* exec(["git", "commit", "-qm", "the fix"], { cwd: rig.projectDir });
+        yield* collect(evidenceDir(dir, runId), { ...regression, run: runId, by: "agent" });
+        const named = {
+          verdict: "clean",
+          findings: [],
+          fixed: [],
+          disputed: [],
+          checks: [{ name: "unit" }],
+          reproduced: "regression",
+        };
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, named, OPENED]);
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+          options: { outcome: "bug" },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* asked(runId, "gate-fix-1")).toContain(
+          '"regression" failed before the fix and passes on this tree',
+        );
+        expect(yield* wasAsked(runId, "gate-fix-2")).toBe(false);
+      }),
+    ),
+);
+
+scenario(
   "each gate pass says why it runs, in the marker while it runs and on its record after",
   () =>
     runEffect(

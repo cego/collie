@@ -375,6 +375,17 @@ function anyField(got: Collected, key: string) {
   return undefined;
 }
 
+// WARNING: the newest Output that names it wins, so a fix's name supersedes the build's.
+function reproducedName(got: Collected) {
+  for (const output of [...got.outputs.values()].reverse()) {
+    const named = isYamlMap(output) ? output["reproduced"] : undefined;
+    if (isString(named) && Str.trim(named) !== "") {
+      return named;
+    }
+  }
+  return undefined;
+}
+
 function reviewerField(got: Collected, key: string) {
   for (const [id, output] of got.outputs) {
     if (!got.reviewed.has(id)) {
@@ -524,9 +535,16 @@ function gapsOf(kind: Outcome, got: Collected) {
           `the bug was reproduced by ${shown(before.at(-1)!)} but the fix is proven by ${shown(fixedBy)}: one command has to fail before the fix and pass after it`,
         );
       }
-      const named = anyField(got, "reproduced");
-      if (!isString(named) || Str.trim(named) === "") {
-        claim("the Output does not name the verification that reproduced the bug");
+      const named = reproducedName(got);
+      if (named === undefined) {
+        // WARNING: a pair the journal holds is a name an agent can still write; with no pair nothing can.
+        if (before.length === 0 || fixedBy === undefined) {
+          claim("the Output does not name the verification that reproduced the bug");
+        } else {
+          check(
+            'no Output names the reproduction, though "regression" failed before the fix and passes on this tree',
+          );
+        }
       }
       break;
     }

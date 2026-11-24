@@ -34,6 +34,9 @@ const EARLIER = { head_sha: "abc000", fingerprint: "tree-0" };
 
 const TESTS: VerifySpec = { name: "tests", executable: "bun", argv: ["test"], cwd: "." };
 
+const UNNAMED_REPRODUCTION =
+  'no Output names the reproduction, though "regression" failed before the fix and passes on this tree';
+
 function record(over: Partial<Verification> & { name: string }) {
   const returned: Verification = {
     id: `${over.name}-1`,
@@ -320,7 +323,55 @@ test("a bug is a fail then a pass, on two different trees", () => {
       "bug",
       collected({ verifications: [record({ name: "tests" }), reproduced, fixed] }),
     ),
-  ).toEqual(["the Output does not name the verification that reproduced the bug"]);
+  ).toEqual([UNNAMED_REPRODUCTION]);
+});
+
+test("a red then green pair no Output names is a gap the gate fix is asked to close", () => {
+  const reproduced = record({
+    name: "regression",
+    expect: "fail",
+    exit: 1,
+    result: "pass",
+    start: EARLIER,
+    end: EARLIER,
+  });
+  const paired = collected({
+    verifications: [record({ name: "tests" }), reproduced, record({ name: "regression" })],
+  });
+  expect(checkGaps("bug", paired)).toEqual([UNNAMED_REPRODUCTION]);
+  expect(UNNAMED_REPRODUCTION).toContain("regression");
+  expect(
+    checkGaps(
+      "bug",
+      collected({ verifications: [record({ name: "tests" }), record({ name: "regression" })] }),
+    ),
+  ).toEqual([
+    "no regression verification recorded with --expect fail, so the bug was never reproduced",
+  ]);
+});
+
+test("the newest Output that names a reproduction is the one the gate reads", () => {
+  const pairs = [
+    record({ name: "tests" }),
+    record({
+      name: "regression",
+      expect: "fail",
+      exit: 1,
+      result: "pass",
+      start: EARLIER,
+      end: EARLIER,
+    }),
+    record({ name: "regression" }),
+  ];
+  const naming = (...names: ReadonlyArray<string>) =>
+    collected({
+      verifications: pairs,
+      outputs: new Map<string, YamlValue>(
+        Arr.map(names, (name, at) => [at === 0 ? "build" : `gate-fix-${at}`, { reproduced: name }]),
+      ),
+    });
+  expect(evidenceGaps("bug", naming("", "regression"))).toEqual([]);
+  expect(evidenceGaps("bug", naming("regression", ""))).toEqual([]);
 });
 
 test("a regression that passed only before the tree moved says it has not run here, not that it fails", () => {

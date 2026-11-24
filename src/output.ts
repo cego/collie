@@ -259,6 +259,10 @@ export const FixOutputSchema = Schema.Struct({
   fixed: optionalList(FixedSchema),
   disputed: optionalList(FindingSchema),
   checks: optionalList(CheckSchema),
+  reproduced: Schema.optionalKey(Schema.String).annotate({
+    description:
+      "the verification that reproduced the bug, when this Run proves a bug and the gate says no Output names it",
+  }),
   ...OutgoingFields,
 }).pipe(listed());
 

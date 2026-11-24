@@ -1608,7 +1608,11 @@ asked, such as `bun`, with the same arguments in the same directory: a fail thro
 manager's shim and a pass through the binary it points at are one command, and the
 environment each was recorded with still says which runtime ran. A record kept before the
 asked executable was compares by the path it resolved to. Whether a record ran one of the
-run's checks is still decided by the resolved path.
+run's checks is still decided by the resolved path. A `bug`'s reproduction is read from the
+newest agent Output that names it, the build's or any fix or gate fix the Run made; a red
+then green record of `regression` in the journal with no Output naming it is a gap the gate
+fix is handed, and with no such pair the Run ends at the gate, as nothing an agent could
+write would name a reproduction that was never made.
 
 The gate runs before the merge request, which is where the claim is made. Collie runs the
 run's own checks itself at the tree as it stands, reading them again at every pass, then
