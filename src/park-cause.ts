@@ -21,6 +21,7 @@ export const ParkCause = Schema.Literals([
   "review-blocked",
   "gate-fix-unproved",
   "step-failed",
+  "compaction-unsettled",
   "predecessor-not-quiet",
   "predecessor-locked",
   "predecessor-unproven",
@@ -94,6 +95,7 @@ export const PARK_CAUSES: Readonly<Record<ParkCause, Entry>> = {
     kind: "needs-you",
     reason: "a Step failed on something to correct, and a resume enters it again",
   },
+  "compaction-unsettled": { kind: "rechecks", neverHeals: true },
   "predecessor-not-quiet": { kind: "rechecks", neverHeals: true },
   "predecessor-locked": { kind: "rechecks", neverHeals: true },
   "predecessor-unproven": {

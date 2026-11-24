@@ -1312,13 +1312,25 @@ Only sending the compaction request takes the Dispatcher's transaction. Reading 
 context and polling an attempt run outside any, with a channel that refuses to send, so a
 steer is never refused behind them: the transaction refuses a second one for the same agent
 in the same process. A compaction is waited on for five minutes (`COMPACTION_WAIT_MS`, the
-host's `compactionWaitMs`). Past them `settle` answers `waiting` rather than parking:
-`boundary` in `agents.ts` shows the reason through the host's `parked`, which raises
-needs-you once, and goes on polling the same attempt with `pollCompaction` at the poll
-interval. Only the harness's correlated outcome ends it; on either outcome the attempt and
-the note are cleared and the step is sent, through its own transaction. A stop of the Run
-ends the wait and sends nothing, and a host restart finds the attempt on the control record
-at the next boundary and waits there.
+host's `compactionWaitMs`). The mark is written before the request is sent, and carries what
+settles it: the request's id, its incarnation and that incarnation's own transcript. Only
+the completion of that request, written by that incarnation, settles it — an automatic
+compaction, another request's, a boundary from a relaunched agent, a boundary that names no
+request and one of two candidates all leave it unresolved, and so does a completion the hook
+could not record: that hook appends the loss marker instead, and where it can record neither
+it exits non-zero rather than leave a hole the host would read as nothing having happened.
+
+Past its bound `settle` answers `waiting` rather than parking forever: `boundary` in
+`agents.ts` records the marked request in the Run's `runs/<run>/compaction-wait.jsonl`,
+answers the boundary as `AgentParked` with the cause `compaction-unsettled`, and stops
+polling. The park's line says who acts — Collie keeps waiting and resumes the step once the
+completion arrives, and the pane is where a human sees why it has not. `recheckPark` reads
+that request once a round, and clears the park when the attempt is settled or gone, since a
+cancelled or replaced attempt has nothing left to wait for; the resumed Run meets its own
+Step again and sends it. The attempt and its deadline stay on the control record, so a host
+restart finds the same request, waits no longer than its original bound, and parks the same
+park. A stop of the Run, or of the agent, cancels the attempt in its telemetry (`cancelled`,
+never `done`) and clears it, because the incarnation that asked is gone.
 
 An agent's controls live in `<state>/compaction/<agent>/` rather than in its Run's
 directory, because the agent outlives the Run that launched it — the same fact the

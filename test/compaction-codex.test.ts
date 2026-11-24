@@ -145,6 +145,8 @@ function why<A, E>(result: Result.Result<A, E>) {
   return Result.isFailure(result) ? reason(result.failure) : "";
 }
 
+const marked = (id: string) => ({ id, session: null, transcript: null });
+
 const ctx = () => ({
   agent: "build-r1",
   run: "run-1",
@@ -275,7 +277,7 @@ test("a submitted request is not a completed one", () =>
     Effect.gen(function* () {
       yield* codex.request(ctx(), "req-1");
       expect(fake.calls).toContain("thread/compact/start");
-      expect(yield* codex.poll(ctx(), "req-1")).toBeNull();
+      expect(yield* codex.poll(ctx(), marked("req-1"))).toBeNull();
     }),
   ));
 
@@ -286,7 +288,7 @@ test("a compaction that was already there cannot complete this request", () =>
       fake.turns = [{ id: "t-old", status: "completed" }];
       yield* codex.request(ctx(), "req-1");
 
-      expect(yield* codex.poll(ctx(), "req-1")).toBeNull();
+      expect(yield* codex.poll(ctx(), marked("req-1"))).toBeNull();
     }),
   ));
 
@@ -301,7 +303,7 @@ test("a new compaction whose turn completed is the success", () =>
       };
 
       yield* codex.request(ctx(), "req-1");
-      expect(yield* codex.poll(ctx(), "req-1")).toEqual({ kind: "success" });
+      expect(yield* codex.poll(ctx(), marked("req-1"))).toEqual({ kind: "success" });
     }),
   ));
 
@@ -314,7 +316,7 @@ test("a new compaction still in its turn is unresolved, not a success", () =>
       };
 
       yield* codex.request(ctx(), "req-1");
-      expect(yield* codex.poll(ctx(), "req-1")).toBeNull();
+      expect(yield* codex.poll(ctx(), marked("req-1"))).toBeNull();
     }),
   ));
 
@@ -329,7 +331,7 @@ test.each(["failed", "interrupted"])(
         };
 
         yield* codex.request(ctx(), "req-1");
-        expect(yield* codex.poll(ctx(), "req-1")).toEqual({
+        expect(yield* codex.poll(ctx(), marked("req-1"))).toEqual({
           kind: "failure",
           reason: "the model refused",
         });
@@ -343,7 +345,7 @@ test("a request nothing recorded as submitted has no outcome", () =>
       fake.compactions = [{ id: "c-new", turnId: "t-new" }];
       fake.turns = [{ id: "t-new", status: "completed" }];
 
-      expect(yield* codex.poll(ctx(), "never-submitted")).toBeNull();
+      expect(yield* codex.poll(ctx(), marked("never-submitted"))).toBeNull();
     }),
   ));
 

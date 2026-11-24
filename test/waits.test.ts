@@ -5,12 +5,22 @@ import { expect, test } from "bun:test";
 import { Clock, Effect, Fiber, FileSystem, Schema, flow, Result } from "effect";
 import { TestClock } from "effect/testing";
 import { withCodex, currentContext } from "../src/codex";
-import { atBoundary, awaitReady, Unsubmitted } from "../src/compaction";
+import {
+  atBoundary,
+  awaitReady,
+  cancelCompaction,
+  readControl,
+  Unsubmitted,
+} from "../src/compaction";
 import type { CompactionPort, CompactionOutcome } from "../src/compaction";
-import { codexPort, servedEndpoint } from "../src/compactors";
+import { COMPACTION_PORTS, codexPort, servedEndpoint } from "../src/compactors";
 import type { Channel } from "../src/dispatcher";
 import { handOverClaim } from "../src/engine";
+import { rememberCompactionWait, recheckPark } from "../src/park-recheck";
+import { parkIdentity, parkText } from "../src/park-cause";
 import { fastForward, runEffect } from "./support/effect";
+import { forgeHttpOnPath } from "./support/forge";
+import { fakeChannel } from "./support/compaction";
 import { until } from "./support/host";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
@@ -146,8 +156,9 @@ test("an unresolved compaction is polled at its interval and last at its recorde
       expect(result).toEqual({
         dispatch: false,
         waiting: true,
+        cause: "compaction-unsettled",
         reason:
-          "build-r1: compaction build-r1-1 has not finished after 1 minutes; Collie keeps waiting and sends 02-ui once it does. Check its pane.",
+          "build-r1: compaction build-r1-1 has not finished after 1 minutes; Collie keeps waiting for its completion and resumes 02-ui once it arrives. Check its pane.",
       });
     }),
   ));
@@ -512,4 +523,219 @@ test("a compaction waits for room before it is asked for, and a stop in that wai
         reason: "build-r1: the Run was stopped while its compaction waited for disk",
       });
     }),
+  ));
+
+const saidBy = (due: { readonly dispatch: boolean; readonly reason?: string }) =>
+  due.dispatch ? "" : (due.reason ?? "");
+
+const startEvent = (id: string) => ({
+  at: 1_791_457_800_000,
+  session: "s-1",
+  kind: "start",
+  request: id,
+});
+
+const postEvent = () => ({
+  at: 1_791_457_860_000,
+  session: "s-1",
+  kind: "auto",
+  reason: "manual",
+  phase: "post",
+});
+
+const binding = { at: 1_791_457_799_000, session: "s-1", kind: "session" };
+
+const hooks = (control: string, events: ReadonlyArray<typeof binding>) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    // WARNING: the newest session line is what binds the events Collie reads, as the status line writes it.
+    yield* fs.writeFileString(
+      `${control}/events.jsonl`,
+      `${Arr.join(
+        Arr.map([{ at: 1_791_457_799_000, session: "s-1", kind: "session" }, ...events], (event) =>
+          JSON.stringify(event),
+        ),
+        "\n",
+      )}\n`,
+      { flag: "a" },
+    );
+  });
+
+const ctx = (dir: string) => ({
+  agent: "build-r1",
+  run: "r1",
+  harness: "claude",
+  cwd: "/nowhere",
+  dir,
+  endpoint: null,
+  channel: fakeChannel([]),
+});
+
+const lostPark = (stateDir: string) => ({
+  runId: "r1",
+  cwd: stateDir,
+  branch: null,
+  mr: null,
+  park: { cause: "compaction-unsettled" as const, kind: "rechecks" as const },
+});
+
+test("a compaction that never completes parks under its own cause at its bound, and its completion carries the Step on", () =>
+  runEffect(
+    Effect.gen(function* () {
+      let polls = 0;
+      const { result } = yield* timed((ask) =>
+        Effect.gen(function* () {
+          const deadline = (yield* Clock.currentTimeMillis) + 1000;
+          const stateDir = yield* controlled({ deadline });
+          const waiting = yield* atBoundary(
+            deps(
+              stateDir,
+              port({
+                poll: () =>
+                  ask.pipe(Effect.andThen(Effect.sync(() => (polls += 1))), Effect.as(null)),
+              }),
+            ),
+            { agent: "build-r1", run: "r1", step: "02-ui" },
+            submitting,
+          );
+          return { stateDir, waiting };
+        }),
+      );
+      const { stateDir } = result;
+      const control = `${stateDir}/compaction/build-r1`;
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(`${stateDir}/runs/r1`, { recursive: true });
+      yield* hooks(control, [startEvent("build-r1-1")]);
+      yield* rememberCompactionWait(`${stateDir}/runs/r1`, {
+        agent: "build-r1",
+        request: "build-r1-1",
+      });
+
+      expect(polls).toBe(5);
+      expect(result.waiting).toMatchObject({
+        dispatch: false,
+        waiting: true,
+        cause: "compaction-unsettled",
+      });
+      const [, reason] = [result.waiting, saidBy(result.waiting)];
+      expect(reason).toContain("Check its pane");
+      expect(reason).toContain("resumes 02-ui once it arrives");
+
+      const herdr = { agentList: () => Effect.succeed([]) };
+      const before = yield* recheckPark(lostPark(stateDir), stateDir, herdr);
+      expect(before).toMatchObject({ cleared: false, error: false });
+
+      yield* hooks(control, [postEvent()]);
+      const after = yield* recheckPark(lostPark(stateDir), stateDir, herdr);
+      expect(after).toMatchObject({ cleared: true, error: false });
+
+      const due = yield* atBoundary(
+        deps(stateDir, COMPACTION_PORTS.claude!),
+        { agent: "build-r1", run: "r1", step: "02-ui" },
+        submitting,
+      );
+      expect(due).toEqual({ dispatch: true });
+    }).pipe(Effect.provide(forgeHttpOnPath)),
+  ));
+
+test("a restart keeps the request it marked, its bound and its park, and a matching completion still carries the Step on", () =>
+  runEffect(
+    Effect.gen(function* () {
+      let pollsAfter = 0;
+      const { result } = yield* timed((ask) =>
+        Effect.gen(function* () {
+          const deadline = (yield* Clock.currentTimeMillis) + 1000;
+          const stateDir = yield* controlled({ deadline });
+          const first = yield* atBoundary(
+            deps(stateDir, port({ poll: () => ask.pipe(Effect.as(null)) })),
+            { agent: "build-r1", run: "r1", step: "02-ui" },
+            submitting,
+          );
+          return { stateDir, first };
+        }),
+      );
+      const { stateDir } = result;
+      const marked = yield* readControl(stateDir, "build-r1");
+      // WARNING: the restart is a fresh reader of the same records, not a new mark.
+      const again = yield* atBoundary(
+        deps(
+          stateDir,
+          port({
+            poll: () => Effect.sync(() => (pollsAfter += 1)).pipe(Effect.as(null)),
+          }),
+        ),
+        { agent: "build-r1", run: "r1", step: "02-ui" },
+        submitting,
+      );
+      const still = yield* readControl(stateDir, "build-r1");
+      const control = `${stateDir}/compaction/build-r1`;
+      yield* hooks(control, [startEvent("build-r1-1"), postEvent()]);
+      const resumed = yield* atBoundary(
+        deps(stateDir, COMPACTION_PORTS.claude!),
+        { agent: "build-r1", run: "r1", step: "02-ui" },
+        submitting,
+      );
+
+      expect(still?.attempt?.id).toBe(marked?.attempt?.id);
+      expect(still?.attempt?.deadline).toBe(marked?.attempt?.deadline);
+      expect(pollsAfter).toBe(1);
+      expect(again).toMatchObject({
+        dispatch: false,
+        waiting: true,
+        cause: "compaction-unsettled",
+      });
+      expect(saidBy(again)).toBe(saidBy(result.first));
+      expect(parkIdentity("r1", "compaction-unsettled", [parkText(saidBy(again))])).toBe(
+        parkIdentity("r1", "compaction-unsettled", [parkText(saidBy(result.first))]),
+      );
+      expect(resumed).toEqual({ dispatch: true });
+    }).pipe(Effect.provide(forgeHttpOnPath)),
+  ));
+
+test("a stopped agent's compaction is recorded as cancelled, no later boundary settles it, and the wait does not stay parked", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { result } = yield* timed((ask) =>
+        Effect.gen(function* () {
+          const deadline = (yield* Clock.currentTimeMillis) + 1000;
+          const stateDir = yield* controlled({ deadline });
+          yield* atBoundary(
+            deps(stateDir, port({ poll: () => ask.pipe(Effect.as(null)) })),
+            { agent: "build-r1", run: "r1", step: "02-ui" },
+            submitting,
+          );
+          return { stateDir };
+        }),
+      );
+      const { stateDir } = result;
+      const control = `${stateDir}/compaction/build-r1`;
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(`${stateDir}/runs/r1`, { recursive: true });
+      yield* rememberCompactionWait(`${stateDir}/runs/r1`, {
+        agent: "build-r1",
+        request: "build-r1-1",
+      });
+      yield* hooks(control, [startEvent("build-r1-1")]);
+      const cancelled = yield* cancelCompaction(
+        { ports: COMPACTION_PORTS, stateDir, log: () => Effect.void },
+        "build-r1",
+        "its Run was stopped",
+      );
+      const written = yield* fs.readFileString(`${control}/events.jsonl`);
+      yield* hooks(control, [postEvent()]);
+      const settled = yield* COMPACTION_PORTS.claude!.poll(ctx(control), {
+        id: "build-r1-1",
+        session: null,
+        transcript: null,
+      });
+      const cleared = yield* recheckPark(lostPark(stateDir), stateDir, {
+        agentList: () => Effect.succeed([]),
+      });
+
+      expect(cancelled).toBe(true);
+      expect(written).toContain('"kind":"cancelled"');
+      expect(written).not.toContain('"kind":"done"');
+      expect(settled).toEqual({ kind: "failure", reason: "its Run was stopped" });
+      expect(cleared).toMatchObject({ cleared: true, error: false });
+    }).pipe(Effect.provide(forgeHttpOnPath)),
   ));

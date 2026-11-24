@@ -10,7 +10,8 @@ import type { AgentHost } from "../src/agents";
 import { foundationLayer } from "../src/engine";
 import { Herdr, HerdrError } from "../src/herdr";
 import type { CompactionPorts, Stopped } from "../src/compaction";
-import { withControlLock } from "../src/compaction";
+import { readControl, withControlLock } from "../src/compaction";
+import { COMPACTION_PORTS } from "../src/compactors";
 import { recheckPark } from "../src/park-recheck";
 import { fastForward, runEffect, runEffect as runLive } from "./support/effect";
 import { Rig } from "./support/recorder";
@@ -126,6 +127,40 @@ test("a Claude agent ends: its core terminal closes and the end is logged", () =
         "impl: Quiet not confirmed: no process of its pane could be named",
         "impl ended: its Run was stopped",
       ]);
+    }),
+  ));
+
+test("an agent ended before its compaction completes records it cancelled, and nothing waits on it afterwards", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const terminalId = yield* arranged("impl");
+      const fs = yield* FileSystem.FileSystem;
+      const dir = `${rig.stateDir}/compaction/impl`;
+      yield* fs.makeDirectory(dir, { recursive: true });
+      yield* fs.writeFileString(
+        `${dir}/control.json`,
+        asJson({
+          agent: "impl",
+          harness: "claude",
+          cwd: rig.projectDir,
+          dir,
+          attempt: {
+            id: "impl-1",
+            run: "r1",
+            step: "02-ui",
+            deadline: 1,
+            asked: 1,
+            session: "s-1",
+          },
+        }),
+      );
+      const { deps, lines } = depsOf({ ports: { claude: COMPACTION_PORTS.claude! } });
+      yield* endAgent(deps, { agent: "impl", terminalId }, "its Run was stopped", "close");
+      const record = yield* readControl(rig.stateDir, "impl");
+      const written = yield* fs.readFileString(`${dir}/events.jsonl`);
+      expect(record?.attempt).toBeNull();
+      expect(written).toContain('"kind":"cancelled"');
+      expect(lines).toContain("impl: compaction impl-1 was cancelled (its Run was stopped)");
     }),
   ));
 

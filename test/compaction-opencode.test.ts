@@ -92,6 +92,8 @@ function serve() {
   };
 }
 
+const marked = (id: string) => ({ id, session: null, transcript: null });
+
 const ctx = () => ({
   agent: "build-r1",
   run: "run-1",
@@ -372,7 +374,7 @@ test("a 200 from summarize is not proof that anything compacted", () =>
       yield* opencode.request(ctx(), "req-1");
 
       expect(fake.calls).toContain(`POST /session/ses_one/summarize`);
-      expect(yield* opencode.poll(ctx(), "req-1")).toBeNull();
+      expect(yield* opencode.poll(ctx(), marked("req-1"))).toBeNull();
     }),
   ));
 
@@ -392,7 +394,7 @@ test("a compaction the session already had cannot complete this request", () =>
       ];
       yield* opencode.request(ctx(), "req-1");
 
-      expect(yield* opencode.poll(ctx(), "req-1")).toBeNull();
+      expect(yield* opencode.poll(ctx(), marked("req-1"))).toBeNull();
     }),
   ));
 
@@ -415,7 +417,7 @@ test("a compaction message that was not there before is the success", () =>
       };
 
       yield* opencode.request(ctx(), "req-1");
-      expect(yield* opencode.poll(ctx(), "req-1")).toEqual({ kind: "success" });
+      expect(yield* opencode.poll(ctx(), marked("req-1"))).toEqual({ kind: "success" });
     }),
   ));
 
@@ -440,7 +442,7 @@ test("a compaction message still being written is unresolved, not a success", ()
       };
 
       yield* opencode.request(ctx(), "req-1");
-      expect(yield* opencode.poll(ctx(), "req-1")).toBeNull();
+      expect(yield* opencode.poll(ctx(), marked("req-1"))).toBeNull();
     }),
   ));
 
@@ -471,7 +473,7 @@ test("the error on that message is the documented confirmed failure", () =>
       };
 
       yield* opencode.request(ctx(), "req-1");
-      expect(yield* opencode.poll(ctx(), "req-1")).toEqual({
+      expect(yield* opencode.poll(ctx(), marked("req-1"))).toEqual({
         kind: "failure",
         reason: "the context is too large to compact",
       });
@@ -484,7 +486,7 @@ test("a request nothing recorded as submitted has no outcome", () =>
       yield* bind();
       fake.messages = [assistant("c-new", undefined, { mode: "compaction" })];
 
-      expect(yield* opencode.poll(ctx(), "never-submitted")).toBeNull();
+      expect(yield* opencode.poll(ctx(), marked("never-submitted"))).toBeNull();
     }),
   ));
 

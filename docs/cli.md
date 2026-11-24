@@ -1015,7 +1015,9 @@ A park whose cause rechecks can resume automatically. The host checks for the na
 at the parked head, an answering forge, core listing its agents as a launch asks it to, a
 clean Collie checkout, a delivery that has settled, or, for `predecessor-not-quiet`, that
 nothing the agent a Fallback replaces, or a launch's controls replace, left is still running,
-or, for `predecessor-locked`, that the agent's controls are free, or, for `hand-over-stale`, that
+or, for `predecessor-locked`, that the agent's controls are free, or, for
+`compaction-unsettled`, that the marked compaction has completed or is no longer in the air,
+or, for `hand-over-stale`, that
 the checkout's head and plan revision held still since they were last read. `predecessor-unproven`
 needs you instead: Collie could not close the agent or could not prove it was this Run's, and its
 reason says what it could not prove. `delivery-unsettled` is set when an

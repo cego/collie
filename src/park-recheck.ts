@@ -13,7 +13,9 @@ import { parkText } from "./park-cause";
 import type { ParkCause } from "./park-cause";
 import { readStepLines } from "./steps";
 import { isSettledDelivery, newestById, readLedger } from "./steering";
-import { keptFor, readControl, withControlLock } from "./compaction";
+import { keptFor, pollCompaction, readControl, withControlLock } from "./compaction";
+import type { CompactionDeps } from "./compaction";
+import { COMPACTION_PORTS } from "./compactors";
 import { processAbsent, processOf } from "./processes";
 import { planRevision } from "./hand-over";
 
@@ -62,6 +64,24 @@ const notQuietJournal = (dir: string) => runJournal(dir, "not-quiet.jsonl");
 
 export const rememberNotQuiet = (dir: string, predecessor: typeof NotQuiet.Type) =>
   appendRunJournal(notQuietJournal(dir), NotQuiet, predecessor);
+
+const CompactionWait = Schema.fromJsonString(
+  Schema.Struct({
+    agent: Schema.String,
+    request: Schema.String,
+  }),
+);
+
+const compactionWaitJournal = (dir: string) => runJournal(dir, "compaction-wait.jsonl");
+
+export const rememberCompactionWait = (dir: string, waiting: typeof CompactionWait.Type) =>
+  appendRunJournal(compactionWaitJournal(dir), CompactionWait, waiting);
+
+const lastCompactionWait = (dir: string) =>
+  Effect.map(
+    readRunJournal(compactionWaitJournal(dir), CompactionWait).pipe(Effect.orElseSucceed(() => [])),
+    (waiting) => waiting.at(-1),
+  );
 
 const StaleHandOver = Schema.fromJsonString(
   Schema.Struct({
@@ -333,6 +353,41 @@ export const recheckPark = (
         return (yield* hasRoom)
           ? reply(true, `${account} has room`)
           : reply(false, `${account} has no room${resetsAt === null ? "" : ` until ${resetsAt}`}`);
+      }
+      case "compaction-unsettled": {
+        const dir = `${stateDir}/runs/${view.runId}`;
+        const waiting = yield* lastCompactionWait(dir);
+        if (waiting === undefined) {
+          return reply(false, "no marked compaction recorded");
+        }
+        const record = yield* readControl(stateDir, waiting.agent);
+        if (record?.attempt == null || record.attempt.id !== waiting.request) {
+          return reply(
+            true,
+            `${waiting.agent}'s compaction ${waiting.request} is no longer in the air`,
+          );
+        }
+        const deps: CompactionDeps = {
+          ports: COMPACTION_PORTS,
+          stateDir,
+          configured: 0,
+          herdr,
+          log: () => Effect.void,
+          warn: () => Effect.void,
+          waitMs: 0,
+          pollMs: 0,
+        };
+        const read = yield* pollCompaction(deps, waiting.agent).pipe(Effect.result);
+        if (read._tag === "Failure") {
+          return reply(false, `its compaction could not be read (${String(read.failure)})`, true);
+        }
+        const left = (yield* readControl(stateDir, waiting.agent))?.attempt;
+        return left == null || left.id !== waiting.request
+          ? reply(true, `${waiting.agent}'s compaction ${waiting.request} has settled`)
+          : reply(
+              false,
+              `${waiting.agent}'s compaction ${waiting.request} has not completed; it resumes the Step once it does`,
+            );
       }
       case "hand-over-stale": {
         const dir = `${stateDir}/runs/${view.runId}`;

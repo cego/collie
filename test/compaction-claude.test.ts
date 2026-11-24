@@ -3,7 +3,7 @@ import { pipe as pipe_ } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Clock, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import { parseJson } from "../src/json";
-import { isoAt } from "../src/time";
+import { epochMs, isoAt } from "../src/time";
 import { TestClock } from "effect/testing";
 import * as PlatformError from "effect/PlatformError";
 import { Rig } from "./support/recorder";
@@ -33,6 +33,7 @@ let path: Path.Path;
 let dir: string;
 
 const claude = COMPACTION_PORTS.claude!;
+const marked = (id: string) => ({ id, session: null, transcript: null });
 const prompted: Array<string> = [];
 
 const ctx = () => ({
@@ -196,9 +197,9 @@ test("the marked PreCompact is the start, and the PostCompact after it the succe
 
       // WARNING: PostCompact carries no marker, so the next manual completion on the session is what finishes the attempt.
       yield* recordClaudeEvent(dir, pre("s-1", "manual", instructions));
-      expect(yield* claude.poll(ctx(), "req-1")).toBeNull();
+      expect(yield* claude.poll(ctx(), marked("req-1"))).toBeNull();
       yield* recordClaudeEvent(dir, post("s-1", "manual"));
-      expect(yield* claude.poll(ctx(), "req-1")).toEqual({ kind: "success" });
+      expect(yield* claude.poll(ctx(), marked("req-1"))).toEqual({ kind: "success" });
     }),
   ));
 
@@ -209,7 +210,7 @@ test("a completion before Collie asked is not the answer to what it asked", () =
       yield* claude.request(ctx(), "req-1");
       yield* recordClaudeEvent(dir, pre("s-1", "manual", `x (collie:req-1)`));
 
-      expect(yield* claude.poll(ctx(), "req-1")).toBeNull();
+      expect(yield* claude.poll(ctx(), marked("req-1"))).toBeNull();
     }),
   ));
 
@@ -221,7 +222,7 @@ test("an automatic compaction cannot complete Collie's request", () =>
       yield* recordClaudeEvent(dir, pre("s-1", "auto", null));
       yield* recordClaudeEvent(dir, post("s-1", "auto"));
 
-      expect(yield* claude.poll(ctx(), "req-1")).toBeNull();
+      expect(yield* claude.poll(ctx(), marked("req-1"))).toBeNull();
     }),
   ));
 
@@ -233,7 +234,7 @@ test("a human typing /compact in the pane cannot complete it either", () =>
       yield* recordClaudeEvent(dir, pre("s-1", "manual", "just tidy it up please"));
       yield* recordClaudeEvent(dir, post("s-1", "manual"));
 
-      expect(yield* claude.poll(ctx(), "req-1")).toBeNull();
+      expect(yield* claude.poll(ctx(), marked("req-1"))).toBeNull();
     }),
   ));
 
@@ -246,7 +247,7 @@ test("another session's hooks cannot complete it, and rebind what is current", (
       yield* recordClaudeEvent(dir, post("s-2", "manual"));
 
       expect(yield* claude.usage(ctx())).toBeNull();
-      expect(yield* claude.poll(ctx(), "req-1")).toBeNull();
+      expect(yield* claude.poll(ctx(), marked("req-1"))).toBeNull();
     }),
   ));
 
@@ -258,7 +259,7 @@ test("a duplicate PostCompact says success once, not twice, and never a failure"
       yield* recordClaudeEvent(dir, post("s-1", "manual"));
       yield* recordClaudeEvent(dir, post("s-1", "manual"));
 
-      expect(yield* claude.poll(ctx(), "req-1")).toEqual({ kind: "success" });
+      expect(yield* claude.poll(ctx(), marked("req-1"))).toEqual({ kind: "success" });
     }),
   ));
 
@@ -718,13 +719,11 @@ const lostCompletion = (transcript: (askedIso: string) => string) =>
     return { due, said, left };
   });
 
-test("a lost completion is reconciled as done after the bound, where the transcript shows the compaction", () =>
+test("a lost completion is reconciled as done after the bound, where the transcript names the marked request", () =>
   runEffect(
     Effect.gen(function* () {
       const { due, said, left } = yield* lostCompletion(
-        (at) =>
-          `{"type":"user","timestamp":"${at}","message":{"role":"user","content":"/compact"}}\n` +
-          `{"type":"system","subtype":"compact_boundary","timestamp":"${at}","compactMetadata":{"trigger":"manual","preTokens":180000}}\n`,
+        (at) => `${naming("req-1", at)}\n${boundaryAt(at)}\n`,
       );
       expect(due).toEqual({ dispatch: true });
       expect(left).toBeNull();
@@ -732,17 +731,155 @@ test("a lost completion is reconciled as done after the bound, where the transcr
     }),
   ));
 
-test("a lost completion is reconciled as failed after the bound, where the transcript shows none", () =>
+test("a lost completion whose transcript shows no completion of it stays unresolved", () =>
   runEffect(
     Effect.gen(function* () {
-      const { due, said, left } = yield* lostCompletion(
+      const { due, left } = yield* lostCompletion(
         (at) =>
           `{"type":"user","timestamp":"${at}","message":{"role":"user","content":"/compact"}}\n`,
       );
-      expect(due).toEqual({ dispatch: true });
-      expect(left).toBeNull();
-      expect(said).toEqual([
-        "  ⚠ build-r1: native compaction failed (its transcript shows no compaction since it was asked for) — sending the work anyway",
-      ]);
+      expect(due).toBeNull();
+      expect(left).not.toBeNull();
+    }),
+  ));
+
+const naming = (request: string, at: string) =>
+  `{"type":"user","timestamp":"${at}","message":{"role":"user","content":"/compact Keep the work in progress. (collie:${request})"}}`;
+
+const boundaryAt = (at: string) =>
+  `{"type":"system","subtype":"compact_boundary","timestamp":"${at}","compactMetadata":{"trigger":"manual","preTokens":180000}}`;
+
+const lostAttempt = (evidence: {
+  transcript?: (after: string, asked: string) => string;
+  also?: (control: string, after: string, asked: string) => Effect.Effect<void, never>;
+}) =>
+  Effect.gen(function* () {
+    const control = `${rig.stateDir}/compaction/build-r1`;
+    const asked = (yield* Clock.currentTimeMillis) - 11 * 60_000;
+    const file = path.join(rig.root, "s-1.jsonl");
+    const [afterIso, askedIso] = [isoAt(asked + 60_000), isoAt(asked)];
+    yield* fs.writeFileString(file, evidence.transcript?.(afterIso, askedIso) ?? "");
+    yield* fs.makeDirectory(control, { recursive: true });
+    yield* fs.writeFileString(
+      `${control}/control.json`,
+      asJson({
+        agent: "build-r1",
+        harness: "claude",
+        cwd: rig.projectDir,
+        dir: control,
+        attempt: {
+          id: "req-1",
+          run: "run-1",
+          step: "02-ui",
+          deadline: asked + 5 * 60_000,
+          asked,
+          session: "s-1",
+          transcript: file,
+        },
+      }),
+    );
+    yield* recordClaudeEvent(control, asJson({ session_id: "s-1", transcript_path: file }));
+    if (evidence.also !== undefined) {
+      yield* evidence.also(control, afterIso, askedIso);
+    }
+    const deps: CompactionDeps = {
+      ports: COMPACTION_PORTS,
+      stateDir: rig.stateDir,
+      configured: 1000,
+      herdr: { agentList: () => Effect.succeed([]) },
+      log: () => Effect.void,
+      warn: () => Effect.void,
+      waitMs: 5 * 60_000,
+      pollMs: 1000,
+    };
+    const due = yield* pollCompaction(deps, "build-r1");
+    const left = (yield* readControl(rig.stateDir, "build-r1"))?.attempt;
+    return { due, left };
+  });
+
+test("a completion the hook can record nowhere exits non-zero", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* claude.request(ctx(), "req-1");
+      const instructions = pipe_(prompted[0]!, Str.replace(/^\/compact /, ""));
+      yield* recordClaudeEvent(dir, pre("s-1", "manual", instructions));
+      yield* fs.chmod(dir, 0o555);
+      const exited = yield* Effect.sync(() =>
+        Bun.spawnSync({
+          cmd: [process.execPath, `${import.meta.dir}/../src/main.ts`, "herdr", "compaction", dir],
+          cwd: rig.root,
+          stdin: Buffer.from(post("s-1", "manual")),
+          stdout: "pipe",
+          stderr: "pipe",
+        }),
+      );
+      yield* fs.chmod(dir, 0o755);
+      expect(exited.stderr.toString()).toContain("could not be recorded");
+      expect(exited.exitCode).not.toBe(0);
+    }),
+  ));
+
+test("a boundary from an earlier compaction, before the mark, does not settle it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { due, left } = yield* lostAttempt({
+        transcript: (_after, asked) =>
+          `${naming("req-1", asked)}\n${boundaryAt(isoAt(epochMs(asked) - 60_000))}\n`,
+      });
+      expect(due).toBeNull();
+      expect(left).not.toBeNull();
+    }),
+  ));
+
+test("a boundary from another request does not settle it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { due, left } = yield* lostAttempt({
+        transcript: (after) =>
+          `${naming("req-1", after)}\n${naming("req-2", after)}\n${boundaryAt(after)}\n`,
+      });
+      expect(due).toBeNull();
+      expect(left).not.toBeNull();
+    }),
+  ));
+
+test("a boundary from another incarnation of the same agent does not settle it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { due, left } = yield* lostAttempt({
+        also: (control, after) =>
+          fs
+            .writeFileString(
+              `${control}/events.jsonl`,
+              `${asJson({ at: epochMs(after), session: "s-2", kind: "start", request: "req-1" })}\n${asJson({ at: epochMs(after) + 1, session: "s-2", kind: "auto", reason: "manual", phase: "post" })}\n`,
+              { flag: "a" },
+            )
+            .pipe(Effect.orDie),
+      });
+      expect(due).toBeNull();
+      expect(left).not.toBeNull();
+    }),
+  ));
+
+test("two candidate completions settle nothing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { due, left } = yield* lostAttempt({
+        transcript: (after) =>
+          `${naming("req-1", after)}\n${boundaryAt(after)}\n${boundaryAt(after)}\n`,
+      });
+      expect(due).toBeNull();
+      expect(left).not.toBeNull();
+    }),
+  ));
+
+test("a boundary that names no request settles nothing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { due, left } = yield* lostAttempt({
+        transcript: (after) => `${boundaryAt(after)}\n`,
+      });
+      expect(due).toBeNull();
+      expect(left).not.toBeNull();
     }),
   ));

@@ -3,7 +3,7 @@ import * as Cause from "effect/Cause";
 // WARNING: launch is external and no Activity is exactly-once, so replay reconciles by the derived agent name rather than launching again (ADR-0020).
 import { Foreground } from "./foreground";
 import { ParkCause } from "./park-cause";
-import { rememberNotQuiet, rememberStaleHandOver } from "./park-recheck";
+import { rememberCompactionWait, rememberNotQuiet, rememberStaleHandOver } from "./park-recheck";
 import { HandOver, atDispatch, buildHandOver, planRevision, renderHandOver } from "./hand-over";
 import type { AtDispatch, CheckoutNow, HandOverGiven, HandOverState } from "./hand-over";
 import { readIntent } from "./intent";
@@ -63,7 +63,6 @@ import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import type { NotQuiet } from "./compaction";
 import {
   COMPACTION_WAIT_MS,
-  pollCompaction,
   Unsubmitted,
   atBoundary,
   awaitReady,
@@ -2309,20 +2308,16 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       if (due.dispatch || due.waiting !== true) {
         return due;
       }
+      // WARNING: past its bound the wait parks, and the host's recheck is what reads its completion; polling on would never end.
       yield* note(due.reason);
-      for (;;) {
-        if (yield* stoppedRun(launched.runId)) {
-          return null;
-        }
-        yield* Effect.sleep(compaction.pollMs);
-        const now = yield* pollCompaction(compaction, launched.agent).pipe(
-          Effect.orElseSucceed(() => null),
-        );
-        if (now !== null) {
-          yield* note(null);
-          return now;
-        }
+      const marked = (yield* readControl(host.env.stateDir, launched.agent))?.attempt;
+      if (marked !== null && marked !== undefined) {
+        yield* rememberCompactionWait(`${host.dir}/runs/${launched.runId}`, {
+          agent: launched.agent,
+          request: marked.id,
+        });
       }
+      return due;
     }).pipe(
       Effect.catch((failed) =>
         Effect.fail(failed).pipe(
@@ -2963,10 +2958,10 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             return launched;
           }
           if (!due.dispatch) {
-            return yield* new AgentParked({
-              operation: ask.operation,
-              reason: due.reason,
-            });
+            const parked = { operation: ask.operation, reason: due.reason };
+            return yield* new AgentParked(
+              due.cause === undefined ? parked : { ...parked, cause: due.cause },
+            );
           }
         }
         if (!replayed) {

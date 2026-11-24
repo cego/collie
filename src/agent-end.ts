@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Clock, Data, Effect, FileSystem, Schedule } from "effect";
 import { RELAUNCH, RunRecords } from "./run-records";
-import { STOP_WAIT_MS, notStopped, stopAgent } from "./compaction";
+import { STOP_WAIT_MS, cancelCompaction, notStopped, stopAgent } from "./compaction";
 import type { CompactionDeps, SeenProcess } from "./compaction";
 import { processOf, sessionOf, startedOf, stillRunning, terminate } from "./processes";
 import type { AgentInfo, Herdr, HerdrError } from "./herdr";
@@ -148,6 +148,8 @@ const ending = Effect.fnUntraced(function* (
     } satisfies Ended;
   }
 
+  // WARNING: the incarnation that asked is over, so its compaction can never complete and is cancelled rather than waited on.
+  yield* cancelCompaction(deps, launched.agent, why).pipe(Effect.ignore);
   const pane =
     reached.success === null && closes === "close"
       ? yield* paneProcesses(deps, launched.root, one?.paneId)

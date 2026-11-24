@@ -21,6 +21,8 @@ let dir: string;
 const pi = COMPACTION_PORTS.pi!;
 
 const prompted: Array<string> = [];
+const marked = (id: string) => ({ id, session: null, transcript: null });
+
 const ctx = () => ({
   agent: "reuse-run-two-r1",
   run: "reuse-run-two",
@@ -139,7 +141,7 @@ test("an unresolved request has no outcome, however much else has happened", () 
       yield* event({ at: 4, session: "s1", kind: "done", request: "req-0" });
       yield* event({ at: 5, session: "s1", kind: "usage", tokens: 12 });
 
-      expect(yield* pi.poll(ctx(), "req-1")).toBeNull();
+      expect(yield* pi.poll(ctx(), marked("req-1"))).toBeNull();
     }),
   ));
 
@@ -151,7 +153,7 @@ test("the request's own completion callback is what establishes success", () =>
       yield* event({ at: 3, session: "s1", kind: "done", request: "req-1" });
       yield* event({ at: 4, session: "s1", kind: "done", request: "req-1" });
 
-      expect(yield* pi.poll(ctx(), "req-1")).toEqual({ kind: "success" });
+      expect(yield* pi.poll(ctx(), marked("req-1"))).toEqual({ kind: "success" });
     }),
   ));
 
@@ -168,7 +170,7 @@ test("its error callback is the confirmed failure, with Pi's own message", () =>
         message: "the provider refused",
       });
 
-      expect(yield* pi.poll(ctx(), "req-1")).toEqual({
+      expect(yield* pi.poll(ctx(), marked("req-1"))).toEqual({
         kind: "failure",
         reason: "the provider refused",
       });
@@ -183,7 +185,7 @@ test("an outcome from another Pi session cannot complete this one's attempt", ()
       yield* event({ at: 3, session: "s2", kind: "session" });
       yield* event({ at: 4, session: "s1", kind: "done", request: "req-1" });
 
-      expect(yield* pi.poll(ctx(), "req-1")).toBeNull();
+      expect(yield* pi.poll(ctx(), marked("req-1"))).toBeNull();
     }),
   ));
 
@@ -263,7 +265,7 @@ test("the extension it installs keeps the identity and the outcome past its own 
       commands.get("collie-compact")!.handler("req-1", piCtx);
       turns(300);
 
-      expect(yield* pi.poll(ctx(), "req-1")).toEqual({ kind: "success" });
+      expect(yield* pi.poll(ctx(), marked("req-1"))).toEqual({ kind: "success" });
       expect(yield* pi.usage(ctx())).toBe(tokens);
     }),
   ));
@@ -334,7 +336,7 @@ onMachineWith("pi")(
         );
         void child.stdin.flush();
 
-        const outcome = yield* pi.poll(ctx(), "req-live").pipe(
+        const outcome = yield* pi.poll(ctx(), marked("req-live")).pipe(
           Effect.repeat({
             until: (found) => found !== null,
             schedule: Schedule.spaced("100 millis"),

@@ -23,9 +23,15 @@ import type { Herdr, HerdrError, Submission } from "./herdr";
 import type { CodexError } from "./codex";
 import type { OpenCodeError } from "./opencode";
 import type { Records } from "./records";
-import type { AgentQuestion, HarnessVersionError, Submitting } from "./compactors";
+import type {
+  AgentQuestion,
+  HarnessVersionError,
+  Submitting,
+  TelemetryUnwritten,
+} from "./compactors";
 import { LOCK_CLAIM_SPACING_MS, ensureLockDir, withLock } from "./lock";
 import { reason } from "./naming";
+import type { ParkCause } from "./park-cause";
 import { COMPACTION_OFF } from "./settings";
 import {
   commandOf,
@@ -87,6 +93,13 @@ export interface LaunchContext {
   session?: string;
 }
 
+// WARNING: the request, its incarnation and its own transcript are what settles it; time alone proves nothing.
+export interface Marked {
+  readonly id: string;
+  readonly session: string | null;
+  readonly transcript: string | null;
+}
+
 export interface AgentContext extends LaunchContext {
   run: string;
   // WARNING: a request's sends run in the Dispatcher's transaction; a reading or poll sends nothing.
@@ -105,6 +118,7 @@ type PortError =
   | OpenCodeError
   | HerdrError
   | HarnessVersionError
+  | TelemetryUnwritten
   | Submitting
   | Unsubmitted;
 
@@ -180,12 +194,26 @@ export interface CompactionPort {
   >;
   poll(
     ctx: AgentContext,
-    requestId: string,
+    mark: Marked,
   ): Effect.Effect<CompactionOutcome | null, PortError, PortServices | Records>;
+  // WARNING: null is "not proven either way", which keeps the request unresolved rather than failing it.
   readonly reconcile?: (
     ctx: AgentContext,
+    mark: Marked,
     since: number,
-  ) => Effect.Effect<CompactionOutcome, PortError, PortServices>;
+  ) => Effect.Effect<CompactionOutcome | null, PortError, PortServices>;
+  readonly mark?: (
+    ctx: AgentContext,
+  ) => Effect.Effect<
+    { readonly session: string | null; readonly transcript: string | null },
+    PortError,
+    PortServices
+  >;
+  readonly cancel?: (
+    ctx: AgentContext,
+    mark: Marked,
+    why: string,
+  ) => Effect.Effect<void, PortError, PortServices>;
 }
 
 export interface CompactionPorts {
@@ -206,6 +234,8 @@ const AttemptSchema = Schema.Struct({
   step: Schema.String,
   deadline: Schema.Finite,
   asked: Schema.optionalKey(Schema.Finite),
+  session: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  transcript: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 const ControlSchema = Schema.Struct({
   agent: Schema.String,
@@ -314,7 +344,12 @@ export interface CompactionDeps {
 
 export type Boundary =
   | { readonly dispatch: true }
-  | { readonly dispatch: false; readonly reason: string; readonly waiting?: true };
+  | {
+      readonly dispatch: false;
+      readonly reason: string;
+      readonly waiting?: true;
+      readonly cause?: ParkCause;
+    };
 
 const DISPATCH: Boundary = { dispatch: true };
 
@@ -842,12 +877,15 @@ export const atBoundary = Effect.fn("Compaction.atBoundary")(function* <Submissi
     } satisfies Boundary;
   }
   const now = yield* Clock.currentTimeMillis;
+  const marked =
+    port.mark === undefined ? null : yield* port.mark(ctx).pipe(Effect.orElseSucceed(() => null));
   const attempt = {
     id: `${at.agent}-${now}`,
     run: at.run,
     step: at.step,
     deadline: now + deps.waitMs,
     asked: now,
+    ...(marked === null ? null : { session: marked.session, transcript: marked.transcript }),
   };
   // WARNING: written before the request is sent, so a crash leaves the attempt visible.
   yield* writeControl(deps.stateDir, { ...record, attempt });
@@ -902,6 +940,38 @@ export const readingContext: (record: ControlRecord, run: string) => AgentContex
   channel: sendsNothing(record.agent),
 });
 
+// WARNING: a stop ends the incarnation that asked, so its compaction can never complete; it is cancelled, never settled by a later boundary.
+export const cancelCompaction = Effect.fn("Compaction.cancelCompaction")(function* (
+  deps: Pick<CompactionDeps, "ports" | "stateDir" | "log">,
+  agent: string,
+  why: string,
+) {
+  const record = yield* readControl(deps.stateDir, agent);
+  const attempt = record?.attempt;
+  if (record === null || !attempt) {
+    return false;
+  }
+  const port = deps.ports[record.harness];
+  const cancelling = port === undefined ? undefined : port.cancel;
+  if (cancelling !== undefined) {
+    const ctx = readingContext(record, attempt.run);
+    // WARNING: an attempt marked before Collie knew the incarnation is still bound to the session it asks of now.
+    const session =
+      attempt.session ??
+      (port?.mark === undefined
+        ? null
+        : ((yield* port.mark(ctx).pipe(Effect.orElseSucceed(() => null)))?.session ?? null));
+    yield* cancelling(
+      ctx,
+      { id: attempt.id, session, transcript: attempt.transcript ?? null },
+      why,
+    ).pipe(Effect.orElseSucceed(() => void 0));
+  }
+  yield* writeControl(deps.stateDir, { ...record, attempt: null });
+  yield* deps.log(`${agent}: compaction ${attempt.id} was cancelled (${why})`);
+  return true;
+});
+
 // WARNING: an attempt no longer recorded, as a deleted control directory leaves it, is over.
 export const pollCompaction = Effect.fn("Compaction.pollCompaction")(function* (
   deps: CompactionDeps,
@@ -931,8 +1001,13 @@ const resolved = Effect.fn("Compaction.resolved")(function* (
   attempt: Schema.Schema.Type<typeof AttemptSchema>,
 ) {
   const port = deps.ports[ctx.harness]!;
+  const mark: Marked = {
+    id: attempt.id,
+    session: attempt.session ?? null,
+    transcript: attempt.transcript ?? null,
+  };
   const outcome = yield* port
-    .poll(ctx, attempt.id)
+    .poll(ctx, mark)
     .pipe(
       Effect.catch((cause) =>
         deps
@@ -945,14 +1020,7 @@ const resolved = Effect.fn("Compaction.resolved")(function* (
     outcome === null &&
     port.reconcile !== undefined &&
     (yield* Clock.currentTimeMillis) >= since + RECONCILE_AFTER_MS
-      ? yield* port.reconcile(ctx, since).pipe(
-          Effect.catch((cause) =>
-            Effect.succeed({
-              kind: "failure",
-              reason: `its own record could not be read (${reason(cause)})`,
-            } as const),
-          ),
-        )
+      ? yield* port.reconcile(ctx, mark, since).pipe(Effect.orElseSucceed(() => null))
       : outcome;
   if (settled === null) {
     return null;
@@ -1000,6 +1068,7 @@ const settle = Effect.fn("Compaction.settle")(function* (
   return {
     dispatch: false,
     waiting: true,
-    reason: `${ctx.agent}: compaction ${attempt.id} has not finished after ${Math.round(deps.waitMs / 60_000)} minutes; Collie keeps waiting and sends ${step} once it does. Check its pane.`,
+    cause: "compaction-unsettled",
+    reason: `${ctx.agent}: compaction ${attempt.id} has not finished after ${Math.round(deps.waitMs / 60_000)} minutes; Collie keeps waiting for its completion and resumes ${step} once it arrives. Check its pane.`,
   } satisfies Boundary;
 });

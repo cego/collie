@@ -10,7 +10,20 @@ const compactionProgram = Effect.gen(function* () {
   const [stdin, { recordClaudeEvent }] = yield* Effect.promise(() =>
     Promise.all([Bun.stdin.text(), import("./compactors")]),
   );
-  const line = yield* recordClaudeEvent(dir, stdin).pipe(Effect.orElseSucceed(() => ""));
+  const line = yield* recordClaudeEvent(dir, stdin).pipe(
+    // WARNING: an event recorded nowhere is a hole the host would read as nothing having happened.
+    Effect.catchTag("TelemetryUnwritten", (lost) =>
+      Console.error(`collie: ${lost.message}`).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            process.exitCode = 1;
+          }),
+        ),
+        Effect.as(""),
+      ),
+    ),
+    Effect.orElseSucceed(() => ""),
+  );
   if (line !== "") {
     yield* Console.log(line);
   }

@@ -8123,8 +8123,8 @@ const slowCompaction = () => {
       ...full,
       request: (ctx, id) =>
         submit(ctx, id, "/compact", id).pipe(Effect.andThen(full.request(ctx, id))),
-      poll: (ctx, id) =>
-        submit(ctx, id, "from a poll", `${id}-poll`).pipe(
+      poll: (ctx, mark) =>
+        submit(ctx, mark.id, "from a poll", `${mark.id}-poll`).pipe(
           Effect.map((outcome) => {
             state.pollSent.push(outcome.ok);
             return state.ended;
@@ -8169,9 +8169,12 @@ const pastTheWait = <A, E>(
     );
     const what = yield* during;
     if (stops) {
-      yield* until(listingSuspended);
       return { what, result: null };
     }
+    yield* until(listingSuspended);
+    // WARNING: past its bound the wait parks, so the host's own resume is what meets the completed compaction.
+    const engine = yield* WorkflowEngine.WorkflowEngine;
+    yield* engine.resume(listing, yield* listing.executionId({ runId: "r1", input: ITEMS }));
     return { what, result: yield* Fiber.join(fiber) };
   }).pipe(
     Effect.provide(
@@ -8195,7 +8198,8 @@ const pastTheWait = <A, E>(
     Effect.orDie,
   );
 
-const NOT_FINISHED = "has not finished after 1 minutes; Collie keeps waiting and sends 02-ui";
+const NOT_FINISHED =
+  "has not finished after 1 minutes; Collie keeps waiting for its completion and resumes 02-ui";
 
 test("a compaction past its wait keeps the Run waiting, says so, and sends the work once it completes", () =>
   runEffect(

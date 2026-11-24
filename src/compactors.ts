@@ -49,6 +49,7 @@ import type { StatusSample } from "./usage-model";
 import { CONTROL_DIR, Unsubmitted, readControl } from "./compaction";
 import type {
   CompactionPort,
+  Marked,
   CompactionPorts,
   AgentContext,
   LaunchContext,
@@ -129,6 +130,7 @@ const EventSchema = Schema.Struct({
     "submit",
     "out",
     "stopped",
+    "cancelled",
   ]),
   tokens: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
   request: Schema.optionalKey(Schema.String),
@@ -273,6 +275,40 @@ export const writeEvent = Effect.fn("Compactors.writeEvent")(function* (
     }),
     TELEMETRY_CLAIMS,
   );
+});
+
+export class TelemetryUnwritten extends Data.TaggedError("TelemetryUnwritten")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
+// WARNING: a hole nobody marked reads as nothing having happened, so a failed write must be marked or loud.
+export const recordEvent = Effect.fn("Compactors.recordEvent")(function* (
+  dir: string,
+  written: Omit<TelemetryEvent, "at">,
+) {
+  const written_ = yield* Effect.result(writeEvent(dir, written));
+  if (Result.isSuccess(written_)) {
+    return;
+  }
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const marked = yield* Effect.result(
+    fs.writeFileString(
+      path.join(dir, LOSSES),
+      `${encodeLoss({ at: yield* Clock.currentTimeMillis })}\n`,
+      {
+        flag: "a",
+      },
+    ),
+  );
+  if (Result.isSuccess(marked)) {
+    return;
+  }
+  return yield* new TelemetryUnwritten({
+    message: `${written.kind} could not be recorded, and its loss could not be marked either`,
+    cause: written_.failure,
+  });
 });
 
 function boundSession(lines: ReadonlyArray<string>) {
@@ -567,9 +603,9 @@ const pi: CompactionPort = {
   ready: reported,
   // WARNING: the human's channel, so a refusal from herdr is a request that never left.
   request: (ctx, requestId) => submitCompaction(ctx, requestId, `/collie-compact ${requestId}`),
-  poll: (ctx, requestId) => outcomeOf(ctx.dir, requestId),
-  reconcile: (ctx, since) =>
-    transcriptCompacted(ctx.dir, since, (line) => line.type === "compaction"),
+  poll: (ctx, mark) => outcomeOf(ctx.dir, mark.id),
+  reconcile: (ctx, mark, since) =>
+    transcriptCompacted(ctx.dir, mark, since, (line) => line.type === "compaction"),
 };
 
 export class Submitting extends Data.TaggedError("Submitting")<{
@@ -840,7 +876,7 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
     // WARNING: the prompt is not stored whole; only who submitted it is kept.
     const prompt = payload.prompt ?? "";
     const delivery = carriedDelivery(prompt);
-    yield* writeEvent(
+    yield* recordEvent(
       dir,
       Arr.some(CLAUDE_INJECTED, (tag) => pipe(prompt, Str.startsWith(tag)))
         ? { session, kind: "submit", reason: "harness" }
@@ -877,14 +913,14 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
     // WARNING: StopFailure fires once Claude has given up on the turn; an overload stops nothing.
     const error = payload.error ?? "unknown";
     if (error === "rate_limit" || error === "billing_error") {
-      yield* writeEvent(dir, {
+      yield* recordEvent(dir, {
         session,
         kind: "out",
         reason: (yield* lastFullWindow(dir)) ?? error,
         ...(transcript && { transcript }),
       });
     } else if (error !== "overloaded") {
-      yield* writeEvent(dir, {
+      yield* recordEvent(dir, {
         session,
         kind: "stopped",
         reason: payload.error_details ?? error,
@@ -898,7 +934,7 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
       event === "PreCompact" && payload.trigger === "manual"
         ? CLAUDE_MARKER.exec(payload.custom_instructions ?? "")?.[1]
         : undefined;
-    yield* writeEvent(
+    yield* recordEvent(
       dir,
       request
         ? { session, kind: "start", request }
@@ -913,7 +949,7 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
   }
 
   const limits = Option.getOrUndefined(decodeLimits(payload.rate_limits));
-  yield* writeEvent(dir, {
+  yield* recordEvent(dir, {
     session,
     kind: "usage",
     tokens,
@@ -928,7 +964,7 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
     (one) => one.kind === "out",
   );
   if (full && !told) {
-    yield* writeEvent(dir, {
+    yield* recordEvent(dir, {
       session,
       kind: "out",
       reason: (yield* lastFullWindow(dir)) ?? "a window at 100%",
@@ -965,30 +1001,92 @@ export function claudeSettings(dir: string, stopFailure: boolean) {
   )}\n`;
 }
 
-// WARNING: PostCompact carries nothing of the request, so completion is correlated by what was absent when Collie asked.
-const claudeOutcome = Effect.fn("Compactors.claudeOutcome")(function* (
-  dir: string,
-  requestId: string,
-) {
+export const claudeMark = Effect.fn("Compactors.claudeMark")(function* (dir: string) {
+  const events = yield* readEvents(dir).pipe(Effect.orElseSucceed(() => []));
+  const bound = Option.getOrUndefined(
+    Arr.findLast(events, (event) => event.session !== null && event.session !== undefined),
+  );
+  return {
+    session: bound?.session ?? null,
+    transcript:
+      Option.getOrUndefined(Arr.findLast(events, (event) => event.transcript !== undefined))
+        ?.transcript ?? null,
+  };
+});
+
+// WARNING: PostCompact carries nothing of the request, so only the marked start's own session finishing it counts.
+const claudeOutcome = Effect.fn("Compactors.claudeOutcome")(function* (dir: string, mark: Marked) {
   const events = yield* readEvents(dir);
   const at = Option.getOrElse(
-    Arr.findFirstIndex(events, (event) => event.kind === "start" && event.request === requestId),
+    Arr.findLastIndex(
+      events,
+      (event) =>
+        event.kind === "start" &&
+        event.request === mark.id &&
+        (mark.session === null || event.session === mark.session),
+    ),
     () => -1,
   );
   if (at < 0) {
     return null;
   }
+  const incarnation = mark.session ?? events[at]!.session;
   for (const event of events.slice(at + 1)) {
+    if (event.kind === "cancelled" && event.request === mark.id) {
+      return { kind: "failure", reason: event.reason ?? "its compaction was cancelled" } as const;
+    }
+    // WARNING: another request's start is not this request's completion, whichever way it ends.
+    if (event.kind === "start") {
+      return null;
+    }
     if (event.kind !== "auto" || event.reason !== "manual") {
       continue;
     }
     if (event.phase === "pre") {
       return null;
     }
+    if (event.session !== incarnation) {
+      return null;
+    }
     // WARNING: a hole since the request leaves it unresolved, not a success.
     return (yield* lostSince(dir, events[at]!.at)) ? null : ({ kind: "success" } as const);
   }
   return null;
+});
+
+// WARNING: a completion that names no request, or names another, is not evidence of this one; two candidates are not either.
+const claudeReconcile = Effect.fn("Compactors.claudeReconcile")(function* (
+  dir: string,
+  mark: Marked,
+  since: number,
+) {
+  const transcript =
+    mark.transcript ??
+    Option.getOrUndefined(
+      Arr.findLast(yield* readEvents(dir), (event) => event.transcript !== undefined),
+    )?.transcript;
+  if (transcript === null || transcript === undefined) {
+    return null;
+  }
+  const text = yield* (yield* FileSystem.FileSystem).readFileString(transcript);
+  const lines = Str.split(text, "\n");
+  let named = false;
+  let candidates = 0;
+  for (const line of lines) {
+    const entry = Option.getOrUndefined(decodeTranscriptLine(line));
+    if (entry === undefined) {
+      continue;
+    }
+    const request = Str.isEmpty(line) ? null : namedRequest(line);
+    if (entry.type === "user" && request !== null) {
+      named = request === mark.id;
+      continue;
+    }
+    if (named && boundary(entry) && epochMs(entry.timestamp) >= since && (candidates += 1) > 1) {
+      return null;
+    }
+  }
+  return candidates === 1 ? ({ kind: "success" } as const) : null;
 });
 
 const lastFullWindow = Effect.fn("Compactors.lastFullWindow")(function* (dir: string) {
@@ -1092,27 +1190,47 @@ const claudeRecords = Effect.fn("Compactors.claudeRecords")(function* (ctx: Agen
 // WARNING: this is what settles a request whose completion was lost.
 const transcriptCompacted = Effect.fn("Compactors.transcriptCompacted")(function* (
   dir: string,
+  mark: Marked,
   since: number,
   boundary: (line: { readonly type?: string; readonly subtype?: string }) => boolean,
 ) {
-  const transcript = Option.getOrUndefined(
-    Arr.findLast(yield* readEvents(dir), (event) => event.transcript !== undefined),
-  )?.transcript;
+  const transcript =
+    mark.transcript ??
+    Option.getOrUndefined(
+      Arr.findLast(yield* readEvents(dir), (event) => event.transcript !== undefined),
+    )?.transcript;
   if (transcript === undefined) {
     return { kind: "failure", reason: "it never said where its transcript is" } as const;
   }
   const text = yield* (yield* FileSystem.FileSystem).readFileString(transcript);
+  let named = false;
   for (const line of Str.split(text, "\n")) {
     const entry = Option.getOrUndefined(decodeTranscriptLine(line));
-    if (entry !== undefined && boundary(entry) && epochMs(entry.timestamp) >= since) {
+    if (entry === undefined) {
+      continue;
+    }
+    // WARNING: a boundary the transcript does not tie to this request is time, not proof.
+    const request = namedRequest(line);
+    if (request !== null) {
+      named = request === mark.id;
+      continue;
+    }
+    if (named && boundary(entry) && epochMs(entry.timestamp) >= since) {
       return { kind: "success" } as const;
     }
   }
-  return {
-    kind: "failure",
-    reason: "its transcript shows no compaction since it was asked for",
-  } as const;
+  return null;
 });
+
+const MARK_REQUEST = /\(collie:([A-Za-z0-9-]+)\)|\/collie-compact ([A-Za-z0-9-]+)/;
+
+const namedRequest = (line: string) => {
+  const found = MARK_REQUEST.exec(line);
+  return found === null ? null : (found[1] ?? found[2] ?? null);
+};
+
+const boundary = (line: { readonly type?: string; readonly subtype?: string }) =>
+  line.type === "system" && line.subtype === "compact_boundary";
 
 const decodeTranscriptLine = Schema.decodeUnknownOption(
   Schema.fromJsonString(
@@ -1142,14 +1260,17 @@ const claude: CompactionPort = {
   ready: reported,
   request: (ctx, requestId) =>
     submitCompaction(ctx, requestId, `/compact ${claudeInstructions(requestId)}`),
+  mark: (ctx) => claudeMark(ctx.dir),
   // WARNING: no documented compact-failed hook exists, so poll can only return success or nothing.
-  poll: (ctx, requestId) => claudeOutcome(ctx.dir, requestId),
-  reconcile: (ctx, since) =>
-    transcriptCompacted(
-      ctx.dir,
-      since,
-      (line) => line.type === "system" && line.subtype === "compact_boundary",
-    ),
+  poll: (ctx, mark) => claudeOutcome(ctx.dir, mark),
+  reconcile: (ctx, mark, since) => claudeReconcile(ctx.dir, mark, since),
+  cancel: (ctx, mark, why) =>
+    recordEvent(ctx.dir, {
+      session: mark.session,
+      kind: "cancelled",
+      request: mark.id,
+      reason: why,
+    }),
 };
 
 export const ServerStartDeadline = Context.Reference<Duration.Duration | null>(
@@ -1628,12 +1749,12 @@ export const codexPort: (server: string) => CompactionPort = (server) => ({
       );
       return null;
     }).pipe(beforeSubmitting),
-  poll: (ctx, requestId) =>
+  poll: (ctx, mark) =>
     Effect.gen(function* () {
       const url = yield* codexAt(ctx);
       const events = yield* readEvents(ctx.dir);
       const started = Option.getOrUndefined(
-        Arr.findFirst(events, (event) => event.kind === "start" && event.request === requestId),
+        Arr.findFirst(events, (event) => event.kind === "start" && event.request === mark.id),
       );
       if (!started?.session) {
         return null;
@@ -1769,13 +1890,13 @@ const opencode: CompactionPort = {
       yield* submitting(summarize(base, session, model));
       return null;
     }).pipe(beforeSubmitting),
-  poll: (ctx, requestId) =>
+  poll: (ctx, mark) =>
     Effect.gen(function* () {
       const base = yield* opencodeAt(ctx);
       const started = Option.getOrUndefined(
         Arr.findFirst(
           yield* readEvents(ctx.dir),
-          (event) => event.kind === "start" && event.request === requestId,
+          (event) => event.kind === "start" && event.request === mark.id,
         ),
       );
       if (!started?.session) {
