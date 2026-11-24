@@ -1482,8 +1482,8 @@ const resumeImplementPark = (
   options: ShippedRun,
   reason: string,
   hooks: {
-    beforePark?: Effect.Effect<void, never, FileSystem.FileSystem | Records>;
-    beforeResume?: Effect.Effect<void, never, FileSystem.FileSystem | Records>;
+    beforePark?: Effect.Effect<void, never, FileSystem.FileSystem | Path.Path | Records>;
+    beforeResume?: Effect.Effect<void, never, FileSystem.FileSystem | Path.Path | Records>;
     stop?: { decision: string; answer: string };
   } = {},
 ) =>
@@ -1809,25 +1809,22 @@ scenario(
 );
 
 scenario(
-  "a plan started to build whose tickets cannot be built fails with why, and asks nothing",
+  "a plan started to build whose tickets cannot be built parks with why, and asks nothing",
   () =>
     runEffect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        yield* rig.queueOutputs([GRILLED, SPEC, TICKETS, TICKETS]);
         yield* repositories("r-plan-alone-bad", THREE_REPOS);
         yield* fs.remove(`${rig.projectDir}/web/.git`, { recursive: true });
 
-        const result = yield* ran({
-          entry: shipped("plan"),
+        const why = yield* parkedAt({
+          entry: shipped("implement"),
           runId: "r-plan-alone-bad",
-          // oxlint-disable-next-line unicorn/no-thenable -- Workflow input selects the next workflow; its value is a string.
-          input: { ...GOAL, then: "implement" },
+          input: { plan: `${runDir(dir, "r-plan-alone-bad")}/plan` },
         });
 
-        expect(reasonOf(result)).toContain(
-          "These repositories are named by a ticket but not checked out",
-        );
+        expect(why).toContain("These repositories are named by a ticket but not checked out");
+        expect(why).toContain("Correct it, then resume r-plan-alone-bad");
         expect(yield* questions("r-plan-alone-bad")).toEqual([]);
         expect(started).toEqual([]);
       }),
@@ -4200,7 +4197,13 @@ const reviewedBranch = () =>
   });
 
 const planOf = (
-  tickets: ReadonlyArray<{ file: string; title: string; checks: string; body?: string }>,
+  tickets: ReadonlyArray<{
+    file: string;
+    title: string;
+    checks: string;
+    body?: string;
+    blockedBy?: string;
+  }>,
   where = `${rig.root}/plan`,
 ) =>
   Effect.gen(function* () {
@@ -4210,7 +4213,7 @@ const planOf = (
     for (const ticket of tickets) {
       yield* fs.writeFileString(
         `${where}/issues/${ticket.file}`,
-        `# ${ticket.title}\n\n**Checks:** ${ticket.checks}\n${ticket.body ?? ""}`,
+        `# ${ticket.title}\n\n${ticket.blockedBy === undefined ? "" : `**Blocked by:** ${ticket.blockedBy}\n\n`}**Checks:** ${ticket.checks}\n${ticket.body ?? ""}`,
       );
     }
     return where;
@@ -5751,6 +5754,57 @@ scenario(
           },
         );
         expect(yield* asked(runId, "review-1")).toContain(plan);
+      }),
+    ),
+);
+
+scenario(
+  "implement parks at a Step on tickets that block each other, and a resume builds on from the tickets it finished",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* noMergeRequests;
+        yield* repository();
+        const plan = yield* planOf([
+          { file: "01-first.md", title: "the first one", checks: "unit", blockedBy: "None" },
+          { file: "02-second.md", title: "the second one", checks: "unit", blockedBy: "None" },
+          { file: "03-third.md", title: "the third one", checks: "unit", blockedBy: "None" },
+        ]);
+        const runId = "r-tickets-cyclic";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([BUILT, BUILT, BUILT, CLEAN_SYNTHESIS, OPENED]);
+        const blocking = (file: string, on: string) =>
+          Effect.gen(function* () {
+            const at = `${plan}/issues/${file}`;
+            const text = yield* fs.readFileString(at);
+            yield* fs.writeFileString(
+              at,
+              pipe(text, Str.replace(/\*\*Blocked by:\*\* \S+/, `**Blocked by:** ${on}`)),
+            );
+          }).pipe(Effect.orDie);
+        yield* resumeImplementPark(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          "block each other",
+          {
+            beforePark: Effect.gen(function* () {
+              yield* until(
+                () => operationsOf(runId),
+                (ops) => Arr.contains(ops, "01-first.md"),
+              );
+              yield* blocking("02-second.md", "03");
+              yield* blocking("03-third.md", "02");
+            }).pipe(Effect.orDie),
+            beforeResume: blocking("03-third.md", "None"),
+          },
+        );
+        expect(yield* operationsOf(runId)).toEqual([
+          "01-first.md",
+          "03-third.md",
+          "02-second.md",
+          "review-1",
+          "mr",
+        ]);
       }),
     ),
 );
@@ -7965,7 +8019,7 @@ scenario("implement started with then=release releases its merge request without
 for (const following of ["finish", "release"]) {
   for (const source of ["unavailable Linear", "refused plan"]) {
     scenario(
-      `Flow: implement then=${following} omits What next before rejecting an ${source} source`,
+      `Flow: implement then=${following} omits What next, and parks before accepting an ${source} source`,
       () =>
         runEffect(
           Effect.gen(function* () {
@@ -7981,18 +8035,18 @@ for (const following of ["finish", "release"]) {
                       body: "\n**Repo:** ../outside\n",
                     },
                   ]);
-            const result = yield* ran({
+            const why = yield* parkedAt({
               entry: shipped("implement"),
               runId,
               // oxlint-disable-next-line unicorn/no-thenable -- implement's Input is named `then`
               input: { plan, then: following },
             });
-            expect(reasonOf(result)).toContain(
+            expect(why).toContain(
               source === "unavailable Linear"
                 ? "Cannot read the work source APP-123"
                 : "not under the plan's root",
             );
-            expect(Arr.map((yield* laneNow(runId, "failed")).nodes, (node) => node.id)).toEqual([
+            expect(Arr.map((yield* laneNow(runId, "waiting")).nodes, (node) => node.id)).toEqual([
               "build",
               "review",
               "checks",
@@ -8925,7 +8979,7 @@ scenario(
 );
 
 scenario(
-  "under inline_plan: on, a plan whose tickets cannot be read goes back to planning once, and halts naming why",
+  "under inline_plan: on, a plan whose tickets cannot be read goes back to planning once, and parks naming why",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -8938,16 +8992,15 @@ scenario(
         ]);
         yield* rig.queueOutputs([unreadable, unreadable]);
 
-        const result = yield* ran({
+        const reason = yield* parkedAt({
           entry: shipped("implement"),
           runId,
           input: { plan: "Count the registries.", ...FINISH },
         });
 
-        expect(result._tag).toBe("Failure");
         const why = "01-first.md (blocked by 7)";
         expect(yield* asked(runId, "plan-2")).toContain(why);
-        expect(reasonOf(result)).toContain(why);
+        expect(reason).toContain(why);
         expect(yield* operationsOf(runId)).toEqual(["plan", "plan-2"]);
       }),
     ),
@@ -8990,7 +9043,7 @@ for (const unbuildable of [
   },
 ]) {
   scenario(
-    `under inline_plan: on, a plan that ${unbuildable.what} goes back to planning once, and halts naming why`,
+    `under inline_plan: on, a plan that ${unbuildable.what} goes back to planning once, and parks naming why`,
     () =>
       runEffect(
         Effect.gen(function* () {
@@ -9009,15 +9062,14 @@ for (const unbuildable of [
           yield* plansFirst(runId);
           yield* rig.queueOutputs([unbuildable.plan(runId), unbuildable.plan(runId)]);
 
-          const result = yield* ran({
+          const reason = yield* parkedAt({
             entry: shipped("implement"),
             runId,
             input: { plan: unbuildable.words, ...FINISH },
           });
 
-          expect(result._tag).toBe("Failure");
           expect(yield* asked(runId, "plan-2")).toContain(unbuildable.why);
-          expect(reasonOf(result)).toContain(unbuildable.why);
+          expect(reason).toContain(unbuildable.why);
           expect(yield* operationsOf(runId)).toEqual(["plan", "plan-2"]);
         }),
       ),
@@ -13165,6 +13217,23 @@ const stalled = (options: ShippedRun) =>
       () => status,
       (got) => got === "suspended",
     ),
+  );
+
+const parkedAt = (options: ShippedRun) =>
+  running(options, (status) =>
+    Effect.gen(function* () {
+      const got = yield* until(
+        () => status,
+        (one) => one === "suspended" || one === "failed" || one === "complete",
+      );
+      expect(got).toBe("suspended");
+      const why = yield* until(
+        () => parkedWhy(options.runId),
+        (one) => one !== "",
+      );
+      expect(yield* parkedCause(options.runId)).toBe("step-failed");
+      return why;
+    }),
   );
 
 const parkedOn = (options: ShippedRun) =>

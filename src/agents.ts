@@ -202,7 +202,7 @@ import {
   Template,
   WorkflowError,
   panelOf,
-  stepFailed,
+  parkStep,
 } from "./sdk";
 import type { AskedQuestion, DecisionSpec, HostApi, Projection, Seat } from "./sdk";
 import {
@@ -1373,9 +1373,7 @@ export const agentWork: <
           if (resumed !== null) {
             return resumed;
           }
-          yield* stepFailed(why);
-          yield* host.parked(runId, why, "step-failed");
-          return yield* Workflow.suspend(yield* WorkflowEngine.WorkflowInstance);
+          return yield* parkStep(why);
         }),
       });
       latest = now;

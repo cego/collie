@@ -1906,6 +1906,20 @@ export const stepFailed = (why: string) =>
     yield* (yield* Host).step((yield* Run).id, { kind: "fail", key: at.key, why });
   });
 
+/**
+ * Parks the Run where its Step stopped on something a person or an agent can correct: the Step
+ * is noted failed, the Run parks under a cause that says who acts, and a resume enters it again.
+ */
+export const parkStep = (why: string, cause: ParkCause = "step-failed") =>
+  Effect.gen(function* () {
+    const host = yield* Host;
+    const runId = (yield* Run).id;
+    yield* host.record(runId, why);
+    yield* stepFailed(why);
+    yield* host.parked(runId, why, cause);
+    return yield* Workflow.suspend(yield* WorkflowInstance);
+  });
+
 const forecasts = new WeakMap<object, number>();
 
 /**

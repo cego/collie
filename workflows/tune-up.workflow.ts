@@ -29,7 +29,7 @@ import {
   renderApproved,
   renderEvidence,
   step,
-  stepFailed,
+  parkStep,
 } from "collie";
 import type { Integration, Measurement, SynthesisReport } from "collie";
 import {
@@ -47,8 +47,6 @@ import {
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as Activity from "effect/workflow/Activity";
-import * as Workflow from "effect/workflow/Workflow";
-import { WorkflowInstance } from "effect/workflow/WorkflowEngine";
 import markdown from "./tune-up.md" with { type: "text" };
 import { IMPLEMENTER, REVIEWER, ROUNDS, rally, reviewPass, reviewRound } from "./reviewing.ts";
 import { Tree, deliver, gate, mergeRequest } from "./delivering.ts";
@@ -1121,15 +1119,7 @@ export default defineWorkflow({
       const told = { inputs: { focus: input.focus ?? "" }, run: { dir: place.dir, id: runId } };
       const measureOrPark = (asked: Parameters<typeof host.measure>[0]) =>
         host.measure(asked).pipe(
-          Effect.catch((failed) =>
-            Effect.gen(function* () {
-              const reason = `${failed.reason}. Correct it, then resume ${runId}.`;
-              yield* host.record(runId, reason);
-              yield* stepFailed(reason);
-              yield* host.parked(runId, reason, "step-failed");
-              return yield* Workflow.suspend(yield* WorkflowInstance);
-            }),
-          ),
+          Effect.catch((failed) => parkStep(`${failed.reason}. Correct it, then resume ${runId}.`)),
           Effect.tap(() => host.parked(runId, null)),
         );
 
@@ -1402,12 +1392,8 @@ export default defineWorkflow({
                 if (yield* fs.exists(marker).pipe(Effect.orDie)) {
                   return yield* host.parked(runId, null);
                 }
-                const reason = `${ending}. Correct it, then resume ${runId}.`;
                 yield* fs.writeFileString(marker, "").pipe(Effect.orDie);
-                yield* host.record(runId, reason);
-                yield* stepFailed(reason);
-                yield* host.parked(runId, reason, "step-failed");
-                return yield* Workflow.suspend(yield* WorkflowInstance);
+                return yield* parkStep(`${ending}. Correct it, then resume ${runId}.`);
               }),
             }),
           );

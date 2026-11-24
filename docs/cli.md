@@ -810,9 +810,10 @@ Desktop draws, recomputed on every read. Their state-changing routes are:
 
 `terminal` addresses `agent` in the inspector's live Terminal, through the bridge's
 existing `focus` route and core's terminal stream. `open` follows `url`, or opens
-the record named by `link`. A terminal Workflow error has no retry: the engine
-cannot resume it. A resumable failed Step records its failure and parks, keeping
-the completed work before it.
+the record named by `link`. A Step that stopped on something to correct records
+its failure and parks, keeping the completed work before it, as [Stop and
+resume](#stop-and-resume) says; a Workflow error that is a verdict on the work or
+the request ends the Run `failed`, and the engine cannot resume it.
 
 `log` and `evidence` open those inspector parts. A node's `log` is the one-based
 line of its latest run's start marker in `log.txt`; each item or round carries its
@@ -995,6 +996,18 @@ answers, only for the resumed Run and the Runs it started, then clears the stop 
 waking work. Other Runs are left as they are: one on the same module that a host left
 mid-work waits at its start, untouched, until its own resume or a `recover`. A restored module is picked up
 without restarting the host.
+
+A Step that stopped on something a person or an agent can correct parks instead of ending
+the Run: an unreadable work source, a plan the planner refused or that stayed unbuildable
+after its tries, tickets that block each other, a builder or a review that stopped, an
+Output still unusable after its repair, an integration that could not be read, and a merge
+request that could not be opened. The Step is drawn failed with the reason, which says what
+to correct and that a resume continues there; the Run is `needs-you` under that cause, and
+a resume re-enters the Step on the same branch, worktree and agents, keeping every Step that
+completed before it and never redoing one. A Workflow error that is a verdict on the work or
+on the request ends the Run `failed` and a resume refuses it: an outcome no reviewer can
+change, an Input whose parts cannot be combined, or two tickets nobody can tell apart. A Run
+that already ended `failed` stays failed.
 
 Resume succeeds only when the host wakes suspended work or recovers this Run's unfinished
 admission or unavailable module into the engine. It clears the old park note before work

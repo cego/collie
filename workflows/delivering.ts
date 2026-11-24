@@ -31,7 +31,7 @@ import {
   settledChecks,
   settleFinalFix,
   step,
-  stepFailed,
+  parkStep,
   wholeRunsOwed,
 } from "collie";
 import type {
@@ -533,10 +533,10 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
             let missing = yield* reading;
             if (missing.fixable.length > 0) {
               yield* fs.writeFileString(unprovedPark, "").pipe(Effect.orDie);
-              const why = `Outcome unproved after ${fixes} gate fixes: ${Arr.join(missing.gaps, "; ")}. Repair the checks, then resume ${runId}.`;
-              yield* stepFailed(why);
-              yield* host.parked(runId, why, "gate-fix-unproved");
-              return yield* Workflow.suspend(yield* WorkflowInstance);
+              return yield* parkStep(
+                `Outcome unproved after ${fixes} gate fixes: ${Arr.join(missing.gaps, "; ")}. Repair the checks, then resume ${runId}.`,
+                "gate-fix-unproved",
+              );
             }
             const reviewedAgain = missing.reviewable.length > 0;
             if (reviewedAgain) {
@@ -628,11 +628,10 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
             (spec) =>
               ` ${spec.name} is left to CI and unproved: job ${spec.ci} on ${head} cannot be read without one.`,
           );
-          const reason = `Cannot open the merge request: ${ready.reason}.${Arr.join(unproved, "")} Repair it, then resume ${runId}.`;
-          yield* host.record(runId, reason);
-          yield* stepFailed(reason);
-          yield* host.parked(runId, reason, ready.cause);
-          return yield* Workflow.suspend(yield* WorkflowInstance);
+          return yield* parkStep(
+            `Cannot open the merge request: ${ready.reason}.${Arr.join(unproved, "")} Repair it, then resume ${runId}.`,
+            ready.cause,
+          );
         }
 
         const settledEvidence = yield* host.evidence(runId, cwd);
@@ -652,11 +651,10 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
             if (read.ok) {
               return read.head;
             }
-            const reason = `Cannot read ${ready.branch}'s head on origin: ${read.reason}. Repair it, then resume ${runId}.`;
-            yield* host.record(runId, reason);
-            yield* stepFailed(reason);
-            yield* host.parked(runId, reason, "forge-unavailable");
-            return yield* Workflow.suspend(yield* WorkflowInstance);
+            return yield* parkStep(
+              `Cannot read ${ready.branch}'s head on origin: ${read.reason}. Repair it, then resume ${runId}.`,
+              "forge-unavailable",
+            );
           }),
         });
         const opened = yield* agentWork({
@@ -714,12 +712,10 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           ...Arr.map(blocking, (finding) => finding.title),
         ];
         if (undone.length > 0 || !opened.mr_url) {
-          const reason = `Merge request delivery is undone: ${Arr.join(undone, "; ")}. Repair it, then resume ${runId}.`;
           yield* fs.writeFileString(parkedAt(attempt), "").pipe(Effect.orDie);
-          yield* host.record(runId, reason);
-          yield* stepFailed(reason);
-          yield* host.parked(runId, reason, "step-failed");
-          return yield* Workflow.suspend(yield* WorkflowInstance);
+          return yield* parkStep(
+            `Merge request delivery is undone: ${Arr.join(undone, "; ")}. Repair it, then resume ${runId}.`,
+          );
         }
         yield* host.mergeRequest(runId, opened.mr_url);
         if (minor.length > 0) {
@@ -743,11 +739,10 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
               if (posted.ok) {
                 return yield* host.parked(runId, null);
               }
-              const reason = `Cannot note what delivery left unsettled on ${opened.mr_url}: ${posted.message}. Repair it, then resume ${runId}.`;
-              yield* host.record(runId, reason);
-              yield* stepFailed(reason);
-              yield* host.parked(runId, reason, "forge-unavailable");
-              return yield* Workflow.suspend(yield* WorkflowInstance);
+              return yield* parkStep(
+                `Cannot note what delivery left unsettled on ${opened.mr_url}: ${posted.message}. Repair it, then resume ${runId}.`,
+                "forge-unavailable",
+              );
             }),
           });
         }
@@ -761,11 +756,10 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
             const at = pipe_(head, Str.slice(0, 12));
             const answer = yield* host.startPipeline({ runId, cwd });
             if (answer._tag === "Failed") {
-              const reason = `Cannot start a pipeline on ${at}: ${answer.reason}. Repair it, then resume ${runId}.`;
-              yield* host.record(runId, reason);
-              yield* stepFailed(reason);
-              yield* host.parked(runId, reason, "forge-unavailable");
-              return yield* Workflow.suspend(yield* WorkflowInstance);
+              return yield* parkStep(
+                `Cannot start a pipeline on ${at}: ${answer.reason}. Repair it, then resume ${runId}.`,
+                "forge-unavailable",
+              );
             }
             yield* host.record(
               runId,

@@ -35,6 +35,7 @@ import {
   isBlocking,
   isSingleRepo,
   orderedTicketsOf,
+  parkStep,
   planReposOf,
   renderApproved,
   renderProgress,
@@ -42,7 +43,6 @@ import {
   sameTree,
   stackedBranch,
   step,
-  stepFailed,
   unmetCriteria,
 } from "collie";
 import type {
@@ -427,9 +427,9 @@ export default defineWorkflow({
       if (source.kind === "linear") {
         const linear = yield* connection("linear");
         if (linear.state !== "ok") {
-          return yield* new WorkflowError({
-            reason: `Cannot read the work source ${source.value}: ${linear.detail}. Fix: ${linear.fix}. Give the issue text as the work source to build without Linear.`,
-          });
+          return yield* parkStep(
+            `Cannot read the work source ${source.value}: ${linear.detail}. Fix: ${linear.fix}. Give the issue text as the work source to build without Linear, then resume ${runId}.`,
+          );
         }
       }
       if (source.kind === "plan-dir" && share === "") {
@@ -459,7 +459,7 @@ export default defineWorkflow({
           ),
         });
         if (plan.refusal !== null) {
-          return yield* new WorkflowError({ reason: plan.refusal });
+          return yield* parkStep(`${plan.refusal}. Correct it, then resume ${runId}.`);
         }
         if (!plan.single) {
           yield* forecast([repoRuns]);
@@ -490,12 +490,8 @@ export default defineWorkflow({
             if (yield* fs.exists(marker).pipe(Effect.orDie)) {
               return yield* host.parked(runId, null);
             }
-            const why = `${reason}. Correct it, then resume ${runId}.`;
             yield* fs.writeFileString(marker, "").pipe(Effect.orDie);
-            yield* host.record(runId, why);
-            yield* stepFailed(why);
-            yield* host.parked(runId, why, "step-failed");
-            return yield* Workflow.suspend(yield* WorkflowInstance);
+            return yield* parkStep(`${reason}. Correct it, then resume ${runId}.`);
           }),
         });
       const checksNow = Effect.map(host.approved(runId), renderApproved);
@@ -528,12 +524,9 @@ export default defineWorkflow({
               return done;
             }
             const why = `not integrated: ${done.reason}`;
-            yield* host.record(runId, why);
-            yield* host.parked(
-              runId,
+            return yield* parkStep(
               `${pipe_(why, Str.replace(/\.+$/, ""))}. Resume ${runId} once it can be read.`,
             );
-            return yield* Workflow.suspend(yield* WorkflowInstance);
           }),
         });
         yield* host.parked(runId, null);
@@ -656,9 +649,9 @@ export default defineWorkflow({
                 break;
               }
               if (attempt === PLAN_TRIES) {
-                return yield* new WorkflowError({
-                  reason: `the plan at ${planDir} cannot be built: ${refused}`,
-                });
+                return yield* parkStep(
+                  `the plan at ${planDir} cannot be built: ${refused}. Correct it, then resume ${runId}.`,
+                );
               }
               refusal = `The plan you wrote cannot be built: ${pipe_(refused, Str.replace(/\.+$/, ""))}. Correct it in place.`;
             }
@@ -853,6 +846,7 @@ export default defineWorkflow({
             );
           }
         });
+      let cycles = 0;
       const pickable = Effect.gen(function* () {
         for (;;) {
           const left = Arr.filter(tickets, (one) => !built.has(one.file));
@@ -869,12 +863,19 @@ export default defineWorkflow({
           }
           const waiting = unblocked[0];
           if (waiting === undefined) {
-            return yield* new WorkflowError({
-              reason: `these tickets block each other, so none of them can be built first: ${Arr.join(
-                Arr.map(left, (one) => one.file),
-                ", ",
-              )}`,
-            });
+            cycles += 1;
+            yield* building(
+              unbuilt(
+                `tickets-cycle-${cycles}`,
+                `these tickets block each other, so none of them can be built first: ${Arr.join(
+                  Arr.map(left, (one) => one.file),
+                  ", ",
+                )}`,
+              ),
+            );
+            // WARNING: a resumed attempt reads the plan again, since correcting it is the whole fix.
+            tickets = yield* ticketsNow;
+            continue;
           }
           yield* building(awaited(waiting), {
             item: waiting.file,
@@ -1234,7 +1235,7 @@ export default defineWorkflow({
         tickets = yield* ticketsNow;
       }
       if (build === null && recovery.entry === "Build") {
-        return yield* new WorkflowError({ reason: "nothing was built" });
+        return yield* building(parkStep(`nothing was built. Correct it, then resume ${runId}.`));
       }
       input = { ...input, verify: yield* checksNow };
       // WARNING: work that stayed on its first agent keeps it to the end.

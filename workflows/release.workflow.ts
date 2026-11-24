@@ -31,7 +31,7 @@ import {
   settleAnswers,
   stackOrder,
   step,
-  stepFailed,
+  parkStep,
   waitsOnApproval,
 } from "collie";
 import type { ParkCause, Finding, JobLink, OpenComment, ReviewStanding } from "collie";
@@ -690,16 +690,12 @@ export default defineWorkflow({
       const runId = (yield* Run).id;
       const fail = (reason: string) => new WorkflowError({ reason });
       const park = (reason: string, cause: ParkCause = "release-failed") =>
-        Effect.gen(function* () {
-          const why =
-            cause === "target-red" || cause === "forge-unavailable"
-              ? reason
-              : `${reason}. Repair it, then resume ${runId}.`;
-          yield* host.record(runId, why);
-          yield* stepFailed(why);
-          yield* host.parked(runId, why, cause);
-          return yield* Workflow.suspend(yield* WorkflowInstance);
-        });
+        parkStep(
+          cause === "target-red" || cause === "forge-unavailable"
+            ? reason
+            : `${reason}. Repair it, then resume ${runId}.`,
+          cause,
+        );
 
       const tagOnly = asked.together !== undefined;
       if (tagOnly && (asked.merge_only === true || asked.together.length === 0)) {
