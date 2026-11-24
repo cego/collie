@@ -867,7 +867,19 @@ test("a finish whose Outputs pass the item cap is judged in batches, and reads a
       }
       const evaluator = yield* fakeEvaluator(dir);
       yield* evaluator.reply(envelope({ result: { reports: [] } }));
-      const out = yield* judge(judgementDeps(dir), semanticIntent(), {
+      const deps = judgementDeps(dir);
+      for (const boundary of ["build-1", "build-2"]) {
+        const judged = yield* judge(deps, semanticIntent(), {
+          runDir: dir,
+          worktree: dir,
+          agentsDir,
+          base: "HEAD",
+          at: boundary,
+          boundary,
+        });
+        expect(judged.judged).toEqual({ semantic: true, truncated: false });
+      }
+      const out = yield* judge(deps, semanticIntent(), {
         runDir: dir,
         worktree: dir,
         agentsDir,
@@ -877,7 +889,7 @@ test("a finish whose Outputs pass the item cap is judged in batches, and reads a
       const packs = yield* evaluator.packs;
       evaluator.restore();
       expect(out.judged).toEqual({ semantic: true, truncated: false });
-      expect(packs).toHaveLength(2);
+      expect(packs).toHaveLength(6);
       expect(alignment(semanticIntent(), yield* readDrift(dir), out.judged)).toEqual({
         aligned: "true",
         why: "every constraint was checked and none is open",
