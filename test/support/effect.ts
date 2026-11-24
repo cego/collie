@@ -15,6 +15,9 @@ import { GIT_QUIET } from "./git-quiet";
 
 const runtime = ManagedRuntime.make(platformLayer);
 
+// WARNING: One platform for the whole process: a layer built per request costs more than the request.
+export const platformRuntime = runtime;
+
 export const memoryRecords = recordsLayer.pipe(
   Layer.provideMerge(storeLayer()),
   Layer.provide(Layer.orDie(SqliteClient.layer({ filename: ":memory:" }))),

@@ -11,7 +11,9 @@ import {
   Result,
 } from "effect";
 import { TestClock } from "effect/testing";
+import { connect } from "../../src/host";
 import { exec } from "./command";
+import { platformRuntime } from "./effect";
 import { submitOutput } from "../../src/output-submit";
 
 const QueuedOutputJson = Schema.Union([Schema.String, Schema.Null, Schema.JsonObject]);
@@ -89,21 +91,44 @@ const ours = (answer: string, at: string | null) =>
 // WARNING: A launch can take a while before the host registers its step for a submit.
 const RETRIES = 6000;
 
-// WARNING: The host that collects a step is in this process, as a test drives it.
+// WARNING: A scenario's host runs in this process; a `collie host` a test started is one of its own.
 export const handIn = ({ server, output, at }: HandIn) => {
   const run = server.env.COLLIE_RUN;
   const agent = server.env.COLLIE_AGENT;
-  return run === undefined || agent === undefined
-    ? Effect.void
-    : Effect.gen(function* () {
-        for (let tries = 0; tries < RETRIES; tries++) {
-          if (yield* ours(yield* submitOutput(run, agent, output), at)) {
-            return;
-          }
-          // WARNING: Live, never the test's clock: waiting on that one would spend the very budget the host is using.
-          yield* TestClock.withLive(Effect.sleep("5 millis"));
-        }
-      });
+  const stateDir = server.env.COLLIE_STATE_DIR;
+  if (run === undefined || agent === undefined || stateDir === undefined) {
+    return Effect.void;
+  }
+  const elsewhere = FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.exists(`${stateDir}/host.sock`)),
+    Effect.orElseSucceed(() => false),
+  );
+  const answer = (separate: boolean) =>
+    separate
+      ? Effect.promise(() =>
+          platformRuntime.runPromise(
+            Effect.scoped(
+              Effect.gen(function* () {
+                const client = yield* connect(stateDir);
+                yield* client.declare({ frontDoor: "agent", from: { run, agent } });
+                return yield* client
+                  .submitOutput({ runId: run, output })
+                  .pipe(Effect.orElseSucceed(() => ""));
+              }),
+            ),
+          ),
+        )
+      : submitOutput(run, agent, output);
+  return Effect.gen(function* () {
+    const separate = yield* elsewhere;
+    for (let tries = 0; tries < RETRIES; tries++) {
+      if (yield* ours(yield* answer(separate), at)) {
+        return;
+      }
+      // WARNING: Live, never the test's clock: waiting on that one would spend the very budget the host is using.
+      yield* TestClock.withLive(Effect.sleep("5 millis"));
+    }
+  });
 };
 
 const answerFrom = Effect.fn("fakeAgent.answer")(function* (
