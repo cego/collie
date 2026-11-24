@@ -320,8 +320,9 @@ const highest = (run: string, ids: ReadonlyArray<string | undefined>) =>
   Arr.reduce(ids, 0, (top, id) => Math.max(top, numberIn(run, id)));
 
 export const isSameFinding = (earlier: Finding, finding: Finding) =>
-  (earlier.id !== undefined && earlier.id === finding.id) ||
-  findingKey(earlier) === findingKey(finding);
+  finding.id === undefined
+    ? findingKey(earlier) === findingKey(finding)
+    : earlier.id === finding.id;
 
 const earlierOf = (earlier: ReadonlyArray<Finding>, finding: Finding) =>
   Option.getOrUndefined(Arr.findFirst(earlier, (one) => isSameFinding(one, finding)));
