@@ -3159,13 +3159,16 @@ new host recovers what the old one was doing, exactly as on any start, so a park
 still parked and a step that was cut short runs again. A check the old host was running is
 handed over to the new host, which collects it and writes its one Verification: the check's
 process runs on. That is only when this install's build is at least the host's own, and only
-for the checks the host supervises — the ones Collie runs for a Run's gate. At the host's own
+for a check the host supervises — whatever asked for it, a Run's gate, an agent's or a
+human's `collie verify`. At the host's own
 build only a client of the host's own installation hands over; a same-build restart from
 another installation, or from a development checkout, ends the check, and it runs again.
 A check the host does not supervise, such as a measurement's, is ended by any stop and runs
 again. One a host left without ending it, because it was killed or crashed, is ended by the
 next host to start, named in the Run's log, and runs once more. A restart asked for by a
-client older than the host is refused, naming the build the host runs, and changes nothing.
+client older than the host is refused, naming the build the host runs, and changes nothing. It
+signals nothing while an owner has not said which build it is: it waits for `host.build` and
+then reports `HostUnavailable` with the owner's pid.
 
 `host rollback` is for going back to an older build. A Run's own records, such as its
 Steps, its audit trail, its Intent and its steering cards, are rows in the state
@@ -3430,8 +3433,11 @@ answer — and sends nothing: an old shell never downgrades the host. A build fr
 refusal has none of it and still sends a plain stop signal, which a host cannot attribute and
 must honour: it ends the running check, and the older build serves until a client of this
 build replaces it again. A client of another
-installation is told which build is running and to point `COLLIE_STATE_DIR` at a directory of
-its own, and sends nothing else. That includes a checkout under development, which is pointed
+installation is told the installation that host serves and to point `COLLIE_STATE_DIR` at a
+directory of its own, and sends nothing else; the host's build is in the refusal's
+`data.host`. A host there that does not answer has published no build to name, and it is
+`HostUnavailable` with whether anything owns the directory. That includes a checkout under
+development, which is pointed
 at a state directory of its own rather than replacing the installed host. Such a
 checkout's host also says `development: "<version>+<sha>"`; a release's does not.
 A host that cannot be started at all, or that takes a connection and does not answer within

@@ -50,11 +50,12 @@ hands over whatever installation it is from; at the host's own build, only a cli
 host's own installation does, which is what `collie host restart` is. Before it signals the
 host, the client writes `host.handover` naming the host's pid and its own build. A host
 signalled while that names it, and a build at least its own, hands its supervised checks
-over rather than ending
-them: it stops collecting them, leaves their processes and records alone, and writes
+over rather than ending them: it stops collecting them, leaves their processes and records
+alone, and writes
 `host.handed-over` naming itself, by pid and start token, the build and the checks before it
 lets go of its lock. It still ends any check it cannot hand over, such as a measurement's:
-only a check a host supervises for a Run's gate can be handed over. Every other end ends
+only a check a host supervises — one `collie verify` asked for, a gate's, an agent's or a
+human's — can be handed over. Every other end ends
 them as above: a plain stop signal, a lost lock or directory, and a watched process gone or
 a crash. A client whose build is older than the host's is refused before it writes anything,
 naming the build the host runs: the one it answered with, or the one it recorded in
@@ -63,7 +64,11 @@ asked a host to stop kills it five seconds after its grace. A host that does not
 is within five seconds is replaced too when `host.build`, which it writes as it starts,
 names an older build of the same installation; a newer one is refused as above; otherwise
 the client reports it as
-`HostUnavailable` with its pid. That host is asked for the same handover before it is
+`HostUnavailable` with its pid. A client is not signalled before the owner has said which
+build it is: a successor holds the lock before it writes `host.build`, so the client waits
+for that record up to five seconds and then reports `HostUnavailable` rather than end a
+check the successor may already have adopted. That host is asked for the same handover
+before it is
 signalled: one too slow to answer still hears its signal and hands its checks over, and one
 that never hears it is killed and hands over nothing.
 

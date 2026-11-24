@@ -856,6 +856,12 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* fs.readFileString(`${removed.state}/host.log`)).not.toContain("took over");
         expect(yield* notedIn(removed.notes, "starts")).toHaveLength(1);
         expect(yield* notedIn(removed.notes, "overlaps")).toEqual([]);
+        expect(yield* fs.exists(`${removed.state}.gone/host.db`)).toBe(true);
+        const written = yield* hostRecords(
+          `${removed.state}.gone`,
+          readVerifications(evidenceDir(`${removed.state}.gone`, removed.runId)),
+        ).pipe(Effect.orElseSucceed(() => []));
+        expect(Arr.filter(written, (one) => one.name === "held")).toEqual([]);
 
         const outlived = yield* watchable;
         const watched = yield* endsWithAHeldCheck(String(outlived.pid), () => outlived.kill);
@@ -1623,6 +1629,34 @@ test("a newer client from another installation leaves the host running and says 
       expect(refused.restart).toContain("COLLIE_STATE_DIR");
       expect((yield* ownerOf(state))?.pid).toBe(who.pid);
       yield* stopHost(state);
+    }),
+  ));
+
+test("a live owner that has not said which build it is is left alone rather than signalled", () =>
+  proves(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { state } = yield* workspace("collie-host-unpublished-");
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const owner = yield* spawner.spawn(
+        ChildProcess.make("sleep", ["30"], { stdout: "ignore", stderr: "ignore" }),
+      );
+      yield* Effect.addFinalizer(() => signalProcess(owner.pid, "SIGKILL"));
+      yield* fs.writeFileString(
+        `${state}/host.lock`,
+        `{"pid":${owner.pid},"start":${stringifyJson(yield* startedOf(owner.pid))}}\n`,
+      );
+
+      const refused = yield* restartHost(state).pipe(
+        (effect) => fastForward(effect, 5),
+        Effect.flip,
+      );
+      if (refused._tag !== "HostUnavailable") {
+        throw new Error(`restarted, or refused with ${refused._tag}`);
+      }
+      expect(refused.reason).toContain(`pid ${owner.pid} owns the directory`);
+      expect(yield* signalProcess(owner.pid)).toBe(true);
+      expect((yield* ownerOf(state))?.pid).toBe(owner.pid);
     }),
   ));
 

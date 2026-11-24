@@ -5205,9 +5205,15 @@ export const restartHost = Effect.fn("Host.restart")(function* (
       Option.match(answered, {
         onNone: () => null,
         onSome: (who) => ({ build: who.build, root: who.root }),
-      }) ?? (yield* recordedOwnerOf(dir, owner.pid));
+      }) ?? (yield* recordedOwnerWithin(dir, owner.pid));
     before = { pid: owner.pid, build: seen?.build ?? null };
-    if (seen !== null && newer(seen.build, build)) {
+    if (seen === null) {
+      return yield* unavailable(
+        dir,
+        `pid ${owner.pid} owns the directory and has not said which build it is`,
+      );
+    }
+    if (newer(seen.build, build)) {
       return yield* new HostVersionMismatch({
         dir,
         host: seen.build,
@@ -5217,9 +5223,9 @@ export const restartHost = Effect.fn("Host.restart")(function* (
       });
     }
     const install = (yield* currentEnv.pipe(Effect.orDie)).pluginRoot;
-    const ours = seen === null || seen.root === undefined || sameInstallation(seen.root, install);
-    const upgrades = seen !== null && newer(build, seen.build);
-    if (seen !== null && atLeast(build, seen.build) && (ours || upgrades)) {
+    const ours = seen.root === undefined || sameInstallation(seen.root, install);
+    const upgrades = newer(build, seen.build);
+    if (atLeast(build, seen.build) && (ours || upgrades)) {
       yield* replaceOwner(dir, owner.pid, build);
     } else {
       yield* stopOwner(dir, owner.pid);
@@ -5525,6 +5531,17 @@ const recordedOwnerOf = Effect.fn("Host.recordedOwner")(function* (dir: string, 
     ? { build: recorded.value.build, root: recorded.value.root }
     : null;
 });
+
+// WARNING: A successor takes the lock before it writes its record, and may already have adopted a check.
+const recordedOwnerWithin = (dir: string, pid: number) =>
+  recordedOwnerOf(dir, pid).pipe(
+    Effect.repeat({
+      until: (seen) => seen !== null,
+      schedule: Schedule.spaced("100 millis"),
+    }),
+    Effect.timeoutOption(ASK_TIMEOUT),
+    Effect.map(Option.getOrNull),
+  );
 
 const sameInstallation = (served: string, install: string) =>
   served === install || install === `${served}/release`;
