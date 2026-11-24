@@ -29,7 +29,7 @@ import { evidenceDir } from "../src/engine";
 import { restartHostAt } from "../src/lifecycle";
 import { registerAgent } from "../src/registry";
 import { signalProcess } from "../src/lock";
-import { groupOf, startedOf, stillRunning } from "../src/processes";
+import { startedOf, stillRunning } from "../src/processes";
 import { encodeVerifying, readVerifications, VERIFYING, verifyingOf } from "../src/verify";
 import { VerifySpecSchema } from "../src/verify-spec";
 import { exec, startDetached } from "./support/command";
@@ -847,9 +847,6 @@ const notedIn = (notes: string, file: string) =>
     Effect.orElseSucceed(() => []),
   );
 
-const recordedLeaders = (state: string) =>
-  Effect.map(checksAt(state), (records) => Arr.map(records, (record) => record.leader.pid));
-
 const releasedOnce = (state: string, runId: string, notes: string) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -904,34 +901,29 @@ test.skipIf(process.platform !== "linux")(
 );
 
 test.skipIf(process.platform !== "linux")(
-  "a restart while a check runs leaves one check of the Run running, and one verification",
+  "a restart onto the same build hands the check over, and it is recorded once",
   () =>
     proves(
       Effect.gen(function* () {
-        const restarted = yield* endsWithAHeldCheck("", ({ state }) =>
-          restartHost(state).pipe(Effect.asVoid, Effect.orDie),
-        );
-        const { state, runId, notes } = restarted;
+        const { state, runId, who, check, notes } = yield* runsAHeldCheck("");
+        const adopted = Arr.map(yield* checksAt(state), (one) => one.id);
         yield* Effect.addFinalizer(() => stopHost(state).pipe(Effect.ignore));
-        expect(restarted.running).toEqual([false, false]);
-        expect(yield* withinTheGrace(restarted.ended)).toBe(true);
+        const restarted = yield* restartHost(state).pipe(Effect.orDie);
+        expect(restarted.before?.pid).toBe(who.pid);
+        expect(restarted.after.build).toBe(who.build);
+        expect(restarted.after.pid).not.toBe(who.pid);
+        expect(yield* signalProcess(who.pid)).toBe(false);
+        expect(yield* Effect.forEach(check, stillRunning)).toEqual([true, true]);
         const fs = yield* FileSystem.FileSystem;
-        expect(yield* fs.readFileString(`${state}/host.log`)).toContain(
-          `ended check held of ${runId}`,
-        );
+        const log = yield* fs.readFileString(`${state}/host.log`);
+        expect(log).toContain(`took over check held of ${runId} from host ${who.pid}`);
+        expect(log).not.toContain(`ended check held of ${runId}`);
+        expect(Arr.map(yield* checksAt(state), (one) => one.id)).toEqual(adopted);
 
-        const [, rerun] = yield* until(
-          () => notedIn(notes, "starts"),
-          (pids) => pids.length === 2,
-        );
-        const group = (yield* groupOf(Number(rerun))) ?? 0;
-        const leaders = yield* until(
-          () => recordedLeaders(state),
-          (pids) => pids.includes(group),
-        );
-        expect(leaders).toEqual([group]);
+        const recorded = yield* releasedOnce(state, runId, notes);
+        expect(recorded).toHaveLength(1);
+        expect(yield* notedIn(notes, "starts")).toEqual([String(check[0]!.pid)]);
         expect(yield* notedIn(notes, "overlaps")).toEqual([]);
-        expect(yield* releasedOnce(state, runId, notes)).toHaveLength(1);
       }),
     ),
 );
@@ -1339,10 +1331,10 @@ test("a lock left by a dead host is recovered without touching the process that 
     }),
   ));
 
-test("a host of another build is reported with what to do, and nothing is taken from it", () =>
+test("an older client connecting for any other command is refused, naming the host's build and not a restart", () =>
   proves(
     Effect.gen(function* () {
-      const { state } = yield* workspace("collie-host-build-");
+      const { state } = yield* workspace("collie-host-old-client-");
       const who = yield* Effect.scoped(
         connect(state).pipe(Effect.flatMap((client) => client.identity())),
       ).pipe(Effect.orDie);
@@ -1358,16 +1350,46 @@ test("a host of another build is reported with what to do, and nothing is taken 
         client: "0.0.0-elsewhere",
         pid: who.pid,
       });
-      expect(refused.restart).toContain("run `collie host restart`");
+      expect(refused.restart).toContain(who.build);
+      expect(refused.restart).not.toContain("collie host restart");
       expect((yield* ownerOf(state))?.pid).toBe(who.pid);
 
       const again = yield* Effect.scoped(
         connect(state).pipe(Effect.flatMap((client) => client.identity())),
       ).pipe(Effect.orDie);
-      expect(again.pid).toBe(who.pid);
+      expect(again).toMatchObject({ pid: who.pid, build: who.build });
       yield* stopHost(state);
     }),
   ));
+
+test.skipIf(process.platform !== "linux")(
+  "an older client's restart is refused, leaving the host and its running check untouched",
+  () =>
+    proves(
+      Effect.gen(function* () {
+        const { state, runId, who, check, notes } = yield* runsAHeldCheck("");
+        yield* Effect.addFinalizer(() => stopHost(state).pipe(Effect.ignore));
+
+        const refused = yield* restartHost(state, { build: OLDER }).pipe(Effect.flip);
+        if (refused._tag !== "HostVersionMismatch") {
+          throw new Error(`restarted, or refused with ${refused._tag}`);
+        }
+        expect(refused).toMatchObject({ host: who.build, client: OLDER, pid: who.pid });
+        expect(refused.restart).toContain(who.build);
+        expect(refused.restart).not.toContain("collie host restart");
+        expect((yield* ownerOf(state))?.pid).toBe(who.pid);
+        const after = yield* Effect.scoped(
+          connect(state).pipe(Effect.flatMap((client) => client.identity())),
+        ).pipe(Effect.orDie);
+        expect(after).toMatchObject({ pid: who.pid, build: who.build });
+        expect(yield* Effect.forEach(check, stillRunning)).toEqual([true, true]);
+
+        const recorded = yield* releasedOnce(state, runId, notes);
+        expect(recorded).toHaveLength(1);
+        expect(yield* notedIn(notes, "starts")).toEqual([String(check[0]!.pid)]);
+      }),
+    ),
+);
 
 test("a client newer than the host stops it and starts a host of its own", () =>
   proves(

@@ -3150,15 +3150,18 @@ command, the board or the chat turn that asked for it. Typing it is how you watc
 terminal.
 
 `host restart` replaces the host that owns the state directory (this installation's by
-default) with this install's: it asks the owner to stop, kills it if it is still there five
-seconds past its stop grace, starts a host, and waits until that one answers. It prints the
-old and new pid and build, `data.before` and `data.after` under `--json`; with no host
-running, `before` is null and it says it started one. A stopped host never answered is named
-with its pid and `build unknown`. Nothing about a Run is touched: the new host recovers
-what the old one was doing, exactly as on any start, so a parked Run is still parked and a
-step that was cut short runs again. A check the old host was running is ended with it and
-runs again on the new one. One a host left without ending it, because it was killed or
-crashed, is ended by the next host to start, named in the Run's log, and runs once more.
+default) with this install's: it asks the owner to hand its running checks over and to stop,
+kills it if it is still there five seconds past its stop grace, starts a host, and waits until
+that one answers. It prints the old and new pid and build, `data.before` and `data.after` under
+`--json`; with no host running, `before` is null and it says it started one. A stopped host
+never answered is named with its pid and `build unknown`. Nothing about a Run is touched: the
+new host recovers what the old one was doing, exactly as on any start, so a parked Run is
+still parked and a step that was cut short runs again. A check the old host was running is
+handed over to the new host, which collects it and writes its one Verification: the check's
+process runs on. One a host left without ending it, because it was killed or crashed, is
+ended by the next host to start, named in the Run's log, and runs once more. A restart asked
+for by a client older than the host is refused, naming the build the host runs, and changes
+nothing.
 
 `host rollback` is for going back to an older build. A Run's own records, such as its
 Steps, its audit trail, its Intent and its steering cards, are rows in the state
@@ -3417,7 +3420,9 @@ It says which build it is, and which installation it serves. A client newer than
 from the same installation (after `collie upgrade`), stops it and starts itself in its
 place; a host still there five seconds past its stop grace is killed, and its work is
 recovered by the one that replaces it. A host that does not answer is replaced the same way
-when the build it recorded in `host.build` is older. Any other client of another build is told which build is running and to run
+when the build it recorded in `host.build` is older. A client older than the host is refused,
+naming the build the host runs, and sends nothing: an old shell never downgrades the host.
+Any other client of another build is told which build is running and to run
 `collie host restart`, and sends nothing else. That includes a checkout under development, which is pointed
 at a state directory of its own rather than replacing the installed host. Such a
 checkout's host also says `development: "<version>+<sha>"`; a release's does not.

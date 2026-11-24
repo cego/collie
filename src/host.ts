@@ -386,6 +386,7 @@ const askHandOver = (dir: string, pid: number, build: string) =>
 
 const newer = (build: string, than: string) =>
   build !== than && Bun.semver.order(build, than) === 1;
+const atLeast = (build: string, than: string) => build === than || newer(build, than);
 
 export class HostUnavailable extends Data.TaggedError("HostUnavailable")<{
   readonly dir: string;
@@ -400,6 +401,9 @@ export class HostVersionMismatch extends Data.TaggedError("HostVersionMismatch")
   readonly restart: string;
   readonly development?: string;
 }> {}
+
+const newerHostSaid = (dir: string, host: string, client: string) =>
+  `the host for ${dir} is collie ${host}, which is newer than this client's ${client}: update this collie`;
 
 const RunShown = Schema.Struct({
   branchProgress: Schema.optionalKey(Schema.NullOr(Schema.String)),
@@ -4852,7 +4856,7 @@ const boundedStop = (dir: string, lock: string, checks: CheckProcessesApi) =>
     const signalled = () => {
       // WARNING: Decided as the signal lands, before an interrupted check's Scope can end it.
       const asked = handOverAsked(dir);
-      if (asked !== null && asked.pid === process.pid && newer(asked.build, BUILD)) {
+      if (asked !== null && asked.pid === process.pid && atLeast(asked.build, BUILD)) {
         handed = { build: asked.build, checks: Effect.runSyncWith(context)(checks.handOver) };
       }
       Deferred.doneUnsafe(stopping, Effect.succeed(StopReason.Asked()));
@@ -5173,9 +5177,11 @@ export const connect: (
         host: who.build,
         client: build,
         pid: who.pid,
-        restart: ours
-          ? `the host for ${dir} is collie ${who.build} and this is ${build}: run \`collie host restart\` and run this again`
-          : `the host for ${dir} serves ${who.root} and this is collie ${build} from ${install}: point COLLIE_STATE_DIR at a directory of its own, or run \`collie host restart\` and run this again`,
+        restart: newer(who.build, build)
+          ? newerHostSaid(dir, who.build, build)
+          : ours
+            ? `the host for ${dir} is collie ${who.build} and this is ${build}: run \`collie host restart\` and run this again`
+            : `the host for ${dir} serves ${who.root} and this is collie ${build} from ${install}: point COLLIE_STATE_DIR at a directory of its own`,
       });
     }
     return yield* open(dir);
@@ -5191,6 +5197,7 @@ export const restartHost = Effect.fn("Host.restart")(function* (
   options?: { readonly build?: string; readonly hostEnv?: Readonly<Record<string, string>> },
 ) {
   const owner = yield* liveOwner(dir);
+  const build = options?.build ?? BUILD;
   let before: HostSeen | null = null;
   if (owner !== null) {
     const answered = yield* ask(dir).pipe(Effect.option);
@@ -5198,19 +5205,31 @@ export const restartHost = Effect.fn("Host.restart")(function* (
       pid: owner.pid,
       build: Option.match(answered, { onNone: () => null, onSome: (who) => who.build }),
     };
-    const build = options?.build ?? BUILD;
     // WARNING: A host that did not answer is judged by the build it recorded.
-    const older =
-      before.build === null
-        ? (yield* olderSilentOwner(dir, build)) === owner.pid
-        : newer(build, before.build);
-    if (older) {
+    const recorded = before.build ?? (yield* silentOwnerOf(dir))?.build ?? null;
+    if (recorded !== null && newer(recorded, build)) {
+      return yield* new HostVersionMismatch({
+        dir,
+        host: recorded,
+        client: build,
+        pid: owner.pid,
+        restart: newerHostSaid(dir, recorded, build),
+      });
+    }
+    // WARNING: Only a client of the host's own installation hands checks over; a dev checkout is not one.
+    const install = (yield* currentEnv.pipe(Effect.orDie)).pluginRoot;
+    const ours = Option.match(answered, {
+      onNone: () => true,
+      onSome: (who) => who.root === undefined || sameInstallation(who.root, install),
+    });
+    const upgrades = recorded !== null && newer(build, recorded);
+    if (recorded !== null && atLeast(build, recorded) && (upgrades || ours)) {
       yield* replaceOwner(dir, owner.pid, build);
     } else {
       yield* stopOwner(dir, owner.pid);
     }
   }
-  const who = yield* ensureRunning(dir, options?.hostEnv ?? {}, options?.build ?? BUILD);
+  const who = yield* ensureRunning(dir, options?.hostEnv ?? {}, build);
   return { before, after: { pid: who.pid, build: who.build } };
 });
 
@@ -5501,7 +5520,7 @@ const REACH_TIMEOUT = Duration.sum(
   Duration.fromInputUnsafe(ASK_TIMEOUT),
 );
 
-const olderSilentOwner = Effect.fn("Host.olderSilentOwner")(function* (dir: string, build: string) {
+const silentOwnerOf = Effect.fn("Host.silentOwner")(function* (dir: string) {
   const owner = yield* liveOwner(dir);
   if (owner === null) {
     return null;
@@ -5514,9 +5533,14 @@ const olderSilentOwner = Effect.fn("Host.olderSilentOwner")(function* (dir: stri
     return null;
   }
   const install = (yield* currentEnv.pipe(Effect.orDie)).pluginRoot;
-  return sameInstallation(recorded.value.root, install) && newer(build, recorded.value.build)
-    ? owner.pid
+  return sameInstallation(recorded.value.root, install)
+    ? { pid: owner.pid, build: recorded.value.build }
     : null;
+});
+
+const olderSilentOwner = Effect.fn("Host.olderSilentOwner")(function* (dir: string, build: string) {
+  const silent = yield* silentOwnerOf(dir);
+  return silent !== null && newer(build, silent.build) ? silent.pid : null;
 });
 
 const sameInstallation = (served: string, install: string) =>

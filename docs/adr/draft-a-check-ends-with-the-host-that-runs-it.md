@@ -42,10 +42,10 @@ never touches another state directory's checks. That matters because Collie's ow
 runs inside a check and starts hosts of its own.
 
 **D3. A stop ends a host's checks. It does not wait for them.** Whatever ends a host ends
-every check it is collecting first: a stop signal, its lock or directory gone, the process
-it watches gone, or a restart onto the same build. Those are one end, bounded by one grace.
-The one end that does not is a replacement by a newer build of the same installation, which
-hands its checks over (D5). Before this, only a stop
+every check it is collecting first: a stop signal, its lock or directory gone, or the process
+it watches gone. Those are one end, bounded by one grace.
+The one end that does not is a replacement by a build at least as new as the host's, of the
+same installation, which hands its checks over (D5). Before this, only a stop
 signal was: a host whose lock went waited on its running steps for as long as they took.
 Each check gets SIGTERM at once. Whatever is left of them gets SIGKILL in the grace's last
 fifth, before the host lets go of its lock. A stop is not made to wait for a check to
@@ -78,10 +78,20 @@ it, and a build newer than its own, hands over: it stops collecting its supervis
 leaves them running, and names itself, the build and the checks in `host.handed-over` before
 it lets go of its lock. Only a host of that build adopts them, and only those whose record
 names the host that handed them over and whose supervisor is proved by pid and start token,
-as D2 proves a leftover. A stop signal without that request, a crash, a lost lock or
-directory and a same-build restart still end every check, as D3 says, and nothing they leave
+as D2 proves a leftover. A stop signal without that request, a crash and a lost lock or
+directory still end every check, as D3 says, and nothing they leave
 is ever adopted. Draining a host before the swap was rejected: newer clients would be
 refused as a version mismatch for up to an hour after each release.
+
+_Amended 2026-11-24 (#264):_ a `collie host restart` by a client of the same build hands its
+checks over too, and a client older than the host never replaces or restarts it. The gate is
+the build the ask names: a host signalled by an ask that names its pid and a build at least
+its own hands each supervised check over exactly as above, and only a host of the build the
+handover names adopts it. A same-build restart therefore stops the old host and leaves the
+check's process running, collected by the host it started. A client whose build is older than
+the host's is refused before anything is written, with the build the host runs and no
+instruction to restart it. The ends D3 keeps hand nothing over: a stop signal with no ask, a
+crash, and a lost lock or directory still end every check, and nothing they leave is adopted.
 
 Three things once made adoption unsafe, and a check's supervisor answers each. A host runs
 a check's command under a supervisor, a `collie` process outside its process group that
@@ -118,9 +128,9 @@ and the check runs again, so nothing of it needs vouching for.
 
 ## Consequences
 
-- A host restart during a check costs one more run of that check, as it did before, and
-  never two copies running at once. A replacement by a newer build costs none: the check
-  runs on, and its one Verification is the run it was already making.
+- A restart during a check, onto the same build or a newer one, costs none: the check runs
+  on, and its one Verification is the run it was already making. A restart by an older
+  client is refused and touches neither the host nor its check.
 - A host whose lock or directory goes, or whose watched process exits, exits within the
   stop grace, as a signalled host does. Before, it waited on its running steps.
 - A stop while a check runs takes the whole stop grace, because the check's step does not

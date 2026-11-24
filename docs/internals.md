@@ -45,15 +45,17 @@ before the lock goes. Three seconds holds one slow look and keeps the exit, with
 flush, inside the five seconds a client gives a stopping host before it kills it. Its step does not complete
 and nothing is recorded for it, so the next host runs it once more.
 
-The one exception is a replacement by a newer build of the same installation: a newer client,
-or `collie host restart` from one. Before it signals the host, the client writes
-`host.handover` naming the host's pid and its own build. A host signalled while that names
-it, and a build newer than its own, hands its supervised checks over rather than ending
+The one exception is a replacement by a build at least as new as the host's, of the same
+installation: a newer client, or `collie host restart` from a client of the same build or a
+newer one. Before it signals the host, the client writes `host.handover` naming the host's
+pid and its own build. A host signalled while that names it, and a build at least its own,
+hands its supervised checks over rather than ending
 them: it stops collecting them, leaves their processes and records alone, and writes
 `host.handed-over` naming itself, by pid and start token, the build and the checks before it
 lets go of its lock. It still ends any check it cannot hand over, such as a measurement's.
-Every other end ends them as above: a plain stop signal, a lost lock or directory, a watched
-process gone, a crash, and a restart onto the same build. A newer client that
+Every other end ends them as above: a plain stop signal, a lost lock or directory, and a
+watched process gone or a crash. A client whose build is older than the host's is refused
+before it writes anything, naming the build the host runs. A newer client that
 asked a host to stop kills it five seconds after its grace. A host that does not say who it
 is within five seconds is replaced too when `host.build`, which it writes as it starts,
 names an older build of the same installation; otherwise the client reports it as
