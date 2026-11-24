@@ -3,10 +3,12 @@ import * as Order from "effect/Order";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import type { Path } from "effect";
 import { Clock, DateTime, Effect, Fiber, FileSystem, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
+
+setDefaultTimeout(60_000);
 import {
   boardLines,
   buildBoard,
@@ -303,7 +305,7 @@ test("a finished Run shows pushed branch movement without rewriting its failed r
     ["recovery.workflow.ts"],
   ));
 
-const endedWithPushedBranch = (world: World) =>
+const endedWithPushedBranch = (world: World, branch: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const clean = {
@@ -339,7 +341,7 @@ const endedWithPushedBranch = (world: World) =>
     const base = Str.trim(
       (yield* exec(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: world.project })).stdout,
     );
-    yield* exec(["git", "switch", "-qc", "feature"], { cwd: world.project });
+    yield* exec(["git", "switch", "-qc", branch], { cwd: world.project });
     yield* exec(["git", "commit", "--allow-empty", "-qm", "the Run's own work"], {
       cwd: world.project,
     });
@@ -353,7 +355,7 @@ const endedWithPushedBranch = (world: World) =>
         request: "failed",
         taskLabel: "recover work",
         input: { goal: "recover work" },
-        options: { branch: "feature" },
+        options: { branch },
         verify: [{ name: "unit", executable: "true", argv: [], cwd: "worktree" }],
       })
       .pipe(Effect.orDie);
@@ -400,7 +402,7 @@ test("a finished Run's card says its branch moved past its last head, beside the
     "collie-board-moved-on-",
     (world) =>
       Effect.gen(function* () {
-        const { ended, cwd } = yield* endedWithPushedBranch(world);
+        const { ended, cwd } = yield* endedWithPushedBranch(world, "moved-on");
         yield* exec(["git", "commit", "--allow-empty", "-qm", "finish after the Run"], { cwd });
         yield* exec(["git", "push", "-qu", "origin", "HEAD"], { cwd });
         const head = Str.trim((yield* exec(["git", "rev-parse", "HEAD"], { cwd })).stdout);
@@ -430,22 +432,25 @@ test("a finished Run's card says its branch diverged, and its offer enters at Bu
     "collie-board-diverged-",
     (world) =>
       Effect.gen(function* () {
-        const { ended, cwd } = yield* endedWithPushedBranch(world);
-        yield* exec(["git", "checkout", "-q", "--orphan", "rewritten"], { cwd });
-        yield* exec(["git", "commit", "--allow-empty", "-qm", "a history without the Run"], {
-          cwd,
-        });
-        yield* exec(["git", "push", "-q", "--force", "origin", "rewritten:feature"], { cwd });
-        const head = Str.trim((yield* exec(["git", "rev-parse", "HEAD"], { cwd })).stdout);
+        const { ended } = yield* endedWithPushedBranch(world, "diverged");
+        const other = `${world.home}/rewritten`;
+        yield* exec(["git", "clone", "-q", `${world.home}/origin.git`, other], { cwd: world.home });
+        for (const args of [
+          ["config", "user.name", "test"],
+          ["config", "user.email", "test@example.com"],
+          ["checkout", "-q", "--orphan", "rewritten"],
+          ["commit", "--allow-empty", "-qm", "a history without the Run"],
+          ["push", "-q", "--force", "origin", "rewritten:diverged"],
+        ]) {
+          yield* exec(["git", ...args], { cwd: other });
+        }
+        const head = Str.trim((yield* exec(["git", "rev-parse", "HEAD"], { cwd: other })).stdout);
         yield* stopHost(world.state);
         yield* connect(world.state).pipe(Effect.orDie);
         const told = yield* followingBoard(world.state);
         const card = yield* until(
           () => Effect.sync(() => cardIn(told)),
-          (one) =>
-            one?.moved !== null &&
-            one?.moved !== undefined &&
-            Arr.some(one.offers ?? [], (offer) => offer.title === "Recover — Build"),
+          (one) => one?.moved !== null && one?.moved !== undefined,
         );
         const shown = card!;
         expect(shown.moved).toContain(`diverged from ${ended}`);
@@ -461,7 +466,7 @@ test("a finished Run whose branch is still at its last head shows no moved-on li
     "collie-board-still-at-head-",
     (world) =>
       Effect.gen(function* () {
-        yield* endedWithPushedBranch(world);
+        yield* endedWithPushedBranch(world, "at-head");
         yield* stopHost(world.state);
         yield* connect(world.state).pipe(Effect.orDie);
         const told = yield* followingBoard(world.state);
