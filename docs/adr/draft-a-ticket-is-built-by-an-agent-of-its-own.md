@@ -64,8 +64,15 @@ decisions, rejected approaches and next action under `ticket` and `round`.
 Twelve implement Runs of build 150c5346 ran against the test fake GitLab. Every session was
 Claude, Opus, high, and the shipped reviewer, with the same settings, audited each Run's
 merge request. Every Run's Checks were `static` and one `bun test` of its case's files,
-identical within a case. Case C restarted its host on ticket 8's build delivery: c-run-off-1
-at board seq 730, c-ticket-on-1 at 8096, c-round-on-1 at 669. The records are in the
+identical within a case. Case C restarted its host once, on ticket 8's build delivery,
+named by its delivery id in `trial/logs/restart-<cell>.json`. The board seq recorded beside
+each (c-run-off-1 730, c-ticket-on-1 8096, c-round-on-1 669) is the board change on which
+the operator first read that delivery as sent. c-round-on-1 had a host of its own, but the
+other two shared one, so their seq may be another card's change. `tools/trial-restart.ts`
+now takes only the Run's own card's change. c-ticket-on-1's `collie host restart` answered
+with the old pid, because that host took 5 s to stop. Its log shows the restart: pid
+853294 stopped at 01:48:31Z and 3927688 started at 01:48:36Z. The tool now confirms a
+restart only once the host lock has a new owner. The records are in the
 implement Run's `trial/` directory: `runs.tsv`, `interventions.md`, `reports/records.md`,
 `reports/figures.md`, and the reports themselves.
 
@@ -91,8 +98,15 @@ How the table was measured:
   the gate fixes and `mr`. B `run`/`on` reviewed inside its build step, so its delivery
   figure is small.
 - Checks passed in every compared Run, and no reopened finding was raised.
-- The planted regression was named by no reviewer in any C Run, the baseline included
-  (plantedCaught 0), because every C builder found and fixed it while building.
+- The planted regression was caught in every C Run, the baseline included: no repeat let it
+  escape. plantedCaught is read from the final tree (`trial/planted.sh`): the Run's own
+  ticket 7 `run list --status parked` test, run through `collie verify` on its own host. That
+  test cannot pass while the plant drops parked Runs from `run list`. A builder that fixes
+  the plant before review has caught it, since the measure asks whether the defect escapes,
+  not who stopped it. Whether a review named it is reported apart and given no direction:
+  none did, because every C builder had already fixed it while building.
+- Follow-up: ticket 24's plantedCaught counts only review findings at the plant ([cego/collie#526](https://github.com/cego/collie/pull/526)), and
+  so misreads a builder's fix. Ticket 26 keeps the same plant and this reading.
 
 **The rule's result.** Each escaped-defect figure is a single audit of a single Run, so a
 failure here means one repeat did not show the arm no worse, not that the arm is worse.
@@ -127,9 +141,13 @@ failure here means one repeat did not show the arm no worse, not that the arm is
   each Run ended:
   - The command is `trial/postcheck.sh`, which is `env -u COLLIE_FORGE_API bun test` with the
     case's files. It ran on each final tree, on the Run's own host.
-  - It was compared with 657bed18's failures: `base-657bed18-tests-acd` and `-b` both passed.
-    The base's list holds verify-told's "a settled agent being collected from is told its
-    verify ended", which failed in 2 of 3 base runs.
+  - A Run's Checks passed when they added no failure over 657bed18's list. Any other failure
+    got one rerun with `--again`, at idle, and both attempts are kept
+    (`trial/logs/postcheck-<cell>.txt` and `-again.txt`). Only c-round-on-1 needed it, and its
+    rerun failed only the listed test.
+  - The base's list is one test, verify-told's "a settled agent being collected from is told
+    its verify ended". It failed in both recorded runs of `guard-check-output` on 2026-11-17,
+    and passed in `base-657bed18-tests-acd` and `-b`.
   - The Runs' own Check records are kept as the evidence of the leak.
 - Other confounds, matched or recorded in `trial/interventions.md`:
   - The origins refused push options until 2026-11-24T01:47Z.
