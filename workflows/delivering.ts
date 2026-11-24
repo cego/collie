@@ -256,15 +256,15 @@ const deliveredBy = (ask: Pick<Delivery<Told, Opened>, "agent" | "takesOver" | "
   return on;
 };
 
+const FIX_FILE = /^(fix|gate-fix|ci-fix)-(\d+)\.json$/;
 // WARNING: the phases are ordered as the Run reaches them, so the last fix's name is the newest.
 const FIX_PHASES = ["fix", "gate-fix", "ci-fix"];
 const parseJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
 
 const fixPhase = (file: string) => {
   const match = FIX_FILE.exec(file);
-  return match === null ? 0 : FIX_PHASES.indexOf(match[1] ?? "") * 1000 + Number(match[2]);
+  return match === null ? 0 : FIX_PHASES.indexOf(match[1] ?? "") * 1000 + Number(match[2] ?? 0);
 };
-const FIX_FILE = /^(fix|gate-fix|ci-fix)-(\d+)\.json$/;
 
 export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =>
   Effect.gen(function* () {
