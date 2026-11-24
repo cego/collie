@@ -1,25 +1,17 @@
-// A finished Run's agent closes once core has reported it idle for `idle_close_ms` since
-// the Run finished, unless something still needs it
-// (ADR-draft-a-finished-runs-idle-agent-is-closed).
-
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Clock, DateTime, Effect, FileSystem, Schema, flow, Result, type Types } from "effect";
-import {
-  forgetGone,
-  idleAgentsSweeper,
-  JOURNAL,
-  noteIdle,
-  sweep,
-  type FinishedSince,
-  type IdleSince,
-} from "../src/cleanup";
+import { Clock, DateTime, Effect, FileSystem, Schema, flow, Result } from "effect";
+import type { Types } from "effect";
+import { forgetGone, idleAgentsSweeper, JOURNAL, noteIdle, sweep } from "../src/cleanup";
+import type { FinishedSince, IdleSince } from "../src/cleanup";
 import { appendCard } from "../src/cards";
 import { STOP } from "../src/controls";
 import { RunRecords } from "../src/run-records";
-import { recordLaunch, type Launched } from "../src/launches";
+import { recordLaunch } from "../src/launches";
+import type { Launched } from "../src/launches";
 import { keepQueued } from "../src/delivery-queue";
-import { Herdr, type AgentInfo } from "../src/herdr";
+import { Herdr } from "../src/herdr";
+import type { AgentInfo } from "../src/herdr";
 import type { CompactionPorts, Stopped } from "../src/compaction";
 import { appendLine } from "../src/steering";
 import type { RunFacts } from "../src/runs";
@@ -39,19 +31,16 @@ afterEach(() => runEffect(rig.close()));
 
 const MIN_MS = 60_000;
 const HOUR_MS = 60 * MIN_MS;
-// Core's address for the first terminal it runs, which is the agent's.
 const TERMINAL = "t1";
 const TARGET = "impl of r1";
 const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
-/** The agent `runId` launched, live on core. */
 const arranged = (opts: { harness?: string; runId?: string } = {}) =>
   Effect.gen(function* () {
     expect(yield* rig.addAgent("impl")).toBe(TERMINAL);
     yield* launched("impl", opts.runId ?? "r1", TERMINAL, opts.harness);
   });
 
-/** What the agent's harness reports of itself from now on. */
 const reports = (status: string) =>
   Effect.flatMap(rig.startCore(), (core) => core.report("impl", status));
 
@@ -73,7 +62,9 @@ const launched = (
     harness,
     terminalId,
   };
-  if (agentSession !== undefined) launch.agentSession = agentSession;
+  if (agentSession !== undefined) {
+    launch.agentSession = agentSession;
+  }
   return recordLaunch(launch);
 };
 
@@ -84,7 +75,7 @@ const isoAgo = (ms: number) =>
 const finished = (ms: number, over: Partial<RunFacts> = {}) =>
   Effect.map(isoAgo(ms), (at) => runFacts({ id: "r1", state: "succeeded", finished: at, ...over }));
 
-const idleFor = (ms: number) => Effect.map(ago(ms), (at): IdleSince => new Map([[TERMINAL, at]]));
+const idleFor = (ms: number) => Effect.map(ago(ms), (at) => new Map([[TERMINAL, at]]));
 
 const sweeper = (
   runs: ReadonlyArray<RunFacts>,
@@ -93,7 +84,6 @@ const sweeper = (
     idleCloseMs?: number;
     ports?: CompactionPorts;
     finishedSince?: FinishedSince;
-    /** Proved unattended unless a test says otherwise, so what else keeps an agent shows. */
     unattended?: () => Effect.Effect<boolean>;
   } = {},
 ) =>
@@ -225,7 +215,6 @@ test("a builder idle while its Run's review and gate ran has the whole hour afte
       );
       expect(just.keep).toEqual(kept("idle 0 of 60 min"));
 
-      // 37 minutes on it is still there for a steer.
       const later = yield* sweep(
         [sweeper([yield* finished(37 * MIN_MS)], yield* idleFor(112 * MIN_MS))],
         rig.stateDir,
@@ -592,7 +581,7 @@ test("an agent whose turn does not stop is kept with the reason, and tried again
           attempt: null,
         }),
       );
-      const stops: string[] = [];
+      const stops: Array<string> = [];
       const ports: CompactionPorts = {
         served: {
           gate: Effect.void,
@@ -632,7 +621,7 @@ test("an agent whose turn does not stop is kept with the reason, and tried again
   ));
 
 test("the host keeps when it first saw each agent idle or done, and anything else clears it", () => {
-  const agent = (name: string, status: AgentInfo["status"]): AgentInfo => ({
+  const agent = (name: string, status: AgentInfo["status"]) => ({
     name,
     paneId: `t-${name}`,
     status,

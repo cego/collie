@@ -2,13 +2,16 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { Schema } from "effect";
-import { type CatalogueEntry, HarnessCatalogue } from "../../../src/catalogue-model";
+import { HarnessCatalogue } from "../../../src/catalogue-model";
+import type { CatalogueEntry } from "../../../src/catalogue-model";
 import { chainEntry, DEFAULT_MODEL, HARNESS_MODELS } from "../../../src/harness-choice";
 import { subscriptionOf } from "../../../src/usage-model";
-import { type MachineUsage, usageEntries } from "./usage";
+import { usageEntries } from "./usage";
+import type { MachineUsage } from "./usage";
 import { HARNESS_NAMES } from "../../../src/settings";
 import { harnessName } from "./chat-view";
-import { chatSelects, type ChoiceSelect } from "./chat-choices";
+import { chatSelects } from "./chat-choices";
+import type { ChoiceSelect } from "./chat-choices";
 import { whenOf } from "./flow";
 import type { MachineRow } from "./flock";
 
@@ -24,7 +27,7 @@ export const rememberCatalogues = (
   held: ReadonlyArray<MachineCatalogue>,
   fresh: ReadonlyArray<MachineCatalogue>,
   machines: ReadonlyArray<Pick<MachineRow, "profile" | "name" | "state">>,
-): ReadonlyArray<MachineCatalogue> =>
+) =>
   Arr.map(machines, ({ profile, name, state }) => {
     const read = Option.getOrUndefined(Arr.findFirst(fresh, (one) => one.profile === profile));
     const before = Option.getOrUndefined(Arr.findFirst(held, (one) => one.profile === profile));
@@ -73,9 +76,11 @@ export const settingsAgentSelects = (
         origins: Set<string>;
       }
     >();
-    for (const source of sources)
+    for (const source of sources) {
       for (const entry of source.entries) {
-        if (entry.hidden && entry.model !== set.model) continue;
+        if (entry.hidden && entry.model !== set.model) {
+          continue;
+        }
         const held = models.get(entry.model) ?? {
           entry,
           machines: new Set<string>(),
@@ -97,6 +102,7 @@ export const settingsAgentSelects = (
         }
         models.set(entry.model, held);
       }
+    }
     return { harness, sources, models };
   });
   const choices = {
@@ -138,8 +144,9 @@ export const settingsAgentSelects = (
   );
   const model = (id: string) => selected?.models.get(id);
   const modelOptions = Arr.map(selects.model.options, (option) => {
-    if (option.value === "")
+    if (option.value === "") {
       return { ...option, description: "The harness's default model for workflow steps" };
+    }
     const entry = model(option.value);
     return entry === undefined
       ? option
@@ -164,7 +171,7 @@ export const settingsAgentSelects = (
       : (HARNESS_MODELS[set.harness]?.defaultModel ?? DEFAULT_MODEL);
   const picked = model(effective);
   const efforts = picked?.efforts ?? new Map<string, Set<string>>();
-  if ((!set.model || set.model === DEFAULT_MODEL) && !HARNESS_MODELS[set.harness]?.defaultModel)
+  if ((!set.model || set.model === DEFAULT_MODEL) && !HARNESS_MODELS[set.harness]?.defaultModel) {
     for (const source of selected?.sources ?? []) {
       const defaultModel = Option.getOrUndefined(
         Arr.findFirst(source.entries, (entry) => entry.isDefault === true),
@@ -176,21 +183,24 @@ export const settingsAgentSelects = (
         efforts.set(effort, on);
       }
     }
+  }
   const times = Arr.flatMap(
     Arr.filter(live, ({ problem }) => problem === null),
     (reading: MachineCatalogue) => Arr.map(reading.catalogues, ({ at }) => at),
   ).sort();
-  if (times.length === 0)
+  if (times.length === 0) {
     times.push(
       ...Arr.flatMap(live, ({ catalogues }) => Arr.map(catalogues, ({ at }) => at)).sort(),
     );
+  }
   const problems = Arr.flatMap(live, ({ name, problem, catalogues }) => {
-    if (catalogues.length === 0)
+    if (catalogues.length === 0) {
       return [
         problem === null
           ? `${name}: no harnesses reported`
           : `${name} not read yet${problem === "not read yet" ? "" : `: ${problem}`}`,
       ];
+    }
     const at = Arr.map(catalogues, ({ at }) => at).sort()[0]!;
     return problem === null ? [] : [`${name}'s at ${whenOf(at, now)}: ${problem}`];
   });
@@ -261,18 +271,23 @@ export const agentSettingChanges = (
   current: AgentSettings,
   key: "harness" | "model" | "effort",
   value: string,
-): ReadonlyArray<{ readonly key: string; readonly value: string }> => {
+) => {
   let next = {
     ...current,
     model: current.model ?? DEFAULT_MODEL,
     effort: current.effort ?? "",
     [key]: value,
   };
-  if (key === "harness" && value !== current.harness)
+  if (key === "harness" && value !== current.harness) {
     next = { ...next, model: DEFAULT_MODEL, effort: "" };
+  }
   const select = settingsAgentSelects(catalogues, profiles, next);
-  if (key === "model" && !Arr.some(select.effort.options, (option) => option.value === next.effort))
+  if (
+    key === "model" &&
+    !Arr.some(select.effort.options, (option) => option.value === next.effort)
+  ) {
     next = { ...next, effort: "" };
+  }
   return [
     { key: "harness", value: next.harness },
     { key: "model", value: next.model },
@@ -285,16 +300,20 @@ export const changeFallbacks = (
   action:
     | { readonly add: string }
     | { readonly at: number; readonly move: "up" | "down" | "remove" },
-): string => {
+) => {
   const values = fallbackValues(value);
   if ("add" in action) {
-    if (action.add !== "" && !values.includes(action.add)) values.push(action.add);
+    if (action.add !== "" && !values.includes(action.add)) {
+      values.push(action.add);
+    }
   } else if (action.at >= 0 && action.at < values.length) {
-    if (action.move === "remove") values.splice(action.at, 1);
-    else {
+    if (action.move === "remove") {
+      values.splice(action.at, 1);
+    } else {
       const to = action.at + (action.move === "up" ? -1 : 1);
-      if (to >= 0 && to < values.length)
+      if (to >= 0 && to < values.length) {
         [values[action.at], values[to]] = [values[to]!, values[action.at]!];
+      }
     }
   }
   return Arr.join(values, ", ");
@@ -311,7 +330,7 @@ export const fallbackList = (
   const entries = Arr.map(values, (value) => {
     const choice = chainEntry(value);
     const subscription = subscriptionOf({
-      harness: choice.harness!,
+      harness: choice.harness,
       model: choice.model ?? DEFAULT_MODEL,
     });
     return {
@@ -339,8 +358,9 @@ export const fallbackList = (
         Option.getOrUndefined(
           Arr.findFirst(selects.harness.options, ({ value }) => value === harness),
         )?.disabled
-      )
+      ) {
         return [];
+      }
       return [
         { value: harness, label: `${harnessName(harness)} · its default model` },
         ...Arr.map(

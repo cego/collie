@@ -1,7 +1,3 @@
-// One row of the evidence table per test. The point of each is what it refuses: an
-// outcome nobody can close with a claim, and one that is not asked for evidence it never
-// promised.
-
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -38,8 +34,8 @@ const EARLIER = { head_sha: "abc000", fingerprint: "tree-0" };
 
 const TESTS: VerifySpec = { name: "tests", executable: "bun", argv: ["test"], cwd: "." };
 
-function record(over: Partial<Verification> & { name: string }): Verification {
-  return {
+function record(over: Partial<Verification> & { name: string }) {
+  const returned: Verification = {
     id: `${over.name}-1`,
     run: "r1",
     executable: "/usr/bin/true",
@@ -56,9 +52,10 @@ function record(over: Partial<Verification> & { name: string }): Verification {
     by: "collie",
     ...over,
   };
+  return returned;
 }
 
-function collected(over: Partial<Collected> = {}): Collected {
+function collected(over: Partial<Collected> = {}) {
   return {
     verifications: [record({ name: "tests" })],
     final: FINAL,
@@ -71,7 +68,6 @@ function collected(over: Partial<Collected> = {}): Collected {
   };
 }
 
-/** The fields only a reviewer may give, as `workflows/review.md` defines them. */
 const JUDGEMENTS = new Set([
   "scope_met",
   "behavior_preserved",
@@ -81,13 +77,15 @@ const JUDGEMENTS = new Set([
   "measurement_valid",
 ]);
 
-/** A Run whose implementer and reviewer each wrote the fields that are theirs to write. */
 const withOutput = (fields: Record<string, YamlValue>, over: Partial<Collected> = {}) => {
   const build: Record<string, YamlValue> = {};
   const review: Record<string, YamlValue> = {};
   for (const [key, value] of Rec.toEntries(fields)) {
-    if (JUDGEMENTS.has(key)) review[key] = value;
-    else build[key] = value;
+    if (JUDGEMENTS.has(key)) {
+      review[key] = value;
+    } else {
+      build[key] = value;
+    }
   }
   return collected({
     outputs: new Map<string, YamlValue>([
@@ -99,7 +97,6 @@ const withOutput = (fields: Record<string, YamlValue>, over: Partial<Collected> 
   });
 };
 
-/** The same Run with the implementer writing everything, including what is not its to say. */
 const claimedByTheImplementer = (fields: Record<string, YamlValue>) =>
   collected({
     outputs: new Map<string, YamlValue>([
@@ -110,7 +107,9 @@ const claimedByTheImplementer = (fields: Record<string, YamlValue>) =>
   });
 
 test("every kind is a kind, and nothing else is", () => {
-  for (const kind of KINDS) expect(isOutcome(kind)).toBe(true);
+  for (const kind of KINDS) {
+    expect(isOutcome(kind)).toBe(true);
+  }
   expect(isOutcome("feature ")).toBe(false);
   expect(isOutcome("chore")).toBe(false);
   expect(isOutcome("")).toBe(false);
@@ -118,7 +117,6 @@ test("every kind is a kind, and nothing else is", () => {
 
 test("an unclassified Run proves the approved set and is asked for nothing else", () => {
   expect(evidenceGaps("unspecified", collected())).toEqual([]);
-  // Not a feature by default: no tickets are demanded of work nobody called a feature.
   expect(Arr.join(evidenceGaps("unspecified", collected()), " ")).not.toContain("ticket");
 });
 
@@ -127,8 +125,9 @@ test("a Run with no check named is a gap its implementer closes by naming the ch
   expect(evidenceGaps("unspecified", got)).toEqual([noCheckNamed]);
   expect(checkGaps("feature", got)).toContain(noCheckNamed);
   expect(noCheckNamed).toContain("collie run intent verification");
-  for (const kind of ["investigation", "plan", "review"] as const)
+  for (const kind of ["investigation", "plan", "review"] as const) {
     expect(evidenceGaps(kind, got)).not.toContain(noCheckNamed);
+  }
 });
 
 test("the approved set has to pass here, now, as its own command", () => {
@@ -147,14 +146,12 @@ test("the approved set has to pass here, now, as its own command", () => {
       collected({ verifications: [record({ name: "tests", result: "unstable" })] }),
     ),
   ).toEqual(["tests ran on a tree that moved under it"]);
-  // Passed, but on a tree that is not this one: history, not evidence.
   expect(
     evidenceGaps(
       "unspecified",
       collected({ verifications: [record({ name: "tests", end: EARLIER })] }),
     ),
   ).toEqual(["tests last passed on a different tree"]);
-  // An agent's record that only shares the check's name is not the check.
   expect(
     evidenceGaps(
       "unspecified",
@@ -218,11 +215,9 @@ test("a feature names what it built and the review says the scope was met", () =
   expect(
     evidenceGaps("feature", withOutput({ tickets_done: ["01 the picker"], scope_met: true })),
   ).toEqual([]);
-  // `scope_met: false` is not "did not say": both are gaps, and neither passes.
   expect(
     evidenceGaps("feature", withOutput({ tickets_done: ["01"], scope_met: false })),
   ).toHaveLength(1);
-  // What a ticket promised would prove it has to have passed here, by whoever ran it.
   const promised = [{ file: "01-picker.md", checks: ["tests", "typecheck"] }];
   const built = { tickets_done: ["01 the picker"], scope_met: true };
   expect(evidenceGaps("feature", withOutput(built, { tickets: promised }))).toEqual([
@@ -237,7 +232,6 @@ test("a feature names what it built and the review says the scope was met", () =
       }),
     ),
   ).toEqual([]);
-  // A promise kept on an earlier tree is history, like any other verification.
   expect(
     evidenceGaps(
       "feature",
@@ -250,8 +244,7 @@ test("a feature names what it built and the review says the scope was met", () =
 });
 
 test("a gap is a check's only where a verification on this tree could close it", () => {
-  // The reviewer's judgement and the implementer's Output are what they are; running a
-  // check again moves neither, so a fix is never asked to.
+  // WARNING: running a check again moves neither the judgement nor the Output, so a fix is never asked to.
   const got = withOutput(
     { tickets_done: [], scope_met: false },
     { verifications: [], tickets: [{ file: "01.md", checks: ["typecheck"] }] },
@@ -274,7 +267,6 @@ test("a bug is a fail then a pass, on two different trees", () => {
   });
   const fixed = record({ name: "regression" });
 
-  // Neither half on its own.
   expect(
     evidenceGaps(
       "bug",
@@ -296,8 +288,6 @@ test("a bug is a fail then a pass, on two different trees", () => {
     ),
   ).toEqual(["regression does not pass on the current tree, so the fix is not proven"]);
 
-  // Both halves on one tree is one tree: a test that fails and passes on the same
-  // fingerprint proves the test is flaky, not that a fix happened between them.
   expect(
     evidenceGaps(
       "bug",
@@ -316,7 +306,6 @@ test("a bug is a fail then a pass, on two different trees", () => {
     "the bug was only reproduced on the tree the fix is already on, so nothing shows it failing before the fix",
   ]);
 
-  // Both halves, and the Output naming it.
   expect(
     evidenceGaps(
       "bug",
@@ -383,7 +372,6 @@ test("a promised check that passed only before the tree moved names the command 
   ]);
 });
 
-/** A bug Run's `regression` failing as expected on an earlier tree, then passing. */
 const regressionPair = (before: Partial<Verification>, after: Partial<Verification>) =>
   withOutput(
     { reproduced: "regression" },
@@ -403,8 +391,7 @@ const regressionPair = (before: Partial<Verification>, after: Partial<Verificati
     },
   );
 
-/** The same, each command as `[executable, ...argv]`. */
-const reproducedThenFixed = (reproducedAs: string[], fixedAs: string[]) =>
+const reproducedThenFixed = (reproducedAs: Array<string>, fixedAs: Array<string>) =>
   regressionPair(
     { executable: reproducedAs[0], argv: reproducedAs.slice(1) },
     { executable: fixedAs[0], argv: fixedAs.slice(1) },
@@ -489,7 +476,6 @@ test("a refactor needs the review to say behaviour survived; a green suite is no
 });
 
 test("an investigation is a conclusion with references that hold it up, and may have no patch", () => {
-  // No approved set is demanded: nothing was changed for a command to prove.
   expect(
     evidenceGaps("investigation", collected({ approved: [], verifications: [] })),
   ).not.toContain(noCheckNamed);
@@ -505,7 +491,6 @@ test("an investigation is a conclusion with references that hold it up, and may 
   expect(endsWithoutPatch("feature", withOutput(full))).toBe(false);
   expect(endsWithoutPatch("investigation", withOutput({ ...full, patch: true }))).toBe(false);
 
-  // A reference that points outside the Run proves nothing about it.
   expect(
     evidenceGaps(
       "investigation",
@@ -529,7 +514,6 @@ test("a build of another Run's plan may cite that Run's files, and nothing besid
   expect(refInside(roots, `${state}/runs/run-a/handoffs/investigation.md`)).toBe(true);
   expect(refInside(roots, `${state}/runs/run-c/handoffs/investigation.md`)).toBe(false);
   expect(refInside(roots, "/home/mk/notes/investigation.md")).toBe(false);
-  // A plan directory that is no Run's own lends nothing beside it.
   expect(
     refInside(
       evidenceRoots(`${state}/runs/run-b`, "/work/app", "/home/mk/tasks/picker"),
@@ -542,7 +526,6 @@ test("documentation is proved by running what it documents", () => {
   expect(evidenceGaps("docs", withOutput({ accurate: true }))).toEqual([
     "no documented command is named, so the instructions were never run",
   ]);
-  // Named but never run: exactly the failure the row exists for.
   expect(
     evidenceGaps("docs", withOutput({ documented_commands: ["docs-quickstart"], accurate: true })),
   ).toEqual(['documented command "docs-quickstart" has no passing verification on this tree']);
@@ -554,7 +537,6 @@ test("documentation is proved by running what it documents", () => {
         {
           verifications: [
             record({ name: "tests" }),
-            // An agent may collect this one: it is the documented command, run as written.
             record({ name: "docs-quickstart", by: "agent" }),
           ],
         },
@@ -755,19 +737,17 @@ test("a reviewer is told a check left to CI is proved by its job, and the job's 
 });
 
 test("every kind has a rule, so a new one cannot be added without one", () => {
-  // The bare shape: nothing verified, nothing claimed. Only the kinds that genuinely
-  // require no evidence may come back empty.
   const empty = collected({ approved: [], verifications: [] });
-  const silent: Outcome[] = [];
+  const silent: Array<Outcome> = [];
   for (const kind of KINDS) {
-    if (evidenceGaps(kind, empty).length === 0) silent.push(kind);
+    if (evidenceGaps(kind, empty).length === 0) {
+      silent.push(kind);
+    }
   }
   expect(silent).toEqual([]);
 });
 
 test("a judgement only a reviewer can give is not accepted from the implementer's Output", () => {
-  // Every one of these is defined in workflows/review.md as the reviewer's word. Read
-  // from any Output, the agent that wrote the change could sign off its own work.
   expect(
     evidenceGaps("feature", claimedByTheImplementer({ tickets_done: ["01"], scope_met: true })),
   ).toEqual(["the review did not report scope_met: true for the agreed scope"]);
@@ -799,7 +779,7 @@ test("a promised check is proved by a pass of its command under any name, and ne
   const tests = { name: "tests", executable: "/usr/bin/bun", argv: ["test"], cwd: "/repo" };
   const agents = (over: Partial<Verification> = {}) =>
     record({ name: "mine", by: "agent", executable: "/usr/bin/bun", argv: ["test"], ...over });
-  const gaps = (verifications: Verification[]) =>
+  const gaps = (verifications: Array<Verification>) =>
     checkGaps(
       "feature",
       collected({
@@ -819,7 +799,7 @@ test("a promised check is proved by a pass of its command under any name, and ne
 
 const searched = (name: string, over: Partial<Verification> = {}) =>
   record({ name, by: "agent", executable: "/usr/bin/rg", argv: ["foo", "src"], ...over });
-const promising = (verifications: Verification[]) =>
+const promising = (verifications: Array<Verification>) =>
   collected({
     verifications: [record({ name: "tests" }), ...verifications],
     tickets: [{ file: "01-a.md", checks: ["proves-a"] }],
@@ -835,7 +815,7 @@ test.each([
   "grep -q foo src/x.ts",
   '"/usr/bin/grep" -q foo src/x.ts',
   "'rg' foo src",
-  "g\\rep -q foo src/x.ts",
+  String.raw`g\rep -q foo src/x.ts`,
   'git "grep" foo',
   "gr\\\nep -q foo src/x.ts",
   '"gr\\\nep" -q foo src/x.ts',
@@ -902,7 +882,6 @@ test("a promised check that also passed as a test is not a gap, whichever ran la
 
 const QUICK = { file: "test/one.test.ts", name: "the quick one" };
 const NESTED = { file: "test/two.test.ts", name: "outer > the nested one" };
-/** Collie's gate run of `tests`, failing on `failed`, and a rerun of each of `reran`. */
 const gateThenReruns = (
   failed: ReadonlyArray<typeof QUICK>,
   reran: ReadonlyArray<readonly [typeof QUICK, "pass" | "fail"]>,
@@ -938,7 +917,6 @@ test("a check whose failed tests all passed their rerun on this tree is not a ga
     { check: "tests", ...QUICK },
     { check: "tests", ...NESTED },
   ]);
-  // A ticket that promised the check is not owed a pass the Flake never was.
   expect(
     checkGaps("feature", { ...got, tickets: [{ file: "01-a.md", checks: ["tests"] }] }),
   ).toEqual([]);
@@ -973,9 +951,7 @@ test("a check with a test still failing after its rerun is a gap naming that tes
   expect(evidenceGaps("unspecified", got)).toEqual([
     "tests failed: outer > the nested one (test/two.test.ts)",
   ]);
-  // A Flake is named whether or not its check is left failing on another test.
   expect(flakesOf(got)).toEqual([{ check: "tests", ...QUICK }]);
-  // A rerun on another tree says nothing about this one.
   const moved = Arr.map(gateThenReruns([QUICK], [[QUICK, "pass"]]), (one, at) =>
     at === 0 ? one : { ...one, end: EARLIER },
   );
@@ -1005,7 +981,6 @@ test("a passing rerun record never counts as the check's pass", () => {
 });
 
 const BASE = { head_sha: "base00", fingerprint: "tree-b" };
-/** One test run alone where this branch leaves the default branch: `fail` only where bun said it failed. */
 const atBase = (test: typeof QUICK, result: "pass" | "fail") =>
   record({
     name: "tests",
@@ -1040,7 +1015,6 @@ test("still-failing tests that all failed at the base are not a gap, and each is
   ).toEqual([]);
   expect(baseFailuresOf(got)).toEqual([{ check: "tests", ...NESTED, at: "base00" }]);
   expect(flakesOf(got)).toEqual([{ check: "tests", ...QUICK }]);
-  // Neither a base failure nor a Flake is the check's pass.
   expect(renderEvidence(got)).toBe("- tests: fail (by collie)");
 });
 
@@ -1103,7 +1077,6 @@ test("a recheck is owed once on a tree, by a check that failed there naming no t
   expect(
     recheckOwed(collected({ verifications: [failedWhole, rechecked], commands: [tests] })),
   ).toEqual([]);
-  // A recheck on an earlier tree, or of a command since re-granted, does not count here.
   const earlier = { ...rechecked, start: EARLIER, end: EARLIER };
   expect(
     recheckOwed(collected({ verifications: [failedWhole, earlier], commands: [tests] })),
@@ -1116,7 +1089,6 @@ test("a recheck is owed once on a tree, by a check that failed there naming no t
 });
 
 const MERGE_BASE = "merge-base-2";
-/** The base tree: the merge base with the harness applied, as Git names its content. */
 const BASE_TREE = { head_sha: "base-head", fingerprint: "clean", content: "content-base" };
 
 type Verdict = Judgement["verdict"];
@@ -1129,8 +1101,12 @@ function measured(over: {
   readonly primary?: Verdict;
   readonly guardrail?: { readonly verdict: Verdict; readonly held: boolean };
   readonly result?: Measurement["result"];
-}): Measurement {
-  const judged = (metric: string, verdict: Verdict, held: boolean): Judgement => ({
+}) {
+  const judged: (metric: string, verdict: Verdict, held: boolean) => Judgement = (
+    metric,
+    verdict,
+    held,
+  ) => ({
     metric,
     ratio: 0.8,
     interval: [0.75, 0.85],
@@ -1139,7 +1115,7 @@ function measured(over: {
   });
   const guardrail = over.guardrail ?? { verdict: "no-change", held: true };
   const tree = { cwd: "/repo", lockfiles: {} };
-  return {
+  const returned: Measurement = {
     id: over.id ?? "r1-measurement-1",
     run: "r1",
     pass: over.pass ?? "final",
@@ -1181,14 +1157,13 @@ function measured(over: {
     started: "2026-10-28T10:00:00.000Z",
     at: "2026-10-28T10:05:00.000Z",
   };
+  return returned;
 }
 
-/** A performance Run with every piece of its proof in place, each of which a test takes away. */
 const performing = (
   over: {
     readonly measurements?: ReadonlyArray<Measurement>;
     readonly fields?: Record<string, YamlValue>;
-    /** The tree the review was of; null where none is recorded for it. */
     readonly reviewedAt?: Snapshot | null;
   } & Partial<Collected> = {},
 ) => {
@@ -1236,7 +1211,6 @@ test("each piece of a performance Run's proof, taken away alone, is a gap naming
       }),
     ),
   ).toContain("guardrail bench.peak_kb");
-  // Within tolerance on its worse bound, and still not shown safe.
   expect(
     alone(
       performing({
@@ -1258,14 +1232,15 @@ test("each piece of a performance Run's proof, taken away alone, is a gap naming
       }),
     ),
   ).toContain("measurement_valid");
-  // Of an earlier tree, or of none recorded: each verdict is a gap of its own.
   for (const reviewedAt of [EARLIER, null]) {
     const gaps = evidenceGaps("performance", performing({ reviewedAt }));
     expect(gaps).toEqual([
       expect.stringContaining("behavior_preserved"),
       expect.stringContaining("measurement_valid"),
     ]);
-    for (const gap of gaps) expect(gap).toContain("not of this tree");
+    for (const gap of gaps) {
+      expect(gap).toContain("not of this tree");
+    }
   }
   expect(
     alone(
@@ -1322,10 +1297,8 @@ test("a performance Run back at its latest base tree ends without a patch, read 
       fields,
     });
   expect(endsWithoutPatch("performance", back("c2"))).toBe(true);
-  // An earlier base tree is not where the Run stands now.
   expect(endsWithoutPatch("performance", back("c1"))).toBe(false);
   expect(endsWithoutPatch("performance", back("c3", { patch: false }))).toBe(false);
-  // Uncommitted changes on the base's content are a change.
   expect(
     endsWithoutPatch(
       "performance",

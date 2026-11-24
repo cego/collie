@@ -46,7 +46,7 @@ close their scopes before a fallback or retry; the first board must match that i
 | `src/shared/`                | RPC schemas, models and decision logic the core and `tools/rune-types.ts` share                                                                                                                                                              |
 | `test/`                      | Tests of the shared logic; the core's behaviour is covered by `test/desktop-*.test.ts` and `test/flock-*.test.ts` at the root                                                                                                                |
 | `core/`                      | The native stdio platform adapter imported by the TypeScript core                                                                                                                                                                            |
-| `fixtures/`                  | The test Flock and NDJSON transcripts of Effect's own client and server, written by `tools/rune-fixtures.ts`                                                                                                                                 |
+| `fixtures/`                  | The test Flock and NDJSON transcripts of Effect's own client and server, written by `tools/rune.fixture.ts`                                                                                                                                  |
 | `fixtures/terminal/`         | `terminal` streams recorded by `core/record-terminal.ts`                                                                                                                                                                                     |
 | `fixtures/chat/`             | `say` streams recorded by `chat/src/bin/record-say.rs`                                                                                                                                                                                       |
 
@@ -71,7 +71,7 @@ The toolchain is pinned in `rust-toolchain.toml`, and Rune at one rev in `Cargo.
 ```sh
 bun run tools/rune-types.ts --write    # regenerate protocol/src/generated.rs from today's Schemas
 bun run tools/rune-types.ts --check    # fail where it differs (test/rune-types.test.ts does this)
-bun run tools/rune-fixtures.ts         # rewrite fixtures/ from test/support/rune-fixtures.ts
+bun run tools/rune.fixture.ts         # rewrite fixtures/ from test/support/rune.fixture.ts
 bun run desktop/scripts/bundle.ts [out]   # the shipped bundle and update archive, in dist/
 bun bench/desktop-start/run.ts --rune desktop/dist/build/linux-x64/collie-desktop/bin/launcher   # board_usable_ms, idle_rss_mib
 

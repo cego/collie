@@ -2,7 +2,8 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { describe, expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
-import { Effect, Fiber, FileSystem, Schema, Scope, flow, Result } from "effect";
+import type { Scope } from "effect";
+import { Effect, Fiber, FileSystem, Schema, flow, Result } from "effect";
 import { TestClock } from "effect/testing";
 import { CATALOGUE_CALL_MS, CATALOGUE_RETRY_MS, makeCatalogue } from "../src/catalogue";
 import { HarnessCatalogue, modelsLines } from "../src/catalogue-model";
@@ -58,7 +59,6 @@ describe("a harness that cannot be read", () => {
         yield* TestClock.adjust(1);
         yield* catalogue.catalogues;
         expect(claude.calls.count).toBe(2);
-        // A second failure waits twice as long.
         yield* TestClock.adjust(2 * CATALOGUE_RETRY_MS - 1);
         yield* catalogue.catalogues;
         expect(claude.calls.count).toBe(2);

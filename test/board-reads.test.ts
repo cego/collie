@@ -1,5 +1,3 @@
-// A board build reads its Runs' records in a fixed number of reads, however many Runs it
-// draws, and none of them from files (ADR-draft-a-runs-own-records-are-rows-in-the-hosts-database, D6).
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { buildBoard } from "../src/board";
@@ -15,8 +13,8 @@ import {
   NOTIFIED,
   parentOf,
   RunRecords,
-  type RunRecordsApi,
 } from "../src/run-records";
+import type { RunRecordsApi } from "../src/run-records";
 import { epochMs } from "../src/time";
 import { Launches } from "../src/launches";
 import { Deliveries } from "../src/steering";
@@ -24,8 +22,10 @@ import { appendVerification, readProofsOf, verificationsPath } from "../src/veri
 import { madeRun } from "./support/records";
 import { runEffect } from "./support/effect";
 
-/** `records` with every read of it counted. */
-const counted = (records: RunRecordsApi, calls: { n: number }): RunRecordsApi => {
+const counted: (records: RunRecordsApi, calls: { n: number }) => RunRecordsApi = (
+  records,
+  calls,
+) => {
   const count = <A>(read: A) => {
     calls.n++;
     return read;
@@ -126,7 +126,6 @@ test("a board build reads its Runs' records in as many reads for five Runs as fo
     }),
   ));
 
-/** Where an older build kept `run`'s records, each by its exact path or, ending `/`, under it. */
 const recordPlaces = (dir: string, run: string) => [
   `${dir}/runs/${run}`,
   `${dir}/evidence/${run}`,
@@ -151,7 +150,7 @@ test("a board build touches no file or directory an older build kept a Run's rec
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-board-io-" });
       const runs = [];
-      for (const id of ["r1", "r2", "r3"])
+      for (const id of ["r1", "r2", "r3"]) {
         runs.push(
           yield* madeRun(dir, {
             id,
@@ -161,7 +160,8 @@ test("a board build touches no file or directory an older build kept a Run's rec
             finished: id === "r1" ? null : "2026-09-13T09:00:00Z",
           }),
         );
-      const touched: string[] = [];
+      }
+      const touched: Array<string> = [];
       const noted =
         <A extends ReadonlyArray<unknown>, B>(use: (path: string, ...rest: A) => B) =>
         (path: string, ...rest: A) => {
@@ -233,7 +233,7 @@ test("a board build reads what each verification says of its Step, never the ver
         by: "collie",
         step: "build",
       });
-      const whole: string[] = [];
+      const whole: Array<string> = [];
       yield* buildBoard({
         env: readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" }),
         runs: [run],

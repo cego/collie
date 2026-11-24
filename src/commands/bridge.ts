@@ -1,8 +1,3 @@
-// `collie bridge`: a front door's byte stream to this Machine's host, as one command.
-//
-// Started over SSH by Desktop, or locally without it. Nobody types it: a front door reads
-// past the ready marker and speaks the host's protocol from there.
-
 import { Effect, Option } from "effect";
 import { Command, Flag } from "effect/cli";
 import { bridge as pipeToHost } from "../bridge";

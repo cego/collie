@@ -15,7 +15,7 @@ here are in [`src/README.md`](src/README.md).
 - **Workflow authoring commands** (`list`, `show`, check, `needs_input`) → [`docs/authoring.md`](docs/authoring.md),
   [`docs/sdk.md`](docs/sdk.md), `src/authoring.ts`, `src/commands/workflow.ts`.
 - **Go to pane** → [ADR-0044](docs/adr/0044-go-to-pane-opens-the-pane-in-desktop.md),
-  `desktop/src/bun/terminal.ts`, `test/desktop-terminal.test.ts`, `desktop/test/terminal-input.test.ts`.
+  `desktop/src/bun/terminal.ts`, `test/desktop-terminal.test.ts`, `desktop/src/shared/test/terminal-input.test.ts`.
 - **Placement** of a start → [ADR-0033](docs/adr/0033-a-run-started-from-the-home-is-placed-not-asked.md),
   joining a Task: [ADR-draft-a-tasks-work-is-what-its-runs-worked-on](docs/adr/draft-a-tasks-work-is-what-its-runs-worked-on.md),
   `taskWorking` in `src/engine.ts`, `test/placement.test.ts`, `src/flows.ts`, `src/route.ts`, `src/projects.ts`, `src/agent-start.ts`.
@@ -59,7 +59,7 @@ here are in [`src/README.md`](src/README.md).
   [`desktop/README.md`](desktop/README.md), [`docs/using.md`](docs/using.md#collie-desktop),
   `test/desktop-*.test.ts`, `test/flock-*.test.ts`, [cutover ADR](docs/adr/0067-collie-replaces-the-webview-desktop-in-place.md),
   `desktop/scripts/bundle.ts`, `desktop/update/`, `tools/rune-types.ts`,
-  `tools/rune-fixtures.ts`, `test/rune-types.test.ts`, `test/rune-contract.test.ts`.
+  `tools/rune.fixture.ts`, `test/rune-types.test.ts`, `test/rune-contract.test.ts`.
 - **Agent launch profile** → [ADR-0060](docs/adr/0060-a-managed-agent-runs-with-the-operators-profile.md),
   [`docs/using.md`](docs/using.md#what-collies-agents-get), `src/profile.ts`, `src/agents.ts`,
   `test/profile.test.ts`, `test/agents.test.ts`.
@@ -221,9 +221,20 @@ While you iterate, run what covers what you touched, each through `collie verify
   Checks, `collie verify` runs nothing: it answers with that Check's latest record on the
   tree, or refuses with `invalid_state` and names the gate.
 
-Tests are unit tests only: they call the code through its own interface, with fakes at
-its edges. No Playwright and no test that drives a built app or a browser — a behaviour
-of the view is covered by testing the logic it renders.
+Tests are unit tests only: they call the code through its own interface, with stand-in
+processes and servers at its edges and MSW for HTTP, never a mock, a stubbed global or a
+spy that changes behaviour. No Playwright and no test that drives a built app or a browser — a
+behaviour of the view is covered by testing the logic it renders.
+
+`bun run lint` runs `oxlint.config.ts`, the `@cloudflare/oxlint-config` preset with Effect's
+rules, and holds the code to [landmines](https://github.com/interfere-inc/landmines):
+no prose comments (only directives, a one-line `// WARNING:` for a recurring footgun, which
+is also how a type assertion states its invariant, and TSDoc on the SDK in `src/sdk.ts`);
+no explicit return types: where a contract matters, a typed variable holds the function
+(`const f: (a: A) => R = ...`) or a typed local holds the value it returns
+(`const returned: R = ...; return returned;`), since `satisfies` checks a type without
+widening to it; a test beside the module it owns or in that directory's `test/`; and `.fixture.ts` or
+`.test-utils.ts` for test data and helpers. Rationale goes in the ADRs and docs.
 
 For native UI inspection, operate Rune headlessly with its built-in CLI: `--snap out.png`
 captures a screen, `--tree out.json` includes the accessibility tree, and `--script input.json`

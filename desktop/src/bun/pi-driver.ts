@@ -2,18 +2,8 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import { hostname } from "node:os";
-import {
-  type Cause,
-  Clock,
-  Effect,
-  FileSystem,
-  Option,
-  Queue,
-  Schema,
-  Stream,
-  flow,
-  Result,
-} from "effect";
+import { Clock, Effect, FileSystem, Option, Queue, Schema, Stream, flow, Result } from "effect";
+import type { Cause } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import type { AguiEvent } from "../shared/agui";
 import { ends } from "../shared/agui";
@@ -24,7 +14,8 @@ import { childEnv, which } from "./login-env";
 import { SESSION_STORES, SESSIONS_CLOSED, sessionStoreReached } from "../../../src/own-words";
 import { decodePiRecord, piEvents, piToolName } from "./pi-agui";
 import { piCommand, piPrompt, piReportedContext, piSessions } from "./pi-transcript";
-import { noticedContext, placementContext, systemPrompt, type UserMcpServers } from "./session";
+import { noticedContext, placementContext, systemPrompt } from "./session";
+import type { UserMcpServers } from "./session";
 import { PiServer, piConnections, piServers } from "./pi-servers";
 import { standingDirectionContext } from "../../../src/standing-direction";
 
@@ -32,12 +23,17 @@ const TOKEN_ENV = "COLLIE_CHAT_MCP_TOKEN";
 const SERVERS_ENV = "COLLIE_CHAT_MCP_SERVERS";
 const TOOL_TIMEOUT = 24 * 60 * 60;
 
-export const piDriver = (
+export const piDriver: (
   context: DriverContext,
   endpoint: ChatEndpoint,
   userServers: () => Promise<UserMcpServers>,
-  command: ReadonlyArray<string> | null = which("pi") === null ? null : [which("pi")!],
-): ChatDriver => {
+  command?: ReadonlyArray<string> | null,
+) => ChatDriver = (
+  context,
+  endpoint,
+  userServers,
+  command = which("pi") === null ? null : [which("pi")!],
+) => {
   const sessions = `${context.dir}/pi-sessions`;
   const read = Effect.promise(() => context.run(piSessions(sessions)));
   return {
@@ -47,7 +43,7 @@ export const piDriver = (
       const servers = piServers(
         yield* Effect.tryPromise(userServers).pipe(Effect.orElseSucceed(() => ({}))),
       );
-      // A short private name avoids user overrides and Pi hashing provider tool names.
+      // WARNING: a short private name avoids user overrides and Pi hashing provider tool names.
       const server = `cf-${pipe_(
         yield* Effect.promise(() =>
           context.run(Effect.flatMap(SecureRandom.SecureRandom, (random) => random.uuidV4())),
@@ -127,8 +123,12 @@ export default function(pi) {
         "--tools",
         "read,bash,edit,write,grep,find,ls,tool_search,mcp__*",
       ];
-      if (model !== "default") args.push("--model", model);
-      if (effort !== null) args.push("--thinking", effort);
+      if (model !== "default") {
+        args.push("--model", model);
+      }
+      if (effort !== null) {
+        args.push("--thinking", effort);
+      }
       const child = Bun.spawn(args, {
         cwd: context.dir,
         env: {
@@ -173,7 +173,9 @@ export default function(pi) {
           started = yield* Clock.currentTimeMillis;
           const command = piCommand(content);
           yield* Queue.offer(output, state.begin(command !== undefined));
-          if (command !== undefined) return yield* write({ type: "prompt", message: command });
+          if (command !== undefined) {
+            return yield* write({ type: "prompt", message: command });
+          }
           const placement = context.placement();
           const reported = state.reported();
           const noticed = context.noticed();
@@ -201,7 +203,9 @@ export default function(pi) {
             while ((at = Option.getOrElse(pipe_(pending, Str.indexOf("\n")), () => -1)) >= 0) {
               const record = decodePiRecord(pipe_(pending, Str.slice(0, at)));
               pending = pipe_(pending, Str.slice(at + 1));
-              if (Option.isNone(record)) continue;
+              if (Option.isNone(record)) {
+                continue;
+              }
               const read = record.value;
               if (
                 read.type === "tool_execution_start" &&

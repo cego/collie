@@ -1,6 +1,3 @@
-// Every subscription the view holds retries by itself: it keeps its last value, says what
-// went wrong and when it tries again, backs off, and wakes on Retry now.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -11,17 +8,19 @@ import { untilStarted } from "../desktop/src/bun/chat";
 import { ActionFailed } from "../desktop/src/shared/flock";
 import { backoff, foldedOf, heldOf, retryWake, retrying } from "../desktop/src/shared/retrying";
 
-/**
- * One subscription per entry: `fail` and `interrupt` end it so, `x!` gives x then fails,
- * `x.` gives x then ends, and anything else gives itself and stays open.
- */
 const scripted = (subscriptions: ReadonlyArray<string>) => {
   let at = 0;
   return Stream.suspend(() => {
     const now = subscriptions[at++] ?? "fail";
-    if (now === "fail") return Stream.fail(new ActionFailed({ reason: "the host refused" }));
-    if (now === "interrupt") return Stream.fromEffect(Effect.interrupt);
-    if (pipe_(now, Str.endsWith("."))) return Stream.make(pipe_(now, Str.slice(0, -1)));
+    if (now === "fail") {
+      return Stream.fail(new ActionFailed({ reason: "the host refused" }));
+    }
+    if (now === "interrupt") {
+      return Stream.fromEffect(Effect.interrupt);
+    }
+    if (pipe_(now, Str.endsWith("."))) {
+      return Stream.make(pipe_(now, Str.slice(0, -1)));
+    }
     return pipe_(now, Str.endsWith("!"))
       ? Stream.make(pipe_(now, Str.slice(0, -1))).pipe(
           Stream.concat(Stream.fail(new ActionFailed({ reason: "the host refused" }))),
@@ -43,8 +42,8 @@ test("a failing subscription says why and when it tries again, at 1 s then 2 s, 
       yield* TestClock.adjust("1 second");
       yield* TestClock.adjust("2 seconds");
       expect(yield* Fiber.join(seen)).toEqual([
-        { _tag: "Retrying", said: "the host refused", attempt: 1, at: 1_000 },
-        { _tag: "Retrying", said: "the host refused", attempt: 2, at: 3_000 },
+        { _tag: "Retrying", said: "the host refused", attempt: 1, at: 1000 },
+        { _tag: "Retrying", said: "the host refused", attempt: 2, at: 3000 },
         { _tag: "Value", value: "up" },
       ]);
     }).pipe(Effect.provide(TestClock.layer())),
@@ -62,10 +61,10 @@ test("a value starts the backoff afresh, and the wait never passes a minute", ()
       yield* TestClock.adjust("1 second");
       expect((yield* Fiber.join(seen)).slice(2)).toEqual([
         { _tag: "Value", value: "up" },
-        { _tag: "Retrying", said: "the host refused", attempt: 1, at: 4_000 },
+        { _tag: "Retrying", said: "the host refused", attempt: 1, at: 4000 },
         { _tag: "Value", value: "up" },
       ]);
-      expect(Arr.map([0, 5, 6, 20], backoff)).toEqual([1_000, 32_000, 60_000, 60_000]);
+      expect(Arr.map([0, 5, 6, 20], backoff)).toEqual([1000, 32_000, 60_000, 60_000]);
     }).pipe(Effect.provide(TestClock.layer())),
   ));
 
@@ -113,7 +112,7 @@ test("a subscription that ends is taken again, and one cut off says its first re
           Stream.take(1),
           Stream.runCollect,
         ),
-      ).toEqual([{ _tag: "Retrying", said: "the host refused", attempt: 1, at: 0 + 1_000 }]);
+      ).toEqual([{ _tag: "Retrying", said: "the host refused", attempt: 1, at: 0 + 1000 }]);
     }).pipe(Effect.provide(TestClock.layer())),
   ));
 
@@ -149,7 +148,7 @@ test("what a page holds keeps its last value through trouble", () =>
         { value: Option.some("up"), trouble: null },
         {
           value: Option.some("up"),
-          trouble: { said: "the host refused", attempt: 1, at: 1_000 },
+          trouble: { said: "the host refused", attempt: 1, at: 1000 },
         },
         { value: Option.some("again"), trouble: null },
       ]);

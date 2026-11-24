@@ -9,10 +9,8 @@ import {
   formatFindings,
   template,
   leaveReview,
-  type Finding,
-  type MrRead,
-  type SynthesisReport,
 } from "collie";
+import type { Finding, MrRead, SynthesisReport } from "collie";
 import { Effect, FileSystem, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import markdown from "./reassess.md" with { type: "text" };
@@ -76,9 +74,11 @@ export const reassess = (ask: {
       },
       output: ReassessmentSchema(Arr.map(ask.findings, (one) => one.id!)),
     });
-    const findings = Arr.map(ask.ledger, (one): Finding => {
+    const findings = Arr.map(ask.ledger, (one) => {
       const found = Arr.findFirst(judged.findings, (next) => next.id === one.id);
-      if (found._tag === "None") return one;
+      if (found._tag === "None") {
+        return one;
+      }
       const status = found.value;
       const judgedHere = {
         ...one,
@@ -108,10 +108,12 @@ export const reassess = (ask: {
       error: WorkflowError,
       execute: Effect.gen(function* () {
         const reading = yield* host.mrReading({ target: ask.target, cwd });
-        if (reading.state !== "open")
+        if (reading.state !== "open") {
           return yield* new WorkflowError({ reason: `${MR_ENDED}${reading.state}` });
-        if (reading.head !== ask.head)
+        }
+        if (reading.head !== ask.head) {
           return yield* new WorkflowError({ reason: `${HEAD_MOVED} ${ask.head}` });
+        }
       }),
     });
     return review;

@@ -26,14 +26,15 @@ test("a record's many instants share one formatter per time zone", () => {
       built++;
     }
   }
-  // SAFETY: whenOf only constructs it.
+  // WARNING: whenOf only constructs it.
   Intl.DateTimeFormat = Counted as typeof Native;
-  for (let minute = 0; minute < 200; minute++)
+  for (let minute = 0; minute < 200; minute++) {
     whenOf(
       DateTime.formatIso(DateTime.makeUnsafe(now - minute * 60_000)),
       now,
       "Europe/Copenhagen",
     );
+  }
   whenOf("2026-11-04T08:05:00Z", now, "UTC");
   expect(built).toBeLessThanOrEqual(2);
 });

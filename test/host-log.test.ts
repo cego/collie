@@ -12,7 +12,6 @@ test("the host log starts again past its bound and keeps the one before it", () 
         const fs = yield* FileSystem.FileSystem;
         const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-host-log-" });
         const file = `${dir}/host.log`;
-        // One flush per line, the way a host that logs now and then writes them.
         for (let n = 1; n <= 10; n++) {
           yield* Effect.scoped(
             Effect.flatMap(hostLogger(file, 250), (logger) =>

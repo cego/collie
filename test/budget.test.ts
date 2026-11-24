@@ -9,7 +9,6 @@ import {
   admission,
   admitted,
   budgetOf,
-  type Entry,
   enqueue,
   entriesOf,
   HOLD_ENV,
@@ -18,18 +17,15 @@ import {
   processOf,
   startOnHold,
 } from "../tools/budget";
+import type { Entry } from "../tools/budget";
 import { runEffect } from "./support/effect";
 import { until } from "./support/host";
+import { stringifyJson } from "../src/json";
 
 const VM_MK = budgetOf(24);
 
 let seq = 0;
-const entry = (
-  kind: Entry["kind"],
-  state: Entry["state"],
-  asked: number,
-  workers = asked,
-): Entry => ({
+const entry = (kind: Entry["kind"], state: Entry["state"], asked: number, workers = asked) => ({
   id: `e${++seq}`,
   kind,
   state,
@@ -150,7 +146,9 @@ const runner = (dir: string) =>
     let out = "";
     while (!pipe_(out, Str.includes("\n"))) {
       const { value, done } = yield* Effect.promise(() => reader.read());
-      if (done) throw new Error(`the runner ended before it held: ${out}`);
+      if (done) {
+        throw new Error(`the runner ended before it held: ${out}`);
+      }
       out += new TextDecoder().decode(value);
     }
     const child = Number(Str.trim(out));
@@ -184,128 +182,117 @@ test.each(["whole", "small"] as const)(
         );
         expect(yield* Effect.promise(() => child.exited)).toBe(0);
         const priority = Number(yield* fs.readFileString(result));
-        if (kind === "whole") expect(priority).toBeGreaterThanOrEqual(10);
-        else expect(priority).toBe(getPriority());
+        if (kind === "whole") {
+          expect(priority).toBeGreaterThanOrEqual(10);
+        } else {
+          expect(priority).toBe(getPriority());
+        }
       }),
     ),
 );
 
-test(
-  "a runner killed with kill -9 holds its workers until the bun test it started is gone too",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const dir = yield* store;
-        const { runner: held, child } = yield* runner(dir);
-        held.kill("SIGKILL");
-        yield* Effect.promise(() => held.exited);
-        const next = yield* waiting(dir);
-        expect(yield* look(dir, VM_MK, next.id)).toMatchObject({ _tag: "wait" });
+test("a runner killed with kill -9 holds its workers until the bun test it started is gone too", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const dir = yield* store;
+      const { runner: held, child } = yield* runner(dir);
+      held.kill("SIGKILL");
+      yield* Effect.promise(() => held.exited);
+      const next = yield* waiting(dir);
+      expect(yield* look(dir, VM_MK, next.id)).toMatchObject({ _tag: "wait" });
 
-        process.kill(child, "SIGKILL");
-        yield* gone(child);
-        expect(yield* look(dir, VM_MK, next.id)).toMatchObject({ _tag: "admit", workers: 12 });
-      }),
-    ),
-  20_000,
-);
+      process.kill(child, "SIGKILL");
+      yield* gone(child);
+      expect(yield* look(dir, VM_MK, next.id)).toMatchObject({ _tag: "admit", workers: 12 });
+    }),
+  ));
 
-test(
-  "a runner stopped with SIGTERM gives back its hold and stops what it started",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const dir = yield* store;
-        const { runner: held, child } = yield* runner(dir);
-        held.kill("SIGTERM");
-        yield* Effect.promise(() => held.exited);
-        yield* gone(child);
-        expect(yield* entriesOf(dir)).toEqual([]);
-      }),
-    ),
-  20_000,
-);
+test("a runner stopped with SIGTERM gives back its hold and stops what it started", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const dir = yield* store;
+      const { runner: held, child } = yield* runner(dir);
+      held.kill("SIGTERM");
+      yield* Effect.promise(() => held.exited);
+      yield* gone(child);
+      expect(yield* entriesOf(dir)).toEqual([]);
+    }),
+  ));
 
-test(
-  "a runner killed while it names its child in the store leaves nothing running on the hold",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const dir = yield* store;
-        const marker = `${dir}/ran`;
-        const one = yield* Effect.acquireRelease(
-          Effect.sync(() =>
-            Bun.spawn(["bun", RUNNER, dir, marker], {
-              stdin: "pipe",
-              stdout: "pipe",
-              stderr: "inherit",
-            }),
-          ),
-          (one) => Effect.sync(() => one.kill("SIGKILL")),
-        );
-        const reader = one.stdout.getReader();
-        yield* Effect.promise(() => reader.read());
-
-        const taken = yield* Deferred.make<void>();
-        const release = yield* Deferred.make<void>();
-        const lock = yield* Effect.forkChild(
-          withLock(
-            `${dir}/budget.lock`,
-            Effect.die(new Error("the store's lock could not be taken")),
-            Deferred.succeed(taken, undefined).pipe(Effect.andThen(Deferred.await(release))),
-          ),
-        );
-        yield* Deferred.await(taken);
-        void one.stdin.write("start\n");
-        void one.stdin.end();
-        const child = yield* until(
-          () =>
-            Effect.promise(() =>
-              new Response(Bun.spawn(["pgrep", "-P", String(one.pid)]).stdout).text(),
-            ),
-          (out) => Str.trim(out) !== "",
-        ).pipe(Effect.map(Number));
-        yield* Effect.addFinalizer(() => signalProcess(child, "SIGKILL"));
-        one.kill("SIGKILL");
-        yield* Effect.promise(() => one.exited);
-        yield* Deferred.succeed(release, undefined);
-        yield* Fiber.join(lock);
-
-        const [, ran] = yield* until(
-          () => Effect.all([signalProcess(child), fs.exists(marker)]),
-          ([lives, ran]) => !lives || ran,
-        );
-        expect(ran).toBe(false);
-      }),
-    ),
-  20_000,
-);
-
-test(
-  "a hold is given back only once the process started on it is gone, even one SIGTERM does not end",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const dir = yield* store;
-        const child = yield* Effect.scoped(
-          Effect.gen(function* () {
-            const hold = yield* admitted(dir, VM_MK, "whole", 12, () => Effect.void);
-            const child = yield* startOnHold(dir, hold.id, ["sleep", "30"], {
-              env: process.env,
-              kind: "whole",
-            });
-            process.kill(child.pid, "SIGSTOP");
-            return child;
+test("a runner killed while it names its child in the store leaves nothing running on the hold", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* store;
+      const marker = `${dir}/ran`;
+      const one = yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          Bun.spawn(["bun", RUNNER, dir, marker], {
+            stdin: "pipe",
+            stdout: "pipe",
+            stderr: "inherit",
           }),
-        );
-        const lives = yield* signalProcess(child.pid);
-        if (lives) child.kill("SIGKILL");
-        expect({ lives, store: yield* entriesOf(dir) }).toEqual({ lives: false, store: [] });
-      }),
-    ),
-  20_000,
-);
+        ),
+        (one) => Effect.sync(() => one.kill("SIGKILL")),
+      );
+      const reader = one.stdout.getReader();
+      yield* Effect.promise(() => reader.read());
+
+      const taken = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const lock = yield* Effect.forkChild(
+        withLock(
+          `${dir}/budget.lock`,
+          Effect.die(new Error("the store's lock could not be taken")),
+          Deferred.succeed(taken, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        ),
+      );
+      yield* Deferred.await(taken);
+      void one.stdin.write("start\n");
+      void one.stdin.end();
+      const child = yield* until(
+        () =>
+          Effect.promise(() =>
+            new Response(Bun.spawn(["pgrep", "-P", String(one.pid)]).stdout).text(),
+          ),
+        (out) => Str.trim(out) !== "",
+      ).pipe(Effect.map(Number));
+      yield* Effect.addFinalizer(() => signalProcess(child, "SIGKILL"));
+      one.kill("SIGKILL");
+      yield* Effect.promise(() => one.exited);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(lock);
+
+      const [, ran] = yield* until(
+        () => Effect.all([signalProcess(child), fs.exists(marker)]),
+        ([lives, ran]) => !lives || ran,
+      );
+      expect(ran).toBe(false);
+    }),
+  ));
+
+test("a hold is given back only once the process started on it is gone, even one SIGTERM does not end", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const dir = yield* store;
+      const child = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const hold = yield* admitted(dir, VM_MK, "whole", 12, () => Effect.void);
+          const child = yield* startOnHold(dir, hold.id, ["sleep", "30"], {
+            env: process.env,
+            kind: "whole",
+          });
+          process.kill(child.pid, "SIGSTOP");
+          return child;
+        }),
+      );
+      const lives = yield* signalProcess(child.pid);
+      if (lives) {
+        child.kill("SIGKILL");
+      }
+      expect({ lives, store: yield* entriesOf(dir) }).toEqual({ lives: false, store: [] });
+    }),
+  ));
 
 test("a hold whose pid now belongs to a process that started later is reclaimed", () =>
   runEffect(
@@ -316,7 +303,7 @@ test("a hold whose pid now belongs to a process that started later is reclaimed"
       const holdOn = (start: string | null) =>
         fs.writeFileString(
           `${dir}/budget.json`,
-          JSON.stringify({
+          stringifyJson({
             next: 1,
             entries: [
               {
@@ -377,13 +364,8 @@ test("an interrupted waiter leaves no ticket, and an interrupted holder leaves n
 
 const SMALL_FILE = new URL("./fixtures/budget/small.ts", import.meta.url).pathname;
 const REPO = new URL("..", import.meta.url).pathname;
-/** What a bare run is told the budget is: 8, with 2 kept for small runs. */
 const EIGHT = budgetOf(1, "8");
 
-/**
- * A bare `bun test` of one small file, whose temporary directory, and so its budget's store,
- * is `tmp`. It writes `started` into `notes` and runs until `release` is there.
- */
 const bare = (tmp: string, notes: string, hold?: string) =>
   Effect.gen(function* () {
     const child = yield* Effect.acquireRelease(
@@ -391,13 +373,15 @@ const bare = (tmp: string, notes: string, hold?: string) =>
         const env: typeof process.env = {
           ...process.env,
           TMPDIR: tmp,
-          // No memory filesystem, so its root is under `tmp` too and goes with it.
           COLLIE_TEST_MEMORY: `${tmp}/none`,
           COLLIE_TEST_BUDGET: "8",
           COLLIE_BARE_NOTES: notes,
         };
-        if (hold === undefined) delete env[HOLD_ENV];
-        else env[HOLD_ENV] = hold;
+        if (hold === undefined) {
+          delete env[HOLD_ENV];
+        } else {
+          env[HOLD_ENV] = hold;
+        }
         return Bun.spawn(["bun", "test", SMALL_FILE], {
           cwd: REPO,
           stdout: "ignore",
@@ -418,7 +402,6 @@ const bare = (tmp: string, notes: string, hold?: string) =>
     return { child, stderr: () => said };
   });
 
-/** A temporary directory, and the budget store a bare run with it as `TMPDIR` uses. */
 const bareStore = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const tmp = yield* store;
@@ -475,7 +458,6 @@ test.skipIf(process.platform !== "linux")(
         expect(Str.split(stderr(), waiting).length - 1).toBe(1);
       }),
     ),
-  60_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -496,7 +478,6 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* entriesOf(dir)).toEqual(holds);
       }),
     ),
-  60_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -520,5 +501,4 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* look(dir, EIGHT, next.id)).toMatchObject({ _tag: "admit", workers: 1 });
       }),
     ),
-  60_000,
 );

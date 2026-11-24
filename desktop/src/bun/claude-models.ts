@@ -59,7 +59,7 @@ export const readClaudeModels = (
       (session) => Effect.sync(() => session.close()),
     ).pipe(
       Effect.ensuring(Deferred.succeed(closed, undefined)),
-      Effect.map((models): ReadonlyArray<ListedModel> =>
+      Effect.map((models) =>
         Arr.map(
           Arr.filter(models, ({ value }) => value !== DEFAULT_MODEL),
           ({ value, displayName, description, supportsEffort, supportedEffortLevels }) => ({

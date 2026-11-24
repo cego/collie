@@ -1,6 +1,3 @@
-// What the operator skill teaches an agent about the CLI has to be what the CLI does, and
-// must not teach a command substitution a security scanner flags.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
@@ -14,7 +11,7 @@ const read = (path: string) =>
 test("the collie skill says only --decide is refused, and --goal and --constraint are recorded", () =>
   runEffect(
     Effect.gen(function* () {
-      const skill = pipe_(yield* read("skills/collie/SKILL.md"), Str.replace(/\s+/g, " "));
+      const skill = pipe_(yield* read("skills/collie/SKILL.md"), Str.replaceAll(/\s+/g, " "));
       expect(skill).toContain("so `--decide` is refused");
       expect(skill).toContain("`--goal` and `--constraint` are recorded into the Run's Intent");
     }),

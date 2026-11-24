@@ -1,4 +1,4 @@
-//! `desktop/test/review-comments.test.ts`, with each diff anchor taken from a rune-kit Diff's
+//! `desktop/src/shared/test/review-comments.test.ts`, with each diff anchor taken from a rune-kit Diff's
 //! selection.
 
 use collie_desktop_board::record::review::{

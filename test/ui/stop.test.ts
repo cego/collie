@@ -1,8 +1,4 @@
 import * as Cause from "effect/Cause";
-// The grace before a stop: the board marks the run and holds it, and only when the five
-// seconds are up does the Driver hear anything at all. Driven through the bridge, which
-// is where the waiting happens — an undo that raced a signal already sent would not be
-// an undo.
 
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -43,17 +39,17 @@ const EMPTY: AppState = {
   stopping: [],
 };
 
-/** Waits for something the fibers do, rather than for a duration. */
 const until = Effect.fn("stop.until")(function* (what: string, ready: () => boolean) {
   for (let tries = 0; tries < 200; tries++) {
-    if (ready()) return;
+    if (ready()) {
+      return;
+    }
     yield* Effect.sleep("5 millis");
   }
   return yield* new Cause.TimeoutError(`${what} never happened`);
 });
 
-/** A bridge that records what was asked of it, with a grace short enough to wait out. */
-function held(acted: Command[], graceMs = 80) {
+function held(acted: Array<Command>, graceMs = 80) {
   return {
     filter: { kind: "workspace", id: "w1" } as const,
     origin: "w1",
@@ -72,7 +68,7 @@ test("a stop is marked on the board and nothing is sent until the grace is up", 
   runEffect(
     Effect.scoped(
       Effect.gen(function* () {
-        const acted: Command[] = [];
+        const acted: Array<Command> = [];
         const driven = yield* driveBridge(held(acted));
 
         driven.dispatch({ _tag: "StopRun", runId: "run:a" });
@@ -81,7 +77,7 @@ test("a stop is marked on the board and nothing is sent until the grace is up", 
 
         yield* until("the stop to be sent", () => acted.length === 1);
         expect(acted).toEqual([{ _tag: "StopRun", runId: "run:a" }]);
-        // The mark goes when the stop does: what is on the board is what has not been sent.
+        // WARNING: the mark goes when the stop does; what is on the board is what has not been sent.
         expect(driven.state().stopping).toEqual([]);
       }),
     ),
@@ -91,7 +87,7 @@ test("undo inside the grace sends nothing at all", () =>
   runEffect(
     Effect.scoped(
       Effect.gen(function* () {
-        const acted: Command[] = [];
+        const acted: Array<Command> = [];
         const driven = yield* driveBridge(held(acted));
 
         driven.dispatch({ _tag: "StopRun", runId: "run:a" });
@@ -99,7 +95,6 @@ test("undo inside the grace sends nothing at all", () =>
         driven.dispatch({ _tag: "UndoStop" });
         yield* until("the mark to go", () => driven.state().stopping.length === 0);
 
-        // Well past when it would have gone, and it never did.
         yield* Effect.sleep("200 millis");
         expect(acted).toEqual([]);
       }),
@@ -110,11 +105,12 @@ test("stopping three at once holds all three, and undo takes back all three", ()
   runEffect(
     Effect.scoped(
       Effect.gen(function* () {
-        const acted: Command[] = [];
+        const acted: Array<Command> = [];
         const driven = yield* driveBridge(held(acted));
 
-        for (const runId of ["run:a", "run:b", "run:c"])
+        for (const runId of ["run:a", "run:b", "run:c"]) {
           driven.dispatch({ _tag: "StopRun", runId });
+        }
         yield* until("all three marks", () => driven.state().stopping.length === 3);
         expect(acted).toEqual([]);
 
@@ -130,11 +126,12 @@ test("three stops nobody took back are three stops", () =>
   runEffect(
     Effect.scoped(
       Effect.gen(function* () {
-        const acted: Command[] = [];
+        const acted: Array<Command> = [];
         const driven = yield* driveBridge(held(acted));
 
-        for (const runId of ["run:a", "run:b", "run:c"])
+        for (const runId of ["run:a", "run:b", "run:c"]) {
           driven.dispatch({ _tag: "StopRun", runId });
+        }
         yield* until("all three stops", () => acted.length === 3);
 
         const stopped = Arr.map(acted, (command) =>

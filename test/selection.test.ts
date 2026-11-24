@@ -1,8 +1,3 @@
-// What the board has selected, as the one small record chat reads. Two things must hold:
-// the record says the whole of what a tool needs to answer about it without asking the
-// board anything, and closing the drawer leaves nothing behind that a later read could
-// mistake for a live selection.
-
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
@@ -60,8 +55,6 @@ test("the status line says what is selected, or that nothing narrows the herd", 
     "board selection: Strapi prod seeder",
   );
   expect(selectionLine(null)).toBe("board selection: none · whole herd");
-  // Attached to a prompt: names the card and its Run, and is nothing — not a line about
-  // nothing — while no card is open.
   expect(promptLine({ task: "t1", run: "r1", name: "Strapi prod seeder" })).toContain(
     '"Strapi prod seeder" is open (run r1)',
   );

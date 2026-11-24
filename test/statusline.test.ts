@@ -1,7 +1,4 @@
-// The line under the chat prompt, and how it gets there. Two things matter: a human's own
-// Claude Code settings survive being configured, and a status line somebody else put there
-// is reported rather than replaced — it is their editor, and Collie is a guest in it.
-
+// WARNING: A status line someone else set is reported, never replaced: Collie is a guest in their settings.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -9,7 +6,8 @@ import * as Option from "effect/Option";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
-import { readEnv, type PluginEnv } from "../src/env";
+import { readEnv } from "../src/env";
+import type { PluginEnv } from "../src/env";
 import {
   claudeSettingsPath,
   installStatusLine,
@@ -91,7 +89,6 @@ test("with no settings file at all, one is written that says only what Collie ne
       yield* installStatusLine(env);
 
       expect(yield* read(file)).toContain(Arr.join(STATUS_LINE_ARGS, " "));
-      // Run again: the same machine, and nothing said twice.
       expect(yield* installStatusLine(env)).toContain("already");
     }),
   ));
@@ -125,8 +122,7 @@ test("settings Collie cannot read are refused rather than replaced", () =>
       const fs = yield* FileSystem.FileSystem;
       const file = yield* claudeSettingsPath(env);
       yield* fs.makeDirectory(`${home}/.claude`, { recursive: true });
-      // Half-edited by hand, which is a file with everything in it rather than an empty
-      // one: writing over it would take the human's own Claude Code settings with it.
+      // WARNING: A half-edited file is kept whole: writing over it would drop the human's own settings.
       const broken = `{"theirs": "kept",\n`;
       yield* fs.writeFileString(file, broken);
 
@@ -143,7 +139,6 @@ test("the status line 0.104.0 wrote is Collie's, and is replaced rather than joi
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const file = yield* claudeSettingsPath(env);
-      // statusLineCommand(["/home/u/.collie/release/bin/collie"]) on 0.104.0.
       const written = "'/home/u/.collie/release/bin/collie' chat status-line";
       yield* fs.makeDirectory(`${home}/.claude`, { recursive: true });
       yield* fs.writeFileString(

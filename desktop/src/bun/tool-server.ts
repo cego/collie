@@ -2,7 +2,8 @@ import * as Arr from "effect/Array";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { DriverContext } from "./driver";
-import { isJsonObject, type JsonObject } from "../../../src/schema";
+import { isJsonObject } from "../../../src/schema";
+import type { JsonObject } from "../../../src/schema";
 import { jsonSchemaOf } from "../../../src/toolkit";
 import { Questions } from "../shared/chat-view";
 import { callFileTool, FILE_TOOLS, isFileTool } from "./file-tools";
@@ -18,7 +19,7 @@ export const toolServer = (
     { capabilities: { tools: { listChanged: false } } },
   );
   const tools = [...FLOCK_TOOLS, ...FILE_TOOLS];
-  if (ask !== undefined)
+  if (ask !== undefined) {
     tools.push({
       name: "AskUserQuestion",
       title: "Ask the human",
@@ -26,13 +27,14 @@ export const toolServer = (
       input: () => jsonSchemaOf(Questions),
       readOnly: true,
     });
+  }
   server.server.setRequestHandler(ListToolsRequestSchema, () =>
     Promise.resolve({
       tools: Arr.map(tools, (tool) => ({
         name: tool.name,
         title: tool.title,
         description: tool.description,
-        // SAFETY: each tool's parameters are an object JSON Schema.
+        // WARNING: each tool's parameters are an object JSON Schema.
         inputSchema: tool.input() as { type: "object" },
         annotations: { readOnlyHint: tool.readOnly },
       })),
@@ -41,8 +43,9 @@ export const toolServer = (
   server.server.setRequestHandler(CallToolRequestSchema, (request) => {
     const { name } = request.params;
     const input = isJsonObject(request.params.arguments) ? request.params.arguments : {};
-    if (name === "AskUserQuestion" && ask !== undefined)
+    if (name === "AskUserQuestion" && ask !== undefined) {
       return ask(input).then((text) => ({ content: [{ type: "text" as const, text }] }));
+    }
     return isFileTool(name)
       ? run(callFileTool(flock, name, input)).then((content) => ({ content: [...content] }))
       : run(callFlockTool(flock, name, input)).then((text) => ({

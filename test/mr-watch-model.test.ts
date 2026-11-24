@@ -1,12 +1,7 @@
 import { expect, test } from "bun:test";
 import { epochMs } from "../src/time";
-import {
-  collieRunOf,
-  judge,
-  type MrReading,
-  type Observed,
-  type WatchCursor,
-} from "../src/mr-watch-model";
+import { collieRunOf, judge } from "../src/mr-watch-model";
+import type { MrReading, WatchCursor } from "../src/mr-watch-model";
 
 const H1 = "1111111111111111111111111111111111111111";
 const H2 = "2222222222222222222222222222222222222222";
@@ -14,14 +9,14 @@ const MIN = 60_000;
 const T0 = epochMs("2026-11-11T10:00:00Z");
 
 const cursor: WatchCursor = { head: H1, seen: ["10"], pipeline: "passed" };
-const reading = (over: Partial<MrReading> = {}): MrReading => ({
+const reading: (over?: Partial<MrReading>) => MrReading = (over = {}) => ({
   state: "open",
   head: H1,
   pipeline: "passed",
   comments: [{ id: "10", body: "Please rename it." }],
   ...over,
 });
-const stood = (head: string, since: number, running: number | null = null): Observed => ({
+const stood = (head: string, since: number, running: number | null = null) => ({
   head,
   since,
   running,
@@ -213,8 +208,9 @@ test("a new head that does not descend from the cursor's head is a force push; u
 });
 
 test("a merged or closed merge request is ended, whatever else changed", () => {
-  for (const state of ["merged", "closed"] as const)
+  for (const state of ["merged", "closed"] as const) {
     expect(
       judge({ cursor, observed: null, reading: reading({ state, head: H2 }), now: T0 }).verdict,
     ).toEqual({ _tag: "Ended", state });
+  }
 });

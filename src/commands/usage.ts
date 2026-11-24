@@ -1,6 +1,3 @@
-// `collie usage`: how much of each Subscription this Machine's logins have used, per
-// window, as its host last read it (ADR-0049).
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -9,11 +6,11 @@ import { Command } from "effect/cli";
 import type { AgentFallback } from "../board-model";
 import { usageFallbacks, usageReadings } from "../lifecycle";
 import { agoMs, epochMs } from "../time";
-import { current, resetPhrase, type UsageReading } from "../usage-model";
+import { current, resetPhrase } from "../usage-model";
+import type { UsageReading } from "../usage-model";
 import { answering, cliDoor } from "./shared";
 
-/** One line per window, then the reading's age and source, or its problem. */
-export function usageLines(readings: ReadonlyArray<UsageReading>, now: number): string {
+export function usageLines(readings: ReadonlyArray<UsageReading>, now: number) {
   return Arr.join(
     Arr.flatMap(readings, (reading) => {
       const who = Arr.join(
@@ -41,7 +38,6 @@ export function usageLines(readings: ReadonlyArray<UsageReading>, now: number): 
   );
 }
 
-/** One line per agent whose work a Fallback would move, saying where. */
 export const fallbackLines = (fallbacks: ReadonlyArray<AgentFallback>) =>
   Arr.map(
     fallbacks,
@@ -53,9 +49,13 @@ export const usage = Command.make("usage", {}, () =>
     Effect.gen(function* () {
       const door = yield* cliDoor(env);
       const read = yield* usageReadings(env, door);
-      if (!read.ok) return read;
+      if (!read.ok) {
+        return read;
+      }
       const fallbacks = yield* usageFallbacks(env, door);
-      if (!fallbacks.ok) return fallbacks;
+      if (!fallbacks.ok) {
+        return fallbacks;
+      }
       const now = yield* Clock.currentTimeMillis;
       return {
         ok: true as const,

@@ -13,11 +13,10 @@ const uiFiles = Effect.fn("boundary.uiFiles")(function* (predicate: (name: strin
   );
 });
 
-/** The code, without the prose: a comment naming `Effect` is not a use of it. */
-function code(source: string): string {
+function code(source: string) {
   return Arr.join(
     Arr.filter(
-      Str.split(pipe(source, Str.replace(/\/\*[\s\S]*?\*\//g, "")), "\n"),
+      Str.split(pipe(source, Str.replaceAll(/\/\*[\s\S]*?\*\//g, "")), "\n"),
       (line) => !pipe(Str.trimStart(line), Str.startsWith("//")),
     ),
     "\n",
@@ -32,8 +31,7 @@ const PURE_EFFECT_HELPERS = new Set([
   "effect/Option",
 ]);
 
-/** Pure helpers belong in views; runtime modules stay at the bridge. Type imports erase. */
-function effectRuntimeImports(source: string): string[] {
+function effectRuntimeImports(source: string) {
   return Arr.filter(
     Arr.map(scanner.scanImports(source), ({ path }) => path),
     (path) =>
@@ -51,16 +49,16 @@ test("a wrapped value import counts as one", () => {
 } from "effect";\n`;
   expect(effectRuntimeImports(wrapped)).toEqual(["effect"]);
   expect(effectRuntimeImports(`import { Effect } from "effect";\n`)).toEqual(["effect"]);
-  // Types are erased, so they are not the concern.
   expect(effectRuntimeImports(`import type {\n  Effect,\n} from "effect";\n`)).toEqual([]);
   expect(effectRuntimeImports(`import { type Effect } from "effect";\n`)).toEqual([]);
   expect(effectRuntimeImports(`import { Effect } from "./effect-helpers";\n`)).toEqual([]);
 });
 
 test("views may import pure Effect helpers directly", () => {
-  for (const path of PURE_EFFECT_HELPERS)
+  for (const path of PURE_EFFECT_HELPERS) {
     expect(effectRuntimeImports(`import * as Helpers from "${path}";`)).toEqual([]);
-  // A barrel import also loads the runtime, even when the named export is a pure helper.
+  }
+  // WARNING: a barrel import loads the runtime even when the named export is a pure helper.
   expect(effectRuntimeImports('import { Array } from "effect";')).toEqual(["effect"]);
 });
 
@@ -79,11 +77,7 @@ test("runtime imports stay forbidden under aliases, deep paths and dynamic loadi
   }
 });
 
-/**
- * The rule that keeps the app testable: a component reaching for the Effect runtime is
- * the first step back to a screen nobody can test, and it is what puts a second runtime
- * inside the render tree. Pure helpers manipulate the data the view already has.
- */
+// WARNING: a component reaching for the Effect runtime puts a second runtime inside the render tree.
 test("components import only pure Effect helpers", () =>
   runEffect(
     Effect.gen(function* () {
@@ -96,12 +90,7 @@ test("components import only pure Effect helpers", () =>
     }),
   ));
 
-/**
- * The state layer is plain data too — the whole point of it — so the only thing it may
- * take from the rest of the program is types and constants, never a service. Judged on
- * the code rather than the whole file: this used to grep the prose too, and a comment
- * explaining the rule was enough to fail it.
- */
+// WARNING: judged on code only; a comment naming Effect must not fail this check.
 test("the state layer holds no Effect", () =>
   runEffect(
     Effect.gen(function* () {

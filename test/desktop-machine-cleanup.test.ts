@@ -1,6 +1,3 @@
-// What a sweep would remove on each Machine, read by Desktop's main process and drawn by the
-// Cleanup dialog (ADR-0045).
-
 import * as Arr from "effect/Array";
 import { describe, expect, test } from "bun:test";
 import { Deferred, Effect, Fiber } from "effect";
@@ -11,33 +8,33 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 import type * as RpcMessage from "effect/rpc/RpcMessage";
 import * as RpcServer from "effect/rpc/RpcServer";
 import { TestClock } from "effect/testing";
-import { cleanupOn, type Door, DoorMap, type Reached } from "../desktop/src/bun/machine";
+import { cleanupOn, DoorMap } from "../desktop/src/bun/machine";
+import type { Door, Reached } from "../desktop/src/bun/machine";
 import {
   CLEANUP_UPGRADE_SAID,
-  type CleanupRead,
   choose,
   cleanupView,
   sweptToast,
 } from "../desktop/src/shared/machine-cleanup";
+import type { CleanupRead } from "../desktop/src/shared/machine-cleanup";
 import { cleanupLines } from "../src/cleanup";
-import { type CleanupReport, FrontDoorRpcs, HostRefused } from "../src/board-model";
+import { FrontDoorRpcs, HostRefused } from "../src/board-model";
+import type { CleanupReport } from "../src/board-model";
 
 type Rpcs = RpcGroup.Rpcs<typeof FrontDoorRpcs>;
 
-const report = (bytes: number): CleanupReport => ({
+const report = (bytes: number) => ({
   remove: [{ kind: "worktree", target: "/w/run-1", bytes, reason: "its Run ended" }],
   keep: [],
   bytes,
 });
 
-/** The `cleanup` call alone, as a host serves it; an older host serves neither it nor `sweep`. */
 const Cleanup = RpcGroup.make(
-  // SAFETY: the group's own `cleanup`, which its map types as any of its Rpcs.
+  // WARNING: the group's own `cleanup`, which its map types as any of its Rpcs.
   FrontDoorRpcs.requests.get("cleanup") as Extract<Rpcs, { readonly _tag: "cleanup" }>,
 );
 const Older = RpcGroup.make(Rpc.make("ping"));
 
-/** A host answering `cleanup` with `answer`, or too old for it; every request it is sent is kept. */
 const fakeHost = (answer: Effect.Effect<CleanupReport, HostRefused> | "older") =>
   Effect.gen(function* () {
     const asked: Array<string> = [];
@@ -46,7 +43,7 @@ const fakeHost = (answer: Effect.Effect<CleanupReport, HostRefused> | "older") =
     const server =
       answer === "older"
         ? yield* RpcServer.makeNoSerialization(Older, {
-            // SAFETY: what a host answers is the same envelope whichever group it serves.
+            // WARNING: what a host answers is the same envelope whichever group it serves.
             onFromServer: (response) => toClient(response as RpcMessage.FromServer<Rpcs>),
           }).pipe(Effect.provide(Older.toLayer({ ping: () => Effect.void })))
         : yield* RpcServer.makeNoSerialization(Cleanup, {
@@ -55,8 +52,10 @@ const fakeHost = (answer: Effect.Effect<CleanupReport, HostRefused> | "older") =
     const client = yield* RpcClient.makeNoSerialization(FrontDoorRpcs, {
       supportsAck: true,
       onFromClient: ({ message }) => {
-        if (message._tag === "Request") asked.push(message.tag);
-        // SAFETY: the host is handed a request it may have no schema for, as over the wire.
+        if (message._tag === "Request") {
+          asked.push(message.tag);
+        }
+        // WARNING: the host is handed a request it may have no schema for, as over the wire.
         return server.write(0, message as never);
       },
     });
@@ -65,16 +64,14 @@ const fakeHost = (answer: Effect.Effect<CleanupReport, HostRefused> | "older") =
   });
 
 const vm = { profile: "p-vm", name: "vm" };
-const reachedOver = (desktop: Partial<Door>): Reached => ({
+const reachedOver = (desktop: Partial<Door>) => ({
   machine: vm,
-  // SAFETY: each test calls only what its door answers.
+  // WARNING: each test calls only what its door answers.
   desktop: desktop as Door,
 });
-/** A door whose call is cut off once `closed` is done: interrupted as a closing door is, or broken. */
 const cutOff = (closed: Deferred.Deferred<void>, how: "closed" | "broken") =>
   reachedOver({
-    // SAFETY: answered as the client answers a call not asked to discard its reply.
-    cleanup: (() =>
+    cleanup: () =>
       Deferred.await(closed).pipe(
         Effect.andThen(
           how === "closed"
@@ -85,7 +82,7 @@ const cutOff = (closed: Deferred.Deferred<void>, how: "closed" | "broken") =>
                 }),
               ),
         ),
-      )) as Door["cleanup"],
+      ),
   });
 const doorsWith = (door: Reached) => {
   const doors = new DoorMap<Reached>();
@@ -136,7 +133,7 @@ describe("the main process reads one Machine's cleanup listing over its door", (
       ).pipe(Effect.provide(TestClock.layer())),
     ));
 
-  for (const how of ["closed", "broken"] as const)
+  for (const how of ["closed", "broken"] as const) {
     test(`a door ${how} under the call is followed to the Machine's next door, whose host answers`, () =>
       Effect.runPromise(
         Effect.scoped(
@@ -159,6 +156,7 @@ describe("the main process reads one Machine's cleanup listing over its door", (
           }),
         ),
       ));
+  }
 
   test("a host that never answers is waited on for 2 minutes, then said so", () =>
     Effect.runPromise(
@@ -215,14 +213,25 @@ describe("the main process reads one Machine's cleanup listing over its door", (
 });
 
 type Shown = Parameters<typeof cleanupView>[0][number];
-const live = (name: string): Shown => ({ profile: `p-${name}`, name, state: "live", reason: null });
+const live: (name: string) => Shown = (name) => ({
+  profile: `p-${name}`,
+  name,
+  state: "live",
+  reason: null,
+});
 type Read = readonly [string, CleanupRead];
-const listed = (name: string, report: CleanupReport): Read => [
+const listed: (name: string, report: CleanupReport) => Read = (name, report) => [
   `p-${name}`,
   { state: "listed", installation: `i-${name}`, report },
 ];
-const failed = (name: string, problem: string): Read => [`p-${name}`, { state: "failed", problem }];
-const reading = (name: string, since: number): Read => [`p-${name}`, { state: "reading", since }];
+const failed: (name: string, problem: string) => Read = (name, problem) => [
+  `p-${name}`,
+  { state: "failed", problem },
+];
+const reading: (name: string, since: number) => Read = (name, since) => [
+  `p-${name}`,
+  { state: "reading", since },
+];
 const reads = (...each: ReadonlyArray<Read>) => new Map(each);
 const item = (kind: string, target: string, bytes: number) => ({
   kind,
@@ -341,7 +350,7 @@ describe("the Cleanup dialog", () => {
   test("a live Machine being read says how long it has waited and can't be chosen, while one listed already can", () => {
     const view = cleanupView(
       [live("slow"), live("vm")],
-      reads(reading("slow", 1_000), listed("vm", { remove: [], keep: [], bytes: 0 })),
+      reads(reading("slow", 1000), listed("vm", { remove: [], keep: [], bytes: 0 })),
       null,
       new Map(),
       24_500,
@@ -365,7 +374,7 @@ describe("the Cleanup dialog", () => {
       reads(reading("off", 0)),
       null,
       new Map(),
-      5_000,
+      5000,
     );
     expect(view.rows[0]).toMatchObject({
       said: "Out of reach: down",

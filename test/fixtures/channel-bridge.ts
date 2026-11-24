@@ -18,7 +18,7 @@ const identity = Schema.encodeEffect(
   ),
 );
 const rpc = <Tag extends "board" | "toasts" | "read" | "runDetail">(tag: Tag) =>
-  // SAFETY: each key selects the RPC carrying that tag.
+  // WARNING: each key selects the RPC carrying that tag.
   FrontDoorRpcs.requests.get(tag)! as Extract<
     RpcGroup.Rpcs<typeof FrontDoorRpcs>,
     { readonly _tag: Tag }
@@ -47,7 +47,9 @@ const handlers = Rpcs.toLayer({
   runDetail: () => Stream.make(null).pipe(Stream.concat(Stream.never)),
   read: ({ input }) =>
     Effect.suspend(() => {
-      if (input.break === "exit") process.exit(23);
+      if (input.break === "exit") {
+        process.exit(23);
+      }
       if (input.break === "socket") {
         const libc = dlopen(
           process.platform === "darwin" ? "/usr/lib/libSystem.B.dylib" : "libc.so.6",
@@ -55,11 +57,13 @@ const handlers = Rpcs.toLayer({
             shutdown: { args: ["i32", "i32"], returns: "i32" },
           },
         );
-        // Bun duplicates stdout; shutdown ends the socket through both descriptors.
+        // WARNING: Bun duplicates stdout; shutdown ends the socket through both descriptors.
         libc.symbols.shutdown(1, 1);
         libc.close();
       }
-      if (input.break === "rpc") process.stdout.write("broken-json\n");
+      if (input.break === "rpc") {
+        process.stdout.write("broken-json\n");
+      }
       return input.break === undefined
         ? identity({ channel: channel!, generation: generation!, pid: process.pid }).pipe(
             Effect.orDie,

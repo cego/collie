@@ -12,14 +12,11 @@ import onGithub from "../workflows/release.github.md" with { type: "text" };
 import renovateOnGitlab from "../workflows/renovate.gitlab.md" with { type: "text" };
 import renovateOnGithub from "../workflows/renovate.github.md" with { type: "text" };
 
-// release keeps a content file per forge, as renovate does (ADR-0050 D1): the procedure
-// differs, so each says it its forge's way.
-
 const content = { gitlab: contentOf(onGitlab), github: contentOf(onGithub) };
-const flat = (text: string) => Str.trim(pipe(text, Str.replace(/\s+/g, " ")));
+const flat = (text: string) => Str.trim(pipe(text, Str.replaceAll(/\s+/g, " ")));
 
 test("both forges' release content has the steps the module asks for, and every step fills from what it gives", () => {
-  for (const one of Rec.values(content))
+  for (const one of Rec.values(content)) {
     expect([...one.sections.keys()]).toEqual([
       "assess",
       "answer",
@@ -33,7 +30,7 @@ test("both forges' release content has the steps the module asks for, and every 
       "production",
       "share",
     ]);
-  // A template naming anything ReleaseInput does not give is refused as it is made.
+  }
   expect(Rec.keys(RELEASE_ON.github)).toEqual(Rec.keys(RELEASE_ON.gitlab));
 });
 
@@ -93,8 +90,9 @@ test("an application's tag step stages the tag, rolls a failed stage back and le
       "--cleanup=verbatim",
       "Roll stage back",
       "Never play, retry or ask about a production job",
-    ])
+    ]) {
       expect(stage).toContain(said);
+    }
     expect(flat(one.sections.get("rollback") ?? "")).toContain("{{failure}}");
     const production = flat(one.sections.get("production") ?? "");
     expect(production).toContain("{{jobs}}");
@@ -111,8 +109,9 @@ test("staging a merge request deploys its own pipeline's head, checks stage and 
       "Nothing is merged",
       "Roll stage back",
       "Never play, retry or ask about a production job",
-    ])
+    ]) {
       expect(staging).toContain(said);
+    }
     const unstage = flat(one.sections.get("unstage") ?? "");
     expect(unstage).toContain("{{failure}}");
     expect(unstage).toContain("{{head}}");
@@ -123,8 +122,9 @@ test("staging a merge request deploys its own pipeline's head, checks stage and 
       "the repository's own tag and notes conventions",
       "--cleanup=verbatim",
       "Never play, retry or ask about a production job",
-    ])
+    ]) {
       expect(tagging).toContain(said);
+    }
   }
 });
 
@@ -138,8 +138,9 @@ test("sharing content describes the host's one approval post and the manual fall
       "no other words, no emoji, no mention and no thread reply",
       "host's Slack adapter",
       "share it yourself",
-    ])
+    ]) {
       expect(share).toContain(said);
+    }
     expect(share).toContain(forge === "gitlab" ? "GitLab" : "GitHub");
   }
 });
@@ -152,7 +153,7 @@ test("every Clearance fits a 120-character repository URL, and names it exactly 
   expect(url.length).toBe(120);
   const jobs = Arr.map(
     ["deploy-production", "deploy-production:spilnu", "deploy-production:happytiger"],
-    (name, n) => ({ name, url: `${url}/-/jobs/${987654321 + n}` }),
+    (name, n) => ({ name, url: `${url}/-/jobs/${987_654_321 + n}` }),
   );
   const measured = Arr.map(Rec.toEntries(RELEASE_CLEARS), ([step, clears]) => {
     const lines = clears(url, jobs);
@@ -163,14 +164,16 @@ test("every Clearance fits a 120-character repository URL, and names it exactly 
 
 test("production names its jobs with their URLs, then by name, then by count, whichever first fits", () => {
   const url = "https://gitlab.example.com/group/app";
-  const job = (name: string, n: number) => ({ name, url: `${url}/-/jobs/${1000000 + n}` });
+  const job = (name: string, n: number) => ({ name, url: `${url}/-/jobs/${1_000_000 + n}` });
 
   const one = Arr.join(RELEASE_CLEARS.production(url, [job("deploy-production", 4)]), "; ");
   expect(one).toContain("`deploy-production` at /-/jobs/1000004");
 
-  const several = Arr.makeBy(12, (n) => job(`production:app${n}`, 9876540000 + n));
+  const several = Arr.makeBy(12, (n) => job(`production:app${n}`, 9_876_540_000 + n));
   const byName = Arr.join(RELEASE_CLEARS.production(url, several), "; ");
-  for (const one of several) expect(byName).toContain(`\`${one.name}\``);
+  for (const one of several) {
+    expect(byName).toContain(`\`${one.name}\``);
+  }
   expect(byName).not.toContain("/-/jobs/");
 
   const many = Arr.makeBy(30, (n) => job(`deploy-production:application-${n}`, n));
@@ -185,7 +188,6 @@ test("production names its jobs with their URLs, then by name, then by count, wh
 });
 
 test("checks a release recorded before it knew of conflicts decode on replay as not conflicting", () => {
-  // As 0.109.2 journaled run-31754f6b.implement.release's answer-2.checks.
   const recorded = { head: "8cc52cf15f461725e8d0b8e7da3a1204c5082e7d", failed: [] };
   const decode = (value: typeof Checked.Encoded) =>
     Effect.runSync(Schema.decodeEffect(Checked)(value));

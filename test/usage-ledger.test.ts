@@ -1,6 +1,3 @@
-// The usage ledger, fed each harness's own record of a session. Every figure asserted
-// here was counted by hand from the fixture, never by the reader's own arithmetic.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
@@ -9,14 +6,16 @@ import { runEffect } from "./support/effect";
 import { fakeChannel } from "./support/compaction";
 import { readMetrics } from "../src/metrics";
 import { readUsage, recordFrom } from "../src/usage-ledger";
-import { usageOf, type Source } from "../src/usage-ledger-model";
+import { usageOf } from "../src/usage-ledger-model";
+import type { Source } from "../src/usage-ledger-model";
 import { COMPACTION_PORTS, writeEvent } from "../src/compactors";
 import { opencodeUsage } from "../src/harness";
 import type { JsonObject } from "../src/schema";
 
+// WARNING: every figure asserted here was counted by hand from the fixture, never by the reader's own arithmetic.
 const FIXTURES = new URL("./fixtures/usage-ledger/", import.meta.url).pathname;
 
-const at = (file: string, parent: string | null = null): Source => ({
+const at: (file: string, parent?: string | null) => Source = (file, parent = null) => ({
   path: `${FIXTURES}${file}`,
   format: Str.startsWith("codex")(file)
     ? "codex"
@@ -28,7 +27,6 @@ const at = (file: string, parent: string | null = null): Source => ({
   parent,
 });
 
-/** The Run's usage once one agent's sources are recorded, as `run metrics` reads it. */
 const recorded = (harness: string, sources: ReadonlyArray<Source>, heal = false) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -188,14 +186,14 @@ test("a session's start, peak, compactions, tool payload and retries are its own
         agent: "build",
         session: "s1",
         initialContext: 9004,
-        peakContext: 10001,
+        peakContext: 10_001,
         compactions: 2,
         toolResultChars: 150,
         reminders: 1,
         repairs: 1,
         recovery: false,
       });
-      // m4 follows the reminder and m5 the repair: their turns are recovery, not the session.
+      // WARNING: m4 follows the reminder and m5 the repair, so their turns are recovery, not the session.
       expect(usage.recovery).toMatchObject({ requests: 2, output: 30 });
     }),
   ));
@@ -229,7 +227,10 @@ test("OpenCode's usage plugin writes what the reader counts: finished messages, 
       const root = yield* fs.makeTempDirectoryScoped();
       const file = `${root}/controls/usage.jsonl`;
       yield* fs.writeFileString(`${root}/usage.js`, opencodeUsage(file));
-      const plugin = yield* Effect.promise((): Promise<UsagePlugin> => import(`${root}/usage.js`));
+      const plugin = yield* Effect.promise(() => {
+        const loaded: Promise<UsagePlugin> = import(`${root}/usage.js`);
+        return loaded;
+      });
       const hooks = yield* Effect.promise(() => plugin.CollieUsage());
       const event = (type: string, properties: JsonObject) =>
         Effect.promise(() => hooks.event({ event: { type, properties } }));

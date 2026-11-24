@@ -1,5 +1,4 @@
-// The taxonomy is the contract: what is sent, how it is titled, and how often.
-
+import type { Toast } from "../src/engine";
 import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -7,8 +6,10 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import type { ChildProcessSpawner } from "effect/process";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Layer, Path, type Schema } from "effect";
-import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
+import type { Path } from "effect";
+import { Effect, FileSystem, Layer } from "effect";
+import type { Schema } from "effect";
+import type * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import {
   NOTIFICATION_KINDS,
   Notifier,
@@ -20,7 +21,8 @@ import { slackApi } from "../src/slack";
 import { writeConfigValue } from "../src/config";
 import { fakeSlack, signedInToSlack } from "./support/slack";
 import { Rig } from "./support/recorder";
-import { Agents, agentsLayer } from "../src/agents";
+import type { Agents } from "../src/agents";
+import { agentsLayer } from "../src/agents";
 import { runEffect } from "./support/effect";
 import { recordsAt } from "./support/records";
 import { Children, Host } from "../src/sdk";
@@ -30,8 +32,6 @@ import { fixtures, until } from "./support/host";
 import { writeTask } from "../src/task";
 
 test("every kind names the repo and the run, and none of them is a bare slug", () => {
-  // One herdr session runs several checkouts, so `review-mr-123 needs you` does not
-  // say which one.
   for (const kind of NOTIFICATION_KINDS) {
     const title = notificationTitle(kind, "/home/mk/work/collie", "review-mr-2");
     expect(pipe_(title, Str.startsWith("collie · review-mr-2 "))).toBe(true);
@@ -51,7 +51,7 @@ test("a kind turned off in settings is not sent, and everything else is", () => 
 
 let rig: Rig;
 let dir: string;
-let toasts: string[];
+let toasts: Array<string>;
 
 beforeEach(() =>
   runEffect(
@@ -84,7 +84,6 @@ const ownRun = Effect.flatMap(Store, (store) =>
   }),
 );
 
-/** One host's lifetime, whose toasts land in `toasts` as `sound|title|body`. */
 const session = <A, E>(
   run: Effect.Effect<
     A,
@@ -102,7 +101,7 @@ const session = <A, E>(
   options: {
     readonly dir?: string;
     readonly slack?: typeof slackApi;
-    readonly toast?: import("../src/engine").Toast;
+    readonly toast?: Toast;
   } = {},
 ) =>
   run.pipe(
@@ -152,7 +151,6 @@ const executed = (entry: string, runId: string, input: Readonly<Record<string, S
     }),
   );
 
-/** Work that parks on its question, submitted and then waited on until it is asking. */
 const asking = (runId: string) =>
   session(
     Effect.gen(function* () {
@@ -187,7 +185,6 @@ test("a question says the Run needs you, once however often the work reaches it"
     Effect.gen(function* () {
       yield* asking("r1");
       yield* asking("r1");
-      // Parked, not finished: a suspension is not an ending.
       expect(toasts).toEqual(["request|host · r1 needs you|approach: How should we tackle this?"]);
     }),
   ));
@@ -340,7 +337,7 @@ test("a notification is posted as the signed-in human, never with a bot token", 
     }),
   ));
 
-for (const destination of ["U789", "W789", "D123"])
+for (const destination of ["U789", "W789", "D123"]) {
   test(`a notification for the person or direct message ${destination} posts nothing and says why on the Run's log`, () =>
     runEffect(
       Effect.gen(function* () {
@@ -362,6 +359,7 @@ for (const destination of ["U789", "W789", "D123"])
         );
       }),
     ));
+}
 
 test("a notification whose sign-in Slack refuses as expired posts nothing and says so on the Run's log", () =>
   runEffect(

@@ -1,7 +1,3 @@
-// A Run's agents on core: launched, given their work, read and
-// stopped through core's own API on the rig's fake core, which takes a prompt the way a
-// harness does. The rest of the host is real: the dispatcher, its ledger and the engine.
-
 import { launchedAt } from "./support/records";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
@@ -12,13 +8,15 @@ import { Clock, Effect, Fiber, FileSystem, Layer, Option, Schema } from "effect"
 import { TestClock } from "effect/testing";
 import type * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import type { PlatformServices } from "../src/platform";
-import { Agents, agentWork, agentsLayer, type AgentHost } from "../src/agents";
+import { Agents, agentWork, agentsLayer } from "../src/agents";
+import type { AgentHost } from "../src/agents";
 import { foundationLayer } from "../src/engine";
 import type { Collecting } from "../src/collecting";
 import { Store } from "../src/store";
 import { hostLockOf } from "../src/lock";
 import { agentName } from "../src/naming";
-import { Rig, type Call } from "./support/recorder";
+import { Rig } from "./support/recorder";
+import type { Call } from "./support/recorder";
 import { Herdr } from "../src/herdr";
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { asRun, enveloped } from "./support/enveloped";
@@ -67,7 +65,6 @@ const body = work.toLayer((payload) =>
   }).pipe(asRun(payload)),
 );
 
-/** A review, then a fix, by one OpenCode agent: its first prompt goes at launch, its second as a send. */
 const opencodeWork = enveloped({
   name: "core-opencode",
   input: {},
@@ -90,7 +87,6 @@ const opencodeBody = opencodeWork.toLayer((payload) =>
   }).pipe(asRun(payload)),
 );
 
-/** What an OpenCode launch on core carries, as the fake core logged it. */
 const OpenCodeLaunch = Schema.Struct({
   argv: Schema.Array(Schema.String),
   env: Schema.Struct({
@@ -106,7 +102,6 @@ const OpenCodeLaunch = Schema.Struct({
   }),
 });
 
-/** The part of an OpenCode plugin OpenCode calls, as the reporter exports it. */
 interface OpenCodePlugin {
   readonly CollieStatus: () => Promise<{
     readonly event: (input: { readonly event: Schema.Json }) => Promise<void>;
@@ -115,7 +110,6 @@ interface OpenCodePlugin {
 
 const PiLaunch = Schema.Struct({ argv: Schema.Array(Schema.String) });
 
-/** One step by a pi agent, which asks the human before it writes anything. */
 const piWork = enveloped({ name: "core-pi", input: {}, success: Verdict });
 const piBody = piWork.toLayer((payload) =>
   agentWork({
@@ -132,7 +126,6 @@ const piBody = piWork.toLayer((payload) =>
 
 const CLAUDE_HELP = "  --autocompact <auto|tokens>           Auto-compact window size";
 
-/** No compaction and no trust prompt, so a turn is only what the test sends. */
 const quietConfig = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const userDir = rig.pluginEnv().userDir;
@@ -143,7 +136,7 @@ const quietConfig = Effect.gen(function* () {
   );
 });
 
-const hostOf = (env: Record<string, string>): AgentHost => ({
+const hostOf: (env: Record<string, string>) => AgentHost = (env) => ({
   dir,
   env: rig.pluginEnv(env),
   herdr: new Herdr(rig.pluginEnv(env)),
@@ -155,7 +148,6 @@ const hostOf = (env: Record<string, string>): AgentHost => ({
   collectMs: 400,
   help: () => Effect.succeed(CLAUDE_HELP),
   version: () => Effect.succeed("2.1.309 (Claude Code)"),
-  // The helper a pi agent's question tool runs, from source.
   self: [process.execPath, `${import.meta.dir}/../src/main.ts`],
 });
 
@@ -295,7 +287,6 @@ test("an OpenCode agent on core is launched with its reporter and its first prom
       const core = yield* rig.startCore();
       yield* quietConfig;
       const sessionFile = `${dir}/agents/r1/review.session`;
-      // The reporter writes the session id once OpenCode opens the session, before any Output.
       yield* rig.queueOutputs([
         { writes: [{ path: sessionFile, text: "ses_review" }], output: { verdict: "clean" } },
         { verdict: "fixed" },
@@ -329,10 +320,12 @@ test("an OpenCode agent on core is launched with its reporter and its first prom
       expect(content.plugin[0]).toBe("their-plugin");
       expect(content.plugin[2]).toEndWith(".usage.js");
       yield* fs.remove(sessionFile);
-      const reporter = yield* Effect.promise(
-        (): Promise<OpenCodePlugin> =>
-          import(pipe(content.plugin[1] ?? "", Str.replace("file://", ""))),
-      );
+      const reporter = yield* Effect.promise(() => {
+        const returned: Promise<OpenCodePlugin> = import(
+          pipe(content.plugin[1] ?? "", Str.replace("file://", ""))
+        );
+        return returned;
+      });
       const hooks = yield* Effect.promise(() => reporter.CollieStatus());
       yield* Effect.promise(() =>
         hooks.event({
@@ -360,7 +353,9 @@ test("an OpenCode agent on core is launched with its reporter and its first prom
 
 const waitFor = <E, R>(reached: Effect.Effect<boolean, E, R>) =>
   Effect.gen(function* () {
-    while (!(yield* reached)) yield* TestClock.withLive(Effect.sleep("10 millis"));
+    while (!(yield* reached)) {
+      yield* TestClock.withLive(Effect.sleep("10 millis"));
+    }
   });
 
 const spend = (ms: number) =>
@@ -369,132 +364,124 @@ const spend = (ms: number) =>
     yield* waitFor(Effect.map(Clock.currentTimeMillis, (now) => now >= until));
   });
 
-test(
-  "a pi agent on core asks with its question tool: two Decisions, its next step held, and one Delivery with both answers",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const core = yield* rig.startCore();
-        yield* quietConfig;
-        yield* fs.writeFileString(
-          hostLockOf(rig.pluginEnv().stateDir),
-          `{"pid":${process.pid},"start":null}`,
+test("a pi agent on core asks with its question tool: two Decisions, its next step held, and one Delivery with both answers", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const core = yield* rig.startCore();
+      yield* quietConfig;
+      yield* fs.writeFileString(
+        hostLockOf(rig.pluginEnv().stateDir),
+        `{"pid":${process.pid},"start":null}`,
+      );
+      yield* rig.queueOutputs([null, null, null, null, null]);
+      const agent = agentName("r1", "builder", null, 1);
+      const delivered = () =>
+        Effect.map(rig.calls(), (calls) =>
+          Arr.filter(
+            Arr.filter(coreCalls(calls), (call) => call.cmd === "terminal.send"),
+            (call) => !(isString(call.params?.text) && call.params.text.includes(".remind-")),
+          ),
         );
-        // Two more for the Output reminders its review turn draws by ending before it asks.
-        yield* rig.queueOutputs([null, null, null, null, null]);
-        const agent = agentName("r1", "builder", null, 1);
-        const delivered = () =>
-          Effect.map(rig.calls(), (calls) =>
-            Arr.filter(
-              Arr.filter(coreCalls(calls), (call) => call.cmd === "terminal.send"),
-              (call) => !(isString(call.params?.text) && call.params.text.includes(".remind-")),
-            ),
-          );
-        const sends = () =>
-          Effect.map(delivered(), (sent) =>
-            Arr.map(sent, (call) => (isString(call.params?.text) ? call.params.text : "")),
-          );
-        yield* session(
-          Effect.gen(function* () {
-            yield* piWork.execute({ runId: "r1", input: {} }, { discard: true });
-            yield* waitFor(Effect.map(sends(), (sent) => sent.length === 1));
-            const [run] = Arr.filter(
-              coreCalls(yield* rig.calls()),
-              (call) => call.cmd === "terminal.run",
-            );
-            const { argv } = yield* Schema.decodeUnknownEffect(PiLaunch)(run?.params);
-            expect(argv[0]).toBe("pi");
-            const launched = yield* launchedAt(dir, "r1", "review");
-            const chosen = argv[argv.indexOf("--session-id") + 1];
-            expect(chosen).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/));
-            expect(launched.agentSession).toEqual({ kind: "pi", value: chosen ?? "" });
-
-            const tools = yield* piTools(argv[argv.indexOf("-e") + 1] ?? "");
-            // The tool's helper stamps its question on the wall clock, which this test's clock
-            // runs ahead of: a question stamped before its work was given is not that work's.
-            yield* waitFor(
-              Effect.map(TestClock.withLive(Clock.currentTimeMillis), (now) => now > launched.at!),
-            );
-            const told = yield* askWith(
-              tools,
-              "call_1",
-              [
-                {
-                  question: "Which database?",
-                  header: "Database",
-                  options: [
-                    { label: "Postgres (Recommended)" },
-                    { label: "SQLite" },
-                    { label: "JSONL" },
-                  ],
-                },
-                {
-                  question: "Which checks?",
-                  header: "Checks",
-                  options: [
-                    { label: "lint (Recommended)" },
-                    { label: "typecheck" },
-                    { label: "none" },
-                  ],
-                },
-              ],
-              launched.agentSession!.value,
-            );
-            expect(told).toContain("End your turn now");
-            const store = yield* Store;
-            yield* waitFor(Effect.map(store.asked("r1"), (asked) => asked.length === 2));
-            expect(Arr.map(yield* store.asked("r1"), (asked) => asked.answer)).toEqual([
-              null,
-              null,
-            ]);
-
-            yield* Effect.forkChild(
-              (yield* Agents).launch({
-                runId: "r1",
-                operation: "fix",
-                role: "reviewer",
-                workflow: "core-pi",
-                task: null,
-                agent: "builder",
-                cwd: rig.projectDir,
-                prompt: "Fix it.",
-                output: `${dir}/agents/r1/fix.json`,
-                skill: null,
-                harness: "pi",
-                model: null,
-                effort: null,
-                permissions: null,
-              }),
-            );
-            yield* spend(30_000);
-            expect(yield* sends()).toHaveLength(1);
-
-            for (const [decision, value] of [
-              ["ask-review-1", "SQLite"],
-              ["ask-review-2", "lint and typecheck"],
-            ] as const)
-              yield* store.settle({ run: "r1", decision, value, request: "a" });
-            yield* waitFor(Effect.map(sends(), (sent) => sent.length === 3));
-            const [step, answers, next] = yield* sends();
-            expect(step).toContain("/review.prompt.md");
-            expect(answers).toContain(
-              "Your questions are answered: Database: SQLite; Checks: lint and typecheck",
-            );
-            expect(next).toContain("/fix.prompt.md");
-            expect(Arr.map(yield* delivered(), (call) => call.params?.terminal)).toEqual([
-              agent,
-              agent,
-              agent,
-            ]);
-          }),
-          coreOnly(core),
-          piBody,
+      const sends = () =>
+        Effect.map(delivered(), (sent) =>
+          Arr.map(sent, (call) => (isString(call.params?.text) ? call.params.text : "")),
         );
-      }),
-    ),
-  120_000,
-);
+      yield* session(
+        Effect.gen(function* () {
+          yield* piWork.execute({ runId: "r1", input: {} }, { discard: true });
+          yield* waitFor(Effect.map(sends(), (sent) => sent.length === 1));
+          const [run] = Arr.filter(
+            coreCalls(yield* rig.calls()),
+            (call) => call.cmd === "terminal.run",
+          );
+          const { argv } = yield* Schema.decodeUnknownEffect(PiLaunch)(run?.params);
+          expect(argv[0]).toBe("pi");
+          const launched = yield* launchedAt(dir, "r1", "review");
+          const chosen = argv[argv.indexOf("--session-id") + 1];
+          expect(chosen).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/));
+          expect(launched.agentSession).toEqual({ kind: "pi", value: chosen ?? "" });
+
+          const tools = yield* piTools(argv[argv.indexOf("-e") + 1] ?? "");
+          // WARNING: The helper stamps its question on the wall clock, which the test clock runs ahead of; a question stamped before its work was given is not that work's.
+          yield* waitFor(
+            Effect.map(TestClock.withLive(Clock.currentTimeMillis), (now) => now > launched.at!),
+          );
+          const told = yield* askWith(
+            tools,
+            "call_1",
+            [
+              {
+                question: "Which database?",
+                header: "Database",
+                options: [
+                  { label: "Postgres (Recommended)" },
+                  { label: "SQLite" },
+                  { label: "JSONL" },
+                ],
+              },
+              {
+                question: "Which checks?",
+                header: "Checks",
+                options: [
+                  { label: "lint (Recommended)" },
+                  { label: "typecheck" },
+                  { label: "none" },
+                ],
+              },
+            ],
+            launched.agentSession!.value,
+          );
+          expect(told).toContain("End your turn now");
+          const store = yield* Store;
+          yield* waitFor(Effect.map(store.asked("r1"), (asked) => asked.length === 2));
+          expect(Arr.map(yield* store.asked("r1"), (asked) => asked.answer)).toEqual([null, null]);
+
+          yield* Effect.forkChild(
+            (yield* Agents).launch({
+              runId: "r1",
+              operation: "fix",
+              role: "reviewer",
+              workflow: "core-pi",
+              task: null,
+              agent: "builder",
+              cwd: rig.projectDir,
+              prompt: "Fix it.",
+              output: `${dir}/agents/r1/fix.json`,
+              skill: null,
+              harness: "pi",
+              model: null,
+              effort: null,
+              permissions: null,
+            }),
+          );
+          yield* spend(30_000);
+          expect(yield* sends()).toHaveLength(1);
+
+          for (const [decision, value] of [
+            ["ask-review-1", "SQLite"],
+            ["ask-review-2", "lint and typecheck"],
+          ] as const) {
+            yield* store.settle({ run: "r1", decision, value, request: "a" });
+          }
+          yield* waitFor(Effect.map(sends(), (sent) => sent.length === 3));
+          const [step, answers, next] = yield* sends();
+          expect(step).toContain("/review.prompt.md");
+          expect(answers).toContain(
+            "Your questions are answered: Database: SQLite; Checks: lint and typecheck",
+          );
+          expect(next).toContain("/fix.prompt.md");
+          expect(Arr.map(yield* delivered(), (call) => call.params?.terminal)).toEqual([
+            agent,
+            agent,
+            agent,
+          ]);
+        }),
+        coreOnly(core),
+        piBody,
+      );
+    }),
+  ));
 
 test("a send core refuses because its agent is blocked is held as herdr's agent_blocked is, and goes once it is idle", () =>
   runEffect(
@@ -562,8 +549,7 @@ test("Go to pane names an agent's core terminal while the host still inherits He
     Effect.gen(function* () {
       const core = yield* rig.startCore();
       const started = yield* launched(core, "builder-1", rig.projectDir);
-      // The rig's environment carries HERDR_SOCKET_PATH to its tripwire, as a host started
-      // from an old login did; asking it anything fails the rig on close.
+      // WARNING: The rig's env carries HERDR_SOCKET_PATH to a tripwire; asking it anything fails the rig on close.
       const env = rig.pluginEnv();
 
       const at = yield* focusPane(yield* liveHerds(new Herdr(env), env), [

@@ -1,6 +1,3 @@
-// One day of Runs, read for what is wrong with the project it runs in (ADR-0053): filed on
-// that project's forge, and up to `improvements` of it planned and built, with nobody asked.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
@@ -20,9 +17,6 @@ import { DateTime, Duration, Effect, FileSystem, Option, Result, Schema, flow } 
 import * as Activity from "effect/workflow/Activity";
 import markdown from "./self-improve.md" with { type: "text" };
 import {
-  type FixEffect,
-  type Outcome,
-  type Starting,
   Ended,
   FAILED_TO_START,
   Finding,
@@ -44,6 +38,7 @@ import {
   summaryOf,
   targetOf,
 } from "./retrospective";
+import type { FixEffect, Outcome } from "./retrospective";
 
 const content = contentOf(markdown);
 const triage = content.template("triage", {
@@ -78,10 +73,9 @@ const Window = Schema.Struct({
   machine: Schema.String,
   runs: Schema.Array(Schema.String),
   report: Schema.Unknown,
-  // A completed window predating these measures stays frozen when its Run resumes.
+  // WARNING: a completed window predating these measures stays frozen when its Run resumes.
   questions: Schema.optionalKey(QuestionMeasures),
   repeated: Schema.optionalKey(Schema.Array(Finding)),
-  /** When each of `runs` was admitted. */
   created: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
 });
 
@@ -185,7 +179,6 @@ export default defineWorkflow({
     ),
   }),
   hints: { improvements: "goal" },
-  // The checkout it was started in is shared and may be dirty or behind its remote.
   checkout: "roaming",
   output: Schema.String,
   agents: { harness: "claude", model: "opus", effort: "high" },
@@ -209,10 +202,11 @@ export default defineWorkflow({
             const own = Option.getOrUndefined(
               Arr.findFirst(report.runs, ({ runId }) => runId === run.id),
             );
-            if (own === undefined)
+            if (own === undefined) {
               return yield* new WorkflowError({
                 reason: `${run.id} is not in its Machine's report`,
               });
+            }
             const kept = Arr.filter(
               report.runs,
               ({ runId, parent, project }) =>
@@ -232,7 +226,6 @@ export default defineWorkflow({
               ),
               questions: questionMeasures(kept),
               repeated: repeatedAnswers(kept),
-              // Another project's tallies and measures are not this one's to read.
               report:
                 input.runs === "machine"
                   ? report
@@ -248,7 +241,9 @@ export default defineWorkflow({
         }),
       );
       const quiet = window.runs.length === 0;
-      if (quiet && bound === 0) return `No Runs since ${window.since}`;
+      if (quiet && bound === 0) {
+        return `No Runs since ${window.since}`;
+      }
 
       const kept =
         bound === 0
@@ -278,7 +273,6 @@ export default defineWorkflow({
                       Effect.map((text) =>
                         decodeKept(text).pipe(Option.map((ended) => ({ created, ended }))),
                       ),
-                      // A Run still going, or one from before Improvements were kept, has none.
                       Effect.orElseSucceed(() => Option.none()),
                     ),
                 );
@@ -291,7 +285,9 @@ export default defineWorkflow({
       const failedToStart = Arr.some(kept.earlier, ({ ended }) =>
         Arr.some(ended, (one) => pipe_(one.ended, Str.startsWith(FAILED_TO_START))),
       );
-      if (quiet && !failedToStart) return `No Runs since ${window.since}`;
+      if (quiet && !failedToStart) {
+        return `No Runs since ${window.since}`;
+      }
 
       const retro = retroStep(
         Activity.make({
@@ -310,7 +306,9 @@ export default defineWorkflow({
           ),
         }),
       );
-      if (!quiet) yield* retro;
+      if (!quiet) {
+        yield* retro;
+      }
 
       const issues = yield* Activity.make({
         name: "issues",
@@ -497,7 +495,12 @@ export default defineWorkflow({
                         "\n\n",
                       ),
                     })
-                    .pipe(Effect.map((filed): Outcome => ({ kind: "filed", ...filed })))
+                    .pipe(
+                      Effect.map((filed) => {
+                        const returned: Outcome = { kind: "filed", ...filed };
+                        return returned;
+                      }),
+                    )
                 : host
                     .commentIssue({
                       runId: run.id,
@@ -523,28 +526,31 @@ export default defineWorkflow({
               ),
             });
             acted.push({ finding, outcome });
-            if (fix !== null) effects.push(fix.effect);
+            if (fix !== null) {
+              effects.push(fix.effect);
+            }
           }
         }),
       );
 
       const restarts = restartsOf(kept.earlier, kept.since, open);
-      if (quiet && restarts.length === 0) return `No Runs since ${window.since}`;
+      if (quiet && restarts.length === 0) {
+        return `No Runs since ${window.since}`;
+      }
       const outcomes = new Map(Arr.map(acted, ({ finding, outcome }) => [finding.key, outcome]));
       const filedNumber = (key: string) => {
         const outcome = outcomes.get(key);
         return outcome?.kind === "filed" ? [outcome.number] : [];
       };
-      const fresh = Arr.map(
-        chosen(triaged.improvements, outcomes, bound),
-        ({ name, keys }): Starting => ({ name, issues: Arr.flatMap(keys, filedNumber) }),
-      );
+      const fresh = Arr.map(chosen(triaged.improvements, outcomes, bound), ({ name, keys }) => ({
+        name,
+        issues: Arr.flatMap(keys, filedNumber),
+      }));
       const starting = [
         ...Arr.filter(restarts, ({ name }) => !Arr.some(fresh, (one) => one.name === name)),
         ...fresh,
       ].slice(0, bound);
-      // The issues as the forge holds them, so a goal carries only what the host let out. Read
-      // by number: the forge's open listing can lag the issues this Run just filed.
+      // WARNING: read by number, since the forge's open listing can lag the issues this Run just filed.
       const published =
         starting.length === 0
           ? Result.succeed([])
@@ -564,14 +570,17 @@ export default defineWorkflow({
         Arr.map(starting, (improvement) =>
           improvementsStep(
             Effect.gen(function* () {
-              if (Result.isFailure(published)) return yield* published.failure;
+              if (Result.isFailure(published)) {
+                return yield* published.failure;
+              }
               const issues = Arr.flatMap(improvement.issues, (number) =>
                 Arr.filter(published.success, (one) => one.number === number),
               );
-              if (issues.length < improvement.issues.length)
+              if (issues.length < improvement.issues.length) {
                 return yield* new WorkflowError({
                   reason: "an issue it fixes could not be read back from the forge",
                 });
+              }
               const child = yield* children.start({
                 invocation: `improvement-${improvement.name}`,
                 workflow: "plan",

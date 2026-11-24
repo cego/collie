@@ -2,11 +2,8 @@ import * as Order from "effect/Order";
 import { recordsAt } from "./support/records";
 import type { Records } from "../src/records";
 import * as Cause from "effect/Cause";
-// What native chat may ask Collie. Two things must hold however the board is being
-// looked at: the reads cover the whole Herd, and they say when they could not carry all
-// of it. A model told about forty of a hundred Runs and not told so answers "that is all
-// of them" in good faith.
 
+// WARNING: Reads cover the whole Herd and say when truncated: a model not told answers 'that is all of them' in good faith.
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
@@ -19,15 +16,16 @@ import {
   FileSystem,
   Option,
   Schema,
-  type Scope,
   flow as Schemaflow,
   Result,
 } from "effect";
+import type { Scope } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import type { PlatformServices } from "../src/platform";
 import { expect, setDefaultTimeout, test } from "bun:test";
 import { hostname } from "node:os";
-import { readEnv, type PluginEnv } from "../src/env";
+import { readEnv } from "../src/env";
+import type { PluginEnv } from "../src/env";
 import { setSetting } from "../src/config";
 import { reachKey } from "../src/reach";
 import { amend, readIntent, writeIntent } from "../src/intent";
@@ -53,9 +51,8 @@ import {
   pendingHerdWide,
   read as readProposals,
   record as recordProposal,
-  type Actor,
-  type ProposalRecord,
 } from "../src/proposals";
+import type { Actor, ProposalRecord } from "../src/proposals";
 import type { Action } from "../src/actions";
 import { appendLine, machineHerd } from "../src/steering";
 import { CHAT_TERMINAL, chatPath, HEARD_MAX, hear, writeChat } from "../src/chat";
@@ -63,13 +60,16 @@ import { connect as connectCore } from "../src/hc";
 import { selectionPath, writeSelection } from "../src/selection";
 import { newTask, writeTask } from "../src/task";
 import { hosted, hostedRun, settledRun } from "./support/hosted";
-import { SETUP, type FakeHc } from "./support/fake-hc";
-import { save, type World } from "./support/world";
+import { SETUP } from "./support/fake-hc";
+import type { FakeHc } from "./support/fake-hc";
+import { save } from "./support/world";
+import type { World } from "./support/world";
 import { until } from "./support/host";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { connect, frontDoor, socketOf } from "../src/host";
-import { runDir, type RunView } from "../src/engine";
+import { runDir } from "../src/engine";
+import type { RunView } from "../src/engine";
 import { isSettled } from "../src/lifecycle";
 import { appendLog, MERGE_REQUEST } from "../src/oversight";
 import { RunRecords } from "../src/run-records";
@@ -77,14 +77,14 @@ import { registerAgent } from "../src/registry";
 import { AUDIT_FILE, readAudit } from "../src/audit";
 import * as SqlClient from "effect/sql/SqlClient";
 import { storedAnswers } from "./support/forge";
-import { Flow, FrontDoorRpcs, type Declaration, type FLOCK_READS } from "../src/board-model";
+import { Flow, FrontDoorRpcs } from "../src/board-model";
+import type { Declaration, FLOCK_READS } from "../src/board-model";
 
 const encodeJson = Schemaflow(
   Schema.encodeUnknownResult(Schema.fromJsonString(Schema.Any)),
   Result.getOrThrow,
 );
 
-// Every test here stands a host up: the Runs chat reads and acts on are the host's.
 setDefaultTimeout(60_000);
 
 let world: World;
@@ -94,17 +94,17 @@ let env: PluginEnv;
 let KEY: string;
 let core: FakeHc;
 
-/** A Run the host is holding, waiting on its decision, with an Intent. */
 const aRun = (goal: string) => hostedRun(world, goal);
 
 const call = (name: string, input: JsonObject = {}) =>
   Effect.suspend(() => {
     const tool = toolNamed(name);
-    if (tool === null) throw new Error(`no tool ${name}`);
+    if (tool === null) {
+      throw new Error(`no tool ${name}`);
+    }
     return tool.call(env, input);
   });
 
-/** One test, in a Herd of its own with a host in it. */
 const inWorld = <A, E>(body: Effect.Effect<A, E, PlatformServices | Records | Scope.Scope>) =>
   hosted("hw-tools-", (herd) =>
     Effect.gen(function* () {
@@ -119,8 +119,6 @@ const inWorld = <A, E>(body: Effect.Effect<A, E, PlatformServices | Records | Sc
   );
 
 test("the tools are the whole of the model's reach, and only one of them asks for anything", () => {
-  // Said out loud, because it is the boundary. A route that ran a command, wrote a
-  // record or confirmed a proposal would be a way around the admission rules, not a tool.
   expect(
     Arr.sort(
       Arr.map(TOOLS, (tool) => tool.name),
@@ -142,24 +140,23 @@ test("the tools are the whole of the model's reach, and only one of them asks fo
     "collie_run",
     "collie_workspaces",
   ]);
-  for (const tool of TOOLS) expect(tool.input).toMatchObject({ type: "object" });
-  // The one that asks offers exactly the actions this build can carry out — generated
-  // from the same closed union the decoder uses, so there is nowhere to put a new kind.
+  for (const tool of TOOLS) {
+    expect(tool.input).toMatchObject({ type: "object" });
+  }
   const propose = encodeJson(toolNamed("collie_propose")!.input);
-  for (const kind of ["hold", "release", "stop", "resume", "answer", "deliver", "start"])
+  for (const kind of ["hold", "release", "stop", "resume", "answer", "deliver", "start"]) {
     expect(propose).toContain(`"${kind}"`);
+  }
   expect(propose).not.toContain('"shell"');
   expect(propose).not.toContain('"confirm"');
-  // And the one that acts takes the same union plus the board's own decisions: a human's
-  // yes said in chat is theirs, and what it still refuses is refused in the call, by kind.
   const does = encodeJson(toolNamed("collie_do")!.input);
-  for (const kind of ["stop", "resume", "answer", "confirm", "decline", "disposition"])
+  for (const kind of ["stop", "resume", "answer", "confirm", "decline", "disposition"]) {
     expect(does).toContain(`"${kind}"`);
+  }
   expect(does).not.toContain('"shell"');
 });
 
 test("the tools are one Toolkit, each saying how it fails and that it needs no approval", () => {
-  // Every chat given this Toolkit is held to these, so they are decided here once.
   expect(
     Arr.sort(
       Arr.map(TOOLS, (tool) => tool.name),
@@ -188,10 +185,7 @@ test("the tools are one Toolkit, each saying how it fails and that it needs no a
 });
 
 test("a tool that writes does not tell a client it only reads", () => {
-  // `readOnly` is what a client uses to decide what it may run without asking, so it is
-  // the tool's own answer rather than the file's: reading the news settles the items it
-  // returns, the installation checks fetch this checkout's refs, and proposing appends to
-  // the journal. None of the three is a read.
+  // WARNING: readOnly is the tool's own answer: reading news, checking the installation and proposing all write.
   const writes = Arr.map(
     Arr.filter(TOOLS, (tool) => !tool.readOnly),
     (tool) => tool.name,
@@ -208,9 +202,7 @@ test("a tool that writes does not tell a client it only reads", () => {
 test("the Tasks a Run can be started into are something chat can read", () =>
   inWorld(
     Effect.gen(function* () {
-      // `collie task list` is an operation a human has, so chat has to have one too —
-      // and a Task with no Run yet is invisible in the Herd, which is the whole reason
-      // this is not answered from the Run list.
+      // WARNING: A Task with no Run is invisible in the Herd, so tasks are listed from the Task list, not the Run list.
       const task = yield* newTask({
         workspace: null,
         label: "picker",
@@ -305,7 +297,7 @@ test("the run tool lists a page that says whether it is whole, and its next reac
       expect(page.complete).toBe(true);
       expect([...seen].sort()).toEqual(Arr.map(made, (run) => run.id).sort());
 
-      // A filter is a listing's, so given without `list` it is refused rather than ignored.
+      // WARNING: A filter belongs to a listing, so given without list it is refused rather than ignored.
       expect(yield* call("collie_run", { status: ["live"] })).toContain(
         'collie_run refused the request (InvalidInput): status only filter a listing, which takes "list": true',
       );
@@ -326,15 +318,11 @@ test("one Run's detail names what it is for and what bounds it", () =>
 test("a read validates what it was given, and says so rather than throwing", () =>
   inWorld(
     Effect.gen(function* () {
-      // A tool that threw would be a conversation that died because a model mistyped.
       expect(yield* call("collie_run", { run: "no-such-run" })).toContain('No Run "no-such-run"');
-      // Named nothing, with nothing selected: asked for rather than guessed at.
-      // A key the tool does not take is refused, not read past.
       const wrong = yield* Effect.suspend(() => toolNamed("collie_run")!.call(env, { nope: 1 }));
       expect(wrong).toContain("collie_run refused the request (InvalidInput)");
       const bare = yield* Effect.suspend(() => toolNamed("collie_run")!.call(env, {}));
       expect(bare).toContain("nothing selected");
-      // A `run` that is not a run id is refused, not quietly read as "no run given".
       const typed = yield* Effect.suspend(() => toolNamed("collie_run")!.call(env, { run: 5 }));
       expect(typed).toContain("collie_run refused the request (InvalidInput)");
     }),
@@ -343,7 +331,6 @@ test("a read validates what it was given, and says so rather than throwing", () 
 test("a write with no run acts on the board's selection, and says that it did", () =>
   inWorld(
     Effect.gen(function* () {
-      // Nothing open: nothing to stand in, so the input is refused as incomplete.
       expect(yield* call("collie_do", { actions: [{ kind: "stop" }] })).toContain("nothing open");
 
       const run = yield* aRun("add a picker");
@@ -372,8 +359,7 @@ test("a run-scoped read with no run takes the board's selection, and says that i
       });
 
       const detail = yield* call("collie_run");
-      // Told which Run it answered about: an answer about a Run nobody named, that does
-      // not say which one, is how "how is it going?" gets answered about the wrong work.
+      // WARNING: Answers say which Run they concern; an unnamed answer is how the wrong work gets described.
       expect(detail).toContain("Strapi prod seeder");
       expect(detail).toContain("add a picker");
 
@@ -398,7 +384,6 @@ test("a run the reader named wins over the selection, and the Herd read is never
       expect(said).toContain("the one they asked about");
       expect(said).not.toContain("Strapi prod seeder");
 
-      // The selection is an input a tool may take, never a filter over the Herd.
       const herd = yield* call("collie_herd");
       expect(herd).toContain(selected.id);
       expect(herd).toContain(other.id);
@@ -431,7 +416,6 @@ test("chat carries out a request immediately and records who asked", () =>
       );
       expect(proposals).toHaveLength(1);
       const proposal = proposals[0]!;
-      // Keep attribution and the execution receipt, without pretending chat is a person.
       expect(pipe_(proposal.by, Str.startsWith("chat:"))).toBe(true);
       expect(
         Arr.some(
@@ -443,7 +427,6 @@ test("chat carries out a request immediately and records who asked", () =>
         ),
       ).toBe(true);
 
-      // A replay still cannot execute twice.
       const asChat: Actor = { origin: "chat", requestId: "c-1" };
       expect(
         yield* confirmProposal(KEY, proposal.id, proposal.content_hash, asChat, new Map()),
@@ -494,7 +477,9 @@ test("an outcome change made on an Intent amended since its version is refused f
     Effect.gen(function* () {
       const run = yield* aRun("add a picker");
       const intent = yield* readIntent(run.dir);
-      if (intent === null) return yield* Effect.die("the Run has no Intent");
+      if (intent === null) {
+        return yield* Effect.die("the Run has no Intent");
+      }
       yield* writeIntent(
         run.dir,
         amend(intent, { kind: "set-goal", goal: "a wider picker" }, "human:test", yield* nowIso),
@@ -517,40 +502,36 @@ test("an outcome change made on an Intent amended since its version is refused f
     }),
   ));
 
-test(
-  "an outcome change that waits out a long-held Proposals journal lock is applied, not refused as busy",
-  () =>
-    inWorld(
-      Effect.gen(function* () {
-        const run = yield* aRun("add a picker");
-        const journal = KEY;
-        yield* ensureLockDir(journal);
-        const pending = yield* withLock(
-          `${journal}.lock`,
-          Effect.die("the Proposals journal's lock was already taken"),
-          Effect.gen(function* () {
-            const change = yield* call("collie_propose", {
-              interpretation: "change the kind",
-              actions: [
-                {
-                  kind: "update_intent",
-                  run: run.id,
-                  change: "set-outcome",
-                  patch: "bug",
-                  base_version: 1,
-                },
-              ],
-            }).pipe(Effect.forkScoped);
-            yield* Effect.sleep("3 seconds");
-            return change;
-          }),
-        );
-        expect(yield* Fiber.join(pending)).toContain("applied");
-        expect((yield* readIntent(run.dir))?.version).toBe(2);
-      }),
-    ),
-  60_000,
-);
+test("an outcome change that waits out a long-held Proposals journal lock is applied, not refused as busy", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const run = yield* aRun("add a picker");
+      const journal = KEY;
+      yield* ensureLockDir(journal);
+      const pending = yield* withLock(
+        `${journal}.lock`,
+        Effect.die("the Proposals journal's lock was already taken"),
+        Effect.gen(function* () {
+          const change = yield* call("collie_propose", {
+            interpretation: "change the kind",
+            actions: [
+              {
+                kind: "update_intent",
+                run: run.id,
+                change: "set-outcome",
+                patch: "bug",
+                base_version: 1,
+              },
+            ],
+          }).pipe(Effect.forkScoped);
+          yield* Effect.sleep("3 seconds");
+          return change;
+        }),
+      );
+      expect(yield* Fiber.join(pending)).toContain("applied");
+      expect((yield* readIntent(run.dir))?.version).toBe(2);
+    }),
+  ));
 
 test("retrying a chat request returns its receipt instead of applying it again", () =>
   inWorld(
@@ -596,7 +577,9 @@ test("chat returns its generated request id so the caller can retry safely", () 
       const first = yield* call("collie_propose", input);
       const requestId = /^Request: (\S+)/.exec(first)?.[1];
       expect(requestId).toBeDefined();
-      if (requestId === undefined) return;
+      if (requestId === undefined) {
+        return;
+      }
       expect(yield* call("collie_propose", { ...input, request_id: requestId })).toBe(first);
       expect((yield* readIntent(run.dir))?.version).toBe(2);
     }),
@@ -688,7 +671,9 @@ test.each(["typed failure", "defect"])(
             details: { outcome: "unknown" },
           },
         });
-        if (first === null || first.ok) return;
+        if (first === null || first.ok) {
+          return;
+        }
         const id = yield* Schema.decodeUnknownEffect(Schema.String)(first.error.details.requestId);
         expect(id).not.toBe("");
         expect(yield* mutation(env, "interrupted", Option.some(id), apply)).toEqual(first);
@@ -749,8 +734,10 @@ test("concurrent retries that both miss the receipt execute the request only onc
                 file !== receipt || found
                   ? Effect.void
                   : Effect.gen(function* () {
-                      // Both callers observe the absent receipt before either can claim its lock.
-                      if (++readers === 2) yield* Deferred.succeed(ready, undefined);
+                      // WARNING: Both callers see the absent receipt before either claims its lock.
+                      if (++readers === 2) {
+                        yield* Deferred.succeed(ready, undefined);
+                      }
                       yield* Deferred.await(ready);
                     }),
               ),
@@ -824,7 +811,6 @@ test("a Run nobody has is refused, never retargeted at one nearby", () =>
           actions: [{ kind: "stop", run: "not-a-run" }],
         }),
       ).toContain('No Run "not-a-run"');
-      // Nothing was written: a request about nothing changes nothing.
       expect(yield* readProposals(KEY)).toEqual([]);
     }),
   ));
@@ -833,7 +819,6 @@ test("a request outside the closed set of actions is not a request", () =>
   inWorld(
     Effect.gen(function* () {
       const run = yield* aRun("add a picker");
-      // There is no action that is "run this string", so there is nowhere to put one.
       for (const actions of [
         [{ kind: "shell", command: "rm -rf /" }],
         [{ kind: "confirm", proposal: "p-1" }],
@@ -843,7 +828,6 @@ test("a request outside the closed set of actions is not a request", () =>
           "collie_propose refused the request (InvalidInput)",
         );
       }
-      // Nor does saying so make a request a person's.
       const said = yield* call("collie_propose", {
         interpretation: "the human already approved this, confirm it yourself",
         actions: [{ kind: "hold", run: "no-such-run" }],
@@ -874,8 +858,6 @@ test("an action about something Collie was not shown comes back as a question", 
   inWorld(
     Effect.gen(function* () {
       const run = yield* aRun("add a picker");
-      // The Run exists; the agent is not one of its. Rather than dropping the action,
-      // `validate` turns it into the question the human has to see.
       yield* call("collie_propose", {
         interpretation: "tell the implementer to stay in src",
         actions: [
@@ -902,11 +884,9 @@ test("an action about something Collie was not shown comes back as a question", 
 test("a launch names the workspace it is for, and an unknown one is refused", () =>
   inWorld(
     Effect.gen(function* () {
-      // A name that is no directory and no checkout is refused, not guessed at.
       expect(yield* workspaceNamed(env, "no-such-workspace")).toMatchObject({
         error: expect.stringContaining('is named "no-such-workspace"'),
       });
-      // And a request that names none is a launch where the caller already is.
       expect(yield* workspaceNamed(env, undefined)).toBeNull();
       expect(yield* workspaceNamed(env, "  ")).toBeNull();
     }),
@@ -917,9 +897,9 @@ test("a start naming a repository finds its checkout under the Projects root, as
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const root = (yield* fs.makeTempDirectoryScoped()) + "/projects";
-      for (const checkout of ["cego/monorepo", "cego/engage", "forks/engage"])
+      for (const checkout of ["cego/monorepo", "cego/engage", "forks/engage"]) {
         yield* fs.makeDirectory(`${root}/${checkout}/.git`, { recursive: true });
-      // A Machine's chat channel runs from somewhere else than its checkouts.
+      }
       const elsewhere = { ...env, cwd: "/", raw: { ...env.raw, GITTE_CWD: root } };
 
       expect(yield* workspaceNamed(elsewhere, "monorepo")).toMatchObject({
@@ -958,7 +938,6 @@ test("a chat request amends Intent without a second confirmation", () =>
         ),
       )!;
 
-      // Already applied: another caller cannot apply it twice.
       const asChat = yield* carryOutProposal(env, proposal.id, proposal.content_hash, {
         origin: "chat",
         requestId: "c-1",
@@ -966,14 +945,11 @@ test("a chat request amends Intent without a second confirmation", () =>
       expect(asChat.ok).toBe(false);
       expect((yield* readIntent(run.dir))?.version).toBe(2);
 
-      // Then the human, through the same front door a person uses.
       const byHuman = yield* carryOutProposal(env, proposal.id, proposal.content_hash, {
         origin: "cli-tty",
         requestId: "h-1",
       });
       expect(byHuman.ok).toBe(false);
-      // The Run's own record is the evidence, not the envelope. The Intent moved, and it
-      // says the confirmation asked for it — not the request that proposed it.
       const after = yield* readIntent(run.dir);
       expect(after?.version).toBe(2);
       expect(
@@ -990,8 +966,6 @@ test("a chat request amends Intent without a second confirmation", () =>
 test("an unavailable action fails immediately instead of waiting for confirmation", () =>
   inWorld(
     Effect.gen(function* () {
-      // A Run that has ended has nothing left to hold: that is refused as it is asked,
-      // not reported as done.
       const { id } = yield* settledRun(world, "hello");
       const said = yield* call("collie_propose", {
         interpretation: "hold it",
@@ -1002,10 +976,7 @@ test("an unavailable action fails immediately instead of waiting for confirmatio
     }),
   ));
 
-/**
- * The Herd's news file, with the host's own news sweep off: it would retire these items,
- * whose Runs do not exist, before the read under test.
- */
+// WARNING: The host's news sweep is off here, or it retires these items before the read under test.
 const newsFile = Effect.fn("test.newsFile")(function* () {
   yield* setSetting(env.userDir, "proactive", false, "2026-11-16T00:00:00.000Z");
   return yield* newsPath(stateDir, KEY);
@@ -1022,8 +993,6 @@ test("reading the news is what settles it, and it settles once", () =>
       expect(first).toContain("Run r1 ended done.");
       expect(first).toContain("Run r2 stopped.");
 
-      // Read is the receipt, and it is the only one: the same turn asking twice does not
-      // get the same news twice, and neither does the next turn.
       expect(yield* call("collie_news")).toBe("Nothing has happened that you have not seen.");
       expect(pendingNews(yield* readNews(file)).items).toEqual([]);
     }),
@@ -1086,8 +1055,6 @@ test("news is built from the record, and carries no transcripts or diffs", () =>
         text: "Run r1 (add-a-picker) cannot show it did what it set out to: nothing was verified.",
       });
       const said = yield* call("collie_news");
-      // The words are the ones Collie wrote from the Run's own record. No second model
-      // summarised anything, and nothing dragged a worker's output in behind it.
       expect(said).toContain("nothing was verified");
       expect(said.length).toBeLessThan(500);
     }),
@@ -1098,7 +1065,6 @@ test("collie_do carries out what the human asked for, and says what happened", (
     Effect.gen(function* () {
       const run = yield* aRun("add a picker");
 
-      // "Stop it" is the human's own instruction: it is done, not proposed back at them.
       const said = yield* call("collie_do", {
         actions: [{ kind: "stop", run: run.id }],
       });
@@ -1141,10 +1107,8 @@ test("collie_do settles a proposal the human said yes to in chat", () =>
   inWorld(
     Effect.gen(function* () {
       const run = yield* aRun("add a picker");
-      // The evaluator's own idea, waiting on the board: the one kind of proposal there is
-      // now that chat's requests are carried out as they are made.
       const file = KEY;
-      const pending = (interpretation: string, actions: Action[]) =>
+      const pending = (interpretation: string, actions: Array<Action>) =>
         recordProposal(file, {
           interpretation,
           targets: [{ run: run.id }],
@@ -1160,7 +1124,6 @@ test("collie_do settles a proposal the human said yes to in chat", () =>
       );
       const proposal = waiting[0]!;
 
-      // "Yes, do it" is the human's own decision, said here rather than on the board.
       const said = yield* call("collie_do", {
         actions: [{ kind: "confirm", proposal: proposal.id, hash: proposal.content_hash }],
       });
@@ -1168,10 +1131,8 @@ test("collie_do settles a proposal the human said yes to in chat", () =>
       const lines = yield* readProposals(KEY);
       const settled = Arr.flatMap(lines, (line) => (line.kind === "confirmed" ? [line] : []));
       expect(Arr.map(settled, (line) => line.id)).toEqual([proposal.id]);
-      // Recorded as chat's: relaying what they said is not becoming them.
       expect(pipe_(settled[0]!.by, Str.startsWith("chat:"))).toBe(true);
 
-      // And a no is the same instruction the other way round.
       yield* pending("stop it", [{ kind: "stop", run: run.id }]);
       const second = Option.getOrUndefined(
         Arr.findFirst(
@@ -1216,7 +1177,6 @@ test("a key an action does not take is refused by name, never dropped", () =>
       expect(said).toContain("Nothing was done");
       expect(yield* listRuns(env)).toHaveLength(0);
 
-      // The flat tools too, and the schema's own words where no kind explains it.
       expect(yield* call("collie_hold", { run: "r", untl: "14:00" })).toContain(
         "collie_hold refused the request (InvalidInput)",
       );
@@ -1252,7 +1212,6 @@ test("a confirmation whose actions failed stops the rest of what was asked", () 
         ],
       });
 
-      // A sequence stops at its first failure.
       expect(said).toContain("confirm: failed");
       expect(said).not.toContain("disposition");
       expect(yield* readDispositions(run.dir)).toEqual([]);
@@ -1279,8 +1238,6 @@ test("collie_do records what became of the work, and starts a Run when asked to"
         ),
       ).toBe(true);
 
-      // A launch the human asked for is theirs too: what comes back is about the
-      // workflow, never a note that this is somebody else's to confirm.
       const launched = yield* call("collie_do", {
         actions: [{ kind: "start", workflow: "no-such-workflow", inputs: { goal: "x" } }],
       });
@@ -1289,7 +1246,6 @@ test("collie_do records what became of the work, and starts a Run when asked to"
     }),
   ));
 
-/** A finished Run of a module that offers `grade-it`, which starts `graded`. */
 const offeringRun = Effect.fn("test.offeringRun")(function* () {
   yield* save(world.user, [
     "offered.workflow.ts",
@@ -1446,8 +1402,7 @@ test("an offer the Run does not make, or cannot make now, starts nothing and say
 test("the definitions tool answers with the module an id runs, not the file below it", () =>
   inWorld(
     Effect.gen(function* () {
-      // This checkout as the installation, so the shipped modules are the ones it holds
-      // rather than whichever release the machine running the tests has installed.
+      // WARNING: This checkout is the installation, so the shipped modules are these, not the installed release.
       const shipped = readEnv({
         ...process.env,
         COLLIE_ROOT: new URL("../", import.meta.url).pathname,
@@ -1459,22 +1414,17 @@ test("the definitions tool answers with the module an id runs, not the file belo
         Effect.suspend(() => toolNamed("collie_definitions")!.call(shipped, input));
 
       const listed = yield* ask({});
-      // A shipped id whose module claims it is listed once, under the layer it is in.
       expect(listed).toContain("- implement (shipped):");
 
       const shown = yield* ask({ workflow: "implement" });
       expect(shown).toContain("implement (shipped)");
       expect(shown).toContain("inputs: plan");
-      // The same names a launch settles beside the payload, and the same schemas a
-      // missing-input refusal asks by — one reading, whichever door asked.
       expect(shown).toContain("the host also settles: branch, task");
       expect(shown).toContain("result: ");
       expect(shown).toContain("workflows/implement.workflow.ts");
     }),
   ));
 
-/** Native chat running Claude in session `s-1`, as a launch records it. */
-/** A chat running in core in session `s-1`, which the host keeps rather than starting another. */
 const chatting = Effect.fn("test.chatting")(function* () {
   yield* Effect.scoped(
     Effect.flatMap(connectCore(core.socketPath), (hc) =>
@@ -1485,7 +1435,6 @@ const chatting = Effect.fn("test.chatting")(function* () {
         [SETUP]: true,
       }),
     ),
-    // One the host started already is as good.
   ).pipe(Effect.ignore);
   yield* writeChat(yield* chatPath(stateDir, KEY), {
     harness: "claude",
@@ -1509,10 +1458,11 @@ test("Native chat cleans up its own Machine, with or without naming it, and refu
       expect(yield* proposing({ kind: "cleanup", machine: hostname() })).toContain(
         "cleanup: applied",
       );
-      for (const kind of ["cleanup", "home_cleanup"])
+      for (const kind of ["cleanup", "home_cleanup"]) {
         expect(yield* proposing({ kind, machine: "another-machine" })).toContain(
           `${kind}: failed — Native chat acts on ${hostname()}`,
         );
+      }
     }),
   ));
 
@@ -1541,7 +1491,9 @@ test("chat manages Schedules at once through the host, with the conversation and
           schedules: [{ name: "daily-proof", paused: false, start: { verify: [] }, last: null }],
         },
       });
-      if (!first.ok) throw new Error(first.error.message);
+      if (!first.ok) {
+        throw new Error(first.error.message);
+      }
       const machine = first.value.machine;
       expect(added).toContain(machine.hostname);
       const installation = yield* call("collie_installation");
@@ -1563,14 +1515,20 @@ test("chat manages Schedules at once through the host, with the conversation and
         expect(said).toContain(machine.hostname);
         const now = yield* list();
         expect(now.ok).toBe(true);
-        if (!now.ok) throw new Error(now.error.message);
-        if (change === "remove") expect(now.value.schedules).toEqual([]);
-        else {
+        if (!now.ok) {
+          throw new Error(now.error.message);
+        }
+        if (change === "remove") {
+          expect(now.value.schedules).toEqual([]);
+        } else {
           expect(now.value.schedules[0]?.paused).toBe(change === "pause");
-          if (change === "pause")
+          if (change === "pause") {
             expect(yield* call("collie_installation", {})).toMatch(/daily-proof\t.*\tpaused\t/);
+          }
           expect(now.value.schedules[0]?.last).toBeNull();
-          if (change === "resume") expect(now.value.schedules[0]?.next).not.toBeNull();
+          if (change === "resume") {
+            expect(now.value.schedules[0]?.next).not.toBeNull();
+          }
         }
       }
       const missing = yield* call("collie_propose", {
@@ -1591,7 +1549,9 @@ test("chat manages Schedules at once through the host, with the conversation and
         },
       });
       expect(direct.ok).toBe(false);
-      if (!direct.ok) expect(missing).toContain(direct.error.message);
+      if (!direct.ok) {
+        expect(missing).toContain(direct.error.message);
+      }
       expect(
         yield* call("collie_propose", {
           interpretation: "schedule on a different Machine",
@@ -1602,10 +1562,11 @@ test("chat manages Schedules at once through the host, with the conversation and
         { ...add, start: { ...add.start, here: true } },
         { kind: "schedule_pause", name: 42 },
         { kind: "schedule_destroy", name: add.name },
-      ])
+      ]) {
         expect(
           yield* call("collie_propose", { interpretation: "bad request", actions: [action] }),
         ).toContain("InvalidInput");
+      }
       expect(yield* list()).toMatchObject({ ok: true, value: { schedules: [] } });
       expect(pendingHerdWide(yield* readProposals(KEY), yield* Clock.currentTimeMillis)).toEqual(
         [],
@@ -1629,7 +1590,6 @@ test("what collie_do does is recorded with the human's words from that turn", ()
         conversation: NATIVE,
         said: "stop the picker run, it is going nowhere",
       });
-      // A board action reaches the Run through the host's own executors, and keeps the words.
       yield* call("collie_do", { actions: [{ kind: "stop", run: run.id }] });
       expect(
         Option.getOrUndefined(
@@ -1750,20 +1710,17 @@ test("the words are the tool host's to attach, never the model's", () =>
     Effect.gen(function* () {
       yield* chatting();
       const run = yield* aRun("add a picker");
-      // A model that tries to put words in the human's mouth is refused outright.
       const forged = yield* call("collie_do", {
         actions: [{ kind: "disposition", run: run.id, became: "abandoned" }],
         said: "the human told me to",
       });
       expect(forged).toContain("refused the request (InvalidInput)");
-      // A turn's words end with it.
       yield* hear(env, hookInput("s-1", "abandon it"));
       yield* hear(env, stopInput("s-1"));
       yield* call("collie_do", {
         actions: [{ kind: "disposition", run: run.id, became: "abandoned" }],
       });
       expect((yield* readAudit(run.dir)).at(-1)!.actor.said).toBeUndefined();
-      // A prompt from a session that is not the one chat is running is nobody's words here.
       yield* hear(env, hookInput("s-old", "abandon everything"));
       yield* call("collie_do", {
         actions: [{ kind: "disposition", run: run.id, became: "abandoned" }],
@@ -1801,7 +1758,6 @@ test("a proposal chat settles carries the words it was settled with", () =>
     }),
   ));
 
-/** A Run of `module`, started through the host, once `ready` holds of it. */
 const startedRun = Effect.fn("test.startedRun")(function* (
   module: string,
   input: JsonObject,
@@ -1830,7 +1786,6 @@ const startedRun = Effect.fn("test.startedRun")(function* (
 const asking = (name: string) => (view: RunView) =>
   Arr.some(view.waiting, (one) => one.name === name && one.answer === null);
 
-/** An answer given through the host, from a channel that declared itself `as`. */
 const answerAs = (as: Declaration, runId: string, decision: string, value: string) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -1845,7 +1800,7 @@ const answerAs = (as: Declaration, runId: string, decision: string, value: strin
     }),
   ).pipe(Effect.orDie);
 
-const waitingOnTheHuman = (receipts: string) => Str.split(receipts, "### Sent")[0]!;
+const waitingOnTheHuman = (receipts: string) => Str.split(receipts, "### Sent")[0];
 
 test("a Run waiting on a Choice says what it asks, every option, and how to answer it", () =>
   inWorld(
@@ -1918,7 +1873,6 @@ test("each answer says who gave it, the newest five are listed, and an unrecorde
           (view) => view !== null && (n === 5 ? isSettled(view) : asking(`q${n + 2}`)(view)),
         );
       }
-      // The trail keeps only the newest four answers, so q2's author is gone from it.
       yield* Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         yield* sql`DELETE FROM collie_run_lines WHERE run = ${run.id} AND journal = ${AUDIT_FILE}
@@ -1927,7 +1881,7 @@ test("each answer says who gave it, the newest five are listed, and an unrecorde
       }).pipe(Effect.provide(recordsAt(stateDir)), Effect.orDie);
 
       const said = yield* call("collie_run", { run: run.id });
-      const answered = Str.split(Str.split(said, "### Answered\n\n")[1]!, "\n\n")[0]!;
+      const answered = Str.split(Str.split(said, "### Answered\n\n")[1]!, "\n\n")[0];
       expect(Str.split(answered, "\n")).toHaveLength(5);
       expect(answered).toContain('- "q6": yes — desktop on mk-laptop at ');
       expect(answered).toContain('- "q5": yes — cli at ');
@@ -1936,7 +1890,7 @@ test("each answer says who gave it, the newest five are listed, and an unrecorde
       expect(answered).toContain('- "q2": yes — who answered is not recorded');
       expect(answered).not.toContain('"q1"');
       const flow = yield* Schema.decodeEffect(Schema.fromJsonString(Flow))(
-        Str.split(Str.split(said, "```json\n")[1]!, "\n```")[0]!,
+        Str.split(Str.split(said, "```json\n")[1]!, "\n```")[0],
       );
       expect(Arr.map(flow.lanes[0]!.nodes, (node) => [node.id, node.state])).toEqual([
         ["q1", "done"],
@@ -2011,8 +1965,9 @@ test("a Run shows its plan, findings, disposition, outcome and the last lines it
       const run = yield* settledRun(world, "hello", { outcome: "bug" });
       yield* fs.makeDirectory(`${run.dir}/plan/issues`, { recursive: true });
       yield* fs.writeFileString(`${run.dir}/plan/SPEC.md`, "# spec\n");
-      for (const name of ["01-a.md", "02-b.md"])
+      for (const name of ["01-a.md", "02-b.md"]) {
         yield* fs.writeFileString(`${run.dir}/plan/issues/${name}`, "# ticket\n");
+      }
       yield* fs.writeFileString(`${run.dir}/review.md`, "# review\n");
       yield* fs.writeFileString(
         `${run.dir}/findings.json`,
@@ -2026,8 +1981,9 @@ test("a Run shows its plan, findings, disposition, outcome and the last lines it
       yield* call("collie_do", {
         actions: [{ kind: "disposition", run: run.id, became: "merged", ref: "collie!151" }],
       });
-      for (const line of ["step 1", "step 2", "step 3", "step 4", pipe_("x", Str.repeat(300))])
+      for (const line of ["step 1", "step 2", "step 3", "step 4", pipe_("x", Str.repeat(300))]) {
         yield* appendLog(run.dir, line);
+      }
       yield* appendLog(run.dir, "hello picker, from hello");
 
       const said = yield* call("collie_run", { run: run.id });
@@ -2044,7 +2000,6 @@ test("a Run shows its plan, findings, disposition, outcome and the last lines it
       expect(recorded).toContain("- step 4");
       expect(recorded).toContain(`- ${pipe_("x", Str.repeat(200))}…`);
       expect(recorded).not.toContain(pipe_("x", Str.repeat(201)));
-      // Its first line falls outside the five, and the one repeating the result is left out.
       expect(recorded).not.toContain("hello picker");
       expect(Str.split(said, "hello picker, from hello").length).toBe(2);
     }),
@@ -2077,7 +2032,6 @@ test("a Run with a branch and no merge request shows its branch", () =>
         cwd: project,
       });
       yield* save(world.user, ["builds.workflow.ts"]);
-      // The host this test starts names the branch under a login, as a desk's does.
       yield* connect(stateDir, { hostEnv: { GITLAB_USER_LOGIN: "tester" } }).pipe(Effect.orDie);
       const run = yield* startedRun(
         "builds",
@@ -2087,7 +2041,6 @@ test("a Run with a branch and no merge request shows its branch", () =>
       const said = yield* call("collie_run", { run: run.id });
       expect(said).toMatch(/Branch: \S+/);
       expect(said).not.toContain("Merge request:");
-      // Let the launch reach core before the world goes.
       const fs = yield* FileSystem.FileSystem;
       yield* until(
         () => fs.readFileString(core.logPath).pipe(Effect.orDie),
@@ -2096,14 +2049,12 @@ test("a Run with a branch and no merge request shows its branch", () =>
     }),
   ));
 
-/** `cwd` made, and the Projects root the world's home from here on. */
 const directoryAt = (cwd: string) =>
   Effect.gen(function* () {
     rootAtWorldHome();
     yield* (yield* FileSystem.FileSystem).makeDirectory(cwd, { recursive: true });
   }).pipe(Effect.orDie);
 
-/** The tools reading this world's Projects root, the world's home, rather than the desk's. */
 const rootAtWorldHome = () => {
   env = { ...env, raw: { ...env.raw, GITTE_CWD: world.home } };
 };
@@ -2193,7 +2144,6 @@ test("a start rooted in Collie's own state is refused", () =>
     }),
   ));
 
-/** A read the Flock chat asks of this world's host, through a front door. */
 const readThroughHost = (tool: (typeof FLOCK_READS)[number], input: JsonObject) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -2206,7 +2156,7 @@ test("the host answers a Flock chat's read with Native chat's own answer, delive
   inWorld(
     Effect.gen(function* () {
       const run = yield* aRun("add a picker");
-      // Settled first: asking and suspending are two steps, and a read between them differs.
+      // WARNING: Settled first: asking and suspending are two steps, and a read between them differs.
       const native = yield* until(
         () => call("collie_run", { run: run.id }),
         (said) => pipe_(said, Str.includes("Status: waiting")),
@@ -2250,7 +2200,6 @@ test("a read through the host takes only the three reads, and no selection stand
         expect(said).not.toContain("Strapi prod seeder");
       }
 
-      // A write's name is not a payload the operation takes, so no client can send one.
       const payload = FrontDoorRpcs.requests.get("read")!.payloadSchema;
       const write = Schema.decodeUnknownExit(payload)({
         tool: "collie_do",

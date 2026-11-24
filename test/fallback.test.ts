@@ -1,17 +1,20 @@
-// Where work starts when its preferred agent's Subscription is spent (ADR-0049 D7, D10).
-
 import { describe, expect, test } from "bun:test";
 import { Schema, flow, Result } from "effect";
 import { AgentChoiceSchema } from "../src/agents";
-import { foldCeiling, type Preferences, resolveWithRoom } from "../src/harness";
+import { foldCeiling, resolveWithRoom } from "../src/harness";
+import type { Preferences } from "../src/harness";
 import { parseSetting } from "../src/settings";
 import { epochMs } from "../src/time";
-import { roomFor, type UsageReading, type UsageWindow } from "../src/usage-model";
-import type { HarnessCatalogue } from "../src/catalogue-model";
+import { codexUsage, roomFor } from "../src/usage-model";
+import type { UsageReading, UsageWindow } from "../src/usage-model";
+import codexRateLimits from "./fixtures/usage/codex-account-ratelimits-read.json";
 
 const NOW = epochMs("2026-10-08T08:00:00Z");
 
-const window = (usedPercent: number, over: Partial<UsageWindow> = {}): UsageWindow => ({
+const window: (usedPercent: number, over?: Partial<UsageWindow>) => UsageWindow = (
+  usedPercent,
+  over = {},
+) => ({
   kind: "session",
   label: "Session",
   model: null,
@@ -20,21 +23,45 @@ const window = (usedPercent: number, over: Partial<UsageWindow> = {}): UsageWind
   reached: false,
   ...over,
 });
-const reading = (subscription: UsageReading["subscription"], windows: UsageWindow[]) =>
-  ({
-    subscription,
-    account: "a",
-    accountLabel: null,
-    plan: null,
-    windows,
-    at: "2026-10-08T07:59:00Z",
-    source: subscription === "claude" ? "claude-usage" : "codex-app-server",
-    problem: null,
-  }) satisfies UsageReading;
+const reading: (
+  subscription: UsageReading["subscription"],
+  windows: Array<UsageWindow>,
+) => UsageReading = (subscription, windows) => ({
+  subscription,
+  account: "a",
+  accountLabel: null,
+  plan: null,
+  windows,
+  at: "2026-10-08T07:59:00Z",
+  source: subscription === "claude" ? "claude-usage" : "codex-app-server",
+  problem: null,
+});
 
 const opus: Preferences = { harness: "claude", model: "opus", effort: "xhigh" };
 const claudeOut = reading("claude", [window(100)]);
 const chatgptOut = reading("chatgpt", [window(100)]);
+const spentCreditCap = (
+  over: {
+    ordinaryUsageAllowed?: boolean;
+    rateLimitReachedType?: string | null;
+    weeklyPercent?: number;
+  } = {},
+) => ({
+  ...codexRateLimits.result,
+  ordinaryUsageAllowed: over.ordinaryUsageAllowed ?? true,
+  rateLimits: {
+    ...codexRateLimits.result.rateLimits,
+    primary: {
+      usedPercent: over.weeklyPercent ?? 2,
+      windowDurationMins: 10_080,
+      resetsAt: 1_791_973_608,
+    },
+    secondary: null,
+    individualLimit: { limit: "5000", used: "5000.0", remainingPercent: 0 },
+    spendControlReached: true,
+    rateLimitReachedType: over.rateLimitReachedType ?? null,
+  },
+});
 
 const resolved = (
   layers: ReadonlyArray<Preferences>,
@@ -42,7 +69,9 @@ const resolved = (
   readings: ReadonlyArray<UsageReading>,
 ) => {
   const result = resolveWithRoom(layers, chain, roomFor(readings, NOW));
-  if (!result.ok) throw new Error(result.problem);
+  if (!result.ok) {
+    throw new Error(result.problem);
+  }
   return result.chosen;
 };
 const on = ({ choice }: ReturnType<typeof resolved>) =>
@@ -50,7 +79,7 @@ const on = ({ choice }: ReturnType<typeof resolved>) =>
 
 describe("resolveWithRoom", () => {
   test("a fallback carries an effort its model reports, even when Collie's table does not", () => {
-    const listed = (harness: string, model: string): HarnessCatalogue => ({
+    const listed = (harness: string, model: string) => ({
       harness,
       at: "2026-10-29T09:00:00.000Z",
       table: null,
@@ -136,11 +165,9 @@ describe("resolveWithRoom", () => {
     const chosen = resolved(layers, ["codex"], busy);
     expect(on(chosen)).toBe("claude/opus medium");
     expect(chosen.why).toMatch(/^session 85%, over its 80%, resets/);
-    // Below the ceiling, the primary.
     expect(on(resolved(layers, ["codex"], [reading("claude", [window(79)])]))).toBe(
       "claude/opus xhigh",
     );
-    // An otherwise entry keeps its own ceiling, then the chain.
     const twice = [{ ...opus, upTo: 80, otherwise: [{ effort: "medium", upTo: 84 }] }];
     expect(on(resolved(twice, ["codex"], busy))).toBe("codex/default");
   });
@@ -187,6 +214,32 @@ describe("resolveWithRoom", () => {
 
   test("an unread Subscription has room", () => {
     expect(on(resolved([opus], ["codex"], []))).toBe("claude/opus xhigh");
+  });
+  test("a spent credit cap keeps work on Codex, with nothing to say", () => {
+    const chosen = resolved(
+      [{ harness: "codex", otherwise: [{ harness: "claude" }] }],
+      [],
+      [reading("chatgpt", codexUsage(spentCreditCap()).windows)],
+    );
+    expect(on(chosen)).toBe("codex/default");
+    expect(chosen.from).toBeNull();
+    expect(chosen.why).toBeNull();
+  });
+  test("Codex's own block signals still move work off it", () => {
+    for (const cap of [
+      spentCreditCap({ ordinaryUsageAllowed: false }),
+      spentCreditCap({ rateLimitReachedType: "workspace_member_credits_depleted" }),
+      spentCreditCap({ weeklyPercent: 100 }),
+    ]) {
+      const chosen = resolved(
+        [{ harness: "codex", otherwise: [{ harness: "claude" }] }],
+        [],
+        [reading("chatgpt", codexUsage(cap).windows)],
+      );
+      expect(on(chosen)).toBe("claude/default");
+      expect(chosen.from?.harness).toBe("codex");
+      expect(chosen.why).toMatch(/^weekly 100%/);
+    }
   });
 });
 

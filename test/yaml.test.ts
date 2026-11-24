@@ -63,7 +63,6 @@ test("a sequence in its key's own column is that key's sequence, one item or man
 
 test("a key written quoted may begin with a dash", () => {
   expect(parseYaml(`"- id": allowed\n`)).toEqual({ "- id": "allowed" });
-  // Even beside a sequence whose items read the same once the indent is gone.
   expect(parseYaml(`"- id": x\nsteps:\n  - id: a\n`)).toEqual({
     "- id": "x",
     steps: [{ id: "a" }],

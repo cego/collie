@@ -1,6 +1,3 @@
-// The board terminal and the flows it runs inline. Every question a human answers goes
-// through `InputPrompts`, so a flow knows nothing of what draws it.
-
 import * as Arr from "effect/Array";
 import { asksRun } from "./lifecycle";
 import { withArtefacts } from "./artefact-client";
@@ -16,7 +13,6 @@ import {
   Clock,
   Config,
   Console,
-  type Duration,
   Effect,
   FileSystem,
   Option,
@@ -26,22 +22,27 @@ import {
   Schema,
   Stream,
 } from "effect";
+import type { Duration } from "effect";
 import { EXCLUSIVE_STRATEGIES, strategyMeaning } from "./strategies";
 import { PROJECTS_ROOT_OPTION, projectsRoot } from "./projects";
 import { insideCheckout } from "./agent-start";
 import { placeableUnder, placedByUrl, routed, routerDeps } from "./route";
-import { offerChoices, offerFields, offerInput, StepResult, type RunDetail } from "./board-model";
+import { offerChoices, offerFields, offerInput, StepResult } from "./board-model";
+import type { RunDetail } from "./board-model";
 import { gitlabHostOf, loadDefaults, savedReach, setSetting } from "./config";
 import { tellHost } from "./tell-host";
 import { reachOf, savedFirst } from "./reach";
 import { parseSetting, settingText } from "./settings";
 import { herdDir, machineHerd } from "./steering";
-import { liveFor, markedOf, type Ledgers } from "./live";
+import { liveFor, markedOf } from "./live";
+import type { Ledgers } from "./live";
 import { RunRecords } from "./run-records";
-import { isStale, layers, loadDefinitions, type Definitions, type Provenance } from "./definitions";
+import { isStale, layers, loadDefinitions } from "./definitions";
+import type { Definitions, Provenance } from "./definitions";
 import type { PluginEnv } from "./env";
-import { Herdr, type AgentInfo } from "./herdr";
-import { inferInput, type InputPrompts, type PickItem } from "./inputs";
+import type { Herdr } from "./herdr";
+import { inferInput } from "./inputs";
+import type { InputPrompts, PickItem } from "./inputs";
 import type { Found } from "./discovery";
 import {
   answerRun,
@@ -57,10 +58,8 @@ import {
   runDetailNow,
   asks,
   hostTasks,
-  type DetailKey,
   invokeOffer,
   launchProject,
-  type BoardRead,
   offersOf,
   resumeRun,
   savedModules,
@@ -71,21 +70,26 @@ import {
   hostProposals,
   hostRegistered,
 } from "./lifecycle";
+import type { DetailKey, BoardRead } from "./lifecycle";
 import type { UsageReading } from "./usage-model";
 import { keyboard } from "./keys";
-import { forkResolvedDefinition, type DefinitionKind } from "./fork";
+import { forkResolvedDefinition } from "./fork";
+import type { DefinitionKind } from "./fork";
 import { COLLIE_TAB, reason, runTitle } from "./naming";
-import { listRuns, settled, type RunFacts } from "./runs";
-import { type AgentEntry } from "./registry";
+import { listRuns, settled } from "./runs";
+import type { RunFacts } from "./runs";
+import type { AgentEntry } from "./registry";
 import { reportedWorktrees } from "./worktree";
-import { scopeFor, type RegistryScope } from "./registry";
+import { scopeFor } from "./registry";
+import type { RegistryScope } from "./registry";
 import type { CompactionSettings } from "./compaction";
 import { statusLine } from "./disposition";
 import { selectionPath, writeSelection } from "./selection";
 import type { TaskChoice, TaskRecord } from "./task";
 import { newRequestId } from "./operations";
 import { typedPaths } from "./attachments";
-import { answerFor, rereads, runIdOf, type AppState, type Command } from "./ui/state";
+import { answerFor, rereads, runIdOf } from "./ui/state";
+import type { AppState, Command } from "./ui/state";
 import type { Focus } from "./ui/bridge";
 import { buildHistory, buildSettings, buildWorkflows } from "./views";
 import { nowIso } from "./time";
@@ -94,91 +98,62 @@ import { forgeOf } from "./forge/forge";
 import { forgeHttpLayer } from "./forge/http";
 import { parseMrTarget, readMrRef } from "./board-model";
 import type { ChildProcessSpawner } from "effect/process";
-import {
-  agentForKey,
-  askingRun,
-  buildView,
-  renderWorkspace,
-  type Asking,
-  type RunRow,
-  type WorkspaceView,
-} from "./workspace";
+import { agentForKey, askingRun, buildView, renderWorkspace } from "./workspace";
+import type { Asking, RunRow, WorkspaceView } from "./workspace";
 
-/** The steps a confirm carried out, as the host answered them. */
 const CarriedSteps = Schema.Struct({ results: Schema.Array(StepResult) });
 
-/**
- * What a board is looking at: which workspace and repository, where the state is, and
- * the pane it can split off. Its own shape rather than a Run's, because a board outlives
- * every Run it draws.
- */
 interface BoardSession extends RegistryScope {
   stateDir: string;
   userDir?: string;
-  /** What this caller already knows about compaction; absent reads the config file. */
   compaction?: CompactionSettings;
 }
 
 export interface ControlSession extends BoardSession {
   herdr: Herdr;
-  /** This installation, so the board can say when it is behind its remote. */
   pluginRoot: string;
-  /** Where releases are published, so the board can say when a newer one is out. */
   releases?: string;
-  /** Where the board's Runs come from: the host's, unless a test hands over its own. */
   runsOf?: RunsOf;
-  /** Where the board's Tasks and registered agents come from: the host's, unless a test hands over its own. */
   recordsOf?: RecordsOf;
-  /** What the live region reads of the host's ledgers: the host's, unless a test hands over its own. */
   ledgers?: Ledgers;
-  /** Where the board's Tasks come from: one read of the host's board, unless followed. */
   tasksOf?: () => Effect.Effect<BoardRead>;
-  /** Where the drawer's details come from: one read of the host's, unless followed; null closes it. */
   detailOf?: (key: DetailKey | null) => Effect.Effect<RunDetail | null>;
-  /** Where the header's Usage readings come from; none where unset. */
   usageOf?: () => Effect.Effect<ReadonlyArray<UsageReading>>;
-  /** Where the defaults live. */
   userDir: string;
 }
 
 export type Mode = "pick" | "continue" | "resume" | "fork";
 
-/**
- * Whether this flow runs in the board terminal: the Herd's own directory, which is no
- * checkout, so a Run started there is placed rather than asked (ADR-0033).
- */
+// WARNING: the board's directory is no checkout, so a Run started there is placed rather than asked for one.
 const fromBoard = Effect.fn("Flows.fromBoard")(function* (env: PluginEnv) {
   const key = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
   return key !== null && env.cwd === (yield* herdDir(env.stateDir, key));
 });
 
-function banner(defs: Definitions): string | undefined {
-  if (defs.errors.length === 0) return undefined;
+function banner(defs: Definitions) {
+  if (defs.errors.length === 0) {
+    return undefined;
+  }
   return Arr.join(
     ["Definitions with errors (skipped):", ...Arr.map(defs.errors, (e) => `  ${e}`)],
     "\n",
   );
 }
 
-/** How a flow asks, and the only thing any of these flows knows about what draws it. */
 export type FlowPrompts = InputPrompts;
 
-/**
- * Continue a Task: another Workflow, or another go at the same one, inside the Task
- * that work already belongs to. Explicit, because a fresh start is what everything
- * else is, and the human says which Task, because no label can say it for them.
- */
 export const continueFlow = Effect.fn("Flows.continueFlow")(function* (
   herdr: Herdr,
   env: PluginEnv,
   prompts: FlowPrompts,
 ) {
   const task = yield* pickTask(env, prompts);
-  if (task === null) return 0;
+  if (task === null) {
+    return 0;
+  }
   return yield* pickFlow(herdr, env, prompts, task);
 });
 
-/** Which Task. Null is the human backing out. */
 const pickTask = Effect.fn("Flows.pickTask")(function* (env: PluginEnv, prompts: FlowPrompts) {
   const tasks = yield* hostTasks(env);
   if (tasks.length === 0) {
@@ -210,7 +185,7 @@ export const pickFlow = Effect.fn("Flows.pickFlow")(function* (
       subtitle: `[${entry.layer}] ${entry.path}`,
     });
   }
-  const items: PickItem[] = [...offered.values()].sort((a, b) =>
+  const items: Array<PickItem> = [...offered.values()].sort((a, b) =>
     pipe_(a.id, Str.localeCompare(b.id)),
   );
 
@@ -222,44 +197,36 @@ export const pickFlow = Effect.fn("Flows.pickFlow")(function* (
     header: headed(`Workflows — ${env.cwd}`),
     footer: "↑↓ move · type to filter · Enter run · Esc cancel",
   });
-  if (!chosen) return 0;
+  if (!chosen) {
+    return 0;
+  }
 
   yield* startChosen(herdr, env, prompts, { workflow: chosen.id, task });
   return 0;
 });
 
-/**
- * A Workflow that has already been named, from its Inputs to a started Run. The half of
- * the launch flow after the name, because there are two ways to arrive here: the picker,
- * which asks which Workflow first, and a row action in the tab, which named one by being
- * clicked. That second one used to hand off to the picker pane, so it asked for a
- * Workflow again — and could start a different one from the row that was clicked.
- *
- * Returns the line to show, or `null` where the human backed out or was told why not.
- */
+// WARNING: the row's Workflow is passed on, never re-picked, or a different one could start.
 const startChosen = Effect.fn("Flows.startChosen")(function* (
   herdr: Herdr,
   env: PluginEnv,
   prompts: FlowPrompts,
   opts: {
     workflow: string;
-    /** Inputs the caller has already settled, which are not asked for again. */
     given?: Record<string, string>;
     parent?: RunFacts;
-    /** The Task this start belongs to; a fresh one unless the caller named it. */
     task?: TaskChoice;
   },
 ) {
   const task = opts.task ?? { mode: "new" };
-  // A workflow saved as a module is started through the host, with the same claim and
-  // the same rows `collie run start` uses — the Run is the same either way.
   const saved = yield* savedModules(env);
   const module = Option.getOrUndefined(
     Arr.findFirst(saved.entries, (entry) => entry.id === opts.workflow),
   );
   if (module) {
     const started = yield* startModule(herdr, env, prompts, { ...opts, task }, module);
-    if (started === null || "line" in started) return started?.line ?? null;
+    if (started === null || "line" in started) {
+      return started?.line ?? null;
+    }
     const plan = Option.getOrUndefined(Arr.findFirst(saved.entries, plansAGoal));
     if (plan === undefined) {
       yield* bail(
@@ -284,7 +251,6 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
     yield* bail(prompts, `${broken.path}: ${broken.message}`);
     return null;
   }
-  // Nothing else runs work: an id with no module is one this installation does not have.
   yield* bail(
     prompts,
     `No workflow module is saved as "${opts.workflow}". \`collie workflow list\` is what this installation has.`,
@@ -292,18 +258,12 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
   return null;
 });
 
-/**
- * A saved module from the name to a started Run (ADR-0033): one question for its launch
- * Input, everything else inferred, and what was inferred shown before the start. A start
- * still missing a required Input is refused with the reason, never asked again.
- */
 const startModule = Effect.fn("Flows.startModule")(function* (
   herdr: Herdr,
   env: PluginEnv,
   prompts: FlowPrompts,
   opts: {
     given?: Record<string, string>;
-    /** The human's words, already said, for the launch Input. */
     words?: string;
     parent?: RunFacts;
     task: TaskChoice;
@@ -324,7 +284,9 @@ const startModule = Effect.fn("Flows.startModule")(function* (
     opts.words === undefined
   ) {
     const answer = yield* prompts.ask(WHAT_DO_YOU_WANT);
-    if (answer === null) return null;
+    if (answer === null) {
+      return null;
+    }
     words = Str.trim(answer);
   }
   let at = env;
@@ -337,7 +299,7 @@ const startModule = Effect.fn("Flows.startModule")(function* (
     const root = (yield* projectsRoot(env)).path;
     const candidates = strategy === "goal" ? [] : yield* placeableUnder(root);
     const byUrl = placedByUrl(words, candidates);
-    // A repository URL no checkout here has is cloned by the Run, as it always was.
+    // WARNING: a repository URL no local checkout has is cloned by the Run itself.
     if (strategy === "goal" || (byUrl === null && strategy === "repository" && isUrl(words))) {
       rooted = true;
       at = { ...env, cwd: root };
@@ -362,8 +324,9 @@ const startModule = Effect.fn("Flows.startModule")(function* (
     }
   }
   if (launchInput !== undefined && text[launchInput.name] === undefined) {
-    if (words !== "" && (yield* wordsAre(strategy, words, at.cwd))) text[launchInput.name] = words;
-    else if (strategy === "repository" && (yield* insideCheckout(at.cwd))) {
+    if (words !== "" && (yield* wordsAre(strategy, words, at.cwd))) {
+      text[launchInput.name] = words;
+    } else if (strategy === "repository" && (yield* insideCheckout(at.cwd))) {
       text[launchInput.name] = at.cwd;
       inferred.set(
         launchInput.name,
@@ -372,7 +335,9 @@ const startModule = Effect.fn("Flows.startModule")(function* (
     }
   }
   for (const field of module.inputs) {
-    if (text[field.name] !== undefined) continue;
+    if (text[field.name] !== undefined) {
+      continue;
+    }
     const found =
       field.strategy === null ? null : yield* infer(at, opts, field.name, field.strategy);
     if (found !== null) {
@@ -409,14 +374,18 @@ const startModule = Effect.fn("Flows.startModule")(function* (
       })),
       { header: module.title, footer: "↑↓ how far it goes · Enter start · Esc cancel" },
     );
-    if (chosen === null) return null;
+    if (chosen === null) {
+      return null;
+    }
     text[reach.name] = pipe_(chosen.id, Str.slice(REACH_ROW.length));
   } else if (inferred.size > 0) {
     const confirmed = yield* prompts.menu(
       [{ id: "start", title: `Starting in ${at.cwd}`, subtitle: Arr.join(inputs, " · ") }],
       { header: module.title, footer: "Enter start · Esc cancel" },
     );
-    if (confirmed === null) return null;
+    if (confirmed === null) {
+      return null;
+    }
   }
   const started = yield* startRun(at, {
     door: "board",
@@ -445,44 +414,43 @@ const startModule = Effect.fn("Flows.startModule")(function* (
   };
 });
 
-/** The one question a start asks: what the human wants, in their own words. */
 const WHAT_DO_YOU_WANT = "What do you want?";
 
-/** A start row's id is this and the reach it starts with. */
 const REACH_ROW = "reach:";
 
-/** The row a start from the Home that no one checkout fits is offered instead. */
 const PLAN_INSTEAD = "plan-instead";
 
-/** A module that plans from a goal, by what it declares rather than what it is called. */
 const plansAGoal = (found: Found) =>
   found.outcome === "plan" && Arr.some(found.inputs, (field) => field.strategy === "goal");
 
-/** The host option a placed start names its checkout with, recorded as inferred. */
 const WORKSPACE = "workspace";
 
 const isUrl = (words: string) => /^(https?:\/\/|git@)/.test(words);
 
-/**
- * Whether a human's words are a value of the launch Input's kind, rather than words about
- * where the work is: any words are a goal or a work source, a merge request URL, an iid or
- * a ref here is a diff target, and a URL or an absolute path is a repository.
- */
 const wordsAre = Effect.fn("Flows.wordsAre")(function* (
   strategy: string,
   words: string,
   cwd: string,
 ) {
-  if (strategy === "goal" || strategy === "work-source") return true;
-  if (strategy === "repository") return /^(https?:\/\/|git@|\/)/.test(words);
-  if (strategy !== "diff-target") return false;
-  if (readMrRef(words, { project: null }) !== null) return true;
-  if (/\s/.test(words)) return false;
+  if (strategy === "goal" || strategy === "work-source") {
+    return true;
+  }
+  if (strategy === "repository") {
+    return /^(https?:\/\/|git@|\/)/.test(words);
+  }
+  if (strategy !== "diff-target") {
+    return false;
+  }
+  if (readMrRef(words, { project: null }) !== null) {
+    return true;
+  }
+  if (/\s/.test(words)) {
+    return false;
+  }
   const ref = yield* shell("git", ["rev-parse", "--verify", "--quiet", `${words}^{commit}`], cwd);
   return ref.code === 0;
 });
 
-/** What the strategy a module attached to this field works out, or null for nothing. */
 const infer = Effect.fn("Flows.infer")(function* (
   env: PluginEnv,
   opts: { task: TaskChoice },
@@ -498,7 +466,9 @@ const infer = Effect.fn("Flows.infer")(function* (
     Effect.provide(forgeHttpLayer),
     Effect.orElseSucceed(() => null),
   );
-  if (settled === null || settled.needsAsking || settled.value === "") return null;
+  if (settled === null || settled.needsAsking || settled.value === "") {
+    return null;
+  }
   return settled;
 });
 
@@ -511,9 +481,9 @@ export const forkFlow = Effect.fn("Flows.forkFlow")(function* (
   const defs = yield* loadDefinitions(layerList);
   const sources = new Map<
     string,
-    { kind: DefinitionKind; path: string; steps: string[]; body: string }
+    { kind: DefinitionKind; path: string; steps: Array<string>; body: string }
   >();
-  const items: PickItem[] = [];
+  const items: Array<PickItem> = [];
 
   for (const persona of [...defs.personas.values()].sort((a, b) =>
     pipe_(a.name, Str.localeCompare(b.name)),
@@ -531,15 +501,19 @@ export const forkFlow = Effect.fn("Flows.forkFlow")(function* (
     });
   }
 
-  if (items.length === 0) return yield* bail(prompts, "Nothing to fork.", banner(defs));
+  if (items.length === 0) {
+    return yield* bail(prompts, "Nothing to fork.", banner(defs));
+  }
 
   const chosen = yield* prompts.menu(items, {
     header: headed("Fork a definition", banner(defs)),
     footer: "↑↓ move · type to filter · Enter choose · Esc cancel",
   });
-  if (!chosen) return 0;
+  if (!chosen) {
+    return 0;
+  }
 
-  const targets: PickItem[] = [
+  const targets: Array<PickItem> = [
     { id: "user", title: "my layer", subtitle: layerList.user.dir },
     { id: "project", title: "this project", subtitle: layerList.project.dir },
   ];
@@ -547,7 +521,9 @@ export const forkFlow = Effect.fn("Flows.forkFlow")(function* (
     header: `Fork ${chosen.title} into`,
     footer: "↑↓ move · Enter fork · Esc cancel",
   });
-  if (!target) return 0;
+  if (!target) {
+    return 0;
+  }
 
   const source = sources.get(chosen.id)!;
   const how = yield* prompts.menu(
@@ -561,9 +537,10 @@ export const forkFlow = Effect.fn("Flows.forkFlow")(function* (
     ],
     { header: `Fork ${chosen.title} how`, footer: "↑↓ move · Enter fork · Esc cancel" },
   );
-  if (!how) return 0;
+  if (!how) {
+    return 0;
+  }
 
-  // A stub needs to name something, or there is nothing in the file to edit.
   let step: string | undefined;
   if (how.id === "extends" && source.steps.length > 0) {
     const which = yield* prompts.menu(
@@ -573,7 +550,9 @@ export const forkFlow = Effect.fn("Flows.forkFlow")(function* (
         footer: "↑↓ move · Enter choose · Esc cancel",
       },
     );
-    if (!which) return 0;
+    if (!which) {
+      return 0;
+    }
     step = which.id;
   }
 
@@ -585,12 +564,14 @@ export const forkFlow = Effect.fn("Flows.forkFlow")(function* (
   return yield* notice(prompts, `${chosen.title}: ${result.message}`, result.ok ? 0 : 1);
 });
 
-/** The layer a definition came from, and whether a full copy has fallen behind. */
-function layerOf(def: Provenance): string {
+function layerOf(def: Provenance) {
   const parts = [`[${def.layer}]`];
-  if (def.extends) parts.push(`extends ${def.extends}`);
-  // A full copy whose parent has moved on is not the fork you took.
-  if (isStale(def)) parts.push("(stale — the original has changed since this copy)");
+  if (def.extends) {
+    parts.push(`extends ${def.extends}`);
+  }
+  if (isStale(def)) {
+    parts.push("(stale — the original has changed since this copy)");
+  }
   return Arr.join(parts, " ");
 }
 
@@ -600,9 +581,11 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (
   prompts: FlowPrompts,
 ) {
   const runs = Arr.filter(yield* listRuns(env), (run) => !settled(run));
-  if (runs.length === 0) return yield* bail(prompts, "No runs are still going to pick back up.");
+  if (runs.length === 0) {
+    return yield* bail(prompts, "No runs are still going to pick back up.");
+  }
 
-  const items: PickItem[] = Arr.map(runs, (run) => ({
+  const items: Array<PickItem> = Arr.map(runs, (run) => ({
     id: run.id,
     title: runTitle(run),
     subtitle: `${run.state} · ${pipe_(run.created, Str.slice(0, 16), Str.replace("T", " "))}`,
@@ -612,21 +595,21 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (
     header: "Resume a run",
     footer: "↑↓ move · type to filter · Enter resume · Esc cancel",
   });
-  if (!chosen) return 0;
+  if (!chosen) {
+    return 0;
+  }
 
   const resumed = yield* resumeRun(env, {
     door: "board",
     runId: chosen.id,
     request: yield* newRequestId(),
   });
-  if (!resumed.ok) return yield* bail(prompts, `${chosen.id}: ${resumed.error.message}`);
+  if (!resumed.ok) {
+    return yield* bail(prompts, `${chosen.id}: ${resumed.error.message}`);
+  }
   return 0;
 });
 
-/**
- * Each field an offer takes, asked for in turn and asked again with why where it cannot be
- * taken; null on cancel.
- */
 const offerArguments = Effect.fn("Flows.offerArguments")(function* (
   prompts: FlowPrompts,
   drawn: Schema.Json | null,
@@ -644,21 +627,33 @@ const offerArguments = Effect.fn("Flows.offerArguments")(function* (
           Arr.map(choices, (one) => ({ id: one.key, title: one.label })),
           { header: question, footer: "↑↓ move · Enter choose · Esc cancel" },
         );
-        if (chosen === null) return null;
+        if (chosen === null) {
+          return null;
+        }
         const entry = Option.getOrUndefined(
           Arr.findFirst(choices, (one) => one.key === chosen.id),
         )?.entry;
-        if (entry === undefined) delete typed[field.name];
-        else typed[field.name] = entry;
+        if (entry === undefined) {
+          delete typed[field.name];
+        } else {
+          typed[field.name] = entry;
+        }
       } else {
         const answer = yield* prompts.ask(question);
-        if (answer === null) return null;
-        if (answer === "" && !field.required) delete typed[field.name];
-        else typed[field.name] = answer;
+        if (answer === null) {
+          return null;
+        }
+        if (answer === "" && !field.required) {
+          delete typed[field.name];
+        } else {
+          typed[field.name] = answer;
+        }
       }
     }
     const read = offerInput(drawn, typed);
-    if (read._tag === "Valid") return read.input;
+    if (read._tag === "Valid") {
+      return read.input;
+    }
     asking = Arr.filterMap(offerFields(drawn), (field) =>
       read.errors[field.name] === undefined
         ? Result.failVoid
@@ -667,12 +662,13 @@ const offerArguments = Effect.fn("Flows.offerArguments")(function* (
   }
 });
 
-/** Yes where the offer says nothing before it is taken, or the human confirms what it does. */
 const confirmed = Effect.fn("Flows.confirmed")(function* (
   prompts: FlowPrompts,
   offer: { readonly title: string; readonly confirm?: string },
 ) {
-  if (offer.confirm === undefined) return true;
+  if (offer.confirm === undefined) {
+    return true;
+  }
   const chosen = yield* prompts.menu(
     [
       { id: "take", title: offer.title, subtitle: offer.confirm },
@@ -683,10 +679,6 @@ const confirmed = Effect.fn("Flows.confirmed")(function* (
   return chosen?.id === "take";
 });
 
-/**
- * Files handed to the Run's newest live agent: the steer `run steer --attach` makes, with
- * no words of its own. The note for the footer, or null where nothing was typed.
- */
 export const attachFiles = Effect.fn("Flows.attachFiles")(function* (
   env: PluginEnv,
   prompts: FlowPrompts,
@@ -694,7 +686,9 @@ export const attachFiles = Effect.fn("Flows.attachFiles")(function* (
 ) {
   const typed = yield* prompts.ask(`Which files go to ${runId}? Paths, separated by spaces`);
   const paths = typedPaths(typed ?? "");
-  if (paths.length === 0) return null;
+  if (paths.length === 0) {
+    return null;
+  }
   const path = yield* Path.Path;
   const done = yield* steerRun(env, {
     door: "board",
@@ -706,10 +700,6 @@ export const attachFiles = Effect.fn("Flows.attachFiles")(function* (
   return done.ok ? done.human : done.error.message;
 });
 
-/**
- * One offer of the Run's module, as it stands now, asked for what it takes and then made.
- * The note for the footer, or null where the human cancelled the asking.
- */
 export const makeOffer = Effect.fn("Flows.makeOffer")(function* (
   env: PluginEnv,
   prompts: FlowPrompts,
@@ -717,14 +707,22 @@ export const makeOffer = Effect.fn("Flows.makeOffer")(function* (
   chosen: string,
 ) {
   const listed = yield* offersOf(env, runId);
-  if ("ok" in listed) return listed.error.message;
+  if ("ok" in listed) {
+    return listed.error.message;
+  }
   const offer = Option.getOrUndefined(
     Arr.findFirst(listed, (one) => one.id === chosen && (one.run ?? runId) === runId),
   );
-  if (offer === undefined) return `${runId} no longer offers ${chosen}`;
-  if (offer.unavailable !== null) return `${offer.title}: ${offer.unavailable}`;
+  if (offer === undefined) {
+    return `${runId} no longer offers ${chosen}`;
+  }
+  if (offer.unavailable !== null) {
+    return `${offer.title}: ${offer.unavailable}`;
+  }
   const input = yield* offerArguments(prompts, offer.arguments);
-  if (input === null || !(yield* confirmed(prompts, offer))) return null;
+  if (input === null || !(yield* confirmed(prompts, offer))) {
+    return null;
+  }
   const done = yield* invokeOffer(env, {
     door: "board",
     runId,
@@ -735,38 +733,30 @@ export const makeOffer = Effect.fn("Flows.makeOffer")(function* (
   return done.ok ? done.human : done.error.message;
 });
 
-/** How often the tab re-reads the files and asks herdr what is still alive. */
 const REFRESH_MS = 1500;
-/** How long a keypress may wait; the tab has to feel like a TUI, not a report. */
 const TICK_MS = 120;
 
-const CLEAR = "\x1b[2J\x1b[H";
+const CLEAR = "\u001b[2J\u001b[H";
 
-/**
- * The narrowest pane the app is worth starting in. Below it the regions have no room
- * and the one-screen text view says more.
- */
 const WIDTH_FLOOR = 40;
 
-/** Why the app cannot run here, or nothing when it can. */
 const whyNoRenderer = Effect.fn("Flows.whyNoRenderer")(function* () {
-  if (!process.stdout.isTTY || !process.stdin.isTTY) return "no terminal on this pane";
+  if (!process.stdout.isTTY || !process.stdin.isTTY) {
+    return "no terminal on this pane";
+  }
   const term = yield* Config.option(Config.String("TERM"));
-  if (term._tag === "Some" && term.value === "dumb") return "TERM is dumb";
+  if (term._tag === "Some" && term.value === "dumb") {
+    return "TERM is dumb";
+  }
   const width = process.stdout.columns ?? 0;
-  if (width < WIDTH_FLOOR) return `the pane is ${width} columns, and the app needs ${WIDTH_FLOOR}`;
+  if (width < WIDTH_FLOOR) {
+    return `the pane is ${width} columns, and the app needs ${WIDTH_FLOOR}`;
+  }
   return null;
 });
 
-/**
- * Reads `file` now, and gives back what completes once it is a different file than it was:
- * a build renames a new binary over the old one, so an upgrade is a new inode under the
- * same path. That never completes where the file cannot be read, as under `bun src/main.ts`.
- */
-export const replacedOnDisk = (
-  file: string,
-  every: Duration.Input = "2 seconds",
-): Effect.Effect<Effect.Effect<void>, never, FileSystem.FileSystem> =>
+// WARNING: an upgrade renames a new file over the old, so compare the inode, never the path.
+export const replacedOnDisk = (file: string, every: Duration.Input = "2 seconds") =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const inode = fs.stat(file).pipe(
@@ -774,7 +764,9 @@ export const replacedOnDisk = (
       Effect.orElseSucceed(() => null),
     );
     const start = yield* inode;
-    if (start === null) return yield* Effect.succeed(Effect.never);
+    if (start === null) {
+      return yield* Effect.succeed(Effect.never);
+    }
     return yield* Effect.succeed(
       inode.pipe(
         Effect.repeat({
@@ -786,18 +778,9 @@ export const replacedOnDisk = (
     );
   });
 
-/** How often the board asks its host for usage, however often it loads. */
 const BOARD_USAGE_EVERY = "15 seconds";
 
-/**
- * The board: the Herd's control surface, as an application in a terminal of its own. It
- * watches the run dirs and the register and renders them; the actions are its own flows,
- * one hand-off, and whatever the Selection can be asked for. It drives no run and holds no
- * engine state, so ending it loses nothing, and the host starts it again.
- *
- * OpenTUI arrives through a dynamic import, so the `collie` CLI — `--json`, the receipts
- * path, CI — neither loads the native renderer nor depends on it being there.
- */
+// WARNING: OpenTUI is a dynamic import, so the CLI never loads the native renderer.
 export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
   herdr: Herdr,
   env: PluginEnv,
@@ -806,15 +789,13 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
   const platform = yield* Effect.context<
     FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
   >();
-  // A file write can arrive before the host publishes its new board. That publication
-  // must wake the terminal too, rather than relying on the duration of a prior read.
+  // WARNING: a file write can precede the host's publication, which must wake the terminal too.
   const changes = yield* Queue.sliding<void>(1);
   yield* Effect.addFinalizer(() => Queue.shutdown(changes));
   const changed = () => {
     Queue.offerUnsafe(changes, undefined);
   };
-  // The board loads again on every change, several times a second on a busy Machine, and
-  // each host usage read is audited: usage moves slowly, so it is asked at most so often.
+  // WARNING: each host usage read is audited, so it is cached with a TTL.
   const usageNow = yield* Effect.cachedWithTTL(
     usageReadings(env, "board").pipe(
       Effect.map((read) => (read.ok ? read.value : [])),
@@ -829,29 +810,20 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     pluginRoot: env.pluginRoot,
     releases: releasesOf(env.raw),
     userDir: env.userDir,
-    // The Control Plane runs its actions on one fiber, one at a time, so a hand-off to
-    // an agent over the threshold must not hold that queue while a compaction runs. It
-    // asks, and reports that the compaction is in the air; the human presses the key
-    // again when the pane says it has finished. No work is sent either way.
+    // WARNING: compaction is asked and reported, never waited on, or the actions queue stalls.
     compaction: { waitMs: 0 },
     tasksOf: yield* followBoard(env, changed),
     detailOf: yield* followRunDetail(env, changed),
     usageOf: () => usageNow,
   };
-  // An upgrade that leaves this board drawing the old build is an upgrade the human
-  // believes happened and did not, so a rebuilt binary ends it, for the host to start the
-  // new one.
+  // WARNING: a rebuilt binary ends the board, so the host starts the new build.
   const why =
     (yield* whyNoRenderer()) ??
     (yield* Effect.gen(function* () {
       const { runApp } = yield* Effect.promise(() => import("./ui/bridge"));
       const app = appState(session, env);
       const records = yield* RunRecords;
-      /**
-       * The board's own dispatch, once it is running. A confirmed `navigate` puts its
-       * target on screen through this and through nothing else: the board never calls a
-       * herdr focus method to show a human something (ADR-0008).
-       */
+      // WARNING: navigate reaches the screen only through dispatch, never a herdr focus call.
       let dispatch: ((command: Command) => void) | null = null;
       const navigate = (run: string) =>
         dispatch?.({ _tag: "SetFilter", filter: { kind: "run", id: run } });
@@ -861,13 +833,10 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
           dispatch = own;
         },
         stateDir: env.stateDir,
-        // All the Herd's work: `g` and a group row are what narrow it after that.
         filter: { kind: "all" },
         origin: null,
         load: (focus) => app.load(focus).pipe(Effect.provideService(RunRecords, records)),
         act: (command, prompts) => runCommand(session, env, command, prompts, navigate),
-        // What the board has open, where chat can read it. Nothing to write it to without
-        // a Herd.
         selected:
           key === null
             ? undefined
@@ -878,51 +847,44 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
       }).pipe(Effect.raceFirst(Effect.flatten(replacedOnDisk(process.execPath))));
       return null;
     }).pipe(
-      // A renderer that will not start must not take the tab down with it: say why and
-      // fall through to the text view, which is what that view is kept for. An interrupt
-      // is not that — the pane is closing, and a key loop started on the way out would
-      // hang it — so it is re-raised rather than fallen back from.
+      // WARNING: an interrupt is re-raised, not handed to the text view, which would hang the closing pane.
       Effect.catchCauseIf(
         (cause) => !Cause.hasInterrupts(cause),
-        (cause) => Effect.succeed(Str.split(reason(cause), "\n")[0]!),
+        (cause) => Effect.succeed(Str.split(reason(cause), "\n")[0]),
       ),
     ));
-  if (why === null) return 0;
+  if (why === null) {
+    return 0;
+  }
   return yield* textBoard(session, env, why);
 }, Effect.scoped);
 
-/** One Run's details from the host, as this session reads them. */
 const detailRead = (session: ControlSession, env: PluginEnv, key: DetailKey) =>
   session.detailOf?.(key) ?? runDetailNow(env, key);
 
-/** The host's board, as this session reads it. */
 const boardRead = (session: ControlSession, env: PluginEnv) =>
   session.tasksOf?.() ??
   boardSnapshot(env).pipe(
-    Effect.map((read): BoardRead =>
-      read.ok
+    Effect.map((read) => {
+      const returned: BoardRead = read.ok
         ? { tasks: read.value.tasks, unreadable: null }
-        : { tasks: [], unreadable: read.error.message },
-    ),
+        : { tasks: [], unreadable: read.error.message };
+      return returned;
+    }),
   );
 
-/** Everything the app draws, for whatever it is looking at. */
 export function appState(session: ControlSession, env: PluginEnv) {
   const runsOf = session.runsOf ?? listRuns;
-  /** The board from the last read, for whatever `rereads` says may be taken from it. */
   let last: { focus: Focus; state: AppState } | null = null;
   const load = Effect.fn("Flows.appState.load")(function* (focus: Focus) {
     const again = rereads(last?.focus ?? null, focus);
     const reuse = again.reuse ? last : null;
-    // The native board draws the host's Tasks. Only History needs the full Run list;
-    // rebuilding the text board here duplicated the host's work for invisible rows.
     const history = reuse
       ? reuse.state.history
       : focus.shown.includes("history")
         ? yield* buildHistory({ cwd: env.cwd, runs: yield* runsOf(env) })
         : null;
     const runId = runIdOf(focus.selected);
-    // A moved Selection always reads its own record, including on a focus-only load.
     const detail = runId
       ? yield* detailRead(session, env, {
           runId,
@@ -931,8 +893,6 @@ export function appState(session: ControlSession, env: PluginEnv) {
           refreshMr: again.forceMr,
         })
       : yield* session.detailOf?.(null) ?? Effect.succeed(null);
-    // A drawer's own verified record supplies its journal directory. With no drawer,
-    // only Herd proposals are drawn; cards and marks for the old lists are not inputs.
     const found =
       focus.view !== "runs"
         ? null
@@ -959,13 +919,11 @@ export function appState(session: ControlSession, env: PluginEnv) {
     const state = {
       view: focus.view,
       filter: focus.filter,
-      // The host's board, Herd-wide: a workspace is a filter over one board, never a board
-      // of its own (ADR-0009).
+      // WARNING: the board is Herd-wide; a workspace is only a filter over it.
       tasks: tasksBuilt,
       now: yield* Clock.currentTimeMillis,
       density: defaults.density,
       newer: reuse ? reuse.state.newer : yield* boardRelease(session),
-      // A reuse read the board not at all, so what it said last still holds.
       note: read === null ? reuse!.state.note : read.unreadable,
       history,
       definitions: reuse
@@ -981,7 +939,6 @@ export function appState(session: ControlSession, env: PluginEnv) {
       usage: reuse ? reuse.state.usage : yield* session.usageOf?.() ?? Effect.succeed([]),
       previewing: focus.previewing,
       live: found?.live ?? null,
-      // The bridge's own, and it overlays what it is holding onto every load.
       stopping: [],
       detail,
       artefacts: artefacts?.ok === true ? artefacts.value : null,
@@ -994,13 +951,11 @@ export function appState(session: ControlSession, env: PluginEnv) {
   return { load };
 }
 
-/** One command, run against the Selection it names. The string becomes the footer note. */
 export const runCommand = Effect.fn("Flows.runCommand")(function* (
   session: ControlSession,
   env: PluginEnv,
   command: Command,
   prompts: FlowPrompts,
-  /** Puts a Run on the board's screen, for a confirmed `navigate`. */
   navigate: (runId: string) => void = () => {},
 ) {
   const runOf = (runId: string) =>
@@ -1010,18 +965,19 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       ),
     );
   switch (command._tag) {
-    /**
-     * Enter, as one call. Everything is resolved here rather than when the row was
-     * drawn: herdr compacts tab ids, and one cached at render time jumps into whatever
-     * has taken its place. The board never focuses anything to inspect it, because
-     * focusing collapses herdr's `done` badge to `idle`.
-     */
+    // WARNING: resolved at Enter, as herdr compacts tab ids; never focused, which turns done into idle.
     case "Jump": {
       const jump = command.jump;
-      if (jump.kind === "agent") return attachLine(jump.agent);
-      if (jump.kind !== "run") return `${jump.label} — nothing to jump to`;
+      if (jump.kind === "agent") {
+        return attachLine(jump.agent);
+      }
+      if (jump.kind !== "run") {
+        return `${jump.label} — nothing to jump to`;
+      }
       const run = yield* runOf(jump.runId);
-      if (!run) return `${jump.label} has gone`;
+      if (!run) {
+        return `${jump.label} has gone`;
+      }
       const agent = Option.getOrUndefined(
         Arr.findLast(
           yield* hostRegistered(env).pipe(Effect.orElseSucceed(() => [])),
@@ -1032,10 +988,6 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     }
     case "FocusAgent":
       return attachLine(command.agent);
-    // The Run itself, not the row the human pressed the key on: what these three need
-    // is a run directory, and looking the row up again meant asking which of the board,
-    // History and every workspace's group it was on — three views built to answer a
-    // question the run directory answers on its own.
     case "StopRun": {
       const stopped = yield* controlRun(env, {
         door: "board",
@@ -1054,14 +1006,18 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
         set: command.set,
         request: yield* newRequestId(),
       });
-      if (!held.ok) return held.error.message;
+      if (!held.ok) {
+        return held.error.message;
+      }
       return `${command.set ? "Held" : "Released"} ${command.runId}`;
     }
     case "OpenLog":
       return "a Run keeps no log of its own: its agents' panes are the record";
     case "OpenCheckOutput": {
       const run = yield* runOf(command.runId);
-      if (!run) return `${command.runId} has gone`;
+      if (!run) {
+        return `${command.runId} has gone`;
+      }
       return `follow its check with: collie run checks ${run.id} --follow`;
     }
     case "Answer": {
@@ -1075,30 +1031,27 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       return answered.ok ? `answered ${command.runId}` : answered.error.message;
     }
     case "SendReview":
-      // What a finished Run offers to do next is its own declaration, and a review that
-      // should reach an implementer is one of those offers. `run actions` is where they
-      // are, on the board and everywhere else.
       return "a review reaches its implementer through the Run's own offers; press the action key";
 
-    /**
-     * One of the things the Run's own Workflow says it offers. Nothing here knows what
-     * that is: the offer names the workflow, the facts decide whether it is still on the
-     * table, and both are asked again now rather than taken from the card.
-     */
     case "InvokeOffer":
       return yield* makeOffer(env, prompts, command.runId, command.offer);
 
-    /** What the Run's module offers now, the one chosen asked for what it takes, then made. */
     case "ChooseOffer": {
       const listed = yield* offersOf(env, command.runId);
-      if ("ok" in listed) return listed.error.message;
+      if ("ok" in listed) {
+        return listed.error.message;
+      }
       const open = Arr.filter(listed, (one) => one.unavailable === null);
-      if (open.length === 0) return `${command.runId} offers nothing now`;
+      if (open.length === 0) {
+        return `${command.runId} offers nothing now`;
+      }
       const chosen = yield* prompts.menu(
         Arr.map(open, (one, at) => ({ id: String(at), title: one.title, subtitle: one.workflow })),
         { header: `What next for ${command.runId}?` },
       );
-      if (chosen === null) return null;
+      if (chosen === null) {
+        return null;
+      }
       const offer = open[Number(chosen.id)]!;
       return yield* makeOffer(env, prompts, offer.run ?? command.runId, offer.id);
     }
@@ -1111,8 +1064,6 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       });
 
     case "PostReview":
-      // A Run posts its own review where its workflow says to; the board does not do it
-      // on the Run's behalf.
       return "a review is posted by the Run that wrote it";
 
     case "ConfirmProposal": {
@@ -1122,14 +1073,15 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
         hash: command.hash,
         request: yield* newRequestId(),
       });
-      // A confirmed `navigate` puts its target on screen here: the host has no screen.
-      // Even where a later action failed: an applied one did happen.
+      // WARNING: navigate applies here since the host has no screen; an applied action counts even if a later one failed.
       const carried = Schema.decodeUnknownOption(CarriedSteps)(
         done.ok ? done.data : done.error.details,
       );
-      for (const step of Option.getOrElse(carried, () => ({ results: [] })).results)
-        if (step.kind === "navigate" && step.state === "applied" && step.run !== null)
+      for (const step of Option.getOrElse(carried, () => ({ results: [] })).results) {
+        if (step.kind === "navigate" && step.state === "applied" && step.run !== null) {
           navigate(step.run);
+        }
+      }
       return done.ok ? done.human : done.error.message;
     }
 
@@ -1145,10 +1097,10 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
 
     case "OpenMr": {
       const ref = parseMrTarget(command.target);
-      if (!ref) return `${command.target} is not a merge request`;
-      // The run's own checkout, where it has one: an unqualified `mr:42` — every older
-      // run has one — is resolved from the directory the CLI runs in, so from a board of
-      // every workspace this used to open *this* repository's !42.
+      if (!ref) {
+        return `${command.target} is not a merge request`;
+      }
+      // WARNING: an unqualified mr:N resolves from the run's own checkout, never the caller's directory.
       const run = command.runId === null ? null : yield* runOf(command.runId);
       const forge = forgeOf(ref);
       const opened = yield* forge.open(ref, run?.cwd ?? env.cwd, shell);
@@ -1159,17 +1111,18 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
 
     case "SetDefault": {
       const parsed = parseSetting(command.key, command.value);
-      if ("refused" in parsed) return parsed.refused;
+      if ("refused" in parsed) {
+        return parsed.refused;
+      }
       return yield* setSetting(env.userDir, command.key, parsed.value, yield* nowIso).pipe(
-        // The host offers it to its peers once told, since nothing watches the user directory.
+        // WARNING: nothing watches the user directory, so the host must be told.
         Effect.tap(() => tellHost(env.stateDir, [`${env.userDir}/config.json`])),
-        // What was written, so the note cannot disagree with the file.
+        // WARNING: the note says what was written, so it cannot disagree with the file.
         Effect.as(`${command.key} is now ${settingText(parsed.value) || "unset"}`),
         Effect.catch((cause) => Effect.succeed(`${command.key}: ${reason(cause)}`)),
       );
     }
 
-    /** The launch flow, drawn by the board itself. */
     case "OpenMode":
       switch (command.mode) {
         case "pick":
@@ -1181,8 +1134,8 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
         case "fork":
           return yield* forkFlow(session.herdr, env, prompts).pipe(Effect.as(null));
       }
+      return null;
 
-    /** A Run taken up again where it stopped, as every door resumes one. */
     case "ResumeRun": {
       const resumed = yield* resumeRun(env, {
         door: "board",
@@ -1195,14 +1148,11 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     case "AttachFiles":
       return yield* attachFiles(env, prompts, command.runId);
 
-    /** A finished plan, built: the same launch "Implement now" runs, from the card. */
-    /**
-     * A child Run on a finished one's outcome. What it should do is asked for here rather
-     * than guessed from the parent: a follow-up with no words is a Run with no spec.
-     */
     case "FollowUp": {
       const text = yield* prompts.ask(`What still needs doing on ${command.runId}?`);
-      if (text === null || Str.trim(text) === "") return null;
+      if (text === null || Str.trim(text) === "") {
+        return null;
+      }
       const done = yield* followUpRun(env, {
         door: "board",
         runId: command.runId,
@@ -1212,13 +1162,11 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       return done.ok ? done.human : done.error.message;
     }
 
-    /**
-     * One thing said to Collie about one Run. It carries nothing out on its own: the
-     * evaluator answers with a proposal, which arrives as that Task's decision card.
-     */
     case "Steer": {
       const run = yield* runOf(command.runId);
-      if (!run) return `${command.runId} has gone`;
+      if (!run) {
+        return `${command.runId} has gone`;
+      }
       const said = yield* steerAbout(env, {
         door: "board",
         runId: run.id,
@@ -1230,13 +1178,11 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       return said.ok ? said.human : said.error.message;
     }
 
-    /**
-     * What became of the work. Beside the Run's status, never over it: a Run that failed
-     * and was then finished by hand is both facts at once.
-     */
     case "RecordDisposition": {
       const run = yield* runOf(command.runId);
-      if (!run) return `${command.runId} has gone`;
+      if (!run) {
+        return `${command.runId} has gone`;
+      }
       const done = yield* disposeRun(env, {
         door: "board",
         runId: run.id,
@@ -1296,30 +1242,17 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     case "Refresh":
     case "UndoStop":
     case "Quit":
-      // The app and the bridge act on these themselves; they never reach a handler.
-      // `EditSetting` opens the app's own editor, and the value it gathers comes back
-      // as a `SetDefault` that carries one; `NextQuestion` moves the Selection and
-      // drops a filter; `OpenRecord` and `OpenSteer` open the drawer. None of those is
-      // anything out here owns.
       return null;
   }
 });
 
-/**
- * Start a Workflow from a row action. An Input nobody could infer is not guessed at: the
- * picker opens instead, which is the one place a human can answer, and the note says so.
- */
 const launch = Effect.fn("Flows.launch")(function* (
   session: ControlSession,
   env: PluginEnv,
   prompts: FlowPrompts,
   opts: { workflow: string; inputs: Record<string, string>; note: string; parent?: RunFacts },
 ) {
-  // The same launch flow the picker runs, for the Workflow the row named and inline in
-  // the tab the row was clicked in. It used to start the Run itself whenever every Input
-  // could be inferred, which skipped the Decisions — so a Workflow with a Choice step
-  // started with none of them answered and stopped at that Choice hours later, which is
-  // the opposite of what deciding upfront is for.
+  // WARNING: the same launch flow as the picker, so a Choice step is never skipped.
   const line = yield* startChosen(session.herdr, env, prompts, {
     workflow: opts.workflow,
     given: opts.inputs,
@@ -1328,25 +1261,13 @@ const launch = Effect.fn("Flows.launch")(function* (
   return line ?? `${opts.workflow} was not started`;
 });
 
-/**
- * The board as one screen of text, with the key loop it always had. This is what a pane
- * with no terminal, a dumb TERM or no renderer gets, and it is the escape hatch if
- * OpenTUI ever becomes a problem on a supported platform — so it stays alive and tested
- * rather than decorative.
- */
 const textBoard = Effect.fn("Flows.textBoard")(function* (
   session: ControlSession,
   env: PluginEnv,
   why: string,
 ) {
   yield* Console.error(`${COLLIE_TAB}: ${why}; showing the text view.`);
-  /**
-   * What steering has found about the Runs on the board, and what has been happening.
-   * The same reads the app makes, so this view says no less about a Run than the app
-   * does — a pane too narrow for the renderer must not be a quieter board.
-   */
   let unreadable: string | null = null;
-  /** The board's own Tasks, so the text view and the pane draw the same sections. */
   const tasksOf = () =>
     boardRead(session, env).pipe(
       Effect.map((read) => {
@@ -1375,8 +1296,7 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
     });
     return { ...live, tasks: yield* tasksOf() };
   });
-  // Nothing to loop on: with no keyboard the board is a report, so it is printed once
-  // and the entrypoint ends rather than spinning on a `takeKey` that can never answer.
+  // WARNING: without a TTY nothing can answer a key; print once and end.
   if (!process.stdin.isTTY) {
     const view = yield* boardOf(session, yield* scan(env, session));
     const steering = yield* steeringOf(view);
@@ -1394,27 +1314,27 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
 
   for (;;) {
     const waiting = askingRun(view);
-    // A new question starts from the top, with nothing typed.
     if (waiting && waiting.id !== answering) {
       asking = { index: 0, typed: "" };
       answering = waiting.id;
     }
-    if (!waiting) answering = null;
+    if (!waiting) {
+      answering = null;
+    }
 
     const steering = yield* steeringOf(view);
     const text = renderWorkspace(view, unreadable ?? note ?? undefined, asking, steering);
     if (text !== drawn) {
-      process.stdout.write(`${CLEAR}${pipe_(text, Str.replace(/\n/g, "\r\n"))}\r\n`);
+      process.stdout.write(`${CLEAR}${pipe_(text, Str.replaceAll("\n", "\r\n"))}\r\n`);
       drawn = text;
     }
     const key = Option.getOrNull(yield* Queue.take(keys).pipe(Effect.timeoutOption(TICK_MS)));
     if (key !== null) {
-      // While a run is asking, every key belongs to that question.
       if (waiting) {
         const answered = yield* answerKey(env, waiting, asking, key);
         asking = answered.asking;
         note = answered.note ?? note;
-      } else if (key === "q" || key === "\x03") {
+      } else if (key === "q" || key === "\u0003") {
         return 0;
       } else {
         note = yield* act(session, env, view, key);
@@ -1430,11 +1350,6 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
   }
 }, Effect.scoped);
 
-/**
- * One keypress against a pending question; the answer goes back to the run dir. The
- * keystroke itself is `answerFor` in `src/ui/state.ts`, so the app and this fallback
- * answer a question the same way rather than each having their own idea of Esc.
- */
 export const answerKey = Effect.fn("Flows.answerKey")(function* (
   env: PluginEnv,
   waiting: RunRow,
@@ -1442,9 +1357,13 @@ export const answerKey = Effect.fn("Flows.answerKey")(function* (
   key: string,
 ) {
   const choice = waiting.choice;
-  if (!choice) return { asking };
+  if (!choice) {
+    return { asking };
+  }
   const next = answerFor(choice, asking, key);
-  if (next.value === null) return { asking: next.asking };
+  if (next.value === null) {
+    return { asking: next.asking };
+  }
   const answered = yield* answerRun(env, {
     door: "board",
     runId: waiting.id,
@@ -1458,7 +1377,6 @@ export const answerKey = Effect.fn("Flows.answerKey")(function* (
   };
 });
 
-/** What one keypress does. Returns the line to show under the lists, if any. */
 const act = Effect.fn("Flows.act")(function* (
   session: ControlSession,
   env: PluginEnv,
@@ -1467,29 +1385,29 @@ const act = Effect.fn("Flows.act")(function* (
 ) {
   if (/^[1-9]$/.test(key)) {
     const agent = agentForKey(view, key);
-    if (!agent) return null;
+    if (!agent) {
+      return null;
+    }
     return attachLine(agent.agent);
   }
-  // The text board acts on the newest run it drew rather than on a Selection, so this
-  // is where "which run" is decided for it — the operations take the run itself.
   if (key === "l") {
     const row = view.active[0] ?? view.recent[0];
-    if (!row) return "no run here to open a log for";
+    if (!row) {
+      return "no run here to open a log for";
+    }
     return `${row.title} keeps no log of its own: its agents' panes are the record`;
   }
   if (key === "k") {
     const row = view.active[0];
-    if (!row) return "nothing running here to stop";
+    if (!row) {
+      return "nothing running here to stop";
+    }
     return yield* stopRun(env, row.id);
   }
   return null;
 });
 
-/**
- * Stops a run. A run used to stop when you closed its pane; the driver has no pane now,
- * so this replaces that. Its agents are left where they are: their panes are the
- * transcript of what happened.
- */
+// WARNING: the run's agents are left running; their panes are the transcript.
 export const stopRun = Effect.fn("Flows.stopRun")(function* (env: PluginEnv, runId: string) {
   const stopped = yield* controlRun(env, {
     door: "board",
@@ -1501,11 +1419,9 @@ export const stopRun = Effect.fn("Flows.stopRun")(function* (env: PluginEnv, run
   return stopped.ok ? stopped.human : stopped.error.message;
 });
 
-/** Where the human reaches an agent's terminal from the board: core's own attach. */
 const attachLine = (agent: string) => `attach to ${agent} with: hc attach ${agent}`;
 
-/** The host's ledgers, asked of it: a board that cannot reach it marks nothing. */
-const ledgersOf = (env: PluginEnv): Ledgers => ({
+const ledgersOf: (env: PluginEnv) => Ledgers = (env) => ({
   overridden: asks(env, (client) => client.overridden()).pipe(
     Effect.map((read) => new Set(read.ok ? read.value : [])),
   ),
@@ -1516,33 +1432,27 @@ const ledgersOf = (env: PluginEnv): Ledgers => ({
   proposals: (herd) => hostProposals(env, herd).pipe(Effect.orElseSucceed(() => [])),
 });
 
-/**
- * How long the board's own quiet threshold stands before `config.json` is read again.
- * The board redraws every three seconds and on every filesystem event, and this value
- * changes only when a human writes it in Settings — so re-parsing the file per redraw
- * was thousands of reads an hour for one open pane. The same reasoning, and the same
- * shape, as the `behindRemote` count in `src/doctor.ts`.
- */
+// WARNING: config.json is read once per quiet period; per redraw it cost thousands of reads an hour.
 const QUIET_FOR_MS = 30_000;
 const quietSeen = new Map<string, { at: number; quietMs: number }>();
 
 const boardQuietMs = Effect.fn("Flows.boardQuietMs")(function* (userDir: string) {
   const now = yield* Clock.currentTimeMillis;
   const seen = quietSeen.get(userDir);
-  if (seen && now - seen.at < QUIET_FOR_MS) return seen.quietMs;
+  if (seen && now - seen.at < QUIET_FOR_MS) {
+    return seen.quietMs;
+  }
   const quietMs = (yield* loadDefaults(userDir)).boardQuietMs;
   quietSeen.set(userDir, { at: now, quietMs });
   return quietMs;
 });
 
-/** Every Run, every Task and every registered agent, read once for all the Views of a load. */
 interface Scanned {
   readonly runs: ReadonlyArray<RunFacts>;
   readonly tasks: ReadonlyArray<TaskRecord>;
   readonly registered: ReadonlyArray<AgentEntry>;
 }
 
-/** Where a board's Runs are read from. */
 type RunsOf = (
   env: PluginEnv,
 ) => Effect.Effect<
@@ -1553,7 +1463,6 @@ type RunsOf = (
 
 type RecordsOf = (env: PluginEnv) => ReturnType<typeof hostRecordsOf>;
 
-// A host that cannot be asked says so on the board itself.
 const hostRecordsOf = (env: PluginEnv) =>
   Effect.all({
     tasks: hostTasks(env).pipe(Effect.orElseSucceed(() => [])),
@@ -1564,10 +1473,11 @@ const scan = Effect.fn("Flows.scan")(function* (
   env: PluginEnv,
   from: Pick<ControlSession, "runsOf" | "recordsOf">,
 ) {
-  return {
+  const returned: Scanned = {
     runs: yield* (from.runsOf ?? listRuns)(env),
     ...(yield* (from.recordsOf ?? hostRecordsOf)(env)),
-  } satisfies Scanned;
+  };
+  return returned;
 });
 
 const boardOf = Effect.fn("Flows.boardOf")(function* (session: ControlSession, scanned: Scanned) {
@@ -1575,8 +1485,8 @@ const boardOf = Effect.fn("Flows.boardOf")(function* (session: ControlSession, s
     ...session,
     stateDir: session.stateDir,
     workspaceLabel: null,
-    // A core that will not answer means "nothing verified live", not a crash.
-    alive: yield* session.herdr.agentList().pipe(Effect.orElseSucceed((): AgentInfo[] => [])),
+    // WARNING: a core that will not answer means nothing is verified alive, not a crash.
+    alive: yield* session.herdr.agentList().pipe(Effect.orElseSucceed(() => [])),
     worktrees: yield* reportedWorktrees(session.stateDir),
     pluginRoot: session.pluginRoot,
     ...(session.releases && { releases: session.releases }),
@@ -1586,10 +1496,11 @@ const boardOf = Effect.fn("Flows.boardOf")(function* (session: ControlSession, s
   return view;
 });
 
-/** The release notice is independent of either board's Run and workspace lists. */
 const boardRelease = Effect.fn("Flows.boardRelease")(function* (session: ControlSession) {
   const fs = yield* FileSystem.FileSystem;
-  if (yield* fs.exists(`${session.pluginRoot}/.git`)) return null;
+  if (yield* fs.exists(`${session.pluginRoot}/.git`)) {
+    return null;
+  }
   return yield* newerRelease(
     session.releases ?? RELEASES,
     manifest.version,
@@ -1597,8 +1508,7 @@ const boardRelease = Effect.fn("Flows.boardRelease")(function* (session: Control
   );
 });
 
-/** A banner above a question: definition load errors, above the list they were skipped from. */
-function headed(header: string, banner?: string): string {
+function headed(header: string, banner?: string) {
   return banner ? `${banner}\n\n${header}` : header;
 }
 
@@ -1610,10 +1520,6 @@ const bail = Effect.fn("Flows.bail")(function* (
   return yield* notice(prompts, message, 1, extra);
 });
 
-/**
- * Something the human has to see before the flow ends. A menu of one, because a thing you
- * acknowledge is a thing you can click.
- */
 const notice = Effect.fn("Flows.notice")(function* (
   prompts: FlowPrompts,
   message: string,

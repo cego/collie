@@ -1,11 +1,6 @@
-const has = (env: Record<string, string | undefined>, ...names: string[]) =>
+const has = (env: Record<string, string | undefined>, ...names: Array<string>) =>
   names.every((name) => (env[name] ?? "") !== ""); // oxlint-disable-line effecttsgo/prefer-effect-array
 
-/**
- * The bundle signs with `ELECTROBUN_DEVELOPER_ID`, the release's existing secret name, `-`
- * meaning ad hoc. Only a real Developer ID with a complete set of notarization credentials
- * is notarized.
- */
 export const macSigning = (env: Record<string, string | undefined>) => {
   const codesign = has(env, "ELECTROBUN_DEVELOPER_ID");
   const notarize =
@@ -21,8 +16,7 @@ export const macSigning = (env: Record<string, string | undefined>) => {
   return { codesign, notarize };
 };
 
-/** The bundle signs with the hardened runtime, which Bun's JIT and an ad hoc identity's
- * libraries need these to run under. */
+// WARNING: Bun's JIT and an ad hoc identity's libraries need these to run under the hardened runtime.
 export const MAC_ENTITLEMENTS = {
   "com.apple.security.cs.allow-jit": true,
   "com.apple.security.cs.allow-unsigned-executable-memory": true,

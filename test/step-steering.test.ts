@@ -11,8 +11,8 @@ import {
   withdrawStepNote,
 } from "../src/step-steering";
 import { runEffect } from "./support/effect";
+import { stringifyJson } from "../src/json";
 
-/** `effect`, failing where it writes Step steering that changed nothing. */
 const unchanged = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     const records = yield* RunRecords;
@@ -39,7 +39,7 @@ test("unchanged Step steering does not rewrite its state", () =>
           records.put(
             runOfDir("/run"),
             "step-steering.json",
-            JSON.stringify({
+            stringifyJson({
               pauses: [],
               reached: null,
               notes: [

@@ -1,11 +1,10 @@
-// Whether a Harness will work in a directory, or stop and ask first. Claude asks
-// once per directory and remembers the answer in ~/.claude.json; this file is
-// Claude's, so unreadable data is always left untouched.
-
+// WARNING: claude's config is not ours: unreadable data is always left untouched.
 import * as Arr from "effect/Array";
-import { Effect, FileSystem, Path, Schema, type PlatformError } from "effect";
+import { Effect, FileSystem, Path, Schema } from "effect";
+import type { PlatformError } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
-import { isYamlMap, YamlMapSchema, type YamlMap } from "./yaml";
+import { isYamlMap, YamlMapSchema } from "./yaml";
+import type { YamlMap } from "./yaml";
 import { currentPid, withLock } from "./lock";
 
 export type TrustState = "trusted" | "untrusted" | "unknown";
@@ -16,11 +15,9 @@ export interface TrustResult {
 }
 
 export interface Trust {
-  /** `unknown` when the harness has left nothing here to read. */
   readonly state: (
     cwd: string,
   ) => Effect.Effect<TrustState, PlatformError.PlatformError, FileSystem.FileSystem>;
-  /** Writing goes through the pid lock, which is what pulls in the spawner. */
   readonly grant: (
     cwd: string,
   ) => Effect.Effect<
@@ -38,11 +35,11 @@ const paths = Effect.fn("Trust.paths")(function* (cwd: string) {
   return real === cwd ? [cwd] : [cwd, real];
 });
 
-function projects(config: YamlMap): YamlMap {
+function projects(config: YamlMap) {
   return isYamlMap(config.projects) ? config.projects : {};
 }
 
-function trustedIn(config: YamlMap, cwds: ReadonlyArray<string>): boolean {
+function trustedIn(config: YamlMap, cwds: ReadonlyArray<string>) {
   const entries = projects(config);
   return Arr.some(cwds, (path) => {
     const entry = entries[path];
@@ -50,21 +47,20 @@ function trustedIn(config: YamlMap, cwds: ReadonlyArray<string>): boolean {
   });
 }
 
-/** A grant is worth retrying while claude is writing, but not for ever. */
 const GRANT_ATTEMPTS = 3;
 const CHANGED = "changed" as const;
 
-export function claudeTrust(home: string, backupDir: string): Trust {
+export function claudeTrust(home: string, backupDir: string) {
   const configPath = `${home}/.claude.json`;
 
-  /** The file as claude last wrote it, or null when it is not there or cannot be read. */
   const readRaw = Effect.fn("Trust.readRaw")(function* () {
     const fs = yield* FileSystem.FileSystem;
-    if (!(yield* fs.exists(configPath))) return null;
+    if (!(yield* fs.exists(configPath))) {
+      return null;
+    }
     return yield* fs.readFileString(configPath).pipe(Effect.orElseSucceed(() => null));
   });
 
-  /** Those same bytes and what they decode to, so a write can check them both. */
   const readConfig = Effect.fn("Trust.readConfig")(function* () {
     const raw = yield* readRaw();
     const config =
@@ -76,7 +72,9 @@ export function claudeTrust(home: string, backupDir: string): Trust {
 
   const state = Effect.fn("Trust.state")(function* (cwd: string) {
     const { config } = yield* readConfig();
-    if (config === null) return "unknown" as const;
+    if (config === null) {
+      return "unknown" as const;
+    }
     return trustedIn(config, yield* paths(cwd)) ? ("trusted" as const) : ("untrusted" as const);
   });
 
@@ -89,16 +87,13 @@ export function claudeTrust(home: string, backupDir: string): Trust {
     );
   });
 
-  /**
-   * The lock keeps collie's own grants apart; claude takes no lock, so its writes are kept
-   * by giving up rather than by excluding them. Each attempt is built on the bytes it just
-   * read and lands only while those bytes are still the ones on disk, so a claude write in
-   * that window costs this grant a retry instead of costing the user their configuration.
-   */
+  // WARNING: claude takes no lock, so each attempt lands only while the bytes it read are still on disk.
   const writeGrant = Effect.fn("Trust.writeGrant")(function* (cwd: string) {
     for (let attempt = 0; attempt < GRANT_ATTEMPTS; attempt++) {
       const result = yield* tryGrant(cwd);
-      if (result !== CHANGED) return result;
+      if (result !== CHANGED) {
+        return result;
+      }
     }
     return { ok: false, message: `${configPath} kept changing under the grant; nothing written` };
   });
@@ -117,22 +112,25 @@ export function claudeTrust(home: string, backupDir: string): Trust {
       };
     }
     const cwds = yield* paths(cwd);
-    if (trustedIn(config, cwds)) return { ok: true, message: `${cwd} is already trusted` };
+    if (trustedIn(config, cwds)) {
+      return { ok: true, message: `${cwd} is already trusted` };
+    }
 
     const entries = projects(config);
     config.projects = entries;
     for (const projectPath of cwds) {
       const current = entries[projectPath];
       const updated: YamlMap = { mcpServers: {} };
-      if (isYamlMap(current)) Object.assign(updated, current);
+      if (isYamlMap(current)) {
+        Object.assign(updated, current);
+      }
       updated.hasTrustDialogAccepted = true;
       entries[projectPath] = updated;
     }
 
     const info = yield* fs.stat(configPath);
     const backup = pathService.join(backupDir, "claude.json.bak");
-    // The bytes this grant was built on, which are the ones a restore has to put back —
-    // and no more readable than the file they came from, which holds claude's own secrets.
+    // WARNING: the backup holds claude's secrets, so it is no more readable than the original.
     yield* fs.writeFileString(backup, raw);
     yield* fs.chmod(backup, info.mode & 0o777);
     const tmp = `${configPath}.herdr-${yield* currentPid}`;

@@ -1,7 +1,3 @@
-// Reading a plan directory as repositories and waves. Pure: the tickets' text and the
-// checkouts that exist go in, what the fan-out would do comes out, so every rule and
-// every refusal is one small case.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
@@ -83,14 +79,11 @@ test("repositories that block each other are refused, naming the cycle and its t
   expect(plan.refusal?.kind).toBe("cycle");
   expect(plan.refusal?.message).toContain("cego/api");
   expect(plan.refusal?.message).toContain("cego/web");
-  // The tickets that interleave, so the planner knows which ones to move.
   expect(plan.refusal?.message).toContain("03-api");
   expect(plan.waves).toEqual([]);
 });
 
 test("the cycle refusal names the repositories on the cycle and no others", () => {
-  // `docs` blocks nothing and is stuck only because the cycle is: telling the planner to
-  // move its tickets too would be telling it to move the wrong ones.
   const plan = readPlanRepos(
     [
       ticket("01-api", { repo: "cego/api" }),
@@ -129,8 +122,6 @@ test("a repository with no checkout under the root is refused, naming the path",
 });
 
 test("two spellings of one repository are one repository", () => {
-  // `Repo:` is prose an agent wrote, so the same checkout arrives spelled several ways.
-  // Two entries would each be given a run in one wave, against one checkout.
   const plan = readPlanRepos(
     [
       ticket("01-api", { repo: "cego/api" }),
@@ -150,9 +141,6 @@ test("two spellings of one repository are one repository", () => {
 });
 
 test("an unpadded blocker still names the ticket it obviously means", () => {
-  // The skill that writes these lines holds "the numbers of the tickets", so a plan
-  // saying `2` for a file called `02-web.md` is a plan that means `02`. Dropping the
-  // edge would have started both repositories in one wave.
   const plan = readPlanRepos(
     [
       ticket("01-api", { repo: "cego/api" }),
@@ -166,8 +154,7 @@ test("an unpadded blocker still names the ticket it obviously means", () => {
 });
 
 test("only a word that is nothing but a number is a ticket number", () => {
-  // The prompt lets a planner write a number and then prose about it, so the prose is
-  // read as prose: the `2` in "v2" is not an edge onto ticket 02.
+  // WARNING: the number 2 in a plan means 02-web.md; dropping that edge would start both repositories in one wave.
   const plan = readPlanRepos(
     [
       ticket("01-contract", { repo: "cego/api" }),
@@ -178,13 +165,10 @@ test("only a word that is nothing but a number is a ticket number", () => {
   );
 
   expect(plan.refusal).toBeNull();
-  // The client and the web repo each wait on the contract and on nothing else.
   expect(plan.waves).toEqual([["cego/api"], ["cego/client", "cego/web"]]);
 });
 
 test('a line that names a ticket and then says "none" still names that ticket', () => {
-  // "None" is what a line says when it names no ticket, not a word that may not appear
-  // in one that does.
   const plan = readPlanRepos(
     [
       ticket("01-api", { repo: "cego/api" }),
@@ -198,8 +182,6 @@ test('a line that names a ticket and then says "none" still names that ticket', 
 });
 
 test("a blocker that names no ticket of this plan is refused, not dropped", () => {
-  // An edge nobody records is the frontend run starting beside the backend run it
-  // depends on, and nothing anywhere saying an edge was ignored.
   for (const blockedBy of ["the API contract", "07"]) {
     const plan = readPlanRepos(
       [ticket("01-api", { repo: "cego/api" }), ticket("02-web", { repo: "cego/web", blockedBy })],
@@ -210,8 +192,6 @@ test("a blocker that names no ticket of this plan is refused, not dropped", () =
     expect(plan.refusal?.message).toContain("02-web");
   }
 
-  // A line that names its ticket and then says more about it is not one of those: the
-  // edge is recorded, and the rest is prose.
   const annotated = readPlanRepos(
     [
       ticket("01-api", { repo: "cego/api" }),
@@ -224,9 +204,7 @@ test("a blocker that names no ticket of this plan is refused, not dropped", () =
 });
 
 test("two tickets numbered the same are refused, naming both", () => {
-  // A "Blocked by" line names a number, so two tickets wearing one number cannot say
-  // which an edge points at: whichever was read last used to win, and the edge onto the
-  // other was quietly lost.
+  // WARNING: two tickets wearing one number cannot say which an edge points at, so a duplicate is refused.
   const plan = readPlanRepos(
     [
       ticket("01-api", { repo: "cego/api" }),
@@ -246,7 +224,6 @@ test("a repository that is not under the plan's root is refused, naming the tick
   for (const outside of ["../other-project", "/srv/other", "cego/../../other", "~/other"]) {
     const plan = readPlanRepos(
       [ticket("01-api", { repo: "cego/api" }), ticket("02-out", { repo: outside })],
-      // Checked out, so nothing but this rule stops Collie cutting a branch in it.
       new Set(["cego/api", outside]),
     );
 
@@ -257,15 +234,11 @@ test("a repository that is not under the plan's root is refused, naming the tick
 });
 
 test("only the run's own root is a single-repo plan", () => {
-  // `.` and nothing else: the plans a Choice chains rooted where the parent is.
   expect(isSingleRepo(readPlanRepos([ticket("01-a", { repo: "." })], new Set()))).toBe(true);
   expect(isSingleRepo(readPlanRepos([ticket("01-a")], new Set()))).toBe(true);
-  // One repository, but one under the root: it needs a run rooted there, so it is a
-  // wave of one rather than an ordinary chain.
   const named = readPlanRepos([ticket("01-api", { repo: "cego/api" })], new Set(["cego/api"]));
   expect(named.repos).toEqual([{ path: "cego/api", tickets: ["01-api"] }]);
   expect(isSingleRepo(named)).toBe(false);
-  // And a refusal is never one, whatever it names.
   expect(isSingleRepo(readPlanRepos([ticket("01-api", { repo: "cego/api" })], new Set()))).toBe(
     false,
   );
@@ -279,8 +252,6 @@ test("a number claimed twice is refused however many repositories the plan names
     ],
     new Set(["."]),
   );
-  // One repository, so this used to take the shortcut below and never be looked at —
-  // and a "Blocked by: 01" in the same plan could not have said which it meant.
   expect(plan.refusal?.kind).toBe("duplicate-ticket");
   expect(plan.refusal?.message).toContain("01-api.md and 01-web.md");
 });
@@ -329,7 +300,6 @@ test("tickets build in an order that respects Blocked by, and plan order otherwi
   ]);
 
   expect(Arr.map(order, (s) => s.file)).toEqual([
-    // 01 and 04 wait for nothing, in plan order; 03 waits for 01; 02 waits for 03.
     "01-api.md",
     "04-docs.md",
     "03-schema.md",
@@ -355,15 +325,12 @@ test("only this repository's tickets are sliced, and every ticket is returned ex
     "01-api.md",
     "03-more.md",
   ]);
-  // An edge onto a ticket that is not in this slice's repo does not hold it back: that
-  // ordering is the fan-out's, between Runs, and it has already been settled.
+  // WARNING: an edge onto a ticket outside this slice's repo does not hold it back; that ordering is the fan-out's.
   expect(Arr.map(orderedTickets(tickets, "cego/web"), (s) => s.file)).toEqual(["02-web.md"]);
   expect(Arr.map(orderedTickets(tickets), (s) => s.file)).toHaveLength(3);
 });
 
 test("a cycle nothing refused still yields every ticket rather than losing one", () => {
-  // `readPlanRepos` refuses this before a build ever gets here; if one did, losing a
-  // ticket silently would be worse than building them in the order they were written.
   const order = orderedTickets([
     { file: "01-a.md", text: "# A\n\n**Blocked by:** 02\n" },
     { file: "02-b.md", text: "# B\n\n**Blocked by:** 01\n" },
@@ -415,21 +382,22 @@ test("under a Projects root that is no repository, a checkout five levels down i
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "collie-plan-root-" });
-      for (const checkout of ["api", "team/platform/services/billing/ledger"])
+      for (const checkout of ["api", "team/platform/services/billing/ledger"]) {
         yield* fs.makeDirectory(`${root}/${checkout}/.git`, { recursive: true });
+      }
       const plan = `${root}/.plan`;
       yield* fs.makeDirectory(`${plan}/issues`, { recursive: true });
       for (const one of [
         ticket("01-api", { repo: "api" }),
         ticket("02-ledger", { repo: "team/platform/services/billing/ledger", blockedBy: "01" }),
-      ])
+      ]) {
         yield* fs.writeFileString(`${plan}/issues/${one.file}.md`, one.text);
+      }
 
       const read = yield* planReposOf(plan, root);
       expect(read.refusal).toBeNull();
       expect(read.waves).toEqual([["api"], ["team/platform/services/billing/ledger"]]);
 
-      // A directory on the way down is not a checkout, however deep the one below it is.
       yield* fs.writeFileString(
         `${plan}/issues/03-billing.md`,
         ticket("03-billing", { repo: "team/platform/services/billing" }).text,
@@ -466,7 +434,6 @@ test("a ticket's acceptance criteria are its checkboxes, each one whole", () => 
     "**Before round one.** Blocking.",
     "Starred.",
   ]);
-  // A ticket with no such section has its checkboxes wherever they are, but never in code.
   expect(criteriaIn("- [ ] One.\n\n```\n- [ ] Code.\n```\n")).toEqual(["One."]);
   expect(criteriaIn("# 01\n\nNo boxes here.\n")).toEqual([]);
   const [slice] = orderedTickets([{ file: "01-a.md", text }]);

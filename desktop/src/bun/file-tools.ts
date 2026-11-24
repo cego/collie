@@ -1,5 +1,3 @@
-// Claude Code's file tools for a path on a Machine, answered by its host (ADR-0011).
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -11,19 +9,9 @@ import type { JsonObject } from "../../../src/schema";
 import { decodeStrict, jsonSchemaOf } from "../../../src/toolkit";
 import { IMAGE_BYTES, imageSize, LONG_EDGE, shownAs, TEXTUAL } from "../shared/attachments";
 import { readWhole } from "./carried";
-import {
-  type ChatMachine,
-  declareVoice,
-  type FlockChat,
-  newRequest,
-  reach,
-  readable,
-  type Reached,
-  reasonOf,
-  writable,
-} from "./flock-tools";
+import { declareVoice, newRequest, reach, readable, reasonOf, writable } from "./flock-tools";
+import type { ChatMachine, FlockChat, Reached } from "./flock-tools";
 
-/** What a file tool hands the model: text, or an image it can see. */
 export type ToolContent =
   | { readonly type: "text"; readonly text: string }
   | { readonly type: "image"; readonly data: string; readonly mimeType: string };
@@ -133,27 +121,27 @@ export const FILE_TOOLS = [
 
 export const isFileTool = (name: string) => Arr.some(FILE_TOOLS, (one) => one.name === name);
 
-const text = (said: string): ReadonlyArray<ToolContent> => [{ type: "text", text: said }];
+const text: (said: string) => ReadonlyArray<ToolContent> = (said) => [{ type: "text", text: said }];
 
-/** Where a `<machine>:<path>` points, or why it does not. */
 const placed = (flock: FlockChat, named: string) => {
   const colon = Option.getOrElse(pipe_(named, Str.indexOf(":")), () => -1);
   const machine = Option.getOrUndefined(
     Arr.findFirst(flock.machines(), (one) => one.name === pipe_(named, Str.slice(0, colon))),
   );
-  if (colon <= 0)
+  if (colon <= 0) {
     return Result.fail(
       `${named} names no Machine: write it as <machine>:<path>, one of ${Arr.join(
         Arr.map(flock.machines(), (one) => one.name),
         ", ",
       )}. Files on this computer are read with Read.`,
     );
-  if (machine === undefined)
+  }
+  if (machine === undefined) {
     return Result.fail(`No Machine "${pipe_(named, Str.slice(0, colon))}".`);
+  }
   return Result.succeed({ machine, path: pipe_(named, Str.slice(colon + 1)) });
 };
 
-/** The Machine reached, refused where its host does not take files. */
 const takingFiles = (reaching: Effect.Effect<Reached, HostRefused>) =>
   Effect.filterOrFail(
     reaching,
@@ -167,12 +155,10 @@ const takingFiles = (reaching: Effect.Effect<Reached, HostRefused>) =>
 const readingFiles = (machine: ChatMachine) =>
   machine.board._tag === "Live" ? takingFiles(reach(machine)) : readable(machine);
 
-/** How many lines a read gives when it is not told. */
 const READ_LINES = 2000;
-/** The most of a text file a read takes, so one with no newlines is not read whole. */
+// WARNING: a file with no newlines must not be read whole.
 const READ_BYTES = 8 * 1024 * 1024;
 
-/** The most of one line a read shows. */
 const LINE_CHARS = 2000;
 
 const numbered = (lines: ReadonlyArray<string>, from: number) =>
@@ -194,27 +180,31 @@ const read = Effect.fn("FileTools.read")(function* (
   const from = Math.max(1, input.offset ?? 1);
   const limit = Math.max(1, input.limit ?? READ_LINES);
   const newlines = (bytes: Uint8Array) => bytes.filter((byte) => byte === 10).length;
-  // The first part says what the file is, so only what is shown is read whole.
   const head = yield* readWhole(machine, path, () => true);
   const { mediaType, size } = head.file;
   const textual = TEXTUAL.test(mediaType) && !head.bytes.subarray(0, 8192).includes(0);
   if (shownAs(mediaType) !== undefined && size <= IMAGE_BYTES) {
     const { bytes } = yield* readWhole(machine, path);
     const dimensions = imageSize(bytes);
-    if (dimensions !== null && Math.max(dimensions.width, dimensions.height) <= LONG_EDGE)
+    if (dimensions !== null && Math.max(dimensions.width, dimensions.height) <= LONG_EDGE) {
       return [{ type: "image", data: Base64.encode(bytes), mimeType: mediaType }] as const;
+    }
     return text(
       `${named} is ${mediaType}, ${size} bytes${dimensions === null ? "" : `, ${dimensions.width}×${dimensions.height}`}: not shown, as only an image of at most ${LONG_EDGE} px on its long edge can be.`,
     );
   }
-  if (!textual) return text(`${named} is ${mediaType}, ${size} bytes.`);
+  if (!textual) {
+    return text(`${named} is ${mediaType}, ${size} bytes.`);
+  }
   let seen = 0;
   let taken = 0;
   const { file, bytes } = yield* readWhole(machine, path, (part) => {
     taken += part.length;
     return (seen += newlines(part)) >= from + limit || taken >= READ_BYTES;
   });
-  if (file.size === 0) return text(`${named} is empty.`);
+  if (file.size === 0) {
+    return text(`${named} is empty.`);
+  }
   const lines = Str.split(pipe_(new TextDecoder().decode(bytes), Str.replace(/\n$/, "")), "\n");
   const shown = lines.slice(from - 1, from - 1 + limit);
   return text(
@@ -224,7 +214,6 @@ const read = Effect.fn("FileTools.read")(function* (
   );
 });
 
-/** A line a host answered that starts with one of its paths, named by its Machine. */
 const onMachine = (machine: Pick<ChatMachine, "name">, line: string) =>
   pipe_(line, Str.startsWith("/")) ? `${machine.name}:${line}` : line;
 
@@ -255,16 +244,24 @@ const answer = Effect.fn("FileTools.answer")(function* (
   switch (name) {
     case "collie_read": {
       const asked = decodeStrict(ReadInput)(input);
-      if (Result.isFailure(asked)) return text(`collie_read: ${asked.failure}`);
+      if (Result.isFailure(asked)) {
+        return text(`collie_read: ${asked.failure}`);
+      }
       const at = where(asked.success.file_path);
-      if (Result.isFailure(at)) return text(at.failure);
+      if (Result.isFailure(at)) {
+        return text(at.failure);
+      }
       return yield* read(yield* readingFiles(at.success.machine), at.success.path, asked.success);
     }
     case "collie_glob": {
       const asked = decodeStrict(GlobInput)(input);
-      if (Result.isFailure(asked)) return text(`collie_glob: ${asked.failure}`);
+      if (Result.isFailure(asked)) {
+        return text(`collie_glob: ${asked.failure}`);
+      }
       const at = where(asked.success.path);
-      if (Result.isFailure(at)) return text(at.failure);
+      if (Result.isFailure(at)) {
+        return text(at.failure);
+      }
       const { path } = at.success;
       const machine = yield* readingFiles(at.success.machine);
       const found = yield* machine.door.glob({ pattern: asked.success.pattern, path });
@@ -272,9 +269,13 @@ const answer = Effect.fn("FileTools.answer")(function* (
     }
     case "collie_grep": {
       const asked = decodeStrict(GrepInput)(input);
-      if (Result.isFailure(asked)) return text(`collie_grep: ${asked.failure}`);
+      if (Result.isFailure(asked)) {
+        return text(`collie_grep: ${asked.failure}`);
+      }
       const at = where(asked.success.path);
-      if (Result.isFailure(at)) return text(at.failure);
+      if (Result.isFailure(at)) {
+        return text(at.failure);
+      }
       const { path } = at.success;
       const machine = yield* readingFiles(at.success.machine);
       const one = asked.success;
@@ -297,9 +298,13 @@ const answer = Effect.fn("FileTools.answer")(function* (
     }
     case "collie_write": {
       const asked = decodeStrict(WriteInput)(input);
-      if (Result.isFailure(asked)) return text(`collie_write: ${asked.failure}`);
+      if (Result.isFailure(asked)) {
+        return text(`collie_write: ${asked.failure}`);
+      }
       const at = where(asked.success.file_path);
-      if (Result.isFailure(at)) return text(at.failure);
+      if (Result.isFailure(at)) {
+        return text(at.failure);
+      }
       const { path } = at.success;
       const machine = yield* takingFiles(writable(at.success.machine));
       yield* declareVoice(flock, machine);
@@ -312,9 +317,13 @@ const answer = Effect.fn("FileTools.answer")(function* (
     }
     case "collie_edit": {
       const asked = decodeStrict(EditInput)(input);
-      if (Result.isFailure(asked)) return text(`collie_edit: ${asked.failure}`);
+      if (Result.isFailure(asked)) {
+        return text(`collie_edit: ${asked.failure}`);
+      }
       const at = where(asked.success.file_path);
-      if (Result.isFailure(at)) return text(at.failure);
+      if (Result.isFailure(at)) {
+        return text(at.failure);
+      }
       const { path } = at.success;
       const machine = yield* takingFiles(writable(at.success.machine));
       yield* declareVoice(flock, machine);
@@ -332,7 +341,6 @@ const answer = Effect.fn("FileTools.answer")(function* (
   }
 });
 
-/** One call to a file tool, answered as content, a refusal included. */
 export const callFileTool = (flock: FlockChat, name: string, input: JsonObject) =>
   answer(flock, name, input).pipe(
     Effect.catch((error) => Effect.succeed(text(`${name}: ${reasonOf(error)}`))),

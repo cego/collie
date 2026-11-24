@@ -12,8 +12,8 @@ import {
   changeFallbacks,
   agentSettingChanges,
   rememberCatalogues,
-  type MachineCatalogue,
 } from "../desktop/src/shared/settings-agents";
+import type { MachineCatalogue } from "../desktop/src/shared/settings-agents";
 import { editSetting, NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
 
 const readings: ReadonlyArray<MachineCatalogue> = [
@@ -158,7 +158,7 @@ test("a native-default model offers its reported efforts and preserves the confi
 });
 
 test("native defaults merge each Machine's capabilities and use reported efforts when no default is identified", () => {
-  const entry = (model: string, efforts: string[], isDefault = false) => ({
+  const entry = (model: string, efforts: Array<string>, isDefault = false) => ({
     model,
     label: model,
     description: null,
@@ -310,7 +310,9 @@ test("fallback order is saved and entries carry their Subscription usage without
   const changed = changeFallbacks(value, { at: 1, move: "up" });
   const saved = editSetting(NO_FLOCK_SETTINGS, "fallbacks", changed, "2026-10-29T12:00:00Z");
   expect(saved).not.toHaveProperty("refused");
-  if ("refused" in saved) throw new Error(saved.refused);
+  if ("refused" in saved) {
+    throw new Error(saved.refused);
+  }
   expect(saved.settings.fallbacks?.value).toEqual(["codex", "claude/sonnet", "pi/google/gemini"]);
   const view = fallbackList(
     value,

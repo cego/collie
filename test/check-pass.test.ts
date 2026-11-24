@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { ConfigProvider, Effect, Exit, FileSystem, Path } from "effect";
+import type { Path } from "effect";
+import { ConfigProvider, Effect, Exit, FileSystem } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { Host } from "../src/sdk";
 import { evidenceDir, foundationLayer, runDir, STOP } from "../src/engine";
@@ -32,12 +33,12 @@ beforeEach(() =>
         ["init", "-q"],
         ["config", "user.email", "t@example.com"],
         ["config", "user.name", "t"],
-      ])
+      ]) {
         yield* exec(["git", ...args], { cwd: rig.projectDir });
+      }
       yield* fs.writeFileString(`${rig.projectDir}/thing.ts`, "export const one = 1;\n");
       yield* exec(["git", "add", "-A"], { cwd: rig.projectDir });
       yield* exec(["git", "commit", "-qm", "first"], { cwd: rig.projectDir });
-      // Outside the tree, so running it moves nothing; red while the flag file is there.
       tool = `${rig.root}/unit`;
       yield* fs.writeFileString(tool, `#!/bin/sh\n[ ! -f ${rig.root}/red ]\n`);
       yield* fs.chmod(tool, 0o755);
@@ -51,7 +52,6 @@ beforeEach(() =>
 
 afterEach(() => runEffect(rig.close()));
 
-/** An agent's `collie verify`, as the host collects it. */
 const agentRan = (argv: ReadonlyArray<string> = [], expect: "pass" | "fail" = "pass") =>
   collect(evidenceDir(dir, runId), {
     run: runId,
@@ -66,7 +66,6 @@ const agentRan = (argv: ReadonlyArray<string> = [], expect: "pass" | "fail" = "p
 const journal = () =>
   readVerifications(evidenceDir(dir, runId)).pipe(Effect.provide(recordsAt(dir)), Effect.orDie);
 
-/** The host's check of `unit`, for the gate unless asked otherwise, once `before` has run inside that host. */
 const gate = <A>(
   before: Effect.Effect<
     A,
@@ -180,7 +179,6 @@ test("where the latest record of that command on this tree failed, the gate runs
     }),
   ));
 
-/** The host's check, on a Machine whose memory is read from this rig and again every 50 ms. */
 const gateOnRig = <A>(
   before: Parameters<typeof gate<A>>[0],
   asked?: Parameters<typeof gate<A>>[1],
@@ -200,7 +198,9 @@ test("a Check pass waits while its Machine is short of memory, runs nothing mean
     Effect.gen(function* () {
       let ranWhileWaiting = -1;
       const freeOnceWaiting = Effect.gen(function* () {
-        while ((yield* waitingFor()) === null) yield* Effect.sleep("20 millis");
+        while ((yield* waitingFor()) === null) {
+          yield* Effect.sleep("20 millis");
+        }
         ranWhileWaiting = (yield* journal()).length;
         yield* rig.memory(50).pipe(Effect.orDie);
       });
@@ -225,7 +225,9 @@ test("a stop of a Run whose Check pass waits for memory runs nothing, however so
   runEffect(
     Effect.gen(function* () {
       const stopOnceWaiting = Effect.gen(function* () {
-        while ((yield* waitingFor()) === null) yield* Effect.sleep("20 millis");
+        while ((yield* waitingFor()) === null) {
+          yield* Effect.sleep("20 millis");
+        }
         yield* RunRecords.use((records) => records.setControl(STOP, runId, "2026-09-14T10:00:00Z"));
         yield* rig.memory(50).pipe(Effect.orDie);
       });

@@ -1,14 +1,7 @@
 import * as Arr from "effect/Array";
-import {
-  Cause,
-  Context,
-  Duration,
-  Effect,
-  type FileSystem,
-  type Path,
-  type PlatformError,
-} from "effect";
-import type { Connection, ConnectionId, ConnectionReading } from "./connection-model";
+import { Cause, Context, Duration, Effect } from "effect";
+import type { FileSystem, Path, PlatformError } from "effect";
+import type { ConnectionId, ConnectionReading } from "./connection-model";
 import type { PluginEnv } from "./env";
 import {
   helleEnvPath,
@@ -18,7 +11,8 @@ import {
   probeHelle,
   probeLinearMcp,
 } from "./connection-probes";
-import { shell, type Runner } from "./mr";
+import { shell } from "./mr";
+import type { Runner } from "./mr";
 import type { ChildProcessSpawner } from "effect/process";
 import { redact } from "./redact";
 import { probeSlack, SLACK_FIX } from "./slack-credentials";
@@ -26,9 +20,8 @@ import { slackApi } from "./slack";
 import { GLAB_RELOGIN } from "./forge/gitlab";
 import { ghLogin } from "./forge/github";
 
-export const CONNECTION_TIMEOUT_MS = 6_000;
+export const CONNECTION_TIMEOUT_MS = 6000;
 
-/** How long a Connection read waits on the host's `Clock` before it reads `broken`. */
 export const ConnectionDeadline = Context.Reference<Duration.Duration>(
   "collie/ConnectionDeadline",
   {
@@ -62,7 +55,7 @@ export const readConnections = <R, E>(probes: ReadonlyArray<ConnectionProbe<R, E
                   fix,
                 }),
           ),
-          Effect.map((reading): Connection => ({ id, reading })),
+          Effect.map((reading) => ({ id, reading })),
         ),
       { concurrency: "unbounded" },
     );

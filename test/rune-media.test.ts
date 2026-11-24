@@ -22,9 +22,11 @@ test.skipIf(process.platform !== "linux")(
           dir,
         );
         expect(libdir.code).toBe(0);
-        const searches: string[][] = [];
+        const searches: Array<Array<string>> = [];
         const run: typeof shell = (command, args, cwd, env) => {
-          if (command === "dpkg-query") searches.push(args);
+          if (command === "dpkg-query") {
+            searches.push(args);
+          }
           return shell(command, args, cwd, env);
         };
         yield* bundleLinuxMedia(
@@ -48,7 +50,7 @@ test.skipIf(process.platform !== "linux")(
           3,
         );
 
-        // dpkg-query returns partial stdout when just one path has no owner: refuse it all.
+        // WARNING: dpkg-query prints partial stdout when one path has no owner, so refuse the whole set.
         const unowned = `${dir}/unowned-library.so`;
         yield* fs.writeFileString(unowned, "unowned");
         const missing: typeof shell = (command, args, cwd, env) =>
@@ -60,10 +62,11 @@ test.skipIf(process.platform !== "linux")(
           missing,
         ).pipe(Effect.exit);
         expect(Exit.isFailure(refused)).toBe(true);
-        if (Exit.isFailure(refused)) expect(Cause.pretty(refused.cause)).toContain(unowned);
+        if (Exit.isFailure(refused)) {
+          expect(Cause.pretty(refused.cause)).toContain(unowned);
+        }
       }),
     ),
-  120_000,
 );
 
 test("dependency resolution refuses missing libraries and leaves libc to the target system", () => {

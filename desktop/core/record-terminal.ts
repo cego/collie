@@ -1,15 +1,10 @@
-// Records what Desktop's `terminal` stream sends for a pane, as NDJSON `TerminalEvent`s: the
-// events `openTerminal` makes once the core terminal is attached, while typing each `--type`
-// once the terminal is idle.
-//
-//   bun desktop/core/record-terminal.ts --core <core terminal> --out <file>
-
 import { parseArgs } from "node:util";
 import { Effect, Stream } from "effect";
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import { openTerminal } from "../../desktop/src/bun/terminal";
 import { localRoute } from "../../desktop/src/bun/machine";
 import type { PaneAt } from "../../src/board-model";
+import { stringifyJson } from "../../src/json";
 
 const { values: flags } = parseArgs({
   args: Bun.argv.slice(2),
@@ -29,14 +24,14 @@ if (flags.out === undefined || flags.core === undefined) {
 const out = flags.out;
 const idle = Number(flags.idle);
 const place = { session: null, workspace: "recording", tab: null };
-// A core terminal is addressed by its core id in both fields.
 const at: PaneAt = { ...place, pane: flags.core, core: flags.core };
 
 let lastEvent = Date.now();
 const lines: Array<string> = [];
-/** Until nothing has come for `idle` ms. */
 const settled = Effect.promise(async () => {
-  while (Date.now() - lastEvent < idle) await Bun.sleep(50);
+  while (Date.now() - lastEvent < idle) {
+    await Bun.sleep(50);
+  }
 });
 
 BunRuntime.runMain(
@@ -52,7 +47,7 @@ BunRuntime.runMain(
         Stream.runForEach(opened.events, (event) =>
           Effect.sync(() => {
             lastEvent = Date.now();
-            lines.push(JSON.stringify(event));
+            lines.push(stringifyJson(event));
           }),
         ),
       );

@@ -1,15 +1,4 @@
-// What a confirmed action does to a Run, and the one place each kind is carried out.
-//
-// The actions are the same whoever confirmed them — a human on the board, a chat turn, a
-// CLI `confirm` — so they are registered once, here, against the host that is running the
-// work. An action kind with nothing registered for it is refused rather than reported as
-// done; `executors.ts` is what holds that line, and this only fills it in.
-//
-// Its own module rather than part of `operations.ts`, because carrying an action out means
-// asking the host, and `lifecycle.ts` — the client side of the host — reads its refusals
-// from `operations.ts`. One direction each way is a cycle; one module downstream of both
-// is not.
-
+// WARNING: carrying out needs the host, and lifecycle reads operations, so this module sits downstream of both.
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -21,7 +10,8 @@ import type { PlatformError } from "effect/PlatformError";
 import { reason } from "./naming";
 import type { PlatformServices } from "./platform";
 import type { Records } from "./records";
-import { executorFor, registerExecutor, registeredKinds, type ExecutionResult } from "./executors";
+import { executorFor, registerExecutor, registeredKinds } from "./executors";
+import type { ExecutionResult } from "./executors";
 import type { PluginEnv } from "./env";
 import {
   answerRun,
@@ -47,14 +37,8 @@ import { agentStartRefusal, CHAT_CHECKOUT_FIX } from "./agent-start";
 import { RESERVED_INPUTS } from "./sdk";
 import { PROJECTS_ROOT_OPTION, projectsRoot, repositoryCheckout } from "./projects";
 import { isOpen, listTasks, removeTask } from "./task";
-import {
-  clearOverride,
-  collieOwnRefusal,
-  err,
-  workspaceNamed,
-  type Failure,
-  type OpResult,
-} from "./operations";
+import { clearOverride, collieOwnRefusal, err, workspaceNamed } from "./operations";
+import type { Failure, OpResult } from "./operations";
 import { Herdr } from "./herdr";
 import { runDir } from "./engine";
 import {
@@ -89,11 +73,11 @@ import {
   stepSettled,
   stepStarted,
   voiceOf,
-  type Actor,
-  type ProposalRecord,
 } from "./proposals";
+import type { Actor, ProposalRecord } from "./proposals";
 import type { Action } from "./actions";
-import { ProposalRefused, type ProposalCarried, type StepResult } from "./board-model";
+import { ProposalRefused } from "./board-model";
+import type { ProposalCarried, StepResult } from "./board-model";
 import { fingerprint } from "./verify";
 import { findRun } from "./runs";
 
@@ -104,11 +88,7 @@ const takesFields = Schema.decodeUnknownOption(
   }),
 );
 
-/**
- * The input a follow-up's words go to, whatever it is called: its one required argument,
- * or its one argument where none is required. Otherwise why there is none.
- */
-export function followUpField(drawn: Schema.Json | null): { field: string } | { refused: string } {
+export function followUpField(drawn: Schema.Json | null) {
   const takes = Option.getOrUndefined(takesFields(drawn));
   const open = Rec.keys(takes?.properties ?? {});
   const required = takes?.required ?? [];
@@ -118,16 +98,13 @@ export function followUpField(drawn: Schema.Json | null): { field: string } | { 
     : { field };
 }
 
-/**
- * Every action kind this build can carry out, against the host that owns the work.
- * Called once per process by whichever front door is about to look an executor up.
- */
 export const registerRunExecutors = Effect.fn("runActions.register")(function* () {
-  // Once per process. A front door calls this before it looks an executor up, and two
-  // calls in one process would be the same module claiming an action kind twice.
-  if (registeredKinds().length > 0) return;
-  const failed = (note: string): ExecutionResult => ({ state: "failed", note });
-  const settled = (result: OpResult | Failure): ExecutionResult =>
+  // WARNING: a second registration would claim an action kind twice, so a repeat call returns early.
+  if (registeredKinds().length > 0) {
+    return;
+  }
+  const failed: (note: string) => ExecutionResult = (note) => ({ state: "failed", note });
+  const settled: (result: OpResult | Failure) => ExecutionResult = (result) =>
     result.ok ? { state: "applied", note: result.human } : failed(result.error.message);
   const carry = (
     what: Effect.Effect<OpResult | Failure, PlatformError, PlatformServices | Records>,
@@ -167,8 +144,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         answerRun(env, {
           door: by,
           runId: action.run,
-          // The question as the board named it, so an answer that arrives after it was
-          // replaced lands on the one it was given rather than on whatever is open now.
+          // WARNING: an answer lands on the question it was given, not whatever is open now.
           decision: action.choiceId === "" ? null : action.choiceId,
           value: action.answer,
           request: by.requestId,
@@ -247,15 +223,15 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       }
       const amended = yield* updateIntent(dir, (intent) =>
         Effect.gen(function* () {
-          if (intent === null)
+          if (intent === null) {
             return yield* Effect.fail(`Run "${action.run}" has no Intent to amend`);
-          if (intent.version !== action.base_version)
+          }
+          if (intent.version !== action.base_version) {
             return yield* Effect.fail(
               `the Intent is v${intent.version}, not v${action.base_version}`,
             );
-          // A constraint is taken in the human's own words — a `semantic` one, because
-          // nothing a model writes is a rule Collie can check by itself. The other two
-          // amendments take the patch as the goal, and as the constraint's id.
+          }
+          // WARNING: a constraint is semantic: a model's words are not a rule Collie can check by itself.
           return amendIntent(
             intent,
             action.change === "set-goal"
@@ -278,13 +254,9 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
           );
         }),
       );
-      // Nothing is told: a Run reads its Intent at its next boundary, from what this has
-      // just written.
       return { state: "applied" as const, note: `intent v${amended?.version}` };
     }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
   );
-  // Through the same host grant as `run intent verification`, and the same Intent amendment,
-  // so what `intent show` lists is what the gate will run.
   registerExecutor("set_verification", (action, by, env) =>
     Effect.gen(function* () {
       const command = action.command ?? null;
@@ -295,10 +267,11 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         request: by.requestId,
         door: by,
       });
-      if (!granted.ok) return failed(granted.error.message);
+      if (!granted.ok) {
+        return failed(granted.error.message);
+      }
       const dir = runDir(env.stateDir, action.run);
-      // The grant is what the gate runs; an Intent that failed to follow it is reported,
-      // not taken for the grant failing.
+      // WARNING: an Intent that failed to follow the grant is reported as such, not as the grant failing.
       const unlisted = yield* updateIntent(dir, (intent) =>
         intent === null
           ? Effect.succeed(null)
@@ -325,11 +298,12 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       };
     }),
   );
-  // A finished Run is the usual one: its checks were named while it ran.
   registerExecutor("remember_verification", (action, _by, env) =>
     Effect.gen(function* () {
       const run = yield* findRun(env, action.run);
-      if (run === null) return failed(`no run "${action.run}"`);
+      if (run === null) {
+        return failed(`no run "${action.run}"`);
+      }
       const remembered = yield* rememberChecks(env, {
         runId: action.run,
         checkouts: [run.cwd, run.project],
@@ -363,9 +337,6 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       }),
     ),
   );
-  // Through the same door `run start` takes, so a confirmed proposal and a typed command
-  // settle Inputs the same way. Nothing is inferred: the action names its checkout and
-  // every Input, and a gap is refused with what would fill it (ADR-0033).
   registerExecutor("start", (action, by, env) =>
     Effect.gen(function* () {
       const named = action.workspace ?? action.inputs.workspace;
@@ -382,10 +353,14 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
             ? repository
             : { found: { cwd: repository.path, label: named ?? "" } }
           : yield* workspaceNamed(env, named);
-      if (where !== null && "error" in where) return failed(where.error);
+      if (where !== null && "error" in where) {
+        return failed(where.error);
+      }
       const own =
         where === null ? null : yield* collieOwnRefusal(env, where.found.label, where.found.cwd);
-      if (own !== null) return failed(own);
+      if (own !== null) {
+        return failed(own);
+      }
       const rooted = where === null ? env : { ...env, cwd: where.found.cwd };
       const fields = Rec.toEntries(action.inputs);
       const input = {
@@ -393,22 +368,25 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         json: {},
       };
       const launch = Rec.fromEntries(Arr.filter(fields, ([name]) => name in RESERVED_INPUTS));
-      if (atRoot) launch.workspace = PROJECTS_ROOT_OPTION;
-      else if (repository !== null && named !== undefined) launch.workspace = named;
+      if (atRoot) {
+        launch.workspace = PROJECTS_ROOT_OPTION;
+      } else if (repository !== null && named !== undefined) {
+        launch.workspace = named;
+      }
       const saved = yield* moduleFor(rooted, action.workflow);
       if (saved !== null && "inputs" in saved) {
         const refused = yield* agentStartRefusal(rooted, saved, input, {
           named: atRoot ? (yield* projectsRoot(env)).path : (where?.found.cwd ?? null),
           fix: CHAT_CHECKOUT_FIX,
         });
-        if (refused !== null) return failed(refused.error.message);
+        if (refused !== null) {
+          return failed(refused.error.message);
+        }
       }
       const started = yield* startRun(rooted, {
         door: by,
         id: action.workflow,
         request: by.requestId,
-        // Text, as the action carries it: the module's own schema is what turns it into
-        // the value it takes, exactly as a typed `run start` does.
         input,
         options: launch,
         task: { mode: "new" },
@@ -432,23 +410,24 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   );
   registerExecutor("update_defaults", (action, _by, env) =>
     Effect.gen(function* () {
-      // The named workspace's scope, never this process's. A Run reads its defaults under
-      // the workspace it was started in; the board confirming a proposal is in the Home,
-      // and writing there would be writing a file no Run opens.
+      // WARNING: the named workspace's scope, never this process's: a Run reads its defaults where it was started.
       const where = yield* workspaceNamed(env, action.workspace);
-      if (where === null) return failed("update_defaults has to name a workspace");
-      if ("error" in where) return failed(where.error);
+      if (where === null) {
+        return failed("update_defaults has to name a workspace");
+      }
+      if ("error" in where) {
+        return failed(where.error);
+      }
       const scope = scopeFor(where.found.cwd);
       const file = yield* defaultsPath(env.stateDir, scopeKey(scope));
       const current = (yield* readDefaults(file)) ?? EMPTY_DEFAULTS;
       if (action.change === "remove-constraint") {
-        // By id, and refused when nothing has it: ids are a hash of the text, so a
-        // constraint named in prose matches none — and reporting that as applied would
-        // tell the human a standing constraint was dropped that is still there.
-        if (!Arr.some(current.constraints, (c) => c.id === action.text))
+        // WARNING: ids are hashes of the text, so a prose name matches none and is refused, not reported as applied.
+        if (!Arr.some(current.constraints, (c) => c.id === action.text)) {
           return failed(
             `no default constraint "${action.text}" in ${where.found.label}; remove one by the id \`collie_installation\` lists`,
           );
+        }
         const next = {
           ...current,
           constraints: Arr.filter(current.constraints, (c) => c.id !== action.text),
@@ -457,8 +436,9 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         return { state: "applied" as const, note: describeDefaults(next) };
       }
       const parsed = parseConstraint(action.text, "warn");
-      if ("error" in parsed) return failed(parsed.error);
-      // Filed as what it is: a default, not something a human typed for one Run.
+      if ("error" in parsed) {
+        return failed(parsed.error);
+      }
       const constraint = { ...parsed, source: "workspace-default" as const, since: 1 };
       const next = {
         ...current,
@@ -471,16 +451,17 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       return { state: "applied" as const, note: describeDefaults(next) };
     }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
   );
-  // A persona is Markdown and is forked by copying it. A workflow is a module, and
-  // `collie workflow fork` writes one that imports what it keeps — which is not this.
   registerExecutor("fork_definition", (action, _by, env) =>
     Effect.gen(function* () {
-      if (action.what !== "persona")
+      if (action.what !== "persona") {
         return failed("a workflow is forked with `collie workflow fork`, which writes a module");
+      }
       const layer = action.layer ?? "user";
       const available = yield* layers(env);
       const found = (yield* loadDefinitions(available)).personas.get(action.name);
-      if (!found) return failed(`No persona "${action.name}".`);
+      if (!found) {
+        return failed(`No persona "${action.name}".`);
+      }
       const result = yield* forkResolvedDefinition(
         { path: found.path, kind: "personas", steps: [], body: found.body },
         available[layer].dir,
@@ -505,15 +486,16 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       action.machine,
       elsewhereCleanup,
       Effect.gen(function* () {
-        // A closed Task that no Run belongs to is work nobody can reach. A listing that
-        // could not be read keeps every Task.
+        // WARNING: an unreadable listing keeps every Task, since it cannot prove any is unreachable.
         const listing = yield* runViews(env, null);
         const owned = new Set(Arr.map(listing.runs, (run) => run.task));
         const gone =
           listing.unreadable === null
             ? Arr.filter(yield* listTasks, (task) => !isOpen(task) && !owned.has(task.id))
             : [];
-        for (const task of gone) yield* removeTask(task.id);
+        for (const task of gone) {
+          yield* removeTask(task.id);
+        }
         return {
           state: "applied" as const,
           note: `forgot ${gone.length} closed Tasks`,
@@ -526,7 +508,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       machine,
       `use collie schedule --machine ${machine} for another Machine`,
       changeSchedule(env, { door: by, change, request: by.requestId }).pipe(
-        Effect.map((done): ExecutionResult =>
+        Effect.map((done) =>
           done.ok
             ? {
                 state: "applied",
@@ -542,11 +524,16 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       let workspace = named;
       if (named !== "" && named !== PROJECTS_ROOT_OPTION && !pipe_(named, Str.startsWith("/"))) {
         const repository = yield* repositoryCheckout(env, named);
-        if (repository !== null && "error" in repository) return failed(repository.error);
-        if (repository !== null) workspace = repository.path;
-        else {
+        if (repository !== null && "error" in repository) {
+          return failed(repository.error);
+        }
+        if (repository !== null) {
+          workspace = repository.path;
+        } else {
           const where = yield* workspaceNamed(env, named);
-          if (where !== null && "error" in where) return failed(where.error);
+          if (where !== null && "error" in where) {
+            return failed(where.error);
+          }
           workspace = where?.found.cwd ?? "";
         }
       }
@@ -569,10 +556,11 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
     ["schedule_pause", "pause"],
     ["schedule_resume", "resume"],
     ["schedule_remove", "remove"],
-  ] as const)
+  ] as const) {
     registerExecutor(kind, (action, by, env) =>
       scheduleChange(env, by, { change, name: action.name }, action.machine),
     );
+  }
   registerExecutor("cleanup", (action, by, env) =>
     onThisMachine(
       action.machine,
@@ -595,7 +583,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       Effect.catch((cause) => Effect.succeed(failed(String(cause)))),
     ),
   );
-  // Unattended: nobody sees a login's URL from here, so a login is left as a step to do.
+  // WARNING: unattended: nobody sees a login URL from here, so a login is left as a step to do.
   registerExecutor("onboard", (action, _by, env) =>
     onboard(
       env,
@@ -613,25 +601,22 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   yield* Effect.void;
 });
 
-/** A proposal confirmed and carried out, as the host does for every front door. */
 export const carryOut = Effect.fn("runActions.carryOut")(function* (
   env: PluginEnv,
   proposalId: string,
   hash: string | undefined,
   actor: Actor,
-  /** Recorded by this same request, so a retry that records it again is the same steps. */
   ownRequest = false,
 ) {
-  // The operations register what they can carry out; without this the registry is empty
-  // and every action is refused as `executor_missing`, which would be a lie about this
-  // build rather than a fact about it.
+  // WARNING: without registration every action is refused as executor_missing, which would misstate this build.
   yield* registerRunExecutors();
   const file = yield* journalOf(proposalId);
-  if (file === null)
+  if (file === null) {
     return yield* new ProposalRefused({
       refused: "not_found",
       detail: `no proposal "${proposalId}"`,
     });
+  }
   const proposal = Option.getOrUndefined(
     Arr.findFirst(
       yield* readProposals(file),
@@ -643,7 +628,9 @@ export const carryOut = Effect.fn("runActions.carryOut")(function* (
     const intent = yield* readIntent(runDir(env.stateDir, target.run)).pipe(
       Effect.orElseSucceed(() => null),
     );
-    if (intent !== null) versions.set(target.run, intent.version);
+    if (intent !== null) {
+      versions.set(target.run, intent.version);
+    }
   }
 
   const judged = yield* confirmProposal(
@@ -653,15 +640,13 @@ export const carryOut = Effect.fn("runActions.carryOut")(function* (
     actor,
     versions,
   );
-  if ("refused" in judged)
+  if ("refused" in judged) {
     return yield* new ProposalRefused({ refused: judged.refused, detail: judged.detail });
+  }
 
-  const results: StepResult[] = [];
+  const results: Array<StepResult> = [];
   const expectedVersions = { ...judged.proposal.intent_versions };
-  // Runs an earlier action failed on: what was asked about them next was asked assuming
-  // the failure did not happen. Everything else in the request is independent of it —
-  // six launches asked for in one breath are six requests, and the first path that does
-  // not exist is no reason to leave the other five unattempted.
+  // WARNING: a later action on a failed Run was asked assuming the failure did not happen; the others are independent.
   const failedRuns = new Set<string>();
   const settle = Effect.fnUntraced(function* (
     index: number,
@@ -683,8 +668,6 @@ export const carryOut = Effect.fn("runActions.carryOut")(function* (
       yield* settle(index, "skipped", "after_failure");
       continue;
     }
-    // All edits in a request name the snapshot it was checked against. Advance only
-    // for edits this sequence applied; unrelated concurrent edits still fail admission.
     const action =
       proposed.kind === "update_intent" &&
       proposed.base_version === judged.proposal.intent_versions[proposed.run]
@@ -694,7 +677,9 @@ export const carryOut = Effect.fn("runActions.carryOut")(function* (
       const state = action.kind === "none" ? "applied" : "failed";
       const note = action.kind === "none" ? action.why : action.question;
       yield* settle(index, state, note);
-      if (action.kind === "ask_human") break;
+      if (action.kind === "ask_human") {
+        break;
+      }
       continue;
     }
     const executor = executorFor(action.kind);
@@ -717,15 +702,17 @@ export const carryOut = Effect.fn("runActions.carryOut")(function* (
       env,
     );
     yield* settle(index, outcome.state, outcome.note);
-    if (outcome.state === "failed" && "run" in action) failedRuns.add(action.run);
-    if (outcome.state !== "failed" && action.kind === "update_intent")
+    if (outcome.state === "failed" && "run" in action) {
+      failedRuns.add(action.run);
+    }
+    if (outcome.state !== "failed" && action.kind === "update_intent") {
       expectedVersions[action.run] = action.base_version + 1;
+    }
   }
   return { proposal: proposalId, results } satisfies ProposalCarried;
-  // A client that hangs up must not cut the steps off from their record.
+  // WARNING: a hung-up client must not cut steps off from their record.
 }, Effect.uninterruptible);
 
-/** `carryOut` as a front door prints it. */
 export const carryOutProposal = (
   env: PluginEnv,
   proposalId: string,
@@ -740,7 +727,6 @@ export const carryOutProposal = (
     ),
   );
 
-/** What the proposal this request already confirmed came to, or null where it confirmed none. */
 export const carriedBefore = Effect.fn("runActions.carriedBefore")(function* (
   file: string,
   request: string,
@@ -752,18 +738,12 @@ export const carriedBefore = Effect.fn("runActions.carriedBefore")(function* (
     : null;
 });
 
-/** One step's own request, so carrying the same request out again is one operation per step. */
-const stepOf = (actor: Actor, step: string | number): Actor => ({
+const stepOf = (actor: Actor, step: string | number) => ({
   ...actor,
   requestId: `${actor.requestId}:${step}`,
 });
 
-/**
- * One action the human asked for in chat, carried out now. The same closed union, the
- * same last-moment admission check and the same executors a confirmation runs; what it
- * has no part of is a proposal, because nobody is being asked — the human already said
- * it (ADR-0011). What Collie wants of its own accord still goes through `request`.
- */
+// WARNING: carried out without a proposal, because the human already asked for it.
 export const carryOutAsked = Effect.fn("runActions.carryOutAsked")(function* (
   env: PluginEnv,
   actions: ReadonlyArray<Action>,
@@ -784,28 +764,30 @@ export const carryOutAsked = Effect.fn("runActions.carryOutAsked")(function* (
     }
     const outcome = yield* executor(action, stepOf(actor, index), env);
     results.push({ kind: action.kind, state: outcome.state, note: outcome.note ?? "" });
-    // What follows a failure was asked for on the assumption that it did not happen.
-    if (outcome.state === "failed") break;
+    if (outcome.state === "failed") {
+      break;
+    }
   }
   return results;
 });
 
-/** Everything the proposal assumed, asked again immediately before the action runs. */
 const admissionFor = Effect.fn("runActions.admissionFor")(function* (
   env: PluginEnv,
   action: Parameters<typeof admit>[0],
-  /** Null for an action nobody proposed: there is then nothing it assumed earlier. */
   proposal: ProposalRecord | null,
 ) {
   const id = "run" in action ? action.run : null;
   const run = id === null ? null : yield* findRun(env, id);
-  if (run === null) return admit(action, emptyAdmission());
+  if (run === null) {
+    return admit(action, emptyAdmission());
+  }
   const live = yield* new Herdr(env).agentList().pipe(Effect.orElseSucceed(() => []));
   const agent = "agent" in action ? (action.agent ?? null) : null;
-  // An Intent nobody can decode is not an Intent with no constraints. Refusing here is
-  // what stops a corrupt file reading as "no version to disagree with".
+  // WARNING: refused rather than read as no version, or a corrupt file would pass as having none to disagree with.
   const intent = yield* readIntent(run.dir).pipe(Effect.orElseSucceed(() => "unreadable" as const));
-  if (intent === "unreadable") return `${run.id}'s Intent cannot be read`;
+  if (intent === "unreadable") {
+    return `${run.id}'s Intent cannot be read`;
+  }
   const bound = proposal?.card;
   const here = bound === undefined ? null : yield* fingerprint(run.cwd);
   const now = here === null ? null : `${here.head_sha}:${here.fingerprint}`;
@@ -823,7 +805,7 @@ const admissionFor = Effect.fn("runActions.admissionFor")(function* (
   });
 });
 
-function emptyAdmission(): Parameters<typeof admit>[1] {
+function emptyAdmission() {
   return {
     run: null,
     pendingChoice: null,

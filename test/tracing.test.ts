@@ -1,5 +1,3 @@
-// A traced host exports only spans long enough to say where time went.
-
 import { Effect, Tracer } from "effect";
 import { expect, test } from "bun:test";
 import { atLeast } from "../src/tracing";

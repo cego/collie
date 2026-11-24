@@ -8,7 +8,7 @@ import { probeGitlab, probeGithub, probeLinearMcp } from "../src/connection-prob
 import { ConnectionReading } from "../src/connection-model";
 import { writeConfigValue } from "../src/config";
 import { parseYaml } from "../src/yaml";
-import { type Ran, type Runner } from "../src/mr";
+import type { Runner } from "../src/mr";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
 
@@ -25,21 +25,27 @@ test("GitLab is read on the host Collie works against, never glab's default, and
       )(
         parseYaml(yield* fs.readFileString(`${import.meta.dir}/fixtures/connections/glab.yml`)),
       ).pipe(Effect.orDie);
-      const asked: string[] = [];
+      const asked: Array<string> = [];
       const run: Runner = (cmd, args) =>
-        Effect.sync((): Ran => {
+        Effect.sync(() => {
           const said = Arr.join(args, " ");
           asked.push(said);
-          if (said === "config get host --global") return { code: 0, stdout: glab.host };
+          if (said === "config get host --global") {
+            return { code: 0, stdout: glab.host };
+          }
           const token = /^config get token --host (\S+)$/.exec(said);
-          if (token !== null) return { code: 0, stdout: glab.hosts[token[1]!]?.token ?? "" };
-          if (said === "api --hostname gitlab.cego.dk user")
+          if (token !== null) {
+            return { code: 0, stdout: glab.hosts[token[1]!]?.token ?? "" };
+          }
+          if (said === "api --hostname gitlab.cego.dk user") {
             return { code: 0, stdout: '{"username":"mk"}' };
+          }
           if (
             cmd === "env" &&
             said === "GITLAB_HOST=gitlab.com glab api --hostname gitlab.com user"
-          )
+          ) {
             return { code: 0, stdout: '{"username":"mk-on-gitlab-com"}' };
+          }
           throw new Error(`unexpected glab ${said}`);
         });
       expect(yield* probeGitlab(rig.pluginEnv(), run)).toEqual({
@@ -88,15 +94,18 @@ test("GitHub names the active gh account, distinguishes absent from invalid, and
         const stderr = yield* fs.readFileString(
           `${import.meta.dir}/fixtures/connections/gh-auth-${fixture}.txt`,
         );
-        const asked: string[] = [];
+        const asked: Array<string> = [];
         const found = yield* probeGithub(rig.pluginEnv(), (cmd, args) => {
           asked.push(Arr.join([cmd, ...args], " "));
           return Effect.succeed({ code, stdout: "", stderr });
         });
         expect(asked).toEqual(["gh auth status --active --hostname github.com"]);
         expect(found.state).toBe(state);
-        if (found.state === "ok") expect(found.account).toBe("mk");
-        else expect(found.fix).toBe("gh auth login --hostname github.com --web");
+        if (found.state === "ok") {
+          expect(found.account).toBe("mk");
+        } else {
+          expect(found.fix).toBe("gh auth login --hostname github.com --web");
+        }
         expect(
           yield* Schema.encodeEffect(Schema.fromJsonString(ConnectionReading))(found).pipe(
             Effect.orDie,

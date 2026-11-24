@@ -1,21 +1,7 @@
-// A month's dependency updates: assessed, batched, proved on stage, merged, released and
-// checked off the team's shared issue.
-//
-// One agent for the whole Run, and a shape a fork can change without copying: the
-// orchestration below is `renovation`, and the three steps that land the work — merge,
-// release, record — are ordinary functions it is given. A fork supplies its own three and
-// keeps everything before them, which is what "customise by composition" means here.
-//
-// What is a package and what is up to date are typed comparisons on the assessment, made
-// before anything expensive: work that is skipped opens no agent, writes no Output and
-// says why in the Run's own record.
-//
-// The Markdown beside this file is the content: what each step judges, and how.
-
 import * as Arr from "effect/Array";
+import type { Agents } from "collie";
 import {
   FindingSchema,
-  Agents,
   Host,
   Run,
   WorkflowError,
@@ -29,13 +15,13 @@ import {
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import * as Workflow from "effect/workflow/Workflow";
-import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
+import { WorkflowInstance } from "effect/workflow/WorkflowEngine";
+import type { WorkflowEngine } from "effect/workflow/WorkflowEngine";
 import onGitlab from "./renovate.gitlab.md" with { type: "text" };
 import onGithub from "./renovate.github.md" with { type: "text" };
 
 const text = Schema.String;
 
-/** What every step of a renovation is told, under the names its content asks for them by. */
 export const RenovateInput = Schema.Struct({
   inputs: Schema.Struct({ repository: text, team: text, issue: text }),
   run: Schema.Struct({ dir: text, id: text }),
@@ -48,7 +34,6 @@ export const RenovateInput = Schema.Struct({
   }),
 });
 
-/** Each step's section of one forge's content, under the preamble they share. */
 const stepsOf = (markdown: string) => {
   const content = contentOf(markdown);
   return {
@@ -63,10 +48,8 @@ const stepsOf = (markdown: string) => {
   };
 };
 
-/** The shipped content per forge: the procedure differs, not only the commands (ADR-0050 D1). */
 export const RENOVATE_ON = { gitlab: stepsOf(onGitlab), github: stepsOf(onGithub) };
 
-/** The GitLab content, under the name a fork written before there were two still reads. */
 export const RENOVATE = RENOVATE_ON.gitlab;
 
 const verdict = {
@@ -74,7 +57,6 @@ const verdict = {
   findings: Schema.optionalKey(Schema.Array(FindingSchema)),
 };
 
-/** The one issue every later step writes to, so a long wait cannot split a repository. */
 export const Tracked = Schema.Struct({
   ...verdict,
   issue: Schema.String.annotate({ description: "the Linear issue id this Run records itself on" }),
@@ -87,7 +69,6 @@ export const Tracked = Schema.Struct({
   }),
 });
 
-/** One Renovate merge request, as the assessment read it. */
 const Bump = Schema.Struct({
   iid: Schema.Union([Schema.Int, Schema.String]),
   title: Schema.optionalKey(Schema.String),
@@ -96,10 +77,6 @@ const Bump = Schema.Struct({
   risk: Schema.optionalKey(Schema.String).annotate({ description: "routine or migration" }),
 });
 
-/**
- * What the batch is, and the two facts everything after this branches on. Both are the
- * assessment's judgement, decided once and compared as values from here on.
- */
 const Assessed = Schema.Struct({
   ...verdict,
   merge_requests: Schema.optionalKey(Schema.Array(Bump)),
@@ -154,7 +131,6 @@ const Approved = Schema.Struct({
   head_sha: Schema.optionalKey(Schema.String),
 });
 
-/** Every relevant merge request ends with exactly one of three outcomes. */
 export const Merged = Schema.Struct({
   ...verdict,
   remaining_requests: Schema.optionalKey(Schema.Array(Bump)),
@@ -201,31 +177,19 @@ export const Recorded = Schema.Struct({
   exceptions: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
-/** The services every step of a renovation needs, which a fork's own three need too. */
 export type Renovating = Run | Agents | Host | WorkflowEngine | WorkflowInstance;
 
-/** Where a landing step stands: its Run's directory, its content, and what came before it. */
 export interface Landed {
   readonly dir: string;
-  /** The forge the repository is on, whose content its steps are given. */
   readonly forge: keyof typeof RENOVATE_ON;
-  /** The repository's web address on that forge, which a step's Clearance names. */
   readonly url: string;
-  /** "merge request" or "pull request". */
   readonly noun: string;
-  /** What every step of this Run is told. */
   readonly input: typeof RenovateInput.Type;
   readonly tracked: typeof Tracked.Type;
   readonly assessed: typeof Assessed.Type;
 }
 
-/**
- * What lands a renovation, once everything before it has agreed there is one. A fork
- * changes these three and keeps the rest; they are functions rather than a service,
- * because the only thing that varies is what to do, not who provides it.
- */
 export interface Landing {
-  /** One turn per request, scoped by `input.merge_request`, on the same conversation. */
   readonly merge: (at: Landed) => Effect.Effect<typeof Merged.Type, WorkflowError, Renovating>;
   readonly release: (at: Landed) => Effect.Effect<typeof Released.Type, WorkflowError, Renovating>;
   readonly record: (
@@ -234,10 +198,8 @@ export interface Landing {
   ) => Effect.Effect<typeof Recorded.Type, WorkflowError, Renovating>;
 }
 
-/** One agent for the whole Run, which each step continues. */
 export const TRACKER = "track";
 
-/** What every step of this Run is asked as, and on which agent. */
 export const asRenovator = (at: Pick<Landed, "input">, operation: string) => ({
   operation: operation === "merge" ? (at.input.merge_operation ?? operation) : operation,
   agent: TRACKER,
@@ -245,7 +207,6 @@ export const asRenovator = (at: Pick<Landed, "input">, operation: string) => ({
   input: { ...at.input, merge_request: at.input.merge_request ?? "" },
 });
 
-/** The shipped landing: merge what was assessed, tag it, and check the repository off. */
 export const shippedLanding: Landing = {
   merge: (at) =>
     agentWork({
@@ -346,10 +307,6 @@ const productionStep = step({
   description: "Keep the claim until the forge shows production carries the merged updates.",
 });
 
-/**
- * The whole renovation, with its landing supplied: the shipped one where none is. A fork
- * spreads this with three functions of its own and an identity of its own.
- */
 export const renovation = (landing: Landing = shippedLanding) =>
   defineWorkflow({
     id: "renovate",
@@ -385,14 +342,10 @@ export const renovation = (landing: Landing = shippedLanding) =>
       ),
     }),
     output: Schema.String,
-    // The one agent every step continues, on Claude Code, whose auto mode it is started in.
     agents: { harness: "claude", model: "default", effort: "high" },
     path: [trackStep, assessStep, claimStep, mergeStep, tagStep, recordStep, productionStep],
     hints: { repository: "repository" },
-    // Detached at the default branch, so no branch of the repository is bound to this Run.
     checkout: "roaming",
-    // A failed Run keeps the claim over shared work it may have left half-done. Recovering
-    // is another renovation of the same repository, which takes that claim over.
     followUps: [
       {
         id: "recover",
@@ -422,9 +375,6 @@ export const renovation = (landing: Landing = shippedLanding) =>
           team: asked.team ?? "",
           issue: asked.issue ?? "",
         };
-        // Everything from the assessment on is the forge's CLI: what it cannot reach, it
-        // cannot read, merge or tag. Asked before an agent is started rather than discovered
-        // by one, and the same answer names the forge and whoever the batch is assigned to.
         const forge = yield* host.mr({ cwd });
         if (!forge.ok || forge.provider === undefined) {
           const reason = forge.ok ? "this checkout's forge could not be read" : forge.reason;
@@ -437,8 +387,6 @@ export const renovation = (landing: Landing = shippedLanding) =>
           merge_request: "",
           run: { dir: place.dir, id: runId },
           mr: { assignee: forge.assignee },
-          // What the operator configured, so nothing team-specific or company-specific
-          // lives in the content: the fallback team, and where this installation's logs are.
           config: {
             linear: { team: yield* host.config("linear.team") },
             renovate: { logs: yield* host.config("renovate.logs") },
@@ -448,16 +396,13 @@ export const renovation = (landing: Landing = shippedLanding) =>
         const tracked = yield* trackStep(
           agentWork({
             ...asRenovator(started, "track"),
-            // Claude Code's configured auto mode; this agent is reused by every later step.
             permissions: "harness",
             instructions: steps.track,
             output: Tracked,
           }),
         );
-        // The issue this Run bound itself to, in the preamble every later step shares: a
-        // long wait, a resume or a cycle rollover cannot split the repository across two.
+        // WARNING: a long wait, resume or cycle rollover must not split the repository's issue across two.
         const bound = { input: { ...input, inputs: { ...inputs, issue: tracked.issue } } };
-        // Nothing shared is touched yet: no claim is held, so the assessment reads only.
         const assessed = yield* assessStep(
           agentWork({
             ...asRenovator(bound, "assess"),
@@ -474,7 +419,7 @@ export const renovation = (landing: Landing = shippedLanding) =>
           tracked,
           assessed,
         };
-        if (!assessed.is_package && !assessed.up_to_date)
+        if (!assessed.is_package && !assessed.up_to_date) {
           yield* forecast([
             trackStep,
             assessStep,
@@ -487,10 +432,8 @@ export const renovation = (landing: Landing = shippedLanding) =>
             recordStep,
             productionStep,
           ]);
+        }
 
-        // An empty batch is a finished Run in waiting, decided from the assessment's own
-        // judgement: no tab is opened for the work that is skipped, and no Output is
-        // written to say it had nothing to do.
         if (assessed.up_to_date) {
           yield* host.record(runId, "nothing to renovate: Renovate has opened nothing here");
           const released = yield* tagStep(landing.release(here));
@@ -498,8 +441,7 @@ export const renovation = (landing: Landing = shippedLanding) =>
           return `${tracked.issue}: ${recorded.status}`;
         }
 
-        // The first thing that touches anything shared, so the claim is taken here and held
-        // until the Run is settled. Waiting costs wall clock and no model tokens.
+        // WARNING: the first thing that touches anything shared; the claim is held until the Run is settled.
         const held = yield* claimStep(
           host.claim({
             runId,
@@ -519,20 +461,18 @@ export const renovation = (landing: Landing = shippedLanding) =>
             say: (line) => host.record(runId, line),
           }),
         );
-        if (!("slugs" in held))
+        if (!("slugs" in held)) {
           yield* host.record(
             runId,
             `◦ ${"none" in held ? held.none : held.unresolved} — carrying on without one`,
           );
+        }
         const claim = "slugs" in held && held.slugs.length > 0 ? Arr.join(held.slugs, ", ") : null;
-        // Given back once the work is finished, merged or not, and not before: holding it
-        // across a consultation is what stops anyone deploying on a half-finished renovation.
+        // WARNING: given back once work is finished, not before; holding it across a consultation stops a half-finished deploy.
         const finished = (outcome: string) =>
           (claim === null ? Effect.void : host.release(runId)).pipe(Effect.as(outcome));
 
         if (!assessed.is_package) {
-          // An application's updates land together: one batch branch, one merge request,
-          // proved on stage once and reviewed once.
           const batched = yield* batchStep(
             agentWork({
               ...asRenovator(here, "batch"),
@@ -540,7 +480,9 @@ export const renovation = (landing: Landing = shippedLanding) =>
               output: Batched,
             }),
           );
-          if (batched.mr_url !== undefined) yield* host.mergeRequest(runId, batched.mr_url);
+          if (batched.mr_url !== undefined) {
+            yield* host.mergeRequest(runId, batched.mr_url);
+          }
           const staged = yield* stageStep(
             agentWork({
               ...asRenovator(here, "stage"),
@@ -552,14 +494,13 @@ export const renovation = (landing: Landing = shippedLanding) =>
               output: Staged,
             }),
           );
-          // Nothing here shows stage is back on its stable release, so the claim stays with
-          // this failed Run until someone recovers stage.
+          // WARNING: nothing shows stage is back on its stable release, so the claim stays with this failed Run.
           if (!staged.verified) {
             return yield* new WorkflowError({
               reason: `${tracked.issue}: stage was not verified, so nothing is merged`,
             });
           }
-          // The batch is approved by another team member, never by the Run that wrote it.
+          // WARNING: approved by another team member, never by the Run that wrote the batch.
           const approval = yield* approvalStep(
             agentWork({
               ...asRenovator(here, "approval"),
@@ -579,7 +520,9 @@ export const renovation = (landing: Landing = shippedLanding) =>
         }
 
         const pending = [...(assessed.merge_requests ?? [])];
-        if (pending.length === 0) yield* mergeStep(landing.merge(here));
+        if (pending.length === 0) {
+          yield* mergeStep(landing.merge(here));
+        }
         for (let index = 0; index < pending.length; index++) {
           const current = pending[index]!;
           const merged = yield* mergeStep(
@@ -593,11 +536,12 @@ export const renovation = (landing: Landing = shippedLanding) =>
             }),
             { item: String(current.iid), items: Arr.map(pending, (one) => String(one.iid)) },
           );
-          for (const discovered of merged.remaining_requests ?? [])
-            if (!Arr.some(pending, (one) => String(one.iid) === String(discovered.iid)))
+          for (const discovered of merged.remaining_requests ?? []) {
+            if (!Arr.some(pending, (one) => String(one.iid) === String(discovered.iid))) {
               pending.push(discovered);
+            }
+          }
         }
-        // Everything this Run merged, read once so a replay waits for the same commit.
         const head =
           claim === null
             ? null
@@ -617,7 +561,7 @@ export const renovation = (landing: Landing = shippedLanding) =>
             ? outcome
             : `${outcome}; production jobs left to play: ${Arr.join(left, ", ")}`;
         }
-        // The forge decides when production carries the merge, never the Output.
+        // WARNING: the forge decides when production carries the merge, never the Output.
         const carried = yield* productionStep(
           host.awaitProduction({
             runId,
@@ -628,7 +572,9 @@ export const renovation = (landing: Landing = shippedLanding) =>
             url: here.url,
           }),
         );
-        if (!carried) return yield* Workflow.suspend(yield* WorkflowInstance);
+        if (!carried) {
+          return yield* Workflow.suspend(yield* WorkflowInstance);
+        }
         return yield* finished(`${outcome}; production carries it`);
       }),
   });

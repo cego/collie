@@ -2167,8 +2167,10 @@ collie workflow check echo
 ```
 
 It imports the module, builds the workflow its definition is registered as and runs the
-compiler over it — no run, no agent, no worktree. Each diagnostic comes back with its file and line, one module at a time: an error
-in one says nothing about the one beside it.
+compiler over it — no run, no agent, no worktree. Without a name it checks every module, compiling
+each directory's modules together in one run of the compiler. Each diagnostic comes back with its
+file and line on the modules that import that file: an error in one says nothing about the one
+beside it. A diagnostic no module is seen to reach is shown on every module of its directory.
 
 Three answers, kept apart. A **problem** stops it running: it would not load, it exports no
 definition, what it declares contradicts itself, or it does not compile. **`drawn without:`** is a place

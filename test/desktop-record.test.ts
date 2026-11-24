@@ -7,7 +7,6 @@ import { inField } from "../desktop/src/shared/board-clicks";
 import {
   afterPaint,
   FOLLOWING_LOG,
-  type KeyFacts,
   keyAction,
   recordTiming,
   desktopTiming,
@@ -20,15 +19,15 @@ import {
   recordTabs,
   rememberScroll,
   scrollToRestore,
-  type SummaryFacts,
   summaryOf,
-  type TabFacts,
   tabBeside,
   tabShown,
   tabsKept,
   typedIn,
   videoPlays,
 } from "../desktop/src/shared/record";
+import type { KeyFacts, SummaryFacts, TabFacts } from "../desktop/src/shared/record";
+import { stringifyJson } from "../src/json";
 
 const everything: TabFacts = {
   loaded: true,
@@ -451,7 +450,7 @@ describe("a key in the record", () => {
   test("gives nothing with Ctrl or Meta, but Alt does not stop it", () => {
     expect(action({ ctrlOrMeta: true })).toBeNull();
     expect(action({ key: "j", ctrlOrMeta: true })).toBeNull();
-    // What Alt or AltGr typed is the key itself: `]` on a Nordic layout.
+    // WARNING: What Alt or AltGr typed is the key itself: ] on a Nordic layout.
     expect(action({ key: "]" })).toBe("next-tab");
   });
 
@@ -593,7 +592,7 @@ describe("timing Desktop's launch, board, terminal, chat and scrolling", () => {
         return line === null ? [] : [line];
       });
     expect(logged({ recordTiming: true })).toEqual(
-      Arr.map(every, (mark) => `${JSON.stringify(mark)}\n`),
+      Arr.map(every, (mark) => `${stringifyJson(mark)}\n`),
     );
     expect(Arr.map(every, ({ name }) => name)).toEqual([
       "launch",
@@ -671,7 +670,9 @@ describe("a drawn mark", () => {
     const render = () => {
       const due = queued;
       queued = [];
-      for (const callback of due) callback();
+      for (const callback of due) {
+        callback();
+      }
       seen.push("painted");
     };
     afterPaint(frame, () => seen.push("marked"));

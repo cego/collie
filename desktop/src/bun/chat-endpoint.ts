@@ -7,13 +7,11 @@ import type { JsonObject } from "../../../src/schema";
 import { NO_HUMAN } from "./session";
 import { toolServer } from "./tool-server";
 
-/** One authenticated endpoint, started lazily and held for Desktop's lifetime. */
 export const loopbackTools = Effect.fn("FlockTools.loopback")(function* (context: DriverContext) {
   const scope = yield* Effect.scope;
   const token = yield* (yield* SecureRandom.SecureRandom).uuidV4();
   const calls = new Map<string, Queue.Queue<string>>();
-  // The foreign MCP handler needs an AbortSignal for the human's pending click.
-  // oxlint-disable-next-line effecttsgo/abort-controller-in-effect
+  // oxlint-disable-next-line effecttsgo/abort-controller-in-effect -- The foreign MCP handler needs an AbortSignal for the human's pending click.
   let turn = new AbortController();
   const matching = (input: JsonObject) =>
     Effect.gen(function* () {
@@ -34,7 +32,9 @@ export const loopbackTools = Effect.fn("FlockTools.loopback")(function* (context
     calls.clear();
   });
   const ask = (input: JsonObject) => {
-    if (context.flock.said() === undefined) return Promise.resolve(NO_HUMAN);
+    if (context.flock.said() === undefined) {
+      return Promise.resolve(NO_HUMAN);
+    }
     const signal = turn.signal;
     return context.run(
       Effect.gen(function* () {
@@ -56,10 +56,12 @@ export const loopbackTools = Effect.fn("FlockTools.loopback")(function* (context
         port: 0,
         idleTimeout: 0,
         fetch: (request) => {
-          if (request.headers.get("Authorization") !== `Bearer ${token}`)
+          if (request.headers.get("Authorization") !== `Bearer ${token}`) {
             return new Response("Unauthorized", { status: 401 });
-          if (new URL(request.url).pathname !== "/mcp")
+          }
+          if (new URL(request.url).pathname !== "/mcp") {
             return new Response("Not found", { status: 404 });
+          }
           const mcp = toolServer(context.flock, context.run, ask);
           const transport = new WebStandardStreamableHTTPServerTransport({
             enableJsonResponse: true,
@@ -81,7 +83,7 @@ export const loopbackTools = Effect.fn("FlockTools.loopback")(function* (context
     begin: finish.pipe(
       Effect.andThen(
         Effect.sync(() => {
-          // oxlint-disable-next-line effecttsgo/abort-controller-in-effect
+          // WARNING: the foreign MCP handler needs an AbortSignal for the human's pending click.
           turn = new AbortController();
         }),
       ),

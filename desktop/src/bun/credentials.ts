@@ -1,6 +1,3 @@
-// What only the human can give, asked once by Desktop: credentials kept in an owner-only file
-// on this computer and handed to each Machine on stdin, and logins approved in this computer's browser.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -25,7 +22,8 @@ import { GITLAB_HOST, SCOPES, TokenSelf } from "../../../src/gitlab-token";
 import { inTerminal } from "../../../src/in-terminal";
 import { scriptLine } from "../../../src/script";
 import type { OnboardRun } from "../shared/flock";
-import { type ShellRoute, spawned } from "./machine";
+import { spawned } from "./machine";
+import type { ShellRoute } from "./machine";
 import { CHILD_CWD, childEnv, which } from "./login-env";
 import { ranWith, shOn, tracked } from "./onboarding";
 import { redact } from "../../../src/redact";
@@ -33,7 +31,6 @@ import { decodeGrant, slackUserLines } from "./slack-user";
 
 export const GITLAB = `https://${GITLAB_HOST}`;
 
-/** What Desktop keeps, by name. */
 export type KeyringEntry = "gitlab-token" | "helle-token" | "slack-user-grant";
 
 export interface Keyring {
@@ -54,31 +51,32 @@ const parsed = (text: string) =>
     }),
   );
 
-/** What an earlier Desktop kept through `secret-tool`, if that is here; nothing otherwise. */
 const fromSecretTool = (tool: string) =>
   Effect.gen(function* () {
     const found = new Map<string, string>();
-    if (which(tool) === null) return found;
+    if (which(tool) === null) {
+      return found;
+    }
     for (const key of ENTRIES) {
-      // A locked keyring may wait on an unlock prompt; Desktop's launch does not.
+      // WARNING: a locked keyring may wait on an unlock prompt; Desktop's launch does not.
       const ran = yield* ranWith([tool, "lookup", "service", "collie-desktop", "key", key]).pipe(
         Effect.timeoutOption("5 seconds"),
       );
-      if (Option.isSome(ran) && ran.value.code === 0 && ran.value.out !== "")
+      if (Option.isSome(ran) && ran.value.code === 0 && ran.value.out !== "") {
         found.set(key, ran.value.out);
+      }
     }
     return found;
   });
 
-/**
- * Desktop's credentials, as `key=value` lines in `dir/credentials`: owner-only and replaced
- * whole, as glab, gh and Helle keep the same tokens on every Machine. Until it exists, what
- * an earlier Desktop left in the Secret Service is read and copied into it.
- */
-export const credentialsFile = (
+// WARNING: until it exists, an earlier Desktop's Secret Service entries are copied into it.
+export const credentialsFile: (
+  dir: string,
+  secretTool?: string,
+) => Keyring & { readonly forgetSlackBot: Effect.Effect<void, string> } = (
   dir: string,
   secretTool = "secret-tool",
-): Keyring & { readonly forgetSlackBot: Effect.Effect<void, string> } => {
+) => {
   const file = `${dir}/credentials`;
   const lock = Semaphore.makeUnsafe(1);
   const write = (values: ReadonlyMap<string, string>) =>
@@ -96,12 +94,16 @@ export const credentialsFile = (
     });
   const load = Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    if (yield* fs.exists(file)) return parsed(yield* fs.readFileString(file));
+    if (yield* fs.exists(file)) {
+      return parsed(yield* fs.readFileString(file));
+    }
     const found = yield* fromSecretTool(secretTool).pipe(
       Effect.orElseSucceed(() => new Map<string, string>()),
     );
-    // Written only with something in it, so a keyring that did not answer is asked again.
-    if (found.size > 0) yield* write(found);
+    // WARNING: written only with something in it, so a keyring that did not answer is asked again.
+    if (found.size > 0) {
+      yield* write(found);
+    }
     return found;
   });
   const locked = <A>(effect: Effect.Effect<A, PlatformError, FileSystem.FileSystem>) =>
@@ -111,7 +113,7 @@ export const credentialsFile = (
         Effect.mapError((error) => `${file}: ${error.message}`),
         Effect.provide(BunFileSystem.layer),
       );
-  // Written even when nothing is left, so an earlier Desktop's keyring is not copied back.
+  // WARNING: written even when nothing is left, so an earlier Desktop's keyring is not copied back.
   const forget = (key: string) =>
     locked(
       load.pipe(
@@ -127,12 +129,11 @@ export const credentialsFile = (
     store: (key, _label, value) =>
       locked(load.pipe(Effect.flatMap((values) => write(new Map(values).set(key, value))))),
     clear: forget,
-    /** An older Collie's bot token, which nothing reads any more. */
+    // WARNING: an older Collie's bot token, which nothing reads any more.
     forgetSlackBot: forget("slack-token"),
   };
 };
 
-/** The `collie onboard --secrets-stdin` lines for every secret Desktop holds. */
 export const secretsFor = (keyring: Keyring) =>
   Effect.gen(function* () {
     const lines: Array<readonly [string, KeyringEntry]> = [
@@ -142,15 +143,13 @@ export const secretsFor = (keyring: Keyring) =>
     let text = "";
     for (const [name, key] of lines) {
       const value = yield* keyring.lookup(key);
-      if (value !== null) text += `${name}=${value}\n`;
+      if (value !== null) {
+        text += `${name}=${value}\n`;
+      }
     }
     return text;
   });
 
-/**
- * What GitLab at `base` says of `token`, once it accepts it with the scopes Collie needs:
- * when it expires, or null where it never does.
- */
 export const gitlabToken = (base: string, token: string) =>
   HttpClient.execute(
     HttpClientRequest.get(`${base}/api/v4/personal_access_tokens/self`).pipe(
@@ -174,7 +173,6 @@ export const gitlabToken = (base: string, token: string) =>
     Effect.provide(FetchHttpClient.layer),
   );
 
-/** Slack's own app, where Helle makes tokens; its web client where the app is not here. */
 export const SLACK_APP = "slack://open";
 export const SLACK_WEB = "https://app.slack.com/client";
 
@@ -185,7 +183,6 @@ const HelleMe = Schema.fromJsonString(
   }),
 );
 
-/** Who Helle at `base` says `token` belongs to; a token it refuses is said plainly. */
 export const helleOwner = (base: string, token: string) =>
   HttpClient.execute(
     HttpClientRequest.get(`${base}/api/v1/me`).pipe(HttpClientRequest.bearerToken(token)),
@@ -211,10 +208,8 @@ export const helleOwner = (base: string, token: string) =>
     Effect.provide(FetchHttpClient.layer),
   );
 
-/** How long a Machine is waited on, as one waiting on SSO would hold a save until it is back. */
 const GIVE_LIMIT = "15 seconds";
 
-/** Runs `script` on every Machine with `stdin`, and says how each went. */
 const onEvery = (routes: ReadonlyArray<ShellRoute>, script: string, stdin: string, token: string) =>
   Effect.forEach(
     routes,
@@ -235,7 +230,7 @@ const onEvery = (routes: ReadonlyArray<ShellRoute>, script: string, stdin: strin
     { concurrency: "unbounded" },
   );
 
-// Suppress login output before a paired host records its shell result.
+// WARNING: suppress login output, which a paired host would record as the shell result.
 export const giveToken = (routes: ReadonlyArray<ShellRoute>, host: string, token: string) =>
   onEvery(
     routes,
@@ -254,7 +249,6 @@ export const giveGithub = (routes: ReadonlyArray<ShellRoute>, token: string) =>
     token,
   );
 
-/** Writes Helle's credentials file, owner-only, on every Machine, as onboarding does. */
 export const giveHelle = (routes: ReadonlyArray<ShellRoute>, url: string, token: string) =>
   onEvery(
     routes,
@@ -264,14 +258,10 @@ export const giveHelle = (routes: ReadonlyArray<ShellRoute>, url: string, token:
   );
 
 const COLLIE_CONFIG = '"${XDG_CONFIG_HOME:-$HOME/.config}/collie"';
-/** Replaces the Machine's `collie/<file>` with stdin, owner-only and whole. */
 const writeCollieFile = (file: string) =>
   `umask 077 && mkdir -p ${COLLIE_CONFIG} && rm -f ${COLLIE_CONFIG}/${file}.new && cat > ${COLLIE_CONFIG}/${file}.new && mv ${COLLIE_CONFIG}/${file}.new ${COLLIE_CONFIG}/${file}`;
 
-/**
- * Each Machine's `slack-user.env` from the grant Desktop keeps, or removed for "". An older
- * Collie's bot token in `slack.env` goes either way.
- */
+// WARNING: an older Collie's bot token in slack.env goes either way.
 export const giveSlackUser = (routes: ReadonlyArray<ShellRoute>, text: string) => {
   const grant = text === "" ? null : decodeGrant(text);
   const bot = `rm -f ${COLLIE_CONFIG}/slack.env`;
@@ -285,7 +275,6 @@ export const giveSlackUser = (routes: ReadonlyArray<ShellRoute>, text: string) =
       );
 };
 
-/** Whether a credential can go on a `KEY=value` line, as every Machine is given it. */
 export const oneLine = (value: string) => value !== "" && !/[\r\n]/.test(value);
 
 const LOGIN_LIMIT = "10 minutes";
@@ -293,7 +282,6 @@ const URL_IN = /https:\/\/[\w\-.~:/?#[\]@!$&'()*+,;=%]+/;
 const SHIM = '"$HOME/.cache/collie/login-browser"';
 const HANDED = '"$HOME/.cache/collie/login-url"';
 
-/** The callback port of a login URL whose `redirect_uri` is on localhost, if it has one. */
 const callbackPort = (url: string) =>
   Option.liftThrowable(
     () => new URL(new URL(url).searchParams.get("redirect_uri") ?? "").port,
@@ -302,11 +290,7 @@ const callbackPort = (url: string) =>
     Option.filter((port) => port > 0),
   );
 
-/**
- * `claude auth login` on the Machine, approved in this computer's browser: Claude Code hands
- * its callback URL to `$BROWSER`, whose shim writes it down to be forwarded and opened
- * here. The printed paste-code URL and each code in `codes` are the fallback.
- */
+// WARNING: Claude Code's callback goes to $BROWSER's shim, which forwards it to open here.
 export const claudeLoginThrough = Effect.fn("Desktop.claudeLoginThrough")(function* (
   route: ShellRoute,
   open: (url: string) => Effect.Effect<void>,
@@ -329,8 +313,7 @@ export const claudeLoginThrough = Effect.fn("Desktop.claudeLoginThrough")(functi
     yield* run.step({ ...login, status: "failed", detail: "could not start the login there" });
     return { ended: false, run: run.current() };
   }
-  // In a terminal Desktop gives it. One over SSH is not passed through, so there the
-  // Machine's own `script` gives it one, as util-linux's does.
+  // WARNING: over SSH no terminal is passed through, so the Machine's own script gives one.
   const command = yield* route.sh(
     `export BROWSER=${SHIM}; if [ -t 0 ]; then exec claude auth login; else ${scriptLine("claude auth login")}; fi`,
   );
@@ -340,7 +323,7 @@ export const claudeLoginThrough = Effect.fn("Desktop.claudeLoginThrough")(functi
     Stream.splitLines,
     Stream.map((line) => URL_IN.exec(line)?.[0]),
     Stream.filter((url) => url !== undefined),
-    // Read to the end all the same: a login whose output is not read dies of SIGPIPE.
+    // WARNING: read to the end all the same: a login whose output is not read dies of SIGPIPE.
     Stream.runForEach((url) =>
       Arr.some(run.current().steps, (step) => step.step === login.step && step.url !== undefined)
         ? Effect.void
@@ -375,12 +358,13 @@ export const claudeLoginThrough = Effect.fn("Desktop.claudeLoginThrough")(functi
     ),
   ).pipe(Effect.timeoutOption(LOGIN_LIMIT));
   const ended = Option.isSome(code) && code.value === 0;
-  if (!ended)
+  if (!ended) {
     yield* run.step({
       ...login,
       status: "failed",
       detail: "the login did not finish",
       command: "claude auth login",
     });
+  }
   return { ended, run: run.current() };
 }, Effect.scoped);

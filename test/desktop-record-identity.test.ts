@@ -1,23 +1,18 @@
-// What an open record is drawn from keeps its identity while the board changes elsewhere, so
-// Vue draws the record again only for a change to its own Task.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import type { Flow, TaskView } from "../src/board-model";
-import {
-  applyItem,
-  EMPTY_FLOCK,
-  flockCards,
-  type Flock,
-  type FlockItem,
-} from "../desktop/src/shared/flock";
+import { applyItem, EMPTY_FLOCK, flockCards } from "../desktop/src/shared/flock";
+import type { Flock, FlockItem } from "../desktop/src/shared/flock";
 import { linkedCards } from "../desktop/src/shared/flow";
 import { flowNode } from "./support/flow";
 import { task } from "./support/task";
 
 const machine = { installation: "inst-pc", profile: "local", name: "mk-pc" };
 const vm = { installation: "inst-vm", profile: "p-vm", name: "vm-mk", target: "mk@vm" };
-const snapshot = (on: typeof machine, tasks: ReadonlyArray<TaskView>): FlockItem => ({
+const snapshot: (on: typeof machine, tasks: ReadonlyArray<TaskView>) => FlockItem = (
+  on,
+  tasks,
+) => ({
   machine: on,
   message: {
     _tag: "Snapshot",
@@ -29,7 +24,7 @@ const snapshot = (on: typeof machine, tasks: ReadonlyArray<TaskView>): FlockItem
     seq: 0,
   },
 });
-const upsert = (one: TaskView, seq: number): FlockItem => ({
+const upsert: (one: TaskView, seq: number) => FlockItem = (one, seq) => ({
   machine,
   message: { _tag: "Upsert", seq, task: one },
 });
@@ -40,7 +35,6 @@ const linked = {
   runs: ["r-l"],
 };
 const other = task({ id: "t-other", name: "Other", state: "active", at: 3 });
-/** A Flow whose one Step links to the Run of `linked`. */
 const flow: Flow = {
   lanes: [
     {

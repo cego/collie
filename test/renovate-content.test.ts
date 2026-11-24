@@ -8,9 +8,6 @@ import { contentOf } from "../src/sdk";
 import onGitlab from "../workflows/renovate.gitlab.md" with { type: "text" };
 import onGithub from "../workflows/renovate.github.md" with { type: "text" };
 
-// renovate keeps a content file per forge (ADR-0050 D1, as amended): the procedure differs,
-// so each says it its forge's way, and what is Linear's is said the same in both.
-
 const gitlab = contentOf(onGitlab);
 const github = contentOf(onGithub);
 
@@ -26,13 +23,13 @@ test("both forges' renovate content has the same steps, and every step fills fro
     "release",
     "record",
   ]);
-  // A template naming anything RenovateInput does not give is refused as it is made.
   expect(Rec.keys(RENOVATE_ON.github)).toEqual(Rec.keys(RENOVATE_ON.gitlab));
 });
 
 test("tracking and recording are Linear's, and word for word the same on both forges", () => {
-  for (const step of ["track", "record"])
+  for (const step of ["track", "record"]) {
     expect(github.sections.get(step)).toBe(gitlab.sections.get(step));
+  }
 });
 
 test("RENOVATE is still the GitLab content a fork written before there were two reads", () => {
@@ -54,7 +51,7 @@ test("the batch branch is named outside Renovate Bot's branch prefix on both for
 
 test("the batch leaves out a bump it cannot fix small, with a recommendation, and never stops to ask", () => {
   for (const content of [gitlab, github]) {
-    const batch = pipe(content.sections.get("batch") ?? "", Str.replace(/\s+/g, " "));
+    const batch = pipe(content.sections.get("batch") ?? "", Str.replaceAll(/\s+/g, " "));
     expect(batch).not.toContain("consult");
     expect(batch).toContain(
       "Anything that needs more than that is **left out of the batch** and reported with why and what you recommend",
@@ -68,7 +65,8 @@ test("the batch leaves out a bump it cannot fix small, with a recommendation, an
 
 test("renovate picks among several issues by rule, asks approval on the Run, and leaves production to the human", () => {
   for (const content of [gitlab, github]) {
-    const flat = (step: string) => pipe(content.sections.get(step) ?? "", Str.replace(/\s+/g, " "));
+    const flat = (step: string) =>
+      pipe(content.sections.get(step) ?? "", Str.replaceAll(/\s+/g, " "));
     const track = flat("track");
     expect(track).toContain("the one whose title names the current month or cycle");
     expect(track).toContain("otherwise the one with the earliest due date");

@@ -1,13 +1,9 @@
-// What became of a Run's work, decided from what it left behind.
-//
-// The rule these hold is that no workflow's name appears in the answer. Two Runs that
-// left the same things behind are the same card whatever they were called, and a fork
-// that renames every shipped workflow gets the classification its work earns.
-
+// WARNING: Classification uses what a Run left behind, never its workflow's name; a renamed fork classifies the same.
 import { expect, test } from "bun:test";
-import { filed, standingOf, type WorkFacts } from "../src/standing";
+import { filed, standingOf } from "../src/standing";
+import type { WorkFacts } from "../src/standing";
 
-const facts = (over: Partial<WorkFacts> = {}): WorkFacts => ({
+const facts = (over: Partial<WorkFacts> = {}) => ({
   settled: true,
   succeeded: true,
   branch: null,
@@ -45,8 +41,7 @@ test("a branch nobody has answered for is not landed, and is not a plan either",
 });
 
 test("tickets beside a branch are work in progress, not a plan to hand on", () => {
-  // Both were left behind, so the question is what to do with the branch — which is the
-  // human's, and not "start building from this plan".
+  // WARNING: A branch left beside a plan is the human's to decide, not a go to build from it.
   expect(standingOf(facts({ planIssues: 2, branch: "mk/thing" })).planReady).toBe(false);
   expect(standingOf(facts({ planIssues: 2, mr: "mk/collie!65" })).planReady).toBe(false);
 });

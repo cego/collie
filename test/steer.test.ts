@@ -1,15 +1,14 @@
-// A steer is a question, and the thing that must not happen is that asking a question
-// changes something. So: the journal has both turns, a proposal is recorded pending, and
-// nothing at all reached an agent — whatever authority the Run has granted.
-
+// WARNING: A steer is a question: it must never reach an agent, whatever authority the Run has granted.
 import { recordsAt } from "./support/records";
 import type { Records } from "../src/records";
 import * as Arr from "effect/Array";
-import { Effect, FileSystem, Path, Schema, type Scope, flow, Result } from "effect";
+import { Effect, FileSystem, Path, Schema, flow, Result } from "effect";
+import type { Scope } from "effect";
 import type { PlatformServices } from "../src/platform";
 import { expect, setDefaultTimeout, test } from "bun:test";
 import { steer } from "../src/operations";
-import { DEFAULT_AUTHORITY, readIntent, type Authority } from "../src/intent";
+import { DEFAULT_AUTHORITY, readIntent } from "../src/intent";
+import type { Authority } from "../src/intent";
 import { conversationPath, read as readConversation } from "../src/conversation";
 import { read as readProposals } from "../src/proposals";
 import { budgetPath, readBudget, machineHerd } from "../src/steering";
@@ -19,10 +18,8 @@ import { hosted, hostedRun } from "./support/hosted";
 import type { World } from "./support/world";
 import type { FakeHc } from "./support/fake-hc";
 
-// Every test here stands a host up: the Runs a steer is about are the host's.
 setDefaultTimeout(60_000);
 
-/** What the fake CLI prints, as a real envelope would carry it. */
 const envelope = flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
   Result.getOrThrow,
@@ -35,10 +32,8 @@ let herdKey: string;
 let core: FakeHc;
 
 const deps = (root: string) => ({
-  herdKey: herdKey,
+  herdKey,
   evaluator: {
-    // Every flag present, so the gate lets the call through and the test is about what
-    // comes back rather than about the gate.
     help: Effect.succeed(
       Arr.join(
         [
@@ -72,7 +67,6 @@ const deps = (root: string) => ({
   },
 });
 
-/** A `claude` on PATH that prints whatever the test put in `reply`. */
 const fakeClaude = Effect.fn("test.fakeClaude")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -91,7 +85,6 @@ const fakeClaude = Effect.fn("test.fakeClaude")(function* (dir: string) {
 let setReply: (text: string) => Effect.Effect<void, PlatformError, FileSystem.FileSystem>;
 let originalPath: string;
 
-/** One test, in a Herd of its own with a host in it, and a `claude` that says what it is told. */
 const inWorld = <A, E>(body: Effect.Effect<A, E, PlatformServices | Records | Scope.Scope>) =>
   hosted("hw-steer-", (herd) =>
     Effect.gen(function* () {
@@ -194,8 +187,7 @@ test("a steer with no target is refused before anything is spent", () =>
         text: "what is going on?",
         requestId: "req-2",
       });
-      // A question about the flock is native chat's, which reads the Herd. Refused here
-      // rather than answered by a model, and refused before the call rather than after.
+      // WARNING: A flock question is refused before the call, never answered by a model.
       expect(result).toMatchObject({ ok: false, error: { code: "invalid_input" } });
       expect(yield* readBudget(yield* budgetPath(stateDir, herdKey))).toEqual([]);
     }),
@@ -245,9 +237,7 @@ test("a Run nobody named is not one Collie will guess at", () =>
 test("every call is counted and costed, and none is refused over the count", () =>
   inWorld(
     Effect.gen(function* () {
-      // An Intent from before spending caps were dropped still decodes, and the quota it
-      // carries decides nothing: the user's decision is that usage is data, never a
-      // restriction on their work.
+      // WARNING: An old Intent's model-call cap still decodes and decides nothing: usage is never enforced.
       const run = yield* aRun({ ...DEFAULT_AUTHORITY, model_calls_per_run: 1 });
       yield* setReply(
         envelope({
@@ -270,8 +260,6 @@ test("every call is counted and costed, and none is refused over the count", () 
         expect(result.ok).toBe(true);
       }
 
-      // Both calls are in the record — started, then settled with what the CLI said they
-      // cost — which is the telemetry that stays.
       const lines = yield* readBudget(yield* budgetPath(stateDir, herdKey));
       expect(Arr.map(lines, (line) => line.kind)).toEqual([
         "reserve",
@@ -316,7 +304,9 @@ test("a dry run prints what it would propose and records nothing", () =>
         requestId: "req-4",
       });
       expect(result.ok).toBe(true);
-      if (result.ok) expect(result.human).toContain("hold it while you look");
+      if (result.ok) {
+        expect(result.human).toContain("hold it while you look");
+      }
 
       const proposals = yield* readProposals(herdKey);
       expect(Arr.filter(proposals, (line) => line.kind === "proposal")).toEqual([]);
@@ -335,9 +325,10 @@ test("a model that answers outside its schema is not acted on", () =>
         requestId: "req-5",
       });
       expect(result).toMatchObject({ ok: false });
-      if (!result.ok) expect(result.error.message).toContain("evaluator_invalid_output");
+      if (!result.ok) {
+        expect(result.error.message).toContain("evaluator_invalid_output");
+      }
 
-      // The call still cost something, and the budget still says so.
       const budget = yield* readBudget(yield* budgetPath(stateDir, herdKey));
       expect(Arr.filter(budget, (line) => line.kind === "settle")).toMatchObject([
         { outcome: "failed" },
@@ -351,7 +342,6 @@ test("the pack names the runs and the target's own intent, and no pane text", ()
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const run = yield* aRun();
-      // The fake keeps what it was given on stdin, which is the only way to see the pack.
       const packFile = path.join(stateDir, "pack.txt");
       yield* fs.writeFileString(
         path.join(stateDir, "bin", "claude"),
@@ -381,8 +371,7 @@ test("the pack names the runs and the target's own intent, and no pane text", ()
       expect(pack).toContain(run.id);
       expect(pack).toContain("Goal: add a picker");
       expect(pack).toContain("Intent version: 1");
-      // What an agent is doing reaches this as core's own status, and no further: there
-      // is no terminal read anywhere in the pack's construction.
+      // WARNING: The pack never reads a terminal: an agent's status reaches it only as core's status.
       expect(yield* fs.readFileString(core.logPath)).not.toContain('"cmd":"terminal.read"');
     }),
   ));
@@ -422,14 +411,11 @@ test("a follow-up is answered with the earlier turns of the same conversation", 
       });
 
       const pack = yield* fs.readFileString(packFile);
-      // Without this the second question is asked with no memory of the first, so
-      // "the second one" refers to nothing and the global Collie cannot hold a
-      // conversation at all.
+      // WARNING: Without the conversation so far, a follow-up has no memory of the first question.
       expect(pack).toContain("## This conversation so far");
       expect(pack).toContain("- human: how is the flock?");
       expect(pack).toContain("- collie: Two are running.");
       expect(pack).toContain("what about the second one?");
-      // And it still says what the flock is, since that is what it is being asked about.
       expect(pack).toContain(run.id);
     }),
   ));
@@ -439,7 +425,6 @@ test("the pack says when it is not listing the whole Herd", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      // More Runs than the pack carries, so the cap is doing something.
       const run = yield* aRun();
       yield* Effect.forEach(Array.from({ length: 42 }), () => aRun(), { concurrency: 8 });
       const packFile = path.join(stateDir, "pack.txt");
@@ -466,8 +451,7 @@ test("the pack says when it is not listing the whole Herd", () =>
       });
 
       const pack = yield* fs.readFileString(packFile);
-      // A model told about forty of forty-two and not told so would answer "that is all
-      // of them" in good faith.
+      // WARNING: A model told about forty of forty-two and not told so answers 'that is all of them' in good faith.
       expect(pack).toMatch(/\(\d+ more Run\(s\) not listed here\)/);
     }),
   ));

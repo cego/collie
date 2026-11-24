@@ -1,7 +1,4 @@
-// What a start loads before its first line runs. Every `collie`, hook and board start pays
-// for it, and the compaction helper starts on every status line and every prompt a Claude
-// agent submits.
-
+// WARNING: Every collie, hook and board start pays for what loads here, and the compaction helper runs on every prompt.
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -15,7 +12,6 @@ const scanners = {
   tsx: new Bun.Transpiler({ loader: "tsx" }),
 };
 
-/** Everything loading `entry` loads first: its static imports, all the way down. */
 const loads = (entry: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -24,14 +20,20 @@ const loads = (entry: string) =>
     const pending = [`${src}${entry}`];
     while (pending.length > 0) {
       const file = pending.pop()!;
-      if (loaded.has(file)) continue;
+      if (loaded.has(file)) {
+        continue;
+      }
       loaded.add(file);
       const scanner = pipe(file, Str.endsWith(".tsx")) ? scanners.tsx : scanners.ts;
       for (const { kind, path: spec } of scanner.scanImports(yield* fs.readFileString(file))) {
-        if (kind !== "import-statement") continue;
-        if (pipe(spec, Str.startsWith(".")))
+        if (kind !== "import-statement") {
+          continue;
+        }
+        if (pipe(spec, Str.startsWith("."))) {
           pending.push(Bun.resolveSync(spec, path.dirname(file)));
-        else loaded.add(spec);
+        } else {
+          loaded.add(spec);
+        }
       }
     }
     return Arr.map([...loaded], (one) => pipe(one, Str.replace(src, "src/")));

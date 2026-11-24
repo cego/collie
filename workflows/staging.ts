@@ -1,7 +1,3 @@
-// Holding a merge request's Helle claims and putting its head on stage, shared by `release`
-// and `stage` so a merge request is claimed, staged and rolled back the same way either way,
-// and a set of merge requests taken one Run each. Each caller asks in its own words.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -15,16 +11,13 @@ import {
   WorkflowError,
   ask,
   mrSet,
-  type ActionFacts,
-  type ChildAsk,
-  type JobLink,
 } from "collie";
+import type { ActionFacts, ChildAsk, JobLink } from "collie";
 import { Effect, Schema, Option } from "effect";
 import * as Activity from "effect/workflow/Activity";
 
 export const short = (sha: string) => pipe_(sha, Str.slice(0, 8));
 
-/** A step or question a Run may take more than once: the first by its name, then numbered. */
 export const nth = (name: string, n: number) => (n === 1 ? name : `${name}-${n}`);
 
 export const quoted = (jobs: ReadonlyArray<string>) =>
@@ -39,7 +32,6 @@ export const plays = (jobs: ReadonlyArray<JobLink>) =>
     ", ",
   );
 
-/** The step gate's limit on a joined Clearance, counted as it counts. */
 const CLEARANCE_CHARS = 400;
 
 export const fitting = (...forms: Arr.NonEmptyReadonlyArray<ReadonlyArray<string>>) =>
@@ -91,17 +83,14 @@ export const RolledBack = Schema.Struct({
   stage: Schema.optionalKey(Schema.String).annotate({ description: "the release stage runs now" }),
 });
 
-/** Why a claim waits on the adopt question, which is asked outside the claim's Activity. */
 const ADOPTING = "the claim is already the operator's own";
 
-/** What a caller's claim questions and record say. */
 export interface ClaimWords {
   readonly adopt: string;
   readonly unclaimed: (why: string, retaining: boolean) => string;
   readonly again: string;
   readonly without: string;
   readonly finish: string;
-  /** The record line for going on without a claim, on the human's say. */
   readonly went: (why: string, retaining: boolean) => string;
 }
 
@@ -110,12 +99,6 @@ export interface Deploys {
   readonly jobs: ReadonlyArray<string>;
 }
 
-/**
- * Every Helle claim `deploys` needs, taken under the step `name`: none where the repository
- * has no Helle project or on the human's say, and null where they finished instead. `free`
- * takes only what nobody else has, and says what it left. `park` stops the Run where Helle would not take back a claim it no
- * longer wants.
- */
 export const claiming =
   <R>(options: {
     readonly runId: string;
@@ -132,8 +115,7 @@ export const claiming =
       const host = yield* Host;
       const { runId, cwd, words } = options;
       const deploys = how.deploys ?? options.deploys;
-      // A claim given back mid-Run must not be taken again when the Run replays, so it is
-      // journaled, and the adopt question is asked outside the Activity.
+      // WARNING: a claim given back mid-Run must not be taken again on replay, so it is journaled.
       const attempt = (at: string, n: number) =>
         Effect.gen(function* () {
           const take = (step: string, adopting: Effect.Effect<boolean, WorkflowError>) =>
@@ -153,8 +135,12 @@ export const claiming =
           const first = yield* take(at, Effect.fail(new WorkflowError({ reason: ADOPTING }))).pipe(
             Effect.result,
           );
-          if (first._tag === "Success") return first.success;
-          if (first.failure.reason !== ADOPTING) return { unresolved: first.failure.reason };
+          if (first._tag === "Success") {
+            return first.success;
+          }
+          if (first.failure.reason !== ADOPTING) {
+            return { unresolved: first.failure.reason };
+          }
           const adopt = yield* ask({
             name: nth("adopt-claim", n),
             prompt: words.adopt,
@@ -170,7 +156,9 @@ export const claiming =
       for (let n = 1; ; n++) {
         const at = nth(name, n);
         const held = yield* attempt(at, n);
-        if ("slugs" in held) return held;
+        if ("slugs" in held) {
+          return held;
+        }
         if ("none" in held) {
           yield* Activity.make({
             name: `${at}.none`,
@@ -183,8 +171,10 @@ export const claiming =
           prompt: words.unclaimed(held.unresolved, how.retaining ?? false),
           options: [{ id: words.again, recommended: true }, words.without, words.finish],
         });
-        if (answer === words.again) continue;
-        if (how.retaining !== true)
+        if (answer === words.again) {
+          continue;
+        }
+        if (how.retaining !== true) {
           yield* Activity.make({
             name: `${at}.give-back`,
             execute: Effect.flatMap(host.release(runId), (kept) =>
@@ -195,7 +185,10 @@ export const claiming =
                   ),
             ),
           });
-        if (answer === words.finish) return null;
+        }
+        if (answer === words.finish) {
+          return null;
+        }
         yield* Activity.make({
           name: `${at}.went`,
           execute: host.record(runId, words.went(held.unresolved, how.retaining ?? false)),
@@ -204,15 +197,9 @@ export const claiming =
       }
     });
 
-/**
- * A merge request's head put on stage by a step of the caller's, proved from the forge, and
- * taken off again. Every head it staged, and every stage environment one reached, is read
- * by the rollback, which is told every job it played.
- */
 export const staging = <R1, R2>(options: {
   readonly runId: string;
   readonly cwd: string;
-  /** The stage deploy jobs the assessment named. */
   readonly jobs: ReadonlyArray<string>;
   readonly stage: (
     name: string,
@@ -229,19 +216,17 @@ export const staging = <R1, R2>(options: {
   const { runId, cwd } = options;
   let reached: ReadonlyArray<string> = [];
   let undiscovered = false;
-  const heads: string[] = [];
+  const heads: Array<string> = [];
   const played = new Set<string>();
   return {
-    /**
-     * Stages `head` under the step `name` with `only` of the jobs, all where not given, and
-     * the forge's read of it with the jobs it read.
-     */
     put: (name: string, head: string, only: ReadonlyArray<string> = options.jobs) =>
       Effect.gen(function* () {
         const host = yield* Host;
         const staged = yield* options.stage(name, head, only);
         heads.push(head);
-        for (const job of only) played.add(job);
+        for (const job of only) {
+          played.add(job);
+        }
         const jobs = [...new Set([...only, ...(staged.stage_jobs ?? [])])];
         const read = yield* Activity.make({
           name: `${name}.read`,
@@ -249,28 +234,32 @@ export const staging = <R1, R2>(options: {
           execute: host.readStage({ runId, cwd, head, jobs }),
         });
         const named = read.environments;
-        if (named === undefined) undiscovered = true;
-        else reached = [...new Set([...reached, ...named])];
+        if (named === undefined) {
+          undiscovered = true;
+        } else {
+          reached = [...new Set([...reached, ...named])];
+        }
         return { read, jobs };
       }),
-    /** Takes stage off under the step `name`, or fails as `failing` where the forge cannot show it. */
     off: (name: string, failure: string, failing: string) =>
       Effect.gen(function* () {
         const host = yield* Host;
         yield* options.unstage(name, heads.at(-1) ?? "", failure, [...played]);
-        if (undiscovered)
+        if (undiscovered) {
           return yield* new WorkflowError({
             reason: `${failing}. Its rollback is not shown: stage environments could not be discovered`,
           });
+        }
         const back = yield* Activity.make({
           name: `${name}.read`,
           success: RollbackReadSchema,
           execute: host.readRollback({ runId, cwd, off: [...heads], environments: reached }),
         });
-        if (back._tag === "Unshown")
+        if (back._tag === "Unshown") {
           return yield* new WorkflowError({
             reason: `${failing}. Its rollback is not shown: ${back.why}`,
           });
+        }
       }),
   };
 };
@@ -283,14 +272,16 @@ export interface SetMember {
 }
 
 const PRIMES: Array<number> = [];
-for (let n = 2; PRIMES.length < 64; n++)
-  if (Arr.every(PRIMES, (prime) => n % prime !== 0)) PRIMES.push(n);
+for (let n = 2; PRIMES.length < 64; n++) {
+  if (Arr.every(PRIMES, (prime) => n % prime !== 0)) {
+    PRIMES.push(n);
+  }
+}
 const fraction32 = (x: number) => ((x - Math.floor(x)) * 2 ** 32) >>> 0;
 const ROUND = Arr.map(PRIMES, (prime) => fraction32(Math.cbrt(prime)));
 const START = Arr.map(Arr.take(PRIMES, 8), (prime) => fraction32(Math.sqrt(prime)));
 const rotr = (x: number, n: number) => (x >>> n) | (x << (32 - n));
 
-/** FIPS 180-4 SHA-256, in hex, of `text` as UTF-16BE: a module an author writes has no crypto. */
 const sha256 = (text: string) => {
   const bytes: Array<number> = [];
   for (let at = 0; at < text.length; at++) {
@@ -299,8 +290,12 @@ const sha256 = (text: string) => {
   }
   const bits = bytes.length * 8;
   bytes.push(0x80);
-  while (bytes.length % 64 !== 56) bytes.push(0);
-  for (let shift = 56; shift >= 0; shift -= 8) bytes.push(Math.floor(bits / 2 ** shift) & 0xff);
+  while (bytes.length % 64 !== 56) {
+    bytes.push(0);
+  }
+  for (let shift = 56; shift >= 0; shift -= 8) {
+    bytes.push(Math.floor(bits / 2 ** shift) & 0xff);
+  }
   const hash = [...START];
   for (let block = 0; block < bytes.length; block += 64) {
     const w: Array<number> = [];
@@ -328,7 +323,9 @@ const sha256 = (text: string) => {
       const t2 = ((rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) | 0;
       v.splice(0, 8, (t1 + t2) | 0, a, b, c, (d + t1) | 0, e, f, g);
     }
-    for (let i = 0; i < 8; i++) hash[i] = (hash[i]! + v[i]!) | 0;
+    for (let i = 0; i < 8; i++) {
+      hash[i] = (hash[i]! + v[i]!) | 0;
+    }
   }
   return Arr.join(
     Arr.map(hash, (word) => pipe_((word >>> 0).toString(16), Str.padStart(8, "0"))),
@@ -336,19 +333,17 @@ const sha256 = (text: string) => {
   );
 };
 
-// The id's SHA-256 keeps two MR ids apart, and the capped slug a child's Run directory short.
+// WARNING: the id's SHA-256 keeps two merge request ids apart; the capped slug alone would not.
 export const invocationFor = (workflow: "release" | "stage" | "tag", member: SetMember) =>
   workflow === "tag"
     ? `tag-${sha256(member.id)}`
-    : `${workflow}-${pipe_(member.id, Str.replace(/[^a-z0-9]+/g, "-"), Str.slice(0, 40))}-${sha256(member.id)}`;
+    : `${workflow}-${pipe_(member.id, Str.replaceAll(/[^a-z0-9]+/g, "-"), Str.slice(0, 40))}-${sha256(member.id)}`;
 
-/** Whether a Run was started with one merge request: a set is never offered again whole. */
 export const startedWithOne = (facts: ActionFacts) => {
   const set = mrSet(facts.diffTarget ?? "");
   return set === null || ("mrs" in set && set.mrs.length === 1);
 };
 
-/** A Run of this workflow on `member` alone, waited on: its result, or why it failed. */
 export const runOn = (
   workflow: "release" | "stage",
   member: SetMember,
@@ -373,8 +368,9 @@ export const runOn = (
         member.checkout === undefined ? ask : { ...ask, options: { workspace: member.checkout } },
       )
       .pipe(Effect.result);
-    if (child._tag === "Failure")
+    if (child._tag === "Failure") {
       return { ok: false, said: `not started: ${child.failure.reason}` };
+    }
     return yield* children.result(child.success).pipe(
       Effect.match({
         onSuccess: (value) => ({ ok: true, said: String(value) }),

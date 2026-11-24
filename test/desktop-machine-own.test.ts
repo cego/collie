@@ -8,7 +8,8 @@ import type * as RpcMessage from "effect/rpc/RpcMessage";
 import * as RpcServer from "effect/rpc/RpcServer";
 import { applyItem, EMPTY_FLOCK, machineRows } from "../desktop/src/shared/flock";
 import { machineOwnRows } from "../desktop/src/shared/machine-own";
-import { type Door, flockStream, machineOwnOn } from "../desktop/src/bun/machine";
+import { flockStream, machineOwnOn } from "../desktop/src/bun/machine";
+import type { Door } from "../desktop/src/bun/machine";
 import { BoardMessage, FrontDoorRpcs, HostRefused } from "../src/board-model";
 import { savedOwn, saveOwn } from "../desktop/src/bun/saved";
 import { runEffect } from "./support/effect";
@@ -110,7 +111,7 @@ test("a host's refused read keeps the reason the operator can fix", () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const read = yield* machineOwnOn(machine, {
-        // SAFETY: the reader asks for a reply, never discard mode.
+        // WARNING: the reader asks for a reply, never discard mode.
         machineOwn: (() =>
           Effect.fail(
             new HostRefused({ reason: "config.json is not readable" }),
@@ -149,7 +150,7 @@ test("a paired base host still draws its board after refusing the additive RPC",
         let toClient: (message: RpcMessage.FromServer<Rpcs>) => Effect.Effect<void> = () =>
           Effect.void;
         const server = yield* RpcServer.makeNoSerialization(Older, {
-          // SAFETY: the older server's responses use the same RPC envelopes.
+          // WARNING: the older server's responses use the same RPC envelopes.
           onFromServer: (message) => toClient(message),
         }).pipe(
           Effect.provide(
@@ -169,7 +170,7 @@ test("a paired base host still draws its board after refusing the additive RPC",
         );
         const client = yield* RpcClient.makeNoSerialization(FrontDoorRpcs, {
           supportsAck: true,
-          // SAFETY: a newer client can send a tag the older server does not know.
+          // WARNING: a newer client can send a tag the older server does not know.
           onFromClient: ({ message }) => server.write(0, message as never),
         });
         toClient = client.write;

@@ -1,5 +1,3 @@
-// This Machine's Herd as a host reads it, and what tells it that its terminals changed.
-
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, Fiber, Option, Stream } from "effect";
 import { Herdr } from "../src/herdr";
@@ -22,7 +20,7 @@ beforeEach(() =>
 
 afterEach(() => runEffect(rig.close()));
 
-const registered = (agent: string, terminal: string): AgentEntry => ({
+const registered: (agent: string, terminal: string) => AgentEntry = (agent, terminal) => ({
   role: "implementer",
   agent,
   paneId: terminal,
@@ -96,7 +94,7 @@ test("Go to pane on a Run whose builder work moved on opens the live builder's p
       const sessions = [{ herd: null, herdr: new Herdr(rig.pluginEnv()) }];
       const first = registered("build-r1", "ended-1");
       const second = yield* rig.addAgent("build-02-r1");
-      // Newest first, as the host asks.
+      // WARNING: newest first, as the host asks.
       expect((yield* focusPane(sessions, [registered("build-02-r1", second), first]))?.core).toBe(
         second,
       );

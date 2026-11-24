@@ -1,21 +1,12 @@
 import * as Cause from "effect/Cause";
-// Collie's polled waits, on a clock that moves only by what is slept on it: how often each
-// asks, what it says once its deadline has passed between two asks, and that an ask still
-// running at the deadline is waited for and its answer used.
 
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Clock, Effect, Fiber, FileSystem, Schema, flow, Result } from "effect";
 import { TestClock } from "effect/testing";
 import { withCodex, currentContext } from "../src/codex";
-import {
-  atBoundary,
-  awaitReady,
-  Unsubmitted,
-  type CompactionDeps,
-  type CompactionPort,
-  type CompactionOutcome,
-} from "../src/compaction";
+import { atBoundary, awaitReady, Unsubmitted } from "../src/compaction";
+import type { CompactionPort, CompactionOutcome } from "../src/compaction";
 import { codexPort, servedEndpoint } from "../src/compactors";
 import type { Channel } from "../src/dispatcher";
 import { handOverClaim } from "../src/engine";
@@ -30,13 +21,12 @@ const decodeFrame = flow(
   Result.getOrThrow,
 );
 
-/** Runs `wait` on a TestClock its sleeps advance, and the times it asked, from its start. */
 const timed = <A, E, R>(wait: (ask: Effect.Effect<number>) => Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     const clock = yield* TestClock.make();
     const fast: Clock.Clock = { ...clock, sleep: (duration) => clock.adjust(duration) };
     const start = clock.currentTimeMillisUnsafe();
-    const asked: number[] = [];
+    const asked: Array<number> = [];
     const ask = Effect.sync(() => {
       const at = clock.currentTimeMillisUnsafe() - start;
       asked.push(at);
@@ -49,7 +39,7 @@ const timed = <A, E, R>(wait: (ask: Effect.Effect<number>) => Effect.Effect<A, E
 const every = (interval: number, from: number, to: number) =>
   Array.from({ length: (to - from) / interval + 1 }, (_, at) => from + at * interval);
 
-const port = (over: Partial<CompactionPort>): CompactionPort => ({
+const port = (over: Partial<CompactionPort>) => ({
   gate: Effect.void,
   install: () => Effect.die(new Error("not installed here")),
   usage: () => Effect.succeed(null),
@@ -58,7 +48,6 @@ const port = (over: Partial<CompactionPort>): CompactionPort => ({
   ...over,
 });
 
-/** An agent's control record under a fresh state directory, with `attempt` in the air. */
 const controlled = (attempt: { readonly deadline: number } | null) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -77,7 +66,7 @@ const controlled = (attempt: { readonly deadline: number } | null) =>
     return stateDir;
   });
 
-const deps = (stateDir: string, claude: CompactionPort): CompactionDeps => ({
+const deps = (stateDir: string, claude: CompactionPort) => ({
   ports: { claude },
   stateDir,
   configured: 1000,
@@ -136,9 +125,7 @@ test("a readiness ask still running at the budget is waited for, and its yes is 
     }),
   ));
 
-const submitting = <A, E, R>(
-  _body: (channel: Channel) => Effect.Effect<A, E, R>,
-): Effect.Effect<A, E | Unsubmitted, R> =>
+const submitting = <A, E, R>(_body: (channel: Channel) => Effect.Effect<A, E, R>) =>
   Effect.fail(new Unsubmitted({ message: "nothing is submitted here" }));
 
 test("an unresolved compaction is polled at its interval and last at its recorded deadline", () =>
@@ -197,7 +184,6 @@ test("a compaction poll still running at the deadline is waited for, and its out
     }),
   ));
 
-/** A FileSystem whose reads of `log` are `said` at each ask. */
 const logSays = (fs: FileSystem.FileSystem, log: string, said: Effect.Effect<string>) => ({
   ...fs,
   readFileString: (path: string, encoding?: string) =>
@@ -270,15 +256,14 @@ test("a fast-forwarded server start waits for a server that takes real time to c
     ),
   ));
 
-// Past any pid_max, so no process here can be one of the machine's.
+// WARNING: past any pid_max, so no process here can be one of the machine's.
 const ROOT = 4_194_400;
 const CHILD = 4_194_401;
 
-/** `/proc` showing one process of `ROOT`'s session, `CHILD`, while each listing says it is there. */
-const session = (
+const session: (
   fs: FileSystem.FileSystem,
   listed: Effect.Effect<boolean>,
-): FileSystem.FileSystem => {
+) => FileSystem.FileSystem = (fs, listed) => {
   const fields = Array<string>(20).fill("0");
   fields[0] = "S";
   fields[3] = String(ROOT);
@@ -373,7 +358,7 @@ const handOver = (
 test("a hand-over looks at each Run it stopped every interval, against one deadline for all", () =>
   runEffect(
     Effect.gen(function* () {
-      const looks: string[] = [];
+      const looks: Array<string> = [];
       const { result } = yield* handOver(
         (runId, at) => Effect.succeed(runId === "r-old" && at >= 500),
         looks,
@@ -409,7 +394,6 @@ test("a hand-over's look still running at its deadline is waited for, and its st
     }),
   ));
 
-/** A Codex App Server stand-in that replays usage only when the test says. */
 const codexServer = () => {
   const { promise: replaying, resolve: resumed } =
     Promise.withResolvers<(threadId: string, tokens: number) => void>();
@@ -421,7 +405,9 @@ const codexServer = () => {
       message(ws, raw) {
         const { id, method } = decodeFrame(String(raw));
         ws.send(encode({ id, result: method === "initialize" ? { userAgent: "fake" } : {} }));
-        if (method !== "thread/resume") return;
+        if (method !== "thread/resume") {
+          return;
+        }
         resumed((threadId, tokens) => {
           const usage = {
             totalTokens: tokens,
@@ -447,7 +433,6 @@ const codexServer = () => {
   };
 };
 
-/** `currentContext` on a TestClock, forked once the server has its rejoin. */
 const reading = Effect.fn("test.reading")(function* (url: string) {
   const clock = yield* TestClock.make();
   const fiber = yield* Effect.forkChild(
@@ -506,7 +491,7 @@ test("a compaction waits for room before it is asked for, and a stop in that wai
   runEffect(
     Effect.gen(function* () {
       const stateDir = yield* controlled(null);
-      const said: string[] = [];
+      const said: Array<string> = [];
       const due = yield* atBoundary(
         {
           ...deps(

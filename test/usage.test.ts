@@ -1,13 +1,12 @@
 import * as Cause from "effect/Cause";
-// The host's Usage readings: how often each endpoint is called, what a refusal or a silent
-// endpoint leaves behind, a login read and never written, and the status lines' samples.
 
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { describe, expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
-import { DateTime, Effect, Fiber, FileSystem, Path, Schema, Scope, flow, Result } from "effect";
+import type { Scope } from "effect";
+import { DateTime, Effect, Fiber, FileSystem, Path, Schema, flow, Result } from "effect";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { TestClock } from "effect/testing";
@@ -17,9 +16,8 @@ import {
   codexReading,
   makeUsage,
   USAGE_INTERVAL_MS,
-  type Asked,
-  type UsageSources,
 } from "../src/usage";
+import type { Asked, UsageSources } from "../src/usage";
 import { fallbackLines, usageLines } from "../src/commands/usage";
 import { fallbacksOf } from "../src/launches";
 import { readEnv } from "../src/env";
@@ -37,7 +35,11 @@ const onTestClock = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices |
     effect.pipe(Effect.scoped, Effect.provide([BunServices.layer, TestClock.layer()])),
   );
 
-const read = (subscription: "claude" | "chatgpt", at: number, percent: number): UsageReading => ({
+const read: (subscription: "claude" | "chatgpt", at: number, percent: number) => UsageReading = (
+  subscription,
+  at,
+  percent,
+) => ({
   subscription,
   account: "acct",
   accountLabel: "me@example.com",
@@ -57,7 +59,6 @@ const read = (subscription: "claude" | "chatgpt", at: number, percent: number): 
   problem: null,
 });
 
-/** A source that answers what `answers` says next, counting each call. */
 const counted = (answers: (call: number, at: number) => Effect.Effect<Asked>) => {
   const calls = { count: 0 };
   const ask = Effect.gen(function* () {
@@ -195,7 +196,7 @@ describe("Claude's login", () => {
         yield* TestClock.setTime(10_000);
         const http = fakeHttp(200, asJson(claudeUsage));
         const asked = yield* askClaude({
-          credentials: Effect.succeed(credentials(5_000)),
+          credentials: Effect.succeed(credentials(5000)),
           claudeJson: Effect.succeed(claudeJson),
         }).pipe(Effect.provideService(HttpClient.HttpClient, http.client));
 
@@ -254,7 +255,7 @@ describe("Claude's login", () => {
         const home = yield* fs.makeTempDirectoryScoped();
         const file = path.join(home, ".claude", ".credentials.json");
         yield* fs.makeDirectory(path.dirname(file));
-        yield* fs.writeFileString(file, credentials(5_000));
+        yield* fs.writeFileString(file, credentials(5000));
         yield* fs.writeFileString(path.join(home, ".claude.json"), claudeJson);
         const before = yield* fs.stat(file);
         yield* TestClock.setTime(10_000);
@@ -266,7 +267,7 @@ describe("Claude's login", () => {
         );
 
         expect(asked.reading.account).toBe("org-1:acct-1");
-        expect(yield* fs.readFileString(file)).toBe(credentials(5_000));
+        expect(yield* fs.readFileString(file)).toBe(credentials(5000));
         expect((yield* fs.stat(file)).mtime).toEqual(before.mtime);
       }),
     ));
@@ -309,8 +310,8 @@ describe("ChatGPT", () => {
 
 describe("status-line samples", () => {
   const limits = {
-    five_hour: { used_percentage: 64, resets_at: 1791457799 },
-    seven_day: { used_percentage: 90, resets_at: 1791544799 },
+    five_hour: { used_percentage: 64, resets_at: 1_791_457_799 },
+    seven_day: { used_percentage: 90, resets_at: 1_791_544_799 },
   };
   const withModelWindow: UsageReading = {
     ...read("claude", 0, 31),

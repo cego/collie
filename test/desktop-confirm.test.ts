@@ -1,16 +1,18 @@
-// Desktop counts a write done only on its host's reply: it waits 30 s an attempt, sends the
-// same request again up to 3 times, and keeps a line per attempt in `actions.log`.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
 import { BunServices } from "@effect/platform-bun";
-import { Effect, FileSystem } from "effect";
-import { act, actOn, type Door } from "../desktop/src/bun/machine";
-import { actionsLog, type Attempted } from "../desktop/src/bun/sent";
-import { ActionFailed, type DesktopAction } from "../desktop/src/shared/flock";
-import { HostRefused, type ActionResult } from "../src/board-model";
+import { Effect, FileSystem, Schema } from "effect";
+import { act, actOn } from "../desktop/src/bun/machine";
+import type { Door } from "../desktop/src/bun/machine";
+import { actionsLog } from "../desktop/src/bun/sent";
+import type { Attempted } from "../desktop/src/bun/sent";
+import { ActionFailed } from "../desktop/src/shared/flock";
+import type { DesktopAction } from "../desktop/src/shared/flock";
+import { HostRefused } from "../src/board-model";
+import type { ActionResult } from "../src/board-model";
 import { fastForward } from "./support/effect";
+import { parseJson } from "../src/json";
 
 const machine = { profile: "vm", name: "vm-mk" };
 const answer: DesktopAction = {
@@ -23,23 +25,21 @@ const UNCONFIRMED =
   "vm-mk did not confirm the answer to r-1 within 30 s, 3 times. It may still land; Try again sends the same request, which vm-mk takes at most once.";
 
 const logged = () => {
-  const lines: Attempted[] = [];
+  const lines: Array<Attempted> = [];
   return { lines, log: (line: Attempted) => Effect.sync(() => void lines.push(line)) };
 };
 
-/** A door whose `answer` replies with each of `replies` in turn, and never after them. */
 const answering = (replies: ReadonlyArray<ReturnType<Door["answer"]>>) => {
-  const requests: string[] = [];
+  const requests: Array<string> = [];
   const fake: Partial<Door> = {
-    // Sent each time it is run, as the client's call is.
-    // SAFETY: an Answer never asks to discard the reply.
+    // WARNING: an Answer never asks to discard the reply.
     answer: ((payload: Parameters<Door["answer"]>[0]) =>
       Effect.suspend(() => {
         requests.push(payload.request);
         return replies[requests.length - 1] ?? Effect.never;
       })) as Door["answer"],
   };
-  // SAFETY: an Answer calls only `answer`.
+  // WARNING: an Answer calls only `answer`.
   return { requests, reached: { machine, desktop: fake as Door } };
 };
 
@@ -51,7 +51,7 @@ test("an answer whose first send is not confirmed is sent again under its reques
     Effect.gen(function* () {
       const { lines, log } = logged();
       const door = answering([Effect.never, accepted(false)]);
-      const said = yield* fastForward(act(door.reached, "ask-1", answer, log), 1_000);
+      const said = yield* fastForward(act(door.reached, "ask-1", answer, log), 1000);
       expect(said).toBe("Answered r-1");
       expect(door.requests).toEqual(["ask-1", "ask-1"]);
       expect(Arr.map(lines, ({ attempt, ended }) => [attempt, ended])).toEqual([
@@ -68,7 +68,7 @@ test("a host that never confirms is tried 3 times, and the failure says so under
       const door = answering([]);
       const failed = yield* fastForward(
         act(door.reached, "ask-2", answer, log).pipe(Effect.flip),
-        1_000,
+        1000,
       );
       expect(failed).toEqual(new ActionFailed({ request: "ask-2", reason: UNCONFIRMED }));
       expect(door.requests).toEqual(["ask-2", "ask-2", "ask-2"]);
@@ -131,13 +131,13 @@ test("a card action Desktop does not send says why, and is logged as not sent", 
     }),
   ));
 
-const delivering = (): Door => {
+const delivering = () => {
   const fake: Partial<Door> = {
     act: () =>
-      // SAFETY: `Deliver` never asks to discard the reply, so it is the results.
+      // WARNING: `Deliver` never asks to discard the reply, so it is the results.
       Effect.succeed([{ kind: "deliver", state: "applied", note: "" } as ActionResult] as never),
   };
-  // SAFETY: a Deliver calls only `act`.
+  // WARNING: a Deliver calls only `act`.
   return fake as Door;
 };
 
@@ -159,7 +159,9 @@ test("actions.log keeps a JSON line per attempt with ids and kinds only, and sta
         log,
       );
       const kept = yield* fs.readFileString(`${dir}/actions.log`);
-      const [first, second] = Arr.map(Str.split(Str.trim(kept), "\n"), (line) => JSON.parse(line));
+      const [first, second] = Arr.map(Str.split(Str.trim(kept), "\n"), (line) =>
+        parseJson(Schema.Any, line),
+      );
       expect(first).toMatchObject({
         door: "board",
         machine: "vm-mk",
@@ -173,8 +175,9 @@ test("actions.log keeps a JSON line per attempt with ids and kinds only, and sta
       expect(second).toMatchObject({ request: "say-1", kind: "Deliver", ended: "accepted" });
       expect(kept).not.toContain("the-answer-value");
       expect(kept).not.toContain("the-deliver-text");
-      for (const request of ["ask-7", "ask-8", "ask-9"])
+      for (const request of ["ask-7", "ask-8", "ask-9"]) {
         yield* act(answering([accepted(true)]).reached, request, answer, log);
+      }
       expect(yield* fs.readFileString(`${dir}/actions.log.1`)).toContain('"ask-6"');
       expect((yield* fs.stat(`${dir}/actions.log`)).size).toBeLessThanOrEqual(600);
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
@@ -212,7 +215,7 @@ test("board and chat writers ending at once at the rotation boundary keep every 
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-actions-log-" });
-      const line = (request: string): Attempted => ({
+      const line: (request: string) => Attempted = (request) => ({
         door: "board",
         machine: "vm-mk",
         request,
@@ -222,7 +225,9 @@ test("board and chat writers ending at once at the rotation boundary keep every 
         ended: "accepted",
       });
       const first = yield* actionsLog(dir, 350);
-      for (const request of ["ask-a", "ask-b"]) yield* first(line(request));
+      for (const request of ["ask-a", "ask-b"]) {
+        yield* first(line(request));
+      }
       const second = yield* actionsLog(dir, 350);
       yield* Effect.all([first(line("ask-c")), second(line("ask-d"))], {
         concurrency: "unbounded",
@@ -234,7 +239,8 @@ test("board and chat writers ending at once at the rotation boundary keep every 
         ],
         "",
       );
-      for (const request of ["ask-a", "ask-b", "ask-c", "ask-d"])
+      for (const request of ["ask-a", "ask-b", "ask-c", "ask-d"]) {
         expect(kept).toContain(`"${request}"`);
+      }
     }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
   ));

@@ -1,8 +1,4 @@
-// The tools a conversation may call on Collie, as one Effect Toolkit: what each takes, what
-// it says when it refuses, and how a call's result becomes the sentence chat is answered
-// with. No effects and nothing Bun-only, so Native chat's tool host (`tools.ts`) and
-// Desktop's Flock chat serve the same definitions.
-
+// WARNING: no effects and nothing Bun-only, so Desktop's Flock chat serves the same definitions.
 import * as Struct from "effect/Struct";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
@@ -23,28 +19,24 @@ import {
   sectionOf,
   SECTIONS,
   shippingLabel,
-  type TaskView,
   mrNounOf,
 } from "./board-model";
-import { isString, type JsonObject } from "./schema";
+import type { TaskView } from "./board-model";
+import { isString } from "./schema";
+import type { JsonObject } from "./schema";
+import { stringifyJson } from "./json";
 
-/**
- * A key a tool does not take is refused, never stripped. Effect strips by default, and
- * a model that passed `goal` beside a start and was told "started" believes the goal is
- * in force while the Run runs without it. The refusal names the key so it can be acted on.
- */
+// WARNING: a key a tool does not take is refused, never stripped: a model told 'started' would believe the goal is in force.
 export const STRICT = { onExcessProperty: "error", errors: "all" } as const;
 
 export const decodeStrict = <S extends Schema.ConstraintDecoder<unknown, never>>(schema: S) => {
   const decode = Schema.decodeUnknownResult(schema, STRICT);
-  return (input: JsonObject): Result.Result<S["Type"], string> =>
-    Result.mapError(decode(input), (error) => error.message);
+  return (input: JsonObject) => Result.mapError(decode(input), (error) => error.message);
 };
 
 export const RunInput = Schema.Struct({ run: Schema.optionalKey(Schema.String) });
 const specs = (description: string) =>
   Schema.optionalKey(Schema.Array(Schema.String).annotate({ description }));
-/** `run metrics --compare … --against …` as `collie_run` takes it. */
 const TrialInput = Schema.Struct({
   compare: specs(
     "Instead of one Run, compare two sets: the first set's Runs, each <run> or <run>=<case>",
@@ -128,21 +120,15 @@ export const DefinitionInput = Schema.Struct({
   ),
 });
 
-/** What a tool says when it will not act: tagged, so a model can tell it from an answer. */
 export const refused = (tool: string, why: string, takes: string) =>
   `${tool} refused the request (InvalidInput): ${why}. Nothing was done. ${takes}`;
 
-/** What a proposal's actions may be, decoded at this boundary and nowhere later. */
 export const ProposeInput = Schema.Struct({
   interpretation: Schema.String,
   actions: Schema.Array(ActionSchema),
   request_id: Schema.optionalKey(Schema.String),
 });
 
-/**
- * The board's decisions, which are not actions on a Run: a yes to a proposal, a no, and
- * what became of finished work. Chat takes them as the human takes them on the board.
- */
 const SettleSchema = Schema.Union([
   Schema.Struct({
     ...RegisterArtefact.fields,
@@ -153,7 +139,6 @@ const SettleSchema = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("confirm"),
     proposal: Schema.String,
-    /** The hash of exactly those actions, as `collie_receipts` lists it beside the id. */
     hash: Schema.String,
   }),
   Schema.Struct({ kind: Schema.Literal("decline"), proposal: Schema.String, hash: Schema.String }),
@@ -161,10 +146,8 @@ const SettleSchema = Schema.Union([
     kind: Schema.Literal("disposition"),
     run: Schema.String,
     became: Schema.Literals(["merged", "abandoned", "superseded"]),
-    /** What backs it up: a merge request, a commit, or the Run that took the work over. */
     ref: Schema.optionalKey(Schema.String),
   }),
-  /** A finished Run's report acknowledged, for every board in the Flock. */
   Schema.Struct({ kind: Schema.Literal("seen"), run: Schema.String }),
   Schema.Struct({
     kind: Schema.Literal("artefact_seen"),
@@ -191,7 +174,6 @@ const AskedInput = Schema.Struct({
 });
 export const decodeAsked = decodeStrict(AskedInput);
 
-/** Each action kind's member of the closed unions, so a refusal can speak in its terms. */
 const MEMBERS = new Map<
   string,
   (typeof ActionSchema.members | typeof SettleSchema.members)[number]
@@ -202,10 +184,6 @@ const MEMBERS = new Map<
   ]),
 );
 
-/**
- * What `collie_do` is called with: `AskedInput`, except that an action about one Run may
- * leave `run` out for the board's selection to stand in. Decoded again once it has.
- */
 const DoInput = Schema.Struct({
   request_id: Schema.optionalKey(Schema.String),
   actions: Schema.Array(
@@ -219,22 +197,19 @@ const DoInput = Schema.Struct({
   ),
 });
 
-/**
- * Why a request's actions were refused, per action and in the model's own terms: a kind
- * that does not exist, a key the kind does not take and what it does take, or the one
- * member's own complaint — never the whole union spelled out. Empty where the trouble is
- * elsewhere, and the schema's own message stands.
- */
-function wrongActions(input: JsonObject): string[] {
+function wrongActions(input: JsonObject) {
   const loose = decodeLoose(input);
-  if (loose._tag === "None") return [];
+  if (loose._tag === "None") {
+    return [];
+  }
   return Arr.flatMap(loose.value.actions, (action, at) => {
-    const kind = isString(action["kind"]) ? action["kind"] : JSON.stringify(action["kind"] ?? null);
+    const kind = isString(action["kind"]) ? action["kind"] : stringifyJson(action["kind"] ?? null);
     const member = MEMBERS.get(kind);
-    if (!member)
+    if (!member) {
       return [
         `actions[${at}] has kind ${kind}, which is none of ${Arr.join([...MEMBERS.keys()], ", ")}`,
       ];
+    }
     const takes = Struct.keys(member.fields);
     const extra = Arr.filter(
       Struct.keys(action),
@@ -264,19 +239,10 @@ export const refusedActions = (tool: string, input: JsonObject, why: string, tak
   return refused(tool, wrong.length > 0 ? Arr.join(wrong, "; ") : why, takes);
 };
 
-/**
- * A Collie tool: it answers in a sentence, a refusal included, and it is allowed without
- * asking — every one carries out what the human asked for in this conversation (ADR-0011).
- */
 const collieTool = <const Name extends string, P extends Schema.Constraint>(
   name: Name,
   options: {
     readonly title: string;
-    /**
-     * Whether this tool leaves everything as it found it. Said per tool rather than once
-     * for the file, because a client uses it to decide what to run without asking: reading
-     * the news settles the items it returns, and proposing writes to the journal.
-     */
     readonly readOnly: boolean;
     readonly description: string;
     readonly parameters: P;
@@ -292,7 +258,6 @@ const collieTool = <const Name extends string, P extends Schema.Constraint>(
     .annotate(Tool.Title, options.title)
     .annotate(Tool.Readonly, options.readOnly);
 
-/** Whether a `collie_artefacts` call searches across Runs rather than reading one Run's material. */
 export const searchesArtefacts = (input: {
   readonly run?: string;
   readonly query?: string;
@@ -444,8 +409,7 @@ export const CollieTools = Toolkit.make(
     parameters: DefinitionInput,
   }),
   collieTool("collie_installation", {
-    // `doctor` fetches this checkout's refs to say whether it is behind, which writes to
-    // the object store. Bounded, and still not a read.
+    // WARNING: doctor fetches refs, which writes to the object store: bounded, and still not a read.
     readOnly: false,
     title: "This installation",
     description:
@@ -543,7 +507,6 @@ export type ToolName = keyof typeof CollieTools.tools;
 
 export const SubmitInput = Schema.Struct({ output: Schema.Json });
 
-/** A Run agent's Output, offered under `output_submit: tool` and never to the chat, which has none. */
 export const SubmitTool = collieTool("collie_submit", {
   readOnly: false,
   title: "Hand in your Output",
@@ -554,14 +517,12 @@ export const SubmitTool = collieTool("collie_submit", {
   parameters: SubmitInput,
 });
 
-/** The tools a role is offered under `role_tools: role`. A role not here, and the chat, get every tool. */
 export const ROLE_TOOLS = new Map<string, ReadonlyArray<ToolName>>([
   ["implementer", ["collie_run", "collie_artefacts", "collie_report", "collie_do"]],
   ["reviewer", ["collie_run", "collie_artefacts", "collie_report"]],
   ["healer", ["collie_do", "collie_artefacts", "collie_report", "collie_run"]],
 ]);
 
-/** What each tool says it takes when it refuses what it was given. */
 export const TAKES: Record<ToolName, string> = {
   collie_artefacts:
     'It takes {"run":"<run id>","id":"<optional artefact id>","revision":1,"offset":0,"refresh":false}, {"run":"<run id>","ref":"log","start":1,"count":200,"search":"<optional pattern>"}, or to search {"query":"<words>","run":"<optional run>","kind":"<optional>","role":"<optional>","unseen":true,"cursor":"<optional>","limit":50}.',
@@ -582,11 +543,9 @@ export const TAKES: Record<ToolName, string> = {
     'It takes {"interpretation": "...", "actions": [...]}, and every action has to be one of the kinds in the schema.',
 };
 
-/** Cards per answer. Sections come in the board's order, so Finished is what gets cut. */
 const HERD_CARDS = 40;
 
-/** One card as chat reads it: what the human sees on it, plus the id an action needs. */
-function cardLine(view: TaskView): string {
+function cardLine(view: TaskView) {
   const project = view.project === "" ? "" : ` (${view.project})`;
   const mrs = view.mrs ?? [];
   const where =
@@ -616,12 +575,10 @@ function cardLine(view: TaskView): string {
   return `- run ${view.run}: ${view.name}${project}, ${view.state}${where}${agents}. ${shippingLabel(view)}${view.sentence}${view.drift === null ? "" : ` ${view.drift}`}${offers.length === 0 ? "" : ` Offers: ${Arr.join(offers, "; ")}.`}`;
 }
 
-/**
- * The board as chat reads it: the header, then each section's cards in the board's order,
- * from the `after`th card on, ending with whether that was all and where the rest start.
- */
-export function herdLines(views: ReadonlyArray<TaskView>, now: number, after = 0): string {
-  if (views.length === 0) return "- (no Runs in this Herd)";
+export function herdLines(views: ReadonlyArray<TaskView>, now: number, after = 0) {
+  if (views.length === 0) {
+    return "- (no Runs in this Herd)";
+  }
   const lines = [headerSentence(views, now).text];
   let skip = after;
   let room = HERD_CARDS;
@@ -630,8 +587,9 @@ export function herdLines(views: ReadonlyArray<TaskView>, now: number, after = 0
     const shown = cards.slice(skip, skip + room);
     skip = Math.max(0, skip - cards.length);
     room -= shown.length;
-    if (shown.length > 0)
+    if (shown.length > 0) {
       lines.push("", `## ${title} · ${cards.length}`, ...Arr.map(shown, cardLine));
+    }
   }
   const left = views.length - after - (HERD_CARDS - room);
   lines.push(
@@ -643,38 +601,38 @@ export function herdLines(views: ReadonlyArray<TaskView>, now: number, after = 0
   return Arr.join(lines, "\n");
 }
 
-/** Only the two fields the stand-in turns on; the closed union decodes the rest. */
 const LooseActions = Schema.Struct({
   actions: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
 });
 export const decodeLoose = Schema.decodeUnknownOption(LooseActions);
 
-/** The JSON Schema a harness is given, generated from the schema the call is decoded with. */
-export const jsonSchemaOf = (schema: Schema.Top): JsonObject => {
+export const jsonSchemaOf = (schema: Schema.Top) => {
   const document = Schema.toJsonSchemaDocument(schema, { onExcessProperty: "error" });
-  // SAFETY: a JSON Schema document is JSON, which is what JsonObject says.
+  // WARNING: a JSON Schema document is JSON, which is what JsonObject says.
   return { ...document.schema, $defs: document.definitions } as JsonObject;
 };
 
-export const inputSchemaOf = (tool: Tool.Any): JsonObject => jsonSchemaOf(tool.parametersSchema);
+export const inputSchemaOf = (tool: Tool.Any) => jsonSchemaOf(tool.parametersSchema);
 
 export const isToolName = (name: string): name is ToolName =>
   Arr.some(Struct.keys(CollieTools.tools), (key) => key === name);
 
-/**
- * One call through a Toolkit made of Collie tools, decoded strictly. Input it will not take
- * is a refusal in the tool's own terms, and a tool it does not have answers nothing.
- */
 export const answerWith = Effect.fn("Toolkit.answer")(function* <
   Tools extends Record<string, Tool.Any>,
 >(toolkit: Toolkit.WithHandler<Tools>, name: string, input: JsonObject) {
-  if (!Rec.has(toolkit.tools, name)) return "";
-  // SAFETY: `handle` decodes it, which is what makes untrusted JSON a tool's parameters.
-  const results = yield* toolkit.handle(name, input as never, undefined, STRICT);
+  if (!Rec.has(toolkit.tools, name)) {
+    return "";
+  }
+  // WARNING: `handle` decodes it, which is what makes untrusted JSON a tool's parameters.
+  const results = yield* toolkit.handle(name, input, undefined, STRICT);
   const last = yield* Stream.runLast(results);
-  if (Option.isNone(last)) return "";
+  if (Option.isNone(last)) {
+    return "";
+  }
   const result: unknown = last.value.result;
-  if (isString(result)) return result;
+  if (isString(result)) {
+    return result;
+  }
   const why = !AiError.isAiError(result)
     ? String(result)
     : result.reason._tag === "ToolParameterValidationError"
@@ -683,7 +641,6 @@ export const answerWith = Effect.fn("Toolkit.answer")(function* <
   return refusedActions(name, input, why, isToolName(name) ? TAKES[name] : "");
 });
 
-/** A tool as an MCP server lists it: its name, words, input schema and whether it only reads. */
 export const describeTool = (tool: Tool.Any) => ({
   name: tool.name,
   title: Context.getUnsafe(tool.annotations, Tool.Title),

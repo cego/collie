@@ -13,7 +13,9 @@ test("a living bridge that never becomes ready fails with a bounded startup diag
           "setInterval(() => {}, 10000)",
         ]).pipe(Effect.result, Effect.timeoutOption("3 minutes"));
         expect(Option.isSome(opened)).toBe(true);
-        if (Option.isNone(opened)) return;
+        if (Option.isNone(opened)) {
+          return;
+        }
         expect(Result.isFailure(opened.value)).toBe(true);
         if (Result.isFailure(opened.value)) {
           expect(opened.value.failure.state).toBe("unreachable");

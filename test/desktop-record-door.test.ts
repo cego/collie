@@ -1,43 +1,37 @@
-// A record reaches Desktop over a door of its own, so a board stream nobody reads cannot hold
-// it back.
-
 import { expect, test } from "bun:test";
 import { Array as Arr, Effect, Option, Stream } from "effect";
-import { DoorMap, openDoors, recordEvents, type Doors } from "../desktop/src/bun/machine";
+import { DoorMap, openDoors, recordEvents } from "../desktop/src/bun/machine";
+import type { Doors } from "../desktop/src/bun/machine";
 import { recordKeeper } from "../desktop/src/bun/records";
 import type { RunDetail } from "../src/board-model";
 import { flowNode, mainFlow } from "./support/flow";
 
 const bridge = [process.execPath, `${import.meta.dir}/fixtures/endless-board-bridge.ts`];
 
-test(
-  "a record frame reaches Desktop while its Machine's board stream is stalled",
-  () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const opened = yield* openDoors({ profile: "vm", name: "vm-mk" }, () => bridge);
-        yield* opened.board.pipe(
-          Stream.runForEach(() => Effect.never),
-          Effect.forkScoped,
-        );
-        const doors = new DoorMap<typeof opened>();
-        doors.set("i-1", opened);
-        const first = yield* recordEvents(doors, "i-1", "r-1").pipe(
-          Stream.runHead,
-          Effect.timeoutOption("5 seconds"),
-        );
-        expect(Option.flatten(first)).toEqual(Option.some({ _tag: "Frame", detail: null }));
-      }).pipe(Effect.scoped),
-    ),
-  15_000,
-);
+test("a record frame reaches Desktop while its Machine's board stream is stalled", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const opened = yield* openDoors({ profile: "vm", name: "vm-mk" }, () => bridge);
+      yield* opened.board.pipe(
+        Stream.runForEach(() => Effect.never),
+        Effect.forkScoped,
+      );
+      const doors = new DoorMap<typeof opened>();
+      doors.set("i-1", opened);
+      const first = yield* recordEvents(doors, "i-1", "r-1").pipe(
+        Stream.runHead,
+        Effect.timeoutOption("5 seconds"),
+      );
+      expect(Option.flatten(first)).toEqual(Option.some({ _tag: "Frame", detail: null }));
+    }).pipe(Effect.scoped),
+  ));
 
 test("a record's later frames reach the view without a Flow it already has", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      // SAFETY: the test reads only a frame's title and Flow.
+      // WARNING: the test reads only a frame's title and Flow.
       const bare = (title: string) => ({ title }) as RunDetail;
-      const sent = (title: string, said: string): RunDetail => ({
+      const sent = (title: string, said: string) => ({
         ...bare(title),
         flow: mainFlow([flowNode("child", { said })]),
       });
@@ -51,7 +45,7 @@ test("a record's later frames reach the view without a Flow it already has", () 
       ];
       const doors = new DoorMap<Pick<Doors, "record">>();
       doors.set("i-1", {
-        // SAFETY: the test calls only `runDetail`, which answers with the frames above.
+        // WARNING: the test calls only `runDetail`, which answers with the frames above.
         record: {
           runDetail: (() => Stream.fromIterable(frames)) as Doors["record"]["runDetail"],
         } as Doors["record"],

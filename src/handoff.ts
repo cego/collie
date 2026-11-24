@@ -1,7 +1,5 @@
 import * as Arr from "effect/Array";
-export function askRouteTo(
-  planner: { readonly agent: string; readonly runId: string } | null,
-): string {
+export function askRouteTo(planner: { readonly agent: string; readonly runId: string } | null) {
   if (!planner) {
     return Arr.join(
       [

@@ -1,16 +1,17 @@
-// Desktop holds a record's host subscription while the view holds it: one opened again is
-// served from it, a frame goes only to its own record, and an older host's frames are whole.
-
 import { expect, test } from "bun:test";
 import { Array as Arr, Effect, Fiber, Stream } from "effect";
-import { DoorMap, type Doors } from "../desktop/src/bun/machine";
+import { DoorMap } from "../desktop/src/bun/machine";
+import type { Doors } from "../desktop/src/bun/machine";
 import { recordKeeper } from "../desktop/src/bun/records";
 import type { KeptRecord } from "../desktop/src/shared/flock";
-import { frame, frameAt, recordDoor, type Asked } from "./support/record-doors";
+import { frame, frameAt, recordDoor } from "./support/record-doors";
+import type { Asked } from "./support/record-doors";
 
 const shownBy = (done: () => boolean) =>
   Effect.gen(function* () {
-    while (!done()) yield* Effect.sleep("5 millis");
+    while (!done()) {
+      yield* Effect.sleep("5 millis");
+    }
   }).pipe(Effect.timeout("2 seconds"));
 
 const said = (records: ReadonlyArray<KeptRecord>) =>
@@ -34,7 +35,6 @@ test("with A, B and C selected 100 ms apart and A's frame last, C's record shows
           Stream.runForEach((record) => Effect.sync(() => shown[run].push(record))),
           Effect.forkChild,
         );
-      // The view's own hold on A, as it keeps a record it showed.
       yield* keeper.open("i-1", "A").pipe(Stream.runDrain, Effect.forkChild);
       const a = yield* show("A");
       yield* Effect.sleep("100 millis");
@@ -50,7 +50,6 @@ test("with A, B and C selected 100 ms apart and A's frame last, C's record shows
       expect(said(shown.C)).toEqual(["C"]);
       yield* Fiber.interrupt(c);
 
-      // A's frame has reached the record the view holds, and the record shown before it had none.
       const again = yield* keeper.open("i-1", "A").pipe(Stream.runHead);
       expect(said(Arr.fromOption(again))).toEqual(["A"]);
       expect(said(shown.A)).toEqual([]);
@@ -112,7 +111,6 @@ test("a kept record is weighed in the bytes its frame encodes to", () =>
       doors.set("i-1", door.door);
       const keeper = yield* recordKeeper(doors);
       const pull = yield* keeper.open("i-1", "r-1").pipe(Stream.toPull);
-      // `{"title":"ææææ"}`: twelve ASCII bytes and four two-byte letters.
       yield* door.offer("r-1", frame("ææææ"));
       const [record] = yield* pull;
       expect(record?.bytes).toBe(20);

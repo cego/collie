@@ -1,18 +1,13 @@
-// This Machine's Harness catalogue, read from each installed harness and kept on the host
-// beside Usage (ADR-0049): each harness read at most once per interval, with a timeout per
-// read and a back-off after a failure, which leaves Collie's table in its place.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
+import type { FileSystem, Path } from "effect";
 import {
   Clock,
   Context,
   DateTime,
   Effect,
-  FileSystem,
   Layer,
   Option,
-  Path,
   Result,
   Schema,
   Semaphore,
@@ -28,24 +23,19 @@ import {
   piEntries,
   tableEntries,
   withAdded,
-  type CatalogueEntry,
-  type HarnessCatalogue,
 } from "./catalogue-model";
+import type { CatalogueEntry, HarnessCatalogue } from "./catalogue-model";
 import { loadDefaults } from "./config";
 import { currentEnv } from "./env";
 import { reason } from "./naming";
+import { stringifyJson } from "./json";
 
-/** How long a harness's reading stands before it is read again. */
 export const CATALOGUE_INTERVAL_MS = 30 * 60_000;
-/** How long one read may take before the harness is said not to answer. */
 export const CATALOGUE_CALL_MS = 20_000;
-/** The wait after a failed read, doubled for each failure after it, up to the interval. */
 export const CATALOGUE_RETRY_MS = 60_000;
 
-/** A harness's entries, null where it is not installed, or why it could not be read. */
 export type HarnessSource = Effect.Effect<ReadonlyArray<CatalogueEntry> | null, string>;
 
-/** What each harness answers, decoded where it is JSON; null where it is not installed. */
 export interface HarnessAdapters {
   readonly claude: Effect.Effect<ClaudeModels | null, string>;
   readonly codex: Effect.Effect<CodexModelList | null, string>;
@@ -71,21 +61,22 @@ const SOURCE = {
 
 const firstLine = (text: string) => Str.split(Str.trim(text), "\n")[0] ?? "";
 
-/** A harness that prints a list: its entries, or what it said instead of one. */
 const listed = (
   harness: Harness,
   printed: Effect.Effect<string | null, string>,
   decode: (text: string) => ReadonlyArray<CatalogueEntry> | null,
-): HarnessSource =>
+) =>
   Effect.flatMap(printed, (text) => {
-    if (text === null) return Effect.succeed(null);
+    if (text === null) {
+      return Effect.succeed(null);
+    }
     const entries = decode(text);
     return entries === null
       ? Effect.fail(`${SOURCE[harness]} said: ${firstLine(text)}`)
       : Effect.succeed(entries);
   });
 
-export const sourcesOf = (adapters: HarnessAdapters): CatalogueSources => ({
+export const sourcesOf = (adapters: HarnessAdapters) => ({
   claude: Effect.map(adapters.claude, (models) => (models === null ? null : claudeEntries(models))),
   codex: Effect.map(adapters.codex, (list) => (list === null ? null : codexEntries(list))),
   pi: listed("pi", adapters.pi, piEntries),
@@ -94,7 +85,6 @@ export const sourcesOf = (adapters: HarnessAdapters): CatalogueSources => ({
 
 const iso = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
 
-/** One harness behind its interval, its back-off after a failure, and its timeout. */
 const paced = Effect.fn("Catalogue.paced")((harness: Harness, source: HarnessSource) =>
   Semaphore.make(1).pipe(
     Effect.map((single) => {
@@ -104,7 +94,9 @@ const paced = Effect.fn("Catalogue.paced")((harness: Harness, source: HarnessSou
       return single.withPermits(1)(
         Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;
-          if (shown !== undefined && now < until) return shown;
+          if (shown !== undefined && now < until) {
+            return shown;
+          }
           const read = yield* source.pipe(
             Effect.timeoutOrElse({
               duration: CATALOGUE_CALL_MS,
@@ -136,7 +128,6 @@ const paced = Effect.fn("Catalogue.paced")((harness: Harness, source: HarnessSou
 
 export const makeCatalogue = Effect.fn("Catalogue.make")(function* (
   sources: CatalogueSources,
-  /** The `models.<harness>` setting, read each time. */
   added: Effect.Effect<Readonly<Record<string, ReadonlyArray<string>>>>,
 ) {
   const readers = yield* Effect.forEach(HARNESSES, (harness) => paced(harness, sources[harness]));
@@ -152,7 +143,6 @@ export const makeCatalogue = Effect.fn("Catalogue.make")(function* (
   });
 });
 
-/** A harness's command run to its end: what it printed, or null where it is not installed. */
 const printed = (command: string, args: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -165,7 +155,9 @@ const printed = (command: string, args: ReadonlyArray<string>) =>
         }),
       )
       .pipe(Effect.option);
-    if (Option.isNone(spawned)) return null;
+    if (Option.isNone(spawned)) {
+      return null;
+    }
     const [out, err, code] = yield* Effect.all(
       [
         spawned.value.stdout.pipe(Stream.decodeText(), Stream.mkString),
@@ -174,15 +166,12 @@ const printed = (command: string, args: ReadonlyArray<string>) =>
       ],
       { concurrency: "unbounded" },
     ).pipe(Effect.mapError(reason));
-    if (Number(code) !== 0)
+    if (Number(code) !== 0) {
       return yield* Effect.fail(`${command} exited ${code}: ${firstLine(err || out)}`);
+    }
     return out;
   }).pipe(Effect.scoped);
 
-/**
- * One exchange with a harness that speaks JSON lines on stdio: `lines` sent, stdin held
- * open, and the first line `reply` answers taken; null where it is not installed.
- */
 const exchange = <A>(
   command: string,
   args: ReadonlyArray<string>,
@@ -193,14 +182,14 @@ const exchange = <A>(
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const sent = Arr.join(
-      Arr.map(lines, (line) => `${JSON.stringify(line)}\n`),
+      Arr.map(lines, (line) => `${stringifyJson(line)}\n`),
       "",
     );
     const spawned = yield* spawner
       .spawn(
         ChildProcess.make(command, args, {
           cwd,
-          // Held open: a closed stdin is the cue to stop before answering.
+          // WARNING: stdin stays open; a closed stdin makes the harness stop before it answers.
           stdin: Stream.concat(Stream.make(new TextEncoder().encode(sent)), Stream.never),
           stdout: "pipe",
           stderr: "ignore",
@@ -208,7 +197,9 @@ const exchange = <A>(
         }),
       )
       .pipe(Effect.option);
-    if (Option.isNone(spawned)) return null;
+    if (Option.isNone(spawned)) {
+      return null;
+    }
     const answer = yield* spawned.value.stdout.pipe(
       Stream.decodeText(),
       Stream.splitLines,
@@ -217,7 +208,9 @@ const exchange = <A>(
       Stream.runHead,
       Effect.mapError(reason),
     );
-    if (Option.isNone(answer)) return yield* Effect.fail(`${command} stopped before it answered`);
+    if (Option.isNone(answer)) {
+      return yield* Effect.fail(`${command} stopped before it answered`);
+    }
     return yield* Effect.fromResult(answer.value);
   }).pipe(Effect.scoped);
 
@@ -247,7 +240,6 @@ const decodeCodexModels = Schema.decodeUnknownOption(CodexModelList);
 const undecodable = (harness: Harness) =>
   Result.fail(`${SOURCE[harness]} answered in a shape Collie does not read`);
 
-/** What the Agent SDK's `supportedModels()` asks: Claude Code's `initialize` over stream-json. */
 const claudeModels = (cwd: string) =>
   exchange(
     "claude",
@@ -269,9 +261,12 @@ const claudeModels = (cwd: string) =>
     [{ type: "control_request", request_id: "models", request: { subtype: "initialize" } }],
     (line) => {
       const reply = Option.getOrNull(decodeClaudeReply(line))?.response;
-      if (reply?.request_id !== "models") return undefined;
-      if (reply.response === undefined)
+      if (reply?.request_id !== "models") {
+        return undefined;
+      }
+      if (reply.response === undefined) {
         return Result.fail(`claude: ${reply.error ?? "initialize failed"}`);
+      }
       return Option.match(decodeClaudeModels(reply.response.models), {
         onNone: () => undecodable("claude"),
         onSome: (models) => Result.succeed(models),
@@ -292,13 +287,17 @@ const codexModels = (cwd: string) =>
         params: { clientInfo: { name: "collie", version: "0" } },
       },
       { jsonrpc: "2.0", method: "initialized" },
-      // ponytail: one page; follow `nextCursor` if a Codex ever lists more than a page.
+      // WARNING: reads one page; follow nextCursor if Codex ever lists more.
       { jsonrpc: "2.0", id: 2, method: "model/list", params: { includeHidden: true } },
     ],
     (line) => {
       const reply = Option.getOrNull(decodeCodexReply(line));
-      if (reply?.id !== 2) return undefined;
-      if (reply.error !== undefined) return Result.fail(`codex model/list: ${reply.error.message}`);
+      if (reply?.id !== 2) {
+        return undefined;
+      }
+      if (reply.error !== undefined) {
+        return Result.fail(`codex model/list: ${reply.error.message}`);
+      }
       return Option.match(decodeCodexModels(reply.result), {
         onNone: () => undecodable("codex"),
         onSome: (list) => Result.succeed(list),
@@ -307,17 +306,13 @@ const codexModels = (cwd: string) =>
   );
 
 export const liveAdapters = (cwd: string) =>
-  Effect.map(
-    Effect.context<ChildProcessSpawner.ChildProcessSpawner>(),
-    (services): HarnessAdapters => ({
-      claude: Effect.provideContext(claudeModels(cwd), services),
-      codex: Effect.provideContext(codexModels(cwd), services),
-      pi: Effect.provideContext(printed("pi", ["--list-models"]), services),
-      opencode: Effect.provideContext(printed("opencode", ["models"]), services),
-    }),
-  );
+  Effect.map(Effect.context<ChildProcessSpawner.ChildProcessSpawner>(), (services) => ({
+    claude: Effect.provideContext(claudeModels(cwd), services),
+    codex: Effect.provideContext(codexModels(cwd), services),
+    pi: Effect.provideContext(printed("pi", ["--list-models"]), services),
+    opencode: Effect.provideContext(printed("opencode", ["models"]), services),
+  }));
 
-/** This Machine's one reader of its harnesses, on the environment this process runs in. */
 export const catalogueLayer = (cwd: string) =>
   Layer.effect(
     HarnessCatalogues,

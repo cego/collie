@@ -1,5 +1,3 @@
-// A Desktop and a host one board protocol apart still read each other's Slack.
-
 import { expect, test } from "bun:test";
 import { Effect, Schema } from "effect";
 import { FrontDoorRpcs } from "../src/board-model";

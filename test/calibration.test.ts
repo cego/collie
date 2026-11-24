@@ -1,9 +1,8 @@
-// What a Measurement of the base against itself says about proving anything with its plan.
-
 import * as Arr from "effect/Array";
 import { describe, expect, test } from "bun:test";
 import { Effect, Schema } from "effect";
-import { BenchmarkPlan, calibrationOf, type Measurement } from "../src/measurement-model";
+import { BenchmarkPlan, calibrationOf } from "../src/measurement-model";
+import type { Measurement } from "../src/measurement-model";
 import { Judgement } from "../src/measurement-verdict";
 import ff23b932 from "./fixtures/measurements/run-ff23b932-calibration.json" with { type: "json" };
 
@@ -15,19 +14,19 @@ const Recorded = Schema.Struct({
 });
 const recorded: Calibrated = Effect.runSync(Schema.decodeUnknownEffect(Recorded)(ff23b932));
 
-const plan = (metrics: Measurement["plan"]["metrics"]): Measurement["plan"] => ({
+const plan = (metrics: Measurement["plan"]["metrics"]) => ({
   ...recorded.plan,
   metrics,
 });
-const judged = (...verdicts: ReadonlyArray<Judgement>): Measurement["result"] => ({
+const judged: (...verdicts: ReadonlyArray<Judgement>) => Measurement["result"] = (...verdicts) => ({
   _tag: "Judged",
   verdicts,
 });
-const verdict = (
-  metric: string,
-  interval: readonly [number, number],
-  held: boolean,
-): Judgement => ({
+const verdict: (metric: string, interval: readonly [number, number], held: boolean) => Judgement = (
+  metric,
+  interval,
+  held,
+) => ({
   metric,
   ratio: 1,
   interval,

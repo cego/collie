@@ -1,6 +1,5 @@
-// Defer Babel's per-file startup cost until a file loads JSX or Solid.
-
-import { plugin, type OnLoadCallback, type PluginBuilder } from "bun";
+import { plugin } from "bun";
+import type { OnLoadCallback, PluginBuilder } from "bun";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 
@@ -12,14 +11,14 @@ interface Handler {
 let handlers: Promise<ReadonlyArray<Handler>> | undefined;
 const solid = () =>
   (handlers ??= import("@opentui/solid/bun-plugin").then(({ default: real }) => {
-    const found: Handler[] = [];
+    const found: Array<Handler> = [];
     const recorder = {
       onLoad: ({ filter }: { filter: RegExp }, load: OnLoadCallback) => {
         found.push({ filter, load });
         return recorder;
       },
     };
-    // SAFETY: this plugin's setup only calls onLoad.
+    // WARNING: this plugin's setup only calls onLoad.
     void real.setup(recorder as PluginBuilder);
     return found;
   }));
@@ -32,13 +31,16 @@ const LOADS = [
 plugin({
   name: "solid-on-demand",
   setup: (build) => {
-    for (const filter of LOADS)
+    for (const filter of LOADS) {
       build.onLoad({ filter }, (args) =>
         solid().then((found) => {
           const handler = Arr.findFirst(found, (one) => one.filter.test(args.path));
-          if (Option.isNone(handler)) throw new Error(`no Solid transform loads ${args.path}`);
+          if (Option.isNone(handler)) {
+            throw new Error(`no Solid transform loads ${args.path}`);
+          }
           return handler.value.load(args);
         }),
       );
+    }
   },
 });

@@ -82,22 +82,24 @@ const story = (mode: Case, harness = "claude") =>
             `${root}workflows/investigate.workflow.ts`,
             `${first.world.install}/workflows/investigate.workflow.ts`,
           );
-          for (const name of ["investigate.md", "measuring.ts", "measuring.md"])
+          for (const name of ["investigate.md", "measuring.ts", "measuring.md"]) {
             yield* fs.copyFile(
               `${root}workflows/${name}`,
               `${first.world.install}/workflows/${name}`,
             );
+          }
           yield* fs.makeDirectory(`${first.world.install}/personas`, { recursive: true });
           yield* fs.copyFile(
             `${root}personas/investigator.md`,
             `${first.world.install}/personas/investigator.md`,
           );
-          if (mode === "failed")
+          if (mode === "failed") {
             yield* fs.writeFileString(
               `${first.world.install}/workflows/investigate.workflow.ts`,
               `import {defineWorkflow,WorkflowError} from "collie"; import {Effect,Schema} from "effect";
 export default defineWorkflow({id:"investigate",title:"Failed investigation",description:"Fails before launch",input:Schema.Struct({goal:Schema.String}),hints:{goal:"goal"},checkout:"branch",closes:"reported",run:()=>Effect.fail(new WorkflowError({reason:"The laptop cannot reproduce this goal"}))});`,
             );
+          }
           const reportText =
             mode === "failed" ? "The laptop cannot reproduce this goal" : result.summary;
           const releaseClose =
@@ -112,13 +114,13 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
               cwd: first.world.project,
             });
           }
-          if (mode === "stale")
+          if (mode === "stale") {
             yield* exec(["git", "branch", "shared-topic"], { cwd: first.world.project });
+          }
           const localOutputs = `${first.world.home}/outputs.json`;
           const farOutputs = `${second.world.home}/outputs.json`;
           yield* fs.writeFileString(localOutputs, encode([null]));
           const built = { verdict: "done" };
-          // OpenCode's reporter writes the session it opened beside the prompt.
           const openedSession = {
             writes: [],
             sh: 'printf ses_requester > "${PROMPT_PATH%.prompt.md}.session"',
@@ -164,7 +166,9 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
           });
           const [peer] = yield* peersOf(second.world.state);
           const caller = `${second.world.home}/caller-only`;
-          if (mode === "cli-path") yield* fs.makeDirectory(caller);
+          if (mode === "cli-path") {
+            yield* fs.makeDirectory(caller);
+          }
           const asked =
             mode === "cli-path"
               ? yield* second.cli(
@@ -232,7 +236,9 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
           expect(text).toContain("start: applied");
           const runId = /started (run-[a-z0-9]+)/.exec(text)?.[1];
           expect(runId).toBeDefined();
-          if (runId === undefined) return;
+          if (runId === undefined) {
+            return;
+          }
           const firstHost = yield* connect(first.world.state);
           const view = yield* until(
             () => firstHost.run({ runId }),
@@ -282,7 +288,7 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
           const entry = Option.getOrUndefined(
             Arr.findFirst(ready.rows, (one) => one.runId === runId),
           );
-          if (entry === undefined && mode !== "failed")
+          if (entry === undefined && mode !== "failed") {
             return yield* Effect.die(
               new Error(
                 encode({
@@ -293,12 +299,12 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
                 }),
               ),
             );
+          }
           const task = yield* hostRecords(first.world.state, readTask(view!.task!)).pipe(
             Effect.orDie,
           );
           let sibling: string | undefined;
           if (mode === "sibling") {
-            // The reported Run's agent is still working; the sibling's gets "done".
             yield* fs.writeFileString(
               localOutputs,
               encode([{ writes: [], output: null, owed: true }, { verdict: "done" }]),
@@ -328,16 +334,20 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
             )?.paneId;
             expect(sibling).toBeDefined();
           }
-          // Stopped, not killed: core starts a running Run's lost agent again.
-          if (mode === "gone")
+          // WARNING: stopped, not killed: core starts a running Run's lost agent again.
+          if (mode === "gone") {
             expect((yield* second.cli(["run", "stop", requesterRun])).envelope.ok).toBe(true);
-          if (mode === "away" || mode === "away-close") yield* stopHost(second.world.state);
+          }
+          if (mode === "away" || mode === "away-close") {
+            yield* stopHost(second.world.state);
+          }
           const before = mode === "restart" ? yield* ownerOf(first.world.state) : null;
-          if (mode !== "failed")
+          if (mode !== "failed") {
             yield* fs.writeFileString(
               `${first.world.state}/agents/${runId}/investigate.json`,
               encode(result),
             );
+          }
           if (mode === "restart") {
             yield* until(
               () => fs.readFileString(second.coreLog),
@@ -360,7 +370,6 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
               Effect.orElseSucceed(() => 0),
             );
           if (mode === "away-close") {
-            // The requester's link comes back while the report's close is still running.
             yield* until(
               () => fs.readFileString(first.coreLog),
               (log) => pipe_(log, Str.includes('"cmd":"terminal.kill"')),
@@ -399,12 +408,14 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
           expect(report!.state).toBe(
             mode === "gone" || mode === "away" ? "undelivered" : "delivered",
           );
-          if (report!.state === "undelivered") expect(report!.note.length).toBeGreaterThan(0);
+          if (report!.state === "undelivered") {
+            expect(report!.note.length).toBeGreaterThan(0);
+          }
           const live = yield* new Herdr(readEnv(first.env)).agentList();
           expect(Arr.some(live, (one) => one.paneId === entry?.paneId)).toBe(false);
-          if (sibling !== undefined)
+          if (sibling !== undefined) {
             expect(Arr.some(live, (one) => one.paneId === sibling)).toBe(true);
-          // Three lines and a sender line are over the paste budget, so a report is kept as a file.
+          }
           const reports = Arr.filter(
             Str.split(yield* fs.readFileString(second.coreLog), "\n"),
             (line) => pipe_(line, Str.includes(`From ${entry?.agent ?? "host"} of ${runId} on `)),
@@ -488,58 +499,28 @@ export default defineWorkflow({id:"investigate",title:"Failed investigation",des
     ),
   );
 
-test(
-  "a Run started by an agent on another Machine reports back and closes",
-  () => story("delivered"),
-  180_000,
-);
-test(
-  "a report to a gone agent is recorded undelivered, still closes and is not sent again",
-  () => story("gone"),
-  180_000,
-);
-test("a report to an away Machine is bounded and recorded", () => story("away"), 180_000);
-test(
-  "a report to a Machine that comes back while the Run is closing is sent again once it closes",
-  () => story("away-close"),
-  180_000,
-);
-test(
-  "a host restarting after delivery records one report and closes",
-  () => story("restart"),
-  180_000,
-);
+test("a Run started by an agent on another Machine reports back and closes", () =>
+  story("delivered"));
+test("a report to a gone agent is recorded undelivered, still closes and is not sent again", () =>
+  story("gone"));
+test("a report to an away Machine is bounded and recorded", () => story("away"));
+test("a report to a Machine that comes back while the Run is closing is sent again once it closes", () =>
+  story("away-close"));
+test("a host restarting after delivery records one report and closes", () => story("restart"));
 
-for (const harness of ["codex", "pi", "opencode"])
-  test(
-    `a report reaches a ${harness} requester without immediate-delivery capability`,
-    () => story("delivered", harness),
-    180_000,
-  );
-test(
-  "a remote investigation cuts its checkout from upstream's fetched branch",
-  () => story("upstream"),
-  180_000,
-);
-test(
-  "a remote start refuses a stale local branch without replacing local work",
-  () => story("stale"),
-  180_000,
-);
-test(
-  "a finished sibling Run's live agent keeps the reported Run's workspace",
-  () => story("sibling"),
-  180_000,
-);
+for (const harness of ["codex", "pi", "opencode"]) {
+  test(`a report reaches a ${harness} requester without immediate-delivery capability`, () =>
+    story("delivered", harness));
+}
+test("a remote investigation cuts its checkout from upstream's fetched branch", () =>
+  story("upstream"));
+test("a remote start refuses a stale local branch without replacing local work", () =>
+  story("stale"));
+test("a finished sibling Run's live agent keeps the reported Run's workspace", () =>
+  story("sibling"));
 
-test(
-  "a failed remote Run reports its reason and closes without a launched agent",
-  () => story("failed"),
-  180_000,
-);
+test("a failed remote Run reports its reason and closes without a launched agent", () =>
+  story("failed"));
 
-test(
-  "a direct remote CLI start fetches in its named checkout instead of the caller directory",
-  () => story("cli-path"),
-  180_000,
-);
+test("a direct remote CLI start fetches in its named checkout instead of the caller directory", () =>
+  story("cli-path"));

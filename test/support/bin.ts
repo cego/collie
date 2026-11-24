@@ -4,7 +4,6 @@ import { Cause, Config, ConfigProvider, Effect, FileSystem, Path, Semaphore } fr
 
 const buildingFixture = Semaphore.makeUnsafe(1);
 
-/** Repeated protocol clients must start within the same budget as the native executables. */
 export const fixtureBinary = (kind: "ssh" | "codex") =>
   Effect.suspend(() =>
     buildingFixture.withPermits(1)(
@@ -12,11 +11,15 @@ export const fixtureBinary = (kind: "ssh" | "codex") =>
         const provided = yield* Config.String(
           kind === "ssh" ? "COLLIE_TEST_FAKE_SSH" : "COLLIE_TEST_CODEX_SERVER",
         ).pipe(Config.withDefault(""));
-        if (provided !== "") return provided;
+        if (provided !== "") {
+          return provided;
+        }
         const home = yield* Config.String("HOME");
         const fs = yield* FileSystem.FileSystem;
         const file = `${home}/collie-fixtures/${kind}`;
-        if (yield* fs.exists(file)) return file;
+        if (yield* fs.exists(file)) {
+          return file;
+        }
         yield* fs.makeDirectory(`${home}/collie-fixtures`, { recursive: true });
         const built = yield* Effect.promise(() =>
           Bun.build({
@@ -29,26 +32,21 @@ export const fixtureBinary = (kind: "ssh" | "codex") =>
             compile: { outfile: file },
           }),
         );
-        if (!built.success)
+        if (!built.success) {
           return yield* new Cause.UnknownError(
             built.logs,
             `Could not build the ${kind} protocol fixture`,
           );
+        }
         return file;
       }).pipe(Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv())),
     ),
   );
 
-/**
- * The `case` arms a fake git needs before a mutating run can be given a checkout:
- * `worktree list --porcelain` names the repository, and `worktree add` really makes the
- * directory and the `.git` file git writes there — which is a checkout's identity.
- */
 export const gitWorktreeCases = (repo: string) =>
   `  "worktree list --porcelain") printf 'worktree %s\\nbranch refs/heads/master\\n' "${repo}" ;;
   "worktree add"*) mkdir -p "$3" && printf 'gitdir: %s/.gitdir\\n' "$3" > "$3/.git" ;;`;
 
-/** A git in `dir`, first on PATH while the scope lasts, that logs each start's arguments. */
 export const loggedGit = (dir: string, log: string) =>
   Effect.gen(function* () {
     const real = Bun.which("git");
@@ -57,12 +55,11 @@ export const loggedGit = (dir: string, log: string) =>
     return yield* Effect.succeed(
       Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(log)).pipe(
         Effect.map((text) => Arr.filter(Str.split(text, "\n"), (line) => line !== "")),
-        Effect.orElseSucceed((): string[] => []),
+        Effect.orElseSucceed(() => []),
       ),
     );
   });
 
-/** A dir of fake executables put in front of PATH for the current test. */
 export class FakeBin {
   private constructor(
     readonly dir: string,
@@ -79,14 +76,7 @@ export class FakeBin {
     });
   }
 
-  /**
-   * `script` is sh; exit code and stdout are what the runner sees.
-   *
-   * Written to a fresh file and renamed over the old one, never written in place: Linux
-   * refuses to open a running executable for writing, so a test that replaced a stub
-   * while a previous copy of it was still executing failed with ETXTBSY. A rename
-   * replaces the name without touching the file the running process holds open.
-   */
+  // WARNING: Write a fresh file and rename it over the old: Linux refuses to write a running executable (ETXTBSY).
   add(name: string, script: string) {
     return Effect.gen(
       function* (this: FakeBin) {
@@ -101,7 +91,6 @@ export class FakeBin {
     );
   }
 
-  /** Makes each staged name its own, so two writes in one process cannot collide. */
   private writes = 0;
 
   restore() {

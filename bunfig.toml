@@ -6,4 +6,12 @@ preload = [
   "./test/support/hosts.ts",
 ]
 # Desktop's own tests drive its built app, and run from desktop/.
-root = "test"
+root = "."
+pathIgnorePatterns = [
+  "desktop/**",
+  "worktrees/**",
+  "release/**",
+  "kept/**",
+  "plans/**",
+  "advisor-plans/**",
+]

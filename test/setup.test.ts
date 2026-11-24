@@ -1,6 +1,3 @@
-// `setup.sh`, the one line that installs Collie: it runs the release's runner only once the
-// download verifies against Collie's release key, and that runner places the release.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
@@ -33,7 +30,6 @@ test("the installer checks with the key release-p256.pub holds", () =>
     }),
   ));
 
-/** A scratch Machine, and `runner` published under `dir/releases/<at>`, signed by `sign` or not. */
 const machine = (
   dir: string,
   runner: Uint8Array,
@@ -45,15 +41,15 @@ const machine = (
     const published = `${dir}/releases/${at}`;
     yield* fs.makeDirectory(published, { recursive: true });
     yield* fs.writeFile(`${published}/${ASSET}`, runner);
-    if (sign) yield* fs.writeFileString(`${published}/${ASSET}.p256.sig`, `${sign(runner)}\n`);
+    if (sign) {
+      yield* fs.writeFileString(`${published}/${ASSET}.p256.sig`, `${sign(runner)}\n`);
+    }
     const stubs = `${dir}/stubs`;
     yield* fs.makeDirectory(stubs, { recursive: true });
     const stub = (name: string, body: string) =>
       fs.writeFileString(`${stubs}/${name}`, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
     yield* stub("uname", `case "$1" in -s) echo Linux ;; -m) echo x86_64 ;; esac`);
     yield* stub("herdr", `echo "$*" >> "${dir}/herdr-calls"`);
-    // The verified runner is `env`, a real program, so `upgrade` below is what it runs: the
-    // placing, as the real runner's own upgrade does it.
     yield* stub(
       "upgrade",
       `echo "$COLLIE_ROOT upgrade\${*:+ $*}" >> "${dir}/placed"
@@ -63,7 +59,6 @@ chmod +x "$COLLIE_DIR/release/bin/collie"`,
     );
   });
 
-/** The script run on its own, as `curl … | sh` runs it, checking with `publicKey`. */
 const install = (dir: string, publicKey: string, extra: Record<string, string> = {}) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -96,7 +91,7 @@ const install = (dir: string, publicKey: string, extra: Record<string, string> =
     };
   });
 
-// Where coreutils is one multi-call binary, `env` runs as whatever it is named; `gnuenv` does not.
+// WARNING: coreutils is one multi-call binary, so env runs as whatever it is named; gnuenv does not.
 const ENV = (await Bun.file("/usr/bin/gnuenv").exists()) ? "/usr/bin/gnuenv" : "/usr/bin/env";
 const env = () => Effect.promise(() => Bun.file(ENV).bytes());
 
@@ -132,7 +127,6 @@ test("a signed runner places the release, and setup ends in doctor", () =>
       expect(again.placed).toBe(
         `${again.collieDir}/release upgrade\n${again.collieDir}/release upgrade\n`,
       );
-      // herdr has no Collie of its own to bind or reload: the board is a core terminal.
       expect(again.config).toBe("");
       expect(again.herdr).not.toContain("reload-config");
       expect(again.calls).toContain("chat status-line --install");

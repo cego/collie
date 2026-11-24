@@ -1,5 +1,3 @@
-// A Flock's latest edits, shared by Desktop and paired hosts.
-
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import { Effect, Option, Schema } from "effect";
@@ -10,16 +8,14 @@ import { epochMs } from "./time";
 export const FlockSetting = Schema.Struct({
   value: Schema.NullOr(Schema.Json),
   at: Schema.String,
-  /** The Machine whose edit it is, or Desktop. */
   from: Schema.String,
-  /** Taken over a different value another Machine had, which Settings says once. */
   differed: Schema.Boolean,
 });
 export type FlockSetting = typeof FlockSetting.Type;
 
 export const FlockSettings = Schema.Struct({
   settings: Schema.Record(Schema.String, FlockSetting),
-  /** The Machines synced at least once: only a first sync says where a value came from. */
+  // WARNING: only a first sync says where a value came from.
   synced: Schema.Array(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
 });
 export type FlockSettings = typeof FlockSettings.Type;
@@ -32,10 +28,10 @@ const valueOf = (value: Schema.Json | null) =>
 const same = (a: Schema.Json | null, b: Schema.Json | null) =>
   settingText(valueOf(a)) === settingText(valueOf(b));
 
-/** Desktop's own, given to every Machine and never taken from one: its token is made for it. */
+// WARNING: never taken from a Machine; its token is made for Desktop.
 const GIVEN_ONLY = "gitlab_host";
 
-/** Each side's edits the other lacks or holds older; a tie keeps what is held, and a removal is an edit. */
+// WARNING: a tie keeps the held value, and a removal counts as an edit.
 export const latestEdits = <
   Held extends { readonly at: string },
   Has extends { readonly at: string },
@@ -56,11 +52,6 @@ export const latestEdits = <
   };
 };
 
-/**
- * What a Machine has, taken into the Flock's where it is the later edit and a value its
- * setting takes, and what the Machine should then be given: each key whose latest edit it
- * lacks.
- */
 export const takeFrom = (
   flock: FlockSettings,
   machine: string,
@@ -69,7 +60,7 @@ export const takeFrom = (
   const settings = { ...flock.settings };
   const first = !flock.synced.includes(machine);
   const held = (edits: FlockSettings["settings"]) =>
-    Arr.map(Rec.toEntries(edits), ([key, { value, at }]): SharedSetting => ({ key, value, at }));
+    Arr.map(Rec.toEntries(edits), ([key, { value, at }]) => ({ key, value, at }));
   const takeable = Arr.filter(
     has,
     ({ key, value }) => key !== GIVEN_ONLY && !("refused" in parseShared(key, value)),

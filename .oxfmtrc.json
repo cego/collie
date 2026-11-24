@@ -5,7 +5,7 @@
     "desktop/vendor/**",
     // Agent messages kept verbatim, as the rendering corpus draws them.
     "desktop/fixtures/corpus/**",
-    // `bun run tools/rune-fixtures.ts` writes it as one line.
+    // `bun run tools/rune.fixture.ts` writes it as one line.
     "desktop/fixtures/flows.json",
     ".agent/**",
     ".agents/**",

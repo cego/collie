@@ -1,18 +1,13 @@
-// What a finished Run offers to do next, and why each offer is there.
-//
-// Every answer here comes from facts the Run left behind. None of it reads a workflow's
-// name: an offer exists because the work earned it, so a fork that renames every shipped
-// workflow keeps what its Runs offer, and a workflow nobody shipped gets the same.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
-import { SELF, inputsFor, offersFrom, taskOffers, type Declared } from "../src/offers";
+import { SELF, inputsFor, offersFrom, taskOffers } from "../src/offers";
+import type { Declared } from "../src/offers";
 import type { ActionFacts } from "../src/sdk";
 import reviewWorkflow from "../workflows/review.workflow";
 import { declaredByModule } from "../src/engine";
 
-const facts = (over: Partial<ActionFacts> = {}): ActionFacts => ({
+const facts: (over?: Partial<ActionFacts>) => ActionFacts = (over = {}) => ({
   outcome: "feature",
   succeeded: true,
   branch: "mk/thing",
@@ -25,7 +20,7 @@ const facts = (over: Partial<ActionFacts> = {}): ActionFacts => ({
   ...over,
 });
 
-const offer = (over: Partial<Declared> = {}): Declared => ({
+const offer: (over?: Partial<Declared>) => Declared = (over = {}) => ({
   id: "fix-open",
   title: "Fix what is open",
   workflow: "implement",
@@ -117,7 +112,7 @@ test("a value the Run was started with is passed on as it was, null included", (
     { inputs: { value: "started-with", missing: "started-with", mr: "merge-request" } },
     { runId: "r", runDir: "/r", facts: facts(), input: { value: null } },
   );
-  // An explicit null is a value; a field nobody gave, and a fact the Run lacks, are not.
+  // WARNING: an explicit null is a value; an absent field and a fact the Run lacks are not.
   expect(passed).toEqual({ value: null });
 });
 
@@ -134,7 +129,6 @@ test("a Task of several merge requests offers each owning Run's own, by its merg
     named,
     offers: offersFrom([release], facts({ mrUrl: `https://gitlab.cego.dk/cego/${run}` })),
   });
-  // The fan-out parent opened no merge request, so its own release is not on offer.
   const own = offersFrom([release], facts(), { keepUnavailable: true });
 
   const listed = taskOffers("r-fan", own, [ownedBy("app", "app!12"), ownedBy("api", "api!7")]);

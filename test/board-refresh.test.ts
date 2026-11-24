@@ -33,14 +33,15 @@ test("a timer refresh leaves covered readers free, but a write during it waits f
 
       const seen = yield* Deferred.make<void>();
       yield* Queue.offer(changed, undefined);
-      // The producer marks writes before handing them to the build buffer.
       yield* Effect.yieldNow;
       const reader = yield* boards.pipe(
         Stream.tap(() => Deferred.succeed(seen, undefined)),
         Stream.runHead,
         Effect.forkScoped,
       );
-      for (let turn = 0; turn < 10; turn++) yield* Effect.yieldNow;
+      for (let turn = 0; turn < 10; turn++) {
+        yield* Effect.yieldNow;
+      }
       expect(yield* Deferred.isDone(seen)).toBe(false);
       yield* Queue.offer(release, undefined);
       expect(yield* Queue.take(entered)).toBe(3);

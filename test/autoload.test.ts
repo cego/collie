@@ -1,50 +1,29 @@
-// Saving a file is the whole of it: found, run, edited and recovered, through the host.
-//
-// Nothing here loads a module by hand. An author writes a file where authors write them,
-// and the questions are the ones that decide whether that is enough — does the host find
-// it, does an edit reach the next run without stopping the one going, do two projects with
-// the same public id stay each other's business, and does a restart read the files as they
-// are now. Every host is a real process, because none of those has an answer in one.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
-import {
-  Config,
-  ConfigProvider,
-  Effect,
-  FileSystem,
-  Option,
-  Schema,
-  Scope,
-  flow,
-  Result,
-} from "effect";
-import { ChildProcessSpawner } from "effect/process";
+import type { Scope } from "effect";
+import { Config, ConfigProvider, Effect, FileSystem, Option, Schema, flow, Result } from "effect";
+import type { ChildProcessSpawner } from "effect/process";
 import { connect } from "../src/host";
+import { tellHost } from "../src/tell-host";
 import { runEffect } from "./support/effect";
 import { events, stopHost, until } from "./support/host";
 
 const repo = new URL("../", import.meta.url).pathname;
 const fixtures = `${repo}test/fixtures/workflows`;
 
-/** The command a client starts a host with, as `connect` reads it. */
 const asCommand = flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Array(Schema.String))),
   Result.getOrThrow,
 );
 
-/** The prompt the entry imports, rewritten mid-test: its length is what the run records. */
 const PROMPT = "A shorter prompt.\n";
 
-/** A module, its helper and its prompt, as an author would have them beside each other. */
 const MODULE = ["proof.workflow.ts", "helper.ts", "notes.md"] as const;
 
 interface Project {
-  /** The directory a client is working in, which is what it asks the host about. */
   readonly root: string;
-  /** Where that project's own workflows are saved. */
   readonly dir: string;
 }
 
@@ -58,7 +37,9 @@ interface World {
 const save = (into: string, names: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    for (const name of names) yield* fs.copyFile(`${fixtures}/${name}`, `${into}/${name}`);
+    for (const name of names) {
+      yield* fs.copyFile(`${fixtures}/${name}`, `${into}/${name}`);
+    }
   }).pipe(Effect.orDie);
 
 const write = (file: string, text: string) =>
@@ -67,11 +48,6 @@ const write = (file: string, text: string) =>
     Effect.orDie,
   );
 
-/**
- * An installation of Collie with nobody's workflows in it yet, a state directory for the
- * host, and projects made on demand. `COLLIE_ROOT` and `COLLIE_USER_DIR` are what a
- * client tells the host it started, so it looks for modules here rather than the machine's.
- */
 const proves = <A, E>(
   prefix: string,
   body: (
@@ -120,340 +96,310 @@ const proves = <A, E>(
     }).pipe(Effect.scoped),
   );
 
-test(
-  "a module saved where an author saves one is found and run, with nothing registered by hand",
-  () =>
-    proves("collie-autoload-user-", (world) =>
-      Effect.gen(function* () {
-        const project = yield* world.project("thing");
-        yield* save(world.user, MODULE);
+test("a module saved where an author saves one is found and run, with nothing registered by hand", () =>
+  proves("collie-autoload-user-", (world) =>
+    Effect.gen(function* () {
+      const project = yield* world.project("thing");
+      yield* save(world.user, MODULE);
 
-        const client = yield* connect(world.state).pipe(Effect.orDie);
-        const found = yield* client.discover({ project: project.root }).pipe(Effect.orDie);
-        expect(found.problems).toEqual([]);
-        expect(found.entries).toEqual([
-          {
-            id: "proof",
-            title: "A workflow that waits for a decision",
-            description: "Records one launch, then waits to be answered.",
-            layer: "user",
-            path: `${world.user}/proof.workflow.ts`,
-            // What it takes, so a caller can ask for it without loading the module.
-            inputs: [
-              {
-                name: "note",
-                required: true,
-                strategy: "goal",
-                schema: { type: "string", $defs: {} },
-                limits: [],
-              },
-            ],
-            outcome: null,
-          },
-        ]);
+      const client = yield* connect(world.state).pipe(Effect.orDie);
+      const found = yield* client.discover({ project: project.root }).pipe(Effect.orDie);
+      expect(found.problems).toEqual([]);
+      expect(found.entries).toEqual([
+        {
+          id: "proof",
+          title: "A workflow that waits for a decision",
+          description: "Records one launch, then waits to be answered.",
+          layer: "user",
+          path: `${world.user}/proof.workflow.ts`,
+          inputs: [
+            {
+              name: "note",
+              required: true,
+              strategy: "goal",
+              schema: { type: "string", $defs: {} },
+              limits: [],
+            },
+          ],
+          outcome: null,
+        },
+      ]);
 
-        // No load: the id, the file the host found for it, and a request of the caller's.
-        const started = yield* client
-          .start({ project: project.root, id: "proof", request: "req-1", input: { note: "saved" } })
-          .pipe(Effect.orDie);
-        expect(started.registration).toBe("proof@1");
-        expect(started.fresh).toBe(true);
-        expect((yield* client.registrations().pipe(Effect.orDie)).live).toEqual(["proof@1"]);
-        const runId = started.runId;
+      const started = yield* client
+        .start({ project: project.root, id: "proof", request: "req-1", input: { note: "saved" } })
+        .pipe(Effect.orDie);
+      expect(started.registration).toBe("proof@1");
+      expect(started.fresh).toBe(true);
+      expect((yield* client.registrations().pipe(Effect.orDie)).live).toEqual(["proof@1"]);
+      const runId = started.runId;
 
+      yield* until(
+        () => client.status({ runId }),
+        (status) => status.status === "suspended",
+      );
+      yield* client
+        .answer({ runId, decision: "decision", value: "yes", request: "answer-yes" })
+        .pipe(Effect.orDie);
+      expect(
+        yield* until(
+          () => client.status({ runId }),
+          (status) => status.status === "complete",
+        ),
+      ).toEqual({ status: "complete", value: "note:saved=yes" });
+      yield* stopHost(world.state);
+    }),
+  ));
+
+test("two projects run their own implementation of one id at the same time", () =>
+  proves("collie-autoload-projects-", (world) =>
+    Effect.gen(function* () {
+      const one = yield* world.project("one");
+      const two = yield* world.project("two");
+      yield* save(one.dir, MODULE);
+      yield* save(two.dir, MODULE);
+      yield* write(
+        `${two.dir}/helper.ts`,
+        "export const label = (note: string): string => `theirs:${note}`;\n",
+      );
+
+      const client = yield* connect(world.state).pipe(Effect.orDie);
+      const started = yield* Effect.all(
+        [
+          client.start({ project: one.root, id: "proof", request: "one", input: { note: "a" } }),
+          client.start({ project: two.root, id: "proof", request: "two", input: { note: "b" } }),
+        ],
+        { concurrency: "unbounded" },
+      ).pipe(Effect.orDie);
+
+      expect(new Set(Arr.map(started, (one) => one.registration)).size).toBe(2);
+      expect((yield* client.registrations().pipe(Effect.orDie)).live).toEqual([
+        "proof@1",
+        "proof@2",
+      ]);
+      expect(
+        (yield* client.discover({ project: one.root }).pipe(Effect.orDie)).entries[0]?.path,
+      ).toBe(`${one.dir}/proof.workflow.ts`);
+
+      for (const admitted of started) {
+        const runId = admitted.runId;
         yield* until(
           () => client.status({ runId }),
           (status) => status.status === "suspended",
         );
         yield* client
-          .answer({ runId, decision: "decision", value: "yes", request: "answer-yes" })
+          .answer({ runId, decision: "decision", value: "ok", request: "answer-ok" })
           .pipe(Effect.orDie);
-        expect(
-          yield* until(
-            () => client.status({ runId }),
-            (status) => status.status === "complete",
-          ),
-        ).toEqual({ status: "complete", value: "note:saved=yes" });
-        yield* stopHost(world.state);
-      }),
-    ),
-  180_000,
-);
+      }
+      expect(
+        yield* until(
+          () => client.status({ runId: started[0].runId }),
+          (status) => status.status === "complete",
+        ),
+      ).toEqual({ status: "complete", value: "note:a=ok" });
+      expect(
+        yield* until(
+          () => client.status({ runId: started[1].runId }),
+          (status) => status.status === "complete",
+        ),
+      ).toEqual({ status: "complete", value: "theirs:b=ok" });
+      yield* stopHost(world.state);
+    }),
+  ));
 
-test(
-  "two projects run their own implementation of one id at the same time",
-  () =>
-    proves("collie-autoload-projects-", (world) =>
-      Effect.gen(function* () {
-        const one = yield* world.project("one");
-        const two = yield* world.project("two");
-        yield* save(one.dir, MODULE);
-        yield* save(two.dir, MODULE);
-        // The same public id, written differently: a project override is the point.
-        yield* write(
-          `${two.dir}/helper.ts`,
-          "export const label = (note: string): string => `theirs:${note}`;\n",
+test("an edited entry, helper and prompt reach the next run while the one going keeps its own", () =>
+  proves("collie-autoload-edit-", (world) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* world.project("thing");
+      yield* save(world.user, MODULE);
+      const client = yield* connect(world.state).pipe(Effect.orDie);
+      const before = yield* client
+        .start({ project: project.root, id: "proof", request: "before", input: { note: "old" } })
+        .pipe(Effect.orDie);
+      yield* until(
+        () => client.status({ runId: before.runId }),
+        (status) => status.status === "suspended",
+      );
+
+      const entry = yield* fs.readFileString(`${world.user}/proof.workflow.ts`).pipe(Effect.orDie);
+      yield* write(
+        `${world.user}/proof.workflow.ts`,
+        pipe_(
+          entry,
+          Str.replace(
+            'title: "A workflow that waits for a decision",',
+            'title: "Edited while a run was waiting",',
+          ),
+        ),
+      );
+      yield* write(
+        `${world.user}/helper.ts`,
+        "export const label = (note: string): string => `edited:${note}`;\n",
+      );
+      yield* write(`${world.user}/notes.md`, PROMPT);
+
+      const listed = () =>
+        Effect.map(
+          client.discover({ project: project.root }).pipe(Effect.orDie),
+          (found) => found.entries[0]?.title,
         );
+      // WARNING: a listing reads the revision the host keeps until it is told of the edit.
+      expect(yield* listed()).toBe("A workflow that waits for a decision");
+      yield* tellHost(world.state, [`${world.user}/proof.workflow.ts`]);
+      expect(yield* listed()).toBe("Edited while a run was waiting");
 
-        const client = yield* connect(world.state).pipe(Effect.orDie);
-        const started = yield* Effect.all(
-          [
-            client.start({ project: one.root, id: "proof", request: "one", input: { note: "a" } }),
-            client.start({ project: two.root, id: "proof", request: "two", input: { note: "b" } }),
-          ],
-          { concurrency: "unbounded" },
-        ).pipe(Effect.orDie);
+      const after = yield* client
+        .start({ project: project.root, id: "proof", request: "after", input: { note: "new" } })
+        .pipe(Effect.orDie);
+      expect(after.registration).toBe("proof@2");
+      yield* until(
+        () => client.status({ runId: after.runId }),
+        (status) => status.status === "suspended",
+      );
+      expect((yield* events(world.state, after.runId))[0]).toBe(
+        `launch edited:new ${PROMPT.length}`,
+      );
 
-        // One id, two generations, and each project's own file behind its own.
-        expect(new Set(Arr.map(started, (one) => one.registration)).size).toBe(2);
-        expect((yield* client.registrations().pipe(Effect.orDie)).live).toEqual([
-          "proof@1",
-          "proof@2",
-        ]);
-        expect(
-          (yield* client.discover({ project: one.root }).pipe(Effect.orDie)).entries[0]?.path,
-        ).toBe(`${one.dir}/proof.workflow.ts`);
-
-        for (const admitted of started) {
-          const runId = admitted.runId;
-          yield* until(
-            () => client.status({ runId }),
-            (status) => status.status === "suspended",
-          );
-          yield* client
-            .answer({ runId, decision: "decision", value: "ok", request: "answer-ok" })
-            .pipe(Effect.orDie);
-        }
-        expect(
-          yield* until(
-            () => client.status({ runId: started[0]!.runId }),
-            (status) => status.status === "complete",
-          ),
-        ).toEqual({ status: "complete", value: "note:a=ok" });
-        expect(
-          yield* until(
-            () => client.status({ runId: started[1]!.runId }),
-            (status) => status.status === "complete",
-          ),
-        ).toEqual({ status: "complete", value: "theirs:b=ok" });
-        yield* stopHost(world.state);
-      }),
-    ),
-  180_000,
-);
-
-test(
-  "an edited entry, helper and prompt reach the next run while the one going keeps its own",
-  () =>
-    proves("collie-autoload-edit-", (world) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const project = yield* world.project("thing");
-        yield* save(world.user, MODULE);
-        const client = yield* connect(world.state).pipe(Effect.orDie);
-        const before = yield* client
-          .start({ project: project.root, id: "proof", request: "before", input: { note: "old" } })
+      for (const runId of [before.runId, after.runId]) {
+        yield* client
+          .answer({ runId, decision: "decision", value: "x", request: "answer-x" })
           .pipe(Effect.orDie);
+      }
+      expect(
         yield* until(
           () => client.status({ runId: before.runId }),
-          (status) => status.status === "suspended",
-        );
-
-        // All three kinds of edit, while that run is parked on its decision.
-        const entry = yield* fs
-          .readFileString(`${world.user}/proof.workflow.ts`)
-          .pipe(Effect.orDie);
-        yield* write(
-          `${world.user}/proof.workflow.ts`,
-          pipe_(
-            entry,
-            Str.replace(
-              'title: "A workflow that waits for a decision",',
-              'title: "Edited while a run was waiting",',
-            ),
-          ),
-        );
-        yield* write(
-          `${world.user}/helper.ts`,
-          "export const label = (note: string): string => `edited:${note}`;\n",
-        );
-        yield* write(`${world.user}/notes.md`, PROMPT);
-
-        expect(
-          (yield* client.discover({ project: project.root }).pipe(Effect.orDie)).entries[0]?.title,
-        ).toBe("Edited while a run was waiting");
-
-        const after = yield* client
-          .start({ project: project.root, id: "proof", request: "after", input: { note: "new" } })
-          .pipe(Effect.orDie);
-        expect(after.registration).toBe("proof@2");
+          (status) => status.status === "complete",
+        ),
+      ).toEqual({ status: "complete", value: "note:old=x" });
+      expect(
         yield* until(
           () => client.status({ runId: after.runId }),
-          (status) => status.status === "suspended",
-        );
-        // The helper the new run used, and the prompt it read: both as they are now.
-        expect((yield* events(world.state, after.runId))[0]).toBe(
-          `launch edited:new ${PROMPT.length}`,
-        );
+          (status) => status.status === "complete",
+        ),
+      ).toEqual({ status: "complete", value: "edited:new=x" });
+      yield* stopHost(world.state);
+    }),
+  ));
 
-        for (const runId of [before.runId, after.runId]) {
-          yield* client
-            .answer({ runId, decision: "decision", value: "x", request: "answer-x" })
-            .pipe(Effect.orDie);
-        }
-        expect(
-          yield* until(
-            () => client.status({ runId: before.runId }),
-            (status) => status.status === "complete",
-          ),
-        ).toEqual({ status: "complete", value: "note:old=x" });
-        expect(
-          yield* until(
-            () => client.status({ runId: after.runId }),
-            (status) => status.status === "complete",
-          ),
-        ).toEqual({ status: "complete", value: "edited:new=x" });
-        yield* stopHost(world.state);
-      }),
-    ),
-  180_000,
-);
+test("an override that cannot be read names its own file, and the entry beside it still runs", () =>
+  proves("collie-autoload-broken-", (world) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* world.project("thing");
+      yield* save(world.user, [...MODULE, "plain.workflow.ts"]);
+      const broken = `${project.dir}/proof.workflow.ts`;
+      yield* write(broken, "export const id = ;\n");
 
-test(
-  "an override that cannot be read names its own file, and the entry beside it still runs",
-  () =>
-    proves("collie-autoload-broken-", (world) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const project = yield* world.project("thing");
-        yield* save(world.user, [...MODULE, "plain.workflow.ts"]);
-        const broken = `${project.dir}/proof.workflow.ts`;
-        yield* write(broken, "export const id = ;\n");
+      const client = yield* connect(world.state).pipe(Effect.orDie);
+      const found = yield* client.discover({ project: project.root }).pipe(Effect.orDie);
+      expect(Arr.map(found.entries, (entry) => entry.id)).toEqual(["plain"]);
+      expect(
+        Arr.map(found.problems, (problem) => [problem.id, problem.layer, problem.path]),
+      ).toEqual([["proof", "project", broken]]);
 
-        const client = yield* connect(world.state).pipe(Effect.orDie);
-        const found = yield* client.discover({ project: project.root }).pipe(Effect.orDie);
-        expect(Arr.map(found.entries, (entry) => entry.id)).toEqual(["plain"]);
-        expect(
-          Arr.map(found.problems, (problem) => [problem.id, problem.layer, problem.path]),
-        ).toEqual([["proof", "project", broken]]);
+      const refused = yield* client
+        .start({ project: project.root, id: "proof", request: "req-1", input: { note: "no" } })
+        .pipe(Effect.flip, Effect.orDie);
+      expect(refused.reason).toContain(broken);
 
-        // Refused by the file that is wrong, not run from the one it was written to replace.
-        const refused = yield* client
-          .start({ project: project.root, id: "proof", request: "req-1", input: { note: "no" } })
-          .pipe(Effect.flip, Effect.orDie);
-        expect(refused.reason).toContain(broken);
-
-        // A new file appears while the host is running, and is as usable as the rest.
-        const plain = yield* client
-          .start({ project: project.root, id: "plain", request: "req-2", input: { note: "fine" } })
-          .pipe(Effect.orDie);
-        expect(
-          yield* until(
-            () => client.status({ runId: plain.runId }),
-            (status) => status.status === "complete",
-          ),
-        ).toEqual({ status: "complete", value: "plain:fine" });
-
-        // Deleting the override is not the same as breaking it: the layer below is back.
-        yield* fs.remove(broken).pipe(Effect.orDie);
-        const repaired = yield* client.discover({ project: project.root }).pipe(Effect.orDie);
-        expect(repaired.problems).toEqual([]);
-        expect(Arr.map(repaired.entries, (entry) => [entry.id, entry.layer])).toEqual([
-          ["plain", "user"],
-          ["proof", "user"],
-        ]);
-        const repairedRun = yield* client
-          .start({ project: project.root, id: "proof", request: "req-3", input: { note: "yes" } })
-          .pipe(Effect.orDie);
+      const plain = yield* client
+        .start({ project: project.root, id: "plain", request: "req-2", input: { note: "fine" } })
+        .pipe(Effect.orDie);
+      expect(
         yield* until(
-          () => client.status({ runId: repairedRun.runId }),
-          (status) => status.status === "suspended",
-        );
-        yield* stopHost(world.state);
-      }),
-    ),
-  180_000,
-);
+          () => client.status({ runId: plain.runId }),
+          (status) => status.status === "complete",
+        ),
+      ).toEqual({ status: "complete", value: "plain:fine" });
 
-test(
-  "a host that replaces one reads the files as they are now, and a module put back is usable again",
-  () =>
-    proves("collie-autoload-restart-", (world) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const project = yield* world.project("thing");
-        yield* save(world.user, MODULE);
-        const runId = yield* Effect.scoped(
-          Effect.gen(function* () {
-            const client = yield* connect(world.state);
-            const started = yield* client.start({
+      yield* fs.remove(broken).pipe(Effect.orDie);
+      yield* tellHost(world.state, [broken]);
+      const repaired = yield* client.discover({ project: project.root }).pipe(Effect.orDie);
+      expect(repaired.problems).toEqual([]);
+      expect(Arr.map(repaired.entries, (entry) => [entry.id, entry.layer])).toEqual([
+        ["plain", "user"],
+        ["proof", "user"],
+      ]);
+      const repairedRun = yield* client
+        .start({ project: project.root, id: "proof", request: "req-3", input: { note: "yes" } })
+        .pipe(Effect.orDie);
+      yield* until(
+        () => client.status({ runId: repairedRun.runId }),
+        (status) => status.status === "suspended",
+      );
+      yield* stopHost(world.state);
+    }),
+  ));
+
+test("a host that replaces one reads the files as they are now, and a module put back is usable again", () =>
+  proves("collie-autoload-restart-", (world) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* world.project("thing");
+      yield* save(world.user, MODULE);
+      const runId = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* connect(world.state);
+          const started = yield* client.start({
+            project: project.root,
+            id: "proof",
+            request: "req-1",
+            input: { note: "durable" },
+          });
+          yield* until(
+            () => client.status({ runId: started.runId }),
+            (status) => status.status === "suspended",
+          );
+          return started.runId;
+        }),
+      ).pipe(Effect.orDie);
+
+      yield* stopHost(world.state);
+      yield* fs.remove(`${world.user}/proof.workflow.ts`).pipe(Effect.orDie);
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* connect(world.state);
+          const held = yield* client.registrations();
+          expect(held.live).toEqual([]);
+          expect(Arr.join(held.unavailable, "\n")).toContain("proof.workflow.ts");
+          const refused = yield* client.status({ runId }).pipe(Effect.flip);
+          expect(refused.reason).toContain("proof.workflow.ts");
+        }).pipe(Effect.orDie),
+      );
+      yield* stopHost(world.state);
+
+      yield* save(world.user, MODULE);
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          expect((yield* client.registrations().pipe(Effect.orDie)).live).toEqual(["proof@1"]);
+          const started = yield* client
+            .start({
               project: project.root,
               id: "proof",
-              request: "req-1",
-              input: { note: "durable" },
-            });
+              request: "req-2",
+              input: { note: "new" },
+            })
+            .pipe(Effect.orDie);
+          expect(started.registration).toBe("proof@1");
+
+          yield* client
+            .answer({ runId, decision: "decision", value: "back", request: "answer-back" })
+            .pipe(Effect.orDie);
+          expect(
             yield* until(
-              () => client.status({ runId: started.runId }),
-              (status) => status.status === "suspended",
-            );
-            return started.runId;
-          }),
-        ).pipe(Effect.orDie);
-
-        // The host goes, and the module with it.
-        yield* stopHost(world.state);
-        yield* fs.remove(`${world.user}/proof.workflow.ts`).pipe(Effect.orDie);
-
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const client = yield* connect(world.state);
-            const held = yield* client.registrations();
-            expect(held.live).toEqual([]);
-            expect(Arr.join(held.unavailable, "\n")).toContain("proof.workflow.ts");
-            // Pending with the file to repair named, rather than failed or run on
-            // whatever code is nearest.
-            const refused = yield* client.status({ runId }).pipe(Effect.flip);
-            expect(refused.reason).toContain("proof.workflow.ts");
-          }).pipe(Effect.orDie),
-        );
-        yield* stopHost(world.state);
-
-        // Put back unchanged: the next host registers it under the name the run started
-        // on, and new work goes to that same generation rather than a second one.
-        yield* save(world.user, MODULE);
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const client = yield* connect(world.state).pipe(Effect.orDie);
-            expect((yield* client.registrations().pipe(Effect.orDie)).live).toEqual(["proof@1"]);
-            const started = yield* client
-              .start({
-                project: project.root,
-                id: "proof",
-                request: "req-2",
-                input: { note: "new" },
-              })
-              .pipe(Effect.orDie);
-            expect(started.registration).toBe("proof@1");
-
-            yield* client
-              .answer({ runId, decision: "decision", value: "back", request: "answer-back" })
-              .pipe(Effect.orDie);
-            expect(
-              yield* until(
-                () => client.status({ runId }),
-                (status) => status.status === "complete",
-              ),
-            ).toEqual({ status: "complete", value: "note:durable=back" });
-            // The Activity that ran before the restart ran once, whatever replay did.
-            expect(
-              Arr.filter(yield* events(world.state, runId), (line) =>
-                pipe_(line, Str.startsWith("launch")),
-              ),
-            ).toHaveLength(1);
-          }),
-        );
-        yield* stopHost(world.state);
-      }),
-    ),
-  240_000,
-);
+              () => client.status({ runId }),
+              (status) => status.status === "complete",
+            ),
+          ).toEqual({ status: "complete", value: "note:durable=back" });
+          expect(
+            Arr.filter(yield* events(world.state, runId), (line) =>
+              pipe_(line, Str.startsWith("launch")),
+            ),
+          ).toHaveLength(1);
+        }),
+      );
+      yield* stopHost(world.state);
+    }),
+  ));

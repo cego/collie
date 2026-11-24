@@ -92,7 +92,6 @@ test("unchanged panel refreshes preserve backoff while changed facts reset it", 
     }).pipe(Effect.provide(forgeHttpLayer)),
   ));
 
-/** How often a park on `cause` is rechecked by 90 s and by 100 s, under a forge reset at 90 s. */
 const rechecksUnderRateLimit = (cause: ParkCause) =>
   Effect.gen(function* () {
     const rig = yield* Rig.scoped();
@@ -162,9 +161,10 @@ const rechecksUnderRateLimit = (cause: ParkCause) =>
     const rechecks = readMetrics(`${env.stateDir}/evidence/r1`).pipe(
       Effect.map((lines) => Arr.filter(lines, (line) => line.action === "rechecked").length),
     );
-    /** Lets each round do its file IO, which the test clock does not drive. */
     const settle = Effect.gen(function* () {
-      for (let tries = 0; tries < 50; tries++) yield* TestClock.withLive(Effect.sleep("2 millis"));
+      for (let tries = 0; tries < 50; tries++) {
+        yield* TestClock.withLive(Effect.sleep("2 millis"));
+      }
     });
     for (let at = 10; at <= 90; at += 10) {
       yield* TestClock.adjust("10 seconds");

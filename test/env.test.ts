@@ -19,9 +19,7 @@ test("Collie reads its own installation, state and working directory", () => {
 });
 
 test("without COLLIE_ROOT the compiled runner is its own installation root", () => {
-  // Compiled: the sources live in bun's virtual filesystem and execPath is the binary.
   expect(ownRoot("/$bunfs/root/main", "/opt/collie/bin/collie")).toBe("/opt/collie");
-  // Development: `bun src/main.ts` runs from disk, and execPath is bun itself.
   expect(ownRoot("/home/x/collie/src/env.ts", "/home/x/.bun/bin/bun")).toBeNull();
   expect(ownRoot("/$bunfs/root/main", "/collie")).toBeNull();
 
@@ -136,8 +134,11 @@ test("a process that leaves the launcher starts children without its preload, ke
           }),
           (was) =>
             Effect.sync(() => {
-              if (was === undefined) delete Bun.env[name];
-              else Bun.env[name] = was;
+              if (was === undefined) {
+                delete Bun.env[name];
+              } else {
+                Bun.env[name] = was;
+              }
             }),
         );
       }

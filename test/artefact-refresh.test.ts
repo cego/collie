@@ -59,7 +59,7 @@ test("refresh coalesces sources, limits work, times out and rotates past failing
           pending: false,
           stale: true,
         });
-        const visited: string[] = [];
+        const visited: Array<string> = [];
         const many = Array.from({ length: 12 }, (_, i) => ({
           key: `job-${Str.padStart(2, "0")(String(i))}`,
           observed: -30_000,
@@ -78,7 +78,7 @@ test("refresh coalesces sources, limits work, times out and rotates past failing
         yield* clock.adjust(30_000);
         yield* jobs.pass(many);
         expect(visited).toHaveLength(20);
-        expect(yield* Clock.currentTimeMillis).toBe(35001);
+        expect(yield* Clock.currentTimeMillis).toBe(35_001);
       }).pipe(Effect.provideService(Clock.Clock, clock));
     }),
   ));

@@ -1,5 +1,3 @@
-// The agent register, kept in the host's database (ADR-draft-collies-own-records-live-in-the-hosts-database).
-
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Deferred, Effect, Fiber, FileSystem, Result, Schema, Stream } from "effect";
@@ -13,9 +11,8 @@ import {
   REGISTERED,
   registerAgent,
   registerOf,
-  type AgentEntry,
-  type RegistryScope,
 } from "../src/registry";
+import type { AgentEntry, RegistryScope } from "../src/registry";
 import { StoreWrites } from "../src/store-writes";
 import { runEffect } from "./support/effect";
 import { stopHost } from "./support/host";
@@ -45,7 +42,7 @@ afterEach(() =>
 const here: RegistryScope = { session: "/run/herdr.sock", workspaceId: "w1", cwd: "/project" };
 const there: RegistryScope = { session: "/run/herdr.sock", workspaceId: "w2", cwd: "/project" };
 
-const entry = (over: Partial<AgentEntry> = {}): AgentEntry => ({
+const entry: (over?: Partial<AgentEntry>) => AgentEntry = (over = {}) => ({
   role: "implementer",
   agent: "impl-1",
   paneId: "1-9",
@@ -57,7 +54,7 @@ const entry = (over: Partial<AgentEntry> = {}): AgentEntry => ({
   ...over,
 });
 
-const live = (of: AgentEntry): AgentInfo => ({
+const live: (of: AgentEntry) => AgentInfo = (of) => ({
   name: of.agent,
   paneId: of.paneId,
   status: "idle",
@@ -71,7 +68,7 @@ const agents = (entries: ReadonlyArray<AgentEntry>) => Arr.map(entries, (one) =>
 test("a registration tells the Run model the Runs of the agents it registered and dropped", () =>
   runEffect(
     Effect.gen(function* () {
-      const moved: string[] = [];
+      const moved: Array<string> = [];
       yield* Effect.gen(function* () {
         yield* registerAgent(here, entry({ agent: "impl-gone", paneId: "1-8", runId: "r0" }));
         moved.length = 0;
@@ -99,7 +96,6 @@ test("an agent registered again is one entry, the newest; one core no longer lis
       yield* registerAgent(here, entry({ at: "2026-09-09T09:05:00Z" }));
       expect(agents(yield* everyRegistered)).toEqual(["impl-gone", "impl-there", "impl-1"]);
 
-      // A seat registered after the listing is kept: it may have started alongside.
       const seat = entry({ agent: "impl-seat", paneId: "1-7", at: "2026-09-09T09:20:00Z" });
       yield* registerAgent(here, seat);
       const kept = yield* registerAgent(here, entry({ agent: "impl-2", paneId: "1-6" }), {
@@ -122,7 +118,9 @@ test("the agent a lineage asks for is the nearest Run's live one in that role", 
       const parents = entry({ agent: "impl-p", paneId: "1-1", runId: "r-parent" });
       const own = entry({ agent: "impl-own", paneId: "1-2", runId: "r-child" });
       const other = entry({ agent: "impl-other", paneId: "1-3", runId: "r-other" });
-      for (const one of [parents, own, other]) yield* registerAgent(here, one);
+      for (const one of [parents, own, other]) {
+        yield* registerAgent(here, one);
+      }
       const alive = Arr.map([parents, own, other], live);
       expect((yield* lineageAgent(alive, "implementer", ["r-child", "r-parent"]))?.agent).toBe(
         "impl-own",
@@ -173,7 +171,6 @@ test("the first host imports each register file once, in its order, and leaves t
         `${stateDir}/agents/${registerOf(there)}.json`,
         `${asJson([entry({ agent: "impl-later" })])}\n`,
       );
-      // Imported into the register it was kept in: a registration there replaces its agent.
       const after = yield* registerAgent(here, entry({ at: "2026-09-09T10:00:00Z" })).pipe(
         Effect.provide(recordsAt(stateDir)),
       );

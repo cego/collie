@@ -1,7 +1,4 @@
-// The Control Plane tab: one per workspace, the Session's control surface. It owns
-// no engine state — it draws the Runs the host reports and the live-agent register,
-// so deleting the tab loses nothing and the next Run recreates it.
-
+// WARNING: owns no engine state: deleting the tab loses nothing and the next Run recreates it.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -12,188 +9,106 @@ import manifest from "../package.json";
 import { COLLIE_TAB, displayName, GLYPH, runTitle } from "./naming";
 import { diffTargetOf } from "./strategies";
 import type { Live } from "./live";
-import { boardLines, type PendingChoice } from "./board";
+import { boardLines } from "./board";
+import type { PendingChoice } from "./board";
 import type { TaskView } from "./board-model";
-import { asText, cardLines, deliveryLine, driftLines, newsLines, type Line } from "./lines";
-import { liveEntries, type AgentEntry } from "./registry";
+import { asText, cardLines, deliveryLine, driftLines, newsLines } from "./lines";
+import type { Line } from "./lines";
+import { liveEntries } from "./registry";
+import type { AgentEntry } from "./registry";
 import { latest, readDispositions } from "./disposition";
 import { openFindingsIn } from "./output";
-import { settled, type RunFacts } from "./runs";
+import { settled } from "./runs";
+import type { RunFacts } from "./runs";
 import type { TaskRecord } from "./task";
 import { took, epochMs } from "./time";
 import type { AgentInfo } from "./herdr";
 
-/** How many finished runs stay on the screen; the tab must not need scrolling. */
 const RECENT = 5;
-/** Keys 1–9 focus an agent, so that is how many the board can offer. */
+// WARNING: keys 1-9 focus an agent, which bounds how many the board can offer.
 export const MAX_AGENTS = 9;
-/**
- * The fallback for the board's quiet threshold, for a caller with no defaults to hand —
- * a test drawing one board. `board_quiet_ms` is what a human sets.
- */
 const DEFAULT_QUIET_MS = 5 * 60_000;
 
-/** What identifies a Session: its directory, or a Herdr 1 session and workspace an older record names. */
 export interface SessionKey {
-  /** Herdr 1's session, as its socket path; null on core. */
   session: string | null;
-  /** Herdr 1's workspace id; null on core. */
   workspaceId: string | null;
-  /** Herdr 1's workspace label; null on core. */
   workspaceLabel: string | null;
-  /**
-   * The directory the board runs in: what it shows as its root and where `p` roots a
-   * run. Not part of the identity — a Run's own checkout is a worktree elsewhere, and
-   * it still belongs to the workspace it was started from.
-   */
   cwd: string;
 }
 
 export interface AgentRow {
-  /** The key that focuses this agent's pane. */
   key: string;
-  /** What to call it: its registered role, else its step and model. */
   name: string;
   agent: string;
   status: string;
   run: string;
-  /**
-   * What the agent says it is doing, from the terminal title its harness publishes, or
-   * `null` where it publishes none. The board asks nothing extra for it: it comes back
-   * on the same `agent list` the statuses do.
-   */
   now: string | null;
 }
 
 export interface RunRow {
   id: string;
-  /** The run dir, so an answer or a log can be written back to it. */
   dir: string;
   glyph: string;
   title: string;
   detail: string;
-  /**
-   * When this run last changed, in epoch milliseconds, or 0 when nothing says. A run
-   * list answers "how long has this been like this", so the app shows it as a relative
-   * time; `now` below is what it is relative to.
-   */
   at: number;
-  /** What this run reviewed, so its merge request can be looked up on selection. */
   target: string | null;
-  /**
-   * The repository runs this run fanned out, which nest under it: a plan that spans
-   * repositories is one thing on the board rather than several rows beside each other.
-   *
-   * The fan-out's own record, not every run that names this one as its parent. An
-   * ordinary chain's parent finishes the moment its child has a Driver, so keying on
-   * parentage drew a live `implement` run inside the finished region under a `plan` run
-   * that was over — and moved it back out again when that row aged off the board.
-   */
+  // WARNING: the fan-out's own record: an ordinary chain's parent ends early, so parentage would misplace live runs.
   children: ReadonlyArray<string>;
-  /**
-   * Whether this run can supply the work for another: `implement` takes a run directory
-   * as a work source only when there is a review in it, so "fix what is still open" is
-   * offered for those and for nothing else.
-   */
   fixable: boolean;
-  /** The question this run is waiting on, rendered under its row. */
   choice: PendingChoice | null;
-  /**
-   * Whether this run has stopped for the human: a `choice` to answer on the row, or an
-   * agent waiting for an answer in its own pane. The board lists these first, because a
-   * blocked run costs the whole run's wall-clock and used to be visible only if its row
-   * happened to be the Selection. A row with no `choice` under it is still worth the
-   * header — Enter on it goes to the pane where the answer has to be typed.
-   */
   needsYou: boolean;
-  /**
-   * What this run is for, what it has not proved, what is in its way and what to do
-   * about it. The board used to say what a run was *doing*; these say what it is *for*
-   * and whether it got there, which is the question a human actually has.
-   *
-   * All four come from the Run's facts, which the row already has: the board must not
-   * read a file per row, and a supervision line nobody can afford to draw is not one.
-   */
   outcome: string | null;
   gaps: number;
   obstacle: string | null;
   next: string | null;
-  /**
-   * What became of the work, where a human recorded it: `merged`, `abandoned` or
-   * `superseded`. Beside the status, never over it — a Run that failed still failed, and
-   * a red row against work that shipped is the thing a person is actually looking at.
-   */
   delivered: string | null;
 }
 
 export interface WorkspaceView {
   repo: string;
   cwd: string;
-  /** What pruning did and what it is holding, one line each. */
-  worktrees: string[];
-  /**
-   * How many commits this installation is behind its remote, or null when there is
-   * nothing to say. Shown on the board and never notified: being a few commits
-   * behind is worth seeing, not worth interrupting for.
-   */
+  worktrees: Array<string>;
   behind: number | null;
-  /** A release newer than this one, where this installation is a release. Shown, never notified. */
   newer?: string | null;
-  /** When this view was built, so a row's `at` can be read as a relative time. */
   now: number;
-  agents: AgentRow[];
-  /** Live agents the board had no key left for. */
+  agents: Array<AgentRow>;
   extraAgents: number;
-  active: RunRow[];
-  recent: RunRow[];
+  active: Array<RunRow>;
+  recent: Array<RunRow>;
 }
 
-/**
- * A workspace with something of Collie's in it, or the one trailing group for
- * everything else. On core every Run's workspace is null, so its Runs are in that group.
- */
 export interface WideGroup {
-  /** Which workspace this is, for the jump, and null for Elsewhere. Never drawn. */
   workspaceId: string | null;
-  /** What the human calls it: its Task's label, or the checkout's own name. */
   label: string;
-  /** The worst of its runs: ⚠ over ⚙ over whatever the newest finished one was. */
   glyph: string;
   running: number;
   needsYou: number;
-  /** `2 running · 1 need you · fix 3/5`: counts, and the leading run's step. */
   summary: string;
-  /** What is in this workspace: its running runs, at most two finished, and its agents. */
-  active: RunRow[];
-  recent: RunRow[];
-  agents: AgentRow[];
+  active: Array<RunRow>;
+  recent: Array<RunRow>;
+  agents: Array<AgentRow>;
 }
 
 export interface WideView {
-  groups: WideGroup[];
-  /** Other workspaces, by name: the ones with no run, no agent and no history of Collie's. */
-  quiet: string[];
+  groups: Array<WideGroup>;
+  quiet: Array<string>;
   now: number;
 }
 
-/** Where a Run lives: a workspace of its own, else its Task's; null where neither says. */
-function workspaceOf(run: RunFacts, tasks: ReadonlyMap<string, TaskRecord>): string | null {
+function workspaceOf(run: RunFacts, tasks: ReadonlyMap<string, TaskRecord>) {
   return run.workspace ?? (run.task === null ? null : (tasks.get(run.task)?.workspace ?? null));
 }
 
-/**
- * Whether a Run belongs to this workspace: the one it lives in, by id. One that names no
- * workspace belongs here only if one of its agents is alive here, and never to one group
- * of the wide scope: an agent herdr reports no workspace for is not proof of any one of
- * them.
- */
 function belongs(
   where: string | null,
   key: SessionKey,
   agentsHere: ReadonlyArray<AgentEntry>,
   grouped: boolean,
-): boolean {
-  if (where === null) return !grouped && agentsHere.length > 0;
+) {
+  if (where === null) {
+    return !grouped && agentsHere.length > 0;
+  }
   return where === key.workspaceId;
 }
 
@@ -203,22 +118,24 @@ const activeDetail = Effect.fn("activeDetail")(function* (
   quietMs: number,
 ) {
   const asked = run.asking[0];
-  // Before the quiet scan: a run waiting on the human is meant to be quiet, so saying
-  // so would be noise on the one row that needs none.
-  if (asked !== undefined) return `waiting on ${asked.name} — your turn`;
-  if (run.state === "waiting") return run.note ?? "parked";
-  if (run.awaiting !== null) return `waiting for ${run.awaiting.on}`;
+  // WARNING: must come before the quiet scan, or a run waiting on the human reads as quiet.
+  if (asked !== undefined) {
+    return `waiting on ${asked.name} — your turn`;
+  }
+  if (run.state === "waiting") {
+    return run.note ?? "parked";
+  }
+  if (run.awaiting !== null) {
+    return `waiting for ${run.awaiting.on}`;
+  }
   const parts = [run.workflow];
   const quiet = yield* quietFor(run.dir, now, quietMs);
-  if (quiet) parts.push(quiet);
+  if (quiet) {
+    parts.push(quiet);
+  }
   return Arr.join(parts, " · ");
 });
 
-/**
- * When a file last changed, or `0` when nothing says — a file that is not there, or a
- * filesystem that does not keep the time. One answer, because two spellings of it is
- * how a row's clock and the quiet check would come to disagree.
- */
 const mtimeOf = Effect.fn("mtimeOf")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
   return yield* fs.stat(file).pipe(
@@ -227,13 +144,7 @@ const mtimeOf = Effect.fn("mtimeOf")(function* (file: string) {
   );
 });
 
-/**
- * When anything in the run's own directory last changed. A shallow scan: what a Run
- * writes as it goes sits at the top of it, and walking every Output would be a
- * directory tree per run per tick for the same answer.
- *
- * ponytail: shallow, deepen it only if a run turns up that writes only below its top.
- */
+// WARNING: a shallow scan: a run that writes only below its top is not seen.
 export const touchedDirAt = Effect.fn("touchedDirAt")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -241,23 +152,21 @@ export const touchedDirAt = Effect.fn("touchedDirAt")(function* (dir: string) {
   let newest = 0;
   for (const name of names) {
     const at = yield* mtimeOf(path.join(dir, name));
-    if (at > newest) newest = at;
+    if (at > newest) {
+      newest = at;
+    }
   }
   return newest;
 });
 
-/**
- * "quiet for 9m", for a run whose directory has not changed for longer than the
- * threshold. A run that is working writes — progress lines, its own record — so silence
- * for minutes is the one signal available from outside that an agent has hung.
- */
 const quietFor = Effect.fn("quietFor")(function* (dir: string, now: number, quietMs: number) {
   const at = yield* touchedDirAt(dir);
-  if (at === 0 || now - at <= quietMs) return null;
+  if (at === 0 || now - at <= quietMs) {
+    return null;
+  }
   return `quiet for ${took(now - at)}`;
 });
 
-/** A row with nothing to say about its outcome: the History view, and every fixture. */
 export const NO_OUTCOME = {
   outcome: null,
   gaps: 0,
@@ -266,10 +175,8 @@ export const NO_OUTCOME = {
   delivered: null,
 } as const;
 
-/** What a Run is for, what is in its way, and the one thing to do about it. */
-function outcomeOf(run: RunFacts): Pick<RunRow, "outcome" | "gaps" | "obstacle" | "next"> {
+function outcomeOf(run: RunFacts) {
   return {
-    // Null where nobody classified it: the row says nothing rather than inventing one.
     outcome: run.outcome === "unspecified" ? null : run.outcome,
     gaps: 0,
     obstacle: run.state === "failed" || run.state === "waiting" ? run.note : null,
@@ -277,26 +184,29 @@ function outcomeOf(run: RunFacts): Pick<RunRow, "outcome" | "gaps" | "obstacle" 
   };
 }
 
-/**
- * What became of a finished Run's work, where someone recorded it. Read only for Runs
- * that did not succeed: those are the rows where a red glyph is standing against work
- * that may well have shipped.
- */
 const deliveredOf = Effect.fn("deliveredOf")(function* (run: RunFacts) {
-  if (run.state === "succeeded") return null;
+  if (run.state === "succeeded") {
+    return null;
+  }
   const line = latest(yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => [])));
-  if (line === null) return null;
+  if (line === null) {
+    return null;
+  }
   return line.ref === "" ? line.kind : `${line.kind} ${line.ref}`;
 });
 
-function recentDetail(run: RunFacts): string {
-  const parts: string[] = [run.state];
-  if (run.state !== "succeeded" && run.note !== null) parts.push(run.note);
-  if (run.mr !== null) parts.push(run.mr);
+function recentDetail(run: RunFacts) {
+  const parts: Array<string> = [run.state];
+  if (run.state !== "succeeded" && run.note !== null) {
+    parts.push(run.note);
+  }
+  if (run.mr !== null) {
+    parts.push(run.mr);
+  }
   return Arr.join(parts, " · ");
 }
 
-function glyphFor(run: RunFacts): string {
+function glyphFor(run: RunFacts) {
   switch (run.state) {
     case "succeeded":
     case "ended":
@@ -311,45 +221,24 @@ function glyphFor(run: RunFacts): string {
   }
 }
 
-/**
- * Whether a run is something the next one can be built from: a review it wrote with a
- * finding still open in it. A review that came back clean has nothing to fix.
- */
 export const fixableRun = (run: Pick<RunFacts, "dir">) =>
   openFindingsIn(run.dir).pipe(Effect.map((open) => open > 0));
 
-/** When a run ended, or last changed while it was going. */
 const touchedAt = (run: RunFacts) =>
   run.finished === null ? touchedDirAt(run.dir) : Effect.succeed(epochMs(run.finished));
 
-/**
- * Everything the tab shows, from the run dirs and one `agent list`: the runs of
- * this Session and every agent of theirs herdr still knows about. `alive` is what
- * herdr answered, so this stays a pure function of state and is testable without
- * a herdr.
- */
 export const buildView = Effect.fn("buildView")(function* (
   opts: SessionKey & {
     stateDir: string;
-    alive: AgentInfo[];
-    /** The Runs, their Tasks and their agents, read once by the caller for every View. */
+    alive: Array<AgentInfo>;
     runs: ReadonlyArray<RunFacts>;
     tasks: ReadonlyArray<TaskRecord>;
     registered: ReadonlyArray<AgentEntry>;
     now?: number;
-    /** What the last prune said; the board reports it rather than deciding it. */
-    worktrees?: string[];
-    /** The installation, when the caller has one to compare against its remote. */
+    worktrees?: Array<string>;
     pluginRoot?: string;
-    /** Where releases are published, for a release to compare against the newest. */
     releases?: string;
-    /** How long a running run may write nothing before its row says so. */
     quietMs?: number;
-    /**
-     * Whether this view is one workspace of a wide board rather than the Session's
-     * own: a group takes only the runs that name its workspace, and its agents are
-     * given no digits, because a wide board numbers those down the whole tree.
-     */
     grouped?: boolean;
   },
 ) {
@@ -366,10 +255,12 @@ export const buildView = Effect.fn("buildView")(function* (
     belongs(workspaceOf(r, tasks), opts, agentsHere(r), opts.grouped ?? false),
   );
 
-  const rows: AgentRow[] = [];
+  const rows: Array<AgentRow> = [];
   for (const run of runs) {
     for (const entry of agentsHere(run)) {
-      if (Arr.some(rows, (r) => r.agent === entry.agent)) continue;
+      if (Arr.some(rows, (r) => r.agent === entry.agent)) {
+        continue;
+      }
       const agent = live.get(entry.agent);
       rows.push({
         key: "",
@@ -381,19 +272,21 @@ export const buildView = Effect.fn("buildView")(function* (
       });
     }
   }
-  // A group of the wide scope keeps every agent it has and gives none of them a digit:
-  // the digits there are numbered down the whole tree.
+  // WARNING: a wide group keeps every agent and gives none a digit: digits number the whole tree.
   const agents = opts.grouped
     ? rows
     : Arr.map(rows.slice(0, MAX_AGENTS), (r, i) => ({ ...r, key: String(i + 1) }));
 
   const fixable = new Set<string>();
-  for (const r of runs) if (yield* fixableRun(r)) fixable.add(r.id);
+  for (const r of runs) {
+    if (yield* fixableRun(r)) {
+      fixable.add(r.id);
+    }
+  }
 
-  const active: RunRow[] = [];
+  const active: Array<RunRow> = [];
   for (const r of Arr.filter(runs, (r) => !settled(r))) {
-    // herdr's own word for an agent sitting at its harness's dialog: a permission
-    // prompt mid-step, which nothing records — the pane is there, asking.
+    // WARNING: herdr's blocked is a permission prompt that nothing else records.
     const blocked = Arr.some(rows, (row) => row.run === r.id && row.status === "blocked");
     active.push({
       id: r.id,
@@ -406,16 +299,13 @@ export const buildView = Effect.fn("buildView")(function* (
       children: [],
       fixable: fixable.has(r.id),
       choice: null,
-      // A question to answer, a parked Run or an agent waiting in its own pane: each
-      // stops the run dead, and Enter on the row reaches the pane either way.
       needsYou: blocked || r.state === "waiting",
       ...outcomeOf(r),
-      // A Run still going has not become anything yet.
       delivered: null,
     });
   }
 
-  const recent: RunRow[] = [];
+  const recent: Array<RunRow> = [];
   for (const r of Arr.filter(runs, settled).slice(0, RECENT)) {
     recent.push({
       id: r.id,
@@ -428,7 +318,6 @@ export const buildView = Effect.fn("buildView")(function* (
       children: [],
       fixable: fixable.has(r.id),
       choice: null,
-      // A finished run is waiting on nobody.
       needsYou: false,
       ...outcomeOf(r),
       delivered: yield* deliveredOf(r),
@@ -454,27 +343,20 @@ export const buildView = Effect.fn("buildView")(function* (
 
 const indent = (line: string) => `  ${line}`;
 
-/**
- * "3 commits behind", in the one place that decides the plural: the app's nav says
- * it and the text board says it, with room for different amounts of sentence around
- * it — the nav row is a fixed width and the board's line has itself to spread into.
- */
-export function commitsBehind(behind: number): string {
+export function commitsBehind(behind: number) {
   return `${behind} commit${behind === 1 ? "" : "s"} behind`;
 }
 
-function section(name: string, rows: string[], empty: string): string[] {
+function section(name: string, rows: Array<string>, empty: string) {
   return ["", name, ...(rows.length > 0 ? rows : [`  (${empty})`])];
 }
 
-/** What the human is being asked, under the run that is asking, never elsewhere. */
 export interface Asking {
-  /** Which option is highlighted, or the text typed so far for a question. */
   index: number;
   typed: string;
 }
 
-function askingRows(choice: PendingChoice, asking: Asking): string[] {
+function askingRows(choice: PendingChoice, asking: Asking) {
   const rows = [`      ${choice.header}`];
   if (choice.kind === "ask") {
     rows.push(`      > ${asking.typed}`, "      type an answer · Enter send · Esc leave it");
@@ -488,13 +370,8 @@ function askingRows(choice: PendingChoice, asking: Asking): string[] {
   return rows;
 }
 
-/**
- * What has been happening, as lines. The very same lines the Live region draws — the app
- * maps each one's tone to a colour and this joins the text — because a human on a pane too
- * narrow for the app must not be shown a shorter, more reassuring version of a card.
- */
-function liveLines(live: Live): string[] {
-  const lines: Line[] = [
+function liveLines(live: Live) {
+  const lines: Array<Line> = [
     ...newsLines(live.news),
     ...Arr.flatMap(live.cards, cardLines),
     ...Arr.flatMap(live.drift, (report) => driftLines(report)),
@@ -504,38 +381,36 @@ function liveLines(live: Live): string[] {
   return Arr.map(lines, (entry) => `  ${asText(entry)}`);
 }
 
-/** The run whose question is being answered, if any: the first one asking. */
-export function askingRun(view: WorkspaceView): RunRow | null {
+export function askingRun(view: WorkspaceView) {
   return Option.getOrUndefined(Arr.findFirst(view.active, (r) => Boolean(r.choice))) ?? null;
 }
 
-/** Plain lists, one screen, no boxes: this is a status board, not an application. */
-/** What every board says of a newer release. */
 export const newerLine = (version: string) => `Collie ${version} is out — collie upgrade`;
 
 export function renderWorkspace(
   view: WorkspaceView,
   note?: string,
   asking: Asking = { index: 0, typed: "" },
-  /** The board's Tasks, and what has been happening. */
   steering: { live?: Live | null; tasks?: ReadonlyArray<TaskView> } = {},
-): string {
+) {
   const lines = [`${COLLIE_TAB} — ${view.repo}`, view.cwd];
   if (view.behind !== null && view.behind > 0) {
     lines.push(`Collie is ${commitsBehind(view.behind)} its remote — \`collie upgrade\``);
   }
-  if (view.newer) lines.push(newerLine(view.newer));
+  if (view.newer) {
+    lines.push(newerLine(view.newer));
+  }
 
   const agents = Arr.map(
     view.agents,
     (a) =>
       `  ${a.key}  ${pipe(a.name, Str.padEnd(22))}${pipe(a.status, Str.padEnd(9))}${a.now ?? a.run}`,
   );
-  if (view.extraAgents > 0) agents.push(`     … and ${view.extraAgents} more without a key`);
+  if (view.extraAgents > 0) {
+    agents.push(`     … and ${view.extraAgents} more without a key`);
+  }
 
   const waiting = askingRun(view);
-  // The key line offers only what is there: a key with nothing to act on is a lie.
-  // While a run is asking, the keys are that question's.
   const keys = waiting
     ? ["answering " + waiting.title]
     : [
@@ -550,13 +425,8 @@ export function renderWorkspace(
       ];
 
   lines.push(
-    // Only where there are any: a repository Collie has no checkout of has nothing to
-    // say here, and an empty section would be noise on every refresh.
     ...(view.worktrees.length > 0 ? section("Worktrees", Arr.map(view.worktrees, indent), "") : []),
     ...section("Agents", agents, "none live here"),
-    // The board's own three sections, as the pane draws them. One model behind both, so
-    // a human on the escape hatch and a human on the board are told the same thing —
-    // with the question a dumb terminal answers in place under the card that is asking.
     ...boardLines(
       steering.tasks ?? [],
       waiting?.choice ? { run: waiting.id, lines: askingRows(waiting.choice, asking) } : null,
@@ -565,10 +435,12 @@ export function renderWorkspace(
     "",
     Arr.join(keys, " · "),
   );
-  if (note) lines.push("", note);
+  if (note) {
+    lines.push("", note);
+  }
   return Arr.join(lines, "\n");
 }
 
-export function agentForKey(view: WorkspaceView, key: string): AgentRow | null {
+export function agentForKey(view: WorkspaceView, key: string) {
   return Option.getOrUndefined(Arr.findFirst(view.agents, (a) => a.key === key)) ?? null;
 }

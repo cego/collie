@@ -2,9 +2,10 @@ import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import type { ScheduleChange, ScheduleChanged, ScheduleEntry } from "../src/schedule-model";
-import { moveSchedule, type ScheduleDoor } from "../src/schedule-move";
+import { moveSchedule } from "../src/schedule-move";
+import type { ScheduleDoor } from "../src/schedule-move";
 
-const entry = (machine: string, over: Partial<ScheduleEntry> = {}): ScheduleEntry => ({
+const entry = (machine: string, over: Partial<ScheduleEntry> = {}) => ({
   machine: { installation: `i-${machine}`, hostname: machine },
   name: "daily",
   workflow: "proof",
@@ -18,7 +19,6 @@ const entry = (machine: string, over: Partial<ScheduleEntry> = {}): ScheduleEntr
   ...over,
 });
 
-/** A host's Schedules in memory, which replays a request id it has seen as a host does. */
 const fakeMachine = (
   name: string,
   initial: ReadonlyArray<ScheduleEntry>,
@@ -41,12 +41,18 @@ const fakeMachine = (
     changeSchedule: ({ change, request }) =>
       Effect.suspend(() => {
         const replay = seen.get(request);
-        if (replay !== undefined) return Effect.succeed(replay);
-        if (fails.change === change.change) return refused(`${change.change} broke`);
+        if (replay !== undefined) {
+          return Effect.succeed(replay);
+        }
+        if (fails.change === change.change) {
+          return refused(`${change.change} broke`);
+        }
         const had = schedules.get(change.name);
         let now: ScheduleEntry | null;
         if (change.change === "add") {
-          if (had !== undefined) return refused("already there");
+          if (had !== undefined) {
+            return refused("already there");
+          }
           now = entry(name, {
             name: change.name,
             cron: change.cron,
@@ -56,8 +62,9 @@ const fakeMachine = (
             checkout: change.start.workspace,
           });
           schedules.set(change.name, now);
-        } else if (had === undefined) return refused("no such Schedule");
-        else if (change.change === "remove") {
+        } else if (had === undefined) {
+          return refused("no such Schedule");
+        } else if (change.change === "remove") {
           schedules.delete(change.name);
           now = null;
         } else {

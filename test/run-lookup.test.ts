@@ -1,11 +1,10 @@
-// A question about one Run asks the host for that Run, and an answer lists every Run at most once.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
 import { expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
-import { Effect, FileSystem, Layer, Schema, type Scope } from "effect";
+import { Effect, FileSystem, Layer, Schema } from "effect";
+import type { Scope } from "effect";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
@@ -22,7 +21,6 @@ import { recordsAt } from "../src/records";
 
 const ROOT = new URL("../", import.meta.url).pathname;
 
-/** The few calls these answers make, as a host answers them. */
 const Asked = RpcGroup.make(
   Rpc.make("identity", {
     success: Schema.Struct({ build: Schema.String, pid: Schema.Int, dir: Schema.String }),
@@ -38,7 +36,7 @@ const Asked = RpcGroup.make(
   Rpc.make("launches", { payload: { run: Schema.String }, success: Schema.Array(Launched) }),
 );
 
-const view = (runId: string, parent: string | null = null): RunView => ({
+const view: (runId: string, parent?: string | null) => RunView = (runId, parent = null) => ({
   runId,
   workflow: "builds",
   project: "/project",
@@ -66,7 +64,6 @@ const view = (runId: string, parent: string | null = null): RunView => ({
   landing: null,
 });
 
-/** A host in `dir` answering as `build`, holding `views`, with each call it is asked counted. */
 const hostOf = (dir: string, views: ReadonlyArray<RunView>, build = BUILD) =>
   Effect.gen(function* () {
     const asked: Array<string> = [];

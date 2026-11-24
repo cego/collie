@@ -56,7 +56,6 @@ const decodeJson = Schema.decodeUnknownOption(JsonLine);
 const decodeHeader = Schema.decodeUnknownOption(Header);
 const decodeEntry = Schema.decodeUnknownOption(Entry);
 
-/** The human's message when it is one of Pi's own `/mcp` commands, which Pi takes as written. */
 export const piCommand = (content: string | Array<ContentBlock>) => {
   const first = isString(content)
     ? content
@@ -109,7 +108,9 @@ const readSession = Effect.fnUntraced(function* (path: string) {
   const text = yield* fs.readFileString(path);
   const lines = Arr.flatMap(Str.split(text, "\n"), (line) => Option.toArray(decodeJson(line)));
   const header = decodeHeader(lines[0]);
-  if (Option.isNone(header)) return null;
+  if (Option.isNone(header)) {
+    return null;
+  }
   const entries = Arr.flatMap(lines.slice(1), (line) => Option.toArray(decodeEntry(line)));
   const byId = new Map(Arr.map(entries, (entry) => [entry.id, entry]));
   const branch: typeof entries = [];
@@ -120,14 +121,21 @@ const readSession = Effect.fnUntraced(function* (path: string) {
     branch.push(leaf);
     leaf = leaf.parentId === null ? undefined : byId.get(leaf.parentId);
   }
-  const messages = Arr.flatMap(Arr.reverse(branch), (entry): ReadonlyArray<Schema.Json> => {
+  const messages = Arr.flatMap(Arr.reverse(branch), (entry) => {
     const message = entry.message;
-    if (entry.type !== "message" || message === undefined) return [];
+    if (entry.type !== "message" || message === undefined) {
+      const returned: ReadonlyArray<Schema.Json> = [];
+      return returned;
+    }
     const base = { uuid: entry.id, parent_tool_use_id: null };
-    if (message.role === "user")
-      return [{ ...base, type: "user", message: { content: humanBlocks(message) } }];
-    if (message.role === "toolResult" && message.toolCallId !== undefined)
-      return [
+    if (message.role === "user") {
+      const returned: ReadonlyArray<Schema.Json> = [
+        { ...base, type: "user", message: { content: humanBlocks(message) } },
+      ];
+      return returned;
+    }
+    if (message.role === "toolResult" && message.toolCallId !== undefined) {
+      const returned: ReadonlyArray<Schema.Json> = [
         {
           ...base,
           type: "user",
@@ -138,8 +146,13 @@ const readSession = Effect.fnUntraced(function* (path: string) {
           },
         },
       ];
-    if (message.role !== "assistant") return [];
-    return [
+      return returned;
+    }
+    if (message.role !== "assistant") {
+      const returned: ReadonlyArray<Schema.Json> = [];
+      return returned;
+    }
+    const returned: ReadonlyArray<Schema.Json> = [
       {
         ...base,
         type: "assistant",
@@ -159,6 +172,7 @@ const readSession = Effect.fnUntraced(function* (path: string) {
         },
       },
     ];
+    return returned;
   });
   const transcript = transcriptOf(messages);
   const first = Option.getOrUndefined(

@@ -1,7 +1,4 @@
-// A Task and every one of its Runs are forgotten together 30 days after its last Run ended,
-// and only once nothing could still need them (ADR-0045 D5).
-
-import { recordLaunch, type Launched } from "../src/launches";
+import { recordLaunch } from "../src/launches";
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Clock, Effect, FileSystem } from "effect";
@@ -9,8 +6,10 @@ import type { TaskView } from "../src/board-model";
 import { retentionSweeper, sweep } from "../src/cleanup";
 import { Herdr } from "../src/herdr";
 import type { RunFacts } from "../src/runs";
-import { readTask, writeTask, type TaskRecord } from "../src/task";
-import { appendLine, deliveriesOf, readLedger, type Delivery } from "../src/steering";
+import { readTask, writeTask } from "../src/task";
+import type { TaskRecord } from "../src/task";
+import { appendLine, deliveriesOf, readLedger } from "../src/steering";
+import type { Delivery } from "../src/steering";
 import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
 import { runFacts } from "./support/records";
@@ -37,7 +36,6 @@ const record: TaskRecord = {
   created_at: "2026-09-01T00:00:00.000Z",
 };
 
-/** The Task's one Run, with its files and markers, its view ended `days` ago. */
 const arranged = (days: number) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -53,7 +51,7 @@ const arranged = (days: number) =>
     return view({ id: "task-1", state: "done", landed: true, ended: now - days * DAY_MS });
   });
 
-const forgotten: string[][] = [];
+const forgotten: Array<Array<string>> = [];
 const sweeper = (
   views: ReadonlyArray<TaskView>,
   runs: ReadonlyArray<RunFacts> = [runFacts({ id: "r1", task: "task-1", state: "succeeded" })],
@@ -69,7 +67,7 @@ const sweeper = (
       }),
   });
 
-const launchOn = (runId: string, terminalId: string): Launched => ({
+const launchOn = (runId: string, terminalId: string) => ({
   agent: "impl",
   output: "out.json",
   reused: false,
@@ -98,15 +96,15 @@ test("a Task whose last Run ended 31 days ago is forgotten: its rows, then its f
         },
       ]);
       expect(forgotten).toEqual([["r1"]]);
-      for (const gone of ["runs/r1", "agents/r1", "evidence/r1", "stop.r1"])
+      for (const gone of ["runs/r1", "agents/r1", "evidence/r1", "stop.r1"]) {
         expect([gone, yield* fs.exists(`${rig.stateDir}/${gone}`)]).toEqual([gone, false]);
-      // Imported into host.db and left for a host of an older build.
+      }
       expect(yield* fs.exists(`${rig.stateDir}/agents/abc/deliveries.jsonl`)).toBe(true);
       expect(yield* readTask("task-1")).toBeNull();
     }),
   ));
 
-const deliveredTo = (run: string, incarnation: string): Delivery => ({
+const deliveredTo: (run: string, incarnation: string) => Delivery = (run, incarnation) => ({
   id: `d-${run}-${incarnation}`,
   at: "2026-09-01T00:00:00.000Z",
   run,

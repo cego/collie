@@ -1,5 +1,3 @@
-// A text read by line, or searched, a page at a time that says how to read on.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -9,27 +7,25 @@ import type { RunFile } from "./board-model";
 
 export const DEFAULT_LINES = 200;
 
-/** A ranged read from line `start` (counted from 1), or, with `search`, the matches from it. */
 export interface LinesAsked {
   readonly start: number;
   readonly count: number;
-  /** A regular expression; each matching line is answered with the line either side. */
   readonly search: string | null;
 }
 
 export const linesError = (asked: LinesAsked) => {
-  if (asked.count < 1) return `count takes 1 or more; not ${asked.count}.`;
-  if (asked.search === null) return null;
+  if (asked.count < 1) {
+    return `count takes 1 or more; not ${asked.count}.`;
+  }
+  if (asked.search === null) {
+    return null;
+  }
   const valid = Result.try(() => new RegExp(asked.search!));
   return Result.isFailure(valid)
     ? `"${asked.search}" is not a search pattern: ${String(valid.failure)}`
     : null;
 };
 
-/**
- * The lines asked for, and what continues it: `to` is the last line the answer covers,
- * `complete` says nothing after it was left out, and `next` is the `start` that reads on.
- */
 export const linesOf = (ref: string, text: string, asked: LinesAsked) => {
   const all = text === "" ? [] : Str.split(pipe_(text, Str.replace(/\n$/, "")), "\n");
   const total = all.length;
@@ -63,33 +59,39 @@ export const linesOf = (ref: string, text: string, asked: LinesAsked) => {
   const found: Array<{ line: number; text: string; before: string | null; after: string | null }> =
     [];
   for (let line = from; line <= total; line++) {
-    if (!pattern.test(at(line)!)) continue;
-    if (found.length === asked.count) return answer(line - 1, found);
+    if (!pattern.test(at(line)!)) {
+      continue;
+    }
+    if (found.length === asked.count) {
+      return answer(line - 1, found);
+    }
     found.push({ line, text: at(line)!, before: at(line - 1), after: at(line + 1) });
   }
   return answer(total, found);
 };
 
-/** An item read a part at a time, whole, as text; null where its bytes are not text. */
 export const wholeText = <E, R>(part: (offset: number) => Effect.Effect<RunFile, E, R>) =>
   Effect.gen(function* () {
     const parts: Array<Uint8Array> = [];
     let read = 0;
-    let size = 0;
+    let size: number;
     do {
       const got = yield* part(read);
       const bytes =
         got.encoding === "utf8"
           ? new TextEncoder().encode(got.content)
           : Result.getOrElse(Base64.decode(got.content), () => new Uint8Array());
-      if (bytes.length === 0) break;
+      if (bytes.length === 0) {
+        break;
+      }
       parts.push(bytes);
       read += bytes.length;
       size = got.size;
     } while (read < size);
-    // ponytail: the whole item in memory once; a log is cut at LOG_BYTES, a diff is a branch's.
     const whole = Buffer.concat(parts);
-    if (whole.includes(0)) return null;
+    if (whole.includes(0)) {
+      return null;
+    }
     return Result.getOrNull(
       Result.try(() => new TextDecoder("utf-8", { fatal: true }).decode(whole)),
     );

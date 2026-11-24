@@ -21,7 +21,6 @@ import {
 import { until } from "./support/host";
 import { runEffect } from "./support/effect";
 
-/** A claim as `src/lock.ts` writes one. */
 const asClaim = flow(
   Schema.encodeResult(
     Schema.fromJsonString(Schema.Struct({ pid: Schema.Int, start: Schema.NullOr(Schema.String) })),
@@ -36,7 +35,7 @@ test("a free lock runs at once and says nothing", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "suite-lock-" });
-      const said: string[] = [];
+      const said: Array<string> = [];
       const got = yield* inTurn(`${dir}/suite.lock`, Effect.succeed(7), (line) =>
         Effect.sync(() => void said.push(line)),
       );
@@ -56,15 +55,15 @@ test("a held lock names its holder once, then the wait as it grows, and falls qu
       const start = yield* processStartTime(holder.pid);
       yield* fs.writeFileString(lock, `${asClaim({ pid: holder.pid, start })}\n`);
 
-      const said: string[] = [];
-      // The holder's suite ends once the waiter has said twice how long it has waited.
+      const said: Array<string> = [];
       const say = (line: string) =>
         Effect.gen(function* () {
           said.push(line);
-          if (Arr.filter(said, (one) => STILL.test(one)).length === 2) yield* fs.remove(lock);
+          if (Arr.filter(said, (one) => STILL.test(one)).length === 2) {
+            yield* fs.remove(lock);
+          }
         }).pipe(Effect.orDie);
       let atStart = -1;
-      // A suite that runs for several intervals, as a real one does for minutes.
       const suite = Effect.sync(() => (atStart = said.length)).pipe(
         Effect.andThen(Effect.sleep("500 millis")),
         Effect.as("ran"),
@@ -77,7 +76,9 @@ test("a held lock names its holder once, then the wait as it grows, and falls qu
       expect(named).toContain("sleep 30");
       expect(named).toMatch(/since \w{3} \w{3} +\d+ \d\d:\d\d:\d\d \d{4}/);
       expect(waited.length).toBeGreaterThanOrEqual(2);
-      for (const line of waited) expect(line).toMatch(STILL);
+      for (const line of waited) {
+        expect(line).toMatch(STILL);
+      }
       expect(said).toHaveLength(atStart);
     }).pipe(Effect.scoped),
   ));
@@ -96,7 +97,7 @@ const heldLock = Effect.gen(function* () {
 test("a run naming an existing path or --changed is targeted, anything else is the whole suite", () =>
   runEffect(
     Effect.gen(function* () {
-      const targeted = (...args: string[]) => isTargeted(args);
+      const targeted = (...args: Array<string>) => isTargeted(args);
       expect(yield* targeted("test/suite-lock.test.ts")).toBe(true);
       expect(yield* targeted("test/support")).toBe(true);
       expect(yield* targeted("--changed")).toBe(true);
@@ -118,7 +119,7 @@ test("a targeted run of a few files is small, and one naming a directory or more
   runEffect(
     Effect.gen(function* () {
       const budget = budgetOf(24);
-      const kind = (...args: string[]) => kindOf(args, budget);
+      const kind = (...args: Array<string>) => kindOf(args, budget);
       const five = [
         "test/budget.test.ts",
         "test/suite-lock.test.ts",
@@ -143,7 +144,7 @@ test("a targeted run goes ahead at once while a suite holds the old lock, and a 
       const { lock, holder } = yield* heldLock;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "suite-budget-" });
       const budget = budgetOf(24);
-      const said: string[] = [];
+      const said: Array<string> = [];
       const say = (line: string) => Effect.sync(() => void said.push(line));
       const ran = (what: string) => () => Effect.succeed(what);
 

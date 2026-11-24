@@ -1,16 +1,10 @@
 import * as Arr from "effect/Array";
 import { Effect, Option, Schema, flow, Result } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
-import {
-  checkModule,
-  createEntry,
-  forkEntry,
-  readModule,
-  type Checked as ModuleCheck,
-  type Described,
-  type Written,
-} from "../authoring";
-import { searchPath, type Catalogued, type EntryLayer, type Found } from "../discovery";
+import { checkModules, createEntry, forkEntry, readModule } from "../authoring";
+import type { Checked as ModuleCheck, Described, Written } from "../authoring";
+import { searchPath } from "../discovery";
+import type { Catalogued, EntryLayer, Found } from "../discovery";
 import type { PluginEnv } from "../env";
 import { savedModules } from "../lifecycle";
 import { loadEntry } from "../engine";
@@ -28,7 +22,6 @@ import {
   root,
 } from "./shared";
 
-/** The Workflow a `workflow` subcommand acts on. */
 const workflowArg = Argument.String("workflow").pipe(
   Argument.withDescription("Which Workflow, as `workflow list` names it"),
 );
@@ -39,7 +32,9 @@ const workflowList = Command.make("list", {}, () =>
     yield* attempt(
       Effect.gen(function* () {
         const resolved = yield* discoveryContext(global);
-        if (resolved._tag === "ContextFailure") return resolved.result;
+        if (resolved._tag === "ContextFailure") {
+          return resolved.result;
+        }
         const saved = yield* savedModules(resolved.env);
         const modules = yield* Effect.forEach(saved.entries, readModule);
         const rows = Arr.map(
@@ -57,12 +52,10 @@ const workflowList = Command.make("list", {}, () =>
   }),
 ).pipe(Command.withDescription("List every Workflow, with its Inputs and the Layer it came from"));
 
-/** Every id a saved module answers for, whether it loaded or refused its own file. */
-const claimedIds = (saved: Catalogued): ReadonlySet<string> =>
+const claimedIds = (saved: Catalogued) =>
   new Set(Arr.map([...saved.entries, ...saved.problems], (one) => one.id));
 
-/** Where the modules an author writes are saved, by Layer. */
-const moduleDir = (env: PluginEnv, layer: EntryLayer): string =>
+const moduleDir = (env: PluginEnv, layer: EntryLayer) =>
   Option.getOrUndefined(
     Arr.findFirst(
       searchPath({ pluginRoot: env.pluginRoot, userDir: env.userDir, project: env.cwd }),
@@ -70,8 +63,7 @@ const moduleDir = (env: PluginEnv, layer: EntryLayer): string =>
     ),
   )!.dir;
 
-/** One module as a human reads it: what it takes, what it gives back, and where it is. */
-function describeForHuman(one: Described): string {
+function describeForHuman(one: Described) {
   return Arr.join(
     [
       one.title,
@@ -79,8 +71,6 @@ function describeForHuman(one: Described): string {
       `Inputs: ${asJson(one.inputs)}`,
       "Host options — never this module's inputs, and always available:",
       ...Arr.map(one.options, (option) =>
-        // `branch` decides which checkout the run gets, so its resolution order is the
-        // whole of what an operator needs; the rest are one sentence each.
         option.name === "branch" ? BRANCH_HELP : `  ${option.name}: ${option.meaning}`,
       ),
       `Result: ${asJson(one.success.schema)}`,
@@ -97,8 +87,7 @@ function describeForHuman(one: Described): string {
 const asJson = (value: Schema.Json) =>
   flow(Schema.encodeResult(UnknownJson), Result.getOrThrow)(value);
 
-/** Where a drawing says less than the module does. The schema itself still holds. */
-const limitLines = (one: Described): ReadonlyArray<string> =>
+const limitLines = (one: Described) =>
   one.success.limits.length + one.error.limits.length === 0
     ? []
     : [
@@ -106,11 +95,6 @@ const limitLines = (one: Described): ReadonlyArray<string> =>
         ...Arr.map([...one.success.limits, ...one.error.limits], (limit) => `  ${limit}`),
       ];
 
-/**
- * What `branch` is, wherever a mutating Workflow's Inputs are listed. Its resolution
- * order rather than a definition, because the order is the whole of it: an operator
- * reading this needs to know when their `--input branch=` is the one that decides.
- */
 const BRANCH_HELP = Arr.join(
   [
     "  branch: which branch this run works on, and so which checkout it gets.",
@@ -124,11 +108,7 @@ const BRANCH_HELP = Arr.join(
   "\n",
 );
 
-/**
- * One module as `check` reports it. Not typechecked is said out loud: silence there
- * would read as a module the compiler was happy with, and nothing compiled it.
- */
-function moduleReport(item: ModuleCheck): string {
+function moduleReport(item: ModuleCheck) {
   return Arr.join(
     [
       `${item.id}\t${item.layer}\t${
@@ -145,8 +125,7 @@ function moduleReport(item: ModuleCheck): string {
   );
 }
 
-/** Why nothing in a directory was typechecked, once per directory rather than per module. */
-const toolchainNotes = (modules: ReadonlyArray<ModuleCheck>): ReadonlyArray<string> =>
+const toolchainNotes = (modules: ReadonlyArray<ModuleCheck>) =>
   Arr.map(
     [
       ...new Set(
@@ -173,25 +152,25 @@ const workflowCheck = Command.make(
       yield* attempt(
         Effect.gen(function* () {
           const resolved = yield* discoveryContext(global);
-          if (resolved._tag === "ContextFailure") return resolved.result;
+          if (resolved._tag === "ContextFailure") {
+            return resolved.result;
+          }
           const saved = yield* savedModules(resolved.env);
           const claimed = claimedIds(saved);
           const named = Option.isSome(workflow) ? workflow.value : null;
           if (named !== null && !claimed.has(named)) {
             return err("workflow_not_found", `Workflow "${named}" was not found.`);
           }
-          // Each on its own: a module that will not load, will not construct or will not
-          // typecheck says so without a Run, an agent or a worktree.
-          const modules = yield* Effect.forEach(
-            Arr.filter(
-              [...saved.entries, ...saved.problems],
-              (one) => named === null || one.id === named,
+          const modules = yield* checkModules(
+            Arr.map(
+              Arr.filter(
+                [...saved.entries, ...saved.problems],
+                (one) => named === null || one.id === named,
+              ),
+              (one) => ({ layer: one.layer, path: one.path }),
             ),
-            (one) => checkModule({ layer: one.layer, path: one.path }),
-            // Each typecheck is its own compiler process, and they share nothing.
-            { concurrency: 4 },
           );
-          // The host keeps each layer's revision for its listings, and reads them again now.
+          // WARNING: the host re-reads each layer's revision only when told.
           yield* tellHost(resolved.env.stateDir, [
             ...new Set(Arr.map([...saved.entries, ...saved.problems], (one) => one.path)),
           ]);
@@ -204,9 +183,6 @@ const workflowCheck = Command.make(
             "\n",
           );
 
-          // The report goes in the message, not only in the details: a failing
-          // envelope prints its message and nothing else for a human, and what is
-          // wrong with which workflow is the whole reason to run this.
           return bad === 0
             ? { ok: true, data: { workflows: modules }, human: report }
             : err("operation_failed", `${bad} workflow(s) are not runnable.\n${report}`, {
@@ -229,9 +205,9 @@ const workflowShow = Command.make(
       yield* attempt(
         Effect.gen(function* () {
           const resolved = yield* discoveryContext(global);
-          if (resolved._tag === "ContextFailure") return resolved.result;
-          // What this id runs, which is the module where one is saved for it. A broken
-          // override is a file to fix, never a fall-through to the definition below it.
+          if (resolved._tag === "ContextFailure") {
+            return resolved.result;
+          }
           const saved = yield* savedModules(resolved.env);
           const module = Option.getOrUndefined(
             Arr.findFirst(saved.entries, (one) => one.id === workflow),
@@ -262,7 +238,6 @@ const workflowShow = Command.make(
   Command.withDescription("Show one Workflow: what it takes, what it gives back, where it is"),
 );
 
-/** Forking a module: a file that imports what it keeps. */
 const forkModule = Effect.fn("Workflow.forkModule")(function* (
   env: PluginEnv,
   options: {
@@ -272,7 +247,9 @@ const forkModule = Effect.fn("Workflow.forkModule")(function* (
   },
 ) {
   const refused = notAnId(options.id);
-  if (refused) return refused;
+  if (refused) {
+    return refused;
+  }
   const entry = yield* loadEntry(options.from.path).pipe(Effect.result);
   if (entry._tag === "Failure") {
     return err("operation_failed", `${options.from.path}: ${entry.failure.message}`);
@@ -285,15 +262,15 @@ const forkModule = Effect.fn("Workflow.forkModule")(function* (
   return asWritten(written, `Forked ${options.from.id} to`);
 });
 
-/** Why this is not a name a module may claim, or null. A file is written only for a name. */
 const notAnId = (id: string) =>
   isWorkflowId(id)
     ? null
     : err("invalid_input", `"${id}" is not a workflow id: lower case, digits and dashes.`);
 
-/** What writing a module came to, as one envelope: the path, and any toolchain it lacks. */
 const asWritten = (written: Written, did: string) => {
-  if (!written.ok) return err("target_exists", written.message, { path: written.path });
+  if (!written.ok) {
+    return err("target_exists", written.message, { path: written.path });
+  }
   const note =
     written.toolchain === null
       ? ""
@@ -321,9 +298,13 @@ const workflowCreate = Command.make(
     mutating("workflow-create", request, (env) =>
       Effect.gen(function* () {
         const refused = notAnId(workflow);
-        if (refused) return refused;
+        if (refused) {
+          return refused;
+        }
         const written = yield* createEntry({ dir: moduleDir(env, layer), id: workflow });
-        if (written.ok) yield* tellHost(env.stateDir, [written.path]);
+        if (written.ok) {
+          yield* tellHost(env.stateDir, [written.path]);
+        }
         return asWritten(written, "Wrote");
       }),
     ),
@@ -349,11 +330,11 @@ const workflowFork = Command.make(
       yield* attempt(
         Effect.gen(function* () {
           const base = yield* context(global, false);
-          if (base._tag === "ContextFailure") return base.result;
+          if (base._tag === "ContextFailure") {
+            return base.result;
+          }
           return yield* mutation(base.env, "workflow-fork", request, (_id) =>
             Effect.gen(function* () {
-              // A module is saved beside the project rather than in a Layer a workspace
-              // resolves, so forking one asks for no workspace at all.
               const module = Option.getOrUndefined(
                 Arr.findFirst(
                   (yield* savedModules(base.env)).entries,

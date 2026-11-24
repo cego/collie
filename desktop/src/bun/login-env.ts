@@ -1,7 +1,8 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { homedir } from "node:os";
-import { Config, type Duration, Effect, Option, Path } from "effect";
+import { Config, Effect, Option, Path } from "effect";
+import type { Duration } from "effect";
 import { withoutHerdrOne, withoutLauncher } from "../../../src/env";
 
 const BIN = Effect.runSync(
@@ -14,42 +15,43 @@ const BIN = Effect.runSync(
 const BEGIN = "<<collie-env-begin-7f3a9c>>";
 const END = "<<collie-env-end-7f3a9c>>";
 
-/** How long the shell gets to start, rc files included. */
 const LIMIT = "5 seconds";
 
-/** The variables between the markers, `env -0` output; whatever the rc files printed around them is ignored. */
+// WARNING: rc files print around the markers; only what lies between them is read.
 export const parseLoginEnv = (output: string) => {
   const start = Option.getOrElse(pipe_(output, Str.indexOf(BEGIN)), () => -1);
   const found = new Map<string, string>();
-  if (start < 0) return found;
+  if (start < 0) {
+    return found;
+  }
   const remaining = pipe_(output, Str.slice(start + BEGIN.length));
   const end = Option.getOrElse(pipe_(remaining, Str.indexOf(END)), () => -1);
-  if (end < 0) return found;
+  if (end < 0) {
+    return found;
+  }
   for (const entry of Str.split(pipe_(remaining, Str.slice(0, end)), "\0")) {
     const eq = Option.getOrElse(pipe_(entry, Str.indexOf("=")), () => -1);
-    if (eq > 0)
+    if (eq > 0) {
       found.set(
         pipe_(entry, Str.slice(0, eq), Str.replace(/^\n/, "")),
         pipe_(entry, Str.slice(eq + 1)),
       );
+    }
   }
   return found;
 };
 
-/** Where children start: Desktop's own folder goes when an update replaces it. */
 export const CHILD_CWD = homedir();
 
-/** Gives children the cleaned environment; Bun otherwise ignores changes made since it started. */
+// WARNING: Bun ignores environment changes made after it started, so children get a copy.
 export const childEnv = () => withoutLauncher(withoutHerdrOne(desktopEnv()), BIN);
 
-// Children inherit the process environment, not an Effect Config.
-// oxlint-disable-next-line effecttsgo/process-env
+// WARNING: children inherit the process environment, not an Effect Config.
 const desktopEnv = () => process.env;
 
-/** Where a bare command is found on `childEnv`'s PATH; Bun's own lookup uses the PATH it started with. */
+// WARNING: Bun's own lookup uses the PATH it started with.
 export const which = (command: string) => Bun.which(command, { PATH: childEnv().PATH });
 
-/** The variables `shell -ilc` exports; empty where it fails, prints none, or outlasts `limit`. */
 export const readLoginEnv = (shell: string, limit: Duration.Input = LIMIT) =>
   Effect.gen(function* () {
     const child = Bun.spawn(
@@ -76,13 +78,10 @@ export const readLoginEnv = (shell: string, limit: Duration.Input = LIMIT) =>
     ),
   );
 
-/** What an SSH agent socket has: keys, none, no agent answering, or nothing could ask it. */
 export type AgentState = "holds" | "empty" | "gone" | "unknown";
 
-/** How long `ssh-add -l` gets to answer for one agent. */
 const AGENT_LIMIT = "2 seconds";
 
-/** What the agent at `socket` has, as `ssh-add -l` says by its exit: 0 keys, 1 none, 2 no agent. */
 export const agentState = (
   socket: string,
   sshAdd = "ssh-add",
@@ -102,7 +101,9 @@ export const agentState = (
       Effect.timeoutOption(limit),
       Effect.ensuring(Effect.sync(() => child.kill())),
     );
-    if (Option.isNone(code)) return "unknown" as const;
+    if (Option.isNone(code)) {
+      return "unknown" as const;
+    }
     return code.value === 0
       ? "holds"
       : code.value === 1
@@ -110,32 +111,38 @@ export const agentState = (
         : code.value === 2
           ? "gone"
           : "unknown";
-  }).pipe(Effect.orElseSucceed((): AgentState => "unknown"));
+  }).pipe(
+    Effect.orElseSucceed(() => {
+      const returned: AgentState = "unknown";
+      return returned;
+    }),
+  );
 
-/**
- * Whether the login shell's SSH agent replaces the one Desktop was started with. An rc file
- * may start an agent of its own, such as keychain's, that holds a key only once a terminal has
- * asked for its passphrase; Desktop's SSH has no terminal to ask in, so the agent that holds
- * keys wins, the login shell's first, and where neither does, one that answers.
- */
+// WARNING: an rc file's agent may hold a key only after a terminal asks, so the agent holding keys wins.
 export const takesLoginAgent = Effect.fn("Desktop.takesLoginAgent")(function* (
   session: string | undefined,
   login: string | undefined,
   stateOf: (socket: string) => Effect.Effect<AgentState>,
 ) {
-  if (login === undefined || session === undefined || login === session) return true;
+  if (login === undefined || session === undefined || login === session) {
+    return true;
+  }
   const theirs = yield* stateOf(login);
-  if (theirs === "holds") return true;
+  if (theirs === "holds") {
+    return true;
+  }
   const ours = yield* stateOf(session);
-  if (ours === "holds") return false;
-  if (theirs === "empty") return true;
+  if (ours === "holds") {
+    return false;
+  }
+  if (theirs === "empty") {
+    return true;
+  }
   return ours !== "empty";
 });
 
-/** The variables that name an SSH agent, which are taken or kept together. */
-const AGENT_VARIABLES = ["SSH_AUTH_SOCK", "SSH_AGENT_PID"];
+const AGENT_VARIABLES = new Set(["SSH_AUTH_SOCK", "SSH_AGENT_PID"]);
 
-/** Merges the interactive login environment into Desktop's; true where it was taken. */
 export const takeLoginEnv = Effect.gen(function* () {
   const shell = yield* Config.String("SHELL").pipe(
     Config.withDefault(process.platform === "darwin" ? "/bin/zsh" : "/bin/sh"),
@@ -149,16 +156,20 @@ export const takeLoginEnv = Effect.gen(function* () {
   const session = env.SSH_AUTH_SOCK;
   const login = taken.get("SSH_AUTH_SOCK");
   const keepsAgent = !(yield* takesLoginAgent(session, login, (socket) => agentState(socket)));
-  if (keepsAgent)
+  if (keepsAgent) {
     yield* Effect.logInfo(
       `Keeping the SSH agent at ${session}: the login shell's at ${login} holds no keys`,
     );
-  for (const [name, value] of taken)
-    if (!(keepsAgent && AGENT_VARIABLES.includes(name))) env[name] = value;
+  }
+  for (const [name, value] of taken) {
+    if (!(keepsAgent && AGENT_VARIABLES.has(name))) {
+      env[name] = value;
+    }
+  }
   return true;
 }).pipe(Effect.orElseSucceed(() => false));
 
-/** A plain shell preserves the resolved PATH; login profiles may reset it. */
+// WARNING: a plain shell preserves the resolved PATH; login profiles may reset it.
 export const localShell = (tookLoginEnv: boolean) =>
   tookLoginEnv
     ? Config.succeed(["/bin/sh", "-c"])

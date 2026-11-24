@@ -1,17 +1,15 @@
-// A command a test runs to its end. Never with `Bun.spawnSync`: under load it can lose its
-// child's exit and spin the worker forever (oven-sh/bun#34069), so every later test in that
-// worker times out.
-
+// WARNING: Never Bun.spawnSync: under load it can lose the child's exit and spin the worker forever (oven-sh/bun#34069).
 import * as Str from "effect/String";
 import { Effect } from "effect";
 
 const signal = (child: Bun.Subprocess, name: NodeJS.Signals) => {
   try {
-    if (process.platform === "win32") child.kill(name);
-    else process.kill(-child.pid, name);
-  } catch {
-    // The process group exited already.
-  }
+    if (process.platform === "win32") {
+      child.kill(name);
+    } else {
+      process.kill(-child.pid, name);
+    }
+  } catch {}
 };
 
 const terminate = Effect.fn("test.command.terminate")(function* (child: Bun.Subprocess) {
@@ -25,7 +23,7 @@ const terminate = Effect.fn("test.command.terminate")(function* (child: Bun.Subp
         ),
     }),
   );
-  // A fixture's descendants must not outlive their leader, even if they ignore SIGTERM.
+  // WARNING: Descendants may ignore SIGTERM, so the group is SIGKILLed and must not outlive its leader.
   signal(child, "SIGKILL");
 });
 
@@ -38,7 +36,6 @@ export interface Ran {
 export interface ExecOptions {
   readonly cwd?: string;
   readonly stdin?: Uint8Array;
-  /** Replaces the test's environment; without it the command inherits that. */
   readonly env?: Readonly<Record<string, string | undefined>>;
 }
 
@@ -65,17 +62,16 @@ export const exec = Effect.fn("test.exec")(
       ],
       { concurrency: "unbounded" },
     );
-    if (handle.signalCode !== null) throw new Error(`command ended by ${handle.signalCode}`);
+    if (handle.signalCode !== null) {
+      throw new Error(`command ended by ${handle.signalCode}`);
+    }
     return { exitCode: Number(exitCode), stdout, stderr } satisfies Ran;
   },
   Effect.scoped,
   Effect.orDie,
 );
 
-/**
- * Starts `argv` as nobody's child, in a session of its own, and gives back its pid once it
- * leads that session: `exec` ends the whole group its command leaves behind.
- */
+// WARNING: exec ends the whole process group a command leaves, so a detached command must lead its own session.
 export const startDetached = (argv: ReadonlyArray<string>) =>
   exec([
     "sh",

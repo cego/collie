@@ -1,13 +1,11 @@
-// The live probe's verdict is only as good as how it reads a reviewer's findings against
-// the fixture's key: these pin that reading, so the probe can be trusted when it is red.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
-import { journal, outsideAnyRun, readKey, scored, type KeyItem } from "../tools/tautology-probe";
+import { journal, outsideAnyRun, readKey, scored } from "../tools/tautology-probe";
+import type { KeyItem } from "../tools/tautology-probe";
 import { runEffect } from "./support/effect";
 
 const restated: KeyItem = {
@@ -83,11 +81,12 @@ test("each honest test in the fixture has a check seen failing on an earlier tre
         (item) => item.id,
       );
       expect(honestTests).toHaveLength(4);
-      for (const id of honestTests)
+      for (const id of honestTests) {
         expect(
           Option.getOrUndefined(
             Arr.findFirst(checks, (line) => pipe(line, Str.startsWith(`- ${id}: pass`))),
           ),
         ).toEndWith("on this tree, at 2026-10-21T00:00:00Z; seen failing on an earlier tree");
+      }
     }),
   ));

@@ -1,15 +1,11 @@
-// The human's Standing direction as every chat is given it: one wording, so no chat says it differently.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 
 export interface StandingDirection {
   readonly text: string;
-  /** When it was last edited, as an ISO time. */
   readonly at: string;
 }
 
-/** The block a chat's message carries, or undefined while the direction is empty. */
 export const standingDirectionContext = (direction: StandingDirection | undefined) => {
   const text = direction === undefined ? "" : Str.trim(direction.text);
   return direction === undefined || text === ""

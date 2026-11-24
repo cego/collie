@@ -1,6 +1,3 @@
-// Why a Run parked, from one closed list, and what each cause lets the host do about it
-// (ADR-draft-a-run-recovers-where-it-parks).
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { Schema, pipe } from "effect";
@@ -32,14 +29,12 @@ export type ParkCause = typeof ParkCause.Type;
 export const ParkKind = Schema.Literals(["asks-agent", "rechecks", "needs-you"]);
 export type ParkKind = typeof ParkKind.Type;
 
-/** A park as a reader shows it. */
 export const Park = Schema.Struct({
   cause: ParkCause,
   kind: ParkKind,
   id: Schema.optionalKey(Schema.String),
   since: Schema.optionalKey(Schema.String),
   history: Schema.optionalKey(Schema.Array(Schema.String)),
-  /** The Heal Run working on this park, while one is. */
   healing: Schema.optionalKey(Schema.String),
 });
 export type Park = typeof Park.Type;
@@ -100,18 +95,16 @@ export const PARK_CAUSES: Readonly<Record<ParkCause, Entry>> = {
   unknown: { kind: "needs-you", reason: "nothing names why it parked" },
 };
 
-export const parkOf = (cause: ParkCause): Park => ({ cause, kind: PARK_CAUSES[cause].kind });
+export const parkOf = (cause: ParkCause) => ({ cause, kind: PARK_CAUSES[cause].kind });
 
-/** A park's text with the times, ids and counts that differ between two tellings removed. */
 export const parkText = (text: string) =>
   pipe(
     text,
-    Str.replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z?/g, "<time>"),
-    Str.replace(/\b(?=[0-9a-f-]*\d)[0-9a-f]{7,}(?:-[0-9a-f]+)*\b/gi, "<id>"),
-    Str.replace(/\d+/g, "<n>"),
+    Str.replaceAll(/\d{4}-\d{2}-\d{2}T[\d:.]+Z?/g, "<time>"),
+    Str.replaceAll(/\b(?=[0-9a-f-]*\d)[0-9a-f]{7,}(?:-[0-9a-f]+)*\b/gi, "<id>"),
+    Str.replaceAll(/\d+/g, "<n>"),
   );
 
-/** The same Run parked for the same cause on the same evidence is the same park. */
 export const parkIdentity = (run: string, cause: ParkCause, evidence: ReadonlyArray<string>) =>
   `${cause}-${Bun.hash(Arr.join([run, cause, ...evidence], "\u0000")).toString(16)}`;
 
@@ -121,15 +114,10 @@ const healLines = (ids: ReadonlyArray<string>, recoveries: ReadonlyArray<Metric>
     (line) => line.action === "healed" && line.park !== undefined && ids.includes(line.park),
   );
 
-/** The nth Heal a park's next one would be: a claim and its close are one Heal. */
 export const healNth = (park: string, recoveries: ReadonlyArray<Metric>) =>
   new Set(Arr.map(healLines([park], recoveries), (line) => line.recoveryId ?? line.at)).size + 1;
 
-/**
- * Whether a park is owed a Heal: none that did not end skipped was claimed for it, or the last
- * one said it could not establish the cause. `ids` is the park's identity and any it had before
- * identities were derived.
- */
+// WARNING: ids also carries a park's identities from before they were derived.
 export const healOwed = (ids: ReadonlyArray<string>, recoveries: ReadonlyArray<Metric>) => {
   const lines = healLines(ids, recoveries);
   const skipped = new Set(
@@ -150,14 +138,13 @@ export const healOwed = (ids: ReadonlyArray<string>, recoveries: ReadonlyArray<M
 export const recoveryLine = (line: Metric) =>
   `${line.at}: ${line.action} ${line.outcome} — ${line.note}`;
 
-/** A Heal claimed or started and not yet judged. */
 export const healInFlight = (line: Metric) =>
   line.action === "healed" && (line.outcome === "claimed" || line.outcome === "started");
 
-export const parkWithRecovery = (park: Park, actions: ReadonlyArray<Metric>): Park => {
+export const parkWithRecovery = (park: Park, actions: ReadonlyArray<Metric>) => {
   const same = Arr.filter(actions, (line) => line.cause === park.cause);
   const tries = Arr.filter(same, (line) => line.action === "resumed" && line.outcome !== "skipped");
-  // Tries before this park began, which a park entered again as the same park can follow.
+  // WARNING: tries before this park began still count when the same park is entered again.
   const exhausted =
     tries.length >= 3 &&
     Arr.every(
@@ -192,7 +179,7 @@ const KIND_SAID: Readonly<Record<ParkKind, string>> = {
   "needs-you": "needs you",
 };
 
-export const parkLine = (park: Park): string =>
+export const parkLine = (park: Park) =>
   park.healing === undefined
     ? `Parked: ${park.cause} · ${KIND_SAID[park.kind]}`
     : `Parked: ${park.cause} · being healed by ${park.healing}`;

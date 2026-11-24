@@ -1,26 +1,26 @@
-// `run metrics --compare … --against …`, as the CLI and `collie_run` both ask it: each named
-// Run's records read from the host that has it, then compared.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { Effect } from "effect";
-import { asksRun, type Door } from "./lifecycle";
-import { err, type Failure } from "./operations";
+import { asksRun } from "./lifecycle";
+import type { Door } from "./lifecycle";
+import { err } from "./operations";
+import type { Failure } from "./operations";
 import type { PluginEnv } from "./env";
-import { compareSets, type Comparison, type Labelled, type Planted } from "./trial-model";
+import { compareSets } from "./trial-model";
+import type { Comparison, Labelled, Planted } from "./trial-model";
 
 export interface TrialAsk {
-  /** `<run>` or `<run>=<case>`. */
   readonly compare: ReadonlyArray<string>;
   readonly against: ReadonlyArray<string>;
-  /** `<run>=<review-run>`. */
   readonly audit: ReadonlyArray<string>;
-  /** `<case>=<file>:<line>`. */
   readonly plant: ReadonlyArray<string>;
 }
 
-const cut = (spec: string, at: Option.Option<number>): readonly [string, string | null] =>
+const cut: (spec: string, at: Option.Option<number>) => readonly [string, string | null] = (
+  spec,
+  at,
+) =>
   Option.match(
     Option.filter(at, (index) => index > 0),
     {
@@ -38,16 +38,18 @@ export const compareRuns = Effect.fn("Trial.compare")(function* (
   const audits = new Map<string, string>();
   for (const spec of ask.audit) {
     const [run, review] = named(spec);
-    if (review === null || review === "")
+    if (review === null || review === "") {
       return err("invalid_input", `--audit takes <run>=<review-run>, not "${spec}"`);
+    }
     audits.set(run, review);
   }
   const planted: Record<string, Planted> = {};
   for (const spec of ask.plant) {
     const [label, at] = named(spec);
     const [file, line] = at === null ? [null, null] : cut(at, Str.lastIndexOf(":")(at));
-    if (file === null || line === null || !/^\d+$/.test(line))
+    if (file === null || line === null || !/^\d+$/.test(line)) {
       return err("invalid_input", `--plant takes <case>=<file>:<line>, not "${spec}"`);
+    }
     planted[label] = { file, line: Number(line) };
   }
   const read = (runId: string) =>
@@ -67,10 +69,14 @@ export const compareRuns = Effect.fn("Trial.compare")(function* (
       Effect.gen(function* () {
         const [runId, label] = named(spec);
         const got = yield* read(runId);
-        if (!got.ok) return got;
+        if (!got.ok) {
+          return got;
+        }
         const audit = audits.get(runId);
         const audited = audit === undefined ? null : yield* read(audit);
-        if (audited !== null && !audited.ok) return audited;
+        if (audited !== null && !audited.ok) {
+          return audited;
+        }
         const labelled: Labelled = {
           case: label === "" ? null : label,
           run: {
@@ -86,7 +92,9 @@ export const compareRuns = Effect.fn("Trial.compare")(function* (
     );
   const sides = { compare: yield* sideOf(ask.compare), against: yield* sideOf(ask.against) };
   const failed = Arr.findFirst([...sides.compare, ...sides.against], (one) => !one.ok);
-  if (failed._tag === "Some" && !failed.value.ok) return failed.value satisfies Failure;
+  if (failed._tag === "Some" && !failed.value.ok) {
+    return failed.value satisfies Failure;
+  }
   const labelled = (side: typeof sides.compare) =>
     Arr.flatMap(side, (one) => (one.ok ? [one.value] : []));
   return {

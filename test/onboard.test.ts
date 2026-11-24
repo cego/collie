@@ -1,7 +1,3 @@
-// `collie onboard`: its step stream against scripted Machines. The release is placed from a
-// carried tree on disk; every installer and system tool that would reach the network or need
-// root is a stub on PATH.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -13,8 +9,10 @@ import { runEffect } from "./support/effect";
 import { FakeBin } from "./support/bin";
 import { readEnv } from "../src/env";
 import { eventText } from "../src/commands/onboard";
-import { onboard, type OnboardEvent, type OnboardOptions } from "../src/onboard";
-import { err, type OpResult } from "../src/operations";
+import { onboard } from "../src/onboard";
+import type { OnboardEvent, OnboardOptions } from "../src/onboard";
+import { err } from "../src/operations";
+import type { OpResult } from "../src/operations";
 import { writeConfigValue } from "../src/config";
 import manifest from "../package.json";
 
@@ -23,7 +21,7 @@ let root: string;
 let carried: { tree: string; runner: string };
 let bin: FakeBin;
 
-const git = (cwd: string, ...args: string[]) =>
+const git = (cwd: string, ...args: Array<string>) =>
   exec(["git", ...args], {
     cwd,
     env: {
@@ -42,7 +40,6 @@ const git = (cwd: string, ...args: string[]) =>
     ),
   );
 
-/** The release this runner carries, whose `prepare.sh` records each time it ran. */
 const carry = Effect.fn("test.carry")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const tree = `${home}/carried/release`;
@@ -64,7 +61,6 @@ const read = (file: string) =>
     fs.readFileString(file).pipe(Effect.orElseSucceed(() => "")),
   );
 
-/** An installer that leaves an executable named `name` in ~/.local/bin, as the real ones do. */
 const installer = (name: string, says = "") =>
   `mkdir -p "$HOME/.local/bin"
 cat > "$HOME/.local/bin/${name}" <<'END'
@@ -73,7 +69,6 @@ ${says}
 END
 chmod +x "$HOME/.local/bin/${name}"`;
 
-/** A Claude Code that is logged in. */
 const LOGGED_IN = `echo '{"loggedIn": true}'`;
 
 const READY: OpResult = { ok: true, data: { ready: true, checks: [] }, human: "ready" };
@@ -81,7 +76,6 @@ const READY: OpResult = { ok: true, data: { ready: true, checks: [] }, human: "r
 let doctorRan = 0;
 let doctoredAs: string | undefined;
 
-/** A Claude Code where its installer puts it, ahead of the stubs on PATH. */
 const claudeAt = (script: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -93,7 +87,7 @@ const claudeAt = (script: string) =>
 
 const GITLAB = "gitlab.cego.dk";
 
-/** Real glab writes auth status to stderr. */
+// WARNING: real glab writes auth status to stderr.
 const glab = (status: string, rest = "") =>
   bin.add(
     "glab",
@@ -103,10 +97,9 @@ const glab = (status: string, rest = "") =>
     esac`,
   );
 
-/** onboard against this Machine, collecting what it streamed. */
 const onboarded = (overrides: Record<string, string> = {}, options: Partial<OnboardOptions> = {}) =>
   Effect.gen(function* () {
-    const events: OnboardEvent[] = [];
+    const events: Array<OnboardEvent> = [];
     const env = readEnv({
       HOME: home,
       PATH: `${home}/stubs:/usr/bin:/bin`,
@@ -124,10 +117,10 @@ const onboarded = (overrides: Record<string, string> = {}, options: Partial<Onbo
     return { result, events };
   });
 
-const results = (events: OnboardEvent[]) =>
+const results = (events: Array<OnboardEvent>) =>
   Arr.flatMap(events, (event) => (event.event === "result" ? [event] : []));
 
-const statusOf = (events: OnboardEvent[], step: string) =>
+const statusOf = (events: Array<OnboardEvent>, step: string) =>
   Option.getOrUndefined(Arr.findFirst(results(events), (event) => event.step === step))?.status;
 
 beforeEach(() =>
@@ -148,9 +141,7 @@ beforeEach(() =>
           *) exit 22 ;;
         esac`,
       );
-      // No test reaches a real GitLab over SSH.
       yield* bin.add("ssh", `echo "Permission denied (publickey)." >&2; exit 255`);
-      // Logged in to GitLab, and pushing over HTTPS with that login.
       yield* glab(
         `echo "${GITLAB}"; echo "  ✓ Git operations for ${GITLAB} configured to use https protocol."`,
       );
@@ -175,7 +166,6 @@ test("a bare Machine gets Collie and Claude Code without installing Herdr", () =
       const { result, events } = yield* onboarded();
 
       expect(result).toMatchObject({ ok: true, data: { ready: true } });
-      // Every step streams a start and then its result.
       const steps = Arr.map(results(events), (event) => event.step);
       expect(steps).toEqual([
         "system",
@@ -205,14 +195,16 @@ test("a bare Machine gets Collie and Claude Code without installing Herdr", () =
       for (const step of ["collie", "claude", "path", "prepare", "doctor"]) {
         expect(statusOf(events, step)).toBe("done");
       }
-      for (const step of ["system", "claude-login", "gitlab", "push"])
+      for (const step of ["system", "claude-login", "gitlab", "push"]) {
         expect(statusOf(events, step)).toBe("in_place");
-      for (const step of ["helle", "linear"]) expect(statusOf(events, step)).toBe("skipped");
+      }
+      for (const step of ["helle", "linear"]) {
+        expect(statusOf(events, step)).toBe("skipped");
+      }
       expect(yield* read(`${root}/release/package.json`)).toContain(manifest.version);
       expect(yield* (yield* FileSystem.FileSystem).exists(`${root}/.git`)).toBe(false);
       expect(yield* read(`${home}/curl-calls`)).not.toContain("https://herdr.dev/install.sh");
       expect(yield* read(`${home}/curl-calls`)).toContain("https://claude.ai/install.sh");
-      // Once as the release is placed, and once more after the harness is installed.
       expect(yield* read(`${home}/prepared`)).toBe("ran\nran\n");
       expect(yield* read(`${home}/.bashrc`)).toContain(`export PATH="${home}/.local/bin:$PATH"`);
       expect(doctorRan).toBe(1);
@@ -282,7 +274,6 @@ test("missing git stops with the exact command to run as root, and changes nothi
     }),
   ));
 
-/** The system step on a Machine with `tools` on PATH and `manager` as its package manager. */
 const systemWith = Effect.fn("onboardTest.systemWith")(function* (
   tools: Record<string, string>,
   manager: string,
@@ -368,7 +359,7 @@ test("a development checkout gets the checks, and nothing installed or moved", (
 test("onboarded means doctor is ready", () =>
   runEffect(
     Effect.gen(function* () {
-      const events: OnboardEvent[] = [];
+      const events: Array<OnboardEvent> = [];
       const env = readEnv({
         HOME: home,
         PATH: `${home}/stubs:/usr/bin:/bin`,
@@ -614,7 +605,6 @@ esac`,
       expect(yield* read(`${home}/claude-calls`)).toContain(
         "mcp add --transport http --scope user linear-server https://mcp.linear.app/mcp",
       );
-      // In a terminal of its own: on macOS too, where `script` takes other flags.
       expect(yield* read(`${home}/claude-calls`)).toContain("mcp login linear-server\ntty\n");
       const human = Option.getOrElse(
         Arr.findFirstIndex(events, (event) => event.event === "human" && event.step === "linear"),
@@ -624,7 +614,7 @@ esac`,
         Arr.findFirstIndex(events, (event) => event.event === "result" && event.step === "linear"),
         () => -1,
       );
-      expect(events[human]).toMatchObject({ url, port: 62074 });
+      expect(events[human]).toMatchObject({ url, port: 62_074 });
       expect(human).toBeLessThan(end);
       expect(statusOf(events, "linear")).toBe("done");
     }),
@@ -650,7 +640,7 @@ esac`,
         events,
         (event) => event.event === "human" && event.step === "linear",
       );
-      expect(human.at(-1)).toMatchObject({ url: handed, port: 62074 });
+      expect(human.at(-1)).toMatchObject({ url: handed, port: 62_074 });
       expect(statusOf(events, "linear")).toBe("done");
     }),
   ));
@@ -685,7 +675,7 @@ esac`,
   ));
 
 test("Claude Code is asked whether it is logged in with the whole environment, not only what Collie reads", () => {
-  // On macOS its Keychain lookup needs USER, which `currentEnv` does not keep.
+  // WARNING: macOS Keychain lookup needs USER, which currentEnv does not keep.
   const user = Bun.env.USER;
   Bun.env.USER = "someone";
   return runEffect(
@@ -699,8 +689,11 @@ test("Claude Code is asked whether it is logged in with the whole environment, n
       expect(statusOf(events, "claude-login")).toBe("in_place");
     }),
   ).finally(() => {
-    if (user === undefined) delete Bun.env.USER;
-    else Bun.env.USER = user;
+    if (user === undefined) {
+      delete Bun.env.USER;
+    } else {
+      Bun.env.USER = user;
+    }
   });
 });
 
@@ -719,8 +712,11 @@ test("attended Linear login keeps the ambient environment and onboarding's overr
         (was) =>
           Effect.sync(() => {
             for (const [name, value] of Rec.toEntries(was)) {
-              if (value === undefined) delete Bun.env[name];
-              else Bun.env[name] = value;
+              if (value === undefined) {
+                delete Bun.env[name];
+              } else {
+                Bun.env[name] = value;
+              }
             }
           }),
       );

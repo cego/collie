@@ -1,6 +1,3 @@
-// What an agent on core is told it is: `collie` run in its terminal, with nothing but the
-// environment it was launched with, finds that agent and its Run, with no herdr pane to ask.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
@@ -28,79 +25,73 @@ const Logged = Schema.fromJsonString(
   }),
 );
 
-test(
-  "collie in an agent's core terminal, with only its launch environment, acts as that agent of its Run",
-  () =>
-    proves(
-      "collie-core-cli-",
-      (world, core) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const log = core.logPath;
-          const outputs = `${world.home}/outputs.json`;
-          yield* fs.writeFileString(outputs, `[{ "verdict": "done" }]`);
-          const start = yield* collie(world, ["run", "start", "attended", "--input", "work=x"]);
-          const { runId } = yield* Schema.decodeUnknownEffect(
-            Schema.Struct({ runId: Schema.String }),
-          )(start.envelope.data);
-          const host = yield* connect(world.state);
-          yield* until(
-            () => host.run({ runId }),
-            (view) => Arr.some(view?.waiting ?? [], (one) => one.answer === null),
-          );
-          const launch = Option.getOrThrow(
-            Arr.findFirst(
-              Arr.filterMap(Str.split(yield* fs.readFileString(log), "\n"), (line) =>
-                Schema.decodeResult(Logged)(line),
-              ),
-              // The host's board and chat are core terminals too, with no Run.
-              (call) => call.cmd === "terminal.run" && call.params?.labels?.run === runId,
+test("collie in an agent's core terminal, with only its launch environment, acts as that agent of its Run", () =>
+  proves(
+    "collie-core-cli-",
+    (world, core) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const log = core.logPath;
+        const outputs = `${world.home}/outputs.json`;
+        yield* fs.writeFileString(outputs, `[{ "verdict": "done" }]`);
+        const start = yield* collie(world, ["run", "start", "attended", "--input", "work=x"]);
+        const { runId } = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({ runId: Schema.String }),
+        )(start.envelope.data);
+        const host = yield* connect(world.state);
+        yield* until(
+          () => host.run({ runId }),
+          (view) => Arr.some(view?.waiting ?? [], (one) => one.answer === null),
+        );
+        const launch = Option.getOrThrow(
+          Arr.findFirst(
+            Arr.filterMap(Str.split(yield* fs.readFileString(log), "\n"), (line) =>
+              Schema.decodeResult(Logged)(line),
             ),
-          );
-          const agent = launch.params?.name ?? "";
-          const launchEnv = launch.params?.env ?? {};
+            (call) => call.cmd === "terminal.run" && call.params?.labels?.run === runId,
+          ),
+        );
+        const agent = launch.params?.name ?? "";
+        const launchEnv = launch.params?.env ?? {};
 
-          // The terminal's environment: core's own, which gives PATH and HOME, and the launch's.
-          const command = yield* collieCommand;
-          const child = Bun.spawn(
-            [
-              ...command,
-              "--json",
-              "run",
-              "steer",
-              runId,
-              "from its terminal",
-              "--request-id",
-              "from-terminal",
-            ],
-            {
-              cwd: world.project,
-              env: {
-                PATH: yield* Config.String("PATH"),
-                HOME: world.home,
-                ...(yield* suiteEnv),
-                ...launchEnv,
-              },
-              stdout: "pipe",
-              stderr: "pipe",
+        const command = yield* collieCommand;
+        const child = Bun.spawn(
+          [
+            ...command,
+            "--json",
+            "run",
+            "steer",
+            runId,
+            "from its terminal",
+            "--request-id",
+            "from-terminal",
+          ],
+          {
+            cwd: world.project,
+            env: {
+              PATH: yield* Config.String("PATH"),
+              HOME: world.home,
+              ...(yield* suiteEnv),
+              ...launchEnv,
             },
-          );
-          const said = yield* Effect.promise(() => new Response(child.stdout).text());
-          expect(yield* Effect.promise(() => child.exited)).toBe(0);
-          expect(said).toContain('"ok":true');
-          const trail = yield* hostRecords(
-            world.state,
-            readAudit(runDir(world.state, runId)).pipe(
-              Effect.provideService(FileSystem.FileSystem, yield* FileSystem.FileSystem),
-            ),
-          );
-          expect(
-            Option.getOrUndefined(Arr.findFirst(trail, (line) => line.request === "from-terminal"))
-              ?.actor,
-          ).toMatchObject({ origin: "agent", from: { run: runId, agent } });
-          expect(pipe(agent, Str.startsWith(runId))).toBe(true);
-        }).pipe(Effect.orDie),
-      ["attended.workflow.ts"],
-    ),
-  180_000,
-);
+            stdout: "pipe",
+            stderr: "pipe",
+          },
+        );
+        const said = yield* Effect.promise(() => new Response(child.stdout).text());
+        expect(yield* Effect.promise(() => child.exited)).toBe(0);
+        expect(said).toContain('"ok":true');
+        const trail = yield* hostRecords(
+          world.state,
+          readAudit(runDir(world.state, runId)).pipe(
+            Effect.provideService(FileSystem.FileSystem, yield* FileSystem.FileSystem),
+          ),
+        );
+        expect(
+          Option.getOrUndefined(Arr.findFirst(trail, (line) => line.request === "from-terminal"))
+            ?.actor,
+        ).toMatchObject({ origin: "agent", from: { run: runId, agent } });
+        expect(pipe(agent, Str.startsWith(runId))).toBe(true);
+      }).pipe(Effect.orDie),
+    ["attended.workflow.ts"],
+  ));

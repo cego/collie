@@ -1,26 +1,14 @@
-// What a Run's agents spent, request by request, as each harness recorded it (pure).
-//
-// Every harness keeps its own record of a session: Claude a transcript, Codex a rollout of
-// events, Pi a session file, OpenCode what Collie's reporter writes of its events. Each is
-// read here into the same rows. A row is one provider request, known by its request or
-// message id, so a streamed record written several times, a resumed session that copies
-// its history and a second read of the same lines all fold into one: each field keeps the
-// largest value any copy reported. A category a harness does not report is null —
-// unavailable — and never 0.
-//
-// Usage is data (invariant 8): nothing here is a budget.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Option, Order, Schema } from "effect";
 import { epochMs } from "./time";
 import type { Metric } from "./metrics";
 
-/** A figure as the harness reported it, or null where it reports nothing of the kind. */
+// WARNING: null is a category the harness does not report, never 0.
 export const Count = Schema.NullOr(Schema.Finite);
 export type Count = typeof Count.Type;
 
-/** Output includes reasoning; uncached input excludes cache reads and cache creation. */
+// WARNING: output includes reasoning; input excludes cache reads and cache creation.
 const CategoryFields = {
   input: Count,
   cacheRead: Count,
@@ -30,7 +18,6 @@ const CategoryFields = {
 };
 type Categories = { readonly [K in keyof typeof CategoryFields]: Count };
 
-/** A session's first request, by component, in characters; null where it cannot be separated. */
 export const Startup = Schema.Struct({
   system: Count,
   persona: Count,
@@ -47,14 +34,11 @@ const Keys = {
   key: Schema.String,
   at: Schema.String,
   agent: Schema.String,
-  /** The harness's own session: with the agent, which incarnation of it this was. */
   session: Schema.String,
-  /** The session a sub-agent's work belongs to; null for the agent's own. */
   parent: Schema.NullOr(Schema.String),
   step: Schema.String,
 };
 
-/** One row of the ledger. */
 export const UsageEntry = Schema.Union([
   Schema.Struct({
     what: Schema.Literal("request"),
@@ -83,7 +67,6 @@ type SessionEntry = Extract<UsageEntry, { what: "session" }>;
 export const Format = Schema.Literals(["claude", "codex", "pi", "opencode"]);
 export type Format = typeof Format.Type;
 
-/** A file a harness keeps a conversation in; `parent` is set for a sub-agent's. */
 export const Source = Schema.Struct({
   path: Schema.String,
   format: Format,
@@ -111,21 +94,20 @@ export interface Event {
 export interface Reading {
   readonly requests: ReadonlyArray<Request>;
   readonly events: ReadonlyArray<Event>;
-  /** What each session's records show of its start-up, by session. */
   readonly startup: ReadonlyArray<{ readonly session: string; readonly startup: Partial<Startup> }>;
 }
 
-/** How Collie opens the reminder it sends a turn that ended without its Output. */
 export const REMINDER_OPENING = "Your turn ended without writing your Output.";
-/** How Collie opens the repair it sends an Output it could not use. */
 export const REPAIR_OPENING = "Your Output file is not usable:";
 
-const retryOf = (text: string): Happening | null =>
-  Str.includes(REMINDER_OPENING)(text)
+const retryOf = (text: string) => {
+  const returned: Happening | null = Str.includes(REMINDER_OPENING)(text)
     ? "reminder"
     : Str.includes(REPAIR_OPENING)(text)
       ? "repair"
       : null;
+  return returned;
+};
 
 const lines = (text: string) => Arr.filter(Str.split(text, "\n"), (line) => Str.trim(line) !== "");
 
@@ -134,8 +116,7 @@ const decodeText = Schema.decodeUnknownOption(
   Schema.Union([Schema.String, Schema.Array(TextBlock)]),
 );
 
-/** The characters of a content value: a string, or the text of each block. */
-const charsOf = (content: Schema.Json): number | null =>
+const charsOf: (content: Schema.Json) => number | null = (content) =>
   Option.match(decodeText(content), {
     onNone: () => null,
     onSome: (text) =>
@@ -144,7 +125,7 @@ const charsOf = (content: Schema.Json): number | null =>
         : Arr.reduce(text, 0, (sum, block) => sum + (block.text?.length ?? 0)),
   });
 
-const textOf = (content: Schema.Json): string =>
+const textOf = (content: Schema.Json) =>
   Option.match(decodeText(content), {
     onNone: () => "",
     onSome: (text) =>
@@ -202,20 +183,20 @@ const ToolResults = Schema.decodeUnknownOption(
   ),
 );
 
-/** A Claude transcript: the agent's own, or a sub-agent's file beside it. */
-function readClaude(text: string, source: Source): Reading {
-  const requests: Request[] = [];
-  const events: Event[] = [];
+const readClaude = (text: string, source: Source) => {
+  const requests: Array<Request> = [];
+  const events: Array<Event> = [];
   for (const line of lines(text)) {
     const decoded = ClaudeLine(line);
-    if (Option.isNone(decoded)) continue;
+    if (Option.isNone(decoded)) {
+      continue;
+    }
     const one = decoded.value;
     const session =
       source.parent === null
         ? (one.sessionId ?? stemOf(source.path))
         : (one.agentId ?? stemOf(source.path));
     const at = msOf(one.timestamp);
-    // A sub-agent's lines name the session that spawned it.
     const parent = source.parent === null ? null : (one.sessionId ?? source.parent);
     const usage = one.message?.usage;
     if (one.type === "assistant" && usage !== undefined && one.message?.model !== "<synthetic>") {
@@ -238,11 +219,15 @@ function readClaude(text: string, source: Source): Reading {
       events.push({ ...base, what: "compaction", key: one.uuid ?? line, chars: null });
       continue;
     }
-    if (one.type !== "user") continue;
+    if (one.type !== "user") {
+      continue;
+    }
     const content = one.message?.content;
     const results = Option.getOrElse(ToolResults(content), () => []);
     for (const result of results) {
-      if (result.type !== "tool_result") continue;
+      if (result.type !== "tool_result") {
+        continue;
+      }
       events.push({
         ...base,
         what: "tool",
@@ -251,10 +236,13 @@ function readClaude(text: string, source: Source): Reading {
       });
     }
     const retry = retryOf(textOf(content ?? ""));
-    if (retry !== null) events.push({ ...base, what: retry, key: one.uuid ?? line, chars: null });
+    if (retry !== null) {
+      events.push({ ...base, what: retry, key: one.uuid ?? line, chars: null });
+    }
   }
-  return { requests, events, startup: [] };
-}
+  const returned: Reading = { requests, events, startup: [] };
+  return returned;
+};
 
 const CodexLine = Schema.decodeUnknownOption(
   Schema.fromJsonString(
@@ -297,28 +285,28 @@ const InputText = Schema.decodeUnknownOption(
   Schema.Array(Schema.Struct({ type: Schema.String, text: Schema.optionalKey(Schema.String) })),
 );
 
-/**
- * A Codex rollout. Its `input_tokens` include the cached ones, and its output includes
- * reasoning; the system prompt, tool definitions and AGENTS.md are records of their own.
- */
-function readCodex(text: string, source: Source): Reading {
-  const requests: Request[] = [];
-  const events: Event[] = [];
+// WARNING: Codex's input_tokens include the cached ones, and its output includes reasoning.
+const readCodex = (text: string, source: Source) => {
+  const requests: Array<Request> = [];
+  const events: Array<Event> = [];
   const startup = new Map<string, Partial<Startup>>();
   let session = stemOf(source.path);
   const started = (patch: Partial<Startup>) =>
     startup.set(session, { ...startup.get(session), ...patch });
   for (const line of lines(text)) {
     const decoded = CodexLine(line);
-    if (Option.isNone(decoded)) continue;
+    if (Option.isNone(decoded)) {
+      continue;
+    }
     const one = decoded.value;
     const payload = one.payload;
     const at = msOf(one.timestamp);
     if (one.type === "session_meta") {
       session = payload?.id ?? session;
       const base = payload?.base_instructions;
-      if (base !== undefined && base !== null)
+      if (base !== undefined && base !== null) {
         started({ system: Str.isString(base) ? base.length : base.text.length });
+      }
       continue;
     }
     const base = { at, session, parent: source.parent };
@@ -349,7 +337,9 @@ function readCodex(text: string, source: Source): Reading {
       });
       continue;
     }
-    if (one.type !== "response_item" || payload === undefined) continue;
+    if (one.type !== "response_item" || payload === undefined) {
+      continue;
+    }
     if (payload.type === "additional_tools") {
       started({ tools: line.length });
     } else if (
@@ -370,23 +360,27 @@ function readCodex(text: string, source: Source): Reading {
         ),
         "\n",
       );
-      if (Str.startsWith(PROJECT_INSTRUCTIONS)(said)) started({ project: said.length });
+      if (Str.startsWith(PROJECT_INSTRUCTIONS)(said)) {
+        started({ project: said.length });
+      }
       const retry = retryOf(said);
-      if (retry !== null)
+      if (retry !== null) {
         events.push({
           ...base,
           what: retry,
           key: payload.id ?? `${one.timestamp}:${retry}`,
           chars: null,
         });
+      }
     }
   }
-  return {
+  const returned: Reading = {
     requests,
     events,
     startup: Arr.map([...startup], ([one, found]) => ({ session: one, startup: found })),
   };
-}
+  return returned;
+};
 
 const PiLine = Schema.decodeUnknownOption(
   Schema.fromJsonString(
@@ -416,18 +410,16 @@ const PiLine = Schema.decodeUnknownOption(
   ),
 );
 
-/**
- * A Pi session file, one per session. Its input excludes both caches, and its output
- * includes reasoning. A resumed or forked session copies entries, which keep their
- * response id.
- */
-function readPi(text: string, source: Source): Reading {
-  const requests: Request[] = [];
-  const events: Event[] = [];
+// WARNING: a resumed or forked Pi session copies entries, which keep their response id.
+const readPi = (text: string, source: Source) => {
+  const requests: Array<Request> = [];
+  const events: Array<Event> = [];
   const session = stemOf(source.path);
   for (const line of lines(text)) {
     const decoded = PiLine(line);
-    if (Option.isNone(decoded)) continue;
+    if (Option.isNone(decoded)) {
+      continue;
+    }
     const one = decoded.value;
     const base = { at: msOf(one.timestamp), session, parent: source.parent };
     if (one.type === "compaction") {
@@ -435,7 +427,9 @@ function readPi(text: string, source: Source): Reading {
       continue;
     }
     const message = one.message;
-    if (one.type !== "message" || message === undefined) continue;
+    if (one.type !== "message" || message === undefined) {
+      continue;
+    }
     if (message.role === "assistant" && message.usage !== undefined) {
       const usage = message.usage;
       requests.push({
@@ -457,11 +451,14 @@ function readPi(text: string, source: Source): Reading {
       });
     } else if (message.role === "user") {
       const retry = retryOf(textOf(message.content ?? ""));
-      if (retry !== null) events.push({ ...base, what: retry, key: one.id ?? line, chars: null });
+      if (retry !== null) {
+        events.push({ ...base, what: retry, key: one.id ?? line, chars: null });
+      }
     }
   }
-  return { requests, events, startup: [] };
-}
+  const returned: Reading = { requests, events, startup: [] };
+  return returned;
+};
 
 const OpenCodeLine = Schema.decodeUnknownOption(
   Schema.fromJsonString(
@@ -469,7 +466,6 @@ const OpenCodeLine = Schema.decodeUnknownOption(
       type: Schema.String,
       parent: Schema.optionalKey(Schema.NullOr(Schema.String)),
       role: Schema.optionalKey(Schema.String),
-      /** A completed tool part's output, in characters. */
       chars: Schema.optionalKey(Schema.Finite),
       info: Schema.optionalKey(
         Schema.Struct({
@@ -507,25 +503,27 @@ const OpenCodeLine = Schema.decodeUnknownOption(
   ),
 );
 
-/**
- * What Collie's OpenCode reporter wrote of the server's events. OpenCode's output leaves
- * reasoning out, so output here is the two added; a sub-agent's session names its parent.
- */
-function readOpenCode(text: string): Reading {
-  const requests: Request[] = [];
-  const events: Event[] = [];
+// WARNING: OpenCode's output leaves reasoning out, so output here is the two added.
+const readOpenCode = (text: string) => {
+  const requests: Array<Request> = [];
+  const events: Array<Event> = [];
   for (const line of lines(text)) {
     const decoded = OpenCodeLine(line);
-    if (Option.isNone(decoded)) continue;
+    if (Option.isNone(decoded)) {
+      continue;
+    }
     const one = decoded.value;
     const parent = one.parent ?? null;
     const info = one.info;
     if (one.type === "message" && info !== undefined && info.role === "assistant") {
       const base = { at: info.time?.created ?? Number.NaN, session: info.sessionID, parent };
-      if (info.summary === true || info.mode === "compaction")
+      if (info.summary === true || info.mode === "compaction") {
         events.push({ ...base, what: "compaction", key: info.id, chars: null });
+      }
       const tokens = info.tokens;
-      if (tokens === undefined || tokens === null) continue;
+      if (tokens === undefined || tokens === null) {
+        continue;
+      }
       const reasoning = tokens.reasoning ?? null;
       requests.push({
         ...base,
@@ -540,20 +538,24 @@ function readOpenCode(text: string): Reading {
       continue;
     }
     const part = one.part;
-    if (one.type !== "part" || part === undefined) continue;
+    if (one.type !== "part" || part === undefined) {
+      continue;
+    }
     const base = { at: Number.NaN, session: part.sessionID, parent };
-    if (part.type === "tool")
+    if (part.type === "tool") {
       events.push({ ...base, what: "tool", key: part.callID ?? part.id, chars: one.chars ?? null });
-    else if (part.type === "text" && one.role === "user") {
+    } else if (part.type === "text" && one.role === "user") {
       const retry = retryOf(part.text ?? "");
-      if (retry !== null) events.push({ ...base, what: retry, key: part.id, chars: null });
+      if (retry !== null) {
+        events.push({ ...base, what: retry, key: part.id, chars: null });
+      }
     }
   }
-  return { requests, events, startup: [] };
-}
+  const returned: Reading = { requests, events, startup: [] };
+  return returned;
+};
 
-/** One source's new lines, read by its harness's own reader. */
-export const readSource = (source: Source, text: string): Reading => {
+export const readSource = (source: Source, text: string) => {
   switch (source.format) {
     case "claude":
       return readClaude(text, source);
@@ -566,18 +568,17 @@ export const readSource = (source: Source, text: string): Reading => {
   }
 };
 
-/** Unavailable where either part is: a total of what was reported would read as the whole. */
-const plus = (a: Count, b: Count): Count => (a === null || b === null ? null : a + b);
-const larger = (a: Count, b: Count): Count => (a === null ? b : b === null ? a : Math.max(a, b));
+// WARNING: unavailable where either part is, since a total of what was reported would read as the whole.
+const plus: (a: Count, b: Count) => Count = (a, b) => (a === null || b === null ? null : a + b);
+const larger: (a: Count, b: Count) => Count = (a, b) =>
+  a === null ? b : b === null ? a : Math.max(a, b);
 
-/** One request's context: everything it was sent, cached or not, of what its harness reports. */
-export const contextOf = (one: Categories): Count =>
+export const contextOf: (one: Categories) => Count = (one) =>
   Arr.reduce([one.cacheRead, one.cacheCreation], one.input, (sum: Count, part) =>
     sum === null ? part : sum + (part ?? 0),
   );
 
-/** The largest each field any copy of a request reported, keeping where it was first seen. */
-const mergeRequest = (kept: RequestEntry, more: RequestEntry): RequestEntry => ({
+const mergeRequest: (kept: RequestEntry, more: RequestEntry) => RequestEntry = (kept, more) => ({
   ...kept,
   input: larger(kept.input, more.input),
   cacheRead: larger(kept.cacheRead, more.cacheRead),
@@ -598,8 +599,7 @@ export const happeningKey = (one: { readonly what: string; readonly key: string 
 export const sessionKey = (one: { readonly agent: string; readonly session: string }) =>
   `${one.agent}\u0000${one.session}`;
 
-/** The ledger as its rows fold: one request per id, one happening per id, one row per session. */
-export function ledgerOf(entries: ReadonlyArray<UsageEntry>): Ledger {
+export const ledgerOf = (entries: ReadonlyArray<UsageEntry>) => {
   const requests = new Map<string, RequestEntry>();
   const happenings = new Map<string, HappeningEntry>();
   const sessions = new Map<string, SessionEntry>();
@@ -621,18 +621,20 @@ export function ledgerOf(entries: ReadonlyArray<UsageEntry>): Ledger {
       );
     }
   }
-  return { requests, happenings, sessions };
-}
+  const returned: Ledger = { requests, happenings, sessions };
+  return returned;
+};
 
-/** Whether a newly read row adds anything to what the ledger already holds. */
-export function adds(ledger: Ledger, entry: UsageEntry): boolean {
+export const adds = (ledger: Ledger, entry: UsageEntry) => {
   if (entry.what === "session") {
     const kept = ledger.sessions.get(sessionKey(entry));
     return kept === undefined || (entry.recovery && !kept.recovery);
   }
   if (entry.what === "request") {
     const kept = ledger.requests.get(entry.key);
-    if (kept === undefined) return true;
+    if (kept === undefined) {
+      return true;
+    }
     const merged = mergeRequest(kept, entry);
     return Arr.some(
       ["input", "cacheRead", "cacheCreation", "output", "reasoning"] as const,
@@ -641,18 +643,14 @@ export function adds(ledger: Ledger, entry: UsageEntry): boolean {
   }
   const kept = ledger.happenings.get(happeningKey(entry));
   return kept === undefined || larger(kept.chars, entry.chars) !== kept.chars;
-}
+};
 
-/**
- * Whether a request was recovery: one in a Heal's session or a session opened by a repair,
- * or one its agent made in the same step after Collie sent a repair or an Output reminder.
- */
-export function recoveryOf(ledger: Ledger): (one: RequestEntry) => boolean {
+export const recoveryOf = (ledger: Ledger) => {
   const retries = Arr.filter(
     [...ledger.happenings.values()],
     (one) => one.parent === null && (one.what === "repair" || one.what === "reminder"),
   );
-  return (one) => {
+  const returned: (one: RequestEntry) => boolean = (one) => {
     const owner = sessionKey({ agent: one.agent, session: one.parent ?? one.session });
     return (
       ledger.sessions.get(owner)?.recovery === true ||
@@ -665,7 +663,8 @@ export function recoveryOf(ledger: Ledger): (one: RequestEntry) => boolean {
       )
     );
   };
-}
+  return returned;
+};
 
 export interface Tally extends Categories {
   readonly requests: number;
@@ -691,8 +690,7 @@ const ZERO: Tally = {
   reasoning: 0,
 };
 
-/** Nothing spent where `totals` knows the category, unavailable where it does not. */
-const noneOf = (totals: Tally): Tally => ({
+const noneOf: (totals: Tally) => Tally = (totals) => ({
   requests: 0,
   input: totals.input === null ? null : 0,
   cacheRead: totals.cacheRead === null ? null : 0,
@@ -701,7 +699,7 @@ const noneOf = (totals: Tally): Tally => ({
   reasoning: totals.reasoning === null ? null : 0,
 });
 
-const tally = (rows: ReadonlyArray<Categories>): Tally =>
+const tally: (rows: ReadonlyArray<Categories>) => Tally = (rows) =>
   rows.length === 0
     ? NOTHING
     : Arr.reduce(rows, ZERO, (sum, one) => ({
@@ -713,7 +711,7 @@ const tally = (rows: ReadonlyArray<Categories>): Tally =>
         reasoning: plus(sum.reasoning, one.reasoning),
       }));
 
-const sum = (a: Tally, b: Tally): Tally =>
+const sum: (a: Tally, b: Tally) => Tally = (a, b) =>
   a.requests === 0
     ? b
     : b.requests === 0
@@ -732,22 +730,20 @@ interface Parented {
   readonly parent: string | null;
 }
 
-/** Every Run started under `runId`, and those started under them. */
-export function descendantsOf(runs: ReadonlyArray<Parented>, runId: string): Array<string> {
-  return Arr.flatMap(
+export const descendantsOf: (runs: ReadonlyArray<Parented>, runId: string) => Array<string> = (
+  runs,
+  runId,
+) =>
+  Arr.flatMap(
     Arr.filter(runs, (one: Parented) => one.parent === runId),
     (one: Parented) => [one.runId, ...descendantsOf(runs, one.runId)],
   );
-}
 
-/**
- * A Run's usage with what its child Runs spent: each listed, and all added to its own. A
- * child whose usage could not be read (null) leaves every category of the total unavailable.
- */
-export const withChildren = (
+// WARNING: a child whose usage could not be read leaves every category of the total unavailable.
+export const withChildren: (
   own: Usage,
   children: ReadonlyArray<{ readonly runId: string; readonly usage: Usage | null }>,
-): Usage => ({
+) => Usage = (own, children) => ({
   ...own,
   children: Arr.map(children, ({ runId, usage }) =>
     usage === null ? { runId, ...NOTHING, unreadable: true } : { runId, ...usage.totals },
@@ -759,10 +755,11 @@ export const withChildren = (
       ),
 });
 
-/** Each value of `by` and what its requests spent, in the order first seen. */
 const grouped = (rows: ReadonlyArray<RequestEntry>, by: (one: RequestEntry) => string) => {
-  const groups = new Map<string, RequestEntry[]>();
-  for (const one of rows) groups.set(by(one), [...(groups.get(by(one)) ?? []), one]);
+  const groups = new Map<string, Array<RequestEntry>>();
+  for (const one of rows) {
+    groups.set(by(one), [...(groups.get(by(one)) ?? []), one]);
+  }
   return Arr.map([...groups], ([value, members]) => [value, tally(members)] as const);
 };
 
@@ -772,7 +769,6 @@ export interface SessionUsage extends Tally {
   readonly harness: string | null;
   readonly model: string | null;
   readonly effort: string | null;
-  /** A Heal's session, or one whose first prompt was a repair. */
   readonly recovery: boolean;
   readonly initialContext: Count;
   readonly peakContext: Count;
@@ -786,39 +782,35 @@ export interface SessionUsage extends Tally {
 
 export interface Usage {
   readonly totals: Tally;
-  /** What recovery spent: Heal and repair sessions, and each repair's and reminder's turn. */
   readonly recovery: Tally;
   readonly steps: ReadonlyArray<{ readonly step: string } & Tally>;
   readonly heads: ReadonlyArray<{ readonly head: string } & Tally>;
   readonly sessions: ReadonlyArray<SessionUsage>;
-  /** Each review round, with the context of the Run's last request before it started. */
   readonly rounds: ReadonlyArray<{
     readonly round: string;
     readonly at: string;
     readonly context: Count;
   }>;
-  /** Each Run this one started, and those started under them, by what they spent. */
   readonly children?: ReadonlyArray<{ readonly runId: string; readonly unreadable?: true } & Tally>;
-  /** `totals` with every child Run's added. */
   readonly withChildren?: Tally;
 }
 
 const byTime = <A extends { readonly at: string }>(rows: ReadonlyArray<A>) =>
   Arr.sortWith(rows, (one) => epochMs(one.at), Order.Number);
 
-/** A Run's usage as `run metrics` shows it, from its ledger and its metric lines' rounds. */
-export function usageOf(
-  entries: ReadonlyArray<UsageEntry>,
-  lines: ReadonlyArray<Metric> = [],
-): Usage {
+export const usageOf = (entries: ReadonlyArray<UsageEntry>, lines: ReadonlyArray<Metric> = []) => {
   const ledger = ledgerOf(entries);
   const requests = byTime([...ledger.requests.values()]);
   const happenings = [...ledger.happenings.values()];
   const own = Arr.filter(requests, (one) => one.parent === null);
   const keys = new Map<string, { readonly agent: string; readonly session: string }>();
-  for (const one of own) keys.set(sessionKey(one), { agent: one.agent, session: one.session });
-  for (const one of ledger.sessions.values()) keys.set(sessionKey(one), one);
-  const sessions = Arr.map([...keys.values()], (at): SessionUsage => {
+  for (const one of own) {
+    keys.set(sessionKey(one), { agent: one.agent, session: one.session });
+  }
+  for (const one of ledger.sessions.values()) {
+    keys.set(sessionKey(one), one);
+  }
+  const sessions = Arr.map([...keys.values()], (at) => {
     const mine = Arr.filter(own, (one) => sessionKey(one) === sessionKey(at));
     const happened = Arr.filter(
       happenings,
@@ -831,7 +823,7 @@ export function usageOf(
       first !== undefined &&
       Arr.some(happened, (one) => one.what === "repair" && epochMs(one.at) <= epochMs(first.at));
     const subs = Arr.filter(requests, (one) => one.parent === at.session && one.agent === at.agent);
-    return {
+    const returned: SessionUsage = {
       agent: at.agent,
       session: at.session,
       harness: first?.harness ?? recorded?.harness ?? null,
@@ -840,7 +832,7 @@ export function usageOf(
       recovery: (recorded?.recovery ?? false) || openedByRepair,
       ...tally(mine),
       initialContext: first === undefined ? null : contextOf(first),
-      peakContext: Arr.reduce(mine, NO_COUNT, (peak, one) => larger(peak, contextOf(one))),
+      peakContext: Arr.reduce(mine, NO_COUNT, (peak: Count, one) => larger(peak, contextOf(one))),
       compactions: count("compaction"),
       toolResultChars: Arr.reduce(
         Arr.filter(happened, (one) => one.what === "tool"),
@@ -858,6 +850,7 @@ export function usageOf(
         }),
       ),
     };
+    return returned;
   });
   const recovering = new Set(
     Arr.map(
@@ -884,7 +877,7 @@ export function usageOf(
       retried(one),
   );
   const totals = tally(requests);
-  return {
+  const returned: Usage = {
     totals,
     recovery: recoveries.length === 0 ? noneOf(totals) : tally(recoveries),
     steps: Arr.map(
@@ -901,7 +894,8 @@ export function usageOf(
     sessions,
     rounds,
   };
-}
+  return returned;
+};
 
 const said = (value: Count) => (value === null ? "unavailable" : String(value));
 
@@ -911,15 +905,19 @@ const tallyLine = (one: Tally) =>
 const startupLine = (startup: Startup) =>
   `start-up, in characters: system ${said(startup.system)}, persona ${said(startup.persona)}, project ${said(startup.project)}, tools ${said(startup.tools)}, skills ${said(startup.skills)}`;
 
-/** A Run's usage in the words `run metrics` and `collie_run` both print. */
-export function usageLines(usage: Usage): ReadonlyArray<string> {
+export const usageLines = (usage: Usage) => {
   if (
     usage.totals.requests === 0 &&
     usage.sessions.length === 0 &&
     (usage.children ?? []).length === 0
-  )
-    return [`rounds: ${usage.rounds.length}`, "tokens: nothing recorded"];
-  return [
+  ) {
+    const nothing: ReadonlyArray<string> = [
+      `rounds: ${usage.rounds.length}`,
+      "tokens: nothing recorded",
+    ];
+    return nothing;
+  }
+  const returned: ReadonlyArray<string> = [
     `rounds: ${usage.rounds.length}`,
     `tokens: ${tallyLine(usage.totals)}`,
     `  recovery: ${tallyLine(usage.recovery)}`,
@@ -941,4 +939,5 @@ export function usageLines(usage: Usage): ReadonlyArray<string> {
         ? ["tokens with child Runs: unavailable"]
         : [`tokens with child Runs: ${tallyLine(usage.withChildren)}`]),
   ];
-}
+  return returned;
+};

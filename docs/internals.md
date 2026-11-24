@@ -214,10 +214,12 @@ the relaunch records and the running checks' records are rows of `collie_control
 them, imported from and rolled back to the files an older build kept. A board build reads each
 journal, fact and activity it uses for all its Runs in one query.
 
-`patches/effect@4.1.4.patch` prevents a conditional SQL activity reset from replaying the
-interrupt that suspended it. The existing transaction protects the reply check and cleanup;
-a stale reset leaves newer replies and interrupts intact. Remove the patch only when an
-upstream release passes `test/effect-sql-reset.test.ts` and the release-set scenarios.
+Effect's own `clearReplies` guards a conditional SQL activity reset: it locks and checks the
+expected reply before it mutates, so a stale reset leaves the newer reply and the request
+state untouched, and a matching one deletes the replies with the interrupts that reply
+stamped. The interrupts that arrived after it are kept, so they reach the attempt that
+resumes rather than the one that parked. `test/effect-sql-reset.test.ts` and the release-set
+scenarios hold it.
 
 Once it answers, a starting host ends every check a previous host left running in its
 state directory: one with a running-check record in `host.db`, or a process marked with this
@@ -1594,7 +1596,7 @@ releases signed with the old key stop verifying.
 ### Numbering a branch's ADRs
 
 A new ADR on a branch has no number: it is `docs/adr/draft-<slug>.md`, and text names it
-`ADR-draft-<slug>`, whether a document, a code comment or a test. Two branches open at once
+`ADR-draft-<slug>`, whether a document or a test. Two branches open at once
 would otherwise both take the next number, and whichever lands second renumbers its ADR and
 every reference to it by hand.
 
@@ -1669,7 +1671,18 @@ fake.
 types' freshness (`rune-types:check`) in parallel, then tests after all four pass. Keeping those phases separate avoids CPU contention with the subprocess-heavy tests.
 The individual scripts in `package.json` still work for focused feedback.
 
-Lint enables Effect's correctness, effect-native, and strict presets. Effect findings
+Lint is `oxlint.config.ts`: the `@cloudflare/oxlint-config` preset spread in first, which
+brings nkzw's rules and its anti-slop `quality/*` rules, then Effect's correctness,
+effect-native and strict presets and landmines' recommended rules. The preset turns off
+oxlint's default `correctness` category, so the default rules it does not list are kept by
+name at their old `warn`. The vendored anti-slop plugin in `tools/oxlint/anti-slop/` stays
+for the six rules the preset has no counterpart for. A preset rule the code cannot pass is
+kept off in one of two lists, both re-applied by a last override for every file: `unfit`
+holds the ones that misread Effect or Solid, each with its reason, and `migrating` the
+ones still to fix. Give a preset rule options under the name the preset uses: oxlint
+folds `@typescript-eslint/x` and `typescript/x` onto one rule, and the preset's plain
+entry wins over options set under the other name. A TypeScript config needs Node.js
+22.18 or later to run oxlint; CI's Ubuntu image has it. Effect findings
 fail the check, including native collection helpers, synchronous schema decoders,
 untyped error channels, and resources started outside their Effect context. `lint:ts`
 uses `effect-tsgo oxlint` directly so lint cannot silently lose Effect rules when a

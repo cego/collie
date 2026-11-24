@@ -15,7 +15,9 @@ test.each([
       const fs = yield* FileSystem.FileSystem;
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "collie-version-" });
       yield* fs.writeFileString(`${root}/herdr-plugin.toml`, 'version = "9.9.9"\n');
-      if (contents !== undefined) yield* fs.writeFileString(`${root}/package.json`, contents);
+      if (contents !== undefined) {
+        yield* fs.writeFileString(`${root}/package.json`, contents);
+      }
       expect(yield* releaseVersion(root)).toBe(expected);
     }),
   ),

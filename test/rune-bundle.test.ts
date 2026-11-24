@@ -1,6 +1,3 @@
-// The Rune spike's bundle (desktop/scripts/bundle.ts): the main process compiled so the
-// bundle needs no Bun, each OS's layout and update files, and how macOS signs it.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -12,8 +9,8 @@ import {
   macSignings,
   notarizeArgs,
   packageInstaller,
-  type Os,
 } from "../desktop/scripts/bundle";
+import type { Os } from "../desktop/scripts/bundle";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 
@@ -25,59 +22,53 @@ const Frame = Schema.fromJsonString(
 );
 
 describe.skipIf(process.platform !== "linux")("the compiled main process", () => {
-  test(
-    "answers the shell over stdio after its Hello, with a fake bridge for collie",
-    () =>
-      runEffect(
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-core-" });
-          yield* compileCore(`${dir}/collie-core`);
-          // `collie bridge` as Desktop starts it: it never answers, so no Machine is reached.
-          yield* fs.writeFileString(`${dir}/fake-bridge`, "#!/bin/sh\nexec cat >/dev/null\n");
-          yield* fs.chmod(`${dir}/fake-bridge`, 0o755);
-          const core = yield* Effect.acquireRelease(
-            Effect.sync(() =>
-              Bun.spawn([`${dir}/collie-core`], {
-                env: {
-                  PATH: "/usr/bin:/bin",
-                  HOME: dir,
-                  SHELL: "/bin/sh",
-                  XDG_STATE_HOME: `${dir}/state`,
-                  COLLIE_RUNE_USER_DATA: `${dir}/data`,
-                  COLLIE_DESKTOP_COLLIE: `["${dir}/fake-bridge"]`,
-                },
-                stdin: "pipe",
-                stdout: "pipe",
-                stderr: "ignore",
-              }),
-            ),
-            (child) => Effect.sync(() => child.kill("SIGKILL")),
-          );
-          void core.stdin.write('{"_tag":"Hello"}\n');
-          void core.stdin.write(
-            '{"_tag":"Request","id":"0","tag":"syncNow","payload":{"profile":"nobody"},"headers":[]}\n',
-          );
-          void core.stdin.flush();
-          const answer = yield* Stream.fromReadableStream({
-            evaluate: () => core.stdout,
-            onError: String,
-          }).pipe(
-            Stream.decodeText(),
-            Stream.splitLines,
-            Stream.mapEffect((line) => Schema.decodeEffect(Frame)(line)),
-            Stream.filter((frame) => frame._tag === "Exit"),
-            Stream.runHead,
-            Effect.timeout("60 seconds"),
-          );
-          expect(Option.getOrUndefined(answer)).toEqual({ _tag: "Exit", requestId: "0" });
-        }),
-      ),
-    120_000,
-  );
+  test("answers the shell over stdio after its Hello, with a fake bridge for collie", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-core-" });
+        yield* compileCore(`${dir}/collie-core`);
+        yield* fs.writeFileString(`${dir}/fake-bridge`, "#!/bin/sh\nexec cat >/dev/null\n");
+        yield* fs.chmod(`${dir}/fake-bridge`, 0o755);
+        const core = yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            Bun.spawn([`${dir}/collie-core`], {
+              env: {
+                PATH: "/usr/bin:/bin",
+                HOME: dir,
+                SHELL: "/bin/sh",
+                XDG_STATE_HOME: `${dir}/state`,
+                COLLIE_RUNE_USER_DATA: `${dir}/data`,
+                COLLIE_DESKTOP_COLLIE: `["${dir}/fake-bridge"]`,
+              },
+              stdin: "pipe",
+              stdout: "pipe",
+              stderr: "ignore",
+            }),
+          ),
+          (child) => Effect.sync(() => child.kill("SIGKILL")),
+        );
+        void core.stdin.write('{"_tag":"Hello"}\n');
+        void core.stdin.write(
+          '{"_tag":"Request","id":"0","tag":"syncNow","payload":{"profile":"nobody"},"headers":[]}\n',
+        );
+        void core.stdin.flush();
+        const answer = yield* Stream.fromReadableStream({
+          evaluate: () => core.stdout,
+          onError: String,
+        }).pipe(
+          Stream.decodeText(),
+          Stream.splitLines,
+          Stream.mapEffect((line) => Schema.decodeEffect(Frame)(line)),
+          Stream.filter((frame) => frame._tag === "Exit"),
+          Stream.runHead,
+          Effect.timeout("60 seconds"),
+        );
+        expect(Option.getOrUndefined(answer)).toEqual({ _tag: "Exit", requestId: "0" });
+      }),
+    ));
 });
 
-/** Every file under `dir`, relative to it, sorted. */
 const filesUnder = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -200,8 +191,9 @@ test("a Linux bundle is the shell, the compiled main process, its icon, launcher
         ),
       );
       const bundle = `${out}/build/linux-x64/collie-desktop`;
-      for (const binary of ["bin/launcher", "bin/collie-core"])
+      for (const binary of ["bin/launcher", "bin/collie-core"]) {
         expect(((yield* fs.stat(`${bundle}/${binary}`)).mode & 0o111) !== 0).toBe(true);
+      }
       const entry = yield* fs.readFileString(`${bundle}/collie-desktop.desktop`);
       expect(entry).toContain("Name=Collie\n");
       expect(entry).toContain("Exec=collie-desktop\n");
@@ -271,8 +263,9 @@ test("a macOS bundle is collie-desktop.app with both executables, its icon, vers
         ["CFBundleExecutable", "launcher"],
         ["CFBundleIconFile", "Collie"],
         ["CFBundleShortVersionString", VERSION],
-      ])
+      ]) {
         expect(plist).toContain(`<key>${key}</key><string>${value}</string>`);
+      }
       const tarred = yield* tarList(
         `${out}/artifacts/stable-macos-arm64-collie-desktop.app.tar.zst`,
       );

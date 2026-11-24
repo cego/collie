@@ -1,22 +1,19 @@
-// A Run as every reader sees one, for tests about what a Run's state *means*.
-//
-// Written out in full rather than asserted into shape: the fields a rule reads are the
-// point of these tests, and a cast would let one silently disappear without the test
-// noticing.
-
+// WARNING: Written out in full rather than cast, so a field a rule reads cannot silently disappear.
 import * as Arr from "effect/Array";
 import { Data, Effect, FileSystem, Layer, Option } from "effect";
 import type { RunFacts } from "../../src/runs";
 import { readLaunches, runAgents } from "../../src/launches";
-import { recordsAt, recordsReadLayer, type Records } from "../../src/records";
+import { recordsAt, recordsReadLayer } from "../../src/records";
+import type { Records } from "../../src/records";
 import { everyRegistered } from "../../src/registry";
 import { deliveriesOf, readLedger } from "../../src/steering";
-import { RunRecords, type RunRecordsApi } from "../../src/run-records";
+import { RunRecords } from "../../src/run-records";
+import type { RunRecordsApi } from "../../src/run-records";
 import { platformLayer } from "../../src/platform";
 
-export function runFacts(over: Partial<RunFacts> = {}): RunFacts {
+export function runFacts(over: Partial<RunFacts> = {}) {
   const id = over.id ?? "r1";
-  return {
+  const returned: RunFacts = {
     id,
     workflow: "implement",
     project: "/project",
@@ -46,9 +43,9 @@ export function runFacts(over: Partial<RunFacts> = {}): RunFacts {
     summary: null,
     ...over,
   };
+  return returned;
 }
 
-/** A Run whose directories exist under this state directory, for readers of its files. */
 export const madeRun = Effect.fn("test.madeRun")(function* (
   stateDir: string,
   over: Partial<RunFacts> = {},
@@ -69,14 +66,12 @@ export { recordsAt };
 
 export class NoHostDb extends Data.TaggedError("NoHostDb")<{ readonly stateDir: string }> {}
 
-/**
- * What a host on `stateDir` recorded, read over a connection of the test's own; a failure,
- * which a poll retries, until that host has made and migrated `host.db`.
- */
+// WARNING: A read fails until the host has made and migrated host.db; the poll retries.
 export const hostRecords = <A, E>(stateDir: string, read: Effect.Effect<A, E, Records>) =>
   Effect.gen(function* () {
-    if (!(yield* (yield* FileSystem.FileSystem).exists(`${stateDir}/host.db`).pipe(Effect.orDie)))
+    if (!(yield* (yield* FileSystem.FileSystem).exists(`${stateDir}/host.db`).pipe(Effect.orDie))) {
       return yield* new NoHostDb({ stateDir });
+    }
     return yield* read.pipe(
       Effect.provide(recordsReadLayer(stateDir)),
       Effect.catchCause(() => Effect.fail(new NoHostDb({ stateDir }))),
@@ -89,19 +84,15 @@ export const deliveredTo = (stateDir: string, run: string) =>
 export const ledgerOf = (stateDir: string, terminalId: string) =>
   hostRecords(stateDir, readLedger(terminalId));
 
-/** The agents a host on `stateDir` registered; none before it has made `host.db`. */
 export const registeredAt = (stateDir: string) =>
   hostRecords(stateDir, everyRegistered).pipe(Effect.orElseSucceed(() => []));
 
-/** A Run's launches as the host on `stateDir` recorded them. */
 export const launchesAt = (stateDir: string, run: string) =>
   readLaunches(run).pipe(Effect.provide(recordsAt(stateDir)));
 
-/** A Run's agents as the host on `stateDir` recorded their launches. */
 export const agentsAt = (stateDir: string, run: string) =>
   runAgents(run).pipe(Effect.provide(recordsAt(stateDir)));
 
-/** The launch of `operation` the host on `stateDir` recorded for the Run; none before it has. */
 export const launchOf = (stateDir: string, run: string, operation: string) =>
   hostRecords(stateDir, readLaunches(run)).pipe(
     Effect.map((launches) =>
@@ -110,7 +101,6 @@ export const launchOf = (stateDir: string, run: string, operation: string) =>
     Effect.orElseSucceed(() => undefined),
   );
 
-/** The Run's launch of `operation`, as the host on `stateDir` recorded it. */
 export const launchedAt = (stateDir: string, run: string, operation: string) =>
   launchesAt(stateDir, run).pipe(
     Effect.map((launches) =>
@@ -118,11 +108,8 @@ export const launchedAt = (stateDir: string, run: string, operation: string) =>
     ),
   );
 
-/**
- * A Run's records as the host on `stateDir()`, whichever directory that is when asked, keeps
- * them: for a test whose own reads and writes must meet its host's, not `runEffect`'s empty ones.
- */
-export const hostRunRecords = (stateDir: () => string): RunRecordsApi => {
+// WARNING: Reads and writes must meet the host's records, not runEffect's empty ones.
+export const hostRunRecords: (stateDir: () => string) => RunRecordsApi = (stateDir) => {
   const at = <A, E, R>(use: (records: RunRecordsApi) => Effect.Effect<A, E, R>) =>
     FileSystem.FileSystem.pipe(
       Effect.flatMap((fs) => fs.makeDirectory(stateDir(), { recursive: true })),
@@ -157,7 +144,6 @@ export const hostRunRecords = (stateDir: () => string): RunRecordsApi => {
   };
 };
 
-/** `effect` with a Run's records read and written where the host on `stateDir()` keeps them. */
 export const overHost =
   (stateDir: () => string) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>) =>

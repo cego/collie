@@ -1,8 +1,7 @@
-// A stop that left an agent running is a failed operation at every door, in one sentence.
-
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
-import { act, type Door } from "../desktop/src/bun/machine";
+import { act } from "../desktop/src/bun/machine";
+import type { Door } from "../desktop/src/bun/machine";
 import { ActionFailed } from "../desktop/src/shared/flock";
 import { controlled } from "../src/lifecycle";
 import type { Controlled } from "../src/board-model";
@@ -10,7 +9,7 @@ import type { Controlled } from "../src/board-model";
 const LEFT =
   "build-r1 is not stopped: acknowledged, its server is still up after 30s — thread t-1 turn u-1; server ws://127.0.0.1:4000 pid 42";
 
-const answer = (over: { closed?: ReadonlyArray<string> } = {}): typeof Controlled.Type => ({
+const answer = (over: { closed?: ReadonlyArray<string> } = {}) => ({
   runId: "r-1",
   control: "stop",
   set: true,
@@ -20,11 +19,10 @@ const answer = (over: { closed?: ReadonlyArray<string> } = {}): typeof Controlle
   ...over,
 });
 
-/** A door whose `control` answers `done`. */
 const answering = (done: typeof Controlled.Type) => {
-  // SAFETY: `Control` never asks to discard the reply, so it is the value.
+  // WARNING: `Control` never asks to discard the reply, so it is the value.
   const fake: Partial<Door> = { control: () => Effect.succeed(done as never) };
-  // SAFETY: `Control` calls only `control`.
+  // WARNING: Control calls only control, so the partial door is the whole door.
   const desktop = fake as Door;
   return { machine: { profile: "vm", name: "vm-mk" }, desktop };
 };

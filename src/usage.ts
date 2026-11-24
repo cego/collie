@@ -1,7 +1,3 @@
-// This Machine's Usage readings (ADR-0049 D1–D2): Claude's from the endpoint Claude Code's
-// `/usage` reads and its agents' status lines, ChatGPT's from Codex's app server. Each
-// endpoint is called only when asked, and at most once per interval.
-
 import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import * as Str from "effect/String";
@@ -23,10 +19,12 @@ import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { type CodexError, withCodex } from "./codex";
+import { withCodex } from "./codex";
+import type { CodexError } from "./codex";
 import { CONTROL_DIR, readControl } from "./compaction";
 import { rateLimitsReader } from "./compactors";
-import { currentEnv, type PluginEnv } from "./env";
+import { currentEnv } from "./env";
+import type { PluginEnv } from "./env";
 import { sha256Hex } from "./attachments";
 import { reason } from "./naming";
 import { epochMs } from "./time";
@@ -40,30 +38,23 @@ import {
   codexLogin,
   codexUsage,
   statusLineWindows,
-  type Login,
-  type StatusSample,
-  type Subscription,
-  type UsageReading,
 } from "./usage-model";
+import type { Login, StatusSample, Subscription, UsageReading } from "./usage-model";
+import { stringifyJson } from "./json";
 
-/** How often an endpoint may be called; Claude's refuses callers that ask more often. */
+// WARNING: Claude's endpoint refuses callers who ask more often than this.
 export const USAGE_INTERVAL_MS = 5 * 60_000;
-/** How long one call may take before it becomes a problem. */
 export const USAGE_CALL_MS = 10_000;
 
-/** What one source said when asked. */
 export interface Asked {
   readonly reading: UsageReading;
-  /** Whether an endpoint was called, which is what the interval paces. */
   readonly called: boolean;
-  /** Set when the endpoint refused: how long it asked to be left alone. */
   readonly retryAfterMs?: number | null;
 }
 
 export interface UsageSources {
   readonly claude: Effect.Effect<Asked>;
   readonly chatgpt: Effect.Effect<Asked>;
-  /** The newest Claude agent's status-line sample on this Machine. */
   readonly statusLine: Effect.Effect<StatusSample | null>;
 }
 
@@ -76,12 +67,17 @@ const SOURCE = { claude: "claude-usage", chatgpt: "codex-app-server" } as const;
 
 const iso = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
 
-const problem = (
+const problem: (
   subscription: Subscription,
   at: number,
   text: string,
-  login: Login = { account: null, accountLabel: null, plan: null },
-): UsageReading => ({
+  login?: Login,
+) => UsageReading = (
+  subscription,
+  at,
+  text,
+  login = { account: null, accountLabel: null, plan: null },
+) => ({
   subscription,
   ...login,
   windows: [],
@@ -90,10 +86,7 @@ const problem = (
   problem: text,
 });
 
-/**
- * One source behind its interval: a call only once the last is old enough, a refusal's
- * back-off honoured, and the last good reading kept, with its age, while there is no new one.
- */
+// WARNING: a refusal's back-off is honoured and the last good reading kept while no new one lands.
 const paced = Effect.fn("Usage.paced")(function* (
   subscription: Subscription,
   ask: Effect.Effect<Asked>,
@@ -106,21 +99,28 @@ const paced = Effect.fn("Usage.paced")(function* (
     single.withPermits(1)(
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
-        if (shown !== null && now < until) return shown;
+        if (shown !== null && now < until) {
+          return shown;
+        }
         const asked = yield* ask.pipe(
           Effect.timeoutOption(USAGE_CALL_MS),
           Effect.map(
-            Option.getOrElse((): Asked => ({
-              reading: problem(
-                subscription,
-                now,
-                `${SOURCE[subscription]} did not answer within ${USAGE_CALL_MS / 1000}s`,
-              ),
-              called: true,
-            })),
+            Option.getOrElse(() => {
+              const returned: Asked = {
+                reading: problem(
+                  subscription,
+                  now,
+                  `${SOURCE[subscription]} did not answer within ${USAGE_CALL_MS / 1000}s`,
+                ),
+                called: true,
+              };
+              return returned;
+            }),
           ),
         );
-        if (asked.reading.problem === null) good = asked.reading;
+        if (asked.reading.problem === null) {
+          good = asked.reading;
+        }
         shown =
           good !== null && asked.reading.problem !== null
             ? {
@@ -128,20 +128,26 @@ const paced = Effect.fn("Usage.paced")(function* (
                 problem: asked.reading.problem,
               }
             : asked.reading;
-        if (asked.called) until = now + Math.max(USAGE_INTERVAL_MS, asked.retryAfterMs ?? 0);
+        if (asked.called) {
+          until = now + Math.max(USAGE_INTERVAL_MS, asked.retryAfterMs ?? 0);
+        }
         return shown;
       }),
     ),
   );
 });
 
-/** Claude's reading, with a status-line sample newer than it in place of its session and weekly. */
-function withSample(reading: UsageReading, sample: StatusSample | null): UsageReading {
-  if (sample === null) return reading;
+function withSample(reading: UsageReading, sample: StatusSample | null) {
+  if (sample === null) {
+    const returned: UsageReading = reading;
+    return returned;
+  }
   const fresh = statusLineWindows(sample.limits);
-  if (fresh.length === 0 || (reading.windows.length > 0 && sample.at <= epochMs(reading.at)))
-    return reading;
-  return {
+  if (fresh.length === 0 || (reading.windows.length > 0 && sample.at <= epochMs(reading.at))) {
+    const returned: UsageReading = reading;
+    return returned;
+  }
+  const returned: UsageReading = {
     ...reading,
     windows: [
       ...fresh,
@@ -153,6 +159,7 @@ function withSample(reading: UsageReading, sample: StatusSample | null): UsageRe
     at: iso(sample.at),
     source: "claude-status-line",
   };
+  return returned;
 }
 
 export const makeUsage = Effect.fn("Usage.make")(function* (sources: UsageSources) {
@@ -173,7 +180,6 @@ const Credentials = Schema.fromJsonString(
       Schema.NullOr(
         Schema.Struct({
           accessToken: Schema.String,
-          /** Epoch ms. */
           expiresAt: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
           subscriptionType: Schema.optionalKey(Schema.NullOr(Schema.String)),
         }),
@@ -187,11 +193,8 @@ const decodeClaudeUsage = Schema.decodeUnknownOption(ClaudeUsage);
 const decodeCodexAccount = Schema.decodeUnknownOption(CodexAccount);
 const decodeCodexRateLimits = Schema.decodeUnknownOption(CodexRateLimits);
 
-/** Where Claude Code keeps its login, and what to read it with. */
 export interface ClaudeLoginSource {
-  /** Claude Code's stored login, as text, or null where there is none. */
   readonly credentials: Effect.Effect<string | null>;
-  /** `~/.claude.json`, as text, or null. */
   readonly claudeJson: Effect.Effect<string | null>;
 }
 
@@ -203,7 +206,7 @@ const readText = (file: string) =>
     return yield* fs.readFileString(file);
   }).pipe(Effect.orElseSucceed(() => null));
 
-/** On macOS the Keychain's item, suffixed by the config directory's hash where one is set. */
+// WARNING: Claude Code suffixes its Keychain item with a hash of its config dir when one is set.
 const keychain = (configDir: string | undefined) =>
   Effect.gen(function* () {
     const service =
@@ -234,43 +237,45 @@ export const claudeLoginSource = (env: PluginEnv) =>
       process.platform === "darwin"
         ? keychain(configDir)
         : readText(path.join(dir, ".credentials.json"));
-    return {
+    const returned: ClaudeLoginSource = {
       credentials: Effect.provideContext(credentials, services),
       claudeJson: readText(
         configDir === undefined
           ? path.join(env.home, ".claude.json")
           : path.join(configDir, ".claude.json"),
       ).pipe(Effect.provideContext(services)),
-    } satisfies ClaudeLoginSource;
+    };
+    return returned;
   });
 
-/**
- * Asks Claude's usage endpoint with the login Claude Code keeps, read and never refreshed
- * or written: a refresh rotates the token and signs Claude Code out.
- */
-export const askClaude = (
+// WARNING: never refresh or write this login: a refresh rotates the token and signs Claude Code out.
+export const askClaude: (
   login: ClaudeLoginSource,
-): Effect.Effect<Asked, never, HttpClient.HttpClient> =>
+) => Effect.Effect<Asked, never, HttpClient.HttpClient> = (login) =>
   Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
     const stored = Option.getOrNull(
       decodeCredentials((yield* login.credentials) ?? ""),
     )?.claudeAiOauth;
-    if (!stored)
+    if (!stored) {
       return {
         reading: problem("claude", now, "Claude Code is not logged in on this Machine"),
         called: false,
       };
+    }
     const account = claudeLogin(
       Option.getOrNull(decodeClaudeJson((yield* login.claudeJson) ?? "")),
       stored.subscriptionType ?? null,
     );
-    const failed = (text: string, retryAfterMs?: number | null): Asked => ({
-      reading: problem("claude", now, text, account),
-      called: true,
-      retryAfterMs,
-    });
-    if (stored.expiresAt != null && stored.expiresAt <= now)
+    const failed = (text: string, retryAfterMs?: number | null) => {
+      const returned: Asked = {
+        reading: problem("claude", now, text, account),
+        called: true,
+        retryAfterMs,
+      };
+      return returned;
+    };
+    if (stored.expiresAt != null && stored.expiresAt <= now) {
       return {
         reading: problem(
           "claude",
@@ -280,14 +285,16 @@ export const askClaude = (
         ),
         called: false,
       };
+    }
     const response = yield* HttpClient.execute(
       HttpClientRequest.get(CLAUDE_USAGE_URL).pipe(
         HttpClientRequest.setHeader("Authorization", `Bearer ${stored.accessToken}`),
         HttpClientRequest.setHeader("anthropic-beta", "oauth-2025-04-20"),
       ),
     ).pipe(Effect.result);
-    if (response._tag === "Failure")
+    if (response._tag === "Failure") {
       return failed(`Claude's usage endpoint: ${reason(response.failure)}`);
+    }
     const { status, headers } = response.success;
     if (status === 429) {
       const seconds = Number(headers["retry-after"]);
@@ -296,15 +303,19 @@ export const askClaude = (
         Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : null,
       );
     }
-    if (status === 401 || status === 403)
+    if (status === 401 || status === 403) {
       return failed(
         "Claude's usage endpoint refused Claude Code's login; it refreshes when Claude Code next runs",
       );
-    if (status < 200 || status >= 300) return failed(`Claude's usage endpoint answered ${status}`);
+    }
+    if (status < 200 || status >= 300) {
+      return failed(`Claude's usage endpoint answered ${status}`);
+    }
     const body = yield* response.success.json.pipe(Effect.orElseSucceed(() => null));
     const usage = Option.getOrNull(decodeClaudeUsage(body));
-    if (usage === null)
+    if (usage === null) {
       return failed("Claude's usage endpoint answered in a shape Collie does not read");
+    }
     const windows = claudeWindows(usage);
     return {
       reading: {
@@ -319,25 +330,24 @@ export const askClaude = (
     } satisfies Asked;
   });
 
-/** What a Codex app server answers to the two calls a reading takes. */
 export interface CodexAnswers {
   readonly rateLimits: unknown;
   readonly account: unknown;
 }
 
-/** A Codex app server for one exchange: a running agent's own, else one over stdio. */
 export type CodexAsk = Effect.Effect<CodexAnswers, CodexError | Cause.UnknownError>;
 
-export const codexReading = (ask: CodexAsk): Effect.Effect<Asked> =>
+export const codexReading: (ask: CodexAsk) => Effect.Effect<Asked> = (ask) =>
   Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
     const answered = yield* Effect.result(ask);
-    if (answered._tag === "Failure")
+    if (answered._tag === "Failure") {
       return { reading: problem("chatgpt", now, answered.failure.message), called: true };
+    }
     const login = codexLogin(
       Option.getOrElse(decodeCodexAccount(answered.success.account), () => ({})),
     );
-    if (login.account === null && login.accountLabel === null)
+    if (login.account === null && login.accountLabel === null) {
       return {
         reading: problem(
           "chatgpt",
@@ -346,8 +356,9 @@ export const codexReading = (ask: CodexAsk): Effect.Effect<Asked> =>
         ),
         called: true,
       };
+    }
     const limits = Option.getOrNull(decodeCodexRateLimits(answered.success.rateLimits));
-    if (limits === null)
+    if (limits === null) {
       return {
         reading: problem(
           "chatgpt",
@@ -357,6 +368,7 @@ export const codexReading = (ask: CodexAsk): Effect.Effect<Asked> =>
         ),
         called: true,
       };
+    }
     const usage = codexUsage(limits);
     return {
       reading: {
@@ -375,7 +387,6 @@ export const codexReading = (ask: CodexAsk): Effect.Effect<Asked> =>
 const RATE_LIMITS = "account/rateLimits/read";
 const ACCOUNT = "account/read";
 
-/** A running Codex agent's own app server, where this Machine has one. */
 const runningCodex = (stateDir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -385,12 +396,14 @@ const runningCodex = (stateDir: string) =>
       .pipe(Effect.orElseSucceed(() => []));
     for (const agent of agents) {
       const control = yield* readControl(stateDir, agent).pipe(Effect.orElseSucceed(() => null));
-      if (control?.harness === "codex" && control.endpoint !== null) return control.endpoint;
+      if (control?.harness === "codex" && control.endpoint !== null) {
+        return control.endpoint;
+      }
     }
     return null;
   });
 
-const viaEndpoint = (endpoint: string): CodexAsk =>
+const viaEndpoint: (endpoint: string) => CodexAsk = (endpoint) =>
   withCodex(endpoint, (client) =>
     Effect.all({
       rateLimits: client.call(RATE_LIMITS, {}),
@@ -398,7 +411,6 @@ const viaEndpoint = (endpoint: string): CodexAsk =>
     }),
   );
 
-/** This Codex agent's own reading from its app server; null where it has none or it fails. */
 export const ownCodexReading = (stateDir: string, agent: string) =>
   readControl(stateDir, agent).pipe(
     Effect.flatMap((control) =>
@@ -420,7 +432,6 @@ const RpcReply = Schema.fromJsonString(
 );
 const decodeReply = Schema.decodeUnknownOption(RpcReply);
 
-/** `codex app-server` over stdio, for one exchange, closed again when it is answered. */
 const viaStdio: Effect.Effect<
   CodexAnswers,
   Cause.UnknownError,
@@ -438,13 +449,13 @@ const viaStdio: Effect.Effect<
       { jsonrpc: "2.0", id: 2, method: RATE_LIMITS, params: {} },
       { jsonrpc: "2.0", id: 3, method: ACCOUNT, params: {} },
     ],
-    (message) => `${JSON.stringify(message)}\n`,
+    (message) => `${stringifyJson(message)}\n`,
   );
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const handle = yield* spawner
     .spawn(
       ChildProcess.make("codex", ["app-server"], {
-        // Held open: a closed stdin is the server's cue to stop before it answers.
+        // WARNING: a closed stdin tells the server to stop before it answers, so stdin is held open.
         stdin: Stream.concat(
           Stream.make(new TextEncoder().encode(Arr.join(lines, ""))),
           Stream.never,
@@ -465,14 +476,17 @@ const viaStdio: Effect.Effect<
     Stream.splitLines,
     Stream.mapEffect((line) => {
       const reply = Option.getOrNull(decodeReply(line));
-      if (reply?.id === undefined || reply.id < 2) return Effect.void;
-      if (reply.error)
+      if (reply?.id === undefined || reply.id < 2) {
+        return Effect.void;
+      }
+      if (reply.error) {
         return Effect.fail(
           new Cause.UnknownError(
             reply.error,
             `codex ${reply.id === 2 ? RATE_LIMITS : ACCOUNT}: ${reply.error.message}`,
           ),
         );
+      }
       answers.set(reply.id, reply.result);
       return Effect.void;
     }),
@@ -482,12 +496,12 @@ const viaStdio: Effect.Effect<
       Cause.isUnknownError(cause) ? cause : new Cause.UnknownError(cause, reason(cause)),
     ),
   );
-  if (answers.size < 2)
+  if (answers.size < 2) {
     return yield* new Cause.UnknownError(undefined, "codex app-server stopped before it answered");
+  }
   return { rateLimits: answers.get(2), account: answers.get(3) };
 }).pipe(Effect.scoped);
 
-/** This Machine's sources, as the host reads them. */
 export const liveSources = (env: PluginEnv) =>
   Effect.gen(function* () {
     const services = yield* Effect.context<
@@ -500,17 +514,17 @@ export const liveSources = (env: PluginEnv) =>
       ),
       Effect.provideContext(services),
     );
-    return {
+    const returned: UsageSources = {
       claude: askClaude(login).pipe(Effect.provide(FetchHttpClient.layer)),
       chatgpt: codexReading(codex),
       statusLine: (yield* rateLimitsReader(env.stateDir)).newest.pipe(
         Effect.orElseSucceed(() => null),
         Effect.provideContext(services),
       ),
-    } satisfies UsageSources;
+    };
+    return returned;
   });
 
-/** This Machine's one reader of its usage, on the environment this process runs in. */
 export const usageLayer = Layer.effect(
   Usage,
   currentEnv.pipe(Effect.orDie, Effect.flatMap(liveSources), Effect.flatMap(makeUsage)),

@@ -1,5 +1,3 @@
-// When a Run last did work, as its host records it and the board reads it
-// (ADR-draft-a-runs-own-records-are-rows-in-the-hosts-database, D4).
 import { expect, test } from "bun:test";
 import { Clock, Effect, FileSystem, Schema } from "effect";
 import { TestClock } from "effect/testing";
@@ -21,7 +19,6 @@ const scratch = Effect.fn("activity.scratch")(function* () {
   return { dir, env: readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" }) };
 });
 
-/** `effect` with the clock at `iso`. */
 const at = <A, E, R>(iso: string, effect: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     const clock = yield* TestClock.make();

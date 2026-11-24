@@ -1,7 +1,4 @@
-// A capability is a recorded live result, not a reading of documentation, so the thing
-// tested here is what happens when there is no result: the gate refuses, and the refusal
-// is written down where a human looking for their steer will find it.
-
+// WARNING: A capability is a recorded live result, never read from docs; with no result the gate refuses.
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
@@ -59,7 +56,7 @@ const alive: AgentInfo = {
 };
 
 function fake() {
-  const calls: string[] = [];
+  const calls: Array<string> = [];
   return {
     calls,
     deps: {
@@ -85,18 +82,19 @@ function fake() {
 test("proven is a recorded date, attribution and the other harnesses are not, and a boundary needs nothing proven", () =>
   runEffect(
     Effect.gen(function* () {
-      for (const row of Rec.values(CAPABILITIES))
+      for (const row of Rec.values(CAPABILITIES)) {
         for (const [capability, record] of Rec.toEntries(row)) {
-          // A capability moves to `proven` only with the day it was recorded.
-          if (record.status === "proven") expect(record.tested_at).not.toBeNull();
-          else expect(record.tested_at).toBeNull();
-          // Attribution needs a human at a Collie-launched agent's pane: nothing an agent
-          // pressing keys can record, so no build claims it.
-          if (capability === "attribution") expect(record.status).toBe("unproven");
+          if (record.status === "proven") {
+            expect(record.tested_at).not.toBeNull();
+          } else {
+            expect(record.tested_at).toBeNull();
+          }
+          // WARNING: Attribution needs a human at a Collie-launched agent's pane; no agent pressing keys can record it.
+          if (capability === "attribution") {
+            expect(record.status).toBe("unproven");
+          }
         }
-      // The live rows from 2026-09-11, kept with their evidence in CAPABILITIES.md: Claude
-      // took a delivery while working and acknowledged it, and both Claude and pi left
-      // `working` on Escape and acknowledged what followed. Nothing else has a pass.
+      }
       const proven = Arr.flatMap(Rec.toEntries(CAPABILITIES), ([harness, row]) =>
         Arr.flatMap(Rec.toEntries(row), ([capability, record]) =>
           record.status === "proven" ? [`${harness}.${capability}`] : [],
@@ -110,7 +108,7 @@ test("proven is a recorded date, attribution and the other harnesses are not, an
       ]);
 
       expect(needed("boundary")).toBeNull();
-      // A boundary delivery is the next prompt file, which every harness already takes.
+      // WARNING: A boundary delivery is the next prompt file, which every harness already takes.
       expect(yield* gate("claude", "boundary").pipe(Effect.exit)).toMatchObject({
         _tag: "Success",
       });
@@ -162,9 +160,7 @@ test("an interrupt is a key and a message, and is never called stopping", () =>
       expect(interruptKeys("claude")).toEqual(["Escape"]);
       expect(interruptKeys("nothing-like-this")).toBeNull();
 
-      // What an interrupt can say is what was observed: keys were sent, and later the
-      // agent acknowledged. herdr has no way to show a harness has actually stopped, so
-      // neither of these files may claim one has.
+      // WARNING: herdr cannot show a harness has stopped, so an interrupt is recorded as keys sent and acknowledged, never as stopped.
       const fs = yield* FileSystem.FileSystem;
       for (const name of ["dispatcher.ts", "steering-caps.ts"]) {
         const source = new URL(`../src/${name}`, import.meta.url).pathname;

@@ -1,6 +1,3 @@
-// Collie's settings on this Machine: what each is, and setting one through the host, so an
-// agent can do what the TUI's and Desktop's Settings do.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Effect } from "effect";
@@ -13,6 +10,7 @@ import { mutation } from "../envelope";
 import { nowIso } from "../time";
 import { isString } from "../schema";
 import { answering, cliDoor, requestIdFlag } from "./shared";
+import { stringifyJson } from "../json";
 
 const list = Command.make("list", {}, () =>
   answering((env) =>
@@ -37,7 +35,7 @@ const list = Command.make("list", {}, () =>
                   ? `(default ${fallback || "unset"})`
                   : isString(value)
                     ? value
-                    : JSON.stringify(value),
+                    : stringifyJson(value),
               ],
               "\t",
             ),
@@ -62,7 +60,9 @@ const set = Command.make(
     answering((env) =>
       Effect.gen(function* () {
         const parsed = parseSetting(key, value);
-        if ("refused" in parsed) return err("invalid_input", parsed.refused);
+        if ("refused" in parsed) {
+          return err("invalid_input", parsed.refused);
+        }
         return yield* mutation(env, "settings-set", requestId, (id) =>
           Effect.gen(function* () {
             const done = yield* setSharedSetting(env, {
@@ -72,7 +72,9 @@ const set = Command.make(
               at: yield* nowIso,
               request: id,
             });
-            if (!done.ok) return done;
+            if (!done.ok) {
+              return done;
+            }
             return {
               ok: true,
               data: done.value,

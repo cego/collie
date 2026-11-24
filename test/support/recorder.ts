@@ -1,24 +1,13 @@
-// Test rig: a temp plugin sandbox and a fake core on `HC_SOCKET`, recording into one ordered
-// log, with Herdr 1's tripwire on PATH and on the socket a host may inherit.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import {
-  Config,
-  Effect,
-  Exit,
-  FileSystem,
-  Path,
-  PlatformError,
-  Schema,
-  Scope,
-  flow,
-  Result,
-} from "effect";
-import { readEnv, type PluginEnv } from "../../src/env";
+import type { PlatformError } from "effect";
+import { Config, Effect, Exit, FileSystem, Path, Schema, Scope, flow, Result } from "effect";
+import { readEnv } from "../../src/env";
 import { connect } from "../../src/hc";
-import { SETUP, serveFakeHc, type FakeHc } from "./fake-hc";
-import { armTripwire, untripped, type Tripwire } from "./herdr-tripwire";
+import { SETUP, serveFakeHc } from "./fake-hc";
+import type { FakeHc } from "./fake-hc";
+import { armTripwire, untripped } from "./herdr-tripwire";
+import type { Tripwire } from "./herdr-tripwire";
 
 const encodeJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
 
@@ -31,36 +20,17 @@ const CallSchema = Schema.Struct({
 });
 const CallString = Schema.fromJsonString(CallSchema);
 
-type RigServices = FileSystem.FileSystem | Path.Path;
 export type RigError =
   | PlatformError.PlatformError
   | PlatformError.BadArgument
   | Config.ConfigError
   | Schema.SchemaError;
 
-interface RigEnv {
-  [key: string]: string;
-  HOME: string;
-  PATH: string;
-  HERDR_BIN_PATH: string;
-  HERDR_SOCKET_PATH: string;
-  COLLIE_ROOT: string;
-  COLLIE_USER_DIR: string;
-  COLLIE_CLAUDE_MANAGED_DIR: string;
-  COLLIE_STATE_DIR: string;
-  COLLIE_CWD: string;
-  HC_SOCKET: string;
-}
-
 export const UNREACHABLE_RELEASES = "http://127.0.0.1:9";
 
 export interface Call extends Schema.Schema.Type<typeof CallSchema> {}
 
-/**
- * The GitLab login every rig runs as. In its environment rather than the process's, so
- * no test reaches out to a real glab to find out who is running it — and none of them
- * has to put a process-wide variable back afterwards.
- */
+// WARNING: In the rig's environment rather than the process's, so no test reaches a real glab to learn who is running it.
 export const TEST_LOGIN = "tester";
 
 export class Rig {
@@ -87,7 +57,7 @@ export class Rig {
     this.coreSocket = path.join(root, "hc.sock");
   }
 
-  static make(): Effect.Effect<Rig, RigError, RigServices> {
+  static make() {
     return Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -99,39 +69,36 @@ export class Rig {
     });
   }
 
-  /** A Rig closed when its scope is, whatever the test did. */
-  static scoped(): Effect.Effect<Rig, RigError, RigServices | Scope.Scope> {
+  static scoped() {
     return Effect.acquireRelease(Rig.make(), (rig) => Effect.ignore(rig.close()));
   }
 
-  private setup(): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {
+  private setup() {
     const dirs = [this.stateDir, this.userDir, this.baselineDir, this.projectDir];
     const memory = this.memory(50);
     const disk = this.disk(50);
     return Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      for (const dir of dirs) yield* fs.makeDirectory(dir, { recursive: true });
+      for (const dir of dirs) {
+        yield* fs.makeDirectory(dir, { recursive: true });
+      }
       yield* memory;
       yield* disk;
     });
   }
 
-  get procDir(): string {
+  get procDir() {
     return this.path.join(this.root, "proc");
   }
 
-  /** This Machine's memory from now on: `availableGiB` of 100 GiB, under `pressure`. */
-  memory(
-    availableGiB: number,
-    pressure = 0,
-  ): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {
+  memory(availableGiB: number, pressure = 0) {
     const proc = this.procDir;
     return Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       yield* fs.makeDirectory(`${proc}/pressure`, { recursive: true });
       yield* fs.writeFileString(
         `${proc}/meminfo`,
-        `MemTotal:       ${100 * 1048576} kB\nMemAvailable:   ${Math.round(availableGiB * 1048576)} kB\n`,
+        `MemTotal:       ${100 * 1_048_576} kB\nMemAvailable:   ${Math.round(availableGiB * 1_048_576)} kB\n`,
       );
       yield* fs.writeFileString(
         `${proc}/pressure/memory`,
@@ -140,27 +107,21 @@ export class Rig {
     });
   }
 
-  get dfPath(): string {
+  get dfPath() {
     return this.path.join(this.root, "df");
   }
 
-  /** What `df -Pk` says from now on of every directory asked about: `percentFree` of 100 GiB on `/`. */
-  disk(
-    percentFree: number,
-  ): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {
+  disk(percentFree: number) {
     const file = this.dfPath;
     return Effect.flatMap(FileSystem.FileSystem, (fs) =>
       fs.writeFileString(
         file,
-        `Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 104857600 ${(100 - percentFree) * 1048576} ${percentFree * 1048576} ${100 - percentFree}% /\n`,
+        `Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 104857600 ${(100 - percentFree) * 1_048_576} ${percentFree * 1_048_576} ${100 - percentFree}% /\n`,
       ),
     );
   }
 
-  /** Stands in for the agents: each queue entry is written for the next prompt. */
-  queueOutputs(
-    items: ReadonlyArray<Schema.Json>,
-  ): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {
+  queueOutputs(items: ReadonlyArray<Schema.Json>) {
     const outputsPath = this.path.join(this.root, "outputs.json");
     return Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -168,9 +129,10 @@ export class Rig {
     });
   }
 
-  /** The fake core on `HC_SOCKET`, serving until the rig closes; started once. */
   startCore() {
-    if (this.served !== null) return Effect.succeed(this.served);
+    if (this.served !== null) {
+      return Effect.succeed(this.served);
+    }
     const socketPath = this.coreSocket;
     const logPath = this.logPath;
     const queuePath = this.path.join(this.root, "outputs.json");
@@ -186,7 +148,6 @@ export class Rig {
     });
   }
 
-  /** An agent live on the fake core, as one an earlier Run started; its terminal's address. */
   addAgent(name: string, cwd = this.projectDir, labels: Record<string, string> = { run: "r0" }) {
     return Effect.flatMap(this.startCore(), (core) =>
       Effect.scoped(
@@ -197,7 +158,6 @@ export class Rig {
     );
   }
 
-  /** An agent core no longer has: its terminal was killed. */
   dropAgent(name: string) {
     return Effect.flatMap(this.startCore(), (core) =>
       Effect.scoped(
@@ -208,11 +168,10 @@ export class Rig {
     ).pipe(Effect.asVoid);
   }
 
-  env(overrides: RigEnvInput = {}): RigEnv {
+  env(overrides: RigEnvInput = {}) {
     return {
       HOME: this.root,
       PATH: `${this.tripwire.binDir}:${this.pathValue}`,
-      // What a host may still inherit from Herdr 1: both lead only to the tripwire.
       HERDR_BIN_PATH: this.tripwire.bin,
       HERDR_SOCKET_PATH: this.tripwire.socketPath,
       COLLIE_ROOT: this.baselineDir,
@@ -222,29 +181,30 @@ export class Rig {
       COLLIE_CWD: this.projectDir,
       GITLAB_USER_LOGIN: TEST_LOGIN,
       GITHUB_ACTOR: TEST_LOGIN,
-      // Refused at once: a test that wants releases serves its own.
       COLLIE_RELEASES: UNREACHABLE_RELEASES,
-      // This Machine's memory as Collie reads it: never the real Machine's.
+      // WARNING: Never the real Machine's memory, as Collie reads it.
       COLLIE_PROC: this.procDir,
-      // Its free disk as Collie reads it: never the real Machine's.
+      // WARNING: Never the real Machine's free disk, as Collie reads it.
       COLLIE_DF: this.dfPath,
-      // The fake core's socket once `startCore` serves it; never the human's core.
+      // WARNING: Never the human's core: the fake core's socket, once startCore serves it.
       HC_SOCKET: this.coreSocket,
       ...overrides,
     };
   }
 
-  pluginEnv(overrides: RigEnvInput = {}): PluginEnv {
+  pluginEnv(overrides: RigEnvInput = {}) {
     return readEnv(this.env(overrides));
   }
 
-  calls(): Effect.Effect<Call[], RigError, FileSystem.FileSystem> {
+  calls() {
     const logPath = this.logPath;
     return Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      if (!(yield* fs.exists(logPath))) return [];
+      if (!(yield* fs.exists(logPath))) {
+        return [];
+      }
       const text = yield* fs.readFileString(logPath);
-      // A line with no newline yet is still being written.
+      // WARNING: A line with no newline yet is still being written.
       const whole = Str.split(text, "\n").slice(0, -1);
       return yield* Effect.forEach(
         Arr.filter(whole, (line) => Str.trim(line) !== ""),
@@ -253,22 +213,25 @@ export class Rig {
     });
   }
 
-  cmds(): Effect.Effect<string[], RigError, FileSystem.FileSystem> {
+  cmds() {
     return this.calls().pipe(Effect.map((calls) => Arr.map(calls, (call) => call.cmd)));
   }
 
-  /** Stops the fake core and removes the rig, failing where anything called Herdr 1. */
-  close(): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {
+  close() {
     const coreScope = this.coreScope;
     const root = this.root;
     const tripwire = this.tripwire;
     return Effect.gen(function* () {
       yield* tripwire.stop;
-      if (coreScope) yield* Scope.close(coreScope, Exit.void);
+      if (coreScope) {
+        yield* Scope.close(coreScope, Exit.void);
+      }
       const tripped = yield* Effect.exit(untripped(tripwire));
       const fs = yield* FileSystem.FileSystem;
       yield* fs.remove(root, { recursive: true, force: true });
-      if (Exit.isFailure(tripped)) return yield* Effect.failCause(tripped.cause);
+      if (Exit.isFailure(tripped)) {
+        return yield* Effect.failCause(tripped.cause);
+      }
     });
   }
 }

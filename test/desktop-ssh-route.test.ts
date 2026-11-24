@@ -1,6 +1,3 @@
-// ADR-draft-a-blocked-link-rides-the-machines-ssh-connection: a fake local `collie` stands
-// in for `machine connect`.
-
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
@@ -8,7 +5,8 @@ import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Scope, Exit } from "effect";
 import { riderArgv } from "../src/ssh-argv";
-import { bridgeCommand, linkRoute, remoteRoute, type ShellRoute } from "../desktop/src/bun/machine";
+import { bridgeCommand, linkRoute, remoteRoute } from "../desktop/src/bun/machine";
+import type { ShellRoute } from "../desktop/src/bun/machine";
 import { runEffect } from "./support/effect";
 import { freePort, silentMaster, writeFakeSsh, socketDir } from "./support/fake-ssh";
 
@@ -29,12 +27,10 @@ const rig = Effect.gen(function* () {
   });
   const path = `${dir}/ctl`;
   const scripts = {
-    // The far Machine's collie: a bridge to a host that identifies itself, or the words it was given.
     "far/collie": `#!/bin/sh
 if [ "$1" = bridge ]; then ${bridging(dir, "far")}; fi
 echo "far $*"
 `,
-    // This computer's collie: `machine connect` opens the shared connection, as Collie's does.
     collie: `#!/bin/sh
 echo "control=\${COLLIE_SSH_CONTROL-} $*" >> '${dir}/collie.log'
 if [ "$1 $2 $3" = "--json machine connect" ]; then
@@ -47,8 +43,9 @@ fi
 exit 1
 `,
   };
-  for (const [name, script] of Rec.toEntries(scripts))
+  for (const [name, script] of Rec.toEntries(scripts)) {
     yield* fs.writeFileString(`${dir}/${name}`, script, { mode: 0o755 });
+  }
   const collieLog = fs.readFileString(`${dir}/collie.log`).pipe(
     Effect.orElseSucceed(() => ""),
     Effect.map((text) => Arr.filter(Str.split(text, "\n"), (line) => line !== "")),

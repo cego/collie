@@ -1,6 +1,3 @@
-// A Run's record read from the host's Run model: nothing read or sent on a bare tick, and
-// nothing read of another Task's Runs.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
@@ -10,7 +7,8 @@ import { buildBoard } from "../src/board";
 import type { RecordUnchanged, RunDetail } from "../src/board-model";
 import { readEnv } from "../src/env";
 import { Foreground, makeForeground } from "../src/foreground";
-import { recordBase, recordFlow, recordFrames, type RecordSources } from "../src/record";
+import { recordBase, recordFlow, recordFrames } from "../src/record";
+import type { RecordSources } from "../src/record";
 import { timedFlow } from "../src/flow-timing";
 import { makeRunModel } from "../src/run-model";
 import type { RunFacts } from "../src/runs";
@@ -24,7 +22,6 @@ type Frame = RunDetail | RecordUnchanged | null;
 const isDone = (frame: Frame): frame is RunDetail =>
   frame !== null && !("_tag" in frame) && (frame.pending ?? []).length === 0;
 
-/** `count` Runs, each in a Task of its own, with files under all three of their directories. */
 const stateOf = (count: number) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -56,7 +53,6 @@ const stateOf = (count: number) =>
     return { dir, runs };
   });
 
-/** A model over `dir` whose every read of the disk beneath it is logged in `reads`. */
 const loggedModel = (dir: string, reads: Array<string>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -74,13 +70,12 @@ const loggedModel = (dir: string, reads: Array<string>) =>
     );
   });
 
-/** A record's sources over these Runs; each build of it says when it starts with `started`. */
-const sourcesOf = (
+const sourcesOf: (
   dir: string,
   model: Effect.Success<ReturnType<typeof makeRunModel>>,
   runs: ReadonlyArray<RunFacts>,
-  started: Effect.Effect<void> = Effect.void,
-): RecordSources => ({
+  started?: Effect.Effect<void>,
+) => RecordSources = (dir, model, runs, started = Effect.void) => ({
   env: readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" }),
   model,
   related: (runId, also) => {
@@ -107,7 +102,7 @@ test("a Flow-only read preserves the record's Flow without waiting for its attac
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const { dir, runs } = yield* stateOf(1);
-      const run = runs[0]!;
+      const run = runs[0];
       const clock = yield* TestClock.make();
       yield* Effect.gen(function* () {
         const before = yield* makeRunModel(dir, "installation");
@@ -141,13 +136,11 @@ test("a bare tick reads none of a record's files and sends nothing; a change sen
       const { dir, runs } = yield* stateOf(3);
       const reads: Array<string> = [];
       const model = yield* loggedModel(dir, reads);
-      const run = runs[0]!;
+      const run = runs[0];
       const poked = yield* Queue.unbounded<void>();
       const frames = yield* Queue.unbounded<Frame>();
-      // How much had been read when each build of the record began.
       const builds = yield* Queue.unbounded<number>();
       const started = Effect.suspend(() => Queue.offer(builds, reads.length));
-      // As the host's board is told: on every tick, and on every write.
       const changes = Stream.merge(Stream.fromQueue(poked), Stream.tick("5 seconds"));
       yield* recordFrames(
         sourcesOf(dir, model, runs, Effect.asVoid(started)),
@@ -158,17 +151,19 @@ test("a bare tick reads none of a record's files and sends nothing; a change sen
         Effect.forkScoped,
       );
       let first = yield* Queue.take(frames);
-      while (!isDone(first)) first = yield* Queue.take(frames);
+      while (!isDone(first)) {
+        first = yield* Queue.take(frames);
+      }
 
-      // The first build, then the tick on subscribing, which finds what the first frame wrote.
       yield* Effect.replicateEffect(Queue.take(builds), 2);
       let quiet = 0;
       for (const tick of Arr.range(1, 12)) {
-        // Lets the last build end, so the next tick is waiting on the clock.
         yield* TestClock.withLive(Effect.sleep("20 millis"));
         yield* TestClock.adjust("5 seconds");
         const at = yield* Queue.take(builds);
-        if (tick === 1) quiet = at;
+        if (tick === 1) {
+          quiet = at;
+        }
       }
       yield* fs.makeDirectory(`${run.dir}/handoffs`, { recursive: true });
       yield* model.writing.writeFileString(`${run.dir}/handoffs/next.md`, "the next step\n");
@@ -183,91 +178,83 @@ test("a bare tick reads none of a record's files and sends nothing; a change sen
     }).pipe(Effect.provide(TestClock.layer())),
   ));
 
-test(
-  "opening a record among 500 Runs reads no file of another Task's Runs",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { dir, runs } = yield* stateOf(500);
-        const reads: Array<string> = [];
-        const model = yield* loggedModel(dir, reads);
-        const run = runs[41]!;
-        const shown = yield* recordFrames(
-          sourcesOf(dir, model, runs),
-          { ...KEY, runId: run.id },
-          Stream.never,
-        ).pipe(Stream.takeUntil(isDone), Stream.runCollect);
-        const others = Arr.flatMap(
-          Arr.filter(runs, (one) => one.task !== run.task),
-          (one: RunFacts) => [
-            `${dir}/runs/${one.id}`,
-            `${dir}/agents/${one.id}`,
-            `${dir}/evidence/${one.id}`,
-          ],
-        );
-        const theirs = Arr.filter(reads, (path) =>
-          Arr.some(others, (other) => path === other || Str.startsWith(`${other}/`)(path)),
-        );
+test("opening a record among 500 Runs reads no file of another Task's Runs", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, runs } = yield* stateOf(500);
+      const reads: Array<string> = [];
+      const model = yield* loggedModel(dir, reads);
+      const run = runs[41]!;
+      const shown = yield* recordFrames(
+        sourcesOf(dir, model, runs),
+        { ...KEY, runId: run.id },
+        Stream.never,
+      ).pipe(Stream.takeUntil(isDone), Stream.runCollect);
+      const others = Arr.flatMap(
+        Arr.filter(runs, (one) => one.task !== run.task),
+        (one: RunFacts) => [
+          `${dir}/runs/${one.id}`,
+          `${dir}/agents/${one.id}`,
+          `${dir}/evidence/${one.id}`,
+        ],
+      );
+      const theirs = Arr.filter(reads, (path) =>
+        Arr.some(others, (other) => path === other || Str.startsWith(`${other}/`)(path)),
+      );
 
-        expect(Arr.some(shown, isDone)).toBe(true);
-        expect(Arr.some(reads, Str.startsWith(run.dir))).toBe(true);
-        expect(theirs).toEqual([]);
-      }),
-    ),
-  60_000,
-);
+      expect(Arr.some(shown, isDone)).toBe(true);
+      expect(Arr.some(reads, Str.startsWith(run.dir))).toBe(true);
+      expect(theirs).toEqual([]);
+    }),
+  ));
 
-test(
-  "a record opened while a board pass over 500 Runs is held at a slice boundary is sent before the pass ends",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { dir, runs } = yield* stateOf(500);
-        const model = yield* makeRunModel(dir, "installation");
-        const foreground = yield* makeForeground;
-        const reached = yield* Deferred.make<void>();
-        const held = yield* Latch.make(false);
-        let boundaries = 0;
-        const pass = yield* buildBoard({
-          env: readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" }),
-          runs,
-          registered: [],
-          offers: () => Effect.succeed([]),
-          cards: { revision: model.highest, kept: new Map() },
-        }).pipe(
-          Effect.provideService(FileSystem.FileSystem, model.reading),
-          Effect.provideService(Foreground, {
-            ...foreground,
-            boundary: Effect.suspend(() =>
-              ++boundaries === 10
-                ? Effect.andThen(Deferred.succeed(reached, undefined), held.await)
-                : foreground.boundary,
-            ),
-          }),
-          Effect.forkScoped,
-        );
-        yield* Deferred.await(reached);
+test("a record opened while a board pass over 500 Runs is held at a slice boundary is sent before the pass ends", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, runs } = yield* stateOf(500);
+      const model = yield* makeRunModel(dir, "installation");
+      const foreground = yield* makeForeground;
+      const reached = yield* Deferred.make<void>();
+      const held = yield* Latch.make(false);
+      let boundaries = 0;
+      const pass = yield* buildBoard({
+        env: readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" }),
+        runs,
+        registered: [],
+        offers: () => Effect.succeed([]),
+        cards: { revision: model.highest, kept: new Map() },
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, model.reading),
+        Effect.provideService(Foreground, {
+          ...foreground,
+          boundary: Effect.suspend(() =>
+            ++boundaries === 10
+              ? Effect.andThen(Deferred.succeed(reached, undefined), held.await)
+              : foreground.boundary,
+          ),
+        }),
+        Effect.forkScoped,
+      );
+      yield* Deferred.await(reached);
 
-        const first = yield* recordFrames(
-          sourcesOf(dir, model, runs),
-          { ...KEY, runId: runs[499]!.id },
-          Stream.never,
-        ).pipe(
-          Stream.runHead,
-          Effect.provideService(Foreground, foreground),
-          Effect.timeoutOption("10 seconds"),
-        );
+      const first = yield* recordFrames(
+        sourcesOf(dir, model, runs),
+        { ...KEY, runId: runs[499]!.id },
+        Stream.never,
+      ).pipe(
+        Stream.runHead,
+        Effect.provideService(Foreground, foreground),
+        Effect.timeoutOption("10 seconds"),
+      );
 
-        expect(first._tag === "Some" && first.value._tag === "Some").toBe(true);
-        expect(boundaries).toBe(10);
-        expect(pass.pollUnsafe()).toBeUndefined();
-        yield* held.open;
-        yield* Fiber.join(pass);
-        expect(boundaries).toBeGreaterThan(400);
-      }),
-    ),
-  60_000,
-);
+      expect(first._tag === "Some" && first.value._tag === "Some").toBe(true);
+      expect(boundaries).toBe(10);
+      expect(pass.pollUnsafe()).toBeUndefined();
+      yield* held.open;
+      yield* Fiber.join(pass);
+      expect(boundaries).toBeGreaterThan(400);
+    }),
+  ));
 
 test("a going Run's record shows an edit to its checkout on its next frame", () =>
   runEffect(
@@ -303,13 +290,17 @@ test("a going Run's record shows an edit to its checkout on its next frame", () 
         Effect.forkScoped,
       );
       let first = yield* Queue.take(frames);
-      while (!isDone(first)) first = yield* Queue.take(frames);
+      while (!isDone(first)) {
+        first = yield* Queue.take(frames);
+      }
       expect(first.diff?.files ?? []).toEqual([]);
 
       yield* fs.writeFileString(`${repo}/new.txt`, "hello\n");
       yield* Queue.offer(poked, undefined);
       let next = yield* Queue.take(frames);
-      while (!isDone(next)) next = yield* Queue.take(frames);
+      while (!isDone(next)) {
+        next = yield* Queue.take(frames);
+      }
       expect(Arr.map(next.diff?.files ?? [], (file) => file.path)).toEqual(["new.txt"]);
     }),
   ));
@@ -320,7 +311,7 @@ test("a write while a record's first parts are read is sent once they are", () =
       const fs = yield* FileSystem.FileSystem;
       const { dir, runs } = yield* stateOf(1);
       const model = yield* makeRunModel(dir, "installation");
-      const run = runs[0]!;
+      const run = runs[0];
       const writes = yield* PubSub.unbounded<void>();
       const reading = yield* Deferred.make<void>();
       const written = yield* Deferred.make<void>();
@@ -349,7 +340,9 @@ test("a write while a record's first parts are read is sent once they are", () =
       const handedOff = Effect.gen(function* () {
         for (;;) {
           const frame = yield* Queue.take(frames);
-          if (isDone(frame) && (frame.handoffFiles ?? []).length > 0) return frame.handoffFiles;
+          if (isDone(frame) && (frame.handoffFiles ?? []).length > 0) {
+            return frame.handoffFiles;
+          }
         }
       });
       const shown = yield* handedOff.pipe(Effect.timeoutOption("3 seconds"));

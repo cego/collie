@@ -1,21 +1,15 @@
-// Progress is evidence, not activity. These are the facts a Run records about itself,
-// and the one judgement it makes from them — which produces a sentence, never a stop.
-
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
 import type { AuditLine } from "../src/audit";
-import {
-  metricsOf,
-  obstacleOf,
-  repeatedFailure,
-  type FailureLike,
-  type Metric,
-} from "../src/metrics";
-import { usageLines, usageOf, withChildren, type UsageEntry } from "../src/usage-ledger-model";
-import { compareSets, interventionsIn, trialLines, type TrialRun } from "../src/trial-model";
+import { metricsOf, obstacleOf, repeatedFailure } from "../src/metrics";
+import type { FailureLike, Metric } from "../src/metrics";
+import { usageLines, usageOf, withChildren } from "../src/usage-ledger-model";
+import type { UsageEntry } from "../src/usage-ledger-model";
+import { compareSets, interventionsIn, trialLines } from "../src/trial-model";
+import type { TrialRun } from "../src/trial-model";
 
-const failure = (over: Partial<FailureLike> = {}): FailureLike => ({
+const failure = (over: Partial<FailureLike> = {}) => ({
   name: "tests",
   result: "fail",
   exit: 1,
@@ -23,7 +17,7 @@ const failure = (over: Partial<FailureLike> = {}): FailureLike => ({
   ...over,
 });
 
-const line = (over: Partial<Metric> & { kind: Metric["kind"] }): Metric => ({
+const line = (over: Partial<Metric> & { kind: Metric["kind"] }) => ({
   at: "2026-09-11T10:00:00.000Z",
   subject: "",
   value: 0,
@@ -42,7 +36,6 @@ test("three identical failures are a Run going round; two are not", () => {
 });
 
 test("failing differently is working through a problem, not going round", () => {
-  // A different last line each time: the Run is getting somewhere.
   expect(
     repeatedFailure(
       [
@@ -53,22 +46,17 @@ test("failing differently is working through a problem, not going round", () => 
       3,
     ),
   ).toBeNull();
-  // A different exit is a different failure too.
   expect(repeatedFailure([failure(), failure(), failure({ exit: 2 })], 3)).toBeNull();
-  // A pass in the middle breaks the run of failures.
   expect(repeatedFailure([failure(), failure({ result: "pass" }), failure()], 3)).toBeNull();
 });
 
 test("the run of failures is the last n, and it is per command", () => {
-  // Two commands failing once each is not one command failing twice.
   expect(
     repeatedFailure([failure(), failure({ name: "lint" }), failure({ name: "typecheck" })], 3),
   ).toBeNull();
-  // An earlier pass does not save a command that has failed three times since.
   expect(
     repeatedFailure([failure({ result: "pass" }), failure(), failure(), failure()], 3),
   ).not.toBeNull();
-  // Interleaved commands: each is judged on its own last three.
   expect(
     repeatedFailure(
       [
@@ -88,9 +76,7 @@ test("the obstacle says what is repeating and asks for a different approach", ()
   expect(said).toContain("tests has failed 3 times in a row the same way (exit 1)");
   expect(said).toContain("at cli.test.ts:9");
   expect(said).toContain("change approach");
-  // Not a threat and not a limit: nothing here says the Run will be stopped.
   expect(said).not.toContain("stop");
-  // A failure that printed nothing still reads as a sentence.
   expect(obstacleOf({ name: "build", times: 3, exit: 2, line: "" })).toContain("(exit 2).");
 });
 
@@ -130,12 +116,9 @@ test("a Run's metrics are what it produced, and when it first produced anything"
     "2026-09-11T10:00:00.000Z",
   );
 
-  // The first collected result, not the first thing that happened: a context sample is
-  // not evidence, and a Run that has sampled context has still proved nothing.
   expect(metrics.timeToFirstEvidence).toBe(120);
   expect(metrics.verifications).toEqual({ pass: 1, fail: 1, unstable: 1, byCollie: 2 });
   expect(metrics.slices).toEqual({ done: 1, total: 2 });
-  // Fix rounds and halts both: each is the Run doing something a second time.
   expect(metrics.rework).toBe(2);
   expect(metrics.peakContext).toEqual({ agent: "impl", tokens: 340_000 });
   expect(metrics.halts).toEqual(["evidence_missing"]);
@@ -158,7 +141,6 @@ test("a ticket is one slice however often its status is noted, and only a re-rev
 
 test("a Run that has proved nothing says so, rather than reporting a zero", () => {
   const metrics = metricsOf([], "2026-09-11T10:00:00.000Z");
-  // Null, not 0: "no evidence yet" and "evidence immediately" are different facts.
   expect(metrics.timeToFirstEvidence).toBeNull();
   expect(metrics.peakContext).toBeNull();
   expect(metrics.verifications).toEqual({ pass: 0, fail: 0, unstable: 0, byCollie: 0 });
@@ -170,21 +152,22 @@ const spent = (
   key: string,
   tokens: { input: number; cacheRead: number; cacheCreation: number | null; output: number },
   harness = "claude",
-): UsageEntry => ({
-  what: "request",
-  key,
-  at: "2026-09-11T10:00:00.000Z",
-  agent,
-  session: agent,
-  parent: null,
-  step: "triage",
-  harness,
-  model: null,
-  effort: null,
-  head: null,
-  reasoning: null,
-  ...tokens,
-});
+) =>
+  ({
+    what: "request",
+    key,
+    at: "2026-09-11T10:00:00.000Z",
+    agent,
+    session: agent,
+    parent: null,
+    step: "triage",
+    harness,
+    model: null,
+    effort: null,
+    head: null,
+    reasoning: null,
+    ...tokens,
+  }) satisfies UsageEntry;
 
 test("a Run's cost is its own usage plus each child Run's, by category, with each child listed", () => {
   const own = usageOf([
@@ -226,7 +209,7 @@ test("a Run's cost is its own usage plus each child Run's, by category, with eac
     input: 10,
     cacheRead: 100,
     cacheCreation: null,
-    output: 10000,
+    output: 10_000,
     reasoning: null,
   });
   expect(usageLines(cost)).toContain(
@@ -302,52 +285,49 @@ test("a trial phase with no requests is 0 where the Run's total knows the catego
 
 type Tokens = { input: number; cacheRead: number; cacheCreation: number | null; output: number };
 
-const request = (
-  session: string,
-  key: string,
-  at: string,
-  tokens: Tokens,
-  agent = "build",
-): UsageEntry => ({
-  what: "request",
-  key,
-  at: `2026-11-18T${at}:00.000Z`,
-  agent,
-  session,
-  parent: null,
-  step: "build",
-  harness: "claude",
-  model: null,
-  effort: null,
-  head: null,
-  reasoning: null,
-  ...tokens,
-});
+const request = (session: string, key: string, at: string, tokens: Tokens, agent = "build") =>
+  ({
+    what: "request",
+    key,
+    at: `2026-11-18T${at}:00.000Z`,
+    agent,
+    session,
+    parent: null,
+    step: "build",
+    harness: "claude",
+    model: null,
+    effort: null,
+    head: null,
+    reasoning: null,
+    ...tokens,
+  }) satisfies UsageEntry;
 
-const healing = (session: string): UsageEntry => ({
-  what: "session",
-  agent: "heal",
-  session,
-  harness: "claude",
-  recovery: true,
-  startup: { system: null, persona: null, project: null, tools: null, skills: null },
-});
+const healing = (session: string) =>
+  ({
+    what: "session",
+    agent: "heal",
+    session,
+    harness: "claude",
+    recovery: true,
+    startup: { system: null, persona: null, project: null, tools: null, skills: null },
+  }) satisfies UsageEntry;
 
 const happened = (
   what: "compaction" | "reminder" | "repair",
   session: string,
   at: string,
   step = "build",
-): UsageEntry => ({
-  what,
-  key: `${session}-${what}-${at}`,
-  at: `2026-11-18T${at}:00.000Z`,
-  agent: "build",
-  session,
-  parent: null,
-  step,
-  chars: null,
-});
+) =>
+  ({
+    what,
+    key: `${session}-${what}-${at}`,
+    at: `2026-11-18T${at}:00.000Z`,
+    agent: "build",
+    session,
+    parent: null,
+    step,
+    chars: null,
+  }) satisfies UsageEntry;
 const compacted = (session: string) => happened("compaction", session, "10:06");
 
 const spentOnly = (tokens: Tokens) => [request("s1", `k-${tokens.output}`, "10:00", tokens)];
@@ -355,22 +335,23 @@ const spentOnly = (tokens: Tokens) => [request("s1", `k-${tokens.output}`, "10:0
 const trialRun = (
   runId: string,
   over: Partial<Omit<TrialRun, "records">> & { records?: Partial<TrialRun["records"]> } = {},
-): TrialRun => ({
-  runId,
-  created: "2026-11-18T10:00:00.000Z",
-  usage: over.usage ?? spentOnly({ input: 1, cacheRead: 0, cacheCreation: 1, output: 1 }),
-  audit:
-    over.audit === undefined
-      ? { reviews: [[]], checks: null, interventions: 0, ended: null }
-      : over.audit,
-  records: {
-    reviews: [[]],
-    checks: { passed: 1, of: 1 },
-    interventions: 0,
-    ended: "2026-11-18T10:30:00.000Z",
-    ...over.records,
-  },
-});
+) =>
+  ({
+    runId,
+    created: "2026-11-18T10:00:00.000Z",
+    usage: over.usage ?? spentOnly({ input: 1, cacheRead: 0, cacheCreation: 1, output: 1 }),
+    audit:
+      over.audit === undefined
+        ? { reviews: [[]], checks: null, interventions: 0, ended: null }
+        : over.audit,
+    records: {
+      reviews: [[]],
+      checks: { passed: 1, of: 1 },
+      interventions: 0,
+      ended: "2026-11-18T10:30:00.000Z",
+      ...over.records,
+    },
+  }) satisfies TrialRun;
 
 const audited = (...findings: ReadonlyArray<{ severity: string; title: string }>) => ({
   reviews: [findings],
@@ -670,13 +651,14 @@ test("interventions are what anyone outside the Run did to it, not its own agent
     operation: string,
     origin: AuditLine["actor"]["origin"],
     from?: AuditLine["actor"]["from"],
-  ): AuditLine => ({
-    at: "2026-11-18T10:00:00.000Z",
-    operation,
-    request: `${operation}-${origin}`,
-    actor: from === undefined ? { origin, requestId: "r" } : { origin, requestId: "r", from },
-    result: null,
-  });
+  ) =>
+    ({
+      at: "2026-11-18T10:00:00.000Z",
+      operation,
+      request: `${operation}-${origin}`,
+      actor: from === undefined ? { origin, requestId: "r" } : { origin, requestId: "r", from },
+      result: null,
+    }) satisfies AuditLine;
   expect(
     interventionsIn("run-1", [
       acted("steer", "cli-tty"),

@@ -1,6 +1,3 @@
-// `integrateDefault`: the default branch merged into a Run's branch where it has moved, over
-// real repositories — a remote, a clone that moves master, and the Run's own clone.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
@@ -32,7 +29,6 @@ const identify = (root: string) =>
     yield* git(root, "config", "user.name", "Test");
   });
 
-/** A remote on master, a clone that moves it, and the Run's clone on `feature`. */
 const repositories = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const root = yield* fs.makeTempDirectoryScoped();
@@ -106,7 +102,6 @@ test("a moved default branch is merged with a merge commit, never a rebase", () 
       });
       expect(yield* parents(run)).toEqual([built, moved]);
       expect(yield* git(run, "merge-base", "HEAD", "origin/master")).toBe(moved);
-      // Integrated once, the same default branch is unchanged from then on.
       expect((yield* integrateDefault(shell, run)).status).toBe("unchanged");
     }),
   ));
@@ -122,13 +117,11 @@ test("a conflict is left for the builder to finish, naming the conflicted files"
       expect(done.sha).toBe(moved);
       expect(done.files).toEqual(["shared.txt"]);
       expect(yield* git(run, "rev-parse", "-q", "--verify", "MERGE_HEAD")).toBe(moved);
-      // Unfinished, the merge is still the builder's, and is handed back as it stands.
       expect(yield* integrateDefault(shell, run)).toMatchObject({
         status: "conflicted",
         sha: moved,
         files: ["shared.txt"],
       });
-      // Resolved but not committed, it waits for the builder's commit.
       const fs = yield* FileSystem.FileSystem;
       yield* fs.writeFileString(`${run}/shared.txt`, "both\n");
       yield* git(run, "add", "shared.txt");
@@ -149,7 +142,6 @@ test("a checkout with uncommitted changes waits for the builder's commit", () =>
       expect(done.reason).toContain("uncommitted");
       expect(yield* git(run, "rev-parse", "HEAD")).toBe(before);
       expect(yield* fs.readFileString(`${run}/feature.txt`)).toBe("half done\n");
-      // A new file not yet added is uncommitted too.
       yield* git(run, "checkout", "-q", "--", "feature.txt");
       yield* fs.writeFileString(`${run}/new.txt`, "not added\n");
       expect((yield* integrateDefault(shell, run)).status).toBe("waiting");
@@ -190,7 +182,7 @@ test("a merged default branch leaves the checkout with the merged head's depende
   runEffect(
     Effect.gen(function* () {
       const run = yield* masterInstalling(
-        'mkdir -p node_modules/.bin && printf "#!/bin/sh\\nexit 0\\n" > node_modules/.bin/tool && chmod +x node_modules/.bin/tool',
+        String.raw`mkdir -p node_modules/.bin && printf "#!/bin/sh\nexit 0\n" > node_modules/.bin/tool && chmod +x node_modules/.bin/tool`,
       );
       expect((yield* integrateDefault(shell, run)).status).toBe("merged");
       expect((yield* shell("sh", ["-c", "node_modules/.bin/tool"], run)).code).toBe(0);
@@ -212,7 +204,7 @@ test("an integration resumed after its install failed installs again, never call
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const run = yield* masterInstalling(
-        'test -f ../registry-up || { echo "registry unreachable" >&2; exit 1; }; mkdir -p node_modules/.bin && printf "#!/bin/sh\\nexit 0\\n" > node_modules/.bin/tool && chmod +x node_modules/.bin/tool',
+        String.raw`test -f ../registry-up || { echo "registry unreachable" >&2; exit 1; }; mkdir -p node_modules/.bin && printf "#!/bin/sh\nexit 0\n" > node_modules/.bin/tool && chmod +x node_modules/.bin/tool`,
       );
       expect((yield* integrateDefault(shell, run)).status).toBe("unavailable");
       yield* fs.writeFileString(`${run}/../registry-up`, "");
@@ -226,7 +218,7 @@ test("an integration resumed after its install left the index locked installs ag
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const run = yield* masterInstalling(
-        'test -f ../registry-up || { touch .git/index.lock; echo "registry unreachable" >&2; exit 1; }; mkdir -p node_modules/.bin && printf "#!/bin/sh\\nexit 0\\n" > node_modules/.bin/tool && chmod +x node_modules/.bin/tool',
+        String.raw`test -f ../registry-up || { touch .git/index.lock; echo "registry unreachable" >&2; exit 1; }; mkdir -p node_modules/.bin && printf "#!/bin/sh\nexit 0\n" > node_modules/.bin/tool && chmod +x node_modules/.bin/tool`,
       );
       expect((yield* integrateDefault(shell, run)).status).toBe("unavailable");
       yield* fs.remove(`${run}/.git/index.lock`);

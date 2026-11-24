@@ -4,119 +4,104 @@ import { DateTime, Effect, Option } from "effect";
 
 export const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
 
-/** Timestamps parsed before: a board build reads the same recorded times again and again. */
 const parsed = new Map<string, number>();
 const PARSED_KEPT = 100_000;
 
-/** A recorded timestamp in epoch milliseconds, and `NaN` for one that is not a time. */
-export function epochMs(iso: string): number {
+export function epochMs(iso: string) {
   const known = parsed.get(iso);
-  if (known !== undefined) return known;
+  if (known !== undefined) {
+    return known;
+  }
   const ms = Option.match(DateTime.make(iso), {
     onNone: () => Number.NaN,
     onSome: DateTime.toEpochMillis,
   });
-  // Dropped whole when full: an LRU only if a host ever sees that many distinct times.
-  if (parsed.size >= PARSED_KEPT) parsed.clear();
+  if (parsed.size >= PARSED_KEPT) {
+    parsed.clear();
+  }
   parsed.set(iso, ms);
   return ms;
 }
 
-/** Epoch milliseconds as an ISO timestamp. */
 export const isoAt = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
 
-/** A recorded timestamp as the `Date` a file's times are set with. */
 export function fileTime(iso: string) {
   return DateTime.toDateUtc(DateTime.makeUnsafe(iso));
 }
 
-/**
- * The one set of thresholds "how long ago" is answered against, so the two renderings
- * below cannot drift into disagreeing about when an hour becomes a day.
- */
 const UNITS = [
   { unit: "day", short: "d", size: 86_400 },
-  { unit: "hour", short: "h", size: 3_600 },
+  { unit: "hour", short: "h", size: 3600 },
   { unit: "minute", short: "m", size: 60 },
 ] as const;
 
-/**
- * How long something took, in the coarsest unit that still says it: `45s`, `12m`,
- * `1h03m`. Two units past an hour, because "63m" is a number to divide in your head.
- * Milliseconds rather than two timestamps, so a caller with only one end of it — a step
- * still running — asks the same question the same way.
- *
- * A negative span is `0s`: the two ends come from different clocks (a step's own stamp
- * against this machine's now), and a duration counting backwards is worse than a zero.
- */
-export function took(ms: number): string {
+// WARNING: a negative span is 0s: the two ends come from different clocks.
+export function took(ms: number) {
   const seconds = Math.max(0, Math.floor(ms / 1000));
-  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
   return `${Math.floor(minutes / 60)}h${pipe_(String(minutes % 60), Str.padStart(2, "0"))}m`;
 }
 
-/**
- * How long something has lasted, spelled out: `49 hours`, `3 minutes`. What a sentence
- * wants where `took`'s `49h` is a code to expand — a card saying "silent for 49h" reads
- * as a measurement, and "silent for 49 hours" reads as the problem it is.
- */
-export function spanned(ms: number): string {
+export function spanned(ms: number) {
   const seconds = Math.max(0, Math.round(ms / 1000));
   for (const { unit, size } of UNITS) {
     const n = Math.floor(seconds / size);
-    if (n >= 1) return `${n} ${unit}${n === 1 ? "" : "s"}`;
+    if (n >= 1) {
+      return `${n} ${unit}${n === 1 ? "" : "s"}`;
+    }
   }
   return "";
 }
 
-/**
- * How long ago, in the coarsest unit that still says something. A menu line and a
- * prompt both want "2 days ago", not a timestamp to subtract in your head.
- */
-export function ago(iso: string, nowMs: number): string {
+export function ago(iso: string, nowMs: number) {
   const then = epochMs(iso);
   return Number.isNaN(then) ? iso : agoMs(then, nowMs);
 }
 
-export function agoMs(thenMs: number, nowMs: number): string {
+export function agoMs(thenMs: number, nowMs: number) {
   const span = spanned(nowMs - thenMs);
   return span === "" ? "just now" : `${span} ago`;
 }
 
-/**
- * The same answer in a column's worth of characters — `2h ago` — for a dense row list
- * where "2 hours ago" does not fit. Same thresholds as `ago` above, deliberately: the
- * resume menu and the tab's row list are both on screen in one session, and the same run
- * reading "2 hours ago" in one and "2h ago" in the other is one clock, said twice.
- *
- * Epoch milliseconds rather than an ISO string, because that is what a row carries;
- * `0` is "nothing recorded when", which shows no time at all rather than 1970.
- */
-export function agoShort(atMs: number, nowMs: number): string {
-  if (atMs <= 0) return "";
+export function agoShort(atMs: number, nowMs: number) {
+  if (atMs <= 0) {
+    return "";
+  }
   const seconds = Math.floor((nowMs - atMs) / 1000);
-  if (seconds < 5) return "now";
-  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 5) {
+    return "now";
+  }
+  if (seconds < 60) {
+    return `${seconds}s ago`;
+  }
   for (const { short, size } of UNITS) {
     const n = Math.floor(seconds / size);
-    if (n >= 1) return `${n}${short} ago`;
+    if (n >= 1) {
+      return `${n}${short} ago`;
+    }
   }
   return "now";
 }
 
-/** How long, as a Flow's fact line says it: `12 min`, `2 h`, `1 h 5 min`. */
-export function minutes(ms: number): string {
+export function minutes(ms: number) {
   const whole = Math.floor(Math.max(0, ms) / 60_000);
-  if (whole < 1) return "under a minute";
-  if (whole < 60) return `${whole} min`;
+  if (whole < 1) {
+    return "under a minute";
+  }
+  if (whole < 60) {
+    return `${whole} min`;
+  }
   const rest = whole % 60;
   return rest === 0 ? `${Math.floor(whole / 60)} h` : `${Math.floor(whole / 60)} h ${rest} min`;
 }
 
-/** A time of day on this Machine's clock: `15:45`. */
-export function clockTime(ms: number): string {
+export function clockTime(ms: number) {
   const iso = DateTime.formatIsoOffset(
     DateTime.makeZonedUnsafe(ms, { timeZone: DateTime.zoneMakeLocal() }),
   );

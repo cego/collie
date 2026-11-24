@@ -1,16 +1,3 @@
-// A review/fix rally a module wrote, and what it is allowed to believe.
-//
-// The loop is TypeScript: a `for` over rounds, `splitDisputed` for what is still the
-// implementer's, `settleRound` for where the round goes and `settleFinalFix` for whether
-// the last fix stands. They are the engine's own functions — a declared loop and a written
-// one converge, stand on a dispute and run out of rounds in the same place, or one of them
-// is wrong.
-//
-// The agents are herdr's through the real dispatcher, answering by writing the file the
-// prompt names. What is being proved beyond the paths is the one thing an Output cannot
-// buy: a check it says it ran is a claim, and only the verification journal — bound to the
-// tree the command ran on — turns it into proof.
-
 import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -21,17 +8,18 @@ import { Rig } from "./support/recorder";
 import { exec } from "./support/command";
 import { runEffect as runShared } from "./support/effect";
 import { overHost } from "./support/records";
-import { agentsLayer, type AgentHost } from "../src/agents";
+import { agentsLayer } from "../src/agents";
+import type { AgentHost } from "../src/agents";
 import { Children, Host } from "../src/sdk";
 import { evidenceDir, foundationLayer, loadEntry } from "../src/engine";
 import { fixtures } from "./support/host";
-import { collect, readVerifications, type Verification } from "../src/verify";
+import { collect, readVerifications } from "../src/verify";
+import type { Verification } from "../src/verify";
 import { Store } from "../src/store";
 import { RunRecords } from "../src/run-records";
 
 let rig: Rig;
 let dir: string;
-/** A test's effect, whose own reads of a Run's records meet its host's. */
 const runEffect = <A, E>(effect: Parameters<typeof runShared<A, E>>[0]) =>
   runShared(effect.pipe(overHost(() => dir)));
 
@@ -44,8 +32,7 @@ beforeEach(() =>
       dir = `${rig.root}/host`;
       yield* fs.makeDirectory(dir, { recursive: true });
       yield* fs.makeDirectory(rig.projectDir, { recursive: true });
-      // A real repository, because what binds a verification is the tree it ran on and
-      // a directory git knows nothing about has no tree to move.
+      // WARNING: a real repository, since a verification binds to the tree it ran on.
       for (const args of [
         ["init", "-q"],
         ["config", "user.email", "t@example.com"],
@@ -62,7 +49,7 @@ beforeEach(() =>
 
 afterEach(() => runEffect(rig.close()));
 
-const hostOf = (): AgentHost => ({
+const hostOf: () => AgentHost = () => ({
   dir,
   env: rig.pluginEnv(),
   herdr: new Herdr(rig.pluginEnv()),
@@ -74,7 +61,6 @@ const hostOf = (): AgentHost => ({
   collectMs: 400,
 });
 
-/** The module as an author saved it, loaded the way a host loads one. */
 const rally = (runId: string, rounds: number) =>
   Effect.gen(function* () {
     const entry = yield* loadEntry(`${fixtures}/rally.workflow.ts`);
@@ -111,7 +97,6 @@ const rally = (runId: string, rounds: number) =>
     Effect.orDie,
   );
 
-/** This suite starts no children; the service is here because a registration takes one. */
 const nothing = () => Effect.die("no children in this suite");
 
 const said = (result: { readonly _tag: string; readonly success?: unknown }) =>
@@ -130,7 +115,6 @@ test("a rally that reviews clean stops there, with no fix and no second review",
       yield* rig.queueOutputs([{ verdict: "clean" }]);
       const result = yield* rally("r-clean", 3);
       expect(said(result)).toBe("clean after 1 round(s), 0 non-blocking left");
-      // One agent, one prompt: nothing reviewed again and nothing was asked to fix.
       expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.send")).toHaveLength(1);
     }),
   ));
@@ -151,14 +135,10 @@ test("findings drive one fix, and the review after it is what ends the rally", (
 test("a finding that says only what it is and how bad is still a finding", () =>
   runEffect(
     Effect.gen(function* () {
-      // No file, no line, no detail — a reviewer who has none of those has still said
-      // something, and a shape that refused it would throw the review away.
       yield* rig.queueOutputs([
         { verdict: "findings", findings: [{ severity: "minor", title: "a passing remark" }] },
       ]);
       const result = yield* rally("r-bare", 2);
-      // Minor is the one severity that does not drive a round, so the rally is over and
-      // what was said is carried rather than dropped.
       expect(said(result)).toBe("clean after 1 round(s), 1 non-blocking left");
     }),
   ));
@@ -174,7 +154,6 @@ test("a blocking finding the implementer disputed is the human's call, not anoth
           fixed: [],
           checks: [],
         },
-        // The reviewer raises it again with no answer to the reason given.
         { verdict: "findings", findings: [blocker("empty list")] },
       ]);
       const result = yield* rally("r-disputed", 3);
@@ -208,7 +187,6 @@ test("the last fix's checks are read from the journal, not from what it said abo
           checks: [{ name: "unit" }],
         },
       ]);
-      // Nothing was ever run under that name, so the fix's word for it buys nothing.
       const claimed = yield* rally("r-claimed", 1);
       expect(said(claimed)).toContain("fix_unverified");
       expect(said(claimed)).toContain(`check "unit" has no verification record`);
@@ -254,7 +232,6 @@ test("a verification that passed before the tree moved is left to the gate, not 
         cwd: rig.projectDir,
         by: "agent",
       }).pipe(Effect.orDie);
-      // The change the fix made is the thing that makes the earlier pass history.
       yield* fs.writeFileString(`${rig.projectDir}/thing.ts`, "export const moved = true;\n");
       yield* rig.queueOutputs([
         { verdict: "findings", findings: [blocker("empty list")] },
@@ -311,7 +288,6 @@ test("a command nobody approved is refused, whatever a workflow asks the host fo
         Effect.orDie,
       );
       expect(asked.allowed._tag).toBe("Success");
-      // Where the grant said, not where the workflow happened to be standing.
       expect(asked.nested._tag === "Success" && asked.nested.success.cwd).toBe(
         `${rig.projectDir}/sub`,
       );
@@ -357,13 +333,11 @@ const deltaRally = (runId: string, moves: boolean, upstream = false) =>
     Effect.orDie,
   );
 
-/** What a Run started on this release records beside its settings: its rounds get a delta. */
 const startedWithDelta = (runId: string) =>
   RunRecords.use((records) => records.put(runId, "features.json", `{"review_delta":true}`));
 
 const DELTA = "Previous round's head:";
 
-/** Two blockers and a minor; the fix settles one blocker and disputes the other. */
 const twoRounds = () =>
   rig.queueOutputs([
     {
@@ -441,7 +415,6 @@ test("round 1 and the final review of the integrated tree read the whole change 
     }),
   ));
 
-/** The shipped rally given an implement ticket's ledger, which starts empty. */
 const ledgerRally = (runId: string) =>
   Effect.gen(function* () {
     const base = Str.trim(
@@ -513,7 +486,6 @@ test("a later round's review that leaves out an earlier finding fails the Run, n
     }),
   ));
 
-/** The shipped rally on a Run started with `static` marked to run before review, then `after`. */
 const staticRally = <A>(
   runId: string,
   fixes: boolean,
@@ -584,7 +556,7 @@ const staticRally = <A>(
     Effect.orDie,
   );
 
-/** A fix that changed nothing, which also reads as a clean review. */
+// WARNING: a fix that changed nothing also reads as a clean review.
 const NOT_FIXED = {
   verdict: "clean",
   summary: "nothing changed",
@@ -593,47 +565,39 @@ const NOT_FIXED = {
   checks: [],
 };
 
-test(
-  "a check marked to run before review that fails on the builder's tree goes back to the builder by name, and no reviewer starts",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        yield* rig.queueOutputs([NOT_FIXED, NOT_FIXED, NOT_FIXED, NOT_FIXED]);
-        yield* staticRally("r-static-fails", false, (ran) =>
-          Effect.gen(function* () {
-            const [failed] = yield* ran.records();
-            expect(ran.said).toContain("before_review_failed");
-            expect(ran.said).toContain(`"static"`);
-            const fix = yield* ran.prompt("before-review-1-fix-1");
-            expect(fix).toContain(`check "static" failed before review`);
-            expect(fix).toContain(`verification:${failed!.id}`);
-            expect(yield* ran.asked("review-1")).toBe(false);
-          }),
-        );
-      }),
-    ),
-  60_000,
-);
+test("a check marked to run before review that fails on the builder's tree goes back to the builder by name, and no reviewer starts", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([NOT_FIXED, NOT_FIXED, NOT_FIXED, NOT_FIXED]);
+      yield* staticRally("r-static-fails", false, (ran) =>
+        Effect.gen(function* () {
+          const [failed] = yield* ran.records();
+          expect(ran.said).toContain("before_review_failed");
+          expect(ran.said).toContain(`"static"`);
+          const fix = yield* ran.prompt("before-review-1-fix-1");
+          expect(fix).toContain(`check "static" failed before review`);
+          expect(fix).toContain(`verification:${failed!.id}`);
+          expect(yield* ran.asked("review-1")).toBe(false);
+        }),
+      );
+    }),
+  ));
 
-test(
-  "a check marked to run before review that passes opens the round, and the gate on the unmoved tree takes its record",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.writeFileString(`${rig.projectDir}/lint-ok`, "already\n");
-        yield* rig.queueOutputs([NOT_FIXED]);
-        yield* staticRally("r-static-passes", false, (ran) =>
-          Effect.gen(function* () {
-            expect(ran.said).toBe("settled");
-            expect(yield* ran.asked("review-1")).toBe(true);
-            const [passed, ...others] = yield* ran.records();
-            expect([passed?.result, others]).toEqual(["pass", []]);
-            expect((yield* ran.gate()).id).toBe(passed!.id);
-            expect(yield* ran.records()).toHaveLength(1);
-          }),
-        );
-      }),
-    ),
-  60_000,
-);
+test("a check marked to run before review that passes opens the round, and the gate on the unmoved tree takes its record", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(`${rig.projectDir}/lint-ok`, "already\n");
+      yield* rig.queueOutputs([NOT_FIXED]);
+      yield* staticRally("r-static-passes", false, (ran) =>
+        Effect.gen(function* () {
+          expect(ran.said).toBe("settled");
+          expect(yield* ran.asked("review-1")).toBe(true);
+          const [passed, ...others] = yield* ran.records();
+          expect([passed?.result, others]).toEqual(["pass", []]);
+          expect((yield* ran.gate()).id).toBe(passed!.id);
+          expect(yield* ran.records()).toHaveLength(1);
+        }),
+      );
+    }),
+  ));

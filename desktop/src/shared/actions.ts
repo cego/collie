@@ -1,4 +1,5 @@
-import { Cause, Exit, Option, Result, type Schema } from "effect";
+import { Cause, Exit, Option, Result } from "effect";
+import type { Schema } from "effect";
 import * as Arr from "effect/Array";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
@@ -15,7 +16,6 @@ export const failureOf = (cause: Cause.Cause<Failed>) => {
     : { reason: saidOf(cause), request: undefined, step: undefined, refused: undefined };
 };
 
-/** A gesture's request, sent again on every Try again. */
 export const newRequest = () => SecureRandom.uuidV4Unsafe();
 
 export interface ActionNotice {
@@ -35,11 +35,7 @@ export const actionRunner = (
   }) => Promise<Exit.Exit<string, Failed>>,
   tell: (notice: ActionNotice) => void,
 ) => {
-  /**
-   * One gesture is one request, minted here so every Try again sends it again, whatever
-   * failed: the host takes it once. `unsent` says, at each try, why not to send it;
-   * `tried` hears each try start (null) and end, and what refused it.
-   */
+  // WARNING: one gesture is one request, reused on every try; the host takes it once.
   const run = (
     installation: string,
     action: DesktopAction,
@@ -47,7 +43,7 @@ export const actionRunner = (
     applied?: () => void,
     unsent?: () => string | undefined,
     tried?: (done: boolean | null, failed?: ReturnType<typeof failureOf>) => void,
-  ): Promise<boolean> => {
+  ) => {
     const request = again ?? newRequest();
     const why = unsent?.();
     tried?.(null);
@@ -82,7 +78,7 @@ export const actionRunner = (
   return run;
 };
 
-export const offerKey = (offer: Pick<OfferView, "id" | "run">): string =>
+export const offerKey = (offer: Pick<OfferView, "id" | "run">) =>
   offer.run === undefined ? offer.id : `${offer.run}:${offer.id}`;
 
 export const offeringOf = (runId: string, offer: Pick<OfferView, "id" | "run"> | null) => ({

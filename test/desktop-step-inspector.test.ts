@@ -3,13 +3,13 @@ import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import type { FlowRun, VerificationView } from "../src/board-model";
 import {
-  type InspectorPart,
   inspectorPart,
   inspectorParts,
   shownPart,
   stepEvidence,
   stepLines,
 } from "../desktop/src/shared/step-inspector";
+import type { InspectorPart } from "../desktop/src/shared/step-inspector";
 import { flowNode } from "./support/flow";
 
 test("a Step's Log is bounded by the next Step's start line", () => {
@@ -40,7 +40,11 @@ test("a tail beginning inside a Step shows what it holds and says where earlier 
   });
 });
 test("the Step's evidence excludes other Steps and narrows to a picked Slice", () => {
-  const check = (id: string, step?: string, item?: string): VerificationView => ({
+  const check: (id: string, step?: string, item?: string) => VerificationView = (
+    id,
+    step?,
+    item?,
+  ) => ({
     id,
     name: id,
     result: "pass",

@@ -1,8 +1,3 @@
-// The plain ticket's build prompt is a contract: its scenario compares it exactly with a golden.
-//
-//   bun run tools/prompt-golden.ts --write   # regenerate the golden from the rendered prompt
-//   bun run tools/prompt-golden.ts --check   # fail, naming the golden, where it differs
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
@@ -34,8 +29,10 @@ export class Drift extends Data.TaggedError("Drift")<{
   }
 }
 
-export const drift = (rendered: string, golden: string): Option.Option<Drift> => {
-  if (rendered === golden) return Option.none();
+export const drift = (rendered: string, golden: string) => {
+  if (rendered === golden) {
+    return Option.none();
+  }
   const ours = Str.split(rendered, "\n");
   const theirs = Str.split(golden, "\n");
   const at = Option.getOrElse(
@@ -55,16 +52,18 @@ export const drift = (rendered: string, golden: string): Option.Option<Drift> =>
   );
 };
 
-/** Fails with `Drift` where `rendered` differs from the golden, or writes it there under `--write`. */
 export const matchGolden = Effect.fn("PromptGolden.match")(function* (rendered: string) {
   const fs = yield* FileSystem.FileSystem;
-  if ((yield* Config.String(WRITE).pipe(Config.withDefault(""))) === "1")
+  if ((yield* Config.String(WRITE).pipe(Config.withDefault(""))) === "1") {
     return yield* fs.writeFileString(GOLDEN, rendered);
+  }
   const found = drift(rendered, yield* fs.readFileString(GOLDEN));
-  if (Option.isSome(found)) return yield* found.value;
+  if (Option.isSome(found)) {
+    return yield* found.value;
+  }
 });
 
-if (import.meta.main)
+if (import.meta.main) {
   BunRuntime.runMain(
     Effect.gen(function* () {
       const mode = Bun.argv[2];
@@ -74,9 +73,9 @@ if (import.meta.main)
       }
       const child = Bun.spawn(["bun", "run", "scenario", SCENARIO], {
         stdio: ["inherit", "inherit", "inherit"],
-        // oxlint-disable-next-line effecttsgo/process-env -- the scenario runs in this environment.
         env: { ...process.env, [WRITE]: mode === "--write" ? "1" : "" },
       });
       return yield* Effect.promise(() => child.exited);
     }).pipe(Effect.flatMap((code) => Effect.sync(() => process.exit(code)))),
   );
+}

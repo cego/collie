@@ -1,7 +1,6 @@
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { Effect, Fiber, Option, Queue, Schema, Stream, flow, Result } from "effect";
-import type { Offered } from "../shared/chat-choices";
 import type { FlockSettings } from "../shared/flock-settings";
 import { childEnv, which } from "./login-env";
 
@@ -34,7 +33,7 @@ export const readPiModels = (
   _flock: FlockSettings,
   dir: string,
   command: ReadonlyArray<string> | null = which("pi") === null ? null : [which("pi")!],
-): Effect.Effect<ReadonlyArray<Omit<Offered, "unsetEffort">>, string> =>
+) =>
   Effect.acquireUseRelease(
     Effect.try({
       try: () =>
@@ -100,8 +99,12 @@ export const readPiModels = (
           });
           while (true) {
             const answer = yield* Queue.take(answers);
-            if (answer.id !== id || answer.command !== type) continue;
-            if (!answer.success) return yield* Effect.fail(answer.error ?? `Pi refused ${type}`);
+            if (answer.id !== id || answer.command !== type) {
+              continue;
+            }
+            if (!answer.success) {
+              return yield* Effect.fail(answer.error ?? `Pi refused ${type}`);
+            }
             return answer.data;
           }
         });
@@ -111,7 +114,9 @@ export const readPiModels = (
         );
         return yield* Effect.forEach(models, (model) =>
           Effect.gen(function* () {
-            if (model.provider === "" || model.id === "") return [];
+            if (model.provider === "" || model.id === "") {
+              return [];
+            }
             const id = `${model.provider}/${model.id}`;
             let efforts: ReadonlyArray<string> = [];
             if (model.reasoning) {

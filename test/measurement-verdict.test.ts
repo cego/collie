@@ -1,16 +1,9 @@
-// A Measurement's verdict per metric, from hand-picked samples with known answers.
-
 import * as Arr from "effect/Array";
 import { describe, expect, test } from "bun:test";
 import { Effect, Schema, flow, Result } from "effect";
 import { BenchmarkPlan, decodeBenchmarkPlan, limitsOf } from "../src/measurement-model";
-import {
-  Judgement,
-  JudgementJson,
-  judge,
-  type Limits,
-  type MetricSamples,
-} from "../src/measurement-verdict";
+import { Judgement, JudgementJson, judge } from "../src/measurement-verdict";
+import type { Limits, MetricSamples } from "../src/measurement-verdict";
 import ff23b932 from "./fixtures/measurements/run-ff23b932-calibration.json" with { type: "json" };
 
 const ID = "measurement-7f3a";
@@ -18,10 +11,13 @@ const LIMITS: Limits = { threshold: 5, tolerance: 2 };
 
 const of = (value: number, count = 10) => Array.from({ length: count }, () => value);
 
-const run = (samples: MetricSamples, id = ID, limits = LIMITS): Judgement =>
+const run = (samples: MetricSamples, id = ID, limits = LIMITS) =>
   Effect.runSync(judge(id, samples, limits));
 
-const latency = (base: ReadonlyArray<number>, candidate: ReadonlyArray<number>): MetricSamples => ({
+const latency: (base: ReadonlyArray<number>, candidate: ReadonlyArray<number>) => MetricSamples = (
+  base,
+  candidate,
+) => ({
   metric: "p95",
   direction: "lower",
   base,
@@ -74,10 +70,10 @@ describe("a metric's verdict", () => {
   });
 
   test("a higher-is-better metric gains when the candidate's median is the larger", () => {
-    const throughput = (
+    const throughput: (
       base: ReadonlyArray<number>,
       candidate: ReadonlyArray<number>,
-    ): MetricSamples => ({
+    ) => MetricSamples = (base, candidate) => ({
       metric: "requests/s",
       direction: "higher",
       base,
@@ -148,7 +144,6 @@ describe("a metric's verdict", () => {
 });
 
 describe("a replay", () => {
-  // Many distinct values, so the interval's bounds depend on which resamples are drawn.
   const spread = (centre: number) =>
     Array.from({ length: 30 }, (_, i) => centre + ((i * 7) % 30) * 1.37 + i * 0.013);
   const noisy = latency(spread(100), spread(98));

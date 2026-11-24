@@ -1,0 +1,61 @@
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import { expect, test } from "bun:test";
+import { Effect } from "effect";
+import { RGBA, TextAttributes } from "@opentui/core";
+import { runEffect } from "../../../test/support/effect";
+import { ansiText, styledMarkdown } from "../markdown";
+import { C } from "../sections";
+
+const RED = RGBA.fromHex(C.red);
+
+test("markdown keeps headings and emphasis when CLI colour is disabled", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const previous = Bun.env.NO_COLOR;
+      Bun.env.NO_COLOR = "1";
+      try {
+        const styled = yield* Effect.promise(() => styledMarkdown("# Heading\n\n**emphasis**", 40));
+        const chunks = styled?.chunks ?? [];
+        for (const text of ["Heading", "emphasis"]) {
+          expect(
+            (Option.getOrUndefined(
+              Arr.findFirst(chunks, (chunk) => pipe(chunk.text, Str.includes(text))),
+            )?.attributes ?? 0) & TextAttributes.BOLD,
+          ).toBe(TextAttributes.BOLD);
+        }
+      } finally {
+        if (previous === undefined) {
+          delete Bun.env.NO_COLOR;
+        } else {
+          Bun.env.NO_COLOR = previous;
+        }
+      }
+    }),
+  ));
+
+test("SGR codes become attributes and the board's colours, and a reset clears both", () => {
+  const chunks = ansiText(
+    "\u001b[1;31mbad\u001b[22mstill red\u001b[0mplain\u001b[38;2;1;3;4mrgb\u001b[39m",
+  ).chunks;
+  expect(Arr.map(chunks, (c) => [c.text, c.attributes, c.fg])).toEqual([
+    ["bad", TextAttributes.BOLD, RED],
+    ["still red", 0, RED],
+    ["plain", 0, undefined],
+    ["rgb", 0, undefined],
+  ]);
+});
+
+test("an escape the agent wrote is text, never a style", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const styled = yield* Effect.promise(() => styledMarkdown("\u001b[1mloud", 40));
+      const chunks = styled?.chunks ?? [];
+      expect(Arr.some(chunks, (c) => pipe(c.text, Str.includes("\u001b")))).toBe(false);
+      expect(Arr.some(chunks, (c) => Boolean((c.attributes ?? 0) & TextAttributes.BOLD))).toBe(
+        false,
+      );
+    }),
+  ));

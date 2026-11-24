@@ -1,7 +1,3 @@
-// A Machine's files as its host hands them to a front door: the Flock chat's Read, Glob,
-// Grep, Write and Edit on a Machine it does not run on (ADR-0011, the Flock chat reaches
-// files). Paths are absolute on this Machine; nothing is written inside the host's state.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -9,16 +5,13 @@ import { Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
 import * as Base64 from "effect/encoding/Base64";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { mediaTypeOf } from "./attachments";
-import { HostRefused, PART_BYTES, type HostFile } from "./board-model";
+import { HostRefused, PART_BYTES } from "./board-model";
+import type { HostFile } from "./board-model";
 import { SESSIONS_CLOSED } from "./own-words";
 
-/** The most paths a glob answers, and lines a grep does, unless asked for fewer. */
 export const FOUND_LIMIT = 100;
-/** Where a search stops looking; `omitted` past it is a lower bound. */
 export const SEARCH_LIMIT = 10_000;
-/** How long a search runs before it answers with what it has found. */
 const SEARCH_TIME = "20 seconds";
-/** The most characters of one line a grep answers, as Claude Code's Grep cuts them. */
 export const LINE_LIMIT = 500;
 
 const refused = (reason: string) => new HostRefused({ reason });
@@ -41,7 +34,9 @@ export const readPart = Effect.fn("HostFiles.read")(function* (
   return yield* Effect.scoped(
     Effect.gen(function* () {
       const info = yield* fs.stat(path);
-      if (info.type !== "File") return yield* refused(`${path} is not a file`);
+      if (info.type !== "File") {
+        return yield* refused(`${path} is not a file`);
+      }
       const size = Number(info.size);
       const from = Math.min(Math.max(0, offset), size);
       const handle = yield* fs.open(path, { flag: "r" });
@@ -57,10 +52,11 @@ export const readPart = Effect.fn("HostFiles.read")(function* (
   );
 });
 
-/** Each name `segment` stands for, its braces expanded innermost first. */
-const expanded = (segment: string): ReadonlyArray<string> => {
+const expanded: (segment: string) => ReadonlyArray<string> = (segment) => {
   const braces = /\{([^{}]*)\}/.exec(segment);
-  if (braces === null) return [segment];
+  if (braces === null) {
+    return [segment];
+  }
   const [before, after] = [
     pipe_(segment, Str.slice(0, braces.index)),
     pipe_(segment, Str.slice(braces.index + braces[0].length)),
@@ -68,13 +64,12 @@ const expanded = (segment: string): ReadonlyArray<string> => {
   return Arr.flatMap(Str.split(braces[1]!, ","), (one) => expanded(before + one + after));
 };
 
-/** The dot names `pattern` asks for, `{.env,.envrc}` as two. */
 const dotNames = (pattern: string) =>
   Arr.filter(Arr.flatMap(Str.split(pattern, "/"), expanded), (name) =>
     pipe_(name, Str.startsWith(".")),
   );
 
-// Named dot segments remain allowed at any depth, unlike Effect Glob's `**`.
+// WARNING: Unlike Effect Glob's `**`, named dot segments match at any depth.
 const reaches = (pattern: string) => {
   const glob = new Bun.Glob(pattern);
   const dotted = Arr.map(dotNames(pattern), (segment) => new Bun.Glob(segment));
@@ -87,7 +82,6 @@ const reaches = (pattern: string) => {
     );
 };
 
-/** Files under `dir` matching `pattern`, newest first, and how many beyond the bound. */
 export const globFiles = Effect.fn("HostFiles.glob")(function* (
   pattern: string,
   dir: string,
@@ -101,14 +95,11 @@ export const globFiles = Effect.fn("HostFiles.glob")(function* (
   const matches = reaches(pattern);
   const keep = (line: string) => matches(paths.relative(root, line)) && !within(line, shut);
   const dotted = dotNames(pattern);
-  // The root must list; an unreadable directory below it is passed by.
   yield* fs
     .readDirectory(root)
     .pipe(Effect.mapError((cause) => refused(`${root} cannot be listed: ${String(cause)}`)));
   const rg = Bun.which("rg");
-  // Links below the root are not followed, so a loop of them ends, and a dot directory is
-  // entered only where the pattern names it: find prunes by those names, so it takes a
-  // dotted pattern.
+  // WARNING: Links below the root are not followed, and dot directories are entered only where the pattern names them.
   const listed = yield* (
     rg === null || dotted.length > 0
       ? searched(
@@ -138,11 +129,12 @@ export const globFiles = Effect.fn("HostFiles.glob")(function* (
   const matched: Array<{ readonly path: string; readonly at: number }> = [];
   for (const path of found) {
     const info = yield* fs.stat(path).pipe(Effect.option);
-    if (info._tag === "Some")
+    if (info._tag === "Some") {
       matched.push({
         path,
         at: Option.match(info.value.mtime, { onNone: () => 0, onSome: (at) => at.getTime() }),
       });
+    }
   }
   matched.sort((a, b) => b.at - a.at || pipe_(a.path, Str.localeCompare(b.path)));
   return {
@@ -169,7 +161,6 @@ export interface GrepAsked {
 const count = (flag: string, value: number | undefined) =>
   value === undefined ? [] : [flag, String(value)];
 
-/** Ripgrep's arguments for a search, as Claude Code's Grep asks it. */
 const rgArgs = (asked: GrepAsked, mode: string) => [
   "--with-filename",
   "--no-messages",
@@ -192,7 +183,6 @@ const rgArgs = (asked: GrepAsked, mode: string) => [
   asked.pattern,
 ];
 
-/** The same with `grep -r`, which has no file types and no multiline. */
 const grepArgs = (asked: GrepAsked, mode: string) => [
   "-r",
   "-s",
@@ -208,7 +198,6 @@ const grepArgs = (asked: GrepAsked, mode: string) => [
   asked.pattern,
 ];
 
-/** The first `limit` lines a search prints, and how many more, counted to `bound`. */
 const searched = (
   cmd: string,
   args: ReadonlyArray<string>,
@@ -222,7 +211,7 @@ const searched = (
     const handle = yield* spawner.spawn(
       ChildProcess.make(cmd, args, { cwd, stdout: "pipe", stderr: "ignore", extendEnv: true }),
     );
-    const lines: string[] = [];
+    const lines: Array<string> = [];
     let seen = 0;
     const done = yield* handle.stdout.pipe(
       Stream.decodeText(),
@@ -231,12 +220,13 @@ const searched = (
       Stream.take(bound),
       Stream.runForEach((line) =>
         Effect.sync(() => {
-          if (seen++ < limit) lines.push(line);
+          if (seen++ < limit) {
+            lines.push(line);
+          }
         }),
       ),
       Effect.timeoutOption(SEARCH_TIME),
     );
-    // Cut short, the search is stopped rather than waited on.
     const code = seen >= bound || Option.isNone(done) ? 0 : Number(yield* handle.exitCode);
     return { lines, omitted: seen - lines.length, code };
   }).pipe(Effect.scoped);
@@ -248,11 +238,11 @@ export const grepFiles = Effect.fn("HostFiles.grep")(function* (
 ) {
   const root = yield* searchRoot(asked.path, closed);
   const shut = yield* closedRoots(closed);
-  // A line names its file first, and after it a separator that varies with the mode.
+  // WARNING: A line names its file first, then a separator that varies with the mode.
   const keep = (line: string) => !Arr.some(shut, (one) => pipe_(line, Str.startsWith(one)));
   const mode = asked.outputMode ?? "files_with_matches";
   const rg = Bun.which("rg");
-  // A search of one file runs beside it: a file is no working directory.
+  // WARNING: A file is no working directory: a search of one file runs beside it.
   const cwd = (yield* (yield* FileSystem.FileSystem).stat(root).pipe(
     Effect.map((info) => info.type === "Directory"),
     Effect.orElseSucceed(() => false),
@@ -265,9 +255,10 @@ export const grepFiles = Effect.fn("HostFiles.grep")(function* (
       ? searched("grep", [...grepArgs(asked, mode), root], cwd, limit, bound, keep)
       : searched(rg, [...rgArgs(asked, mode), root], cwd, limit, bound, keep)
   ).pipe(Effect.mapError((cause) => refused(`the search of ${root} failed: ${String(cause)}`)));
-  // Exit 1 is "nothing matched"; above it with matches, some files could not be read.
-  if (found.code > 1 && found.lines.length === 0)
+  // WARNING: Exit 1 is nothing matched; above it with matches, some files could not be read.
+  if (found.code > 1 && found.lines.length === 0) {
     return yield* refused(`the search of ${root} failed (exit ${found.code})`);
+  }
   return {
     text: Arr.join(
       Arr.map(found.lines, (line) => pipe_(line, Str.slice(0, LINE_LIMIT))),
@@ -277,10 +268,6 @@ export const grepFiles = Effect.fn("HostFiles.grep")(function* (
   };
 });
 
-/**
- * Where `path` really is: the nearest part of it that exists with every link followed,
- * and the rest as written.
- */
 const realOf: (
   path: string,
 ) => Effect.Effect<string, HostRefused, FileSystem.FileSystem | Path.Path> = Effect.fn(
@@ -292,59 +279,62 @@ const realOf: (
   let rest = "";
   for (let links = 0; ;) {
     const real = yield* fs.realPath(existing).pipe(Effect.option);
-    if (real._tag === "Some") return rest === "" ? real.value : paths.join(real.value, rest);
-    // A link to nothing yet is where a write through it lands.
+    if (real._tag === "Some") {
+      return rest === "" ? real.value : paths.join(real.value, rest);
+    }
+    // WARNING: A dangling link is where a write through it lands.
     const target = yield* fs.readLink(existing).pipe(Effect.option);
     if (target._tag === "Some") {
-      if (++links > 40) return yield* refused(`${path} has too many links to follow`);
+      if (++links > 40) {
+        return yield* refused(`${path} has too many links to follow`);
+      }
       existing = paths.resolve(yield* realOf(paths.dirname(existing)), target.value);
       continue;
     }
     const parent = paths.dirname(existing);
-    if (parent === existing) return path;
+    if (parent === existing) {
+      return path;
+    }
     rest = rest === "" ? paths.basename(existing) : paths.join(paths.basename(existing), rest);
     existing = parent;
   }
 });
 
-/** `path`, refused where it is inside `state`: a Run's state is changed through the host. */
 const writable = Effect.fn("HostFiles.writable")(function* (asked: string, state: string) {
   const paths = yield* Path.Path;
   const path = yield* absolute(asked);
   const real = yield* realOf(path);
   const top = yield* realOf(state);
-  if (real === top || pipe_(real, Str.startsWith(`${top}${paths.sep}`)))
+  if (real === top || pipe_(real, Str.startsWith(`${top}${paths.sep}`))) {
     return yield* refused(
       `${path} is inside the host's state directory ${state}, which only its operations change`,
     );
+  }
   return path;
 });
 
 const within = (path: string, roots: ReadonlyArray<string>) =>
   Arr.some(roots, (root) => path === root || pipe_(path, Str.startsWith(`${root}/`)));
 
-/** `closed` as named and where their links lead. */
 const closedRoots = Effect.fn("HostFiles.closedRoots")(function* (closed: ReadonlyArray<string>) {
   return [...closed, ...(yield* Effect.forEach(closed, realOf))];
 });
 
-/** `asked`, refused where it, or where its links lead, is inside one of `closed`. */
 const outside = Effect.fn("HostFiles.outside")(function* (
   asked: string,
   closed: ReadonlyArray<string>,
 ) {
   const path = yield* absolute(asked);
-  if (closed.length === 0) return path;
+  if (closed.length === 0) {
+    return path;
+  }
   const shut = yield* closedRoots(closed);
-  if (within(path, shut) || within(yield* realOf(path), shut))
+  if (within(path, shut) || within(yield* realOf(path), shut)) {
     return yield* refused(`${path} ${SESSIONS_CLOSED}`);
+  }
   return path;
 });
 
-/**
- * Where a search of `asked` starts: past its links where any path is closed, so that every path
- * it prints is real, as `closed`'s own roots are.
- */
 const searchRoot = Effect.fn("HostFiles.searchRoot")(function* (
   asked: string,
   closed: ReadonlyArray<string>,
@@ -377,8 +367,9 @@ export const editString = Effect.fn("HostFiles.edit")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* writable(asked.path, state);
-  if (asked.oldString === asked.newString)
+  if (asked.oldString === asked.newString) {
     return yield* refused("old_string and new_string are the same: there is nothing to change");
+  }
   const text = yield* fs.readFile(path).pipe(
     Effect.flatMap((bytes) =>
       Effect.try({
@@ -388,11 +379,14 @@ export const editString = Effect.fn("HostFiles.edit")(function* (
     ),
   );
   const replaced = asked.oldString === "" ? 0 : Str.split(text, asked.oldString).length - 1;
-  if (replaced === 0) return yield* refused(`old_string is not in ${path}`);
-  if (replaced > 1 && !asked.replaceAll)
+  if (replaced === 0) {
+    return yield* refused(`old_string is not in ${path}`);
+  }
+  if (replaced > 1 && !asked.replaceAll) {
     return yield* refused(
       `old_string is in ${path} ${replaced} times: give more of the text around it to make it unique, or set replace_all`,
     );
+  }
   yield* fs.writeFileString(
     path,
     // oxlint-disable-next-line effecttsgo/prefer-effect-string -- Replacement text is literal, including dollar sequences; Effect String only accepts replacement syntax.

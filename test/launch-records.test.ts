@@ -1,5 +1,3 @@
-// Launch records, kept in the host's database (ADR-draft-collies-own-records-live-in-the-hosts-database).
-
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Deferred, Effect, Fiber, FileSystem, Result, Schema, Stream } from "effect";
@@ -38,7 +36,7 @@ afterEach(() =>
   ),
 );
 
-const launch = (over: Partial<Launched> = {}): Launched => ({
+const launch = (over: Partial<Launched> = {}) => ({
   agent: "run-a-implementer",
   output: "/state/agents/run-a/implement.json",
   reused: false,
@@ -184,7 +182,7 @@ test("a launch file the first host cannot read fails its import, and the next ho
 test("a launch written tells the Run model which Run moved", () =>
   runEffect(
     Effect.gen(function* () {
-      const moved: string[] = [];
+      const moved: Array<string> = [];
       yield* Effect.gen(function* () {
         yield* recordLaunch(launch());
         yield* orderLaunch(launch());

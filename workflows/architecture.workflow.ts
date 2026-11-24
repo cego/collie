@@ -1,10 +1,3 @@
-// Look at what is there, then decide whether to build the improvement.
-//
-// One attended pass over the project, its report written into this Run's own directory,
-// and one question for the human. The Markdown beside this file is the content — what the
-// architect is asked and what the report is for — and everything that decides what
-// happens is here.
-
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import {
@@ -21,20 +14,13 @@ import {
 import { Effect, Schema } from "effect";
 import markdown from "./architecture.md" with { type: "text" };
 
-// It takes the goal it is asked about; the project to look at is where the Run is rooted. No
-// outcome is declared: what building this report would prove is what the report
-// itself says — usually a refactor, a feature where we agreed to build something that is
-// not there yet — so it is the architect's own answer below rather than a kind fixed here.
-
 const content = contentOf(markdown);
-/** What the architect is asked; the report goes in this Run's own directory. */
 const attended = content.template("attended", {
   inputs: Schema.Struct({ goal: Schema.String }),
   run: Schema.Struct({ dir: Schema.String }),
   rooting: Schema.String,
 });
 
-/** What the architect is held to: the report, what it applied, and what it left. */
 const Report = Schema.Struct({
   verdict: Schema.Literals(["clean", "findings"]).annotate({
     description: "findings only where something stopped you, with the reason in findings",
@@ -56,9 +42,8 @@ const Report = Schema.Struct({
   }),
 });
 
-/** The host's own options for a child, with the ones nobody settled left out: absent
- *  rather than empty, exactly as a front door passes them. */
-const launch = (options: Record<string, string>): Record<string, string> =>
+// WARNING: absent rather than empty, exactly as a front door passes them.
+const launch = (options: Record<string, string>) =>
   Rec.fromEntries(Arr.filter(Rec.toEntries(options), ([, value]) => value !== ""));
 
 const IMPLEMENT = "Implement now";
@@ -87,7 +72,6 @@ export default defineWorkflow({
   input: Schema.Struct({ goal: Schema.String }),
   hints: { goal: "goal" },
   output: Schema.String,
-  // Design, like planning: the planner's model and effort.
   agents: { harness: "claude", model: "opus", effort: "high" },
   path: [architecture, menu],
   run: ({ input: asked }) =>
@@ -119,11 +103,10 @@ export default defineWorkflow({
           options: [{ id: IMPLEMENT, recommended: true }, STOP],
         }),
       );
-      if (next === STOP) return `${report.report}: stopped there`;
+      if (next === STOP) {
+        return `${report.report}: stopped there`;
+      }
 
-      // The plan the architect wrote, built by the workflow that builds — and the kind of
-      // result it said building it would be, settled while we agreed on the work rather
-      // than asked for again at the start of the build.
       const children = yield* Children;
       const child = yield* children.start({
         invocation: "implement",

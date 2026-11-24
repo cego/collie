@@ -1,7 +1,6 @@
-// What a Desktop terminal's size changes tell herdr's controller, which resizes the agent's pane.
-
 import { expect, test } from "bun:test";
-import { settledResizes, type Timers } from "../desktop/src/shared/terminal-size";
+import { settledResizes } from "../desktop/src/shared/terminal-size";
+import type { Timers } from "../desktop/src/shared/terminal-size";
 import { keyAction } from "../desktop/src/shared/terminal-input";
 
 const world = () => {
@@ -22,11 +21,12 @@ const world = () => {
   const sizes = settledResizes((cols, rows) => sent.push([cols, rows]), timers);
   const advance = (ms: number) => {
     now += ms;
-    for (const [handle, timer] of [...due].sort((one, other) => one[1].at - other[1].at))
+    for (const [handle, timer] of [...due].sort((one, other) => one[1].at - other[1].at)) {
       if (timer.at <= now) {
         due.delete(handle);
         timer.run();
       }
+    }
   };
   return { sent, sizes, advance, pending: () => due.size > 0 };
 };

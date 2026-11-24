@@ -6,12 +6,11 @@ import { pipe } from "effect/Function";
 import { parseDocument } from "./yaml";
 import { isString } from "./schema";
 
-/** The Claude Code that first honours `skillOverrides`. */
+// WARNING: the first Claude Code version that honours skillOverrides.
 export const SKILL_OVERRIDES_VERSION = "2.1.129";
 export const MAIN_CHECKOUT_SKILLS_VERSION = "2.1.277";
 
 interface Where {
-  /** Claude's own config directory: `CLAUDE_CONFIG_DIR`, else `~/.claude`. */
   readonly claudeDir: string;
   readonly cwd: string;
   readonly mainCheckoutSkills?: boolean;
@@ -24,7 +23,6 @@ const Overrides = Schema.fromJsonString(
 );
 const decodeOverrides = Schema.decodeOption(Overrides);
 
-/** Shorten unnamed skills while preserving operator choices and invocation restrictions. */
 export const quietSkills = Effect.fn("SkillOverrides.quiet")(function* (
   where: Where,
   kept: ReadonlyArray<string>,
@@ -33,7 +31,7 @@ export const quietSkills = Effect.fn("SkillOverrides.quiet")(function* (
   const path = yield* Path.Path;
   const claudeDir = path.resolve(where.cwd, where.claudeDir);
   const read = (file: string) => fs.readFileString(file).pipe(Effect.option);
-  const projects: string[] = [];
+  const projects: Array<string> = [];
   const settingsDirs = [claudeDir];
   let inRepository = false;
   for (let dir = path.resolve(where.cwd); ; dir = path.dirname(dir)) {
@@ -47,15 +45,20 @@ export const quietSkills = Effect.fn("SkillOverrides.quiet")(function* (
         if (Option.isSome(common)) {
           const main = `${path.dirname(path.resolve(gitdir, Str.trim(common.value)))}/.claude`;
           settingsDirs.push(main);
-          if (where.mainCheckoutSkills !== false && !(yield* fs.exists(`${dir}/.claude/skills`)))
+          if (where.mainCheckoutSkills !== false && !(yield* fs.exists(`${dir}/.claude/skills`))) {
             projects.push(main);
+          }
         }
       }
       break;
     }
-    if (path.dirname(dir) === dir) break;
+    if (path.dirname(dir) === dir) {
+      break;
+    }
   }
-  if (!inRepository) projects.splice(1);
+  if (!inRepository) {
+    projects.splice(1);
+  }
   settingsDirs.push(...projects);
   const decided = new Set<string>();
   for (const file of Arr.flatMap(settingsDirs, (dir) => [
@@ -63,12 +66,17 @@ export const quietSkills = Effect.fn("SkillOverrides.quiet")(function* (
     `${dir}/settings.local.json`,
   ])) {
     const text = yield* read(file);
-    if (Option.isNone(text)) continue;
+    if (Option.isNone(text)) {
+      continue;
+    }
     const settings = decodeOverrides(text.value);
-    if (Option.isSome(settings))
-      for (const name of Rec.keys(settings.value.skillOverrides ?? {})) decided.add(name);
+    if (Option.isSome(settings)) {
+      for (const name of Rec.keys(settings.value.skillOverrides ?? {})) {
+        decided.add(name);
+      }
+    }
   }
-  const candidates: string[] = [];
+  const candidates: Array<string> = [];
   for (const base of [claudeDir, ...projects]) {
     for (const kind of ["skills", "commands"]) {
       const isCommand = kind === "commands";
@@ -79,9 +87,13 @@ export const quietSkills = Effect.fn("SkillOverrides.quiet")(function* (
       for (const entry of Arr.sort(entries, (a: string, b: string) =>
         pipe(a, Str.localeCompare(b)),
       )) {
-        if (isCommand && !pipe(entry, Str.endsWith(".md"))) continue;
+        if (isCommand && !pipe(entry, Str.endsWith(".md"))) {
+          continue;
+        }
         const text = yield* read(isCommand ? `${dir}/${entry}` : `${dir}/${entry}/SKILL.md`);
-        if (Option.isNone(text)) continue;
+        if (Option.isNone(text)) {
+          continue;
+        }
         const name = isCommand
           ? pipe(entry, Str.slice(0, -3), Str.replaceAll(path.sep, ":"))
           : entry;
@@ -90,13 +102,21 @@ export const quietSkills = Effect.fn("SkillOverrides.quiet")(function* (
           !skill.described ||
           Arr.some(skill.names, (name) => Arr.contains(kept, name) || decided.has(name))
         ) {
-          for (const name of skill.names) decided.add(name);
-        } else candidates.push(...skill.names);
+          for (const name of skill.names) {
+            decided.add(name);
+          }
+        } else {
+          candidates.push(...skill.names);
+        }
       }
     }
   }
   const quiet: Record<string, "name-only"> = {};
-  for (const name of candidates) if (!decided.has(name)) quiet[name] = "name-only";
+  for (const name of candidates) {
+    if (!decided.has(name)) {
+      quiet[name] = "name-only";
+    }
+  }
   return quiet;
 });
 

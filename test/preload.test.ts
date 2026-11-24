@@ -28,15 +28,16 @@ const Recorded = Schema.Struct({
 
 const alive = (pid: number | undefined) => signalProcess(pid ?? 0, 0);
 
-/** Runs one fixture file under the preload, in a temporary directory of its own. */
-const suite = (fixture: string, args: ReadonlyArray<string> = [], memory = false) =>
+const runFile = (fixture: string, args: ReadonlyArray<string> = [], memory = false) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const dir = yield* fs.makeTempDirectoryScoped({ prefix: "preload-" });
     const base = memory ? `${dir}/memory` : `${dir}/tmp`;
     const out = `${dir}/out.json`;
     yield* fs.makeDirectory(`${dir}/tmp`);
-    if (memory) yield* fs.makeDirectory(base);
+    if (memory) {
+      yield* fs.makeDirectory(base);
+    }
     yield* fs.writeFileString(`${dir}/bunfig.toml`, `[test]\npreload = ["${preload}"]\n`);
     yield* fs.writeFileString(`${dir}/fixture.test.ts`, fixture);
     const ran = yield* exec(["bun", "test", ...args, "./fixture.test.ts"], {
@@ -68,75 +69,61 @@ const record = (what) => writeFileSync(process.env.FIXTURE_OUT, JSON.stringify(w
 `;
 
 describe("the test preload", () => {
-  test(
-    "a test that leaves a directory fails naming it, and the directory is removed",
-    () =>
-      runEffect(
-        Effect.gen(function* () {
-          const run = yield* suite(`${header}
+  test("a test that leaves a directory fails naming it, and the directory is removed", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const run = yield* runFile(`${header}
 test("leaks", () => { mkdtempSync(join(tmpdir(), "leaked-")); });
 test("after", () => { expect(readdirSync(tmpdir()).filter((n) => n.startsWith("leaked-"))).toEqual([]); });
 `);
-          expect(run.output).toContain("(fail) leaks");
-          expect(run.output).toMatch(/directory \S*leaked-/);
-          expect(run.output).toContain("1 pass");
-          expect(run.left).toEqual([]);
-        }),
-      ),
-    30_000,
-  );
+        expect(run.output).toContain("(fail) leaks");
+        expect(run.output).toMatch(/directory \S*leaked-/);
+        expect(run.output).toContain("1 pass");
+        expect(run.left).toEqual([]);
+      }),
+    ));
 
-  test(
-    "a process a test leaves running fails the file, naming it, and is killed",
-    () =>
-      runEffect(
-        Effect.gen(function* () {
-          const run = yield* suite(`${header}
+  test("a process a test leaves running fails the file, naming it, and is killed", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const run = yield* runFile(`${header}
 test("spawns", () => { record({ pid: Bun.spawn(["sleep", "61"]).pid }); });
 `);
-          expect(run.output).toContain("1 pass");
-          expect(run.output).toMatch(/process pid \d+ \(sleep 61\)/);
-          expect(run.output).toContain("1 fail");
-          expect(run.recorded.pid).toBeGreaterThan(0);
-          expect(yield* alive(run.recorded.pid)).toBe(false);
-          expect(run.left).toEqual([]);
-        }),
-      ),
-    30_000,
-  );
+        expect(run.output).toContain("1 pass");
+        expect(run.output).toMatch(/process pid \d+ \(sleep 61\)/);
+        expect(run.output).toContain("1 fail");
+        expect(run.recorded.pid).toBeGreaterThan(0);
+        expect(yield* alive(run.recorded.pid)).toBe(false);
+        expect(run.left).toEqual([]);
+      }),
+    ));
 
-  test(
-    "a test that times out leaves neither its directory nor its process",
-    () =>
-      runEffect(
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const run = yield* suite(`${header}
+  test("a test that times out leaves neither its directory nor its process", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const run = yield* runFile(`${header}
 test("hangs", async () => {
   const dir = mkdtempSync(join(tmpdir(), "held-"));
   record({ dir, pid: Bun.spawn(["sleep", "62"]).pid });
   await Bun.sleep(10_000);
 }, 500);
 `);
-          expect(run.output).toContain("timed out");
-          expect(run.recorded.dir).toBeDefined();
-          expect(yield* fs.exists(run.recorded.dir ?? "")).toBe(false);
-          expect(yield* alive(run.recorded.pid)).toBe(false);
-          expect(run.left).toEqual([]);
-        }),
-      ),
-    30_000,
-  );
+        expect(run.output).toContain("timed out");
+        expect(run.recorded.dir).toBeDefined();
+        expect(yield* fs.exists(run.recorded.dir ?? "")).toBe(false);
+        expect(yield* alive(run.recorded.pid)).toBe(false);
+        expect(run.left).toEqual([]);
+      }),
+    ));
 });
 
 describe("the test preload under --rerun-each", () => {
-  test(
-    "every run gets a root of its own, and none is left",
-    () =>
-      runEffect(
-        Effect.gen(function* () {
-          const run = yield* suite(
-            `${header}
+  test("every run gets a root of its own, and none is left", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const run = yield* runFile(
+          `${header}
 const runs = (globalThis.runs ??= []);
 test("sees its root", () => {
   runs.push({ pid: process.pid, root: tmpdir(), home: process.env.HOME });
@@ -145,57 +132,49 @@ test("sees its root", () => {
   record({ runs });
 });
 `,
-            ["--rerun-each", "3"],
-          );
-          expect(run.output).toContain("3 pass");
-          expect(run.output).toContain("0 fail");
-          const runs = run.recorded.runs ?? [];
-          expect(runs).toHaveLength(3);
-          for (const one of runs) {
-            expect(pipe_(one.root, Str.startsWith(`${run.base}/collie-test-${one.pid}-`))).toBe(
-              true,
-            );
-            expect(pipe_(one.home, Str.startsWith(`${one.root}/`))).toBe(true);
-            expect(marked(one.root)).toEqual([]);
-          }
-          expect(new Set(Arr.map(runs, (one) => one.root)).size).toBe(3);
-          expect(
-            Arr.filter(run.left, (name) => pipe_(name, Str.startsWith("collie-test-"))),
-          ).toEqual([]);
-        }),
-      ),
-    30_000,
-  );
+          ["--rerun-each", "3"],
+        );
+        expect(run.output).toContain("3 pass");
+        expect(run.output).toContain("0 fail");
+        const runs = run.recorded.runs ?? [];
+        expect(runs).toHaveLength(3);
+        for (const one of runs) {
+          expect(pipe_(one.root, Str.startsWith(`${run.base}/collie-test-${one.pid}-`))).toBe(true);
+          expect(pipe_(one.home, Str.startsWith(`${one.root}/`))).toBe(true);
+          expect(marked(one.root)).toEqual([]);
+        }
+        expect(new Set(Arr.map(runs, (one) => one.root)).size).toBe(3);
+        expect(Arr.filter(run.left, (name) => pipe_(name, Str.startsWith("collie-test-")))).toEqual(
+          [],
+        );
+      }),
+    ));
 
-  test(
-    "a directory left on the second run fails that run, naming it, and is removed",
-    () =>
-      runEffect(
-        Effect.gen(function* () {
-          const run = yield* suite(
-            `${header}
+  test("a directory left on the second run fails that run, naming it, and is removed", () =>
+    runEffect(
+      Effect.gen(function* () {
+        const run = yield* runFile(
+          `${header}
 globalThis.runs = (globalThis.runs ?? 0) + 1;
 test("leaks on the second run", () => {
   if (globalThis.runs === 2) mkdtempSync(join(tmpdir(), "leaked-"));
 });
 `,
-            ["--rerun-each", "3"],
-          );
-          expect(run.output).toContain("2 pass");
-          expect(run.output).toContain("1 fail");
-          expect(run.output).toMatch(/directory \S*leaked-/);
-          expect(run.left).toEqual([]);
-        }),
-      ),
-    30_000,
-  );
+          ["--rerun-each", "3"],
+        );
+        expect(run.output).toContain("2 pass");
+        expect(run.output).toContain("1 fail");
+        expect(run.output).toMatch(/directory \S*leaked-/);
+        expect(run.left).toEqual([]);
+      }),
+    ));
 });
 
 describe("where a test file's root is made", () => {
   test("on the memory filesystem while it has room", () =>
     runEffect(
       Effect.gen(function* () {
-        const run = yield* suite(
+        const run = yield* runFile(
           `${header}
 test("sees its root", () => record({ dir: tmpdir() }));
 `,
@@ -255,7 +234,7 @@ describe("the start-of-suite sweep", () => {
         const live = `collie-test-${process.pid}-x`;
         yield* fs.makeDirectory(dead);
         yield* fs.makeDirectory(`${dir}/${live}`);
-        // Read-only inside, as a Go module cache is: it still goes.
+        // WARNING: a read-only directory inside, as a Go module cache is, still goes.
         yield* fs.makeDirectory(`${dead}/cache/pkg`, { recursive: true });
         yield* fs.chmod(`${dead}/cache`, 0o555);
         const orphan = Bun.spawn(["sh", "-c", "echo up; exec sleep 63"], {
@@ -263,7 +242,6 @@ describe("the start-of-suite sweep", () => {
           stdout: "pipe",
         });
         yield* Effect.addFinalizer(() => signalProcess(orphan.pid, "SIGKILL"));
-        // Its environment is in /proc once it has started.
         yield* Effect.promise(() => orphan.stdout.getReader().read());
 
         expect(sweepDeadRoots(dir)).toEqual([dead]);
@@ -279,7 +257,7 @@ describe("the start-of-suite sweep", () => {
         const fs = yield* FileSystem.FileSystem;
         const proc = yield* fs.makeTempDirectoryScoped({ prefix: "proc-" });
         const pid = `${proc}/4242`;
-        // proc(5) fields 3 on; 51, env_end, is 0 until execve has written the environment.
+        // WARNING: proc(5) field 51, env_end, is 0 until execve has written the environment.
         const stat = (envEnd: string) =>
           `4242 (sh) R 1 4242 4242 0 -1 4194304${pipe_(" 0", Str.repeat(41))} ${envEnd} 0\n`;
         yield* fs.makeDirectory(pid);
@@ -288,7 +266,7 @@ describe("the start-of-suite sweep", () => {
         yield* fs.writeFileString(`${pid}/cmdline`, "");
         yield* fs.writeFileString(`${pid}/stat.next`, stat("140730872492009"));
         yield* fs.writeFileString(`${pid}/environ.next`, `PATH=/bin\0${MARKER}=/root-a\0`);
-        yield* fs.writeFileString(`${pid}/cmdline.next`, "sleep\x0063\0");
+        yield* fs.writeFileString(`${pid}/cmdline.next`, "sleep\u000063\0");
         const exec = Bun.spawn([
           "sh",
           "-c",
@@ -308,13 +286,13 @@ describe("the start-of-suite sweep", () => {
         const proc = yield* fs.makeTempDirectoryScoped({ prefix: "proc-" });
         const pid = `${proc}/4242`;
         yield* fs.makeDirectory(pid);
-        yield* fs.writeFileString(`${pid}/cmdline`, "sleep\x0063\0");
+        yield* fs.writeFileString(`${pid}/cmdline`, "sleep\u000063\0");
         yield* fs.writeFileString(`${pid}/environ.next`, `PATH=/bin\0${MARKER}=/root-a\0`);
         yield* fs.writeFileString(
           `${pid}/stat.next`,
           `4242 (sleep) S 1 4242 4242 0 -1 4194304${pipe_(" 0", Str.repeat(41))} 140730872492009 0\n`,
         );
-        // FIFOs order the reads: environ reads empty, the exec finishes, then stat is read.
+        // WARNING: FIFOs order the reads: environ reads empty until exec finishes, then stat is read.
         yield* exec(["mkfifo", `${pid}/environ`, `${pid}/stat`]);
         const execs = Bun.spawn([
           "sh",

@@ -1,5 +1,3 @@
-// What self-improve measures of the questions its window's Runs asked.
-
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
@@ -11,11 +9,10 @@ import {
   repeatedAnswers,
   sortOut,
   summaryOf,
-  type AskingRun,
-  type Finding,
 } from "../workflows/retrospective";
+import type { AskingRun, Finding } from "../workflows/retrospective";
 
-const asking = (over: Partial<AskingRun> & { runId: string }): AskingRun => ({
+const asking: (over: Partial<AskingRun> & { runId: string }) => AskingRun = (over) => ({
   workflow: "implement",
   status: "complete",
   mr: null,
@@ -134,7 +131,7 @@ test("a question still open is not an answer, so it counts toward neither thresh
   ).toEqual([]);
 });
 
-const found = (over: Partial<Finding> & Pick<Finding, "key">): Finding => ({
+const found: (over: Partial<Finding> & Pick<Finding, "key">) => Finding = (over) => ({
   category: "navigation",
   title: `Project ${over.key}`,
   body: `What the Runs did: ${over.key}.`,

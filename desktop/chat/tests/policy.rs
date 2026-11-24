@@ -1,4 +1,4 @@
-//! `desktop/test/markdown.test.ts`, on rune-kit: each case's markdown, confined, as rune-kit
+//! `desktop/src/shared/test/markdown.test.ts`, on rune-kit: each case's markdown, confined, as rune-kit
 //! parses it to draw. rune-kit draws no HTML element at all, so the cases about elements'
 //! styles, popovers and commands hold with the element gone and its text kept.
 

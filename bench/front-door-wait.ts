@@ -1,13 +1,10 @@
-// A front door's wait while the fixture's live Runs keep the host building its board.
-
-// oxlint-disable-next-line effecttsgo/node-builtin-import -- Shares record-open's isolated host world.
 import { homedir } from "node:os";
 import { Clock, Console, Effect, FileSystem, Schedule, Schema, Stream } from "effect";
 import * as Str from "effect/String";
 import { connect, frontDoor, socketOf } from "../src/host";
 import { runEffect } from "../test/support/effect";
 import { stopHost } from "../test/support/host";
-import { prepare } from "./record-open/fixture";
+import { prepare } from "./record-open/record-open.fixture";
 import { filledSinceStart, measuring, refusal, userStateDir } from "./record-open/guards";
 import { summaryOf } from "./record-open/stats";
 import { enterWorld, live, recordMarksFile, userEnv, world } from "./record-open/world";
@@ -21,11 +18,12 @@ await runEffect(
         { state: world.state, socket: socketOf(world.state) },
         { home: homedir(), env: userEnv },
       );
-      if (refused !== null) return yield* Effect.die(new Error(refused));
+      if (refused !== null) {
+        return yield* Effect.die(new Error(refused));
+      }
       const fs = yield* FileSystem.FileSystem;
       yield* fs.remove(live, { recursive: true, force: true });
       yield* enterWorld;
-      // oxlint-disable-next-line effecttsgo/process-env-in-effect -- Only the isolated host inherits this setting.
       delete Bun.env.OTEL_EXPORTER_OTLP_ENDPOINT;
       yield* Effect.addFinalizer(() =>
         stopHost(world.state).pipe(
@@ -43,8 +41,8 @@ await runEffect(
       );
       yield* fs.writeFileString(recordMarksFile, "");
       yield* Console.error("sampling 20 verify and read answers");
-      const verify: number[] = [];
-      const read: number[] = [];
+      const verify: Array<number> = [];
+      const read: Array<number> = [];
       for (let at = 0; at < 20; at++) {
         const began = yield* Clock.currentTimeNanos;
         let first = true;
@@ -66,18 +64,23 @@ await runEffect(
                   verify.push(Number((yield* Clock.currentTimeNanos) - began) / 1_000_000);
                   first = false;
                 }
-                if (event._tag === "Result") result = event.verification.result === "pass";
+                if (event._tag === "Result") {
+                  result = event.verification.result === "pass";
+                }
               }),
             ),
           );
-        if (first || !result) return yield* Effect.die(new Error("verify did not pass"));
+        if (first || !result) {
+          return yield* Effect.die(new Error("verify did not pass"));
+        }
         const started = yield* Clock.currentTimeNanos;
         const answer = yield* door.read({
           tool: "collie_run",
           input: { run: fixture.settled[at]! },
         });
-        if (!Str.includes(fixture.settled[at]!)(answer))
+        if (!Str.includes(fixture.settled[at]!)(answer)) {
           return yield* Effect.die(new Error("collie_run did not answer for the requested Run"));
+        }
         read.push(Number((yield* Clock.currentTimeNanos) - started) / 1_000_000);
       }
       yield* stopHost(world.state);
@@ -85,7 +88,9 @@ await runEffect(
         Str.matchAll(/^\d+ board:built (\d+)$/gm)(yield* fs.readFileString(recordMarksFile)),
         (match) => Number(match[1]),
       );
-      if (builds.length === 0) return yield* Effect.die(new Error("no board builds collected"));
+      if (builds.length === 0) {
+        return yield* Effect.die(new Error("no board builds collected"));
+      }
       yield* Console.log(
         yield* Schema.encodeEffect(
           Schema.fromJsonString(Schema.Record(Schema.String, Schema.Finite)),
