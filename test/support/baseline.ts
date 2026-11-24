@@ -16618,6 +16618,49 @@ for (const name of ["gitlab", "github"] as const) {
   );
 
   scenario(
+    `release on ${name}: a dirty Collie checkout its one commit-and-push round cannot settle parks checkout-dirty-collie, with no Heal`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const { bin, reviewed } = yield* releasable(name);
+          yield* exec(["git", "worktree", "remove", "--force", reviewed], { cwd: rig.projectDir });
+          const owned = `${rig.root}/.collie/worktrees/project/feature`;
+          const runId = `r-dirty-parks-${name}`;
+          const healed = healStarted(runId);
+          yield* rig.queueOutputs([PACKAGED, "committed and pushed nothing"]);
+          const why = yield* driven(
+            {
+              entry: shipped("release"),
+              runId,
+              input: { mr: target },
+              host: releaseHost(
+                {},
+                undefined,
+                Infinity,
+                undefined,
+                fs.writeFileString(`${owned}/notes.txt`, "work in progress\n"),
+              ),
+            },
+            () =>
+              until(
+                () => parkedWhy(runId),
+                (said) => said !== "",
+              ),
+          );
+          yield* bin.restore();
+          expect(yield* parkedCause(runId)).toBe("checkout-dirty-collie");
+          expect(why).toContain("notes.txt");
+          expect(yield* asked(runId, "conflict-0.fast-forward.commit")).toContain(
+            "never a force push, and never a reset or a discard",
+          );
+          expect(yield* healed).toEqual([]);
+          expect(yield* fs.readFileString(`${owned}/notes.txt`)).toBe("work in progress\n");
+        }),
+      ),
+  );
+
+  scenario(
     `release on ${name}: a wait that outlives the collect budget hands the checkout to its one commit-and-push round, then parks`,
     () =>
       runEffect(
