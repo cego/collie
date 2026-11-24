@@ -42,9 +42,10 @@ release-set scenarios) and the seven behaviours above still hold. The three runt
 move together, as the Consequences say. A state directory a 4.1.4 host wrote is read as it
 is: every `CREATE` and `ALTER` statement in `cluster/SqlMessageStorage.js` and
 `cluster/SqlRunnerStorage.js` is unchanged, and `ShardingConfig`'s fields are the same set.
-The upgrade also took away Collie's checked-in `effect` patch: 4.1.5 guards a stale activity
-reset itself, but keeps the interrupts no reply has stamped, so a resumed attempt replays
-them (behaviour 8, below). Collie resets the whole family itself, in its own storage layer.
+The upgrade also took away Collie's checked-in `effect` patch: 4.1.5 guards a conditional
+activity reset itself, locking the expected reply before it mutates, so the interrupt that
+parked an attempt no longer replays and the ones that arrived later still reach the attempt
+that resumes (behaviour 8, below). None of that is Collie's code any more.
 `tools/migrate-effect.ts up|down` proves the move both ways, each time installing a throwaway
 copy's lockfile and running the regression test there: one of this tree, one of the
 merge-base's.
@@ -157,13 +158,12 @@ Six things the proof measured rather than assumed, and a seventh a Flake found. 
    stopped to wait on it. The baseline scenarios that answer before the Run awaits are the
    test.
 
-8. **A guarded Activity reset keeps the interrupts no reply has stamped.** `clearReplies`
-   with `expectedReplyId` deletes the replies and the interrupt rows stamped by that reply,
-   and keeps the interrupts that arrived after it for the next attempt. A resumed attempt
-   that replays the interrupt meant for the parked one makes no progress, so Collie resets
-   the whole family once the expected reply is the latest one — `resetReplies` in
-   `src/engine-touches.ts`, in one transaction — and `test/effect-sql-reset.test.ts` holds
-   it.
+8. **A guarded Activity reset drops the interrupts the parked attempt saw, and keeps the
+   later ones.** `clearReplies` with `expectedReplyId` locks and checks the expected reply
+   before it mutates, so a stale reset changes nothing; a matching one deletes the replies
+   and the interrupt rows that reply stamped, and leaves the interrupts that arrived after
+   it for the next attempt. `test/effect-sql-reset.test.ts` holds both halves, and
+   `test/resume.test.ts` with `test/core-resume.test.ts` the resume that follows.
 
 ## What this does not decide
 

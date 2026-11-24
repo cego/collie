@@ -28,7 +28,7 @@ const request = {
   headers: {},
 } satisfies Envelope.PartialRequestEncoded;
 
-test("a conditional SQL activity reset does not replay the interrupt that suspended it", () =>
+test("a conditional SQL activity reset drops the interrupt that suspended it and keeps a later one", () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const storage = yield* SqlMessageStorage.makeEncoded();
@@ -62,7 +62,10 @@ test("a conditional SQL activity reset does not replay the interrupt that suspen
       yield* resetting.clearReplies(requestId, { expectedReplyId: suspendedReplyId });
 
       const replay = yield* storage.unprocessedMessages(["default:1"], 0);
-      expect(Arr.map(replay, ({ envelope }) => envelope._tag)).toEqual(["Request"]);
+      expect(Arr.map(replay, ({ envelope }) => envelope._tag)).toEqual(["Request", "Interrupt"]);
+      expect(
+        Arr.flatMap(replay, ({ envelope }) => (envelope._tag === "Interrupt" ? [envelope.id] : [])),
+      ).toEqual(["4"]);
       expect(yield* storage.repliesFor([String(requestId)])).toEqual([]);
     }).pipe(
       Effect.provide([sqlite, Digest.layerWebCrypto, Snowflake.layerGenerator, engineTouchesLayer]),
