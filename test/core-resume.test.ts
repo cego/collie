@@ -29,7 +29,8 @@ import { RELAUNCH, RunRecords } from "../src/run-records";
 import { appendLine } from "../src/steering";
 import { registerAgent, scopeFor } from "../src/registry";
 import { COMPACT_AT_TOKENS } from "../src/settings";
-import { COMPACTION_PORTS, codexPort } from "../src/compactors";
+import { COMPACTION_PORTS, codexPort, recordClaudeEvent } from "../src/compactors";
+import { controlDir } from "../src/compaction";
 import { isString } from "../src/schema";
 
 const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
@@ -229,7 +230,21 @@ const recordedSession = (runId: string, operation: string) =>
         ),
       ),
     Option.isSome,
-  ).pipe(Effect.map(Option.getOrThrow));
+  ).pipe(
+    Effect.map(Option.getOrThrow),
+    Effect.tap((session) =>
+      Effect.gen(function* () {
+        if (session.kind !== "claude") {
+          return;
+        }
+        const dir = yield* controlDir(env().stateDir, agentName(runId, operation, null, 1));
+        yield* recordClaudeEvent(
+          dir,
+          asJson({ session_id: session.value, hook_event_name: "UserPromptSubmit", prompt: "go" }),
+        );
+      }).pipe(Effect.orDie),
+    ),
+  );
 
 const Launch = Schema.Struct({
   name: Schema.String,
@@ -708,6 +723,17 @@ for (const [hasSession, sessionOnlyAnchor, outcome] of [
               ...(hasSession ? recorded : Struct.omit(recorded, ["agentSession"])),
               agent: collided,
             });
+          }
+          if (hasSession) {
+            const at = yield* controlDir(dir(), collided);
+            yield* recordClaudeEvent(
+              at,
+              asJson({
+                session_id: Option.getOrThrow(Option.fromNullishOr(latest.agentSession?.value)),
+                hook_event_name: "UserPromptSubmit",
+                prompt: "go",
+              }),
+            );
           }
           const runRecords = yield* RunRecords;
           if (sessionOnlyAnchor) {

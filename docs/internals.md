@@ -1332,6 +1332,24 @@ restart finds the same request, waits no longer than its original bound, and par
 park. A stop of the Run, or of the agent, cancels the attempt in its telemetry (`cancelled`,
 never `done`) and clears it, because the incarnation that asked is gone.
 
+## Starting an agent again
+
+An agent core has lost is started again by `resumeLost` in `agents.ts`, under the Run's
+relaunch lock, and each start is told which session to open. Claude opens a
+`--session-id` conversation only on its first submitted turn: an id recorded by a launch
+that was stopped or parked before that turn has nothing `--resume` can open, and Claude
+exits 1 with `No conversation found`. So a Claude session is resumed only when its own
+telemetry holds a `submit` for that id; otherwise it is started with `--session-id` and the
+same id, as a fresh conversation that takes the same Step. Codex, OpenCode and Pi are
+resumed as their own records say.
+
+A start that is gone again is counted: `relaunch.jsonl` in the Run's directory records one
+line per relaunch, with what the harness was last seen to do, and a fresh launch of the
+generation resets it. After `RELAUNCH_CAP` (`src/relaunch-attempts.ts`) relaunches the
+next one parks instead of starting, with the cause `relaunch-exhausted`: it needs you, it
+says how many times the agent was started and what was last seen, it never starts a Heal,
+and nothing starts that agent again until the Run is resumed.
+
 An agent's controls live in `<state>/compaction/<agent>/` rather than in its Run's
 directory, because the agent outlives the Run that launched it — the same fact the
 registry exists for. That directory holds the control record, the helper the launch

@@ -1,4 +1,5 @@
 import { launchesAt, agentsAt, launchedAt } from "./support/records";
+import { RELAUNCH_CAP } from "../src/relaunch-attempts";
 import * as Cause from "effect/Cause";
 
 import * as Struct from "effect/Struct";
@@ -1233,7 +1234,9 @@ test("an agent that goes while it is collected past its budget is started again,
           const pane = Option.getOrUndefined(
             Arr.findFirst(yield* herdr.agentList(), (one) => one.name === agentFor("r1")),
           )?.paneId;
-          yield* herdr.terminalKill(pane ?? "");
+          if (pane !== undefined) {
+            yield* herdr.terminalKill(pane);
+          }
           yield* (yield* Agents).resumeLost("r1", runningNow);
           yield* until(starts.pipe(Effect.map((count) => count === 2)));
           yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"revived"}`);
@@ -1244,6 +1247,211 @@ test("an agent that goes while it is collected past its budget is started again,
       expect(result._tag === "Success" && result.success.note).toBe("revived");
       expect(yield* isSet(PARKED, "r1")).toBe(false);
       expect(yield* starts).toBe(2);
+    }),
+  ));
+
+const claudeSessionOf = (runId: string) =>
+  Effect.gen(function* () {
+    for (;;) {
+      const found = yield* launchesAt(dir, runId).pipe(
+        Effect.map((launches) =>
+          Option.flatMapNullishOr(
+            Arr.findLast(launches, (one) => one.agent === agentFor(runId)),
+            (one) => one.agentSession?.value,
+          ),
+        ),
+      );
+      if (Option.isSome(found)) {
+        return found.value;
+      }
+      yield* TestClock.withLive(Effect.sleep("10 millis"));
+    }
+  });
+
+const claudeLaunches = (count: number) =>
+  rig.calls().pipe(
+    Effect.orDie,
+    Effect.map((calls) =>
+      Arr.filter(everyLaunch(calls), (argv) =>
+        Arr.head(argv).pipe(Option.exists((one) => one === "claude")),
+      ),
+    ),
+    Effect.map((launches) => launches[count - 1] ?? []),
+  );
+
+const acknowledged = (runId: string) =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path;
+    yield* until(
+      steps(runId).pipe(
+        Effect.provideService(Path.Path, path),
+        Effect.map(
+          (found) => found.length > 0 && Arr.every(found, (one) => one.state === "acknowledged"),
+        ),
+      ),
+    );
+  });
+
+const killThePane = (herdr: Herdr, runId: string) =>
+  Effect.gen(function* () {
+    const pane = Option.getOrUndefined(
+      Arr.findFirst(yield* herdr.agentList(), (one) => one.name === agentFor(runId)),
+    )?.paneId;
+    if (pane !== undefined) {
+      yield* herdr.terminalKill(pane);
+    }
+  });
+
+const exitedAtOnce = (message: string) => ({
+  ...hostOf().ports,
+  claude: {
+    ...claudeControls().claude,
+    ready: () => Effect.fail(new Cause.UnknownError(undefined, message)),
+  },
+});
+
+test("a Claude session that never took a turn is started again under its own id, not resumed, and is given its Step", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      core.reportedOnly([agentFor("r1")]);
+      yield* rig.queueOutputs([null]);
+      const herdr = new UnseenTurn(rig.pluginEnv());
+      const result = yield* session(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(started("r1"));
+          yield* untilStarted;
+          const session = yield* claudeSessionOf("r1");
+          yield* acknowledged("r1");
+          yield* killThePane(herdr, "r1");
+          yield* (yield* Agents).resumeLost("r1", runningNow);
+          yield* until(
+            rig.cmds().pipe(
+              Effect.orDie,
+              Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run").length === 2),
+            ),
+          );
+          const again = yield* claudeLaunches(2);
+          const typed = sent(yield* rig.calls(), "Your task for this step");
+          yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"fresh"}`);
+          const done = yield* Fiber.join(fiber);
+          return { session, again, typed, done };
+        }),
+        { herdr, collectMs: 400 },
+      );
+      expect(result.again).toContain("--session-id");
+      expect(result.again).toContain(result.session);
+      expect(result.again).not.toContain("--resume");
+      expect(result.typed).toBe(2);
+      expect(result.done._tag).toBe("Success");
+    }),
+  ));
+
+test("a Claude resume whose harness exits at once is started fresh under the same id on its next relaunch", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      core.reportedOnly([agentFor("r1")]);
+      yield* rig.queueOutputs([null]);
+      const herdr = new UnseenTurn(rig.pluginEnv());
+      let bellyUp = false;
+      const result = yield* session(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(started("r1"));
+          yield* untilStarted;
+          const session = yield* claudeSessionOf("r1");
+          yield* acknowledged("r1");
+          const at = yield* controlDir(hostOf().env.stateDir, agentFor("r1"));
+          yield* recordClaudeEvent(
+            at,
+            encodeJson({ session_id: session, hook_event_name: "UserPromptSubmit", prompt: "go" }),
+          );
+          bellyUp = true;
+          yield* killThePane(herdr, "r1");
+          yield* (yield* Agents).resumeLost("r1", runningNow);
+          yield* until(
+            rig.cmds().pipe(
+              Effect.orDie,
+              Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run").length === 2),
+            ),
+          );
+          const resumed = yield* claudeLaunches(2);
+          yield* killThePane(herdr, "r1");
+          bellyUp = false;
+          yield* (yield* Agents).resumeLost("r1", runningNow);
+          yield* until(
+            rig.cmds().pipe(
+              Effect.orDie,
+              Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run").length === 3),
+            ),
+          );
+          const again = yield* claudeLaunches(3);
+          yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"fresh"}`);
+          const done = yield* Fiber.join(fiber);
+          return { session, resumed, again, done };
+        }),
+        {
+          herdr,
+          collectMs: 400,
+          readyMs: 200,
+          ports: {
+            ...hostOf().ports,
+            claude: {
+              ...claudeControls().claude,
+              ready: () =>
+                bellyUp
+                  ? Effect.fail(
+                      new Cause.UnknownError(undefined, "claude exited 1: No conversation found"),
+                    )
+                  : Effect.succeed(true),
+            },
+          },
+        },
+      );
+      expect(result.resumed).toContain("--resume");
+      expect(result.again).toContain("--session-id");
+      expect(result.again).toContain(result.session);
+      expect(result.again).not.toContain("--resume");
+      expect(result.done._tag).toBe("Success");
+    }),
+  ));
+
+test("an agent whose harness exits at once is started again only to its cap, and then parks needing you naming the exit", () =>
+  runEffect(
+    Effect.gen(function* () {
+      core.reportedOnly([agentFor("r1")]);
+      yield* rig.queueOutputs([null]);
+      const herdr = new UnseenTurn(rig.pluginEnv());
+      const why = yield* session(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(started("r1"));
+          yield* untilStarted;
+          yield* acknowledged("r1");
+          for (let tries = 0; tries < 6; tries++) {
+            yield* killThePane(herdr, "r1");
+            yield* (yield* Agents).resumeLost("r1", runningNow);
+          }
+          yield* until(
+            controlOf(PARK_CAUSE, "r1").pipe(Effect.map((cause) => cause === "relaunch-exhausted")),
+          );
+          yield* Fiber.interrupt(fiber);
+          return yield* controlOf(PARKED, "r1");
+        }),
+        {
+          herdr,
+          collectMs: 60_000,
+          readyMs: 200,
+          ports: exitedAtOnce("claude exited 1: No conversation found"),
+        },
+      );
+      expect(why).toContain("was started again 3 times");
+      expect(why).toContain("core no longer lists it");
+      expect(why).not.toContain("gave no sign");
+      expect(
+        Arr.filter(everyLaunch(yield* rig.calls()), (argv) =>
+          Option.contains(Arr.head(argv), "claude"),
+        ),
+      ).toHaveLength(1 + RELAUNCH_CAP);
     }),
   ));
 

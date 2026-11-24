@@ -496,7 +496,9 @@ rechecks that nothing it left is still running, and never starts a Heal. `predec
 such an agent where a lock kept it from being stopped at all: it rechecks that the agent's
 controls are free. `predecessor-unproven` is one Collie could not close or could not prove was
 its own: it needs you, and its reason says what could not be proved. `compaction-unsettled` is a compaction Collie asked for and never saw complete: it rechecks
-the marked request's own completion, and never starts a Heal. `usage-wait` is an agent that ran out while no harness choice had room: it names the
+the marked request's own completion, and never starts a Heal. `relaunch-exhausted` is an agent the host started again and again, each time finding its harness
+gone: it needs you, its reason says how many times and what was last seen, and it never starts a
+Heal. `usage-wait` is an agent that ran out while no harness choice had room: it names the
 **Subscription** and when it resets, rechecks room with the same poll that waits for it, and
 never starts a Heal. `hand-over-stale` is a **Hand-over** whose checkout moved again after it was
 rebuilt: it rechecks that the head and plan revision hold still between two readings, and never

@@ -105,7 +105,7 @@ test("a harness's readiness is asked every poll, and past its budget the wait sa
         ),
       );
       expect(asked).toEqual([0, 300, 600, 900, 1200]);
-      expect(result).toBe("claude gave no sign it was up within 1s (no prompt)");
+      expect(result).toBe("no prompt");
     }),
   ));
 

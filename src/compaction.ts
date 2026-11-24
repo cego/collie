@@ -717,7 +717,10 @@ export const awaitReady = Effect.fn("Compaction.awaitReady")(function* (
   if (up) {
     return null;
   }
-  return `${record.harness} gave no sign it was up within ${Math.round(budgetMs / 1000)}s${why === "" ? "" : ` (${why})`}`;
+  // WARNING: the harness's own words are the exit; the elapsed budget hides which failure it was.
+  return why === ""
+    ? `${record.harness} gave no sign it was up within ${Math.round(budgetMs / 1000)}s`
+    : why;
 });
 
 // WARNING: best-effort; an agent this Session cannot see is not necessarily gone, so only the ones herdr does not list are put down.

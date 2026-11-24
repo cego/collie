@@ -193,6 +193,26 @@ const readEvents = Effect.fn("Compactors.readEvents")(function* (dir: string) {
   return events;
 });
 
+// WARNING: Claude writes a --session-id conversation only on its first submitted turn, so an id with none cannot be resumed.
+export const turnTaken = Effect.fn("Compactors.turnTaken")(function* (
+  dir: string,
+  session: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const file = path.join(dir, TELEMETRY);
+  if (!(yield* fs.exists(file))) {
+    return false;
+  }
+  const text = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+  return Arr.some(Str.split(text, "\n"), (line) => {
+    const event = decodeEvent(line);
+    return (
+      event._tag === "Some" && event.value.kind === "submit" && event.value.session === session
+    );
+  });
+});
+
 // WARNING: a status line writes on every event, so an append-only file would be tens of thousands of lines by lunchtime.
 export const KEEP_LINES = 200;
 

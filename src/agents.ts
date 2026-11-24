@@ -91,9 +91,11 @@ import {
   stoppedSince,
   submittedDelivery,
   piQuestionTool,
+  turnTaken,
 } from "./compactors";
 import type { AskedCall, AgentQuestion } from "./compactors";
 import { RECOMMENDED_MARKER, questionRepair, shortfallOf, solutionsOf } from "./question-standard";
+import { RELAUNCH_CAP, relaunchFailures, rememberRelaunch } from "./relaunch-attempts";
 import { UNPROVABLE, endAgent, rootOf } from "./agent-end";
 import type { EndDeps } from "./agent-end";
 import { boundThread, withCodex } from "./codex";
@@ -2884,9 +2886,14 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         const had = alive
           ? null
           : yield* sessionHad(ask.runId, agent, adapter.kind, ask.sequence ?? 1);
+        yield* rememberRelaunch(`${host.dir}/runs/${ask.runId}`, {
+          agent,
+          at: yield* Clock.currentTimeMillis,
+          why: null,
+        });
         const session: StartSession | null =
           had !== null
-            ? { id: had, resumed: true }
+            ? { id: had, resumed: yield* resumable(adapter, agent, had, false) }
             : !alive && (adapter.id === "pi" || adapter.id === "claude")
               ? { id: yield* (yield* SecureRandom.SecureRandom).uuidV4(), resumed: false }
               : null;
@@ -3647,13 +3654,20 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       ),
     );
 
+  const resumable = (adapter: HarnessAdapter, agent: string, id: string, failed: boolean) =>
+    adapter.id === "claude"
+      ? Effect.flatMap(controlDir(host.env.stateDir, agent), (dir) =>
+          Effect.map(turnTaken(dir, id), (taken) => taken && !failed),
+        )
+      : Effect.succeed(true);
+
   const startedWith = (runId: string, agent: string) =>
     under(RunRecords.use((records) => records.control(RELAUNCH, runId, agent)));
   const setStarted = (runId: string, agent: string, text: string | null) =>
     under(RunRecords.use((records) => records.setControl(RELAUNCH, runId, text, agent)));
 
   const comingBack = new Map<string, Deferred.Deferred<void>>();
-  const refusedStarts = new Map<string, string>();
+  const refusedStarts = new Map<string, { reason: string; cause: ParkCause }>();
   const turnBegun = new Set<string>();
   const resuming = Semaphore.makeUnsafe(1);
 
@@ -3721,6 +3735,14 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           Option.flatMap((one) => Option.fromNullishOr(one.agentSession?.value)),
         ),
       );
+      const failures = yield* relaunchFailures(`${host.dir}/runs/${runId}`, agent);
+      if (failures.tried >= RELAUNCH_CAP) {
+        return yield* new AgentParked({
+          operation: latest.operation,
+          cause: "relaunch-exhausted",
+          reason: `${agent} was started again ${failures.tried} times and each time its harness was gone (${failures.last ?? "no reason given"}). Nothing else will start it: look at its pane, then \`collie run resume ${runId}\`.`,
+        });
+      }
       const out =
         Str.trim(yield* fs.readFileString(latest.output).pipe(Effect.orElseSucceed(() => ""))) ===
         "";
@@ -3744,12 +3766,15 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         { ...ask, operation: latest.operation, sequence: latest.sequence },
         agent,
       );
-      const session: StartSession | null =
-        had !== null
-          ? { id: had, resumed: true }
-          : adapter.id === "pi" || adapter.id === "claude"
+      const session =
+        had === null
+          ? adapter.id === "pi" || adapter.id === "claude"
             ? { id: yield* (yield* SecureRandom.SecureRandom).uuidV4(), resumed: false }
-            : null;
+            : null
+          : {
+              id: had,
+              resumed: yield* resumable(adapter, agent, had, failures.tried > 0),
+            };
       const incarnation = yield* Effect.uninterruptible(
         start(ask, agent, listed, atLaunch ? told : null, session),
       );
@@ -3778,6 +3803,16 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         runId,
         `${agent}: started again on core after core lost it, ${had === null ? "in a new session: none was recorded to resume" : `resuming its ${adapter.id} session ${had}`}`,
       );
+      const late = yield* awaitReady(
+        compactionDeps(host, runId),
+        agent,
+        host.readyMs ?? READY_TIMEOUT_MS,
+      );
+      yield* rememberRelaunch(`${host.dir}/runs/${runId}`, {
+        agent,
+        at: yield* Clock.currentTimeMillis,
+        why: late ?? "core no longer lists it",
+      });
       if (told === null || atLaunch) {
         return [];
       }
@@ -3802,14 +3837,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               `${agent}: not resumed: OpenCode reported no idle within ${Math.round(budgetMs / 1000)}s, so it was not told to carry on with ${latest.operation}`,
             );
           }
-        }
-        const late = yield* awaitReady(
-          compactionDeps(host, runId),
-          agent,
-          host.readyMs ?? READY_TIMEOUT_MS,
-        );
-        if (late !== null) {
-          return yield* log(runId, `${agent}: was not told to carry on with its step: ${late}`);
         }
         let delivery: Parameters<typeof deliver>[2] = { kind: "step", ref: stemOf(latest) };
         const base =
@@ -3891,7 +3918,10 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
                     Effect.catch((cause) =>
                       Effect.sync(() => {
                         if (isParked(cause)) {
-                          refusedStarts.set(agent, cause.reason);
+                          refusedStarts.set(agent, {
+                            reason: cause.reason,
+                            cause: cause.cause ?? "unknown",
+                          });
                         }
                       }).pipe(
                         Effect.andThen(
@@ -3992,7 +4022,11 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         if (refused !== undefined) {
           refusedStarts.delete(agent);
           yield* setStarted(ask.runId, agent, null);
-          return yield* new AgentParked({ operation: ask.operation, reason: refused });
+          const parked: ConstructorParameters<typeof AgentParked>[0] = {
+            operation: ask.operation,
+            reason: refused.reason,
+          };
+          return yield* new AgentParked({ ...parked, cause: refused.cause });
         }
         const lost = yield* lostServer(compactionDeps(host, ask.runId), agent);
         if (onlyDeadServer && lost === null) {
