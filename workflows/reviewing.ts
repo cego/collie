@@ -20,6 +20,7 @@ import {
   isBlocking,
   leaveOutstanding,
   leaveReview,
+  offeredDisputes,
   mrForgeFacts,
   parseMrTarget,
   remainingDisputes,
@@ -773,7 +774,7 @@ export const rally = (ask: {
             return cleaned(reviewed, judged.attestation);
           }
           if (judged.halt === "dispute_unresolved") {
-            const standing = Arr.filter(judged.outstanding, isBlocking);
+            const standing = offeredDisputes(report, waived);
             const name = `${prefix}dispute-${++disputeAsks}`;
             const chosen = yield* ask.choose({
               name,

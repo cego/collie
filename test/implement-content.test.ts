@@ -52,6 +52,20 @@ test.each([implement, tuneUp])(
   },
 );
 
+test.each([implement, tuneUp])(
+  "the rendered MR instructions ask for a waived finding under Waived and unverified",
+  (content) => {
+    const rendered = renderTemplate(contentOf(content).sections.get("mr")!, {
+      run: { id: "run-12345678", dir: "/work/run" },
+      waived: "- the guard is on the wrong side (src/a.ts) — waived by a person to dispute-1",
+      mr: { existing: "", publish: "collie run publish run-12345678" },
+    }).text;
+    expect(rendered).toContain("waived by a person to dispute-1");
+    expect(rendered).toContain("**Waived and unverified**");
+    expect(rendered).toContain("nothing proves it");
+  },
+);
+
 test("implement's mr step merges on a request of its own from the human, chat or another agent alike", () => {
   const mr = pipe(contentOf(implement).sections.get("mr") ?? "", Str.replaceAll(/\s+/g, " "));
   expect(mr).toContain("the human typing in this pane");

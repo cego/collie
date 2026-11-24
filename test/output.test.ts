@@ -5,6 +5,7 @@ import {
   findingKey,
   formatFindings,
   isBlocking,
+  offeredDisputes,
   parseFixOutput,
   parseReviewOutput,
   parseSynthesis,
@@ -649,6 +650,30 @@ test("a fix Output in the legacy shape or with an unusable check does not parse"
   const open = parseFixOutput(fixJson({ verdict: "findings", findings: [BLOCKER] }), "fix.json");
   expect(open.ok && open.value.findings).toEqual([BLOCKER]);
   expect(parseFixOutput(fixJson({ verdict: "findings" }), "fix.json").ok).toBe(false);
+});
+
+test("a person at a last-fix halt is offered the fix's disputes, not the findings it reported fixed", () => {
+  const fixedOne: Finding = {
+    file: "src/b.ts",
+    severity: "blocker",
+    title: "the retry loop stops",
+  };
+  const newOne: Finding = {
+    file: "src/a.ts",
+    severity: "blocker",
+    title: "the guard is on the wrong side",
+    reason: "the caller already validates it",
+  };
+  const minorOne: Finding = { file: "cli.js", severity: "minor", title: "long argument list" };
+  const fix = {
+    verdict: "findings" as const,
+    findings: [],
+    fixed: [{ file: fixedOne.file, title: fixedOne.title }],
+    disputed: [newOne, minorOne],
+    checks: [{ name: "bun test" }],
+  };
+  expect(offeredDisputes(fix, [])).toEqual([newOne]);
+  expect(offeredDisputes(fix, [newOne])).toEqual([]);
 });
 
 test("the last fix cannot both fix and dispute a finding, and what it still reports open counts against it", () => {

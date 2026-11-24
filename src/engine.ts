@@ -2375,6 +2375,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     handedBack: ReadonlyArray<HandedBack>,
   ): string;
   export function formatFindings(findings: ReadonlyArray<Finding>): string;
+  /** What a person is offered at a dispute: the fix's own blocking disputes, never what it reported fixed. */
+  export function offeredDisputes(
+    fix: FixReport,
+    waived: ReadonlyArray<Finding>,
+  ): Array<Finding>;
   /** Who acted, naming the agent where the audit recorded one, else the door it came from. */
   export function whoActed(actor: {
     readonly origin: string;

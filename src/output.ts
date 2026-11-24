@@ -1029,6 +1029,12 @@ export function settleFinalFix(
   return returned;
 }
 
+// WARNING: what a person is offered are the fix's own disputes, never the findings it reported fixed.
+export function offeredDisputes(fix: FixReport, waived: ReadonlyArray<Finding>) {
+  const gone = new Set(Arr.map(waived, findingKey));
+  return Arr.filter(fix.disputed, (one) => isBlocking(one) && !gone.has(findingKey(one)));
+}
+
 const oneLine = (f: Finding) => `[${f.severity}] ${f.title}${f.file ? ` (${f.file})` : ""}`;
 
 const SEVERITIES = ["blocker", "major", "minor"];

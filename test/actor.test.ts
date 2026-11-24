@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema, flow, Result } from "effect";
-import { readAudit } from "../src/audit";
+import { readAudit, whoActed } from "../src/audit";
 import { cliOrigin } from "../src/commands/shared";
 import { currentEnv } from "../src/env";
 import { stopRun } from "../src/flows";
@@ -405,3 +405,9 @@ test("seen from the command line is the CLI's, and from an agent's collie_do the
       }).pipe(Effect.orDie),
     ["attended.workflow.ts", "plain.workflow.ts"],
   ));
+
+test("who acted names the agent the audit recorded, before the door it came through", () => {
+  expect(whoActed({ origin: "desktop", from: { agent: "reviewer" } })).toBe("reviewer");
+  expect(whoActed({ origin: "desktop" })).toBe("Desktop");
+  expect(whoActed({ origin: "cli" })).toBe("the CLI");
+});
