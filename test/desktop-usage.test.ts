@@ -9,7 +9,9 @@ import * as RpcServer from "effect/rpc/RpcServer";
 import { bridgeCommand, openBridge, usageOn } from "../desktop/src/bun/machine";
 import { FrontDoorRpcs } from "../src/board-model";
 import { epochMs } from "../src/time";
+import { codexUsage } from "../src/usage-model";
 import type { UsageReading, UsageWindow } from "../src/usage-model";
+import codexRateLimits from "./fixtures/usage/codex-account-ratelimits-read.json";
 import {
   UPGRADE_SAID,
   usageDue,
@@ -54,6 +56,18 @@ const machine = (name: string, readings: ReadonlyArray<UsageReading>) => ({
 
 const chatgpt = (over: Partial<UsageReading>) =>
   reading({ subscription: "chatgpt", account: "workspace", source: "codex-app-server", ...over });
+const spentCreditCap = {
+  ...codexRateLimits.result,
+  ordinaryUsageAllowed: true,
+  rateLimits: {
+    ...codexRateLimits.result.rateLimits,
+    primary: { usedPercent: 2, windowDurationMins: 10_080, resetsAt: 1_791_973_608 },
+    secondary: null,
+    individualLimit: { limit: "5000", used: "5000.0", remainingPercent: 0 },
+    spendControlReached: true,
+    rateLimitReachedType: null,
+  },
+};
 
 const LIVE = ["p-mk-pc", "p-vm-mk"];
 
@@ -436,6 +450,23 @@ describe("the Usage page", () => {
   });
 });
 
+test("a spent credit cap shows ChatGPT's real weekly percent, in the header and on the page", () => {
+  const seat = chatgpt({ windows: codexUsage(spentCreditCap).windows });
+  expect(
+    Arr.map(usageEntries([machine("mk-pc", [seat])], LIVE, NOW), ({ text, level }) => [
+      text,
+      level,
+    ]),
+  ).toEqual([["ChatGPT 2%", "ok"]]);
+  const page = usagePage([machine("mk-pc", [seat])], LIVE, NOW);
+  expect(
+    Option.getOrUndefined(
+      Option.map(Option.fromNullishOr(page.sections[0]), (present) =>
+        Arr.map(present.windows, ({ label, percent, level }) => [label, percent, level]),
+      ),
+    ),
+  ).toEqual([["Weekly", 2, "ok"]]);
+});
 test("Desktop asks first at once, then each minute while it is shown", () => {
   expect(usageDue(null, NOW, true)).toBe(true);
   expect(usageDue(NOW - 59_000, NOW, true)).toBe(false);

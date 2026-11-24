@@ -8,6 +8,7 @@ import {
   claudeWindows,
   codexLogin,
   codexUsage,
+  roomFor,
   statusLineWindows,
   subscriptionOf,
   usagePhrase,
@@ -166,6 +167,68 @@ describe("parsing", () => {
   });
 });
 
+describe("a spent credit cap", () => {
+  const spentCreditCap = (
+    over: {
+      ordinaryUsageAllowed?: boolean;
+      rateLimitReachedType?: string | null;
+      weeklyPercent?: number;
+    } = {},
+  ) => ({
+    ...codexRateLimits.result,
+    ordinaryUsageAllowed: over.ordinaryUsageAllowed ?? true,
+    rateLimits: {
+      ...codexRateLimits.result.rateLimits,
+      primary: {
+        usedPercent: over.weeklyPercent ?? 2,
+        windowDurationMins: 10_080,
+        resetsAt: 1_791_973_608,
+      },
+      secondary: null,
+      individualLimit: { limit: "5000", used: "5000.0", remainingPercent: 0 },
+      spendControlReached: true,
+      rateLimitReachedType: over.rateLimitReachedType ?? null,
+    },
+  });
+  test("leaves the weekly window at its real percent, saying chatgpt 2% and keeping room", () => {
+    const usage = codexUsage(spentCreditCap());
+    expect(usage.windows).toEqual([
+      window({
+        kind: "weekly",
+        label: "Weekly",
+        usedPercent: 2,
+        resetsAt: isoOfSeconds(1_791_973_608),
+      }),
+    ]);
+    const readings = [reading({ subscription: "chatgpt", windows: usage.windows })];
+    expect(usagePhrase(readings, NOW)).toEqual({ text: "chatgpt 2%", warn: false });
+    expect(roomFor(readings, NOW)({ harness: "codex", model: "gpt-6.1-sol" }, undefined)).toEqual({
+      room: true,
+    });
+  });
+  test("does not mark a model's own limit reached", () => {
+    const sample = spentCreditCap();
+    const spark = { ...sample.rateLimits, limitName: "GPT-5.3-Codex-Spark" };
+    const usage = codexUsage({
+      ...sample,
+      rateLimitsByLimitId: { ...sample.rateLimitsByLimitId, spark },
+    });
+    expect(Arr.map(usage.windows, (w) => [w.label, w.reached])).toEqual([
+      ["Weekly", false],
+      ["Weekly GPT-5.3-Codex-Spark", false],
+    ]);
+  });
+  test("Codex's own block signals still say out", () => {
+    for (const variant of [
+      spentCreditCap({ ordinaryUsageAllowed: false }),
+      spentCreditCap({ rateLimitReachedType: "workspace_member_credits_depleted" }),
+      spentCreditCap({ weeklyPercent: 100 }),
+    ]) {
+      const readings = [reading({ subscription: "chatgpt", windows: codexUsage(variant).windows })];
+      expect(usagePhrase(readings, NOW)).toEqual({ text: "chatgpt out", warn: true });
+    }
+  });
+});
 describe("accounts", () => {
   const claudeJson = (organizationUuid: string) => ({
     oauthAccount: {
