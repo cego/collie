@@ -378,6 +378,33 @@ test("the newest Output that names a reproduction is the one the gate reads", ()
   expect(evidenceGaps("bug", naming("regression", ""))).toEqual([]);
 });
 
+test("with two names given, the newest is the one read, and the older does not stand in for it", () => {
+  const pairs = [
+    record({ name: "tests" }),
+    record({
+      name: "regression",
+      expect: "fail",
+      exit: 1,
+      result: "pass",
+      start: EARLIER,
+      end: EARLIER,
+    }),
+    record({ name: "regression" }),
+  ];
+  const named = (newest: string) =>
+    collected({
+      verifications: pairs,
+      outputs: new Map<string, YamlValue>([
+        ["build", { reproduced: "unit" }],
+        ["gate-fix-1", { reproduced: newest }],
+      ]),
+    });
+  expect(evidenceGaps("bug", named("regression"))).toEqual([]);
+  const gaps = evidenceGaps("bug", named("unit"));
+  expect(gaps).toHaveLength(1);
+  expect(gaps[0]).toContain('"unit"');
+});
+
 test("an Output naming a check that did not reproduce the bug does not close the gap", () => {
   const pairs = [
     record({ name: "tests" }),

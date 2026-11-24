@@ -9842,7 +9842,7 @@ const bugReproduction = () => ({
 });
 
 scenario(
-  "a bug whose build records its own reproduction, and whose gate fix names it, reaches its merge request instead of failing at Checks",
+  "a bug whose earlier ticket's rally fix records the red and the green and names it, so the gate asks nothing of the last ticket",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -9851,7 +9851,10 @@ scenario(
         yield* noGitlabMrs(bin);
         yield* ahead();
         const runId = "r-bug-named";
-        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const plan = yield* planOf([
+          { file: "01-first.md", title: "the first one", checks: "unit" },
+          { file: "02-second.md", title: "the second one", checks: "unit" },
+        ]);
         yield* approve(runId, ["unit"]);
         yield* freeze(runId, [
           { name: "unit", executable: "sh", argv: ["-c", "true"], cwd: rig.projectDir },
@@ -9860,7 +9863,6 @@ scenario(
         const touched = (what: string) => `touch '${waits(what)}'`;
         const held = (what: string) =>
           `while [ ! -f '${waits(`${what}-done`)}' ]; do sleep 0.05; done`;
-        // WARNING: the pair is recorded while the builder holds its turn, so the gate reads an agent's own record.
         const script = Arr.join(
           [
             touched("red"),
@@ -9872,18 +9874,30 @@ scenario(
           ],
           " && ",
         );
-        const named = {
+        const later = { severity: "major", title: "the count is off by one", file: "src/b.ts" };
+        const names = {
           verdict: "clean",
           findings: [],
-          fixed: [],
+          fixed: [{ title: GUARD_FINDING.title, file: GUARD_FINDING.file }],
           disputed: [],
           checks: [{ name: "unit" }],
           reproduced: "regression",
         };
         yield* rig.queueOutputs([
-          { writes: [], sh: script, output: BUILT },
-          CLEAN_SYNTHESIS,
-          named,
+          { ...BUILT, verdict: "findings", findings: [GUARD_FINDING] },
+          FOUND_GUARD,
+          { writes: [], sh: script, output: names },
+          {
+            ...CLEAN_SYNTHESIS,
+            findings: [{ ...GUARD_FINDING, id: `${runId}-F1`, status: "fixed" }],
+          },
+          { ...BUILT, verdict: "findings", findings: [later], tickets_done: ["the second one"] },
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [later] },
+          { verdict: "clean", fixed: [{ title: later.title, file: later.file }], checks: [] },
+          {
+            ...CLEAN_SYNTHESIS,
+            findings: [{ ...later, id: `${runId}-F2`, status: "fixed" }],
+          },
           OPENED,
         ]);
         const reached = (what: string) =>
@@ -9920,9 +9934,7 @@ scenario(
         yield* bin.restore();
 
         expect(said(result)).toBe(OPENED.mr_url);
-        expect(yield* asked(runId, "gate-fix-1")).toContain(
-          '"regression" failed before the fix and passes on this tree',
-        );
+        expect(yield* wasAsked(runId, "gate-fix-1")).toBe(false);
         expect(yield* wasAsked(runId, "gate-fix-2")).toBe(false);
       }),
     ),

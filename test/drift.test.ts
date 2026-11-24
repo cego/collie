@@ -1084,6 +1084,21 @@ test("a drifting report names the batch it came from and what that batch held", 
     }),
   ));
 
+test("a report of the same drift from a later batch keeps that batch", () => {
+  const intent = intentWith({ kind: "protected_paths", globs: ["src/**"] });
+  const found = checkRules(intent, facts({ changedFiles: ["docs/using.md"] }), "t");
+  const onFile = Arr.map(found, (report) => ({ ...report, batch: "batch 1 of 1 (docs/using.md)" }));
+  const again = Arr.map(found, (report) => ({
+    ...report,
+    at: "t2",
+    batch: "batch 2 of 2 (docs/using.md, src/a.ts)",
+  }));
+
+  const [next] = newReports(again, onFile);
+  expect(next?.batch).toBe("batch 2 of 2 (docs/using.md, src/a.ts)");
+  expect(next?.id).toBe(onFile[0]?.id);
+});
+
 test("a finish does not undo what an earlier judgement cut or never judged", () => {
   const boundary: Judged = { semantic: false, truncated: true, cut: ["src/a.ts"], at: "T1" };
   const finish: Judged = { semantic: true, truncated: false, at: "T2" };
@@ -1124,6 +1139,8 @@ test("reading an Outputs folder for a cross-run look stops at the cap", () =>
       const all = yield* outputsIn(agentsDir);
       const capped = yield* outputsIn(agentsDir, MAX_FILES);
       expect(all.outputs).toHaveLength(MAX_FILES + 5);
+      expect(all.truncated).toBe(false);
       expect(capped.outputs).toHaveLength(MAX_FILES);
+      expect(capped.truncated).toBe(true);
     }),
   ));

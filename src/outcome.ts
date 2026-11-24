@@ -539,7 +539,6 @@ function gapsOf(kind: Outcome, got: Collected) {
         fixedBy === undefined
           ? undefined
           : Option.getOrUndefined(Arr.findLast(before, (one) => sameAsked(one, fixedBy)));
-      // WARNING: a pair the journal holds is a name an agent can still write; with no pair nothing can.
       if (named === undefined) {
         if (pair === undefined) {
           claim("the Output does not name the verification that reproduced the bug");

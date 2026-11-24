@@ -730,10 +730,16 @@ export default defineWorkflow({
       const ledger = new Map<string, Finding>();
       const ledgering = (given: ReadonlyArray<Finding>) =>
         ledgered ? { ledger: given, taken: [...ledger.keys()] } : {};
+      const fixers: Array<string> = [];
       const kept = (done: Rallied) => {
         for (const one of ledgered ? done.reviewed.findings : []) {
           if (one.id !== undefined) {
             ledger.set(one.id, one);
+          }
+        }
+        for (const one of done.fixed ?? []) {
+          if (!fixers.includes(one)) {
+            fixers.push(one);
           }
         }
         return done;
@@ -1313,7 +1319,7 @@ export default defineWorkflow({
         outputs: () => ({ build: { ...build } }),
         tickets: Arr.map(tickets, (ticket) => ({ file: ticket.file, checks: ticket.checks })),
         roots: evidenceRoots(place.dir, cwd, source.value),
-        rallied,
+        rallied: rallied === null ? rallied : { ...rallied, fixed: [...fixers] },
         built: planned
           ? Arr.join(
               Arr.flatMap(handed, (one) =>

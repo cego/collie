@@ -1,4 +1,7 @@
-import { Context, Effect, Layer } from "effect";
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { pipe } from "effect/Function";
+import { Clock, Context, Effect, Layer } from "effect";
 
 export interface CollectingApi {
   readonly during: <A, E, R>(
@@ -20,11 +23,23 @@ export interface CollectingApi {
 export interface VerifyHold {
   readonly under: boolean;
   readonly ended: string | null;
+  readonly endedAt: number | null;
 }
+
+export type Owed = { readonly since: number; readonly id: string };
+
+export const released = (owed: Owed | null, settled: boolean, told: boolean) =>
+  owed === null || (settled && told);
+
+export const owedFor = (began: number, now: VerifyHold) =>
+  now.ended === null || now.endedAt === null || now.endedAt < began
+    ? null
+    : { since: began, id: now.ended };
 
 interface VerifyCount {
   under: number;
   ended: string | null;
+  endedAt: number | null;
 }
 
 export class Collecting extends Context.Service<Collecting, CollectingApi>()("collie/Collecting") {}
@@ -45,14 +60,6 @@ export const collectingLayer = Layer.effect(Collecting)(
           }
         }
       });
-    const during =
-      (now: Map<string, number>, keys: ReadonlyArray<string>) =>
-      <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        Effect.acquireUseRelease(
-          add(now, keys, 1),
-          () => effect,
-          () => add(now, keys, -1),
-        );
     const keysOf = (run: string, agent: string, launch?: string) =>
       launch === undefined
         ? [`${run}\n${agent}`]
@@ -63,14 +70,31 @@ export const collectingLayer = Layer.effect(Collecting)(
       if (known !== undefined) {
         return known;
       }
-      const fresh = { under: 0, ended: null };
-      const added: VerifyCount = fresh;
-      verifies.set(of(run, agent), added);
-      return added;
+      const fresh: VerifyCount = { under: 0, ended: null, endedAt: null };
+      verifies.set(of(run, agent), fresh);
+      return fresh;
     };
+    const retire = (run: string, agent: string) =>
+      Effect.sync(() => {
+        const held = verifies.get(of(run, agent));
+        const collecting = Arr.some(
+          [...collections.keys()],
+          (key) => key === of(run, agent) || pipe(key, Str.startsWith(`${of(run, agent)}\n`)),
+        );
+        if (held !== undefined && held.under === 0 && !collecting) {
+          verifies.delete(of(run, agent));
+        }
+      });
     return Collecting.of({
       during: (run, agent, collection, launch) =>
-        during(collections, keysOf(run, agent, launch))(collection),
+        Effect.acquireUseRelease(
+          add(collections, keysOf(run, agent, launch), 1),
+          () => collection,
+          () =>
+            add(collections, keysOf(run, agent, launch), -1).pipe(
+              Effect.andThen(retire(run, agent)),
+            ),
+        ),
       has: (run, agent, launch) =>
         Effect.sync(() => collections.has(keysOf(run, agent, launch).at(-1)!)),
       duringVerify: (run, agent, verify, named) =>
@@ -82,10 +106,13 @@ export const collectingLayer = Layer.effect(Collecting)(
             named === undefined
               ? verify
               : Effect.tap(verify, (verified) =>
-                  Effect.sync(() => {
+                  Effect.gen(function* () {
                     const id = named(verified);
                     if (id !== null) {
-                      holding(run, agent).ended = id;
+                      const at = yield* Clock.currentTimeMillis;
+                      const held = holding(run, agent);
+                      held.ended = id;
+                      held.endedAt = at;
                     }
                   }),
                 ),
@@ -93,7 +120,7 @@ export const collectingLayer = Layer.effect(Collecting)(
             Effect.sync(() => {
               const held = holding(run, agent);
               held.under = Math.max(0, held.under - 1);
-            }),
+            }).pipe(Effect.andThen(retire(run, agent))),
         ),
       verifying: (run, agent) =>
         Effect.sync(() => {
@@ -101,6 +128,7 @@ export const collectingLayer = Layer.effect(Collecting)(
           const returned: VerifyHold = {
             under: (held?.under ?? 0) > 0,
             ended: held?.ended ?? null,
+            endedAt: held?.endedAt ?? null,
           };
           return returned;
         }),

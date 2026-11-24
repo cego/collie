@@ -389,11 +389,10 @@ export const outputsIn = Effect.fn("Drift.outputsIn")(function* (
     (name) =>
       pipe(name, Str.endsWith(".json")) &&
       !Arr.some(NOT_OUTPUTS, (not) => pipe(name, Str.endsWith(not))),
-  )
-    .sort()
-    .slice(0, limit ?? Number.POSITIVE_INFINITY);
+  ).sort();
+  const kept = names.slice(0, limit ?? Number.POSITIVE_INFINITY);
   const outputs: Array<ShownOutput> = [];
-  for (const name of names) {
+  for (const name of kept) {
     const operation = pipe(name, Str.slice(0, -".json".length));
     if (looksSecret(name)) {
       outputs.push({ operation, text: "<redacted>", truncated: false });
@@ -411,7 +410,10 @@ export const outputsIn = Effect.fn("Drift.outputsIn")(function* (
       truncated: lines.length > MAX_LINES_PER_FILE,
     });
   }
-  return { outputs, truncated: Arr.some(outputs, (one) => one.truncated) };
+  return {
+    outputs,
+    truncated: names.length > kept.length || Arr.some(outputs, (one) => one.truncated),
+  };
 });
 
 export interface Batch {
@@ -461,7 +463,11 @@ export function newReports(found: ReadonlyArray<DriftReport>, existing: Readonly
   for (const report of found) {
     const key = findingKey(report.constraint, report.evidence);
     const open = known.get(key);
-    if (open !== undefined && open.intent_version >= report.intent_version) {
+    if (
+      open !== undefined &&
+      open.intent_version >= report.intent_version &&
+      open.batch === report.batch
+    ) {
       continue;
     }
     const next = open === undefined ? report : movedTo(open, report);

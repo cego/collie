@@ -218,7 +218,8 @@ import type { JsonObject } from "./schema";
 import { awaitOutput, outputCollected } from "./output-submit";
 import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } from "./subagents";
 import { Collecting, collectingLayer } from "./collecting";
-import type { CollectingApi, VerifyHold } from "./collecting";
+import { owedFor, released } from "./collecting";
+import type { CollectingApi, Owed, VerifyHold } from "./collecting";
 import { holdsBudgetOf, waitForMemory } from "./memory-wait";
 import {
   appendLine,
@@ -5104,31 +5105,30 @@ const waitForOutput = <R>(
     const fs = yield* FileSystem.FileSystem;
     const read = fs.readFileString(path).pipe(Effect.orElseSucceed(() => ""));
     const fresh = (text: string) => Str.trim(text) !== "" && text !== unless;
-    // WARNING: an Output is not taken while its agent's own verify runs, nor before the turn its tell starts ends.
-    let held = false;
-    let heldAt = 0;
-    let turning = false;
-    let ended: string | null = null;
+    const began = yield* Clock.currentTimeMillis;
+    // WARNING: a verify that ends between two polls is owed its tell too, so the wait follows the time it ended, not a hold it was seen under.
+    let owed: Owed | null = null;
     const free = Effect.gen(function* () {
       if (every.holding !== undefined) {
         const now = yield* every.holding;
-        ended = now.ended ?? ended;
         if (now.under) {
-          held = true;
-          heldAt = yield* Clock.currentTimeMillis;
-          turning = false;
           return false;
         }
+        const due = owedFor(began, now);
+        if (due !== null) {
+          owed = due;
+        }
       }
-      if (!held) {
+      if (owed === null) {
         return true;
       }
       if (!(yield* every.settled)) {
-        turning = true;
         return false;
       }
-      return (
-        turning || every.told === undefined || ended === null || (yield* every.told(heldAt, ended))
+      return released(
+        owed,
+        true,
+        every.told === undefined || (yield* every.told(owed.since, owed.id)),
       );
     });
     let spent = 0;

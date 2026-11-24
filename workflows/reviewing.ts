@@ -536,7 +536,7 @@ export const rally = (ask: {
       ask.resume === undefined && (yield* host.place(runId)).features?.review_delta === true;
     let prior: { readonly head: string; readonly open: ReadonlyArray<Finding> } | null = null;
     let ledger = ask.ledger;
-    const fixes: Array<string> = [];
+    const fixes: Array<string> = [...(ask.resume?.previous.fixed ?? [])];
 
     const repair = Effect.gen(function* () {
       const resumed = ask.resume;
