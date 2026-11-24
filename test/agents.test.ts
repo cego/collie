@@ -7703,6 +7703,84 @@ test("a role no live agent of the Run has is refused, naming the live agents and
     }),
   ));
 
+class Hides extends Herdr {
+  constructor(
+    env: ConstructorParameters<typeof Herdr>[0],
+    private readonly hidden: string,
+  ) {
+    super(env);
+  }
+  override agentList() {
+    return super.agentList().pipe(Effect.map(Arr.filter((one) => one.name !== this.hidden)));
+  }
+}
+
+test("a role whose only terminal has exited is refused, naming the agent that is live", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null, null]);
+      const launched = yield* session(
+        Agents.pipe(Effect.flatMap((agents) => agents.launch(implementerAsk()))),
+      );
+      yield* session(
+        Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.launch({ ...implementerAsk(), operation: "review", role: "reviewer" }),
+          ),
+        ),
+      );
+      const herdr = new Hides(rig.pluginEnv(), launched.agent);
+      const refused = yield* session(
+        Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.steer({
+              runId: "r1",
+              to: "implementer",
+              text: "Look at this",
+              request: "to-dead-implementer",
+            }),
+          ),
+        ),
+        { herdr },
+      );
+      expect(refused).toMatchObject({ agent: "", delivered: false, gone: false });
+      expect(refused.detail).toContain("no live agent");
+      expect(refused.detail).toContain("reviewer");
+      expect(sent(yield* rig.calls(), "Look at this")).toBe(0);
+    }),
+  ));
+
+test("a send that failed names the agents of the Run that are still live", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null, null]);
+      yield* session(Agents.pipe(Effect.flatMap((agents) => agents.launch(implementerAsk()))));
+      yield* session(
+        Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.launch({ ...implementerAsk(), operation: "review", role: "reviewer" }),
+          ),
+        ),
+      );
+      const failed = yield* session(
+        Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.steer({
+              runId: "r1",
+              to: "implementer",
+              text: "Look at this",
+              request: "to-busy-implementer",
+            }),
+          ),
+        ),
+        { herdr: new Refusing({ "terminal.send": "blocked" }) },
+      );
+      expect(failed).toMatchObject({ delivered: false, gone: false });
+      expect(failed.detail).toContain("live:");
+      expect(failed.detail).toContain("reviewer");
+    }),
+  ));
+
 test("a listing that failed is not a Run agent gone, so a refusal says liveness could not be read", () =>
   runEffect(
     Effect.gen(function* () {

@@ -4413,22 +4413,39 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         }
         const candidates = yield* candidatesOf(options.runId);
         const launched = steerTarget(candidates, queued ?? { to, operation, agent }, launchedAs);
+        const listed = yield* listedAgents();
+        const rosterOf = (agents: ReadonlyArray<{ agent: string; role: string }>) =>
+          Arr.join(
+            Arr.map(agents, (one) => `${one.agent} (${one.role})`),
+            ", ",
+          );
         if (launched === undefined) {
-          const listed = yield* listedAgents();
           const live = stillListed(candidates, listed);
           const named = agent ?? operation ?? to;
           return {
             agent: "",
             delivered: false,
             detail: `${options.runId} has launched no agent${named === undefined ? "" : ` for "${named}"`}${
-              live.length === 0
-                ? ""
-                : `; live: ${Arr.join(
-                    Arr.map(live, (one) => `${one.agent} (${one.role})`),
-                    ", ",
-                  )}`
+              live.length === 0 ? "" : `; live: ${rosterOf(live)}`
             }${Option.isNone(listed) ? "; liveness could not be read" : ""}`,
             gone: Option.isSome(listed) && live.length === 0,
+          };
+        }
+        const others = stillListed(
+          Arr.filter(candidates, (one) => one.agent !== launched.agent),
+          listed,
+        );
+        if (
+          Option.isSome(listed) &&
+          !Arr.some(listed.value, (live) => live.name === launched.agent)
+        ) {
+          return {
+            agent: "",
+            delivered: false,
+            detail: `${options.runId} has no live agent for "${agent ?? operation ?? to ?? launched.role}"; ${
+              others.length === 0 ? "no other agent of it is live" : `live: ${rosterOf(others)}`
+            }`,
+            gone: others.length === 0,
           };
         }
         const out = stepsGoingOut.get(launched.agent);
@@ -4552,11 +4569,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             detail: `Queued durably; waiting for a supported idle submission (${sent.why}).`,
           };
         }
-        const listed = yield* listedAgents();
-        const others = stillListed(
-          Arr.filter(candidates, (one) => one.agent !== launched.agent),
-          listed,
-        );
         const gone =
           Option.isSome(listed) &&
           others.length === 0 &&
@@ -4564,7 +4576,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         return {
           agent: launched.agent,
           delivered: false,
-          detail: Option.isNone(listed) ? `${sent.why}; liveness could not be read` : sent.why,
+          detail: `${sent.why}${others.length === 0 ? "" : `; live: ${rosterOf(others)}`}${
+            Option.isNone(listed) ? "; liveness could not be read" : ""
+          }`,
           gone,
         };
       }).pipe(

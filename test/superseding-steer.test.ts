@@ -609,45 +609,73 @@ test("a Run stopped while its agent works on the message does not ask the questi
   ));
 
 for (const evidence of ["no-submit", "another-delivery", "another-incarnation"] as const) {
-  test(`an answered Choice is not asked again after a restart, with ${evidence} for its delivery`, () =>
+  test(`an agent-owned question stays answered across a restart, with ${evidence} for its delivery`, () =>
     atQuestion(`collie-answered-restart-${evidence}-`, (at) =>
       Effect.gen(function* () {
+        yield* recordClaudeEvent(
+          yield* controlDir(at.world.state, at.agent),
+          encode({
+            session_id: at.agent,
+            hook_event_name: "PreToolUse",
+            tool_name: "AskUserQuestion",
+            tool_use_id: `toolu-${at.agent}`,
+            tool_input: {
+              questions: [{ question: "Which database?", header: "DB", options: PICKS }],
+            },
+          }),
+          null,
+        ).pipe(Effect.orDie);
         const asked = yield* until(
           () => waitingOf(at),
-          (rows) => rowOf(rows, "go")?.answer === null,
+          (rows) => rowOf(rows, "ask-build-1")?.answer === null,
         );
-        expect(rowOf(asked, "go")?.answer).toBeNull();
-        expect((yield* answer(at, "yes", "go")).envelope).toMatchObject({ ok: true });
-        yield* Effect.sleep("2 seconds");
-        const sent = yield* deliveredTo(at.world.state, at.runId).pipe(
-          Effect.orElseSucceed(() => []),
+        expect(rowOf(asked, "ask-build-1")?.answer).toBeNull();
+
+        core.refuse("terminal.send", "unreachable", "the core did not answer");
+        expect((yield* answer(at, "SQLite", "ask-build-1")).envelope).toMatchObject({ ok: true });
+        const sent = yield* until(
+          () =>
+            deliveredTo(at.world.state, at.runId).pipe(
+              Effect.map((rows) => Arr.filter(rows, (one) => one.state === "unknown")),
+              Effect.orElseSucceed(() => []),
+            ),
+          (rows) => rows.length > 0,
         );
-        const delivery = Option.getOrUndefined(Arr.last(sent));
-        expect(delivery).toBeDefined();
+        core.restore("terminal.send");
+        const lost = Option.getOrUndefined(Arr.last(sent));
+        expect(lost?.state).toBe("unknown");
+
         if (evidence !== "no-submit") {
           yield* recordClaudeEvent(
             yield* controlDir(at.world.state, at.agent),
             encode({
-              session_id: "s-1",
+              session_id: at.agent,
               hook_event_name: "UserPromptSubmit",
               prompt: `collie-delivery:${
-                evidence === "another-delivery" ? `${delivery?.id}-elsewhere` : delivery?.id
+                evidence === "another-delivery" ? `${lost?.id}-elsewhere` : lost?.id
               }\nYour task for this step is next.`,
             }),
-            evidence === "another-incarnation"
-              ? "not-its-terminal"
-              : (delivery?.incarnation ?? null),
+            evidence === "another-incarnation" ? "not-its-terminal" : (lost?.incarnation ?? null),
           ).pipe(Effect.orDie);
         }
-        const settled = Effect.gen(function* () {
-          yield* Effect.sleep("2 seconds");
-          expect(rowOf(yield* waitingOf(at), "go")?.answer).toBe("yes");
-          expect((yield* cardOf(at))?.questions ?? []).toEqual([]);
-        });
-        yield* settled;
+
         yield* stopHost(at.world.state);
-        yield* startHost(at.world);
-        yield* settled;
+        const again = yield* startHost(at.world);
+        const after = yield* until(
+          () => again.run({ runId: at.runId }).pipe(Effect.orDie),
+          (view) => view?.waiting !== undefined && view.waiting.length > 0,
+        );
+        expect(rowOf(after?.waiting ?? [], "ask-build-1")?.answer).not.toBeNull();
+        const afterRestart = yield* deliveredTo(at.world.state, at.runId).pipe(
+          Effect.orElseSucceed(() => []),
+        );
+        expect(Arr.filter(afterRestart, (one) => one.id === lost?.id)).toMatchObject([
+          { state: "unknown" },
+        ]);
+        const still = yield* deliveredTo(at.world.state, at.runId).pipe(
+          Effect.orElseSucceed(() => []),
+        );
+        expect(Arr.length(Arr.filter(still, (one) => one.id === lost?.id))).toBe(1);
       }),
     ));
 }
