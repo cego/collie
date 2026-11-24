@@ -688,8 +688,9 @@ test.skipIf(process.platform !== "linux")(
     proves(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const { state, runId, running, ended } = yield* endsWithAHeldCheck("", ({ pid }) =>
-          Effect.asVoid(signalProcess(pid, "SIGTERM")),
+        const { state, runId, running, ended, notes, check } = yield* endsWithAHeldCheck(
+          "",
+          ({ pid }) => Effect.asVoid(signalProcess(pid, "SIGTERM")),
         );
         expect(yield* ownerOf(state)).toBeNull();
         expect(running).toEqual([false, false]);
@@ -702,6 +703,21 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* fs.readFileString(`${state}/host.log`)).toContain(
           `ended check held of ${runId}`,
         );
+
+        yield* Effect.addFinalizer(() => stopHost(state).pipe(Effect.ignore));
+        yield* Effect.scoped(
+          connect(state).pipe(Effect.flatMap((client) => client.identity())),
+        ).pipe(Effect.orDie);
+        yield* until(
+          () => notedIn(notes, "starts"),
+          (pids) => pids.length === 2,
+        );
+        expect(yield* fs.readFileString(`${state}/host.log`)).not.toContain(
+          `took over check held of ${runId}`,
+        );
+        expect(yield* Effect.forEach(check, stillRunning)).toEqual([false, false]);
+        expect(yield* notedIn(notes, "overlaps")).toEqual([]);
+        expect(yield* releasedOnce(state, runId, notes)).toHaveLength(1);
       }),
     ),
 );
@@ -832,6 +848,14 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* fs.readFileString(`${removed.state}/host.log`)).toContain(
           `ended check held of ${removed.runId}`,
         );
+        yield* Effect.addFinalizer(() => stopHost(removed.state).pipe(Effect.ignore));
+        yield* Effect.scoped(
+          connect(removed.state).pipe(Effect.flatMap((client) => client.identity())),
+        ).pipe(Effect.orDie);
+        expect(yield* checksAt(removed.state)).toEqual([]);
+        expect(yield* fs.readFileString(`${removed.state}/host.log`)).not.toContain("took over");
+        expect(yield* notedIn(removed.notes, "starts")).toHaveLength(1);
+        expect(yield* notedIn(removed.notes, "overlaps")).toEqual([]);
 
         const outlived = yield* watchable;
         const watched = yield* endsWithAHeldCheck(String(outlived.pid), () => outlived.kill);
@@ -1522,6 +1546,59 @@ test("a newer client replaces an older host that does not answer, by the build i
       expect(refused._tag).toBe("HostVersionMismatch");
       expect(yield* signalProcess(old.pid)).toBe(false);
       expect((yield* ownerOf(state))?.pid).not.toBe(old.pid);
+      yield* stopHost(state);
+    }),
+  ));
+
+test("an older client's command is refused by a silent newer host, naming the build it recorded", () =>
+  proves(
+    Effect.gen(function* () {
+      const { state } = yield* workspace("collie-host-silent-newer-");
+      const who = yield* Effect.scoped(
+        connect(state).pipe(Effect.flatMap((client) => client.identity())),
+      ).pipe(Effect.orDie);
+      yield* pauseHost(state, who.pid);
+
+      const refused = yield* Effect.scoped(connect(state, { build: OLDER })).pipe(
+        (effect) => fastForward(effect, 5),
+        Effect.flip,
+      );
+      if (refused._tag !== "HostVersionMismatch") {
+        throw new Error(`connected, or refused with ${refused._tag}`);
+      }
+      expect(refused.host).toBe(who.build);
+      expect(refused.restart).toContain(who.build);
+      expect(refused.restart).not.toContain("collie host restart");
+      expect((yield* ownerOf(state))?.pid).toBe(who.pid);
+      yield* signalProcess(who.pid, "SIGCONT");
+      yield* stopHost(state);
+    }),
+  ));
+
+test("an older client's restart is refused by a silent host of another installation", () =>
+  proves(
+    Effect.gen(function* () {
+      const { state } = yield* workspace("collie-host-silent-elsewhere-");
+      const old = yield* Effect.scoped(
+        connect(state).pipe(Effect.flatMap((client) => client.identity())),
+      ).pipe(Effect.orDie);
+      yield* pauseHost(state, old.pid);
+
+      const refused = yield* restartHost(state, { build: OLDER }).pipe(
+        Effect.provide(
+          ConfigProvider.layer(ConfigProvider.fromUnknown({ COLLIE_ROOT: "/elsewhere" })),
+        ),
+        (effect) => fastForward(effect, 5),
+        Effect.flip,
+      );
+      if (refused._tag !== "HostVersionMismatch") {
+        throw new Error(`restarted, or refused with ${refused._tag}`);
+      }
+      expect(refused.host).toBe(old.build);
+      expect(refused.restart).toContain(old.build);
+      expect(yield* signalProcess(old.pid)).toBe(true);
+      expect((yield* ownerOf(state))?.pid).toBe(old.pid);
+      yield* signalProcess(old.pid, "SIGCONT");
       yield* stopHost(state);
     }),
   ));

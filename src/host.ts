@@ -5201,29 +5201,25 @@ export const restartHost = Effect.fn("Host.restart")(function* (
   let before: HostSeen | null = null;
   if (owner !== null) {
     const answered = yield* ask(dir).pipe(Effect.option);
-    before = {
-      pid: owner.pid,
-      build: Option.match(answered, { onNone: () => null, onSome: (who) => who.build }),
-    };
-    // WARNING: A host that did not answer is judged by the build it recorded.
-    const recorded = before.build ?? (yield* silentOwnerOf(dir))?.build ?? null;
-    if (recorded !== null && newer(recorded, build)) {
+    const seen =
+      Option.match(answered, {
+        onNone: () => null,
+        onSome: (who) => ({ build: who.build, root: who.root }),
+      }) ?? (yield* recordedOwnerOf(dir, owner.pid));
+    before = { pid: owner.pid, build: seen?.build ?? null };
+    if (seen !== null && newer(seen.build, build)) {
       return yield* new HostVersionMismatch({
         dir,
-        host: recorded,
+        host: seen.build,
         client: build,
         pid: owner.pid,
-        restart: newerHostSaid(dir, recorded, build),
+        restart: newerHostSaid(dir, seen.build, build),
       });
     }
-    // WARNING: Only a client of the host's own installation hands checks over; a dev checkout is not one.
     const install = (yield* currentEnv.pipe(Effect.orDie)).pluginRoot;
-    const ours = Option.match(answered, {
-      onNone: () => true,
-      onSome: (who) => who.root === undefined || sameInstallation(who.root, install),
-    });
-    const upgrades = recorded !== null && newer(build, recorded);
-    if (recorded !== null && atLeast(build, recorded) && (upgrades || ours)) {
+    const ours = seen === null || seen.root === undefined || sameInstallation(seen.root, install);
+    const upgrades = seen !== null && newer(build, seen.build);
+    if (seen !== null && atLeast(build, seen.build) && (ours || upgrades)) {
       yield* replaceOwner(dir, owner.pid, build);
     } else {
       yield* stopOwner(dir, owner.pid);
@@ -5520,27 +5516,14 @@ const REACH_TIMEOUT = Duration.sum(
   Duration.fromInputUnsafe(ASK_TIMEOUT),
 );
 
-const silentOwnerOf = Effect.fn("Host.silentOwner")(function* (dir: string) {
-  const owner = yield* liveOwner(dir);
-  if (owner === null) {
-    return null;
-  }
+const recordedOwnerOf = Effect.fn("Host.recordedOwner")(function* (dir: string, pid: number) {
   const fs = yield* FileSystem.FileSystem;
   const recorded = yield* fs
     .readFileString(recordOf(dir))
     .pipe(Effect.flatMap(Schema.decodeUnknownEffect(HostRecord)), Effect.option);
-  if (Option.isNone(recorded) || recorded.value.pid !== owner.pid) {
-    return null;
-  }
-  const install = (yield* currentEnv.pipe(Effect.orDie)).pluginRoot;
-  return sameInstallation(recorded.value.root, install)
-    ? { pid: owner.pid, build: recorded.value.build }
+  return Option.isSome(recorded) && recorded.value.pid === pid
+    ? { build: recorded.value.build, root: recorded.value.root }
     : null;
-});
-
-const olderSilentOwner = Effect.fn("Host.olderSilentOwner")(function* (dir: string, build: string) {
-  const silent = yield* silentOwnerOf(dir);
-  return silent !== null && newer(build, silent.build) ? silent.pid : null;
 });
 
 const sameInstallation = (served: string, install: string) =>
@@ -5556,10 +5539,23 @@ const ensureRunning = Effect.fn("Host.ensureRunning")(function* (
   if (first._tag === "Success") {
     return first.success;
   }
-  const silent = yield* olderSilentOwner(dir, build);
-  // WARNING: Too slow to answer is not gone: it still hears its signal and hands its checks over.
-  if (silent !== null) {
-    yield* replaceOwner(dir, silent, build);
+  const owner = yield* liveOwner(dir);
+  const silent = owner === null ? null : yield* recordedOwnerOf(dir, owner.pid);
+  if (owner !== null && silent !== null) {
+    if (newer(silent.build, build)) {
+      return yield* new HostVersionMismatch({
+        dir,
+        host: silent.build,
+        client: build,
+        pid: owner.pid,
+        restart: newerHostSaid(dir, silent.build, build),
+      });
+    }
+    const install = (yield* currentEnv.pipe(Effect.orDie)).pluginRoot;
+    if (newer(build, silent.build) && sameInstallation(silent.root, install)) {
+      // WARNING: Too slow to answer is not gone: it still hears its signal and hands its checks over.
+      yield* replaceOwner(dir, owner.pid, build);
+    }
   }
   const started = Effect.scoped(
     Effect.gen(function* () {
