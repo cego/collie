@@ -166,6 +166,7 @@ export type Call = {
   readonly operation: string;
   readonly run: string | null;
   readonly destination?: "cwd";
+  readonly selector?: string | null;
   readonly files?: ReadonlyArray<string>;
   readonly args: Given;
 };
@@ -203,7 +204,11 @@ const digestOf = (call: Call, env: PluginEnv, files: ReadonlyArray<string>) =>
       run: call.run,
       where:
         call.destination === "cwd"
-          ? { machine: env.machine ?? null, cwd: env.cwd, asked: env.asked ?? null }
+          ? {
+              machine: env.machine ?? null,
+              cwd: env.cwd,
+              asked: call.selector === undefined ? (env.asked ?? null) : call.selector,
+            }
           : { machine: env.machine ?? null },
       files,
       args: call.args,

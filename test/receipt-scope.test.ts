@@ -658,6 +658,34 @@ test("a start's decision and workspace are part of its request", () =>
       }),
     ["lingers.workflow.ts"],
   ));
+test("a Schedule's checkout is the same request however it is named", () =>
+  proves(
+    "collie-receipt-scope-sched-form-",
+    (world) =>
+      Effect.gen(function* () {
+        const add = (given: ReadonlyArray<string>) =>
+          collie(world, [
+            "schedule",
+            "add",
+            "named-form",
+            "lingers",
+            "--cron",
+            "0 7 * * *",
+            "--paused",
+            "--input",
+            "note=cache",
+            ...given,
+            "--request-id",
+            "sched-form",
+          ]);
+        const flag = yield* add(["--workspace", world.project]);
+        expect(flag.envelope.ok).toBe(true);
+        expect((yield* add(["--input", `workspace=${world.project}`])).envelope).toEqual(
+          flag.envelope,
+        );
+      }),
+    ["lingers.workflow.ts"],
+  ));
 test("an artefact's whole registration is part of its request", () =>
   proves(
     "collie-receipt-scope-artefact-",
@@ -734,6 +762,39 @@ test("a start's attachment is the file the request names", () =>
         expect(named.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
       }),
     ["lingers.workflow.ts"],
+  ));
+test("a registration without an upload is the path the host was given", () =>
+  proves(
+    "collie-receipt-scope-register-path-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const runId = yield* started(world, { workflow: "plain" });
+        yield* collie(world, ["run", "wait", runId]);
+        yield* fs.writeFileString(`${world.project}/answer.md`, "# Delivered\n");
+        const register = (file: string, id: string) =>
+          collie(world, [
+            "run",
+            "artefact",
+            "register",
+            runId,
+            "--path",
+            file,
+            "--title",
+            "The answer",
+            "--request-id",
+            id,
+          ]);
+        const stored = yield* register(`${world.project}/answer.md`, "register-path");
+        expect(stored.envelope.ok).toBe(true);
+        const relative = yield* register("answer.md", "register-path");
+        expect(relative.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+        expect(relative.envelope.data).toBeUndefined();
+        const fresh = yield* register("answer.md", "register-path-fresh");
+        expect(fresh.envelope.ok).toBe(false);
+        expect(fresh.envelope.error?.message).toContain("absolute file path");
+      }),
+    ["plain.workflow.ts"],
   ));
 test("an uploaded artefact is the file the request names", () =>
   proves(

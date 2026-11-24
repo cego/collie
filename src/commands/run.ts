@@ -2540,6 +2540,7 @@ const artefactResult = (read: {
           }
           const input = { ...read.registration, metadata: metadata.value };
           const path = input.path;
+          const upload = read.upload === true;
           const files = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
           const pathSvc = yield* Path.Path;
           return yield* mutation(
@@ -2547,11 +2548,13 @@ const artefactResult = (read: {
             {
               operation: "artefact-register",
               run: runId,
-              files: path === undefined ? [] : [path],
+              files: upload && path !== undefined ? [path] : [],
               args: {
-                registration: { ...read.registration, path: undefined },
+                registration: upload
+                  ? { ...read.registration, path: undefined }
+                  : read.registration,
                 metadata: metadata.value ?? null,
-                upload: read.upload === true,
+                upload,
               },
             },
             read.requestId ?? Option.none(),
@@ -2564,7 +2567,7 @@ const artefactResult = (read: {
                     client.board(),
                     Effect.gen(function* () {
                       const sent =
-                        read.upload === true && path !== undefined
+                        upload && path !== undefined
                           ? {
                               path: yield* uploadArtefact(
                                 client,

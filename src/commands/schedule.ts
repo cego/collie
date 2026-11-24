@@ -65,9 +65,10 @@ const changing = (
     env: PluginEnv,
   ) => Effect.Effect<ScheduleChange | { readonly refused: OpResult }, never, PlatformServices>,
   destination?: "cwd",
+  selector?: string | null,
 ) =>
   answering((env) =>
-    mutation(env, { operation, run: null, destination, args }, requestId, (request) =>
+    mutation(env, { operation, run: null, destination, selector, args }, requestId, (request) =>
       Effect.gen(function* () {
         const asked = yield* change(env);
         if ("refused" in asked) {
@@ -207,6 +208,7 @@ const scheduleAdd = Command.make(
               return scheduled(checkout.path ?? "");
             }).pipe(Effect.orDie),
           "cwd",
+          where,
         );
       }),
     ),
