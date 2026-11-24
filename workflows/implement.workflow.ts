@@ -76,6 +76,7 @@ const Implementing = Schema.Struct({
   inputs: Schema.Struct({ plan: text, plan_kind: text, repo: text, outcome: text }),
   run: Schema.Struct({ dir: text, id: text }),
   verify: text,
+  measure: text,
 });
 
 const sectionOf = (section: string, input: typeof Implementing.Type) =>
@@ -144,7 +145,6 @@ const prompts = {
     handing: text,
     obstacle: text,
     criteria: text,
-    measure: text,
     source: text,
     proof: text,
   }),
@@ -511,6 +511,7 @@ export default defineWorkflow({
         },
         run: { dir: place.dir, id: runId },
         verify: yield* checksNow,
+        measure: "",
       };
       // WARNING: asked again for each ticket, so a planner that has gone is never described as live.
       const sessionNow = Effect.map(agents.askRoute("planner", place.lineage), (ask) => ({
@@ -923,6 +924,12 @@ export default defineWorkflow({
                 : Arr.flatMap(tickets, (one) => one.criteria));
             yield* restateKind;
             handing.ticket = ticket?.file ?? null;
+            const measure =
+              work.kind !== "plan-dir"
+                ? measuredBy("measure.own", `${place.dir}/plan/issues/NN-<slug>.benchmark.json`)
+                : ticket?.benchmark != null
+                  ? measuredBy("measure", benchmarkFile(work.value, ticket.benchmark))
+                  : "";
             build = yield* agentWork({
               operation,
               ...onHolder(handing),
@@ -946,12 +953,7 @@ export default defineWorkflow({
                   ticket === null && work.kind === "linear"
                     ? "Every checkbox in the issue's description. Copy the description into the spec word for word, its checkboxes included, and answer each one."
                     : renderCriteria(given),
-                measure:
-                  work.kind !== "plan-dir"
-                    ? measuredBy("measure.own", `${place.dir}/plan/issues/NN-<slug>.benchmark.json`)
-                    : ticket?.benchmark != null
-                      ? measuredBy("measure", benchmarkFile(work.value, ticket.benchmark))
-                      : "",
+                measure,
                 source: sectionOf(`source.${work.kind}`, input),
                 proof: sectionOf(
                   content.sections.has(`outcome.${input.inputs.outcome}`)
@@ -968,6 +970,9 @@ export default defineWorkflow({
             });
             handing.said = build;
             handing.last = operation;
+            if (measure !== "") {
+              input = { ...input, measure };
+            }
             let spec: ReadonlyArray<string> | null = given;
             for (let reading = 1; ; reading++) {
               spec =

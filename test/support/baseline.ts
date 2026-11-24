@@ -10439,6 +10439,140 @@ scenario(
     ),
 );
 
+const MEASURE_END = "is between the two passes";
+const MEASURE_LEADS = [
+  "This ticket's speed-up criterion is proved by a Measurement",
+  "A criterion that something is faster, smaller or lighter is a Measurement",
+];
+
+const at = (prompt: string, text: string) => Option.getOrElse(Str.indexOf(text)(prompt), () => -1);
+
+const measureBlock = (prompt: string) => {
+  const from = Arr.findFirst(
+    Arr.map(MEASURE_LEADS, (lead) => at(prompt, lead)),
+    (one) => one !== -1,
+  ).pipe(Option.getOrElse(() => -1));
+  const to = at(prompt, MEASURE_END);
+  return from === -1 || to < from ? "" : Str.slice(from, to + MEASURE_END.length)(prompt);
+};
+
+const MEASURED_FINDING = {
+  severity: "major",
+  title: "the guard is on the wrong side",
+  file: "src/a.ts",
+  detail: "an empty list goes through it",
+};
+
+const flaggingFixCommit = (content: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const at = `${rig.projectDir}/unbroken`;
+    yield* fs.writeFileString(at, content);
+    yield* exec(["git", "add", "unbroken"], { cwd: rig.projectDir });
+    const tree = Str.trim((yield* exec(["git", "write-tree"], { cwd: rig.projectDir })).stdout);
+    const sha = Str.trim(
+      (yield* exec(["git", "commit-tree", tree, "-p", "HEAD", "-m", "ci fix"], {
+        cwd: rig.projectDir,
+      })).stdout,
+    );
+    yield* exec(["git", "rm", "--cached", "-q", "unbroken"], { cwd: rig.projectDir });
+    yield* fs.remove(at);
+    const branch = Str.trim(
+      (yield* exec(["git", "symbolic-ref", "--short", "HEAD"], { cwd: rig.projectDir })).stdout,
+    );
+    return {
+      sha,
+      write: { path: `${rig.projectDir}/.git/refs/heads/${branch}`, text: `${sha}\n` },
+    };
+  });
+
+const fixRoundsOf = (runId: string, benchmark: string | null) =>
+  Effect.gen(function* () {
+    const { bin } = yield* deliveringOn("gitlab");
+    const head = yield* headOf();
+    const forge = yield* forgeOnPath(bin, "gitlab", ciOn(head, ciFailing, "passed"));
+    const fix = yield* flaggingFixCommit("fixed\n");
+    const plan = yield* planOf([
+      {
+        file: "01-first.md",
+        title: "the first one",
+        checks: "unit",
+        body: benchmark === null ? "" : `**Benchmark:** ${benchmark}\n`,
+      },
+      { file: "02-second.md", title: "the second one", checks: "unit" },
+    ]);
+    const unbroken = `${rig.projectDir}/unbroken`;
+    yield* freeze(runId, [
+      counting("unit", `${rig.root}/${runId}-unit-runs`, `[ -f ${unbroken} ]`),
+      { ...counting("nuxi", `${rig.root}/${runId}-nuxi-runs`), ci: "nuxi-job" },
+    ]);
+    yield* rig.queueOutputs([
+      { ...BUILT, verdict: "findings", findings: [MEASURED_FINDING] },
+      { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [MEASURED_FINDING] },
+      {
+        verdict: "clean",
+        fixed: [{ title: MEASURED_FINDING.title, file: MEASURED_FINDING.file }],
+        checks: [],
+      },
+      CLEAN_SYNTHESIS,
+      { ...BUILT, tickets_done: ["the first one", "the second one"] },
+      CLEAN_SYNTHESIS,
+      { writes: [{ path: unbroken, text: "fixed\n" }], output: GATE_FIX },
+      OPENED_CI,
+      {
+        writes: [
+          fix.write,
+          forge.holding(ciOn(fix.sha, { name: "nuxi-job", state: "passed" }, "passed")),
+        ],
+        sh: `cd ${rig.projectDir} && git reset --hard -q`,
+        output: GATE_FIX,
+      },
+    ]);
+    const result = yield* ran({
+      entry: shipped("implement"),
+      runId,
+      input: { plan, ...FINISH },
+    });
+    yield* bin.restore();
+    return {
+      result,
+      plan,
+      build: yield* asked(runId, "01-first.md"),
+      rally: yield* asked(runId, "01-first.md.fix-1"),
+      gate: yield* asked(runId, "gate-fix-1"),
+      ci: yield* asked(runId, "ci-fix-1"),
+    };
+  });
+
+scenario("a Measured ticket's criterion reaches its rally fix, its gate fix and its CI fix", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { result, build, rally, gate, ci } = yield* fixRoundsOf(
+        "r-measured-fixes",
+        "01-only.benchmark.json",
+      );
+      expect(said(result)).toBe(CI_MR);
+      const measured = measureBlock(build);
+      expect(measured.length).toBeGreaterThan(0);
+      for (const prompt of [rally, gate, ci]) {
+        expect(prompt).toContain(measured);
+      }
+    }),
+  ),
+);
+
+scenario("a Run without a Measurement renders none in any fix round", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { result, build, rally, gate, ci } = yield* fixRoundsOf("r-unmeasured-fixes", null);
+      expect(said(result)).toBe(CI_MR);
+      for (const prompt of [build, rally, gate, ci]) {
+        expect(measureBlock(prompt)).toBe("");
+      }
+    }),
+  ),
+);
+
 scenario(
   "a job red where the branch leaves its target is reported on the merge request and the record, and gets no round",
   () =>

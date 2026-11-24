@@ -74,9 +74,9 @@ before you write the code that makes it pass. Never offer a text search as a ver
 Collie reviews this work in its own rally once you are done. Do not run a review skill,
 and do not start review sub-agents or threads.
 
-Apply the **Code comment hygiene** rules you were given to comments this branch added or
-changed: make the code self-explanatory, delete unnecessary comments, and reduce each
-essential comment to the fewest words that preserve its meaning.
+Before you write your Output, list every comment line this branch's diff adds or changes —
+`git diff` against the commit this branch leaves its default branch at — and delete each one
+that restates what the code says. Keep only those that state a fact the code cannot.
 
 Build the complete approved scope before you report the step done. A ticket or a
 required behaviour you did not build is not an optional follow-up, and the size of the
@@ -103,7 +103,8 @@ tests pass is a claim. Say in your Output which verifications you ran, by name.
 
 A `collie verify` you started in the background is reported to you when it ends,
 so you may end your turn waiting on it. Never end a turn waiting on any other
-background job.
+background job. Run a check you keep editing beside with
+`collie verify --isolated -- <command>`, so your edits cannot move the tree it runs on.
 
 {{obstacle}}
 
@@ -129,6 +130,8 @@ The review found:
 
 {{findings}}
 
+{{measure}}
+
 That is one review, synthesised from every reviewer that looked at this branch, so each
 finding arrives once and already reconciled. A finding that starts with an id
 (`<run>-F<n>: <status>`) keeps that id in every later review and in the merge request.
@@ -146,8 +149,9 @@ itself. Commit each fix to this branch.
 Collie reviews this fix in its own rally. Do not run a review skill, and do not start
 review sub-agents or threads.
 
-Apply the **Code comment hygiene** rules you were given to comments this fix added or changed,
-the same way `build` does.
+Before you write your Output, list every comment line this fix's diff adds or changes and
+delete each one that restates what the code says. Keep only those that state a fact the code
+cannot.
 
 A finding that arrives with `answers your dispute:` is one you rejected before and a
 reviewer has now answered. Deal with it: apply it, or dispute it again with a reason that
@@ -160,7 +164,8 @@ tests pass is a claim. Say in your Output which verifications you ran, by name.
 
 A `collie verify` you started in the background is reported to you when it ends,
 so you may end your turn waiting on it. Never end a turn waiting on any other
-background job.
+background job. Run a check you keep editing beside with
+`collie verify --isolated -- <command>`, so your edits cannot move the tree it runs on.
 
 Never defer a blocking finding to a follow-up or leave it out of your Output: every
 `blocker` and `major` above is either under `fixed` or under `disputed`, never both and
@@ -189,6 +194,8 @@ CI fix {{iteration}} of at most {{max_iterations}}. The merge request is open, a
 this Run leaves to CI failed in its pipeline on the merge request's head:
 
 {{findings}}
+
+{{measure}}
 
 Each one names the job, its URL, and the command that prints its log. Collie compared each
 with the same job where this branch leaves its target branch, and retried it once: it did
