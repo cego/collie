@@ -1526,6 +1526,11 @@ instead of landing, so a review of your own branch or an investigation holds the
 you choose what to build or dismiss the rest. An offer taken once per id starts one Run per
 finding: two ids are two invocations, each with one id.
 
+An offer taken for exactly one finding is invoked the same way with one id, and its child
+is given the finding as text under the input the offer names — its title, severity,
+location, detail, evidence, basis and the path of the report it came from — so
+`collie run action <run-id> plan-this --input findings=<run>-F2` plans that finding.
+
 ## Acknowledging a finished Run
 
 ```sh
