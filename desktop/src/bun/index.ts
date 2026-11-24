@@ -821,7 +821,7 @@ const main = Effect.gen(function* () {
       loopbackTools(context).pipe(
         Effect.map((endpoint) => ({
           claude: claudeDriver(claudeCode, context),
-          codex: codexDriver(context, endpoint),
+          codex: codexDriver(context, endpoint, readUserMcpServers),
           pi: piDriver(context, endpoint, readUserMcpServers),
         })),
       ),

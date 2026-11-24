@@ -8,6 +8,7 @@ import * as Option from "effect/Option";
 import { Schema, flow, Result } from "effect";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { homedir } from "node:os";
 import { childEnv } from "../../desktop/src/bun/login-env";
 import type { JsonObject } from "../../src/schema";
 
@@ -22,14 +23,106 @@ const decode = flow(Schema.decodeResult(Schema.fromJsonString(Message)), Result.
 const send = (message: JsonObject) => process.stdout.write(`${encode(message)}\n`);
 const notify = (method: string, params: JsonObject) => send({ method, params });
 
-const config = new Map<string, Schema.Json>();
-for (const [at, arg] of Bun.argv.entries()) {
-  if (Bun.argv[at - 1] === "-c") {
-    const [key, ...value] = Str.split(arg, "=");
-    config.set(key, flow(Schema.decodeResult(Json), Result.getOrThrow)(Arr.join(value, "=")));
+const asJson = flow(Schema.decodeUnknownResult(Schema.Json), Result.getOrThrow);
+
+const ServerSchema = Schema.Record(Schema.String, Schema.Json);
+type Server = Record<string, Schema.Json>;
+const OwnConfig = Schema.Struct({
+  mcp_servers: Schema.optionalKey(Schema.Record(Schema.String, ServerSchema)),
+});
+const codexHome = childEnv().CODEX_HOME ?? `${homedir()}/.codex`;
+const ownPath = `${codexHome}/config.toml`;
+const own = (await Bun.file(ownPath).exists())
+  ? Option.getOrElse(
+      Schema.decodeOption(OwnConfig)(Bun.TOML.parse(await Bun.file(ownPath).text())),
+      () => ({ mcp_servers: {} }),
+    )
+  : { mcp_servers: {} };
+
+// WARNING: a `-c` value is a table only when it decoded to a JSON object.
+const tableOf: (value: Schema.Json | undefined) => Server = (value) =>
+  Schema.is(ServerSchema)(value) ? value : {};
+
+const put = (into: Server, path: ReadonlyArray<string>, value: Schema.Json) => {
+  let held = into;
+  for (const key of Arr.dropRight(path, 1)) {
+    const next = tableOf(held[key]);
+    held[key] = next;
+    held = next;
   }
-}
+  held[path.at(-1) ?? ""] = value;
+};
+
+// WARNING: Codex's `-c` overrides layer over the config.toml its own servers come from.
+const servers = () => {
+  const merged: Record<string, Server> = {};
+  const configured: Readonly<Record<string, Server>> = own.mcp_servers ?? {};
+  for (const [name, cfg] of Rec.toEntries(configured)) {
+    merged[name] = { ...cfg };
+  }
+  for (const [at, arg] of Bun.argv.entries()) {
+    if (Bun.argv[at - 1] !== "-c") {
+      continue;
+    }
+    const [key, ...held] = Str.split(arg, "=");
+    const [head, name, field, ...rest] = Str.split(key, ".");
+    if (head !== "mcp_servers" || name === undefined || field === undefined) {
+      continue;
+    }
+    put(
+      (merged[name] ??= {}),
+      [field, ...rest],
+      flow(Schema.decodeResult(Json), Result.getOrThrow)(Arr.join(held, "=")),
+    );
+  }
+  return merged;
+};
 const server = "collie_desktop";
+
+const login = (name: string) =>
+  childEnv().FAKE_CODEX_MCP_LOGIN === name ? childEnv().FAKE_CODEX_MCP_LOGIN_TOKEN : undefined;
+
+const headersOf = (cfg: Server) => {
+  const headers: Record<string, string> = {};
+  const literal = cfg.http_headers;
+  if (Schema.is(Schema.Record(Schema.String, Schema.String))(literal)) {
+    Object.assign(headers, literal);
+  }
+  const fromEnv = cfg.env_http_headers;
+  if (Schema.is(Schema.Record(Schema.String, Schema.String))(fromEnv)) {
+    const named: Readonly<Record<string, string>> = fromEnv;
+    for (const header of Rec.keys(named)) {
+      const value = childEnv()[named[header] ?? ""];
+      if (value !== undefined) {
+        headers[header] = value;
+      }
+    }
+  }
+  if (Str.isString(cfg.bearer_token_env_var)) {
+    const token = childEnv()[cfg.bearer_token_env_var];
+    if (token !== undefined) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+  }
+  return headers;
+};
+
+const connect = async (name: string) => {
+  const url = servers()[name]?.url;
+  if (!Str.isString(url)) {
+    return undefined;
+  }
+  const headers = headersOf(servers()[name] ?? {});
+  const held = login(name);
+  if (headers.Authorization === undefined && held !== undefined) {
+    headers.Authorization = `Bearer ${held}`;
+  }
+  const client = new Client({ name: "codex-stand-in", version: "1" });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers } }),
+  );
+  return client;
+};
 
 const JsonObject = Schema.Record(Schema.String, Schema.Json);
 const Store = Schema.fromJsonString(
@@ -137,6 +230,9 @@ const play = async (turn: Turn, params: JsonObject) => {
         args: Bun.argv.slice(2),
         cwd: process.cwd(),
         hasToken: childEnv().COLLIE_CHAT_MCP_TOKEN !== undefined,
+        env: Arr.filter(Rec.keys(childEnv()), (key) =>
+          pipe(key, Str.startsWith("COLLIE_CHAT_MCP_")),
+        ),
         thread: loaded!.id,
         start: loaded!.params,
         turn: params,
@@ -160,7 +256,7 @@ const play = async (turn: Turn, params: JsonObject) => {
     };
     item(turn, call);
     const client = new Client({ name: "codex-stand-in", version: "1" });
-    const url = config.get(`mcp_servers.${server}.url`);
+    const url = servers()[server]?.url;
     await client.connect(
       new StreamableHTTPClientTransport(new URL(Str.isString(url) ? url : ""), {
         requestInit: { headers: { Authorization: `Bearer ${childEnv().COLLIE_CHAT_MCP_TOKEN}` } },
@@ -177,6 +273,43 @@ const play = async (turn: Turn, params: JsonObject) => {
         _meta: null,
       },
     });
+    return finish(turn, "completed");
+  }
+  if (pipe(said, Str.startsWith("servers"))) {
+    for (const name of Rec.keys(servers())) {
+      if (name === server) {
+        continue;
+      }
+      const client = await connect(name).catch(() => undefined);
+      if (client === undefined) {
+        continue;
+      }
+      const first = (await client.listTools()).tools[0];
+      if (first !== undefined) {
+        const call = {
+          type: "mcpToolCall",
+          id: `${turn.id}-${name}-mcp`,
+          server: name,
+          tool: first.name,
+          status: "inProgress",
+          arguments: {},
+          result: null,
+          error: null,
+        };
+        item(turn, call);
+        const result = await client.callTool({ name: first.name, arguments: {} });
+        completed(turn, {
+          ...call,
+          status: "completed",
+          result: {
+            content: asJson(result.content),
+            structuredContent: null,
+            _meta: null,
+          },
+        });
+      }
+      await client.close();
+    }
     return finish(turn, "completed");
   }
   if (pipe(said, Str.startsWith("wait"))) {
@@ -363,6 +496,41 @@ for await (const chunk of Bun.stdin.stream()) {
           data: all.slice(from, from + 2),
           nextCursor: from + 2 < all.length ? String(from + 2) : null,
         });
+        break;
+      }
+      case "mcpServerStatus/list": {
+        const data = [];
+        for (const [name, cfg] of Rec.toEntries(servers())) {
+          const credential = Rec.keys(headersOf(cfg)).length > 0;
+          let tools: Record<string, Schema.Json> = {};
+          let authStatus = "unsupported";
+          let toolsError: string | null = null;
+          try {
+            const client = await connect(name);
+            if (client !== undefined) {
+              tools = Rec.fromEntries(
+                Arr.map((await client.listTools()).tools, (tool) => [tool.name, asJson(tool)]),
+              );
+              authStatus = credential
+                ? "bearerToken"
+                : login(name) === undefined
+                  ? "unsupported"
+                  : "oAuth";
+              await client.close();
+            }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            // WARNING: 401 to a server holding no credential is Codex's sign-in to do, not a failure.
+            if (!credential && /401|Unauthorized/.test(message)) {
+              authStatus = "notLoggedIn";
+            } else {
+              authStatus = credential ? "bearerToken" : "unsupported";
+              toolsError = message;
+            }
+          }
+          data.push({ name, tools, authStatus, toolsError });
+        }
+        answer({ data, nextCursor: null });
         break;
       }
       case "model/list":

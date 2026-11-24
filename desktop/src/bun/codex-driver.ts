@@ -27,11 +27,13 @@ import { isNumber, isString } from "../../../src/schema";
 import type { JsonObject } from "../../../src/schema";
 import { standingDirectionContext } from "../../../src/standing-direction";
 import type { ChatEndpoint } from "./chat-endpoint";
+import { CodexStatus, codexConfigured, codexConnections, codexServers } from "./codex-servers";
 import type { ListedModel } from "./claude-models";
 import type { ChatDriver, ContentBlock, DriverContext, TurnCost } from "./driver";
 import { listedIn } from "./harness-lists";
 import { childEnv, which } from "./login-env";
 import { noticedContext, placementContext, systemPrompt } from "./session";
+import type { UserMcpServers } from "./session";
 import { transcriptOf } from "./transcript";
 
 const TOKEN_ENV = "COLLIE_CHAT_MCP_TOKEN";
@@ -609,15 +611,20 @@ export const readCodexModels: (
     ),
   );
 
+const decodeStatuses = decoded(Schema.Struct({ data: Schema.Array(CodexStatus) }));
+const NO_STATUS: ReadonlyArray<CodexStatus> = [];
+
 const noThreads: Readonly<Record<string, string>> = {};
 
 export const codexDriver: (
   context: DriverContext,
   endpoint: ChatEndpoint,
+  userServers: () => Promise<UserMcpServers>,
   command?: ReadonlyArray<string> | null,
 ) => ChatDriver = (
   context,
   endpoint,
+  userServers,
   command = which("codex") === null ? null : [which("codex")!],
 ) => {
   const mapping = `${context.dir}/codex-threads.json`;
@@ -655,7 +662,6 @@ export const codexDriver: (
     cwd: context.dir,
     approvalPolicy: "never",
     sandbox: "danger-full-access",
-    developerInstructions: systemPrompt(hostname()),
   };
   return {
     installed: command !== null,
@@ -706,10 +712,15 @@ export const codexDriver: (
           return yield* new CodexError({ message: NOT_INSTALLED });
         }
         const { url, token } = yield* endpoint.start;
+        const given = codexServers(
+          yield* Effect.tryPromise(userServers).pipe(Effect.orElseSucceed(() => ({}))),
+          yield* Effect.tryPromise(codexConfigured).pipe(Effect.orElseSucceed(() => [])),
+        );
         const server = yield* appServer(
           command,
           context.dir,
           [
+            ...given.args,
             "-c",
             `mcp_servers.${SERVER}.url=${encodeLine(url)}`,
             "-c",
@@ -717,7 +728,7 @@ export const codexDriver: (
             "-c",
             `mcp_servers.${SERVER}.tool_timeout_sec=${TOOL_TIMEOUT}`,
           ],
-          { ...childEnv(), [TOKEN_ENV]: token },
+          { ...childEnv(), ...given.env, [TOKEN_ENV]: token },
         );
         kill = server.kill;
         yield* Effect.forkScoped(pump(server));
@@ -727,8 +738,17 @@ export const codexDriver: (
         if (account === null && requiresOpenaiAuth) {
           return yield* new CodexError({ message: SIGNED_OUT });
         }
+        const statuses = yield* server.call("mcpServerStatus/list", {}).pipe(
+          Effect.flatMap(decodeStatuses),
+          Effect.map(({ data }) => data),
+          Effect.orElseSucceed(() => NO_STATUS),
+        );
+        const started = {
+          ...setting,
+          developerInstructions: `${systemPrompt(hostname())}\n\n${codexConnections(given, statuses)}`,
+        };
         const resumed = yield* server
-          .call("thread/resume", { threadId: yield* threadOf(id), ...setting })
+          .call("thread/resume", { threadId: yield* threadOf(id), ...started })
           .pipe(
             Effect.flatMap(decodeThreadRef),
             Effect.asSome,
@@ -738,7 +758,7 @@ export const codexDriver: (
           return { server, thread: resumed.value.thread.id };
         }
         const { thread } = yield* server
-          .call("thread/start", setting)
+          .call("thread/start", started)
           .pipe(Effect.flatMap(decodeThreadRef));
         yield* remember(id, thread.id);
         return { server, thread: thread.id };

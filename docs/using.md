@@ -2351,11 +2351,23 @@ ends the session with what it printed. A question Codex's App Server asks the cl
 such as an elicitation, is refused, so the turn goes on.
 
 What Codex cannot take is said here rather than dropped: it has no PDF input, so a PDF goes by
-the path Desktop lists in the message, which Codex reads with its shell; your Claude Code MCP
-servers and claude.ai connectors do not reach it, since it has its own; and nothing stops its
-shell reading your agents' session stores (`~/.claude/projects`, `~/.codex/sessions` and the
+the path Desktop lists in the message, which Codex reads with its shell; claude.ai connectors do
+not reach it; and nothing stops its shell reading your agents' session stores
+(`~/.claude/projects`, `~/.codex/sessions` and the
 like), which Claude Code's and Pi's chats refuse. Codex could refuse them only with its
 sandbox, which needs user namespaces this computer may not give it.
+
+On Codex the chat has your Claude Code user-scope MCP servers too, as Pi and Claude Code do:
+Desktop reads the same list and passes each one to the App Server as
+`-c mcp_servers.<name>.*` when the conversation starts. A server name Codex already has in
+its own `config.toml` keeps Codex's entry, and the chat names it once; `collie_desktop` is
+Collie's own and no server of yours takes its place. A server's static headers, such as a
+bearer token, reach Codex through the child's environment, never its command line, and never
+the chat. Codex keeps its own sign-ins: a server that needs a browser login, such as Linear,
+works once you run `codex mcp login <server>` in a terminal, and until then the chat says the
+server is not signed in and names that command. A server Codex could not start is said too,
+with `codex mcp list` in a terminal as the way to see why. A server added while a conversation
+is open reaches the next one, as on Pi.
 
 The effort is chosen in its select, or by asking the chat, for example "answer at high
 effort from now on", which `collie_chat_harness` saves. Claude's levels range from `low` to
