@@ -16,17 +16,16 @@ test("a board notices its binary renamed over, and nothing while it is left alon
         const replaced = yield* replacedOnDisk(bin, "10 millis");
         const watching = yield* Effect.forkChild(replaced.pipe(Effect.timeoutOption(2000)));
         yield* Effect.sleep(100);
-        // Rewritten in place is the same file: not an upgrade.
         yield* fs.writeFileString(bin, "old again");
         yield* Effect.sleep(100);
         expect(watching.pollUnsafe()).toBeUndefined();
 
-        // How tools/build.ts installs one: beside it, then renamed over it.
+        // WARNING: tools/build.ts installs by writing beside the binary and renaming over it; that is what a rebuild looks like.
         yield* fs.writeFileString(`${bin}.new`, "new");
         yield* fs.rename(`${bin}.new`, bin);
         expect(Option.isSome(yield* Fiber.join(watching))).toBe(true);
 
-        // A path nobody can read never counts as rebuilt.
+        // WARNING: a path nobody can read never counts as rebuilt.
         const missing = yield* Effect.flatten(replacedOnDisk(`${dir}/gone`, "10 millis")).pipe(
           Effect.timeoutOption(100),
         );
@@ -53,7 +52,6 @@ test("the MCP server answers here until its binary is renamed over, then through
 
         yield* fs.writeFileString(`${bin}.new`, "new");
         yield* fs.rename(`${bin}.new`, bin);
-        // Asked until it changes: the watch notices on its own schedule, not on the test's.
         const after = yield* answer("collie_herd", {}).pipe(
           Effect.repeat({
             until: (said) => said !== "old collie_herd",

@@ -4,9 +4,8 @@ import {
   remainingDisputes,
   settleRound,
   splitDisputed,
-  type Finding,
-  type Fixed,
 } from "../src/output";
+import type { Finding, Fixed } from "../src/output";
 
 const dispute: Finding = {
   file: "src/worker.ts",
@@ -22,10 +21,10 @@ const accepted: Finding = {
 
 const review = (
   over: Partial<{
-    findings: Finding[];
-    disputed: Finding[];
-    dropped: Finding[];
-    fixed: Fixed[];
+    findings: Array<Finding>;
+    disputed: Array<Finding>;
+    dropped: Array<Finding>;
+    fixed: Array<Fixed>;
   }> = {},
 ) => ({ findings: [], disputed: [], dropped: [], fixed: [], ...over });
 

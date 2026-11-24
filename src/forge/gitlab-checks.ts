@@ -1,12 +1,10 @@
-// The doctor's GitLab checks: glab and its login, the token's expiry, and whether this
-// Machine can push to the Flock's GitLab. They run glab, so they live beside its adapter.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 import { hostname } from "node:os";
 import { Clock, Effect, Option, Result, Schema } from "effect";
-import { type ChildProcessSpawner, CommandLine } from "effect/process";
+import { CommandLine } from "effect/process";
+import type { ChildProcessSpawner } from "effect/process";
 import { gitlabHostOf } from "../config";
 import {
   FETCH_LIMIT,
@@ -17,11 +15,12 @@ import {
   onPath,
   passed,
   warned,
-  type Check,
 } from "../doctor-check";
+import type { Check } from "../doctor-check";
 import type { PluginEnv } from "../env";
 import { daysLeft, RENEW_WITHIN_DAYS, TokenSelf, tokenPage } from "../gitlab-token";
-import { whatItSaid, type Runner } from "../mr";
+import { whatItSaid } from "../mr";
+import type { Runner } from "../mr";
 import { glabLoginTo } from "./gitlab";
 import type { ConnectionReading as Probe } from "../connection-model";
 
@@ -41,19 +40,21 @@ export const probeGitlab = Effect.fn("Connections.probeGitlab")(function* <R>(
     env.raw.GITLAB_TOKEN || env.raw.GITLAB_ACCESS_TOKEN || env.raw.OAUTH_TOKEN;
   const storedToken = environmentToken ? null : yield* login.token(run, env.cwd);
   const token = environmentToken || (storedToken ?? "");
-  if (token === "")
+  if (token === "") {
     return { state: "absent", detail: `no GitLab login for ${host}`, fix } satisfies Probe;
+  }
   const args = ["api", "--hostname", host, "user"];
   const me = yield* environmentToken
     ? run("env", [`GITLAB_HOST=${host}`, "glab", ...args], env.cwd)
     : run("glab", args, env.cwd);
   const user = Schema.decodeOption(GitlabUser)(me.stdout);
-  if (me.code !== 0 || Option.isNone(user))
+  if (me.code !== 0 || Option.isNone(user)) {
     return {
       state: "broken",
       detail: `${host} did not accept its GitLab login`,
       fix,
     } satisfies Probe;
+  }
   return {
     state: "ok",
     account: user.value.username,
@@ -61,11 +62,7 @@ export const probeGitlab = Effect.fn("Connections.probeGitlab")(function* <R>(
   } satisfies Probe;
 });
 
-/**
- * Each host `glab auth status` names (its unindented lines), and whether git reaches it
- * over HTTPS. Read whatever the exit code: one host with a bad token fails the command
- * for all of them.
- */
+// WARNING: read the status whatever its exit code; one host with a bad token fails it for all.
 export const glabHosts = (status: string) =>
   Arr.map(
     Arr.filter(Str.split(status, "\n"), (line) => /^[a-z0-9.-]+(:\d+)?$/i.test(line)),
@@ -92,32 +89,46 @@ const tokenExpiry = Effect.fn("Doctor.tokenExpiry")(function* (
     return warned(`${host} would not say when its token expires`, renew);
   }
   const expires = token.value.expires_at;
-  if (expires === null) return passed(`${host}: the token never expires`);
+  if (expires === null) {
+    return passed(`${host}: the token never expires`);
+  }
   const days = daysLeft(expires, yield* Clock.currentTimeMillis);
-  if (days < 0) return failed(`${host}: the token expired on ${expires}`, renew);
-  if (days < RENEW_WITHIN_DAYS) return warned(`${host}: the token expires on ${expires}`, renew);
+  if (days < 0) {
+    return failed(`${host}: the token expired on ${expires}`, renew);
+  }
+  if (days < RENEW_WITHIN_DAYS) {
+    return warned(`${host}: the token expires on ${expires}`, renew);
+  }
   return passed(`${host}: the token expires on ${expires}`);
 });
 
-/** An agent sshd forwarded into this session, which goes when the computer it came from sleeps. */
+// WARNING: a forwarded SSH agent goes when the computer it came from sleeps.
 const FORWARDED_AGENT = /^\/tmp\/ssh-[^/]+\/agent\.\d+$/;
 
-/** Whether this Machine's own keys reach `host` over SSH, or glab's token over HTTPS. */
 export const pushCheck = Effect.fn("Doctor.pushCheck")(function* (
   host: { host: string; https: boolean },
   env: PluginEnv,
   ssh: boolean,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
-  if (host.https) return passed(`pushes to ${host.host} over HTTPS with glab's token`);
-  if (!ssh) return failed("no ssh on PATH", "install the OpenSSH client");
+  if (host.https) {
+    return passed(`pushes to ${host.host} over HTTPS with glab's token`);
+  }
+  if (!ssh) {
+    return failed("no ssh on PATH", "install the OpenSSH client");
+  }
   const forwarded = FORWARDED_AGENT.test(env.raw["SSH_AUTH_SOCK"] ?? "");
   const args = ["-oBatchMode=yes", "-oConnectTimeout=5", "-T"];
-  if (forwarded) args.push("-oIdentityAgent=none");
+  if (forwarded) {
+    args.push("-oIdentityAgent=none");
+  }
   const answer = yield* answered(run("ssh", [...args, `git@${host.host}`], env.pluginRoot));
-  if (answer.code === 0) return passed(`pushes to ${host.host} with this Machine's own key`);
-  if (answer.code === 124)
+  if (answer.code === 0) {
+    return passed(`pushes to ${host.host} with this Machine's own key`);
+  }
+  if (answer.code === 124) {
     return failed(`${host.host} did not answer within ${FETCH_LIMIT}`, `ssh -T git@${host.host}`);
+  }
   if (pipe(whatItSaid(answer), Str.includes("Host key verification failed"))) {
     return failed(
       `${host.host}'s host key is not known here`,
@@ -130,17 +141,15 @@ export const pushCheck = Effect.fn("Doctor.pushCheck")(function* (
   );
 });
 
-/** Every GitLab check, exactly as `collie doctor` has always made them. */
 export const gitlabChecks = Effect.fn("Doctor.gitlabChecks")(function* (
   env: PluginEnv,
   search: string,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
   const root = env.pluginRoot;
-  const checks: Check[] = [];
+  const checks: Array<Check> = [];
   const glabDir = yield* onPath(search, "glab");
   const host = yield* gitlabHostOf(env);
-  // The whole status only names the other hosts: one with a bad token fails it for all.
   const [auth, everyHost] = glabDir
     ? yield* Effect.all(
         [
@@ -170,17 +179,18 @@ export const gitlabChecks = Effect.fn("Doctor.gitlabChecks")(function* (
             )),
   });
 
-  // A host glab has never heard of is the `glab` check's failure, not two more.
   const known = auth
     ? Option.getOrUndefined(Arr.findFirst(glabHosts(whatItSaid(auth)), (one) => one.host === host))
     : undefined;
   if (known !== undefined || auth?.code === 0) {
     const ssh = (yield* onPath(search, "ssh")) !== null;
-    checks.push({ name: "gitlab token", ...(yield* tokenExpiry(host, root, run)) });
-    checks.push({
-      name: "git push",
-      ...(yield* pushCheck(known ?? { host, https: false }, env, ssh, run)),
-    });
+    checks.push(
+      { name: "gitlab token", ...(yield* tokenExpiry(host, root, run)) },
+      {
+        name: "git push",
+        ...(yield* pushCheck(known ?? { host, https: false }, env, ssh, run)),
+      },
+    );
   }
   const others = everyHost
     ? Arr.filter(glabHosts(whatItSaid(everyHost)), (one) => one.host !== host)

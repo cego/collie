@@ -1,8 +1,3 @@
-// `collie upgrade` on a release: the runner places the release it carries into the Collie
-// directory's `release/`, keeping any edit it finds there, and never writes `user/`. Another
-// version is handed to that version's runner, downloaded from a served fake release and
-// verified first.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -12,7 +7,8 @@ import { Effect, FileSystem, Schema } from "effect";
 import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
 import { upgrade } from "../src/operations";
-import { shell, type Ran } from "../src/mr";
+import { shell } from "../src/mr";
+import type { Ran } from "../src/mr";
 import { ownPlatform } from "../src/releases";
 import { signRelease } from "../src/signing";
 import { generateKeyPairSync } from "node:crypto";
@@ -23,9 +19,8 @@ let rig: Rig;
 let collieDir: string;
 let tree: string;
 let runner: string;
-let prepared: string[];
+let prepared: Array<string>;
 let served: ReturnType<typeof Bun.serve>;
-/** What the fake release source answers: the newest version, and each published file. */
 let latest: string;
 let published: Map<string, Uint8Array | string>;
 
@@ -89,7 +84,6 @@ afterEach(() =>
   ),
 );
 
-/** Publishes `version`'s runner: it records how it was run and answers as an upgrade. */
 const publish = (version: string, signedBy = KEY.privateKey) => {
   const bytes = new TextEncoder().encode(`#!/bin/sh
 echo "$COLLIE_DIR $*" > "${rig.root}/handed-off"
@@ -99,17 +93,19 @@ echo '{"ok":true,"data":{"root":"'"$COLLIE_DIR"'/release","checkout":false,"rele
   published.set(`/download/${version}/${ASSET}.sig`, signRelease(bytes, signedBy));
 };
 
-/** Not a checkout to git, a `prepare.sh` whose directory is recorded, and anything else run. */
-const run = (cmd: string, args: string[], cwd: string) => {
-  if (cmd === "git") return Effect.succeed<Ran>({ code: 128, stdout: "", stderr: "not a git" });
-  if (cmd !== "sh") return shell(cmd, args, cwd);
-  return Effect.sync((): Ran => {
+const run = (cmd: string, args: Array<string>, cwd: string) => {
+  if (cmd === "git") {
+    return Effect.succeed<Ran>({ code: 128, stdout: "", stderr: "not a git" });
+  }
+  if (cmd !== "sh") {
+    return shell(cmd, args, cwd);
+  }
+  return Effect.sync(() => {
     prepared.push(`${cmd} ${Arr.join(args, " ")} in ${cwd}`);
     return { code: 0, stdout: "prepare: runner: already in place\n" };
   });
 };
 
-/** The files an upgrade said it kept, relative to their `kept/<when>/`. */
 const keptOf = (result: Effect.Success<ReturnType<typeof upgrade>>) =>
   result.ok && "kept" in result.data ? result.data.kept : [];
 const shipped = (file: string) => pipe(file, Str.replace(/^kept\/[^/]+\//, ""));
@@ -198,58 +194,56 @@ test("a fresh Collie directory gets an empty user/ beside the release", () =>
     }),
   ));
 
-test(
-  "placements at once take turns, so the release is wholly one of them",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const other = `${rig.root}/other/release`;
-        yield* fs.copy(tree, other);
-        yield* write(`${other}/personas/extra.md`, "only in the other\n");
-        // Large enough that the two placements overlap.
-        for (let file = 0; file < 1500; file++) {
-          yield* write(`${tree}/bulk/${file}.md`, `${file}\n`);
-          yield* write(`${other}/other/${file}.md`, `${file}\n`);
-        }
+test("placements at once take turns, so the release is wholly one of them", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const other = `${rig.root}/other/release`;
+      yield* fs.copy(tree, other);
+      yield* write(`${other}/personas/extra.md`, "only in the other\n");
+      // WARNING: sized so the two placements overlap.
+      for (let file = 0; file < 1500; file++) {
+        yield* write(`${tree}/bulk/${file}.md`, `${file}\n`);
+        yield* write(`${other}/other/${file}.md`, `${file}\n`);
+      }
 
-        const both = yield* Effect.promise(() =>
-          Promise.all(
-            Arr.map(
-              [
-                [tree, "1.0.0"],
-                [other, "2.0.0"],
-              ],
-              ([from, version]) =>
-                Bun.spawn([
-                  "bun",
-                  `${import.meta.dir}/fixtures/place-release.ts`,
-                  from!,
-                  runner,
-                  collieDir,
-                  version!,
-                ]).exited,
-            ),
+      const both = yield* Effect.forEach(
+        [
+          [tree, "1.0.0"],
+          [other, "2.0.0"],
+        ],
+        ([from, version]) =>
+          Effect.promise(
+            () =>
+              Bun.spawn([
+                "bun",
+                `${import.meta.dir}/fixtures/place-release.ts`,
+                from!,
+                runner,
+                collieDir,
+                version!,
+              ]).exited,
           ),
-        );
+        { concurrency: "unbounded" },
+      );
 
-        expect(both).toEqual([0, 0]);
-        const record = yield* Schema.decodeEffect(
-          Schema.fromJsonString(
-            Schema.Struct({ files: Schema.Record(Schema.String, Schema.String) }),
-          ),
-        )(yield* read(`${collieDir}/release/placed.json`));
-        const placed: string[] = [];
-        for (const name of yield* fs.readDirectory(`${collieDir}/release`, { recursive: true })) {
-          const file = (yield* fs.stat(`${collieDir}/release/${name}`)).type === "File";
-          if (file && name !== "placed.json") placed.push(name);
+      expect(both).toEqual([0, 0]);
+      const record = yield* Schema.decodeEffect(
+        Schema.fromJsonString(
+          Schema.Struct({ files: Schema.Record(Schema.String, Schema.String) }),
+        ),
+      )(yield* read(`${collieDir}/release/placed.json`));
+      const placed: Array<string> = [];
+      for (const name of yield* fs.readDirectory(`${collieDir}/release`, { recursive: true })) {
+        const file = (yield* fs.stat(`${collieDir}/release/${name}`)).type === "File";
+        if (file && name !== "placed.json") {
+          placed.push(name);
         }
-        expect(placed.sort()).toEqual(Rec.keys(record.files).sort());
-        expect(yield* exists(`${collieDir}/release.new`)).toBe(false);
-      }),
-    ),
-  60_000,
-);
+      }
+      expect(placed.sort()).toEqual(Rec.keys(record.files).sort());
+      expect(yield* exists(`${collieDir}/release.new`)).toBe(false);
+    }),
+  ));
 
 test("placing the same version twice changes nothing and keeps nothing", () =>
   runEffect(
@@ -311,7 +305,6 @@ test("--to an older release moves to exactly it", () =>
     }),
   ));
 
-/** The release as it was placed, so a refused upgrade can be shown to have left it alone. */
 const placedRecord = () => read(`${collieDir}/release/placed.json`);
 
 test("a version with no release is refused, and the release is left as it was", () =>
@@ -357,14 +350,8 @@ test("a release source that cannot be reached changes nothing, and says so", () 
     }),
   ));
 
-/** Where upstream's hc installer puts hc, in the rig's home. */
 const hcBin = () => `${rig.root}/.local/bin`;
 
-/**
- * Carries an hc archive whose `herdr-core` says it is 0.1.0, older than any pin, and logs
- * every other way it is run, and the second line of a `--from` binary, which names the
- * build: `build` tells one pin's hc from another's.
- */
 const carryHc = (build: string) =>
   Effect.gen(function* () {
     const staged = `${rig.root}/hc-${build}`;
@@ -381,7 +368,6 @@ const carryHc = (build: string) =>
     expect(made.code).toBe(0);
   });
 
-/** `place`, with a PATH that has no hc on it: the human's own `hc` is never the rig's. */
 const placeHc = () =>
   upgrade(
     { ...releaseEnv(), raw: { ...releaseEnv().raw, PATH: "/usr/bin:/bin" } },
@@ -443,7 +429,6 @@ test("an upgrade with an unchanged pin leaves hc alone", () =>
     }),
   ));
 
-/** An hc of the human's own in upstream's place, saying `version`, logging every other call. */
 const ownHc = (version: string) =>
   Effect.gen(function* () {
     yield* write(

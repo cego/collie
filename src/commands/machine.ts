@@ -1,8 +1,3 @@
-// `collie machine`: the Machines this one is paired with (ADR-0057). Pairing happens by
-// itself on first reach. `list`, `connect`, which opens the SSH connection a blocked link and
-// core ride, `add` and `forget` are what a human has a use for; `invite` is what pairing runs
-// on the other Machine over SSH.
-
 import * as Arr from "effect/Array";
 import { Effect, Option } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
@@ -17,11 +12,10 @@ import type { PeerView } from "../peers-model";
 import { BUILD } from "../host";
 import { answering } from "./shared";
 
-/** How a link stands, and which way it went or what each way saw. */
 const standing = (peer: PeerView & { readonly added: boolean | null }) => {
   const state =
     peer.state === "away" && peer.since !== null ? `away since ${peer.since}` : peer.state;
-  if (peer.state === "live")
+  if (peer.state === "live") {
     return [
       state,
       ...(peer.transport === "ssh"
@@ -31,6 +25,7 @@ const standing = (peer: PeerView & { readonly added: boolean | null }) => {
           : []),
       ...(peer.failure === null ? [] : [peer.failure]),
     ];
+  }
   const ways = [
     ...(peer.direct === null ? [] : [`direct: ${peer.direct}`]),
     ...(peer.ssh === null ? [] : [`ssh: ${peer.ssh}`]),
@@ -48,7 +43,9 @@ const list = Command.make("list", {}, () =>
   answering((env) =>
     machinesListed(env).pipe(
       Effect.map((read) => {
-        if (!read.ok) return read;
+        if (!read.ok) {
+          return read;
+        }
         const { peers, backend, roster } = read.value;
         return {
           ok: true as const,

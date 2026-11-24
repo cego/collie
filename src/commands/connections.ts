@@ -8,7 +8,9 @@ export const connections = Command.make("connections", {}, () =>
   answering((env) =>
     Effect.gen(function* () {
       const read = yield* connectionReadings(env, yield* cliDoor(env));
-      if (!read.ok) return read;
+      if (!read.ok) {
+        return read;
+      }
       return {
         ok: true as const,
         data: { machine: read.machine, connections: read.value },

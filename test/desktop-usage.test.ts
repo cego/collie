@@ -1,6 +1,3 @@
-// What Desktop draws of each Machine's Usage readings: the header's entry per Subscription
-// and account, and the Usage page.
-
 import * as Arr from "effect/Array";
 import { describe, expect, test } from "bun:test";
 import { Config, Effect, Option, Schema, flow, Result } from "effect";
@@ -14,7 +11,6 @@ import { FrontDoorRpcs } from "../src/board-model";
 import { epochMs } from "../src/time";
 import type { UsageReading, UsageWindow } from "../src/usage-model";
 import {
-  type MachineUsage,
   UPGRADE_SAID,
   usageDue,
   usageAccounts,
@@ -27,7 +23,7 @@ import { proves } from "./support/world";
 
 const NOW = epochMs("2026-10-08T08:00:00Z");
 
-const window = (over: Partial<UsageWindow>): UsageWindow => ({
+const window: (over: Partial<UsageWindow>) => UsageWindow = (over) => ({
   kind: "session",
   label: "Session",
   model: null,
@@ -37,7 +33,7 @@ const window = (over: Partial<UsageWindow>): UsageWindow => ({
   ...over,
 });
 
-const reading = (over: Partial<UsageReading>): UsageReading => ({
+const reading: (over: Partial<UsageReading>) => UsageReading = (over) => ({
   subscription: "claude",
   account: "org:acct",
   accountLabel: "me@example.com",
@@ -49,7 +45,7 @@ const reading = (over: Partial<UsageReading>): UsageReading => ({
   ...over,
 });
 
-const machine = (name: string, readings: ReadonlyArray<UsageReading>): MachineUsage => ({
+const machine = (name: string, readings: ReadonlyArray<UsageReading>) => ({
   profile: `p-${name}`,
   name,
   readings,
@@ -455,57 +451,52 @@ const mkPc = { profile: "local", name: "mk-pc" };
 type Rpcs = RpcGroup.Rpcs<typeof FrontDoorRpcs>;
 
 describe("the main process asks each Machine's host", () => {
-  test(
-    "a host that answers gives its readings, each saying why it has no numbers",
-    () =>
-      proves(
-        "collie-desktop-usage-",
-        (world) =>
-          Effect.gen(function* () {
-            const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
-            const collie = Option.isSome(binary)
-              ? [binary.value]
-              : [process.execPath, `${root}src/main.ts`];
-            // No Claude login under this HOME and no Codex on this PATH: nothing reaches an endpoint.
-            const door = yield* openBridge(bridgeCommand(collie, "mk-pc"), {
-              PATH: "/usr/bin:/bin",
-              HOME: world.home,
-              COLLIE_ROOT: world.install,
-              COLLIE_STATE_DIR: world.state,
-              COLLIE_USER_DIR: world.config,
-              COLLIE_HOST: asCommand(collie),
-              ...(yield* suiteEnv),
-              HC_SOCKET: Bun.env.HC_SOCKET ?? "",
-            });
-            const read = yield* usageOn(mkPc, door);
-            expect(read).toMatchObject({ profile: "local", name: "mk-pc", problem: null });
-            expect(Arr.map(read.readings, ({ subscription }) => subscription)).toEqual([
-              "claude",
-              "chatgpt",
-            ]);
-            expect(Arr.every(read.readings, ({ problem }) => problem !== null)).toBe(true);
-            yield* stopHost(world.state);
-          }).pipe(Effect.orDie),
-        [],
-      ),
-    120_000,
-  );
+  test("a host that answers gives its readings, each saying why it has no numbers", () =>
+    proves(
+      "collie-desktop-usage-",
+      (world) =>
+        Effect.gen(function* () {
+          const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
+          const collie = Option.isSome(binary)
+            ? [binary.value]
+            : [process.execPath, `${root}src/main.ts`];
+          // WARNING: No Claude login under this HOME and no Codex on this PATH: nothing reaches an endpoint.
+          const door = yield* openBridge(bridgeCommand(collie, "mk-pc"), {
+            PATH: "/usr/bin:/bin",
+            HOME: world.home,
+            COLLIE_ROOT: world.install,
+            COLLIE_STATE_DIR: world.state,
+            COLLIE_USER_DIR: world.config,
+            COLLIE_HOST: asCommand(collie),
+            ...(yield* suiteEnv),
+            HC_SOCKET: Bun.env.HC_SOCKET ?? "",
+          });
+          const read = yield* usageOn(mkPc, door);
+          expect(read).toMatchObject({ profile: "local", name: "mk-pc", problem: null });
+          expect(Arr.map(read.readings, ({ subscription }) => subscription)).toEqual([
+            "claude",
+            "chatgpt",
+          ]);
+          expect(Arr.every(read.readings, ({ problem }) => problem !== null)).toBe(true);
+          yield* stopHost(world.state);
+        }).pipe(Effect.orDie),
+      [],
+    ));
 
   test("a host without the call asks for an upgrade rather than showing nothing", () =>
     Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          // An older host: it serves operations, but not `usage`.
           const Older = RpcGroup.make(Rpc.make("ping"));
           let toClient: (response: RpcMessage.FromServer<Rpcs>) => Effect.Effect<void> = () =>
             Effect.void;
           const server = yield* RpcServer.makeNoSerialization(Older, {
-            // SAFETY: what a host answers is the same envelope whichever group it serves.
+            // WARNING: what a host answers is the same envelope whichever group it serves.
             onFromServer: (response) => toClient(response as RpcMessage.FromServer<Rpcs>),
           }).pipe(Effect.provide(Older.toLayer({ ping: () => Effect.void })));
           const client = yield* RpcClient.makeNoSerialization(FrontDoorRpcs, {
             supportsAck: true,
-            // SAFETY: the older host is handed a request it has no schema for, as over the wire.
+            // WARNING: the older host is handed a request it has no schema for, as over the wire.
             onFromClient: ({ message }) =>
               server.write(0, message as RpcMessage.FromClient<RpcGroup.Rpcs<typeof Older>>),
           });

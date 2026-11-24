@@ -1,10 +1,5 @@
 import { Effect, FileSystem, Path } from "effect";
 
-/**
- * The skills the shipped work asks an agent for, as empty directories under `home`.
- * They are a prerequisite, not what any test is about: without them a machine is
- * reported as missing its skills and nothing gets as far as the behaviour under test.
- */
 export function installFakeSkills(home: string) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -26,8 +21,7 @@ export function installFakeSkills(home: string) {
     ]) {
       const dir = path.join(home, ".agents", "skills", skill);
       yield* fs.makeDirectory(dir, { recursive: true });
-      // The file, not just the directory: that is what "installed" means to both the
-      // check and the mention an agent is handed.
+      // WARNING: Installed means the SKILL.md file exists: both the check and the agent's mention need the file, not just the directory.
       yield* fs.writeFileString(path.join(dir, "SKILL.md"), `# ${skill}\n`);
     }
   });

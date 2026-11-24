@@ -1,6 +1,4 @@
-// The board's model is imported by a browser bundle as well as by the host, so it must
-// bundle for a browser and load in a context that has no runtime to reach.
-
+// WARNING: the model is bundled for a browser and must load with no runtime to reach.
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
@@ -28,6 +26,7 @@ import {
 import { task } from "./support/task";
 import { flowNode, mainFlow } from "./support/flow";
 import type { FlowNode, TaskMr, TaskView as Task } from "../src/board-model";
+import { stringifyJson, parseJson } from "../src/json";
 
 const acting = (node: Partial<FlowNode>, over: Partial<Task> = {}) => {
   const base = mainFlow();
@@ -226,9 +225,8 @@ test("a Step's reused agent stays addressable under another Run of the Task", ()
 const MODULE = new URL("../src/board-model.ts", import.meta.url).pathname;
 const RUNTIME_ONLY = /^(bun(:|$)|node:|@effect\/platform-bun|@opentui\/)/;
 
-/** The module bundled for a browser, and every runtime-only import the bundle reached. */
 const bundled = Effect.gen(function* () {
-  const reached: string[] = [];
+  const reached: Array<string> = [];
   const built = yield* Effect.promise(() =>
     Bun.build({
       entrypoints: [MODULE],
@@ -266,8 +264,7 @@ test("loading the board model does nothing but define it", () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const { code } = yield* bundled;
-      // Only what a browser has that reaches nothing: process, timers, fetch or console at
-      // load throws here. Bun's contexts carry a console of their own, so it is blanked.
+      // WARNING: only what a browser has: process, timers, fetch or console at load throws here.
       const sandbox = { TextEncoder, TextDecoder, console: undefined };
       expect(() => runInNewContext(code, sandbox)).not.toThrow();
       expect(Rec.keys(sandbox)).toEqual(["TextEncoder", "TextDecoder", "console"]);
@@ -317,7 +314,9 @@ test("a TaskView carries its open questions, and one from an older host without 
 
   expect(decode(older).questions).toBeUndefined();
   const newer = { ...older, questions: [question, { ...question, id: "c-2" }] };
-  expect(decode(JSON.parse(JSON.stringify(newer))).questions).toEqual(newer.questions);
+  expect(decode(parseJson(Schema.Unknown, stringifyJson(newer))).questions).toEqual(
+    newer.questions,
+  );
   expect(decode(older).unseen).toBeUndefined();
   expect(decode({ ...older, unseen: true }).unseen).toBe(true);
 });
@@ -419,7 +418,7 @@ test("a TaskView and a RunDetail survive a round trip through JSON", () => {
     Schemaflow(
       Schema.decodeUnknownResult(json),
       Result.getOrThrow,
-    )(JSON.parse(JSON.stringify(view))),
+    )(parseJson(Schema.Unknown, stringifyJson(view))),
   ).toEqual(view);
 
   const detail: RunDetail = {
@@ -473,7 +472,7 @@ test("a TaskView and a RunDetail survive a round trip through JSON", () => {
     Schemaflow(
       Schema.decodeUnknownResult(Schema.toCodecJson(RunDetail)),
       Result.getOrThrow,
-    )(JSON.parse(JSON.stringify(detail))),
+    )(parseJson(Schema.Unknown, stringifyJson(detail))),
   ).toEqual(detail);
 });
 
@@ -597,7 +596,9 @@ test.each([
   const waiting = task({ state: "done", landed: false, mr });
   const action = primaryAction(waiting);
   expect(action?.kind).toBe("open-mr");
-  if (action?.kind !== "open-mr") return;
+  if (action?.kind !== "open-mr") {
+    return;
+  }
   expect(mrUrlOf(action.mr)).toBe(url);
   expect([openMrLabel(action.mr, true), openMrLabel(action.mr, false)]).toEqual([...open]);
   expect(Arr.some(cardActions(waiting), (one) => one.kind === "open-mr")).toBe(true);
@@ -608,8 +609,11 @@ test.each([
   });
 });
 
-/** A merge request of a Task on gitlab.cego.dk, open and with nothing said of it. */
-const entryOf = (repo: string, iid: number, over: Partial<TaskMr> = {}): TaskMr => ({
+const entryOf: (repo: string, iid: number, over?: Partial<TaskMr>) => TaskMr = (
+  repo,
+  iid,
+  over = {},
+) => ({
   id: `gitlab.cego.dk/cego/${repo}!${iid}`,
   mr: `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`,
   label: `cego/${repo}!${iid}`,
@@ -670,7 +674,6 @@ test("the primary action of several merge requests is about the first one waitin
     Arr.filter(dispositionActions(closed), (one) => one.kind === "dispose" && one.ref === API7.id),
   ).toHaveLength(3);
 
-  // Once someone said what became of it, the one ready to release is what waits.
   const said = task({
     ...closed,
     mrs: [
@@ -739,7 +742,6 @@ const mergeableNow = {
 
 test("ready to release is mergeable now, and nothing is missing", () => {
   expect(readyToRelease(mergeableNow)).toEqual({ ready: true, missing: [] });
-  // No pipeline at all is not a pipeline that has not passed.
   expect(readyToRelease({ ...mergeableNow, ci: { state: "none" } }).ready).toBe(true);
 });
 
@@ -802,7 +804,6 @@ test("each fact ready to release needs is named when it is missing, and whether 
   expect(missing({ ci: { state: "failed", name: "lint" } })).toEqual([["ci", false]]);
   expect(missing({ ci: { state: "running" } })).toEqual([["ci", true]]);
   expect(missing({ ci: null })).toEqual([["ci", true]]);
-  // A pipeline that exists and has not passed (canceled, manual, skipped, or of an older head).
   expect(missing({ ci: { state: "unknown" } })).toEqual([["ci", false]]);
   expect(missing({ blocking: 2 })).toEqual([["review", false]]);
   expect(missing({ mergeable: { state: "blocked", said: "not_approved" } })).toEqual([

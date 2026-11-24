@@ -1,22 +1,11 @@
-// Fake herdr-core: core's plain JSON-RPC on a scratch socket, recording each call into the
-// rig's log. Every reply it sends is checked against the pinned `hc.openrpc.json` first,
-// so a reply the real core could not send fails the call that caused it. Its terminals act
-// as a harness does: idle once started, and a sent prompt answered from the rig's Output
-// queue between a `working` and an `idle` reported as OSC 7501 status events. One started
-// with `--prompt`, as OpenCode is, reports nothing until it has worked on that prompt; an
-// `opencode` one also serves its session and a prompt posted to it on its `--port`. After
-// `hello {framed: true}` a connection is framed, and `terminal.attach` streams a terminal's
-// first paint and what it prints, never more than core's window ahead of the viewer's CREDIT.
-// A machine added with `via` is dialled as core dials one: its command, given a shell line
-// last, run with the rig's `PATH`, each dial logged as `dialled`. An added machine's
-// terminals are this core's own, under `<machine>/`.
-
+// WARNING: Every reply is checked against the pinned hc.openrpc.json first, so a reply the real core could not send fails the call that caused it.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
 import * as Socket from "effect/socket/Socket";
-import { Clock, Effect, FileSystem, Option, Path, Schema, Scope } from "effect";
+import type { Path } from "effect";
+import { Clock, Effect, FileSystem, Option, Schema, Scope } from "effect";
 import { isString } from "../../src/schema";
 import { Kind } from "../../src/hc";
 import { answerPrompt } from "./fake-agent";
@@ -36,50 +25,29 @@ const hangUp = (pid: number) => {
 const decodeRequest = Schema.decodeUnknownOption(Schema.fromJsonString(Request));
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Json));
 
-/** A param marking a test's own arranging call, which the call log leaves out. */
 export const SETUP = "collie_test_setup";
 
 export interface FakeHc {
   readonly socketPath: string;
-  /** Where each call it was asked is logged, one JSON line each. */
   readonly logPath: string;
-  /** Each later `method` call is logged and then waits until the returned release is called. */
   readonly hold: (method: string) => () => void;
-  /** Answers every later `method` call with `reply`, whatever was asked. */
   readonly answer: (method: string, reply: Schema.Json) => void;
-  /** Answers the method with a core RPC error until restored. */
   readonly refuse: (method: string, kind: string, message: string) => void;
-  /** Returns the method to its normal behavior. */
   readonly restore: (method: string) => void;
-  /** The terminal named `name` reports `state`, as its program's OSC 7501 would. */
   readonly report: (name: string, state: string) => Effect.Effect<void>;
-  /** The next send is typed but never starts a turn, until an Enter is pressed. */
   readonly stallNextSend: () => void;
-  /** What is sent to these agents starts no turn: their status is the test's to report. */
   readonly reportedOnly: (names: ReadonlyArray<string>) => void;
-  /** The next terminal's program reports itself blocked once started, as one in a dialog does. */
   readonly startBlocked: () => void;
-  /** The next terminal's program is the process `pid`, hung up when the terminal is killed. */
+  // WARNING: the program is hung up when the terminal is killed.
   readonly runsAs: (pid: number) => void;
-  /** The terminal named `name` prints `text` to each viewer attached to it. */
   readonly print: (name: string, text: string) => Effect.Effect<void>;
-  /** The program in the terminal named `name` exits with `code`. */
   readonly exit: (name: string, code: number) => Effect.Effect<void>;
-  /** Every live terminal ends at once, as losing core's holder ends them. */
   readonly lose: Effect.Effect<void>;
-  /**
-   * Whether core can start `program`: one it cannot, as one missing from core's own PATH,
-   * is `spawn_failed`, and core says the terminal it had made for it was `removed`.
-   */
+  // WARNING: Core reports a program missing from its own PATH as spawn_failed, and the terminal it made for it as removed.
   readonly startable: (program: string, can: boolean) => void;
-  /**
-   * Core's own PATH is a bare system one, as for a core another Machine's SSH dial started:
-   * it finds a program only on the PATH the launch passes in its `env`.
-   */
+  // WARNING: Core's own PATH is bare, so it finds a program only on the PATH the launch passes in its env.
   readonly barePath: () => void;
-  /** What runs in the terminal named `name` changes directory to `dir`. */
   readonly cd: (name: string, dir: string) => void;
-  /** Core's machine list from now on, as `machine add` would leave it, each one connected. */
   readonly roster: (
     machines: ReadonlyArray<{ readonly name: string; readonly target: string }>,
   ) => void;
@@ -93,9 +61,8 @@ interface Added {
   why: string | null;
 }
 
-/** How far core streams ahead of a viewer's CREDIT, as hc 0.1.14 does. */
+// WARNING: How far core streams ahead of a viewer's CREDIT, as hc 0.1.14 does.
 export const CORE_WINDOW = 256 * 1024;
-/** The size of each DATA frame a print is sent in. */
 const CHUNK = 16 * 1024;
 
 const frameOf = (channel: number, kind: number, payload: Uint8Array) => {
@@ -117,19 +84,12 @@ interface Viewer {
   uncredited: number;
 }
 
-/** One client's connection: framed once it said so, with the streams it attached. */
 interface Link {
   framed: boolean;
   next: number;
   readonly viewers: Map<number, Viewer>;
   readonly write: (bytes: Uint8Array) => Effect.Effect<void>;
 }
-
-type Answer =
-  | { readonly result: Schema.Json }
-  | {
-      readonly failure: { readonly code: number; readonly message: string; readonly kind: string };
-    };
 
 const json = (value: Schema.Json) => value;
 
@@ -139,19 +99,16 @@ interface Terminal {
   readonly labels: Schema.Json;
   readonly argv: Schema.Json;
   readonly cwd: string;
-  /** Where its foreground process is now, which a `cd` moves. */
   foregroundCwd: string;
-  /** None unless a test names a real process: a made-up pid may be another's. */
+  // WARNING: null unless a test names a real process; a made-up pid may be another's.
   readonly pid: number | null;
   state: "live" | "finished";
   status: string | null;
   turn: number;
-  /** The tail of what it printed, which a first paint shows. */
   screen: string;
 }
 
-/** A terminal as core's API shows it. */
-const view = (terminal: Terminal): Schema.JsonObject => ({
+const view: (terminal: Terminal) => Schema.JsonObject = (terminal) => ({
   address: terminal.address,
   name: terminal.name,
   labels: terminal.labels,
@@ -172,13 +129,10 @@ const view = (terminal: Terminal): Schema.JsonObject => ({
   turn: terminal.turn,
 });
 
-/** What Collie posts to OpenCode's `prompt_async`. */
 const Prompted = Schema.Struct({ parts: Schema.Array(Schema.Struct({ text: Schema.String })) });
 
-/** How long a fake harness works on a prompt before its Output is written. */
 const TURN = "200 millis";
 const text = (value: Schema.Json | undefined) => (isString(value) ? value : undefined);
-/** The PATH a launch's `env` passes, if it passes one. */
 const pathIn = (env: Schema.Json | undefined) =>
   Option.getOrUndefined(
     Option.map(
@@ -187,14 +141,11 @@ const pathIn = (env: Schema.Json | undefined) =>
     ),
   );
 
-/** Serves a fake core at `socketPath` until `scope` closes, logging calls to `logPath`. */
 export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
   socketPath: string,
   logPath: string,
   scope: Scope.Scope,
-  /** Where a sent prompt's Output is taken from, as the fake herdr's agents take theirs. */
   queuePath = "",
-  /** The environment a `via` command is run with. */
   dialEnv: Readonly<Record<string, string>> = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -219,7 +170,9 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
   yield* Scope.addFinalizer(
     scope,
     Effect.sync(() => {
-      for (const served of opencodes.values()) void served.stop(true);
+      for (const served of opencodes.values()) {
+        void served.stop(true);
+      }
     }),
   );
   const ended = (terminal: Terminal) => {
@@ -244,9 +197,9 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
       Arr.filter([...terminals.values()], (t) => t.state === "live"),
       view,
     );
-  const notFound = (params: Schema.JsonObject): Answer => ({
+  const notFound = (params: Schema.JsonObject) => ({
     failure: {
-      code: -32000,
+      code: -32_000,
       message: `no terminal ${text(params.terminal) ?? ""}`,
       kind: "not_found",
     },
@@ -260,23 +213,29 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
         method: "event",
         params: { seq, type, terminal: at, data },
       }).pipe(Effect.orDie);
-      for (const write of subscribers) yield* write(`${line}\n`);
+      for (const write of subscribers) {
+        yield* write(`${line}\n`);
+      }
     });
   const logged = (cmd: string, params: Schema.Json) =>
     encodeJson({ transport: "core", cmd, params }).pipe(
       Effect.flatMap((entry) => fs.writeFileString(logPath, `${entry}\n`, { flag: "a" })),
       Effect.orDie,
     );
-  /** Sends what the viewer's credit allows of its backlog, filling the window exactly. */
   const pump = (viewer: Viewer) =>
     Effect.gen(function* () {
       for (;;) {
         const next = viewer.backlog[0];
         const room = CORE_WINDOW - viewer.uncredited;
-        if (next === undefined || room <= 0) return;
+        if (next === undefined || room <= 0) {
+          return;
+        }
         const sent = next.subarray(0, room);
-        if (sent.length === next.length) viewer.backlog.shift();
-        else viewer.backlog[0] = next.subarray(room);
+        if (sent.length === next.length) {
+          viewer.backlog.shift();
+        } else {
+          viewer.backlog[0] = next.subarray(room);
+        }
         viewer.uncredited += sent.length;
         yield* viewer.write(frameOf(viewer.channel, Kind.DATA, sent));
       }
@@ -290,7 +249,6 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
   const viewersOf = (terminal: Terminal) =>
     Arr.filter([...viewing], (viewer) => viewer.terminal === terminal);
 
-  /** Logged beside the calls as `reported`, so a test can order a call against it. */
   const setStatus = (terminal: Terminal, state: string) =>
     Effect.gen(function* () {
       terminal.status = state;
@@ -302,7 +260,6 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
       yield* fs.writeFileString(logPath, `${entry}\n`, { flag: "a" }).pipe(Effect.orDie);
       yield* emit(terminal.address, "status", { status: { state }, records: {}, reported: true });
     });
-  /** The turn a prompt starts: working at once, then its Output written and idle again (an owed one once the test writes it). */
   const take = (terminal: Terminal, prompt: string) =>
     Effect.gen(function* () {
       terminal.turn += 1;
@@ -313,14 +270,19 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
           Effect.andThen(answerPrompt(prompt, logPath, queuePath)),
           Effect.provideContext(services),
           Effect.orDie,
-          Effect.flatMap(({ then, owed }) =>
+          Effect.flatMap(({ status, owed }) =>
             Effect.gen(function* () {
-              yield* setStatus(terminal, then);
-              if (owed === undefined) return;
+              yield* setStatus(terminal, status);
+              if (owed === undefined) {
+                return;
+              }
               const turn = terminal.turn;
-              while (!(yield* fs.exists(owed).pipe(Effect.orElseSucceed(() => false))))
+              while (!(yield* fs.exists(owed).pipe(Effect.orElseSucceed(() => false)))) {
                 yield* Effect.sleep(TURN);
-              if (terminal.turn === turn) yield* setStatus(terminal, "idle");
+              }
+              if (terminal.turn === turn) {
+                yield* setStatus(terminal, "idle");
+              }
             }),
           ),
         ),
@@ -329,7 +291,6 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
       return terminal.turn;
     });
 
-  /** OpenCode's TUI is its own server: the session it continues, and a prompt posted to it. */
   const opencodeServer = (terminal: Terminal, argv: ReadonlyArray<string>) => {
     const session = argv[argv.indexOf("--session") + 1];
     const served = Bun.serve<undefined>({
@@ -339,10 +300,12 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
         Effect.runPromiseWith(services)(
           Effect.gen(function* () {
             const path = new URL(request.url).pathname;
-            if (request.method === "GET" && path === `/session/${session}`)
+            if (request.method === "GET" && path === `/session/${session}`) {
               return Response.json({ id: session, directory: terminal.cwd });
-            if (request.method !== "POST" || path !== `/session/${session}/prompt_async`)
+            }
+            if (request.method !== "POST" || path !== `/session/${session}/prompt_async`) {
               return new Response("not found", { status: 404 });
+            }
             const body = yield* Effect.promise(() => request.json()).pipe(
               Effect.flatMap(Schema.decodeUnknownEffect(Prompted)),
               Effect.orDie,
@@ -357,7 +320,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
     opencodes.set(terminal.address, served);
   };
 
-  const profile = (machine: Added): Schema.JsonObject => ({
+  const profile = (machine: Added) => ({
     name: machine.name,
     target: machine.target,
     via: machine.via,
@@ -365,12 +328,16 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
     host: machine.name,
     version: "0.1.14",
   });
-  const machineView = (machine: Added): Schema.JsonObject => ({
-    ...profile(machine),
+  const machineView: (machine: Added) => Schema.JsonObject = (machine) => ({
+    name: machine.name,
+    target: machine.target,
+    via: machine.via,
+    id: `id-${machine.name}`,
+    host: machine.name,
+    version: "0.1.14",
     state: machine.state,
     why: machine.why,
   });
-  /** Runs a machine's `via` with a line that answers at once, as core checks hc there. */
   const dial = (machine: Added) =>
     Effect.gen(function* () {
       const started = yield* Clock.currentTimeMillis;
@@ -388,20 +355,24 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
       const ms = (yield* Clock.currentTimeMillis) - started;
       yield* logged("dialled", { machine: machine.name, code, ms });
     });
-  const unknownMachine = (params: Schema.JsonObject): Answer => ({
+  const unknownMachine = (params: Schema.JsonObject) => ({
     failure: {
-      code: -32000,
+      code: -32_000,
       message: `no machine ${text(params.machine) ?? ""}`,
       kind: "machine_unknown",
     },
   });
 
-  const answer = (method: string, params: Schema.JsonObject, link: Link): Effect.Effect<Answer> =>
+  const answer = (method: string, params: Schema.JsonObject, link: Link) =>
     Effect.gen(function* () {
       const refused = refusals.get(method);
-      if (refused !== undefined) return { failure: refused };
+      if (refused !== undefined) {
+        return { failure: refused };
+      }
       const canned = answers.get(method);
-      if (canned !== undefined) return { result: canned };
+      if (canned !== undefined) {
+        return { result: canned };
+      }
       switch (method) {
         case "hello":
           return {
@@ -416,10 +387,14 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
           };
         case "terminal.run": {
           const cwd = text(params.cwd);
-          if (cwd !== undefined && !(yield* fs.exists(cwd).pipe(Effect.orElseSucceed(() => false))))
+          if (
+            cwd !== undefined &&
+            !(yield* fs.exists(cwd).pipe(Effect.orElseSucceed(() => false)))
+          ) {
             return {
-              failure: { code: -32000, message: "spawn_failed", kind: "spawn_failed" },
+              failure: { code: -32_000, message: "spawn_failed", kind: "spawn_failed" },
             };
+          }
           const program = Arr.filter(Arr.isArray(params.argv) ? params.argv : [], isString)[0];
           const notFound =
             bare &&
@@ -429,7 +404,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
             made += 1;
             yield* emit(`t${made}`, "removed", {});
             return {
-              failure: { code: -32000, message: "spawn_failed", kind: "spawn_failed" },
+              failure: { code: -32_000, message: "spawn_failed", kind: "spawn_failed" },
             };
           }
           made += 1;
@@ -449,8 +424,6 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
           terminals.set(terminal.address, terminal);
           yield* emit(terminal.address, "created", view(terminal));
           const argv = Arr.filter(Arr.isArray(params.argv) ? params.argv : [], isString);
-          // The harness coming up: Claude's first status-line call into the control dir its
-          // `--settings` names.
           const settings = argv[argv.indexOf("--settings") + 1];
           if (argv.includes("--settings") && settings !== undefined) {
             const event = yield* encodeJson({
@@ -468,11 +441,15 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
               )
               .pipe(Effect.ignore);
           }
-          if (argv[0] === "opencode" && argv.includes("--port")) opencodeServer(terminal, argv);
+          if (argv[0] === "opencode" && argv.includes("--port")) {
+            opencodeServer(terminal, argv);
+          }
           const prompt = argv[argv.indexOf("--prompt") + 1];
-          if (argv.includes("--prompt") && prompt !== undefined) yield* take(terminal, prompt);
-          // A harness at its prompt says so once it has drawn it.
-          else yield* setStatus(terminal, blocked ? "blocked" : "idle");
+          if (argv.includes("--prompt") && prompt !== undefined) {
+            yield* take(terminal, prompt);
+          } else {
+            yield* setStatus(terminal, blocked ? "blocked" : "idle");
+          }
           blocked = false;
           runsAs = null;
           return { result: view(terminal) };
@@ -491,14 +468,18 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
         }
         case "terminal.send": {
           const found = find(params);
-          if (!found) return notFound(params);
+          if (!found) {
+            return notFound(params);
+          }
           const status = found.status;
-          if (status === "blocked")
+          if (status === "blocked") {
             return {
-              failure: { code: -32000, message: "blocked", kind: "blocked" },
+              failure: { code: -32_000, message: "blocked", kind: "blocked" },
             };
-          if (found.name !== null && onlyReported.has(found.name))
+          }
+          if (found.name !== null && onlyReported.has(found.name)) {
             return { result: { turn: found.turn, started: true, status } };
+          }
           if (stall) {
             stall = false;
             typed.set(found.address, text(params.text) ?? "");
@@ -509,7 +490,9 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
         }
         case "terminal.keys": {
           const found = find(params);
-          if (!found) return notFound(params);
+          if (!found) {
+            return notFound(params);
+          }
           const pending = typed.get(found.address);
           const keys = Arr.isArray(params.keys) ? params.keys : [];
           if (pending !== undefined && keys.includes("enter")) {
@@ -520,17 +503,24 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
         }
         case "terminal.kill": {
           const found = find(params);
-          if (!found) return notFound(params);
+          if (!found) {
+            return notFound(params);
+          }
           found.state = "finished";
-          if (found.pid !== null) hangUp(found.pid);
+          if (found.pid !== null) {
+            hangUp(found.pid);
+          }
           yield* emit(found.address, "finished", { reason: "killed" });
           return { result: view(found) };
         }
         case "terminal.attach": {
-          if (!link.framed)
-            return { failure: { code: -32000, message: "needs_framed", kind: "needs_framed" } };
+          if (!link.framed) {
+            return { failure: { code: -32_000, message: "needs_framed", kind: "needs_framed" } };
+          }
           const found = find(params);
-          if (!found) return notFound(params);
+          if (!found) {
+            return notFound(params);
+          }
           const viewer: Viewer = {
             channel: link.next++,
             terminal: found,
@@ -540,7 +530,6 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
           };
           link.viewers.set(viewer.channel, viewer);
           viewing.add(viewer);
-          // Both off: Collie sends keys as DATA and tracks size itself.
           return {
             result: {
               channel: viewer.channel,
@@ -565,8 +554,9 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
           return { result: { machines: Arr.map([...machines.values()], machineView) } };
         case "machine.add": {
           const name = text(params.name) ?? text(params.target) ?? "";
-          if (machines.has(name))
-            return { failure: { code: -32000, message: "already_added", kind: "already_added" } };
+          if (machines.has(name)) {
+            return { failure: { code: -32_000, message: "already_added", kind: "already_added" } };
+          }
           const via = text(params.via);
           const added: Added = {
             name,
@@ -577,36 +567,38 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
           };
           if (added.via) {
             yield* dial(added);
-            if (added.state !== "connected")
+            if (added.state !== "connected") {
               return {
-                failure: { code: -32000, message: added.why ?? "", kind: "unreachable" },
+                failure: { code: -32_000, message: added.why ?? "", kind: "unreachable" },
               };
+            }
           }
           machines.set(name, added);
           return { result: profile(added) };
         }
         case "machine.connect": {
           const found = machines.get(text(params.machine) ?? "");
-          if (found === undefined) return unknownMachine(params);
-          if (found.via) yield* dial(found);
+          if (found === undefined) {
+            return unknownMachine(params);
+          }
+          if (found.via) {
+            yield* dial(found);
+          }
           return { result: machineView(found) };
         }
         case "machine.rm": {
           const name = text(params.machine) ?? "";
-          if (!machines.delete(name)) return unknownMachine(params);
+          if (!machines.delete(name)) {
+            return unknownMachine(params);
+          }
           return { result: { removed: name } };
         }
         default:
-          return { failure: { code: -32601, message: `no method ${method}`, kind: "not_found" } };
+          return { failure: { code: -32_601, message: `no method ${method}`, kind: "not_found" } };
       }
     });
 
-  const reply = (
-    id: number,
-    method: string,
-    params: Schema.JsonObject,
-    link: Link,
-  ): Effect.Effect<Schema.Json> =>
+  const reply = (id: number, method: string, params: Schema.JsonObject, link: Link) =>
     Effect.gen(function* () {
       const answered = yield* answer(method, params, link);
       if ("failure" in answered) {
@@ -614,23 +606,26 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
         return json({ jsonrpc: "2.0", id, error: { code, message, data: { kind } } });
       }
       const violation = replyViolation(method, answered.result);
-      if (violation === undefined) return json({ jsonrpc: "2.0", id, result: answered.result });
+      if (violation === undefined) {
+        return json({ jsonrpc: "2.0", id, result: answered.result });
+      }
       return json({
         jsonrpc: "2.0",
         id,
         error: {
-          code: -32603,
+          code: -32_603,
           message: `the fake core's reply is one hc.openrpc.json forbids: ${method} ${jsonText(answered.result)}: ${violation}`,
           data: { kind: "fake_core_contract" },
         },
       });
     });
 
-  /** What a viewer sent on its stream: keys, a resize, credit, or that it let go. */
   const streamed = (link: Link, channel: number, kind: number, payload: Uint8Array) =>
     Effect.gen(function* () {
       const viewer = link.viewers.get(channel);
-      if (viewer === undefined) return;
+      if (viewer === undefined) {
+        return;
+      }
       const terminal = viewer.terminal.name;
       const bytes = new DataView(payload.buffer, payload.byteOffset, payload.length);
       switch (kind) {
@@ -672,25 +667,39 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
           subscribers.delete(write);
-          for (const viewer of link.viewers.values()) viewing.delete(viewer);
+          for (const viewer of link.viewers.values()) {
+            viewing.delete(viewer);
+          }
         }),
       );
       const request = (line: string) =>
         Effect.gen(function* () {
           const asked = decodeRequest(line);
-          if (Option.isNone(asked)) return;
+          if (Option.isNone(asked)) {
+            return;
+          }
           const { id, method, params: { [SETUP]: setup, ...params } = {} } = asked.value;
           const entry = yield* encodeJson({ transport: "core", cmd: method, method, params });
-          if (setup !== true) yield* fs.writeFileString(logPath, `${entry}\n`, { flag: "a" });
+          if (setup !== true) {
+            yield* fs.writeFileString(logPath, `${entry}\n`, { flag: "a" });
+          }
           const held = holds.get(method);
-          if (held !== undefined) yield* Effect.promise(() => held);
+          if (held !== undefined) {
+            yield* Effect.promise(() => held);
+          }
           const answered = yield* encodeJson(yield* reply(id, method, params, link));
           yield* link.framed
             ? link.write(frameOf(0, Kind.DATA, utf8(answered)))
             : writer.write(`${answered}\n`);
-          if (method === "hello" && params.framed === true) link.framed = true;
-          if (method === "events.subscribe") subscribers.add(write);
-          for (const viewer of link.viewers.values()) yield* pump(viewer);
+          if (method === "hello" && params.framed === true) {
+            link.framed = true;
+          }
+          if (method === "events.subscribe") {
+            subscribers.add(write);
+          }
+          for (const viewer of link.viewers.values()) {
+            yield* pump(viewer);
+          }
         });
       let buffered = new Uint8Array(0);
       for (;;) {
@@ -703,16 +712,22 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
         for (;;) {
           if (!link.framed) {
             const end = buffered.indexOf(10);
-            if (end < 0) break;
+            if (end < 0) {
+              break;
+            }
             const line = new TextDecoder().decode(buffered.subarray(0, end));
             buffered = buffered.subarray(end + 1);
             yield* request(line);
             continue;
           }
-          if (buffered.length < 9) break;
+          if (buffered.length < 9) {
+            break;
+          }
           const head = new DataView(buffered.buffer, buffered.byteOffset);
           const length = head.getUint32(5, true);
-          if (buffered.length < 9 + length) break;
+          if (buffered.length < 9 + length) {
+            break;
+          }
           const channel = head.getUint32(0, true);
           const kind = head.getUint8(4);
           const payload = buffered.slice(9, 9 + length);
@@ -726,23 +741,26 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
 
   const server = yield* BunSocketServer.make({ path: socketPath }).pipe(Scope.provide(scope));
   yield* Effect.forkIn(server.run(connection), scope);
-  return {
+  const returned: FakeHc = {
     socketPath,
     logPath,
     cd: (name, dir) => {
       const found = find({ terminal: name });
-      if (found !== undefined) found.foregroundCwd = dir;
+      if (found !== undefined) {
+        found.foregroundCwd = dir;
+      }
     },
     roster: (listed) => {
       machines.clear();
-      for (const one of listed)
+      for (const one of listed) {
         machines.set(one.name, { ...one, via: false, state: "connected", why: null });
+      }
     },
     answer: (method, value) => {
       answers.set(method, value);
     },
     refuse: (method, kind, message) => {
-      refusals.set(method, { code: -32000, kind, message });
+      refusals.set(method, { code: -32_000, kind, message });
     },
     restore: (method) => {
       refusals.delete(method);
@@ -765,7 +783,9 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
       stall = true;
     },
     reportedOnly: (names) => {
-      for (const name of names) onlyReported.add(name);
+      for (const name of names) {
+        onlyReported.add(name);
+      }
     },
     startBlocked: () => {
       blocked = true;
@@ -776,7 +796,9 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
     print: (name, text) =>
       Effect.suspend(() => {
         const found = find({ terminal: name });
-        if (found === undefined) return Effect.void;
+        if (found === undefined) {
+          return Effect.void;
+        }
         found.screen = pipe(found.screen + text, Str.slice(-200));
         return Effect.forEach(viewersOf(found), (viewer) => {
           viewer.backlog.push(...chunks(text));
@@ -786,7 +808,9 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
     exit: (name, code) =>
       Effect.suspend(() => {
         const found = find({ terminal: name });
-        if (found === undefined) return Effect.void;
+        if (found === undefined) {
+          return Effect.void;
+        }
         ended(found);
         return Effect.gen(function* () {
           yield* emit(found.address, "finished", { reason: "exited", exit_code: code });
@@ -813,11 +837,15 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
       ),
     ),
     startable: (program, can) => {
-      if (can) unstartable.delete(program);
-      else unstartable.add(program);
+      if (can) {
+        unstartable.delete(program);
+      } else {
+        unstartable.add(program);
+      }
     },
     barePath: () => {
       bare = true;
     },
-  } satisfies FakeHc;
+  };
+  return returned;
 });

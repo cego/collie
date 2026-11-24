@@ -16,8 +16,12 @@ export default defineWorkflow({
   output: Schema.String,
   run: ({ input }) =>
     Effect.gen(function* () {
-      for (const one of STEPS.slice(0, Number(input.steps))) yield* one(Effect.void);
-      if (input.on === "ask") return yield* ask({ name: "never", prompt: "Nobody answers." });
+      for (const one of STEPS.slice(0, Number(input.steps))) {
+        yield* one(Effect.void);
+      }
+      if (input.on === "ask") {
+        return yield* ask({ name: "never", prompt: "Nobody answers." });
+      }
       return "done";
     }),
 });

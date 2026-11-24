@@ -1,7 +1,3 @@
-// What the human typed, read from each harness's sessions and Collie's records on this
-// computer, for a chat to draft their Standing direction from. Never a tool: the host answers
-// a Read only on Desktop's own door, after the human's click there.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
@@ -9,16 +5,12 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { Database } from "bun:sqlite";
 import { Effect, FileSystem, Result, Schema, flow } from "effect";
-import {
-  type OwnMessage,
-  type OwnSource,
-  type OwnStore,
-  type OwnWords,
-  withinCaps,
-} from "./own-words-model";
+import { withinCaps } from "./own-words-model";
+import type { OwnMessage, OwnSource, OwnStore, OwnWords } from "./own-words-model";
 import { redact } from "./redact";
 import { epochMs, isoAt } from "./time";
-import { isJsonObject, isString, type JsonObject } from "./schema";
+import { isJsonObject, isString } from "./schema";
+import type { JsonObject } from "./schema";
 
 type Json = Schema.Json;
 const isJsonArray = Schema.is(Schema.Array(Schema.Json));
@@ -28,7 +20,6 @@ export interface OwnPlaces {
   readonly stateDir: string;
 }
 
-/** Where harnesses keep the human's sessions, under their home: only Read opens them. */
 export const SESSION_STORES = [
   ".claude/projects",
   ".claude/history.jsonl",
@@ -38,11 +29,9 @@ export const SESSION_STORES = [
   ".local/share/opencode",
 ];
 
-/** Why a chat's file tool may not go there. */
 export const SESSIONS_CLOSED =
   "holds the human's sessions, which only their click on Desktop's \"Read my messages\" reads";
 
-/** What a chat's file tool or shell touches: a file or folder, a folder searched, or a command. */
 export interface SessionCall {
   readonly cwd: string;
   readonly path?: string | undefined;
@@ -50,10 +39,7 @@ export interface SessionCall {
   readonly command?: string | undefined;
 }
 
-/**
- * The session store `call` reaches, past `~`, dot segments and links. Pi's extension carries
- * this function's source, so it uses nothing around it.
- */
+// WARNING: Pi runs this source without Effect, so it may use nothing from outside it.
 /* oxlint-disable effecttsgo/prefer-effect-array, effecttsgo/prefer-effect-string -- Pi runs this source without Effect. */
 export function sessionStoreReached(
   stores: ReadonlyArray<string>,
@@ -63,10 +49,9 @@ export function sessionStoreReached(
     readonly resolve: (...paths: ReadonlyArray<string>) => string;
   },
   call: SessionCall,
-): string | undefined {
+) {
   const full = (path: string) =>
     io.resolve(call.cwd, path === "~" || path.startsWith("~/") ? home + path.slice(1) : path);
-  // A path not there yet is where the nearest one that is leads.
   const real = (path: string) => {
     const tail: Array<string> = [];
     for (let at = path; at.length > 1; at = io.resolve(at, "..")) {
@@ -81,7 +66,7 @@ export function sessionStoreReached(
   const under = (path: string, top: string) =>
     path === top || path.startsWith(top.endsWith("/") ? top : `${top}/`);
   const places = (path: string) => [full(path), real(full(path))];
-  const command = call.command?.replace(/\/(\.\/)+/g, "/").replace(/\/{2,}/g, "/");
+  const command = call.command?.replaceAll(/\/(\.\/)+/g, "/").replaceAll(/\/{2,}/g, "/");
   return stores.find((store) => {
     const tops = [`${home}/${store}`, real(`${home}/${store}`)];
     const inside = (path: string | undefined) =>
@@ -102,7 +87,6 @@ interface Said {
   readonly text: string;
 }
 
-/** One session as its store has it: the human's candidate messages, and whether Collie sent any. */
 interface Session {
   readonly ids: ReadonlyArray<string>;
   readonly cwd: string | null;
@@ -111,27 +95,25 @@ interface Session {
 }
 
 const decodeLine = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
-/** Each line's record, or why the file is not one the reader knows; an unended last line is still being written. */
-const recordsOf = (
-  text: string,
-  types?: ReadonlySet<string>,
-): ReadonlyArray<JsonObject> | string => {
+const recordsOf = (text: string, types?: ReadonlySet<string>) => {
   const records: Array<JsonObject> = [];
   const lines = Str.split(text, "\n");
   for (const [index, line] of Arr.map(Arr.dropRight(lines, 1), (line, i) => [i, line] as const)) {
-    if (Str.trim(line) === "") continue;
+    if (Str.trim(line) === "") {
+      continue;
+    }
     const record = pipe(decodeLine(line), Option.filter(isJsonObject), Option.getOrUndefined);
     const type = record?.["type"];
-    if (record === undefined || (types !== undefined && !(isString(type) && types.has(type))))
+    if (record === undefined || (types !== undefined && !(isString(type) && types.has(type)))) {
       return record === undefined
         ? `line ${index + 1} is not a record`
         : `line ${index + 1} is of type ${isString(type) ? type : "none"}, which it does not know`;
+    }
     records.push(record);
   }
   return records;
 };
 
-/** The record types each harness writes to a session, as of the versions read here. */
 const CLAUDE_TYPES = new Set([
   "user",
   "assistant",
@@ -198,7 +180,7 @@ const PI_TYPES = new Set([
   "label",
   "session_info",
 ]);
-const objectAt = (value: Json | undefined, key: string): JsonObject | undefined => {
+const objectAt = (value: Json | undefined, key: string) => {
   const found = isJsonObject(value) ? value[key] : undefined;
   return isJsonObject(found) ? found : undefined;
 };
@@ -207,7 +189,6 @@ const stringAt = (value: Json | undefined, key: string) => {
   return isString(found) ? found : undefined;
 };
 
-/** Text the harness or a hook put where the human types. */
 const injected = (text: string) =>
   /^<[a-z][\w-]*>/.test(text) ||
   pipe(text, Str.startsWith("Caveat: ")) ||
@@ -215,14 +196,19 @@ const injected = (text: string) =>
   pipe(text, Str.startsWith("# AGENTS.md instructions"));
 
 const withoutReminders = (text: string) =>
-  Str.trim(pipe(text, Str.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")));
+  Str.trim(pipe(text, Str.replaceAll(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")));
 
-/** The text of a turn of text and images: a list with anything else in it is a tool's. */
 const typedText = (content: Json | undefined, kind: string) => {
-  if (isString(content)) return content;
-  if (!isJsonArray(content)) return undefined;
+  if (isString(content)) {
+    return content;
+  }
+  if (!isJsonArray(content)) {
+    return undefined;
+  }
   const types = Arr.map(content, (block) => stringAt(block, "type"));
-  if (!Arr.every(types, (type) => type === kind || type === "image")) return undefined;
+  if (!Arr.every(types, (type) => type === kind || type === "image")) {
+    return undefined;
+  }
   const texts = Arr.filter(
     Arr.map(content, (block) => stringAt(block, "text")),
     isString,
@@ -230,15 +216,19 @@ const typedText = (content: Json | undefined, kind: string) => {
   return texts.length === 0 ? undefined : Arr.join(texts, "\n");
 };
 
-const claudeSession = (records: ReadonlyArray<JsonObject>, stem: string): Session => {
+const claudeSession = (records: ReadonlyArray<JsonObject>, stem: string) => {
   let cwd: string | null = null;
   let delivered = false;
   const said: Array<Said> = [];
   for (const line of records) {
-    if (line["type"] !== "user") continue;
+    if (line["type"] !== "user") {
+      continue;
+    }
     cwd = stringAt(line, "cwd") ?? cwd;
     const raw = typedText(objectAt(line, "message")?.["content"], "text");
-    if (raw === undefined) continue;
+    if (raw === undefined) {
+      continue;
+    }
     delivered ||= pipe(raw, Str.includes(DELIVERY));
     const kind = stringAt(objectAt(line, "origin"), "kind");
     if (
@@ -247,16 +237,19 @@ const claudeSession = (records: ReadonlyArray<JsonObject>, stem: string): Sessio
       line["isVisibleInTranscriptOnly"] === true ||
       line["isSidechain"] === true ||
       (kind !== undefined && kind !== "human")
-    )
+    ) {
       continue;
+    }
     const typed = withoutReminders(raw);
     const at = stringAt(line, "timestamp");
-    if (typed !== "" && !injected(typed) && at !== undefined) said.push({ at, text: typed });
+    if (typed !== "" && !injected(typed) && at !== undefined) {
+      said.push({ at, text: typed });
+    }
   }
   return { ids: [stem], cwd, said, delivered };
 };
 
-const codexSession = (records: ReadonlyArray<JsonObject>): Session => {
+const codexSession = (records: ReadonlyArray<JsonObject>) => {
   let ids: ReadonlyArray<string> = [];
   let cwd: string | null = null;
   let spawned = false;
@@ -267,26 +260,33 @@ const codexSession = (records: ReadonlyArray<JsonObject>): Session => {
     if (line["type"] === "session_meta") {
       ids = Arr.filter([stringAt(payload, "id"), stringAt(payload, "session_id")], isString);
       cwd = stringAt(payload, "cwd") ?? cwd;
-      // A subagent's user turns are its parent model's words.
       spawned = objectAt(payload, "source")?.["subagent"] !== undefined;
       continue;
     }
-    if (line["type"] !== "response_item") continue;
-    if (stringAt(payload, "type") !== "message" || stringAt(payload, "role") !== "user") continue;
+    if (line["type"] !== "response_item") {
+      continue;
+    }
+    if (stringAt(payload, "type") !== "message" || stringAt(payload, "role") !== "user") {
+      continue;
+    }
     const at = stringAt(line, "timestamp");
     const content = payload?.["content"];
     for (const block of isJsonArray(content) ? content : []) {
       const raw = stringAt(block, "type") === "input_text" ? stringAt(block, "text") : undefined;
-      if (raw === undefined) continue;
+      if (raw === undefined) {
+        continue;
+      }
       delivered ||= pipe(raw, Str.includes(DELIVERY));
       const typed = Str.trim(raw);
-      if (typed !== "" && !injected(typed) && at !== undefined) said.push({ at, text: typed });
+      if (typed !== "" && !injected(typed) && at !== undefined) {
+        said.push({ at, text: typed });
+      }
     }
   }
   return { ids, cwd, said: spawned ? [] : said, delivered };
 };
 
-const piSession = (records: ReadonlyArray<JsonObject>): Session => {
+const piSession = (records: ReadonlyArray<JsonObject>) => {
   let ids: ReadonlyArray<string> = [];
   let cwd: string | null = null;
   let delivered = false;
@@ -298,13 +298,19 @@ const piSession = (records: ReadonlyArray<JsonObject>): Session => {
       continue;
     }
     const message = objectAt(line, "message");
-    if (line["type"] !== "message" || stringAt(message, "role") !== "user") continue;
+    if (line["type"] !== "message" || stringAt(message, "role") !== "user") {
+      continue;
+    }
     const raw = typedText(message?.["content"], "text");
-    if (raw === undefined) continue;
+    if (raw === undefined) {
+      continue;
+    }
     delivered ||= pipe(raw, Str.includes(DELIVERY));
     const typed = Str.trim(raw);
     const at = stringAt(line, "timestamp");
-    if (typed !== "" && !injected(typed) && at !== undefined) said.push({ at, text: typed });
+    if (typed !== "" && !injected(typed) && at !== undefined) {
+      said.push({ at, text: typed });
+    }
   }
   return { ids, cwd, said, delivered };
 };
@@ -338,15 +344,16 @@ const decodeCount = flow(
   Result.getOrThrow,
 );
 
-/** OpenCode's SQLite store, read-only; any table or column it lacks makes it unreadable. */
+// WARNING: a missing table or column makes the whole store unreadable.
 const openCodeStore = (file: string, since: number | null) =>
   Effect.try({
     try: () => {
       const db = new Database(file, { readonly: true });
       try {
         const count = decodeCount(db.query("SELECT count(*) AS n FROM session").get()).n;
-        if (since === null) return { count, sessions: [] };
-        // A token marks the whole session, however old the message that carries it.
+        if (since === null) {
+          return { count, sessions: [] };
+        }
         const collies = new Set(
           Arr.map(
             decodeSessions(
@@ -373,28 +380,30 @@ const openCodeStore = (file: string, since: number | null) =>
             )
             .all(since),
         );
-        const sessions = Arr.map(
-          Rec.values(Arr.groupBy(rows, (row) => row.session)),
-          (parts): Session => {
-            const said: Array<Said> = [];
-            for (const row of parts) {
-              const part = pipe(decodeLine(row.part), Option.getOrUndefined);
-              const raw = stringAt(part, "type") === "text" ? stringAt(part, "text") : undefined;
-              if (raw === undefined) continue;
-              const typed = Str.trim(raw);
-              if (isJsonObject(part) && part["synthetic"] === true) continue;
-              if (typed !== "" && !injected(typed)) said.push({ at: isoAt(row.at), text: typed });
+        const sessions = Arr.map(Rec.values(Arr.groupBy(rows, (row) => row.session)), (parts) => {
+          const said: Array<Said> = [];
+          for (const row of parts) {
+            const part = pipe(decodeLine(row.part), Option.getOrUndefined);
+            const raw = stringAt(part, "type") === "text" ? stringAt(part, "text") : undefined;
+            if (raw === undefined) {
+              continue;
             }
-            const first = parts[0]!;
-            // A child session's user turns are the model's own.
-            return {
-              ids: [first.session],
-              cwd: first.directory,
-              said: first.parent === null ? said : [],
-              delivered: collies.has(first.session),
-            };
-          },
-        );
+            const typed = Str.trim(raw);
+            if (isJsonObject(part) && part["synthetic"] === true) {
+              continue;
+            }
+            if (typed !== "" && !injected(typed)) {
+              said.push({ at: isoAt(row.at), text: typed });
+            }
+          }
+          const first = parts[0];
+          return {
+            ids: [first.session],
+            cwd: first.directory,
+            said: first.parent === null ? said : [],
+            delivered: collies.has(first.session),
+          };
+        });
         return { count, sessions };
       } finally {
         db.close();
@@ -403,7 +412,6 @@ const openCodeStore = (file: string, since: number | null) =>
     catch: (cause) => (cause instanceof Error ? cause.message : String(cause)),
   });
 
-/** A harness's session files, and how each is read. */
 interface FileStore {
   readonly source: OwnSource;
   readonly root: string;
@@ -412,11 +420,11 @@ interface FileStore {
   readonly read: (records: ReadonlyArray<JsonObject>, relative: string) => Session;
 }
 
-const fileStores = (home: string): ReadonlyArray<FileStore> => [
+const fileStores: (home: string) => ReadonlyArray<FileStore> = (home) => [
   {
     source: "claude-code",
     root: `${home}/.claude/projects`,
-    // A session's own subagents are kept in a folder beside it, as sidechains.
+    // WARNING: a session's subagents sit in a folder beside it and are not sessions.
     isSession: (relative) => /^[^/]+\/[^/]+\.jsonl$/.test(relative),
     types: CLAUDE_TYPES,
     read: (records, relative) =>
@@ -443,13 +451,14 @@ const fileStores = (home: string): ReadonlyArray<FileStore> => [
 
 const openCodeFile = (home: string) => `${home}/.local/share/opencode/opencode.db`;
 
-/** Every session the state directory's host recorded launching a Run's agent in, by id or path. */
 const recordedAgentSessions = Effect.fn("OwnWords.recordedAgentSessions")(function* (
   stateDir: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const file = `${stateDir}/host.db`;
-  if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) return new Set<string>();
+  if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) {
+    return new Set<string>();
+  }
   return yield* Effect.try(() => {
     const db = new Database(file, { readonly: true });
     try {
@@ -473,19 +482,18 @@ const recordedAgentSessions = Effect.fn("OwnWords.recordedAgentSessions")(functi
 
 const HUMAN_DOORS = new Set(["desktop", "cli-tty", "board"]);
 
-/** A human's entry: through a human door, or a chat's carrying the words they said. */
 const isHuman = (line: JsonObject) => {
   const actor = objectAt(line, "actor");
   const origin = stringAt(actor, "origin");
   return origin === "chat" ? stringAt(actor, "said") !== undefined : HUMAN_DOORS.has(origin ?? "");
 };
 
-/** The words each Run was started with through a human door, as the host's store keeps them. */
 const startedWords = Effect.fn("OwnWords.startedWords")(function* (stateDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const file = `${stateDir}/host.db`;
-  if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false))))
+  if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) {
     return new Map<string, string>();
+  }
   return yield* Effect.try({
     try: () => {
       const db = new Database(file, { readonly: true });
@@ -496,7 +504,9 @@ const startedWords = Effect.fn("OwnWords.startedWords")(function* (stateDir: str
         )) {
           const by = objectAt(pipe(decodeLine(placing), Option.getOrUndefined), "started");
           const words = stringAt(by, "words");
-          if (words !== undefined && stringAt(by, "door") !== "chat") started.set(run, words);
+          if (words !== undefined && stringAt(by, "door") !== "chat") {
+            started.set(run, words);
+          }
         }
         return started;
       } finally {
@@ -507,7 +517,6 @@ const startedWords = Effect.fn("OwnWords.startedWords")(function* (stateDir: str
   });
 });
 
-/** What a human's entry says they typed, where it holds their words. */
 const typedIn = (line: JsonObject, started: ReadonlyMap<string, string>, run: string) => {
   const asked = objectAt(line, "asked");
   return (
@@ -520,7 +529,6 @@ const typedIn = (line: JsonObject, started: ReadonlyMap<string, string>, run: st
   );
 };
 
-/** The sessions of a store it could not read, and why the first could not. */
 class Unread {
   private count = 0;
   private first: string | undefined;
@@ -528,15 +536,11 @@ class Unread {
     this.count += 1;
     this.first ??= `${which}: ${why}`;
   }
-  said(): Pick<OwnStore, "unread" | "why"> {
+  said() {
     return this.first === undefined ? {} : { unread: this.count, why: this.first };
   }
 }
 
-/**
- * How many human entries Collie's records hold, and, when `reading`, the words they hold, each
- * under the Run it was said to.
- */
 const collieWords = Effect.fn("OwnWords.collie")(function* (stateDir: string, reading: boolean) {
   const trails = yield* Effect.try({
     try: () => {
@@ -552,8 +556,11 @@ const collieWords = Effect.fn("OwnWords.collie")(function* (stateDir: string, re
             .all("operations.jsonl"),
         )) {
           const trail = byRun.get(run);
-          if (trail === undefined) byRun.set(run, [line]);
-          else trail.push(line);
+          if (trail === undefined) {
+            byRun.set(run, [line]);
+          } else {
+            trail.push(line);
+          }
         }
         return byRun;
       } finally {
@@ -574,13 +581,17 @@ const collieWords = Effect.fn("OwnWords.collie")(function* (stateDir: string, re
     }
     const lines = Arr.filter(records, isHuman);
     entries += lines.length;
-    if (!reading) continue;
+    if (!reading) {
+      continue;
+    }
     const seen = new Set<string>();
     for (const line of lines) {
       const text = typedIn(line, started, run);
       const at = stringAt(line, "at");
       const typed = text === undefined ? "" : Str.trim(text);
-      if (typed === "" || at === undefined || seen.has(typed)) continue;
+      if (typed === "" || at === undefined || seen.has(typed)) {
+        continue;
+      }
       seen.add(typed);
       words.push({ source: "collie", at, cwd: null, text: typed, run });
     }
@@ -594,14 +605,13 @@ interface Gathered {
   readonly skipped: number;
 }
 
-const notThere = (source: OwnSource, where: string): OwnStore => ({
+const notThere: (source: OwnSource, where: string) => OwnStore = (source, where) => ({
   source,
   where,
   found: "missing",
   sessions: 0,
 });
 
-/** Each store, read for messages said `since` where it is given, or only counted where not. */
 const gather = Effect.fn("OwnWords.gather")(function* (places: OwnPlaces, since: number | null) {
   const fs = yield* FileSystem.FileSystem;
   const recorded =
@@ -614,9 +624,11 @@ const gather = Effect.fn("OwnWords.gather")(function* (places: OwnPlaces, since:
       skipped += 1;
       return;
     }
-    for (const { at, text } of session.said)
-      if (since === null || epochMs(at) >= since)
+    for (const { at, text } of session.said) {
+      if (since === null || epochMs(at) >= since) {
         messages.push({ source, at, cwd: session.cwd, text });
+      }
+    }
   };
 
   for (const store of fileStores(places.home)) {
@@ -637,12 +649,13 @@ const gather = Effect.fn("OwnWords.gather")(function* (places: OwnPlaces, since:
     const unread = new Unread();
     for (const relative of since === null ? [] : files) {
       const path = `${store.root}/${relative}`;
-      // ponytail: a whole file is read at once; stream it if sessions outgrow memory.
       const modified = yield* fs.stat(path).pipe(
         Effect.map((info) => Option.getOrUndefined(info.mtime)),
         Effect.orElseSucceed(() => undefined),
       );
-      if (modified !== undefined && since !== null && modified.getTime() < since) continue;
+      if (modified !== undefined && since !== null && modified.getTime() < since) {
+        continue;
+      }
       const text = yield* fs.readFileString(path).pipe(Effect.result);
       const records =
         text._tag === "Failure" ? String(text.failure) : recordsOf(text.success, store.types);
@@ -663,30 +676,32 @@ const gather = Effect.fn("OwnWords.gather")(function* (places: OwnPlaces, since:
   }
 
   const openCode = openCodeFile(places.home);
-  if (!(yield* fs.exists(openCode).pipe(Effect.orElseSucceed(() => false))))
+  if (!(yield* fs.exists(openCode).pipe(Effect.orElseSucceed(() => false)))) {
     stores.push(notThere("opencode", openCode));
-  else {
+  } else {
     const read = yield* openCodeStore(openCode, since).pipe(Effect.result);
-    if (read._tag === "Failure")
+    if (read._tag === "Failure") {
       stores.push({
         ...notThere("opencode", openCode),
         found: "unreadable",
         why: read.failure,
       });
-    else {
+    } else {
       stores.push({
         source: "opencode",
         where: openCode,
         found: "read",
         sessions: read.success.count,
       });
-      for (const session of read.success.sessions) take("opencode", session, session.ids);
+      for (const session of read.success.sessions) {
+        take("opencode", session, session.ids);
+      }
     }
   }
 
   const runs = `${places.stateDir}/host.db`;
   const collie = yield* collieWords(places.stateDir, since !== null).pipe(Effect.result);
-  if (collie._tag === "Failure")
+  if (collie._tag === "Failure") {
     stores.push(
       (yield* fs.exists(runs).pipe(Effect.orElseSucceed(() => false)))
         ? {
@@ -696,7 +711,7 @@ const gather = Effect.fn("OwnWords.gather")(function* (places: OwnPlaces, since:
           }
         : notThere("collie", runs),
     );
-  else {
+  } else {
     stores.push({
       source: "collie",
       where: runs,
@@ -704,24 +719,22 @@ const gather = Effect.fn("OwnWords.gather")(function* (places: OwnPlaces, since:
       sessions: collie.success.entries,
       ...collie.success.unread,
     });
-    for (const one of collie.success.words)
-      if (since === null || epochMs(one.at) >= since) messages.push(one);
+    for (const one of collie.success.words) {
+      if (since === null || epochMs(one.at) >= since) {
+        messages.push(one);
+      }
+    }
   }
-  return { stores, messages, skipped } satisfies Gathered;
+  const returned: Gathered = { stores, messages, skipped };
+  return returned;
 });
 
-/** Where the human's words are and how many sessions hold them; no text. */
 export const ownInventory = Effect.fn("OwnWords.inventory")(function* (places: OwnPlaces) {
   const { stores } = yield* gather(places, null);
   return { stores };
 });
 
-/** The human's typed messages, newest first, within the caps, saying what was left out. */
-export const readOwnWords = Effect.fn("OwnWords.read")(function* (
-  places: OwnPlaces,
-  /** Epoch milliseconds. */
-  now: number,
-) {
+export const readOwnWords = Effect.fn("OwnWords.read")(function* (places: OwnPlaces, now: number) {
   const since = now - DAYS * 24 * 60 * 60 * 1000;
   const gathered = yield* gather(places, since);
   const cutOnes = new Set<OwnMessage>();
@@ -729,15 +742,18 @@ export const readOwnWords = Effect.fn("OwnWords.read")(function* (
     Arr.map(gathered.messages, (message) => {
       const clean = redact(message.text);
       const one = { ...message, text: pipe(clean, Str.slice(0, MOST_IN_ONE)) };
-      if (one.text !== clean) cutOnes.add(one);
+      if (one.text !== clean) {
+        cutOnes.add(one);
+      }
       return one;
     }),
   );
-  return {
+  const returned: OwnWords = {
     messages: kept,
     stores: gathered.stores,
     skipped: gathered.skipped,
     leftOut,
     cut: Arr.filter(kept, (one) => cutOnes.has(one)).length,
-  } satisfies OwnWords;
+  };
+  return returned;
 });

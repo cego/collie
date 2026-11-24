@@ -1,19 +1,9 @@
-// `collie doctor`: every prerequisite that is not the runner, checked in one pass,
-// each with the command that fixes it. Everything here used to fail at its own
-// point deep inside a Run — a harness that is not installed, a `glab` that is not
-// logged in, a shim whose directory is not on PATH — which a teammate discovered one
-// failed Run at a time.
-//
-// Two ways of asking, and the difference is deliberate: whether an executable is
-// there is answered by walking PATH, which cannot hang and needs nothing stubbed;
-// what it *says* — a version, a login — is answered by running it. Core itself is
-// asked through `src/herdr.ts` like everything else.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import { Clock, Effect, Option, Path, Result, Schema } from "effect";
-import { CommandLine, type ChildProcessSpawner } from "effect/process";
+import { CommandLine } from "effect/process";
+import type { ChildProcessSpawner } from "effect/process";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import { loadDefaults, worktreesDirectory } from "./config";
 import { savedModules } from "./discovery";
@@ -21,7 +11,8 @@ import { layers, loadDefinitions, skillDirs, skillFile } from "./definitions";
 import type { PluginEnv } from "./env";
 import { HARNESSES } from "./harness";
 import { Herdr } from "./herdr";
-import { shell, type Runner } from "./mr";
+import { shell } from "./mr";
+import type { Runner } from "./mr";
 import { isCheckout } from "./release";
 import { isNewer, newestRelease, releasesOf } from "./releases";
 import manifest from "../package.json";
@@ -34,18 +25,13 @@ import { claudeSettingsPath, readStatusLine, STATUS_LINE_ARGS } from "./statusli
 import { humanBytes } from "./bytes";
 import { diskSaid, lowOn, readDisk } from "./disk";
 import { collieCache } from "./cleanup";
-import {
-  anyRuns,
-  cleanupListing,
-  hostRegistered,
-  machineList,
-  machineShell,
-  type Door,
-} from "./lifecycle";
+import { anyRuns, cleanupListing, hostRegistered, machineList, machineShell } from "./lifecycle";
+import type { Door } from "./lifecycle";
 import { peersOf } from "./peers";
 import { herdOfHost } from "./host";
 import { tmpdir } from "node:os";
-import { machineMemory, memorySaid, type Memory } from "./memory";
+import { machineMemory, memorySaid } from "./memory";
+import type { Memory } from "./memory";
 import {
   FETCH_LIMIT,
   answered,
@@ -56,9 +42,8 @@ import {
   passed,
   runnable,
   warned,
-  type Check,
-  type Outcome,
 } from "./doctor-check";
+import type { Check } from "./doctor-check";
 import { gitlabChecks } from "./forge/gitlab-checks";
 import { connect, coreSocket } from "./hc";
 import { hcInstallDir, hcMeets, hcVersion } from "./hc-install";
@@ -68,8 +53,7 @@ import { githubChecks } from "./forge/github-checks";
 export type { Check } from "./doctor-check";
 export { onPath } from "./doctor-check";
 
-/** An optional integration, as doctor reports it: absent is a note, broken is a warning. */
-const optional = (probe: ConnectionReading): Outcome =>
+const optional = (probe: ConnectionReading) =>
   probe.state === "ok"
     ? passed(probe.detail)
     : probe.state === "absent"
@@ -78,7 +62,6 @@ const optional = (probe: ConnectionReading): Outcome =>
 
 const HC_INSTALL = `curl -fsSL https://releases.herdr.dev/core/install.sh | HC_VERSION=${hcPin.version} sh`;
 
-/** The hc on PATH, else where upstream's installer puts it, at least at the version this Collie pins. */
 const hcInstalled = Effect.fn("Doctor.hcInstalled")(function* (
   env: PluginEnv,
   search: string,
@@ -89,10 +72,14 @@ const hcInstalled = Effect.fn("Doctor.hcInstalled")(function* (
   const installed = path.join(hcInstallDir(env.raw, env.home), "herdr-core");
   const bin =
     dir !== null ? path.join(dir, "herdr-core") : (yield* runnable(installed)) ? installed : null;
-  if (bin === null) return failed("not installed", HC_INSTALL);
+  if (bin === null) {
+    return failed("not installed", HC_INSTALL);
+  }
   const said = (yield* answered(run(bin, ["--version"], env.home))).stdout;
   const version = hcVersion(said);
-  if (hcMeets(said, hcPin.version)) return passed(`${version} at ${bin}`);
+  if (hcMeets(said, hcPin.version)) {
+    return passed(`${version} at ${bin}`);
+  }
   return failed(
     version === null
       ? `the hc at ${bin} names no version, so it is taken as older than the ${hcPin.version} this Collie needs`
@@ -101,7 +88,6 @@ const hcInstalled = Effect.fn("Doctor.hcInstalled")(function* (
   );
 });
 
-/** Whether this Machine's default core session says hello. */
 const coreAnswers = Effect.fn("Doctor.coreAnswers")(function* (env: PluginEnv) {
   const socket = yield* coreSocket(env.raw);
   const hello = yield* Effect.scoped(
@@ -113,18 +99,20 @@ const coreAnswers = Effect.fn("Doctor.coreAnswers")(function* (env: PluginEnv) {
   });
 });
 
-/** Agents this Machine's host still registers on Herdr 1, which Collie no longer reaches. */
 const onHerdrOne = Effect.fn("Doctor.onHerdrOne")(function* (env: PluginEnv) {
   const registered = (yield* anyRuns(env))
     ? yield* Effect.result(hostRegistered(env))
     : Result.succeed([]);
-  if (Result.isFailure(registered))
+  if (Result.isFailure(registered)) {
     return warned(
       `could not ask this Machine's host which agents it registered (${registered.failure.message})`,
       "collie host restart",
     );
+  }
   const left = Arr.filter(registered.success, (entry) => entry.incarnation?.backend !== "core");
-  if (left.length === 0) return passed("nothing on this Machine is registered on Herdr 1");
+  if (left.length === 0) {
+    return passed("nothing on this Machine is registered on Herdr 1");
+  }
   return noted(
     `registered on Herdr 1, which Collie no longer reaches: ${Arr.join(
       Arr.map(left, (entry) => `${entry.agent} (run ${entry.runId})`),
@@ -134,30 +122,12 @@ const onHerdrOne = Effect.fn("Doctor.onHerdrOne")(function* (env: PluginEnv) {
   );
 });
 
-/**
- * What this machine needs to run work: the skills the operator's own guidance names, and
- * every harness the defaults may route an agent to. A workflow is a module now, so what
- * it asks for is TypeScript rather than a list to read — what is checked here is what an
- * installation needs whatever its workflows turn out to want.
- */
 const asked = Effect.fn("Doctor.asked")(function* (env: PluginEnv) {
   const defaults = yield* loadDefaults(env.userDir);
-  // Every harness a Run could be routed to: the default, and anything a variant may
-  // name. A module decides its own at runtime, so what is checked is what the machine
-  // would need whichever it picks.
   return { harnesses: [defaults.harness] };
 });
 
-/**
- * A fetch that can only succeed or give up. No prompt of any kind can come out of
- * it: an SSH passphrase or an HTTPS credential prompt would be asked by a process
- * the human cannot see, reading from the terminal the Control Plane is taking keys
- * from. And it is bounded, so a remote that hangs does not hang `collie doctor` or
- * the install that ends in it.
- *
- * The settings ride along as arguments rather than as this process's environment,
- * because that environment is inherited by every agent Collie starts.
- */
+// WARNING: never prompts, since a hidden credential prompt would hang the terminal, and it is bounded; settings go as arguments, not the inherited environment.
 const FETCH = [
   "GIT_TERMINAL_PROMPT=0",
   "GIT_ASKPASS=",
@@ -173,46 +143,21 @@ const FETCH = [
 const fetchRemote = (root: string, run: Runner<ChildProcessSpawner.ChildProcessSpawner>) =>
   Effect.timeoutOption(run("env", FETCH, root), FETCH_LIMIT);
 
-/**
- * How many commits this installation's checkout is behind its upstream, or null when
- * there is nothing to say: an installation that is not a checkout, a branch with no
- * upstream, or a git that would not answer. Absent rather than alarming — a warning
- * about a state nobody can act on is worse than no line at all.
- *
- * A fetch is the only thing that changes this answer, and the only part of it that
- * touches the network. So there are two ways in, one per caller: the Control Plane
- * calls `behindRemote`, which counts against the remote-tracking ref — local, and
- * never waiting on a remote, because the board redraws every second and a half —
- * and starts a fetch *behind* that at most every few minutes, whose result the next
- * count picks up. `collie doctor` calls `refreshBehind`, which fetches and waits,
- * because a human waiting on a command can afford it.
- *
- * A fetch that fails or times out changes nothing: the count is what the refs on
- * this machine say, which stays true whether or not the remote could be reached.
- */
 const FETCH_EVERY_MS = 5 * 60_000;
-/**
- * How long a count stands before it is asked again. The board would otherwise spawn
- * a `git` every redraw — some thousands an hour for one open pane — to re-read refs
- * that change only when something fetches or pulls. Short enough that an upgrade in
- * another terminal shows up while the human is still looking at the board.
- */
+// WARNING: the board redraws often; a count is re-read only this often rather than spawning git on every redraw.
 const COUNT_FOR_MS = 30_000;
 
-/** What this process already knows about one installation, and when it learned it. */
 interface Known {
   fetchedAt: number;
   countedAt: number;
   behind: number | null;
 }
 const known = new Map<string, Known>();
-const knownOf = (root: string): Known =>
-  known.get(root) ?? { fetchedAt: 0, countedAt: 0, behind: null };
+const knownOf = (root: string) => known.get(root) ?? { fetchedAt: 0, countedAt: 0, behind: null };
 
 export const behindRemote = Effect.fn("Doctor.behindRemote")(function* (
   root: string,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner> = shell,
-  /** The board builds against one clock reading; both windows below are measured on it. */
   at?: number,
 ) {
   const now = at ?? (yield* Clock.currentTimeMillis);
@@ -221,7 +166,9 @@ export const behindRemote = Effect.fn("Doctor.behindRemote")(function* (
     known.set(root, { ...seen, fetchedAt: now });
     yield* Effect.forkDetach(fetchRemote(root, run));
   }
-  if (seen.countedAt !== 0 && now - seen.countedAt < COUNT_FOR_MS) return seen.behind;
+  if (seen.countedAt !== 0 && now - seen.countedAt < COUNT_FOR_MS) {
+    return seen.behind;
+  }
   return yield* count(root, run, now);
 });
 
@@ -235,7 +182,6 @@ export const refreshBehind = Effect.fn("Doctor.refreshBehind")(function* (
   return yield* count(root, run, now);
 });
 
-/** What the refs on this machine say, remembered only for as long as `COUNT_FOR_MS`. */
 const count = Effect.fn("Doctor.count")(function* (
   root: string,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
@@ -248,15 +194,7 @@ const count = Effect.fn("Doctor.count")(function* (
   return behind;
 });
 
-/**
- * What this machine answers a workflow id with, where that is not what Collie ships. A
- * customisation is the operator's, so it is named and never judged: nothing here knows
- * what any workflow is supposed to contain, and an id it recognised would be the start
- * of a shipped workflow being privileged over one somebody wrote.
- *
- * A file that claims an id and will not load is the exception, because it answers for
- * that id and cannot run — the layer below it is not consulted.
- */
+// WARNING: a file that claims an id and will not load answers for it; the layer below is not consulted.
 const overrides = Effect.fn("Doctor.overrides")(function* (env: PluginEnv) {
   const saved = yield* savedModules(env);
   const own = Arr.map(
@@ -280,10 +218,6 @@ const overrides = Effect.fn("Doctor.overrides")(function* (env: PluginEnv) {
     : passed(`overridden here: ${Arr.join(own, "; ")}`);
 });
 
-/**
- * Every persona the layers define, read as a launch reads it: one that will not parse, or
- * that names anything but a skill, is named with why.
- */
 const personas = Effect.fn("Doctor.personas")(function* (env: PluginEnv) {
   const found = yield* loadDefinitions(yield* layers(env));
   return found.errors.length === 0
@@ -291,11 +225,14 @@ const personas = Effect.fn("Doctor.personas")(function* (env: PluginEnv) {
     : noted(Arr.join(found.errors, "; "), "fix each file named");
 });
 
-/** Where a Run started from the Home is rooted, and which of the three places said so. */
 const projects = Effect.fn("Doctor.projects")(function* (env: PluginEnv) {
   const root = yield* projectsRoot(env);
-  if (root.source === "config") return passed(`${root.path} (from projects.root)`);
-  if (root.source === "gitte") return passed(`${root.path} (from GITTE_CWD)`);
+  if (root.source === "config") {
+    return passed(`${root.path} (from projects.root)`);
+  }
+  if (root.source === "gitte") {
+    return passed(`${root.path} (from GITTE_CWD)`);
+  }
   return warned(
     `${root.path} (the home directory: neither projects.root nor GITTE_CWD is set)`,
     `set projects.root in ${env.userDir}/config.json to the folder your checkouts live under`,
@@ -304,11 +241,6 @@ const projects = Effect.fn("Doctor.projects")(function* (env: PluginEnv) {
 
 const ClaudeStatus = Schema.fromJsonString(Schema.Struct({ loggedIn: Schema.Boolean }));
 
-/**
- * Every check, in one pass, whatever the state of the machine: a prerequisite that
- * is missing must not stop the ones after it from being reported, or `doctor` is one
- * failed Run at a time again.
- */
 export const doctor = Effect.fn("Doctor.doctor")(function* (
   env: PluginEnv,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner> = shell,
@@ -318,30 +250,23 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
   const path = yield* Path.Path;
   const root = env.pluginRoot;
   const search = env.raw["PATH"] ?? "";
-  const checks: Check[] = [];
+  const checks: Array<Check> = [];
 
   checks.push(
     { name: "hc", ...(yield* hcInstalled(env, search, run)) },
     { name: "core", ...(yield* coreAnswers(env)) },
     { name: "herdr 1", ...(yield* onHerdrOne(env)) },
+    {
+      name: "runner",
+      // WARNING: the shim exec's this, so a bin without its executable bit is the same permission-denied failure as a shim without one.
+      ...((yield* runnable(path.join(root, "bin", "collie")))
+        ? passed(`${root}/bin/collie`)
+        : failed("not built", `sh ${root}/prepare.sh`)),
+    },
   );
 
-  checks.push({
-    name: "runner",
-    // Runnable, not merely there: the shim `exec`s this, so a `bin/collie` without
-    // its executable bit is the same permission-denied mystery as a shim without one.
-    ...((yield* runnable(path.join(root, "bin", "collie")))
-      ? passed(`${root}/bin/collie`)
-      : failed("not built", `sh ${root}/prepare.sh`)),
-  });
-
-  // The shim and its directory are two states, not one: "installed but not on PATH"
-  // is the one that otherwise reads as a mystery.
   const shimDir = yield* onPath(search, "collie");
   const binDir = env.raw["COLLIE_BIN_DIR"] ?? path.join(env.home, ".local", "bin");
-  // Runnable here too: a shim that exists without its bit is not "installed but not
-  // on PATH" — putting that directory on PATH would not fix it, and rewriting the
-  // shim would, which is what falling through to "not installed" tells you to do.
   const offPath = shimDir === null && (yield* runnable(path.join(binDir, "collie")));
   checks.push({
     name: "collie on PATH",
@@ -357,10 +282,6 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
 
   const needs = yield* asked(env);
   const dirs = yield* skillDirs(env);
-  // What a module asks an agent for is decided while it runs, so there is no list to
-  // check against: what this says is whether the store is there at all, and the routine
-  // that fills it. The sources, the global store and the Claude Code target are
-  // `prepare.sh`'s to know.
   checks.push({
     name: "skills",
     ...((yield* skillFile(dirs, "collie")) !== null
@@ -368,10 +289,12 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
       : failed("the operator skill is not installed", `sh ${root}/prepare.sh`)),
   });
 
-  const absent: string[] = [];
+  const absent: Array<string> = [];
   for (const harness of needs.harnesses) {
     const kind = HARNESSES[harness]?.kind ?? harness;
-    if ((yield* onPath(search, kind)) === null) absent.push(kind);
+    if ((yield* onPath(search, kind)) === null) {
+      absent.push(kind);
+    }
   }
   checks.push({
     name: "harnesses",
@@ -396,8 +319,7 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
     });
   }
 
-  // Reported, never failed: the board and every Run work without it, and a machine that
-  // is otherwise ready must not exit non-zero over a line under a prompt.
+  // WARNING: reported, never failed: a machine that is otherwise ready must not exit non-zero over a status line.
   const line = yield* readStatusLine(env);
   const settings = yield* claudeSettingsPath(env);
   const install = `collie ${Arr.join(STATUS_LINE_ARGS, " ")} --install`;
@@ -419,29 +341,30 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
   const checkout = gitDir !== null && (yield* isCheckout(root, run));
   const behind = checkout ? yield* refreshBehind(root, run) : null;
   const newest = checkout ? null : yield* newestRelease(releasesOf(env.raw));
-  checks.push({
-    name: "up to date",
-    // Passing even when it is behind: an installation a release or a few commits back is
-    // a thing to say, not a missing prerequisite, and the same line on the Control Plane is
-    // shown rather than sent for the same reason. It still carries the command.
-    ...(checkout
-      ? behind === null
-        ? passed("a checkout with no remote, so there is nothing to compare")
-        : behind === 0
-          ? passed("level with its remote")
-          : noted(`${behind} commit${behind === 1 ? "" : "s"} behind its remote`, "collie upgrade")
-      : isNewer(newest, manifest.version)
-        ? noted(`Collie ${newest} is out`, "collie upgrade")
-        : passed(
-            newest === null
-              ? "the newest release could not be read, so there is nothing to compare"
-              : `Collie ${manifest.version} is the newest release`,
-          )),
-  });
-
-  checks.push({ name: "workflows", ...(yield* overrides(env)) });
-  checks.push({ name: "personas", ...(yield* personas(env)) });
-  checks.push({ name: "projects root", ...(yield* projects(env)) });
+  checks.push(
+    {
+      name: "up to date",
+      ...(checkout
+        ? behind === null
+          ? passed("a checkout with no remote, so there is nothing to compare")
+          : behind === 0
+            ? passed("level with its remote")
+            : noted(
+                `${behind} commit${behind === 1 ? "" : "s"} behind its remote`,
+                "collie upgrade",
+              )
+        : isNewer(newest, manifest.version)
+          ? noted(`Collie ${newest} is out`, "collie upgrade")
+          : passed(
+              newest === null
+                ? "the newest release could not be read, so there is nothing to compare"
+                : `Collie ${manifest.version} is the newest release`,
+            )),
+    },
+    { name: "workflows", ...(yield* overrides(env)) },
+    { name: "personas", ...(yield* personas(env)) },
+    { name: "projects root", ...(yield* projects(env)) },
+  );
   if ((yield* peersOf(env.stateDir)).length > 0) {
     const links = yield* machineList(env);
     const views = links.ok ? links.value : [];
@@ -498,21 +421,26 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
             : passed("The paired listener has no recorded failure.")),
     });
   }
-  checks.push({ name: "disk", ...(yield* diskSpace(env, run)) });
-  checks.push({ name: "memory", ...(yield* memoryCheck(env, run)) });
-  checks.push({ name: "checks", ...(yield* leftoverChecks(env)) });
+  checks.push(
+    { name: "disk", ...(yield* diskSpace(env, run)) },
+    { name: "memory", ...(yield* memoryCheck(env, run)) },
+    { name: "checks", ...(yield* leftoverChecks(env)) },
+  );
 
   const herd = yield* herdOfHost(env.stateDir);
-  if (herd !== undefined)
+  if (herd !== undefined) {
     checks.push({
       name: "host herd",
       ...(herd === null
         ? warned("this host has no Herd: judgements will be skipped", "collie host restart")
         : passed(`the host works for the Herd at ${herd}`)),
     });
+  }
 
-  checks.push(...(yield* gitlabChecks(env, search, run)));
-  checks.push(...(yield* githubChecks(env, search, run)));
+  checks.push(
+    ...(yield* gitlabChecks(env, search, run)),
+    ...(yield* githubChecks(env, search, run)),
+  );
 
   for (const { id, reading } of yield* readConnections(
     Arr.filter(
@@ -527,11 +455,6 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
   return report(checks);
 });
 
-/**
- * Free space on each filesystem Collie writes to — the state directory, its cache, the
- * worktrees and the temporary directory — each filesystem once. Low is a warning, with what
- * a sweep would free where a host has served this state directory.
- */
 const diskSpace = Effect.fn("Doctor.diskSpace")(function* (
   env: PluginEnv,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
@@ -547,9 +470,13 @@ const diskSpace = Effect.fn("Doctor.diskSpace")(function* (
     ],
     run,
   );
-  if (mounts.length === 0) return noted("could not read how much space is free", "df -h");
+  if (mounts.length === 0) {
+    return noted("could not read how much space is free", "df -h");
+  }
   const low = Arr.filter(mounts, lowOn);
-  if (low.length === 0) return passed(Arr.join(Arr.map(mounts, diskSaid), "; "));
+  if (low.length === 0) {
+    return passed(Arr.join(Arr.map(mounts, diskSaid), "; "));
+  }
   const listing = (yield* anyRuns(env)) ? yield* cleanupListing(env, "cli") : null;
   const frees =
     listing !== null && listing.ok
@@ -558,17 +485,17 @@ const diskSpace = Effect.fn("Doctor.diskSpace")(function* (
   return warned(`${Arr.join(Arr.map(low, diskSaid), "; ")}${frees}`, "collie cleanup --apply");
 });
 
-/**
- * This Machine's memory reading. Short is a warning with the agents `collie cleanup` would
- * close, `closing` null where that could not be asked.
- */
 export const memoryOutcome = (
   memory: Memory,
   short: boolean,
   closing: ReadonlyArray<string> | null,
-): Outcome => {
-  if (!memory.known) return warned(`memory could not be read from ${memory.from}`, "");
-  if (!short) return passed(memorySaid(memory));
+) => {
+  if (!memory.known) {
+    return warned(`memory could not be read from ${memory.from}`, "");
+  }
+  if (!short) {
+    return passed(memorySaid(memory));
+  }
   const closes =
     closing === null
       ? ""
@@ -584,7 +511,9 @@ const memoryCheck = Effect.fn("Doctor.memoryCheck")(function* (
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
   const { memory, short } = yield* machineMemory(env, run);
-  if (!short) return memoryOutcome(memory, short, null);
+  if (!short) {
+    return memoryOutcome(memory, short, null);
+  }
   const listing = (yield* anyRuns(env)) ? yield* cleanupListing(env, "cli") : null;
   const closing =
     listing === null
@@ -598,7 +527,6 @@ const memoryCheck = Effect.fn("Doctor.memoryCheck")(function* (
   return memoryOutcome(memory, short, closing);
 });
 
-/** Check processes no host is collecting, as `collie cleanup` lists them. */
 const leftoverChecks = Effect.fn("Doctor.leftoverChecks")(function* (env: PluginEnv) {
   const listing = (yield* anyRuns(env)) ? yield* cleanupListing(env, "cli") : null;
   const left =
@@ -632,7 +560,6 @@ const DoctorSaid = Schema.fromJsonString(
   ]),
 );
 
-/** Doctor on the paired Machine `--machine` names, run there by its own host. */
 export const doctorOn = Effect.fn("Doctor.doctorOn")(function* (
   env: PluginEnv,
   gitlabHost: Option.Option<string>,
@@ -644,25 +571,28 @@ export const doctorOn = Effect.fn("Doctor.doctorOn")(function* (
     "doctor",
     ...Option.match(gitlabHost, { onNone: () => [], onSome: (host) => ["--gitlab-host", host] }),
   ]);
-  if (script._tag === "Failure")
+  if (script._tag === "Failure") {
     return err("invalid_input", `--gitlab-host cannot be passed on: ${script.failure.message}`);
+  }
   const request = `doctor:${yield* (yield* SecureRandom.SecureRandom).uuidV4()}`;
   const ran = yield* machineShell(env, script.success, request, door);
-  if (!ran.ok) return ran;
+  if (!ran.ok) {
+    return ran;
+  }
   const said = Schema.decodeOption(DoctorSaid)(
     Arr.findLast(Str.split(Str.trim(ran.value.stdout), "\n"), (line) => line !== "").pipe(
       Option.getOrElse(() => ""),
     ),
   );
-  if (Option.isNone(said))
+  if (Option.isNone(said)) {
     return err("operation_failed", `${env.machine}'s doctor did not report its checks.`, {
       output: Str.trim(ran.value.stderr) || Str.trim(ran.value.stdout),
     });
+  }
   return report([...("data" in said.value ? said.value.data : said.value.error.details).checks]);
 });
 
-/** One line per check, and under it the command to run where there is one. */
-function render(checks: Check[]): string {
+function render(checks: Array<Check>) {
   return Arr.join(
     Arr.flatMap(checks, (check) => [
       `  ${check.ok ? (check.warn ? "!" : "✓") : "✗"} ${pipe(check.name, Str.padEnd(16))}${check.detail}`,
@@ -672,7 +602,7 @@ function render(checks: Check[]): string {
   );
 }
 
-function report(checks: Check[]) {
+function report(checks: Array<Check>) {
   const failed = Arr.filter(checks, (check) => !check.ok);
   if (failed.length === 0) {
     return {
@@ -681,13 +611,10 @@ function report(checks: Check[]) {
       human: Arr.join([`Collie is ready — ${checks.length} checks passed.`, render(checks)], "\n"),
     };
   }
-  // The failure envelope prints its message and nothing else, so the message is the
-  // whole report: what is wrong, and the command that fixes each of them.
   return err(
     "operation_failed",
     Arr.join([`${failed.length} of ${checks.length} checks failed.`, render(checks)], "\n"),
-    // Spread into plain maps: `err` takes a YAML map, and `Check` is an interface,
-    // which has no index signature for it to satisfy.
+    // WARNING: spread into plain maps: err takes a YAML map, and Check is an interface with no index signature.
     { checks: Arr.map(checks, (check) => ({ ...check })), ready: false },
   );
 }

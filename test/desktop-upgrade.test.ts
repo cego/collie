@@ -1,14 +1,10 @@
-// `collie upgrade` brings Desktop on this computer to the same version, by staging the
-// update the way Electrobun's own download does: never installed until it verifies, and
-// never under a running Desktop. A throwaway data home and a local release, signed with a
-// key of the test's own.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
 import { BunServices } from "@effect/platform-bun";
-import { Effect, FileSystem, Path, Schema, Scope, flow, Result } from "effect";
+import type { Path, Scope } from "effect";
+import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { dataHomeOf, updateDesktop } from "../src/desktop";
 import { upgrade } from "../src/operations";
 import { signRelease } from "../src/signing";
@@ -31,16 +27,10 @@ const TAR = new TextEncoder().encode("the 0.34.0 bundle");
 const ARTIFACT = "stable-linux-x64-collie-desktop.tar.zst";
 const ROOT = "dk.cego.collie.desktop/stable";
 
-interface Release {
-  readonly base: string;
-  readonly asked: string[];
-}
-
-/** Serves release 0.34.0 under `/download/0.34.0/`, its tar signed `signature`. */
 const serveRelease = (signature: string | null, tar: Uint8Array = TAR, version = "0.34.0") =>
   Effect.acquireRelease(
     Effect.sync(() => {
-      const asked: string[] = [];
+      const asked: Array<string> = [];
       const files = new Map<string, string | Uint8Array>([
         [
           "stable-linux-x64-update.json",
@@ -57,7 +47,9 @@ const serveRelease = (signature: string | null, tar: Uint8Array = TAR, version =
         ],
         [ARTIFACT, Bun.zstdCompressSync(tar)],
       ]);
-      if (signature !== null) files.set("stable-linux-x64-collie-desktop.tar.sig", signature);
+      if (signature !== null) {
+        files.set("stable-linux-x64-collie-desktop.tar.sig", signature);
+      }
       const server = Bun.serve({
         port: 0,
         fetch: (request) => {
@@ -74,13 +66,12 @@ const serveRelease = (signature: string | null, tar: Uint8Array = TAR, version =
     }),
     ({ server }) => Effect.promise(() => server.stop(true)),
   ).pipe(
-    Effect.map(({ server, asked }): Release => ({
+    Effect.map(({ server, asked }) => ({
       base: `http://localhost:${server.port}`,
       asked,
     })),
   );
 
-/** A released Desktop installed at `version` under `data`, as Electrobun's installer leaves it. */
 const install = (data: string, base: string, version: string, channel = "stable") =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -113,7 +104,9 @@ const staged = (data: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const record = `${data}/${ROOT}/self-extraction/.electrobun-prepared-update.json`;
-    if (!(yield* fs.exists(record))) return null;
+    if (!(yield* fs.exists(record))) {
+      return null;
+    }
     return yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(
       yield* fs.readFileString(record),
     );
@@ -234,7 +227,6 @@ test("Desktop already at the version, as when it upgrades Local to its own, is l
   );
 });
 
-/** An update Desktop's own download already staged under `data`, at `version`. */
 const stageEarlier = (data: string, version: string, hash: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -343,7 +335,6 @@ test("collie upgrade shows the Desktop step in its text and steps, and stages no
       const data = `${rig.root}/.local/share`;
       yield* install(data, release.base, "0.33.0");
 
-      // A release, placed from the one this runner carries.
       const tree = `${rig.root}/carried`;
       yield* Effect.promise(() => Bun.write(`${tree}/prepare.sh`, ""));
       const collieDir = `${rig.root}/collie-dir`;

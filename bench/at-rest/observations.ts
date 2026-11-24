@@ -1,4 +1,4 @@
-/* oxlint-disable effecttsgo/node-builtin-import, no-restricted-imports -- the benchmark reads its isolated host's files. */
+/* oxlint-disable effecttsgo/node-builtin-import -- the benchmark reads its isolated host's files. */
 import type { Database } from "bun:sqlite";
 import { readFileSync } from "node:fs";
 import { Effect } from "effect";
@@ -24,7 +24,8 @@ export const wakeDeadline = (db: Database, runId: string) => {
     ORDER BY m.deliver_at LIMIT 1
   `)
     .get(runId);
-  if (row?.deliver_at == null || !Number.isFinite(row.deliver_at))
+  if (row?.deliver_at == null || !Number.isFinite(row.deliver_at)) {
     throw new Error(`no durable deadline for ${runId}`);
+  }
   return row.deliver_at;
 };

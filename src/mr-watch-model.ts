@@ -3,22 +3,17 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { Schema } from "effect";
 
-/** How long a new head must stand unchanged before it is a change. */
 export const QUIET_MS = 5 * 60_000;
-/** How long a running pipeline is waited for before the change goes ahead without it. */
 export const PIPELINE_CAP_MS = 30 * 60_000;
 
-/** Where the watching Run left off: the head it worked from, the comments it has seen, its pipeline. */
 export const WatchCursor = Schema.Struct({
   head: Schema.String,
   seen: Schema.Array(Schema.String),
-  /** The head's checks as the card reads them: `passed`, `failed`, `running`, `unknown` or `none`. */
   pipeline: Schema.String,
   headOnly: Schema.optionalKey(Schema.Boolean),
 });
 export type WatchCursor = typeof WatchCursor.Type;
 
-/** The head the watch last read, since when it has stood, and since when its pipeline has run. */
 export const Observed = Schema.Struct({
   head: Schema.String,
   since: Schema.Finite,
@@ -26,7 +21,6 @@ export const Observed = Schema.Struct({
 });
 export type Observed = typeof Observed.Type;
 
-/** One read of the merge request, as the merge watch made it. */
 export interface MrReading {
   readonly state: "open" | "merged" | "closed";
   readonly head: string;
@@ -36,19 +30,15 @@ export interface MrReading {
 
 export const WatchChange = Schema.Struct({
   head: Schema.String,
-  /** The cursor's head. */
   previous: Schema.String,
   newHead: Schema.Boolean,
-  /** Comments new since the cursor, none of them Collie's. */
   comments: Schema.Array(Schema.String),
-  /** The head's pipeline where it has ended, `passed` or `failed`. */
   pipeline: Schema.NullOr(Schema.String),
-  /** A new head that does not descend from `previous`; null where ancestry was not read. */
+  // WARNING: null where ancestry was not read, so it is not a force push.
   forcePush: Schema.NullOr(Schema.Boolean),
 });
 export type WatchChange = typeof WatchChange.Type;
 
-/** What wakes a watching Run. */
 export const Woke = Schema.Union([
   Schema.TaggedStruct("Changed", { change: WatchChange }),
   Schema.TaggedStruct("Ended", { state: Schema.Literals(["merged", "closed"]) }),
@@ -68,29 +58,28 @@ const SIGNATURES = [
   /^Posted by Collie's Run (\S+) on /,
 ];
 
-/** A verdict, and what the watch keeps for the next judgement. */
 export interface Judgement {
   readonly verdict: Verdict;
   readonly observed: Observed;
 }
 
-export const collieRunOf = (body: string): string | null => {
+export const collieRunOf = (body: string) => {
   const last = Arr.last(Arr.filter(Str.split(Str.trimEnd(body), "\n"), (line) => line !== ""));
-  if (last._tag === "None") return null;
+  if (last._tag === "None") {
+    return null;
+  }
   for (const signature of SIGNATURES) {
     const run = signature.exec(Str.trim(last.value))?.[1];
-    if (run !== undefined) return run;
+    if (run !== undefined) {
+      return run;
+    }
   }
   return null;
 };
 
-/** Whether a comment's last line is one Collie signs its notes and replies with. */
 export const signedByCollie = (body: string) => collieRunOf(body) !== null;
 
-/**
- * The verdict on `reading` against `cursor`.
- * `descends` says whether a new head descends from the cursor's; left out, it was not read.
- */
+// WARNING: a descends answer left out means ancestry was not read, not that the head is new.
 export function judge(options: {
   readonly cursor: WatchCursor;
   readonly observed: Observed | null;
@@ -98,7 +87,7 @@ export function judge(options: {
   readonly now: number;
   readonly descends?: boolean;
   readonly run?: string;
-}): Judgement {
+}) {
   const { cursor, reading, now } = options;
   const before = options.observed?.head === reading.head ? options.observed : null;
   const running = reading.pipeline === "running";
@@ -107,8 +96,10 @@ export function judge(options: {
     since: before?.since ?? now,
     running: running ? (before?.running ?? now) : null,
   };
-  if (reading.state !== "open")
-    return { verdict: { _tag: "Ended", state: reading.state }, observed };
+  if (reading.state !== "open") {
+    const returned: Judgement = { verdict: { _tag: "Ended", state: reading.state }, observed };
+    return returned;
+  }
   const newHead = reading.head !== "" && reading.head !== cursor.head;
   const comments = cursor.headOnly
     ? []
@@ -126,14 +117,19 @@ export function judge(options: {
     !cursor.headOnly &&
     TERMINAL.has(reading.pipeline) &&
     (newHead || reading.pipeline !== cursor.pipeline);
-  if (!newHead && comments.length === 0 && !ended)
-    return { verdict: { _tag: "NoChange" }, observed };
+  if (!newHead && comments.length === 0 && !ended) {
+    const returned: Judgement = { verdict: { _tag: "NoChange" }, observed };
+    return returned;
+  }
   const until = Math.max(
     newHead ? observed.since + QUIET_MS : now,
     observed.running === null ? now : observed.running + PIPELINE_CAP_MS,
   );
-  if (until > now) return { verdict: { _tag: "NotYet", until }, observed };
-  return {
+  if (until > now) {
+    const returned: Judgement = { verdict: { _tag: "NotYet", until }, observed };
+    return returned;
+  }
+  const returned: Judgement = {
     verdict: {
       _tag: "Changed",
       change: {
@@ -147,4 +143,5 @@ export function judge(options: {
     },
     observed,
   };
+  return returned;
 }

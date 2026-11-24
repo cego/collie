@@ -1,13 +1,3 @@
-// One request is one run, through the two windows where a host can die.
-//
-// A start is two things that cannot be one: a row that says this work was accepted, and an
-// engine that has been told about it. Whichever order they are done in, a crash can land
-// between them — so the proof is a host that really dies there, killed at a named point by
-// the host itself, and a second host that has to end with one run either way.
-//
-// Real processes and a real database, because a gap between two writes is not something a
-// map can have.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -16,207 +6,172 @@ import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { connect } from "../src/host";
 import { runEffect } from "./support/effect";
-import { events, fixtures, openHost, runDirOf, until, workspace, type Host } from "./support/host";
+import { events, fixtures, openHost, runDirOf, until, workspace } from "./support/host";
+import type { Host } from "./support/host";
 
 const suspended = (reply: { readonly status?: string }) => reply.status === "suspended";
 const complete = (reply: { readonly status?: string }) => reply.status === "complete";
 
-/** How many times the run's one launch Activity actually ran. */
 const launches = (log: ReadonlyArray<string>) =>
   Arr.filter(log, (line) => pipe_(line, Str.startsWith("launch"))).length;
 
 const started = (host: Host, runId: string, note: string) =>
   host.ask({ op: "start", id: "proof", runId, input: { note } });
 
-test(
-  "a host that dies with the run recorded and the engine not told hands it over when it starts again",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-admission-gap-");
-        const dying = yield* openHost(state, { crashAt: "admitted" });
-        yield* dying.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
-        // No reply is coming: the host kills itself between the row and the engine.
-        yield* dying.tell({ op: "start", id: "proof", runId: "r1", input: { note: "gap" } });
-        yield* dying.child.exitCode.pipe(Effect.ignore);
-        expect(yield* events(state, "r1")).toEqual([]);
+test("a host that dies with the run recorded and the engine not told hands it over when it starts again", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { wf, state } = yield* workspace("collie-admission-gap-");
+      const dying = yield* openHost(state, { crashAt: "admitted" });
+      yield* dying.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
+      yield* dying.tell({ op: "start", id: "proof", runId: "r1", input: { note: "gap" } });
+      yield* dying.child.exitCode.pipe(Effect.ignore);
+      expect(yield* events(state, "r1")).toEqual([]);
 
-        // The next host finds work it never accepted and hands it over.
-        const next = yield* openHost(state);
-        yield* next.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
-        yield* next.ask({
-          op: "answer",
-          id: "proof",
-          runId: "r1",
-          decision: "decision",
-          value: "on",
-        });
-        expect((yield* next.until({ op: "poll", id: "proof", runId: "r1" }, complete)).value).toBe(
-          "note:gap=on",
-        );
-        expect(launches(yield* events(state, "r1"))).toBe(1);
-        yield* next.stop;
-      }).pipe(Effect.scoped),
-    ),
-  180_000,
-);
+      const next = yield* openHost(state);
+      yield* next.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
+      yield* next.ask({
+        op: "answer",
+        id: "proof",
+        runId: "r1",
+        decision: "decision",
+        value: "on",
+      });
+      expect((yield* next.until({ op: "poll", id: "proof", runId: "r1" }, complete)).value).toBe(
+        "note:gap=on",
+      );
+      expect(launches(yield* events(state, "r1"))).toBe(1);
+      yield* next.stop;
+    }).pipe(Effect.scoped),
+  ));
 
-test(
-  "a host that dies after the engine has the work and before the receipt does not start it twice",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-admission-receipt-");
-        const dying = yield* openHost(state, { crashAt: "executed" });
-        yield* dying.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
-        yield* dying.tell({ op: "start", id: "proof", runId: "r1", input: { note: "receipt" } });
-        yield* dying.child.exitCode.pipe(Effect.ignore);
+test("a host that dies after the engine has the work and before the receipt does not start it twice", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { wf, state } = yield* workspace("collie-admission-receipt-");
+      const dying = yield* openHost(state, { crashAt: "executed" });
+      yield* dying.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
+      yield* dying.tell({ op: "start", id: "proof", runId: "r1", input: { note: "receipt" } });
+      yield* dying.child.exitCode.pipe(Effect.ignore);
 
-        // The row still says nobody has accepted it, so the next host offers it again —
-        // under the identity it was admitted with, which is what makes that a no-op.
-        const next = yield* openHost(state);
-        yield* next.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
-        yield* next.ask({
-          op: "answer",
-          id: "proof",
-          runId: "r1",
-          decision: "decision",
-          value: "once",
-        });
-        expect((yield* next.until({ op: "poll", id: "proof", runId: "r1" }, complete)).value).toBe(
-          "note:receipt=once",
-        );
-        expect(launches(yield* events(state, "r1"))).toBe(1);
-        yield* next.stop;
-      }).pipe(Effect.scoped),
-    ),
-  180_000,
-);
+      const next = yield* openHost(state);
+      yield* next.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
+      yield* next.ask({
+        op: "answer",
+        id: "proof",
+        runId: "r1",
+        decision: "decision",
+        value: "once",
+      });
+      expect((yield* next.until({ op: "poll", id: "proof", runId: "r1" }, complete)).value).toBe(
+        "note:receipt=once",
+      );
+      expect(launches(yield* events(state, "r1"))).toBe(1);
+      yield* next.stop;
+    }).pipe(Effect.scoped),
+  ));
 
-test(
-  "an answer a host recorded and died before handing over reaches the run, and its retry is that answer",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-admission-answer-");
-        const dying = yield* openHost(state, { crashAt: "answered" });
-        yield* dying.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
-        yield* started(dying, "r1", "told");
-        yield* dying.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
-        const answer = {
-          op: "answer" as const,
-          id: "proof",
-          runId: "r1",
-          decision: "decision",
-          value: "on",
-          request: "ans-1",
-        };
-        yield* dying.tell(answer);
-        yield* dying.child.exitCode.pipe(Effect.ignore);
+test("an answer a host recorded and died before handing over reaches the run, and its retry is that answer", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { wf, state } = yield* workspace("collie-admission-answer-");
+      const dying = yield* openHost(state, { crashAt: "answered" });
+      yield* dying.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
+      yield* started(dying, "r1", "told");
+      yield* dying.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
+      const answer = {
+        op: "answer" as const,
+        id: "proof",
+        runId: "r1",
+        decision: "decision",
+        value: "on",
+        request: "ans-1",
+      };
+      yield* dying.tell(answer);
+      yield* dying.child.exitCode.pipe(Effect.ignore);
 
-        const next = yield* openHost(state);
-        expect((yield* next.until({ op: "poll", id: "proof", runId: "r1" }, complete)).value).toBe(
-          "note:told=on",
-        );
-        const retried = yield* next.ask(answer);
-        expect(retried.ok).toBe(true);
-        const changed = yield* next.ask({ ...answer, value: "off" });
-        expect(changed.ok).toBe(false);
-        yield* next.stop;
-      }).pipe(Effect.scoped),
-    ),
-  180_000,
-);
+      const next = yield* openHost(state);
+      expect((yield* next.until({ op: "poll", id: "proof", runId: "r1" }, complete)).value).toBe(
+        "note:told=on",
+      );
+      const retried = yield* next.ask(answer);
+      expect(retried.ok).toBe(true);
+      const changed = yield* next.ask({ ...answer, value: "off" });
+      expect(changed.ok).toBe(false);
+      yield* next.stop;
+    }).pipe(Effect.scoped),
+  ));
 
-test(
-  "the same request twice is one run, and the same request with other arguments is refused",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-admission-retry-");
-        const host = yield* openHost(state);
-        yield* host.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
+test("the same request twice is one run, and the same request with other arguments is refused", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { wf, state } = yield* workspace("collie-admission-retry-");
+      const host = yield* openHost(state);
+      yield* host.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
 
-        const first = yield* started(host, "r1", "once");
-        const retry = yield* started(host, "r1", "once");
-        expect([first.ok, retry.ok]).toEqual([true, true]);
-        expect(retry.registration).toBe(first.registration);
-        yield* host.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
-        // Twice asked, once started: the second claim found the first one's run.
-        expect(launches(yield* events(state, "r1"))).toBe(1);
+      const first = yield* started(host, "r1", "once");
+      const retry = yield* started(host, "r1", "once");
+      expect([first.ok, retry.ok]).toEqual([true, true]);
+      expect(retry.registration).toBe(first.registration);
+      yield* host.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
+      expect(launches(yield* events(state, "r1"))).toBe(1);
 
-        // The same claim for something else is not that claim.
-        const changed = yield* started(host, "r1", "something else");
-        expect(changed.ok).toBe(false);
-        expect(changed.detail).toContain("r1");
+      const changed = yield* started(host, "r1", "something else");
+      expect(changed.ok).toBe(false);
+      expect(changed.detail).toContain("r1");
 
-        // What it claimed is untouched by the refusal.
-        yield* host.ask({
-          op: "answer",
-          id: "proof",
-          runId: "r1",
-          decision: "decision",
-          value: "x",
-        });
-        expect((yield* host.until({ op: "poll", id: "proof", runId: "r1" }, complete)).value).toBe(
-          "note:once=x",
-        );
-        yield* host.stop;
-      }).pipe(Effect.scoped),
-    ),
-  180_000,
-);
+      yield* host.ask({
+        op: "answer",
+        id: "proof",
+        runId: "r1",
+        decision: "decision",
+        value: "x",
+      });
+      expect((yield* host.until({ op: "poll", id: "proof", runId: "r1" }, complete)).value).toBe(
+        "note:once=x",
+      );
+      yield* host.stop;
+    }).pipe(Effect.scoped),
+  ));
 
-test(
-  "two requests with the same arguments are two runs",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-admission-separate-");
-        const host = yield* openHost(state);
-        yield* host.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
+test("two requests with the same arguments are two runs", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { wf, state } = yield* workspace("collie-admission-separate-");
+      const host = yield* openHost(state);
+      yield* host.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
 
-        // Identical in every way but the claim, which is what says they are two.
-        for (const runId of ["r1", "r2"]) {
-          const reply = yield* started(host, runId, "same");
-          expect(reply.ok).toBe(true);
-        }
-        for (const runId of ["r1", "r2"]) {
-          yield* host.until({ op: "poll", id: "proof", runId }, suspended);
-          expect(launches(yield* events(state, runId))).toBe(1);
-        }
-        yield* host.stop;
-      }).pipe(Effect.scoped),
-    ),
-  180_000,
-);
+      for (const runId of ["r1", "r2"]) {
+        const reply = yield* started(host, runId, "same");
+        expect(reply.ok).toBe(true);
+      }
+      for (const runId of ["r1", "r2"]) {
+        yield* host.until({ op: "poll", id: "proof", runId }, suspended);
+        expect(launches(yield* events(state, runId))).toBe(1);
+      }
+      yield* host.stop;
+    }).pipe(Effect.scoped),
+  ));
 
-test(
-  "a subscriber and a reader see the same committed rows",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-admission-committed-");
-        const host = yield* openHost(state);
-        yield* host.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
-        yield* started(host, "r1", "committed");
-        yield* host.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
-        yield* host.stop;
+test("a subscriber and a reader see the same committed rows", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { wf, state } = yield* workspace("collie-admission-committed-");
+      const host = yield* openHost(state);
+      yield* host.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
+      yield* started(host, "r1", "committed");
+      yield* host.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
+      yield* host.stop;
 
-        // Nothing of this was in memory: the next host answers from what was committed.
-        const next = yield* openHost(state);
-        expect((yield* next.ask({ op: "poll", id: "proof", runId: "r1" })).status).toBe(
-          "suspended",
-        );
-        yield* until(
-          () => next.ask({ op: "registrations" }),
-          (reply) => (reply.registrations ?? []).includes("proof@1"),
-        );
-        yield* next.stop;
-      }).pipe(Effect.scoped),
-    ),
-  180_000,
-);
+      const next = yield* openHost(state);
+      expect((yield* next.ask({ op: "poll", id: "proof", runId: "r1" })).status).toBe("suspended");
+      yield* until(
+        () => next.ask({ op: "registrations" }),
+        (reply) => (reply.registrations ?? []).includes("proof@1"),
+      );
+      yield* next.stop;
+    }).pipe(Effect.scoped),
+  ));
 
 for (const { target, stopped } of [
   { target: true, stopped: false },
@@ -315,14 +270,9 @@ for (const { target, stopped } of [
           yield* next.stop;
         }).pipe(Effect.scoped),
       ),
-    180_000,
   );
 }
 
-/**
- * Runs left mid-work on held-wake by a host that died, and a host that started without the
- * module, which is then put back. Each of `unaccepted` reached the engine and not the row.
- */
 const stranded = (
   prefix: string,
   accepted: ReadonlyArray<string>,
@@ -354,8 +304,9 @@ const stranded = (
     yield* fs.remove(gate).pipe(Effect.orDie);
     const host = yield* openHost(state);
     yield* fs.copyFile(`${fixtures}/held-wake.workflow.ts`, module).pipe(Effect.orDie);
-    // Names the Runs their dying host never answered for.
-    for (const runId of unaccepted) yield* host.ask({ op: "poll", id: "held-wake", runId });
+    for (const runId of unaccepted) {
+      yield* host.ask({ op: "poll", id: "held-wake", runId });
+    }
     const client = yield* connect(state).pipe(Effect.orDie);
     const idOf = (name: string) =>
       runDirOf(state, name).pipe(
@@ -374,92 +325,79 @@ const stranded = (
     return { state, gate, host, client, idOf, waiting };
   });
 
-test(
-  "a resume that registers a restored module leaves another Run on it alone until it is recovered",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const others = ["other", "unaccepted"];
-        const { state, host, client, idOf, waiting } = yield* stranded(
-          "collie-admission-shared-",
-          ["target", "other"],
-          ["unaccepted"],
-        );
-        const seen = (name: string) =>
-          Effect.gen(function* () {
-            const view = yield* client.run({ runId: yield* idOf(name) }).pipe(Effect.orDie);
-            return { log: yield* events(state, name), parked: view?.parked ?? null };
-          });
-        const before = yield* Effect.forEach(others, seen);
-        const resumed = yield* client
-          .resume({ runId: yield* idOf("target"), request: "resume-target" })
-          .pipe(Effect.orDie);
-        expect(resumed.applied).toBe(true);
-        yield* waiting("target");
-        expect(yield* Effect.forEach(others, seen)).toEqual(before);
-        const taken = yield* client
-          .resume({ runId: yield* idOf("unaccepted"), request: "resume-unaccepted" })
-          .pipe(Effect.orDie);
-        expect(taken.applied).toBe(true);
-        yield* waiting("unaccepted");
-        yield* client.recover().pipe(Effect.orDie);
-        yield* waiting("other");
-        yield* host.stop;
-      }).pipe(Effect.scoped),
-    ),
-  180_000,
-);
+test("a resume that registers a restored module leaves another Run on it alone until it is recovered", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const others = ["other", "unaccepted"];
+      const { state, host, client, idOf, waiting } = yield* stranded(
+        "collie-admission-shared-",
+        ["target", "other"],
+        ["unaccepted"],
+      );
+      const seen = (name: string) =>
+        Effect.gen(function* () {
+          const view = yield* client.run({ runId: yield* idOf(name) }).pipe(Effect.orDie);
+          return { log: yield* events(state, name), parked: view?.parked ?? null };
+        });
+      const before = yield* Effect.forEach(others, seen);
+      const resumed = yield* client
+        .resume({ runId: yield* idOf("target"), request: "resume-target" })
+        .pipe(Effect.orDie);
+      expect(resumed.applied).toBe(true);
+      yield* waiting("target");
+      expect(yield* Effect.forEach(others, seen)).toEqual(before);
+      const taken = yield* client
+        .resume({ runId: yield* idOf("unaccepted"), request: "resume-unaccepted" })
+        .pipe(Effect.orDie);
+      expect(taken.applied).toBe(true);
+      yield* waiting("unaccepted");
+      yield* client.recover().pipe(Effect.orDie);
+      yield* waiting("other");
+      yield* host.stop;
+    }).pipe(Effect.scoped),
+  ));
 
-test(
-  "resumes of two Runs on one restored module at once each take their Run up",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { host, client, idOf, waiting } = yield* stranded(
-          "collie-admission-together-",
-          ["one", "two"],
-          [],
-        );
-        const replies = yield* Effect.forEach(
-          ["one", "two"],
-          (name) =>
-            Effect.flatMap(idOf(name), (runId) =>
-              client.resume({ runId, request: `resume-${name}` }).pipe(Effect.orDie),
-            ),
-          { concurrency: "unbounded" },
-        );
-        expect(Arr.map(replies, (reply) => reply.applied)).toEqual([true, true]);
-        yield* waiting("one");
-        yield* waiting("two");
-        yield* host.stop;
-      }).pipe(Effect.scoped),
-    ),
-  180_000,
-);
+test("resumes of two Runs on one restored module at once each take their Run up", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { host, client, idOf, waiting } = yield* stranded(
+        "collie-admission-together-",
+        ["one", "two"],
+        [],
+      );
+      const replies = yield* Effect.forEach(
+        ["one", "two"],
+        (name) =>
+          Effect.flatMap(idOf(name), (runId) =>
+            client.resume({ runId, request: `resume-${name}` }).pipe(Effect.orDie),
+          ),
+        { concurrency: "unbounded" },
+      );
+      expect(Arr.map(replies, (reply) => reply.applied)).toEqual([true, true]);
+      yield* waiting("one");
+      yield* waiting("two");
+      yield* host.stop;
+    }).pipe(Effect.scoped),
+  ));
 
-test(
-  "a resume of a Run another resume held at its start returns once that Run has asked",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const { gate, host, client, idOf, waiting } = yield* stranded(
-          "collie-admission-released-",
-          ["first", "held"],
-          [],
-        );
-        yield* client.resume({ runId: yield* idOf("first"), request: "resume-first" });
-        yield* waiting("first");
-        // Shut while the resume is asked, so it has to wait for the Run to go on to its question.
-        yield* fs.writeFileString(gate, "").pipe(Effect.orDie);
-        yield* Effect.forkScoped(fs.remove(gate).pipe(Effect.orDie, Effect.delay("500 millis")));
-        const runId = yield* idOf("held");
-        const resumed = yield* client.resume({ runId, request: "resume-held" }).pipe(Effect.orDie);
-        expect(resumed.applied).toBe(true);
-        const view = yield* client.run({ runId }).pipe(Effect.orDie);
-        expect(Arr.map(view?.waiting ?? [], (asked) => asked.name)).toEqual(["decision"]);
-        yield* host.stop;
-      }).pipe(Effect.scoped),
-    ),
-  180_000,
-);
+test("a resume of a Run another resume held at its start returns once that Run has asked", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { gate, host, client, idOf, waiting } = yield* stranded(
+        "collie-admission-released-",
+        ["first", "held"],
+        [],
+      );
+      yield* client.resume({ runId: yield* idOf("first"), request: "resume-first" });
+      yield* waiting("first");
+      yield* fs.writeFileString(gate, "").pipe(Effect.orDie);
+      yield* Effect.forkScoped(fs.remove(gate).pipe(Effect.orDie, Effect.delay("500 millis")));
+      const runId = yield* idOf("held");
+      const resumed = yield* client.resume({ runId, request: "resume-held" }).pipe(Effect.orDie);
+      expect(resumed.applied).toBe(true);
+      const view = yield* client.run({ runId }).pipe(Effect.orDie);
+      expect(Arr.map(view?.waiting ?? [], (asked) => asked.name)).toEqual(["decision"]);
+      yield* host.stop;
+    }).pipe(Effect.scoped),
+  ));

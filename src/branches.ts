@@ -1,7 +1,3 @@
-// What git last said of each checkout and branch a card reads, as rows in the host's database
-// (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs). A card reads these rows; only
-// the git syncer, on a turn, a Step's end, a publish, a push or the backstop poll, asks git.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Context, Effect, Layer, Option, Result, Schema, flow } from "effect";
@@ -12,11 +8,9 @@ import { projectHere, shell } from "./mr";
 import { branchMovement } from "./recovery";
 
 export const Branch = Schema.Struct({
-  /** The commit the branch is at in the checkout, or null where git could not say. */
   head: Schema.NullOr(Schema.String),
-  /** The project the checkout pushes to, which a bare or legacy reference resolves against. */
+  // WARNING: a bare or legacy merge request reference resolves against this project.
   project: Schema.NullOr(Schema.String),
-  /** How the pushed branch moved past the finished record it was read against. */
   movement: Schema.NullOr(
     Schema.Struct({ finished: Schema.String, said: Schema.NullOr(Schema.String) }),
   ),
@@ -27,10 +21,8 @@ const BranchJson = Schema.fromJsonString(Branch);
 const encodeBranch = flow(Schema.encodeResult(BranchJson), Result.getOrThrow);
 const decodeBranch = Schema.decodeUnknownOption(BranchJson);
 
-/** A branch's key in the rows: its checkout and its name. */
 export const branchKey = (cwd: string, branch: string | null) => `${cwd}\0${branch ?? ""}`;
 
-/** What the git syncer reads a branch by. */
 export interface BranchRun {
   readonly cwd: string;
   readonly dir: string;
@@ -39,19 +31,15 @@ export interface BranchRun {
 }
 
 export interface BranchesApi {
-  /** Every row, by `branchKey`. */
   readonly all: Effect.Effect<ReadonlyMap<string, Branch>>;
-  /** Writes what moved; a read that moves nothing invalidates nothing. */
+  // WARNING: a write that moves nothing invalidates nothing.
   readonly put: (rows: ReadonlyMap<string, Branch>) => Effect.Effect<void>;
-  /** Asks the git syncer for a branch a card found no row of. */
   readonly want: (run: BranchRun) => Effect.Effect<void>;
-  /** The branches asked for since the last call. */
   readonly wanted: Effect.Effect<ReadonlyArray<BranchRun>>;
 }
 
 export class Branches extends Context.Service<Branches, BranchesApi>()("collie/Branches") {}
 
-/** What a moved branch invalidates. */
 export const BRANCHES = "collie/branches";
 
 export const branchesLayer = Layer.effect(Branches)(
@@ -85,13 +73,17 @@ export const branchesLayer = Layer.effect(Branches)(
       }),
       put: (rows) =>
         Effect.gen(function* () {
-          if (rows.size === 0) return;
+          if (rows.size === 0) {
+            return;
+          }
           const known = yield* all;
           const moved = Arr.filter([...rows], ([key, row]) => {
             const was = known.get(key);
             return was === undefined || encodeBranch(was) !== encodeBranch(row);
           });
-          if (moved.length === 0) return;
+          if (moved.length === 0) {
+            return;
+          }
           yield* sql
             .withTransaction(
               Effect.forEach(
@@ -110,10 +102,11 @@ export const branchesLayer = Layer.effect(Branches)(
   }),
 );
 
-/** What git says now of `run`'s branch in its checkout: the git syncer's one read. */
 export const readBranch = Effect.fn("Branches.read")(function* (run: BranchRun) {
   const project = yield* projectHere(run.cwd, shell);
-  if (run.branch === null) return { head: null, project, movement: null } satisfies Branch;
+  if (run.branch === null) {
+    return { head: null, project, movement: null } satisfies Branch;
+  }
   const read = yield* shell(
     "git",
     ["rev-parse", "--verify", "--quiet", `${run.branch}^{commit}`],

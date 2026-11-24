@@ -3,23 +3,19 @@ import * as Str from "effect/String";
 import * as Struct from "effect/Struct";
 import { heapStats } from "bun:jsc";
 import { expect, test } from "bun:test";
-import { Deferred, Effect, Fiber, FileSystem, Layer, Option, Queue, Schema, Stream } from "effect";
-import { ChildProcessSpawner } from "effect/process";
+import { Deferred, Effect, Fiber, FileSystem, Layer, Schema } from "effect";
 import { TaskView } from "../src/board-model";
 import { buildBoard } from "../src/board";
 import { readEnv } from "../src/env";
 import { makeRunModel, RunModel, runModelLayer } from "../src/run-model";
 import { writeTask } from "../src/task";
 import { epochMs } from "../src/time";
-import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
-import { until } from "./support/host";
 import { madeRun, recordsAt, runFacts } from "./support/records";
 
 const RUNS = 500;
 
-/** A card as the board draws one, for what the model stamps on it. */
-const card = (over: Partial<TaskView> = {}): TaskView => ({
+const card: (over?: Partial<TaskView>) => TaskView = (over = {}) => ({
   id: "t1",
   name: "Work",
   project: "project",
@@ -47,77 +43,73 @@ const card = (over: Partial<TaskView> = {}): TaskView => ({
   ...over,
 });
 
-test(
-  "a change to one Run re-reads only that Run's files, and the board still equals one read from disk",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-run-model-" });
-        const env = readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" });
-        const runs = yield* Effect.forEach(Arr.range(1, RUNS), (n) =>
-          Effect.gen(function* () {
-            const task = `task-${n}`;
-            yield* writeTask({
-              id: task,
-              workspace: "w1",
-              label: `project | Work ${n}`,
-              cwd: "/project",
-              created_at: "2026-10-30T09:00:00Z",
-            });
-            const run = yield* madeRun(dir, {
-              id: `r${n}`,
-              task,
-              state: n % 2 === 0 ? "succeeded" : "running",
-              created: "2026-10-30T09:00:00Z",
-            });
-            yield* fs.writeFileString(`${run.dir}/log.txt`, "started\n");
-            return run;
-          }),
-        );
-        const reads: string[] = [];
-        const logged = (path: string) => Effect.sync(() => reads.push(path));
-        const model = yield* makeRunModel(dir, "installation").pipe(
-          Effect.provideService(FileSystem.FileSystem, {
-            ...fs,
-            readFileString: (path, encoding) =>
-              logged(path).pipe(Effect.andThen(fs.readFileString(path, encoding))),
-            readDirectory: (path, options) =>
-              logged(path).pipe(Effect.andThen(fs.readDirectory(path, options))),
-            exists: (path) => logged(path).pipe(Effect.andThen(fs.exists(path))),
-            stat: (path) => logged(path).pipe(Effect.andThen(fs.stat(path))),
-          }),
-        );
-        const now = epochMs("2026-10-30T10:00:00Z");
-        const build = (through: FileSystem.FileSystem) =>
-          buildBoard({
-            env,
-            runs,
-            now,
-            registered: [],
-            offers: () => Effect.succeed([]),
-          }).pipe(Effect.provideService(FileSystem.FileSystem, through));
-        yield* build(model.reading);
-        expect(reads.length).toBeGreaterThan(RUNS);
+test("a change to one Run re-reads only that Run's files, and the board still equals one read from disk", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-run-model-" });
+      const env = readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" });
+      const runs = yield* Effect.forEach(Arr.range(1, RUNS), (n) =>
+        Effect.gen(function* () {
+          const task = `task-${n}`;
+          yield* writeTask({
+            id: task,
+            workspace: "w1",
+            label: `project | Work ${n}`,
+            cwd: "/project",
+            created_at: "2026-10-30T09:00:00Z",
+          });
+          const run = yield* madeRun(dir, {
+            id: `r${n}`,
+            task,
+            state: n % 2 === 0 ? "succeeded" : "running",
+            created: "2026-10-30T09:00:00Z",
+          });
+          yield* fs.writeFileString(`${run.dir}/log.txt`, "started\n");
+          return run;
+        }),
+      );
+      const reads: Array<string> = [];
+      const logged = (path: string) => Effect.sync(() => reads.push(path));
+      const model = yield* makeRunModel(dir, "installation").pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          readFileString: (path, encoding) =>
+            logged(path).pipe(Effect.andThen(fs.readFileString(path, encoding))),
+          readDirectory: (path, options) =>
+            logged(path).pipe(Effect.andThen(fs.readDirectory(path, options))),
+          exists: (path) => logged(path).pipe(Effect.andThen(fs.exists(path))),
+          stat: (path) => logged(path).pipe(Effect.andThen(fs.stat(path))),
+        }),
+      );
+      const now = epochMs("2026-10-30T10:00:00Z");
+      const build = (through: FileSystem.FileSystem) =>
+        buildBoard({
+          env,
+          runs,
+          now,
+          registered: [],
+          offers: () => Effect.succeed([]),
+        }).pipe(Effect.provideService(FileSystem.FileSystem, through));
+      yield* build(model.reading);
+      expect(reads.length).toBeGreaterThan(RUNS);
 
-        reads.length = 0;
-        const changed = runs[41]!;
-        yield* model.writing.makeDirectory(`${changed.dir}/plan/issues`, { recursive: true });
-        yield* model.writing.writeFileString(`${changed.dir}/plan/issues/01-next.md`, "# Next\n");
-        const fromModel = yield* build(model.reading);
+      reads.length = 0;
+      const changed = runs[41]!;
+      yield* model.writing.makeDirectory(`${changed.dir}/plan/issues`, { recursive: true });
+      yield* model.writing.writeFileString(`${changed.dir}/plan/issues/01-next.md`, "# Next\n");
+      const fromModel = yield* build(model.reading);
 
-        const own = [changed.dir, changed.evidence, `${dir}/agents/${changed.id}`];
-        const elsewhere = Arr.filter(
-          reads,
-          (path) => !Arr.some(own, (mine) => path === mine || Str.startsWith(`${mine}/`)(path)),
-        );
-        expect(elsewhere).toEqual([]);
-        expect(Arr.some(reads, Str.startsWith(changed.dir))).toBe(true);
-        expect(fromModel).toEqual(yield* build(fs));
-      }),
-    ),
-  60_000,
-);
+      const own = [changed.dir, changed.evidence, `${dir}/agents/${changed.id}`];
+      const elsewhere = Arr.filter(
+        reads,
+        (path) => !Arr.some(own, (mine) => path === mine || Str.startsWith(`${mine}/`)(path)),
+      );
+      expect(elsewhere).toEqual([]);
+      expect(Arr.some(reads, Str.startsWith(changed.dir))).toBe(true);
+      expect(fromModel).toEqual(yield* build(fs));
+    }),
+  ));
 
 test("a Task written moves the Revision of its Runs, and no other Run's", () =>
   runEffect(
@@ -234,7 +226,6 @@ test("revisions grow within an epoch, per Run, and a Task's is the highest of it
       expect(seqOf("b")).toBeGreaterThan(afterA);
       expect([seqOf("a"), seqOf("c")]).toEqual([afterA, first.c]);
 
-      // Seen again unchanged, nothing moves.
       const settled = { a: seqOf("a"), b: seqOf("b"), c: seqOf("c") };
       yield* model.observe([a, { ...b, state: "succeeded" }, c]);
       expect({ a: seqOf("a"), b: seqOf("b"), c: seqOf("c") }).toEqual(settled);
@@ -244,7 +235,6 @@ test("revisions grow within an epoch, per Run, and a Task's is the highest of it
         epoch: model.epoch,
         seq: Math.max(settled.a, settled.b),
       });
-      // A card that moved with no Run's revision moving still says so.
       const [moved] = model.stamp([card({ sentence: "Quiet for 6 minutes." })]);
       expect(moved!.revision!.seq).toBeGreaterThan(stamped!.revision!.seq);
       expect(seqOf("c")).toBe(first.c);
@@ -355,7 +345,6 @@ test("two models of one state directory number their Runs as one, each told what
       expect(reader.factsAt("r1")).toBe(writer.factsAt("r1"));
       expect(yield* reader.reading.readFileString(log)).toBe("two\n");
 
-      // A record that moved while none of its Runs did moves its Run for both.
       reader.stampRecord("key", "r1", ["r1"], "first");
       const moved = reader.stampRecord("key", "r1", ["r1"], "second");
       yield* deliver;

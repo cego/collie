@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test";
 import { Array as Arr, Deferred, Effect, Queue, Stream } from "effect";
-import { type BoardMessage, type BoardSnapshot, PROTOCOL } from "../src/board-model";
-import { flockStream, type Route, type RouteChange } from "../desktop/src/bun/machine";
+import { PROTOCOL } from "../src/board-model";
+import type { BoardMessage, BoardSnapshot } from "../src/board-model";
+import { flockStream } from "../desktop/src/bun/machine";
+import type { Route, RouteChange } from "../desktop/src/bun/machine";
 import type { FlockItem } from "../desktop/src/shared/flock";
 
-const snapshot = (installation: string): BoardSnapshot => ({
+const snapshot: (installation: string) => BoardSnapshot = (installation) => ({
   _tag: "Snapshot",
   installation,
   build: "1.0.5",
@@ -29,7 +31,7 @@ test("startup read connection: the identity-checked door is available before the
     Effect.gen(function* () {
       const subscribed = yield* Deferred.make<void>();
       const mayArrive = yield* Deferred.make<void>();
-      const told: FlockItem[] = [];
+      const told: Array<FlockItem> = [];
       const doors = new Map<string, Opening>();
       const readDoors = new Map<string, Opening>();
       let closed = 0;
@@ -66,7 +68,9 @@ test("startup read connection: the identity-checked door is available before the
           expect(closed).toBe(0);
 
           yield* Deferred.succeed(mayArrive, undefined);
-          while (!Arr.some(told, (item) => "message" in item)) yield* Effect.yieldNow;
+          while (!Arr.some(told, (item) => "message" in item)) {
+            yield* Effect.yieldNow;
+          }
           expect(Arr.filter(told, (item) => "message" in item)).toMatchObject([
             { machine: { installation: "vm" }, message: { _tag: "Snapshot", installation: "vm" } },
           ]);
@@ -87,7 +91,7 @@ test("startup read connection: removing an alias keeps another route to the same
         const readDoors = new Map<string, Opening>();
         const changes = yield* Queue.unbounded<RouteChange<Opening>>();
         let subscribed = 0;
-        const route = (profile: string): Route<Opening> => ({
+        const route = (profile: string) => ({
           machine: { profile, name: profile },
           open: () =>
             Effect.succeed({
@@ -104,7 +108,9 @@ test("startup read connection: removing an alias keeps another route to the same
           () => {},
           readDoors,
         ).pipe(Stream.runDrain, Effect.forkScoped);
-        while (subscribed < 2) yield* Effect.yieldNow;
+        while (subscribed < 2) {
+          yield* Effect.yieldNow;
+        }
         const second = readDoors.get("second");
         expect(readDoors.has("first")).toBe(true);
         expect(second).toBeDefined();

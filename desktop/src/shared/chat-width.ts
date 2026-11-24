@@ -1,6 +1,3 @@
-// The Flock chat's width beside the board, in CSS pixels: a larger Zoom makes the window fewer of them.
-
-/** The chat's sizes in px, and the share of the window it starts at. */
 export const CHAT_WIDTH = {
   start: 512,
   startShare: 0.4,
@@ -9,12 +6,10 @@ export const CHAT_WIDTH = {
   step: 16,
 } as const;
 
-/** The widest the chat is drawn in a window `window` wide. */
-export const chatWidthMax = (window: number): number =>
+export const chatWidthMax = (window: number) =>
   Math.max(CHAT_WIDTH.min, window - CHAT_WIDTH.boardMin);
 
-/** The chat's drawn width: the chosen one, or the start where none is, within its least and greatest. */
-export const chatWidth = (chosen: number | undefined, window: number): number =>
+export const chatWidth = (chosen: number | undefined, window: number) =>
   Math.max(
     CHAT_WIDTH.min,
     Math.min(
@@ -23,20 +18,16 @@ export const chatWidth = (chosen: number | undefined, window: number): number =>
     ),
   );
 
-/** The width a drag from `from` to `x` chooses; the chat is right of its edge. */
 export const dragged = (from: { x: number; width: number }, x: number, window: number) =>
   chatWidth(from.width + from.x - x, window);
 
-/** The width `key` chooses, stepped from the drawn width, or null for a key that does not size it. */
-export const nudged = (chosen: number | undefined, window: number, key: string): number | null => {
+export const nudged = (chosen: number | undefined, window: number, key: string) => {
   const by = key === "ArrowLeft" ? 1 : key === "ArrowRight" ? -1 : null;
   return by === null ? null : chatWidth(chatWidth(chosen, window) + by * CHAT_WIDTH.step, window);
 };
 
 type Box<A> = { value: A };
 
-/** The splitter's hold on the chosen width: one save per drag or held key, and a width the
- * settings tell back never undoes a newer choice. */
 export const chatWidthControl = (
   view: { chosen: Box<number | undefined>; dragging: Box<{ x: number; width: number } | null> },
   save: (width: number | undefined) => Promise<void>,
@@ -54,7 +45,9 @@ export const chatWidthControl = (
   };
   return {
     told: (saved: number | undefined) => {
-      if (saving === 0 && before === null) view.chosen.value = saved;
+      if (saving === 0 && before === null) {
+        view.chosen.value = saved;
+      }
     },
     startDrag: (x: number, window: number) => {
       begin();
@@ -62,24 +55,26 @@ export const chatWidthControl = (
     },
     drag: (x: number, window: number) => {
       const from = view.dragging.value;
-      if (from !== null) view.chosen.value = dragged(from, x, window);
+      if (from !== null) {
+        view.chosen.value = dragged(from, x, window);
+      }
     },
-    /** False for a key that does not size the chat. */
-    nudge: (key: string, window: number): boolean => {
+    nudge: (key: string, window: number) => {
       const width = nudged(view.chosen.value, window, key);
-      if (width === null) return false;
+      if (width === null) {
+        return false;
+      }
       begin();
       view.chosen.value = width;
       return true;
     },
-    /** Ends a drag or a run of nudges, saving the width if it changed. */
-    settle: (): Promise<void> => {
+    settle: () => {
       view.dragging.value = null;
       const from = before;
       before = null;
       return from !== null && from.chosen !== view.chosen.value ? keep() : Promise.resolve();
     },
-    reset: (): Promise<void> => {
+    reset: () => {
       before = null;
       view.dragging.value = null;
       view.chosen.value = undefined;

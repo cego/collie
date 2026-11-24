@@ -1,30 +1,4 @@
 #!/usr/bin/env bun
-// What native chat actually does, as the core terminal a host keeps, with a real harness.
-// Nothing about typing, global scope, follow-ups or resume may be called proven from a
-// test with a fake adapter: a process that started is not an editor that took a keystroke.
-//
-//   HC_SOCKET=<a scratch core's socket> bun run tools/chat-live.ts [--harness claude|pi] [--keep]
-//
-// It makes a **disposable** Herd: its own state and config directories, its own host and
-// its own chat session, on a core the caller started for it (`hc server start` under an
-// `HC_SESSION` of its own), never the one your agents run in. It never touches the state
-// directory your Runs are in. It costs real model calls.
-//
-// Six questions, printed as markdown to paste into the implementation Run:
-//   2. the host starts the chat terminal on the harness that was asked for
-//   3. a typed question reaches the editor and produces an answer
-//   4. a follow-up naming nothing resolves against the answer before it
-//   5. a chat that ends is started again, on a new conversation
-//   6. a requested action changes the Run immediately, is attributed to chat, leaves no
-//      confirmation pending, and cannot be replayed — observed in the Run's own record,
-//      never just in what the model said it did
-//   7. a development nobody asked about reaches the conversation — pushed where the
-//      harness has a queue, on the next turn where it does not — and settles only once
-//      the model has actually read it
-//
-// Every marker asserted here is a string the model had to find out, never one typed at
-// it: a screen shows the question as well as the answer, so a marker that appears in the
-// question is satisfied by its echo.
 
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -39,10 +13,11 @@ import {
   preferredHarness,
   pushable,
   readChat,
-  type ChatRecord,
 } from "../src/chat";
+import type { ChatRecord } from "../src/chat";
 import { writeConfigValue } from "../src/config";
-import { readEnv, type PluginEnv } from "../src/env";
+import { readEnv } from "../src/env";
+import type { PluginEnv } from "../src/env";
 import { connect } from "../src/hc";
 import { Herdr } from "../src/herdr";
 import { ownerOf } from "../src/host";
@@ -108,12 +83,9 @@ interface Row {
   readonly note: string;
 }
 
-/** How long a native turn is given before its silence is the answer. */
 const ANSWER_MS = 180_000;
-/** How long an unasked-for arrival is waited for. Nobody is working, so silence is quick. */
 const UNASKED_MS = 60_000;
 
-/** What the chat terminal's screen shows now. */
 const screen = (socket: string) =>
   Effect.scoped(
     Effect.flatMap(connect(socket), (hc) => hc.call("terminal.read", { terminal: CHAT_TERMINAL })),
@@ -122,13 +94,7 @@ const screen = (socket: string) =>
     Effect.orElseSucceed(() => ""),
   );
 
-/**
- * A turn's answer, waited for by the thing that proves it: the marker on the screen.
- *
- * Not the agent's status. A harness is `working` while it starts up and `idle` again
- * before it has read anything, so a probe that waited on status reported a question
- * answered that the model never saw. What is on the screen is the evidence.
- */
+// WARNING: a harness is working while it starts and idle before it reads anything; wait on the screen marker, not the status.
 const answers = Effect.fn("live.answers")(function* (
   socket: string,
   marker: string,
@@ -137,13 +103,14 @@ const answers = Effect.fn("live.answers")(function* (
   const until = (yield* Clock.currentTimeMillis) + withinMs;
   while ((yield* Clock.currentTimeMillis) < until) {
     const tail = yield* screen(socket);
-    if (pipe_(tail, Str.includes(marker))) return tail;
+    if (pipe_(tail, Str.includes(marker))) {
+      return tail;
+    }
     yield* Effect.sleep("3 seconds");
   }
   return null;
 });
 
-/** The chat record once it names a session other than `not`, as the host writes it. */
 const chatOtherThan = Effect.fn("live.chatOtherThan")(function* (
   file: string,
   not: string | undefined,
@@ -151,7 +118,9 @@ const chatOtherThan = Effect.fn("live.chatOtherThan")(function* (
   const until = (yield* Clock.currentTimeMillis) + ANSWER_MS;
   while ((yield* Clock.currentTimeMillis) < until) {
     const record = yield* readChat(file);
-    if (record !== null && record.sessions[record.harness] !== not) return record;
+    if (record !== null && record.sessions[record.harness] !== not) {
+      return record;
+    }
     yield* Effect.sleep("1 second");
   }
   return null;
@@ -159,7 +128,7 @@ const chatOtherThan = Effect.fn("live.chatOtherThan")(function* (
 
 const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
   const fs = yield* FileSystem.FileSystem;
-  const rows: Row[] = [];
+  const rows: Array<Row> = [];
   const say = (check: string, result: Result, note: string) => rows.push({ check, result, note });
 
   const temporary = (prefix: string) =>
@@ -169,8 +138,6 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
   yield* writeConfigValue(userDir, "chat_harness", harness);
 
   const env = readEnv({
-    // The probe replays the caller's complete environment into its disposable configuration.
-    // oxlint-disable-next-line effecttsgo/process-env, effecttsgo/process-env-in-effect
     ...process.env,
     COLLIE_STATE_DIR: stateDir,
     COLLIE_USER_DIR: userDir,
@@ -188,22 +155,22 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
   const chosen = preferredHarness(yield* chatHarnessOf(userDir));
   const key = yield* machineHerd(env);
   const chatFile = yield* chatPath(stateDir, key);
-  // The host first, so that the terminals it keeps are not started again once killed.
+  // WARNING: the host goes first so the terminals it keeps are not started again once killed.
   yield* Effect.addFinalizer(() =>
     keep
       ? Effect.log(`kept ${stateDir} and ${userDir}`)
       : Effect.gen(function* () {
           const owner = yield* ownerOf(stateDir);
-          if (owner !== null) process.kill(owner.pid, "SIGTERM");
+          if (owner !== null) {
+            process.kill(owner.pid, "SIGTERM");
+          }
           yield* Effect.sleep("2 seconds");
-          for (const name of [BOARD_TERMINAL, CHAT_TERMINAL])
+          for (const name of [BOARD_TERMINAL, CHAT_TERMINAL]) {
             yield* herdr.terminalKill(name).pipe(Effect.ignore);
+          }
         }).pipe(Effect.ignore),
   );
 
-  // A disposable Run of this probe's own, so there is exactly one thing to read about
-  // and its id is a string that appears nowhere in what is typed at the model. Starting
-  // it starts the host, and the host starts the chat.
   const project = yield* temporary("collie-chat-live-project-");
   const mine = yield* disposableRun(env, project).pipe(Effect.orElseSucceed(() => null));
   if (mine === null) {
@@ -220,15 +187,9 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
     chat.harness === chosen ? "pass" : "fail",
     `${chat.harness} as ${CHAT_TERMINAL}`,
   );
-  // The harness's own startup, before anything is typed at it.
   yield* Effect.sleep("10 seconds");
 
-  // (3) A question typed into the native editor, answered through a Collie tool.
-  //
-  // What is asserted is the Run's own id next to a word, and the id is never typed at the
-  // model — only `collie_herd` can tell it. That matters: a screen shows the prompt as well
-  // as the answer, so a marker that appears in the question is satisfied by the echo of
-  // the question, and an earlier version of this probe passed on exactly that.
+  // WARNING: a screen shows the question as well as the answer, so a marker typed into the question proves nothing.
   const prompt = (text: string) =>
     herdr
       .agentPrompt(CHAT_TERMINAL, text)
@@ -243,16 +204,12 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
     `submission ${String(asked)}`,
   );
 
-  // (4) A follow-up that names nothing and may call nothing: it can only be answered
-  // from the turn before it, and again the id is what proves the answer is an answer.
   yield* prompt(
     "Without calling any tool, reply with one line: AGAIN followed by a space and that same id.",
   );
   const followed = yield* answers(socket, `AGAIN ${mine.id}`);
   say("a follow-up keeps its context", followed === null ? "fail" : "pass", "");
 
-  // (5) The chat ended under it, as a human or a crash would: the host starts it again,
-  // on a conversation of its own rather than whatever the harness wrote last.
   yield* herdr.terminalKill(CHAT_TERMINAL).pipe(Effect.ignore);
   const again = yield* chatOtherThan(chatFile, chat.sessions[chat.harness]);
   say(
@@ -262,8 +219,6 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
   );
   yield* Effect.sleep("10 seconds");
 
-  // (6) Control. A request typed at the real editor, checked against the Run's own record.
-  // The expected version is not in the prompt: its echo cannot satisfy the check.
   yield* prompt(
     `Use your collie_propose tool to add the constraint "stay in src" to the Intent of Run ${mine.id}, against base_version 1, with request_id "probe-intent". Then call collie_run for that Run and reply with one line: APPLIED followed by a space and the Intent version it reports.`,
   );
@@ -324,9 +279,6 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
     say("a recorded execution cannot be replayed", "fail", "no request was recorded");
   }
 
-  // (7) News. A meaningful development while nobody is asking, and what reaches the
-  // conversation about it. Pi is pushed to between turns; Claude is told on its next turn
-  // through `collie_news`. Either way the item settles only when the model has read it.
   const newsFile = yield* newsPath(stateDir, key);
   yield* appendNews(newsFile, {
     key: `${mine.id}:probe`,
@@ -334,10 +286,6 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
     text: `Run ${mine.id} stopped with COLLIE-PROBE-NEWS. What is going on?`,
   }).pipe(Effect.ignore);
   const push = pushable(chosen);
-  // Watched on every harness, including the one Collie attempts no push on. Whether a
-  // development reaches an idle conversation unasked is a fact about this installation,
-  // and reading a `--help` page is not how it is settled — an item is written while the
-  // editor sits idle, and the screen is what says whether it arrived.
   const pushed = yield* answers(socket, "COLLIE-PROBE-NEWS", UNASKED_MS);
   say(
     "a queued push arrives on its own",
@@ -348,8 +296,6 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
         ? "not observed; the next turn is what carries it"
         : "no push attempted here, and nothing arrived on its own: the next turn carries it",
   );
-  // The path Collie actually relies on, and the one both harnesses have: the next turn
-  // reads the news and says what is in it.
   yield* prompt("Is there anything I have not been told about? Answer in one line.");
   const arrived = yield* answers(socket, "COLLIE-PROBE-NEWS");
   say(

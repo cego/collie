@@ -1,9 +1,3 @@
-// `bun run tools/adr-number.ts [--base <ref>]`: numbers this branch's draft ADRs before it
-// lands. A draft is `docs/adr/draft-<slug>.md`, named in text as `ADR-draft-<slug>`. Each
-// takes the next number above the highest on the default branch and on this branch, in slug
-// order, and every reference to it in the repository is rewritten. Nothing is committed.
-// Numbers the default branch already has twice are reported and left as they are.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -50,10 +44,12 @@ const program = Effect.gen(function* () {
   );
   const onBranch = yield* fs.readDirectory(`${root}/${ADR_DIR}`);
 
-  const byNumber = new Map<string, string[]>();
+  const byNumber = new Map<string, Array<string>>();
   for (const name of onBase) {
     const number = numberOf(name);
-    if (number !== undefined) byNumber.set(number, [...(byNumber.get(number) ?? []), name]);
+    if (number !== undefined) {
+      byNumber.set(number, [...(byNumber.get(number) ?? []), name]);
+    }
   }
   for (const [number, names] of byNumber) {
     if (names.length > 1) {
@@ -64,7 +60,9 @@ const program = Effect.gen(function* () {
   }
 
   const drafts = Arr.filter(Arr.map(onBranch, slugOf), (slug) => slug !== undefined).sort();
-  if (drafts.length === 0) return yield* Effect.log("No draft ADRs to number.");
+  if (drafts.length === 0) {
+    return yield* Effect.log("No draft ADRs to number.");
+  }
 
   let highest = Math.max(
     0,
@@ -86,8 +84,8 @@ const program = Effect.gen(function* () {
     Arr.reduce(numbered, text, (out, { slug, number }) =>
       pipe_(
         out,
-        Str.replace(new RegExp(`(?<![a-z0-9-])draft-${slug}\\.md`, "g"), `${number}-${slug}.md`),
-        Str.replace(new RegExp(`ADR-draft-${slug}(?![a-z0-9-])`, "g"), `ADR-${number}`),
+        Str.replaceAll(new RegExp(`(?<![a-z0-9-])draft-${slug}\\.md`, "g"), `${number}-${slug}.md`),
+        Str.replaceAll(new RegExp(`ADR-draft-${slug}(?![a-z0-9-])`, "g"), `ADR-${number}`),
       ),
     );
 
@@ -101,7 +99,9 @@ const program = Effect.gen(function* () {
   for (const file of new Set(files)) {
     const path = `${root}/${file}`;
     const text = yield* fs.readFileString(path).pipe(Effect.option);
-    if (Option.isNone(text) || pipe_(text.value, Str.includes("\0"))) continue;
+    if (Option.isNone(text) || pipe_(text.value, Str.includes("\0"))) {
+      continue;
+    }
     const rewritten = rewrite(text.value);
     if (rewritten !== text.value) {
       yield* fs.writeFileString(path, rewritten);

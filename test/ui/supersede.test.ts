@@ -1,14 +1,12 @@
 import * as Cause from "effect/Cause";
-// The bridge's own behaviour, with no renderer to own: a newer focus interrupts the read
-// in flight, and a slow command never stalls the next keypress. Both were real holes —
-// holding a cursor key queued one full read per press and ran every one of them, and a
-// `glab` call sat in the same queue in front of the next Select.
 
+// WARNING: a newer focus interrupts the read in flight, and a slow command never stalls the next keypress.
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Deferred, Effect, FileSystem, Queue, Stream } from "effect";
 import { Rig } from "../support/recorder";
 import { runEffect } from "../support/effect";
-import { driveBridge, type Focus } from "../../src/ui/bridge";
+import { driveBridge } from "../../src/ui/bridge";
+import type { Focus } from "../../src/ui/bridge";
 import type { AppState, Command } from "../../src/ui/state";
 import { epochMs } from "../../src/time";
 
@@ -24,12 +22,9 @@ beforeEach(() =>
 
 afterEach(() => runEffect(rig.close()));
 
-/**
- * A state that says which focus produced it. `newer` rather than `note`, because the note
- * is the footer's own line: a load keeps whatever the last command said there.
- */
-function stateFor(selected: string | null): AppState {
-  return {
+// WARNING: newer rather than note, since a load keeps the note the last command left in the footer.
+function stateFor(selected: string | null) {
+  const returned: AppState = {
     view: "runs",
     filter: { kind: "workspace", id: "w1" },
     tasks: [],
@@ -45,12 +40,14 @@ function stateFor(selected: string | null): AppState {
     previewing: null,
     stopping: [],
   };
+  return returned;
 }
 
-/** Waits for something the fibers do, rather than for a duration. */
 const until = Effect.fn("supersede.until")(function* (what: string, ready: () => boolean) {
   for (let tries = 0; tries < 200; tries++) {
-    if (ready()) return;
+    if (ready()) {
+      return;
+    }
     yield* Effect.sleep("5 millis");
   }
   return yield* new Cause.TimeoutError(`${what} never happened`);
@@ -60,10 +57,8 @@ test("a newer focus interrupts the read in flight, and the newer one lands", () 
   runEffect(
     Effect.scoped(
       Effect.gen(function* () {
-        const started: string[] = [];
-        const interrupted: string[] = [];
-        // The first Select's read never finishes on its own, so the only way the second
-        // one can land is by interrupting it.
+        const started: Array<string> = [];
+        const interrupted: Array<string> = [];
         const held = yield* Deferred.make<void>();
 
         const driven = yield* driveBridge({
@@ -74,7 +69,9 @@ test("a newer focus interrupts the read in flight, and the newer one lands", () 
             Effect.gen(function* () {
               const which = focus.selected ?? "none";
               started.push(which);
-              if (which === "run:a") yield* Deferred.await(held);
+              if (which === "run:a") {
+                yield* Deferred.await(held);
+              }
               return stateFor(focus.selected);
             }).pipe(
               Effect.onInterrupt(() =>
@@ -92,7 +89,6 @@ test("a newer focus interrupts the read in flight, and the newer one lands", () 
         driven.dispatch({ _tag: "Select", id: "run:b", on: null });
         yield* until("the second read to land", () => driven.state().newer === "run:b");
 
-        // Superseded, not merely ignored: the fiber was actually stopped.
         expect(interrupted).toContain("run:a");
         expect(driven.state().newer).toBe("run:b");
       }),
@@ -115,7 +111,7 @@ test("writes during a refresh let it finish and request one fresh read afterward
         load: () =>
           Effect.gen(function* () {
             const reading = ++reads;
-            if (reading === 2)
+            if (reading === 2) {
               yield* Deferred.await(held).pipe(
                 Effect.onInterrupt(() =>
                   Effect.sync(() => {
@@ -123,6 +119,7 @@ test("writes during a refresh let it finish and request one fresh read afterward
                   }),
                 ),
               );
+            }
             return stateFor(String(reading));
           }),
         act: () => Effect.succeed(null),
@@ -177,7 +174,7 @@ test("host board changes publish without a file write and coalesce behind the cu
           Effect.gen(function* () {
             const reading = ++reads;
             const value = latest;
-            if (reading === 3)
+            if (reading === 3) {
               yield* Deferred.await(held).pipe(
                 Effect.onInterrupt(() =>
                   Effect.sync(() => {
@@ -185,6 +182,7 @@ test("host board changes publish without a file write and coalesce behind the cu
                   }),
                 ),
               );
+            }
             return stateFor(value);
           }),
         act: () => Effect.succeed(null),
@@ -267,10 +265,10 @@ test("a usage audit written by a read does not trigger another read", () =>
         load: () =>
           Effect.gen(function* () {
             const reading = ++reads;
-            // A board refresh asks the host for usage, which appends its audit. Bound
-            // the fake loop so a broken implementation cannot run indefinitely.
-            if (reading > 1 && reading <= 4)
+            // WARNING: a board refresh asks the host for usage, which appends its audit; bound the loop so a broken build cannot run forever.
+            if (reading > 1 && reading <= 4) {
               yield* Queue.offer(events, { _tag: "Update", path: "usage/operations.jsonl" });
+            }
             return stateFor(String(reading));
           }),
         act: () => Effect.succeed(null),
@@ -281,7 +279,9 @@ test("a usage audit written by a read does not trigger another read", () =>
             Stream.fromQueue(events).pipe(
               Stream.tap((event) =>
                 Effect.sync(() => {
-                  if (event.path === "usage/operations.jsonl") auditsSeen++;
+                  if (event.path === "usage/operations.jsonl") {
+                    auditsSeen++;
+                  }
                 }),
               ),
             ),
@@ -349,7 +349,7 @@ test("a command that takes its time does not stall the next keypress", () =>
   runEffect(
     Effect.scoped(
       Effect.gen(function* () {
-        const acted: Command[] = [];
+        const acted: Array<Command> = [];
         const slow = yield* Deferred.make<void>();
 
         const driven = yield* driveBridge({
@@ -360,7 +360,6 @@ test("a command that takes its time does not stall the next keypress", () =>
           act: (command) =>
             Effect.gen(function* () {
               acted.push(command);
-              // A `glab` call, as far as the queue is concerned.
               yield* Deferred.await(slow);
               return "done";
             }),
@@ -369,8 +368,7 @@ test("a command that takes its time does not stall the next keypress", () =>
         driven.dispatch({ _tag: "OpenMr", target: "mr:host/g/p!1", runId: null });
         yield* until("the command to start", () => acted.length === 1);
 
-        // The Selection moves while that is still going: it is a focus change, so it
-        // never joins the queue the command is sitting in.
+        // WARNING: a focus change never joins the queue the slow command sits in.
         driven.dispatch({ _tag: "Select", id: "run:b", on: null });
         yield* until("the Selection to land", () => driven.state().newer === "run:b");
 
@@ -384,7 +382,7 @@ test("a Refresh asked for twice is read twice, because a repeat is the whole poi
   runEffect(
     Effect.scoped(
       Effect.gen(function* () {
-        const nonces: number[] = [];
+        const nonces: Array<number> = [];
 
         const driven = yield* driveBridge({
           filter: { kind: "workspace", id: "w1" } as const,
@@ -403,8 +401,7 @@ test("a Refresh asked for twice is read twice, because a repeat is the whole poi
         driven.dispatch({ _tag: "Refresh" });
         yield* until("the second re-read", () => nonces.includes(2));
 
-        // The same focus twice: without the nonce, `changes` would drop the second as a
-        // repeat and pressing the key again would do nothing.
+        // WARNING: without the nonce, changes would drop a repeated focus and pressing the key again would do nothing.
         expect(nonces).toContain(1);
         expect(nonces).toContain(2);
       }),
@@ -429,11 +426,8 @@ test("a command that fails leaves its reason in the footer", () =>
         driven.dispatch({ _tag: "OpenMr", target: "mr:host/g/p!1", runId: null });
         yield* until("the failure to reach the footer", () => driven.state().note !== null);
 
-        // The reason used to be written and then immediately overwritten with null, so a
-        // failed action gave the human nothing at all.
         expect(driven.state().note).toContain("glab could not reach");
 
-        // And a load after it keeps the reason on screen rather than clearing it.
         driven.dispatch({ _tag: "Refresh" });
         yield* Effect.sleep("30 millis");
         expect(driven.state().note).toContain("glab could not reach");
@@ -468,7 +462,7 @@ test("a load's own note is shown, and taken back when the load stops saying it",
         hostSays = null;
         yield* refreshed(null);
 
-        // A command's note is the command's: a load with nothing to say leaves it.
+        // WARNING: a command's note is the command's; a load with nothing to say leaves it.
         driven.dispatch({ _tag: "OpenMr", target: "mr:host/g/p!1", runId: null });
         yield* until("the command's note", () => driven.state().note === "opened");
         driven.dispatch({ _tag: "Refresh" });
@@ -482,11 +476,9 @@ test("the board opens on the scope from config, and g is what changes it after",
   runEffect(
     Effect.scoped(
       Effect.gen(function* () {
-        const scopes: string[] = [];
+        const scopes: Array<string> = [];
 
         const driven = yield* driveBridge({
-          // What `loadDefaults` answered, as a filter: nothing else remembers it, so
-          // this is the whole of "the board opens the way I use it".
           filter: { kind: "all" } as const,
           origin: "w1",
           stateDir: rig.stateDir,
@@ -500,9 +492,7 @@ test("the board opens on the scope from config, and g is what changes it after",
 
         expect(scopes[0]).toBe("all");
 
-        // Waited on the state, not on the load having been called: `scopes.push`
-        // happens inside the load and the stream writes the state a moment later, so
-        // asserting on the first was a pass about one run in eight.
+        // WARNING: wait on the state, not on the load call; the stream writes state a moment after the scope push.
         driven.dispatch({ _tag: "ToggleFilter" });
         yield* until("the narrowed board", () => driven.state().filter.kind === "workspace");
         expect(scopes).toContain("workspace");

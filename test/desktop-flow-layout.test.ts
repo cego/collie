@@ -1,5 +1,3 @@
-// How the Flow's workspace shares the record between the rail, the Step's context and its work.
-
 import { expect, test } from "bun:test";
 import {
   contextStepped,
@@ -81,8 +79,8 @@ interface Control {
 }
 
 const controls = () => {
-  const focused: string[] = [];
-  const control = (name: string): Control => ({
+  const focused: Array<string> = [];
+  const control = (name: string) => ({
     name,
     isConnected: true,
     focus: () => focused.push(name),

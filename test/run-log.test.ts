@@ -26,8 +26,9 @@ test("a capped log tail keeps absolute line numbers and rebuilds a stale count",
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-log-tail-" });
-      for (let n = 1; n <= 20; n++)
+      for (let n = 1; n <= 20; n++) {
         yield* appendLogLine(dir, `line ${pipe(String(n), Str.padStart(2, "0"))}`);
+      }
       expect(yield* readLogTail(dir, 20)).toEqual({
         panel: { _tag: "Text", text: "line 19\nline 20\n", truncated: true },
         firstLine: 19,

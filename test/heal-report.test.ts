@@ -19,18 +19,24 @@ import {
 import { connect } from "../src/host";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
-import { foundationLayer, type RunView } from "../src/engine";
+import { foundationLayer } from "../src/engine";
+import type { RunView } from "../src/engine";
 import type { PlatformServices } from "../src/platform";
 import type { Records } from "../src/records";
 import { healParks } from "../src/park-recovery";
-import { Host, type HostApi } from "../src/sdk";
-import { knownIn, pendingIn, report, type Pending } from "../src/heal-report";
-import { appendMetric, readMetrics, type HealFinding, type Metric } from "../src/metrics";
+import { Host } from "../src/sdk";
+import type { HostApi } from "../src/sdk";
+import { knownIn, pendingIn, report } from "../src/heal-report";
+import type { Pending } from "../src/heal-report";
+import { appendMetric, readMetrics } from "../src/metrics";
+import type { HealFinding, Metric } from "../src/metrics";
 import type { HealOutput } from "../src/heal";
-import { collie, proves, type World } from "./support/world";
+import { collie, proves } from "./support/world";
+import type { World } from "./support/world";
 import { until } from "./support/host";
 import { FakeBin } from "./support/bin";
-import { forgeOnPath, serveForges, type ForgeModel } from "./support/forge";
+import { forgeOnPath, serveForges } from "./support/forge";
+import type { ForgeModel } from "./support/forge";
 import { exec } from "./support/command";
 
 const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
@@ -45,7 +51,6 @@ const FINDING = {
   regression: "A retirement that times out parks for a recheck cause.",
 };
 
-/** A parked Run on a GitLab project, healed by `mender` with `output`, and GitHub's fake gh. */
 const healed = (world: World, output: HealOutput, github: ForgeModel) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -87,76 +92,66 @@ const healed = (world: World, output: HealOutput, github: ForgeModel) =>
 const reportsOf = (lines: ReadonlyArray<{ readonly kind: string }>) =>
   Arr.filter(lines, (line) => line.kind === "report");
 
-test(
-  "an escalated Heal's Collie defect is filed on cego/collie, not on the healed Run's project, and its issue is kept on the Run",
-  () =>
-    proves(
-      "collie-heal-report-",
-      (world) =>
-        Effect.gen(function* () {
-          const { runId, client, forge } = yield* healed(
-            world,
-            {
-              diagnosis: "The agent it waits on was retired and never stopped.",
-              actions: ["read its record"],
-              result: "escalate",
-              needs_person: "Only you can restart its agent.",
-              finding: FINDING,
-            },
-            { installed: true, loggedIn: ["github.com"], login: "me", mrs: [], issues: [] },
-          );
-          const lines = yield* until(
-            () => client.runMetrics({ runId }).pipe(Effect.orDie),
-            (lines) => reportsOf(lines).length > 0,
-          );
-          const issues = (yield* forge.model()).issues ?? [];
-          expect(Arr.map(issues, (one) => one.project)).toEqual([COLLIE]);
-          expect(issues[0]!.body).toContain(`<!-- collie-finding: ${FINDING.key} -->`);
-          expect(issues[0]!.body).toContain(FINDING.root_cause);
-          expect(reportsOf(lines)).toEqual([
-            expect.objectContaining({
-              publication: "filed",
-              issue: `https://${COLLIE}/issues/${issues[0]!.number}`,
-            }),
-          ]);
-        }),
-      ["parks-for.workflow.ts", "mender.workflow.ts"],
-    ),
-  120_000,
-);
+test("an escalated Heal's Collie defect is filed on cego/collie, not on the healed Run's project, and its issue is kept on the Run", () =>
+  proves(
+    "collie-heal-report-",
+    (world) =>
+      Effect.gen(function* () {
+        const { runId, client, forge } = yield* healed(
+          world,
+          {
+            diagnosis: "The agent it waits on was retired and never stopped.",
+            actions: ["read its record"],
+            result: "escalate",
+            needs_person: "Only you can restart its agent.",
+            finding: FINDING,
+          },
+          { installed: true, loggedIn: ["github.com"], login: "me", mrs: [], issues: [] },
+        );
+        const lines = yield* until(
+          () => client.runMetrics({ runId }).pipe(Effect.orDie),
+          (lines) => reportsOf(lines).length > 0,
+        );
+        const issues = (yield* forge.model()).issues ?? [];
+        expect(Arr.map(issues, (one) => one.project)).toEqual([COLLIE]);
+        expect(issues[0]!.body).toContain(`<!-- collie-finding: ${FINDING.key} -->`);
+        expect(issues[0]!.body).toContain(FINDING.root_cause);
+        expect(reportsOf(lines)).toEqual([
+          expect.objectContaining({
+            publication: "filed",
+            issue: `https://${COLLIE}/issues/${issues[0]!.number}`,
+          }),
+        ]);
+      }),
+    ["parks-for.workflow.ts", "mender.workflow.ts"],
+  ));
 
-test(
-  "a Machine with no GitHub login records its refused report once, however often it retries",
-  () =>
-    proves(
-      "collie-heal-unlogged-",
-      (world) =>
-        Effect.gen(function* () {
-          const { runId, client, forge } = yield* healed(
-            world,
-            {
-              diagnosis: "The agent it waits on was retired and never stopped.",
-              actions: ["read its record"],
-              result: "escalate",
-              needs_person: "Only you can restart its agent.",
-              finding: FINDING,
-            },
-            { installed: true, loggedIn: [], login: null, mrs: [], issues: [] },
-          );
-          yield* until(
-            () => forge.calls(),
-            (calls) =>
-              Arr.filter(calls, (one) => pipe(one, Str.includes("auth status"))).length >= 4,
-          );
-          const lines = yield* client.runMetrics({ runId }).pipe(Effect.orDie);
-          expect(reportsOf(lines)).toEqual([expect.objectContaining({ publication: "refused" })]);
-        }),
-      ["parks-for.workflow.ts", "mender.workflow.ts"],
-    ),
-  120_000,
-);
+test("a Machine with no GitHub login records its refused report once, however often it retries", () =>
+  proves(
+    "collie-heal-unlogged-",
+    (world) =>
+      Effect.gen(function* () {
+        const { runId, client, forge } = yield* healed(
+          world,
+          {
+            diagnosis: "The agent it waits on was retired and never stopped.",
+            actions: ["read its record"],
+            result: "escalate",
+            needs_person: "Only you can restart its agent.",
+            finding: FINDING,
+          },
+          { installed: true, loggedIn: [], login: null, mrs: [], issues: [] },
+        );
+        yield* until(
+          () => forge.calls(),
+          (calls) => Arr.filter(calls, (one) => pipe(one, Str.includes("auth status"))).length >= 4,
+        );
+        const lines = yield* client.runMetrics({ runId }).pipe(Effect.orDie);
+        expect(reportsOf(lines)).toEqual([expect.objectContaining({ publication: "refused" })]);
+      }),
+    ["parks-for.workflow.ts", "mender.workflow.ts"],
+  ));
 
-/** The host's own Collie issue operations, against a fake gh holding `model`. */
 const onCollie = <A, E>(
   model: Partial<ForgeModel>,
   body: (
@@ -195,10 +190,7 @@ const onCollie = <A, E>(
     }).pipe(Effect.scoped),
   );
 
-const pending = (
-  finding: Partial<Pending["finding"]> = {},
-  more: Partial<Pending> = {},
-): Pending => ({
+const pending = (finding: Partial<Pending["finding"]> = {}, more: Partial<Pending> = {}) => ({
   run: "run-parked",
   heal: "run-heal",
   judged: "escalated",
@@ -276,7 +268,6 @@ test("a new defect is filed once with observation apart from diagnosis; the next
       expect(filed.body).toContain("**Diagnosis**, the healer's, not yet confirmed.");
       expect(filed.body).toContain("judged the Heal `recovered`");
       expect(filed.body).not.toContain("gitlab.example.com");
-      // A second Heal reporting at once with no local record of the first.
       expect(yield* report(host, pending({}, { heal: "run-heal-2" }), new Map())).toMatchObject({
         publication: "linked",
         issue: `https://${COLLIE}/issues/1`,
@@ -288,11 +279,11 @@ test("a new defect is filed once with observation apart from diagnosis; the next
 test("a non-defect is never pending, and a false recovery or a finding without its fix is not filed", () =>
   onCollie({}, (host, forge) =>
     Effect.gen(function* () {
-      const healed = (
+      const healed: (
         heal: string,
         finding: Partial<HealFinding>,
         outcome: Metric["outcome"],
-      ): Metric => ({
+      ) => Metric = (heal, finding, outcome) => ({
         at: "2026-11-13T10:00:00Z",
         kind: "recovery",
         subject: "run-parked",
@@ -327,7 +318,7 @@ test("a non-defect is never pending, and a false recovery or a finding without i
     }),
   ));
 
-const reportLine = (publication: Metric["publication"]): Metric => ({
+const reportLine: (publication: Metric["publication"]) => Metric = (publication) => ({
   at: "2026-11-13T10:00:01Z",
   kind: "report",
   subject: FINDING.key,
@@ -336,7 +327,7 @@ const reportLine = (publication: Metric["publication"]): Metric => ({
   heal: "run-heal",
   publication,
 });
-const reportedAs = (publication: Metric["publication"], issue: string): Metric => ({
+const reportedAs = (publication: Metric["publication"], issue: string) => ({
   ...reportLine(publication),
   issue,
 });
@@ -358,8 +349,9 @@ test("report retries keep distinct Heals without repeating refusals while judgin
     Effect.gen(function* () {
       const env = rig.pluginEnv();
       const evidence = `${env.stateDir}/evidence/run-parked`;
-      for (const heal of ["run-heal", "run-heal-2"])
+      for (const heal of ["run-heal", "run-heal-2"]) {
         yield* appendMetric(evidence, { ...healedLine, heal, recoveryId: `heal:${heal}` });
+      }
       const view: RunView = {
         runId: "run-parked",
         workflow: "any",
@@ -565,10 +557,11 @@ test("retained findings of earlier Heals link to the issues already filed for th
           ["run-750ea061", "taken-delivery-left-unknown-blocks-reminders", 445],
           ["run-d6af1e3b", "compaction-completion-lost-to-write-failure", 446],
         ] as const;
-        for (const [heal, key, number] of historical)
+        for (const [heal, key, number] of historical) {
           expect(
             yield* report(host, pending({ key }, { heal, judged: "recovered" }), new Map()),
           ).toMatchObject({ publication: "linked", issue: `https://${COLLIE}/issues/${number}` });
+        }
         expect(writes(forge)).toEqual([]);
       }),
   ));

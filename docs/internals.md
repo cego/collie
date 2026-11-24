@@ -1594,7 +1594,7 @@ releases signed with the old key stop verifying.
 ### Numbering a branch's ADRs
 
 A new ADR on a branch has no number: it is `docs/adr/draft-<slug>.md`, and text names it
-`ADR-draft-<slug>`, whether a document, a code comment or a test. Two branches open at once
+`ADR-draft-<slug>`, whether a document or a test. Two branches open at once
 would otherwise both take the next number, and whichever lands second renumbers its ADR and
 every reference to it by hand.
 
@@ -1669,7 +1669,18 @@ fake.
 types' freshness (`rune-types:check`) in parallel, then tests after all four pass. Keeping those phases separate avoids CPU contention with the subprocess-heavy tests.
 The individual scripts in `package.json` still work for focused feedback.
 
-Lint enables Effect's correctness, effect-native, and strict presets. Effect findings
+Lint is `oxlint.config.ts`: the `@cloudflare/oxlint-config` preset spread in first, which
+brings nkzw's rules and its anti-slop `quality/*` rules, then Effect's correctness,
+effect-native and strict presets and landmines' recommended rules. The preset turns off
+oxlint's default `correctness` category, so the default rules it does not list are kept by
+name at their old `warn`. The vendored anti-slop plugin in `tools/oxlint/anti-slop/` stays
+for the six rules the preset has no counterpart for. A preset rule the code cannot pass is
+kept off in one of two lists, both re-applied by a last override for every file: `unfit`
+holds the ones that misread Effect or Solid, each with its reason, and `migrating` the
+ones still to fix. Give a preset rule options under the name the preset uses: oxlint
+folds `@typescript-eslint/x` and `typescript/x` onto one rule, and the preset's plain
+entry wins over options set under the other name. A TypeScript config needs Node.js
+22.18 or later to run oxlint; CI's Ubuntu image has it. Effect findings
 fail the check, including native collection helpers, synchronous schema decoders,
 untyped error channels, and resources started outside their Effect context. `lint:ts`
 uses `effect-tsgo oxlint` directly so lint cannot silently lose Effect rules when a

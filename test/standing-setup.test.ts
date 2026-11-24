@@ -1,6 +1,4 @@
-// Desktop offers to help write an empty Standing direction, asks what the human's sessions
-// hold before reading a word of them, and starts the setup conversation the human chose.
-
+// WARNING: Sessions are read only after the human has said what they hold; nothing is read before they choose.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -15,7 +13,8 @@ import { openFlockChat } from "../desktop/src/bun/chat";
 import { opensOn, offerOf } from "../desktop/src/bun/chat-choices";
 import type { ChatDriver, ContentBlock } from "../desktop/src/bun/driver";
 import { heldSettings } from "../desktop/src/bun/settings";
-import { type Place, setUp, setupInventory, setupOffer } from "../desktop/src/bun/standing-setup";
+import { setUp, setupInventory, setupOffer } from "../desktop/src/bun/standing-setup";
+import type { Place } from "../desktop/src/bun/standing-setup";
 import type { DesktopSettings } from "../desktop/src/shared/flock";
 import { NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
 import { offersSetup, setupTurn } from "../desktop/src/shared/standing-setup";
@@ -35,7 +34,6 @@ test("Desktop offers help only while the direction is empty, a Machine is connec
 
 const TYPED = "Keep pull requests small, and never force push to main.";
 
-/** A home with one Claude Code session the human typed in. */
 const home = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -55,7 +53,6 @@ const home = (dir: string) =>
     return { home: `${dir}/home`, stateDir: `${dir}/state` };
   });
 
-/** This computer, read in-process over the fixture home, counting each Read. */
 const counted = (dir: string) =>
   Effect.gen(function* () {
     const places = yield* home(dir);
@@ -96,7 +93,6 @@ test("the dialog asks only where the human's sessions are and how many; it reads
     }).pipe(Effect.scoped, Effect.provide(platformLayer)),
   ));
 
-/** A harness that finishes each turn at once, keeping what each conversation was sent. */
 const recording = () => {
   const sent: Array<{ readonly conversation: string; readonly text: string }> = [];
   const driver: ChatDriver = {
@@ -185,7 +181,6 @@ test('"Read my messages" reads once and opens a new conversation that starts wit
     expect(reads).toBe(1);
     expect(after).not.toBe(before);
     expect(Arr.map(sent, ({ conversation }) => conversation)).toEqual([before, after]);
-    // The conversation the human was in got only their own message.
     expect(sent[0]!.text).not.toContain(PROCEDURE_LINE);
     const first = sent[1]!.text;
     expect(pipe_(first, Str.startsWith(Str.trim(procedure)))).toBe(true);
@@ -225,9 +220,11 @@ test('"Not now" keeps this version in Desktop\'s own settings and "Don\'t ask ag
 
       yield* offer.decline(true);
       expect(yield* fs.readFileString(`${dir}/settings.json`)).toContain('"setupNever":true');
-      for (const name of yield* fs.readDirectory(dir))
-        if (name !== "settings.json")
+      for (const name of yield* fs.readDirectory(dir)) {
+        if (name !== "settings.json") {
           expect(yield* fs.readFileString(`${dir}/${name}`)).not.toContain("setup");
+        }
+      }
     }).pipe(Effect.scoped, Effect.provide(platformLayer)),
   ));
 

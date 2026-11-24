@@ -1,15 +1,10 @@
 /* oxlint-disable effecttsgo/node-builtin-import, effecttsgo/global-console, no-restricted-globals -- an offline benchmark's driver, on its own copy of a state directory. */
-// Host start to first Snapshot on this tree's copy of the snapshot
-// (ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs): a first host leaves its
-// board's projection, and a second is timed from its spawn to the first board message.
-// Fails above `LIMIT_MS`. Run `prepare.ts` first. Give it the executable a release ships,
-// `bun run build`'s `bin/collie`, to time what runs; without one it runs this tree's source.
 import { Effect, Schedule, Stream } from "effect";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { frontDoor, socketOf } from "../../src/host";
 import { platformLayer } from "../../src/platform";
 
-const LIMIT_MS = 1_000;
+const LIMIT_MS = 1000;
 const root = new URL("../../", import.meta.url).pathname;
 const work = `${root}.scratch/board-reads`;
 const state = `${work}/state`;
@@ -30,6 +25,7 @@ const env = {
 };
 
 const spawned: Array<Bun.Subprocess> = [];
+// WARNING: pass `bun run build`'s bin/collie to time what a release runs; without it this tree's source runs.
 const executable = Bun.argv[2];
 const host = () => {
   const command = executable === undefined ? ["bun", `${root}src/main.ts`] : [executable];
@@ -41,9 +37,11 @@ const host = () => {
   spawned.push(made);
   return made;
 };
-// A host left on the copy would answer the next run's door in place of its own.
+// WARNING: a host left on the copy would answer the next run's door in place of its own.
 process.on("exit", () => {
-  for (const one of spawned) one.kill("SIGKILL");
+  for (const one of spawned) {
+    one.kill("SIGKILL");
+  }
 });
 const stop = (one: Bun.Subprocess) =>
   Effect.runPromise(
@@ -58,7 +56,6 @@ const stop = (one: Bun.Subprocess) =>
     ),
   );
 
-/** The first board message a host on the copy sends, and how long after `from` it came. */
 const firstMessage = (from: number) =>
   Effect.runPromise(
     Effect.scoped(
@@ -67,7 +64,7 @@ const firstMessage = (from: number) =>
         return yield* Stream.runHead(door.board());
       }),
     ).pipe(
-      // The socket opens on the first call, which fails until the host listens.
+      // WARNING: the socket opens on the first call, which fails until the host listens.
       Effect.retry({ times: 12_000, schedule: Schedule.spaced("10 millis") }),
       Effect.orDie,
       Effect.map(() => performance.now() - from),
@@ -78,7 +75,7 @@ const firstMessage = (from: number) =>
 const log = () =>
   existsSync(`${state}/host.log`) ? readFileSync(`${state}/host.log`, "utf8") : "";
 
-// The first host fills the projection; its pass is done once it says how many it confirmed.
+// WARNING: the first host's pass is done only once it logs how many cards it confirmed.
 const first = host();
 const filled = await Effect.runPromise(
   Effect.suspend(() =>
@@ -103,4 +100,6 @@ const second = host();
 const first_snapshot_ms = Math.round(await firstMessage(started));
 await stop(second);
 console.log(JSON.stringify({ first_snapshot_ms, limit_ms: LIMIT_MS }));
-if (first_snapshot_ms > LIMIT_MS) process.exit(1);
+if (first_snapshot_ms > LIMIT_MS) {
+  process.exit(1);
+}

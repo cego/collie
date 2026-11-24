@@ -1,30 +1,18 @@
-// Where a workflow module lives, and which of them wins.
-//
-// No host and no engine here: this is the lookup itself, which is what decides whether
-// saving a file is enough to run it. The questions are about files — which layer claims
-// an id, what an unreadable override does to the one below it, and what counts as an
-// edit — so the answers are read off a directory rather than a running process.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
-import {
-  discover,
-  searchPath,
-  type Catalogued,
-  type EntryLayer,
-  type Root,
-} from "../src/discovery";
-import { RevisionRows, onSyncedRevisions, type ModuleRevisionsApi } from "../src/module-revisions";
+import { discover, searchPath } from "../src/discovery";
+import type { Catalogued, EntryLayer, Root } from "../src/discovery";
+import { RevisionRows, onSyncedRevisions } from "../src/module-revisions";
+import type { ModuleRevisionsApi } from "../src/module-revisions";
 import { revisionOf } from "../src/engine";
 import { runEffect } from "./support/effect";
 
 const repo = new URL("../", import.meta.url).pathname;
 
-/** A whole entry, in as much as discovery reads one: what it is, not what it does. */
 const entry = (id: string, title = `The ${id} workflow`, declared = "") => `
 import { defineWorkflow } from "collie";
 import { Effect, Layer, Schema } from "effect";
@@ -37,7 +25,6 @@ export default defineWorkflow({
 });
 `;
 
-/** The three layers, empty, in a directory of their own. */
 const layers = Effect.fn("DiscoveryTest.layers")(function* (prefix: string) {
   const fs = yield* FileSystem.FileSystem;
   const dir = yield* fs.makeTempDirectoryScoped({ prefix });
@@ -46,7 +33,9 @@ const layers = Effect.fn("DiscoveryTest.layers")(function* (prefix: string) {
     userDir: `${dir}/install/user`,
     project: `${dir}/project`,
   });
-  for (const layer of roots) yield* fs.makeDirectory(layer.dir, { recursive: true });
+  for (const layer of roots) {
+    yield* fs.makeDirectory(layer.dir, { recursive: true });
+  }
   const dirOf = (layer: EntryLayer) =>
     Option.getOrUndefined(Arr.findFirst(roots, (root) => root.layer === layer))!.dir;
   return {
@@ -90,7 +79,6 @@ test("the nearest layer that claims an id is the one a run would get", () =>
       ]);
       expect(found.entries[1]?.path).toBe(overriding);
 
-      // Deleting an override is not a broken one: the layer below claims the id again.
       yield* where.remove("project", "proof.workflow.ts");
       const after = yield* discover(where.roots);
       expect(Arr.map(after.entries, (one) => [one.id, one.layer])).toEqual([
@@ -109,7 +97,6 @@ test("an override that cannot be read refuses its own id rather than running the
       yield* where.save("user", "plain.workflow.ts", entry("plain"));
 
       const found = yield* discover(where.roots);
-      // The id is refused, and the file that refused it is named.
       expect(Arr.map(found.entries, (one) => one.id)).toEqual(["plain"]);
       expect(Arr.map(found.problems, (one) => [one.id, one.layer, one.path])).toEqual([
         ["proof", "project", broken],
@@ -161,8 +148,7 @@ test("two entries in one layer claiming one id are an error that names the other
       const first = yield* where.save("user", "copy.workflow.ts", entry("proof"));
       const second = yield* where.save("user", "proof.workflow.ts", entry("proof"));
       yield* where.save("user", "plain.workflow.ts", entry("plain"));
-      // The layer below has a perfectly good one, which an ambiguous claim above still
-      // refuses: a duplicate is a mistake to fix, not a reason to pick for the author.
+      // WARNING: An ambiguous claim is refused even when the layer below has a good one: a duplicate is a mistake to fix, not a choice to make.
       yield* where.save("shipped", "proof.workflow.ts", entry("proof"));
 
       const found = yield* discover(where.roots);
@@ -180,8 +166,7 @@ test("only entry files are looked at, and an entry is read without being built",
       yield* where.save("user", "helper.ts", "export const label = (note: string) => note;\n");
       yield* where.save("user", "notes.md", "A prompt beside the code.\n");
       yield* where.save("user", "proof.workflow.ts.bak", entry("stale"));
-      // Discovery imports a module to read what it says it is; building it is what a
-      // start does, so an entry nobody could build is still an entry.
+      // WARNING: Discovery imports a module only to read it; building is what a start does, so an unbuildable entry is still an entry.
       yield* where.save(
         "user",
         "plain.workflow.ts",
@@ -215,8 +200,7 @@ test("an edited helper is a new revision of the entry beside it", () =>
       );
       const after = yield* discover(where.roots);
       expect(after.entries[0]?.revision).not.toBe(before.entries[0]?.revision);
-      // An edit to a file the entry imports is an edit to the entry: it is the directory
-      // a generation is staged from, so the revision is the directory's.
+      // WARNING: An edit to a file the entry imports is an edit to the entry; the revision is the directory's.
       expect(after.entries[0]?.id).toBe("proof");
     }).pipe(Effect.scoped),
   ));
@@ -236,7 +220,7 @@ test("one revision reads each source once and the next revision reads an edited 
       yield* fs.makeDirectory(linked);
       yield* fs.writeFileString(`${linked}/note.md`, "Before");
       yield* fs.symlink(linked, `${dir}/linked-notes`);
-      const reads: string[] = [];
+      const reads: Array<string> = [];
       const counted: FileSystem.FileSystem = {
         ...fs,
         readFileString: (file, encoding) =>
@@ -286,12 +270,10 @@ test("an installed dependency counts by its name, not by everything inside it", 
       yield* fs.writeFileString(`${installed}/index.js`, "module.exports = 1;\n");
 
       const before = yield* discover(where.roots);
-      // A dependency's own contents are not read: the toolchain a module is typechecked
-      // against is installed here, and reading all of it would be on the way of a start.
+      // WARNING: A dependency's contents are not read: reading all of the toolchain would slow every start.
       yield* fs.writeFileString(`${installed}/index.js`, "module.exports = 2;\n");
       expect((yield* discover(where.roots)).entries[0]?.revision).toBe(before.entries[0]?.revision);
 
-      // Installing something is still a change, because its name is new.
       yield* fs.writeFileString(`${installed}/other.js`, "module.exports = 3;\n");
       expect((yield* discover(where.roots)).entries[0]?.revision).not.toBe(
         before.entries[0]?.revision,
@@ -302,8 +284,7 @@ test("an installed dependency counts by its name, not by everything inside it", 
 test("the user's workflows are not something the installation's own checkout can overwrite", () =>
   runEffect(
     Effect.gen(function* () {
-      // `collie upgrade` fast-forwards this checkout. A user directory git tracked or did
-      // not ignore is one an upgrade could write over, which is the whole risk here.
+      // WARNING: collie upgrade fast-forwards this checkout; an untracked or unignored user directory is one it could write over.
       const ignored = yield* Effect.promise(() =>
         Bun.$`git check-ignore user/workflows/mine.workflow.ts`.cwd(repo).nothrow().quiet(),
       );
@@ -343,10 +324,6 @@ test("a module still hinting gitlab-repository loads, its Input read as reposito
     }).pipe(Effect.scoped),
   ));
 
-/**
- * `discover` as a host runs it: revisions kept in rows, and every path it touches through
- * the file system noted, which is how staging an entry and hashing a tree both reach a file.
- */
 const hosted = Effect.fn("DiscoveryTest.hosted")(function* (roots: ReadonlyArray<Root>) {
   const fs = yield* FileSystem.FileSystem;
   const revisions = new Map<string, string>();
@@ -373,7 +350,6 @@ const hosted = Effect.fn("DiscoveryTest.hosted")(function* (roots: ReadonlyArray
     );
   return {
     revisions,
-    /** Paths under any layer touched since the last call. */
     layerReads: () => {
       const seen = Arr.filter(touched, (path) =>
         Arr.some(roots, (root) => pipe_(path, Str.includes(root.dir))),
@@ -381,9 +357,7 @@ const hosted = Effect.fn("DiscoveryTest.hosted")(function* (roots: ReadonlyArray
       touched.length = 0;
       return seen;
     },
-    /** As a start, an offer taken or `collie workflow check` reads. */
     fresh: asHost(discover(roots)),
-    /** As a listing reads. */
     synced: asHost(onSyncedRevisions(discover(roots))),
   };
 });
@@ -418,7 +392,7 @@ test("an entry or helper edit a start reads is what the next listing says", () =
       yield* host.fresh;
 
       yield* where.save("user", "named.ts", 'export const title = "After";\n');
-      // A listing reads the kept revision, which nothing has moved yet.
+      // WARNING: A listing reads the kept revision, which nothing has moved yet.
       expect((yield* host.synced).entries[0]?.title).toBe("Before");
       expect((yield* host.fresh).entries[0]?.title).toBe("After");
       host.layerReads();
@@ -452,7 +426,7 @@ test("a fault is kept while its file is, and a fixed file clears it at the next 
       expect(host.layerReads()).toEqual([]);
 
       yield* where.save("user", "proof.workflow.ts", entry("proof"));
-      // What the backstop does for an edit made outside Collie.
+      // WARNING: This is what the backstop does for an edit made outside Collie.
       host.revisions.set(where.dirOf("user"), yield* revisionOf(where.dirOf("user")));
       const fixed = yield* host.synced;
       expect(Arr.map(fixed.entries, (one) => one.id)).toEqual(["proof"]);
@@ -513,7 +487,7 @@ test("a read that is not a listing, as `collie workflow check` takes, imports ev
       host.layerReads();
 
       yield* host.fresh;
-      // Hashing reads the file too; only an import looks for its staged generation.
+      // WARNING: Hashing reads the file too; only an import looks for its staged generation.
       const staged = Arr.filter(host.layerReads(), (path) =>
         pipe_(path, Str.includes("/generations/")),
       );

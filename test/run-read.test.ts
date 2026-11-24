@@ -1,6 +1,3 @@
-// A Run's log, diff or report read by line range or searched, a page at a time that says
-// whether it is the whole and where the next one starts.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
@@ -39,104 +36,96 @@ const fromTool = (envelope: { readonly data?: unknown }) =>
     Effect.orDie,
   );
 
-test(
-  "a ranged read of a Run's log answers exactly those lines, its total and where the next range starts",
-  () =>
-    proves(
-      "collie-run-read-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          yield* Effect.gen(function* () {
-            yield* (yield* Store).admit({
-              request: "logged",
-              run: "logged",
-              workflow: "proof",
-              project: world.project,
-              input: {},
-              provenance: {},
-              options: {},
-              generation: "proof-1",
-              execution: "logged",
-              task: null,
-              parent: null,
-            });
-          }).pipe(
-            Effect.provide(foundationLayer({ dir: world.state })),
-            Effect.scoped,
+test("a ranged read of a Run's log answers exactly those lines, its total and where the next range starts", () =>
+  proves(
+    "collie-run-read-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* Effect.gen(function* () {
+          yield* (yield* Store).admit({
+            request: "logged",
+            run: "logged",
+            workflow: "proof",
+            project: world.project,
+            input: {},
+            provenance: {},
+            options: {},
+            generation: "proof-1",
+            execution: "logged",
+            task: null,
+            parent: null,
+          });
+        }).pipe(Effect.provide(foundationLayer({ dir: world.state })), Effect.scoped, Effect.orDie);
+        yield* fs.makeDirectory(runDir(world.state, "logged"), { recursive: true });
+        yield* fs.writeFileString(
+          `${runDir(world.state, "logged")}/log.txt`,
+          Arr.join(
+            Arr.makeBy(2000, (i) => `line ${i + 1}`),
+            "\n",
+          ) + "\n",
+        );
+        const wanted = Arr.makeBy(100, (i) => ({ line: 100 + i, text: `line ${100 + i}` }));
+        const range = { run: "logged", ref: "log", start: 100, count: 100 };
+
+        for (const tool of ["collie_run", "collie_artefacts"]) {
+          const input = encode(range);
+          const said = yield* collie(world, ["tools", "call", tool, "--input", input]);
+          const page = yield* fromTool(said.envelope);
+          expect({ tool, page }).toEqual({
+            tool,
+            page: {
+              ref: "log",
+              total: 2000,
+              from: 100,
+              to: 199,
+              lines: wanted,
+              complete: false,
+              next: 200,
+            },
+          });
+          const none = yield* collie(world, [
+            "tools",
+            "call",
+            tool,
+            "--input",
+            encode({ ...range, count: 0 }),
+          ]);
+          const told = yield* Schema.decodeUnknownEffect(ToolText)(none.envelope.data).pipe(
             Effect.orDie,
           );
-          yield* fs.makeDirectory(runDir(world.state, "logged"), { recursive: true });
-          yield* fs.writeFileString(
-            `${runDir(world.state, "logged")}/log.txt`,
-            Arr.join(
-              Arr.makeBy(2000, (i) => `line ${i + 1}`),
-              "\n",
-            ) + "\n",
-          );
-          const wanted = Arr.makeBy(100, (i) => ({ line: 100 + i, text: `line ${100 + i}` }));
-          const range = { run: "logged", ref: "log", start: 100, count: 100 };
+          expect({ tool, text: told.text }).toEqual({
+            tool,
+            text: `${tool} could not read log (invalid_input): count takes 1 or more; not 0.`,
+          });
+        }
+        const refused = yield* collie(world, ["run", "read", "logged", "log", "--count", "0"]);
+        expect([refused.envelope.error?.code, refused.envelope.error?.message]).toEqual([
+          "invalid_input",
+          "count takes 1 or more; not 0.",
+        ]);
 
-          for (const tool of ["collie_run", "collie_artefacts"]) {
-            const input = encode(range);
-            const said = yield* collie(world, ["tools", "call", tool, "--input", input]);
-            const page = yield* fromTool(said.envelope);
-            expect({ tool, page }).toEqual({
-              tool,
-              page: {
-                ref: "log",
-                total: 2000,
-                from: 100,
-                to: 199,
-                lines: wanted,
-                complete: false,
-                next: 200,
-              },
-            });
-            const none = yield* collie(world, [
-              "tools",
-              "call",
-              tool,
-              "--input",
-              encode({ ...range, count: 0 }),
-            ]);
-            const told = yield* Schema.decodeUnknownEffect(ToolText)(none.envelope.data).pipe(
-              Effect.orDie,
-            );
-            expect({ tool, text: told.text }).toEqual({
-              tool,
-              text: `${tool} could not read log (invalid_input): count takes 1 or more; not 0.`,
-            });
-          }
-          const refused = yield* collie(world, ["run", "read", "logged", "log", "--count", "0"]);
-          expect([refused.envelope.error?.code, refused.envelope.error?.message]).toEqual([
-            "invalid_input",
-            "count takes 1 or more; not 0.",
-          ]);
-
-          const cli = yield* collie(world, [
-            "run",
-            "read",
-            "logged",
-            "log",
-            "--start",
-            "1901",
-            "--count",
-            "200",
-          ]);
-          const last = yield* Schema.decodeUnknownEffect(Lines)(cli.envelope.data);
-          expect([last.from, last.to, last.lines.length, last.complete, last.next]).toEqual([
-            1901,
-            2000,
-            100,
-            true,
-            null,
-          ]);
-        }),
-      [],
-    ),
-  120_000,
-);
+        const cli = yield* collie(world, [
+          "run",
+          "read",
+          "logged",
+          "log",
+          "--start",
+          "1901",
+          "--count",
+          "200",
+        ]);
+        const last = yield* Schema.decodeUnknownEffect(Lines)(cli.envelope.data);
+        expect([last.from, last.to, last.lines.length, last.complete, last.next]).toEqual([
+          1901,
+          2000,
+          100,
+          true,
+          null,
+        ]);
+      }),
+    [],
+  ));
 
 test("a search of a Run's diff answers each matching line with its neighbours, and whether every match was", () =>
   runEffect(
@@ -144,7 +133,7 @@ test("a search of a Run's diff answers each matching line with its neighbours, a
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const repo = yield* fs.makeTempDirectoryScoped({ prefix: "collie-read-diff-" });
-        const git = (...args: string[]) =>
+        const git = (...args: Array<string>) =>
           exec(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd: repo });
         yield* git("init", "-q", "-b", "main");
         yield* fs.writeFileString(`${repo}/base.txt`, "base\n");
@@ -162,7 +151,6 @@ test("a search of a Run's diff answers each matching line with its neighbours, a
         yield* git("commit", "-qm", "work");
         const state = yield* fs.makeTempDirectoryScoped({ prefix: "collie-read-state-" });
         const run = yield* madeRun(state, { cwd: repo, branch: "feature", state: "succeeded" });
-        // Read in parts smaller than the patch, as a long diff is.
         const patch = yield* wholeText((offset) =>
           fetchRef(run, "diff:listing.txt", { offset, length: 64 }),
         );

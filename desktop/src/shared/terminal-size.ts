@@ -1,12 +1,9 @@
-// When a Desktop terminal tells herdr's controller its size. Each resize redraws the agent's
-// whole pane, so a drag or a layout change sends only the size it settles at.
-
+// WARNING: each resize redraws the agent's whole pane, so only the size a drag settles at is sent.
 export interface Timers<Handle> {
   readonly set: (run: () => void, ms: number) => Handle;
   readonly clear: (handle: Handle) => void;
 }
 
-/** How long a size must hold before the pane is resized to it. */
 export const SETTLE_MS = 120;
 
 export const settledResizes = <Handle>(
@@ -16,7 +13,9 @@ export const settledResizes = <Handle>(
   let sent: { cols: number; rows: number } | null = null;
   let pending: { handle: Handle } | null = null;
   const cancel = () => {
-    if (pending !== null) timers.clear(pending.handle);
+    if (pending !== null) {
+      timers.clear(pending.handle);
+    }
     pending = null;
   };
   const tell = (cols: number, rows: number) => {
@@ -24,7 +23,7 @@ export const settledResizes = <Handle>(
     send(cols, rows);
   };
   return {
-    /** A controller just opened, and refused any resize sent while it was starting. */
+    // WARNING: a controller just opened refuses any resize sent while it starts.
     opened: (cols: number, rows: number) => {
       cancel();
       tell(cols, rows);
@@ -34,7 +33,9 @@ export const settledResizes = <Handle>(
       pending = {
         handle: timers.set(() => {
           pending = null;
-          if (sent?.cols !== cols || sent.rows !== rows) tell(cols, rows);
+          if (sent?.cols !== cols || sent.rows !== rows) {
+            tell(cols, rows);
+          }
         }, SETTLE_MS),
       };
     },

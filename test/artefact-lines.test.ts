@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { artefactLines, type Artefact } from "../src/artefact-model";
+import { artefactLines } from "../src/artefact-model";
+import type { Artefact } from "../src/artefact-model";
 
 const base: Artefact = {
   id: "a1",

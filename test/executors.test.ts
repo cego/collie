@@ -1,23 +1,12 @@
-// What confirming an installation-wide proposal actually does.
-//
-// These four kinds are the ones that are not about a Run — a fork, a change to what a
-// workspace's new Runs begin with, a cleanup, an upgrade — so nothing about a Run's
-// record says whether they worked. The file that was written and the Tasks that were
-// forgotten are what says it, and that is what is asserted here.
-//
-// The failure this is built against: an executor that writes a real file under the wrong
-// key, reports `applied` with the new contents, and is believed. A defaults file is read
-// by a Run under the directory it was started in, and the board that carries out a
-// confirmation is in the Home — so "it wrote a defaults file" and "a Run will read it"
-// are two different facts.
-
+// WARNING: A written defaults file counts only where a Run started in that workspace reads it; applied is not proof a Run will read it.
 import * as Option from "effect/Option";
 import { pipe as pipe_ } from "effect/Function";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { Effect, FileSystem } from "effect";
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
-import { readEnv, type PluginEnv } from "../src/env";
+import { readEnv } from "../src/env";
+import type { PluginEnv } from "../src/env";
 import { defaultsPath, readDefaults } from "../src/intent";
 import { executorFor, resetExecutors } from "../src/executors";
 import { registerRunExecutors } from "../src/operations";
@@ -27,10 +16,8 @@ import { runEffect } from "./support/effect";
 
 let stateDir: string;
 let env: PluginEnv;
-/** The directory every action below names as its workspace. */
 let picker: string;
 
-/** Where a Run started in `picker` reads its defaults, which is the only file that counts. */
 const defaultsOfW1 = Effect.fn("test.defaultsOfW1")(function* () {
   return yield* defaultsPath(stateDir, scopeKey({ session: null, workspaceId: null, cwd: picker }));
 });
@@ -49,8 +36,6 @@ beforeEach(() =>
       const fs = yield* FileSystem.FileSystem;
       resetExecutors();
       stateDir = yield* fs.makeTempDirectory({ prefix: "hw-executors-" });
-      // The baseline layer is the repository's own definitions, so there is a Workflow to
-      // fork; the user layer is a temp directory, so forking one writes nowhere real.
       const userDir = `${stateDir}/config`;
       yield* fs.makeDirectory(userDir);
       picker = `${stateDir}/picker`;
@@ -76,9 +61,7 @@ afterEach(() =>
   ),
 );
 
-// And once the file is done, because the registry is the process's: left registered, the
-// next file's confirmations run against these executors and the temp directory they
-// closed over, which `afterEach` has already deleted.
+// WARNING: The registry is the process's: left registered, the next file's confirmations run against executors closing over a deleted temp directory.
 afterAll(() => {
   resetExecutors();
 });
@@ -93,8 +76,6 @@ test("a default constraint is written where the workspace's own Runs read it", (
         text: "no force pushes",
       });
       expect(done.state).toBe("applied");
-      // Under the named workspace's key, which is where a Run started there looks — not
-      // under the board's own, which is the Home's and which no Run ever opens.
       const written = yield* readDefaults(yield* defaultsOfW1());
       expect(
         Option.getOrUndefined(
@@ -132,9 +113,7 @@ test("a removal names the constraint's id, and prose removes nothing and says so
       });
       const id = (yield* readDefaults(yield* defaultsOfW1()))!.constraints[0]!.id;
 
-      // Ids are a hash of the text, so the words never match one. Reporting that as
-      // applied would tell the human a standing constraint was dropped that is still
-      // there, which is the whole reason this refuses.
+      // WARNING: Ids are a hash of the text, so the words never match one; reporting that as applied would claim a constraint was dropped that is still there.
       const byProse = yield* carry({
         kind: "update_defaults",
         change: "remove-constraint",
@@ -219,9 +198,6 @@ test("a cleanup forgets the closed Tasks no Run belongs to, and keeps the rest",
 test("an upgrade that cannot run reports a failure rather than taking the confirmation down", () =>
   runEffect(
     Effect.gen(function* () {
-      // Its own plugin root, empty: no checkout to pull and no `prepare.sh` to run, so
-      // this asks nothing of the network and of nobody's repository. A confirmation
-      // carrying out a sequence has to be told the step failed, not die inside it.
       const done = yield* carry({ kind: "upgrade" }, { ...env, pluginRoot: stateDir });
       expect(done.state).toBe("failed");
       expect(done.note).toContain(stateDir);

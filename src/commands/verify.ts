@@ -6,30 +6,27 @@ import { Argument, Command, Flag } from "effect/cli";
 import { err } from "../operations";
 import { refusal, verifyRun } from "../lifecycle";
 import { FrontDoor, HostRefused } from "../board-model";
-import { type Echo } from "../verify";
-import { isolatedHint, movedLine, type Verification } from "../verify-model";
+import type { Echo } from "../verify";
+import { isolatedHint, movedLine } from "../verify-model";
+import type { Verification } from "../verify-model";
 import { checkNameOf } from "../verify-spec";
 import { NAMED_FAILURES, failureReader } from "../bun-tests";
 import { printResult } from "../envelope";
 import { answering, cliDoor, root } from "./shared";
 
-/**
- * The command's own output, shown as it runs: a failure says why the first time, rather
- * than after running it again outside Collie. Under `--json` both streams go to stderr,
- * since stdout is the one envelope.
- */
+// WARNING: under --json both streams go to stderr, since stdout is the one envelope.
 const echoed = Effect.fn("collie.verify.echoed")(function* () {
   const stdio = yield* Stdio.Stdio;
   const json = (yield* root).json;
   const to = (stream: "stdout" | "stderr") => (text: string) =>
     Stream.make(text).pipe(Stream.run(stdio[stream]({ endOnDone: false })), Effect.ignore);
-  return {
+  const returned: Echo = {
     stdout: to(json ? "stderr" : "stdout"),
     stderr: to("stderr"),
-  } satisfies Echo;
+  };
+  return returned;
 });
 
-/** Where the whole log is read, as a reference `collie run read` takes. */
 const logRef = (record: Verification) => {
   const under = `/evidence/${record.run}/`;
   const log = record.log ?? "";
@@ -44,7 +41,6 @@ const unstableWhy = (record: Verification) =>
     ? `the tree could not be measured: ${record.start.unmeasured ?? record.end.unmeasured}`
     : `the tree moved while it ran, from ${record.start.fingerprint} to ${record.end.fingerprint}`;
 
-/** What an agent is answered instead of the stream. */
 const bounded = (record: Verification, ran: boolean, failures: ReadonlyArray<string>) => {
   const log = logRef(record);
   const failed = failures.slice(0, NAMED_FAILURES);
@@ -80,14 +76,7 @@ const bounded = (record: Verification, ran: boolean, failures: ReadonlyArray<str
   };
 };
 
-/**
- * A command whose result Collie watched, bound to the tree it ran on. Not a mutation:
- * running the tests twice is running the tests twice, and a request id that replayed the
- * receipt would hand back a result about a tree that has since moved.
- *
- * The exit status is the command's own, so anything wrapping `collie verify -- bun test`
- * behaves as it would around `bun test`.
- */
+// WARNING: not a mutation: a replayed request id would hand back a result about a tree that has since moved.
 export const verify = Command.make(
   "verify",
   {
@@ -138,10 +127,11 @@ export const verify = Command.make(
   },
   ({ runId, cwd, name, expect, again, isolated, prepare, command }) => {
     const [executable, ...argv] = command;
-    if (executable === undefined)
+    if (executable === undefined) {
       return printResult(err("invalid_input", "verify needs a command to run."), true);
+    }
     const wanted = Option.getOrElse(expect, () => "pass");
-    // ponytail: split on spaces, so a prepare that needs a quoted word goes in a script.
+    // WARNING: split on spaces, so a prepare that needs a quoted word goes in a script.
     const [prepareWith, ...prepareArgv] = Arr.filter(
       Str.split(
         Option.getOrElse(prepare, () => ""),
@@ -151,11 +141,12 @@ export const verify = Command.make(
     );
     const prepared =
       prepareWith === undefined ? undefined : { executable: prepareWith, argv: prepareArgv };
-    if (wanted !== "pass" && wanted !== "fail")
+    if (wanted !== "pass" && wanted !== "fail") {
       return printResult(
         err("invalid_input", `--expect is "pass" or "fail", not "${wanted}".`),
         true,
       );
+    }
     return answering((env) =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -163,8 +154,9 @@ export const verify = Command.make(
           const run = Option.getOrElse(runId, () =>
             Schema.is(FrontDoor)(door) ? null : door.from.run,
           );
-          if (run === null)
+          if (run === null) {
             return err("invalid_input", "verify needs --run outside a Run's agent pane.");
+          }
           const request = {
             runId: run,
             name: Option.getOrElse(name, () => checkNameOf(executable, argv)),
@@ -181,7 +173,9 @@ export const verify = Command.make(
             where === undefined ? request : { ...request, cwd: where },
             door,
           );
-          if (!opened.ok) return opened;
+          if (!opened.ok) {
+            return opened;
+          }
           const byAgent = !Schema.is(FrontDoor)(door);
           const readers = { stdout: failureReader(), stderr: failureReader() };
           const shown = yield* echoed();
@@ -189,23 +183,18 @@ export const verify = Command.make(
             stdout: (text) => Effect.sync(() => readers.stdout.feed(text)),
             stderr: (text) => Effect.sync(() => readers.stderr.feed(text)),
           };
-          // Output before Started is the host's own word, such as a memory wait, and an agent sees it.
           let started = false;
           type Answered = { verification: Verification; ran: boolean };
-          const answered = yield* Stream.runFoldEffect(
-            opened.events,
-            (): Answered | null => null,
-            (last, event) =>
-              event._tag === "Output"
-                ? (byAgent && started ? bounding : shown)
-                    [event.stream](event.text)
-                    .pipe(Effect.as(last))
-                : event._tag === "Started"
-                  ? Effect.sync(() => {
-                      started = true;
-                      return last;
-                    })
-                  : Effect.succeed({ verification: event.verification, ran: event.ran ?? true }),
+          const nothingYet: () => Answered | null = () => null;
+          const answered = yield* Stream.runFoldEffect(opened.events, nothingYet, (last, event) =>
+            event._tag === "Output"
+              ? Effect.as((byAgent && started ? bounding : shown)[event.stream](event.text), last)
+              : event._tag === "Started"
+                ? Effect.sync(() => {
+                    started = true;
+                    return last;
+                  })
+                : Effect.succeed({ verification: event.verification, ran: event.ran ?? true }),
           ).pipe(
             Effect.catch((cause) =>
               Effect.succeed(
@@ -215,12 +204,15 @@ export const verify = Command.make(
               ),
             ),
           );
-          if (answered === null)
+          if (answered === null) {
             return err("operation_failed", "The verification ended without a record.");
-          if ("ok" in answered) return answered;
+          }
+          if ("ok" in answered) {
+            return answered;
+          }
           const { verification: record, ran } = answered;
           process.exitCode = record.exit;
-          if (byAgent)
+          if (byAgent) {
             return bounded(
               record,
               ran,
@@ -228,6 +220,7 @@ export const verify = Command.make(
                 ? [...readers.stdout.names(), ...readers.stderr.names()]
                 : Arr.map(record.failed ?? [], (one) => `${one.file} > ${one.name}`),
             );
+          }
           return {
             ok: true as const,
             data: { verification: record, ran },

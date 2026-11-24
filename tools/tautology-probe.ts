@@ -1,16 +1,4 @@
 #!/usr/bin/env bun
-// Whether the shipped reviewer raises a Tautology (ADR-draft-a-tautology-proves-nothing, D6)
-// — against a real model, told what a review Run's reviewer is told.
-//
-//   bun run tools/tautology-probe.ts [--runs 3] [--keep]
-//
-// It costs real money (each run is one full review at the reviewer's own model and effort)
-// and needs a working `claude`, so it is never part of `bun test`.
-//
-// The fixture in `tools/tautology-fixture/` is a base and a patch, applied in a scratch git
-// repository, with the ticket, recorded checks and hand-off a reviewer is shown, and a key
-// naming which of its items are Tautologies. It passes only when, in most runs, every
-// Tautology is raised and no honest item is.
 
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -31,12 +19,10 @@ import type { Verification } from "../src/verify";
 import { renderAnswered } from "../workflows/implement.workflow";
 import { REVIEW, REVIEWER, told } from "../workflows/reviewing";
 
-/** One item of the fixture, at the lines a finding has to name to count against it. */
 export interface KeyItem {
   readonly id: string;
   readonly kind: string;
   readonly tautology: boolean;
-  /** Relative to the scratch directory: `repo/…`, `plan/…` or `run/…`. */
   readonly file: string;
   readonly lines: readonly [number, number];
 }
@@ -46,7 +32,6 @@ export interface Raised {
   readonly line?: number;
 }
 
-/** Whether a finding's path and the key's name one file, however much of the path each gives. */
 const sameFile = (named: string, keyed: string) => {
   const a = pipe(named, Str.replace(/^\.\//, ""));
   return a === keyed || pipe(a, Str.endsWith(`/${keyed}`)) || pipe(keyed, Str.endsWith(`/${a}`));
@@ -59,7 +44,6 @@ const hits = (finding: Raised, item: KeyItem) =>
   finding.line >= item.lines[0] &&
   finding.line <= item.lines[1];
 
-/** Each Tautology most runs missed, and each honest item most runs raised. */
 export function scored(runs: ReadonlyArray<ReadonlyArray<Raised>>, key: ReadonlyArray<KeyItem>) {
   const raised = (item: KeyItem) =>
     Arr.filter(runs, (findings) => Arr.some(findings, (finding) => hits(finding, item))).length *
@@ -75,7 +59,6 @@ const runtime = ManagedRuntime.make(BunServices.layer);
 const repo = new URL("../", import.meta.url).pathname;
 const fixture = `${repo}tools/tautology-fixture`;
 
-/** The longest one review may take before the probe stops waiting for it. */
 const REVIEW_CEILING = Duration.minutes(45);
 
 const KeySchema = Schema.Array(
@@ -114,12 +97,11 @@ const readAnswers = flow(
   Result.getOrThrow,
 );
 
-const git = (cwd: string, ...args: string[]) =>
+const git = (cwd: string, ...args: Array<string>) =>
   Effect.promise(() =>
     Bun.$`git -c user.name=probe -c user.email=probe@example.invalid ${args}`.cwd(cwd).quiet(),
   );
 
-/** The fixture as a branch `hours` over `master`, beside its plan and run directories. */
 const scratch = Effect.fn("probe.scratch")(function* (keep: boolean) {
   const fs = yield* FileSystem.FileSystem;
   const dir = keep
@@ -145,7 +127,6 @@ const scratch = Effect.fn("probe.scratch")(function* (keep: boolean) {
   return { dir, work, trees: { head: yield* sha("HEAD"), base: yield* sha("master") } };
 });
 
-/** The fixture's journal as recorded checks, on the reviewed tree unless one says `earlier`. */
 export const journal = (
   raw: string,
   cwd: string,
@@ -154,37 +135,35 @@ export const journal = (
 ) => {
   const final = { head_sha: trees.head, fingerprint: "fixture" };
   const earlier = { head_sha: trees.base, fingerprint: "fixture-base" };
-  const verifications = Arr.map(readJournal(raw), (one, n): Verification => ({
-    id: `fixture-${n}`,
-    run: "tautology-probe",
-    name: one.name,
-    executable: one.command[0],
-    argv: one.command.slice(1),
-    cwd,
-    start: one.tree === "earlier" ? earlier : final,
-    end: one.tree === "earlier" ? earlier : final,
-    exit: one.result === "pass" ? 0 : 1,
-    seconds: 1,
-    tail: { stdout: "", stderr: "" },
-    expect: "pass",
-    result: one.result,
-    at,
-    by: one.by,
-  }));
+  const verifications = Arr.map(readJournal(raw), (one, n) => {
+    const returned: Verification = {
+      id: `fixture-${n}`,
+      run: "tautology-probe",
+      name: one.name,
+      executable: one.command[0],
+      argv: one.command.slice(1),
+      cwd,
+      start: one.tree === "earlier" ? earlier : final,
+      end: one.tree === "earlier" ? earlier : final,
+      exit: one.result === "pass" ? 0 : 1,
+      seconds: 1,
+      tail: { stdout: "", stderr: "" },
+      expect: "pass",
+      result: one.result,
+      at,
+      by: one.by,
+    };
+    return returned;
+  });
   return renderRecordedChecks({ verifications, final });
 };
 
-/**
- * The environment without what names a Run's agent, so a `collie verify` the reviewer runs
- * is refused rather than recorded on, and run in the checkout of, the Run the probe was
- * started from.
- */
+// WARNING: without what names a Run's agent, a verify the reviewer runs is refused, not recorded on the probe's Run.
 export const outsideAnyRun = (env: NodeJS.ProcessEnv) =>
   Rec.fromEntries(
     Arr.filter(Rec.toEntries(env), ([name]) => !["COLLIE_RUN", "COLLIE_AGENT"].includes(name)),
   );
 
-/** One reviewer, launched as a review Run launches it, and the findings it wrote. */
 const review = Effect.fn("probe.review")(function* (
   cwd: string,
   persona: string,
@@ -279,7 +258,9 @@ const probe = Effect.fn("probe.run")(function* (runs: number, keep: boolean) {
     });
     yield* fs.writeFileString(`${dir}/out/review-${n}.prompt.md`, prompt);
     const got = yield* review(work, persona, prompt, output);
-    if (got.problem !== null) yield* Effect.logWarning(`run ${n}: ${got.problem}`);
+    if (got.problem !== null) {
+      yield* Effect.logWarning(`run ${n}: ${got.problem}`);
+    }
     yield* Effect.log(`run ${n}: ${got.findings.length} finding(s)`);
     all.push(got.findings);
   }
@@ -330,7 +311,6 @@ const probe = Effect.fn("probe.run")(function* (runs: number, keep: boolean) {
   return missed.length === 0 && falselyRaised.length === 0 ? 0 : 1;
 });
 
-// Only as a command. Imported — the scorer has a unit test — this makes no call.
 if (import.meta.main) {
   const at = Bun.argv.indexOf("--runs");
   const runs = at > 0 ? Number(Bun.argv[at + 1]) : 3;

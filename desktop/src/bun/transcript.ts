@@ -1,11 +1,10 @@
-// A conversation already had, read back from the transcript Claude Code keeps of it. Decoded
-// rather than typed against the SDK, like the live stream; anything unknown is skipped.
-
 import * as Arr from "effect/Array";
 import { Option, Schema } from "effect";
 import { isString } from "../../../src/schema";
 import { attachmentPart, fromListing } from "../shared/attachments";
-import { type About, type ChatMessage, fromAboutNote } from "../shared/chat-view";
+import { fromAboutNote } from "../shared/chat-view";
+import type { About, ChatMessage } from "../shared/chat-view";
+import { stringifyJson } from "../../../src/json";
 
 const Text = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
 const Other = Schema.Struct({ type: Schema.String });
@@ -57,7 +56,7 @@ const decodeEntry = Schema.decodeUnknownOption(Entry);
 
 type Part = ChatMessage["parts"][number];
 
-/** What Claude Code writes as a user message when a turn is interrupted. */
+// WARNING: Claude Code writes this text as the user message when a turn is interrupted.
 const INTERRUPTED = /^\[Request interrupted by user/;
 
 const textOf = (
@@ -70,13 +69,9 @@ const textOf = (
         "\n",
       );
 
-/**
- * The human's words, then the files Desktop listed after them, and the card Desktop noted
- * the message was about; the images and documents the model was handed are not the view's.
- */
 const humanMessage = (content: Parameters<typeof textOf>[0]) => {
   if (isString(content)) {
-    const parts: Part[] = content === "" ? [] : [{ type: "text", content }];
+    const parts: Array<Part> = content === "" ? [] : [{ type: "text", content }];
     return { parts, about: null };
   }
   const texts = Arr.flatMap(content, (part) =>
@@ -94,19 +89,18 @@ const humanMessage = (content: Parameters<typeof textOf>[0]) => {
   );
   const words = Arr.join(at < 0 ? own : own.slice(0, at), "\n");
   const files = at < 0 ? [] : (fromListing(own[at]!) ?? []);
-  const parts: Part[] = [
+  const parts: Array<Part> = [
     ...(words === "" ? [] : [{ type: "text" as const, content: words }]),
     ...Arr.map(files, attachmentPart),
   ];
   return { parts, about };
 };
 
-/** The human's messages and the answers, each answer one message however many model turns it took. */
-export const transcriptOf = (entries: ReadonlyArray<unknown>): ReadonlyArray<ChatMessage> => {
+export const transcriptOf = (entries: ReadonlyArray<unknown>) => {
   const messages: Array<{
     id: string;
     role: ChatMessage["role"];
-    parts: Part[];
+    parts: Array<Part>;
     metadata?: { about: About };
   }> = [];
   for (const entry of Arr.flatMap(
@@ -117,7 +111,9 @@ export const transcriptOf = (entries: ReadonlyArray<unknown>): ReadonlyArray<Cha
       const content = entry.message.content;
       const said = textOf(content);
       for (const part of isString(content) ? [] : content) {
-        if (!("tool_use_id" in part)) continue;
+        if (!("tool_use_id" in part)) {
+          continue;
+        }
         const answering = messages.at(-1)?.parts ?? [];
         const at = Option.getOrElse(
           Arr.findFirstIndex(
@@ -127,38 +123,48 @@ export const transcriptOf = (entries: ReadonlyArray<unknown>): ReadonlyArray<Cha
           () => -1,
         );
         const call = answering[at];
-        if (call?.type === "tool-call") answering[at] = { ...call, output: textOf(part.content) };
+        if (call?.type === "tool-call") {
+          answering[at] = { ...call, output: textOf(part.content) };
+        }
       }
-      if (INTERRUPTED.test(said)) continue;
+      if (INTERRUPTED.test(said)) {
+        continue;
+      }
       const { parts, about } = humanMessage(content);
-      if (parts.length > 0)
+      if (parts.length > 0) {
         messages.push(
           about === null
             ? { id: entry.uuid, role: "user", parts }
             : { id: entry.uuid, role: "user", parts, metadata: { about } },
         );
+      }
       continue;
     }
-    const parts = Arr.flatMap(entry.message.content, (block): Part[] =>
-      "text" in block
-        ? [{ type: "text", content: block.text }]
-        : "thinking" in block
-          ? [{ type: "thinking", content: block.thinking }]
-          : "input" in block
-            ? [
-                {
-                  type: "tool-call",
-                  id: block.id,
-                  name: block.name,
-                  arguments: JSON.stringify(block.input ?? {}),
-                  state: "complete",
-                },
-              ]
-            : [],
-    );
+    const parts = Arr.flatMap(entry.message.content, (block) => {
+      const returned: Array<Part> =
+        "text" in block
+          ? [{ type: "text", content: block.text }]
+          : "thinking" in block
+            ? [{ type: "thinking", content: block.thinking }]
+            : "input" in block
+              ? [
+                  {
+                    type: "tool-call",
+                    id: block.id,
+                    name: block.name,
+                    arguments: stringifyJson(block.input ?? {}),
+                    state: "complete",
+                  },
+                ]
+              : [];
+      return returned;
+    });
     const last = messages.at(-1);
-    if (last?.role === "assistant") last.parts.push(...parts);
-    else messages.push({ id: entry.uuid, role: "assistant", parts });
+    if (last?.role === "assistant") {
+      last.parts.push(...parts);
+    } else {
+      messages.push({ id: entry.uuid, role: "assistant", parts });
+    }
   }
   return messages;
 };

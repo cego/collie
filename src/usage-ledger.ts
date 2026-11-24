@@ -1,45 +1,29 @@
-// Recording an agent's usage into its Run's ledger: its harness's records read from where
-// the last read stopped, attributed to the step, head, model and effort each request was
-// made under, and appended to the ledger only where they add something. The ledger is a
-// journal of its own, so the metrics every hot path reads whole stay small.
-//
-// A read that fails records nothing and fails nothing.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Order from "effect/Order";
 import * as Rec from "effect/Record";
 import { Effect, FileSystem, Option, Schema } from "effect";
 import { appendRunJournal, readRunJournal, runJournal } from "./journal";
-import { readControl, readingContext, type CompactionPorts } from "./compaction";
-import { launchDir, readLaunches, stemOf, type Launched } from "./launches";
+import { readControl, readingContext } from "./compaction";
+import type { CompactionPorts } from "./compaction";
+import { launchDir, readLaunches, stemOf } from "./launches";
+import type { Launched } from "./launches";
 import { shell } from "./mr";
 import { isoAt, nowIso } from "./time";
-import {
-  adds,
-  ledgerOf,
-  readSource,
-  Source,
-  type Reading,
-  type Startup,
-  UsageEntry,
-} from "./usage-ledger-model";
+import { adds, ledgerOf, readSource, Source, UsageEntry } from "./usage-ledger-model";
+import type { Reading, Startup } from "./usage-ledger-model";
 
 export interface LedgerDeps {
-  /** The host's directory: a Run's agents and its evidence are under it. */
   readonly dir: string;
 }
 
 export interface LedgerAt {
   readonly run: string;
   readonly agent: string;
-  /** The step a request with no launch to attribute it to is counted under. */
   readonly step?: string;
-  /** The Run is a Heal, so each of its sessions is recovery. */
   readonly heal?: boolean;
 }
 
-/** Where the agent works and keeps its controls, as its control record says. */
 export interface LedgerAgent {
   readonly harness: string;
   readonly cwd: string;
@@ -52,9 +36,8 @@ const ledgerPath = (runDir: string) => runJournal(runDir, "usage.jsonl");
 export const appendUsage = (runDir: string, entry: UsageEntry) =>
   appendRunJournal(ledgerPath(runDir), UsageJson, entry);
 
-/** A Run's ledger rows, from its evidence directory; none where it cannot be read. */
 export const readUsage = Effect.fn("UsageLedger.read")(function* (runDir: string) {
-  const none: UsageEntry[] = [];
+  const none: Array<UsageEntry> = [];
   return yield* readRunJournal(ledgerPath(runDir), UsageJson).pipe(
     Effect.orElseSucceed(() => none),
   );
@@ -69,7 +52,6 @@ const LedgerStateJson = Schema.fromJsonString(LedgerState);
 const NEWLINE = 10;
 const HEADS = 200;
 
-/** What was read before: how far into each source, and every source found so far. */
 const readState = (file: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -77,7 +59,6 @@ const readState = (file: string) =>
     return yield* Schema.decodeEffect(LedgerStateJson)(text);
   }).pipe(Effect.orElseSucceed(() => ({ offsets: {}, sources: [] })));
 
-/** The checkout's commits newest first, with when each was made, to say what head a request saw. */
 const headsOf = (cwd: string) =>
   shell("git", ["log", "--first-parent", "--format=%H %ct", "-n", String(HEADS)], cwd).pipe(
     Effect.map((ran) =>
@@ -102,7 +83,6 @@ const headAt = (heads: ReadonlyArray<{ readonly sha: string; readonly ms: number
       )
     : (heads[0]?.sha ?? null);
 
-/** The work the agent was given last before `ms`: what a request made then was for. */
 const launchAt = (launches: ReadonlyArray<Launched>, ms: number) =>
   Arr.findLast(launches, (one) => !Number.isFinite(ms) || (one.at ?? 0) <= ms).pipe(
     Option.orElse(() => Arr.head(launches)),
@@ -119,27 +99,29 @@ const personaChars = (deps: LedgerDeps, run: string, first: Launched | undefined
         Effect.orElseSucceed(() => null),
       );
 
-/** Each source's lines since the last read, up to the last whole line. */
 const readNew = (sources: ReadonlyArray<Source>, offsets: Readonly<Record<string, number>>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const decoder = new TextDecoder();
     let moved = offsets;
-    const readings: Reading[] = [];
+    const readings: Array<Reading> = [];
     for (const source of sources) {
       const bytes = yield* fs.readFile(source.path).pipe(Effect.option);
-      if (Option.isNone(bytes)) continue;
+      if (Option.isNone(bytes)) {
+        continue;
+      }
       const end = bytes.value.lastIndexOf(NEWLINE) + 1;
-      // A file shorter than what was read of it is a new file in its place.
+      // WARNING: a file shorter than what was read of it is a new file in its place.
       const from = (offsets[source.path] ?? 0) > end ? 0 : (offsets[source.path] ?? 0);
-      if (end <= from) continue;
+      if (end <= from) {
+        continue;
+      }
       readings.push(readSource(source, decoder.decode(bytes.value.subarray(from, end))));
       moved = Rec.set(moved, source.path, end);
     }
     return { readings, offsets: moved };
   });
 
-/** Reads `found`, with every source read before, into the Run's ledger. */
 export const recordFrom = Effect.fn("UsageLedger.recordFrom")(function* (
   deps: LedgerDeps,
   at: LedgerAt,
@@ -163,7 +145,7 @@ export const recordFrom = Effect.fn("UsageLedger.recordFrom")(function* (
   );
   const heads = yield* headsOf(agent.cwd);
   const now = yield* nowIso;
-  // A reused agent's launch is given no persona of its own.
+  // WARNING: a reused agent's launch is given no persona of its own.
   const persona = yield* personaChars(
     deps,
     at.run,
@@ -173,7 +155,7 @@ export const recordFrom = Effect.fn("UsageLedger.recordFrom")(function* (
   const stepAt = (ms: number) => launchAt(launches, ms)?.operation ?? at.step ?? "";
   const keys = { agent: at.agent };
 
-  const read: UsageEntry[] = [];
+  const read: Array<UsageEntry> = [];
   for (const reading of readings) {
     for (const one of reading.requests) {
       const launch = launchAt(launches, one.at);
@@ -196,7 +178,7 @@ export const recordFrom = Effect.fn("UsageLedger.recordFrom")(function* (
         reasoning: one.reasoning,
       });
     }
-    for (const one of reading.events)
+    for (const one of reading.events) {
       read.push({
         what: one.what,
         ...keys,
@@ -207,6 +189,7 @@ export const recordFrom = Effect.fn("UsageLedger.recordFrom")(function* (
         step: stepAt(one.at),
         chars: one.chars,
       });
+    }
     const own = new Set(
       Arr.map(
         Arr.filter([...reading.requests, ...reading.events], (one) => one.parent === null),
@@ -216,7 +199,10 @@ export const recordFrom = Effect.fn("UsageLedger.recordFrom")(function* (
     for (const session of own) {
       const seen = Arr.findFirst(reading.startup, (one) => one.session === session).pipe(
         Option.map((one) => one.startup),
-        Option.getOrElse((): Partial<Startup> => ({})),
+        Option.getOrElse(() => {
+          const none: Partial<Startup> = {};
+          return none;
+        }),
       );
       read.push({
         what: "session",
@@ -234,17 +220,23 @@ export const recordFrom = Effect.fn("UsageLedger.recordFrom")(function* (
       });
     }
   }
-  // A Heal's sessions recorded before it was known to be one.
-  if (at.heal === true)
-    for (const kept of ledger.sessions.values())
-      if (kept.agent === at.agent) read.push({ ...kept, recovery: true });
+  // WARNING: a Heal's sessions may be recorded before it was known to be one.
+  if (at.heal === true) {
+    for (const kept of ledger.sessions.values()) {
+      if (kept.agent === at.agent) {
+        read.push({ ...kept, recovery: true });
+      }
+    }
+  }
 
   const batch = ledgerOf(read);
   const fresh = Arr.filter(
     [...batch.requests.values(), ...batch.happenings.values(), ...batch.sessions.values()],
     (entry) => adds(ledger, entry),
   );
-  for (const entry of fresh) yield* appendUsage(evidence, entry);
+  for (const entry of fresh) {
+    yield* appendUsage(evidence, entry);
+  }
   yield* fs.makeDirectory(agent.dir, { recursive: true });
   yield* fs.writeFileString(
     stateFile,
@@ -252,17 +244,16 @@ export const recordFrom = Effect.fn("UsageLedger.recordFrom")(function* (
   );
 });
 
-/**
- * Reads one agent's usage into its Run's ledger, from the sources its harness's controls
- * name. An agent with no controls has nothing to read; nothing here fails its caller.
- */
+// WARNING: a failed read records nothing and fails nothing.
 export const recordUsage = (
   deps: LedgerDeps & { readonly stateDir: string; readonly ports: CompactionPorts },
   at: LedgerAt,
 ) =>
   Effect.gen(function* () {
     const control = yield* readControl(deps.stateDir, at.agent);
-    if (control === null) return;
+    if (control === null) {
+      return;
+    }
     const records = deps.ports[control.harness]?.records;
     const found =
       records === undefined

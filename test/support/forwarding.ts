@@ -1,13 +1,12 @@
-// The test process's side of the fakes: one unix socket per test process, on which it answers
-// every call a fake's forwarder (forwarder.ts) hands it, with the fake's own core.
-
-import { createServer, type Server } from "node:net";
+import { createServer } from "node:net";
+import type { Server } from "node:net";
 import { tmpdir } from "node:os";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import { Cause, Effect, FileSystem, Result, Schema, Semaphore } from "effect";
 import { CommandLine } from "effect/process";
 import { MARKER } from "./sweep";
+import { stringifyJson } from "../../src/json";
 
 export interface Answer {
   readonly code: number;
@@ -15,18 +14,13 @@ export interface Answer {
   readonly stderr: string;
 }
 
-/**
- * Answers one call: its argv, the fake's name first, and the environment and directory it
- * was started in.
- */
 export type Answerer<E> = (
   argv: ReadonlyArray<string>,
   env: Record<string, string>,
   cwd: string,
 ) => Effect.Effect<Answer, E>;
 
-/** How a shim starts the forwarder: what `bun run test` compiled of it, or else its source. */
-export const forwarderCommand = (compiled: string): string[] =>
+export const forwarderCommand = (compiled: string) =>
   compiled === ""
     ? [process.execPath, new URL("./forwarder.ts", import.meta.url).pathname]
     : [compiled];
@@ -42,18 +36,13 @@ const Call = Schema.fromJsonString(
 const ANSWERER = "COLLIE_FAKE_ANSWERER";
 const answerers = new Map<string, Answerer<never>>();
 
-const failedAnswer = <E>(cause: Cause.Cause<E>): Effect.Effect<Answer> =>
+const failedAnswer = <E>(cause: Cause.Cause<E>) =>
   Effect.succeed({ code: 70, stdout: "", stderr: `${Cause.pretty(cause)}\n` });
 
-/** The environments of the calls this process is answering now. */
 const inFlight = new Set<Readonly<Record<string, string>>>();
 
-/**
- * How many calls this process is still answering whose environment holds every one of
- * `bindings`. An answer outlives the forwarder that asked once its host has stopped, and
- * still writes where it was asked to.
- */
-export const answering = (bindings: Readonly<Record<string, string>>): number =>
+// WARNING: An answer outlives its forwarder once the host has stopped, and still writes where it was asked to.
+export const answering = (bindings: Readonly<Record<string, string>>) =>
   Arr.filter(Arr.fromIterable(inFlight), (env) =>
     Arr.every(Rec.toEntries(bindings), ([key, value]) => env[key] === value),
   ).length;
@@ -82,7 +71,7 @@ const serve = (path: string) =>
       });
       connection.on("end", () => {
         void Effect.runPromise(answer(request)).then((reply) =>
-          connection.end(JSON.stringify(reply)),
+          connection.end(stringifyJson(reply)),
         );
       });
       connection.on("error", () => {});
@@ -95,16 +84,15 @@ const serve = (path: string) =>
 let listening: { readonly path: string; readonly server: Server } | null = null;
 const once = Semaphore.makeUnsafe(1);
 
-/**
- * Inside the file's root, under its home, which the preload neither sweeps nor counts as left.
- * A new one once that root is gone, as it is between `--rerun-each` runs.
- */
+// WARNING: Under the file's home, which the preload neither sweeps nor counts as left; a new one once the root is gone (--rerun-each).
 const socket = once.withPermits(1)(
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    if (listening !== null && (yield* fs.exists(listening.path))) return listening.path;
+    if (listening !== null && (yield* fs.exists(listening.path))) {
+      return listening.path;
+    }
     listening?.server.close();
-    // The preload's, whatever Config provider a test runs this under.
+    // WARNING: Read from Bun.env, the preload's, whatever Config provider the test runs under.
     const root = Bun.env[MARKER];
     const at = `${root === undefined ? tmpdir() : `${root}/home`}/fake.sock`;
     yield* fs.remove(at, { force: true });
@@ -113,11 +101,7 @@ const socket = once.withPermits(1)(
   }).pipe(Effect.orDie),
 );
 
-/**
- * A shim's command line: `compiled` (or the forwarder's source) with `args` and the shim's
- * own, its calls answered here by `answerer`. Listens first, so the
- * shim's first call is answered.
- */
+// WARNING: Listen before the shim starts, or its first call goes unanswered.
 export const forwarding = Effect.fn("forwarding")(function* <E>(
   compiled: string,
   args: ReadonlyArray<string>,

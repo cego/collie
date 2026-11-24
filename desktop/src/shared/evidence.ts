@@ -1,5 +1,4 @@
-// A Run's evidence files as the record shows them. No Bun-only import: the view bundles this.
-
+// WARNING: no Bun-only import: the view bundles this.
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -21,7 +20,6 @@ const MEDIA = new Map([
   ["ogv", "video/ogg"],
 ]);
 
-/** An image's or a video's media type, by its extension; null for anything else. */
 export const mediaType = (name: string) =>
   MEDIA.get(
     Option.getOrUndefined(
@@ -33,7 +31,6 @@ export const mediaType = (name: string) =>
 
 const REPORT = /\.html?$/i;
 
-/** One place in the gallery: a before/after pair, or a shot on its own. */
 export interface GalleryItem {
   readonly key: string;
   readonly before?: EvidenceFile;
@@ -41,14 +38,13 @@ export interface GalleryItem {
   readonly alone?: EvidenceFile;
 }
 
-/** `before` or `after` as a word of a name: `home.before.png`, `after-cart.jpg`. */
 const SIDE = /(^|[._-])(before|after)(?=[._-]|$)/i;
 
 const byName = (a: EvidenceFile, b: EvidenceFile) => pipe(a.name, Str.localeCompare(b.name));
 
 export const sortEvidence = (files: ReadonlyArray<EvidenceFile>) => {
   const pairs = new Map<string, { before?: EvidenceFile; after?: EvidenceFile }>();
-  const shots: GalleryItem[] = [];
+  const shots: Array<GalleryItem> = [];
   const alone = (file: EvidenceFile) => shots.push({ key: file.name, alone: file });
   const kind = (file: EvidenceFile) =>
     Option.getOrUndefined(
@@ -67,12 +63,18 @@ export const sortEvidence = (files: ReadonlyArray<EvidenceFile>) => {
         ? "before"
         : "after";
     const pair = pairs.get(key) ?? {};
-    if (side === null || pair[which] !== undefined) alone(file);
-    else pairs.set(key, { ...pair, [which]: file });
+    if (side === null || pair[which] !== undefined) {
+      alone(file);
+    } else {
+      pairs.set(key, { ...pair, [which]: file });
+    }
   }
   for (const [key, { before, after }] of pairs) {
-    if (before !== undefined && after !== undefined) shots.push({ key, before, after });
-    else alone((before ?? after)!);
+    if (before !== undefined && after !== undefined) {
+      shots.push({ key, before, after });
+    } else {
+      alone((before ?? after)!);
+    }
   }
   const rest = Arr.filter(files, (file) => kind(file) !== "image");
   return {
@@ -85,7 +87,7 @@ export const sortEvidence = (files: ReadonlyArray<EvidenceFile>) => {
   };
 };
 
-/** Whether the Evidence tab has anything above its Metrics, which do not count. */
+// WARNING: Metrics do not count as evidence.
 export const hasEvidence = ({
   verifications,
   evidence,

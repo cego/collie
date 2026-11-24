@@ -41,8 +41,7 @@ test("a completed historical Heal is readable after the workflow output gains is
           Effect.scoped,
         );
 
-      // A fresh engine reads the same durable exit using the shipped workflow's schema.
-      // It must neither rewrite the old result nor execute the Heal again.
+      // WARNING: A fresh engine reads the durable exit with the shipped schema; it must neither rewrite the old result nor run the Heal again.
       const current = Workflow.make("heal@1", {
         payload: { runId: Schema.String },
         idempotencyKey: (input) => input.runId,

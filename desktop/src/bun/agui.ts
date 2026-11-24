@@ -1,7 +1,4 @@
-// The Agent SDK's messages as AG-UI events, one message at a time. Pure, so a recorded SDK
-// stream is its test; and decoded rather than typed against the SDK, which Collie's own
-// suite does not install. Anything this does not know is skipped.
-
+// WARNING: decoded, not typed against the SDK, because Collie's own suite does not install it.
 import * as Arr from "effect/Array";
 import { Option, Schema } from "effect";
 import { isString } from "../../../src/schema";
@@ -47,7 +44,7 @@ const ToolResult = Schema.Struct({
   ]),
 });
 
-/** What is read of an SDK message. A subagent's (`parent_tool_use_id` set) is not. */
+// WARNING: a subagent's message (parent_tool_use_id set) is not read.
 const Known = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("stream_event"),
@@ -75,7 +72,6 @@ const Known = Schema.Union([
 
 const decodeKnown = Schema.decodeUnknownOption(Known);
 
-/** An SDK message, as far as this needs to know before decoding it. */
 export interface SdkMessage {
   readonly type: string;
 }
@@ -87,16 +83,13 @@ interface Open {
 
 export interface AguiState {
   readonly thread: string;
-  /** Turns started, which names the next one. */
   readonly turns: number;
-  /** The turn under way, if any. */
   readonly run: string | null;
-  /** The model message the open blocks belong to. */
   readonly message: string;
   readonly blocks: ReadonlyMap<number, Open>;
 }
 
-export const startState = (thread: string): AguiState => ({
+export const startState: (thread: string) => AguiState = (thread) => ({
   thread,
   turns: 0,
   run: null,
@@ -112,19 +105,22 @@ const textOf = (content: typeof ToolResult.Type.content) =>
         "\n",
       );
 
-/** What one SDK message adds to the stream, and the state after it. */
-export const step = (
+export const step: (
   state: AguiState,
   message: SdkMessage,
-): readonly [AguiState, ReadonlyArray<AguiEvent>] => {
+) => readonly [AguiState, ReadonlyArray<AguiEvent>] = (state, message) => {
   const known = decodeKnown(message);
-  if (Option.isNone(known)) return [state, []];
+  if (Option.isNone(known)) {
+    return [state, []];
+  }
   const read = known.value;
-  const begun: AguiEvent[] = [];
+  const begun: Array<AguiEvent> = [];
   let now = state;
-  // A turn begins with the model's first word, or ends without one; a message before it is not this turn's.
+  // WARNING: a turn begins with the model's first word, or ends without one.
   if (now.run === null) {
-    if (read.type === "user") return [now, []];
+    if (read.type === "user") {
+      return [now, []];
+    }
     const run = `${now.thread}:${now.turns + 1}`;
     now = { ...now, turns: now.turns + 1, run };
     begun.push({ type: "RUN_STARTED", threadId: now.thread, runId: run });
@@ -145,13 +141,16 @@ export const step = (
         now,
         [
           ...begun,
-          ...Arr.map(results, (result): AguiEvent => ({
-            type: "TOOL_CALL_RESULT",
-            toolCallId: result.tool_use_id,
-            messageId: `${result.tool_use_id}:result`,
-            content: textOf(result.content),
-            role: "tool",
-          })),
+          ...Arr.map(results, (result) => {
+            const returned: AguiEvent = {
+              type: "TOOL_CALL_RESULT",
+              toolCallId: result.tool_use_id,
+              messageId: `${result.tool_use_id}:result`,
+              content: textOf(result.content),
+              role: "tool",
+            };
+            return returned;
+          }),
         ],
       ];
     }
@@ -164,7 +163,7 @@ export const step = (
           const block = event.content_block;
           const id = block.type === "tool_use" ? block.id : `${now.message}:${event.index}`;
           const blocks = new Map(now.blocks).set(event.index, { kind: block.type, id });
-          const opened: AguiEvent[] =
+          const opened: Array<AguiEvent> =
             block.type === "tool_use"
               ? [
                   {
@@ -184,7 +183,9 @@ export const step = (
         }
         case "content_block_delta": {
           const open = now.blocks.get(event.index);
-          if (open === undefined) return [now, begun];
+          if (open === undefined) {
+            return [now, begun];
+          }
           const delta = event.delta;
           const said: AguiEvent =
             delta.type === "text_delta"
@@ -196,10 +197,12 @@ export const step = (
         }
         case "content_block_stop": {
           const open = now.blocks.get(event.index);
-          if (open === undefined) return [now, begun];
+          if (open === undefined) {
+            return [now, begun];
+          }
           const blocks = new Map(now.blocks);
           blocks.delete(event.index);
-          const closed: AguiEvent[] =
+          const closed: Array<AguiEvent> =
             open.kind === "text"
               ? [{ type: "TEXT_MESSAGE_END", messageId: open.id }]
               : open.kind === "thinking"

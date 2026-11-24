@@ -1,5 +1,3 @@
-// The Tasks this Herd has: what `run start --task` names, and what a picker offers.
-
 import * as Arr from "effect/Array";
 import { Effect } from "effect";
 import { Command } from "effect/cli";

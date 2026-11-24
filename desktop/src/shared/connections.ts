@@ -24,8 +24,9 @@ export const workflowConnections = (
 export const connectionUses = (id: ConnectionId, workflows: ReadonlyArray<ConnectionWorkflow>) =>
   Arr.flatMap(workflows, (workflow) => {
     const needs = workflow.connections.needs?.[id];
-    if (needs !== undefined)
+    if (needs !== undefined) {
       return [{ id: workflow.id, declares: "needs", with: needs.with, without: "Does not start" }];
+    }
     const uses = workflow.connections.uses?.[id];
     return uses === undefined ? [] : [{ id: workflow.id, declares: "uses", ...uses }];
   });
@@ -78,7 +79,7 @@ export const connectionCards = (machines: ReadonlyArray<MachineConnections>) =>
     const targets = Arr.map(lacking, (one) => one.profile);
     let primary: ConnectionPrimary | null = null;
     if (lacking.length > 0) {
-      if ((id === "gitlab" || id === "github") && source !== undefined)
+      if ((id === "gitlab" || id === "github") && source !== undefined) {
         primary = {
           kind: "reuse",
           label:
@@ -88,13 +89,15 @@ export const connectionCards = (machines: ReadonlyArray<MachineConnections>) =>
           from: source.profile,
           to: targets,
         };
-      else if (id === "github" || id === "linear")
+      } else if (id === "github" || id === "linear") {
         primary = {
           kind: id === "github" ? "login" : "setup",
           label: `${id === "github" ? "Sign in on" : "Set up on"} ${lacking[0]!.name}`,
           to: [lacking[0]!.profile],
         };
-      else primary = { kind: "connect", label: "Connect" };
+      } else {
+        primary = { kind: "connect", label: "Connect" };
+      }
     }
     return {
       id,
@@ -139,14 +142,15 @@ export const mergeConnections = (
     readonly machine: string;
     readonly connections: ReadonlyArray<Connection>;
   }>,
-): ReadonlyArray<FlockConnection> => {
-  const groups = new Map<ConnectionId, FlockConnection["machines"][number][]>();
-  for (const { machine, connections } of machines)
+) => {
+  const groups = new Map<ConnectionId, Array<FlockConnection["machines"][number]>>();
+  for (const { machine, connections } of machines) {
     for (const { id, reading } of connections) {
       const group = groups.get(id) ?? [];
       group.push({ machine, reading });
       groups.set(id, group);
     }
+  }
   return Arr.map([...groups], ([id, readings]) => {
     const ready = Option.getOrUndefined(
       Arr.findFirst(readings, ({ reading }) => reading.state === "ok"),

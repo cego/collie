@@ -17,7 +17,6 @@ import { madeRun } from "./support/records";
 const NOW = epochMs("2026-10-30T10:00:00Z");
 const AT = "2026-10-30T09:30:00Z";
 
-/** A Run that finished on `feature` at `abc`, whose pushed branch a card would compare. */
 const finishedOnFeature = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-board-branches-" });
@@ -67,10 +66,9 @@ const finishedOnFeature = Effect.gen(function* () {
   return { env: readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" }), run };
 });
 
-/** A board build whose every process start is recorded and refused. */
 const drawn = (env: ReturnType<typeof readEnv>, run: RunFacts) =>
   Effect.gen(function* () {
-    const started: string[] = [];
+    const started: Array<string> = [];
     const views = yield* buildBoard({
       env,
       runs: [run],
@@ -142,8 +140,9 @@ test("Git sync reads a branch a build asked for on its next round", () =>
           "-m",
           "one",
         ],
-      ])
+      ]) {
         expect((yield* shell("git", args, dir)).code).toBe(0);
+      }
       const head = Str.trim((yield* shell("git", ["rev-parse", "HEAD"], dir)).stdout);
       const branches = yield* Branches;
       yield* branches.want({ cwd: dir, dir: `${dir}/run`, branch: "feature", state: "running" });

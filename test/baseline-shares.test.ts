@@ -37,7 +37,6 @@ test("a scenario added under a new name moves no other between shares", () => {
   expect(Arr.map(after, (share) => Arr.filter(share, (name) => name !== added))).toEqual(before);
 });
 
-// crc32 puts alpha in share 10, beta in 7, gamma in 5.
 const names = ["alpha", "beta", "gamma"];
 
 test("a pattern naming one scenario yields its shipped and unrelated shard files", () => {
@@ -58,7 +57,7 @@ test("a pattern matching scenarios in two shares yields all four files", () => {
 
 test("a pattern matches each pass's full test names, as -t does", () => {
   expect(scenarioFiles(names, "^beta$")).toEqual(["test/baseline-07.test.ts"]);
-  expect(scenarioFiles(names, "beta \\(under an unrelated id\\)")).toEqual([
+  expect(scenarioFiles(names, String.raw`beta \(under an unrelated id\)`)).toEqual([
     "test/baseline-unrelated-07.test.ts",
   ]);
 });
@@ -88,7 +87,9 @@ test("every scenario resolves to the file whose register call runs it", () =>
             Str.match(/register\("(shipped|unrelated)", (\d+)\)/),
           ),
         );
-        if (call === null) continue;
+        if (call === null) {
+          continue;
+        }
         registered++;
         for (const name of shares[Number(call[2])]!) {
           const full = call[1] === "unrelated" ? `${name} (under an unrelated id)` : name;

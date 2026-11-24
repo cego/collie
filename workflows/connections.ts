@@ -1,4 +1,5 @@
-import { ConnectionReading, Host, type ConnectionId } from "collie";
+import { ConnectionReading, Host } from "collie";
+import type { ConnectionId } from "collie";
 import { Effect } from "effect";
 import * as Activity from "effect/workflow/Activity";
 

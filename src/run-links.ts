@@ -23,7 +23,9 @@ export const readRunLinks = Effect.fn("RunLinks.read")(function* (runDir: string
   const latest = new Map<string, typeof LinkedRun.Type>();
   for (const notice of yield* readRunJournal(runJournal(runDir, "links.jsonl"), LinkedRunJson)) {
     const key = `${notice.machine.installation}/${notice.run}`;
-    if (latest.get(key)?.phase === "settled" && notice.phase === "admitted") continue;
+    if (latest.get(key)?.phase === "settled" && notice.phase === "admitted") {
+      continue;
+    }
     latest.set(key, notice);
   }
   return [...latest.values()];
@@ -45,7 +47,7 @@ export const recordLinkDelivery = (runDir: string, delivery: typeof LinkDelivery
   appendRunJournal(runJournal(runDir, "link-deliveries.jsonl"), LinkDeliveryJson, delivery);
 
 const RunLinkNoticeJson = Schema.fromJsonString(RunLinkNotice);
-/** Each notice as first sent: a resend under the same request id must match it. */
+// WARNING: a resend under the same request id must match the notice as first sent.
 export const readSentNotices = (runDir: string) =>
   readRunJournal(runJournal(runDir, "link-notices.jsonl"), RunLinkNoticeJson);
 export const recordSentNotice = (runDir: string, notice: RunLinkNotice) =>

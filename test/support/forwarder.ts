@@ -1,10 +1,5 @@
 #!/usr/bin/env bun
-// The fake herdr and fake forge as executables: a process started for every call, which
-// hands its argv, working directory and environment to the test process on COLLIE_FAKE_SOCKET and prints the
-// answer it gets back. Load only the codecs and configuration this startup path uses.
 
-// BunSocket exposes WebSocket, while this protocol needs a Unix socket's write-half close.
-// oxlint-disable-next-line effecttsgo/node-builtin-import
 import { connect } from "node:net";
 import * as Arr from "effect/Array";
 import * as Config from "effect/Config";
@@ -45,8 +40,6 @@ socket.on("connect", () => {
     Schema.encodeUnknownResult(CallJson)({
       argv: Arr.drop(process.argv, 2),
       cwd: process.cwd(),
-      // Replay the caller's exact environment; Config provides named settings, not this record.
-      // oxlint-disable-next-line effecttsgo/process-env
       env: process.env,
     }),
   );
@@ -57,9 +50,13 @@ socket.on("data", (chunk) => {
 });
 socket.on("error", (error: NodeJS.ErrnoException) => fail(error.code ?? error.message));
 socket.on("close", (hadError) => {
-  if (hadError) return;
+  if (hadError) {
+    return;
+  }
   const decoded = Schema.decodeOption(AnswerJson)(reply);
-  if (Option.isNone(decoded)) return fail("it closed without an answer");
+  if (Option.isNone(decoded)) {
+    return fail("it closed without an answer");
+  }
   const answer = decoded.value;
   process.stderr.write(answer.stderr);
   process.stdout.write(answer.stdout);

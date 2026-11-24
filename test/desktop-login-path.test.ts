@@ -1,6 +1,4 @@
-// Desktop opened from the Dock inherits launchd's PATH, so on macOS it takes the one the
-// user's login shell sets, as Terminal would.
-
+// WARNING: On macOS a Dock-opened Desktop inherits launchd's PATH, so it takes the login shell's PATH as Terminal would.
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { loginPath, MARK, pathIn } from "../desktop/src/bun/login-path";
@@ -17,7 +15,6 @@ test("a shell that printed no markers, or was cut off after one, has said no PAT
   expect(pathIn(`${MARK}/opt/homebrew/b`)).toBeNull();
 });
 
-/** A login shell that prints `body` as its own, and notes that it ran. */
 const shell = (body: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

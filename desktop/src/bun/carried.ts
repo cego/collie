@@ -1,5 +1,3 @@
-// The files a Flock chat action carries, as paths on the Machine it goes to (ADR-0046).
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Option from "effect/Option";
@@ -7,40 +5,43 @@ import * as Arr from "effect/Array";
 import { Clock, Effect, FileSystem, Result } from "effect";
 import * as Base64 from "effect/encoding/Base64";
 import { ATTACHMENT_BYTES, sha256Hex } from "../../../src/attachments";
-import { HostRefused, type HostFile, PART_BYTES } from "../../../src/board-model";
+import { HostRefused, PART_BYTES } from "../../../src/board-model";
+import type { HostFile } from "../../../src/board-model";
 import { describeAttachment } from "./attachments";
-import { type ChatDoor, type FlockChat, reach, type Reached } from "./flock-tools";
+import { reach } from "./flock-tools";
+import type { ChatDoor, FlockChat, Reached } from "./flock-tools";
 import { reasonOf } from "./sent";
 
 const tooLarge = (path: string) =>
   new HostRefused({ reason: `${path} is larger than ${ATTACHMENT_BYTES / 1024 / 1024} MB` });
 
-/** The whole file, part by part, or until `enough` says of the latest part. */
 export const readWhole = Effect.fn("Carried.readWhole")(function* (
   machine: Pick<Reached, "name" | "door">,
   path: string,
   enough: (part: Uint8Array) => boolean = () => false,
   most = Number.POSITIVE_INFINITY,
 ) {
-  const parts: Uint8Array[] = [];
+  const parts: Array<Uint8Array> = [];
   let first: HostFile | null = null;
   let offset = 0;
   for (;;) {
     const part = yield* machine.door.readFile({ path, offset, length: PART_BYTES });
     first ??= part;
-    if (part.size > most) return yield* tooLarge(`${machine.name}:${path}`);
+    if (part.size > most) {
+      return yield* tooLarge(`${machine.name}:${path}`);
+    }
     const bytes = Base64.decode(part.content).pipe(Result.getOrElse(() => new Uint8Array()));
     parts.push(bytes);
     offset += bytes.length;
-    if (bytes.length === 0 || offset >= part.size || enough(bytes))
+    if (bytes.length === 0 || offset >= part.size || enough(bytes)) {
       return { file: first, bytes: new Uint8Array(Buffer.concat(parts)) };
+    }
   }
 });
 
-/** How long an upload is taken as still held: well inside the week a host keeps one. */
+// WARNING: a host keeps an upload for a week, so a day here stays well inside it.
 const REMEMBERED = 24 * 60 * 60 * 1000;
 
-/** `bytes` on `machine`, uploaded unless this session did today, and their path there. */
 const uploaded = Effect.fn("Carried.upload")(function* (
   uploads: FlockChat["uploaded"],
   machine: { readonly name: string; readonly door: Pick<ChatDoor, "upload"> },
@@ -52,7 +53,9 @@ const uploaded = Effect.fn("Carried.upload")(function* (
   uploads.set(machine.name, known);
   const now = yield* Clock.currentTimeMillis;
   const held = known.get(sha256);
-  if (held !== undefined && now - held.at < REMEMBERED) return held.path;
+  if (held !== undefined && now - held.at < REMEMBERED) {
+    return held.path;
+  }
   for (let offset = 0; ; offset += PART_BYTES) {
     const part = bytes.subarray(offset, offset + PART_BYTES);
     const { path } = yield* machine.door.upload({
@@ -66,15 +69,12 @@ const uploaded = Effect.fn("Carried.upload")(function* (
       known.set(sha256, { path, at: now });
       return path;
     }
-    if (offset + PART_BYTES >= bytes.length)
+    if (offset + PART_BYTES >= bytes.length) {
       return yield* new HostRefused({ reason: `${machine.name} did not keep ${name}` });
+    }
   }
 });
 
-/**
- * What an action carries, as paths on `machine`: the files it names, or, named nowhere,
- * those of the human's message this turn. Undefined where it carries nothing to resolve.
- */
 export const carriedPaths = Effect.fn("Carried.paths")(function* (
   flock: FlockChat,
   machine: Reached,
@@ -87,13 +87,16 @@ export const carriedPaths = Effect.fn("Carried.paths")(function* (
         Arr.map(present, ({ path }) => path),
       ),
     );
-  if (named === undefined || named.length === 0) return given;
-  if (!machine.board.files)
+  if (named === undefined || named.length === 0) {
+    return given;
+  }
+  if (!machine.board.files) {
     return yield* new HostRefused({
       reason: `${machine.name}'s Collie does not take files; upgrade Collie on ${machine.name}. Nothing was done there.`,
     });
+  }
   const fs = yield* FileSystem.FileSystem;
-  const paths: string[] = [];
+  const paths: Array<string> = [];
   for (const one of named) {
     const colon = Option.getOrElse(pipe_(one, Str.indexOf(":")), () => -1);
     const on =
@@ -104,8 +107,9 @@ export const carriedPaths = Effect.fn("Carried.paths")(function* (
         : undefined;
     const path = on === undefined ? one : pipe_(one, Str.slice(colon + 1));
     const name = Str.split(path, "/").at(-1) ?? path;
-    if (on?.name === machine.name) paths.push(path);
-    else if (on !== undefined)
+    if (on?.name === machine.name) {
+      paths.push(path);
+    } else if (on !== undefined) {
       paths.push(
         yield* uploaded(
           flock.uploaded,
@@ -114,58 +118,59 @@ export const carriedPaths = Effect.fn("Carried.paths")(function* (
           (yield* readWhole(yield* reach(on), path, undefined, ATTACHMENT_BYTES)).bytes,
         ),
       );
-    else if (pipe_(path, Str.startsWith("/"))) {
+    } else if (pipe_(path, Str.startsWith("/"))) {
       const unreadable = () =>
         new HostRefused({ reason: `${path} cannot be read on this computer` });
       const info = yield* fs.stat(path).pipe(Effect.mapError(unreadable));
-      if (info.type !== "File") return yield* unreadable();
-      if (Number(info.size) > ATTACHMENT_BYTES) return yield* tooLarge(path);
+      if (info.type !== "File") {
+        return yield* unreadable();
+      }
+      if (Number(info.size) > ATTACHMENT_BYTES) {
+        return yield* tooLarge(path);
+      }
       const bytes = yield* fs.readFile(path).pipe(Effect.mapError(unreadable));
       paths.push(yield* uploaded(flock.uploaded, machine, name, bytes));
-    } else
+    } else {
       return yield* new HostRefused({
         reason: `${one} is neither a path on this computer nor <machine>:<path>. Nothing was done.`,
       });
+    }
   }
   return paths;
 });
 
-/** A Machine a pane is on, as placing a file there needs it. */
 export interface PlacedOn {
   readonly name: string;
-  /** Whether its host takes files, as its latest Snapshot said. */
   readonly files: boolean;
   readonly door: Pick<ChatDoor, "upload">;
 }
 
-/**
- * Desktop's copies, by id, placed on the Machine a pane is on, and their paths there, in
- * order; the first that cannot be placed fails the whole, naming it.
- */
 export const placeStaged = Effect.fn("Carried.place")(function* (
   held: FlockChat["uploaded"],
   machine: PlacedOn,
   dir: string,
   ids: ReadonlyArray<string>,
 ) {
-  if (!machine.files)
+  if (!machine.files) {
     return yield* new HostRefused({
       reason: `${machine.name}'s Collie does not take files; upgrade Collie on ${machine.name}. Nothing was pasted.`,
     });
+  }
   const fs = yield* FileSystem.FileSystem;
   const copies = [];
   for (const id of ids) {
     const copy = yield* describeAttachment(dir, id);
     const name = copy?.name ?? Str.split(id, "/").at(-1) ?? id;
     const bytes = copy === null ? undefined : yield* fs.readFile(copy.path).pipe(Effect.option);
-    if (bytes === undefined || Option.isNone(bytes))
+    if (bytes === undefined || Option.isNone(bytes)) {
       return yield* new HostRefused({
         reason: `${name} is no longer held by Desktop; paste it again`,
       });
+    }
     copies.push({ name, bytes: bytes.value });
   }
-  const paths: string[] = [];
-  for (const { name, bytes } of copies)
+  const paths: Array<string> = [];
+  for (const { name, bytes } of copies) {
     paths.push(
       yield* uploaded(held, machine, name, bytes).pipe(
         Effect.mapError(
@@ -176,5 +181,6 @@ export const placeStaged = Effect.fn("Carried.place")(function* (
         ),
       ),
     );
+  }
   return paths;
 });

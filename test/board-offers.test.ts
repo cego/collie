@@ -2,7 +2,8 @@ import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { DateTime, Effect, FileSystem, Option } from "effect";
 import { TestClock } from "effect/testing";
-import { buildBoard, type ForgeFacts, type KeptCards } from "../src/board";
+import { buildBoard } from "../src/board";
+import type { ForgeFacts, KeptCards } from "../src/board";
 import type { MrState, OfferView, TaskView } from "../src/board-model";
 import { readEnv } from "../src/env";
 import type { AgentInfo } from "../src/herdr";
@@ -18,7 +19,7 @@ const FINISHED = "2026-10-30T09:30:00Z";
 const mrOf = (n: number) => `https://github.com/cego/collie/pull/${n}`;
 const mrIdOf = (n: number) => `github.com/cego/collie#${n}`;
 
-const follow = (unavailable: string | null = null): OfferView => ({
+const follow: (unavailable?: string | null) => OfferView = (unavailable = null) => ({
   id: "build",
   title: "Build it",
   workflow: "implement",
@@ -28,7 +29,7 @@ const follow = (unavailable: string | null = null): OfferView => ({
   unavailable,
 });
 
-const agent = (status: AgentInfo["status"]): AgentInfo => ({
+const agent: (status: AgentInfo["status"]) => AgentInfo = (status) => ({
   name: "plan-1",
   paneId: "t-1",
   status,
@@ -37,7 +38,6 @@ const agent = (status: AgentInfo["status"]): AgentInfo => ({
   foregroundCwd: null,
 });
 
-/** Two finished planners, each in a checkout of its own with a merge request and a ready plan. */
 const planners = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-board-offers-" });
@@ -78,11 +78,12 @@ const planners = Effect.gen(function* () {
   };
 });
 
-/** A board whose every input a test can move, counting each Run the `offers` source is asked of. */
+const offersOfEach: (run: string) => ReadonlyArray<OfferView> = () => [follow()];
+
 const rig = Effect.gen(function* () {
   yield* TestClock.setTime(NOW);
   const { env, runs, model, registered } = yield* planners;
-  const asked: string[] = [];
+  const asked: Array<string> = [];
   const shown: ReadonlyArray<RunFacts> = runs;
   const state = {
     runs: shown,
@@ -97,7 +98,7 @@ const rig = Effect.gen(function* () {
         { checks: { state: "unknown" }, head: null, read: "2026-10-30T09:59:00Z" },
       ]),
     ),
-    offers: (_run: string): ReadonlyArray<OfferView> => [follow()],
+    offers: offersOfEach,
   };
   const cards: KeptCards = {
     revision: model.inputsAt,

@@ -1,6 +1,3 @@
-// `collie models`: which models and efforts each harness on a Machine offers, as its host
-// last read them (the Harness catalogue).
-
 import * as Arr from "effect/Array";
 import { Effect, Option } from "effect";
 import { Command, Flag } from "effect/cli";
@@ -24,13 +21,16 @@ export const models = Command.make(
     answering((env) =>
       Effect.gen(function* () {
         const only = Option.getOrNull(harness);
-        if (only !== null && !isHarness(only))
+        if (only !== null && !isHarness(only)) {
           return err(
             "invalid_input",
             `No harness "${only}"; it is one of ${Arr.join(HARNESS_NAMES, ", ")}.`,
           );
+        }
         const read = yield* catalogueReadings(env, yield* cliDoor(env));
-        if (!read.ok) return read;
+        if (!read.ok) {
+          return read;
+        }
         return {
           ok: true as const,
           data: {

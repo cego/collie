@@ -4,17 +4,14 @@ import { AuditLine } from "./audit";
 export const Steered = Schema.Struct({
   note: Schema.optional(Schema.String),
   agent: Schema.String,
-  /** Submission to the harness, never acceptance by this queue. */
+  // WARNING: delivered means submitted to the harness, never accepted by this queue.
   delivered: Schema.Boolean,
-  /** The Delivery that carried it, where one was submitted. */
   delivery: Schema.optionalKey(Schema.String),
   detail: Schema.String,
-  /** Durably kept until a supported submission is possible; nothing has been sent. */
   queued: Schema.optionalKey(Schema.Boolean),
   gone: Schema.optionalKey(Schema.Boolean),
   finished: Schema.optionalKey(Schema.Boolean),
   workflowNotice: Schema.optionalKey(Schema.String),
-  /** Whether the harness was seen to take the submission, and how. */
   observed: Schema.optionalKey(Schema.Boolean),
   how: Schema.optionalKey(Schema.String),
   pane: Schema.optionalKey(Schema.String),
@@ -39,7 +36,9 @@ const lock = Semaphore.makeUnsafe(1);
 export const readQueue = Effect.fn("DeliveryQueue.read")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const file = `${dir}/delivery-queue.json`;
-  if (!(yield* fs.exists(file))) return [];
+  if (!(yield* fs.exists(file))) {
+    return [];
+  }
   return yield* fs.readFileString(file).pipe(Effect.flatMap(Schema.decodeEffect(json)));
 });
 
@@ -51,7 +50,9 @@ export const keepQueued = (dir: string, queued: Queued) =>
       const old = Option.getOrUndefined(
         Arr.findFirst(before, (one) => one.request === queued.request),
       );
-      if (old !== undefined && (old.result !== null || queued.result === null)) return;
+      if (old !== undefined && (old.result !== null || queued.result === null)) {
+        return;
+      }
       const next =
         old === undefined
           ? [...before, queued]

@@ -1,5 +1,4 @@
-// Desktop updates come from Collie's public GitHub releases. A redirect may hand an
-// asset to GitHub's CDN, but must never turn an update into a request to another service.
+// WARNING: a redirect may hand an asset to GitHub's CDN, but must never turn an update into a request to another service.
 import { Effect } from "effect";
 import * as HttpClient from "effect/http/HttpClient";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
@@ -20,7 +19,6 @@ const allowed = (url: URL, redirected: boolean) =>
       (url.hostname === "release-assets.githubusercontent.com" ||
         url.hostname === "objects.githubusercontent.com")));
 
-/** What a release that does not carry the asset answers. */
 export const UNPUBLISHED = "the update download answered 404";
 
 export const downloadRelease = (source: string) =>
@@ -28,8 +26,9 @@ export const downloadRelease = (source: string) =>
     const client = yield* HttpClient.HttpClient;
     let url = yield* Effect.try({ try: () => new URL(source), catch: String });
     for (let hop = 0; hop <= 5; hop++) {
-      if (!allowed(url, hop > 0))
+      if (!allowed(url, hop > 0)) {
         return yield* Effect.fail("the update URL is not a Collie release");
+      }
       const response: HttpClientResponse.HttpClientResponse = yield* client
         .get(url.href)
         .pipe(
@@ -38,14 +37,18 @@ export const downloadRelease = (source: string) =>
         );
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.location;
-        if (location === undefined)
+        if (location === undefined) {
           return yield* Effect.fail("the update redirect has no location");
+        }
         url = yield* Effect.try({ try: () => new URL(location, url), catch: String });
         continue;
       }
-      if (response.status === 404) return yield* Effect.fail(UNPUBLISHED);
-      if (response.status !== 200)
+      if (response.status === 404) {
+        return yield* Effect.fail(UNPUBLISHED);
+      }
+      if (response.status !== 200) {
         return yield* Effect.fail(`the update download answered ${response.status}`);
+      }
       return response;
     }
     return yield* Effect.fail("the update download redirected too many times");

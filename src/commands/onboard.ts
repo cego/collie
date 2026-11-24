@@ -5,7 +5,8 @@ import { Effect, Option, Schema, flow, Result } from "effect";
 import { Command, Flag } from "effect/cli";
 import manifest from "../../package.json";
 import { attempt, say } from "../envelope";
-import { onboard as onboardMachine, type OnboardEvent, type StepStatus } from "../onboard";
+import { onboard as onboardMachine } from "../onboard";
+import type { OnboardEvent, StepStatus } from "../onboard";
 import { HELLE_TOKEN_STEPS } from "../helle-url";
 import { context, gitlabHostFlag, root, stdinText, withGitlabHost } from "./shared";
 
@@ -20,7 +21,6 @@ const MARK = {
   failed: "✗",
 } satisfies Record<StepStatus, string>;
 
-/** `KEY=value` lines; anything else is ignored. */
 const secretLines = (text: string) =>
   Rec.fromEntries(
     Arr.flatMap(Str.split(text, "\n"), (line) => {
@@ -29,10 +29,13 @@ const secretLines = (text: string) =>
     }),
   );
 
-/** One event as a terminal shows it. */
-export function eventText(event: OnboardEvent): string {
-  if (event.event === "start") return `→ ${event.title}`;
-  if (event.event === "human") return `  … ${event.detail}\n    open: ${event.url}`;
+export function eventText(event: OnboardEvent) {
+  if (event.event === "start") {
+    return `→ ${event.title}`;
+  }
+  if (event.event === "human") {
+    return `  … ${event.detail}\n    open: ${event.url}`;
+  }
   return Arr.join(
     [
       `  ${MARK[event.status]} ${event.detail}`,
@@ -68,9 +71,13 @@ export const onboard = Command.make(
       yield* attempt(
         Effect.gen(function* () {
           const resolved = yield* context(global, false);
-          if (resolved._tag === "ContextFailure") return resolved.result;
+          if (resolved._tag === "ContextFailure") {
+            return resolved.result;
+          }
           const env = withGitlabHost(resolved.env, gitlabHost);
-          if ("ok" in env) return env;
+          if ("ok" in env) {
+            return env;
+          }
           const secrets = secretsStdin ? secretLines(yield* stdinText) : {};
           return yield* onboardMachine(
             env,

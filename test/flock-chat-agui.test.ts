@@ -1,19 +1,17 @@
-// The Flock chat's window hears AG-UI, which Desktop's main process makes from the Agent
-// SDK's messages. Tested against streams recorded from a real session.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
-import { type SdkMessage, startState, step } from "../desktop/src/bun/agui";
+import { startState, step } from "../desktop/src/bun/agui";
+import type { SdkMessage } from "../desktop/src/bun/agui";
 import type { AguiEvent } from "../desktop/src/shared/agui";
 import thinkingTurn from "./fixtures/flock-chat-thinking-turn.json";
 import toolTurn from "./fixtures/flock-chat-tool-turn.json";
 
 const eventsOf = (messages: ReadonlyArray<SdkMessage>) => {
   let state = startState("session-1");
-  const events: AguiEvent[] = [];
+  const events: Array<AguiEvent> = [];
   for (const message of messages) {
     const [next, said] = step(state, message);
     state = next;
@@ -22,7 +20,6 @@ const eventsOf = (messages: ReadonlyArray<SdkMessage>) => {
   return events;
 };
 
-/** Each run of deltas to one message as one entry, so a test reads a turn in order. */
 const sequence = (events: ReadonlyArray<AguiEvent>) => {
   const types = Arr.map(events, (event) => event.type);
   return Arr.filter(

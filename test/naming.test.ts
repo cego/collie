@@ -23,13 +23,10 @@ test("a review's target is short and human, and never a sha", () => {
   expect(targetLabel("review", "review-x", "worktree")).toBe("worktree");
   expect(targetLabel("review", "review-x", "branch:main...add-picker")).toBe("add-picker");
 
-  // The case that produced `review-branch-b5571dc-head` as a run name.
   const opaque = targetLabel("review", "review-branch-b5571dc-head", "branch:b5571dc...HEAD");
   expect(opaque).toBe("diff");
   expect(opaque).not.toMatch(/[0-9a-f]{7}/i);
-  // A sha base with a real head still shows the head.
   expect(targetLabel("review", "r", "branch:b5571dc...add-picker")).toBe("add-picker");
-  // A real base with an opaque head falls back to the base rather than a sha.
   expect(targetLabel("review", "r", "branch:main...HEAD")).toBe("main");
 });
 
@@ -37,7 +34,6 @@ test("workflows with no target are named by their slug, without repeating the wo
   expect(targetLabel("implement", "implement-add-picker", "")).toBe("add-picker");
   expect(targetLabel("plan", "plan-add-picker", "")).toBe("add-picker");
   expect(targetLabel("architecture", "architecture-run", "")).toBe("run");
-  // A slug that does not carry the prefix is left alone.
   expect(targetLabel("implement", "something-else", "")).toBe("something-else");
 });
 
@@ -47,7 +43,7 @@ test("a tab is a glyph and one Capitalized word: the workflow, or the step", () 
   expect(tabLabel(GLYPH.waiting, "plan")).toBe("⚠ Plan");
   expect(tabLabel(GLYPH.done, "review")).toBe("✓ Review");
   for (const label of [tabLabel(GLYPH.running, "review"), tabLabel(GLYPH.done, "implement")]) {
-    expect(label).not.toMatch(/\d{8}-\d{6}/); // no run-id stamp
+    expect(label).not.toMatch(/\d{8}-\d{6}/);
     expect(label).not.toContain("claude");
     expect(label).not.toContain("·");
   }
@@ -56,17 +52,13 @@ test("a tab is a glyph and one Capitalized word: the workflow, or the step", () 
 test("the target is appended only to break a collision, and read back off the label", () => {
   expect(disambiguate("review", "!123")).toBe("review · !123");
   expect(disambiguate("implement", "add-picker")).toBe("implement · add-picker");
-  // Nothing to disambiguate with is still the plain name, never a dangling separator.
   expect(disambiguate("plan", "")).toBe("plan");
 
-  // The workflow is Capitalized; the target stays whatever it actually is, because
-  // a branch prettied up is no longer the branch's name.
   expect(tabLabel(GLYPH.running, disambiguate("review", "!123"))).toBe("⚙ Review · !123");
   expect(tabLabel(GLYPH.done, disambiguate("implement", "add-picker"))).toBe(
     "✓ Implement · add-picker",
   );
 
-  // A collision is judged on the name, so the glyph a tab is wearing cannot hide one.
   expect(tabNameOf("⚙ Review")).toBe("Review");
   expect(tabNameOf("✓ Review · !123")).toBe("Review · !123");
   expect(tabNameOf("Workflows")).toBe("Workflows");
@@ -84,33 +76,24 @@ test("a pane names the model, or the step, or nothing at all", () => {
   const opus = { harness: "claude", model: "opus" };
   const pi = { harness: "pi", model: "openai-codex/gpt-5.6-sol" };
 
-  // Parallel variants: the model alone, with the provider stripped off it. A model
-  // id that is not a word keeps its own casing.
   expect(paneLabel(opus, "review", 2, false)).toBe("Opus");
   expect(paneLabel(pi, "review", 2, false)).toBe("gpt-5.6-sol");
-  // The harness names the pane only where there is no model to name.
   expect(paneLabel({ harness: "claude", model: "default" }, "review", 2, false)).toBe("Claude");
   expect(paneLabel({ harness: "pi", model: "default" }, "review", 2, false)).toBe("Pi");
 
-  // Alone in a tab, the tab has already said it.
   expect(paneLabel(opus, "build", 1, false)).toBeNull();
-  // Sharing a tab with the panes it came from, it says which step it is — and the
-  // prefix `use:` gave that step's id is bookkeeping, not part of the name.
   expect(paneLabel(opus, "synthesize", 1, true)).toBe("Synthesize");
   expect(paneLabel(opus, "review.synthesize", 1, true)).toBe("Synthesize");
 });
 
 test("even splits leave every one of N panes the same width", () => {
-  // Two variants: the first split halves the tab.
   expect(evenRatio(1, 2)).toBeCloseTo(1 / 2);
-  // Three: 1/3 off the whole, then half of what is left.
   expect(evenRatio(1, 3)).toBeCloseTo(1 / 3);
   expect(evenRatio(2, 3)).toBeCloseTo(1 / 2);
 });
 
 test("a long model never truncates away the number that makes a name unique", () => {
-  // The live failure: two runs, different seq, same 32-character name, and herdr
-  // refused the second with `agent_name_taken`.
+  // WARNING: herdr caps agent names at 32 characters and refuses a duplicate.
   const a = agentName("review-smoke-tab-16", "review", "pi-openai-codex/gpt-5.6-sol", 23);
   const b = agentName("review-smoke-tab-16", "review", "pi-openai-codex/gpt-5.6-sol", 24);
 
@@ -121,14 +104,12 @@ test("a long model never truncates away the number that makes a name unique", ()
   }
   expect(pipe(a, Str.endsWith("-r23"))).toBe(true);
   expect(pipe(b, Str.endsWith("-r24"))).toBe(true);
-  // A three-digit run number still fits, and still ends the name.
   expect(
     pipe(
       agentName("review-smoke-tab-16", "review", "pi-openai-codex/gpt-5.6-sol", 1234),
       Str.endsWith("-r1234"),
     ),
   ).toBe(true);
-  // A short variant still gets its slug prefix, as before.
   expect(agentName("review-x", "review", "claude-opus", 12)).toBe(
     "review-x-review-claude-opus-r12",
   );
@@ -152,7 +133,6 @@ test("long numeric steps keep every generation suffix when the legal name needs 
 });
 
 test("sibling children that share a long prefix get agents of their own", () => {
-  // The live failure: both registered run-053c5b9d-implement-build-r1.
   const nuxt = agentName(
     "run-053c5b9d.implement.implement-gitlab.cego.dk-cego-ci-modules-nuxt",
     "build",
@@ -173,14 +153,14 @@ test("sibling children that share a long prefix get agents of their own", () => 
     expect(name).toContain("-build-");
     expect(name).toEndWith("-r1");
   }
-  // A step long enough to leave no room for the slug still keeps them apart.
   const step = "a-very-long-operation-name-here";
   const crowded = Arr.map(["a", "b"], (repo) =>
     agentName(`run-053c5b9d.implement.implement-gitlab.cego.dk-${repo}`, step, null, 1),
   );
   expect(crowded[0]).not.toBe(crowded[1]);
-  for (const name of crowded) expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
-  // A name nothing was cut from is the name it always was.
+  for (const name of crowded) {
+    expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
+  }
   expect(agentName("run-053c5b9d", "build", null, 1)).toBe("run-053c5b9d-build-r1");
 });
 
@@ -189,7 +169,9 @@ test("two steps of one Run that differ only where the name is cut get agents of 
     agentName("run-053c5b9d", step, null, 1),
   );
   expect(seats[0]).not.toBe(seats[1]);
-  for (const name of seats) expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
+  for (const name of seats) {
+    expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
+  }
   const panel = Arr.map(["security", "standards"], (seat) =>
     agentName("run-053c5b9d", "review", `claude-opus-${seat}`, 1),
   );
@@ -199,33 +181,25 @@ test("two steps of one Run that differ only where the name is cut get agents of 
 test("agent names stay herdr-legal and are never what a label shows", () => {
   const name = agentName("review-branch-b5571dc-head", "review", "claude-opus", 12);
   expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
-  // stepLabel is still what the run record carries for a variant.
   expect(stepLabel("review-x", "review", "claude-opus")).toBe("review-x/review/claude-opus");
 });
 
 test("the Collie tab's label survives its own helpers", () => {
   expect(tabNameOf(COLLIE_TAB)).toBe("Collie");
-  // Without the u flag the dog enters the character class as two surrogate halves
-  // and stripping matches one of them, leaving a lone surrogate in the name.
+  // WARNING: without the u flag the emoji splits into surrogate halves and leaves a lone one in the name.
   expect(Array.from(tabNameOf("🐕 Collie"))).toHaveLength(6);
-  // A run tab keeps its status glyph and gains no dog.
   expect(tabNameOf(tabLabel(GLYPH.running, "implement"))).toBe("Implement");
 });
 
-/** A run record, as much of one as a tab label is made of. */
 test("a task workspace is named for its project and what the task is", () => {
   expect(taskWorkspaceLabel({ project: "Collie", title: "Task workspaces" })).toBe(
     "Collie | Task workspaces",
   );
-  // Whitespace and control characters are display data, not layout: a label herdr is
-  // given never carries a newline into a sidebar row.
   expect(taskWorkspaceLabel({ project: " Collie \n", title: "Task\tworkspaces " })).toBe(
     "Collie | Task workspaces",
   );
-  // A half-answer still names something rather than reading as a stray separator.
   expect(taskWorkspaceLabel({ project: "", title: "Task workspaces" })).toBe("Task workspaces");
   expect(taskWorkspaceLabel({ project: "Collie", title: "" })).toBe("Collie");
-  // A repository's name is what the model answers with, and a label is Capitalized.
   expect(taskWorkspaceLabel({ project: " monorepo ", title: "FRO-343" })).toBe(
     "Monorepo | FRO-343",
   );

@@ -1,6 +1,3 @@
-// The host's merge: the landing attempt written before the forge is asked, its outcome after,
-// and an attempt an earlier host left settled on the forge's word.
-
 import { Herdr } from "../src/herdr";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -8,24 +5,19 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { ConfigProvider, DateTime, Effect, FileSystem, Result, Schema } from "effect";
 import { foundationLayer, Registry, registryLayer } from "../src/engine";
 import { agentsLayer } from "../src/agents";
-import { land, readLanding, takeOver, writeLanding, type Landing } from "../src/landing";
+import { land, readLanding, takeOver, writeLanding } from "../src/landing";
+import type { Landing } from "../src/landing";
 import { forgeHttpTest } from "../src/forge/http";
 import { WorkflowError } from "../src/sdk";
 import { RunRecords } from "../src/run-records";
 import { FakeBin } from "./support/bin";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
-import {
-  FORGE_HOST,
-  PROJECT,
-  fakeForge,
-  forgeOnPath,
-  serveForges,
-  type FakeMr,
-  type ForgeModel,
-} from "./support/forge";
+import { FORGE_HOST, PROJECT, fakeForge, forgeOnPath, serveForges } from "./support/forge";
+import type { FakeMr, ForgeModel } from "./support/forge";
 import { Rig } from "./support/recorder";
 import * as Layer from "effect/Layer";
+import { stringifyJson } from "../src/json";
 
 const HEAD = "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b";
 const MERGED = "35ae2cea5e5848602729dbc0e8a87ed0d9049c46";
@@ -34,11 +26,11 @@ const URL_OF = {
   github: `https://${PROJECT.github}/pull/30`,
 } as const;
 
-const model = (
+const model: (
   forge: "gitlab" | "github",
-  over: Partial<FakeMr> = {},
-  world: Partial<ForgeModel> = {},
-): ForgeModel => ({
+  over?: Partial<FakeMr>,
+  world?: Partial<ForgeModel>,
+) => ForgeModel = (forge, over = {}, world = {}) => ({
   installed: true,
   loggedIn: [FORGE_HOST[forge]],
   login: "me",
@@ -57,7 +49,6 @@ const model = (
   ...world,
 });
 
-/** A Run's directory, and a forge whose merge also reads what the Run had recorded by then. */
 const landing = Effect.fn("landing.landing")(function* (
   forge: "gitlab" | "github",
   over: Partial<FakeMr> = {},
@@ -71,8 +62,9 @@ const landing = Effect.fn("landing.landing")(function* (
   const http = forgeHttpTest(fake.run, (input, init = {}) =>
     Effect.runPromiseWith(services)(
       Effect.gen(function* () {
-        if (init.method === "PUT" && pipe_(input, Str.endsWith("/merge")))
+        if (init.method === "PUT" && pipe_(input, Str.endsWith("/merge"))) {
           seen.push(yield* readLanding(runDir));
+        }
         return yield* Effect.promise(() => fake.fetch(input, init));
       }),
     ),
@@ -82,7 +74,10 @@ const landing = Effect.fn("landing.landing")(function* (
   return { runDir, fake, seen, merge };
 });
 
-const attempt = (forge: "gitlab" | "github", over: Partial<Landing> = {}): Landing => ({
+const attempt: (forge: "gitlab" | "github", over?: Partial<Landing>) => Landing = (
+  forge,
+  over = {},
+) => ({
   state: "attempt",
   mr: URL_OF[forge],
   head: HEAD,
@@ -323,7 +318,7 @@ test("a landing an older build kept is read from its Run's records", () =>
     Effect.gen(function* () {
       const kept = attempt("gitlab", { state: "landed", sha: MERGED });
       yield* RunRecords.use((records) =>
-        records.put("r-kept", "landing.json", JSON.stringify(kept)),
+        records.put("r-kept", "landing.json", stringifyJson(kept)),
       );
       expect(yield* readLanding("/state/runs/r-kept")).toEqual(kept);
     }),
@@ -344,7 +339,6 @@ test("a Run that recorded no merge request is refused, and the forge is not aske
     }),
   ));
 
-/** A Run on this host that landed `forge`'s merge request at MERGED, and how it ended. */
 const lander = (
   forge: "gitlab" | "github",
   runId: string,
@@ -401,7 +395,6 @@ for (const forge of ["gitlab", "github"] as const) {
         expect(yield* fs.readFileString(`${runDir}/log.txt`)).toBe(
           `landing: took over the merge of ${URL_OF[forge]} at ${HEAD} as ${MERGED} from r-failed\n`,
         );
-        // Asked again, as a replay would: the same answer from what it recorded.
         expect(
           yield* takeOver({ runDir, mr: URL_OF[forge], runs, cwd: "/w", run: fake.run }).pipe(
             Effect.provide(fake.layer),
@@ -481,59 +474,56 @@ const withMachine = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Effect.scoped,
   );
 
-test(
-  "the host merges the merge request a Run recorded, and its landing is a fact of the Run",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        expect((yield* exec(["git", "init", "--quiet", rig.projectDir])).exitCode).toBe(0);
-        const bin = yield* FakeBin.make(`${rig.root}/bin`);
-        try {
-          const fake = yield* forgeOnPath(bin, "github", model("github"));
-          const forgeApi = yield* serveForges(fake);
-          yield* Effect.gen(function* () {
-            const registry = yield* Registry;
-            const generation = yield* registry.load(
-              new URL("./fixtures/workflows/merges.workflow.ts", import.meta.url).pathname,
-            );
-            const landed = yield* registry.start({
-              generation,
-              request: "lands",
-              project: rig.projectDir,
-              input: { mr: URL_OF.github, head: HEAD },
-              handsOver: true,
-            });
-            expect(yield* registry.result(landed.runId)).toEqual({ _tag: "Merged", sha: MERGED });
-            expect((yield* registry.view(landed.runId))?.landing).toMatchObject({
-              state: "landed",
-              mr: URL_OF.github,
-              head: HEAD,
-              sha: MERGED,
-            });
-
-            const none = yield* registry.start({
-              generation,
-              request: "none",
-              project: rig.projectDir,
-              input: { mr: "", head: HEAD },
-              handsOver: true,
-            });
-            const refused = yield* registry.result(none.runId).pipe(Effect.result);
-            expect(Result.isFailure(refused)).toBe(true);
-            if (Result.isFailure(refused))
-              expect(refused.failure.reason).toContain("no merge request");
-            expect((yield* registry.view(none.runId))?.landing).toBeNull();
-          }).pipe(
-            withMachine,
-            Effect.provide(
-              ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: forgeApi })),
-            ),
+test("the host merges the merge request a Run recorded, and its landing is a fact of the Run", () =>
+  runEffect(
+    Effect.gen(function* () {
+      expect((yield* exec(["git", "init", "--quiet", rig.projectDir])).exitCode).toBe(0);
+      const bin = yield* FakeBin.make(`${rig.root}/bin`);
+      try {
+        const fake = yield* forgeOnPath(bin, "github", model("github"));
+        const forgeApi = yield* serveForges(fake);
+        yield* Effect.gen(function* () {
+          const registry = yield* Registry;
+          const generation = yield* registry.load(
+            new URL("./fixtures/workflows/merges.workflow.ts", import.meta.url).pathname,
           );
-          expect((yield* fake.model()).merges).toHaveLength(1);
-        } finally {
-          yield* bin.restore();
-        }
-      }),
-    ),
-  30_000,
-);
+          const landed = yield* registry.start({
+            generation,
+            request: "lands",
+            project: rig.projectDir,
+            input: { mr: URL_OF.github, head: HEAD },
+            handsOver: true,
+          });
+          expect(yield* registry.result(landed.runId)).toEqual({ _tag: "Merged", sha: MERGED });
+          expect((yield* registry.view(landed.runId))?.landing).toMatchObject({
+            state: "landed",
+            mr: URL_OF.github,
+            head: HEAD,
+            sha: MERGED,
+          });
+
+          const none = yield* registry.start({
+            generation,
+            request: "none",
+            project: rig.projectDir,
+            input: { mr: "", head: HEAD },
+            handsOver: true,
+          });
+          const refused = yield* registry.result(none.runId).pipe(Effect.result);
+          expect(Result.isFailure(refused)).toBe(true);
+          if (Result.isFailure(refused)) {
+            expect(refused.failure.reason).toContain("no merge request");
+          }
+          expect((yield* registry.view(none.runId))?.landing).toBeNull();
+        }).pipe(
+          withMachine,
+          Effect.provide(
+            ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: forgeApi })),
+          ),
+        );
+        expect((yield* fake.model()).merges).toHaveLength(1);
+      } finally {
+        yield* bin.restore();
+      }
+    }),
+  ));

@@ -8,6 +8,7 @@ import {
   FileSystem,
   Layer,
   Option,
+  Order,
   Schema,
   flow,
 } from "effect";
@@ -19,7 +20,8 @@ import { epochMs } from "../src/time";
 import { StoreWrites } from "../src/store-writes";
 import { Artefacts } from "../src/artefacts";
 import type { ArtefactMatches, ArtefactSearch } from "../src/artefact-model";
-import { Away, searchFlock, type SearchSource } from "../src/artefact-search";
+import { Away, searchFlock } from "../src/artefact-search";
+import type { SearchSource } from "../src/artefact-search";
 import { connect } from "../src/host";
 import { removeTask, writeTask } from "../src/task";
 import { runEffect } from "./support/effect";
@@ -78,8 +80,9 @@ test("bounded indexing rotates past unfinished Runs to reach later retained mate
       const runs = [];
       for (let n = 0; n < 5; n++) {
         const run = yield* madeRun(rig.stateDir, { id: `r-${n}` });
-        for (let file = 0; file < (n === 4 ? 1 : 20); file++)
+        for (let file = 0; file < (n === 4 ? 1 : 20); file++) {
           yield* fs.writeFileString(`${run.evidence}/${file}.txt`, "evidence");
+        }
         runs.push(run);
       }
       yield* catalogue.index(runs);
@@ -103,7 +106,7 @@ test("interruption during a source read retries that source after restart withou
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const notified: string[] = [];
+      const notified: Array<string> = [];
       const hostOn = Layer.build(recordsAt(rig.stateDir)).pipe(
         Effect.map((built) => Context.get(built, Artefacts)),
         Effect.provideService(StoreWrites, (runs) => notified.push(...runs)),
@@ -145,7 +148,6 @@ test("search filters by name, description, URL, path, Run, kind, role and unseen
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      // One host's database, opened by two hosts in turn: the second is the first restarted.
       const hostOn = Layer.build(recordsAt(rig.stateDir)).pipe(
         Effect.map((built) => Context.get(built, Artefacts)),
       );
@@ -155,8 +157,9 @@ test("search filters by name, description, URL, path, Run, kind, role and unseen
       yield* fs.makeDirectory(`${old.dir}/attachments`, { recursive: true });
       yield* fs.makeDirectory(`${old.dir}/handoffs`, { recursive: true });
       yield* fs.writeFileString(`${old.dir}/attachments/design-brief.md`, "# Brief\n");
-      for (const n of Arr.range(0, 9))
+      for (const n of Arr.range(0, 9)) {
         yield* fs.writeFileString(`${old.dir}/handoffs/h${n}.txt`, `handoff ${n}\n`);
+      }
       yield* fs.writeFileString(`${newer.evidence}/report.txt`, "evidence\n");
       yield* fs.makeDirectory(`${rig.stateDir}/outside`, { recursive: true });
       yield* fs.writeFileString(`${rig.stateDir}/outside/data.csv`, "a,b\n");
@@ -202,8 +205,9 @@ test("search filters by name, description, URL, path, Run, kind, role and unseen
         seen: { revision: 1 },
         updated: { provenance: "filesystem-mtime" },
       });
-      for (const before of halfway.items)
+      for (const before of halfway.items) {
         expect(Arr.some(whole.items, (item) => item.id === before.id)).toBe(true);
+      }
 
       const titles = (matches: ArtefactMatches) => Arr.map(matches.items, (item) => item.title);
       expect(titles(yield* restarted.search({ query: "BRIEF" }, eligible))).toEqual([
@@ -259,8 +263,10 @@ test("search filters by name, description, URL, path, Run, kind, role and unseen
         const page: ArtefactMatches = yield* restarted.search({ limit: 4, after }, eligible);
         expect(page.items.length).toBeLessThanOrEqual(4);
         paged.push(...Arr.map(page.items, (item) => item.id));
-        if (!page.more) break;
-        const last = page.items[page.items.length - 1]!;
+        if (!page.more) {
+          break;
+        }
+        const last = page.items.at(-1)!;
         after = { detectedAt: last.detectedAt, run: last.run, id: last.id };
       }
       expect(paged).toEqual(Arr.map(whole.items, (item) => item.id));
@@ -268,12 +274,7 @@ test("search filters by name, description, URL, path, Run, kind, role and unseen
     }),
   ));
 
-const found = (
-  installation: string,
-  run: string,
-  id: string,
-  detectedAt: string,
-): ArtefactMatches["items"][number] => ({
+const found = (installation: string, run: string, id: string, detectedAt: string) => ({
   id,
   run,
   kind: "file",
@@ -295,7 +296,6 @@ const found = (
   installation,
 });
 
-/** A host's search over `items`, ordered and paged as a host's catalogue is. */
 const hostOf = (
   installation: string,
   items: ReadonlyArray<ArtefactMatches["items"][number]>,
@@ -358,7 +358,6 @@ test("the Flock's search keeps Machines' Runs apart, refuses an ambiguous bare i
       const sources: Array<SearchSource<never>> = [
         { machine: "alpha", reach: Effect.succeed(a) },
         { machine: "beta", reach: Effect.succeed(b) },
-        // A second route to the first installation, as a paired link and herdr both offer it.
         { machine: "alpha-over-ssh", reach: Effect.succeed(a) },
       ];
 
@@ -500,113 +499,122 @@ test("the Flock's search keeps Machines' Runs apart, refuses an ambiguous bare i
     }),
   ));
 
-test(
-  "a Task's earlier Run off the board, its active Run and a Run with no Task card are all found once reconciled",
-  () =>
-    proves(
-      "collie-artefact-search-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          yield* writeTask({
-            id: "task-1",
-            workspace: "w1",
-            label: "project | Find material",
-            cwd: world.project,
-            created_at: "2026-10-01T09:00:00Z",
-          }).pipe(Effect.provide(recordsAt(world.state)), Effect.orDie);
-          const runIdOf = flow(
-            Schema.decodeUnknownEffect(Schema.Struct({ runId: Schema.String })),
-            Effect.map(({ runId }) => runId),
-            Effect.orDie,
-          );
-          // Given at the start, so each Run's material is there before anything indexes it.
-          for (const name of ["old", "active", "loose"])
-            yield* fs.writeFileString(`${world.project}/${name}-findings.md`, `# ${name}\n`);
-          const attach = (name: string) => ["--attach", `${world.project}/${name}-findings.md`];
-          const old = yield* runIdOf(
-            (yield* collie(world, [
-              "run",
-              "start",
-              "plain",
-              "--task",
-              "task-1",
-              ...attach("old"),
-              "--input",
-              "note=old",
-            ])).envelope.data,
-          );
-          yield* collie(world, ["run", "wait", old]);
-          const active = yield* runIdOf(
-            (yield* collie(world, [
-              "run",
-              "start",
-              "asks",
-              "--task",
-              "task-1",
-              ...attach("active"),
-              "--input",
-              "goal=now",
-            ])).envelope.data,
-          );
-          const loose = yield* runIdOf(
-            (yield* collie(world, [
-              "run",
-              "start",
-              "plain",
-              ...attach("loose"),
-              "--input",
-              "note=loose",
-            ])).envelope.data,
-          );
-          yield* collie(world, ["run", "wait", loose]);
-          const door = yield* connect(world.state).pipe(Effect.orDie);
-          const looseTask = (yield* door.run({ runId: loose }).pipe(Effect.orDie))?.task;
-          if (looseTask != null)
-            yield* removeTask(looseTask).pipe(Effect.provide(recordsAt(world.state)), Effect.orDie);
+test("a Task's earlier Run off the board, its active Run and a Run with no Task card are all found once reconciled", () =>
+  proves(
+    "collie-artefact-search-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* writeTask({
+          id: "task-1",
+          workspace: "w1",
+          label: "project | Find material",
+          cwd: world.project,
+          created_at: "2026-10-01T09:00:00Z",
+        }).pipe(Effect.provide(recordsAt(world.state)), Effect.orDie);
+        const runIdOf = flow(
+          Schema.decodeUnknownEffect(Schema.Struct({ runId: Schema.String })),
+          Effect.map(({ runId }) => runId),
+          Effect.orDie,
+        );
+        for (const name of ["old", "active", "loose"]) {
+          yield* fs.writeFileString(`${world.project}/${name}-findings.md`, `# ${name}\n`);
+        }
+        const attach = (name: string) => ["--attach", `${world.project}/${name}-findings.md`];
+        const old = yield* runIdOf(
+          (yield* collie(world, [
+            "run",
+            "start",
+            "plain",
+            "--task",
+            "task-1",
+            ...attach("old"),
+            "--input",
+            "note=old",
+          ])).envelope.data,
+        );
+        yield* collie(world, ["run", "wait", old]);
+        const active = yield* runIdOf(
+          (yield* collie(world, [
+            "run",
+            "start",
+            "asks",
+            "--task",
+            "task-1",
+            ...attach("active"),
+            "--input",
+            "goal=now",
+          ])).envelope.data,
+        );
+        const loose = yield* runIdOf(
+          (yield* collie(world, [
+            "run",
+            "start",
+            "plain",
+            ...attach("loose"),
+            "--input",
+            "note=loose",
+          ])).envelope.data,
+        );
+        yield* collie(world, ["run", "wait", loose]);
+        const door = yield* connect(world.state).pipe(Effect.orDie);
+        const looseTask = (yield* door.run({ runId: loose }).pipe(Effect.orDie))?.task;
+        if (looseTask != null) {
+          yield* removeTask(looseTask).pipe(Effect.provide(recordsAt(world.state)), Effect.orDie);
+        }
 
-          const search = door.artefactSearch({ query: "findings" }).pipe(Effect.orDie);
-          let searched = yield* search;
-          for (
-            let tries = 0;
-            searched.coverage.indexed < searched.coverage.runs && tries < 200;
-            tries++
-          )
-            searched = yield* search;
-          expect(searched.coverage.indexed).toBe(searched.coverage.runs);
-          expect(searched.coverage.runs).toBeGreaterThanOrEqual(3);
-          expect(Arr.map(searched.items, (item) => [item.run, item.title]).sort()).toEqual(
+        const search = door.artefactSearch({ query: "findings" }).pipe(Effect.orDie);
+        let searched = yield* search;
+        for (
+          let tries = 0;
+          searched.coverage.indexed < searched.coverage.runs && tries < 200;
+          tries++
+        ) {
+          searched = yield* search;
+        }
+        expect(searched.coverage.indexed).toBe(searched.coverage.runs);
+        expect(searched.coverage.runs).toBeGreaterThanOrEqual(3);
+        const byRow = Order.mapInput(Order.String, (row: ReadonlyArray<string>) =>
+          Arr.join(row, ","),
+        );
+        expect(
+          Arr.sort(
+            Arr.map(searched.items, (item) => [item.run, item.title]),
+            byRow,
+          ),
+        ).toEqual(
+          Arr.sort(
             [
               [old, "old-findings.md"],
               [active, "active-findings.md"],
               [loose, "loose-findings.md"],
-            ].sort(),
-          );
+            ],
+            byRow,
+          ),
+        );
 
-          const cli = yield* collie(world, ["artefacts", "--query", "findings"]);
-          expect(cli.envelope.ok).toBe(true);
-          expect(cli.envelope.data).toMatchObject({ complete: true, next: null });
-          const listed = yield* Schema.decodeUnknownEffect(
-            Schema.Struct({
-              items: Schema.Array(
-                Schema.Struct({
-                  installation: Schema.String,
-                  item: Schema.Struct({ run: Schema.String, title: Schema.String }),
-                }),
-              ),
-            }),
-          )(cli.envelope.data);
-          const installation = Str.trim(yield* fs.readFileString(`${world.state}/installation`));
-          expect(Arr.map(listed.items, (one) => one.installation)).toEqual([
-            installation,
-            installation,
-            installation,
-          ]);
-        }),
-      ["plain.workflow.ts", "asks.workflow.ts"],
-    ),
-  120_000,
-);
+        const cli = yield* collie(world, ["artefacts", "--query", "findings"]);
+        expect(cli.envelope.ok).toBe(true);
+        expect(cli.envelope.data).toMatchObject({ complete: true, next: null });
+        const listed = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({
+            items: Schema.Array(
+              Schema.Struct({
+                installation: Schema.String,
+                item: Schema.Struct({ run: Schema.String, title: Schema.String }),
+              }),
+            ),
+          }),
+        )(cli.envelope.data);
+        const installation = Str.trim(yield* fs.readFileString(`${world.state}/installation`));
+        expect(Arr.map(listed.items, (one) => one.installation)).toEqual([
+          installation,
+          installation,
+          installation,
+        ]);
+      }),
+    ["plain.workflow.ts", "asks.workflow.ts"],
+  ));
 
 test("an unavailable Run lookup is bounded and reported alongside another Machine's results", () =>
   runEffect(

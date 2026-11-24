@@ -7,6 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { childEnv } from "../../desktop/src/bun/login-env";
 import type { JsonObject } from "../../src/schema";
+import { stringifyJson } from "../../src/json";
 const emit = (record: JsonObject) =>
   process.stdout.write(
     `${flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow)(record)}\n`,
@@ -70,7 +71,9 @@ for await (const chunk of Bun.stdin.stream()) {
       emit({ type: "agent_settled", aborted: true });
       continue;
     }
-    if (command.type !== "prompt") continue;
+    if (command.type !== "prompt") {
+      continue;
+    }
     if (
       Option.getOrUndefined(
         Option.map(Option.fromNullishOr(command.message), (present) =>
@@ -101,7 +104,6 @@ for await (const chunk of Bun.stdin.stream()) {
       });
       const url = /url: "([^"]+)"/.exec(extension)![1]!;
       const client = new Client({ name: "pi-script", version: "1" });
-      // The scripted child, like Pi, keeps reading abort while an MCP call is pending.
       void client
         .connect(
           new StreamableHTTPClientTransport(new URL(url), {
@@ -139,10 +141,12 @@ for await (const chunk of Bun.stdin.stream()) {
           Effect.gen(function* () {
             const local = Bun.file(`${process.cwd()}/.pi/${name}`);
             const global = Bun.file(`${childEnv().PI_CODING_AGENT_DIR}/${name}`);
-            if (yield* Effect.promise(() => local.exists()))
+            if (yield* Effect.promise(() => local.exists())) {
               return yield* Effect.promise(() => local.text());
-            if (yield* Effect.promise(() => global.exists()))
+            }
+            if (yield* Effect.promise(() => global.exists())) {
               return yield* Effect.promise(() => global.text());
+            }
             return "";
           }),
         );
@@ -173,7 +177,7 @@ for await (const chunk of Bun.stdin.stream()) {
       emit({ type: "agent_start" });
       emit({ type: "message_start", message: { role: "assistant" } });
       update("text_start");
-      update("text_delta", { delta: JSON.stringify(details) });
+      update("text_delta", { delta: stringifyJson(details) });
       update("text_end");
       emit({ type: "agent_settled", aborted: false });
       continue;
@@ -227,8 +231,9 @@ for await (const chunk of Bun.stdin.stream()) {
           pipe(present___, Str.startsWith("hold")),
         ),
       )
-    )
+    ) {
       continue;
+    }
     emit({ type: "message_start", message: { role: "assistant" } });
     update("thinking_start");
     update("thinking_delta", { delta: "Considering" });

@@ -14,6 +14,7 @@ import {
 } from "../src/harness";
 import { renderTemplate, skillMention, skillsIn } from "../src/template";
 import { runEffect } from "./support/effect";
+import { parseJson } from "../src/json";
 
 test("the adapter table covers claude, codex and opencode with model flags", () => {
   expect(HARNESSES.claude!.modelArgs("sonnet")).toEqual(["--model", "sonnet"]);
@@ -44,10 +45,12 @@ test("model checks accept the alias list, the harness pattern and user extras", 
   expect(knownModel(HARNESSES.opencode!, "sonnet")).toBe(false);
   expect(knownModel(HARNESSES.opencode!, "anthropic/claude-sonnet-4")).toBe(true);
   expect(knownModel(HARNESSES.opencode!, "sonnet", ["sonnet"])).toBe(true);
-  for (const model of ["gpt-6.1-sol", "gpt-5.6-sol", "gpt5", "o3"])
+  for (const model of ["gpt-6.1-sol", "gpt-5.6-sol", "gpt5", "o3"]) {
     expect(knownModel(HARNESSES.codex!, model)).toBe(true);
-  for (const model of ["gpt-sol", "o-3", "gpt-6.1-sol --flag", "anthropic/opus"])
+  }
+  for (const model of ["gpt-sol", "o-3", "gpt-6.1-sol --flag", "anthropic/opus"]) {
     expect(knownModel(HARNESSES.codex!, model)).toBe(false);
+  }
 });
 
 test("effort flags follow the harness's launch interface", () => {
@@ -119,15 +122,11 @@ test("pi takes a provider-qualified model, a thinking level and the persona file
 });
 
 test("a skill is started in each harness's own syntax", () => {
-  // The skills are shared — one ~/.agents/skills for every harness — so only the
-  // way the human channel starts one differs.
   expect(HARNESSES.claude!.skillCommand("code-review")).toBe("/code-review");
   expect(HARNESSES.pi!.skillCommand("code-review")).toBe("/skill:code-review");
-  // No slash form at all: these surface skills to the model by description, so a
-  // slash would be sent as literal text and do nothing.
+  // WARNING: No slash form: these surface skills to the model by description, so a slash would be sent as literal text.
   expect(HARNESSES.codex!.skillCommand("code-review")).toBe('the "code-review" skill');
   expect(HARNESSES.opencode!.skillCommand("code-review")).toBe('the "code-review" skill');
-  // Every harness in the table answers, so a definition can never name one that cannot.
   for (const adapter of Rec.values(HARNESSES)) {
     expect(adapter.skillCommand("tdd")).toContain("tdd");
   }
@@ -137,8 +136,6 @@ test("a body names a skill and every harness is pointed at the same file", () =>
   const body = "Run {{skill:code-review}} then {{skill:tdd}}, and {{skill:code-review}} again.";
 
   expect(skillsIn(body)).toEqual(["code-review", "tdd"]);
-  // A mention is what the agent reads, and a path is not harness-specific: nothing
-  // expands a slash command inside a file a model is handed.
   const mention = skillMention(new Map([["code-review", "/skills/code-review/SKILL.md"]]));
   expect(renderTemplate(body, {}, { skill: mention }).text).toBe(
     "Run the `code-review` skill (read `/skills/code-review/SKILL.md` and follow it) then " +
@@ -146,14 +143,12 @@ test("a body names a skill and every harness is pointed at the same file", () =>
       "(read `/skills/code-review/SKILL.md` and follow it) again.",
   );
 
-  // A skill reference is not a missing variable, and is left alone with no renderer.
   const plain = renderTemplate("{{skill:tdd}} and {{inputs.goal}}", { inputs: { goal: "g" } });
   expect(plain.missing).toEqual([]);
   expect(plain.text).toBe("{{skill:tdd}} and g");
 });
 
 test("every harness starts in its auto mode, and past its prompts only when bypass is asked for", () => {
-  // The permission switch comes last, after everything `harness` passes too.
   const permissionsOf = (adapter: string, model: string, mode?: "auto" | "bypass") => {
     const plain = startArgs(HARNESSES[adapter]!, model, "/p/i.md", undefined, "harness");
     return startArgs(HARNESSES[adapter]!, model, "/p/i.md", undefined, mode).slice(plain.length);
@@ -168,14 +163,13 @@ test("every harness starts in its auto mode, and past its prompts only when bypa
   expect(permissionsOf("codex", "gpt-5", "bypass")).toEqual([
     "--dangerously-bypass-approvals-and-sandbox",
   ]);
-  // opencode's `--auto` approves every call rather than reviewing it, so it has no auto mode.
+  // WARNING: opencode's --auto approves every call rather than reviewing it, so it has no auto mode.
   expect(permissionsOf("opencode", "anthropic/claude-sonnet-4")).toEqual([]);
   expect(permissionsOf("opencode", "anthropic/claude-sonnet-4", "bypass")).toEqual(["--auto"]);
-  // pi has no tool-approval prompt, so every mode is the same start.
-  for (const mode of ["auto", "bypass"] as const)
+  for (const mode of ["auto", "bypass"] as const) {
     expect(permissionsOf("pi", "openai-codex/gpt-5.6-sol", mode)).toEqual([]);
+  }
 
-  // `harness` passes no switch at all, whichever harness a step names.
   for (const adapter of Rec.values(HARNESSES)) {
     const asked = startArgs(adapter, DEFAULT_MODEL, "/p/i.md", undefined, "harness");
     for (const flag of [
@@ -183,13 +177,14 @@ test("every harness starts in its auto mode, and past its prompts only when bypa
       "--approve-for-me",
       "--dangerously-bypass-approvals-and-sandbox",
       "--auto",
-    ])
+    ]) {
       expect(asked).not.toContain(flag);
+    }
   }
 });
 
 test("Claude Code alone is given its auto-compact window, after everything else it is started with", () => {
-  expect(startArgs(HARNESSES.claude!, "opus", "/p/i.md", "high", "auto", 400000)).toEqual([
+  expect(startArgs(HARNESSES.claude!, "opus", "/p/i.md", "high", "auto", 400_000)).toEqual([
     "--model",
     "opus",
     "--effort",
@@ -209,13 +204,14 @@ test("Claude Code alone is given its auto-compact window, after everything else 
     "--autocompact",
     "auto",
   ]);
-  expect(startArgs(HARNESSES.codex!, "gpt-5", "/p/i.md", undefined, "auto", 400000)).toEqual([
+  expect(startArgs(HARNESSES.codex!, "gpt-5", "/p/i.md", undefined, "auto", 400_000)).toEqual([
     "-m",
     "gpt-5",
     "--approve-for-me",
   ]);
-  for (const adapter of ["codex", "opencode", "pi"])
+  for (const adapter of ["codex", "opencode", "pi"]) {
     expect(HARNESSES[adapter]!.autoCompactFlag).toBeUndefined();
+  }
 });
 
 test("Claude Code's managed settings forbid bypass where the file or a drop-in disables it", () =>
@@ -259,7 +255,6 @@ test("the agent is decided layer over layer, and the nearest one that names a fi
 });
 
 test("switching harness keeps nothing chosen for the one below, and falls back to its default", () => {
-  // Opus and a high effort were Claude's; codex takes neither, so neither comes along.
   expect(resolveChoice([configured, { harness: "codex" }])).toEqual({
     ok: true,
     choice: { harness: "codex", model: "default", effort: null },
@@ -268,7 +263,6 @@ test("switching harness keeps nothing chosen for the one below, and falls back t
     ok: true,
     choice: { harness: "codex", model: "gpt-5", effort: null },
   });
-  // Naming the harness already in force is not a switch.
   expect(resolveChoice([configured, { harness: "claude" }])).toEqual({
     ok: true,
     choice: { harness: "claude", model: "opus", effort: "high" },
@@ -324,7 +318,6 @@ test("a combination no harness takes is refused with what would be taken instead
   const harness = resolveChoice([configured, { harness: "gemini" }]);
   expect(!harness.ok && harness.problem).toContain('no harness called "gemini"');
 
-  // A model the operator added for a harness is one it takes.
   expect(
     resolveChoice([configured, { model: "claude-next" }], { claude: ["claude-next"] }).ok,
   ).toBe(true);
@@ -350,20 +343,25 @@ test("each harness wires the whole Collie Toolkit with its Run and agent environ
   for (const id of ["claude", "codex", "pi", "opencode"]) {
     const wired = HARNESSES[id]!.mcp(launch);
     expect(wired.args.length + Rec.keys(wired.env).length).toBeGreaterThan(0);
-    if (id === "claude") expect(wired.args).toEqual(["--mcp-config", launch.config]);
-    if (id === "pi") expect(wired.args).toEqual(["-e", launch.extension]);
+    if (id === "claude") {
+      expect(wired.args).toEqual(["--mcp-config", launch.config]);
+    }
+    if (id === "pi") {
+      expect(wired.args).toEqual(["-e", launch.extension]);
+    }
     if (id === "codex") {
       expect(wired.args).toContain('mcp_servers.collie.command="/bin/collie"');
       expect(wired.args).toContain('mcp_servers.collie.env.COLLIE_RUN="run-source"');
       expect(wired.args).toContain('mcp_servers.collie.env.COLLIE_AGENT="source-agent"');
     }
-    if (id === "opencode")
-      expect(JSON.parse(wired.env.OPENCODE_CONFIG_CONTENT!).mcp.collie).toEqual({
+    if (id === "opencode") {
+      expect(parseJson(Schema.Any, wired.env.OPENCODE_CONFIG_CONTENT!).mcp.collie).toEqual({
         type: "local",
         command: ["/bin/collie", "mcp"],
         environment: launch.env,
         enabled: true,
       });
+    }
   }
 });
 

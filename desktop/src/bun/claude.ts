@@ -1,5 +1,3 @@
-// The Flock chat's Claude Code: the Agent SDK, and Collie's tools served to it in this process.
-
 import {
   getSessionInfo,
   getSessionMessages,

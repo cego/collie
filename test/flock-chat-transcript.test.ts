@@ -1,7 +1,3 @@
-// A Flock conversation reopened, or shown in a second window, is read back from the
-// transcript Claude Code keeps: the human's words, the answers, and each tool call with
-// what it came back with.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";

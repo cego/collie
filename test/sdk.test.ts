@@ -1,10 +1,3 @@
-// The public workflow contract, held to what it promises an author.
-//
-// Everything here is about refusal before anything starts. A module that contradicts
-// itself is caught at load, where nothing has been created yet, and the message names
-// every conflict rather than the first — an author fixing one at a time learns the rules
-// one round trip each.
-
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
@@ -20,77 +13,71 @@ import {
   jsonSchemaFor,
   step,
   template,
-  type Registration,
-  type WorkflowEntry,
-  type WorkflowMetadata,
 } from "../src/sdk";
-import { REQUESTABLE, isOutcome, type Outcome } from "../src/outcome";
+import type { WorkflowEntry, WorkflowMetadata } from "../src/sdk";
+import { REQUESTABLE, isOutcome } from "../src/outcome";
+import type { Outcome } from "../src/outcome";
 import { loadEntry } from "../src/engine";
 import { runEffect } from "./support/effect";
 import { fixtures } from "./support/host";
 import { stopHost, until } from "./support/host";
 import { proves } from "./support/world";
 import { connect } from "../src/host";
+import { stringifyJson, parseJson } from "../src/json";
 
 const requestable: ReadonlyArray<Outcome> = Arr.filter(REQUESTABLE, isOutcome);
 
-test(
-  "ask persists a shipping declaration and refuses malformed actions or missing heads",
-  () =>
-    proves(
-      "collie-shipping-contract-",
-      (world) =>
-        Effect.gen(function* () {
-          const client = yield* connect(world.state).pipe(Effect.orDie);
-          for (const declaration of [
-            { action: "merge", head: "abc123" },
-            { action: "unknown", head: "abc123" },
-            { action: "merge" },
-          ]) {
-            const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
-              declaration,
-            );
-            const started = yield* client
-              .start({
-                project: world.project,
-                id: "shipping-go",
-                request: encoded,
-                input: { declaration: encoded },
+test("ask persists a shipping declaration and refuses malformed actions or missing heads", () =>
+  proves(
+    "collie-shipping-contract-",
+    (world) =>
+      Effect.gen(function* () {
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        for (const declaration of [
+          { action: "merge", head: "abc123" },
+          { action: "unknown", head: "abc123" },
+          { action: "merge" },
+        ]) {
+          const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
+            declaration,
+          );
+          const started = yield* client
+            .start({
+              project: world.project,
+              id: "shipping-go",
+              request: encoded,
+              input: { declaration: encoded },
+            })
+            .pipe(Effect.orDie);
+          const shown = yield* until(
+            () => client.run({ runId: started.runId }),
+            (run) => (run?.waiting.length ?? 0) > 0 || run?.status.status === "failed",
+          ).pipe(Effect.orDie);
+          if (declaration.action === "merge" && declaration.head !== undefined) {
+            expect(shown?.waiting[0]?.shipping).toEqual({ action: "merge", head: "abc123" });
+            yield* client
+              .answer({
+                runId: started.runId,
+                decision: "ship",
+                value: "stop",
+                request: "answered",
               })
               .pipe(Effect.orDie);
-            const shown = yield* until(
-              () => client.run({ runId: started.runId }),
-              (run) => (run?.waiting.length ?? 0) > 0 || run?.status.status === "failed",
-            ).pipe(Effect.orDie);
-            if (declaration.action === "merge" && declaration.head !== undefined) {
-              expect(shown?.waiting[0]?.shipping).toEqual({ action: "merge", head: "abc123" });
-              yield* client
-                .answer({
-                  runId: started.runId,
-                  decision: "ship",
-                  value: "stop",
-                  request: "answered",
-                })
-                .pipe(Effect.orDie);
-            } else {
-              expect(shown?.status.status).toBe("failed");
-              expect(shown?.waiting).toEqual([]);
-            }
+          } else {
+            expect(shown?.status.status).toBe("failed");
+            expect(shown?.waiting).toEqual([]);
           }
-          yield* stopHost(world.state);
-        }),
-      ["shipping-go.workflow.ts"],
-    ),
-  240_000,
-);
+        }
+        yield* stopHost(world.state);
+      }),
+    ["shipping-go.workflow.ts"],
+  ));
 
-/** Checking what a module declares never builds one, which is the point of doing it first. */
-const registration = (): Registration => {
+const registration = () => {
   throw new Error("checkEntry does not construct a registration");
 };
 
-/** A module with one launch Input, unless a test says otherwise. */
-const entry = (over: Partial<WorkflowEntry>): WorkflowEntry => ({
+const entry = (over: Partial<WorkflowEntry>) => ({
   id: "echo",
   title: "Echo",
   description: "Repeats a line.",
@@ -125,7 +112,6 @@ test("the identity is an identity, and a title is there for a human to read", ()
   expect(checkEntry(entry({ id: "Echo" }))[0]).toContain("is not an identity");
   expect(checkEntry(entry({ id: "2fast" }))[0]).toContain("is not an identity");
   expect(checkEntry(entry({ title: "  " }))).toEqual(["title is required"]);
-  // A description is worth writing, and a workflow without one is still a workflow.
   expect(checkEntry(entry({ description: "" }))).toEqual([]);
 });
 
@@ -152,7 +138,6 @@ test("only one input may claim each strategy inference reads", () => {
     );
     expect(problems).toEqual([`"here" and "there" both claim ${strategy}`]);
   }
-  // Two fields may share a strategy nothing infers from.
   expect(
     checkEntry(
       entry({
@@ -175,7 +160,6 @@ test("a module with inputs names exactly one launch Input, and one with none nam
       }),
     ),
   ).toEqual(['"goal" and "target" are both launch Inputs; a workflow has one']);
-  // Two goals are the exclusive clash every launch strategy has.
   expect(
     checkEntry(
       entry({
@@ -205,8 +189,6 @@ test("an outcome is fixed or selectable, and never contradicts itself", () => {
   expect(checkEntry(entry({ metadata: { outcome: { selectable: [] } } }))).toEqual([
     "a selectable outcome offers nothing",
   ]);
-  // `review` and `plan` are what a workflow proves, never what a human asks an implement
-  // Run for, so offering one as a choice is a contradiction too.
   expect(checkEntry(entry({ metadata: { outcome: { selectable: ["review"] } } }))[0]).toContain(
     "not an outcome a human may ask for",
   );
@@ -215,8 +197,7 @@ test("an outcome is fixed or selectable, and never contradicts itself", () => {
 test("a checkout is branch or roaming, and anything else is refused at load", () => {
   expect(checkEntry(entry({ metadata: { checkout: "branch" } }))).toEqual([]);
   expect(checkEntry(entry({ metadata: { checkout: "roaming" } }))).toEqual([]);
-  // What a module written in plain JavaScript can still say.
-  const loose: WorkflowMetadata = JSON.parse('{"checkout":"worktree"}');
+  const loose: WorkflowMetadata = parseJson(Schema.Any, '{"checkout":"worktree"}');
   expect(checkEntry(entry({ metadata: loose }))).toEqual([
     'checkout "worktree" is not branch or roaming',
   ]);
@@ -224,7 +205,7 @@ test("a checkout is branch or roaming, and anything else is refused at load", ()
 
 type Action = NonNullable<WorkflowMetadata["actions"]>[number];
 
-const action = (over: Partial<Action>): Action => ({
+const action = (over: Partial<Action>) => ({
   id: "fix-open",
   title: "Fix what is open",
   workflow: "implement",
@@ -244,7 +225,6 @@ test("an offer has a stable id, a title of its own, and a workflow it starts", (
   expect(
     checkEntry(entry({ metadata: { actions: [action({ workflow: "Not A Workflow" })] } }))[0],
   ).toContain("which is not a workflow id");
-  // The id is what a card matches on, so two offers wearing one cannot be told apart.
   expect(
     checkEntry(
       entry({
@@ -287,7 +267,6 @@ test("the envelope is the host's runId and the author's input, keyed on the run"
       const entry = yield* loadEntry(`${fixtures}/hello.workflow.ts`);
       const { workflow } = entry.make("hello@1");
       expect(workflow.idempotencyKey({ runId: "r1", input: { name: "mk" } })).toBe("r1");
-      // Different input, same run: the same execution, which is what a retry has to be.
       expect(workflow.idempotencyKey({ runId: "r1", input: { name: "other" } })).toBe("r1");
       expect(Schema.decodeExit(workflow.payloadSchema)({ runId: "r1", input: {} })._tag).toBe(
         "Failure",
@@ -304,12 +283,15 @@ test("modules are staged where only this account can write, and a cache others c
       const was = Bun.env.XDG_CACHE_HOME;
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
-          if (was === undefined) delete Bun.env.XDG_CACHE_HOME;
-          else Bun.env.XDG_CACHE_HOME = was;
+          if (was === undefined) {
+            delete Bun.env.XDG_CACHE_HOME;
+          } else {
+            Bun.env.XDG_CACHE_HOME = was;
+          }
         }),
       );
       Bun.env.XDG_CACHE_HOME = cache;
-      // Another account could have made this, and put whatever it likes where a module is read.
+      // WARNING: another account could have made this and put what it likes where a module is read.
       yield* fs.makeDirectory(entries, { recursive: true });
       yield* fs.chmod(entries, 0o777);
       const refused = yield* loadEntry(`${fixtures}/hello.workflow.ts`).pipe(Effect.flip);
@@ -325,8 +307,7 @@ test("a schema JSON Schema cannot say everything about is still a schema, and sa
   expect(drawable.limits).toEqual([]);
   expect(drawable.document).not.toBeNull();
 
-  // A declared schema draws as an empty object: valid JSON Schema that constrains
-  // nothing. The limit is on the copy a model would be held to, never on the contract.
+  // WARNING: a declared schema draws as an empty object; the JSON Schema limit is on the copy a model is held to, not the contract.
   const url = Schema.declare((value: unknown): value is URL => value instanceof URL);
   const undrawable = Schema.Struct({ at: url });
   const projected = jsonSchemaFor(undrawable);
@@ -350,7 +331,16 @@ test("a pattern check is drawn as the pattern a model is held to, with or withou
 });
 
 test("a flagless pattern that matches differently under the u flag is not drawn", () => {
-  const sources = ["^..$", "^.$", "^[^a]$", "^\\S$", "^\\W$", "^\\D$", "^\\p{L}$", "^\\u{61}$"];
+  const sources = [
+    "^..$",
+    "^.$",
+    "^[^a]$",
+    String.raw`^\S$`,
+    String.raw`^\W$`,
+    String.raw`^\D$`,
+    String.raw`^\p{L}$`,
+    String.raw`^\u{61}$`,
+  ];
   for (const source of sources) {
     const drawn = jsonSchemaFor(Schema.String.check(Schema.isPattern(new RegExp(source))));
     expect(drawn.document).not.toHaveProperty("pattern");
@@ -408,7 +398,7 @@ test("what a card is given is ids, titles and projections — never the closures
       },
     ],
   });
-  expect(JSON.stringify(described)).not.toContain("eligible");
+  expect(stringifyJson(described)).not.toContain("eligible");
 });
 
 test("a template takes what it declares, what every agent is given, and any key of a map", () => {
@@ -431,7 +421,6 @@ test("a template refuses every name it does not declare, and anything that is no
   ).toThrow(
     "this template names {{inputs.goal}}, {{run}}, {{not a name}}, which nothing fills: declare them among what it takes, or remove them",
   );
-  // A declared leaf has nothing under it to name.
   expect(() =>
     template("{{run.dir.more}}", { run: Schema.Struct({ dir: Schema.String }) }),
   ).toThrow("{{run.dir.more}}");

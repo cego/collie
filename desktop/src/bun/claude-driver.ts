@@ -1,26 +1,26 @@
-// The Flock chat on the user's own Claude Code, through the Agent SDK. Desktop mints the
-// session id; the Machine rule and News go in its UserPromptSubmit hook, not the message.
-
+// WARNING: Desktop mints the session id; the Machine rule and News go in its hook, not the message.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { homedir } from "node:os";
-import { Config, Effect, type FileSystem, Option, Path, Queue, Schema, Stream } from "effect";
+import { Config, Effect, Option, Path, Queue, Schema, Stream } from "effect";
+import type { FileSystem } from "effect";
 import type * as SecureRandom from "effect/crypto/SecureRandom";
-import { type SdkMessage, startState, step } from "./agui";
-import { type ChatDriver, type ContentBlock, type DriverContext, TurnCost } from "./driver";
+import { startState, step } from "./agui";
+import type { SdkMessage } from "./agui";
+import { TurnCost } from "./driver";
+import type { ChatDriver, ContentBlock, DriverContext } from "./driver";
 import { which } from "./login-env";
-import { isEffort, sessionOptions, type UserMcpServers } from "./session";
+import { isEffort, sessionOptions } from "./session";
+import type { UserMcpServers } from "./session";
 import { transcriptOf } from "./transcript";
 import type { FlockChat } from "./flock-tools";
 
-/** A session as the chat drives it. */
 export interface ClaudeSession extends AsyncIterable<SdkMessage> {
   readonly interrupt: () => Promise<object | void>;
   readonly close: () => void;
 }
 
-/** The Agent SDK's user message, as much of it as the chat sends; claude.ts holds it to the SDK's. */
 export interface UserMessage {
   readonly type: "user";
   readonly message: {
@@ -30,7 +30,6 @@ export interface UserMessage {
   readonly parent_tool_use_id: null;
 }
 
-/** What the chat needs of Claude Code: the Agent SDK in Desktop, a script in a test. */
 export interface ClaudeCode<Server> {
   readonly query: (params: {
     readonly prompt: AsyncIterable<UserMessage>;
@@ -51,28 +50,25 @@ export interface ClaudeCode<Server> {
       readonly lastModified: number;
     }>
   >;
-  /** Collie's tools as an MCP server in this process. */
   readonly server: (
     flock: FlockChat,
     run: <A>(
       effect: Effect.Effect<A, never, SecureRandom.SecureRandom | FileSystem.FileSystem>,
     ) => Promise<A>,
   ) => Server;
-  /** The MCP servers the human added to Claude Code at user scope. */
   readonly userServers: () => Promise<UserMcpServers>;
 }
 
-/** What a turn cost, as Claude Code's result says. */
 const TurnResult = Schema.Struct({ type: Schema.Literal("result"), ...TurnCost.fields });
 const decodeTurnResult = Schema.decodeUnknownOption(TurnResult);
 
-export const claudeDriver = <Server>(
+export const claudeDriver: <Server>(
   claude: ClaudeCode<Server>,
   opts: DriverContext,
-): ChatDriver => {
+) => ChatDriver = <Server>(claude: ClaudeCode<Server>, opts: DriverContext) => {
   const server = claude.server(opts.flock, opts.run);
   return {
-    // The SDK carries a Claude Code of its own where none is on PATH.
+    // WARNING: the SDK carries a Claude Code of its own where none is on PATH.
     installed: true,
     open: Effect.fnUntraced(function* (id, model, effort) {
       const known = yield* Effect.tryPromise(() =>
@@ -147,7 +143,7 @@ export const claudeDriver = <Server>(
         return path.join(
           config,
           "projects",
-          pipe_(opts.dir, Str.replace(/[^a-zA-Z0-9]/g, "-")),
+          pipe_(opts.dir, Str.replaceAll(/[^a-zA-Z0-9]/g, "-")),
           `${id}.jsonl`,
         );
       }),

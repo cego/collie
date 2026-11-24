@@ -1,14 +1,15 @@
 import { Cause, Effect } from "effect";
 import type { ConnectionLogin, ConnectionReading } from "../../../src/connection-model";
-import { GITHUB_WEB_LOGIN, type Keyring } from "./credentials";
-import { type MachineConnections, workflowConnections } from "../shared/connections";
+import { GITHUB_WEB_LOGIN } from "./credentials";
+import type { Keyring } from "./credentials";
+import { workflowConnections } from "../shared/connections";
 import type { Door, ShellRoute } from "./machine";
 import { redact } from "../../../src/redact";
 
 export const connectionsOn = (
   machine: { readonly profile: string; readonly name: string },
   door: Pick<Door, "connections" | "definitions">,
-): Effect.Effect<MachineConnections> =>
+) =>
   Effect.gen(function* () {
     const connections = yield* door.connections();
     const workflows = yield* door

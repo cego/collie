@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert";
 import { Config, Effect } from "effect";
 import * as Str from "effect/String";
+import { stringifyJson } from "../../src/json";
 
 const [modelPath, cwd, kind, production] = Bun.argv.slice(2);
 assert(modelPath && cwd);
@@ -67,7 +68,7 @@ if (merged) {
       },
     };
   }
-  await Bun.write(modelPath, JSON.stringify(model));
+  await Bun.write(modelPath, stringifyJson(model));
   output = {
     verdict: "clean",
     tag,
@@ -83,7 +84,7 @@ if (merged) {
     { project, name: "stage", tier: "staging", deployed: sha, job: "deploy-stage" },
     { project, name: "production", tier: "production", deployed: sha },
   ];
-  await Bun.write(modelPath, JSON.stringify(model));
+  await Bun.write(modelPath, stringifyJson(model));
   output = { verdict: "clean", played: ["deploy-production"] };
 } else {
   output = {
@@ -93,4 +94,4 @@ if (merged) {
     stage_jobs: { merge_request: [], tag: ["deploy-stage"] },
   };
 }
-await Bun.write(paths.output, JSON.stringify(output));
+await Bun.write(paths.output, stringifyJson(output));

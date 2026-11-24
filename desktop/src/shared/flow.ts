@@ -4,7 +4,7 @@ import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
-import type { Flow, FlowNode, FlowRun } from "../../../src/board-model";
+import type { Flow, FlowRun } from "../../../src/board-model";
 import { epochMs } from "../../../src/time";
 import { keepEqual, keepList } from "./keep-equal";
 import { stepTiming } from "./step-timing";
@@ -22,15 +22,18 @@ export interface FlowCard {
 }
 export const rowOrigin = (flow: Flow, run: string) => {
   const row = Option.getOrUndefined(Arr.findFirst(flow.lanes, (one) => one.run === run));
-  if (row?.requestedBy != null)
+  if (row?.requestedBy != null) {
     return { run: row.requestedBy.run, machine: row.requestedBy.machine.name };
-  if (row?.startedBy !== undefined) return { run: row.startedBy.run, machine: row.machine };
+  }
+  if (row?.startedBy !== undefined) {
+    return { run: row.startedBy.run, machine: row.machine };
+  }
   return null;
 };
 export const nodeName = (
   node: FlowRun,
   options: { missing?: boolean; notLive?: boolean; action?: string } = {},
-): string =>
+) =>
   Arr.join(
     Arr.map(
       Arr.filter(
@@ -49,39 +52,37 @@ export const nodeName = (
     ", ",
   );
 
-export const flowAnnouncements = (before: Flow | null, after: Flow): string[] => {
-  if (before === null) return [];
+export const flowAnnouncements = (before: Flow | null, after: Flow) => {
+  if (before === null) {
+    return [];
+  }
   const messages = new Set<string>();
   if (!sameSpot(before.current, after.current) && after.current !== null) {
     const current = nodeAt(after, after.current);
-    if (current !== null) messages.add(nodeName(current));
+    if (current !== null) {
+      messages.add(nodeName(current));
+    }
   }
-  for (const row of flowRows(after))
+  for (const row of flowRows(after)) {
     for (const node of row.nodes) {
       if (
         node.state === "needs-you" &&
         nodeAt(before, { run: row.run, node: node.id })?.state !== "needs-you"
-      )
+      ) {
         messages.add(nodeName(node));
+      }
     }
+  }
   return [...messages];
 };
 
-export const flowKey = (
-  flow: Flow,
-  focus: FlowSpot,
-  key: string,
-  open: boolean,
-  shift = false,
-): {
-  focus: FlowSpot;
-  close: boolean;
-  select: boolean;
-  primary?: boolean;
-  menu?: boolean;
-} | null => {
-  if (isFlowMenuKey(key, shift)) return { focus, close: false, select: false, menu: true };
-  if (key === "Enter" && shift) return { focus, close: false, select: false, primary: true };
+export const flowKey = (flow: Flow, focus: FlowSpot, key: string, open: boolean, shift = false) => {
+  if (isFlowMenuKey(key, shift)) {
+    return { focus, close: false, select: false, menu: true };
+  }
+  if (key === "Enter" && shift) {
+    return { focus, close: false, select: false, primary: true };
+  }
   const rows = Arr.filter(flowRows(flow), (row) => row.nodes.length > 0);
   let row = Option.getOrElse(
     Arr.findFirstIndex(rows, (one) => one.run === focus.run),
@@ -96,7 +97,9 @@ export const flowKey = (
         ),
       ),
     ) ?? -1;
-  if (row < 0 || at < 0) return null;
+  if (row < 0 || at < 0) {
+    return null;
+  }
   switch (key) {
     case "ArrowLeft":
       at--;
@@ -134,11 +137,19 @@ export interface FlowOpen {
   readonly run: string;
   readonly tab: "plan" | "review" | "evidence" | "mr" | "terminal" | "log";
 }
-export const openIn = (node: FlowRun, run: string): FlowOpen => {
-  if (node.produces === "plan" || node.produces === "review") return { run, tab: node.produces };
-  if (node.kind === "check" || node.produces === "evidence") return { run, tab: "evidence" };
-  if (node.kind === "release" || node.produces === "merge-request") return { run, tab: "mr" };
-  if (node.kind === "agent" && node.state === "running") return { run, tab: "terminal" };
+export const openIn = (node: FlowRun, run: string) => {
+  if (node.produces === "plan" || node.produces === "review") {
+    return { run, tab: node.produces };
+  }
+  if (node.kind === "check" || node.produces === "evidence") {
+    return { run, tab: "evidence" };
+  }
+  if (node.kind === "release" || node.produces === "merge-request") {
+    return { run, tab: "mr" };
+  }
+  if (node.kind === "agent" && node.state === "running") {
+    return { run, tab: "terminal" };
+  }
   return { run, tab: "log" };
 };
 
@@ -149,7 +160,6 @@ export type FlowEntry = {
   readonly wave?: number;
 };
 const formats = new Map<string | undefined, Intl.DateTimeFormat>();
-/** One formatter per zone: building one costs more than a record's whole Flow of instants. */
 const formatIn = (timeZone: string | undefined) => {
   let format = formats.get(timeZone);
   if (format === undefined) {
@@ -171,14 +181,17 @@ const dateParts = (ms: number, timeZone: string | undefined) =>
     Arr.map(formatIn(timeZone).formatToParts(ms), (part) => [part.type, part.value] as const),
   );
 
-/** An instant on this Machine's clock: `11:22` today, `24 Oct, 11:22` on another day. */
-export const whenOf = (iso: string, now: number, timeZone?: string): string => {
+export const whenOf = (iso: string, now: number, timeZone?: string) => {
   const ms = epochMs(iso);
-  if (Number.isNaN(ms)) return iso;
+  if (Number.isNaN(ms)) {
+    return iso;
+  }
   const at = dateParts(ms, timeZone);
   const today = dateParts(now, timeZone);
   const time = `${at.hour}:${at.minute}`;
-  if (at.year !== today.year) return `${at.day} ${at.month} ${at.year}, ${time}`;
+  if (at.year !== today.year) {
+    return `${at.day} ${at.month} ${at.year}, ${time}`;
+  }
   return at.month === today.month && at.day === today.day ? time : `${at.day} ${at.month}, ${time}`;
 };
 
@@ -187,7 +200,6 @@ export interface StepFact {
   readonly value: string;
 }
 const DURATION = /^(under a minute|\d+ min|\d+ h( \d+ min)?)$/;
-/** The host's words for a Step, less what its timing and warning already say. */
 const statusOf = (node: FlowRun, timing: string | null) =>
   Arr.join(
     [
@@ -200,7 +212,7 @@ const statusOf = (node: FlowRun, timing: string | null) =>
     ],
     " · ",
   ) || null;
-const factOf = (label: string, value: string | null | undefined): StepFact[] =>
+const factOf = (label: string, value: string | null | undefined) =>
   Option.match(Option.fromNullishOr(value), {
     onNone: () => [],
     onSome: (raw) => {
@@ -208,7 +220,7 @@ const factOf = (label: string, value: string | null | undefined): StepFact[] =>
       return text === "" ? [] : [{ label, value: text }];
     },
   });
-const factsOf = (node: FlowRun, when: (iso: string) => string): StepFact[] => [
+const factsOf = (node: FlowRun, when: (iso: string) => string) => [
   ...factOf("Role", node.role),
   ...factOf("Agent", node.agent),
   ...factOf("Model", node.ranOn),
@@ -238,13 +250,17 @@ export const inspectorOf = (
 ) => {
   const when = (iso: string) => whenOf(iso, now, timeZone);
   const parent = nodeAt(flow, selection);
-  if (parent === null) return null;
+  if (parent === null) {
+    return null;
+  }
   const all = [...parent.runs, ...(parent.links ?? [])];
   const node =
     Option.getOrUndefined(Arr.findFirst(all, (one) => one.id === selection.item)) ?? parent;
-  const lines: string[] = [];
-  if (node.agent != null) lines.push(`Agent ${node.agent}`);
-  if (node.ranOn !== null)
+  const lines: Array<string> = [];
+  if (node.agent != null) {
+    lines.push(`Agent ${node.agent}`);
+  }
+  if (node.ranOn !== null) {
     lines.push(
       Arr.join(
         Arr.map(Arr.filter([node.role, node.ranOn], Boolean), (part) =>
@@ -253,26 +269,33 @@ export const inspectorOf = (
         " · ",
       ),
     );
+  }
   if (node.started !== null) {
     lines.push(`Started ${when(node.started)}`);
   }
   const timing = stepTiming(node, now);
-  if (timing !== null) lines.push(timing);
-  if (node.ended !== null) lines.push(`Ended ${when(node.ended)}`);
+  if (timing !== null) {
+    lines.push(timing);
+  }
+  if (node.ended !== null) {
+    lines.push(`Ended ${when(node.ended)}`);
+  }
   Arr.forEach(node.attempts.slice(1), (attempt, i) =>
     lines.push(`Attempt ${i + 2} · ${attempt.cause ?? "retried"} · ${when(attempt.at)}`),
   );
-  for (const question of node.questions)
-    if (question.answered !== null)
+  for (const question of node.questions) {
+    if (question.answered !== null) {
       lines.push(
         `Answered ${when(question.answered)}${question.by === null ? "" : ` by ${question.by}`}`,
       );
+    }
+  }
   const waves = Arr.sortWith(
     [...new Set(Arr.flatMap(all, (one) => (one.wave === undefined ? [] : [one.wave])))],
     (value) => value,
     (one, other) => Num.sign(one - other),
   );
-  const entries: FlowEntry[] = Arr.map(waves, (wave) => ({
+  const entries: Array<FlowEntry> = Arr.map(waves, (wave) => ({
     title: `Wave ${wave}`,
     nodes: Arr.filter(all, (one) => one.wave === wave),
     folded: false,
@@ -284,10 +307,12 @@ export const inspectorOf = (
     () => -1,
   );
   const count = first === -1 ? ungrouped.length : first;
-  if (count > 1)
+  if (count > 1) {
     entries.push({ title: `${count} done`, nodes: ungrouped.slice(0, count), folded: true });
-  for (const one of ungrouped.slice(count > 1 ? count : 0))
+  }
+  for (const one of ungrouped.slice(count > 1 ? count : 0)) {
     entries.push({ title: one.title, nodes: [one], folded: false });
+  }
   return {
     title: node.title,
     state: node.state,
@@ -325,7 +350,7 @@ export const flowRows = (flow: Flow) => [
     name: row.title,
   })),
 ];
-export const nodeAt = (flow: Flow, spot: FlowSpot): FlowNode | null =>
+export const nodeAt = (flow: Flow, spot: FlowSpot) =>
   Option.getOrUndefined(
     Option.map(
       Option.fromNullishOr(
@@ -345,10 +370,6 @@ const sameRuns = Arr.makeEquivalence<string>((one, other) => one === other);
 const sameCard = (one: FlowCard, other: FlowCard) =>
   one.key === other.key && one.machine === other.machine && sameRuns(one.runs, other.runs);
 
-/**
- * The cards a Flow's links, nested links and Runs' origins can open, in the board's order. While they show what `before`
- * shows they are `before`, so a change to a Task the Flow does not link to draws nothing.
- */
 export const linkedCards = (
   flow: Flow,
   placed: ReadonlyArray<{
@@ -357,7 +378,7 @@ export const linkedCards = (
     readonly task: { readonly runs: ReadonlyArray<string> };
   }>,
   before?: ReadonlyArray<FlowCard>,
-): ReadonlyArray<FlowCard> => {
+) => {
   const runOf = (node: FlowRun) => (node.link?.run == null ? [] : [node.link.run]);
   const linked = new Set([
     ...Arr.flatMap(flowRows(flow), (row) =>
@@ -404,9 +425,11 @@ export const selectEntry = (
   selection: FlowSelection,
   item: string | null,
   cards: ReadonlyArray<FlowCard>,
-): FlowPick => {
+) => {
   const parent = nodeAt(flow, selection);
-  if (parent === null) return { kind: "none" };
+  if (parent === null) {
+    return { kind: "none" };
+  }
   const node = Option.getOrUndefined(
     Arr.findFirst([...parent.runs, ...(parent.links ?? [])], (one) => one.id === item),
   );
@@ -424,32 +447,33 @@ export const selectNode = (
   spot: FlowSpot,
   selected: FlowSelection | null,
   cards: ReadonlyArray<FlowCard>,
-): FlowPick => {
+) => {
   const node = nodeAt(flow, spot);
-  if (node === null) return { kind: "none" };
+  if (node === null) {
+    return { kind: "none" };
+  }
   if (node.link !== undefined) {
     const card = cardForLink(node, cards);
     return card === undefined || node.link.run === null
       ? { kind: "none" }
       : { kind: "open", card: card.key, run: node.link.run };
   }
-  if (node.kind === "offer")
+  if (node.kind === "offer") {
     return {
       kind: "offer",
       run: owningRun(flow, spot),
       offer: pipe(node.id, Str.replace(/^offer:/, "")),
     };
+  }
   return sameSpot(spot, selected)
     ? { kind: "close" }
     : { kind: "inspect", run: owningRun(flow, spot), selection: { ...spot, item: null } };
 };
 
-/**
- * `next`, with each lane and Step equal to the one already drawn being that one, so a Flow sent
- * or timed again draws only what changed.
- */
-export const keepFlow = (next: Flow, before: Flow | null): Flow => {
-  if (before === null) return next;
+export const keepFlow = (next: Flow, before: Flow | null) => {
+  if (before === null) {
+    return next;
+  }
   const lanes = keepList(next.lanes, before.lanes, (lane, was) => {
     const nodes = keepList(lane.nodes, was?.nodes);
     return keepEqual(nodes === lane.nodes ? lane : { ...lane, nodes }, was);

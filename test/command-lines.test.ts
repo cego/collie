@@ -7,7 +7,16 @@ import { STATUS_LINE_ARGS, statusLineCommand } from "../src/statusline";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 
-const WORDS = ["two words", "it's", `say "hi"`, "a;b", "$HOME", "*", "back\\slash", "line\nbreak"];
+const WORDS = [
+  "two words",
+  "it's",
+  `say "hi"`,
+  "a;b",
+  "$HOME",
+  "*",
+  String.raw`back\slash`,
+  "line\nbreak",
+];
 
 const argvOf = (line: string, program: string, env: Readonly<Record<string, string>> = {}) =>
   Effect.gen(function* () {
@@ -42,7 +51,8 @@ test("a Machine's login shell runs collie with the words it was given", () =>
 test("a login under script is handed to script as the words it was built from", () =>
   runEffect(
     Effect.gen(function* () {
-      for (const word of WORDS)
+      for (const word of WORDS) {
         expect(yield* argvOf(scriptLine(word), "script")).toEqual(["-qefc", word, "/dev/null"]);
+      }
     }),
   ));

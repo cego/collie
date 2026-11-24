@@ -1,6 +1,3 @@
-// The record an agent taking over another's work is handed, built from the host's own state
-// (ADR-0049 D8, as amended).
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Effect, FileSystem, Path, Result, Schema, pipe } from "effect";
@@ -12,7 +9,6 @@ import type { Solution } from "./board-model";
 
 const Strings = Schema.Array(Schema.String);
 
-/** What an agent may say beside its Output for whoever takes its work over. */
 export const OutgoingFields = {
   decisions: Schema.optionalKey(
     Strings.annotate({ description: "what you decided that the next agent should keep" }),
@@ -29,9 +25,7 @@ export type Outgoing = typeof Outgoing.Type;
 
 const Claim = Schema.Struct({
   criterion: Schema.String,
-  /** The answer the work's last Output gave it as met; null where none did. */
   claimed: Schema.NullOr(Schema.String),
-  /** The passing records at the head whose name that answer names. */
   proved: Strings,
 });
 
@@ -48,7 +42,6 @@ export const HandOver = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
   base: Schema.NullOr(Schema.String),
   head: Schema.String,
-  /** Whose the uncommitted work in the checkout is; null where there is none. */
   uncommitted: Schema.NullOr(Schema.String),
   criteria: Schema.Array(Claim),
   owed: Strings,
@@ -59,29 +52,21 @@ export const HandOver = Schema.Struct({
   transcript: Schema.NullOr(Schema.String),
   reports: Schema.String,
   said: Schema.optionalKey(Outgoing),
-  /** The head the findings were reviewed at. */
   reviewed: Schema.optionalKey(Schema.String),
 });
 export type HandOver = typeof HandOver.Type;
 
-/** What only the workflow knows of the work a hand-over is about. */
 export interface HandOverGiven {
   readonly ticket?: string;
-  /** The plan directory, whose digest is the plan revision. */
   readonly plan?: string;
-  /** The ticket's acceptance criteria, from its checkboxes. */
   readonly criteria?: ReadonlyArray<string>;
-  /** The work's last decoded Output's answers to them. */
   readonly answers?: ReadonlyArray<{ readonly criterion: string; readonly met: string }>;
   readonly checks?: ReadonlyArray<string>;
   readonly findings?: ReadonlyArray<Finding>;
-  /** The head the findings were reviewed at. */
   readonly reviewed?: string;
-  /** The outgoing agent's last Output. */
   readonly said?: Outgoing;
 }
 
-/** What the host holds when it builds one. */
 export interface HandOverState {
   readonly revision: number;
   readonly run: string;
@@ -111,10 +96,10 @@ const NOT_MET = /^\s*(not met|after merge)\b/i;
 
 const names = (text: string, name: string) =>
   new RegExp(
-    `(^|[^\\w-])${pipe(name, Str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))}([^\\w-]|$)`,
+    `(^|[^\\w-])${pipe(name, Str.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`))}([^\\w-]|$)`,
   ).test(text);
 
-export const buildHandOver = (state: HandOverState): HandOver => {
+export const buildHandOver = (state: HandOverState) => {
   const { given, checkout } = state;
   const passing = Arr.filter(
     state.verifications,
@@ -173,13 +158,22 @@ export const buildHandOver = (state: HandOverState): HandOver => {
   const { decisions, rejected, next_action } = given.said ?? {};
   if (decisions !== undefined || rejected !== undefined || next_action !== undefined) {
     const own: Types.Mutable<Outgoing> = {};
-    if (decisions !== undefined) own.decisions = decisions;
-    if (rejected !== undefined) own.rejected = rejected;
-    if (next_action !== undefined) own.next_action = next_action;
+    if (decisions !== undefined) {
+      own.decisions = decisions;
+    }
+    if (rejected !== undefined) {
+      own.rejected = rejected;
+    }
+    if (next_action !== undefined) {
+      own.next_action = next_action;
+    }
     record.said = own;
   }
-  if (given.reviewed) record.reviewed = given.reviewed;
-  return record;
+  if (given.reviewed) {
+    record.reviewed = given.reviewed;
+  }
+  const returned: HandOver = record;
+  return returned;
 };
 
 const listed = (heading: string, lines: ReadonlyArray<string>) =>
@@ -187,8 +181,7 @@ const listed = (heading: string, lines: ReadonlyArray<string>) =>
 
 const short = (sha: string) => (sha === "" ? "none" : pipe(sha, Str.slice(0, 12)));
 
-/** The record as the new agent reads it, where it took over because `why`. */
-export const renderHandOver = (record: HandOver, why: string): string =>
+export const renderHandOver = (record: HandOver, why: string) =>
   Arr.join(
     [
       `## Hand-over (revision ${record.revision})`,
@@ -239,7 +232,6 @@ export const renderHandOver = (record: HandOver, why: string): string =>
     "\n",
   );
 
-/** What of the checkout a record is held to at dispatch. */
 export interface AtDispatch {
   readonly head: string;
   readonly plan: string | null;
@@ -251,22 +243,20 @@ const current = (record: HandOver, now: AtDispatch) =>
   record.plan === now.plan &&
   (record.uncommitted !== null) === now.dirty;
 
-/**
- * The record to dispatch: this one where it still matches the checkout, else one rebuilt
- * from host state where that matches, else null.
- */
+// WARNING: a record that no longer matches the checkout is rebuilt from host state, else dropped.
 export const atDispatch = <E, R>(
   record: HandOver,
   read: Effect.Effect<AtDispatch, E, R>,
   rebuild: Effect.Effect<HandOver, E, R>,
 ) =>
   Effect.gen(function* () {
-    if (current(record, yield* read)) return record;
+    if (current(record, yield* read)) {
+      return record;
+    }
     const rebuilt = yield* rebuild;
     return current(rebuilt, yield* read) ? rebuilt : null;
   });
 
-/** A digest of every file under the plan directory, by path and content. */
 export const planRevision = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -275,7 +265,9 @@ export const planRevision = (dir: string) =>
     const hasher = new Bun.CryptoHasher("sha256");
     for (const file of files) {
       const at = path.join(dir, file);
-      if ((yield* fs.stat(at)).type !== "File") continue;
+      if ((yield* fs.stat(at)).type !== "File") {
+        continue;
+      }
       hasher.update(`${file}\u0000`);
       hasher.update(yield* fs.readFile(at));
       hasher.update("\u0000");

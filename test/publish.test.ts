@@ -18,7 +18,7 @@ test.each(["github", "gitlab"] as const)(
       (world) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
-          const git = (args: string[]) => exec(["git", ...args], { cwd: world.project });
+          const git = (args: Array<string>) => exec(["git", ...args], { cwd: world.project });
           for (const args of [
             ["init", "-b", "main"],
             ["config", "user.name", "Tester"],
@@ -29,8 +29,9 @@ test.each(["github", "gitlab"] as const)(
             ["checkout", "-b", "fix/cache"],
             ["remote", "add", "origin", `https://${PROJECT[forge]}.git`],
             ["commit", "--allow-empty", "-m", "Keep cached results", "-m", "Built by this Run."],
-          ])
+          ]) {
             expect((yield* git(args)).exitCode).toBe(0);
+          }
           const sha = Str.trim((yield* git(["rev-parse", "--short", "HEAD"])).stdout);
           const bin = yield* Effect.acquireRelease(FakeBin.make(`${world.home}/bin`), (bin) =>
             bin.restore(),
@@ -156,5 +157,4 @@ test.each(["github", "gitlab"] as const)(
         }),
       ["plain.workflow.ts"],
     ),
-  60_000,
 );

@@ -1,13 +1,4 @@
-// The one place a model is asked anything, and the shape of everything it may say back.
-//
-// Collie holds no API key and grows no daemon, so the model is a harness CLI run once,
-// with no tools, no inherited configuration, a clock and an output cap. It speaks only in
-// closed schemas: there is no free-text channel from the model into anything that acts.
-//
-// Nothing here executes an action. `evaluate` returns a decoded answer, judgement or
-// proposal; `validate` says which of a proposal's actions the target's own authority
-// already grants and which need a human. Running them is somebody else's module.
-
+// WARNING: the model is a harness CLI run once with no tools or inherited config, and speaks only in closed schemas.
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -20,7 +11,6 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Stream } from "effect";
 import type { Authority } from "./intent";
 
-/** Where a claim points. Validated against the Run's own directories before it is stored. */
 const RefSchema = Schema.Struct({
   kind: Schema.Literals(["diff", "output", "verification", "plan", "record", "git"]),
   path: Schema.optionalKey(Schema.String),
@@ -54,7 +44,8 @@ export type DriftReport = Schema.Schema.Type<typeof DriftReportSchema>;
 export const JudgementSchema = Schema.Struct({ reports: Schema.Array(DriftReportSchema) });
 export type Judgement = Schema.Schema.Type<typeof JudgementSchema>;
 
-import { ActionSchema, recipientOf, type Action } from "./actions";
+import { ActionSchema, recipientOf } from "./actions";
+import type { Action } from "./actions";
 
 export const ProposalSchema = Schema.Struct({
   interpretation: Schema.String,
@@ -64,22 +55,14 @@ export const ProposalSchema = Schema.Struct({
 });
 export type Proposal = Schema.Schema.Type<typeof ProposalSchema>;
 
-/**
- * What a new Task's workspace is called: the project or theme it belongs to, and what
- * this piece of work is. Two short strings and nothing else — a name is display data,
- * and there is no field here for the model to say anything that acts.
- */
+// WARNING: display data only; no field here lets the model say anything that acts.
 export const TaskNameSchema = Schema.Struct({
   project: Schema.String,
   title: Schema.String,
 });
 export type TaskName = Schema.Schema.Type<typeof TaskNameSchema>;
 
-/**
- * Which checkout under the Projects root a human's words are about: exactly one of the
- * candidates it was shown, several it cannot choose between, or none. Paths it was shown
- * and nothing else, so an answer can only point where a Run could already go.
- */
+// WARNING: only paths it was shown may be chosen, so an answer points only where a Run could already go.
 export const RouteSchema = Schema.Struct({
   answer: Schema.Literals(["one", "several", "none"]),
   checkouts: Schema.Array(Schema.String),
@@ -95,8 +78,7 @@ const SCHEMAS = {
 
 export type EvaluationKind = keyof typeof SCHEMAS;
 
-/** The JSON Schema handed to `--json-schema`, so the model is constrained at its own end too. */
-export function jsonSchemaFor(kind: EvaluationKind): string {
+export function jsonSchemaFor(kind: EvaluationKind) {
   const document = Schema.toJsonSchemaDocument(SCHEMAS[kind]);
   return encodeJson({ ...document.schema, $defs: document.definitions });
 }
@@ -110,13 +92,7 @@ export class EvaluatorUnavailable extends Data.TaggedError("EvaluatorUnavailable
   reason: string;
 }> {}
 
-/**
- * Every flag SPEC §7.6 relies on. Checked against the installed `--help` before a call,
- * because each one is load-bearing: without `--tools ""` the model has tools, without
- * `--setting-sources ""` it inherits the human's hooks and MCP servers, without
- * A missing flag refuses the call. No spending flag is among them: what a call costs is
- * recorded, never capped — the user's decision is that usage is data, not a restriction.
- */
+// WARNING: each flag is load-bearing for isolation; there is no spending flag, since usage is recorded, never capped.
 export const REQUIRED_FLAGS = [
   "--print",
   "--output-format",
@@ -136,17 +112,8 @@ export interface CallLimits {
   readonly effort: string;
 }
 
-/**
- * The argv one evaluation runs as. Exported and pure so a test can assert it exactly:
- * this list is the whole of the isolation, and a flag quietly dropped from it would not
- * change any behaviour a test could otherwise see.
- */
-export function argvFor(
-  limits: CallLimits,
-  /** The JSON Schema itself: the CLI takes the text, not a path to it. */
-  schema: string,
-  systemPromptFile: string,
-): string[] {
+// WARNING: this list is the whole isolation; a dropped flag shows in no test.
+export function argvFor(limits: CallLimits, schema: string, systemPromptFile: string) {
   return [
     "-p",
     "--output-format",
@@ -169,68 +136,61 @@ export function argvFor(
   ];
 }
 
-/**
- * The structured result, found by what validates rather than by a field name. The CLI's
- * envelope is its own shape and may rename its fields between releases; what cannot
- * change is that the payload is the thing that satisfies the closed schema we demanded.
- * So every candidate in the envelope is tried against that schema, and the one that
- * decodes is the answer.
- */
-export function structuredFrom<A, I>(
-  raw: string,
-  /** The closed schema the model was given, which is what says which node is the payload. */
-  schema: Schema.Codec<A, I, never>,
-): A | { readonly error: string } {
+// WARNING: the payload is found by what validates, since the CLI envelope may rename its fields.
+export function structuredFrom<A, I>(raw: string, schema: Schema.Codec<A, I, never>) {
   const decode = Schema.decodeUnknownOption(schema);
   const parse = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
   const envelope = parse(raw);
-  if (envelope._tag === "None") return { error: "the CLI did not print JSON" };
+  if (envelope._tag === "None") {
+    return { error: "the CLI did not print JSON" };
+  }
 
-  const seen: unknown[] = [];
-  const queue: unknown[] = [envelope.value];
+  const seen: Array<unknown> = [];
+  const queue: Array<unknown> = [envelope.value];
   while (queue.length > 0) {
     const node = queue.shift();
-    if (seen.includes(node)) continue;
-    seen.push(node);
-    const direct = decode(node);
-    if (direct._tag === "Some") return direct.value;
-    if (isString(node)) {
-      const nested = parse(node);
-      if (nested._tag === "Some") queue.push(nested.value);
+    if (seen.includes(node)) {
       continue;
     }
-    if (isArray(node)) queue.push(...node);
-    else if (isRecord(node)) queue.push(...Rec.values(node));
+    seen.push(node);
+    const direct = decode(node);
+    if (direct._tag === "Some") {
+      return direct.value;
+    }
+    if (isString(node)) {
+      const nested = parse(node);
+      if (nested._tag === "Some") {
+        queue.push(nested.value);
+      }
+      continue;
+    }
+    if (isArray(node)) {
+      queue.push(...node);
+    } else if (isRecord(node)) {
+      queue.push(...Rec.values(node));
+    }
   }
   return { error: "nothing in the CLI's envelope matched the schema it was given" };
 }
 
 export interface EvaluatorDeps {
-  /** `claude --help`, however the caller gets it; checked for every required flag. */
   readonly help: Effect.Effect<
     string,
     EvaluatorUnavailable,
     ChildProcessSpawner.ChildProcessSpawner
   >;
-  /** Where the frozen system prompt lives. Repo content, never anything an agent wrote. */
   readonly systemPromptFile: string;
   readonly limits: CallLimits;
 }
 
-/** Whether the installed CLI still takes every flag the isolation depends on. */
-/**
- * The required flags this `--help` does not name. A flag is named either as its own row
- * or folded into a neighbour's — claude 2.1.268 lists `--append-system-prompt[-file]` and
- * takes both spellings — so a bracketed suffix is read as naming both.
- */
-export function missingFlags(help: string): string[] {
-  const named = pipe_(help, Str.replace(/(--[a-z-]+)\[(-[a-z-]+)\]/g, "$1 $1$2"));
+// WARNING: a bracketed suffix such as [-file] names both spellings.
+export function missingFlags(help: string) {
+  const named = pipe_(help, Str.replaceAll(/(--[a-z-]+)\[(-[a-z-]+)\]/g, "$1 $1$2"));
   return Arr.filter(REQUIRED_FLAGS, (flag) => !pipe_(named, Str.includes(flag)));
 }
 
 const HELP_TAIL = 500;
 
-/** `<command> --help`, or why it could not be read: a failing CLI has not dropped its flags. */
 export const helpOf = (command: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -253,7 +213,9 @@ export const helpOf = (command: ReadonlyArray<string>) =>
         }),
     ),
     Effect.flatMap((ran) => {
-      if (ran.exitCode === 0 && Str.trim(ran.stdout) !== "") return Effect.succeed(ran.stdout);
+      if (ran.exitCode === 0 && Str.trim(ran.stdout) !== "") {
+        return Effect.succeed(ran.stdout);
+      }
       const said = pipe_(Str.trim(ran.stderr), Str.slice(-HELP_TAIL));
       return Effect.fail(
         new EvaluatorUnavailable({
@@ -274,21 +236,18 @@ export interface Outcome {
   readonly stdout: string;
 }
 
-/** What a failing call is allowed to say about itself. Enough to diagnose, not a transcript. */
 const STDERR_TAIL_BYTES = 4 * 1024;
 
-/** What has arrived on a stream so far, and what it has weighed — kept only under a cap. */
 interface Captured {
   readonly text: string;
   readonly bytes: number;
 }
 
-/** Fold a child's output under a byte cap, counting everything and keeping what fits. */
 const capped = <E, R>(stream: Stream.Stream<Uint8Array, E, R>, cap: number) =>
   stream.pipe(
     Stream.decodeText(),
     Stream.runFold(
-      (): Captured => ({ text: "", bytes: 0 }),
+      () => ({ text: "", bytes: 0 }),
       (all: Captured, chunk: string) => {
         const bytes = all.bytes + Buffer.byteLength(chunk, "utf8");
         return { text: bytes > cap ? all.text : all.text + chunk, bytes };
@@ -296,25 +255,18 @@ const capped = <E, R>(stream: Stream.Stream<Uint8Array, E, R>, cap: number) =>
     ),
   );
 
-/**
- * One call: no tools, no inherited settings, a wall clock and an output cap.
- * The pack goes in on stdin as data, never as instructions — the system prompt says so,
- * and the schema is what the answer has to fit.
- *
- * The caller reserves and settles the budget around this; that is deliberately not done
- * here, because a broker that both spent and accounted for the money would be the only
- * witness to its own spending.
- */
+// WARNING: the caller reserves and settles the budget around this, never here.
 export const call = Effect.fn("Evaluator.call")(function* (
   deps: EvaluatorDeps,
   kind: EvaluationKind,
   pack: string,
 ) {
   const missing = yield* flagsPresent(deps);
-  if (missing.length > 0)
+  if (missing.length > 0) {
     return yield* new EvaluatorUnavailable({
       reason: `the installed claude does not take ${Arr.join(missing, ", ")}`,
     });
+  }
 
   const argv = argvFor(deps.limits, jsonSchemaFor(kind), deps.systemPromptFile);
   const started = yield* Clock.currentTimeMillis;
@@ -322,17 +274,14 @@ export const call = Effect.fn("Evaluator.call")(function* (
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const handle = yield* spawner.spawn(
       ChildProcess.make("claude", argv, {
-        // The pack goes in as one stream on stdin: it is data about someone else's work,
-        // and putting it on the command line would make it argv a shell could see.
+        // WARNING: the pack goes on stdin, since argv is visible to other processes.
         stdin: Stream.make(new TextEncoder().encode(pack)),
         stdout: "pipe",
         stderr: "pipe",
         extendEnv: true,
       }),
     );
-    // Both streams, concurrently: a child whose stderr nobody reads blocks on a full pipe
-    // and becomes a timeout. Counted as they arrive, because a cap that only classifies
-    // what has already been allocated is not a cap on anything.
+    // WARNING: both streams are read concurrently, or a full stderr pipe stalls the child into a timeout.
     const [read, failed, exit] = yield* Effect.all(
       [
         capped(handle.stdout, deps.limits.maxOutputBytes),
@@ -349,11 +298,13 @@ export const call = Effect.fn("Evaluator.call")(function* (
   );
 
   const seconds = ((yield* Clock.currentTimeMillis) - started) / 1000;
-  if (ran === undefined || ran._tag === "None")
+  if (ran === undefined || ran._tag === "None") {
     return { outcome: "timeout" as const, seconds, bytes: 0, stdout: "", stderr: "" };
+  }
   const { read, stderr, code } = ran.value;
-  if (read.bytes > deps.limits.maxOutputBytes)
+  if (read.bytes > deps.limits.maxOutputBytes) {
     return { outcome: "over_output" as const, seconds, bytes: read.bytes, stdout: "", stderr };
+  }
   return {
     outcome: code === 0 ? ("ok" as const) : ("failed" as const),
     seconds,
@@ -364,40 +315,30 @@ export const call = Effect.fn("Evaluator.call")(function* (
   };
 });
 
-/**
- * What the CLI said the call cost, where it said: the envelope's own `total_cost_usd`.
- * Telemetry, written beside the call's record for a human to see; nothing reads it back
- * to decide anything.
- */
+// WARNING: telemetry only; nothing may decide from the cost.
 const CostEnvelope = Schema.Struct({ total_cost_usd: Schema.Finite });
-const costOf = (stdout: string): number | undefined =>
+const costOf = (stdout: string) =>
   Schema.decodeOption(Schema.fromJsonString(Schema.Unknown))(stdout).pipe(
     Option.flatMap((json) => Schema.decodeUnknownOption(CostEnvelope)(json)),
     Option.map((envelope) => envelope.total_cost_usd),
     Option.getOrUndefined,
   );
 
-/**
- * What a call produced, decoded, or why there is nothing. A decode failure is
- * `evaluator_invalid_output` and yields no action at all: a model that answered outside
- * its schema has said nothing Collie is willing to act on.
- */
+// WARNING: an answer outside its schema yields no action at all.
 export const evaluate = Effect.fn("Evaluator.evaluate")(function* (
   deps: EvaluatorDeps,
   kind: EvaluationKind,
   pack: string,
 ) {
   const ran = yield* call(deps, kind, pack);
-  // The child's own words about why, where it said any: `failed` on its own is a fact
-  // about an exit code and nothing a human can act on.
-  if (ran.outcome !== "ok")
+  if (ran.outcome !== "ok") {
     return {
       spent: ran,
       value: null,
       error: ran.stderr === "" ? ran.outcome : `${ran.outcome}: ${Str.trim(ran.stderr)}`,
     };
-  // Per kind rather than from `SCHEMAS`: inference over that union picks one member's
-  // type, and callers narrow the union of both.
+  }
+  // WARNING: per kind, since inference over the union picks one member's type.
   const decoded =
     kind === "judgement"
       ? structuredFrom(ran.stdout, JudgementSchema)
@@ -406,29 +347,19 @@ export const evaluate = Effect.fn("Evaluator.evaluate")(function* (
         : kind === "routing"
           ? structuredFrom(ran.stdout, RouteSchema)
           : structuredFrom(ran.stdout, ProposalSchema);
-  if ("error" in decoded)
+  if ("error" in decoded) {
     return { spent: ran, value: null, error: `evaluator_invalid_output: ${decoded.error}` };
+  }
   return { spent: ran, value: decoded, error: null };
 });
 
-// ---------------------------------------------------------------------------
-// The validator
-// ---------------------------------------------------------------------------
-
 export interface ValidationContext {
-  /** Runs the model was shown. An action about anything else is about nothing. */
   readonly runs: ReadonlySet<string>;
-  /** Agents the model was shown, by run. */
   readonly agents: ReadonlyMap<string, ReadonlySet<string>>;
-  /** Each target's current Intent version and authority. */
   readonly intents: ReadonlyMap<
     string,
     { readonly version: number; readonly authority: Authority }
   >;
-  /**
-   * Where the proposal came from. A Driver's own drift check may act inside what the Run
-   * granted; anything a human's steer produced waits for that human, whatever was granted.
-   */
   readonly origin: "driver" | "steer";
   readonly maxDeliveryBytes: number;
 }
@@ -438,46 +369,41 @@ export interface Validated {
   readonly state: "allowed_now" | "pending";
 }
 
-/**
- * Whether the Run's own authority already grants Collie this action. Only ever consulted
- * for a Driver's drift check: a proposal that came out of a conversation with a human
- * goes back to that human, because the grant was for correcting drift, not for doing
- * whatever the conversation turned up.
- */
-function granted(action: Action, authority: Authority): boolean {
+// WARNING: only a Driver's drift check may act on the grant; a steer's proposal goes back to its human.
+function granted(action: Action, authority: Authority) {
   switch (action.kind) {
     case "deliver":
-      if (!authority.auto_correct) return false;
-      if (action.mode === "now") return authority.now_allowed;
-      if (action.mode === "interrupt") return authority.interrupt_allowed;
+      if (!authority.auto_correct) {
+        return false;
+      }
+      if (action.mode === "now") {
+        return authority.now_allowed;
+      }
+      if (action.mode === "interrupt") {
+        return authority.interrupt_allowed;
+      }
       return true;
     case "stop":
       return authority.stop_allowed;
     default:
-      // Everything else — an amended Intent, a new Run, a resumed one, an answered
-      // Choice, a cleared override — is a decision, and decisions are the human's.
       return false;
   }
 }
 
-function runOf(action: Action): string | null {
+function runOf(action: Action) {
   return "run" in action ? action.run : null;
 }
 
-/**
- * Every action, with what it is allowed to do. An action about something the model was
- * not shown becomes `ask_human` carrying the reason rather than being dropped: the human
- * asked a question, and "I proposed something about a Run that does not exist" is an
- * answer they need to see.
- */
-export function validate(proposal: Proposal, ctx: ValidationContext): Validated[] {
+// WARNING: an action about a Run not shown becomes ask_human, not dropped.
+export function validate(proposal: Proposal, ctx: ValidationContext) {
   return Arr.map(proposal.actions, (action) => {
     const refused = refusalFor(action, ctx);
-    if (refused !== null)
+    if (refused !== null) {
       return {
         action: { kind: "ask_human" as const, question: refused },
         state: "pending" as const,
       };
+    }
     const run = runOf(action);
     const intent = run === null ? undefined : ctx.intents.get(run);
     const allowed =
@@ -486,31 +412,29 @@ export function validate(proposal: Proposal, ctx: ValidationContext): Validated[
   });
 }
 
-function refusalFor(action: Action, ctx: ValidationContext): string | null {
+function refusalFor(action: Action, ctx: ValidationContext) {
   const run = runOf(action);
-  if (run !== null && !ctx.runs.has(run))
+  if (run !== null && !ctx.runs.has(run)) {
     return `I proposed ${action.kind} for run "${run}", which was not among the runs I was shown.`;
+  }
   if (action.kind === "deliver") {
     const agent = action.agent;
-    if (agent !== undefined && !ctx.agents.get(action.run)?.has(agent))
+    if (agent !== undefined && !ctx.agents.get(action.run)?.has(agent)) {
       return `I proposed a message for agent "${agent}", which is not one of run ${action.run}'s.`;
-    if (Buffer.byteLength(action.text, "utf8") > ctx.maxDeliveryBytes)
+    }
+    if (Buffer.byteLength(action.text, "utf8") > ctx.maxDeliveryBytes) {
       return `The message I wrote for ${recipientOf(action)} is over the ${ctx.maxDeliveryBytes}-byte limit.`;
+    }
   }
   if (action.kind === "update_intent") {
     const current = ctx.intents.get(action.run)?.version;
-    if (current !== undefined && current !== action.base_version)
+    if (current !== undefined && current !== action.base_version) {
       return `I wrote an Intent change against v${action.base_version} of run ${action.run}, which is now v${current}.`;
+    }
   }
   return null;
 }
 
-/**
- * What asking the evaluator takes on this machine: the Herd its calls are charged to, the
- * model's own system prompt, and the bounds a call runs within. Execution bounds, not
- * spending ones: what a call costs is recorded in `budget.jsonl` and never used to refuse
- * the next one.
- */
 export const evaluationDeps = Effect.fn("Evaluator.evaluationDeps")(function* (env: {
   readonly pluginRoot: string;
   readonly herdKey: string;
@@ -533,17 +457,12 @@ export const evaluationDeps = Effect.fn("Evaluator.evaluationDeps")(function* (e
   };
 });
 
-/** A small call with a frozen prompt of its own, and where its usage is written down. */
 export interface BudgetedDeps {
   readonly evaluator: EvaluatorDeps;
   readonly budget: string;
 }
 
-/**
- * What one small call takes, or null where it cannot be asked at all: no Herd to record
- * it against, or no `prompts/<prompt>` in this build to ask with. The prompt is what keeps
- * the data it is shown data, so its absence is a reason not to call.
- */
+// WARNING: without its prompt the data shown is no longer data, so no call is made.
 export const budgetedDeps = Effect.fn("Evaluator.budgetedDeps")(function* (
   env: {
     readonly userDir: string;
@@ -557,9 +476,13 @@ export const budgetedDeps = Effect.fn("Evaluator.budgetedDeps")(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const herd = yield* machineHerd(env).pipe(Effect.orElseSucceed(() => null));
-  if (herd === null) return null;
+  if (herd === null) {
+    return null;
+  }
   const systemPromptFile = path.join(env.pluginRoot, "prompts", prompt);
-  if (!(yield* fs.exists(systemPromptFile).pipe(Effect.orElseSucceed(() => false)))) return null;
+  if (!(yield* fs.exists(systemPromptFile).pipe(Effect.orElseSucceed(() => false)))) {
+    return null;
+  }
   const evaluation = yield* evaluationDeps({ pluginRoot: env.pluginRoot, herdKey: herd });
   return {
     evaluator: {
@@ -571,10 +494,6 @@ export const budgetedDeps = Effect.fn("Evaluator.budgetedDeps")(function* (
   } satisfies BudgetedDeps;
 });
 
-/**
- * One call, written down as usage before it is made and after, and its decoded answer —
- * null for none that fits its schema, and never a failure: whoever asks has a stand-in.
- */
 export const askOnce = Effect.fn("Evaluator.askOnce")(function* (
   deps: BudgetedDeps,
   kind: EvaluationKind,

@@ -1,5 +1,3 @@
-// The replies a Run posted to reviewers in its human's name, recorded by its host as posted.
-
 import { Effect, Schema } from "effect";
 import { RunReply } from "./board-model";
 import { appendRunJournal, readRunJournal, runJournal } from "./journal";
@@ -16,6 +14,5 @@ export const readReplies = Effect.fn("Replies.read")(function* (runDir: string) 
   return yield* readRunJournal(repliesPath(runDir), RunReplyJson);
 });
 
-/** The line a list of replies shows for one: what it was, on which comment, and when. */
 export const replyLine = (reply: RunReply) =>
   `${reply.kind ?? "replied"} ${reply.comment} at ${reply.at}`;

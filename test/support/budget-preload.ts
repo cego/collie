@@ -1,9 +1,4 @@
-// A `bun test` that `bun run test` did not start on a hold joins the Machine's budget as a
-// small run (ADR-draft-test-processes-share-one-budget-per-machine, D4). Bun 1.4.4 runs this
-// in every process that runs test files, and again for each file under `--isolate`, as
-// `--parallel`'s workers are, so each run of it takes one worker and gives it back once its
-// files end. Its wait is no test's: a test's timeout starts after it.
-
+// WARNING: Bun runs this in each test process and again per file under --isolate, so each run takes one worker and gives it back.
 import * as Arr from "effect/Array";
 import { afterAll } from "bun:test";
 import { availableParallelism } from "node:os";
@@ -15,7 +10,9 @@ const scope = Scope.makeUnsafe();
 
 await Effect.runPromise(
   Effect.gen(function* () {
-    if (Option.isSome(yield* Config.option(Config.String(HOLD_ENV)))) return;
+    if (Option.isSome(yield* Config.option(Config.String(HOLD_ENV)))) {
+      return;
+    }
     const override = yield* Config.option(Config.String("COLLIE_TEST_BUDGET"));
     const budget = budgetOf(availableParallelism(), Option.getOrUndefined(override));
     const share = shareOf(budget, "small");
@@ -29,12 +26,12 @@ await Effect.runPromise(
       (sum, one) => sum + one.workers,
     );
     yield* Console.error(
-      `test: admitted after ${(hold.waited / 1_000).toFixed(2)} s queued; small runs hold ${holding} of their ${share} workers`,
+      `test: admitted after ${(hold.waited / 1000).toFixed(2)} s queued; small runs hold ${holding} of their ${share} workers`,
     );
   }).pipe(
     Scope.provide(scope),
     Effect.provide(BunServices.layer),
-    // Effect's default provider keeps the environment it first reads, before hosts.ts sets the test's.
+    // WARNING: Effect's default provider keeps the environment read first, before hosts.ts sets the test's, so provide it explicitly.
     Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv()),
   ),
 );

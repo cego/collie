@@ -1,6 +1,3 @@
-// Native chat: which harness opens, which session it is, and what must never happen — a
-// chat reopening into whatever conversation the harness wrote last in this directory.
-
 import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
@@ -24,13 +21,14 @@ import {
   writeLaunchFiles,
   whyUnavailable,
   writeChat,
-  type ChatRecord,
 } from "../src/chat";
+import type { ChatRecord } from "../src/chat";
 import { setSetting, writeConfigValue } from "../src/config";
 import { chatContextFor } from "../src/statusline";
 import { selectionPath, writeSelection } from "../src/selection";
 import { machineHerd } from "../src/steering";
-import { Rig, type Call } from "./support/recorder";
+import { Rig } from "./support/recorder";
+import type { Call } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 import { TOOLS } from "../src/tools";
 import { runEffect } from "./support/effect";
@@ -43,7 +41,7 @@ const decodeJson = flow(
 const KEY = "herd-abc";
 let stateDir: string;
 
-const record = (over: Partial<ChatRecord> = {}): ChatRecord => ({
+const record: (over?: Partial<ChatRecord>) => ChatRecord = (over = {}) => ({
   harness: "claude",
   agent: "collie-chat",
   sessions: { claude: "abcd1234-0000-4000-8000-000000000000" },
@@ -74,15 +72,12 @@ test("Claude Code is what opens, whatever the workers are on", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const userDir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-chat-config-" });
-      // An existing installation: workers on another harness, and a `scope` from before
-      // any of this existed. Neither says anything about which chat opens.
       yield* writeConfigValue(userDir, "harness", "codex");
       yield* writeConfigValue(userDir, "scope", "local");
       expect(yield* chatHarnessOf(userDir)).toBe(DEFAULT_CHAT_HARNESS);
 
       yield* writeConfigValue(userDir, CHAT_HARNESS_KEY, "pi");
       expect(yield* chatHarnessOf(userDir)).toBe("pi");
-      // A value nobody meant still has to open something.
       yield* writeConfigValue(userDir, CHAT_HARNESS_KEY, "nonesuch");
       expect(yield* chatHarnessOf(userDir)).toBe("claude");
       expect(preferredHarness(undefined)).toBe("claude");
@@ -106,7 +101,7 @@ test("chat keeps native tools and adds Collie's tools", () => {
     extension: "/d/c.ts",
     settings: "/d/settings.json",
   };
-  const claude = chatArgs("claude", "s-1", files, 400000);
+  const claude = chatArgs("claude", "s-1", files, 400_000);
   expect(claude).toEqual([
     "--session-id",
     "s-1",
@@ -125,7 +120,7 @@ test("chat keeps native tools and adds Collie's tools", () => {
   ]);
   expect(chatArgs("claude", "s-1", files, "auto").slice(-2)).toEqual(["--autocompact", "auto"]);
   expect(chatArgs("claude", "s-1", files, null)).not.toContain("--autocompact");
-  const pi = chatArgs("pi", "s-2", files, 400000);
+  const pi = chatArgs("pi", "s-2", files, 400_000);
   expect(pi).toEqual([
     "--session-id",
     "s-2",
@@ -161,31 +156,25 @@ test("both harnesses are wired to the same Collie reads", () => {
     "/s/herd/abc",
     "news.jsonl",
   );
-  // The same tools, reached the way Pi documents: a registered tool, not a shell.
-  for (const tool of TOOLS) expect(extension).toContain(tool.name);
+  for (const tool of TOOLS) {
+    expect(extension).toContain(tool.name);
+  }
   expect(extension).toContain("pi.registerTool");
   expect(extension).toContain('"tools", "call"');
-  // Both adapters are told which Collie to read, rather than inheriting whatever the
-  // pane happened to have: two answers about two Herds is the failure this prevents.
+  // WARNING: Both adapters read the same Collie; two answers about two Herds is the failure this prevents.
   expect(extension).toContain('"COLLIE_STATE_DIR":"/s"');
   expect(extension).toContain("...process.env, ...ENV");
-  // The directory, not the file: there is nothing to watch before the first event, and
-  // trimming the journal replaces the file by rename.
+  // WARNING: Watch the directory, not the file: trims replace the journal by rename.
   expect(extension).toContain('const NEWS_DIR = "/s/herd/abc"');
   expect(extension).toContain("watch(NEWS_DIR");
-  // A custom message, never `sendUserMessage` — the one that appears as if the human
-  // typed it — and never delivered into a turn that is running.
+  // WARNING: Custom message, never sendUserMessage (it looks typed by the human) and never into a running turn.
   expect(extension).toContain("pi.sendMessage");
   expect(extension).not.toContain("pi.sendUserMessage");
   expect(extension).toContain('deliverAs: "followUp"');
-  // Waits for a running turn, wakes an idle one: that is speaking first without
-  // interrupting anything.
   expect(extension).toContain("triggerTurn: true");
-  // Nothing synchronous: a `collie` process start on Pi's event loop is Pi's editor
-  // stopping for as long as the Herd takes to read.
+  // WARNING: No spawnSync: a blocking call stalls Pi's event loop and editor.
   expect(extension).not.toContain("spawnSync");
-  // The journal itself, not the `news.jsonl.<pid>.tmp` a trim renames over it — which
-  // would deliver the same item twice.
+  // WARNING: Match the journal itself, not the tmp file a trim renames over it, or the same item is delivered twice.
   expect(extension).toContain("String(name) === NEWS_FILE");
   expect(config).toMatchObject({
     mcpServers: { collie: { env: { COLLIE_STATE_DIR: "/s" } } },
@@ -196,9 +185,7 @@ test("a harness that is not there is said out loud, and costs nothing else", () 
   expect(whyUnavailable("pi", "/usr/bin/pi")).toBeNull();
   const why = whyUnavailable("claude", null);
   expect(why).toContain("not installed");
-  // Never a reason to open the other one instead: the human chose this harness.
   expect(why).not.toContain("pi");
-  // And never a reason to have no control plane.
   expect(why).toContain("board and existing Runs are unaffected");
 });
 
@@ -229,14 +216,10 @@ test("both adapters are told about the same Collie, in one place", () =>
         mcpConfig: mcpConfig(["/bin/collie"], serverEnv),
       });
 
-      // The same environment reaches both. They diverged once — Pi's extension was given
-      // only a working directory, so it read whichever Collie the pane happened to have
-      // and answered about the human's real Herd inside a disposable one.
+      // WARNING: Same environment reaches both adapters; once Pi's extension read a different Collie.
       const extension = yield* fs.readFileString(files.extension);
       const config = decodeJson(yield* fs.readFileString(files.mcpConfig));
-      // The prompt hook shells back into the same Collie, so the same environment is
-      // spelled out on its command line rather than inherited from the pane.
-      // SAFETY: the file was written by `claudeSettings` two lines above, whose one shape this names.
+      // WARNING: the file was written by `claudeSettings` two lines above, whose one shape this names.
       const hook = decodeJson(yield* fs.readFileString(files.settings)) as {
         hooks: {
           UserPromptSubmit: Array<{ hooks: Array<{ command: string }> }>;
@@ -245,15 +228,15 @@ test("both adapters are told about the same Collie, in one place", () =>
       };
       const command = hook.hooks.UserPromptSubmit[0]!.hooks[0]!.command;
       expect(command).toEndWith("/bin/collie chat context");
-      // And every prompt is handed to the tool host until the turn ends, so a chat's
-      // actions carry the words of the turn they were taken in.
       const heard = hook.hooks.UserPromptSubmit[0]!.hooks[1]!.command;
       expect(heard).toEndWith("/bin/collie chat heard");
       expect(hook.hooks.Stop[0]!.hooks[0]!.command).toBe(heard);
-      for (const [key, value] of Rec.toEntries(serverEnv))
+      for (const [key, value] of Rec.toEntries(serverEnv)) {
         expect(heard).toContain(`${key}=${value}`);
-      for (const [key, value] of Rec.toEntries(serverEnv))
+      }
+      for (const [key, value] of Rec.toEntries(serverEnv)) {
         expect(command).toContain(`${key}=${value}`);
+      }
       for (const [key, value] of Rec.toEntries(serverEnv)) {
         expect(extension).toContain(`"${key}":"${value}"`);
         expect(config).toMatchObject({ mcpServers: { collie: { env: { [key]: value } } } });
@@ -287,7 +270,9 @@ test.each([
           });
         yield* write(`${root}/plugin/prompts/collie-chat.md`, "You are Collie's chat.\n");
         yield* write(`${root}/plugin/personas/every-agent.md`, "The installation's rule.\n");
-        if (user) yield* write(`${root}/user/personas/every-agent.md`, "The user's rule.\n");
+        if (user) {
+          yield* write(`${root}/user/personas/every-agent.md`, "The user's rule.\n");
+        }
         const files = yield* writeLaunchFiles({
           dir: `${root}/chat`,
           pluginRoot: `${root}/plugin`,
@@ -323,7 +308,10 @@ test("the system prompt chat writes takes a reported review as a report, asks be
         tools: [],
         mcpConfig: "{}",
       });
-      const prompt = pipe_(yield* fs.readFileString(files.systemPrompt), Str.replace(/\s+/g, " "));
+      const prompt = pipe_(
+        yield* fs.readFileString(files.systemPrompt),
+        Str.replaceAll(/\s+/g, " "),
+      );
       expect(prompt).toContain(
         `A human reporting a review, such as "I got review on the MR", is telling you what happened, not asking you to change what a Run does.`,
       );
@@ -368,7 +356,7 @@ test("the shipped prompt has chat choose by description, with ad-hoc work as gen
       const fs = yield* FileSystem.FileSystem;
       const prompt = pipe_(
         yield* fs.readFileString(`${import.meta.dir}/../prompts/collie-chat.md`),
-        Str.replace(/\s+/g, " "),
+        Str.replaceAll(/\s+/g, " "),
       );
       expect(prompt).toContain("Choose the workflow whose description fits the request");
       expect(prompt).toContain(
@@ -378,7 +366,6 @@ test("the shipped prompt has chat choose by description, with ad-hoc work as gen
     }),
   ));
 
-/** The chat started on Claude Code as a core terminal, against the fake core and a stand-in `claude`. */
 const launchedChat = (opts: {
   readonly config?: string;
   readonly settingsSet?: string;
@@ -394,13 +381,16 @@ const launchedChat = (opts: {
     yield* bin.add(opts.harness ?? "claude", "exit 0");
     const fs = yield* FileSystem.FileSystem;
     const env = rig.pluginEnv();
-    if (opts.config !== undefined)
+    if (opts.config !== undefined) {
       yield* fs.writeFileString(`${env.userDir}/config.json`, opts.config);
-    if (opts.settingsSet !== undefined)
+    }
+    if (opts.settingsSet !== undefined) {
       yield* fs.writeFileString(`${env.userDir}/settings-set.json`, opts.settingsSet);
-    if (opts.recorded !== undefined)
+    }
+    if (opts.recorded !== undefined) {
       yield* writeChat(yield* chatPath(env.stateDir, KEY), opts.recorded);
-    const lines: string[] = [];
+    }
+    const lines: Array<string> = [];
     const ensured = yield* startChat(
       new Herdr(env),
       env,
@@ -470,7 +460,6 @@ test("chat on Claude Code starts as collie-chat with a 400000 auto-compact windo
 test("a chat started again starts a new conversation, whatever was recorded", () =>
   runEffect(
     Effect.gen(function* () {
-      // Resumed, it would carry its whole history into every turn, and the model it began on.
       const chat = yield* launchedChat({ recorded: record() });
       const session = chat.args[chat.args.indexOf("--session-id") + 1];
       expect(session).toBeDefined();

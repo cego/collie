@@ -8,7 +8,6 @@ import type { ConnectionReading as Probe } from "./connection-model";
 
 export type { ConnectionReading as Probe } from "./connection-model";
 
-/** Long enough for a small internal service; short enough that chat's health line is not held by it. */
 const HELLE_PROBE = "5 seconds";
 
 export const helleEnvPath = (env: PluginEnv) =>
@@ -17,40 +16,44 @@ export const helleEnvPath = (env: PluginEnv) =>
 export const probeHelle = Effect.fn("Connections.probeHelle")(function* (env: PluginEnv) {
   const file = helleEnvPath(env);
   const fs = yield* FileSystem.FileSystem;
-  if (!(yield* fs.exists(file)))
+  if (!(yield* fs.exists(file))) {
     return {
       state: "absent",
       detail: `no credentials at ${file}`,
       fix: `write HELLE_API_TOKEN=<token> to ${file}`,
     } satisfies Probe;
+  }
   const creds = yield* credentials({
     home: env.home,
     envFile: file,
     url: helleUrlOf(env.raw),
   }).pipe(Effect.result);
-  if (Result.isFailure(creds))
+  if (Result.isFailure(creds)) {
     return {
       state: "broken",
       detail: creds.failure.message,
       fix: `add HELLE_API_TOKEN=<token> to ${file}`,
     } satisfies Probe;
+  }
   const me = yield* helleMe(creds.success).pipe(
     Effect.result,
     Effect.timeoutOption(HELLE_PROBE),
     Effect.map(Option.getOrNull),
   );
-  if (me === null)
+  if (me === null) {
     return {
       state: "broken",
       detail: `${creds.success.url} did not answer within ${HELLE_PROBE}`,
       fix: `check that ${creds.success.url} is reachable`,
     } satisfies Probe;
-  if (Result.isFailure(me))
+  }
+  if (Result.isFailure(me)) {
     return {
       state: "broken",
       detail: me.failure.message,
       fix: `check HELLE_API_TOKEN in ${file}`,
     } satisfies Probe;
+  }
   return {
     state: "ok",
     account: me.success.user_id,
@@ -89,10 +92,11 @@ const McpConfig = Schema.Struct({
 type McpConfig = Schema.Schema.Type<typeof McpConfig>;
 const decodeMcpConfig = flow(Schema.decodeUnknownResult(McpConfig), Result.getOrThrow);
 
-const linearAmong = (servers: Servers | undefined): string | null => {
+const linearAmong = (servers: Servers | undefined) => {
   for (const [name, server] of Rec.toEntries(servers ?? {})) {
-    if (server.enabled !== false && (/linear/i.test(name) || /linear/i.test(server.url ?? "")))
+    if (server.enabled !== false && (/linear/i.test(name) || /linear/i.test(server.url ?? ""))) {
       return name;
+    }
   }
   return null;
 };
@@ -107,12 +111,12 @@ export const probeLinearMcp = Effect.fn("Connections.probeLinearMcp")(function* 
   );
   const jsonc = (text: string) => decodeMcpConfig(Bun.JSONC.parse(text));
   const toml = (text: string) => decodeMcpConfig(Bun.TOML.parse(text));
-  const places: {
+  const places: Array<{
     file: string;
     harness: string;
     parse: (text: string) => McpConfig;
     servers: (config: McpConfig) => Servers | undefined;
-  }[] = [
+  }> = [
     {
       file: path.join(configDir, ".claude.json"),
       harness: "Claude Code",
@@ -162,19 +166,26 @@ export const probeLinearMcp = Effect.fn("Connections.probeLinearMcp")(function* 
         harness: "OpenCode",
         parse: jsonc,
         servers: (config: McpConfig) => {
-          if (config.mcp === undefined) return undefined;
-          if ("servers" in config.mcp && Schema.is(Servers)(config.mcp.servers))
+          if (config.mcp === undefined) {
+            return undefined;
+          }
+          if ("servers" in config.mcp && Schema.is(Servers)(config.mcp.servers)) {
             return config.mcp.servers;
+          }
           return Schema.is(Servers)(config.mcp) ? config.mcp : undefined;
         },
       }),
     ),
   ];
-  const seen: string[] = [];
+  const seen: Array<string> = [];
   let broken: Probe | undefined;
   for (const place of places) {
-    if (!(yield* fs.exists(place.file))) continue;
-    if (!seen.includes(place.file)) seen.push(place.file);
+    if (!(yield* fs.exists(place.file))) {
+      continue;
+    }
+    if (!seen.includes(place.file)) {
+      seen.push(place.file);
+    }
     const text = yield* fs.readFileString(place.file).pipe(Effect.orElseSucceed(() => ""));
     const config = yield* Effect.try(() => place.parse(text)).pipe(Effect.result);
     if (Result.isFailure(config)) {
@@ -186,8 +197,9 @@ export const probeLinearMcp = Effect.fn("Connections.probeLinearMcp")(function* 
       continue;
     }
     const name = linearAmong(place.servers(config.success));
-    if (name !== null)
+    if (name !== null) {
       return { state: "ok", account: name, detail: `"${name}" in ${place.file}` } satisfies Probe;
+    }
   }
   return (
     broken ??

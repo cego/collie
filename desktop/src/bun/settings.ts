@@ -1,5 +1,3 @@
-// What the human set in Desktop, kept on this computer beside the Flock chat's session.
-
 import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
@@ -8,20 +6,17 @@ import * as Arr from "effect/Array";
 import { Effect, FileSystem, Path, Schema, Semaphore, SubscriptionRef, flow, Result } from "effect";
 import { DEFAULT_MODEL, HARNESS_MODELS, resolveChoice } from "../../../src/harness-choice";
 import { isString } from "../../../src/schema";
-import { effortsOf, type Offer } from "../shared/chat-choices";
-import { ActionFailed, DesktopSettings, type DesktopSettingsChange } from "../shared/flock";
-import {
-  CHAT_HARNESSES,
-  DEFAULT_CHAT_HARNESS,
-  editSetting,
-  type FlockSettings,
-} from "../shared/flock-settings";
+import { effortsOf } from "../shared/chat-choices";
+import type { Offer } from "../shared/chat-choices";
+import { ActionFailed, DesktopSettings } from "../shared/flock";
+import type { DesktopSettingsChange } from "../shared/flock";
+import { CHAT_HARNESSES, DEFAULT_CHAT_HARNESS, editSetting } from "../shared/flock-settings";
+import type { FlockSettings } from "../shared/flock-settings";
 import { readFlockSettings, writeFlockSettings } from "./flock-settings";
 
 const SettingsFile = Schema.fromJsonString(DesktopSettings);
 const FILE = "settings.json";
 
-/** The saved settings, or the defaults where nothing is saved or it cannot be read. */
 export const readSettings = Effect.fn("Settings.read")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   return yield* fs.readFileString((yield* Path.Path).join(dir, FILE)).pipe(
@@ -42,17 +37,15 @@ export const writeSettings = Effect.fn("Settings.write")(function* (
   );
 });
 
-/**
- * Carries the Machine rule and a quiet Flock chat an earlier Desktop kept as its own into the
- * Flock's settings, as Desktop's edits at `now`, then drops Desktop's copy so it happens once.
- */
 export const carryIntoFlock = Effect.fn("Settings.carryIntoFlock")(function* (
   dir: string,
   now: string,
 ) {
   const { proactive, machineRule, ...own } = yield* readSettings(dir);
   const flock = yield* readFlockSettings(dir);
-  if (proactive === undefined && machineRule === undefined) return flock;
+  if (proactive === undefined && machineRule === undefined) {
+    return flock;
+  }
   const carried = Arr.reduce(
     [
       ["machine_rule", machineRule ?? ""],
@@ -60,7 +53,9 @@ export const carryIntoFlock = Effect.fn("Settings.carryIntoFlock")(function* (
     ] as const,
     flock,
     (held, [key, typed]) => {
-      if (typed === "" || held.settings[key] !== undefined) return held;
+      if (typed === "" || held.settings[key] !== undefined) {
+        return held;
+      }
       const edited = editSetting(held, key, typed, now);
       return "refused" in edited ? held : edited;
     },
@@ -70,7 +65,6 @@ export const carryIntoFlock = Effect.fn("Settings.carryIntoFlock")(function* (
   return carried;
 });
 
-/** What each harness offers, by harness. */
 export type Offers = Readonly<Record<string, Offer>>;
 
 const modelOf = (settings: DesktopSettings, offers: Offers) => {
@@ -101,15 +95,11 @@ const modelOf = (settings: DesktopSettings, offers: Offers) => {
   };
 };
 
-/**
- * `change` over `settings`. Another harness unsets a model and an effort chosen for the one
- * before; another model keeps the effort only where it lists it.
- */
 export const applyChange = (
   settings: DesktopSettings,
   change: DesktopSettingsChange,
   offers: Offers = {},
-): DesktopSettings => {
+) => {
   const { chatModel, chatEffort, chatWidth, ...rest } = { ...settings, ...change };
   const otherHarness =
     change.chatHarness !== undefined &&
@@ -137,10 +127,9 @@ export const applyChange = (
   };
 };
 
-/** Extra models per harness, from the Flock's `models.<harness>`. */
-export const extraModels = (
+export const extraModels: (
   flock: FlockSettings,
-): Readonly<Record<string, ReadonlyArray<string>>> =>
+) => Readonly<Record<string, ReadonlyArray<string>>> = (flock) =>
   Rec.fromEntries(
     Arr.flatMap(Rec.toEntries(flock.settings), ([key, { value }]) =>
       pipe_(key, Str.startsWith("models.")) && Arr.isArray(value) && Arr.every(value, isString)
@@ -149,18 +138,18 @@ export const extraModels = (
     ),
   );
 
-/** The harness, model and effort the Flock chat is set to, checked as a Run's are. */
 export const chatChoice = (
   settings: DesktopSettings,
   flock: FlockSettings,
   offers: Offers = {},
 ) => {
   const harness = settings.chatHarness ?? DEFAULT_CHAT_HARNESS;
-  if (!CHAT_HARNESSES.includes(harness))
+  if (!CHAT_HARNESSES.includes(harness)) {
     return {
       ok: false as const,
       problem: `the Flock chat has no harness called "${harness}" (${Arr.join(CHAT_HARNESSES, ", ")})`,
     };
+  }
   const resolved = resolveChoice(
     [
       {
@@ -189,36 +178,33 @@ export const chatChoice = (
     harness === "pi" &&
     settings.chatModel !== undefined &&
     !pipe_(settings.chatModel, Str.includes("/"))
-  )
+  ) {
     return {
       ok: false as const,
       problem: `${resolved.problem}. Write provider/model, for example openai-codex/gpt-6.1-sol.`,
     };
+  }
   return resolved;
 };
 
-/**
- * The settings `change` makes, or why it is refused; a change that leaves the chat alone is
- * not checked. An effort is checked against the efforts its model lists in `offers`.
- */
 export const changeSettings = (
   settings: DesktopSettings,
   flock: FlockSettings,
   change: DesktopSettingsChange,
   offers: Offers = {},
-): DesktopSettings | { readonly refused: string } => {
+) => {
   const changed = applyChange(settings, change, offers);
   if (
     change.chatHarness === undefined &&
     change.chatModel === undefined &&
     change.chatEffort === undefined
-  )
+  ) {
     return changed;
+  }
   const checked = chatChoice(changed, flock, offers);
   return checked.ok ? changed : { refused: checked.problem };
 };
 
-/** Desktop's settings, saved one change at a time through the check and told to whoever follows them. */
 export const heldSettings = Effect.fn("Settings.held")(function* (
   dir: string,
   flock: () => FlockSettings,
@@ -231,14 +217,14 @@ export const heldSettings = Effect.fn("Settings.held")(function* (
   const services = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
   return {
     now: () => SubscriptionRef.getUnsafe(held),
-    /** The settings now, then each saved change. */
     changes: SubscriptionRef.changes(held),
-    /** What was saved, or why the change was refused and nothing kept. */
     save: (change: DesktopSettingsChange) =>
       Effect.gen(function* () {
         const now = SubscriptionRef.getUnsafe(held);
         const changed = changeSettings(now, flock(), change, yield* offers(now));
-        if ("refused" in changed) return yield* new ActionFailed({ reason: changed.refused });
+        if ("refused" in changed) {
+          return yield* new ActionFailed({ reason: changed.refused });
+        }
         yield* writeSettings(dir, changed).pipe(
           Effect.mapError((error) => new ActionFailed({ reason: error.message })),
         );

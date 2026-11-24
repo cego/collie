@@ -1,13 +1,10 @@
-// The Flock chat on the human's own Codex, through `codex app-server` on stdio. Codex mints
-// its own thread ids, so `codex-threads.json` maps each Desktop conversation to its thread.
-
+// WARNING: Codex mints its own thread ids, so codex-threads.json maps each conversation to its thread.
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { hostname } from "node:os";
 import {
-  type Cause,
   Clock,
   Deferred,
   Effect,
@@ -21,11 +18,13 @@ import {
   flow,
   Result,
 } from "effect";
+import type { Cause } from "effect";
 import type { AguiEvent } from "../shared/agui";
 import { ends } from "../shared/agui";
 import { CodexModelList, codexEntries } from "../../../src/catalogue-model";
 import { CodexError } from "../../../src/codex";
-import { isNumber, isString, type JsonObject } from "../../../src/schema";
+import { isNumber, isString } from "../../../src/schema";
+import type { JsonObject } from "../../../src/schema";
 import { standingDirectionContext } from "../../../src/standing-direction";
 import type { ChatEndpoint } from "./chat-endpoint";
 import type { ListedModel } from "./claude-models";
@@ -36,11 +35,9 @@ import { noticedContext, placementContext, systemPrompt } from "./session";
 import { transcriptOf } from "./transcript";
 
 const TOKEN_ENV = "COLLIE_CHAT_MCP_TOKEN";
-/** Collie's tools' server, named apart from any the human configured in Codex. */
 const SERVER = "collie_desktop";
 const TOOL_TIMEOUT = 24 * 60 * 60;
 const CLIENT_INFO = { name: "collie_desktop", title: "Collie Desktop", version: "1" };
-/** Heads the input that carries Desktop's turn context, which the transcript leaves out. */
 const NOTE = "[Desktop: context accompanying this message]";
 const SIGNED_OUT =
   "Codex is not signed in on this computer: run `codex login` in a terminal, then send your message again.";
@@ -60,14 +57,12 @@ const Message = Schema.Struct({
 type Message = typeof Message.Type;
 const decodeMessage = Schema.decodeUnknownOption(Schema.fromJsonString(Message));
 
-/** What the server sends unasked: a notification, or a request where it carries an id. */
 interface Heard {
   readonly id: Message["id"];
   readonly method: string;
   readonly params: Schema.Json | undefined;
 }
 
-/** `codex app-server` on stdio, killed when the scope closes; it ends `heard` with why it stopped. */
 const appServer = Effect.fnUntraced(function* (
   command: ReadonlyArray<string>,
   dir: string,
@@ -104,15 +99,20 @@ const appServer = Effect.fnUntraced(function* (
     Stream.splitLines,
     Stream.runForEach((line) => {
       const message = Option.getOrUndefined(decodeMessage(line));
-      if (message === undefined) return Effect.void;
-      if (message.method !== undefined)
+      if (message === undefined) {
+        return Effect.void;
+      }
+      if (message.method !== undefined) {
         return Queue.offer(heard, {
           id: message.id,
           method: message.method,
           params: message.params,
         });
+      }
       const waiting = isNumber(message.id) ? pending.get(message.id) : undefined;
-      if (waiting === undefined) return Effect.void;
+      if (waiting === undefined) {
+        return Effect.void;
+      }
       pending.delete(Number(message.id));
       return message.error === undefined
         ? Deferred.succeed(waiting, message.result ?? null)
@@ -125,7 +125,9 @@ const appServer = Effect.fnUntraced(function* (
         const why = new CodexError({
           message: Str.trim(yield* Fiber.join(said)) || `Codex ended its session (exit ${code}).`,
         });
-        for (const waiting of pending.values()) yield* Deferred.fail(waiting, why);
+        for (const waiting of pending.values()) {
+          yield* Deferred.fail(waiting, why);
+        }
         pending.clear();
         yield* Queue.fail(heard, why);
       }),
@@ -145,14 +147,13 @@ const appServer = Effect.fnUntraced(function* (
   return {
     call,
     heard,
-    /** Refuses a request the chat does not answer, so the turn waiting on it goes on. */
     refuse: (id: Heard["id"], method: string) =>
       id === undefined
         ? Effect.void
         : send({
             jsonrpc: "2.0",
             id,
-            error: { code: -32601, message: `Desktop's chat does not answer ${method}` },
+            error: { code: -32_601, message: `Desktop's chat does not answer ${method}` },
           }),
     kill: () => child.kill(),
   };
@@ -218,12 +219,13 @@ const decodeUsage = Schema.decodeUnknownOption(
   }),
 );
 
-/** A tool call as the chat's window names it: Collie's tools as on every harness. */
-const toolOf = (
-  item: Item,
-):
-  | { readonly name: string; readonly args: Schema.Json; readonly output: string | undefined }
-  | undefined => {
+type Tool = {
+  readonly name: string;
+  readonly args: Schema.Json;
+  readonly output: string | undefined;
+};
+
+const toolOf = (item: Item) => {
   switch (item.type) {
     case "mcpToolCall": {
       const tool = item.tool ?? "";
@@ -241,22 +243,33 @@ const toolOf = (
               Arr.flatMap(item.result.content, (part) => (isText(part) ? [part.text] : [])),
               "\n",
             ));
-      return { name, args: item.arguments ?? {}, output };
+      const called: Tool = { name, args: item.arguments ?? {}, output };
+      return called;
     }
-    case "commandExecution":
-      return {
+    case "commandExecution": {
+      const tool: Tool = {
         name: "Bash",
         args: { command: item.command ?? "" },
         output: item.aggregatedOutput ?? undefined,
       };
-    case "fileChange":
-      return {
+      return tool;
+    }
+    case "fileChange": {
+      const tool: Tool = {
         name: "Edit",
         args: { paths: Arr.map(item.changes ?? [], ({ path }) => path) },
         output: undefined,
       };
-    case "webSearch":
-      return { name: "WebSearch", args: { query: item.query ?? "" }, output: undefined };
+      return tool;
+    }
+    case "webSearch": {
+      const tool: Tool = {
+        name: "WebSearch",
+        args: { query: item.query ?? "" },
+        output: undefined,
+      };
+      return tool;
+    }
     default:
       return undefined;
   }
@@ -278,9 +291,11 @@ const codexEvents = (thread: string) => {
   const reasons = new Set<string>();
   const tools = new Set<string>();
   const runId = () => `${thread}:${turn}`;
-  const startTool = (item: Item): AguiEvent[] => {
+  const startTool: (item: Item) => Array<AguiEvent> = (item) => {
     const tool = toolOf(item);
-    if (tool === undefined || tools.has(item.id)) return [];
+    if (tool === undefined || tools.has(item.id)) {
+      return [];
+    }
     tools.add(item.id);
     return [
       {
@@ -293,42 +308,47 @@ const codexEvents = (thread: string) => {
       { type: "TOOL_CALL_END", toolCallId: item.id },
     ];
   };
-  const step = (method: string, params: Schema.Json | undefined): ReadonlyArray<AguiEvent> => {
+  const step: (method: string, params: Schema.Json | undefined) => ReadonlyArray<AguiEvent> = (
+    method,
+    params,
+  ) => {
     switch (method) {
       case "item/agentMessage/delta":
         return Option.match(decodeDelta(params), {
           onNone: () => [],
-          onSome: ({ itemId, delta }): AguiEvent[] => [
-            ...(texts.has(itemId)
-              ? []
-              : (texts.add(itemId),
-                [
-                  {
-                    type: "TEXT_MESSAGE_START" as const,
-                    messageId: itemId,
-                    role: "assistant" as const,
-                  },
-                ])),
-            { type: "TEXT_MESSAGE_CONTENT", messageId: itemId, delta },
-          ],
+          onSome: ({ itemId, delta }) =>
+            [
+              ...(texts.has(itemId)
+                ? []
+                : (texts.add(itemId),
+                  [
+                    {
+                      type: "TEXT_MESSAGE_START" as const,
+                      messageId: itemId,
+                      role: "assistant" as const,
+                    },
+                  ])),
+              { type: "TEXT_MESSAGE_CONTENT", messageId: itemId, delta },
+            ] satisfies Array<AguiEvent>,
         });
       case "item/reasoning/summaryTextDelta":
         return Option.match(decodeDelta(params), {
           onNone: () => [],
-          onSome: ({ itemId, delta }): AguiEvent[] => [
-            ...(reasons.has(itemId)
-              ? []
-              : (reasons.add(itemId),
-                [
-                  { type: "REASONING_START" as const, messageId: itemId },
-                  {
-                    type: "REASONING_MESSAGE_START" as const,
-                    messageId: itemId,
-                    role: "reasoning" as const,
-                  },
-                ])),
-            { type: "REASONING_MESSAGE_CONTENT", messageId: itemId, delta },
-          ],
+          onSome: ({ itemId, delta }) =>
+            [
+              ...(reasons.has(itemId)
+                ? []
+                : (reasons.add(itemId),
+                  [
+                    { type: "REASONING_START" as const, messageId: itemId },
+                    {
+                      type: "REASONING_MESSAGE_START" as const,
+                      messageId: itemId,
+                      role: "reasoning" as const,
+                    },
+                  ])),
+              { type: "REASONING_MESSAGE_CONTENT", messageId: itemId, delta },
+            ] satisfies Array<AguiEvent>,
         });
       case "item/started":
         return Option.match(decodeItem(params), {
@@ -338,25 +358,32 @@ const codexEvents = (thread: string) => {
       case "item/completed":
         return Option.match(decodeItem(params), {
           onNone: () => [],
-          onSome: ({ item }): ReadonlyArray<AguiEvent> => {
+          onSome: ({ item }) => {
             if (item.type === "agentMessage") {
-              if (texts.has(item.id)) return [{ type: "TEXT_MESSAGE_END", messageId: item.id }];
-              if (item.text === undefined || item.text === "") return [];
+              if (texts.has(item.id)) {
+                return [{ type: "TEXT_MESSAGE_END", messageId: item.id }];
+              }
+              if (item.text === undefined || item.text === "") {
+                return [];
+              }
               return [
                 { type: "TEXT_MESSAGE_START", messageId: item.id, role: "assistant" },
                 { type: "TEXT_MESSAGE_CONTENT", messageId: item.id, delta: item.text },
                 { type: "TEXT_MESSAGE_END", messageId: item.id },
               ];
             }
-            if (item.type === "reasoning")
+            if (item.type === "reasoning") {
               return reasons.has(item.id)
                 ? [
                     { type: "REASONING_MESSAGE_END", messageId: item.id },
                     { type: "REASONING_END", messageId: item.id },
                   ]
                 : [];
+            }
             const tool = toolOf(item);
-            if (tool === undefined) return [];
+            if (tool === undefined) {
+              return [];
+            }
             return [
               ...startTool(item),
               {
@@ -374,7 +401,9 @@ const codexEvents = (thread: string) => {
         return [];
       case "thread/tokenUsage/updated":
         Option.map(decodeUsage(params), ({ turnId: of, tokenUsage: { last } }) => {
-          if (of !== turnId) return;
+          if (of !== turnId) {
+            return;
+          }
           usage = {
             input_tokens: usage.input_tokens + last.inputTokens - last.cachedInputTokens,
             output_tokens: usage.output_tokens + last.outputTokens,
@@ -387,11 +416,14 @@ const codexEvents = (thread: string) => {
       case "turn/completed":
         return Option.match(decodeTurn(params), {
           onNone: () => [],
-          onSome: ({ turn: ended }): ReadonlyArray<AguiEvent> => {
-            if (turnId !== undefined && ended.id !== turnId) return [];
+          onSome: ({ turn: ended }) => {
+            if (turnId !== undefined && ended.id !== turnId) {
+              return [];
+            }
             const error = ended.status === "failed" ? ended.error : undefined;
-            if (error === undefined || error === null)
+            if (error === undefined || error === null) {
               return [{ type: "RUN_FINISHED", threadId: thread, runId: runId() }];
+            }
             limited = error.codexErrorInfo === "usageLimitExceeded";
             return [
               {
@@ -410,7 +442,7 @@ const codexEvents = (thread: string) => {
     }
   };
   return {
-    begin: (): AguiEvent => {
+    begin: () => {
       turn++;
       turnId = undefined;
       usage = ZERO;
@@ -418,7 +450,7 @@ const codexEvents = (thread: string) => {
       texts.clear();
       reasons.clear();
       tools.clear();
-      return { type: "RUN_STARTED", threadId: thread, runId: runId() };
+      return { type: "RUN_STARTED", threadId: thread, runId: runId() } satisfies AguiEvent;
     },
     started: (id: string) => {
       turnId = id;
@@ -430,88 +462,90 @@ const codexEvents = (thread: string) => {
   };
 };
 
-/** The human's message as Codex's input: words, Desktop's notes and images; a PDF goes by its listed path. */
 const inputOf = (content: string | ReadonlyArray<ContentBlock>, note: string) => {
   const blocks = isString(content) ? [{ type: "text" as const, text: content }] : content;
   const text = (words: string) => ({ type: "text", text: words, text_elements: [] });
-  return [
-    ...Arr.flatMap(blocks, (block): ReadonlyArray<JsonObject> => {
-      if (block.type === "text") return [text(block.text)];
-      if (block.type === "image")
-        return [
-          {
-            type: "image",
-            url: `data:${block.source.media_type};base64,${block.source.data}`,
-          },
-        ];
-      return [];
-    }),
-    ...(note === "" ? [] : [text(`${NOTE}\n${note}`)]),
-  ];
+  const partOf: (block: ContentBlock) => ReadonlyArray<JsonObject> = (block) => {
+    if (block.type === "text") {
+      return [text(block.text)];
+    }
+    if (block.type === "image") {
+      return [
+        {
+          type: "image",
+          url: `data:${block.source.media_type};base64,${block.source.data}`,
+        },
+      ];
+    }
+    return [];
+  };
+  return [...Arr.flatMap(blocks, partOf), ...(note === "" ? [] : [text(`${NOTE}\n${note}`)])];
 };
 
-/** A thread's items as the Agent SDK's messages, which the chat's transcript reads. */
-const entriesOf = (items: ReadonlyArray<Item>) =>
-  Arr.flatMap(items, (item): ReadonlyArray<Schema.Json> => {
-    const of = { uuid: item.id, parent_tool_use_id: null };
-    switch (item.type) {
-      case "userMessage":
-        return [
-          {
-            ...of,
-            type: "user",
-            message: {
-              content: Arr.flatMap(item.content ?? [], (part) =>
-                isText(part) && !pipe_(part.text, Str.startsWith(NOTE))
-                  ? [{ type: "text", text: part.text }]
-                  : [],
-              ),
-            },
+const entryOf: (item: Item) => ReadonlyArray<Schema.Json> = (item) => {
+  const of = { uuid: item.id, parent_tool_use_id: null };
+  switch (item.type) {
+    case "userMessage":
+      return [
+        {
+          ...of,
+          type: "user",
+          message: {
+            content: Arr.flatMap(item.content ?? [], (part) =>
+              isText(part) && !pipe_(part.text, Str.startsWith(NOTE))
+                ? [{ type: "text", text: part.text }]
+                : [],
+            ),
           },
-        ];
-      case "agentMessage":
-        return [
-          {
-            ...of,
-            type: "assistant",
-            message: { content: [{ type: "text", text: item.text ?? "" }] },
-          },
-        ];
-      case "reasoning":
-        return item.summary === undefined || item.summary.length === 0
-          ? []
-          : [
-              {
-                ...of,
-                type: "assistant",
-                message: {
-                  content: [{ type: "thinking", thinking: Arr.join(item.summary, "\n") }],
-                },
+        },
+      ];
+    case "agentMessage":
+      return [
+        {
+          ...of,
+          type: "assistant",
+          message: { content: [{ type: "text", text: item.text ?? "" }] },
+        },
+      ];
+    case "reasoning":
+      return item.summary === undefined || item.summary.length === 0
+        ? []
+        : [
+            {
+              ...of,
+              type: "assistant",
+              message: {
+                content: [{ type: "thinking", thinking: Arr.join(item.summary, "\n") }],
               },
-            ];
-      default: {
-        const tool = toolOf(item);
-        if (tool === undefined) return [];
-        return [
-          {
-            ...of,
-            type: "assistant",
-            message: {
-              content: [{ type: "tool_use", id: item.id, name: tool.name, input: tool.args }],
             },
-          },
-          {
-            ...of,
-            uuid: `${item.id}:result`,
-            type: "user",
-            message: {
-              content: [{ type: "tool_result", tool_use_id: item.id, content: tool.output ?? "" }],
-            },
-          },
-        ];
+          ];
+    default: {
+      const tool = toolOf(item);
+      if (tool === undefined) {
+        return [];
       }
+      return [
+        {
+          ...of,
+          type: "assistant",
+          message: {
+            content: [{ type: "tool_use", id: item.id, name: tool.name, input: tool.args }],
+          },
+        },
+        {
+          ...of,
+          uuid: `${item.id}:result`,
+          type: "user",
+          message: {
+            content: [{ type: "tool_result", tool_use_id: item.id, content: tool.output ?? "" }],
+          },
+        },
+      ];
     }
-  });
+  }
+};
+
+const entriesOf = (items: ReadonlyArray<Item>) => Arr.flatMap(items, entryOf);
 
 const Threads = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
 const decodeThreadRef = decoded(Schema.Struct({ thread: Schema.Struct({ id: Schema.String }) }));
@@ -544,11 +578,10 @@ const decodeRead = decoded(
 );
 const decodeModels = decoded(CodexModelList);
 
-/** How Codex 0.170.0 refuses to resume a thread it has no rollout of. */
+// WARNING: Codex 0.170.0 refuses to resume a thread it has no rollout of.
 const unknownThread = (cause: CodexError) =>
-  cause.code === -32600 && pipe_(cause.message, Str.startsWith("no rollout found"));
+  cause.code === -32_600 && pipe_(cause.message, Str.startsWith("no rollout found"));
 
-/** A short-lived server, for a read with no session. */
 const reading = <A>(
   command: ReadonlyArray<string> | null,
   dir: string,
@@ -558,10 +591,13 @@ const reading = <A>(
     ? Effect.fail(new CodexError({ message: NOT_INSTALLED }))
     : appServer(command, dir, [], childEnv()).pipe(Effect.flatMap(read), Effect.scoped);
 
-export const readCodexModels = (
+export const readCodexModels: (
   dir: string,
-  command: ReadonlyArray<string> | null = which("codex") === null ? null : [which("codex")!],
-): Effect.Effect<ReadonlyArray<ListedModel>, string> =>
+  command?: ReadonlyArray<string> | null,
+) => Effect.Effect<ReadonlyArray<ListedModel>, string> = (
+  dir,
+  command = which("codex") === null ? null : [which("codex")!],
+) =>
   reading(command, dir, (server) =>
     server.call("model/list", { includeHidden: true }).pipe(Effect.flatMap(decodeModels)),
   ).pipe(
@@ -573,18 +609,24 @@ export const readCodexModels = (
     ),
   );
 
-export const codexDriver = (
+const noThreads: Readonly<Record<string, string>> = {};
+
+export const codexDriver: (
   context: DriverContext,
   endpoint: ChatEndpoint,
-  command: ReadonlyArray<string> | null = which("codex") === null ? null : [which("codex")!],
-): ChatDriver => {
+  command?: ReadonlyArray<string> | null,
+) => ChatDriver = (
+  context,
+  endpoint,
+  command = which("codex") === null ? null : [which("codex")!],
+) => {
   const mapping = `${context.dir}/codex-threads.json`;
   const threads = Effect.promise(() =>
     context.run(
       FileSystem.FileSystem.pipe(
         Effect.flatMap((fs) => fs.readFileString(mapping)),
         Effect.flatMap(Schema.decodeUnknownEffect(Threads)),
-        Effect.orElseSucceed((): Readonly<Record<string, string>> => ({})),
+        Effect.orElseSucceed(() => noThreads),
       ),
     ),
   );
@@ -628,20 +670,23 @@ export const codexDriver = (
         Stream.fromQueue(server.heard).pipe(
           Stream.runForEach(({ id: asked, method, params }) =>
             Effect.gen(function* () {
-              if (asked !== undefined) return yield* server.refuse(asked, method);
+              if (asked !== undefined) {
+                return yield* server.refuse(asked, method);
+              }
               if (method === "item/started") {
                 const item = Option.getOrUndefined(decodeItem(params))?.item;
                 if (
                   item?.type === "mcpToolCall" &&
                   item.server === SERVER &&
                   item.tool === "AskUserQuestion"
-                )
+                ) {
                   yield* endpoint.question(
                     item.id,
                     Schema.is(Schema.Record(Schema.String, Schema.Json))(item.arguments)
                       ? item.arguments
                       : {},
                   );
+                }
               }
               const events = state.step(method, params);
               if (Arr.some(events, ends)) {
@@ -657,7 +702,9 @@ export const codexDriver = (
           Effect.catch(({ message }) => Queue.fail(output, message)),
         );
       const connect = Effect.gen(function* () {
-        if (command === null) return yield* new CodexError({ message: NOT_INSTALLED });
+        if (command === null) {
+          return yield* new CodexError({ message: NOT_INSTALLED });
+        }
         const { url, token } = yield* endpoint.start;
         const server = yield* appServer(
           command,
@@ -677,8 +724,9 @@ export const codexDriver = (
         const { account, requiresOpenaiAuth } = yield* server
           .call("account/read", {})
           .pipe(Effect.flatMap(decodeAccount));
-        if (account === null && requiresOpenaiAuth)
+        if (account === null && requiresOpenaiAuth) {
           return yield* new CodexError({ message: SIGNED_OUT });
+        }
         const resumed = yield* server
           .call("thread/resume", { threadId: yield* threadOf(id), ...setting })
           .pipe(
@@ -686,7 +734,9 @@ export const codexDriver = (
             Effect.asSome,
             Effect.catchIf(unknownThread, () => Effect.succeedNone),
           );
-        if (Option.isSome(resumed)) return { server, thread: resumed.value.thread.id };
+        if (Option.isSome(resumed)) {
+          return { server, thread: resumed.value.thread.id };
+        }
         const { thread } = yield* server
           .call("thread/start", setting)
           .pipe(Effect.flatMap(decodeThreadRef));
@@ -722,7 +772,9 @@ export const codexDriver = (
             started = yield* Clock.currentTimeMillis;
             yield* Queue.offer(output, state.begin());
             const on = yield* connected;
-            if (Option.isNone(on)) return;
+            if (Option.isNone(on)) {
+              return;
+            }
             const asked = yield* on.value.server
               .call("turn/start", {
                 threadId: on.value.thread,
@@ -731,19 +783,23 @@ export const codexDriver = (
                 ...(effort !== null && { effort }),
               })
               .pipe(Effect.flatMap(decodeTurnStarted), Effect.result);
-            if (Result.isSuccess(asked)) state.started(asked.success.turn.id);
-            else
+            if (Result.isSuccess(asked)) {
+              state.started(asked.success.turn.id);
+            } else {
               yield* Queue.offer(output, {
                 type: "RUN_ERROR",
                 runId: id,
                 message: asked.failure.message,
               });
+            }
           }),
         events: Stream.fromQueue(output),
         interrupt: Effect.gen(function* () {
           const on = yield* connected;
           const turnId = state.turnId();
-          if (Option.isNone(on) || turnId === undefined) return;
+          if (Option.isNone(on) || turnId === undefined) {
+            return;
+          }
           yield* on.value.server
             .call("turn/interrupt", { threadId: on.value.thread, turnId })
             .pipe(Effect.ignore);
@@ -757,7 +813,7 @@ export const codexDriver = (
       read((server) =>
         Effect.gen(function* () {
           const threadId = yield* threadOf(id);
-          const items: Item[] = [];
+          const items: Array<Item> = [];
           let cursor: string | null = null;
           do {
             const page: Effect.Success<ReturnType<typeof decodeItems>> = yield* server

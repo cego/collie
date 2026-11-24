@@ -1,8 +1,3 @@
-// A card's job is to say how far the evidence goes and no further, and to decide whether
-// something is worth interrupting a human for by rules over facts. Both of those are what
-// is tested here — including the one thing a model must not be able to do, which is make
-// its own work look more important by describing it that way.
-
 import * as Arr from "effect/Array";
 import { Effect, FileSystem, Option } from "effect";
 import { expect, test } from "bun:test";
@@ -20,16 +15,15 @@ import {
   readiness,
   significance,
   verificationOn,
-  type Card,
-  type SignificanceFacts,
 } from "../src/cards";
+import type { Card, SignificanceFacts } from "../src/cards";
 import type { Verification } from "../src/verify";
 import { RunRecords } from "../src/run-records";
 import { runEffect } from "./support/effect";
 
 const revision = { branch: "feat/picker", head_sha: "abc", fingerprint: "f1", dirty: false };
 
-const facts = (over: Partial<SignificanceFacts> = {}): SignificanceFacts => ({
+const facts: (over?: Partial<SignificanceFacts>) => SignificanceFacts = (over = {}) => ({
   readiness: "claimed",
   mrTouched: false,
   pendingChoice: false,
@@ -43,7 +37,7 @@ const facts = (over: Partial<SignificanceFacts> = {}): SignificanceFacts => ({
   ...over,
 });
 
-const verification = (over: Partial<Verification> = {}): Verification => ({
+const verification: (over?: Partial<Verification>) => Verification = (over = {}) => ({
   id: "v1",
   run: "r1",
   name: "tests",
@@ -63,41 +57,32 @@ const verification = (over: Partial<Verification> = {}): Verification => ({
 });
 
 test("readiness never says more than the evidence does", () => {
-  // An agent's word for it, and nothing to look at.
   expect(readiness({ claimed: true, changed: false, verifiedHere: false })).toBe("claimed");
-  // Something changed, and somebody said it was done: a human can go and look.
   expect(readiness({ claimed: true, changed: true, verifiedHere: false })).toBe("inspect-ready");
-  // A command Collie watched passed on this tree.
   expect(readiness({ claimed: true, changed: true, verifiedHere: true })).toBe("verified");
-  // Nobody claimed anything: a change on its own is not a slice that is ready.
   expect(readiness({ claimed: false, changed: true, verifiedHere: false })).toBe("claimed");
 });
 
 test("a verification on other bytes is stale, and one on the same bytes at another commit is a pass for this one", () => {
   expect(verificationOn(verification(), revision).result).toBe("pass");
-  // The same bytes committed since are the same tree.
+  // WARNING: A new commit of the same bytes is the same tree, not a stale one.
   expect(
     verificationOn(verification({ end: { head_sha: "def", fingerprint: "f1" } }), revision).result,
   ).toBe("pass");
-  // A moved tree says nothing about what this card describes.
   expect(
     verificationOn(verification({ end: { head_sha: "abc", fingerprint: "f2" } }), revision).result,
   ).toBe("stale");
-  // A failure is a failure, not staleness.
   expect(verificationOn(verification({ result: "fail", exit: 1 }), revision).result).toBe("fail");
 });
 
 test("significance is rules over facts, in the order that puts the human first", () => {
   expect(significance(facts())).toBe("routine");
-  // Something to try.
   expect(significance(facts({ readiness: "inspect-ready" }))).toBe("try-it");
   expect(significance(facts({ mrTouched: true }))).toBe("try-it");
-  // Something happened that the human should know about.
   expect(significance(facts({ blockingDrift: true }))).toBe("consequential");
   expect(significance(facts({ correctionSent: true }))).toBe("consequential");
   expect(significance(facts({ intentChanged: true }))).toBe("consequential");
   expect(significance(facts({ ended: "failed" }))).toBe("consequential");
-  // Something is waiting for the human, which outranks being told about anything.
   expect(significance(facts({ pendingChoice: true, blockingDrift: true }))).toBe("decision");
   expect(significance(facts({ driftUnresolved: true }))).toBe("decision");
   expect(significance(facts({ pendingProposal: true }))).toBe("decision");
@@ -133,7 +118,6 @@ test("a narrative cannot make a card matter more", () => {
   });
   expect(quiet.significance).toBe("routine");
   expect(loud.significance).toBe("routine");
-  // There is no route from what a model wrote to whether anybody is interrupted.
   expect(loud.narrative).toContain("URGENT");
 });
 
@@ -148,7 +132,6 @@ test("a card computes its own readiness, so it cannot be told it is verified", (
     revision,
     changes: { files: ["src/a.ts"], commits: ["abc first"] },
     requested: { goal: "add a picker", constraints: ["stay in src"] },
-    // Passed, but on a different tree.
     verifications: [verification({ end: { head_sha: "def", fingerprint: "zz" } })],
     claims: [{ text: "the tests pass", ref: "r1:build" }],
     missing: ["no verification named typecheck"],
@@ -163,7 +146,7 @@ test("a card computes its own readiness, so it cannot be told it is verified", (
   });
   expect(built.verifications[0]?.result).toBe("stale");
   expect(built.readiness).toBe("inspect-ready");
-  // The agent's words are claims, and they are never among the verifications.
+  // WARNING: Agent claims are never among the verifications.
   expect(Arr.map(built.claims, (claim) => claim.text)).toEqual(["the tests pass"]);
   expect(Arr.map(built.verifications, (entry) => entry.name)).toEqual(["tests"]);
   expect(built.missing).toEqual(["no verification named typecheck"]);
@@ -207,7 +190,6 @@ test("inspect entries are suggestions, and nothing here runs them", () => {
   expect(Arr.map(entries, (entry) => entry.what)).toEqual(["what changed", "the merge request"]);
   expect(entries[0]?.how).toBe("git -C /repo/wt diff abc..HEAD");
   expect(entries[1]?.how).toBe("glab mr view 42 --repo gitlab.example.com/group/app --comments");
-  // A pull request is read with gh, never told to run glab.
   const pull = inspectFor({
     worktree: null,
     base: "abc",
@@ -229,8 +211,6 @@ test("cards.ts never focuses anything", () =>
       const fs = yield* FileSystem.FileSystem;
       const source = new URL("../src/cards.ts", import.meta.url).pathname;
       const text = yield* fs.readFileString(source);
-      // A card arriving must not move a human off what they are doing. The only thing
-      // that still takes focus is a pending question.
       expect(text).not.toContain("agentFocus");
       expect(text).not.toContain("tabFocus");
       expect(text).not.toContain("callAttention");
@@ -242,7 +222,7 @@ test("the newest card per slice is what a reader sees, and the journal keeps the
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-cards-" });
-      const base = (over: Partial<Card>): Card => ({
+      const base: (over: Partial<Card>) => Card = (over) => ({
         id: "c1",
         run: "r1",
         kind: "slice",

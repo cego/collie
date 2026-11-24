@@ -1,7 +1,3 @@
-// Two sets of Runs compared case by case, on what they spent and how good the work was
-// (pure). It reports figures and which way each directional quality measure moved, and
-// never a percentage or a verdict: the decision rules that read it say what counts.
-
 import * as Arr from "effect/Array";
 import * as Num from "effect/Number";
 import * as Order from "effect/Order";
@@ -10,16 +6,10 @@ import { Schema } from "effect";
 import type { AuditLine } from "./audit";
 import { findingKey } from "./output";
 import { epochMs } from "./time";
-import {
-  ledgerOf,
-  recoveryOf,
-  sessionKey,
-  usageOf,
-  type Count,
-  type UsageEntry,
-} from "./usage-ledger-model";
+import { ledgerOf, recoveryOf, sessionKey, usageOf } from "./usage-ledger-model";
+import type { Count, UsageEntry } from "./usage-ledger-model";
 
-/** A finding as any reviewer's Output gives it: a reassessment names only its id and status. */
+// WARNING: a reassessment names only its id and status.
 export const ReviewedFinding = Schema.Struct({
   id: Schema.optionalKey(Schema.String),
   status: Schema.optionalKey(Schema.Literals(["open", "fixed", "disputed", "obsolete"])),
@@ -30,11 +20,8 @@ export const ReviewedFinding = Schema.Struct({
 });
 export type ReviewedFinding = typeof ReviewedFinding.Type;
 
-/** What a Run's host recorded that a comparison reads beside its metric lines. */
 export const TrialRecords = Schema.Struct({
-  /** Each reviewer Output's findings, in the order its agent was launched. */
   reviews: Schema.Array(Schema.Array(ReviewedFinding)),
-  /** Its required Checks that passed on its final tree; null where it never finished. */
   checks: Schema.NullOr(Schema.Struct({ passed: Schema.Int, of: Schema.Int })),
   interventions: Schema.Int,
   ended: Schema.NullOr(Schema.String),
@@ -46,7 +33,6 @@ export interface TrialRun {
   readonly created: string;
   readonly usage: ReadonlyArray<UsageEntry>;
   readonly records: TrialRecords;
-  /** The records of the review Run that audited its final tree, or null for none. */
   readonly audit: TrialRecords | null;
 }
 
@@ -66,12 +52,15 @@ interface Token {
   readonly category: Category;
 }
 const TOKENS = Arr.flatMap(PHASES, (phase) =>
-  Arr.map(CATEGORIES, (category): Token => ({ measure: `${phase}.${category}`, phase, category })),
+  Arr.map(CATEGORIES, (category) => {
+    const token: Token = { measure: `${phase}.${category}`, phase, category };
+    return token;
+  }),
 );
 const TOKEN_MEASURES = Arr.map(TOKENS, (one) => one.measure);
 
-/** Better is higher for these, and lower for every other directed measure. */
-const HIGHER: ReadonlyArray<string> = ["accepted", "checksPassed", "plantedCaught"];
+// WARNING: better is higher for these, and lower for every other directed measure.
+const HIGHER: ReadonlySet<string> = new Set(["accepted", "checksPassed", "plantedCaught"]);
 const DIRECTED = [
   "accepted",
   "checksPassed",
@@ -101,12 +90,17 @@ const tabulate = <T, K extends string, V>(
   items: ReadonlyArray<T>,
   key: (item: T) => K,
   value: (item: T) => V,
-): Readonly<Record<K, V>> =>
-  // SAFETY: callers pass one of the constant lists above, which names every key of `K`.
-  Rec.fromIterableWith(items, (item): readonly [K, V] => [key(item), value(item)]) as Record<K, V>;
+) => {
+  const entry = (item: T) => {
+    const returned: readonly [K, V] = [key(item), value(item)];
+    return returned;
+  };
+  // WARNING: callers pass one of the constant lists above, which names every key of `K`.
+  const returned = Rec.fromIterableWith(items, entry) as Readonly<Record<K, V>>;
+  return returned;
+};
 const same = <K extends string>(key: K) => key;
 
-/** Each measure of one Run, or of a case or set; null where it is unavailable. */
 export type Figures = Readonly<Record<Measure, number | null>>;
 export type Direction = "no worse" | "worse" | "unavailable";
 
@@ -137,7 +131,7 @@ export type Labelled = { readonly case: string | null; readonly run: TrialRun };
 const INTERVENING = new Set(["answer", "steer", "followup", "deliver", "resume", "hold"]);
 const COLLIE = new Set(["host", "driver", "evaluator", "schedule"]);
 
-export const interventionsIn = (runId: string, trail: ReadonlyArray<AuditLine>): number =>
+export const interventionsIn = (runId: string, trail: ReadonlyArray<AuditLine>) =>
   Arr.filter(
     trail,
     (line) =>
@@ -155,29 +149,32 @@ const blocking = (one: ReviewedFinding) =>
 const named = (one: ReviewedFinding) => findingKey({ file: one.file, title: one.title ?? "" });
 const keyOf = (one: ReviewedFinding) => one.id ?? named(one);
 
-/** A Run's review rounds read as one ledger of findings, each known by its id. */
 function ledgerOfReviews(reviews: ReadonlyArray<ReadonlyArray<ReviewedFinding>>) {
   const latest = new Map<string, ReviewedFinding>();
   const raised = new Set<string>();
   const reopened = new Set<string>();
   const statuses = new Map<string, string>();
   const last = Arr.map(reviews.at(-1) ?? [], keyOf);
-  for (const review of reviews)
+  for (const review of reviews) {
     for (const one of review) {
       const key = keyOf(one);
       const merged = { ...latest.get(key), ...one };
       latest.set(key, merged);
-      // By file and title, so a seat's finding and the synthesis's copy with an id are one.
-      if (blocking(merged)) raised.add(named(merged));
+      // WARNING: keyed by file and title, so a seat's finding and the synthesis's copy with an id are one.
+      if (blocking(merged)) {
+        raised.add(named(merged));
+      }
       const was = statuses.get(key);
       const now = one.status ?? "open";
-      if (was === "fixed" && now === "open") reopened.add(key);
+      if (was === "fixed" && now === "open") {
+        reopened.add(key);
+      }
       statuses.set(key, now);
     }
+  }
   return {
     raised: raised.size,
     reopened: reopened.size,
-    /** The last review's blocking findings, by file and title. */
     finalBlocking: new Set(
       Arr.map(
         Arr.filter(
@@ -195,9 +192,8 @@ function ledgerOfReviews(reviews: ReadonlyArray<ReadonlyArray<ReviewedFinding>>)
   };
 }
 
-const plus = (a: Count, b: Count): Count => (a === null || b === null ? null : a + b);
+const plus: (a: Count, b: Count) => Count = (a, b) => (a === null || b === null ? null : a + b);
 
-/** What one Run spent by phase: each session's first request, recovery, and the rest. */
 function phasesOf(entries: ReadonlyArray<UsageEntry>) {
   const usage = usageOf(entries);
   const recovering = new Set(
@@ -224,13 +220,17 @@ function phasesOf(entries: ReadonlyArray<UsageEntry>) {
   for (const one of requests) {
     const owner = sessionKey({ agent: one.agent, session: one.parent ?? one.session });
     const first = one.parent === null && !opened.has(owner);
-    if (one.parent === null) opened.add(owner);
+    if (one.parent === null) {
+      opened.add(owner);
+    }
     const phase: Phase =
       recovering.has(owner) || retried(one) ? "recovery" : first ? "startup" : "work";
     counted.add(phase);
     for (const at of [phase, "total"] as const) {
       const sum = sums.get(at)!;
-      for (const category of CATEGORIES) sum[category] = plus(sum[category], one[category]);
+      for (const category of CATEGORIES) {
+        sum[category] = plus(sum[category], one[category]);
+      }
     }
   }
   const figures = tabulate(
@@ -246,7 +246,7 @@ function phasesOf(entries: ReadonlyArray<UsageEntry>) {
 
 const flag = (value: boolean | null) => (value === null ? null : value ? 1 : 0);
 
-function figuresOf(run: TrialRun, planted: Planted | undefined): Figures {
+const figuresOf = (run: TrialRun, planted: Planted | undefined) => {
   const { figures, usage } = phasesOf(run.usage);
   const { records } = run;
   const reviewed = records.reviews.length === 0 ? null : ledgerOfReviews(records.reviews);
@@ -259,7 +259,7 @@ function figuresOf(run: TrialRun, planted: Planted | undefined): Figures {
     Arr.map(usage.sessions, (one) => one.peakContext),
     (peak): peak is number => peak !== null,
   );
-  return {
+  const returned: Figures = {
     ...figures,
     sessions: usage.sessions.length,
     compactions: Arr.reduce(usage.sessions, 0, (sum, one) => sum + one.compactions),
@@ -274,18 +274,17 @@ function figuresOf(run: TrialRun, planted: Planted | undefined): Figures {
     interventions: records.interventions,
     wallMs: records.ended === null ? null : epochMs(records.ended) - epochMs(run.created),
   };
-}
+  return returned;
+};
 
-const each =
-  (fold: (values: ReadonlyArray<number>) => number) =>
-  (all: ReadonlyArray<Figures>): Figures =>
-    tabulate(MEASURES, same, (measure) => {
-      const known = Arr.filter(
-        Arr.map(all, (one) => one[measure]),
-        (value): value is number => value !== null,
-      );
-      return known.length === 0 || known.length < all.length ? null : fold(known);
-    });
+const each = (fold: (values: ReadonlyArray<number>) => number) => (all: ReadonlyArray<Figures>) =>
+  tabulate(MEASURES, same, (measure) => {
+    const known = Arr.filter(
+      Arr.map(all, (one) => one[measure]),
+      (value): value is number => value !== null,
+    );
+    return known.length === 0 || known.length < all.length ? null : fold(known);
+  });
 
 const median = each((values) => {
   const sorted = Arr.sort(values, Num.Order);
@@ -294,20 +293,27 @@ const median = each((values) => {
 });
 const minimum = each((values) => Math.min(...values));
 const maximum = each((values) => Math.max(...values));
-const total = (all: ReadonlyArray<Figures>): Figures => {
+const total = (all: ReadonlyArray<Figures>) => {
   const summed = each((values) => Num.sumAll(values))(all);
-  return { ...summed, peakContext: maximum(all).peakContext };
+  const returned: Figures = { ...summed, peakContext: maximum(all).peakContext };
+  return returned;
 };
 
-const directionOf = (compare: Figures, against: Figures, measure: Directed): Direction => {
+const directionOf: (compare: Figures, against: Figures, measure: Directed) => Direction = (
+  compare,
+  against,
+  measure,
+) => {
   const before = compare[measure];
   const after = against[measure];
-  if (before === null || after === null) return "unavailable";
-  const higher = HIGHER.includes(measure);
+  if (before === null || after === null) {
+    return "unavailable";
+  }
+  const higher = HIGHER.has(measure);
   return (higher ? after >= before : after <= before) ? "no worse" : "worse";
 };
 
-/** Cases in the order first named; Runs with no label are matched by position. */
+// WARNING: Runs with no label are matched by position.
 function casesOf(compare: ReadonlyArray<Labelled>, against: ReadonlyArray<Labelled>) {
   const labelOf = (side: ReadonlyArray<Labelled>) => {
     let unlabelled = 0;
@@ -326,18 +332,23 @@ function casesOf(compare: ReadonlyArray<Labelled>, against: ReadonlyArray<Labell
   }));
 }
 
-export function compareSets(ask: {
+export const compareSets = (ask: {
   readonly compare: ReadonlyArray<Labelled>;
   readonly against: ReadonlyArray<Labelled>;
   readonly planted: Readonly<Record<string, Planted>>;
-}): Comparison {
-  const sideOf = (label: string, runs: ReadonlyArray<{ readonly run: TrialRun }>): Side => {
+}) => {
+  const sideOf = (label: string, runs: ReadonlyArray<{ readonly run: TrialRun }>) => {
     const measured = Arr.map(runs, ({ run }) => ({
       runId: run.runId,
       figures: figuresOf(run, ask.planted[label]),
     }));
     const all = Arr.map(measured, (one) => one.figures);
-    return { runs: measured, median: median(all), range: { min: minimum(all), max: maximum(all) } };
+    const side: Side = {
+      runs: measured,
+      median: median(all),
+      range: { min: minimum(all), max: maximum(all) },
+    };
+    return side;
   };
   const cases = Arr.map(casesOf(ask.compare, ask.against), (one) => {
     const compare = sideOf(one.label, one.compare);
@@ -347,11 +358,11 @@ export function compareSets(ask: {
     );
     return { case: one.label, compare, against, direction };
   });
-  const setOf = (side: "compare" | "against"): SetFigures => {
+  const setOf = (side: "compare" | "against") => {
     const runs = Arr.flatMap(cases, (one) => one[side].runs);
     const figures = total(Arr.map(runs, (one) => one.figures));
     const accepted = figures.accepted ?? 0;
-    return {
+    const set: SetFigures = {
       runs: Arr.map(runs, (one) => one.runId),
       figures,
       perAcceptedChange:
@@ -362,9 +373,14 @@ export function compareSets(ask: {
               return value === null ? null : value / accepted;
             }),
     };
+    return set;
   };
-  return { cases, sets: { compare: setOf("compare"), against: setOf("against") } };
-}
+  const returned: Comparison = {
+    cases,
+    sets: { compare: setOf("compare"), against: setOf("against") },
+  };
+  return returned;
+};
 
 const said = (value: number | null) => (value === null ? "unavailable" : String(value));
 
@@ -388,8 +404,7 @@ const QUALITY: ReadonlyArray<Measure> = [
   "peakContext",
 ];
 
-/** The comparison in the words `run metrics --compare` prints. */
-export function trialLines(report: Comparison): ReadonlyArray<string> {
+export const trialLines = (report: Comparison) => {
   const sideLines = (name: string, side: Side) => [
     ...Arr.map(side.runs, (one) => `    ${name} ${one.runId}: ${figureLine(one.figures, QUALITY)}`),
     `    ${name} median: ${figureLine(side.median, [...QUALITY, ...TOKEN_MEASURES])}`,
@@ -413,7 +428,7 @@ export function trialLines(report: Comparison): ReadonlyArray<string> {
           )}`,
     ];
   };
-  return [
+  const returned: ReadonlyArray<string> = [
     ...Arr.flatMap(report.cases, (one) => [
       `case ${one.case}:`,
       ...sideLines("compare", one.compare),
@@ -426,4 +441,5 @@ export function trialLines(report: Comparison): ReadonlyArray<string> {
     ...setLines("compare", report.sets.compare),
     ...setLines("against", report.sets.against),
   ];
-}
+  return returned;
+};

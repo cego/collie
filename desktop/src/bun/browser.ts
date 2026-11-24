@@ -1,5 +1,3 @@
-// A web page opened in the human's default browser, where their sessions already are.
-
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
@@ -11,12 +9,12 @@ import { output } from "./machine";
 const CHROMIUM = /chrom|brave|(^|[.-])edge|vivaldi/i;
 const FIELD_CODE = /^(%[a-zA-Z]|@@u?)$/;
 
-/** The `[Desktop Entry]` group's own command, as the desktop entry spec quotes it. */
 const commandOf = (entry: string) => {
   let group = "";
-  for (const line of Arr.map(Str.split(entry, "\n"), (one) => Str.trim(one)))
-    if (pipe_(line, Str.startsWith("["))) group = line;
-    else if (group === "[Desktop Entry]" && /^Exec\s*=/.test(line))
+  for (const line of Arr.map(Str.split(entry, "\n"), (one) => Str.trim(one))) {
+    if (pipe_(line, Str.startsWith("["))) {
+      group = line;
+    } else if (group === "[Desktop Entry]" && /^Exec\s*=/.test(line)) {
       return Arr.map(
         Arr.filter(
           Arr.map(
@@ -30,7 +28,7 @@ const commandOf = (entry: string) => {
             ([, quoted, plain]) =>
               Option.getOrUndefined(
                 Option.map(Option.fromNullishOr(quoted), (present) =>
-                  pipe_(present, Str.replace(/\\(.)/g, "$1")),
+                  pipe_(present, Str.replaceAll(/\\(.)/g, "$1")),
                 ),
               ) ??
               plain ??
@@ -40,10 +38,11 @@ const commandOf = (entry: string) => {
         ),
         (word) => pipe_(word, Str.replaceAll("%%", "%")),
       );
+    }
+  }
   return [];
 };
 
-/** How a Chromium-based browser opens `url` in a window of its own; null for any other. */
 export const appWindow = (id: string, entry: string, url: string) => {
   const command = commandOf(entry);
   return CHROMIUM.test(id) && command.length > 0 ? [...command, `--app=${url}`] : null;
@@ -54,7 +53,6 @@ const dataDirs = () => [
   ...Str.split(Bun.env.XDG_DATA_DIRS || "/usr/local/share:/usr/share", ":"),
 ];
 
-/** How the default browser opens `url` as an app window; null where it has no such window. */
 export const appWindowFor = (url: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -65,7 +63,9 @@ export const appWindowFor = (url: string) =>
     );
     for (const dir of dataDirs()) {
       const entry = yield* fs.readFileString(`${dir}/applications/${id}`).pipe(Effect.option);
-      if (entry._tag === "Some") return appWindow(id, entry.value, url);
+      if (entry._tag === "Some") {
+        return appWindow(id, entry.value, url);
+      }
     }
     return null;
   }).pipe(Effect.orElseSucceed(() => null));

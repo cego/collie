@@ -1,11 +1,4 @@
-// The two append-only journals steering keeps: what was sent to each live agent, and
-// what the model calls for a Herd have cost. Both are read by deriving state from the
-// lines, never by rewriting them — a ledger whose past can be edited cannot answer
-// "was this already sent" after a crash, which is the only question it exists for.
-//
-// This module is the only writer of the ledgers and of `budget.jsonl` — the second a
-// record of every model call and what it cost, never a permission to make one.
-
+// WARNING: append-only: a ledger whose past can be edited cannot answer 'was this already sent' after a crash.
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -14,14 +7,14 @@ import { Context, Data, Effect, FileSystem, Layer, Path, Schema, flow, Result } 
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
 import { markWorked } from "./run-records";
-import { readJournal, type Journal } from "./journal";
+import { readJournal } from "./journal";
+import type { Journal } from "./journal";
 import { ensureLockDir, withLock } from "./lock";
 import { StoreWrites } from "./store-writes";
 import { nowIso, epochMs } from "./time";
 import { coreSocket } from "./hc";
 import { FrontDoor } from "./board-model";
 
-/** What a delivery is about. The work, not the words. */
 const CauseSchema = Schema.Struct({
   kind: Schema.Literals([
     "step",
@@ -36,20 +29,6 @@ const CauseSchema = Schema.Struct({
   ref: Schema.String,
 });
 export type Cause = Schema.Schema.Type<typeof CauseSchema>;
-/**
- * Where a delivery has got to. `submitted` says the text and the Enter went in, which is
- * not the same as the agent having read it; `acknowledged` says it took a turn after the
- * delivery — herdr saw one start, or its harness's submit hook recorded the prompt. Whether
- * the work then went where it was told is the drift judgement's, never a delivery state.
- *
- * `unknown` is the honest state for a crash between reserving and submitting: nobody can
- * say whether herdr got it. It blocks the same work from being sent again until a human
- * reconciles it, and Collie never retries out of it on its own.
- *
- * `deferred` is herdr answering that the pane cannot take a prompt right now. That answer
- * proves nothing was delivered, so the sender tries again under the same id, and the work
- * stays blocked to every other copy meanwhile.
- */
 const DELIVERY_STATES = [
   "reserved",
   "deferred",
@@ -60,15 +39,12 @@ const DELIVERY_STATES = [
   "superseded",
 ] as const;
 
-/** States that say herdr took the text: a delivery in one of these was sent. */
 export const SENT_STATES: ReadonlySet<string> = new Set(["submitted", "acknowledged"]);
 
-/** The line a Run's agents log keeps for a human's message told to one of its agents. */
 export const toldLine = (agent: string, text: string) =>
   `${agent}: told "${Str.split(text, "\n")[0] ?? ""}"`;
 
-/** The first line of the newest message `log` says `agent` was told, or null for none. */
-export function toldIn(log: string, agent: string): string | null {
+export function toldIn(log: string, agent: string) {
   const prefix = `${agent}: told "`;
   const line = Option.getOrUndefined(
     Arr.findLast(
@@ -76,10 +52,11 @@ export function toldIn(log: string, agent: string): string | null {
       (one) => pipe_(one, Str.startsWith(prefix)) && pipe_(one, Str.endsWith('"')),
     ),
   );
-  return line === undefined ? null : pipe_(line, Str.slice(prefix.length, -1));
+  const returned: string | null =
+    line === undefined ? null : pipe_(line, Str.slice(prefix.length, -1));
+  return returned;
 }
 
-/** States nothing follows: a causal key with one of these is free for a new delivery. */
 const TERMINAL_STATES: ReadonlySet<string> = new Set(["failed", "superseded"]);
 
 const HumanDoorSchema = Schema.Struct({
@@ -103,20 +80,14 @@ export const DeliverySchema = Schema.Struct({
   attempt: Schema.Int,
   state: Schema.Literals(DELIVERY_STATES),
   evidence: Schema.optionalKey(Schema.Struct({ kind: Schema.String, ref: Schema.String })),
-  /** herdr's own code for a refusal it answered with. */
   code: Schema.optionalKey(Schema.String),
   note: Schema.optionalKey(Schema.String),
   workflowNotice: Schema.optionalKey(Schema.String),
-  /** Where its words are a human's, whose: a host that dies before acting on it still can. */
   human: Schema.optionalKey(HumanDoorSchema),
 });
 export type Delivery = Schema.Schema.Type<typeof DeliverySchema>;
 
-/**
- * An incarnation someone typed into directly, and the human clearing that. Not delivery
- * states: they are about the agent, not about one message, and automatic corrections to
- * an incarnation under override stop until the override is explicitly cleared.
- */
+// WARNING: automatic corrections under an override stop until a human clears it.
 const OverrideSchema = Schema.Struct({
   kind: Schema.Literals(["manual_override", "override_cleared"]),
   at: Schema.String,
@@ -136,29 +107,22 @@ function isDelivery(line: LedgerLine): line is Delivery {
   return "state" in line;
 }
 
-/** A short stable digest for a key or a body. Not a security property; a name. */
-function digest(value: string): string {
+function digest(value: string) {
   return Bun.hash(value).toString(16);
 }
 
-export function textHash(text: string): string {
+export function textHash(text: string) {
   return digest(text);
 }
 
-/**
- * What this delivery is *about*: the run, the cause and the Intent it was composed
- * against. Deliberately not the text — a nudge and a re-sent prompt can be the same
- * words about different work, and two corrections for one constraint are the same work
- * in different words. What must not happen twice is the work.
- */
-export function causalKey(run: string, cause: Cause, intentVersion: number): string {
+// WARNING: keyed by the work, not the text: a re-worded nudge for the same work must not send twice.
+export function causalKey(run: string, cause: Cause, intentVersion: number) {
   return digest(`${run}\u0000${cause.kind}\u0000${cause.ref}\u0000${intentVersion}`);
 }
 
 export const LEDGER_FILE = "deliveries.jsonl";
 
-/** The key an incarnation's ledger is kept under, from herdr's own identity for it. */
-export function incarnationKey(terminalId: string): string {
+export function incarnationKey(terminalId: string) {
   return digest(terminalId);
 }
 
@@ -166,38 +130,22 @@ type HumanSubmit = Delivery & { readonly human: HumanDoor };
 
 export interface DeliveriesApi {
   readonly append: (line: LedgerLine) => Effect.Effect<void>;
-  /** One incarnation's ledger, oldest first, with the lines nobody can read counted. */
   readonly ledger: (incarnation: string) => Effect.Effect<Journal<LedgerLine>>;
-  /**
-   * Every delivery about this Run, newest state each, in the order each was first written,
-   * across every incarnation it has had: an incarnation that exited after a reservation went
-   * `unknown` still has the entry blocking that causal key.
-   */
   readonly ofRun: (run: string) => Effect.Effect<ReadonlyArray<Delivery>>;
-  /** The newest line of each delivery about each of these Runs, as written, in one read. */
   readonly newestOf: (
     runs: ReadonlyArray<string>,
   ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<string>>>;
-  /** This incarnation's deliveries of one piece of work, newest state each, in the order first written. */
   readonly about: (
     incarnation: string,
     causalKey: string,
   ) => Effect.Effect<ReadonlyArray<Delivery>>;
-  /** Every Delivery of a human's words herdr took, at its first line saying so. */
   readonly humanSubmits: Effect.Effect<ReadonlyArray<HumanSubmit>>;
-  /**
-   * The Runs a human has typed at behind Collie's back: those delivered to through an
-   * incarnation whose last word is a manual override.
-   */
   readonly overridden: Effect.Effect<ReadonlySet<string>>;
-  /** Removes the ledgers every delivery of which is about one of `runs`. */
   readonly forget: (runs: ReadonlyArray<string>) => Effect.Effect<void>;
 }
 
-/** The delivery ledgers, in the host's database (ADR-draft-collies-own-records-live-in-the-hosts-database). */
 export class Deliveries extends Context.Service<Deliveries, DeliveriesApi>()("collie/Deliveries") {}
 
-/** What a write to the ledgers invalidates. */
 export const DELIVERIES = "collie/deliveries";
 
 const encodeLedgerLine = flow(Schema.encodeResult(LedgerLineJson), Result.getOrThrow);
@@ -208,7 +156,6 @@ const deliveriesIn = (rows: ReadonlyArray<{ readonly line: string }>) =>
     isDelivery,
   );
 
-/** Over the host's connection, or the door's own read-only one, to `host.db`. */
 export const deliveriesLayer = Layer.effect(Deliveries)(
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -222,13 +169,14 @@ export const deliveriesLayer = Layer.effect(Deliveries)(
       ) ON seq = last
       ORDER BY first
     `;
-    return {
+    const returned: DeliveriesApi = {
       append: (line) =>
         Effect.gen(function* () {
           const ledger = incarnationKey(line.incarnation);
           yield* sql`INSERT INTO collie_deliveries (ledger, line) VALUES (${ledger}, ${encodeLedgerLine(line)})`;
-          if (isDelivery(line))
+          if (isDelivery(line)) {
             yield* markWorked(line.run).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+          }
           const runs = isDelivery(line)
             ? [line.run]
             : Arr.map(
@@ -245,12 +193,15 @@ export const deliveriesLayer = Layer.effect(Deliveries)(
           SELECT line FROM collie_deliveries WHERE ledger = ${incarnationKey(incarnation)} ORDER BY seq
         `.pipe(
           Effect.map((rows) => {
-            const lines: LedgerLine[] = [];
+            const lines: Array<LedgerLine> = [];
             let corrupt = 0;
             for (const row of rows) {
               const line = decodeLedgerLine(row.line);
-              if (Option.isSome(line)) lines.push(line.value);
-              else corrupt += 1;
+              if (Option.isSome(line)) {
+                lines.push(line.value);
+              } else {
+                corrupt += 1;
+              }
             }
             return { lines, corrupt };
           }),
@@ -269,9 +220,10 @@ export const deliveriesLayer = Layer.effect(Deliveries)(
               ORDER BY newest.run, newest.first
             `.pipe(
               Effect.map((rows) => {
-                const byRun = new Map<string, string[]>();
-                for (const row of rows)
+                const byRun = new Map<string, Array<string>>();
+                for (const row of rows) {
                   byRun.set(row.run, [...(byRun.get(row.run) ?? []), row.line]);
+                }
                 return byRun;
               }),
               Effect.orDie,
@@ -310,7 +262,9 @@ export const deliveriesLayer = Layer.effect(Deliveries)(
       ),
       forget: (runs) =>
         Effect.gen(function* () {
-          if (runs.length === 0) return;
+          if (runs.length === 0) {
+            return;
+          }
           yield* sql`
             DELETE FROM collie_deliveries WHERE ledger IN (
               SELECT ledger FROM collie_deliveries WHERE run IS NOT NULL GROUP BY ledger
@@ -319,46 +273,45 @@ export const deliveriesLayer = Layer.effect(Deliveries)(
           `;
           yield* reactivity.invalidate([DELIVERIES]);
         }).pipe(Effect.orDie),
-    } satisfies DeliveriesApi;
+    };
+    return returned;
   }),
 );
 
 export const appendLine = (line: LedgerLine) => Deliveries.use((ledgers) => ledgers.append(line));
 
-/** Every line of this incarnation's ledger, oldest first. */
 export const readLedger = (incarnation: string) =>
   Effect.map(readLedgerWhole(incarnation), (ledger) => ledger.lines);
 
-/**
- * The ledger with its corruption counted. A delivery line that cannot be read is a
- * delivery whose state nobody knows, and §7.3's rule is that such a thing blocks the work
- * it was about until a human settles it — so the one caller that decides whether to send
- * reads it this way and refuses rather than sending into a gap.
- */
+// WARNING: an unreadable line blocks the work it was about; the sender refuses rather than sending into a gap.
 export const readLedgerWhole = (incarnation: string) =>
   Deliveries.use((ledgers) => ledgers.ledger(incarnation));
 
-/** The newest line for each delivery id, which is that delivery's current state. */
-export function newestById(lines: ReadonlyArray<LedgerLine>): Map<string, Delivery> {
+export function newestById(lines: ReadonlyArray<LedgerLine>) {
   const newest = new Map<string, Delivery>();
-  for (const line of lines) if (isDelivery(line)) newest.set(line.id, line);
-  return newest;
+  for (const line of lines) {
+    if (isDelivery(line)) {
+      newest.set(line.id, line);
+    }
+  }
+  const returned: Map<string, Delivery> = newest;
+  return returned;
 }
 
-/** `deliveries` for one pass over these Runs, as `readAhead` reads their records. */
 export const deliveriesAhead = Effect.fn("Steering.deliveriesAhead")(function* (
   deliveries: DeliveriesApi,
   runs: ReadonlyArray<string>,
 ) {
   const ids = new Set(runs);
   const all = yield* Effect.cached(deliveries.newestOf(runs));
-  return {
+  const returned: DeliveriesApi = {
     ...deliveries,
     ofRun: (run) =>
       ids.has(run)
         ? Effect.map(all, (got) => deliveriesIn(Arr.map(got.get(run) ?? [], (line) => ({ line }))))
         : deliveries.ofRun(run),
-  } satisfies DeliveriesApi;
+  };
+  return returned;
 });
 
 export const deliveriesOf = Effect.fn("Steering.deliveriesOf")(function* (run: string) {
@@ -375,37 +328,34 @@ export const forgetDeliveries = (runs: ReadonlyArray<string>) =>
 
 export const overriddenRuns = Deliveries.use((ledgers) => ledgers.overridden);
 
-/**
- * The delivery, if any, that stops new work with this causal key going out: one still in
- * flight, or one nobody can say the fate of. An `unknown` blocks until a human says what
- * happened, which appends `superseded` — so it stops blocking by being answered, never
- * by timing out into a guess.
- */
-export function blocked(
-  lines: ReadonlyArray<LedgerLine>,
-  causal_key: string,
-  /** The delivery being sent: its own `deferred` line is its retry, not another copy. */
-  resending?: string,
-): Delivery | null {
+// WARNING: an unknown blocks until a human reconciles it, never by timing out into a resend.
+export function blocked(lines: ReadonlyArray<LedgerLine>, causal_key: string, resending?: string) {
   let found: Delivery | null = null;
   for (const delivery of newestById(lines).values()) {
-    if (delivery.causal_key !== causal_key) continue;
-    if (TERMINAL_STATES.has(delivery.state)) continue;
-    if (delivery.id === resending && delivery.state === "deferred") continue;
-    if (found === null || delivery.at > found.at) found = delivery;
+    if (delivery.causal_key !== causal_key) {
+      continue;
+    }
+    if (TERMINAL_STATES.has(delivery.state)) {
+      continue;
+    }
+    if (delivery.id === resending && delivery.state === "deferred") {
+      continue;
+    }
+    if (found === null || delivery.at > found.at) {
+      found = delivery;
+    }
   }
-  return found;
+  const returned: Delivery | null = found;
+  return returned;
 }
 
-/**
- * When this delivery's current run of `deferred` answers began, and how many it has had.
- * A reservation is each retry's own and continues the run; any other state ends it.
- */
 export function deferralsOf(lines: ReadonlyArray<LedgerLine>, id: string) {
   let since: string | null = null;
   let count = 0;
   for (const line of lines) {
-    if (!isDelivery(line) || line.id !== id || line.state === "reserved") continue;
+    if (!isDelivery(line) || line.id !== id || line.state === "reserved") {
+      continue;
+    }
     if (line.state !== "deferred") {
       since = null;
       count = 0;
@@ -417,23 +367,22 @@ export function deferralsOf(lines: ReadonlyArray<LedgerLine>, id: string) {
   return { since, count };
 }
 
-/**
- * The lines that settle reservations nobody came back for. A crash after `reserved` and
- * one after herdr returned but before `submitted` was written look identical from here,
- * so both settle to `unknown` — the state that asks a human — rather than to a guess in
- * either direction.
- */
+// WARNING: a crash after reserved and one after herdr returned look identical, so both settle to unknown.
 export function settleStaleReservations(
   lines: ReadonlyArray<LedgerLine>,
   nowMs: number,
   submitTimeoutMs: number,
   at: string,
-): Delivery[] {
-  const settled: Delivery[] = [];
+) {
+  const settled: Array<Delivery> = [];
   for (const delivery of newestById(lines).values()) {
-    if (delivery.state !== "reserved") continue;
+    if (delivery.state !== "reserved") {
+      continue;
+    }
     const reservedAt = epochMs(delivery.at);
-    if (Number.isNaN(reservedAt) || nowMs - reservedAt < submitTimeoutMs) continue;
+    if (Number.isNaN(reservedAt) || nowMs - reservedAt < submitTimeoutMs) {
+      continue;
+    }
     settled.push({
       ...delivery,
       at,
@@ -441,20 +390,21 @@ export function settleStaleReservations(
       note: "reserved and never settled (crash or lost result)",
     });
   }
-  return settled;
+  const returned: Array<Delivery> = settled;
+  return returned;
 }
 
-/** Whether this incarnation is under manual override: the last word on it wins. */
-export function overrideActive(lines: ReadonlyArray<LedgerLine>): boolean {
+export function overrideActive(lines: ReadonlyArray<LedgerLine>) {
   let active = false;
   for (const line of lines) {
-    if (isDelivery(line)) continue;
+    if (isDelivery(line)) {
+      continue;
+    }
     active = line.kind === "manual_override";
   }
   return active;
 }
 
-/** Sent, with nothing to show the harness took it. */
 export const isUnobserved = (delivery: Delivery) =>
   delivery.state === "submitted" &&
   Option.getOrUndefined(
@@ -463,72 +413,63 @@ export const isUnobserved = (delivery: Delivery) =>
     ),
   ) === true;
 
-/** Neither in flight nor of unknown fate: nothing about it blocks its work any more. */
 export const isSettledDelivery = (delivery: Delivery) =>
   delivery.state !== "reserved" &&
   delivery.state !== "deferred" &&
   delivery.state !== "unknown" &&
   !isUnobserved(delivery);
 
-/**
- * An explicit account of an unknown or unobserved delivery. Callers establish whether it
- * was sent; a timeout alone never supplies an answer or authorizes a resend.
- */
+// WARNING: a timeout alone never supplies an answer or authorizes a resend.
 export function reconcile(
   lines: ReadonlyArray<LedgerLine>,
   id: string,
   as: "sent" | "not-sent",
   by: string,
   at: string,
-): Delivery | { readonly error: string } {
+) {
   const delivery = newestById(lines).get(id);
-  if (!delivery) return { error: `no delivery "${id}" in this ledger` };
-  if (delivery.state !== "unknown" && !isUnobserved(delivery))
-    return { error: `delivery "${id}" is ${delivery.state}` };
-  return {
+  if (!delivery) {
+    const returned: Delivery | { readonly error: string } = {
+      error: `no delivery "${id}" in this ledger`,
+    };
+    return returned;
+  }
+  if (delivery.state !== "unknown" && !isUnobserved(delivery)) {
+    const returned: Delivery | { readonly error: string } = {
+      error: `delivery "${id}" is ${delivery.state}`,
+    };
+    return returned;
+  }
+  const returned: Delivery | { readonly error: string } = {
     ...delivery,
     at,
     state: "superseded",
     note: `reconciled as ${as} by ${by}`,
   };
+  return returned;
 }
 
-// ---------------------------------------------------------------------------
-// The Herd's budget
-// ---------------------------------------------------------------------------
-
-/** herdr is not reachable, so there is no Herd to key anything by. Never a cwd. */
 export class HerdrUnreachable extends Data.TaggedError("HerdrUnreachable")<{ why: string }> {}
 
-/**
- * The Herd: one herdr or herdr-core session, named by the canonical path of its socket. Everything
- * shared across the workspaces of one session — the conversation, proposals, the budget,
- * elections — is filed under this. A cwd would key two sessions in one repository to the
- * same Herd and one session across two repositories to different ones.
- */
 export const herdKey = Effect.fn("Steering.herdKey")(function* <R>(
   socketPath: string | null,
   fromStatus: () => Effect.Effect<string | null, never, R>,
 ) {
   const socket = socketPath ?? (yield* fromStatus());
-  if (socket === null || socket === "")
+  if (socket === null || socket === "") {
     return yield* new HerdrUnreachable({
       why: "no socket path",
     });
+  }
   const fs = yield* FileSystem.FileSystem;
   const real = yield* fs.realPath(socket).pipe(Effect.orElseSucceed(() => socket));
   return digest(real);
 });
 
-/**
- * The Herd of a plugin invocation. A Collie that was not started by herdr has no Herd and
- * is told so, rather than being given a second-best one: the fallback that a cwd or a
- * status probe would supply is exactly the thing that keys two sessions to one Herd.
- */
+// WARNING: a Collie not started by herdr has no Herd; a cwd fallback would key two sessions to one Herd.
 export const herdOf = (socketPath: string | null) =>
   herdKey(socketPath, () => Effect.succeed(null));
 
-/** The Herd of a Collie on this Machine: its core session's, keyed by that session's socket. */
 export const machineHerd = (env: { readonly raw: Readonly<Record<string, string | undefined>> }) =>
   Effect.flatMap(coreSocket(env.raw), herdOf);
 
@@ -541,14 +482,11 @@ const BudgetSchema = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("reserve"),
     id: Schema.String,
-    /** The Run this call is about, or null for one about the whole Herd. */
     run: Schema.NullOr(Schema.String),
     at: Schema.String,
-    /** Read from records written before spending caps were dropped; never written now. */
     max_usd: Schema.optionalKey(Schema.Finite),
     max_seconds: Schema.Finite,
     max_output_bytes: Schema.Finite,
-    /** What the call was asked of; absent on records from before either was written. */
     model: Schema.optionalKey(Schema.String),
     effort: Schema.optionalKey(Schema.String),
   }),
@@ -576,7 +514,6 @@ export const budgetPath = Effect.fn("Steering.budgetPath")(function* (
 
 export const readBudget = (file: string) => readJournal(file, BudgetJson);
 
-/** The execution bounds a call is made under, written down beside it. */
 export interface CallLimits {
   readonly maxSeconds: number;
   readonly maxOutputBytes: number;
@@ -584,31 +521,30 @@ export interface CallLimits {
   readonly effort?: string;
 }
 
-/**
- * Reservations nobody settled, as synthetic failures. A call that took the model down
- * with it still happened and still counts; leaving it unsettled would make the record
- * say fewer calls were made than were.
- */
-function staleSettlements(
-  lines: ReadonlyArray<BudgetLine>,
-  nowMs: number,
-  at: string,
-): BudgetLine[] {
+// WARNING: a call that took the model down still happened and still counts.
+function staleSettlements(lines: ReadonlyArray<BudgetLine>, nowMs: number, at: string) {
   const settled = new Set(Arr.flatMap(lines, (l) => (l.kind === "settle" ? [l.id] : [])));
-  return Arr.flatMap(lines, (line): BudgetLine[] => {
-    if (line.kind !== "reserve" || settled.has(line.id)) return [];
+  const answer: Array<BudgetLine> = Arr.flatMap(lines, (line) => {
+    if (line.kind !== "reserve" || settled.has(line.id)) {
+      const returned: Array<BudgetLine> = [];
+      return returned;
+    }
     const startedAt = epochMs(line.at);
-    if (Number.isNaN(startedAt) || nowMs - startedAt < 2 * line.max_seconds * 1000) return [];
-    return [{ kind: "settle", id: line.id, at, outcome: "failed", seconds: 0, bytes: 0 }];
+    if (Number.isNaN(startedAt) || nowMs - startedAt < 2 * line.max_seconds * 1000) {
+      const returned: Array<BudgetLine> = [];
+      return returned;
+    }
+    {
+      const returned: Array<BudgetLine> = [
+        { kind: "settle", id: line.id, at, outcome: "failed", seconds: 0, bytes: 0 },
+      ];
+      return returned;
+    }
   });
+  return answer;
 }
 
-/**
- * The lines that record one more model call starting: the stale settlements it is time
- * to write, and the reservation itself. Nothing here refuses a call. The user's decision
- * is that usage is data — counted, costed, shown — and never a quota that blocks or
- * throttles their work; what bounds a call is its own clock and output cap, not a tally.
- */
+// WARNING: usage is counted, never a quota: nothing here refuses or throttles a call.
 export function planReservation(
   lines: ReadonlyArray<BudgetLine>,
   request: { readonly id: string; readonly run: string | null; readonly at: string },
@@ -635,7 +571,9 @@ export const appendBudget = Effect.fn("Steering.appendBudget")(function* (
   file: string,
   lines: ReadonlyArray<BudgetLine>,
 ) {
-  if (lines.length === 0) return;
+  if (lines.length === 0) {
+    return;
+  }
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   yield* fs.makeDirectory(path.dirname(file), { recursive: true });
@@ -646,11 +584,7 @@ export const appendBudget = Effect.fn("Steering.appendBudget")(function* (
   yield* fs.writeFileString(file, `${body}\n`, { flag: "a" });
 });
 
-/**
- * One model call's record, written before the call is made. Under the ledger lock where
- * it can be had; a busy lock appends anyway, because a record that a call happened must
- * not be what stops the call from happening. Never fails and never refuses.
- */
+// WARNING: a busy lock appends anyway: a record that a call happened must not stop the call.
 export const reserve = Effect.fn("Steering.reserve")(function* (
   file: string,
   request: { readonly id: string; readonly run: string | null },
@@ -671,7 +605,6 @@ export const settle = Effect.fn("Steering.settle")(function* (
   id: string,
   actual: {
     readonly outcome: "ok" | "failed" | "timeout" | "over_output" | "killed";
-    /** What the CLI said the call cost, where it said. Telemetry; nothing decides on it. */
     readonly usd?: number | undefined;
     readonly seconds: number;
     readonly bytes: number;

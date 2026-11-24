@@ -15,8 +15,11 @@ test("Pi's reader isolates setup and pairs delayed, out-of-order answers with ea
       Bun.env.PI_CODING_AGENT_DIR = `${dir}/agent`;
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
-          if (previous === undefined) delete Bun.env.PI_CODING_AGENT_DIR;
-          else Bun.env.PI_CODING_AGENT_DIR = previous;
+          if (previous === undefined) {
+            delete Bun.env.PI_CODING_AGENT_DIR;
+          } else {
+            Bun.env.PI_CODING_AGENT_DIR = previous;
+          }
         }),
       );
       const models = yield* readPiModels(NO_FLOCK_SETTINGS, dir, [

@@ -4,15 +4,12 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Config, Effect, FileSystem } from "effect";
 
-/**
- * Appends `<name> <command> [<subcommand>]` to `COLLIE_TEST_STARTS`, so a suite can count the
- * processes it started, followed by a tab and `COLLIE_TEST_FILE` where that names the test file
- * that caused it. Unset, it does nothing.
- */
 export const recordStart = (name: string, args: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const file = yield* Config.String("COLLIE_TEST_STARTS").pipe(Config.withDefault(""));
-    if (file === "") return;
+    if (file === "") {
+      return;
+    }
     const at = Option.getOrElse(
       Arr.findFirstIndex(args, (arg) => !pipe_(arg, Str.startsWith("-"))),
       () => -1,

@@ -1,18 +1,7 @@
-// What a human actually reads before they say yes.
-//
-// `describeAction` is the whole payload: the board draws these lines under the
-// interpretation, and chat's own reply repeats them. The interpretation above them is a
-// model's prose, and a yes is a yes to the payload rather than to a summary of it — so a
-// field that decides what a change does, or where it lands, has to be in the line rather
-// than only in the JSON.
-
 import { expect, test } from "bun:test";
 import { describeAction } from "../src/lines";
 
 test("an action that names a workspace says which one", () => {
-  // Both of these write outside any Run: the defaults a workspace's next Runs begin with,
-  // and the checkout a launch roots in. Which workspace is the field that decides what
-  // the change does, and it was absent from what the human read.
   expect(
     describeAction({
       kind: "update_defaults",
@@ -32,8 +21,6 @@ test("an action that names a workspace says which one", () => {
 });
 
 test("a launch says what it would run on, not only where", () => {
-  // The inputs are what the Run actually does; a yes to a workflow name alone is a yes to
-  // a plan the human never read.
   expect(
     describeAction({
       kind: "start",
@@ -48,7 +35,6 @@ test("a launch says what it would run on, not only where", () => {
 });
 
 test("a launch that names no workspace says so, rather than reading as though it did", () => {
-  // An agent's start is refused without one, which a yes should know before it is given.
   const said = describeAction({ kind: "start", workflow: "implement", inputs: {} });
   expect(said).toBe("start implement in no workspace named, so it will be refused");
 });
@@ -65,7 +51,6 @@ test("a removal says the text is an id, because prose there removes nothing", ()
 });
 
 test("a launch that carries its own checks says what Collie will run for them", () => {
-  // Collie spawns these itself at the gate, so a yes to the launch is a yes to them.
   expect(
     describeAction({
       kind: "start",

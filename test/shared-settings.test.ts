@@ -1,7 +1,3 @@
-// Collie's settings as a Machine's host shares them: each with when it was last set, and
-// written by the host for a front door with the edit's own time, so the latest edit of a
-// key wins wherever it was made.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
@@ -22,94 +18,85 @@ import { connect } from "../src/host";
 import { stopHost } from "./support/host";
 import { collie, proves } from "./support/world";
 
-test(
-  "a host shares its settings with when each was set, and keeps the latest edit of each",
-  () =>
-    proves(
-      "collie-shared-settings-",
-      (world) =>
-        Effect.gen(function* () {
-          // Set before anything recorded when: the file's own time stands in for it.
-          yield* writeConfigValue(world.config, "scope", "all");
-          yield* setSetting(world.config, "model", "sonnet", "2026-10-07T10:00:00.000Z");
-          // A remembered answer is this Machine's own and is never shared.
-          yield* writeConfigValue(world.config, "linear.team", "CEG");
-          const client = yield* connect(world.state);
-          yield* client.declare({ frontDoor: "desktop" });
+test("a host shares its settings with when each was set, and keeps the latest edit of each", () =>
+  proves(
+    "collie-shared-settings-",
+    (world) =>
+      Effect.gen(function* () {
+        yield* writeConfigValue(world.config, "scope", "all");
+        yield* setSetting(world.config, "model", "sonnet", "2026-10-07T10:00:00.000Z");
+        // WARNING: a remembered answer is this Machine's own and is never shared.
+        yield* writeConfigValue(world.config, "linear.team", "CEG");
+        const client = yield* connect(world.state);
+        yield* client.declare({ frontDoor: "desktop" });
 
-          const shared = yield* client.settings();
-          expect(shared.flock).toBeNull();
-          expect(Arr.map(shared.settings, ({ key }) => key).sort()).toEqual(["model", "scope"]);
-          expect(
-            Option.getOrUndefined(Arr.findFirst(shared.settings, ({ key }) => key === "model")),
-          ).toEqual({
-            key: "model",
-            value: "sonnet",
-            at: "2026-10-07T10:00:00.000Z",
-          });
-          const dated = Option.getOrUndefined(
-            Arr.findFirst(shared.settings, ({ key }) => key === "scope"),
-          )!.at;
-          // Dated once, so a later write to the file cannot make the old value newer.
-          expect((yield* readSettingsSet(world.config)).set.scope).toBe(dated);
+        const shared = yield* client.settings();
+        expect(shared.flock).toBeNull();
+        expect(Arr.map(shared.settings, ({ key }) => key).sort()).toEqual(["model", "scope"]);
+        expect(
+          Option.getOrUndefined(Arr.findFirst(shared.settings, ({ key }) => key === "model")),
+        ).toEqual({
+          key: "model",
+          value: "sonnet",
+          at: "2026-10-07T10:00:00.000Z",
+        });
+        const dated = Option.getOrUndefined(
+          Arr.findFirst(shared.settings, ({ key }) => key === "scope"),
+        )!.at;
+        expect((yield* readSettingsSet(world.config)).set.scope).toBe(dated);
 
-          const after = yield* client.setSettings({
-            request: "s-1",
-            settings: [
-              // Later than the clock, so these outlast the scope dated as it was read.
-              { key: "proactive", value: false, at: "2099-10-07T11:00:00.000Z" },
-              // Older than this Machine's own edit, so the Machine's stands.
-              { key: "model", value: "haiku", at: "2026-10-07T09:00:00.000Z" },
-              { key: "scope", value: null, at: "2099-10-07T11:00:00.000Z" },
-            ],
-          });
-          const defaults = yield* loadDefaults(world.config);
-          expect([defaults.proactive, defaults.model, defaults.scope]).toEqual([
-            false,
-            "sonnet",
-            "local",
-          ]);
-          expect(after.flock).toMatchObject({ by: "desktop" });
-          expect(
-            Option.getOrUndefined(Arr.findFirst(after.settings, ({ key }) => key === "scope")),
-          ).toEqual({
-            key: "scope",
-            value: null,
-            at: "2099-10-07T11:00:00.000Z",
-          });
-          expect((yield* readSettingsSet(world.config)).set.proactive).toBe(
-            "2099-10-07T11:00:00.000Z",
-          );
+        const after = yield* client.setSettings({
+          request: "s-1",
+          settings: [
+            { key: "proactive", value: false, at: "2099-10-07T11:00:00.000Z" },
+            { key: "model", value: "haiku", at: "2026-10-07T09:00:00.000Z" },
+            { key: "scope", value: null, at: "2099-10-07T11:00:00.000Z" },
+          ],
+        });
+        const defaults = yield* loadDefaults(world.config);
+        expect([defaults.proactive, defaults.model, defaults.scope]).toEqual([
+          false,
+          "sonnet",
+          "local",
+        ]);
+        expect(after.flock).toMatchObject({ by: "desktop" });
+        expect(
+          Option.getOrUndefined(Arr.findFirst(after.settings, ({ key }) => key === "scope")),
+        ).toEqual({
+          key: "scope",
+          value: null,
+          at: "2099-10-07T11:00:00.000Z",
+        });
+        expect((yield* readSettingsSet(world.config)).set.proactive).toBe(
+          "2099-10-07T11:00:00.000Z",
+        );
 
-          const refused = yield* client
-            .setSettings({
-              request: "s-2",
-              settings: [{ key: "scope", value: "everywhere", at: "2099-10-07T12:00:00.000Z" }],
-            })
-            .pipe(Effect.flip);
-          expect(refused).toMatchObject({ _tag: "HostRefused" });
-          const notOne = yield* client
-            .setSettings({
-              request: "s-3",
-              settings: [{ key: "linear.team", value: "X", at: "2099-10-07T12:00:00.000Z" }],
-            })
-            .pipe(Effect.flip);
-          expect(notOne).toMatchObject({ _tag: "HostRefused" });
+        const refused = yield* client
+          .setSettings({
+            request: "s-2",
+            settings: [{ key: "scope", value: "everywhere", at: "2099-10-07T12:00:00.000Z" }],
+          })
+          .pipe(Effect.flip);
+        expect(refused).toMatchObject({ _tag: "HostRefused" });
+        const notOne = yield* client
+          .setSettings({
+            request: "s-3",
+            settings: [{ key: "linear.team", value: "X", at: "2099-10-07T12:00:00.000Z" }],
+          })
+          .pipe(Effect.flip);
+        expect(notOne).toMatchObject({ _tag: "HostRefused" });
 
-          // An agent sets one as a human would, through the host.
-          const said = yield* collie(world, ["settings", "set", "max_iterations", "9"]);
-          expect(said.envelope).toMatchObject({ ok: true });
-          expect((yield* loadDefaults(world.config)).maxIterations).toBe(9);
-          // Only a Desktop marks the settings shared with the Flock.
-          expect((yield* readSettingsSet(world.config)).flock).toEqual(after.flock!);
-          const nine = yield* collie(world, ["settings", "set", "max_iterations", "nine"]);
-          expect(nine.envelope).toMatchObject({ ok: false });
-          yield* stopHost(world.state);
-        }),
-      [],
-    ),
-  120_000,
-);
+        const said = yield* collie(world, ["settings", "set", "max_iterations", "9"]);
+        expect(said.envelope).toMatchObject({ ok: true });
+        expect((yield* loadDefaults(world.config)).maxIterations).toBe(9);
+        // WARNING: only a Desktop marks settings shared with the Flock.
+        expect((yield* readSettingsSet(world.config)).flock).toEqual(after.flock!);
+        const nine = yield* collie(world, ["settings", "set", "max_iterations", "nine"]);
+        expect(nine.envelope).toMatchObject({ ok: false });
+        yield* stopHost(world.state);
+      }),
+    [],
+  ));
 
 test("a settings file naming a notification kind Collie no longer raises still loads whole", () =>
   runEffect(
@@ -184,84 +171,80 @@ test("a Flock's auto-compact window is taken when it is the latest edit, and ref
 
       yield* takeShared(
         userDir,
-        [{ key: "claude_auto_compact_window", value: 500000, at: "2026-10-12T10:00:00.000Z" }],
+        [{ key: "claude_auto_compact_window", value: 500_000, at: "2026-10-12T10:00:00.000Z" }],
         "desktop",
         now,
       );
-      expect((yield* loadDefaults(userDir)).claudeAutoCompactWindow).toBe(500000);
+      expect((yield* loadDefaults(userDir)).claudeAutoCompactWindow).toBe(500_000);
     }).pipe(Effect.scoped),
   ));
 
-test(
-  "a Run's agent cannot set the Standing direction, and a human or a chat can",
-  () =>
-    proves(
-      "collie-standing-direction-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const direction = () =>
-            Effect.map(readConfig(world.config), (raw) => raw.standing_direction);
-          let edits = 0;
-          const edit = (frontDoor: "desktop" | "cli-tty" | "chat" | "agent", text: string) =>
-            Effect.gen(function* () {
-              const client = yield* connect(world.state);
-              yield* client.declare(
-                frontDoor === "agent"
-                  ? { frontDoor, from: { agent: "build-1" } }
-                  : frontDoor === "chat"
-                    ? { frontDoor, conversation: "flock@mk-pc", said: "keep that" }
-                    : { frontDoor },
-              );
-              return yield* client.setSettings({
-                request: `edit-${frontDoor}`,
-                settings: [
-                  {
-                    key: "standing_direction",
-                    value: text,
-                    at: `2099-11-04T10:0${++edits}:00.000Z`,
-                  },
-                ],
-              });
+test("a Run's agent cannot set the Standing direction, and a human or a chat can", () =>
+  proves(
+    "collie-standing-direction-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const direction = () =>
+          Effect.map(readConfig(world.config), (raw) => raw.standing_direction);
+        let edits = 0;
+        const edit = (frontDoor: "desktop" | "cli-tty" | "chat" | "agent", text: string) =>
+          Effect.gen(function* () {
+            const client = yield* connect(world.state);
+            yield* client.declare(
+              frontDoor === "agent"
+                ? { frontDoor, from: { agent: "build-1" } }
+                : frontDoor === "chat"
+                  ? { frontDoor, conversation: "flock@mk-pc", said: "keep that" }
+                  : { frontDoor },
+            );
+            return yield* client.setSettings({
+              request: `edit-${frontDoor}`,
+              settings: [
+                {
+                  key: "standing_direction",
+                  value: text,
+                  at: `2099-11-04T10:0${++edits}:00.000Z`,
+                },
+              ],
             });
-          yield* setSetting(
-            world.config,
-            "standing_direction",
-            "Stage only; production waits for my go.",
-            "2026-11-04T09:00:00.000Z",
-          );
-          yield* fs.makeDirectory(`${world.state}/agents`, { recursive: true });
-          yield* fs.writeFileString(
-            `${world.state}/agents/test.json`,
-            yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))([
-              {
-                role: "implementer",
-                agent: "build-1",
-                paneId: "p-1",
-                workspaceId: null,
-                runId: "run-1",
-                workflow: "implement",
-                at: "2026-11-04T09:00:00.000Z",
-              },
-            ]),
-          );
-
-          const refused = yield* edit("agent", "Push to production freely.").pipe(Effect.flip);
-          expect(refused).toMatchObject({
-            _tag: "HostRefused",
-            reason: expect.stringContaining("every chat as the human's words"),
           });
-          expect(yield* direction()).toBe("Stage only; production waits for my go.");
+        yield* setSetting(
+          world.config,
+          "standing_direction",
+          "Stage only; production waits for my go.",
+          "2026-11-04T09:00:00.000Z",
+        );
+        yield* fs.makeDirectory(`${world.state}/agents`, { recursive: true });
+        yield* fs.writeFileString(
+          `${world.state}/agents/test.json`,
+          yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))([
+            {
+              role: "implementer",
+              agent: "build-1",
+              paneId: "p-1",
+              workspaceId: null,
+              runId: "run-1",
+              workflow: "implement",
+              at: "2026-11-04T09:00:00.000Z",
+            },
+          ]),
+        );
 
-          yield* edit("desktop", "From Desktop.");
-          expect(yield* direction()).toBe("From Desktop.");
-          yield* edit("cli-tty", "From a terminal.");
-          expect(yield* direction()).toBe("From a terminal.");
-          yield* edit("chat", "From a chat.");
-          expect(yield* direction()).toBe("From a chat.");
-          yield* stopHost(world.state);
-        }),
-      [],
-    ),
-  120_000,
-);
+        const refused = yield* edit("agent", "Push to production freely.").pipe(Effect.flip);
+        expect(refused).toMatchObject({
+          _tag: "HostRefused",
+          reason: expect.stringContaining("every chat as the human's words"),
+        });
+        expect(yield* direction()).toBe("Stage only; production waits for my go.");
+
+        yield* edit("desktop", "From Desktop.");
+        expect(yield* direction()).toBe("From Desktop.");
+        yield* edit("cli-tty", "From a terminal.");
+        expect(yield* direction()).toBe("From a terminal.");
+        yield* edit("chat", "From a chat.");
+        expect(yield* direction()).toBe("From a chat.");
+        yield* stopHost(world.state);
+      }),
+    [],
+  ));

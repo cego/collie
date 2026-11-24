@@ -1,5 +1,4 @@
 import * as Cause from "effect/Cause";
-// User defaults from the plugin config dir. Optional; the baseline is neutral.
 
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -12,20 +11,20 @@ import { byKey, latestEdits } from "./flock-settings";
 import { ensureLockDir, withLock } from "./lock";
 import { isNumber, isString } from "./schema";
 import {
-  type Defaults,
   FALLBACK_DEFAULTS,
   isDensity,
   isQuestionMode,
   isScope,
   parseShared,
   SETTINGS,
-  type SettingValue,
   WORKTREES_DIRECTORY,
 } from "./settings";
+import type { Defaults, SettingValue } from "./settings";
 import type { SharedSetting, SharedSettings } from "./board-model";
 import { isReachKey, REACH_SETTING, reachKey } from "./reach";
-import type { StandingDirection } from "./standing-direction";
-import { isYamlMap, YamlMapSchema, type YamlMap, type YamlValue } from "./yaml";
+import { isYamlMap, YamlMapSchema } from "./yaml";
+import type { YamlMap, YamlValue } from "./yaml";
+import { stringifyJson } from "./json";
 
 export { type Defaults, FALLBACK_DEFAULTS } from "./settings";
 
@@ -33,37 +32,35 @@ const ConfigJson = Schema.fromJsonString(YamlMapSchema);
 const Models = Schema.Record(Schema.String, Schema.Array(Schema.String));
 const Notifications = Schema.Record(Schema.String, Schema.Boolean);
 
-/** The whole config file, for values only a prompt cares about (e.g. linear.team). */
 export const readConfig = Effect.fn("Config.readConfig")(function* (userDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const paths = yield* Path.Path;
   const path = paths.join(userDir, "config.json");
-  if (!(yield* fs.exists(path))) return {};
+  if (!(yield* fs.exists(path))) {
+    return {};
+  }
   const text = yield* fs.readFileString(path);
   return yield* Schema.decodeEffect(ConfigJson)(text).pipe(
     Effect.mapError((cause) => new Cause.UnknownError(cause, `${path}: ${String(cause)}`)),
   );
 });
 
-export function configValue(raw: YamlMap, dotted: string): YamlValue | undefined {
+export function configValue(raw: YamlMap, dotted: string) {
   let node: YamlValue = raw;
   for (const key of Str.split(dotted, ".")) {
-    if (!isYamlMap(node)) return undefined;
+    if (!isYamlMap(node)) {
+      return undefined;
+    }
     const next: YamlValue | undefined = node[key];
-    if (next === undefined) return undefined;
+    if (next === undefined) {
+      return undefined;
+    }
     node = next;
   }
   return node;
 }
 
-/**
- * Remembers an answer the human gave once, e.g. which Linear team is theirs. A number
- * has to arrive as one: `loadDefaults` reads `max_iterations` and `quiet_ms` with
- * `isNumber`, so a string there is silently ignored and the default stays where it was.
- *
- * `null` removes the key, which is the only way to say "unset": an empty string is a
- * configured value, and an empty `harness` is one every Run then fails validation on.
- */
+// WARNING: numbers must be written as numbers, since loadDefaults ignores strings; null removes a key, while an empty string is a value.
 export const writeConfigValue = Effect.fn("Config.writeConfigValue")(function* (
   userDir: string,
   dotted: string,
@@ -81,9 +78,14 @@ export const writeConfigValue = Effect.fn("Config.writeConfigValue")(function* (
     node = child;
   }
   const last = keys.at(-1);
-  if (last === undefined) return;
-  if (value === null) delete node[last];
-  else node[last] = value;
+  if (last === undefined) {
+    return;
+  }
+  if (value === null) {
+    delete node[last];
+  } else {
+    node[last] = value;
+  }
   yield* fs.makeDirectory(userDir, { recursive: true });
   yield* fs.writeFileString(
     paths.join(userDir, "config.json"),
@@ -91,23 +93,23 @@ export const writeConfigValue = Effect.fn("Config.writeConfigValue")(function* (
   );
 });
 
-/** When each setting was last set, beside config.json, and which Desktop shares them. */
 export const SettingsSet = Schema.Struct({
   set: Schema.Record(Schema.String, Schema.String),
-  /** The Desktop that last gave this Machine the Flock's settings. */
   flock: Schema.optionalKey(Schema.Struct({ by: Schema.String, at: Schema.String })),
 });
 export type SettingsSet = typeof SettingsSet.Type;
 const SettingsSetJson = Schema.fromJsonString(SettingsSet);
 const SET_FILE = "settings-set.json";
 
-/** What `settings-set.json` holds, or nothing set where there is none or it cannot be read. */
 export const readSettingsSet = Effect.fn("Config.readSettingsSet")(function* (userDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const paths = yield* Path.Path;
   return yield* fs.readFileString(paths.join(userDir, SET_FILE)).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(SettingsSetJson)),
-    Effect.orElseSucceed((): SettingsSet => ({ set: {} })),
+    Effect.orElseSucceed(() => {
+      const returned: SettingsSet = { set: {} };
+      return returned;
+    }),
   );
 });
 
@@ -124,7 +126,6 @@ export const writeSettingsSet = Effect.fn("Config.writeSettingsSet")(function* (
   );
 });
 
-/** Held while config.json and its stamps are read and written, which the TUI and the host both do. */
 const settingsLocked = <A, E, R>(userDir: string, effect: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     const lock = (yield* Path.Path).join(userDir, "settings.lock");
@@ -147,10 +148,6 @@ const writeSetting = Effect.fn("Config.writeSetting")(function* (
   yield* writeSettingsSet(userDir, { ...stamps, set: { ...stamps.set, [key]: at } });
 });
 
-/**
- * Writes one of Collie's settings and records `at` as when it was set, which is what
- * decides it across a Flock: the latest edit of a key wins.
- */
 export const setSetting = (userDir: string, key: string, value: SettingValue | null, at: string) =>
   settingsLocked(userDir, writeSetting(userDir, key, value, at));
 
@@ -170,14 +167,14 @@ const readShared = Effect.fn("Config.sharedSettings")(function* (userDir: string
     ),
     ...new Set([...reachKeysIn(raw), ...Arr.filter(Rec.keys(stamps.set), isReachKey)]),
   ];
-  const settings = Arr.flatMap(shared, (key): ReadonlyArray<SharedSetting> => {
+  const settings = Arr.flatMap(shared, (key) => {
     const value = configValue(raw, key) ?? null;
     const at = stamps.set[key] ?? (value === null ? undefined : written);
     return at === undefined ? [] : [{ key, value, at }];
   });
-  // Recorded the first time, so a later write to the file does not make them newer.
+  // WARNING: recorded the first time, so a later write to the file does not make them newer.
   const unstamped = Arr.filter(settings, ({ key }) => stamps.set[key] === undefined);
-  if (unstamped.length > 0)
+  if (unstamped.length > 0) {
     yield* writeSettingsSet(userDir, {
       ...stamps,
       set: {
@@ -185,12 +182,16 @@ const readShared = Effect.fn("Config.sharedSettings")(function* (userDir: string
         ...Rec.fromEntries(Arr.map(unstamped, ({ key, at }) => [key, at] as const)),
       },
     });
-  return { settings, flock: stamps.flock ?? null } satisfies SharedSettings;
+  }
+  const returned: SharedSettings = { settings, flock: stamps.flock ?? null };
+  return returned;
 });
 
-function reachKeysIn(raw: YamlMap): ReadonlyArray<string> {
+function reachKeysIn(raw: YamlMap) {
   const held = raw[REACH_SETTING];
-  if (held === undefined || !isYamlMap(held)) return [];
+  if (held === undefined || !isYamlMap(held)) {
+    return [];
+  }
   return Arr.flatMap(Rec.toEntries(held), ([workflow, projects]) =>
     isYamlMap(projects)
       ? Arr.map(Rec.toEntries(projects), ([project]) => `${REACH_SETTING}.${workflow}.${project}`)
@@ -198,7 +199,6 @@ function reachKeysIn(raw: YamlMap): ReadonlyArray<string> {
   );
 }
 
-/** How far the last launch of `workflow` in `project` went, or null where none was saved. */
 export const savedReach = (userDir: string, workflow: string, project: string) =>
   readConfig(userDir).pipe(
     Effect.map((raw) => {
@@ -222,13 +222,11 @@ export const savedReaches = (userDir: string) =>
     Effect.orElseSucceed(() => []),
   );
 
-/** This Machine's settings a Flock shares: each ever set, and when, the file's time where unrecorded. */
 export const sharedSettings = (userDir: string) => settingsLocked(userDir, readShared(userDir));
 
-/** This Machine's Standing direction and its last edit, or undefined while it is empty. */
 export const standingDirectionOn = (userDir: string) =>
   sharedSettings(userDir).pipe(
-    Effect.map(({ settings }): StandingDirection | undefined => {
+    Effect.map(({ settings }) => {
       const held = Arr.findFirst(settings, ({ key }) => key === "standing_direction");
       return Option.match(held, {
         onNone: () => undefined,
@@ -238,16 +236,11 @@ export const standingDirectionOn = (userDir: string) =>
     }),
   );
 
-/** A shared value refused as one its setting does not take. */
 export class SettingRefused extends Data.TaggedError("SettingRefused")<{
   readonly reason: string;
 }> {}
 
-/**
- * The Flock's settings, each written where its edit is newer than this Machine's last edit
- * of it. Refused whole, with why, where any one is not a value its setting takes. `by` is
- * the Desktop giving them, recorded so the TUI says they are shared; null for any other door.
- */
+// WARNING: refused whole, with why, where any one value is not one its setting takes.
 export const takeShared = (
   userDir: string,
   given: ReadonlyArray<SharedSetting>,
@@ -260,25 +253,28 @@ export const takeShared = (
       const parsed = [];
       for (const { key, value, at } of given) {
         const one = parseShared(key, value);
-        if ("refused" in one) return yield* new SettingRefused({ reason: one.refused });
+        if ("refused" in one) {
+          return yield* new SettingRefused({ reason: one.refused });
+        }
         parsed.push({ key, value: one.value, at });
       }
       const before = Arr.map(Rec.toEntries((yield* readSettingsSet(userDir)).set), ([key, at]) => ({
         key,
         at,
       }));
-      for (const { key, value, at } of latestEdits(before, parsed, byKey).take)
+      for (const { key, value, at } of latestEdits(before, parsed, byKey).take) {
         yield* writeSetting(userDir, key, value, at);
-      if (by !== null)
+      }
+      if (by !== null) {
         yield* writeSettingsSet(userDir, {
           ...(yield* readSettingsSet(userDir)),
           flock: { by, at: now },
         });
+      }
       return yield* readShared(userDir);
     }),
   );
 
-/** Where this Machine's new checkouts go, `~/` being `home`. */
 export const worktreesDirectory = (env: { readonly home: string; readonly userDir: string }) =>
   readConfig(env.userDir).pipe(
     Effect.map((raw) => raw.worktrees_directory),
@@ -289,7 +285,6 @@ export const worktreesDirectory = (env: { readonly home: string; readonly userDi
     }),
   );
 
-/** The GitLab this run works against: `GITLAB_HOST` where it names a host, else the setting. */
 export const gitlabHostOf = Effect.fn("Config.gitlabHostOf")(function* (env: {
   readonly raw: Readonly<Record<string, string | undefined>>;
   readonly userDir: string;
@@ -300,10 +295,11 @@ export const gitlabHostOf = Effect.fn("Config.gitlabHostOf")(function* (env: {
     : (yield* loadDefaults(env.userDir)).gitlabHost;
 });
 
-/** The configured window as written, kept as text where it is neither a number nor text. */
-export function autoCompactWindowAsWritten(value: YamlValue | undefined): number | string {
-  if (value === undefined) return FALLBACK_DEFAULTS.claudeAutoCompactWindow;
-  return isNumber(value) || isString(value) ? value : JSON.stringify(value);
+export function autoCompactWindowAsWritten(value: YamlValue | undefined) {
+  if (value === undefined) {
+    return FALLBACK_DEFAULTS.claudeAutoCompactWindow;
+  }
+  return isNumber(value) || isString(value) ? value : stringifyJson(value);
 }
 
 export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (userDir: string) {
@@ -322,7 +318,7 @@ export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (userDir:
       ? raw.board_quiet_ms
       : FALLBACK_DEFAULTS.boardQuietMs,
     idleCloseMs: isNumber(raw.idle_close_ms) ? raw.idle_close_ms : FALLBACK_DEFAULTS.idleCloseMs,
-    // Only an explicit `false` turns it off, as with `proactive`.
+    // WARNING: only an explicit false turns it off; keep the !== false test.
     runModel: raw.run_model !== false,
     memoryHold: isNumber(raw.memory_hold) ? raw.memory_hold : FALLBACK_DEFAULTS.memoryHold,
     compactAtTokens: isNumber(raw.compact_at_tokens)
@@ -335,39 +331,29 @@ export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (userDir:
       () => [],
     ),
     trust: raw.trust === "auto" || raw.trust === "never" ? raw.trust : FALLBACK_DEFAULTS.trust,
-    // As written rather than coerced: `loadDefaults` is read by the Settings and
-    // Workflows views and by Doctor, so a file hand-edited into nonsense still has to
-    // return — and coercing it would hide it. Validation names it.
+    // WARNING: kept as written, not coerced, since readers would otherwise hide it; validation names it.
     permissions: permissionsAsWritten(raw.permissions) ?? FALLBACK_DEFAULTS.permissions,
-    // Coerced rather than kept as written: the board has to open on one of the two
-    // whatever the file says. A value that is neither is refused where it is written.
     scope: isString(raw.scope) && isScope(raw.scope) ? raw.scope : FALLBACK_DEFAULTS.scope,
-    // Coerced like `scope`: the board has to draw at one of the two whatever the file
-    // says. A value that is neither is refused where it is written.
     density:
       isString(raw.density) && isDensity(raw.density) ? raw.density : FALLBACK_DEFAULTS.density,
     notifications: Option.getOrElse(
       Schema.decodeUnknownOption(Notifications)(raw.notifications),
       () => ({}),
     ),
-    // Coerced like `scope`: a Driver has to do one of the two whatever the file says,
-    // and the backward-compatible one is the focus every install already had. A value
-    // that is neither is refused where it is written.
     questions:
       isString(raw.questions) && isQuestionMode(raw.questions)
         ? raw.questions
         : FALLBACK_DEFAULTS.questions,
-    // Only an explicit `false` turns it off: anything else, including a value nobody
-    // meant, leaves a human being told what happened.
+    // WARNING: only an explicit false turns it off; anything else leaves a human told what happened.
     proactive: raw.proactive !== false,
-    // Coerced like `scope`; a value that is not a host name is refused where it is written.
     gitlabHost:
       isString(raw.gitlab_host) && isHostName(raw.gitlab_host)
         ? raw.gitlab_host
         : FALLBACK_DEFAULTS.gitlabHost,
-    // As written: a launch reads it again and refuses what it cannot apply.
     agentProfile: isString(raw.agent_profile) ? raw.agent_profile : FALLBACK_DEFAULTS.agentProfile,
   };
-  if (isString(raw.effort)) defaults.effort = raw.effort;
+  if (isString(raw.effort)) {
+    defaults.effort = raw.effort;
+  }
   return defaults;
 });

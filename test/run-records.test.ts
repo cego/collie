@@ -1,5 +1,3 @@
-// A Run's own records, kept in the host's database
-// (ADR-draft-a-runs-own-records-are-rows-in-the-hosts-database).
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 import { epochMs } from "../src/time";
@@ -9,12 +7,7 @@ import * as Rec from "effect/Record";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
-import {
-  parentOf,
-  RUN_RECORDS_MIGRATION_ID,
-  RunRecords,
-  runRecordsLayer,
-} from "../src/run-records";
+import { parentOf, RunRecords, runRecordsLayer } from "../src/run-records";
 import { StoreWrites } from "../src/store-writes";
 import { runEffect } from "./support/effect";
 import { recordsAt } from "./support/records";
@@ -40,7 +33,6 @@ afterEach(() =>
   ),
 );
 
-/** A Run's legacy files, as an older build left them. */
 const legacy = Effect.fn("test.legacy")(function* (files: Record<string, string>) {
   const fs = yield* FileSystem.FileSystem;
   for (const [name, text] of Rec.toEntries(files)) {
@@ -106,7 +98,7 @@ test("migrate up: the first host imports every legacy record once, as written, a
         ],
         missing: null,
       });
-      // A file written after the import is not a record, and a second host imports nothing again.
+      // WARNING: a file written after the import is not a record, and a second host imports nothing again.
       yield* fs.writeFileString(`${stateDir}/runs/run-a/steps.jsonl`, '{"kind":"late"}\n');
       expect(yield* read).toEqual(first);
       expect(yield* fs.readFileString(`${stateDir}/runs/run-a/intent.json`)).toBe(
@@ -315,7 +307,7 @@ test("the first host imports when each Run last did work, less what was written 
 test("a write names its Run to the Run model once it is committed", () =>
   runEffect(
     Effect.gen(function* () {
-      const moved: string[] = [];
+      const moved: Array<string> = [];
       yield* Effect.gen(function* () {
         const one = yield* RunRecords;
         yield* one.append("run-a", "steps.jsonl", ["1"]);

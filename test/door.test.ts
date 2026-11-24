@@ -1,6 +1,3 @@
-// The host's door: what it answers itself while the engine answers nothing, and what it
-// passes on to the engine.
-
 import { expect, test } from "bun:test";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import * as Arr from "effect/Array";
@@ -10,21 +7,24 @@ import { Deferred, Effect, Fiber, FileSystem, Layer, Option, Stream } from "effe
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
-import { IdentityRpc, recordIn, type OfferView, type RunDetail } from "../src/board-model";
-import { door, relatedOf, type FromDoor, type ToDoor } from "../src/door";
+import { IdentityRpc, recordIn } from "../src/board-model";
+import type { OfferView, RunDetail } from "../src/board-model";
+import { door, relatedOf } from "../src/door";
+import type { FromDoor, ToDoor } from "../src/door";
 import { readEnv } from "../src/env";
 import type { AgentInfo } from "../src/herdr";
 import { frontDoor } from "../src/host";
 import { recordLaunch } from "../src/launches";
 import { registerAgent } from "../src/registry";
 import type { RunFacts } from "../src/runs";
-import { appendStepLine, type StepLine } from "../src/steps";
+import { appendStepLine } from "../src/steps";
+import type { StepLine } from "../src/steps";
 import { runEffect } from "./support/effect";
 import { madeRun, recordsAt } from "./support/records";
+import { stringifyJson } from "../src/json";
 
 const identity = { build: "test", pid: 1, dir: "/state", protocol: 1, installation: "i" };
 
-/** A door over `dir` whose engine hears everything and answers nothing. */
 const silentEngine = (
   dir: string,
   socket: string,
@@ -32,7 +32,7 @@ const silentEngine = (
   offers: ReadonlyArray<readonly [string, ReadonlyArray<OfferView>]> = [],
 ) =>
   Effect.gen(function* () {
-    // The engine lists its Runs only once it has migrated `host.db`.
+    // WARNING: The engine lists its Runs only once it has migrated host.db.
     yield* Layer.build(recordsAt(dir));
     const heard: Array<FromDoor> = [];
     const listening = yield* Deferred.make<void>();
@@ -41,7 +41,9 @@ const silentEngine = (
       door({
         post: (message) => {
           heard.push(message);
-          if (message._tag === "Listening") Deferred.doneUnsafe(listening, Effect.void);
+          if (message._tag === "Listening") {
+            Deferred.doneUnsafe(listening, Effect.void);
+          }
         },
         listen: (receive) => {
           tell = receive;
@@ -70,7 +72,9 @@ const silentEngine = (
 
 const until = (done: () => boolean) =>
   Effect.gen(function* () {
-    while (!done()) yield* Effect.sleep("10 millis");
+    while (!done()) {
+      yield* Effect.sleep("10 millis");
+    }
   }).pipe(Effect.timeout("4 seconds"));
 
 test("the door answers a Run's record and the host's identity while the engine answers nothing", () =>
@@ -92,10 +96,9 @@ test("the door answers a Run's record and the host's identity while the engine a
         .runDetail({ runId: "r1", tail: false, pages: 1, refreshMr: false, parts: true })
         .pipe(Stream.runHead, Effect.timeout("5 seconds"));
       expect(first._tag).toBe("Some");
-      // SAFETY: a record of a Run the door was told of is a record, not null or Unchanged.
+      // WARNING: a record of a Run the door was told of is a record, not null or Unchanged.
       expect((first._tag === "Some" ? (first.value as RunDetail) : null)?.id).toBe("r1");
 
-      // A Run with no merge request has nothing to ask the engine for any part.
       const whole = yield* client
         .runDetail({ runId: "r1", tail: true, pages: 1, refreshMr: false, parts: true })
         .pipe(
@@ -106,7 +109,6 @@ test("the door answers a Run's record and the host's identity while the engine a
           Effect.timeout("5 seconds"),
         );
       expect(whole._tag).toBe("Some");
-      // Its Flow shows no offer, so it asked the engine for none.
       expect(Arr.filter(heard, (one) => one._tag === "Ask")).toEqual([]);
 
       const who = yield* RpcClient.make(RpcGroup.make(IdentityRpc)).pipe(
@@ -144,7 +146,6 @@ test("the door reads a record before any client asks, and tells the engine nothi
         created: "2026-10-30T09:00:00Z",
         finished: "2026-10-30T09:30:00Z",
       });
-      // A finished Step, which an open's record would tell the engine it showed.
       const step = {
         id: "build",
         title: "Build",
@@ -261,7 +262,6 @@ const implementNow: OfferView = {
   unavailable: null,
 };
 
-/** A plan ready to implement, whose Flow shows its first offer. */
 const readyPlan = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -278,7 +278,7 @@ const readyPlan = (dir: string) =>
   });
 
 const flowIds = (shown: Option.Option<unknown>) => {
-  // SAFETY: a record of a Run the door was told of is a record, not null or Unchanged.
+  // WARNING: a record of a Run the door was told of is a record, not null or Unchanged.
   const flow = (shown._tag === "Some" ? (shown.value as RunDetail) : null)?.flow;
   return Arr.flatMap(flow?.lanes ?? [], (lane) => Arr.map(lane.nodes, (node) => node.id));
 };
@@ -356,7 +356,7 @@ test("the door shows the offers the engine's board read with its listing, and as
 
 test("the door reads the Runs of a record as the engine chooses them, and none it was not told of", () => {
   const fact = (id: string, over: Partial<RunFacts> = {}) =>
-    // SAFETY: only the fields `relatedOf` reads are given.
+    // WARNING: only the fields `relatedOf` reads are given.
     ({ id, task: null, parent: null, ...over }) as RunFacts;
   const facts = new Map(
     Arr.map(
@@ -387,55 +387,47 @@ test("the door reads the Runs of a record as the engine chooses them, and none i
   ]);
   expect(relatedOf(facts, order, "a", ["unknown"])).toBeNull();
   expect(relatedOf(facts, order, "missing", [])).toBeNull();
-  // A Run asked of the engine before any listing named it is not yet in the listing's order.
   expect(relatedOf(facts, ["b", "p"], "a", [])).toBeNull();
 });
 
-test(
-  "a record the door is slow to send first tells the engine how long it took",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-door-slow-" });
-        const run = yield* madeRun(dir, {
-          id: "r1",
-          state: "succeeded",
-          created: "2026-10-30T09:00:00Z",
-          finished: "2026-10-30T09:30:00Z",
-        });
-        const socket = `${dir}/host.sock`;
-        // Told of no Run, so the door asks the engine for the record's Runs.
-        const { heard, tell } = yield* silentEngine(dir, socket, []);
-        const client = yield* frontDoor(socket);
-        const first = yield* client
-          .runDetail({ runId: "r1", tail: false, pages: 1, refreshMr: false, parts: true })
-          .pipe(Stream.runHead, Effect.forkScoped);
-        yield* until(() => Arr.some(heard, (one) => one._tag === "Ask"));
-        const asked = Arr.findFirst(heard, (one) => one._tag === "Ask");
-        // The engine answers past the door's slow mark.
-        yield* Effect.sleep("2100 millis");
-        tell({
-          _tag: "Answer",
-          ask: asked._tag === "Some" && asked.value._tag === "Ask" ? asked.value.ask : 0,
-          value: [{ fact: run, seq: 0 }],
-        });
-        yield* Fiber.join(first);
+test("a record the door is slow to send first tells the engine how long it took", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-door-slow-" });
+      const run = yield* madeRun(dir, {
+        id: "r1",
+        state: "succeeded",
+        created: "2026-10-30T09:00:00Z",
+        finished: "2026-10-30T09:30:00Z",
+      });
+      const socket = `${dir}/host.sock`;
+      const { heard, tell } = yield* silentEngine(dir, socket, []);
+      const client = yield* frontDoor(socket);
+      const first = yield* client
+        .runDetail({ runId: "r1", tail: false, pages: 1, refreshMr: false, parts: true })
+        .pipe(Stream.runHead, Effect.forkScoped);
+      yield* until(() => Arr.some(heard, (one) => one._tag === "Ask"));
+      const asked = Arr.findFirst(heard, (one) => one._tag === "Ask");
+      yield* Effect.sleep("2100 millis");
+      tell({
+        _tag: "Answer",
+        ask: asked._tag === "Some" && asked.value._tag === "Ask" ? asked.value.ask : 0,
+        value: [{ fact: run, seq: 0 }],
+      });
+      yield* Fiber.join(first);
 
-        yield* until(() => Arr.some(heard, (one) => one._tag === "Slow"));
-        const slow = Arr.findFirst(heard, (one) => one._tag === "Slow");
-        expect(slow._tag === "Some" && slow.value._tag === "Slow" && slow.value.rpc).toBe(
-          "runDetail",
-        );
-        expect(slow._tag === "Some" && slow.value._tag === "Slow" && slow.value.ms).toBeGreaterThan(
-          2_000,
-        );
-      }).pipe(Effect.scoped),
-    ),
-  15_000,
-);
+      yield* until(() => Arr.some(heard, (one) => one._tag === "Slow"));
+      const slow = Arr.findFirst(heard, (one) => one._tag === "Slow");
+      expect(slow._tag === "Some" && slow.value._tag === "Slow" && slow.value.rpc).toBe(
+        "runDetail",
+      );
+      expect(slow._tag === "Some" && slow.value._tag === "Slow" && slow.value.ms).toBeGreaterThan(
+        2000,
+      );
+    }).pipe(Effect.scoped),
+  ));
 
-/** A raw client of the door's socket: what it read, and its socket to stop reading or close. */
 const rawClient = (socket: string) =>
   Effect.gen(function* () {
     let text = "";
@@ -453,7 +445,7 @@ const rawClient = (socket: string) =>
   });
 
 const requestLine = (id: string, tag: string) =>
-  `${JSON.stringify({ _tag: "Request", id, tag, payload: null, headers: [] })}\n`;
+  `${stringifyJson({ _tag: "Request", id, tag, payload: null, headers: [] })}\n`;
 
 test("a client that stops reading, then goes, leaves every other client answered", () =>
   runEffect(
@@ -468,7 +460,6 @@ test("a client that stops reading, then goes, leaves every other client answered
           (one) => one._tag === "Request" && one.frame._tag === "Request" && one.frame.id === id,
         );
 
-      // A asks the engine for a stream and never reads what it is sent.
       const a = yield* rawClient(socket);
       a.socket.pause();
       a.socket.write(requestLine("a", "toasts"));
@@ -478,16 +469,18 @@ test("a client that stops reading, then goes, leaves every other client answered
       b.socket.write(requestLine("b", "toasts"));
       yield* until(() => Option.isSome(passed("b")));
       const connB = Option.getOrThrow(passed("b"));
-      if (connA._tag !== "Request" || connB._tag !== "Request") return;
+      if (connA._tag !== "Request" || connB._tag !== "Request") {
+        return;
+      }
 
-      // The engine streams to A until its socket is full, then A goes away.
       const big = pipe("x", Str.repeat(64 * 1024));
-      for (let i = 0; i < 256; i++)
+      for (let i = 0; i < 256; i++) {
         tell({
           _tag: "Response",
           conn: connA.conn,
           frame: { _tag: "Chunk", requestId: "a", values: [big] },
         });
+      }
       yield* Effect.sleep("200 millis");
       a.socket.end();
       a.socket.terminate();

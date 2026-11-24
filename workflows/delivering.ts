@@ -1,10 +1,3 @@
-// A reviewed change delivered: Collie's gate over the Run's checks, the merge request, and
-// CI's proof of the checks left to it, each with the fixes that settle what it finds.
-//
-// Shared, like `reviewing.ts`: every workflow that ends in a merge request wants the same
-// gate and the same proof, so it is an ordinary function over the caller's prompts, Output
-// and outcome kind, not steps one workflow copied from another.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
@@ -40,30 +33,31 @@ import {
   step,
   stepFailed,
   wholeRunsOwed,
-  type Finding,
-  type HandOverGiven,
-  type Snapshot,
-  type SynthesisReport,
-  type Template,
-  type Verification,
-  type VerifySpec,
+} from "collie";
+import type {
+  Finding,
+  HandOverGiven,
+  Snapshot,
+  SynthesisReport,
+  Template,
+  Verification,
+  VerifySpec,
 } from "collie";
 import { CommandLine } from "effect/process";
 import { Result } from "effect";
 import type * as Types from "effect/Types";
 import { Effect, FileSystem, Schema, Stream } from "effect";
 import { connection } from "./connections.ts";
-import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
+import { WorkflowInstance } from "effect/workflow/WorkflowEngine";
+import type { WorkflowEngine } from "effect/workflow/WorkflowEngine";
 import * as Workflow from "effect/workflow/Workflow";
 import * as Activity from "effect/workflow/Activity";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-/** At most four fix rounds at the gate, and four for CI. */
 const ROUNDS = 4;
 
 export const Tree = Schema.Struct({ head: Schema.String, fingerprint: Schema.String });
 
-/** A check left to CI whose job failed on the merge request's head, as a CI fix round is told of it. */
 const CiFailed = Schema.Struct({
   name: Schema.String,
   job: Schema.String,
@@ -104,10 +98,11 @@ type Needs =
   | FileSystem.FileSystem
   | ChildProcessSpawner.ChildProcessSpawner;
 
-/** `branch`'s head on origin, null where origin has no such branch, or why origin could not say. */
 const remoteHead = (cwd: string, branch: string) =>
   Effect.gen(function* () {
-    if (branch === "") return { ok: true, head: null } as const;
+    if (branch === "") {
+      return { ok: true, head: null } as const;
+    }
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const handle = yield* spawner.spawn(
       ChildProcess.make("git", ["ls-remote", "--exit-code", "origin", `refs/heads/${branch}`], {
@@ -120,17 +115,19 @@ const remoteHead = (cwd: string, branch: string) =>
       [text(handle.stdout), text(handle.stderr), handle.exitCode],
       { concurrency: "unbounded" },
     );
-    // --exit-code: 2 is "no such ref", anything else but 0 is origin not answering.
-    if (code === 2) return { ok: true, head: null } as const;
-    if (code !== 0)
+    // WARNING: --exit-code: 2 is no such ref; any other non-zero means origin did not answer.
+    if (code === 2) {
+      return { ok: true, head: null } as const;
+    }
+    if (code !== 0) {
       return { ok: false, reason: Str.trim(said) || `git ls-remote exited ${code}` } as const;
+    }
     return { ok: true, head: Str.split(Str.trim(listed), "\t")[0] || null } as const;
   }).pipe(
     Effect.scoped,
     Effect.catch((cause) => Effect.succeed({ ok: false, reason: String(cause) } as const)),
   );
 
-/** What every prompt here is given beside its own fields. */
 type Told = Readonly<Record<string, Schema.Json>> & {
   readonly inputs: Readonly<Record<string, Schema.Json>> & { readonly outcome: string };
   readonly verify: string;
@@ -143,9 +140,7 @@ interface Fixing {
 }
 
 interface Opening {
-  /** The tickets of a plan the Run wrote itself, built one at a time, a line each; else empty. */
   readonly built?: string;
-  /** Every finding the reviews gave a ledger id, at its latest status; empty where none did. */
   readonly ledger?: string;
   readonly evidence: string;
   readonly unreviewed: string;
@@ -162,7 +157,6 @@ interface Opening {
   readonly target_repo: string;
 }
 
-/** What the merge request's agent must report for delivery to count as done. */
 interface Opened {
   readonly verdict: "clean" | "findings";
   readonly findings?: ReadonlyArray<Finding>;
@@ -170,31 +164,22 @@ interface Opened {
   readonly pushed: boolean;
 }
 
-/** Where the review before delivery left the change. */
 export interface Reviewed {
-  /** What the last fix is attested by where no review came after it; empty otherwise. */
   readonly unreviewed: string;
-  /** Blocking disputes nobody answered, for the human to settle in the merge request. */
   readonly unsettled: ReadonlyArray<string>;
-  /** Those disputes as findings, which stay counted until the human settles them. */
   readonly disputes: ReadonlyArray<Finding>;
-  /** The review that decided it, which is the one judgement the gate may read. */
   readonly reviewed: SynthesisReport;
-  /** The tree it reviewed, where that was recorded. */
   readonly on?: Snapshot;
 }
 
 export interface Delivery<I extends Told, O extends Opened> {
   readonly cwd: string;
   readonly source: { readonly value: string; readonly kind: string };
-  /** The branch a new merge request targets, where it is not the default branch. */
   readonly onto?: string | undefined;
-  /** The agent that fixes and opens the merge request, and its role. */
   readonly agent: string;
   readonly role: string;
-  /** The agent `agent` takes the work over from, where it has not yet run. */
+  // WARNING: set only where `agent` has not yet run.
   readonly takesOver?: { readonly agent: string; readonly why: string };
-  /** What only the workflow knows of the work, for an agent taking it over. */
   readonly handOver?: HandOverGiven;
   readonly input: I;
   readonly checksNow: Effect.Effect<string, never, Needs>;
@@ -204,11 +189,8 @@ export interface Delivery<I extends Told, O extends Opened> {
     readonly mr: Template<I & Opening>;
   };
   readonly opened: Schema.Codec<O, unknown, never, never>;
-  /** The outcome kind as it stands, read inside the gate's Activities. */
   readonly outcome: Effect.Effect<string, never, Needs>;
-  /** The same, journaled, as the merge request is told it. */
   readonly outcomeJournaled: Effect.Effect<string, never, Needs>;
-  /** The Outputs the outcome is read from, beside the review's `synthesize`. */
   readonly outputs: () => Parameters<typeof evidenceGapsOf>[0]["outputs"];
   readonly tickets: ReadonlyArray<{
     readonly file: string;
@@ -218,27 +200,19 @@ export interface Delivery<I extends Told, O extends Opened> {
   readonly rallied: Reviewed;
   readonly built?: string;
   readonly ledger?: string;
-  /** What the caller leaves unsettled, listed before what delivery adds. */
   readonly unsettled: ReadonlyArray<string>;
-  /** Integrates the default branch before a fresh review. */
   readonly integrate: (operation: string) => Effect.Effect<unknown, WorkflowError, Needs>;
-  /**
-   * A fresh review of the gate's tree, told where the last gate fix's account is. Prepared
-   * once the gate's fixes end, outside the Activity that may run it.
-   */
   readonly review: Effect.Effect<
     (answered: string) => Effect.Effect<SynthesisReport, WorkflowError, Needs>,
     WorkflowError,
     Needs
   >;
-  /** Run after a gate or CI fix that moved the tree, answering with a review of the new tree. */
   readonly moved?: (fix: {
     readonly pass: "gate" | "ci";
     readonly round: number;
   }) => Effect.Effect<Pick<Reviewed, "reviewed" | "on">, WorkflowError, Needs>;
 }
 
-/** A fix round that changed nothing and disputed every finding: another would read the same tree. */
 const stalledFix = (
   before: typeof Tree.Type | undefined,
   after: typeof Tree.Type | undefined,
@@ -255,14 +229,7 @@ const stalledFix = (
   );
 };
 
-/**
- * Each check as the gate last spawned it: a grant can change under a Run, and the command
- * the human reads has to be the one that ran.
- */
-const spawned = (
-  granted: ReadonlyArray<VerifySpec>,
-  verifications: ReadonlyArray<Verification>,
-): ReadonlyArray<VerifySpec> =>
+const spawned = (granted: ReadonlyArray<VerifySpec>, verifications: ReadonlyArray<Verification>) =>
   Arr.map(granted, (spec) => {
     const ran = Option.getOrUndefined(
       Arr.findLast(
@@ -275,17 +242,16 @@ const spawned = (
       : { ...spec, executable: ran.executable, argv: ran.argv, cwd: ran.cwd };
   });
 
-/**
- * The gate, the merge request and CI's proof, answering with the merge request's URL, or why
- * the branch had nothing to land.
- */
-/** The agent a delivery step goes to, with what it needs to take the work over. */
 const deliveredBy = (ask: Pick<Delivery<Told, Opened>, "agent" | "takesOver" | "handOver">) => {
   const on: Types.Mutable<Pick<Delivery<Told, Opened>, "agent" | "takesOver" | "handOver">> = {
     agent: ask.agent,
   };
-  if (ask.takesOver !== undefined) on.takesOver = ask.takesOver;
-  if (ask.handOver !== undefined) on.handOver = ask.handOver;
+  if (ask.takesOver !== undefined) {
+    on.takesOver = ask.takesOver;
+  }
+  if (ask.handOver !== undefined) {
+    on.handOver = ask.handOver;
+  }
   return on;
 };
 
@@ -302,12 +268,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
       fingerprint: final.fingerprint,
     }));
 
-    // The gate: Collie's own run of every check, on this tree, and then what this kind of
-    // result still has no evidence for. An Output saying the tests pass is a claim; a
-    // record in the journal, bound to this tree, is not. Each pass is journaled, so a
-    // replay follows the results the merge request will cite rather than a fresh run of
-    // checks that may come out differently. The host runs nothing that already passed on
-    // this tree.
+    // WARNING: an Output saying tests pass is a claim; a journaled pass bound to this tree is evidence.
     let passes = 0;
     let reruns = 0;
     let passed: ReadonlyArray<string> = [];
@@ -332,7 +293,6 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         reviewable: reviewGapsOf(asked),
       };
     });
-    // Why each pass runs, which every door shows while it does (ADR-0042).
     const gapsNow = Effect.fn("deliver.gapsNow")(function* (
       why: {
         readonly pass: "gate" | "recheck" | "fix";
@@ -345,7 +305,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         name: `gate.${passes}`,
         success: Schema.Struct({
           gaps: Schema.Array(Schema.String),
-          // A pass journaled before gaps were told apart handed a fix every gap.
+          // WARNING: a pass journaled before gaps were told apart handed a fix every gap.
           fixable: Schema.optionalKey(Schema.Array(Schema.String)),
           passed: Schema.Array(Schema.String),
           tree: Schema.optionalKey(Tree),
@@ -354,16 +314,23 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           const checks = yield* host.approved(runId);
           const now = [...passed];
           const journal = { ...(yield* host.evidence(runId, cwd)), approved: checks };
-          // On a tree a fix left as it was, its records stand: only a check with none runs.
+          // WARNING: on a tree a fix left as it was, its records stand; only a check with none runs.
           const unmoved = since !== undefined && sameTree(since, journal.final);
-          // A failure that named its tests had them run again alone instead.
           const whole = why.pass === "recheck" ? wholeRunsOwed(journal) : null;
           for (const spec of owedLocally(checks)) {
-            if (now.includes(spec.name)) continue;
-            if (whole !== null && !whole.includes(spec.name)) continue;
-            if (unmoved && checkProof(journal, spec.name, "collie").last !== undefined) continue;
+            if (now.includes(spec.name)) {
+              continue;
+            }
+            if (whole !== null && !whole.includes(spec.name)) {
+              continue;
+            }
+            if (unmoved && checkProof(journal, spec.name, "collie").last !== undefined) {
+              continue;
+            }
             const ran = yield* host.verify({ runId, name: spec.name, cwd, ...why });
-            if (ran.result === "pass") now.push(spec.name);
+            if (ran.result === "pass") {
+              now.push(spec.name);
+            }
           }
           const { final } = yield* host.evidence(runId, cwd);
           return {
@@ -376,24 +343,24 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
       passed = pass.passed;
       return { gaps: pass.gaps, fixable: pass.fixable ?? pass.gaps, tree: pass.tree };
     });
-    // Each test a failed check named, run again alone once on the same tree, and each that
-    // still fails run alone at the base: a Flake, or a test that fails there too, is neither
-    // a gap nor a pass (ADR-0034, amended 2026-10-15).
+    // WARNING: a Flake, or a test failing at the base too, is neither a gap nor a pass.
     const settleTests = Effect.gen(function* () {
       const approved = yield* host.approved(runId);
       for (const { check, test } of rerunsOwed({
         ...(yield* host.evidence(runId, cwd)),
         approved,
-      }))
+      })) {
         yield* host.verify({ runId, name: check, cwd, pass: "rerun", test });
-      // A base that cannot be reached exempts nothing.
+      }
+      // WARNING: a base that cannot be reached exempts nothing.
       for (const { check, test } of baselinesOwed({
         ...(yield* host.evidence(runId, cwd)),
         approved,
-      }))
+      })) {
         yield* host
           .verify({ runId, name: check, cwd, at: "default-base", test })
           .pipe(Effect.ignore);
+      }
       return approved;
     });
     const settleFailed = Effect.fn("deliver.settleFailed")(function* (gaps: {
@@ -401,7 +368,9 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
       readonly fixable: ReadonlyArray<string>;
       readonly tree?: { readonly head: string; readonly fingerprint: string };
     }) {
-      if (gaps.fixable.length === 0) return gaps;
+      if (gaps.fixable.length === 0) {
+        return gaps;
+      }
       reruns += 1;
       const reread = yield* Activity.make({
         name: `rerun.${reruns}`,
@@ -414,22 +383,17 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           Effect.orDie,
         ),
       });
-      // Neither moves the tree from where the pass before read it.
       return { ...reread, tree: gaps.tree };
     });
     const { unreviewed, stalled } = yield* gate(
       Effect.gen(function* () {
         let gaps = yield* settleFailed(yield* gapsNow({ pass: "gate" }));
-        // Once more before a fix, where a failure named no tests: a check that fails and then
-        // passes on the same tree is a flake, and a Run that ends on one has proved nothing.
-        if (gaps.fixable.length > 0)
+        // WARNING: a check that fails then passes on the same tree is a flake; a Run ending on one proved nothing.
+        if (gaps.fixable.length > 0) {
           gaps = yield* settleFailed(yield* gapsNow({ pass: "recheck" }));
-        // A gate fix lands after the last review, so the merge request says it was not re-reviewed.
+        }
         let unreviewed = rallied.unreviewed;
-        // The implementer fixes what a check could still prove, bounded like the rally; the
-        // human reads what is left in the merge request, before it lands.
         let fixes = 0;
-        // A round that changed nothing and disputed every finding: another would check the same tree.
         let stalled: { readonly at: number; readonly disputed: ReadonlyArray<Finding> } | null =
           null;
         for (; gaps.fixable.length > 0 && fixes < ROUNDS && stalled === null; fixes++) {
@@ -480,8 +444,9 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
             }
           }
           gaps = yield* settleFailed(yield* gapsNow({ pass: "fix", round: at }, before));
-          if (stalledFix(before, gaps.tree, findings, fixed))
+          if (stalledFix(before, gaps.tree, findings, fixed)) {
             stalled = { at, disputed: fixed.disputed ?? [] };
+          }
           if (reviewedAgain) {
             unreviewed = "";
             continue;
@@ -524,10 +489,6 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
                 reviewable,
               })),
             );
-            // A check that failed on this tree is run whole again only where its failures named no
-            // tests and it has had no recheck here, or on a resume from the park below; one that is
-            // has its named failures run alone too, before any gap is read (ADR-0034, amended
-            // 2026-10-19).
             const rely = Effect.fn("deliver.rely")(function* (resumed: boolean) {
               const journal = { ...(yield* host.evidence(runId, cwd)), approved };
               const settled = settledChecks(journal);
@@ -541,11 +502,12 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
                   proof.state === "passed" || resumed || whole.includes(spec.name)
                     ? yield* host.verify({ runId, name: spec.name, cwd, pass: "recheck" })
                     : proof.last;
-                if (relied !== undefined)
+                if (relied !== undefined) {
                   yield* host.record(
                     runId,
                     `proof: ${spec.name} relies on verification ${relied.id}`,
                   );
+                }
               }
               yield* settleTests;
             });
@@ -553,17 +515,20 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
             const unprovedPark = `${dir}/proof-parked-unproved`;
             const resumed = yield* fs.exists(unprovedPark).pipe(Effect.orDie);
             yield* rely(resumed);
-            if (resumed) yield* fs.remove(unprovedPark).pipe(Effect.orDie);
+            if (resumed) {
+              yield* fs.remove(unprovedPark).pipe(Effect.orDie);
+            }
             if (stalled !== null) {
               const standing = Arr.filter(
                 (yield* readGaps(approved, reviewed)).fixable,
                 (gap) => !undisputed(gap),
               );
-              if (standing.length > 0)
+              if (standing.length > 0) {
                 yield* host.record(
                   runId,
                   `outcome unproved: ${Arr.join(standing, "; ")}; gate fix ${stalled.at} disputed them and changed nothing`,
                 );
+              }
             }
             let missing = yield* reading;
             if (missing.fixable.length > 0) {
@@ -575,12 +540,13 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
             }
             const reviewedAgain = missing.reviewable.length > 0;
             if (reviewedAgain) {
-              // A fresh review sees what will merge too; checks that passed before a merge
-              // prove nothing about the tree after it.
+              // WARNING: checks that passed before a merge prove nothing about the tree after it.
               const checked = (yield* host.evidence(runId, cwd)).final;
               yield* ask.integrate("merge-proof");
               const now = (yield* host.evidence(runId, cwd)).final;
-              if (!sameTree(now, checked)) yield* rely(false);
+              if (!sameTree(now, checked)) {
+                yield* rely(false);
+              }
               reviewed = {
                 on: (yield* host.evidence(runId, cwd)).final,
                 reviewed: yield* review(
@@ -589,17 +555,18 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
               };
               missing = yield* reading;
             }
-            if (missing.gaps.length > 0)
+            if (missing.gaps.length > 0) {
               return yield* new WorkflowError({
                 reason: `Outcome ${reviewedAgain ? "still unproved after a fresh review" : "unproved, and no reviewer can change that"}: ${Arr.join(missing.gaps, "; ")}. Continue with a follow-up Run to repair the work.`,
               });
+            }
             yield* host.parked(runId, null);
           }),
         });
         return { unreviewed, stalled };
       }),
     );
-    // A dispute the human settles stays counted at its own severity, whatever review wrote last.
+    // WARNING: a dispute the human settles stays counted at its own severity, whatever review wrote last.
     if (rallied.disputes.length > 0) {
       const disputedKeys = new Set(Arr.map(rallied.disputes, findingKey));
       const onFile = yield* findingsIn(dir);
@@ -611,7 +578,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
     const checks = yield* host.approved(runId);
     const journal = { ...(yield* host.evidence(runId, cwd)), approved: checks };
     const flakes = flakesOf(journal);
-    // Failed before this Run changed anything, and still fails: reported, never passed.
+    // WARNING: failed before this Run changed anything and still fails: reported, never passed.
     const preexisting = baseFailuresOf(journal);
     const unsettled = [
       ...ask.unsettled,
@@ -632,18 +599,20 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           `${check}: ${name} (${file}) also fails at ${pipe_(at, Str.slice(0, 12))}, where this branch leaves the default branch, so it failed before this Run's changes.`,
       ),
     ];
-    // Its own Activity, so a replay writes no second line.
-    if (unsettled.length > 0)
+    if (unsettled.length > 0) {
       yield* Activity.make({
         name: "unsettled",
         execute: host.record(runId, `unsettled: ${Arr.join(unsettled, "; ")}`),
       });
+    }
     const nothing = yield* Activity.make({
       name: "nothing-to-land",
       success: Schema.NullOr(Schema.String),
       execute: host.nothingToLand(runId, cwd),
     });
-    if (nothing !== null) return { nothing };
+    if (nothing !== null) {
+      return { nothing };
+    }
     const leftToCi = Arr.filter(checks, (spec) => spec.ci !== undefined);
     const mrUrl = yield* mergeRequest(
       Effect.gen(function* () {
@@ -669,17 +638,20 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         const settledEvidence = yield* host.evidence(runId, cwd);
         const linear = yield* connection("linear", "connection.mr-linear");
         const fs = yield* FileSystem.FileSystem;
-        // A park per attempt, so a resume asks again rather than replaying the undone Output.
+        // WARNING: a park per attempt, so a resume asks again rather than replaying the undone Output.
         const parkedAt = (attempt: number) => `${dir}/mr-parked-${attempt}`;
         let attempt = 1;
-        while (yield* fs.exists(parkedAt(attempt)).pipe(Effect.orDie)) attempt += 1;
-        // Where the agent leaves this head, its push sent nothing and started no pipeline.
+        while (yield* fs.exists(parkedAt(attempt)).pipe(Effect.orDie)) {
+          attempt += 1;
+        }
         const remoteBefore = yield* Activity.make({
           name: attempt === 1 ? "mr-remote-head" : `mr-remote-head-${attempt}`,
           success: Schema.NullOr(Schema.String),
           execute: Effect.gen(function* () {
             const read = yield* remoteHead(cwd, ready.branch ?? "");
-            if (read.ok) return read.head;
+            if (read.ok) {
+              return read.head;
+            }
             const reason = `Cannot read ${ready.branch}'s head on origin: ${read.reason}. Repair it, then resume ${runId}.`;
             yield* host.record(runId, reason);
             yield* stepFailed(reason);
@@ -692,7 +664,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           ...deliveredBy(ask),
           role: ask.role,
           pushes: true,
-          // Not merging: only a message of its own asks for that.
+          // WARNING: not merging: only a message of its own asks for that.
           clears: !ready.branch
             ? []
             : [
@@ -704,7 +676,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
             ...ask.input,
             inputs: { ...ask.input.inputs, outcome: yield* ask.outcomeJournaled },
             verify: renderApproved(spawned(checks, settledEvidence.verifications)),
-            // Read after the gate settled, so the merge request cites the passing runs.
+            // WARNING: read after the gate settled, so the merge request cites the passing runs.
             evidence: renderEvidence(settledEvidence),
             built: ask.built ?? "",
             ledger: ask.ledger ?? "",
@@ -730,7 +702,6 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
                 ]),
               ),
             },
-            // Not read by the shipped content; a fork's may, and `--repo` suits both CLIs.
             target_repo: ready.repository ? `--repo ${ready.repository}` : "",
           },
           output: ask.opened,
@@ -769,7 +740,9 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
                   "\n",
                 )}`,
               });
-              if (posted.ok) return yield* host.parked(runId, null);
+              if (posted.ok) {
+                return yield* host.parked(runId, null);
+              }
               const reason = `Cannot note what delivery left unsettled on ${opened.mr_url}: ${posted.message}. Repair it, then resume ${runId}.`;
               yield* host.record(runId, reason);
               yield* stepFailed(reason);
@@ -782,7 +755,9 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           name: "mr-pipeline",
           execute: Effect.gen(function* () {
             const head = (yield* host.evidence(runId, cwd)).final.head_sha;
-            if (head !== remoteBefore) return;
+            if (head !== remoteBefore) {
+              return;
+            }
             const at = pipe_(head, Str.slice(0, 12));
             const answer = yield* host.startPipeline({ runId, cwd });
             if (answer._tag === "Failed") {
@@ -808,20 +783,16 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         return opened.mr_url;
       }),
     );
-    // Each check left to CI is proved by its job on the merge request's head. A failed one
-    // is the builder's in a CI fix round, bounded like the gate's; the gate's fix loop stays
-    // apart, since what fails, how it is read again and the replay keys all differ.
     const told = (line: string) =>
       Effect.andThen(host.record(runId, line), host.note({ runId, cwd, body: line }));
     let ciFixes = 0;
-    // Why a job still failing parks the Run rather than going to another round.
     let blocked: { readonly why: string; readonly unmoved: boolean } | null = null;
     while (leftToCi.length > 0) {
       const read = yield* Activity.make({
         name: `ci-proof.${ciFixes}`,
         success: Schema.Struct({ failed: Schema.Array(CiFailed), tree: Tree }),
         execute: Effect.gen(function* () {
-          const unproved: string[] = [];
+          const unproved: Array<string> = [];
           const failed: Array<typeof CiFailed.Type> = [];
           for (const spec of leftToCi) {
             const job = spec.ci ?? "";
@@ -830,12 +801,11 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
               cwd,
               name: spec.name,
               wait: true,
-              // The same job on an unmoved head was compared and retried already.
               settle: blocked?.unmoved !== true,
             });
             if ("proved" in read) {
               const flaked = read.proved.job?.flaked ?? [];
-              if (read.retried === true)
+              if (read.retried === true) {
                 yield* told(
                   `unsettled: ${spec.name}: job ${job} failed on ${pipe_(read.proved.end.head_sha, Str.slice(0, 12))}${
                     flaked.length === 0
@@ -846,13 +816,14 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
                         )}`
                   }, then passed when retried — a flake, so it is not settled.`,
                 );
-            } else if (read.before !== undefined)
+              }
+            } else if (read.before !== undefined) {
               yield* told(
                 read.before.branch === undefined
                   ? `unsettled: ${spec.name}: job ${job} also fails at ${pipe_(read.before.at, Str.slice(0, 12))}, where this branch leaves its target branch, so it failed before this branch's changes (failed there too: ${Arr.join(read.before.jobs, ", ")}).`
                   : `unsettled: ${spec.name}: job ${job} also fails on its target branch ${read.before.branch} at ${pipe_(read.before.at, Str.slice(0, 12))}${read.before.url === null ? "" : ` (${read.before.url})`}, so the failure is the target's, not this branch's (failed there too: ${Arr.join(read.before.jobs, ", ")}).`,
               );
-            else if (read.state === "failed")
+            } else if (read.state === "failed") {
               failed.push({
                 name: spec.name,
                 job,
@@ -860,10 +831,13 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
                 log: read.log,
                 unproved: read.unproved,
               });
-            else unproved.push(read.unproved);
+            } else {
+              unproved.push(read.unproved);
+            }
           }
-          if (yield* host.stopRequested(runId))
+          if (yield* host.stopRequested(runId)) {
             return yield* Workflow.suspend(yield* WorkflowInstance);
+          }
           const why =
             unproved.length > 0
               ? `Outcome unproved: ${Arr.join([...unproved, ...Arr.map(failed, (one) => one.unproved)], "; ")}`
@@ -887,7 +861,9 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           return { failed, tree: yield* treeNow };
         }),
       });
-      if (read.failed.length === 0) break;
+      if (read.failed.length === 0) {
+        break;
+      }
       ciFixes += 1;
       const at = ciFixes;
       const findings = Arr.map(read.failed, (one) => ({
@@ -931,9 +907,9 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         });
         break;
       }
-      if (ask.moved !== undefined && after.head !== read.tree.head)
+      if (ask.moved !== undefined && after.head !== read.tree.head) {
         latest = yield* ask.moved({ pass: "ci", round: at });
-      else {
+      } else {
         const settled = settleFinalFix(findings, fixed, yield* host.evidence(runId, cwd));
         yield* Activity.make({
           name: `ci-unreviewed.${at}`,

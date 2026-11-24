@@ -1,18 +1,13 @@
-// What a `bun run test` invocation is, and what it holds from the Machine's budget. One that
-// names files or `--changed` is targeted: it builds into a directory of its own, shares nothing
-// with a whole suite, and takes its workers from the budget's reserve. One naming a directory,
-// or more files than the reserve has workers, is the size of a suite: it still builds and times
-// as a targeted run, but takes its workers and the suite lock as a whole suite does. Anything
-// else is the whole suite.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Num from "effect/Number";
 import * as Rec from "effect/Record";
 import { loadavg } from "node:os";
-import { type Duration, Effect, FileSystem, Option, Path, Schema, flow, Result } from "effect";
-import { admitted, type Budget, type Kind, shareOf } from "./budget";
+import { Effect, FileSystem, Option, Path, Schema, flow, Result } from "effect";
+import type { Duration } from "effect";
+import { admitted, shareOf } from "./budget";
+import type { Budget, Kind } from "./budget";
 import { inTurn } from "./suite-lock";
 
 const exists = (path: string) =>
@@ -20,7 +15,6 @@ const exists = (path: string) =>
     Effect.orElseSucceed(() => false),
   );
 
-// `bun test --help`'s options that require a value, which may come as the next word.
 const TAKES_VALUE = new Set([
   "-t",
   "--test-name-pattern",
@@ -43,7 +37,6 @@ const TAKES_VALUE = new Set([
 
 const isChanged = (arg: string) => arg === "--changed" || pipe(arg, Str.startsWith("--changed="));
 
-/** The existing files and directories a run names, and whether it passes `--changed`. */
 const namedBy = (args: ReadonlyArray<string>) => {
   const operands = args.indexOf("--");
   const option = (arg: string, at: number) =>
@@ -62,12 +55,13 @@ const namedBy = (args: ReadonlyArray<string>) => {
 export const isTargeted = (args: ReadonlyArray<string>) =>
   Effect.map(namedBy(args), ({ paths, changed }) => changed || paths.length > 0);
 
-/** A targeted run the size of a suite, naming a directory or more files than small runs share, is whole. */
 export const kindOf = (args: ReadonlyArray<string>, budget: Budget) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const { paths, changed } = yield* namedBy(args);
-    if (paths.length === 0) return changed ? "small" : "whole";
+    if (paths.length === 0) {
+      return changed ? "small" : "whole";
+    }
     const directories = yield* Effect.filter(paths, (path) =>
       fs.stat(path).pipe(
         Effect.map((info) => info.type === "Directory"),
@@ -77,7 +71,6 @@ export const kindOf = (args: ReadonlyArray<string>, budget: Budget) =>
     return directories.length > 0 || paths.length > shareOf(budget, "small") ? "whole" : "small";
   });
 
-/** What a run asks of the budget, and its arguments less the `--parallel` it is given instead. */
 export const requestOf = (
   args: ReadonlyArray<string>,
   budget: Budget,
@@ -101,10 +94,6 @@ export const requestOf = (
   return { kind, asked, args: Arr.filter(args, (arg, at) => !isWorkers(arg, at)) };
 };
 
-/**
- * Runs `run` on a hold from the budget. A whole suite then also takes the old suite lock, so
- * a whole suite from a checkout without the budget still waits for it, and it for that one.
- */
 export const turnFor = <A, E, R>(
   request: { readonly kind: Kind; readonly asked: number },
   dir: string,
@@ -119,7 +108,6 @@ export const turnFor = <A, E, R>(
     return yield* request.kind === "small" ? run(hold) : inTurn(lock, run(hold), say, every);
   }).pipe(Effect.scoped);
 
-/** Where the executables are built: a targeted run's own, removed with its scope. */
 export const binDirectory = (targeted: boolean) =>
   targeted
     ? Effect.flatMap(FileSystem.FileSystem, (fs) =>
@@ -139,25 +127,28 @@ const TimingsJson = Schema.fromJsonString(
 const decodeTimings = Schema.decodeUnknownOption(TimingsJson);
 const encodeTimings = flow(Schema.encodeResult(TimingsJson), Result.getOrThrow);
 
-/**
- * Seeds a whole suite's timings and drops files that no longer exist, which Bun's own merge
- * keeps forever. A targeted run reads the timings without updating them, so it leaves them be.
- * Timings that do not decode are left for Bun.
- */
+// WARNING: Bun's timings merge keeps dropped files forever, so they are removed here.
 export const prepareTimings = Effect.fn("prepareTimings")(function* (
   targeted: boolean,
   timings: string,
   seed: string,
 ) {
-  if (targeted) return;
+  if (targeted) {
+    return;
+  }
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const text = yield* fs.readFileString((yield* exists(timings)) ? timings : seed);
   const recorded = decodeTimings(text);
-  if (Option.isNone(recorded)) return;
+  if (Option.isNone(recorded)) {
+    return;
+  }
   const files: Record<string, number> = {};
-  for (const [file, duration] of Rec.toEntries(recorded.value.files))
-    if (yield* exists(file)) files[file] = duration;
+  for (const [file, duration] of Rec.toEntries(recorded.value.files)) {
+    if (yield* exists(file)) {
+      files[file] = duration;
+    }
+  }
   yield* fs.makeDirectory(path.dirname(timings), { recursive: true });
   yield* fs.writeFileString(timings, `${encodeTimings({ ...recorded.value, files })}\n`);
 });
@@ -165,12 +156,13 @@ export const prepareTimings = Effect.fn("prepareTimings")(function* (
 const byDurationDescending = ([, a]: readonly [string, number], [, b]: readonly [string, number]) =>
   Num.Order(b, a);
 
-/** Each file's mean duration over the timings records that name it, longest first. */
 export const averageTimings = (records: ReadonlyArray<Readonly<Record<string, number>>>) => {
-  const seen = new Map<string, number[]>();
-  for (const files of records)
-    for (const [file, duration] of Rec.toEntries(files))
+  const seen = new Map<string, Array<number>>();
+  for (const files of records) {
+    for (const [file, duration] of Rec.toEntries(files)) {
       seen.set(file, [...(seen.get(file) ?? []), duration]);
+    }
+  }
   return Rec.fromEntries(
     Arr.sort(
       Arr.map(
@@ -186,7 +178,6 @@ export const averageTimings = (records: ReadonlyArray<Readonly<Record<string, nu
   );
 };
 
-/** Writes `seed` from the timings files `records`, each test file at its mean over them. */
 export const seedFrom = Effect.fn("seedFrom")(function* (
   records: ReadonlyArray<string>,
   seed: string,
@@ -201,7 +192,9 @@ export const seedFrom = Effect.fn("seedFrom")(function* (
 
 const ranked = (lines: ReadonlyArray<string>, top: number, indent = 0) => {
   const counts = new Map<string, number>();
-  for (const line of lines) counts.set(line, (counts.get(line) ?? 0) + 1);
+  for (const line of lines) {
+    counts.set(line, (counts.get(line) ?? 0) + 1);
+  }
   return Arr.map(
     Arr.take(
       Arr.sort([...counts], ([a, x], [b, y]) => Num.Order(y, x) || Str.localeCompare(b)(a)),
@@ -217,9 +210,10 @@ const ranked = (lines: ReadonlyArray<string>, top: number, indent = 0) => {
 export const startsSummary = (starts: string) => {
   const lines = Arr.map(
     Arr.filter(Str.split(starts, "\n"), (line) => line !== ""),
-    (line): [string, string?] => {
+    (line) => {
       const [source, file] = Str.split(line, "\t");
-      return [source, file];
+      const returned: [string, string?] = [source, file];
+      return returned;
     },
   );
   const byFile = Map.groupBy(lines, ([, file]) => file);
@@ -254,7 +248,6 @@ export const startsSummary = (starts: string) => {
 };
 
 export interface Pressure {
-  /** `/proc/pressure/cpu`'s `some avg60`, or null where the Machine has no such file. */
   readonly psi: number | null;
   readonly load: number;
 }
@@ -266,7 +259,7 @@ export const pressureAt = (path = "/proc/pressure/cpu") =>
       return avg60 === undefined ? null : Number(avg60);
     }),
     Effect.orElseSucceed(() => null),
-    Effect.map((psi): Pressure => ({ psi, load: loadavg()[0]! })),
+    Effect.map((psi) => ({ psi, load: loadavg()[0]! })),
   );
 
 const seconds = (value: number) => `${value.toFixed(2)} s`;
@@ -279,7 +272,6 @@ export const report = (run: {
   readonly ran: number;
   readonly workers: number;
   readonly budget: Budget;
-  /** A whole suite's per-file milliseconds, from the timings it updated. */
   readonly timings: Readonly<Record<string, number>> | null;
   readonly starts: string;
   readonly admitted: Pressure;
@@ -288,7 +280,7 @@ export const report = (run: {
   const { budget } = run;
   const files = Arr.sort(Rec.toEntries(run.timings ?? {}), byDurationDescending);
   const longest = files[0];
-  const summed = Arr.reduce(files, 0, (sum, [, ms]) => sum + ms) / 1_000;
+  const summed = Arr.reduce(files, 0, (sum, [, ms]) => sum + ms) / 1000;
   const kept =
     shareOf(budget, "small") === budget.total
       ? "shared by every run"
@@ -299,8 +291,8 @@ export const report = (run: {
     ...(longest === undefined
       ? []
       : [
-          `test: longest file ${longest[0]} at ${seconds(longest[1] / 1_000)}, ${Math.round(
-            (100 * longest[1]) / 1_000 / run.ran,
+          `test: longest file ${longest[0]} at ${seconds(longest[1] / 1000)}, ${Math.round(
+            (100 * longest[1]) / 1000 / run.ran,
           )} % of the run; per-file time summed ${seconds(summed)}`,
         ]),
     ...startsSummary(run.starts),

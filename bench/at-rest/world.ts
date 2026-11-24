@@ -1,14 +1,15 @@
-/* oxlint-disable effecttsgo/async-function, effecttsgo/global-console, effecttsgo/global-console-in-effect, effecttsgo/global-date, effecttsgo/global-date-in-effect, effecttsgo/node-builtin-import, effecttsgo/prefer-effect-array, effecttsgo/prefer-effect-record, effecttsgo/prefer-effect-string, effecttsgo/prefer-schema-over-json, no-restricted-globals, no-restricted-properties -- the benchmark's drivers speak to processes, files and /proc on their own terms, as record-open's do. */
-// host.db keeps absolute paths; base and candidate builders must use their sample's paths.
+/* oxlint-disable effecttsgo/prefer-effect-string -- the benchmark's drivers speak to processes, files and /proc on their own terms, as record-open's do. */
 
+// WARNING: host.db keeps absolute paths, so each builder uses its own sample's paths.
 import { tmpdir } from "node:os";
 import { Effect, FileSystem } from "effect";
 import { GIT_QUIET } from "../../test/support/git-quiet";
 import { testBunfig } from "../../test/support/packages";
+import { stringifyJson } from "../../src/json";
 
 export const root = new URL("../../", import.meta.url).pathname;
 export const tree = Bun.env.BENCH_AT_REST_TREE ?? root;
-/** The host's socket is in its state directory, so it needs a short path. */
+// WARNING: the host's socket is in its state directory, so the path must stay short.
 export const live = `${tmpdir()}/car-${Bun.hash(tree).toString(16).slice(0, 8)}`;
 export const keptFixture = `${tree}.scratch/at-rest/fixture`;
 export const manifestPath = `${tree}.scratch/at-rest/fixture.json`;
@@ -27,10 +28,10 @@ export const userEnv = { ...Bun.env };
 
 export const enterWorld = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
-  for (const dir of [world.user, world.state, world.home, world.project, world.bin])
+  for (const dir of [world.user, world.state, world.home, world.project, world.bin]) {
     yield* fs.makeDirectory(dir, { recursive: true });
+  }
   yield* fs.writeFileString(`${world.home}/.bunfig.toml`, testBunfig);
-  // Never the user's claude.
   yield* fs.writeFileString(
     `${world.bin}/claude`,
     `#!/bin/sh\n[ "$1" = --help ] && echo "  --autocompact <auto|tokens>" && exit 0\nexit 1\n`,
@@ -47,7 +48,7 @@ export const enterWorld = Effect.gen(function* () {
     COLLIE_STATE_DIR: world.state,
     COLLIE_USER_DIR: world.config,
     COLLIE_CWD: world.project,
-    COLLIE_HOST: JSON.stringify([process.execPath, `${root}src/main.ts`]),
+    COLLIE_HOST: stringifyJson([process.execPath, `${root}src/main.ts`]),
     COLLIE_HOST_WATCH_PID: String(process.pid),
     HC_SOCKET: `${live}/absent-core.sock`,
     COLLIE_RELEASES: "http://127.0.0.1:9",

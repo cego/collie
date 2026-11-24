@@ -1,5 +1,6 @@
 import * as Arr from "effect/Array";
-import { Deferred, Effect, Option, Result, SubscriptionRef, type Types } from "effect";
+import { Deferred, Effect, Option, Result, SubscriptionRef } from "effect";
+import type { Types } from "effect";
 import type { HarnessCatalogue } from "../../../src/catalogue-model";
 import type { ListedModel } from "./claude-models";
 
@@ -19,7 +20,9 @@ export const harnessLists = Effect.fn("HarnessLists.open")(function* (
     SubscriptionRef.update(held, (all) => ({ ...all, [harness]: list }));
   const need = Effect.fn("HarnessLists.need")(function* (harness: string) {
     const reader = readers[harness];
-    if (reader === undefined || pending.has(harness) || now(harness)?.from === "harness") return;
+    if (reader === undefined || pending.has(harness) || now(harness)?.from === "harness") {
+      return;
+    }
     const done = Deferred.makeUnsafe<void>();
     pending.set(harness, done);
     yield* put(harness, { from: "reading" });
@@ -42,7 +45,9 @@ export const harnessLists = Effect.fn("HarnessLists.open")(function* (
       Effect.andThen(
         Effect.suspend(() => {
           const done = pending.get(harness);
-          if (done === undefined || now(harness)?.from !== "reading") return Effect.void;
+          if (done === undefined || now(harness)?.from !== "reading") {
+            return Effect.void;
+          }
           return Deferred.await(done).pipe(
             Effect.timeoutOption("20 seconds"),
             Effect.flatMap((finished) =>
@@ -62,23 +67,28 @@ export const harnessLists = Effect.fn("HarnessLists.open")(function* (
 
 export type HarnessLists = Effect.Success<ReturnType<typeof harnessLists>>;
 
-/** A harness's list as this computer's host read it: what it does not hide, or why it read none. */
 export const listedIn = (
   catalogues: ReadonlyArray<HarnessCatalogue>,
   harness: string,
   keep: (model: string) => boolean = () => true,
-): Result.Result<ReadonlyArray<ListedModel>, string> => {
+) => {
   const catalogue = Option.getOrUndefined(
     Arr.findFirst(catalogues, (one) => one.harness === harness),
   );
-  if (catalogue === undefined) return Result.fail(`${harness} is not installed on this computer`);
-  if (catalogue.table !== null) return Result.fail(catalogue.table);
+  if (catalogue === undefined) {
+    return Result.fail(`${harness} is not installed on this computer`);
+  }
+  if (catalogue.table !== null) {
+    return Result.fail(catalogue.table);
+  }
   return Result.succeed(
     Arr.map(
       Arr.filter(catalogue.entries, (entry) => !entry.hidden && keep(entry.model)),
       ({ model, label, description, efforts }) => {
         const offered: Types.Mutable<ListedModel> = { id: model, label, efforts };
-        if (description !== null) offered.description = description;
+        if (description !== null) {
+          offered.description = description;
+        }
         return offered;
       },
     ),

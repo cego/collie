@@ -1,36 +1,4 @@
-// The live probe: `src/hc.ts`'s decoders against the real `hc` that `hc-pin.json` names.
-// The contract test compares the decoders with the schema; only this catches a core that
-// sends less than its schema promises (hc 0.1.14's `terminal.list` without `machines`).
-//
-//   bun run probe:hc
-//   bun tools/hc-probe.ts --harness claude|codex|pi
-//   bun tools/hc-probe.ts --harness opencode [--no-reporter]
-//   bun tools/hc-probe.ts --harness pi-question
-//   bun tools/hc-probe.ts --resume claude|codex|opencode|pi
-//
-// It downloads and checksums the pinned release, starts it on a session of its own with
-// scratch XDG directories, and drives run, list, get, read, send, keys, events and attach.
-// With `--harness`, it instead starts that harness in a core terminal and sends it a prompt
-// as Collie does, then passes once the prompt arrived without core's `<hc from>` mark and
-// the harness answered it, reporting `idle`, `working` and `done` through OSC 7501. It runs
-// the installed harness, with no tool it would need to answer, and costs one turn of its model.
-// OpenCode runs as Collie launches it on core: two agents in one checkout, each with Collie's
-// reporter and its first prompt at launch. Each must report working then idle, one must act
-// on a second prompt sent as Collie does, each reporter must write its own agent's session,
-// and OpenCode's settings files must not change. `--no-reporter` leaves the reporter out,
-// and fails for want of status. OpenCode's store is a scratch one, so it uses its free model.
-// `pi-question` starts pi as Collie launches a Run's pi agent on core, with Collie's question
-// tool and a session id, and stands in for the host that owns its state. Told to ask, pi must
-// call the tool, put its question where the host reads it, and end its turn; then it must act
-// on the answer sent as Collie sends it.
-// `--resume` tells that harness's agent a word, stops core and starts it again as a reboot
-// would, then starts the agent again as Collie's host does: a new terminal under its name, in
-// its checkout, with `sessionArgs`' resume of the session recorded at launch (Codex's on a
-// new App Server). It passes once the agent answers with the word, which only the
-// conversation it had holds.
-// Then it stops that core, and fails if a process of the binary is still running or core's
-// default state, config or runtime directory changed.
-
+// WARNING: only this live probe catches a core that sends less than its schema promises (hc 0.1.14 omitted machines).
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -58,15 +26,8 @@ import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { PlatformError } from "effect/PlatformError";
-import {
-  applyNote,
-  connect,
-  Kind,
-  snapshotOf,
-  type HcConnection,
-  type HcNote,
-  type HcReply,
-} from "../src/hc";
+import { applyNote, connect, Kind, snapshotOf } from "../src/hc";
+import type { HcConnection, HcNote, HcReply } from "../src/hc";
 import { opencodeReporter, sessionArgs } from "../src/harness";
 import { claudeTrust } from "../src/trust";
 import { piExtension } from "../src/chat";
@@ -86,14 +47,12 @@ const Pin = Schema.Struct({
 
 const fail = (message: string) => Effect.fail(new Cause.UnknownError(message, message));
 
-/** The release target names hc uses, for the platforms Collie ships. */
 const target = () => {
   const os = process.platform === "darwin" ? "macos" : "linux";
   const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
   return `${os}-${arch}`;
 };
 
-/** Downloads the pinned archive, checks it against the pin, and unpacks `herdr-core` into `dir`. */
 const fetchPinned = Effect.fn("HcProbe.fetchPinned")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const digest = yield* Digest.Digest;
@@ -102,13 +61,19 @@ const fetchPinned = Effect.fn("HcProbe.fetchPinned")(function* (dir: string) {
   );
   const on = target();
   const want = pin.sha256[on];
-  if (want === undefined) return yield* fail(`hc-pin.json pins no hc for ${on}`);
+  if (want === undefined) {
+    return yield* fail(`hc-pin.json pins no hc for ${on}`);
+  }
   const url = `https://releases.herdr.dev/core/${pin.version}/herdr-core-${on}.tar.gz`;
   const response = yield* HttpClient.get(url);
-  if (response.status !== 200) return yield* fail(`${url} answered ${response.status}`);
+  if (response.status !== 200) {
+    return yield* fail(`${url} answered ${response.status}`);
+  }
   const bytes = new Uint8Array(yield* response.arrayBuffer);
   const got = yield* digest.digestHex(Digest.sha256, bytes);
-  if (got !== want) return yield* fail(`${url} hashed ${got}, but hc-pin.json says ${want}`);
+  if (got !== want) {
+    return yield* fail(`${url} hashed ${got}, but hc-pin.json says ${want}`);
+  }
   yield* fs.writeFile(`${dir}/hc.tar.gz`, bytes);
   yield* run("tar", ["-xzf", `${dir}/hc.tar.gz`, "-C", dir, "herdr-core"], {});
   yield* Console.error(`hc ${pin.version} ${on} sha256 ${got}`);
@@ -140,17 +105,15 @@ const run = Effect.fn("HcProbe.run")(function* (
     ],
     { concurrency: "unbounded" },
   );
-  if (code !== 0) return yield* fail(`${command} ${Arr.join(args, " ")} exited ${code}: ${stderr}`);
+  if (code !== 0) {
+    return yield* fail(`${command} ${Arr.join(args, " ")} exited ${code}: ${stderr}`);
+  }
   return stdout;
 }, Effect.scoped);
 
-/**
- * Every entry under each of `dirs`, by name and type: what a probe leaking into them would
- * add or remove. Not contents, which a live core on the same Machine changes by itself.
- */
 const fingerprint = Effect.fn("HcProbe.fingerprint")(function* (dirs: ReadonlyArray<string>) {
   const fs = yield* FileSystem.FileSystem;
-  const lines: string[] = [];
+  const lines: Array<string> = [];
   for (const dir of dirs) {
     if (!(yield* fs.exists(dir))) {
       lines.push(`${dir} absent`);
@@ -164,15 +127,18 @@ const fingerprint = Effect.fn("HcProbe.fingerprint")(function* (dirs: ReadonlyAr
   return lines;
 });
 
-/** Pids whose executable is `binary`, read from /proc where there is one. */
 const runningFrom = Effect.fn("HcProbe.runningFrom")(function* (binary: string) {
   const fs = yield* FileSystem.FileSystem;
-  if (!(yield* fs.exists("/proc/self/exe"))) return [];
+  if (!(yield* fs.exists("/proc/self/exe"))) {
+    return [];
+  }
   const pids = Arr.filter(yield* fs.readDirectory("/proc"), (name) => /^\d+$/.test(name));
-  const running: string[] = [];
+  const running: Array<string> = [];
   for (const pid of pids) {
     const exe = yield* fs.readLink(`/proc/${pid}/exe`).pipe(Effect.orElseSucceed(() => ""));
-    if (exe === binary || exe === `${binary} (deleted)`) running.push(pid);
+    if (exe === binary || exe === `${binary} (deleted)`) {
+      running.push(pid);
+    }
   }
   return running;
 });
@@ -193,7 +159,9 @@ const untilRead = (hc: HcConnection, terminal: string, line: string) =>
     Effect.gen(function* () {
       for (;;) {
         const read = yield* hc.call("terminal.read", { terminal });
-        if (Arr.some(pipe(read.text, Str.split("\n")), (l) => Str.trimEnd(l) === line)) return read;
+        if (Arr.some(pipe(read.text, Str.split("\n")), (l) => Str.trimEnd(l) === line)) {
+          return read;
+        }
         yield* Effect.sleep("100 millis");
       }
     }),
@@ -223,7 +191,7 @@ const plain = Effect.fn("HcProbe.plain")(function* (socket: string, cwd: string)
   yield* untilRead(api, echo.address, "ready");
   yield* api.call("terminal.send", { terminal: echo.address, text: "hello" });
 
-  const notes: HcNote[] = [];
+  const notes: Array<HcNote> = [];
   yield* within(
     `${echo.address} to finish`,
     Effect.gen(function* () {
@@ -234,8 +202,9 @@ const plain = Effect.fn("HcProbe.plain")(function* (socket: string, cwd: string)
           note.method === "event" &&
           note.params.type === "finished" &&
           note.params.terminal === echo.address
-        )
+        ) {
           return;
+        }
       }
     }),
   );
@@ -286,8 +255,12 @@ const framed = Effect.fn("HcProbe.framed")(function* (socket: string, cwd: strin
       Effect.gen(function* () {
         while (!done()) {
           const frame = yield* Queue.take(frames);
-          if (frame.kind === Kind.DATA) output += decoder.decode(frame.payload);
-          if (frame.kind === Kind.CLOSE) close = frame.payload;
+          if (frame.kind === Kind.DATA) {
+            output += decoder.decode(frame.payload);
+          }
+          if (frame.kind === Kind.CLOSE) {
+            close = frame.payload;
+          }
         }
       }),
     );
@@ -310,7 +283,6 @@ const framed = Effect.fn("HcProbe.framed")(function* (socket: string, cwd: strin
   );
 });
 
-/** How each harness starts as an interactive agent that answers in text and asks nothing. */
 const harnessArgv = (name: string) => {
   switch (name) {
     case "claude":
@@ -331,18 +303,22 @@ const harnessArgv = (name: string) => {
   }
 };
 
-// The answer is not in the prompt, so seeing it shows the harness acted on what it was sent.
+// WARNING: the answer is not in the prompt, so seeing it shows the harness acted on what it was sent.
 const ANSWER = "DETCA";
 const PROMPT = "Reply with the word acted spelled backwards in capital letters, and nothing else.";
 const TURN_SECONDS = 300;
 
 const harness = Effect.fn("HcProbe.harness")(function* (socket: string, cwd: string, name: string) {
   const argv = harnessArgv(name);
-  if (argv === undefined) return yield* fail(`no harness ${name}: claude, codex or pi`);
-  // As Collie's launch does, so Claude opens at its prompt and not its folder-trust dialog.
+  if (argv === undefined) {
+    return yield* fail(`no harness ${name}: claude, codex or pi`);
+  }
+  // WARNING: as Collie's launch does, so Claude opens at its prompt and not its folder-trust dialog.
   if (name === "claude") {
     const granted = yield* claudeTrust(yield* Config.String("HOME"), `${cwd}/..`).grant(cwd);
-    if (!granted.ok) return yield* fail(granted.message);
+    if (!granted.ok) {
+      return yield* fail(granted.message);
+    }
   }
   const events = yield* connect(socket);
   yield* events.call("hello", { generation: 1 });
@@ -357,7 +333,7 @@ const harness = Effect.fn("HcProbe.harness")(function* (socket: string, cwd: str
     no_parent: true,
     env: { TERM: "xterm-256color", COLORTERM: "truecolor" },
   });
-  const words: string[] = [];
+  const words: Array<string> = [];
   const statusOf = () => snapshot.terminals.get(agent.address)?.status?.state ?? null;
   const screen = api
     .call("terminal.read", { terminal: agent.address })
@@ -367,9 +343,12 @@ const harness = Effect.fn("HcProbe.harness")(function* (socket: string, cwd: str
       while (!(yield* done())) {
         snapshot = applyNote(snapshot, yield* Queue.take(events.notes));
         const word = statusOf();
-        if (word !== null && words.at(-1) !== word) words.push(word);
-        if (word === "blocked" || word === "error")
+        if (word !== null && words.at(-1) !== word) {
+          words.push(word);
+        }
+        if (word === "blocked" || word === "error") {
           return yield* fail(`${name} reported ${word}:\n${yield* screen}`);
+        }
       }
     }).pipe(
       Effect.timeoutOrElse({
@@ -389,23 +368,18 @@ const harness = Effect.fn("HcProbe.harness")(function* (socket: string, cwd: str
   yield* Console.error(`${name}: sent as turn ${sent.turn}, started ${String(sent.started)}`);
   yield* until(`${name} to answer and report done`, () =>
     Effect.gen(function* () {
-      const after = words.slice(before);
-      return (
-        after.includes("working") &&
-        after.includes("done") &&
-        pipe(yield* screen, Str.includes(ANSWER))
-      );
+      const after = new Set(words.slice(before));
+      return after.has("working") && after.has("done") && pipe(yield* screen, Str.includes(ANSWER));
     }),
   );
   const shown = yield* screen;
   yield* Console.error(`${name}: reported ${Arr.join(words, ", ")}; answered ${ANSWER}`);
-  // A TUI wraps and indents a long line, so the prompt is looked for with its spacing evened out.
-  const even = (text: string) => pipe(text, Str.replace(/\s+/g, " "));
+  // WARNING: a TUI wraps and indents long lines, so the prompt is found with its spacing evened out.
+  const even = (text: string) => pipe(text, Str.replaceAll(/\s+/g, " "));
   yield* expect(
     pipe(even(shown), Str.includes(even(PROMPT))),
     `${name}'s screen to show the prompt:\n${shown}`,
   );
-  // Measured on 0.1.14: a plain send is not marked. A pin that marks it is the planner's question.
   yield* expect(
     !pipe(shown, Str.includes("<hc from")),
     `${name}'s screen to show the prompt without core's <hc from> mark:\n${shown}`,
@@ -419,7 +393,7 @@ const PI_ANSWER = "BLUE";
 
 const piQuestion = Effect.fn("HcProbe.piQuestion")(function* (socket: string, dir: string) {
   const fs = yield* FileSystem.FileSystem;
-  // The probe stands in for the host that owns this state directory.
+  // WARNING: the probe stands in for the host that owns this state directory.
   yield* fs.writeFileString(hostLockOf(dir), `{"pid":${process.pid},"start":null}`);
   const name = "probe-pi-question";
   const control = yield* controlDir(dir, name);
@@ -442,7 +416,7 @@ const piQuestion = Effect.fn("HcProbe.piQuestion")(function* (socket: string, di
     no_parent: true,
     env: { TERM: "xterm-256color", COLORTERM: "truecolor" },
   });
-  const words: string[] = [];
+  const words: Array<string> = [];
   const statusOf = () => snapshot.terminals.get(agent.address)?.status?.state ?? null;
   const screen = api
     .call("terminal.read", { terminal: agent.address })
@@ -452,8 +426,12 @@ const piQuestion = Effect.fn("HcProbe.piQuestion")(function* (socket: string, di
       while (!(yield* done())) {
         snapshot = applyNote(snapshot, yield* Queue.take(events.notes));
         const word = statusOf();
-        if (word !== null && words.at(-1) !== word) words.push(word);
-        if (word === "error") return yield* fail(`pi reported error:\n${yield* screen}`);
+        if (word !== null && words.at(-1) !== word) {
+          words.push(word);
+        }
+        if (word === "error") {
+          return yield* fail(`pi reported error:\n${yield* screen}`);
+        }
       }
     }).pipe(
       Effect.timeoutOrElse({
@@ -497,10 +475,7 @@ const piQuestion = Effect.fn("HcProbe.piQuestion")(function* (socket: string, di
   yield* api.call("terminal.kill", { terminal: agent.address });
 });
 
-/**
- * Each OpenCode agent's first prompt, given at launch, and the answer that shows it acted.
- * Its free model misspells a word spelled backwards, so these are facts it gets right.
- */
+// WARNING: OpenCode's free model misspells words spelled backwards, so these are facts it gets right.
 const capital = (country: string, answer: string) => ({
   prompt: `Reply with the capital of ${country} in capital letters, and nothing else.`,
   answer,
@@ -545,7 +520,6 @@ const opencode = Effect.fn("HcProbe.opencode")(function* (
   );
   const before = yield* settings;
   const cwd = `${dir}/work`;
-  // The operator's settings, and a store of the probe's own.
   const openEnv = {
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
@@ -576,7 +550,7 @@ const opencode = Effect.fn("HcProbe.opencode")(function* (
       return { name, address: started.address, sessionFile, first };
     }),
   );
-  const words = new Map<string, string[]>(Arr.map(agents, (one) => [one.address, []]));
+  const words = new Map<string, Array<string>>(Arr.map(agents, (one) => [one.address, []]));
   const screen = (address: string) =>
     api.call("terminal.read", { terminal: address }).pipe(Effect.map((read) => read.text));
   const until = <E>(what: string, done: () => Effect.Effect<boolean, E>) =>
@@ -585,9 +559,12 @@ const opencode = Effect.fn("HcProbe.opencode")(function* (
         snapshot = applyNote(snapshot, yield* Queue.take(events.notes));
         for (const [address, seen] of words) {
           const word = snapshot.terminals.get(address)?.status?.state ?? null;
-          if (word !== null && seen.at(-1) !== word) seen.push(word);
-          if (word === "blocked" || word === "error")
+          if (word !== null && seen.at(-1) !== word) {
+            seen.push(word);
+          }
+          if (word === "blocked" || word === "error") {
             return yield* fail(`${address} reported ${word}:\n${yield* screen(address)}`);
+          }
         }
       }
     }).pipe(
@@ -610,11 +587,14 @@ const opencode = Effect.fn("HcProbe.opencode")(function* (
   const workedThenIdle = (seen: ReadonlyArray<string>) =>
     seen.includes("working") && seen.lastIndexOf("idle") > seen.indexOf("working");
 
-  // Settled by the screen, not by status, so a run without the reporter still gets this far.
+  // WARNING: settled by the screen, not status, so a run without the reporter still gets this far.
   yield* until("each agent to answer its first prompt", () =>
     Effect.gen(function* () {
-      for (const one of agents)
-        if (!pipe(yield* screen(one.address), Str.includes(one.first.answer))) return false;
+      for (const one of agents) {
+        if (!pipe(yield* screen(one.address), Str.includes(one.first.answer))) {
+          return false;
+        }
+      }
       return Arr.every(agents, (one) => workedThenIdle(reported(one.address)) || !reporter);
     }),
   );
@@ -641,7 +621,7 @@ const opencode = Effect.fn("HcProbe.opencode")(function* (
     }),
   );
   const shown = yield* screen(first!.address);
-  const even = (text: string) => pipe(text, Str.replace(/\s+/g, " "));
+  const even = (text: string) => pipe(text, Str.replaceAll(/\s+/g, " "));
   yield* expect(
     pipe(even(shown), Str.includes(even(SECOND.prompt))),
     `${first!.name}'s screen to show the sent prompt:\n${shown}`,
@@ -681,7 +661,9 @@ const opencode = Effect.fn("HcProbe.opencode")(function* (
     Arr.join(before, "\0") === Arr.join(yield* settings, "\0"),
     "OpenCode's settings files to be the same before and after",
   );
-  for (const one of agents) yield* api.call("terminal.kill", { terminal: one.address });
+  for (const one of agents) {
+    yield* api.call("terminal.kill", { terminal: one.address });
+  }
 });
 
 const WORD = "MARMALADE";
@@ -706,7 +688,9 @@ const resume = Effect.fn("HcProbe.resume")(function* (
   const agent = `probe-${name}`;
   if (name === "claude") {
     const granted = yield* claudeTrust(home, `${cwd}/..`).grant(cwd);
-    if (!granted.ok) return yield* fail(granted.message);
+    if (!granted.ok) {
+      return yield* fail(granted.message);
+    }
   }
   const sessionFile = `${dir}/${agent}.session`;
   const plugin = `${dir}/${agent}.status.js`;
@@ -727,7 +711,6 @@ const resume = Effect.fn("HcProbe.resume")(function* (
     codexPort("codex app-server").install({ agent, harness: "codex", cwd, dir: `${dir}/codex` });
   const codexFlags = ["--sandbox", "workspace-write", "--ask-for-approval", "never"];
 
-  /** The agent in a core terminal of its own, with what it reported and showed. */
   const started = (argv: ReadonlyArray<string>) =>
     Effect.gen(function* () {
       const events = yield* connect(socket);
@@ -743,7 +726,7 @@ const resume = Effect.fn("HcProbe.resume")(function* (
         env,
       });
       yield* Console.error(`${name}: started ${Arr.join(argv, " ")}`);
-      const words: string[] = [];
+      const words: Array<string> = [];
       const screen = api
         .call("terminal.read", { terminal: terminal.address })
         .pipe(Effect.map((read) => read.text));
@@ -752,9 +735,12 @@ const resume = Effect.fn("HcProbe.resume")(function* (
           while (!(yield* done())) {
             snapshot = applyNote(snapshot, yield* Queue.take(events.notes));
             const word = snapshot.terminals.get(terminal.address)?.status?.state ?? null;
-            if (word !== null && words.at(-1) !== word) words.push(word);
-            if (word === "blocked" || word === "error")
+            if (word !== null && words.at(-1) !== word) {
+              words.push(word);
+            }
+            if (word === "blocked" || word === "error") {
               return yield* fail(`${name} reported ${word}:\n${yield* screen}`);
+            }
           }
         }).pipe(
           Effect.timeoutOrElse({
@@ -771,7 +757,6 @@ const resume = Effect.fn("HcProbe.resume")(function* (
         const after = words.slice(from);
         return after.includes("working") && ["idle", "done"].includes(after.at(-1) ?? "");
       };
-      /** Sends `text` once it is at its prompt, and waits for the turn it starts to end. */
       const told = (text: string) =>
         Effect.gen(function* () {
           yield* until(`${name} to report idle`, () =>
@@ -793,18 +778,22 @@ const resume = Effect.fn("HcProbe.resume")(function* (
         ? ["opencode", "--prompt", REMEMBER]
         : [...(harnessArgv(name) ?? []), ...sessionArgs(name, { id: chosen, resumed: false }).tail];
   const before = yield* started(first);
-  if (name === "opencode")
+  if (name === "opencode") {
     yield* before.until(`${name} to answer its first prompt`, () =>
       Effect.succeed(before.settled(0)),
     );
-  else yield* before.told(REMEMBER);
+  } else {
+    yield* before.told(REMEMBER);
+  }
   const recorded =
     name === "codex"
       ? yield* withCodex(server?.endpoint ?? "", (client) => boundThread(client, cwd))
       : name === "opencode"
         ? yield* fs.readFileString(sessionFile)
         : chosen;
-  if (recorded === null) return yield* fail(`${name} has no session to resume`);
+  if (recorded === null) {
+    return yield* fail(`${name} has no session to resume`);
+  }
   yield* Console.error(`${name}: told the word in session ${recorded}; stopping core`);
 
   yield* restart;
@@ -814,8 +803,7 @@ const resume = Effect.fn("HcProbe.resume")(function* (
   );
   yield* expect(left.length === 0, `${agent} to be gone after core stopped`);
 
-  // Codex's old App Server is put down before a new one is started, as a launch waits for
-  // it: a server still holding the thread leaves it read-only to the next.
+  // WARNING: an old App Server is put down first; a server still holding the thread leaves it read-only to the next.
   if (server?.pid !== undefined) {
     yield* terminate(server.pid);
     yield* fs.exists(`/proc/${server.pid}`).pipe(
@@ -833,7 +821,6 @@ const resume = Effect.fn("HcProbe.resume")(function* (
     opencodeReporter({ sessionFile, tty: "/dev/tty", session: recorded }),
   );
   const resumed = sessionArgs(name, { id: recorded, resumed: true });
-  // OpenCode's server, as Collie's controls give it, is what a resumed agent is prompted on.
   const served =
     name === "opencode"
       ? yield* COMPACTION_PORTS.opencode!.install({
@@ -846,11 +833,9 @@ const resume = Effect.fn("HcProbe.resume")(function* (
       : null;
   const second =
     name === "codex"
-      ? // The thread keeps its permissions: a remote resume refuses them again.
-        ["codex", ...resumed.lead, ...(again?.args ?? [])]
+      ? ["codex", ...resumed.lead, ...(again?.args ?? [])]
       : name === "opencode"
-        ? // OpenCode drops a --prompt given with a session that has a conversation.
-          ["opencode", ...(served?.args ?? [])]
+        ? ["opencode", ...(served?.args ?? [])]
         : [...(harnessArgv(name) ?? []), ...resumed.tail];
   const after = yield* started(second);
   if (served?.endpoint) {
@@ -860,8 +845,10 @@ const resume = Effect.fn("HcProbe.resume")(function* (
     const from = after.words.length;
     yield* promptAsync(served.endpoint, recorded, RECALL);
     yield* after.until(`${name} to answer`, () => Effect.succeed(after.settled(from)));
-  } else yield* after.told(RECALL);
-  // Claude reports done before it has drawn its answer.
+  } else {
+    yield* after.told(RECALL);
+  }
+  // WARNING: Claude reports done before it has drawn its answer.
   const shown = yield* after.screen.pipe(
     Effect.repeat({
       until: (text) => pipe(text, Str.includes(RECALLED)),
@@ -880,7 +867,6 @@ const resume = Effect.fn("HcProbe.resume")(function* (
         : yield* fs.readFileString(sessionFile);
     yield* expect(now === recorded, `${name} to be in session ${recorded}, not ${now}`);
   }
-  // Claude and pi keep their own transcript of each session: the answer has to be in its.
   const store =
     name === "claude"
       ? { dir: `${home}/.claude/projects`, file: `${recorded}.jsonl` }
@@ -899,7 +885,9 @@ const resume = Effect.fn("HcProbe.resume")(function* (
   }
   yield* Console.error(`${name}: started again in session ${recorded}, answered ${RECALLED}`);
   yield* (yield* connect(socket)).call("terminal.kill", { terminal: after.address });
-  if (again?.pid !== undefined) yield* terminate(again.pid);
+  if (again?.pid !== undefined) {
+    yield* terminate(again.pid);
+  }
 });
 
 const program = Effect.gen(function* () {
@@ -916,11 +904,12 @@ const program = Effect.gen(function* () {
   const before = yield* fingerprint(defaults);
 
   const dir = yield* fs.makeTempDirectoryScoped({ prefix: "hc-probe-" });
-  for (const sub of ["state", "config", "run"])
+  for (const sub of ["state", "config", "run"]) {
     yield* fs.makeDirectory(`${dir}/${sub}`, { mode: 0o700 });
+  }
   const binary = yield* fetchPinned(dir);
   const socket = `${dir}/run/hc.sock`;
-  // Only what hc and the probe's shells need: nothing that names a live core, herdr or agent.
+  // WARNING: only what hc and the probe's shells need; nothing that names a live core, herdr or agent.
   const env = {
     PATH: yield* Config.String("PATH"),
     HOME: home,
@@ -964,7 +953,9 @@ const program = Effect.gen(function* () {
   );
   yield* run(binary, ["server", "stop", "--json"], env).pipe(Effect.ignore);
   const left = yield* runningFrom(binary);
-  for (const pid of left) process.kill(Number(pid));
+  for (const pid of left) {
+    process.kill(Number(pid));
+  }
   const after = yield* fingerprint(defaults);
 
   const problems = [
@@ -976,7 +967,9 @@ const program = Effect.gen(function* () {
     ),
     ...Arr.map(Arr.difference(before, after), (line) => `core's default directories lost ${line}`),
   ];
-  for (const problem of problems) yield* Console.error(problem);
+  for (const problem of problems) {
+    yield* Console.error(problem);
+  }
   yield* Console.error(problems.length === 0 ? "probe: every reply decoded" : "probe: FAILED");
   return problems.length === 0 ? 0 : 1;
 });

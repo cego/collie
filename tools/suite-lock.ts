@@ -1,13 +1,10 @@
-// The suite's turn on this machine: one suite runs at a time, and the next waits. A wait
-// says who it is waiting for once, then how long it has waited, so it is never silent.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
-import { Clock, Duration, Effect, Fiber, Option, Stream } from "effect";
+import type { Duration } from "effect";
+import { Clock, Effect, Fiber, Option, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { lockHolder, withLock } from "../src/lock";
 
-/** What `ps` says of a pid: when it started (`lstart` is always 24 characters) and its command. */
 export const described = (pid: number) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -15,7 +12,7 @@ export const described = (pid: number) =>
       ChildProcess.make("ps", ["-o", "lstart=", "-o", "args=", "-p", String(pid)], {
         stdout: "pipe",
         stderr: "ignore",
-        // `lstart`'s width is fixed only in the C locale.
+        // WARNING: lstart's width is fixed only in the C locale.
         env: { LC_ALL: "C" },
         extendEnv: true,
       }),
@@ -23,7 +20,7 @@ export const described = (pid: number) =>
     const out = yield* handle.stdout.pipe(
       Stream.decodeText(),
       Stream.runFold(
-        (): string => "",
+        () => "",
         (all, chunk) => all + chunk,
       ),
     );
@@ -39,7 +36,9 @@ export const described = (pid: number) =>
 const holderLine = (lock: string) =>
   Effect.gen(function* () {
     const holder = yield* lockHolder(lock);
-    if (holder === null) return "test: waiting for the suite that holds the lock to finish";
+    if (holder === null) {
+      return "test: waiting for the suite that holds the lock to finish";
+    }
     const ps = yield* described(holder.pid);
     return ps === null
       ? `test: waiting for the suite in process ${holder.pid} to finish`
@@ -52,10 +51,6 @@ export const elapsed = (ms: number) => {
   return minutes === 0 ? `${seconds}s` : `${minutes}m ${seconds % 60}s`;
 };
 
-/**
- * Runs `run` once this process holds `lock`, waiting as long as that takes. Where it has to
- * wait it says who holds it, then every `every` how long it has been.
- */
 export const inTurn = <A, E, R>(
   lock: string,
   run: Effect.Effect<A, E, R>,
@@ -65,7 +60,9 @@ export const inTurn = <A, E, R>(
   Effect.gen(function* () {
     const ran = run.pipe(Effect.asSome);
     const now = yield* withLock(lock, Effect.succeedNone, ran, 1);
-    if (Option.isSome(now)) return now.value;
+    if (Option.isSome(now)) {
+      return now.value;
+    }
     yield* say(yield* holderLine(lock));
     const began = yield* Clock.currentTimeMillis;
     const telling = yield* Clock.currentTimeMillis.pipe(
@@ -76,6 +73,8 @@ export const inTurn = <A, E, R>(
     );
     const quietly = Fiber.interrupt(telling).pipe(Effect.andThen(ran));
     const later = yield* withLock(lock, Effect.succeedNone, quietly, Number.MAX_SAFE_INTEGER);
-    if (Option.isSome(later)) return later.value;
+    if (Option.isSome(later)) {
+      return later.value;
+    }
     return yield* Effect.die(new Error(`${lock} was never given up`));
   }).pipe(Effect.scoped);

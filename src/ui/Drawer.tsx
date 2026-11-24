@@ -1,62 +1,30 @@
-// The record drawer: one Task's whole record, over the board rather than instead of it.
-//
-// Tabs share one scrollbox. The division is what each answers: Summary is where the
-// work has got to, Review is what was found, Plan is what it was judged against, Cards is
-// the evidence, Log is the end of the runner's own output. One at a time, because the
-// panel this replaced stacked all of them and a review was five screens down.
-//
-// Evidence and narrative must not look alike here either: Cards draws `src/lines.ts`, so
-// a claim reads as `claimed:` and `missing` is always there, exactly as the Live region
-// draws them.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
-import { createEffect, createMemo, createResource, For, Show, type JSX } from "solid-js";
-import {
-  TextAttributes,
-  type MouseEvent,
-  type ScrollBoxRenderable,
-  type TextRenderable,
-} from "@opentui/core";
+import { createEffect, createMemo, createResource, For, Show } from "solid-js";
+import type { JSX } from "solid-js";
+import { TextAttributes } from "@opentui/core";
+import type { MouseEvent, ScrollBoxRenderable, TextRenderable } from "@opentui/core";
 import { useRenderer, useTerminalDimensions } from "@opentui/solid";
-import {
-  ranOn,
-  requestedByLine,
-  type MrDetails,
-  type MrPanel,
-  type Panel,
-  type PlanPanel,
-  type RunDetail,
-  type TaskView,
-  mrReadiness,
-  mrTarget,
-  mrWords,
-  readMrRef,
-} from "../board-model";
+import { ranOn, requestedByLine, mrReadiness, mrTarget, mrWords, readMrRef } from "../board-model";
+import type { MrDetails, MrPanel, Panel, PlanPanel, RunDetail, TaskView } from "../board-model";
 import { truncated } from "../views";
 import type { Live } from "../live";
 import { sinceReview } from "../mr";
-import {
-  asText,
-  cardLines,
-  deliveryLine,
-  driftLines,
-  type Line as Evidence,
-  type Tone,
-} from "../lines";
-import { dispositionsFor, menuFor, type Command, type MenuItem } from "./state";
+import { asText, cardLines, deliveryLine, driftLines } from "../lines";
+import type { Line as Evidence, Tone } from "../lines";
+import { dispositionsFor, menuFor } from "./state";
+import type { Command } from "./state";
 import { styledMarkdown } from "./markdown";
 import { C, stateGlyph, stepGlyph } from "./sections";
 import { handoffsDir } from "../handoffs";
 import { replyLine } from "../replies";
 import { PARK_CAUSES, parkLine } from "../park-cause";
-import { artefactLines, type ArtefactCollection } from "../artefact-model";
+import { artefactLines } from "../artefact-model";
+import type { ArtefactCollection } from "../artefact-model";
 
-/** How many of a running check's last lines the Summary shows. */
 const DRAWER_LINES = 8;
 
-/** What the record is being read for. One at a time, and Summary is where it opens. */
 export type Tab = "summary" | "review" | "plan" | "cards" | "artefacts" | "log";
 export const TABS: ReadonlyArray<{ tab: Tab; label: string }> = [
   { tab: "summary", label: "Summary" },
@@ -67,20 +35,17 @@ export const TABS: ReadonlyArray<{ tab: Tab; label: string }> = [
   { tab: "log", label: "Log" },
 ];
 
-/** The drawer's share of the board, and what it stops growing at on a wide pane. */
 const SHARE = 0.6;
 const MAX = 72;
 
 export interface DrawerProps {
   view: TaskView;
-  /** The Run's own record, once it has been read; null while it is being. */
   detail: RunDetail | null;
   artefacts?: ArtefactCollection | null;
   artefactsError?: string | null;
   live: Live | null;
   tab: Tab;
   onTab: (tab: Tab) => void;
-  /** What is being said to this Run's Driver, and whether the keyboard is in it. */
   steer: {
     text: string;
     typing: boolean;
@@ -102,13 +67,14 @@ interface Line {
 
 export function Drawer(props: DrawerProps) {
   const glyph = () => stateGlyph(props.view.state);
-  /** The step durations the record knows, which the TaskView's own steps do not carry. */
   const took = () =>
     new Map(Arr.map(props.detail?.steps ?? [], (step) => [step.id, step.took ?? ""]));
 
-  const intent = (): Line[] => {
+  const intent = () => {
     const held = props.detail?.intent;
-    if (!held) return [{ text: "no intent recorded for this run", fg: C.dim }];
+    if (!held) {
+      return [{ text: "no intent recorded for this run", fg: C.dim }];
+    }
     return [
       { text: held.goal ?? "no goal recorded", mark: "›", markFg: C.blue },
       ...Arr.map(held.constraints, (text) => ({ text, mark: "¬", markFg: C.amber, fg: C.muted })),
@@ -118,7 +84,7 @@ export function Drawer(props: DrawerProps) {
     ];
   };
 
-  const steps = (): Line[] =>
+  const steps = () =>
     Arr.map(props.view.steps, (step) => ({
       text: step.name,
       mark: stepGlyph(step.state).glyph,
@@ -127,7 +93,7 @@ export function Drawer(props: DrawerProps) {
       fg: step.state === "todo" ? C.dim : C.text,
     }));
 
-  const requester = (): Line[] => {
+  const requester = () => {
     const who = props.detail?.requestedBy;
     const started = props.detail?.startedBy;
     return [
@@ -135,14 +101,14 @@ export function Drawer(props: DrawerProps) {
       ...(who === undefined ? [] : [{ text: requestedByLine(who) }]),
     ];
   };
-  const report = (): Line[] => {
+  const report = () => {
     const report = props.detail?.report;
     return report === undefined
       ? []
       : [{ text: `${report.state}: ${report.note}` }, { text: report.closure ?? "" }];
   };
 
-  const agents = (): Line[] =>
+  const agents = () =>
     props.view.agents.length === 0
       ? [{ text: "no live agent: the host holds this run", fg: C.dim }]
       : Arr.map(props.view.agents, (agent) => ({
@@ -151,14 +117,14 @@ export function Drawer(props: DrawerProps) {
           markFg: C.blue,
         }));
 
-  const ranOnLines = (): Line[] =>
+  const ranOnLines = () =>
     Arr.map(props.detail?.agents ?? [], (agent) => ({
       text: `${agent.operation}  ${ranOn(agent)}`,
       right: agent.agent,
       fg: C.muted,
     }));
 
-  const held = (): Line[] =>
+  const held = () =>
     props.view.heldBy === null
       ? []
       : [
@@ -169,9 +135,11 @@ export function Drawer(props: DrawerProps) {
           },
         ];
 
-  const parked = (): Line[] => {
+  const parked = () => {
     const park = props.view.park;
-    if (park == null) return [];
+    if (park == null) {
+      return [];
+    }
     const entry = PARK_CAUSES[park.cause];
     return [
       { text: parkLine(park), mark: "◆", markFg: C.amber },
@@ -179,10 +147,11 @@ export function Drawer(props: DrawerProps) {
     ];
   };
 
-  /** What a yes on this card would name, where the record is open beside it. */
-  const proposed = (): Line[] => {
+  const proposed = () => {
     const decision = props.view.decision;
-    if (decision?.kind !== "proposal") return [];
+    if (decision?.kind !== "proposal") {
+      return [];
+    }
     return [
       { text: decision.text },
       ...Arr.map(decision.actions, (action) => ({
@@ -194,23 +163,21 @@ export function Drawer(props: DrawerProps) {
     ];
   };
 
-  /** What the Run was given, where its agents read it. */
-  const attached = (): Line[] =>
+  const attached = () =>
     Arr.map(props.detail?.attachments ?? [], (file) => ({
       text: `${props.detail!.dir}/attachments/${file.name}`,
       mark: "•",
       right: `${file.size} bytes`,
     }));
 
-  /** What its agents left for whoever comes next. */
-  const handedOn = (): Line[] =>
+  const handedOn = () =>
     Arr.map(props.detail?.handoffFiles ?? [], (file) => ({
       text: `${handoffsDir(props.detail!.dir)}/${file.name}`,
       mark: "•",
       right: `${file.bytes} bytes`,
     }));
 
-  const replied = (): Line[] =>
+  const replied = () =>
     Arr.flatMap(props.detail?.replies ?? [], (reply) => [
       { text: replyLine(reply), mark: reply.kind === "disputed" ? "!" : "•" },
       ...Arr.map(Str.split(reply.body, "\n"), (text) => ({
@@ -220,15 +187,10 @@ export function Drawer(props: DrawerProps) {
       })),
     ]);
 
-  const branch = (): Line[] => [
+  const branch = () => [
     { text: props.view.branch ?? "no branch of its own", mark: "⎇", markFg: C.dim },
   ];
 
-  /**
-   * The merge request behind the work: whether it is still open, whether its pipeline
-   * passed, whether anyone is still arguing in it, and whether anything moved since the
-   * review. The card's own line says only which one it is.
-   */
   const mr = () => props.detail?.mr ?? null;
   const readinessOf = (id: string) => {
     const mrs = props.view.mrs ?? [];
@@ -236,7 +198,7 @@ export function Drawer(props: DrawerProps) {
     return one === undefined ? null : mrReadiness(one, mrs);
   };
 
-  const findings = (): Line[] =>
+  const findings = () =>
     Arr.map(props.detail?.findings ?? [], (finding) => ({
       text: finding.title,
       mark: "•",
@@ -246,31 +208,28 @@ export function Drawer(props: DrawerProps) {
           : `${finding.file}${finding.line === null ? "" : `:${finding.line}`}`,
     }));
 
-  /** The Run's branch against its merge base, one line per file, as plain text. */
-  const changed = (): Line[] =>
+  const changed = () =>
     Arr.map(props.detail?.diff?.files ?? [], (file) => ({
       text: file.path,
       mark: file.status === "added" ? "+" : file.status === "deleted" ? "-" : "~",
       right: file.added === null ? "binary" : `+${file.added} -${file.removed}`,
     }));
 
-  const verified = (): Line[] =>
+  const verified = () =>
     Arr.map(props.detail?.verifications ?? [], (one) => {
       const held = one.result === one.expect;
       return { text: one.name, mark: held ? "✓" : "✗", markFg: held ? C.green : C.red };
     });
 
-  const card = (): Line[] => {
+  const card = () => {
     const newest = props.live?.cards[0];
     return newest === undefined ? [] : Arr.map(cardLines(newest), (line) => ({ text: line.text }));
   };
 
-  /** The card's own menu, as buttons, without the one that opens what is already open. */
-  const buttons = (): MenuItem[] => [
+  const buttons = () => [
     ...Arr.filter(menuFor(props.view), (item) => item.command._tag !== "OpenRecord"),
     ...dispositionsFor(props.view),
   ];
-  /** Steering a Run nothing is driving would be words nobody reads. */
   const steerable = () => Arr.some(menuFor(props.view), (item) => item.label === "Steer…");
 
   return (
@@ -301,8 +260,6 @@ export function Drawer(props: DrawerProps) {
         <box style={{ flexGrow: 1 }} />
         <Button label="Close" onPress={() => props.onClose()} />
       </box>
-      {/* Nothing above the scroll area may shrink: the column would otherwise take the
-          blank rows back from the header to make room for a long record below it. */}
       <text
         fg={C.dim}
         style={{ flexShrink: 0 }}
@@ -310,7 +267,6 @@ export function Drawer(props: DrawerProps) {
       <text fg={C.muted} style={{ marginTop: 1, flexShrink: 0 }}>
         {props.view.sentence}
       </text>
-      {/* What the check Collie is running has written last; the menu opens the rest live. */}
       <Show when={(props.view.check?.lastLines.length ?? 0) > 0}>
         <box style={{ flexDirection: "column", flexShrink: 0, marginTop: 1 }}>
           <For each={props.view.check!.lastLines.slice(-DRAWER_LINES)}>
@@ -322,7 +278,6 @@ export function Drawer(props: DrawerProps) {
       <box
         style={{ flexDirection: "row", flexWrap: "wrap", flexShrink: 0, marginTop: 1, rowGap: 1 }}
       >
-        {/* The decision is on the card this is drawn over, where its own buttons are. */}
         <Show when={props.view.decision !== null}>
           <Button label="Answer above" onPress={() => props.onClose()} />
         </Show>
@@ -331,7 +286,9 @@ export function Drawer(props: DrawerProps) {
             <Button
               label={item.label}
               onPress={() => {
-                if (item.disabled !== true) props.onAct(item.command);
+                if (item.disabled !== true) {
+                  props.onAct(item.command);
+                }
               }}
             />
           )}
@@ -524,8 +481,6 @@ export function Drawer(props: DrawerProps) {
   );
 }
 
-/** One of the drawer's buttons. The press stops here: the board behind it is not asked. */
-/** Two cells of padding and two between: at one, two filled labels read as one bar. */
 function Button(props: { label: string; onPress: () => void }) {
   return (
     <text
@@ -542,11 +497,6 @@ function Button(props: { label: string; onPress: () => void }) {
   );
 }
 
-/**
- * Every block of the drawer: a small capital title, a blank line above and below, and the
- * content set two cells in. One shape, so the summary's sections and the other tabs'
- * documents read as the same page.
- */
 function Titled(props: { title: string; flush?: boolean; children: JSX.Element }) {
   return (
     <box style={{ flexDirection: "column", paddingTop: 1, paddingBottom: 1, flexShrink: 0 }}>
@@ -580,10 +530,6 @@ function Section(props: { title: string; lines: ReadonlyArray<Line> }) {
   );
 }
 
-/**
- * A read document — the review, the plan's spec, the end of the log. The review and spec
- * are agent-written markdown, drawn through Comark; the log is plain text.
- */
 function Document(props: { title: string; panel: Panel | null; markdown?: boolean }) {
   const panel = () => props.panel;
   return (
@@ -607,19 +553,12 @@ function Document(props: { title: string; panel: Panel | null; markdown?: boolea
   );
 }
 
-/** What a panel shows: the text it read, or the one line saying why it has none. */
-function panelLine(panel: Panel): string {
+function panelLine(panel: Panel) {
   return panel._tag === "Text" ? panel.text : panel.reason;
 }
 
-/** The drawer's padding and a section's indent, which a document is drawn inside. */
 const INSET = 8;
 
-/**
- * The text as written until Comark has rendered it, or if it cannot. Set through a ref,
- * because Solid's `content` prop takes only a string. The memos keep the bridge's
- * three-second state refresh from rendering the same text again.
- */
 function Markdown(props: { text: string }) {
   const terminal = useTerminalDimensions();
   const text = createMemo(() => props.text);
@@ -630,7 +569,9 @@ function Markdown(props: { text: string }) {
   );
   let node: TextRenderable | undefined;
   createEffect(() => {
-    if (node) node.content = (styled.state === "ready" && styled()) || text();
+    if (node) {
+      node.content = (styled.state === "ready" && styled()) || text();
+    }
   });
   return (
     <text
@@ -642,11 +583,6 @@ function Markdown(props: { text: string }) {
   );
 }
 
-/**
- * The plan a run is building from: the spec it was given, and each ticket with whether its
- * boxes are all checked. Enough to judge the work against its intent without leaving the
- * tab, which is what the review beside it is here for too.
- */
 function Plan(props: { plan: PlanPanel | null }) {
   return (
     <Show
@@ -671,7 +607,6 @@ function Plan(props: { plan: PlanPanel | null }) {
   );
 }
 
-/** What each tone of an evidence line is drawn in, in the board's own palette. */
 const TONES = {
   plain: C.text,
   dim: C.dim,
@@ -694,11 +629,6 @@ function Evidenced(props: { lines: ReadonlyArray<Evidence> }) {
   );
 }
 
-/**
- * This Run's evidence: its cards, the drift nobody has settled, and what each message sent
- * to its agents actually reached. Drawn through `src/lines.ts` like the Live region, so a
- * claim can never be read as a pass and `missing` is always on screen.
- */
 function Cards(props: { live: Live | null }) {
   const cards = () => props.live?.cards ?? [];
   const drift = () => props.live?.drift ?? [];
@@ -727,27 +657,21 @@ function Cards(props: { live: Live | null }) {
   );
 }
 
-/**
- * The merge request behind a review: is it still open, did its pipeline pass, is anyone
- * still arguing in it, and — the line that decides whether to look again — has anything
- * moved since this review finished.
- */
 function MergeRequest(props: {
   url: string | null;
   panel: MrPanel | null;
   reviewedAt: number;
-  /** Where it is one of several: its state, readiness and wait, and so which one it opens. */
   readiness?: string | null;
   onOpen?: (target: string) => void;
 }) {
   const details = () => (props.panel?._tag === "Details" ? props.panel : null);
-  /**
-   * The one line there is instead of the details: no merge request yet, no glab, no login,
-   * or one nobody can read. The URL alone is what a Run has before its details are read.
-   */
   const instead = () => {
-    if (props.panel?._tag === "Unavailable") return props.panel.reason;
-    if (props.url !== null) return props.url;
+    if (props.panel?._tag === "Unavailable") {
+      return props.panel.reason;
+    }
+    if (props.url !== null) {
+      return props.url;
+    }
     return "no merge request yet — opened by the mr step";
   };
   const ref = () => (props.url === null ? null : readMrRef(props.url));
@@ -792,8 +716,6 @@ function MergeRequestDetails(props: {
       <Show when={moved() !== ""}>
         <text fg={props.mr.updatedAt > props.reviewedAt ? C.blue : C.dim}>{moved()}</text>
       </Show>
-      {/* The URL is on screen and the pane owns the mouse while it is focused, so copying
-          it is a press rather than a drag. */}
       <Show when={props.onOpen !== undefined}>
         <Button
           label={`Open ${words().sign}${props.mr.iid}`}

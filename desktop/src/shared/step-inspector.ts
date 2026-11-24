@@ -13,8 +13,10 @@ export const stepLines = (
   first: number,
   start: number | null | undefined,
   starts: ReadonlyArray<number>,
-): StepLog => {
-  if (tail?._tag !== "Text" || start == null) return { panel: null, count: 0, older: null };
+) => {
+  if (tail?._tag !== "Text" || start == null) {
+    return { panel: null, count: 0, older: null };
+  }
   const all = tail.text === "" ? [] : Str.split(pipe(tail.text, Str.replace(/\n$/, "")), "\n");
   const next = Arr.reduce(
     Arr.filter(starts, (line) => line > start),
@@ -37,36 +39,43 @@ export const stepEvidence = (
   checks: ReadonlyArray<VerificationView>,
   step: string,
   picked: FlowRun | null,
-): ReadonlyArray<VerificationView> =>
+) =>
   Arr.filter(checks, (one) => {
-    if (one.step !== step) return false;
-    if (picked === null) return true;
+    if (one.step !== step) {
+      return false;
+    }
+    if (picked === null) {
+      return true;
+    }
     const place =
       one.place == null ? null : "item" in one.place ? one.place.item : `Round ${one.place.round}`;
     return place === picked.place;
   });
-export const inspectorPart = (node: FlowRun, live: boolean): InspectorPart => {
+export const inspectorPart = (node: FlowRun, live: boolean) => {
   if (
     node.wait === "proposal" ||
     Arr.some(node.questions, (one) => one.open ?? one.answered === null)
-  )
+  ) {
     return "decision";
+  }
   if (
     live &&
     (node.state === "running" ||
       node.wait === "stalled" ||
       node.wait === "parked" ||
       node.wait === "usage")
-  )
+  ) {
     return "terminal";
-  if (node.state === "failed") return "why";
-  if (node.kind === "check" || node.produces === "evidence") return "evidence";
+  }
+  if (node.state === "failed") {
+    return "why";
+  }
+  if (node.kind === "check" || node.produces === "evidence") {
+    return "evidence";
+  }
   return node.log == null ? "details" : "log";
 };
-export const shownPart = (
-  chosen: InspectorPart,
-  parts: ReadonlyArray<InspectorTab>,
-): InspectorPart =>
+export const shownPart = (chosen: InspectorPart, parts: ReadonlyArray<InspectorTab>) =>
   Arr.some(parts, (one) => one.value === chosen) ? chosen : (parts[0]?.value ?? chosen);
 export const quietWork = (node: FlowRun) =>
   node.state === "expected"
@@ -76,15 +85,16 @@ export interface InspectorTab {
   readonly value: InspectorPart;
   readonly label: string;
 }
-export const inspectorParts = (
-  node: FlowRun,
-  live: boolean,
-  logs: number,
-  proofs: number,
-): ReadonlyArray<InspectorTab> => {
-  const parts: InspectorTab[] = [];
-  if (live) parts.push({ value: "terminal", label: "Terminal" });
-  if (node.log != null) parts.push({ value: "log", label: `Log · ${logs}` });
-  if (proofs > 0) parts.push({ value: "evidence", label: `Evidence · ${proofs}` });
+export const inspectorParts = (node: FlowRun, live: boolean, logs: number, proofs: number) => {
+  const parts: Array<InspectorTab> = [];
+  if (live) {
+    parts.push({ value: "terminal", label: "Terminal" });
+  }
+  if (node.log != null) {
+    parts.push({ value: "log", label: `Log · ${logs}` });
+  }
+  if (proofs > 0) {
+    parts.push({ value: "evidence", label: `Evidence · ${proofs}` });
+  }
   return parts;
 };

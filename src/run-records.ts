@@ -1,8 +1,4 @@
-// A Run's own records in `host.db` (ADR-draft-a-runs-own-records-are-rows-in-the-hosts-database):
-// its journals, line by line in the order written, and its facts, one value each. Each is
-// named by the file an older build kept it in, which is what the import reads and the
-// rollback writes.
-
+// WARNING: each record is named by the file an older build kept it in: the import reads and the rollback writes those names.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Clock, Context, Effect, Layer, Option } from "effect";
@@ -10,18 +6,14 @@ import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
 import { StoreWrites } from "./store-writes";
 
-/** The migration that made these tables and imported the files they replace. */
 export const RUN_RECORDS_MIGRATION_ID = 25;
 export const RUN_RECORDS_MIGRATION = `${RUN_RECORDS_MIGRATION_ID}_run_records`;
 
-/** Where an older build kept a Run's records, under the state directory, by the Run's id. */
 export const AREAS = ["runs", "evidence"] as const;
 
-/** A record's name: its path in the Run's directory, `evidence/` first for that area's. */
 export const recordName = (area: (typeof AREAS)[number], path: string) =>
   area === "runs" ? path : `${area}/${path}`;
 
-/** The journals an older build kept as JSONL files, by name. */
 export const LEGACY_JOURNALS: ReadonlyArray<string> = [
   "steps.jsonl",
   "operations.jsonl",
@@ -43,10 +35,8 @@ export const LEGACY_JOURNALS: ReadonlyArray<string> = [
   "evidence/steering/verifications.jsonl",
 ];
 
-/** Journals of plain lines rather than JSON. */
 export const TEXT_JOURNALS: ReadonlySet<string> = new Set(["steering/carded"]);
 
-/** The facts an older build kept one file each, by name. */
 export const LEGACY_FACTS: ReadonlyArray<string> = [
   "intent.json",
   "step-steering.json",
@@ -59,16 +49,11 @@ export const LEGACY_FACTS: ReadonlyArray<string> = [
   "evidence/approved.json",
 ];
 
-/** Facts an older build kept one file each beside others of their kind, by name prefix. */
 export const LEGACY_FACT_PREFIXES: ReadonlyArray<string> = [
   "steering/progress/",
   "steering/externals.",
 ];
 
-/**
- * The controls the host sets over a Run that an older build kept as `<control>.<run>`
- * files in the state directory, one value each.
- */
 export const LEGACY_CONTROLS: ReadonlyArray<string> = [
   "hold",
   "stop",
@@ -78,16 +63,11 @@ export const LEGACY_CONTROLS: ReadonlyArray<string> = [
   "awaiting",
   "usage",
 ];
-/** What the host told about a Run: one row per thing told, keyed by it (`notified.<run>`). */
 export const NOTIFIED = "notified";
-/** The children a Run waits on, one row each keyed by the child (`awaited.<run>/<child>`). */
 export const AWAITED = "awaited";
-/** What a Run's agent on core was started with, keyed by agent (`relaunch/<run>/<agent>.json`). */
 export const RELAUNCH = "relaunch";
-/** A check the host runs, keyed by its id under no Run (`running-checks/<id>.json`); its Run is in its record. */
 export const RUNNING_CHECK = "running-check";
 
-/** A Run directory's records: the Run, and what its records' names start with. */
 export const addressOf = (dir: string) => {
   const run = runOfDir(dir);
   const parent = runOfDir(parentOf(dir));
@@ -96,100 +76,68 @@ export const addressOf = (dir: string) => {
 
 export const STEPS = "steps.jsonl";
 
-/** What a write to a Run's records invalidates. */
 export const RUN_RECORDS = "collie/run-records";
 
 const lastSlash = (path: string) => Option.getOrElse(Str.lastIndexOf("/")(path), () => -1);
 
 export const runOfDir = (dir: string) => Str.slice(lastSlash(dir) + 1)(dir);
 
-/** The directory `path` is in; empty where it names none. */
 export const parentOf = (path: string) => Str.slice(0, Math.max(0, lastSlash(path)))(path);
 
 export interface RunRecordsApi {
-  /** A journal's lines, oldest first. */
   readonly lines: (run: string, journal: string) => Effect.Effect<ReadonlyArray<string>>;
-  /** These Runs' lines of `journal`, in one read; a Run with none is absent. */
   readonly linesOf: (
     runs: ReadonlyArray<string>,
     journal: string,
   ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<string>>>;
-  /**
-   * These Runs' lines of `journal` whose kind (its `kind`, else its `operation`) is one of
-   * `kinds`, newest first, or for null only its last line, in one read; a Run with none is
-   * absent.
-   */
   readonly lastOf: (
     runs: ReadonlyArray<string>,
     journal: string,
     kinds: ReadonlyArray<string> | null,
   ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<string>>>;
-  /**
-   * These Runs' briefs of `journal`'s lines, oldest first, in one read: what a reader across
-   * Runs needs of each line, for a journal that keeps one. A Run with none is absent.
-   */
   readonly briefsOf: (
     runs: ReadonlyArray<string>,
     journal: string,
   ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<string>>>;
-  /** Appends lines to a journal, after every line already there. */
   readonly append: (
     run: string,
     journal: string,
     lines: ReadonlyArray<string>,
   ) => Effect.Effect<void>;
-  /** A fact's value, null where there is none. */
   readonly fact: (run: string, name: string) => Effect.Effect<string | null>;
-  /** These Runs' values of `name`, in one read; a Run with none is absent. */
   readonly factsOf: (
     runs: ReadonlyArray<string>,
     name: string,
   ) => Effect.Effect<ReadonlyMap<string, string>>;
-  /** The Run's facts whose names start with `prefix`, by name. */
   readonly factsUnder: (
     run: string,
     prefix: string,
   ) => Effect.Effect<ReadonlyArray<{ readonly name: string; readonly data: string }>>;
-  /** Sets a fact, or removes it for null. */
   readonly put: (run: string, name: string, value: string | null) => Effect.Effect<void>;
-  /**
-   * Replaces a fact with what `change` makes of it, in one transaction: no other write to
-   * this database lands between the read and the write. Null removes it.
-   */
+  // WARNING: one transaction: no other write lands between the read and the write.
   readonly update: <E, R>(
     run: string,
     name: string,
     change: (value: string | null) => Effect.Effect<string | null, E, R>,
   ) => Effect.Effect<string | null, E, R>;
-  /** When each of these Runs last did work, epoch ms; a Run with none recorded is absent. */
   readonly activity: (runs: ReadonlyArray<string>) => Effect.Effect<ReadonlyMap<string, number>>;
-  /**
-   * How long each workflow's Steps took: for each Step, at most its 10 latest runs, each
-   * from the Step's first entry to its last leaving.
-   */
   readonly stepSamples: Effect.Effect<
     ReadonlyArray<{ readonly workflow: string; readonly step: string; readonly ms: number }>
   >;
-  /** Records that the Run did work now. */
   readonly touch: (run: string) => Effect.Effect<void>;
-  /** A control's value over the Run, null where it is not set. */
   readonly control: (control: string, run: string, key?: string) => Effect.Effect<string | null>;
-  /** Every value of `control` set over the Run, by key. */
   readonly controlsOf: (
     control: string,
     run: string,
   ) => Effect.Effect<ReadonlyArray<{ readonly key: string; readonly data: string }>>;
-  /** Every value of `control`, over any Run. */
   readonly everyControl: (
     control: string,
   ) => Effect.Effect<
     ReadonlyArray<{ readonly run: string; readonly key: string; readonly data: string }>
   >;
-  /** These Runs' controls, in one read; a Run with none is absent. */
   readonly controlsIn: (
     runs: ReadonlyArray<string>,
   ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<ControlRow>>>;
-  /** Sets a control over the Run, or clears it for null. Not work: activity stays. */
   readonly setControl: (
     control: string,
     run: string,
@@ -206,20 +154,15 @@ export interface ControlRow {
 
 export class RunRecords extends Context.Service<RunRecords, RunRecordsApi>()("collie/RunRecords") {}
 
-/**
- * Records about a Run that the host writes for itself, not work the Run did: who looked at
- * it, what became of it, who asked for what. Writing one does not make the Run active.
- */
+// WARNING: writing one of these does not make the Run active: it is not work the Run did.
 export const BOOKKEEPING: ReadonlySet<string> = new Set([
   "operations.jsonl",
   "steering/disposition.jsonl",
   "steering/seen.jsonl",
 ]);
 
-/** How many of a Step's latest times its usual time is taken from. */
 const STEP_SAMPLES = 10;
 
-/** Each Step's time in `?1`'s Runs, or every Run's for null: its latest leaving, less its first entry. */
 const stepSamplesOf = `WITH leaves AS (
     SELECT l.run, l.key, json_extract(l.line, '$.at') AS at, r.workflow,
       row_number() OVER (PARTITION BY l.run, l.key ORDER BY json_extract(l.line, '$.at') DESC) AS nth
@@ -237,19 +180,19 @@ const stepSamplesOf = `WITH leaves AS (
     WHERE leaves.nth = 1
   ), samples AS (SELECT run, key, workflow, step, at, ms FROM timed WHERE ms >= 0)`;
 
-/**
- * `records` for one pass over these Runs: the first read of a journal, a fact, a control's
- * values or activity for any of them reads it for all of them, in one query, and the pass
- * reads that.
- */
-export const readAhead = (records: RunRecordsApi, runs: ReadonlyArray<string>): RunRecordsApi => {
+export const readAhead: (records: RunRecordsApi, runs: ReadonlyArray<string>) => RunRecordsApi = (
+  records,
+  runs,
+) => {
   const ids = new Set(runs);
   const once = <A>(read: (name: string) => Effect.Effect<A>) => {
     const reads = new Map<string, Effect.Effect<A>>();
     return (name: string) =>
       Effect.suspend(() => {
         const known = reads.get(name);
-        if (known !== undefined) return known;
+        if (known !== undefined) {
+          return known;
+        }
         return Effect.flatMap(Effect.cached(read(name)), (read) => {
           reads.set(name, read);
           return read;
@@ -260,7 +203,7 @@ export const readAhead = (records: RunRecordsApi, runs: ReadonlyArray<string>): 
   const brief = once((name) => records.briefsOf(runs, name));
   const fact = once((name) => records.factsOf(runs, name));
   const last = once((key) => {
-    const [name = "", ...kinds] = Str.split(key, "\u0000");
+    const [name, ...kinds] = Str.split(key, "\u0000");
     return records.lastOf(runs, name, kinds.length === 0 ? null : kinds);
   });
   const activity = once(() => records.activity(runs));
@@ -298,10 +241,7 @@ export const readAhead = (records: RunRecordsApi, runs: ReadonlyArray<string>): 
   };
 };
 
-/**
- * Keeps `run`'s Step times, or every Run's for null, as written, for the usual times its
- * workflow's Runs are measured against; they outlive the Run, and each Step keeps its latest ten.
- */
+// WARNING: step times outlive the Run, so forgetting a Run must not drop them.
 export const keepStepTimes = (run: string | null) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -325,7 +265,6 @@ export const trimStepTimes = Effect.gen(function* () {
   `;
 });
 
-/** Records that `run` did work now, as part of the write it is in. */
 export const markWorked = (run: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -354,11 +293,14 @@ export const runRecordsLayer = Layer.effect(RunRecords)(
       rows: ReadonlyArray<R>,
       value: (row: R) => A,
     ) => {
-      const byRun = new Map<string, A[]>();
+      const byRun = new Map<string, Array<A>>();
       for (const row of rows) {
         const list = byRun.get(row.run);
-        if (list === undefined) byRun.set(row.run, [value(row)]);
-        else list.push(value(row));
+        if (list === undefined) {
+          byRun.set(row.run, [value(row)]);
+        } else {
+          list.push(value(row));
+        }
       }
       return byRun;
     };
@@ -374,7 +316,7 @@ export const runRecordsLayer = Layer.effect(RunRecords)(
             ON CONFLICT (run, name) DO UPDATE SET data = excluded.data
           `
       ).pipe(Effect.andThen(worked(run, name)));
-    return {
+    const returned: RunRecordsApi = {
       lines: (run, journal) =>
         sql<{ readonly line: string }>`
           SELECT line FROM collie_run_lines WHERE run = ${run} AND journal = ${journal} ORDER BY seq
@@ -434,14 +376,16 @@ export const runRecordsLayer = Layer.effect(RunRecords)(
                 SELECT max(seq) AS seq FROM collie_run_lines WHERE run = ${run} AND journal = ${journal}
               `;
               let seq = last?.seq ?? -1;
-              for (const line of lines)
+              for (const line of lines) {
                 yield* sql`
                   INSERT INTO collie_run_lines (run, journal, seq, line)
                   VALUES (${run}, ${journal}, ${++seq}, ${line})
                 `;
+              }
               yield* worked(run, journal);
-              if (journal === STEPS)
+              if (journal === STEPS) {
                 yield* keepStepTimes(run).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+              }
             }).pipe(sql.withTransaction, Effect.andThen(moved(run)), Effect.orDie),
       fact: (run, name) => readFact(run, name).pipe(Effect.orDie),
       factsOf: (runs, name) =>
@@ -468,7 +412,9 @@ export const runRecordsLayer = Layer.effect(RunRecords)(
         Effect.gen(function* () {
           const was = yield* readFact(run, name).pipe(Effect.orDie);
           const now = yield* change(was);
-          if (now !== was) yield* writeFact(run, name, now).pipe(Effect.orDie);
+          if (now !== was) {
+            yield* writeFact(run, name, now).pipe(Effect.orDie);
+          }
           return now;
         }).pipe(
           sql.withTransaction,
@@ -511,7 +457,7 @@ export const runRecordsLayer = Layer.effect(RunRecords)(
               SELECT run, control, key, data FROM collie_controls WHERE run IN ${sql.in(runs)}
             `.pipe(
               Effect.map((rows) =>
-                grouped(rows, (row): ControlRow => ({
+                grouped(rows, (row) => ({
                   control: row.control,
                   key: row.key,
                   data: row.data,
@@ -527,6 +473,7 @@ export const runRecordsLayer = Layer.effect(RunRecords)(
               ON CONFLICT (control, run, key) DO UPDATE SET data = excluded.data
             `
         ).pipe(Effect.andThen(moved(run)), Effect.orDie),
-    } satisfies RunRecordsApi;
+    };
+    return returned;
   }),
 );

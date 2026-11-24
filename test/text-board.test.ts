@@ -1,7 +1,3 @@
-// The text board's key loop, on a pane whose stdin is a terminal: what a key does and what
-// the human's terminal is left in. `bun test` has no terminal, so stdin is stubbed as one
-// and stdout, which is not one, sends the board to its text view.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -17,9 +13,8 @@ import { recordsAt } from "../src/records";
 import { until } from "./support/host";
 import { proves } from "./support/world";
 
-const CLEAR = "\x1b[2J\x1b[H";
+const CLEAR = "\u001b[2J\u001b[H";
 
-/** `process.stdin` as a terminal for the scope: its raw modes recorded, its keys sent by hand. */
 const terminalStdin = Effect.acquireRelease(
   Effect.sync(() => {
     const stdin = process.stdin;
@@ -27,8 +22,8 @@ const terminalStdin = Effect.acquireRelease(
     const own = new Map(
       Arr.map(names, (name) => [name, Object.getOwnPropertyDescriptor(stdin, name)]),
     );
-    const rawModes: boolean[] = [];
-    let listener: ((...args: unknown[]) => void) | null = null;
+    const rawModes: Array<boolean> = [];
+    let listener: ((...args: Array<unknown>) => void) | null = null;
     const on = stdin.on.bind(stdin);
     const off = stdin.off.bind(stdin);
     Object.defineProperties(stdin, {
@@ -42,19 +37,26 @@ const terminalStdin = Effect.acquireRelease(
         writable: true,
       },
       on: {
-        value: (event: string, handler: (...args: unknown[]) => void) => {
-          if (event === "data") listener = handler;
-          else on(event, handler);
+        value: (event: string, handler: (...args: Array<unknown>) => void) => {
+          if (event === "data") {
+            listener = handler;
+          } else {
+            on(event, handler);
+          }
           return stdin;
         },
         configurable: true,
         writable: true,
       },
       off: {
-        value: (event: string, handler: (...args: unknown[]) => void) => {
+        value: (event: string, handler: (...args: Array<unknown>) => void) => {
           if (event === "data") {
-            if (listener === handler) listener = null;
-          } else off(event, handler);
+            if (listener === handler) {
+              listener = null;
+            }
+          } else {
+            off(event, handler);
+          }
           return stdin;
         },
         configurable: true,
@@ -68,8 +70,11 @@ const terminalStdin = Effect.acquireRelease(
       send: (key: string) => listener?.(Buffer.from(key)),
       restore: () => {
         for (const [name, descriptor] of own) {
-          if (descriptor === undefined) Reflect.deleteProperty(stdin, name);
-          else Object.defineProperty(stdin, name, descriptor);
+          if (descriptor === undefined) {
+            Reflect.deleteProperty(stdin, name);
+          } else {
+            Object.defineProperty(stdin, name, descriptor);
+          }
         }
       },
     };
@@ -79,14 +84,12 @@ const terminalStdin = Effect.acquireRelease(
 
 const capturedStdout = Effect.acquireRelease(
   Effect.sync(() => {
-    const written: string[] = [];
+    const written: Array<string> = [];
     const write = process.stdout.write.bind(process.stdout);
-    // SAFETY: the board writes strings and reads nothing back, so the overload that takes
-    // an encoding or a callback is never the one reached here.
-    process.stdout.write = ((chunk: string) => {
+    process.stdout.write = (chunk: string) => {
       written.push(String(chunk));
       return true;
-    }) as typeof process.stdout.write;
+    };
     return { written, restore: () => (process.stdout.write = write) };
   }),
   (captured) => Effect.sync(captured.restore),
@@ -98,75 +101,65 @@ const drawn = (written: ReadonlyArray<string>) =>
     (text) => pipe_(text, Str.includes(CLEAR)),
   );
 
-test(
-  "a board whose rebuild fails after a key hands the terminal back out of raw mode",
-  () =>
-    proves(
-      "collie-text-board-fails-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const env = yield* currentEnv.pipe(Effect.orDie);
-          const stdin = yield* terminalStdin;
-          const written = yield* capturedStdout;
-          // Every rebuild of the board reads the reported worktrees.
-          const reported = `${world.state}/${PRUNE_FILE}`;
-          let failing = false;
-          const failingFs: FileSystem.FileSystem = {
-            ...fs,
-            readFileString: (path, encoding) =>
-              failing && path === reported
-                ? Effect.die(new Error("the reported worktrees went away"))
-                : fs.readFileString(path, encoding),
-          };
+test("a board whose rebuild fails after a key hands the terminal back out of raw mode", () =>
+  proves(
+    "collie-text-board-fails-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const env = yield* currentEnv.pipe(Effect.orDie);
+        const stdin = yield* terminalStdin;
+        const written = yield* capturedStdout;
+        const reported = `${world.state}/${PRUNE_FILE}`;
+        let failing = false;
+        const failingFs: FileSystem.FileSystem = {
+          ...fs,
+          readFileString: (path, encoding) =>
+            failing && path === reported
+              ? Effect.die(new Error("the reported worktrees went away"))
+              : fs.readFileString(path, encoding),
+        };
 
-          const board = yield* Effect.forkChild(
-            workspaceFlow(new Herdr(env), env).pipe(
-              Effect.provideService(FileSystem.FileSystem, failingFs),
-              Effect.provide(recordsAt(env.stateDir)),
-            ),
-          );
-          yield* drawn(written);
-          failing = true;
-          stdin.send("l");
-          const exit = yield* Fiber.await(board).pipe(Effect.timeoutOption("10 seconds"));
+        const board = yield* Effect.forkChild(
+          workspaceFlow(new Herdr(env), env).pipe(
+            Effect.provideService(FileSystem.FileSystem, failingFs),
+            Effect.provide(recordsAt(env.stateDir)),
+          ),
+        );
+        yield* drawn(written);
+        failing = true;
+        stdin.send("l");
+        const exit = yield* Fiber.await(board).pipe(Effect.timeoutOption("10 seconds"));
 
-          expect(exit._tag === "Some" && Exit.isFailure(exit.value)).toBe(true);
-          expect(stdin.rawModes).toEqual([true, false]);
-        }),
-      [],
-    ),
-  60_000,
-);
+        expect(exit._tag === "Some" && Exit.isFailure(exit.value)).toBe(true);
+        expect(stdin.rawModes).toEqual([true, false]);
+      }),
+    [],
+  ));
 
-test(
-  "a key is acted on as it arrives, not on the board's next tick",
-  () =>
-    proves(
-      "collie-text-board-key-",
-      () =>
-        Effect.gen(function* () {
-          const env = yield* currentEnv.pipe(Effect.orDie);
-          const stdin = yield* terminalStdin;
-          const written = yield* capturedStdout;
-          // Up on the real clock: its first board is what the board waits for before it draws.
-          yield* connect(env.stateDir).pipe(Effect.orDie);
-          const clock = yield* TestClock.make();
-          yield* clock.setTime(yield* Clock.currentTimeMillis);
+test("a key is acted on as it arrives, not on the board's next tick", () =>
+  proves(
+    "collie-text-board-key-",
+    () =>
+      Effect.gen(function* () {
+        const env = yield* currentEnv.pipe(Effect.orDie);
+        const stdin = yield* terminalStdin;
+        const written = yield* capturedStdout;
+        yield* connect(env.stateDir).pipe(Effect.orDie);
+        const clock = yield* TestClock.make();
+        yield* clock.setTime(yield* Clock.currentTimeMillis);
 
-          const board = yield* Effect.forkChild(
-            workspaceFlow(new Herdr(env), env).pipe(
-              Effect.provideService(Clock.Clock, clock),
-              Effect.provide(recordsAt(env.stateDir)),
-            ),
-          );
-          yield* drawn(written);
-          stdin.send("q");
-          const code = yield* Fiber.join(board).pipe(Effect.timeoutOption("5 seconds"));
+        const board = yield* Effect.forkChild(
+          workspaceFlow(new Herdr(env), env).pipe(
+            Effect.provideService(Clock.Clock, clock),
+            Effect.provide(recordsAt(env.stateDir)),
+          ),
+        );
+        yield* drawn(written);
+        stdin.send("q");
+        const code = yield* Fiber.join(board).pipe(Effect.timeoutOption("5 seconds"));
 
-          expect(Option.getOrNull(code)).toBe(0);
-        }),
-      [],
-    ),
-  60_000,
-);
+        expect(Option.getOrNull(code)).toBe(0);
+      }),
+    [],
+  ));

@@ -20,11 +20,7 @@ export type ConnectionReading = typeof ConnectionReading.Type;
 export const Connection = Schema.Struct({ id: ConnectionId, reading: ConnectionReading });
 export type Connection = typeof Connection.Type;
 
-/**
- * A host's Connections as sent. Until the next protocol bump the human's sign-in goes as
- * protocol 4's `slack-user`, and a `slack` sent is a protocol-4 host's bot; an id this build
- * does not know is dropped.
- */
+// WARNING: until the next protocol bump a sign-in is sent as protocol 4's slack-user, not slack.
 export const HostConnections = Schema.Array(
   Schema.Struct({ id: Schema.String, reading: ConnectionReading }),
 ).pipe(
@@ -62,7 +58,7 @@ export const HOST_CONNECTION_USES: ReadonlyArray<typeof ConnectionUse.Type> = [
   },
 ];
 
-export const connectionsLines = (connections: ReadonlyArray<Connection>): string =>
+export const connectionsLines = (connections: ReadonlyArray<Connection>) =>
   Arr.join(
     Arr.map(
       connections,

@@ -1,6 +1,3 @@
-// Whether anyone has seen what a finished Run reported, recorded by its host once for the
-// whole Flock (ADR-draft-a-finished-run-is-seen-once-for-the-flock).
-
 import * as Str from "effect/String";
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
 import { Seen } from "./board-model";
@@ -24,7 +21,6 @@ const sincePath = Effect.fn("Seen.sincePath")(function* (stateDir: string) {
   return path.join(stateDir, "seen-since");
 });
 
-/** The first host to record seen notes when it started; a later start keeps that moment. */
 export const markSeenSince = Effect.fn("Seen.markSince")(function* (stateDir: string, at: string) {
   const fs = yield* FileSystem.FileSystem;
   yield* fs
@@ -36,13 +32,15 @@ export const markSeenSince = Effect.fn("Seen.markSince")(function* (stateDir: st
     );
 });
 
-/** When seen began to be recorded here, or null where no host has; a Run that ended earlier counts as seen. */
+// WARNING: a Run that ended before recording began counts as seen.
 export const seenSince = Effect.fn("Seen.since")(function* (stateDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const text = yield* fs
     .readFileString(yield* sincePath(stateDir))
     .pipe(Effect.option, Effect.map(Option.getOrNull));
-  if (text === null) return null;
+  if (text === null) {
+    return null;
+  }
   const at = epochMs(Str.trim(text));
   return Number.isFinite(at) ? at : null;
 });

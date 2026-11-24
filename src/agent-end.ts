@@ -1,29 +1,13 @@
-// The one way a Run's agent ends (ADR-0059 D1, D4). Every end takes the same steps, in
-// this order:
-//
-// 1. prove the incarnation is this Run's, from its launch record;
-// 2. stop it where its work runs;
-// 3. require it to be Quiet;
-// 4. end its core terminal, and require what ran in it to be Quiet;
-// 5. log the end on the Run's log.
-//
-// In the caller's mode, steps 4 and 5 are the caller's: it ends the terminals itself once
-// every agent has answered, then logs each end with `endedLine`.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Clock, Data, Effect, FileSystem, Schedule } from "effect";
 import { RELAUNCH, RunRecords } from "./run-records";
-import {
-  STOP_WAIT_MS,
-  notStopped,
-  stopAgent,
-  type CompactionDeps,
-  type SeenProcess,
-} from "./compaction";
+import { STOP_WAIT_MS, notStopped, stopAgent } from "./compaction";
+import type { CompactionDeps, SeenProcess } from "./compaction";
 import { processOf, sessionOf, startedOf, stillRunning, terminate } from "./processes";
 import type { AgentInfo, Herdr, HerdrError } from "./herdr";
-import { launchDir, readLaunches, stemOf, withRelaunchLock, type Launched } from "./launches";
+import { launchDir, readLaunches, stemOf, withRelaunchLock } from "./launches";
+import type { Launched } from "./launches";
 import { reason } from "./naming";
 
 export interface EndDeps extends Pick<CompactionDeps, "ports" | "stateDir" | "log" | "account"> {
@@ -31,16 +15,10 @@ export interface EndDeps extends Pick<CompactionDeps, "ports" | "stateDir" | "lo
   readonly stopMs?: number;
 }
 
-/** Who closes the agent's pane: this module, or the caller once every agent has answered. */
 export type Closes = "close" | "caller";
 
 export type Ended =
-  /** `ended` is false where nothing of this Run's was there to end. */
   | { readonly _tag: "Closed"; readonly ended: boolean }
-  /**
-   * `locked` is why no stop could be made, where none could. `left` is what of its pane was
-   * still running once it closed.
-   */
   | {
       readonly _tag: "NotQuiet";
       readonly reason: string;
@@ -48,14 +26,13 @@ export type Ended =
       readonly left?: ReadonlyArray<SeenProcess>;
     }
   | { readonly _tag: "Unprovable"; readonly reason: string }
-  /** Only where the caller closes: another process has the agent's name, so its panes stay. */
+  // WARNING: only where the caller closes: another process holds the agent's name, so its panes stay.
   | { readonly _tag: "Replaced"; readonly reason: string };
 
 export const endedLine = (agent: string, why: string) => `${agent} ended: ${why}`;
 
 export const UNPROVABLE = "cannot be proven to be this Run's, so it was left running";
 
-/** Core would not list its agents, so nothing about this one can be proved. */
 export class AgentsUnlisted extends Data.TaggedError("AgentsUnlisted")<{
   readonly cause: HerdrError;
 }> {}
@@ -65,10 +42,6 @@ export class PaneOpen extends Data.TaggedError("PaneOpen")<{
   readonly cause: HerdrError;
 }> {}
 
-/**
- * Ends one agent of a Run. `listed` is core's agent list where the caller has already
- * read it for several ends.
- */
 export const endAgent = Effect.fn("AgentEnd.end")(function* (
   deps: EndDeps,
   launched: Ending,
@@ -77,7 +50,9 @@ export const endAgent = Effect.fn("AgentEnd.end")(function* (
   listed?: ReadonlyArray<AgentInfo>,
 ) {
   const runId = launched.runId;
-  if (runId === undefined) return yield* ending(deps, launched, why, closes, listed);
+  if (runId === undefined) {
+    return yield* ending(deps, launched, why, closes, listed);
+  }
   return yield* withRelaunchLock(
     deps.stateDir,
     runId,
@@ -86,7 +61,6 @@ export const endAgent = Effect.fn("AgentEnd.end")(function* (
       reason: `${launched.agent} could not be stopped while core's recovery starts it again`,
     }),
     Effect.gen(function* () {
-      // Recovery rewrites the record with the incarnation it started.
       const operation = launched.operation;
       const stem = operation === undefined ? null : stemOf({ ...launched, operation });
       const now = Option.getOrUndefined(
@@ -95,8 +69,9 @@ export const endAgent = Effect.fn("AgentEnd.end")(function* (
           (one) => stemOf(one) === stem,
         ),
       );
-      if (now === undefined || now.terminalId === launched.terminalId)
+      if (now === undefined || now.terminalId === launched.terminalId) {
         return yield* ending(deps, launched, why, closes, listed);
+      }
       return yield* ending(
         deps,
         { ...launched, terminalId: now.terminalId, agentSession: now.agentSession },
@@ -139,19 +114,22 @@ const ending = Effect.fnUntraced(function* (
   const one = Option.getOrUndefined(
     Arr.findFirst(agents, (agent) => agent.name === launched.agent),
   );
-  if (one !== undefined && launched.terminalId === undefined)
+  if (one !== undefined && launched.terminalId === undefined) {
     return { _tag: "Unprovable", reason: `${launched.agent} ${UNPROVABLE}` } satisfies Ended;
-  if (one !== undefined && one.terminalId !== launched.terminalId)
+  }
+  if (one !== undefined && one.terminalId !== launched.terminalId) {
     return closes === "caller"
       ? ({
           _tag: "Replaced",
           reason: `${launched.agent} was started again since, and is not this Run's to end`,
         } satisfies Ended)
       : ({ _tag: "Closed", ended: false } satisfies Ended);
+  }
 
-  // Read before the stop, while a harness that answers only alive can name its records,
-  // and again once Quiet, for what it did after.
-  if (deps.account !== undefined) yield* deps.account(launched.agent);
+  // WARNING: read before the stop, while a harness that answers only alive can still name its records.
+  if (deps.account !== undefined) {
+    yield* deps.account(launched.agent);
+  }
   const reached = yield* stopAgent(deps, launched.agent, deps.stopMs ?? STOP_WAIT_MS).pipe(
     Effect.result,
   );
@@ -163,31 +141,35 @@ const ending = Effect.fnUntraced(function* (
       locked,
     } satisfies Ended;
   }
-  if (reached.success !== null && reached.success.state !== "quiet")
+  if (reached.success !== null && reached.success.state !== "quiet") {
     return {
       _tag: "NotQuiet",
       reason: notStopped(launched.agent, reached.success, reached.success.target),
     } satisfies Ended;
+  }
 
-  // Only where its work is in its terminal, and this end ends it.
   const pane =
     reached.success === null && closes === "close"
       ? yield* paneProcesses(deps, launched.root, one?.paneId)
       : null;
 
-  if (deps.account !== undefined) yield* deps.account(launched.agent);
-  // Ended on purpose, so nothing starts it again.
+  if (deps.account !== undefined) {
+    yield* deps.account(launched.agent);
+  }
+  // WARNING: ended on purpose, so nothing may start it again.
   const runId = launched.runId;
-  if (runId !== undefined)
+  if (runId !== undefined) {
     yield* RunRecords.use((records) => records.setControl(RELAUNCH, runId, null, launched.agent));
-  if (one !== undefined && closes === "close")
+  }
+  if (one !== undefined && closes === "close") {
     yield* deps.herdr
       .terminalKill(one.paneId)
       .pipe(Effect.mapError((cause) => new PaneOpen({ paneId: one.paneId, cause })));
+  }
   const stopMs = deps.stopMs ?? STOP_WAIT_MS;
   const left =
     pane === null || "unconfirmed" in pane ? [] : yield* settled(pane.roots, pane.noted, stopMs);
-  if (left.length > 0)
+  if (left.length > 0) {
     return {
       _tag: "NotQuiet",
       reason: `${launched.agent} is not Quiet: ${Arr.join(
@@ -196,21 +178,22 @@ const ending = Effect.fnUntraced(function* (
       )} of its pane still running ${Math.round(stopMs / 1000)}s after it closed`,
       left,
     } satisfies Ended;
+  }
   const ended =
     one !== undefined ||
     reached.success !== null ||
     (pane !== null && !("unconfirmed" in pane) && pane.noted.length > 0);
   if (ended && closes === "close") {
-    if (pane !== null && "unconfirmed" in pane)
+    if (pane !== null && "unconfirmed" in pane) {
       yield* deps
         .log(`${launched.agent}: Quiet not confirmed: ${pane.unconfirmed}`)
         .pipe(Effect.ignore);
+    }
     yield* deps.log(endedLine(launched.agent, why)).pipe(Effect.ignore);
   }
   return { _tag: "Closed", ended } satisfies Ended;
 });
 
-/** The process at a pane's root now, which its agent's start records; undefined where none is named. */
 export const rootOf = (herdr: Pick<Herdr, "terminalRoot">, address: string) =>
   Effect.gen(function* () {
     const pid = yield* herdr.terminalRoot(address).pipe(Effect.orElseSucceed(() => null));
@@ -218,14 +201,9 @@ export const rootOf = (herdr: Pick<Herdr, "terminalRoot">, address: string) =>
     return pid === null || started === null ? undefined : { pid, started };
   });
 
-/** How long what a closed pane leaves gets to end before each process is sent its one SIGTERM. */
-const HANGUP_GRACE_MS = 2_000;
+const HANGUP_GRACE_MS = 2000;
 
-/**
- * Every process of the agent's pane, read before its close: the session of the root its
- * start recorded and of the root its pane has now. A root whose pid is now another process
- * names nothing; where none names anything, why Quiet cannot be confirmed.
- */
+// WARNING: a root whose pid now belongs to another process names nothing.
 const paneProcesses = Effect.fnUntraced(function* (
   deps: Pick<EndDeps, "herdr">,
   recorded: SeenProcess | undefined,
@@ -236,30 +214,37 @@ const paneProcesses = Effect.fnUntraced(function* (
     ...(recorded === undefined ? [] : [recorded]),
     ...(current === undefined || current.pid === recorded?.pid ? [] : [current]),
   ];
-  if (named.length === 0) return { unconfirmed: "no process of its pane could be named" };
-  const roots: SeenProcess[] = [];
-  const noted: SeenProcess[] = [];
+  if (named.length === 0) {
+    return { unconfirmed: "no process of its pane could be named" };
+  }
+  const roots: Array<SeenProcess> = [];
+  const noted: Array<SeenProcess> = [];
   for (const root of named) {
     const now = yield* processOf(root.pid);
-    if (now !== null && now.started !== root.started) continue;
+    if (now !== null && now.started !== root.started) {
+      continue;
+    }
     const session = yield* sessionOf(root.pid).pipe(Effect.result);
-    if (session._tag === "Failure")
+    if (session._tag === "Failure") {
       return {
         unconfirmed: `its pane's processes could not be listed (${reason(session.failure)})`,
       };
+    }
     roots.push(root);
-    if (now !== null) noted.push(root);
-    for (const one of session.success) noted.push({ pid: one.pid, started: one.started });
+    if (now !== null) {
+      noted.push(root);
+    }
+    for (const one of session.success) {
+      noted.push({ pid: one.pid, started: one.started });
+    }
   }
-  if (roots.length === 0)
+  if (roots.length === 0) {
     return { unconfirmed: `its pane's root, pid ${named[0]!.pid}, is now another process` };
+  }
   return { roots, noted };
 });
 
-/**
- * What of a closed pane is still running once the stop's budget is spent: each process left
- * after the grace a hang-up gets is sent one SIGTERM, as a Codex server's session is.
- */
+// WARNING: each process still running after the hang-up grace gets exactly one SIGTERM.
 const settled = Effect.fnUntraced(function* (
   roots: ReadonlyArray<SeenProcess>,
   noted: ReadonlyArray<SeenProcess>,
@@ -268,13 +253,15 @@ const settled = Effect.fnUntraced(function* (
   const start = yield* Clock.currentTimeMillis;
   const running = Effect.gen(function* () {
     const found = [...noted];
-    // A process started as the pane closed is in its session too, while its root's pid is
-    // not another process's.
+    // WARNING: a process started as the pane closed is in its session too, while its root's pid is not reused.
     for (const root of roots) {
       const now = yield* processOf(root.pid);
-      if (now !== null && now.started !== root.started) continue;
-      for (const one of yield* sessionOf(root.pid).pipe(Effect.orElseSucceed(() => [])))
+      if (now !== null && now.started !== root.started) {
+        continue;
+      }
+      for (const one of yield* sessionOf(root.pid).pipe(Effect.orElseSucceed(() => []))) {
         found.push({ pid: one.pid, started: one.started });
+      }
     }
     const distinct = Arr.dedupeWith(
       found,
@@ -290,14 +277,17 @@ const settled = Effect.fnUntraced(function* (
       }),
     );
   const hungUp = yield* until(start + Math.min(HANGUP_GRACE_MS, budgetMs));
-  if (hungUp.length === 0) return hungUp;
-  for (const one of hungUp) yield* terminate(one.pid);
+  if (hungUp.length === 0) {
+    return hungUp;
+  }
+  for (const one of hungUp) {
+    yield* terminate(one.pid);
+  }
   return yield* until(
     Math.max(start + budgetMs, (yield* Clock.currentTimeMillis) + HANGUP_GRACE_MS),
   );
 });
 
-/** A Run's log, for an end its Agents service does not make. */
 export const runLog = (stateDir: string, runId: string) => (line: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

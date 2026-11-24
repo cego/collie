@@ -1,14 +1,11 @@
-// How Collie reaches a forge: one interface, a GitLab adapter and a GitHub adapter, and
-// the choice between them. `glab` is run only by the GitLab adapter (`gitlab.ts` and its
-// doctor checks) and `gh` only by the GitHub one (ADR-0050 D1); a caller asks the forge of
-// the reference or checkout in front of it.
-
+// WARNING: glab runs only in the GitLab adapter and gh only in the GitHub one.
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import type { Effect, FileSystem, Path } from "effect";
 import type { PlatformError } from "effect/PlatformError";
-import { forgeOfRef, parseMrTarget, type MrForge, type MrPanel, type MrRef } from "../board-model";
+import { forgeOfRef, parseMrTarget } from "../board-model";
+import type { MrForge, MrPanel, MrRef } from "../board-model";
 import type { Ran, Runner } from "../mr";
 import type { Posted } from "../sdk";
 import { github } from "./github";
@@ -21,13 +18,11 @@ import type { FailedTest } from "../own-tests";
 export interface Readiness {
   readonly ok: boolean;
   readonly cause?: "login-missing" | "forge-unavailable";
-  /** Why not, phrased for the runner's skip note. */
   readonly reason: string;
 }
 
 export type DeployTier = "production" | "staging";
 
-/** A branch's open merge request, preferring auto-merge, none, or why the forge could not say. */
 export type ForBranch =
   | {
       readonly ok: true;
@@ -39,7 +34,6 @@ export type ForBranch =
     }
   | { readonly ok: false; readonly reason: string };
 
-/** A merge request from a branch, in any state, with when it opened and merged or closed. */
 export interface FromBranch {
   readonly iid: string;
   readonly url: string;
@@ -48,12 +42,10 @@ export interface FromBranch {
   readonly ended: string | null;
 }
 
-/** A branch's merge requests in every state, or why the forge could not say. */
 export type FromBranchList =
   | { readonly ok: true; readonly mrs: ReadonlyArray<FromBranch> }
   | { readonly ok: false; readonly reason: string };
 
-/** A pipeline job's state, as a check left to CI reads it; `missing` is a pipeline without it. */
 export type JobState =
   | "passed"
   | "pending"
@@ -63,49 +55,36 @@ export type JobState =
   | "cancelled"
   | "missing";
 
-/** A named job on a merge request's head commit, or why the forge could not say. */
 export type JobRead =
   | {
       readonly ok: true;
       readonly head: string;
       readonly state: JobState;
       readonly url: string | null;
-      /** What `retryJob` and `jobLog` take; null where there is no such job. */
       readonly id: string | null;
-      /** The merge commit a merged-results pipeline of `head` ran on, else null. */
       readonly merge: string | null;
-      /** Earlier failed attempts, newest first, as `failedAttempt` takes each one. */
       readonly retryOf: ReadonlyArray<string>;
-      /** The branch the merge request targets, where the forge said. */
       readonly target: string | null;
     }
   | { readonly ok: false; readonly reason: string };
 
-/** A job's failed attempt: where it is, and the tests its run's failed jobs' logs name as failed. */
 export interface FailedAttempt {
   readonly url: string | null;
-  /** None where the logs cannot be read or name no test. */
   readonly tests: ReadonlyArray<FailedTest>;
-  /** Its pipeline's or run attempt's failed jobs, null where they could not be listed. */
   readonly jobs: ReadonlyArray<FailedJob> | null;
 }
 
-/** A failed job by name, and the failed tests its own log names, null where it could not be read. */
 export interface FailedJob {
   readonly name: string;
   readonly tests: ReadonlyArray<FailedTest> | null;
 }
 
-/** A job of a pipeline read whole; `manual` waits for somebody to start it by hand. */
 export type PipelineJobState = JobState | "manual";
 
-/** A pipeline or Actions run and its jobs, or why the forge could not say. */
 export type PipelineRead =
   | {
       readonly ok: true;
-      /** It finished, and the forge says it succeeded. */
       readonly succeeded: boolean;
-      /** The project it ran in, as `host/path`, the branch or tag it ran for, and its commit. */
       readonly project: string;
       readonly ref: string;
       readonly sha: string;
@@ -117,52 +96,41 @@ export type PipelineRead =
     }
   | { readonly ok: false; readonly reason: string };
 
-/** The newest pipeline or Actions run a tag started, null where none, or why not. */
 export type TagPipelineRead =
   | { readonly ok: true; readonly url: string | null }
   | { readonly ok: false; readonly reason: string };
 
-/** The commit a tier's newest successful deployment has, null where none, or why not. */
 export type DeployedRead =
   | { readonly ok: true; readonly sha: string | null }
   | { readonly ok: false; readonly reason: string };
 
-/** A staging environment's live commit, and whether the requested commit was deployed by the selected jobs, or by any job where none were selected. */
 export interface StagingEnvironment {
   readonly name: string;
   readonly live: string | null;
   readonly hasCommit: boolean;
 }
 
-/** Each staging environment, or why the forge could not say. */
 export type StagingRead =
   | { readonly ok: true; readonly environments: ReadonlyArray<StagingEnvironment> }
   | { readonly ok: false; readonly reason: string };
 
-/** What asking for a pipeline on a merge request's head came to. */
 export type PipelineStart =
   | { readonly _tag: "Has"; readonly url: string }
   | { readonly _tag: "Started"; readonly url: string }
-  /** The forge runs one on every push without being asked. */
   | { readonly _tag: "Unneeded"; readonly why: string }
-  /** The project's CI gives this head no pipeline, in the forge's words. */
   | { readonly _tag: "NoneByRules"; readonly message: string }
   | { readonly _tag: "Failed"; readonly reason: string };
 
-/** The same job where the branch leaves its target, or on the target's latest pipeline. */
 export type BaseJobRead =
   | {
       readonly ok: true;
-      /** The commit its pipeline ran on. */
       readonly at: string;
       readonly state: JobState;
       readonly url: string | null;
-      /** What `failedAttempt` takes; null where there is no such job. */
       readonly id: string | null;
     }
   | { readonly ok: false; readonly reason: string };
 
-/** A job on the target branch's newest commit; `at` is null where no pipeline names one. */
 export type TargetJobRead =
   | {
       readonly ok: true;
@@ -170,7 +138,6 @@ export type TargetJobRead =
       readonly at: string | null;
       readonly state: JobState;
       readonly url: string | null;
-      /** What `failedAttempt` takes; null where there is no such job. */
       readonly id: string | null;
     }
   | { readonly ok: false; readonly reason: string };
@@ -187,7 +154,6 @@ export interface ReviewCommands {
   readonly checkout: string;
 }
 
-/** What Collie asks a forge. Every answer is a value: a forge that cannot be asked says why. */
 export interface Forge {
   readonly name: MrForge;
   readonly reviewChanges: <R>(
@@ -213,17 +179,13 @@ export interface Forge {
     never,
     R
   >;
-  /**
-   * The open issues; with numbers, those issues read one by one, as a listing can lag a
-   * filing; with `closedSince`, the issues closed since then.
-   */
+  // WARNING: with numbers, issues are read one by one, as a listing can lag a filing.
   readonly issues: <R>(
     project: string,
     cwd: string,
     run: Runner<R>,
     which?: IssueQuery,
   ) => Effect.Effect<IssueList, never, R | ForgeHttp>;
-  /** The open merge requests, with their descriptions as `body`. */
   readonly requests: (project: string, cwd: string) => Effect.Effect<IssueList, never, ForgeHttp>;
   readonly fileIssue: <R>(
     project: string,
@@ -239,39 +201,33 @@ export interface Forge {
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<Readiness, never, R | ForgeHttp>;
-  /** The CLI is installed and logged in to `project`'s host; a null project asks the checkout at `cwd`. */
   readonly ready: <R>(
     project: string | null,
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<Readiness, never, R | ForgeHttp>;
-  /** Who the CLI is logged in as, or null where it will not say. */
   readonly login: <R>(
     cwd: string,
     run: Runner<R>,
     project?: string | null,
   ) => Effect.Effect<string | null, never, R | ForgeHttp>;
-  /** One merge request as the panel shows it. */
   readonly details: <R>(
     ref: MrRef,
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<MrPanel, never, R | ForgeHttp>;
-  /** How far a merged commit has been deployed, or null where the forge does not say. */
   readonly liveTier: <R>(
     ref: MrRef,
     mergedSha: string,
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<DeployTier | null, never, R | ForgeHttp>;
-  /** The commit `tier`'s newest successful deployment has, in `ref`'s project (ADR-0050 D7). */
   readonly deployed: <R>(
     ref: MrRef,
     tier: DeployTier,
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<DeployedRead, never, R | ForgeHttp>;
-  /** `ref`'s project's staging environments, one by one; a null `commit` asks for none. */
   readonly stagingEnvironments: <R>(
     ref: MrRef,
     commit: string | null,
@@ -279,139 +235,108 @@ export interface Forge {
     run: Runner<R>,
     jobs?: ReadonlyArray<string>,
   ) => Effect.Effect<StagingRead, never, R | ForgeHttp>;
-  /** The open merge request whose source branch is `branch`, if any. */
   readonly forBranch: <R>(
     project: string,
     branch: string,
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<ForBranch, never, R | ForgeHttp>;
-  /**
-   * Whether `branch`, pushed or not, is the default branch or matches any protection rule
-   * or ruleset, whatever the rule allows; null where the forge cannot say.
-   */
   readonly protects: <R>(
     project: string,
     branch: string,
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<boolean | null, never, R | ForgeHttp>;
-  /** Every merge request whose source branch is `branch`, whatever its state. */
   readonly fromBranch: <R>(
     project: string,
     branch: string,
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<FromBranchList, never, R | ForgeHttp>;
-  /** The job named `name` in the pipeline on the merge request's head commit. */
   readonly job: <R>(
     ref: MrRef,
     name: string,
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<JobRead, never, R | ForgeHttp>;
-  /**
-   * The job named `name` at the merge-base of the merge request's head and its target
-   * branch, or on the target branch's latest pipeline where that commit has none.
-   */
   readonly baseJob: <R>(
     ref: MrRef,
     name: string,
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<BaseJobRead, never, R | ForgeHttp>;
-  /** The job named `name` on the merge request's target branch's newest commit. */
   readonly targetJob: <R>(
     ref: MrRef,
     name: string,
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<TargetJobRead, never, R | ForgeHttp>;
-  /** The failed attempt `id` of a job, and the failed tests its run's failed jobs name. */
   readonly failedAttempt: <R>(
     ref: MrRef,
     id: string,
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<FailedAttempt, never, R | ForgeHttp>;
-  /** Runs the job `id` again: GitLab's retry, GitHub's rerun. */
   readonly retryJob: <R>(
     ref: MrRef,
     id: string,
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<Readiness, never, R | ForgeHttp>;
-  /** A pipeline on `head`, the merge request's head, unless one that was not skipped is there. */
   readonly startPipeline: <R>(
     ref: MrRef,
     head: string,
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<PipelineStart, never, R | ForgeHttp>;
-  /** The command line that prints job `id`'s log, for an agent to run. */
   readonly jobLog: (ref: MrRef, id: string) => string;
-  /** The repository's merge request template, relative to the checkout, or null. */
   readonly template: (
     cwd: string,
   ) => Effect.Effect<string | null, PlatformError, FileSystem.FileSystem | Path.Path>;
-  /** How a pipeline or Actions run at `url` went, or null where the forge does not say. */
   readonly runStatus: <R>(
     url: string,
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<string | null, never, R | ForgeHttp>;
-  /** The pipeline or Actions run at `url`, with its jobs; another forge's is refused. */
   readonly pipeline: <R>(
     url: string,
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<PipelineRead, never, R | ForgeHttp>;
-  /** The newest pipeline or Actions run `tag` started in `ref`'s project. */
   readonly tagPipeline: <R>(
     ref: MrRef,
     tag: string,
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<TagPipelineRead, never, R | ForgeHttp>;
-  /** Clones `project` (`host/path`) into `into`, or says why it could not. */
   readonly clone: <R>(
     project: string,
     into: string,
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<Readiness, never, R>;
-  /**
-   * Gives the checkout at `into` a credential helper for `project`'s host that asks the
-   * CLI for its token at each use, so no token is stored.
-   */
   readonly credentials: <R>(
     project: string,
     into: string,
     run: Runner<R>,
   ) => Effect.Effect<Readiness, never, R>;
-  /** "GitLab" or "GitHub". */
   readonly display: string;
-  /** The CLI it is reached through, as a human is told to log in with it. */
   readonly cli: string;
-  /** "merge request" or "pull request". */
   readonly noun: string;
-  /** The repository's web address, from its `host/path`. */
   readonly webUrl: (project: string) => string;
-  /** One note on the merge request. */
   readonly post: <R>(
     ref: MrRef,
     body: string,
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<Posted, never, R | ForgeHttp>;
-  /** A retry reconciles an uncertain write against the forge before approving again. */
+  // WARNING: a retry reconciles an uncertain write with the forge before approving again.
   readonly approve: <R>(
     ref: MrRef,
     head: string,
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<Posted & { readonly retryable?: boolean }, never, R | ForgeHttp>;
-  /** Whether `head` descends from `previous`; a `previous` the forge no longer has does not. */
   readonly descends: <R>(
     ref: MrRef,
     previous: string,
@@ -419,7 +344,6 @@ export interface Forge {
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<Answered<boolean>, never, R | ForgeHttp>;
-  /** Whether `login`'s approval stands while the head is `head`. */
   readonly approvedAt: <R>(
     ref: MrRef,
     login: string,
@@ -427,20 +351,17 @@ export interface Forge {
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<Answered<boolean>, never, R | ForgeHttp>;
-  /** Finds a top-level note by its exact last-line signature. */
   readonly findNote: <R>(
     ref: MrRef,
     signature: string,
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<Answered<boolean>, never, R | ForgeHttp>;
-  /** The merge request's review: its state, approval, mergeability, pipeline and comments. */
   readonly readReview: <R>(
     ref: MrRef,
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<ReviewRead, never, R | ForgeHttp>;
-  /** Posts `body` as it is, in the comment's thread where it has one; never resolves it. */
   readonly reply: <R>(
     ref: MrRef,
     to: Pick<ForgeComment, "thread">,
@@ -448,21 +369,19 @@ export interface Forge {
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<Readiness, never, R | ForgeHttp>;
-  /** Merges through the forge's REST merge at `head`: never admin, never auto-merge. */
+  // WARNING: merges through the REST endpoint at head, never as admin or with auto-merge.
   readonly merge: <R>(
     ref: MrRef,
     head: string,
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<MergeAnswer, never, R | ForgeHttp>;
-  /** The open merge requests on `host` that request `login`'s review, its own among them. */
   readonly reviewRequests: <R>(
     host: string,
     login: string,
     cwd: string,
     run: Runner<R>,
   ) => Effect.Effect<Answered<ReadonlyArray<ReviewRequest>>, never, R | ForgeHttp>;
-  /** My open merge requests in `project`, as assignee or author, for a menu. */
   readonly mine: <R>(
     project: string | null,
     cwd: string,
@@ -472,16 +391,13 @@ export interface Forge {
     never,
     R | ForgeHttp
   >;
-  /** Opens the merge request in a browser. */
   readonly open: <R>(ref: MrRef, cwd: string, run: Runner<R>) => Effect.Effect<Ran, never, R>;
-  /** What a reviewer runs to read the change and its description, and to check it out. */
   readonly review: (ref: MrRef) => ReviewCommands;
 }
 
-/** Where Collie's own defects are filed, whatever project the Run that found one is in. */
 export const COLLIE_REPOSITORY = "github.com/cego/collie";
 
-// The adapters import mr.ts, which imports this registry before they finish initializing.
+// WARNING: adapters import mr.ts, which imports this registry before they finish initializing.
 export const FORGES: Readonly<Record<MrForge, Forge>> = {
   get gitlab() {
     return gitlab;
@@ -491,41 +407,36 @@ export const FORGES: Readonly<Record<MrForge, Forge>> = {
   },
 };
 
-/** The forge a pipeline or Actions run's URL is on: GitHub on github.com, GitLab elsewhere. */
-export function forgeOfUrl(url: string): Forge {
+export function forgeOfUrl(url: string) {
   return /^https?:\/\/github\.com\//i.test(Str.trim(url)) ? github : gitlab;
 }
 
-/** The forge a merge request is on. */
-export function forgeOf(ref: MrRef): Forge {
+export function forgeOf(ref: MrRef) {
   return FORGES[forgeOfRef(ref)];
 }
 
-/**
- * The forge a host is on (ADR-0050 D2): GitHub on `github.com`, GitLab on the Flock's
- * GitLab host or any host whose name says `gitlab`, and none anywhere else.
- */
-export function forgeOfHost(host: string, gitlabHost?: string): MrForge | null {
+export function forgeOfHost(host: string, gitlabHost?: string) {
   const name = Str.toLowerCase(host);
-  if (name === "github.com") return "github";
+  if (name === "github.com") {
+    return "github";
+  }
   if (
     name ===
       Option.getOrUndefined(
         Option.map(Option.fromNullishOr(gitlabHost), (present) => Str.toLowerCase(present)),
       ) ||
     pipe(name, Str.includes("gitlab"))
-  )
+  ) {
     return "gitlab";
+  }
   return null;
 }
 
-/**
- * What a prompt says of an `mr:` target's forge: its name and noun, and the commands that
- * read the change, its description, and check it out. Null for any other target.
- */
 export function mrForgeFacts(target: string) {
   const ref = parseMrTarget(target);
-  if (ref === null) return null;
+  if (ref === null) {
+    return null;
+  }
   const forge = forgeOf(ref);
   return { forge: forge.display, noun: forge.noun, ...forge.review(ref) };
 }

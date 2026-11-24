@@ -1,13 +1,9 @@
-// Whether an agent's question is to standard, what to tell it where it is not, and the
-// solutions it reaches the Run as.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import type * as Types from "effect/Types";
 import type { Solution } from "./board-model";
 import type { AgentQuestion as AskedQuestion } from "./compactors";
 
-/** Claude's own convention, which Codex and pi agents are told. */
 export const RECOMMENDED_MARKER = " (Recommended)";
 
 const isRecommended = Str.endsWith(RECOMMENDED_MARKER);
@@ -55,8 +51,7 @@ const listed = (parts: ReadonlyArray<string>) =>
 
 export const isToStandard = (question: AskedQuestion) => gapsOf(question).length === 0;
 
-/** What tells the agent how to ask its call's questions again. */
-export const questionRepair = (questions: ReadonlyArray<AskedQuestion>): string =>
+export const questionRepair = (questions: ReadonlyArray<AskedQuestion>) =>
   Arr.join(
     [
       "Collie did not post this question.",
@@ -74,10 +69,11 @@ export const questionRepair = (questions: ReadonlyArray<AskedQuestion>): string 
     " ",
   );
 
-/** The flag on a question posted short of standard, or null where it is to standard. */
-export const shortfallOf = (question: AskedQuestion): string | null => {
+export const shortfallOf = (question: AskedQuestion) => {
   const gaps = gapsOf(question);
-  if (gaps.length === 0) return null;
+  if (gaps.length === 0) {
+    return null;
+  }
   const count = question.options.length;
   const recommended = recommendedCount(question);
   const recommendation =
@@ -89,11 +85,8 @@ export const shortfallOf = (question: AskedQuestion): string | null => {
   return `The agent gave ${count} ${count === 1 ? "option" : "options"} and ${recommendation}; Collie asked for ${listed(Arr.map(gaps, (gap) => gap.shortfall))}.`;
 };
 
-/**
- * Its options as solutions numbered from 1, the one recommended first, without the
- * marker. More or fewer than one marked, none is recommended.
- */
-export const solutionsOf = (question: AskedQuestion): ReadonlyArray<Solution> => {
+// WARNING: more or fewer than one marked means none is recommended.
+export const solutionsOf = (question: AskedQuestion) => {
   const one = recommendedCount(question) === 1;
   const ordered = one
     ? [
@@ -106,8 +99,12 @@ export const solutionsOf = (question: AskedQuestion): ReadonlyArray<Solution> =>
       id: String(at + 1),
       title: titleOf(option.label),
     };
-    if (option.description !== undefined) solution.detail = option.description;
-    if (one && isRecommended(option.label)) solution.recommended = true;
+    if (option.description !== undefined) {
+      solution.detail = option.description;
+    }
+    if (one && isRecommended(option.label)) {
+      solution.recommended = true;
+    }
     return solution;
   });
 };

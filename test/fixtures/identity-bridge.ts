@@ -34,16 +34,24 @@ Effect.gen(function* () {
     pending += chunk.toString();
     for (;;) {
       const end = Option.getOrElse(Str.indexOf("\n")(pending), () => -1);
-      if (end < 0) return;
+      if (end < 0) {
+        return;
+      }
       const line = Str.slice(0, end)(pending);
       pending = Str.slice(end + 1)(pending);
-      if (line === "") continue;
+      if (line === "") {
+        continue;
+      }
       run(
         Effect.gen(function* () {
           const frame = yield* decodeFrame(line);
-          if (frame._tag !== "Request" || frame.tag !== "identity") return;
+          if (frame._tag !== "Request" || frame.tag !== "identity") {
+            return;
+          }
           yield* note("identity");
-          if (mode === "silent") return;
+          if (mode === "silent") {
+            return;
+          }
           const value =
             mode === "malformed"
               ? { build: 42 }

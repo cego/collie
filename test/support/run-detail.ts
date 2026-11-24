@@ -1,9 +1,8 @@
 import type { RunDetail } from "../../src/board-model";
 import { NO_RUN_OUTCOME } from "../../src/views";
 
-/** A complete host record, with only what the test is about filled in. */
-export function runDetail(over: Partial<RunDetail> = {}): RunDetail {
-  return {
+export function runDetail(over: Partial<RunDetail> = {}) {
+  const returned: RunDetail = {
     id: "r1",
     dir: "/state/runs/r1",
     title: "Selected Run",
@@ -27,4 +26,5 @@ export function runDetail(over: Partial<RunDetail> = {}): RunDetail {
     diff: null,
     ...over,
   };
+  return returned;
 }

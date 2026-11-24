@@ -1,8 +1,4 @@
-// The release build. `bun build --compile` cannot run bundler plugins, and Solid needs
-// its JSX transform, so the build is a script: `bun run tools/build.ts [target]
-// [outfile]`. Every release artifact and the local `bun run build` come through here,
-// so the plugin, the libc pin and the renderer gate below cannot drift apart.
-
+// WARNING: bun build --compile cannot run bundler plugins, so the release build is this script.
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import * as BunServices from "@effect/platform-bun/BunServices";
 import {
@@ -22,28 +18,16 @@ import { bundleHc } from "./hc-release";
 import { RELEASE_TREE } from "./release-tree";
 import hcPin from "../hc-pin.json";
 
-/**
- * `linux-x64` and `bun-linux-x64` both name the same target; CI passes the short one.
- * Bun's musl targets are their own — `bun-linux-x64-musl` — and the libc below only ever
- * decided which native renderer to embed, so a musl machine building from source got a
- * glibc-linked executable it could not run, which is not what it asked for.
- */
-function bunTarget(name: string, libc: "musl" | "glibc"): string {
+// WARNING: bun's musl targets are their own; libc only picks the native renderer to embed, never the target.
+function bunTarget(name: string, libc: "musl" | "glibc") {
   const full = Str.startsWith("bun-")(name) ? name : `bun-${name}`;
   return libc === "musl" && Str.includes("-linux-")(full) && !Str.endsWith("-musl")(full)
     ? `${full}-musl`
     : full;
 }
 
-/**
- * Which linux C library the artifact is for. `@opentui/core` reads this at *runtime* to
- * pick its package, so both branches are reachable to the bundler and both native
- * libraries get embedded — 6 MB of the artifact for one that will never load. Pinned as
- * a build-time define instead. The releases are glibc; a musl machine building from
- * source sets `OPENTUI_LIBC=musl` and gets its own.
- */
+// WARNING: a build-time define, not a runtime read; otherwise both native libraries are embedded, 6 MB unused.
 const libcConfig = Config.String("OPENTUI_LIBC").pipe(Config.withDefault(""));
-/** Where hc's releases are fetched from: upstream's, unless a test serves its own. */
 const hcReleasesConfig = Config.String("COLLIE_HC_RELEASES_URL").pipe(
   Config.withDefault("https://releases.herdr.dev"),
 );
@@ -68,17 +52,12 @@ const Target = Schema.Union([
   Schema.TemplateLiteral(["bun-windows-x64-", Simd]),
 ]);
 
-/**
- * The native renderer a given target must end up carrying. `@opentui/core` picks its
- * library with an `await import` per platform, so a cross-build that resolved the wrong
- * optional package produces a binary that dies on first render on the machine it was
- * built for — and nothing on the build runner can execute it to find out. The asset key
- * below is the name the bundler registers the embedded library under, so its presence in
- * the artifact is the proof; it appears in no other target's binary.
- */
-function nativeMarker(target: string, libc: "musl" | "glibc"): string {
+// WARNING: nothing on the build runner can run a cross-built binary to prove its renderer; the asset key is the proof.
+function nativeMarker(target: string, libc: "musl" | "glibc") {
   const [, platform = "", arch = ""] = Str.split(target, "-");
-  if (platform === "darwin") return `@opentui/core-darwin-${arch}/libopentui.dylib`;
+  if (platform === "darwin") {
+    return `@opentui/core-darwin-${arch}/libopentui.dylib`;
+  }
   const suffix = platform === "linux" && libc === "musl" ? "-musl" : "";
   return `@opentui/core-${platform}-${arch}${suffix}/libopentui.so`;
 }
@@ -92,15 +71,15 @@ const program = Effect.gen(function* () {
     bunTarget(args[0] ?? `${process.platform}-${process.arch}`, libc),
   );
   const outfile = args[1] ?? "bin/collie";
-  // Renaming a sibling preserves the executable bit and never overwrites a running runner in place.
+  // WARNING: renaming a sibling keeps the executable bit and never overwrites a running runner in place.
   const staging = `${outfile}.new`;
-  // Named `release` because the embedded directory keeps its basename: `/$bunfs/root/release`.
   const tree = paths.join(
     yield* fs.makeTempDirectoryScoped({ prefix: "collie-build-" }),
     "release",
   );
-  for (const entry of RELEASE_TREE)
+  for (const entry of RELEASE_TREE) {
     yield* fs.copy(entry, paths.join(tree, entry), { overwrite: true });
+  }
   const hc = yield* bundleHc(hcPin, target, tree, {
     releases: yield* hcReleasesConfig,
     cache: "node_modules/.cache/collie-hc",
@@ -114,12 +93,12 @@ const program = Effect.gen(function* () {
 
   yield* Effect.promise(() =>
     Bun.build({
-      // The host's door runs on a Worker of its own, so the binary carries its entry too.
+      // WARNING: the host's door runs on a Worker, so the binary carries its entry too.
       entrypoints: ["src/main.ts", "src/door.ts"],
       target: "bun",
       plugins: [solidPlugin],
       define: { "process.env.OPENTUI_LIBC": libcDefine },
-      // Bytecode starts faster; ESM supports the renderer's top-level await.
+      // WARNING: bytecode for startup speed; ESM, since the renderer uses top-level await.
       bytecode: true,
       format: "esm",
       compile: { target, outfile: staging, assets: [tree] },
@@ -129,7 +108,9 @@ const program = Effect.gen(function* () {
   const marker = nativeMarker(target, libc);
   const artifact = Buffer.from(yield* fs.readFile(staging));
   const missing = Arr.filter([marker, ...carried], (name) => !artifact.includes(name));
-  if (!artifact.includes(hc)) missing.push(`hc ${hcPin.version}'s archive as pinned`);
+  if (!artifact.includes(hc)) {
+    missing.push(`hc ${hcPin.version}'s archive as pinned`);
+  }
   if (missing.length > 0) {
     yield* fs.remove(staging);
     return yield* Effect.die(

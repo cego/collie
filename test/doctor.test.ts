@@ -1,7 +1,3 @@
-// `collie doctor`: every prerequisite checked at once, each with the command that
-// fixes it. Driven at the operation, with the outside world scripted through the
-// fake-PATH rig — the same seam the `upgrade` tests use.
-
 import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -25,24 +21,21 @@ import { writeConfigValue } from "../src/config";
 import { withGitlabHost } from "../src/commands/shared";
 import manifest from "../package.json";
 import hcPin from "../hc-pin.json";
-import { registerAgent, type AgentEntry } from "../src/registry";
+import { registerAgent } from "../src/registry";
+import type { AgentEntry } from "../src/registry";
 import { openHost } from "./support/host";
 import { recordsAt } from "./support/records";
 import { slackApi } from "../src/slack";
 import { fakeSlack } from "./support/slack";
+import { stringifyJson } from "../src/json";
 
 let rig: Rig;
 let bin: FakeBin;
 
-/**
- * The environment doctor sees. Its PATH is the stub directory alone: the developer's
- * own `claude` or `glab` would otherwise answer for one a test has removed.
- */
 function env(overrides: Record<string, string> = {}) {
   return rig.pluginEnv({ PATH: `${rig.root}/bin`, ...overrides });
 }
 
-/** doctor against this rig: everything on PATH, and the rig's fake core. */
 function report(overrides: Record<string, string> = {}, slack?: typeof slackApi) {
   const pluginEnv = env(overrides);
   return doctor(pluginEnv, undefined, new Herdr(pluginEnv), slack);
@@ -56,8 +49,7 @@ const healthy = Effect.fn("doctorTest.healthy")(function* () {
   yield* writeConfigValue(rig.userDir, "gitlab_host", "gitlab.example");
   yield* gitlab({ expires: "2099-01-01" });
   yield* bin.add("ssh", `echo "Welcome to GitLab, @t!"; exit 0`);
-  // A checkout that is level with its remote. `$*`, because the fetch arrives
-  // behind the settings that stop it prompting.
+  // WARNING: A fetch that prompts is stopped by the settings behind `$*`; the match must cover every argument.
   yield* bin.add("git", `case "$*" in *rev-list*) echo 0 ;; *) exit 0 ;; esac`);
   yield* bin.add(
     "claude",
@@ -95,10 +87,8 @@ const registered = (agent: string, paneId: string, backend?: "core" | "legacy") 
     );
   });
 
-/** The one filesystem asked about is `percent` free, of 100 GiB. */
 const freeSpace = (percent: number) => rig.disk(percent);
 
-/** A glab logged in to one GitLab host, whose token expires on `expires` (or never). */
 const gitlab = (opts: { expires: string | null }) =>
   bin.add(
     "glab",
@@ -109,15 +99,12 @@ const gitlab = (opts: { expires: string | null }) =>
     esac`,
   );
 
-/** A date `days` from today, as GitLab writes one. */
 const inDays = (days: number) =>
   DateTime.now.pipe(Effect.map((now) => DateTime.formatIsoDateUtc(DateTime.add(now, { days }))));
 
-/** Take one prerequisite away from the machine, to see what doctor says about it. */
 const remove = (target: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.remove(target, { recursive: true }));
 
-/** The checks, decoded from the envelope the same way any other boundary is read. */
 const Checks = Schema.Struct({
   checks: Schema.Array(
     Schema.Struct({
@@ -137,10 +124,11 @@ function reported(result: OpResult) {
   )(result.ok ? result.data : result.error.details).checks;
 }
 
-/** One check by name, as doctor reported it. */
 function check(result: OpResult, name: string) {
   const found = Option.getOrUndefined(Arr.findFirst(reported(result), (c) => c.name === name));
-  if (!found) throw new Error(`no check named "${name}"`);
+  if (!found) {
+    throw new Error(`no check named "${name}"`);
+  }
   return found;
 }
 
@@ -201,11 +189,12 @@ test("a healthy machine passes every check and says so", () =>
 
       const result = yield* report();
 
-      if (!result.ok) return yield* Effect.die(new Error(result.error.message));
+      if (!result.ok) {
+        return yield* Effect.die(new Error(result.error.message));
+      }
       expect(result.ok && result.human).toContain("ready");
       const checks = reported(result);
       expect(Arr.every(checks, (c) => c.ok)).toBe(true);
-      // Every prerequisite, in one run.
       expect(Arr.map(checks, (c) => c.name)).toEqual([
         "hc",
         "core",
@@ -376,71 +365,58 @@ test("a core that answers passes with its version", () =>
     }),
   ));
 
-test(
-  "an agent registered on Herdr 1, or before incarnations, is reported; one on core is not",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        yield* healthy();
-        yield* registered("builder-a", "1-7");
-        yield* registered("reviewer-a", "t1", "core");
-        yield* registered("builder-legacy", "1-4", "legacy");
+test("an agent registered on Herdr 1, or before incarnations, is reported; one on core is not", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* registered("builder-a", "1-7");
+      yield* registered("reviewer-a", "t1", "core");
+      yield* registered("builder-legacy", "1-4", "legacy");
 
-        // Doctor reads the register through the host.
-        yield* openHost(rig.stateDir);
-        const result = yield* report();
+      yield* openHost(rig.stateDir);
+      const result = yield* report();
 
-        expect(check(result, "herdr 1")).toMatchObject({
-          ok: true,
-          detail:
-            "registered on Herdr 1, which Collie no longer reaches: builder-a (run run-builder-a), builder-legacy (run run-builder-legacy)",
-          fix: "collie run resume <run> starts its agents again on core",
-        });
-      }),
-    ),
-  30_000,
-);
+      expect(check(result, "herdr 1")).toMatchObject({
+        ok: true,
+        detail:
+          "registered on Herdr 1, which Collie no longer reaches: builder-a (run run-builder-a), builder-legacy (run run-builder-legacy)",
+        fix: "collie run resume <run> starts its agents again on core",
+      });
+    }),
+  ));
 
-test(
-  "a host doctor cannot ask is a warning, never reported as nothing on Herdr 1",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        yield* healthy();
-        yield* registered("builder-a", "1-7");
+test("a host doctor cannot ask is a warning, never reported as nothing on Herdr 1", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* registered("builder-a", "1-7");
 
-        const result = yield* report();
+      const result = yield* report();
 
-        expect(check(result, "herdr 1")).toMatchObject({ ok: true, warn: true });
-        expect(check(result, "herdr 1").detail).toContain(
-          "could not ask this Machine's host which agents it registered",
-        );
-      }),
-    ),
-  30_000,
-);
+      expect(check(result, "herdr 1")).toMatchObject({ ok: true, warn: true });
+      expect(check(result, "herdr 1").detail).toContain(
+        "could not ask this Machine's host which agents it registered",
+      );
+    }),
+  ));
 
-test(
-  "with nothing registered on Herdr 1, doctor reports none",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        yield* healthy();
-        yield* registered("reviewer-a", "t1", "core");
+test("with nothing registered on Herdr 1, doctor reports none", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* healthy();
+      yield* registered("reviewer-a", "t1", "core");
 
-        yield* openHost(rig.stateDir);
-        const result = yield* report();
+      yield* openHost(rig.stateDir);
+      const result = yield* report();
 
-        expect(check(result, "herdr 1")).toEqual({
-          name: "herdr 1",
-          ok: true,
-          detail: "nothing on this Machine is registered on Herdr 1",
-          fix: "",
-        });
-      }),
-    ),
-  30_000,
-);
+      expect(check(result, "herdr 1")).toEqual({
+        name: "herdr 1",
+        ok: true,
+        detail: "nothing on this Machine is registered on Herdr 1",
+        fix: "",
+      });
+    }),
+  ));
 
 test("a filesystem Collie writes to with under a tenth free is a warning, with the fix", () =>
   runEffect(
@@ -550,7 +526,6 @@ test("a shim whose directory is not on PATH is its own state, not 'installed'", 
     Effect.gen(function* () {
       yield* healthy();
       const fs = yield* FileSystem.FileSystem;
-      // Where install.sh writes it by default, which is not on this PATH.
       yield* fs.makeDirectory(`${rig.root}/.local/bin`, { recursive: true });
       yield* fs.rename(`${rig.root}/bin/collie`, `${rig.root}/.local/bin/collie`);
 
@@ -574,8 +549,7 @@ test("a skill store that is not there is named, with the routine that fills it",
       expect(result.ok).toBe(false);
       const skills = check(result, "skills");
       expect(skills.detail).toContain("operator skill");
-      // The fix is the routine that owns the sources and the store, not a bare
-      // `npx skills add`, which would install a name into neither reliably.
+      // WARNING: The fix is the routine that owns the sources and store, not a bare npx skills add, which installs a name into neither reliably.
       expect(skills.fix).toBe(`sh ${rig.baselineDir}/prepare.sh`);
     }),
   ));
@@ -600,9 +574,6 @@ test("a glab that did not answer reads differently from one that said no", () =>
   runEffect(
     Effect.gen(function* () {
       yield* healthy();
-      // What a timed-out `glab auth status` comes back as, which is what `doctor`
-      // turns into a state of its own rather than into "not logged in". The bound
-      // itself is twenty seconds of real time and is not what this asserts.
       const result = yield* doctor(env(), (cmd, args, cwd) =>
         cmd === "glab"
           ? Effect.succeed({ code: 124, stdout: "", stderr: "timed out" })
@@ -629,8 +600,6 @@ test("a runner that cannot be executed is not a runner", () =>
   runEffect(
     Effect.gen(function* () {
       yield* healthy();
-      // The shim `exec`s this, so a bin/collie without its bit is the same
-      // permission-denied mystery as a shim without one.
       yield* (yield* FileSystem.FileSystem).chmod(`${rig.baselineDir}/bin/collie`, 0o644);
 
       const result = yield* report();
@@ -651,8 +620,6 @@ test("a checkout behind its remote is reported, the same state the board shows",
       const behind = check(result, "up to date");
       expect(behind.detail).toContain("3 commits behind");
       expect(behind.fix).toBe("collie upgrade");
-      // Behind is a thing to say, not a missing prerequisite: it carries the command
-      // without failing the run, the same way the board shows it without sending it.
       expect(behind.ok).toBe(true);
       expect(result.ok).toBe(true);
     }),
@@ -689,7 +656,6 @@ test("a release whose newest release cannot be read says nothing about being beh
     }),
   ));
 
-/** A release source whose newest release is `latest`. */
 const releasesAt = (latest: string) =>
   Effect.acquireRelease(
     Effect.sync(() =>
@@ -734,7 +700,6 @@ test("a release at the newest is up to date", () =>
 test("every failing check carries its fix, and the message lists them", () =>
   runEffect(
     Effect.gen(function* () {
-      // Nothing installed at all: the state a fresh machine is in, hc included.
       const result = yield* report();
 
       expect(result.ok).toBe(false);
@@ -752,8 +717,6 @@ test("what is overridden here is named, never judged and never edited", () =>
       yield* healthy();
       const project = `${rig.projectDir}/.collie`;
 
-      // A module of an author's own, claiming a shipped id — the customisation the whole
-      // search path exists for. It is named, with no opinion about what is in it.
       const modules = `${project}/workflows`;
       yield* fs.makeDirectory(modules, { recursive: true });
       const mine = `${modules}/review.workflow.ts`;
@@ -774,16 +737,13 @@ test("what is overridden here is named, never judged and never edited", () =>
         ),
       );
       const found = check(yield* report(), "workflows");
-      // Not a failure: a customisation is the user's, and doctor still exits clean.
       expect(found.ok).toBe(true);
       expect(found.detail).toContain(`review (project, ${mine})`);
       expect(found.fix).toBe("");
-      // Nothing about what any of them contains: an id doctor recognised would be the
-      // start of a shipped workflow being privileged over one somebody wrote.
+      // WARNING: An id doctor recognised would privilege a shipped workflow over one someone wrote, so it names no opinion.
       expect(found.detail).not.toContain("still runs");
 
-      // A module that answers for an id and will not load is the one exception: the
-      // layer below it is not consulted, so nothing would run that id at all.
+      // WARNING: A module that answers for an id but will not load is the one exception: the layer below is not consulted, so nothing would run that id.
       yield* fs.writeFileString(mine, "export const id = 1;\n");
       const broken = check(yield* report(), "workflows");
       expect(broken.detail).toContain("review:");
@@ -831,7 +791,6 @@ test("a template or a persona naming what nothing fills is named with the file i
       yield* fs.makeDirectory(`${project}/workflows`, { recursive: true });
       yield* fs.makeDirectory(`${project}/personas`, { recursive: true });
 
-      // A template is checked where its module loads, against the input it declares.
       const module = `${project}/workflows/templated.workflow.ts`;
       yield* fs.writeFileString(
         module,
@@ -856,7 +815,6 @@ test("a template or a persona naming what nothing fills is named with the file i
       expect(workflows.detail).not.toContain("{{role}}");
       expect(workflows.fix).toContain(module);
 
-      // A persona is told nothing but where its skills are.
       const persona = `${project}/personas/nosy.md`;
       yield* fs.writeFileString(persona, "Review {{inputs.target}} with {{skill:code-review}}.\n");
       const personas = check(yield* report(), "personas");
@@ -875,8 +833,6 @@ test("the chat pane's status line is reported, whoever configured it", () =>
       const fs = yield* FileSystem.FileSystem;
       yield* healthy();
 
-      // Nothing configured yet: something to do, not a missing prerequisite — a board
-      // still works without a line under the chat prompt.
       const bare = check(yield* report(), "status line");
       expect(bare.ok).toBe(true);
       expect(bare.detail).toContain("not configured");
@@ -885,12 +841,9 @@ test("the chat pane's status line is reported, whoever configured it", () =>
       yield* installStatusLine(env());
       const configured = check(yield* report(), "status line");
       expect(configured.detail).toContain("board");
-      // Named, so the human reads that the line under the prompt and the answer chat
-      // gets are the same fact.
       expect(configured.detail).toContain("each prompt");
       expect(configured.fix).toBe("");
 
-      // Somebody else's line is theirs: named, and never quietly replaced.
       yield* fs.writeFileString(
         yield* claudeSettingsPath(env()),
         `{"statusLine":{"type":"command","command":"my-own-line"}}\n`,
@@ -905,15 +858,12 @@ test("Helle is optional: absent is a note, configured and broken is a warning, n
       const fs = yield* FileSystem.FileSystem;
       yield* healthy();
 
-      // Nothing at all: only a workflow that waits on Helle needs it, so say where it
-      // would go and what to put there, and leave the run green.
       const absent = check(yield* report(), "helle");
       expect(absent.ok).toBe(true);
       expect(absent.warn).toBeUndefined();
       expect(absent.detail).toContain(`${rig.root}/.config/helle/env`);
       expect(absent.fix).toContain("HELLE_API_TOKEN=");
 
-      // A file with one of its two lines: misconfigured, which is not "not set up".
       const file = `${rig.root}/.config/helle/env`;
       yield* fs.makeDirectory(`${rig.root}/.config/helle`, { recursive: true });
       yield* fs.writeFileString(file, "HELLE_API_URL=https://helle.cego.dk\n");
@@ -923,7 +873,6 @@ test("Helle is optional: absent is a note, configured and broken is a warning, n
       expect(missingToken.detail).toContain("HELLE_API_TOKEN");
       expect(missingToken.fix).toContain(file);
 
-      // A token, and a Helle that does not answer: the human is told which file to look in.
       yield* fs.writeFileString(file, "HELLE_API_TOKEN=x\n");
       const result = yield* report({ COLLIE_HELLE_URL: "http://127.0.0.1:1" });
       const unreachable = check(result, "helle");
@@ -945,7 +894,6 @@ test("a Linear MCP in Claude Code is looked for, and the add command is the fix"
       expect(absent.detail).toContain("no Linear MCP server");
       expect(absent.fix).toContain("claude mcp add");
 
-      // User scope, named however the human named it: the URL says it is Linear's.
       yield* fs.writeFileString(
         `${rig.root}/.claude.json`,
         '{"mcpServers":{"tickets":{"type":"http","url":"https://mcp.linear.app/mcp"}}}',
@@ -954,7 +902,6 @@ test("a Linear MCP in Claude Code is looked for, and the add command is the fix"
       expect(found.detail).toContain('"tickets"');
       expect(found.fix).toBe("");
 
-      // A settings file Claude Code itself cannot read is a warning with the file named.
       yield* fs.writeFileString(`${rig.root}/.claude.json`, "{not json");
       const broken = check(yield* report(), "linear mcp");
       expect(broken.ok).toBe(true);
@@ -1012,7 +959,6 @@ test("a push that works only through a forwarded agent is not a Machine that can
   runEffect(
     Effect.gen(function* () {
       yield* healthy();
-      // Pushes only while an agent is offered, which a forwarded one would be.
       yield* bin.add(
         "ssh",
         `case "$*" in *IdentityAgent=none*) exit 255 ;; *) echo "Welcome to GitLab, @t!" ;; esac`,
@@ -1069,7 +1015,6 @@ test("a host git reaches over HTTPS pushes with glab's token, and no key is aske
     }),
   ));
 
-/** A glab that knows gitlab.com and gitlab.cego.dk, logged in to gitlab.cego.dk alone. */
 const twoHosts = () =>
   bin.add(
     "glab",
@@ -1095,7 +1040,9 @@ test("only the GitLab host Collie is set to is checked; another one glab knows i
 
       const result = yield* report();
 
-      if (!result.ok) return yield* Effect.die(new Error(result.error.message));
+      if (!result.ok) {
+        return yield* Effect.die(new Error(result.error.message));
+      }
       expect(check(result, "glab").detail).toContain("gitlab.cego.dk");
       expect(check(result, "gitlab token").detail).toContain("gitlab.cego.dk");
       expect(check(result, "git push").detail).toContain("gitlab.cego.dk");
@@ -1126,7 +1073,6 @@ test("set to gitlab.com, doctor checks gitlab.com instead", () =>
       expect(check(result, "git push").detail).toContain("gitlab.com");
       expect(check(result, "other gitlabs").detail).toContain("gitlab.cego.dk");
 
-      // An explicit GITLAB_HOST wins over the setting for that run; an empty one does not.
       const overridden = yield* report({ GITLAB_HOST: "gitlab.cego.dk" });
       expect(check(overridden, "git push").detail).toContain("gitlab.cego.dk");
       expect(check(yield* report({ GITLAB_HOST: "" }), "git push").detail).toContain("gitlab.com");
@@ -1142,7 +1088,9 @@ test("--gitlab-host names the host doctor checks, and a URL is refused", () =>
       const pluginEnv = env();
 
       const named = withGitlabHost(pluginEnv, Option.some("gitlab.com"));
-      if ("ok" in named) return yield* Effect.die(new Error(named.error.message));
+      if ("ok" in named) {
+        return yield* Effect.die(new Error(named.error.message));
+      }
       const result = yield* doctor(named, undefined, new Herdr(named));
       expect(check(result, "git push").detail).toContain("gitlab.com");
       expect(check(result, "other gitlabs").detail).toContain("gitlab.cego.dk");
@@ -1154,14 +1102,12 @@ test("--gitlab-host names the host doctor checks, and a URL is refused", () =>
     }),
   ));
 
-/**
- * A Projects root holding a checkout per name, each a `.git` directory, and a git that
- * answers each one's `origin` (and, for `gh-and-old-gitlab`, a gitlab remote beside it).
- */
 const checkouts = Effect.fn("doctorTest.checkouts")(function* (names: ReadonlyArray<string>) {
   const fs = yield* FileSystem.FileSystem;
   const root = `${rig.root}/projects`;
-  for (const name of names) yield* fs.makeDirectory(`${root}/${name}/.git`, { recursive: true });
+  for (const name of names) {
+    yield* fs.makeDirectory(`${root}/${name}/.git`, { recursive: true });
+  }
   yield* bin.add(
     "git",
     `case "$*" in
@@ -1209,7 +1155,6 @@ test("gh logged out fails with the login that fixes it, and logged in passes", (
   runEffect(
     Effect.gen(function* () {
       yield* healthy();
-      // origin is GitHub and an old gitlab remote sits beside it: GitHub's.
       const root = yield* checkouts(["gh-and-old-gitlab", "gh-other"]);
       yield* bin.add("gh", "exit 1");
       expect(ghCheck(yield* report(root))).toMatchObject({
@@ -1257,7 +1202,7 @@ test("a host started with no Herd is a warning, saying its judgements will be sk
       const hostRecord = (herd: string | null) =>
         fs.writeFileString(
           `${rig.stateDir}/host.build`,
-          JSON.stringify({ pid: process.pid, build: "0.0.0", root: rig.baselineDir, herd }),
+          stringifyJson({ pid: process.pid, build: "0.0.0", root: rig.baselineDir, herd }),
         );
       expect(Arr.map(reported(yield* report()), (c) => c.name)).not.toContain("host herd");
 

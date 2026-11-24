@@ -1,6 +1,3 @@
-// What a Run's host recorded that a comparison of Runs reads: its reviewers' findings, its
-// required Checks on its final tree, who intervened from outside it, and when it ended.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Effect, FileSystem, Schema } from "effect";
@@ -11,7 +8,8 @@ import { checkProof } from "./check-proof";
 import { readIntent } from "./intent";
 import { readLaunches } from "./launches";
 import { readVerifications } from "./verify";
-import { interventionsIn, ReviewedFinding, type TrialRecords } from "./trial-model";
+import { interventionsIn, ReviewedFinding } from "./trial-model";
+import type { TrialRecords } from "./trial-model";
 
 const ReviewedOutput = Schema.fromJsonString(
   Schema.Struct({ findings: Schema.optionalKey(Schema.Array(ReviewedFinding)) }),

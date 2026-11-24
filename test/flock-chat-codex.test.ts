@@ -2,12 +2,14 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { platformLayer } from "../src/platform";
-import { Effect, FileSystem, Path, Schema, Scope, Stream, flow, Result } from "effect";
-import * as SecureRandom from "effect/crypto/SecureRandom";
+import type { Path, Scope } from "effect";
+import { Effect, FileSystem, Schema, Stream, flow, Result } from "effect";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import { codexDriver, readCodexModels } from "../desktop/src/bun/codex-driver";
 import { loopbackTools } from "../desktop/src/bun/chat-endpoint";
 import type { DriverContext } from "../desktop/src/bun/driver";
-import { type AguiEvent, ends } from "../desktop/src/shared/agui";
+import { ends } from "../desktop/src/shared/agui";
+import type { AguiEvent } from "../desktop/src/shared/agui";
 import { aboutNote } from "../desktop/src/shared/chat-view";
 import { offersOf, opensOn } from "../desktop/src/bun/chat-choices";
 import { harnessLists } from "../desktop/src/bun/harness-lists";
@@ -76,7 +78,9 @@ const inspected = (events: ReadonlyArray<AguiEvent>) => {
   const text = Option.getOrUndefined(
     Arr.findFirst(events, (event) => event.type === "TEXT_MESSAGE_CONTENT"),
   );
-  if (text?.type !== "TEXT_MESSAGE_CONTENT") throw new Error("No reply");
+  if (text?.type !== "TEXT_MESSAGE_CONTENT") {
+    throw new Error("No reply");
+  }
   return flow(Schema.decodeResult(Inspected), Result.getOrThrow)(text.delta);
 };
 
@@ -387,7 +391,9 @@ test("Codex can be chosen for the chat, offering its own models, and opens on th
         chatModel: "gpt-6.2-sol",
         chatEffort: "high",
       });
-      if ("refused" in saved) return;
+      if ("refused" in saved) {
+        return;
+      }
       expect(yield* opensOn(saved, NO_FLOCK_SETTINGS, Effect.succeed({}), lists)).toEqual({
         ok: true,
         choice: { harness: "codex", model: "gpt-6.2-sol", effort: "high" },

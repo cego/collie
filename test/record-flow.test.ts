@@ -1,6 +1,3 @@
-// A record builds its Task's Flow on every change while it is open, so the Flow reads
-// only what its Task needs: a Run's deliveries only where it may be Reopened.
-
 import { expect, test } from "bun:test";
 import * as Arr from "effect/Array";
 import { Effect, FileSystem, Schema, Tracer } from "effect";
@@ -83,7 +80,9 @@ test("a lane reads stop attribution only while its Run is stopped", () =>
           Effect.provideService(RunRecords, {
             ...records,
             lastOf: (some, journal, kinds) => {
-              if (some.includes(run.id) && journal === AUDIT_FILE) reads++;
+              if (some.includes(run.id) && journal === AUDIT_FILE) {
+                reads++;
+              }
               return records.lastOf(some, journal, kinds);
             },
           }),
@@ -106,7 +105,7 @@ test("two Tasks share one reading of the installation and step duration index", 
         yield* madeRun(dir, { id: "first", task: "task-a", state: "running" }),
         yield* madeRun(dir, { id: "second", task: "task-b", state: "running" }),
       ];
-      const reads: string[] = [];
+      const reads: Array<string> = [];
       const records = yield* RunRecords;
       let sampled = 0;
       const views = yield* buildBoard({

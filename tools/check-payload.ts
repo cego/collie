@@ -1,8 +1,4 @@
-// `bun run tools/check-payload.ts <installer>...`: fails when an Electrobun installer's
-// payload has an entry its self-extractor cannot read: a GNU long-name or pax header, or any
-// path over the 100 characters a tar header holds. Checked before a release publishes one.
-// A macOS app carries its payload as a `.tar.zst` of its own, which is checked as it is.
-
+// WARNING: the Electrobun extractor cannot read GNU long-name or pax headers, or paths over 100 bytes.
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -11,7 +7,6 @@ import { Data, Effect, FileSystem } from "effect";
 
 class PayloadRefused extends Data.TaggedError("PayloadRefused")<{ readonly message: string }> {}
 
-/** What the installer's own code ends at; the zstd payload follows the last one. */
 const MARKER = new TextEncoder().encode("ELECTROBUN_ARCHIVE_V1");
 const BLOCK = 512;
 const LONGEST = 100;
@@ -19,12 +14,13 @@ const LONGEST = 100;
 const text = (bytes: Uint8Array) =>
   pipe_(new TextDecoder().decode(bytes), Str.replace(/\0.*$/s, ""));
 
-/** Every path in a tar whose header the extractor could not read, with why. */
 const unreadable = (tar: Uint8Array) => {
-  const found: string[] = [];
+  const found: Array<string> = [];
   for (let at = 0; at + BLOCK <= tar.length;) {
     const header = tar.subarray(at, at + BLOCK);
-    if (header.every((byte) => byte === 0)) break;
+    if (header.every((byte) => byte === 0)) {
+      break;
+    }
     const name = text(header.subarray(0, 100));
     const ustar = text(header.subarray(257, 262)) === "ustar";
     const prefix = ustar ? text(header.subarray(345, 500)) : "";
@@ -34,8 +30,11 @@ const unreadable = (tar: Uint8Array) => {
     if (type === "L" || type === "K") {
       const long = text(tar.subarray(at + BLOCK, at + BLOCK + size));
       found.push(`${long} (a GNU long-name entry)`);
-    } else if (type === "x" || type === "g") found.push(`${path} (a pax header)`);
-    else if (path.length > LONGEST) found.push(`${path} (${path.length} characters)`);
+    } else if (type === "x" || type === "g") {
+      found.push(`${path} (a pax header)`);
+    } else if (path.length > LONGEST) {
+      found.push(`${path} (${path.length} characters)`);
+    }
     at += BLOCK + Math.ceil(size / BLOCK) * BLOCK;
   }
   return found;

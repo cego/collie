@@ -14,7 +14,8 @@ import { onboardingSkips, ranWith } from "../desktop/src/bun/onboarding";
 import { credentialsFile, giveToken, giveGithub } from "../desktop/src/bun/credentials";
 import { connectionCards } from "../desktop/src/shared/connections";
 import { givenCredentials } from "../desktop/src/bun/given";
-import { localRoute, type ShellRoute } from "../desktop/src/bun/machine";
+import { localRoute } from "../desktop/src/bun/machine";
+import type { ShellRoute } from "../desktop/src/bun/machine";
 import type { MachineGiven } from "../desktop/src/shared/flock";
 import type { Runner } from "../src/mr";
 import { Rig } from "./support/recorder";
@@ -27,15 +28,15 @@ test("Use glab's login reads the source host and token, saves it, and hands it o
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-reuse-" });
       const secret = "a-short-opaque-token";
-      const commands: string[] = [];
-      const stdin: string[] = [];
-      const events: MachineGiven[] = [];
+      const commands: Array<string> = [];
+      const stdin: Array<string> = [];
+      const events: Array<MachineGiven> = [];
       const run: Runner = (cmd, args) =>
         Effect.sync(() => {
           commands.push(`${cmd} ${Arr.join(args, " ")}`);
           return { code: 0, stdout: args.includes("host") ? "gitlab.example.org" : secret };
         });
-      const targets: ShellRoute[] = Arr.map(["vm", "mini"], (name) => ({
+      const targets: Array<ShellRoute> = Arr.map(["vm", "mini"], (name) => ({
         ...localRoute([], name),
         machine: { profile: `p-${name}`, name },
         execute: (script, bytes) =>
@@ -63,7 +64,7 @@ test("Use glab's login reads the source host and token, saves it, and hands it o
         },
       });
       yield* writeConfigValue(rig.userDir, "gitlab_host", "gitlab.example.org");
-      const hosts: string[] = [];
+      const hosts: Array<string> = [];
       const result = yield* reuseGitlab(
         readConnectionLogin(rig.pluginEnv(), "gitlab", run),
         (login) =>
@@ -86,20 +87,23 @@ test("Use glab's login reads the source host and token, saves it, and hands it o
     }),
   ));
 
-/** A Machine's glab: the host it defaults to, and the token it holds for each host. */
-const glabOn =
-  (defaultHost: string, logins: Map<string, string>): Runner =>
-  (_, args) =>
+const glabOn: (defaultHost: string, logins: Map<string, string>) => Runner =
+  (defaultHost, logins) => (_, args) =>
     Effect.sync(() => {
       const said = Arr.join(args, " ");
-      if (said === "config get host --global") return { code: 0, stdout: defaultHost };
+      if (said === "config get host --global") {
+        return { code: 0, stdout: defaultHost };
+      }
       const token = /^config get token --host (\S+)$/.exec(said);
-      if (token !== null) return { code: 0, stdout: logins.get(token[1]!) ?? "" };
+      if (token !== null) {
+        return { code: 0, stdout: logins.get(token[1]!) ?? "" };
+      }
       const user = /^api --hostname (\S+) user$/.exec(said);
-      if (user !== null)
+      if (user !== null) {
         return logins.has(user[1]!)
           ? { code: 0, stdout: '{"username":"mk"}' }
           : { code: 1, stdout: "", stderr: "401" };
+      }
       throw new Error(`unexpected glab ${said}`);
     });
 
@@ -126,15 +130,17 @@ test("Use glab's login from the laptop reaches a VM whose glab defaults to gitla
         machine: { profile: "p-vm", name: "vm-mk" },
         execute: (script, stdin) =>
           Effect.sync(() => {
-            if (!reachable)
+            if (!reachable) {
               return { code: 255, out: "", err: "ssh: connect to host vm-mk: refused" };
+            }
             const host = /glab auth login --hostname '?([^' ]+)'? --stdin/.exec(script)?.[1];
-            if (host === undefined) return { code: 1, out: "", err: "not a glab login" };
+            if (host === undefined) {
+              return { code: 1, out: "", err: "not a glab login" };
+            }
             vmLogins.set(host, Str.trim(new TextDecoder().decode(stdin)));
             return { code: 0, out: "", err: "" };
           }),
       };
-      // Desktop's own GitLab host while the Flock sets none.
       const desktop = givenCredentials({
         dir,
         keyring,
@@ -148,7 +154,7 @@ test("Use glab's login from the laptop reaches a VM whose glab defaults to gitla
         },
       });
       const before = yield* desktop;
-      const sources: string[] = [];
+      const sources: Array<string> = [];
       const first = yield* reuseGitlab(
         readConnectionLogin(laptop.pluginEnv(), "gitlab", laptopRun),
         (login) => Effect.sync(() => void sources.push(login.host)),
@@ -213,14 +219,14 @@ test("Give to vm reads gh's token and sends it only on stdin; no login offers th
     Effect.gen(function* () {
       const rig = yield* Effect.acquireRelease(Rig.make(), (rig) => rig.close().pipe(Effect.orDie));
       const token = "ghp_fakefixture01234567890123456789";
-      const commands: string[] = [];
+      const commands: Array<string> = [];
       const run: Runner = (cmd, args) =>
         Effect.sync(() => {
           commands.push(`${cmd} ${Arr.join(args, " ")}`);
           return { code: 0, stdout: token };
         });
       const login = yield* readConnectionLogin(rig.pluginEnv(), "github", run);
-      const inputs: string[] = [];
+      const inputs: Array<string> = [];
       const target: ShellRoute = {
         ...localRoute([], "vm"),
         execute: (script, stdin) =>
@@ -260,7 +266,7 @@ test("Give to vm reads gh's token and sends it only on stdin; no login offers th
         ),
       )!;
       expect(card.primary).toMatchObject({ kind: "login", to: ["p-vm"] });
-      const opened: ReadonlyArray<string>[] = [];
+      const opened: Array<ReadonlyArray<string>> = [];
       const loginRoute = {
         ...target,
         sh: (script: string) => Effect.succeed(["ssh", "vm", script]),
@@ -308,7 +314,7 @@ test("login commands cannot echo stdin into the paired host's recorded shell res
       for (const cli of ["gh", "glab"]) {
         yield* fs.writeFileString(`${dir}/${cli}`, "#!/bin/sh\ncat >&2\nexit 1\n", { mode: 0o755 });
       }
-      const transport: unknown[] = [];
+      const transport: Array<unknown> = [];
       const search = yield* Config.String("PATH");
       const route: ShellRoute = {
         ...localRoute([], "vm"),

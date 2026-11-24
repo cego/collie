@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { judgePrerequisites, type MrLanding, type RunDetail } from "../src/prerequisites";
+import { judgePrerequisites } from "../src/prerequisites";
+import type { MrLanding, RunDetail } from "../src/prerequisites";
 
 const MR = "https://gitlab.example.com/group/app/-/merge_requests/7";
 const OTHER_MR = "https://gitlab.example.com/group/app/-/merge_requests/9";
@@ -12,7 +13,7 @@ const rows = [
   { run: "run-third", parent: null },
 ];
 
-const detail = (over: Partial<RunDetail> = {}): RunDetail => ({
+const detail = (over: Partial<RunDetail> = {}) => ({
   repo: ".",
   change: null,
   ended: false,
@@ -41,11 +42,12 @@ test("a Run this host does not know can never land", () => {
 });
 
 test("this Run or one of its ancestors can never land before it", () => {
-  for (const run of ["run-plan.implement", "run-plan"])
+  for (const run of ["run-plan.implement", "run-plan"]) {
     expect(judged([{ run, change: null }], [[run, detail()]])).toEqual({
       _tag: "Never",
       why: `${run} is this Run or one it came out of, so its Change cannot be waited on: name a ticket of this plan on **Blocked by:** instead`,
     });
+  }
 });
 
 test("no merge request yet while the named Run goes on is waiting", () => {

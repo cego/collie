@@ -18,8 +18,12 @@ export default defineWorkflow({
   output: Schema.String,
   run: ({ input }) =>
     Effect.gen(function* () {
-      for (const one of STEPS) yield* one(Effect.void);
-      if (input.on === "ask") return yield* ask({ name: "never", prompt: "Nobody answers." });
+      for (const one of STEPS) {
+        yield* one(Effect.void);
+      }
+      if (input.on === "ask") {
+        return yield* ask({ name: "never", prompt: "Nobody answers." });
+      }
       yield* DurableClock.sleep({
         name: "nap",
         duration: Duration.seconds(Number(input.seconds)),

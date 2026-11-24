@@ -1,4 +1,3 @@
-// Eighty lanes with about 10 MB of operation history, matching the observed board reads.
 import { strict as assert } from "node:assert";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -51,7 +50,7 @@ await runEffect(
     }
     let lanes = 0;
     let stopped = 0;
-    for (let round = 0; round < 3; round++)
+    for (let round = 0; round < 3; round++) {
       for (const run of runs) {
         const lane = yield* laneFor(env, run, undefined, new Map());
         const named = Arr.some(lane.nodes, (node) => node.said === "Stopped by the CLI");
@@ -60,6 +59,7 @@ await runEffect(
         stopped += Number(named);
         lanes++;
       }
+    }
     assert.equal(lanes, 240);
     assert.equal(stopped, 12);
     yield* Console.log(

@@ -1,6 +1,6 @@
 import { Effect, Stream } from "effect";
 
-/** Closing the client's reply also closes its RPC reader, even between events. */
+// WARNING: closing the client's reply also closes its RPC reader, even between events.
 export const replyEvents = <A, E>(stream: Stream.Stream<A, E>, signal?: AbortSignal) =>
   Stream.toAsyncIterable(
     signal === undefined
@@ -12,8 +12,11 @@ export const replyEvents = <A, E>(stream: Stream.Stream<A, E>, signal?: AbortSig
                 Stream.interruptWhen(
                   Effect.callback<void>((resume) => {
                     const aborted = () => resume(Effect.void);
-                    if (signal.aborted) aborted();
-                    else signal.addEventListener("abort", aborted, { once: true });
+                    if (signal.aborted) {
+                      aborted();
+                    } else {
+                      signal.addEventListener("abort", aborted, { once: true });
+                    }
                     return Effect.sync(() => signal.removeEventListener("abort", aborted));
                   }),
                 ),

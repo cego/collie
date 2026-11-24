@@ -6,10 +6,12 @@ import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import type { MrForge } from "../src/board-model";
-import { autoModeBlock, autoModeFacts, startedOf, type RunAuthority } from "../src/automode";
+import { autoModeBlock, autoModeFacts, startedOf } from "../src/automode";
+import type { RunAuthority } from "../src/automode";
 import type { Runner } from "../src/mr";
 import { runEffect } from "./support/effect";
-import { FORGE_HOST, fakeForge, type ForgeModel } from "./support/forge";
+import { FORGE_HOST, fakeForge } from "./support/forge";
+import type { ForgeModel } from "./support/forge";
 
 const ORIGIN = {
   gitlab: "git@gitlab.example.com:group/app.git",
@@ -25,7 +27,6 @@ const SESSION = {
   cwd: "/work/app",
 };
 
-/** The Run made `branch` in the session's checkout, on the forge's origin. */
 const made = (forge: MrForge, branch: string) => ({
   created: { branch, checkout: SESSION.cwd, origin: ORIGIN[forge] },
 });
@@ -167,8 +168,9 @@ test("a created branch a GitLab wildcard rule or a GitHub ruleset matches gets n
         branch: "release/2.0",
         rulesets: ["release/*"],
       });
-      for (const { block } of [gitlab, github])
+      for (const { block } of [gitlab, github]) {
         expect(Arr.some(block.allow, (one) => pipe_(one, Str.startsWith(HISTORY)))).toBe(false);
+      }
     }),
   ));
 
@@ -258,15 +260,15 @@ test("a human's starting words are quoted with their door, scrubbed, and cut at 
       expect(Arr.some(block.allow, (one) => pipe_(one, Str.includes("starting words")))).toBe(true);
 
       const long = yield* blockFor("gitlab", {
-        started: { door: "chat", words: pipe_("x", Str.repeat(2_500)) },
+        started: { door: "chat", words: pipe_("x", Str.repeat(2500)) },
       });
       const cut = Option.getOrUndefined(
         Arr.findFirst(long.block.environment, (one) =>
           pipe_(one, Str.startsWith("The user started")),
         ),
       );
-      expect(cut).toContain(pipe_("x", Str.repeat(2_000)));
-      expect(cut).not.toContain(pipe_("x", Str.repeat(2_001)));
+      expect(cut).toContain(pipe_("x", Str.repeat(2000)));
+      expect(cut).not.toContain(pipe_("x", Str.repeat(2001)));
       expect(cut).toContain("cut at 2,000 characters");
     }),
   ));
@@ -294,6 +296,7 @@ test("only a human door or chat starts a Run with words: an agent, a Schedule or
     door: "chat",
     words: "fix login please",
   });
-  for (const origin of ["agent", "schedule", "cli", "driver", "host"])
+  for (const origin of ["agent", "schedule", "cli", "driver", "host"]) {
     expect(startedOf(origin, "said", input, undefined)).toBeUndefined();
+  }
 });

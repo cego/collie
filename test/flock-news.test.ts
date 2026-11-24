@@ -1,6 +1,3 @@
-// The Flock chat hears every Herd's News on every Machine as one batch: what matters most
-// first, then by time, a screen's worth, and what it left out said per Machine.
-
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
@@ -15,7 +12,7 @@ const item = (
   at: string,
 ) => ({
   key,
-  run: Str.split(key, ":")[0]!,
+  run: Str.split(key, ":")[0],
   text: `${key} happened.`,
   at,
   significance,

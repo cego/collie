@@ -4,7 +4,8 @@ import { Effect, FileSystem, Option, Path, Schema } from "effect";
 import { sha256Hex } from "./attachments";
 import { nowIso } from "./time";
 import type { ChildProcessSpawner } from "effect/process";
-import { shell, type Runner } from "./mr";
+import { shell } from "./mr";
+import type { Runner } from "./mr";
 
 export const RELEASE_TAG = /^\d+\.\d+\.\d+$/;
 
@@ -14,7 +15,6 @@ export type Installation =
 
 const RELEASED: Installation = { release: true };
 
-/** Whether `root` is the Collie directory itself, however either is spelled. */
 export const atCollieDir = Effect.fn("release.atCollieDir")(function* (
   root: string,
   collieDir: string,
@@ -24,7 +24,6 @@ export const atCollieDir = Effect.fn("release.atCollieDir")(function* (
   return (yield* real(root)) === (yield* real(collieDir));
 });
 
-/** Whether `root` is the top of a git worktree; a release placed inside a kept clone is not. */
 export const isCheckout = Effect.fn("release.isCheckout")(function* (
   root: string,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner> = shell,
@@ -33,35 +32,32 @@ export const isCheckout = Effect.fn("release.isCheckout")(function* (
   return prefix.code === 0 && Str.trim(prefix.stdout) === "";
 });
 
-/**
- * Not a checkout is a release, and so is a clone at the Collie directory, which its next
- * upgrade migrates. Any other checkout is a development checkout.
- */
 export const installation = Effect.fn("release.installation")(function* (
   root: string,
   collieDir: string,
   version: string,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner> = shell,
-): Effect.fn.Return<
-  Installation,
-  never,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
-> {
-  const git = (...args: string[]) => run("git", args, root);
-  if (!(yield* isCheckout(root, run))) return RELEASED;
-  if (yield* atCollieDir(root, collieDir)) return RELEASED;
+) {
+  const git = (...args: Array<string>) => run("git", args, root);
+  if (!(yield* isCheckout(root, run))) {
+    return RELEASED;
+  }
+  if (yield* atCollieDir(root, collieDir)) {
+    return RELEASED;
+  }
   const sha = Str.trim((yield* git("rev-parse", "--short", "HEAD")).stdout);
   return { release: false, build: `${version}+${sha}`, reason: "it is a development checkout" };
 });
 
 const PackageVersion = Schema.fromJsonString(Schema.Struct({ version: Schema.String }));
 
-/** The version of the installation at `root`, or "" when no version is declared. */
 export const releaseVersion = Effect.fn("release.releaseVersion")(function* (root: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const manifest = path.join(root, "package.json");
-  if (!(yield* fs.exists(manifest))) return "";
+  if (!(yield* fs.exists(manifest))) {
+    return "";
+  }
   const text = yield* fs.readFileString(manifest);
   return Option.match(Schema.decodeOption(PackageVersion)(text), {
     onNone: () => "",
@@ -69,9 +65,7 @@ export const releaseVersion = Effect.fn("release.releaseVersion")(function* (roo
   });
 });
 
-/** The release a compiled runner carries, embedded by `tools/build.ts`. */
 export const CARRIED_TREE = "/$bunfs/root/release";
-/** Each placed file's sha256, written into the release it describes. */
 export const RECORD = "placed.json";
 
 export interface Carried {
@@ -79,11 +73,10 @@ export interface Carried {
   readonly runner: string;
 }
 
-/** What this runner carries: nothing unless it is a compiled build. */
 export const carriedRelease = (
   modulePath: string = import.meta.path,
   execPath: string = process.execPath,
-): Carried | null =>
+) =>
   pipe_(modulePath, Str.startsWith("/$bunfs/")) ? { tree: CARRIED_TREE, runner: execPath } : null;
 
 const Placed = Schema.fromJsonString(
@@ -94,19 +87,16 @@ const filesUnder = Effect.fn("release.filesUnder")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const names = yield* fs.readDirectory(dir, { recursive: true });
-  const files: string[] = [];
+  const files: Array<string> = [];
   for (const name of names) {
-    if ((yield* fs.stat(path.join(dir, name))).type === "File") files.push(name);
+    if ((yield* fs.stat(path.join(dir, name))).type === "File") {
+      files.push(name);
+    }
   }
   return files.sort();
 });
 
-/**
- * Writes `carried` into `<collieDir>/release` whole: beside the current one, recorded, then
- * swapped. Every file of the current release that differs from its own record is copied into
- * `kept/<when>/` first; the result names each, relative to `collieDir`, with the sha256 of each
- * file placed. Unlocked: callers go through `placeLocked`.
- */
+// WARNING: unlocked: callers go through placeLocked.
 export const placeRelease = Effect.fn("release.place")(function* (
   carried: Carried,
   collieDir: string,
@@ -137,18 +127,25 @@ export const placeRelease = Effect.fn("release.place")(function* (
     yield* Schema.encodeEffect(Placed)({ version, files }).pipe(Effect.orDie),
   );
 
-  const kept: string[] = [];
+  const kept: Array<string> = [];
   if (yield* fs.exists(current)) {
     const recorded = yield* fs.readFileString(path.join(current, RECORD)).pipe(
       Effect.flatMap(Schema.decodeUnknownEffect(Placed)),
       Effect.map((record) => record.files),
-      Effect.orElseSucceed((): Record<string, string> => ({})),
+      Effect.orElseSucceed(() => {
+        const returned: Record<string, string> = {};
+        return returned;
+      }),
     );
-    const when = pipe_(yield* nowIso, Str.replace(/:/g, "-"));
+    const when = pipe_(yield* nowIso, Str.replaceAll(":", "-"));
     for (const name of yield* filesUnder(current)) {
-      if (name === RECORD) continue;
+      if (name === RECORD) {
+        continue;
+      }
       const bytes = yield* fs.readFile(path.join(current, name));
-      if (recorded[name] === sha256Hex(bytes)) continue;
+      if (recorded[name] === sha256Hex(bytes)) {
+        continue;
+      }
       const aside = path.join("kept", when, name);
       yield* fs.makeDirectory(path.dirname(path.join(collieDir, aside)), { recursive: true });
       yield* fs.writeFile(path.join(collieDir, aside), bytes);

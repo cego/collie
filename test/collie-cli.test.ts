@@ -27,7 +27,7 @@ import { callTool } from "../src/tools";
 import { readEnv } from "../src/env";
 
 const root = new URL("../", import.meta.url).pathname;
-const join = (...parts: string[]) => pipe_(Arr.join(parts, "/"), Str.replace(/\/+/g, "/"));
+const join = (...parts: Array<string>) => pipe_(Arr.join(parts, "/"), Str.replaceAll(/\/+/g, "/"));
 
 const CliEnvelope = Schema.fromJsonString(
   Schema.Struct({
@@ -44,13 +44,12 @@ const CliEnvelope = Schema.fromJsonString(
 );
 
 const cli = Effect.fn("test.cli")(function* (
-  args: string[],
+  args: Array<string>,
   extraEnv: Record<string, string> = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
   const suite = yield* suiteEnv;
   const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-cli-" });
-  // Before the directory goes, or a host the command started can write it back.
   yield* Effect.addFinalizer(() => Effect.ignore(stopHost(join(dir, "state"))));
   yield* fs.makeDirectory(join(dir, "config"), { recursive: true });
   yield* fs.writeFileString(join(dir, ".bunfig.toml"), testBunfig);
@@ -85,7 +84,6 @@ const decodeRemembered = flow(
   Result.getOrThrow,
 );
 
-/** `workflow show` for a module: what a caller may give it, and what it gives back. */
 const ShownModule = Schema.fromJsonString(
   Schema.Struct({
     data: Schema.Struct({
@@ -104,7 +102,6 @@ const ShownModule = Schema.fromJsonString(
   }),
 );
 
-/** `workflow list`, just far enough to read each workflow's inputs back. */
 const WorkflowRows = Schema.fromJsonString(
   Schema.Struct({
     data: Schema.Struct({
@@ -118,30 +115,26 @@ const WorkflowRows = Schema.fromJsonString(
   }),
 );
 
-test(
-  "public JSON discovery has one typed envelope",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const listed = yield* cli(["--json", "workflow", "list"]);
-        expect(listed.exit).toBe(0);
-        expect(listed.stderr).toBe("");
-        expect(yield* parseEnvelope(listed.stdout)).toMatchObject({
-          ok: true,
-          data: { workflows: expect.any(Array) },
-        });
+test("public JSON discovery has one typed envelope", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const listed = yield* cli(["--json", "workflow", "list"]);
+      expect(listed.exit).toBe(0);
+      expect(listed.stderr).toBe("");
+      expect(yield* parseEnvelope(listed.stdout)).toMatchObject({
+        ok: true,
+        data: { workflows: expect.any(Array) },
+      });
 
-        const missing = yield* cli(["--json", "workflow", "show", "__missing__"]);
-        expect(missing.exit).toBe(1);
-        expect(missing.stderr).toBe("");
-        expect(yield* parseEnvelope(missing.stdout)).toMatchObject({
-          ok: false,
-          error: { code: "workflow_not_found", details: {} },
-        });
-      }),
-    ),
-  60_000,
-);
+      const missing = yield* cli(["--json", "workflow", "show", "__missing__"]);
+      expect(missing.exit).toBe(1);
+      expect(missing.stderr).toBe("");
+      expect(yield* parseEnvelope(missing.stdout)).toMatchObject({
+        ok: false,
+        error: { code: "workflow_not_found", details: {} },
+      });
+    }),
+  ));
 
 test("persona discovery uses the same command boundary", () =>
   runEffect(
@@ -160,7 +153,6 @@ test("invalid input is one envelope on stdout, its reason on stderr, and exit 2"
     Effect.gen(function* () {
       const missing = yield* cli(["--json", "workflow", "show"]);
 
-      // No usage text: under --json stdout carries the envelope and nothing else.
       expect(yield* parseEnvelope(missing.stdout)).toEqual({
         ok: false,
         error: {
@@ -171,7 +163,6 @@ test("invalid input is one envelope on stdout, its reason on stderr, and exit 2"
       });
       expect(missing.stdout).not.toContain("USAGE");
       expect(missing.exit).toBe(2);
-      // The diagnostic is still there for a human, on the stream that cannot corrupt it.
       expect(missing.stderr).toContain("Missing required argument");
 
       const unknownFlag = yield* cli(["--json", "workflow", "list", "--nope"]);
@@ -181,7 +172,6 @@ test("invalid input is one envelope on stdout, its reason on stderr, and exit 2"
       });
       expect(unknownFlag.exit).toBe(2);
 
-      // Asking for help is nobody's failure, and the release gate runs it.
       const help = yield* cli(["--help"]);
       expect(help.exit).toBe(0);
       expect(help.stdout).toContain("USAGE");
@@ -247,8 +237,7 @@ test("a workflow is forked by importing it, so fork takes no Markdown merge flag
 test("a command group named with no subcommand is invalid input, not success", () =>
   runEffect(
     Effect.gen(function* () {
-      // Effect's CLI raises the same ShowHelp it raises for --help, carrying no parse
-      // errors, so what tells them apart is whether help was actually asked for.
+      // WARNING: Effect's CLI raises the same ShowHelp for --help with no parse errors; only whether help was asked tells them apart.
       for (const argv of [["--json", "run"], ["--json", "workflow"], ["--json"]]) {
         const stopped = yield* cli(argv);
         expect(yield* parseEnvelope(stopped.stdout)).toMatchObject({
@@ -256,8 +245,6 @@ test("a command group named with no subcommand is invalid input, not success", (
           error: { code: "invalid_input" },
         });
         expect(stopped.exit).toBe(2);
-        // The envelope is the whole of stdout: no help document, and no blank line
-        // ahead of it for a consumer reading a line at a time.
         expect(pipe_(stopped.stdout, Str.startsWith("{"))).toBe(true);
         expect(Str.split(Str.trimEnd(stopped.stdout), "\n")).toHaveLength(1);
       }
@@ -275,8 +262,6 @@ test("discovery ignores a workspace id Herdr 1 left in the environment", () =>
       const personas = yield* cli(["--json", "persona", "list"], stale);
       expect(yield* parseEnvelope(personas.stdout)).toMatchObject({ ok: true });
 
-      // A workspace the caller named is still an error: the spec reserves
-      // workspace_not_found for exactly that.
       const named = yield* cli(["--json", "--workspace", "gone", "workflow", "list"], stale);
       expect(yield* parseEnvelope(named.stdout)).toMatchObject({
         ok: false,
@@ -286,478 +271,430 @@ test("discovery ignores a workspace id Herdr 1 left in the environment", () =>
     }),
   ));
 
-test(
-  "plan takes a goal and no ticket, and architecture needs a goal",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const inputsOf = (stdout: string) =>
-          Arr.map(
-            flow(Schema.decodeResult(ShownModule), Result.getOrThrow)(stdout).data.workflow.inputs,
-            (one) => [one.name, one.strategy],
-          );
-        expect(inputsOf((yield* cli(["--json", "workflow", "show", "plan"])).stdout)).toEqual([
-          ["goal", "goal"],
-          ["then", "reach"],
-        ]);
-        expect(
-          inputsOf((yield* cli(["--json", "workflow", "show", "architecture"])).stdout),
-        ).toEqual([["goal", "goal"]]);
+test("plan takes a goal and no ticket, and architecture needs a goal", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const inputsOf = (stdout: string) =>
+        Arr.map(
+          flow(Schema.decodeResult(ShownModule), Result.getOrThrow)(stdout).data.workflow.inputs,
+          (one) => [one.name, one.strategy],
+        );
+      expect(inputsOf((yield* cli(["--json", "workflow", "show", "plan"])).stdout)).toEqual([
+        ["goal", "goal"],
+        ["then", "reach"],
+      ]);
+      expect(inputsOf((yield* cli(["--json", "workflow", "show", "architecture"])).stdout)).toEqual(
+        [["goal", "goal"]],
+      );
 
-        const ticket = yield* cli([
-          "--json",
-          "run",
-          "start",
-          "plan",
-          "--input",
-          "goal=one registry",
-          "--input",
-          "then=",
-          "--input",
-          "ticket=ENG-1",
-        ]);
-        expect(yield* parseEnvelope(ticket.stdout)).toMatchObject({
-          ok: false,
-          error: {
-            code: "invalid_input",
-            message: expect.stringContaining('"ticket" is not an input'),
-          },
-        });
+      const ticket = yield* cli([
+        "--json",
+        "run",
+        "start",
+        "plan",
+        "--input",
+        "goal=one registry",
+        "--input",
+        "then=",
+        "--input",
+        "ticket=ENG-1",
+      ]);
+      expect(yield* parseEnvelope(ticket.stdout)).toMatchObject({
+        ok: false,
+        error: {
+          code: "invalid_input",
+          message: expect.stringContaining('"ticket" is not an input'),
+        },
+      });
 
-        const bare = yield* cli(["--json", "run", "start", "architecture"]);
-        expect(yield* parseEnvelope(bare.stdout)).toMatchObject({
-          ok: false,
-          error: { code: "needs_input", details: { inputs: [{ name: "goal" }] } },
-        });
-      }),
-    ),
-  60_000,
-);
+      const bare = yield* cli(["--json", "run", "start", "architecture"]);
+      expect(yield* parseEnvelope(bare.stdout)).toMatchObject({
+        ok: false,
+        error: { code: "needs_input", details: { inputs: [{ name: "goal" }] } },
+      });
+    }),
+  ));
 
-/** A Projects root holding two checkouts, and a directory that is none of them. */
 const projectsTree = Effect.fn("test.projectsTree")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-projects-" });
-  for (const checkout of ["app/.git", "group/lib/.git"])
+  for (const checkout of ["app/.git", "group/lib/.git"]) {
     yield* fs.makeDirectory(join(dir, "root", checkout), { recursive: true });
+  }
   yield* fs.makeDirectory(join(dir, "elsewhere"), { recursive: true });
   return { root: join(dir, "root"), elsewhere: join(dir, "elsewhere"), dir };
 });
 
-test(
-  "a start outside any checkout names one, or is refused with the checkouts to choose from",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const tree = yield* projectsTree();
-        const refused = yield* cli(
-          [
-            "--json",
-            "run",
-            "start",
-            "review",
-            "--input",
-            "target=worktree",
-            "--input",
-            "plan=",
-            "--input",
-            "proves=",
-          ],
-          { COLLIE_CWD: tree.elsewhere, GITTE_CWD: tree.root },
-        );
-        const envelope = yield* parseEnvelope(refused.stdout);
-        expect(envelope).toMatchObject({
-          ok: false,
-          error: {
-            code: "needs_input",
-            message: expect.stringContaining("workspace="),
-            details: {
-              inputs: [
-                {
-                  name: "workspace",
-                  facts: [join(tree.root, "app"), join(tree.root, "group/lib"), "projects-root"],
-                },
-              ],
-            },
+test("a start outside any checkout names one, or is refused with the checkouts to choose from", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const tree = yield* projectsTree();
+      const refused = yield* cli(
+        [
+          "--json",
+          "run",
+          "start",
+          "review",
+          "--input",
+          "target=worktree",
+          "--input",
+          "plan=",
+          "--input",
+          "proves=",
+        ],
+        { COLLIE_CWD: tree.elsewhere, GITTE_CWD: tree.root },
+      );
+      const envelope = yield* parseEnvelope(refused.stdout);
+      expect(envelope).toMatchObject({
+        ok: false,
+        error: {
+          code: "needs_input",
+          message: expect.stringContaining("workspace="),
+          details: {
+            inputs: [
+              {
+                name: "workspace",
+                facts: [join(tree.root, "app"), join(tree.root, "group/lib"), "projects-root"],
+              },
+            ],
           },
-        });
-      }),
-    ),
-  60_000,
-);
+        },
+      });
+    }),
+  ));
 
-test(
-  "an agent's start names every Input, an optional one as empty, and is told what each means",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const bare = yield* cli(["--json", "run", "start", "review", "--input", "target=worktree"]);
-        const envelope = yield* parseEnvelope(bare.stdout);
-        expect(envelope).toMatchObject({
-          ok: false,
-          error: { code: "needs_input", message: expect.stringContaining('""') },
-        });
-        const missing = yield* Schema.decodeUnknownEffect(
-          Schema.Array(Schema.Struct({ name: Schema.String, meaning: Schema.String })),
-        )(envelope.error?.details["inputs"]).pipe(Effect.orDie);
-        expect(Arr.map(missing, (one) => one.name)).toEqual(["plan", "proves"]);
-        for (const one of missing) expect(one.meaning).not.toBe("");
+test("an agent's start names every Input, an optional one as empty, and is told what each means", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const bare = yield* cli(["--json", "run", "start", "review", "--input", "target=worktree"]);
+      const envelope = yield* parseEnvelope(bare.stdout);
+      expect(envelope).toMatchObject({
+        ok: false,
+        error: { code: "needs_input", message: expect.stringContaining('""') },
+      });
+      const missing = yield* Schema.decodeUnknownEffect(
+        Schema.Array(Schema.Struct({ name: Schema.String, meaning: Schema.String })),
+      )(envelope.error?.details["inputs"]).pipe(Effect.orDie);
+      expect(Arr.map(missing, (one) => one.name)).toEqual(["plan", "proves"]);
+      for (const one of missing) {
+        expect(one.meaning).not.toBe("");
+      }
 
-        // An internal Input is the starting workflow's to set: a release's merge_only and together.
-        const release = yield* cli(["--json", "run", "start", "release", "--input", "mr=!1"]);
-        const releaseMissing = (yield* parseEnvelope(release.stdout)).error?.details["inputs"];
-        expect(releaseMissing).toEqual([expect.objectContaining({ name: "ship" })]);
+      const release = yield* cli(["--json", "run", "start", "release", "--input", "mr=!1"]);
+      const releaseMissing = (yield* parseEnvelope(release.stdout)).error?.details["inputs"];
+      expect(releaseMissing).toEqual([expect.objectContaining({ name: "ship" })]);
 
-        const plan = yield* cli(["--json", "run", "start", "plan", "--input", "goal=one registry"]);
-        expect(yield* parseEnvelope(plan.stdout)).toMatchObject({
-          ok: false,
-          error: { code: "needs_input", details: { inputs: [{ name: "then" }] } },
-        });
-      }),
-    ),
-  60_000,
-);
+      const plan = yield* cli(["--json", "run", "start", "plan", "--input", "goal=one registry"]);
+      expect(yield* parseEnvelope(plan.stdout)).toMatchObject({
+        ok: false,
+        error: { code: "needs_input", details: { inputs: [{ name: "then" }] } },
+      });
+    }),
+  ));
 
-test(
-  "a missing diff target is told the target inference would pick in the checkout",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const bin = yield* fs.makeTempDirectoryScoped({ prefix: "collie-bin-" });
-        const checkout = join(bin, "project");
-        yield* fs.makeDirectory(checkout);
-        yield* exec(["git", "init", "-q", "-b", "main"], { cwd: checkout });
-        yield* exec(
-          [
-            "git",
-            "-c",
-            "user.email=t@example.test",
-            "-c",
-            "user.name=t",
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            "init",
-          ],
-          { cwd: checkout },
-        );
-        yield* exec(["git", "remote", "add", "origin", "git@gitlab.example.com:group/app.git"], {
-          cwd: checkout,
-        });
-        const fake = yield* FakeBin.make(join(bin, "fake"));
-        const gitlab = yield* forgeOnPath(fake, "gitlab", {
-          installed: true,
-          loggedIn: ["gitlab.example.com"],
-          login: "me",
-          mrs: [
-            {
-              project: "gitlab.example.com/group/app",
-              iid: "42",
-              state: "open",
-              title: "t",
-              sourceBranch: "main",
-            },
-          ],
-        });
-        const COLLIE_FORGE_API = yield* serveForges(gitlab);
-        yield* fake.restore();
-        const bare = yield* cli(
-          ["--json", "run", "start", "review", "--input", "plan=", "--input", "proves="],
-          { PATH: `${fake.dir}:/usr/bin:/bin`, COLLIE_CWD: checkout, COLLIE_FORGE_API },
-        );
-        expect(yield* parseEnvelope(bare.stdout)).toMatchObject({
-          ok: false,
-          error: {
-            code: "needs_input",
-            details: { inputs: [{ name: "target", facts: [expect.stringContaining("!42")] }] },
+test("a missing diff target is told the target inference would pick in the checkout", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const bin = yield* fs.makeTempDirectoryScoped({ prefix: "collie-bin-" });
+      const checkout = join(bin, "project");
+      yield* fs.makeDirectory(checkout);
+      yield* exec(["git", "init", "-q", "-b", "main"], { cwd: checkout });
+      yield* exec(
+        [
+          "git",
+          "-c",
+          "user.email=t@example.test",
+          "-c",
+          "user.name=t",
+          "commit",
+          "-q",
+          "--allow-empty",
+          "-m",
+          "init",
+        ],
+        { cwd: checkout },
+      );
+      yield* exec(["git", "remote", "add", "origin", "git@gitlab.example.com:group/app.git"], {
+        cwd: checkout,
+      });
+      const fake = yield* FakeBin.make(join(bin, "fake"));
+      const gitlab = yield* forgeOnPath(fake, "gitlab", {
+        installed: true,
+        loggedIn: ["gitlab.example.com"],
+        login: "me",
+        mrs: [
+          {
+            project: "gitlab.example.com/group/app",
+            iid: "42",
+            state: "open",
+            title: "t",
+            sourceBranch: "main",
           },
-        });
-      }),
-    ),
-  60_000,
-);
+        ],
+      });
+      const COLLIE_FORGE_API = yield* serveForges(gitlab);
+      yield* fake.restore();
+      const bare = yield* cli(
+        ["--json", "run", "start", "review", "--input", "plan=", "--input", "proves="],
+        { PATH: `${fake.dir}:/usr/bin:/bin`, COLLIE_CWD: checkout, COLLIE_FORGE_API },
+      );
+      expect(yield* parseEnvelope(bare.stdout)).toMatchObject({
+        ok: false,
+        error: {
+          code: "needs_input",
+          details: { inputs: [{ name: "target", facts: [expect.stringContaining("!42")] }] },
+        },
+      });
+    }),
+  ));
 
-test(
-  "a missing diff target is told what inference would pick in the checkout named, not the shell's",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const tree = yield* projectsTree();
-        const named = join(tree.dir, "named");
-        yield* fs.makeDirectory(named, { recursive: true });
-        const git = (...args: string[]) =>
-          exec(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd: named });
-        yield* git("init", "-q", "-b", "main");
-        yield* git("commit", "-q", "--allow-empty", "-m", "base");
-        yield* git("checkout", "-q", "-b", "topic");
-        yield* git("commit", "-q", "--allow-empty", "-m", "work");
-        const bin = join(tree.dir, "bin");
-        yield* fs.makeDirectory(bin, { recursive: true });
-        yield* fs.writeFileString(join(bin, "glab"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+test("a missing diff target is told what inference would pick in the checkout named, not the shell's", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const tree = yield* projectsTree();
+      const named = join(tree.dir, "named");
+      yield* fs.makeDirectory(named, { recursive: true });
+      const git = (...args: Array<string>) =>
+        exec(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd: named });
+      yield* git("init", "-q", "-b", "main");
+      yield* git("commit", "-q", "--allow-empty", "-m", "base");
+      yield* git("checkout", "-q", "-b", "topic");
+      yield* git("commit", "-q", "--allow-empty", "-m", "work");
+      const bin = join(tree.dir, "bin");
+      yield* fs.makeDirectory(bin, { recursive: true });
+      yield* fs.writeFileString(join(bin, "glab"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
 
-        const refused = yield* cli(
-          [
-            "--json",
-            "run",
-            "start",
-            "review",
-            "--input",
-            `workspace=${named}`,
-            "--input",
-            "plan=",
-            "--input",
-            "proves=",
-          ],
-          { COLLIE_CWD: tree.elsewhere, PATH: `${bin}:/usr/bin:/bin` },
-        );
-        expect(yield* parseEnvelope(refused.stdout)).toMatchObject({
-          ok: false,
-          error: {
-            code: "needs_input",
-            details: {
-              inputs: [{ name: "target", facts: [expect.stringContaining("main...topic")] }],
-            },
+      const refused = yield* cli(
+        [
+          "--json",
+          "run",
+          "start",
+          "review",
+          "--input",
+          `workspace=${named}`,
+          "--input",
+          "plan=",
+          "--input",
+          "proves=",
+        ],
+        { COLLIE_CWD: tree.elsewhere, PATH: `${bin}:/usr/bin:/bin` },
+      );
+      expect(yield* parseEnvelope(refused.stdout)).toMatchObject({
+        ok: false,
+        error: {
+          code: "needs_input",
+          details: {
+            inputs: [{ name: "target", facts: [expect.stringContaining("main...topic")] }],
           },
-        });
-      }),
-    ),
-  60_000,
-);
+        },
+      });
+    }),
+  ));
 
-/** Every `collie run start` a reader can paste as it is written: no placeholder, no continuation. */
 const documentedStarts = Effect.fn("test.documentedStarts")(function* () {
   const fs = yield* FileSystem.FileSystem;
-  const lines: string[] = [];
+  const lines: Array<string> = [];
   for (const file of ["README.md", "docs/cli.md"]) {
     const text = yield* fs.readFileString(join(root, file));
     for (const line of Str.split(text, "\n")) {
       const trimmed = Str.trim(line);
-      if (!pipe_(trimmed, Str.startsWith("collie run start "))) continue;
-      if (/[<…]|\\$/.test(trimmed)) continue;
+      if (!pipe_(trimmed, Str.startsWith("collie run start "))) {
+        continue;
+      }
+      if (/[<…]|\\$/.test(trimmed)) {
+        continue;
+      }
       lines.push(trimmed);
     }
   }
   return lines;
 });
 
-/** A command line's words, with a double-quoted value kept whole. */
 const words = (line: string) =>
   Arr.map([...pipe_(line, Str.matchAll(/(?:[^\s"]+|"[^"]*")+/g))], ([word]) =>
     pipe_(word, Str.replaceAll('"', "")),
   );
 
-test(
-  "every documented start, run inside a checkout, is admitted as written",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const tree = yield* projectsTree();
-        const checkout = join(tree.root, "app");
-        yield* fs.makeDirectory(join(checkout, ".collie"), { recursive: true });
-        yield* fs.writeFileString(
-          join(checkout, ".collie/verify.json"),
-          `[{"name":"unit","executable":"true","argv":[],"cwd":"worktree"}]`,
-        );
-        for (const args of [
-          ["init", "-q", "-b", "main"],
-          ["remote", "add", "origin", "git@gitlab.example.com:team/project.git"],
-          [
-            "-c",
-            "user.email=t@example.com",
-            "-c",
-            "user.name=t",
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            "first",
-          ],
-          ["remote", "add", "upstream", "git@gitlab.example.com:group/app.git"],
-        ])
-          yield* exec(["git", ...args], { cwd: checkout });
-        const bin = join(tree.dir, "bin");
-        yield* fs.makeDirectory(bin, { recursive: true });
-        yield* fs.writeFileString(join(bin, "glab"), "#!/bin/sh\necho '[]'\n", { mode: 0o755 });
-        const starts = yield* documentedStarts();
-        expect(starts.length).toBeGreaterThan(2);
-        for (const line of starts) {
-          const started = yield* cli(["--json", ...words(line).slice(1)], {
-            COLLIE_CWD: checkout,
-            GITTE_CWD: tree.root,
-            GITLAB_USER_LOGIN: "tester",
-            PATH: `${bin}:/usr/bin:/bin`,
-          });
-          const envelope = yield* parseEnvelope(started.stdout);
-          expect({ line, ok: envelope.ok, error: envelope.error?.message }).toEqual({
-            line,
-            ok: true,
-            error: undefined,
-          });
-        }
-      }),
-    ),
-  240_000,
-);
-
-test(
-  "the names the host settles are published beside the ones a module declares",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        // An agent driving Collie cannot pass an Input nothing names, and `branch` is
-        // the one that decides which checkout the run gets. A module never declares it —
-        // declaring it is refused — so it is published as the host's, with what it means.
-        const implement = yield* cli(["--json", "workflow", "show", "implement"]);
-        const described = (yield* Schema.decodeEffect(ShownModule)(implement.stdout).pipe(
-          Effect.orDie,
-        )).data.workflow;
-        expect(Arr.map(described.inputs, (one) => one.name)).not.toContain("branch");
-        expect(Arr.map(described.options, (one) => one.name)).toEqual([
-          "branch",
-          "task",
-          "workspace",
-          "repo",
-          "change",
-          "stacked",
-          "outcome",
-          "risks",
-          "previous",
-          "harness",
-          "model",
-          "effort",
-        ]);
-
-        // And for a human, the order `branch` is resolved in, which is the whole of it.
-        const human = yield* cli(["workflow", "show", "implement"]);
-        expect(human.stdout).toContain("branch:");
-        expect(human.stdout).toContain("--input branch=");
-
-        // `branch` is the host's, not a module's: it is never among what a module declares.
-        const listed = yield* cli(["--json", "workflow", "list"]);
-        const workflows = (yield* Schema.decodeEffect(WorkflowRows)(listed.stdout).pipe(
-          Effect.orDie,
-        )).data.workflows;
-        const row = Option.getOrUndefined(Arr.findFirst(workflows, (w) => w.id === "implement"))!;
-        expect(Arr.map(row.inputs, (input) => input.name)).not.toContain("branch");
-      }),
-    ),
-  60_000,
-);
-
-test(
-  "an agent saves a workflow, checks it and finds it, with nothing to register by hand",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        // The project layer, so nothing outside this scratch directory is written.
-        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "collie-authoring-" });
-        const scratch = { COLLIE_CWD: cwd };
-        const saved = join(cwd, ".collie", "workflows");
-
-        const made = yield* cli(
-          ["--json", "workflow", "create", "tally", "--layer", "project"],
-          scratch,
-        );
-        expect(made.exit).toBe(0);
-        expect(yield* parseEnvelope(made.stdout)).toMatchObject({
+test("every documented start, run inside a checkout, is admitted as written", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const tree = yield* projectsTree();
+      const checkout = join(tree.root, "app");
+      yield* fs.makeDirectory(join(checkout, ".collie"), { recursive: true });
+      yield* fs.writeFileString(
+        join(checkout, ".collie/verify.json"),
+        `[{"name":"unit","executable":"true","argv":[],"cwd":"worktree"}]`,
+      );
+      for (const args of [
+        ["init", "-q", "-b", "main"],
+        ["remote", "add", "origin", "git@gitlab.example.com:team/project.git"],
+        [
+          "-c",
+          "user.email=t@example.com",
+          "-c",
+          "user.name=t",
+          "commit",
+          "-q",
+          "--allow-empty",
+          "-m",
+          "first",
+        ],
+        ["remote", "add", "upstream", "git@gitlab.example.com:group/app.git"],
+      ]) {
+        yield* exec(["git", ...args], { cwd: checkout });
+      }
+      const bin = join(tree.dir, "bin");
+      yield* fs.makeDirectory(bin, { recursive: true });
+      yield* fs.writeFileString(join(bin, "glab"), "#!/bin/sh\necho '[]'\n", { mode: 0o755 });
+      const starts = yield* documentedStarts();
+      expect(starts.length).toBeGreaterThan(2);
+      for (const line of starts) {
+        const started = yield* cli(["--json", ...words(line).slice(1)], {
+          COLLIE_CWD: checkout,
+          GITTE_CWD: tree.root,
+          GITLAB_USER_LOGIN: "tester",
+          PATH: `${bin}:/usr/bin:/bin`,
+        });
+        const envelope = yield* parseEnvelope(started.stdout);
+        expect({ line, ok: envelope.ok, error: envelope.error?.message }).toEqual({
+          line,
           ok: true,
-          data: { path: join(saved, "tally.workflow.ts"), toolchain: null },
+          error: undefined,
         });
-        // The setup to typecheck it is beside it, provisioned with the embedded Bun.
-        for (const name of ["package.json", "tsconfig.json", "collie.d.ts"]) {
-          expect(yield* fs.exists(join(saved, name))).toBe(true);
-        }
+      }
+    }),
+  ));
 
-        // Saving it is the whole of it: no registry to edit, no rebuild, no restart.
-        const listed = yield* cli(["workflow", "list"], scratch);
-        expect(listed.stdout).toContain("tally\tproject");
+test("the names the host settles are published beside the ones a module declares", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const implement = yield* cli(["--json", "workflow", "show", "implement"]);
+      const described = (yield* Schema.decodeEffect(ShownModule)(implement.stdout).pipe(
+        Effect.orDie,
+      )).data.workflow;
+      expect(Arr.map(described.inputs, (one) => one.name)).not.toContain("branch");
+      expect(Arr.map(described.options, (one) => one.name)).toEqual([
+        "branch",
+        "task",
+        "workspace",
+        "repo",
+        "change",
+        "stacked",
+        "outcome",
+        "risks",
+        "previous",
+        "harness",
+        "model",
+        "effort",
+      ]);
 
-        // And it compiles against the declarations it was written against.
-        const checked = yield* cli(["workflow", "check", "tally"], scratch);
-        expect(checked.exit).toBe(0);
-        expect(checked.stdout).toContain("tally\tproject\tok");
-        expect(checked.stdout).not.toContain("not typechecked");
+      const human = yield* cli(["workflow", "show", "implement"]);
+      expect(human.stdout).toContain("branch:");
+      expect(human.stdout).toContain("--input branch=");
 
-        // Never over a file that is already there — it is the one they already edited.
-        const before = yield* fs.readFileString(join(saved, "tally.workflow.ts"));
-        const again = yield* cli(
-          ["--json", "workflow", "create", "tally", "--layer", "project"],
-          scratch,
-        );
-        expect(again.exit).not.toBe(0);
-        expect(yield* parseEnvelope(again.stdout)).toMatchObject({
-          ok: false,
-          error: { code: "target_exists" },
-        });
-        expect(yield* fs.readFileString(join(saved, "tally.workflow.ts"))).toBe(before);
-      }),
-    ),
-  120_000,
-);
+      const listed = yield* cli(["--json", "workflow", "list"]);
+      const workflows = (yield* Schema.decodeEffect(WorkflowRows)(listed.stdout).pipe(Effect.orDie))
+        .data.workflows;
+      const row = Option.getOrUndefined(Arr.findFirst(workflows, (w) => w.id === "implement"))!;
+      expect(Arr.map(row.inputs, (input) => input.name)).not.toContain("branch");
+    }),
+  ));
 
-test(
-  "forking a module writes a file that imports what it keeps, and the merge flags are a migration",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "collie-forking-" });
-        const scratch = { COLLIE_CWD: cwd };
+test("an agent saves a workflow, checks it and finds it, with nothing to register by hand", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "collie-authoring-" });
+      const scratch = { COLLIE_CWD: cwd };
+      const saved = join(cwd, ".collie", "workflows");
 
-        const forked = yield* cli(
-          ["--json", "workflow", "fork", "implement", "--layer", "project", "--name", "ours"],
-          scratch,
-        );
-        expect(forked.exit).toBe(0);
-        const path = join(cwd, ".collie", "workflows", "ours.workflow.ts");
-        expect(yield* parseEnvelope(forked.stdout)).toMatchObject({ ok: true, data: { path } });
-        // Ordinary composition: it imports the original and spreads it under its own id.
-        const text = yield* fs.readFileString(path);
-        expect(text).toContain("workflows/implement.workflow.ts");
-        expect(text).toContain("...original");
-        expect(text).toContain('id: "ours"');
-        // Its title and description are the original's too, so they follow an upgrade.
-        expect(text).not.toContain("title:");
+      const made = yield* cli(
+        ["--json", "workflow", "create", "tally", "--layer", "project"],
+        scratch,
+      );
+      expect(made.exit).toBe(0);
+      expect(yield* parseEnvelope(made.stdout)).toMatchObject({
+        ok: true,
+        data: { path: join(saved, "tally.workflow.ts"), toolchain: null },
+      });
+      for (const name of ["package.json", "tsconfig.json", "collie.d.ts"]) {
+        expect(yield* fs.exists(join(saved, name))).toBe(true);
+      }
 
-        // Both are runnable, each under its own id, and the fork takes what it inherited.
-        const shown = yield* cli(["--json", "workflow", "show", "ours"], scratch);
-        const described = (yield* Schema.decodeEffect(ShownModule)(shown.stdout).pipe(Effect.orDie))
-          .data.workflow;
-        expect(described.layer).toBe("project");
-        expect(Arr.map(described.inputs, (one) => one.name)).toEqual(["plan", "recovery", "then"]);
+      const listed = yield* cli(["workflow", "list"], scratch);
+      expect(listed.stdout).toContain("tally\tproject");
 
-        // There is nothing to merge in a module, so the flags that merged steps say so.
-        const merged = yield* cli(
-          [
-            "--json",
-            "workflow",
-            "fork",
-            "implement",
-            "--layer",
-            "project",
-            "--name",
-            "theirs",
-            "--mode",
-            "extends",
-          ],
-          scratch,
-        );
-        expect(yield* parseEnvelope(merged.stdout)).toMatchObject({
-          ok: false,
-          error: { code: "invalid_input", message: expect.stringContaining("--mode") },
-        });
-        expect(yield* fs.exists(join(cwd, ".collie", "workflows", "theirs.workflow.ts"))).toBe(
-          false,
-        );
-      }),
-    ),
-  120_000,
-);
+      const checked = yield* cli(["workflow", "check", "tally"], scratch);
+      expect(checked.exit).toBe(0);
+      expect(checked.stdout).toContain("tally\tproject\tok");
+      expect(checked.stdout).not.toContain("not typechecked");
+
+      // WARNING: Never overwrite a file already there: it is the one the human edited.
+      const before = yield* fs.readFileString(join(saved, "tally.workflow.ts"));
+      const again = yield* cli(
+        ["--json", "workflow", "create", "tally", "--layer", "project"],
+        scratch,
+      );
+      expect(again.exit).not.toBe(0);
+      expect(yield* parseEnvelope(again.stdout)).toMatchObject({
+        ok: false,
+        error: { code: "target_exists" },
+      });
+      expect(yield* fs.readFileString(join(saved, "tally.workflow.ts"))).toBe(before);
+    }),
+  ));
+
+test("forking a module writes a file that imports what it keeps, and the merge flags are a migration", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "collie-forking-" });
+      const scratch = { COLLIE_CWD: cwd };
+
+      const forked = yield* cli(
+        ["--json", "workflow", "fork", "implement", "--layer", "project", "--name", "ours"],
+        scratch,
+      );
+      expect(forked.exit).toBe(0);
+      const path = join(cwd, ".collie", "workflows", "ours.workflow.ts");
+      expect(yield* parseEnvelope(forked.stdout)).toMatchObject({ ok: true, data: { path } });
+      const text = yield* fs.readFileString(path);
+      expect(text).toContain("workflows/implement.workflow.ts");
+      expect(text).toContain("...original");
+      expect(text).toContain('id: "ours"');
+      expect(text).not.toContain("title:");
+
+      const shown = yield* cli(["--json", "workflow", "show", "ours"], scratch);
+      const described = (yield* Schema.decodeEffect(ShownModule)(shown.stdout).pipe(Effect.orDie))
+        .data.workflow;
+      expect(described.layer).toBe("project");
+      expect(Arr.map(described.inputs, (one) => one.name)).toEqual(["plan", "recovery", "then"]);
+
+      const merged = yield* cli(
+        [
+          "--json",
+          "workflow",
+          "fork",
+          "implement",
+          "--layer",
+          "project",
+          "--name",
+          "theirs",
+          "--mode",
+          "extends",
+        ],
+        scratch,
+      );
+      expect(yield* parseEnvelope(merged.stdout)).toMatchObject({
+        ok: false,
+        error: { code: "invalid_input", message: expect.stringContaining("--mode") },
+      });
+      expect(yield* fs.exists(join(cwd, ".collie", "workflows", "theirs.workflow.ts"))).toBe(false);
+    }),
+  ));
 
 test("upgrade is a command of its own, and says what it would do", () =>
   runEffect(
@@ -765,7 +702,6 @@ test("upgrade is a command of its own, and says what it would do", () =>
       const help = yield* cli(["upgrade", "--help"]);
       expect(help.exit).toBe(0);
       expect(help.stdout).toContain("Update this installation");
-      // Discoverable from the root help, like every other command.
       const root = yield* cli(["--help"]);
       expect(root.stdout).toContain("upgrade");
     }),
@@ -775,7 +711,6 @@ test("the version the CLI reports is the one package.json declares", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      // The installer and runner must agree about which release to fetch.
       const manifest = yield* fs.readFileString(join(root, "package.json"));
       const declared = yield* Schema.decodeEffect(
         Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
@@ -787,488 +722,443 @@ test("the version the CLI reports is the one package.json declares", () =>
     }),
   ));
 
-test(
-  "intent defaults round trip, and a Run's Intent is amended through the envelope",
-  () =>
-    hosted("collie-intent-", ({ world }) =>
-      Effect.gen(function* () {
-        const shared = {
-          COLLIE_ROOT: world.install,
-          COLLIE_STATE_DIR: world.state,
-          COLLIE_USER_DIR: world.config,
-        };
+test("intent defaults round trip, and a Run's Intent is amended through the envelope", () =>
+  hosted("collie-intent-", ({ world }) =>
+    Effect.gen(function* () {
+      const shared = {
+        COLLIE_ROOT: world.install,
+        COLLIE_STATE_DIR: world.state,
+        COLLIE_USER_DIR: world.config,
+      };
 
-        const added = yield* cli(
-          ["--json", "run", "intent", "defaults", "add-constraint", "no new dependencies"],
-          shared,
-        );
-        expect(added.exit).toBe(0);
-        expect(yield* parseEnvelope(added.stdout)).toMatchObject({ ok: true });
-        const shown = yield* cli(["--json", "run", "intent", "defaults", "show"], shared);
-        expect(shown.stdout).toContain("no new dependencies");
+      const added = yield* cli(
+        ["--json", "run", "intent", "defaults", "add-constraint", "no new dependencies"],
+        shared,
+      );
+      expect(added.exit).toBe(0);
+      expect(yield* parseEnvelope(added.stdout)).toMatchObject({ ok: true });
+      const shown = yield* cli(["--json", "run", "intent", "defaults", "show"], shared);
+      expect(shown.stdout).toContain("no new dependencies");
 
-        // A grant nobody named is not a grant: the file is refused, not silently ignored.
-        const bogus = yield* cli(
-          ["--json", "run", "intent", "defaults", "set-authority", "invented=true"],
-          shared,
-        );
-        expect(bogus.exit).toBe(2);
-        expect(yield* parseEnvelope(bogus.stdout)).toMatchObject({
-          ok: false,
-          error: { code: "invalid_input" },
-        });
+      const bogus = yield* cli(
+        ["--json", "run", "intent", "defaults", "set-authority", "invented=true"],
+        shared,
+      );
+      expect(bogus.exit).toBe(2);
+      expect(yield* parseEnvelope(bogus.stdout)).toMatchObject({
+        ok: false,
+        error: { code: "invalid_input" },
+      });
 
-        const run = yield* settledRun(world, "hello");
-        yield* writeIntent(run.dir, seedIntent(run.id, { goal: "ship it" }));
+      const run = yield* settledRun(world, "hello");
+      yield* writeIntent(run.dir, seedIntent(run.id, { goal: "ship it" }));
 
-        const amended = yield* cli(
-          [
-            "--json",
-            "run",
-            "intent",
-            "add-constraint",
-            run.id,
-            "preserve the public --json envelope",
-            "--severity",
-            "block",
-          ],
-          shared,
-        );
-        expect(yield* parseEnvelope(amended.stdout)).toMatchObject({
-          ok: true,
-          data: { runId: run.id, version: 2 },
-        });
+      const amended = yield* cli(
+        [
+          "--json",
+          "run",
+          "intent",
+          "add-constraint",
+          run.id,
+          "preserve the public --json envelope",
+          "--severity",
+          "block",
+        ],
+        shared,
+      );
+      expect(yield* parseEnvelope(amended.stdout)).toMatchObject({
+        ok: true,
+        data: { runId: run.id, version: 2 },
+      });
 
-        const intent = yield* readIntent(run.dir);
-        expect(intent?.version).toBe(2);
-        expect(
-          Option.getOrUndefined(
-            Option.map(Option.fromNullishOr(intent), (present) =>
-              Arr.map(present.constraints, (constraint) => constraint.text),
-            ),
+      const intent = yield* readIntent(run.dir);
+      expect(intent?.version).toBe(2);
+      expect(
+        Option.getOrUndefined(
+          Option.map(Option.fromNullishOr(intent), (present) =>
+            Arr.map(present.constraints, (constraint) => constraint.text),
           ),
-        ).toEqual(["preserve the public --json envelope"]);
-      }).pipe(Effect.provide(recordsAt(world.state))),
-    ),
-  60_000,
-);
+        ),
+      ).toEqual(["preserve the public --json envelope"]);
+    }).pipe(Effect.provide(recordsAt(world.state))),
+  ));
 
-test(
-  "run metrics reports what a Run produced, and says so when it has produced nothing",
-  () =>
-    hosted("collie-metrics-", ({ world }) =>
-      Effect.gen(function* () {
-        // One state directory the Run and the command both see: `cli` makes its own per
-        // call, and a Run written into one of those would not be there for the next.
-        const env = { COLLIE_STATE_DIR: world.state };
-        const run = yield* settledRun(world, "hello", { outcome: "bug" });
+test("run metrics reports what a Run produced, and says so when it has produced nothing", () =>
+  hosted("collie-metrics-", ({ world }) =>
+    Effect.gen(function* () {
+      const env = { COLLIE_STATE_DIR: world.state };
+      const run = yield* settledRun(world, "hello", { outcome: "bug" });
 
-        const empty = yield* cli(["--json", "run", "metrics", run.id], env);
-        expect(empty.exit).toBe(0);
-        const bare = yield* parseEnvelope(empty.stdout);
-        expect(bare.ok).toBe(true);
-        // SAFETY: the envelope decoded `ok: true` above, and `run metrics` puts exactly
-        // these fields in `data` — asserted immediately below, so a shape that changed
-        // fails here rather than passing silently.
-        const data = bare.data as {
-          metrics: { timeToFirstEvidence: number | null };
-          outcome: string;
-        };
-        // Null rather than zero: "nothing yet" and "immediately" are different facts.
-        expect(data.metrics.timeToFirstEvidence).toBeNull();
-        expect(data.outcome).toBe("bug");
+      const empty = yield* cli(["--json", "run", "metrics", run.id], env);
+      expect(empty.exit).toBe(0);
+      const bare = yield* parseEnvelope(empty.stdout);
+      expect(bare.ok).toBe(true);
+      // WARNING: the envelope decoded `ok: true` above, and `run metrics` puts exactly these fields in `data` — asserted immediately below, so a shape that changed fails here rather than passing silently.
+      const data = bare.data as {
+        metrics: { timeToFirstEvidence: number | null };
+        outcome: string;
+      };
+      expect(data.metrics.timeToFirstEvidence).toBeNull();
+      expect(data.outcome).toBe("bug");
 
-        yield* appendMetric(evidenceDir(world.state, run.id), {
-          at: "2026-09-01T10:00:00Z",
-          kind: "verification",
-          subject: "v1",
-          value: 1,
-          note: "pass",
+      yield* appendMetric(evidenceDir(world.state, run.id), {
+        at: "2026-09-01T10:00:00Z",
+        kind: "verification",
+        subject: "v1",
+        value: 1,
+        note: "pass",
+      }).pipe(Effect.provide(recordsAt(world.state)));
+
+      const shown = yield* cli(["run", "metrics", run.id], env);
+      expect(shown.exit).toBe(0);
+      expect(shown.stdout).toContain("time to first evidence: 0s");
+      expect(shown.stdout).toContain("1 pass, 0 fail, 0 unstable (1 by collie)");
+      expect(shown.stdout).toContain("rework: 0");
+    }),
+  ));
+
+test("run metrics shows a token category the harness never reported as unavailable, not 0", () =>
+  hosted("collie-usage-", ({ world }) =>
+    Effect.gen(function* () {
+      const env = { COLLIE_STATE_DIR: world.state };
+      const run = yield* settledRun(world, "hello");
+      yield* recordFrom(
+        { dir: world.state },
+        { run: run.id, agent: "build" },
+        { harness: "codex", cwd: world.home, dir: join(world.home, "controls") },
+        [
+          {
+            path: new URL("./fixtures/usage-ledger/codex-no-cache-write.jsonl", import.meta.url)
+              .pathname,
+            format: "codex",
+            parent: null,
+          },
+        ],
+      ).pipe(Effect.provide(recordsAt(world.state)));
+
+      const shown = yield* cli(["--json", "run", "metrics", run.id], env);
+      expect(shown.exit).toBe(0);
+      const envelope = yield* parseEnvelope(shown.stdout);
+      // WARNING: `run metrics` puts the Run's usage in `data`; the assertion below fails on any other shape.
+      const data = envelope.data as {
+        usage: { totals: { cacheCreation: number | null; cacheRead: number | null } };
+      };
+      expect(data.usage.totals).toMatchObject({ cacheCreation: null, cacheRead: 100 });
+      const human = yield* cli(["run", "metrics", run.id], env);
+      expect(human.stdout).toContain("cache creation unavailable");
+    }),
+  ));
+
+test("run metrics compares two sets of recorded Runs by case, reading each Run's reviews, interventions and usage from its host", () =>
+  hosted("collie-trial-", ({ world }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const env = { COLLIE_STATE_DIR: world.state };
+      const recorded = (
+        run: { readonly id: string; readonly dir: string },
+        output: number,
+        findings: ReadonlyArray<{ readonly severity: string; readonly title: string }>,
+      ) =>
+        Effect.gen(function* () {
+          yield* appendUsage(evidenceDir(world.state, run.id), {
+            what: "request",
+            key: `${run.id}-m1`,
+            at: "2026-11-18T10:00:00.000Z",
+            agent: "build",
+            session: "s1",
+            parent: null,
+            step: "build",
+            harness: "claude",
+            model: null,
+            effort: null,
+            head: null,
+            input: 1,
+            cacheRead: 2,
+            cacheCreation: 3,
+            output,
+            reasoning: null,
+          });
+          const reviewed = join(world.state, `${run.id}-review.json`);
+          const listed = Arr.map(
+            findings,
+            (one) => `{"severity":"${one.severity}","title":"${one.title}"}`,
+          );
+          yield* fs.writeFileString(
+            reviewed,
+            `{"verdict":"findings","findings":[${Arr.join(listed, ",")}]}`,
+          );
+          yield* recordLaunch({
+            agent: `${run.id}-reviewer`,
+            output: reviewed,
+            reused: false,
+            runId: run.id,
+            operation: "review",
+            role: "reviewer",
+            workflow: "hello",
+            harness: "claude",
+          });
+          yield* appendCard(run.dir, {
+            id: `${run.id}-final`,
+            run: run.id,
+            kind: "final",
+            at: "2026-11-18T11:00:00.000Z",
+            step: "finish",
+            iteration: 1,
+            intent_version: 1,
+            revision: { branch: null, head_sha: "h", fingerprint: "f", dirty: false },
+            changes: { files: [], commits: [] },
+            requested: { goal: null, constraints: [] },
+            readiness: "claimed",
+            verifications: [],
+            claims: [],
+            missing: [],
+            inspect: [],
+            links: {},
+            drift: [],
+            deliveries: [],
+            narrative: null,
+            aligned: "unverified",
+            cross_run: "none",
+            significance: "routine",
+          });
         }).pipe(Effect.provide(recordsAt(world.state)));
+      const first = yield* settledRun(world, "hello");
+      const second = yield* settledRun(world, "hello");
+      yield* recorded(first, 100, [{ severity: "major", title: "lost write" }]);
+      yield* recorded(second, 40, []);
+      yield* recordAudit(first.dir, {
+        operation: "steer",
+        request: "steer-1",
+        origin: "cli-tty",
+        result: Schema.Null,
+        value: null,
+      }).pipe(Effect.provide(recordsAt(world.state)));
 
-        const shown = yield* cli(["run", "metrics", run.id], env);
-        expect(shown.exit).toBe(0);
-        expect(shown.stdout).toContain("time to first evidence: 0s");
-        expect(shown.stdout).toContain("1 pass, 0 fail, 0 unstable (1 by collie)");
-        expect(shown.stdout).toContain("rework: 0");
-      }),
-    ),
-  60_000,
-);
+      const shown = yield* cli(
+        ["--json", "run", "metrics", "--compare", `${first.id}=x`, "--against", `${second.id}=x`],
+        env,
+      );
+      expect(shown.exit).toBe(0);
+      const envelope = yield* parseEnvelope(shown.stdout);
+      // WARNING: `run metrics --compare` puts the comparison in `data`; the assertions below fail on any other shape.
+      const data = envelope.data as Comparison;
+      expect(Arr.map(data.cases, (one) => one.case)).toEqual(["x"]);
+      expect(data.cases[0]!.compare.runs[0]).toMatchObject({
+        runId: first.id,
+        figures: {
+          "total.output": 100,
+          "startup.cacheRead": 2,
+          defectsFound: 1,
+          accepted: 0,
+          interventions: 1,
+        },
+      });
+      expect(data.cases[0]!.against.runs[0]!.figures).toMatchObject({
+        defectsFound: 0,
+        accepted: 1,
+        interventions: 0,
+        escapedDefects: null,
+      });
+      expect(data.sets.compare.perAcceptedChange).toBe("no accepted change");
+      expect(data.sets.against.perAcceptedChange).toMatchObject({ "total.output": 40 });
 
-test(
-  "run metrics shows a token category the harness never reported as unavailable, not 0",
-  () =>
-    hosted("collie-usage-", ({ world }) =>
-      Effect.gen(function* () {
-        const env = { COLLIE_STATE_DIR: world.state };
-        const run = yield* settledRun(world, "hello");
-        yield* recordFrom(
-          { dir: world.state },
-          { run: run.id, agent: "build" },
-          { harness: "codex", cwd: world.home, dir: join(world.home, "controls") },
-          [
+      const human = yield* cli(
+        ["run", "metrics", "--compare", first.id, "--against", second.id],
+        env,
+      );
+      expect(human.exit).toBe(0);
+      expect(human.stdout).toContain("per accepted change: no accepted change");
+      expect(human.stdout).not.toContain("%");
+    }),
+  ));
+
+test("run intent remember keeps a Run's checks for its repository, and overwrites only when told", () =>
+  hosted("collie-remember-", ({ world }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const env = { COLLIE_STATE_DIR: world.state, COLLIE_USER_DIR: world.config };
+      const worktree = join(world.home, "worktree");
+      yield* fs.makeDirectory(worktree, { recursive: true });
+      yield* exec(["git", "init", "-q"], { cwd: worktree });
+      for (const cwd of [world.project, worktree]) {
+        yield* exec(["git", "remote", "add", "origin", "git@example.test:team/app.git"], { cwd });
+      }
+      const run = yield* settledRun(world, "hello", { workspace: worktree });
+      const client = yield* connect(world.state).pipe(Effect.orDie);
+      expect((yield* client.run({ runId: run.id }).pipe(Effect.orDie))?.cwd).toBe(worktree);
+      yield* writeIntent(run.dir, seedIntent(run.id, { goal: "ship it" }));
+
+      const granted = yield* cli(
+        ["--json", "run", "intent", "verification", run.id, "--name", "unit", "--", "true"],
+        env,
+      );
+      expect(granted.exit).toBe(0);
+
+      const remember = ["--json", "run", "intent", "remember", run.id];
+      const first = yield* cli(remember, env);
+      expect(first.exit).toBe(0);
+      expect(yield* parseEnvelope(first.stdout)).toMatchObject({ ok: true });
+      const file = join(world.config, "verify/example.test/team/app.json");
+      expect(decodeRemembered(yield* fs.readFileString(file))).toEqual([
+        { name: "unit", executable: "true", argv: [], cwd: "worktree" },
+      ]);
+
+      yield* fs.remove(worktree, { recursive: true });
+      const again = yield* cli(remember, env);
+      expect(again.exit).not.toBe(0);
+      expect(yield* parseEnvelope(again.stdout)).toMatchObject({ ok: false });
+
+      const replaced = yield* cli([...remember, "--replace"], env);
+      expect(replaced.exit).toBe(0);
+    }).pipe(Effect.provide(recordsAt(world.state))),
+  ));
+
+test("run report counts every Run by where it ended, and refuses a --since that is not a date", () =>
+  hosted("collie-report-", ({ world }) =>
+    Effect.gen(function* () {
+      const env = { COLLIE_STATE_DIR: world.state };
+      yield* settledRun(world, "hello");
+
+      const all = yield* cli(["--json", "run", "report"], env);
+      expect(all.exit).toBe(0);
+      const report = yield* parseEnvelope(all.stdout);
+      expect(report.ok).toBe(true);
+      // WARNING: the envelope decoded `ok: true` above, and `run report`'s `data` is the Report — these two fields are asserted immediately below.
+      const data = report.data as { total: number; workflows: Array<{ total: number }> };
+      expect(data.total).toBe(1);
+      expect(data.workflows[0]!.total).toBe(1);
+
+      const ran = yield* settledRun(world, "hello");
+      yield* appendMetric(evidenceDir(world.state, ran.id), {
+        at: "2026-09-30T10:00:00.000Z",
+        kind: "context",
+        subject: "hello-agent",
+        value: 42_000,
+        note: "",
+      }).pipe(Effect.provide(recordsAt(world.state)));
+      const measured = yield* cli(["--json", "run", "report"], env);
+      // WARNING: `run report`'s `data` is the Report; only its peak context is read.
+      const measures = (yield* parseEnvelope(measured.stdout)).data as {
+        measures: {
+          peakContext: Array<{ runId: string; tokens: number | null; agent: string | null }>;
+        };
+      };
+      expect(measures.measures.peakContext).toContainEqual({
+        runId: ran.id,
+        tokens: 42_000,
+        agent: "hello-agent",
+      });
+      const text = yield* cli(["run", "report"], env);
+      expect(text.stdout).toContain("peak context tokens: 1 of 2 Runs recorded");
+      const asked = yield* callTool(readEnv({ ...process.env, ...env }), "collie_report", {});
+      expect(asked).toBe(Str.trim(text.stdout));
+
+      const later = yield* cli(["--json", "run", "report", "--since", "2999-01-01"], env);
+      expect(later.exit).toBe(0);
+      // WARNING: as above; only `total` is read.
+      expect(((yield* parseEnvelope(later.stdout)).data as { total: number }).total).toBe(0);
+
+      const bad = yield* cli(["--json", "run", "report", "--since", "nope"], env);
+      expect(bad.exit).not.toBe(0);
+      expect((yield* parseEnvelope(bad.stdout)).ok).toBe(false);
+    }),
+  ));
+
+test("usage is each Subscription's reading in the standard envelope, and says why one is missing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const claudeDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-claude-" });
+      const login = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+        claudeAiOauth: { accessToken: "t", expiresAt: 1, subscriptionType: "max" },
+      }).pipe(Effect.orDie);
+      yield* fs.writeFileString(join(claudeDir, ".credentials.json"), login);
+      const state = yield* fs.makeTempDirectoryScoped({ prefix: "collie-state-" });
+      yield* Effect.addFinalizer(() => Effect.ignore(stopHost(state)));
+      // WARNING: No PATH: this Machine has no Codex, and nothing here may reach a real endpoint.
+      const env = { CLAUDE_CONFIG_DIR: claudeDir, COLLIE_STATE_DIR: state };
+
+      const read = yield* cli(["--json", "usage"], env);
+      expect(read.exit).toBe(0);
+      expect(yield* parseEnvelope(read.stdout)).toMatchObject({
+        ok: true,
+        data: {
+          readings: [
             {
-              path: new URL("./fixtures/usage-ledger/codex-no-cache-write.jsonl", import.meta.url)
-                .pathname,
-              format: "codex",
-              parent: null,
+              subscription: "claude",
+              plan: "max",
+              windows: [],
+              source: "claude-usage",
+              problem: "Claude Code's login expired; it refreshes when Claude Code next runs",
+            },
+            {
+              subscription: "chatgpt",
+              source: "codex-app-server",
+              problem: "Codex is not installed on this Machine",
             },
           ],
-        ).pipe(Effect.provide(recordsAt(world.state)));
+        },
+      });
+      expect(yield* fs.readFileString(join(claudeDir, ".credentials.json"))).toBe(login);
 
-        const shown = yield* cli(["--json", "run", "metrics", run.id], env);
-        expect(shown.exit).toBe(0);
-        const envelope = yield* parseEnvelope(shown.stdout);
-        // SAFETY: `run metrics` puts the Run's usage in `data`; the assertion below fails
-        // on any other shape.
-        const data = envelope.data as {
-          usage: { totals: { cacheCreation: number | null; cacheRead: number | null } };
-        };
-        expect(data.usage.totals).toMatchObject({ cacheCreation: null, cacheRead: 100 });
-        const human = yield* cli(["run", "metrics", run.id], env);
-        expect(human.stdout).toContain("cache creation unavailable");
-      }),
-    ),
-  60_000,
-);
+      const human = yield* cli(["usage"], env);
+      expect(human.exit).toBe(0);
+      expect(Str.split(Str.trim(human.stdout), "\n")).toEqual([
+        "claude  Claude Code's login expired; it refreshes when Claude Code next runs",
+        "chatgpt Codex is not installed on this Machine",
+      ]);
+      const trail = yield* readAudit(join(state, "usage"));
+      expect(Arr.map(trail, ({ operation, actor }) => [operation, actor.origin])).toEqual([
+        ["usage", "cli"],
+        ["usage", "cli"],
+      ]);
 
-test(
-  "run metrics compares two sets of recorded Runs by case, reading each Run's reviews, interventions and usage from its host",
-  () =>
-    hosted("collie-trial-", ({ world }) =>
+      const door = yield* frontDoor(socketOf(state));
+      yield* Effect.forEach(Array.from({ length: 230 }), () => door.usage(), {
+        concurrency: "unbounded",
+      });
+      expect((yield* readAudit(join(state, "usage"))).length).toBe(200);
+    }),
+  ));
+
+test("usage names where a Fallback would move a live agent's work", () =>
+  proves(
+    "collie-usage-fallbacks-",
+    (world) =>
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const env = { COLLIE_STATE_DIR: world.state };
-        const recorded = (
-          run: { readonly id: string; readonly dir: string },
-          output: number,
-          findings: ReadonlyArray<{ readonly severity: string; readonly title: string }>,
-        ) =>
-          Effect.gen(function* () {
-            yield* appendUsage(evidenceDir(world.state, run.id), {
-              what: "request",
-              key: `${run.id}-m1`,
-              at: "2026-11-18T10:00:00.000Z",
-              agent: "build",
-              session: "s1",
-              parent: null,
-              step: "build",
-              harness: "claude",
-              model: null,
-              effort: null,
-              head: null,
-              input: 1,
-              cacheRead: 2,
-              cacheCreation: 3,
-              output,
-              reasoning: null,
-            });
-            const reviewed = join(world.state, `${run.id}-review.json`);
-            const listed = Arr.map(
-              findings,
-              (one) => `{"severity":"${one.severity}","title":"${one.title}"}`,
-            );
-            yield* fs.writeFileString(
-              reviewed,
-              `{"verdict":"findings","findings":[${Arr.join(listed, ",")}]}`,
-            );
-            yield* recordLaunch({
-              agent: `${run.id}-reviewer`,
-              output: reviewed,
-              reused: false,
-              runId: run.id,
-              operation: "review",
-              role: "reviewer",
-              workflow: "hello",
-              harness: "claude",
-            });
-            yield* appendCard(run.dir, {
-              id: `${run.id}-final`,
-              run: run.id,
-              kind: "final",
-              at: "2026-11-18T11:00:00.000Z",
-              step: "finish",
-              iteration: 1,
-              intent_version: 1,
-              revision: { branch: null, head_sha: "h", fingerprint: "f", dirty: false },
-              changes: { files: [], commits: [] },
-              requested: { goal: null, constraints: [] },
-              readiness: "claimed",
-              verifications: [],
-              claims: [],
-              missing: [],
-              inspect: [],
-              links: {},
-              drift: [],
-              deliveries: [],
-              narrative: null,
-              aligned: "unverified",
-              cross_run: "none",
-              significance: "routine",
-            });
-          }).pipe(Effect.provide(recordsAt(world.state)));
-        const first = yield* settledRun(world, "hello");
-        const second = yield* settledRun(world, "hello");
-        yield* recorded(first, 100, [{ severity: "major", title: "lost write" }]);
-        yield* recorded(second, 40, []);
-        yield* recordAudit(first.dir, {
-          operation: "steer",
-          request: "steer-1",
-          origin: "cli-tty",
-          result: Schema.Null,
-          value: null,
-        }).pipe(Effect.provide(recordsAt(world.state)));
-
-        const shown = yield* cli(
-          ["--json", "run", "metrics", "--compare", `${first.id}=x`, "--against", `${second.id}=x`],
-          env,
+        expect((yield* collie(world, ["settings", "set", "fallbacks", "codex"])).envelope.ok).toBe(
+          true,
         );
-        expect(shown.exit).toBe(0);
-        const envelope = yield* parseEnvelope(shown.stdout);
-        // SAFETY: `run metrics --compare` puts the comparison in `data`; the assertions below
-        // fail on any other shape.
-        const data = envelope.data as Comparison;
-        expect(Arr.map(data.cases, (one) => one.case)).toEqual(["x"]);
-        expect(data.cases[0]!.compare.runs[0]).toMatchObject({
-          runId: first.id,
-          figures: {
-            "total.output": 100,
-            "startup.cacheRead": 2,
-            defectsFound: 1,
-            accepted: 0,
-            interventions: 1,
-          },
-        });
-        expect(data.cases[0]!.against.runs[0]!.figures).toMatchObject({
-          defectsFound: 0,
-          accepted: 1,
-          interventions: 0,
-          escapedDefects: null,
-        });
-        expect(data.sets.compare.perAcceptedChange).toBe("no accepted change");
-        expect(data.sets.against.perAcceptedChange).toMatchObject({ "total.output": 40 });
-
-        const human = yield* cli(
-          ["run", "metrics", "--compare", first.id, "--against", second.id],
-          env,
+        const herdr = { FAKE_HERDR_AGENT_STATUS: "working" };
+        const started = yield* collie(
+          world,
+          [
+            "run",
+            "start",
+            "agent",
+            "--input",
+            "target=worktree",
+            "--input",
+            `cwd=${world.project}`,
+            "--input",
+            "skip=false",
+          ],
+          herdr,
         );
-        expect(human.exit).toBe(0);
-        expect(human.stdout).toContain("per accepted change: no accepted change");
-        expect(human.stdout).not.toContain("%");
-      }),
-    ),
-  60_000,
-);
-
-test(
-  "run intent remember keeps a Run's checks for its repository, and overwrites only when told",
-  () =>
-    hosted("collie-remember-", ({ world }) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const env = { COLLIE_STATE_DIR: world.state, COLLIE_USER_DIR: world.config };
-        // A checkout of its own, as a worktree is, and gone once the Run has settled.
-        const worktree = join(world.home, "worktree");
-        yield* fs.makeDirectory(worktree, { recursive: true });
-        yield* exec(["git", "init", "-q"], { cwd: worktree });
-        for (const cwd of [world.project, worktree])
-          yield* exec(["git", "remote", "add", "origin", "git@example.test:team/app.git"], { cwd });
-        const run = yield* settledRun(world, "hello", { workspace: worktree });
-        const client = yield* connect(world.state).pipe(Effect.orDie);
-        expect((yield* client.run({ runId: run.id }).pipe(Effect.orDie))?.cwd).toBe(worktree);
-        yield* writeIntent(run.dir, seedIntent(run.id, { goal: "ship it" }));
-
-        const granted = yield* cli(
-          ["--json", "run", "intent", "verification", run.id, "--name", "unit", "--", "true"],
-          env,
+        expect(started.envelope).toMatchObject({ ok: true });
+        const read = yield* until(
+          () => collie(world, ["usage"], herdr),
+          (one) =>
+            Option.exists(
+              Schema.decodeUnknownOption(
+                Schema.Struct({ fallbacks: Schema.Array(Schema.Unknown) }),
+              )(one.envelope.data),
+              (data) => data.fallbacks.length === 1,
+            ),
         );
-        expect(granted.exit).toBe(0);
-
-        const remember = ["--json", "run", "intent", "remember", run.id];
-        const first = yield* cli(remember, env);
-        expect(first.exit).toBe(0);
-        expect(yield* parseEnvelope(first.stdout)).toMatchObject({ ok: true });
-        const file = join(world.config, "verify/example.test/team/app.json");
-        expect(decodeRemembered(yield* fs.readFileString(file))).toEqual([
-          { name: "unit", executable: "true", argv: [], cwd: "worktree" },
-        ]);
-
-        // The checkout it was started for still names the repository.
-        yield* fs.remove(worktree, { recursive: true });
-        const again = yield* cli(remember, env);
-        expect(again.exit).not.toBe(0);
-        expect(yield* parseEnvelope(again.stdout)).toMatchObject({ ok: false });
-
-        const replaced = yield* cli([...remember, "--replace"], env);
-        expect(replaced.exit).toBe(0);
-      }).pipe(Effect.provide(recordsAt(world.state))),
-    ),
-  60_000,
-);
-
-test(
-  "run report counts every Run by where it ended, and refuses a --since that is not a date",
-  () =>
-    hosted("collie-report-", ({ world }) =>
-      Effect.gen(function* () {
-        const env = { COLLIE_STATE_DIR: world.state };
-        yield* settledRun(world, "hello");
-
-        const all = yield* cli(["--json", "run", "report"], env);
-        expect(all.exit).toBe(0);
-        const report = yield* parseEnvelope(all.stdout);
-        expect(report.ok).toBe(true);
-        // SAFETY: the envelope decoded `ok: true` above, and `run report`'s `data` is the
-        // Report — these two fields are asserted immediately below.
-        const data = report.data as { total: number; workflows: Array<{ total: number }> };
-        expect(data.total).toBe(1);
-        expect(data.workflows[0]!.total).toBe(1);
-
-        // The measures, from what the Run recorded: a context sample, and nothing else.
-        const ran = yield* settledRun(world, "hello");
-        yield* appendMetric(evidenceDir(world.state, ran.id), {
-          at: "2026-09-30T10:00:00.000Z",
-          kind: "context",
-          subject: "hello-agent",
-          value: 42_000,
-          note: "",
-        }).pipe(Effect.provide(recordsAt(world.state)));
-        const measured = yield* cli(["--json", "run", "report"], env);
-        // SAFETY: `run report`'s `data` is the Report; only its peak context is read.
-        const measures = (yield* parseEnvelope(measured.stdout)).data as {
-          measures: {
-            peakContext: Array<{ runId: string; tokens: number | null; agent: string | null }>;
-          };
-        };
-        expect(measures.measures.peakContext).toContainEqual({
-          runId: ran.id,
-          tokens: 42_000,
-          agent: "hello-agent",
+        expect(read.envelope.data).toMatchObject({
+          fallbacks: [{ agent: expect.stringContaining("review"), next: "codex/default" }],
         });
-        // Chat reads the same report, word for word.
-        const text = yield* cli(["run", "report"], env);
-        expect(text.stdout).toContain("peak context tokens: 1 of 2 Runs recorded");
-        const asked = yield* callTool(readEnv({ ...process.env, ...env }), "collie_report", {});
-        expect(asked).toBe(Str.trim(text.stdout));
-
-        const later = yield* cli(["--json", "run", "report", "--since", "2999-01-01"], env);
-        expect(later.exit).toBe(0);
-        // SAFETY: as above; only `total` is read.
-        expect(((yield* parseEnvelope(later.stdout)).data as { total: number }).total).toBe(0);
-
-        const bad = yield* cli(["--json", "run", "report", "--since", "nope"], env);
-        expect(bad.exit).not.toBe(0);
-        expect((yield* parseEnvelope(bad.stdout)).ok).toBe(false);
       }),
-    ),
-  60_000,
-);
-
-test(
-  "usage is each Subscription's reading in the standard envelope, and says why one is missing",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const claudeDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-claude-" });
-        const login = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
-          claudeAiOauth: { accessToken: "t", expiresAt: 1, subscriptionType: "max" },
-        }).pipe(Effect.orDie);
-        yield* fs.writeFileString(join(claudeDir, ".credentials.json"), login);
-        const state = yield* fs.makeTempDirectoryScoped({ prefix: "collie-state-" });
-        yield* Effect.addFinalizer(() => Effect.ignore(stopHost(state)));
-        // No PATH: this Machine has no Codex, and nothing here may reach a real endpoint.
-        const env = { CLAUDE_CONFIG_DIR: claudeDir, COLLIE_STATE_DIR: state };
-
-        const read = yield* cli(["--json", "usage"], env);
-        expect(read.exit).toBe(0);
-        expect(yield* parseEnvelope(read.stdout)).toMatchObject({
-          ok: true,
-          data: {
-            readings: [
-              {
-                subscription: "claude",
-                plan: "max",
-                windows: [],
-                source: "claude-usage",
-                problem: "Claude Code's login expired; it refreshes when Claude Code next runs",
-              },
-              {
-                subscription: "chatgpt",
-                source: "codex-app-server",
-                problem: "Codex is not installed on this Machine",
-              },
-            ],
-          },
-        });
-        expect(yield* fs.readFileString(join(claudeDir, ".credentials.json"))).toBe(login);
-
-        const human = yield* cli(["usage"], env);
-        expect(human.exit).toBe(0);
-        expect(Str.split(Str.trim(human.stdout), "\n")).toEqual([
-          "claude  Claude Code's login expired; it refreshes when Claude Code next runs",
-          "chatgpt Codex is not installed on this Machine",
-        ]);
-        const trail = yield* readAudit(join(state, "usage"));
-        expect(Arr.map(trail, ({ operation, actor }) => [operation, actor.origin])).toEqual([
-          ["usage", "cli"],
-          ["usage", "cli"],
-        ]);
-
-        // Past the trail's length, reads at once each record and the trim keeps the newest.
-        const door = yield* frontDoor(socketOf(state));
-        yield* Effect.forEach(Array.from({ length: 230 }), () => door.usage(), {
-          concurrency: "unbounded",
-        });
-        expect((yield* readAudit(join(state, "usage"))).length).toBe(200);
-      }),
-    ),
-  60_000,
-);
-
-test(
-  "usage names where a Fallback would move a live agent's work",
-  () =>
-    proves(
-      "collie-usage-fallbacks-",
-      (world) =>
-        Effect.gen(function* () {
-          expect(
-            (yield* collie(world, ["settings", "set", "fallbacks", "codex"])).envelope.ok,
-          ).toBe(true);
-          const herdr = { FAKE_HERDR_AGENT_STATUS: "working" };
-          const started = yield* collie(
-            world,
-            [
-              "run",
-              "start",
-              "agent",
-              "--input",
-              "target=worktree",
-              "--input",
-              `cwd=${world.project}`,
-              "--input",
-              "skip=false",
-            ],
-            herdr,
-          );
-          expect(started.envelope).toMatchObject({ ok: true });
-          const read = yield* until(
-            () => collie(world, ["usage"], herdr),
-            (one) =>
-              Option.exists(
-                Schema.decodeUnknownOption(
-                  Schema.Struct({ fallbacks: Schema.Array(Schema.Unknown) }),
-                )(one.envelope.data),
-                (data) => data.fallbacks.length === 1,
-              ),
-          );
-          expect(read.envelope.data).toMatchObject({
-            fallbacks: [{ agent: expect.stringContaining("review"), next: "codex/default" }],
-          });
-        }),
-      ["agent.workflow.ts", "notes.md"],
-    ),
-  120_000,
-);
+    ["agent.workflow.ts", "notes.md"],
+  ));

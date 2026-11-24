@@ -1,7 +1,3 @@
-// A Codex agent's launch at the Agents service: the App Server Collie starts for it is the
-// stand-in in `support/codex-server.ts`, run as a real process, and what is asserted is what
-// a human could see of that process and of the terminal core was asked to run.
-
 import { Herdr } from "../src/herdr";
 import { isString } from "../src/schema";
 import * as Str from "effect/String";
@@ -11,9 +7,11 @@ import * as Option from "effect/Option";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import type { PlatformServices } from "../src/platform";
 import { Effect, FileSystem, Schema, flow, Result } from "effect";
-import { Rig, type Call } from "./support/recorder";
+import { Rig } from "./support/recorder";
+import type { Call } from "./support/recorder";
 import { fastForward, runEffect as runLive } from "./support/effect";
-import { agentWork, agentsLayer, type AgentHost } from "../src/agents";
+import { agentWork, agentsLayer } from "../src/agents";
+import type { AgentHost } from "../src/agents";
 import { asRun, enveloped } from "./support/enveloped";
 import { foundationLayer } from "../src/engine";
 import { agentName } from "../src/naming";
@@ -43,7 +41,9 @@ afterEach(() =>
   runLive(
     Effect.gen(function* () {
       const pid = (yield* started())?.pid;
-      if (pid !== undefined) kill(pid);
+      if (pid !== undefined) {
+        kill(pid);
+      }
       yield* rig.close();
     }),
   ),
@@ -81,7 +81,7 @@ const eventsFile = () => `${rig.root}/codex-server.events`;
 const server = () => `bun ${SERVER} ${config()}`;
 const agent = agentName("r1", "build", null, 1);
 
-const hostOf = (): AgentHost => ({
+const hostOf: () => AgentHost = () => ({
   dir,
   env: rig.pluginEnv(),
   herdr: new Herdr(rig.pluginEnv()),
@@ -131,7 +131,9 @@ const started = () =>
     Effect.map((text) => {
       for (const line of Str.split(text, "\n")) {
         const one = decodeStarted(line);
-        if (one._tag === "Some") return one.value;
+        if (one._tag === "Some") {
+          return one.value;
+        }
       }
       return undefined;
     }),
@@ -140,16 +142,13 @@ const started = () =>
 const kill = (pid: number) => {
   try {
     process.kill(pid, "SIGKILL");
-  } catch {
-    // Already gone.
-  }
+  } catch {}
 };
 
 const mcpOverrides = (argv: ReadonlyArray<string>) =>
   Arr.flatMap(argv, (arg, at) =>
     argv[at - 1] === "-c" && pipe_(arg, Str.startsWith("mcp_servers.")) ? [arg] : [],
   );
-/** The argv core was asked to run the agent's terminal with. */
 const agentStartArgs = (calls: ReadonlyArray<Call>) => {
   const argv = Option.getOrUndefined(Arr.findFirst(calls, (call) => call.cmd === "terminal.run"))
     ?.params?.argv;

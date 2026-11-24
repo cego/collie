@@ -1,16 +1,18 @@
-// Whether this Machine is Short of memory, read from its own sources
-// (ADR-draft-new-work-waits-while-its-machine-is-short-of-memory, D1).
-
 import * as Rec from "effect/Record";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
 import { FakeBin } from "./support/bin";
-import { linuxMemory, macMemory, shortOfMemory, type Memory } from "../src/memory";
+import { linuxMemory, macMemory, shortOfMemory } from "../src/memory";
+import type { Memory } from "../src/memory";
 import { shell } from "../src/mr";
 
 const GiB = 1024 ** 3;
-const known = (available: number, total: number, pressure: number | null = null): Memory => ({
+const known: (available: number, total: number, pressure?: number | null) => Memory = (
+  available,
+  total,
+  pressure = null,
+) => ({
   known: true,
   available,
   total,
@@ -62,8 +64,9 @@ const proc = (files: Record<string, string>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     yield* fs.makeDirectory(`${dir}/proc/pressure`, { recursive: true });
-    for (const [name, text] of Rec.toEntries(files))
+    for (const [name, text] of Rec.toEntries(files)) {
       yield* fs.writeFileString(`${dir}/proc/${name}`, text);
+    }
     return `${dir}/proc`;
   });
 
@@ -78,7 +81,7 @@ test("Linux reads MemAvailable, MemTotal and the full avg10 of memory pressure",
         "pressure/memory":
           "some avg10=12.50 avg60=3.00 avg300=1.00 total=100\nfull avg10=4.25 avg60=1.00 avg300=0.50 total=50\n",
       });
-      expect(yield* linuxMemory(root)).toEqual(known(8000000 * 1024, 65000000 * 1024, 4.25));
+      expect(yield* linuxMemory(root)).toEqual(known(8_000_000 * 1024, 65_000_000 * 1024, 4.25));
     }),
   ));
 
@@ -86,7 +89,7 @@ test("a Linux kernel without pressure information is read by memory alone", () =
   runEffect(
     Effect.gen(function* () {
       const root = yield* proc({ meminfo: MEMINFO });
-      expect(yield* linuxMemory(root)).toEqual(known(8000000 * 1024, 65000000 * 1024));
+      expect(yield* linuxMemory(root)).toEqual(known(8_000_000 * 1024, 65_000_000 * 1024));
     }),
   ));
 
