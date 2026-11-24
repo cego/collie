@@ -266,7 +266,6 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
     const { cwd, rallied } = ask;
     let latest: Pick<Reviewed, "reviewed" | "on"> = rallied;
     const { dir } = yield* host.place(runId);
-    // WARNING: a fix may name the reproduction the build did not, so the gate reads every fix's Output.
     const fixers: Array<string> = [];
     const fixes = Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
