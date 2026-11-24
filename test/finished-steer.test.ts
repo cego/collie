@@ -486,6 +486,84 @@ for (const [status, terminal, offer] of [
     ));
 }
 
+for (const [status, terminal, offer] of [
+  ["failed", "failed", "recover"],
+  ["complete", "succeeded", "carry-on"],
+] as const) {
+  test(`a ${terminal} Run's build agent is told the Run ended, in its answer, its receipt and its words`, () =>
+    steerable(
+      `collie-ended-${terminal}-`,
+      (world) =>
+        Effect.gen(function* () {
+          const { client, runId, agent } = yield* finishedWithAgent(
+            world,
+            "terminal-delivery",
+            status,
+          );
+          const check = (words: string) => {
+            expect(words).toContain(`${runId} has finished (${terminal})`);
+            expect(words).toContain("No Step reads this turn's Output");
+            expect(words).toContain(`follow-up offer "${offer}"`);
+          };
+          const cli = yield* collie(world, [
+            "run",
+            "steer",
+            runId,
+            "--operation",
+            agent.name,
+            "the build went in",
+          ]);
+          expect(cli.envelope.ok).toBe(true);
+          const notice = yield* Schema.decodeUnknownEffect(
+            Schema.Struct({ workflowNotice: Schema.String }),
+          )(cli.envelope.data).pipe(Effect.orDie);
+          check(notice.workflowNotice);
+          const [line] = yield* until(
+            () =>
+              client.deliveries({ runId }).pipe(
+                Effect.orDie,
+                Effect.map((lines) => Arr.filter(lines ?? [], (one) => one.cause.kind === "steer")),
+              ),
+            (lines) => lines.length >= 1,
+          );
+          expect(line?.state).toBe("acknowledged");
+          check(line?.workflowNotice ?? "");
+          check(yield* lastTypedTo(agent));
+        }),
+      [{ verdict: status === "failed" ? "failed" : "built" }],
+      ["terminal-delivery.workflow.ts"],
+    ));
+}
+
+test("while a finished Run's follow-up is live, its follow-up offer is unavailable and a second take is refused", () =>
+  steerable(
+    "collie-ended-guard-",
+    (world) =>
+      Effect.gen(function* () {
+        const { client, runId } = yield* finishedWithAgent(world, "terminal-delivery", "failed");
+        const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
+        const taken = yield* client
+          .invoke({ runId, offer: "recover", input: { work: "again" }, request: "act-1" })
+          .pipe(Effect.orDie);
+        expect(taken.runId).not.toBe(runId);
+        const unavailable =
+          Option.getOrUndefined(
+            Arr.findFirst(
+              yield* client.offers({ runId }).pipe(Effect.orDie),
+              (one) => one.id === "recover",
+            ),
+          )?.unavailable ?? "";
+        expect(unavailable).toContain(taken.runId);
+        const refused = yield* client
+          .invoke({ runId, offer: "recover", input: { work: "again" }, request: "act-2" })
+          .pipe(Effect.flip, Effect.orDie);
+        expect(refused.reason).toContain(taken.runId);
+        expect(yield* client.runs({ task: null }).pipe(Effect.orDie)).toHaveLength(runs.length + 1);
+      }),
+    [{ verdict: "failed" }],
+    ["terminal-delivery.workflow.ts"],
+  ));
+
 test("a steer is typed plain within 3 lines and 700 characters, or kept as a file the typed line names", () =>
   steerable("collie-finished-budget-", (world) =>
     Effect.gen(function* () {
