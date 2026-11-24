@@ -70,7 +70,8 @@ seconds for that record and signals nothing if it never comes, reporting `HostUn
 rather than end a check the successor may already have adopted. One that arrives in the wait
 is judged as any other, a newer build as `HostVersionMismatch`. The record names the pid, the
 start token, the build and the installation it serves: a pid alone is reused, so one whose
-token disagrees with `host.lock` is another owner's and is not signalled. A build from before
+token disagrees with `host.lock`, or is unknown on either side, is not this owner's and is
+not signalled. A build from before
 the token is therefore reported, not replaced, while it is silent; one that answers is
 replaced as any host is. That host is asked for the same handover before it is signalled: one
 too slow to answer still hears its signal and hands its checks over, and one that never hears

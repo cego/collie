@@ -5534,7 +5534,8 @@ const recordedOwnerOf = Effect.fn("Host.recordedOwner")(function* (dir: string, 
     return null;
   }
   const { pid, build, root, started } = recorded.value;
-  return pid === owner.pid && started === owner.start ? { build, root } : null;
+  const identified = started !== null && started !== undefined && started === owner.start;
+  return pid === owner.pid && identified ? { build, root } : null;
 });
 
 // WARNING: A successor takes the lock before it writes its record, and may already have adopted a check.
