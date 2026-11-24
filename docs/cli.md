@@ -3426,7 +3426,10 @@ place; a host still there five seconds past its stop grace is killed, and its wo
 recovered by the one that replaces it. A host that does not answer is replaced the same way
 when the build it recorded in `host.build` is older. A client older than the host is refused,
 naming the build the host runs — the build the host recorded in `host.build` when it does not
-answer — and sends nothing: an old shell never downgrades the host. A client of another
+answer — and sends nothing: an old shell never downgrades the host. A build from before that
+refusal has none of it and still sends a plain stop signal, which a host cannot attribute and
+must honour: it ends the running check, and the older build serves until a client of this
+build replaces it again. A client of another
 installation is told which build is running and to point `COLLIE_STATE_DIR` at a directory of
 its own, and sends nothing else. That includes a checkout under development, which is pointed
 at a state directory of its own rather than replacing the installed host. Such a
