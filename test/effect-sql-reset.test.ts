@@ -62,10 +62,13 @@ test("a conditional SQL activity reset drops the interrupt that suspended it and
       yield* resetting.clearReplies(requestId, { expectedReplyId: suspendedReplyId });
 
       const replay = yield* storage.unprocessedMessages(["default:1"], 0);
-      expect(Arr.map(replay, ({ envelope }) => envelope._tag)).toEqual(["Request", "Interrupt"]);
       expect(
-        Arr.flatMap(replay, ({ envelope }) => (envelope._tag === "Interrupt" ? [envelope.id] : [])),
-      ).toEqual(["4"]);
+        Arr.map(replay, ({ envelope }) =>
+          envelope._tag === "Interrupt"
+            ? `interrupt ${envelope.id}`
+            : `request ${envelope.requestId}`,
+        ),
+      ).toEqual(["request 1", "interrupt 4"]);
       expect(yield* storage.repliesFor([String(requestId)])).toEqual([]);
     }).pipe(
       Effect.provide([sqlite, Digest.layerWebCrypto, Snowflake.layerGenerator, engineTouchesLayer]),
