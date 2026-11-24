@@ -612,13 +612,6 @@ test("a Run stopped while its agent works on the message does not ask the questi
     }),
   ));
 
-const runLog = (at: AtQuestion) =>
-  Effect.flatMap(FileSystem.FileSystem, (fs) =>
-    fs
-      .readFileString(`${at.world.state}/runs/${at.runId}/agents.log`)
-      .pipe(Effect.orElseSucceed(() => "")),
-  );
-
 const answerSends = (at: AtQuestion, needle: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) =>
     fs.readFileString(core.logPath).pipe(
