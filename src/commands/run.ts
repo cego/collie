@@ -121,6 +121,16 @@ import type { Global } from "./shared";
 import { outOfReach, readRunLines } from "../run-read";
 import { DEFAULT_LINES } from "../text-lines";
 
+const inputPairs = (pairs: ReadonlyArray<string>) =>
+  Rec.fromEntries(
+    Arr.flatMap(pairs, (pair) => {
+      const at = Option.getOrElse(pipe_(pair, Str.indexOf("=")), () => -1);
+      return at === -1
+        ? []
+        : [[pipe_(pair, Str.slice(0, at)), pipe_(pair, Str.slice(at + 1))] as const];
+    }),
+  );
+
 // WARNING: paired by position; a repeated flag arrives as its own list, so order between lists is lost.
 function namedConstraints(texts: ReadonlyArray<string>, severities: ReadonlyArray<string>) {
   const constraints: Array<Omit<Constraint, "since">> = [];
@@ -293,14 +303,15 @@ const runStart = Command.make(
             {
               operation: "run-start",
               run: null,
+              destination: "cwd",
               args: {
                 workflow,
                 input: { json: explicit.given.json, text: explicit.given.text },
                 task: Option.getOrNull(taskId),
                 title: Option.getOrNull(title),
                 goal: Option.getOrNull(goal),
-                constraints: Arr.map(named.constraints, (one) => one.text),
-                verify: Arr.map(given.specs, (one) => one.name),
+                constraints: named.constraints,
+                verify: given.specs,
                 harness: Option.getOrNull(harness),
                 model: Option.getOrNull(model),
                 effort: Option.getOrNull(effort),
@@ -1962,12 +1973,13 @@ const runAction = Command.make(
     attach: attachFlag,
     requestId: requestIdFlag,
   },
-  ({ runId, offer, input, attach, requestId }) =>
-    runMutationCommand(
+  ({ runId, offer, input, attach, requestId }) => {
+    const inputs = inputPairs(input);
+    return runMutationCommand(
       {
         operation: "run-action",
         run: runId,
-        args: { runId, offer, input: [...input], attach: [...attach] },
+        args: { runId, offer, inputs, attach: [...attach] },
       },
       requestId,
       (env, id) =>
@@ -1977,18 +1989,12 @@ const runAction = Command.make(
             door,
             runId,
             offer,
-            input: Rec.fromEntries(
-              Arr.flatMap(input, (pair) => {
-                const at = Option.getOrElse(pipe_(pair, Str.indexOf("=")), () => -1);
-                return at === -1
-                  ? []
-                  : [[pipe_(pair, Str.slice(0, at)), pipe_(pair, Str.slice(at + 1))] as const];
-              }),
-            ),
+            input: inputs,
             request: id,
           }),
         ),
-    ),
+    );
+  },
 ).pipe(Command.withDescription("Do one of the things this Run offers, if it still offers it"));
 
 const RESUME_WORKSPACE =
@@ -2387,7 +2393,7 @@ function defaultsCommand(
   requestId: Option.Option<string>,
   change: (defaults: Defaults) => Defaults | Failure,
 ) {
-  return mutating({ operation, run: null, args }, requestId, (env) =>
+  return mutating({ operation, run: null, destination: "cwd", args }, requestId, (env) =>
     Effect.gen(function* () {
       const file = yield* defaultsFile(env);
       const current = (yield* readDefaults(file)) ?? EMPTY_DEFAULTS;
@@ -2469,7 +2475,7 @@ const defaultsAuthority = Command.make(
   ({ pairs, requestId }) =>
     defaultsCommand(
       "run-intent-defaults-authority",
-      { pairs: [...pairs] },
+      { patch: authorityPatch(pairs) },
       requestId,
       (defaults) => {
         const patch = authorityPatch(pairs);
@@ -2543,7 +2549,7 @@ const artefactResult = (read: {
                 id: read.registration.id ?? null,
                 url: read.registration.url ?? null,
                 title: read.registration.title ?? null,
-                metadata: read.metadata ?? null,
+                metadata: metadata.value ?? null,
                 upload: read.upload === true,
               },
             },

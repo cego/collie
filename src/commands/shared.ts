@@ -94,7 +94,8 @@ export const context = Effect.fn("collie.context")(function* (
   const reach = Option.isSome(global.machine)
     ? { pairs: true, machine: global.machine.value }
     : { pairs: true };
-  const base = { ...baseEnv, ...reach };
+  // WARNING: who asked comes from the front door, so a receipt scopes to the Run the agent claim resolves to.
+  const base = { ...baseEnv, ...reach, caller: yield* callerIn(baseEnv) };
   if (!id) {
     return requireScope
       ? contextFailure(err("workspace_required", "This operation requires a workspace."))
@@ -328,6 +329,11 @@ export const cliDoor = Effect.fn("Shared.cliDoor")(function* (env: PluginEnv) {
     }
   }
   return cliOrigin({ terminal, agent: named !== "" });
+});
+
+export const callerIn = Effect.fn("Shared.callerIn")(function* (env: PluginEnv) {
+  const door = yield* cliDoor(env);
+  return Schema.is(FrontDoor)(door) ? null : door.from.run;
 });
 
 export const actorNow = Effect.fn("Shared.actorNow")(function* (env: PluginEnv, requestId: string) {

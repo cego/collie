@@ -1,15 +1,18 @@
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { Effect, Fiber, FileSystem, Option, Schema } from "effect";
+import { Effect, Fiber, FileSystem, Option, Schema, flow, Result } from "effect";
 import { readAudit } from "../src/audit";
 import { runDir } from "../src/engine";
 import { recordsReadLayer } from "../src/records";
 import { collie, proves } from "./support/world";
 import type { World } from "./support/world";
 import { until } from "./support/host";
+import { registeredAt } from "./support/records";
 import { exec } from "./support/command";
 import { FakeBin } from "./support/bin";
 import { forgeOnPath, FORGE_HOST, PROJECT, serveForges } from "./support/forge";
+
+const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
 const Started = Schema.Struct({ runId: Schema.String });
 const Listed = Schema.Struct({
@@ -17,14 +20,15 @@ const Listed = Schema.Struct({
 });
 const Published = Schema.Struct({ mr_url: Schema.String });
 
-const receiptOf = (world: World, operation: string, id: string) =>
+const receiptOf = (world: World, id: string) => `${world.state}/requests/by-id/${id}.json`;
+const legacyReceiptOf = (world: World, operation: string, id: string) =>
   `${world.state}/requests/${operation}/${id}.json`;
 
 const writeReceipt = (world: World, operation: string, id: string, text: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     yield* fs.makeDirectory(`${world.state}/requests/${operation}`, { recursive: true });
-    yield* fs.writeFileString(receiptOf(world, operation, id), `${text}\n`);
+    yield* fs.writeFileString(legacyReceiptOf(world, operation, id), `${text}\n`);
   });
 
 const auditFor = (world: World, runId: string) =>
@@ -32,11 +36,15 @@ const auditFor = (world: World, runId: string) =>
 
 const started = Effect.fn("receiptScope.started")(function* (
   world: World,
-  options: { readonly workflow?: string; readonly env?: Readonly<Record<string, string>> } = {},
+  options: {
+    readonly workflow?: string;
+    readonly input?: string;
+    readonly env?: Readonly<Record<string, string>>;
+  } = {},
 ) {
   const answer = yield* collie(
     world,
-    ["run", "start", options.workflow ?? "lingers", "--input", "note=cache"],
+    ["run", "start", options.workflow ?? "lingers", "--input", options.input ?? "note=cache"],
     options.env ?? {},
   );
   const { runId } = yield* Schema.decodeUnknownEffect(Started)(answer.envelope.data);
@@ -79,12 +87,12 @@ test("the first Run's retry still replays once another Run has asked under its i
         const runB = yield* started(world);
         const first = yield* held(world, runA, "because", "held-guard");
         expect(first.envelope.ok).toBe(true);
-        const stored = yield* fs.readFileString(receiptOf(world, "run-hold", "held-guard"));
+        const stored = yield* fs.readFileString(receiptOf(world, "held-guard"));
         yield* held(world, runB, "because", "held-guard");
         expect((yield* held(world, runA, "because", "held-guard")).envelope).toEqual(
           first.envelope,
         );
-        expect(yield* fs.readFileString(receiptOf(world, "run-hold", "held-guard"))).toBe(stored);
+        expect(yield* fs.readFileString(receiptOf(world, "held-guard"))).toBe(stored);
       }),
     ["lingers.workflow.ts"],
   ));
@@ -101,7 +109,6 @@ test("the same Run reusing an id with other arguments is refused", () =>
         expect(reused.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
         expect(reused.envelope.data).toBeUndefined();
         expect(reused.envelope.error?.message).toContain("held-twice");
-        expect(reused.envelope.data).toBeUndefined();
         expect(reused.envelope.error?.message).not.toContain(runA);
       }),
     ["lingers.workflow.ts"],
@@ -128,25 +135,175 @@ test("a global operation reusing an id with other arguments is refused", () =>
     ["lingers.workflow.ts"],
   ));
 
-test("an agent of another Run never replays the receipt of the Run it names", () =>
+test("an id recorded for one operation is refused for another", () =>
+  proves(
+    "collie-receipt-scope-operation-",
+    (world) =>
+      Effect.gen(function* () {
+        const runA = yield* started(world);
+        expect(
+          (yield* collie(world, ["settings", "set", "effort", "low", "--request-id", "one-id"]))
+            .envelope.ok,
+        ).toBe(true);
+        const reused = yield* held(world, runA, "because", "one-id");
+        expect(reused.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+        expect(reused.envelope.data).toBeUndefined();
+        expect(reused.envelope.error?.message).toContain("one-id");
+        const lines = yield* auditFor(world, runA);
+        expect(Arr.filter(lines, (one) => one.request === "one-id")).toHaveLength(0);
+      }),
+    ["lingers.workflow.ts"],
+  ));
+
+test("a request naming this workspace's own files does not replay from another directory", () =>
+  proves(
+    "collie-receipt-scope-directory-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const elsewhere = `${world.home}/elsewhere`;
+        yield* fs.makeDirectory(elsewhere, { recursive: true });
+        const add = (dir: string) =>
+          collie(
+            world,
+            [
+              "run",
+              "intent",
+              "defaults",
+              "add-constraint",
+              "Keep it small",
+              "--request-id",
+              "defaults-once",
+            ],
+            { COLLIE_CWD: dir },
+          );
+        expect((yield* add(world.project)).envelope.ok).toBe(true);
+        const other = yield* add(elsewhere);
+        expect(other.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+        expect(other.envelope.data).toBeUndefined();
+        expect((yield* add(world.project)).envelope.ok).toBe(true);
+      }),
+    ["lingers.workflow.ts"],
+  ));
+
+test("a start's whole constraints and checks are part of its request", () =>
+  proves(
+    "collie-receipt-scope-definitions-",
+    (world) =>
+      Effect.gen(function* () {
+        const start = (severity: string) =>
+          collie(world, [
+            "run",
+            "start",
+            "plain",
+            "--input",
+            "note=cache",
+            "--constraint",
+            "Keep it small",
+            "--severity",
+            severity,
+            "--request-id",
+            "start-definitions",
+          ]);
+        expect((yield* start("warn")).envelope.ok).toBe(true);
+        const changed = yield* start("block");
+        expect(changed.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+        expect(changed.envelope.data).toBeUndefined();
+        const check = (argv: string) =>
+          collie(world, [
+            "run",
+            "start",
+            "plain",
+            "--input",
+            "note=cache",
+            "--verify",
+            `{"name":"tests","executable":"bun","argv":["${argv}"],"cwd":"."}`,
+            "--request-id",
+            "start-checks",
+          ]);
+        expect((yield* check("test")).envelope.ok).toBe(true);
+        const replaced = yield* check("run");
+        expect(replaced.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+        expect(replaced.envelope.data).toBeUndefined();
+      }),
+    ["plain.workflow.ts"],
+  ));
+
+test("a request is the same however its structured inputs are written", () =>
+  proves(
+    "collie-receipt-scope-canonical-",
+    (world) =>
+      Effect.gen(function* () {
+        const add = (payload: string) =>
+          collie(world, [
+            "schedule",
+            "add",
+            "nightly",
+            "typed",
+            "--cron",
+            "0 7 * * *",
+            "--paused",
+            "--inputs-json",
+            payload,
+            "--request-id",
+            "sched-once",
+          ]);
+        const first = yield* add(
+          '{"note":"n","count":1,"draft":true,"labels":[],"ticket":"","mode":"fast","ref":"r","spec":""}',
+        );
+        expect(first.envelope.ok).toBe(true);
+        const reordered = yield* add(
+          '{"spec":"","ref":"r","mode":"fast","ticket":"","labels":[],"draft":true,"count":1,"note":"n"}',
+        );
+        expect(reordered.envelope).toEqual(first.envelope);
+        const set = (value: string) =>
+          collie(world, ["settings", "set", "effort", value, "--request-id", "effort-form"]);
+        const spaced = yield* set(" low ");
+        expect(spaced.envelope.ok).toBe(true);
+        expect((yield* set("low")).envelope).toEqual(spaced.envelope);
+      }),
+    ["typed.workflow.ts"],
+  ));
+
+test("a receipt scopes to the Run whose claim asked, not to a Run the request names", () =>
   proves(
     "collie-receipt-scope-agent-",
     (world) =>
       Effect.gen(function* () {
-        const runA = yield* started(world);
-        const runB = yield* started(world);
-        expect((yield* held(world, runB, "because", "held-agent")).envelope.ok).toBe(true);
-        const asRunA = { COLLIE_RUN: runA, COLLIE_AGENT: "builder" };
-        const elsewhere = yield* held(world, runA, "because", "held-agent", asRunA);
-        expect(elsewhere.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
-        expect(elsewhere.envelope.data).toBeUndefined();
-        expect(elsewhere.envelope.error?.message).not.toContain(runB);
-        const same = yield* held(world, runB, "because", "held-agent", asRunA);
-        expect(same.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
-        expect(same.envelope.data).toBeUndefined();
-        expect(same.envelope.error?.message).not.toContain(runB);
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(
+          `${world.home}/outputs.json`,
+          encode([{ verdict: "done" }, { verdict: "done" }]),
+        );
+        const runA = yield* started(world, { workflow: "attended", input: "work=identity" });
+        const agent = yield* until(
+          () => registeredAt(world.state),
+          (entries) => Arr.some(entries, (one) => one.runId === runA),
+        ).pipe(
+          Effect.map((entries) =>
+            Option.getOrUndefined(Arr.findFirst(entries, (one) => one.runId === runA)),
+          ),
+        );
+        if (agent === undefined) {
+          return yield* Effect.die(new Error(`no agent is registered for ${runA}`));
+        }
+        const claim = { COLLIE_AGENT: agent.agent };
+        const first = yield* held(world, runA, "because", "held-agent", claim);
+        expect(first.envelope.ok).toBe(true);
+        expect((yield* held(world, runA, "because", "held-agent", claim)).envelope).toEqual(
+          first.envelope,
+        );
+        const forged = yield* held(world, runA, "because", "held-agent", {
+          COLLIE_RUN: runA,
+          COLLIE_AGENT: "not-an-agent",
+        });
+        expect(forged.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+        expect(forged.envelope.data).toBeUndefined();
+        const human = yield* held(world, runA, "because", "held-agent");
+        expect(human.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+        expect(human.envelope.data).toBeUndefined();
       }),
-    ["lingers.workflow.ts"],
+    ["attended.workflow.ts"],
   ));
 
 test("a receipt written before receipts were scoped replays to its own Run", () =>
@@ -391,7 +548,7 @@ test("a request meeting another Run's in-progress receipt neither replays nor ov
             () => fs.exists(atPush),
             (found) => found,
           );
-          const receipt = receiptOf(world, "run-publish", "publish-slow");
+          const receipt = receiptOf(world, "publish-slow");
           const during = yield* fs.readFileString(receipt);
           expect(during).toContain('"digest"');
           const foreign = yield* publish(runB, { ...env(), COLLIE_CWD: other });

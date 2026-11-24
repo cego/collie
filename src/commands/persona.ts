@@ -90,6 +90,7 @@ const personaFork = Command.make(
             {
               operation: "persona-fork",
               run: null,
+              destination: layer === "project" ? "cwd" : undefined,
               args: { persona, layer, name },
             },
             request,

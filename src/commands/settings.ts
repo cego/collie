@@ -65,7 +65,7 @@ const set = Command.make(
         }
         return yield* mutation(
           env,
-          { operation: "settings-set", run: null, args: { key, value } },
+          { operation: "settings-set", run: null, args: { key, value: parsed.value } },
           requestId,
           (id) =>
             Effect.gen(function* () {

@@ -1,11 +1,13 @@
 import type { PlatformServices } from "./platform";
 import type { Config } from "effect";
-import * as Rec from "effect/Record";
+import * as Arr from "effect/Array";
 import { Effect, FileSystem, Option, Path, Schema, Stdio, Stream, flow, Result } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import type { PluginEnv } from "./env";
 import type { HerdrError } from "./herdr";
 import { sha256Hex } from "./attachments";
+import { canonical } from "./canonical";
+import type { Given } from "./canonical";
 import { currentPid, withLock } from "./lock";
 import { err, HostUnread, newRequestId, ExpectedError } from "./operations";
 import type { OpResult } from "./operations";
@@ -25,11 +27,13 @@ const Stored = Schema.Union([
     ok: Schema.Literal(true),
     data: Schema.ObjectKeyword,
     human: Schema.String,
+    operation: Schema.optionalKey(Schema.String),
     digest: Schema.optionalKey(Schema.String),
   }),
   Schema.Struct({
     ok: Schema.Literal(false),
     error: Schema.suspend(() => ExpectedError),
+    operation: Schema.optionalKey(Schema.String),
     digest: Schema.optionalKey(Schema.String),
   }),
 ]);
@@ -108,28 +112,62 @@ const requestId = Effect.fn("collie.requestId")(function* (value: Option.Option<
   return Option.isSome(value) ? value.value : yield* newRequestId();
 });
 
-const receiptPath = Effect.fn("collie.receiptPath")(function* (
+const NO_DIRECTORIES: Array<string> = [];
+
+// WARNING: a receipt is found by its id alone, so the same id under another operation is the same request.
+const receiptPath = Effect.fn("collie.receiptPath")(function* (env: PluginEnv, id: string) {
+  const path = yield* Path.Path;
+  return path.join(env.stateDir, "requests", "by-id", `${encodeURIComponent(id)}.json`);
+});
+
+type Found = { readonly file: string; readonly operation?: string };
+
+// WARNING: receipts written before they were scoped live under their operation's own directory.
+const receiptFound = Effect.fn("collie.receiptFound")(function* (
   env: PluginEnv,
   operation: string,
   id: string,
 ) {
+  const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  return path.join(env.stateDir, "requests", operation, `${encodeURIComponent(id)}.json`);
+  const root = path.join(env.stateDir, "requests");
+  const file = `${encodeURIComponent(id)}.json`;
+  const mine = yield* receiptPath(env, id);
+  if (yield* fs.exists(mine)) {
+    return Option.some<Found>({ file: mine });
+  }
+  const scoped = path.join(root, operation, file);
+  if (yield* fs.exists(scoped)) {
+    return Option.some<Found>({ file: scoped, operation });
+  }
+  const listed = yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => NO_DIRECTORIES));
+  const elsewhere = Arr.filter(listed, (one) => one !== "by-id" && one !== operation);
+  const there = yield* Effect.forEach(elsewhere, (one) =>
+    Effect.map(fs.exists(path.join(root, one, file)), (is) =>
+      is ? [{ file: path.join(root, one, file), operation: one }] : [],
+    ),
+  );
+  return Option.fromUndefinedOr(Arr.flatten(there)[0]);
 });
 
-const readReceipt = Effect.fn("collie.readReceipt")(function* (file: string) {
+const readReceipt = Effect.fn("collie.readReceipt")(function* (found: Found) {
   const fs = yield* FileSystem.FileSystem;
-  const stored = yield* Schema.decodeEffect(StoredJson)(yield* fs.readFileString(file));
+  const stored = yield* Schema.decodeEffect(StoredJson)(yield* fs.readFileString(found.file));
   const result: Result = stored.ok
     ? { ok: true, data: stored.data, human: stored.human }
     : { ok: false, error: stored.error };
-  return { digest: stored.digest, result };
+  return {
+    operation: stored.operation ?? found.operation,
+    digest: stored.digest,
+    result,
+  };
 });
 
 export type Call = {
   readonly operation: string;
   readonly run: string | null;
-  readonly args: Schema.Json;
+  readonly destination?: "cwd";
+  readonly args: Given;
 };
 
 const NamedRun = Schema.Struct({
@@ -148,22 +186,6 @@ const namedRun = (result: Result) => {
   return run === undefined ? null : Schema.is(Schema.String)(run) ? run : run.runId;
 };
 
-const JsonList = Schema.Array(Schema.Json);
-const JsonRecord = Schema.Record(Schema.String, Schema.Json);
-
-// WARNING: key order is ignored, so a retry that differs only in key order is one request.
-const canonical: (value: Schema.Json) => string = (value) =>
-  JSON.stringify(value, (_key, one) =>
-    Schema.is(JsonRecord)(one) && !Schema.is(JsonList)(one)
-      ? Rec.fromEntries(
-          Rec.toEntries(one).sort(([one], [other]) => (one < other ? -1 : one > other ? 1 : 0)),
-        )
-      : one,
-  );
-
-const callerOf = (env: PluginEnv) =>
-  env.raw.COLLIE_AGENT === undefined ? null : (env.raw.COLLIE_RUN ?? null);
-
 const scopeRefusal = (id: string, unscoped: boolean) =>
   err(
     "invalid_input",
@@ -173,12 +195,27 @@ const scopeRefusal = (id: string, unscoped: boolean) =>
     { requestId: id },
   );
 
-const digestOf = (call: Call, caller: string | null) =>
-  sha256Hex(canonical({ operation: call.operation, caller, run: call.run, args: call.args }));
+const digestOf = (call: Call, env: PluginEnv) =>
+  sha256Hex(
+    canonical({
+      operation: call.operation,
+      caller: env.caller ?? null,
+      run: call.run,
+      where: { machine: env.machine ?? null, cwd: call.destination === "cwd" ? env.cwd : null },
+      args: call.args,
+    }),
+  );
 
 const replayOf =
   (call: Call, id: string, caller: string | null, digest: string) =>
-  (stored: { readonly digest?: string | undefined; readonly result: Result }) => {
+  (stored: {
+    readonly operation?: string | undefined;
+    readonly digest?: string | undefined;
+    readonly result: Result;
+  }) => {
+    if (stored.operation !== undefined && stored.operation !== call.operation) {
+      return scopeRefusal(id, false);
+    }
     if (stored.digest === digest) {
       return stored.result;
     }
@@ -211,15 +248,12 @@ export const mutation = Effect.fn("collie.mutation")(function* (
   const fs = yield* FileSystem.FileSystem;
   const pathSvc = yield* Path.Path;
   const id = yield* requestId(requested);
-  const path = yield* receiptPath(env, call.operation, id);
-  const caller = callerOf(env);
-  const digest = digestOf(call, caller);
-  const replay = replayOf(call, id, caller, digest);
+  const path = yield* receiptPath(env, id);
+  const digest = digestOf(call, env);
+  const replay = replayOf(call, id, env.caller ?? null, digest);
   const recorded = Effect.gen(function* () {
-    if (!(yield* fs.exists(path))) {
-      return null;
-    }
-    return replay(yield* readReceipt(path));
+    const found = yield* receiptFound(env, call.operation, id);
+    return Option.isNone(found) ? null : replay(yield* readReceipt(found.value));
   });
   const already = yield* recorded;
   if (already !== null) {
@@ -246,7 +280,14 @@ export const mutation = Effect.fn("collie.mutation")(function* (
         fs
           .writeFileString(
             tmp,
-            `${flow(Schema.encodeResult(StoredJson), Result.getOrThrow)({ ...value, digest })}\n`,
+            `${flow(
+              Schema.encodeResult(StoredJson),
+              Result.getOrThrow,
+            )({
+              ...value,
+              operation: call.operation,
+              digest,
+            })}\n`,
           )
           .pipe(Effect.andThen(fs.rename(tmp, path)));
       yield* save(

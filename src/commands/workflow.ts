@@ -296,7 +296,12 @@ const workflowCreate = Command.make(
   },
   ({ workflow, layer, requestId: request }) =>
     mutating(
-      { operation: "workflow-create", run: null, args: { workflow, layer } },
+      {
+        operation: "workflow-create",
+        run: null,
+        destination: layer === "project" ? "cwd" : undefined,
+        args: { workflow, layer },
+      },
       request,
       (env) =>
         Effect.gen(function* () {
@@ -341,6 +346,7 @@ const workflowFork = Command.make(
             {
               operation: "workflow-fork",
               run: null,
+              destination: layer === "project" ? "cwd" : undefined,
               args: { workflow, layer, name },
             },
             request,

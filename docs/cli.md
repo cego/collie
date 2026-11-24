@@ -2528,7 +2528,8 @@ A failure carries the request id back in `error.details.requestId`, including wh
 was generated for you — so a failed send always leaves you something to retry with rather
 than forcing a fresh id, which would be a second run rather than a retry. A `needs_input`
 or `invalid_input` rejection writes no receipt, so the same id is free to reuse once you
-have fixed the command.
+have fixed the command — unless the refusal was a receipt conflict, which leaves the
+first request's receipt in place for its own retry.
 
 Native chat returns `Request: <id>` with its result; pass that value as `request_id` to
 retry. A partially applied sequence keeps its receipt even if its last action asks a

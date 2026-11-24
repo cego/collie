@@ -21,6 +21,7 @@ export interface PluginEnv {
   cwdExplicit: boolean;
   raw: Record<string, string>;
   machine?: string;
+  caller?: string | null;
   hostStamp?: string;
   asker?: Asker;
   pairs?: boolean;
