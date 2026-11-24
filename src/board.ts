@@ -48,7 +48,7 @@ import {
 import type { CheckCommand, Verification } from "./verify";
 import { approvedFor, approvedIn } from "./verify-spec";
 import { readIntent } from "./intent";
-import { findingsIn, isBlocking, openFindingsIn } from "./output";
+import { findingsIn, isBlocking } from "./output";
 import { markersOf, runningCheck } from "./checks";
 import { runningChecks } from "./check-processes";
 import { waitLine } from "./memory-wait";
@@ -75,6 +75,7 @@ import { flowInputsFor, taskFlowFor } from "./flow-read";
 import { machineName, peersOf } from "./peers";
 import { Deliveries, deliveriesAhead, deliveriesOf, SENT_STATES, toldIn } from "./steering";
 import { finishedOnRecord } from "./cards";
+import { openFindingsFact } from "./finding-status";
 import { owedLocally } from "./check-proof";
 import {
   Answered,
@@ -1366,7 +1367,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
             cards.content?.([runId]) ?? cards.revision([runId]),
             touched.get(runId) ?? 0,
             yield* planIssuesIn(run.dir),
-            yield* openFindingsIn(run.dir),
+            yield* openFindingsFact(run.dir),
             latest(yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => []))),
             cards.modules ?? "",
             id === null ? null : (mrStates.get(id) ?? null),

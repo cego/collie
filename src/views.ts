@@ -16,7 +16,8 @@ import { savedModules } from "./discovery";
 import { checkModules, readModule } from "./authoring";
 import type { PluginEnv } from "./env";
 import { runTitle } from "./naming";
-import { REVIEW_FILE, findingsIn, openFindingsIn } from "./output";
+import { REVIEW_FILE, openFindingsIn } from "./output";
+import { findingsWithStatus } from "./finding-status";
 import { findRun, settled } from "./runs";
 import type { RunFacts, RunState } from "./runs";
 import { diffTargetOf } from "./strategies";
@@ -554,16 +555,7 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
     logStart: log?.logStart,
     finishedAt: run.finished ? epochMs(run.finished) : 0,
     mr: opts.mr,
-    findings: Arr.map(yield* findingsIn(run.dir), (finding) => ({
-      severity: finding.severity,
-      title: finding.title,
-      file: finding.file ?? null,
-      line: finding.line ?? null,
-      detail: finding.detail ?? null,
-      basis: finding.basis ?? null,
-      evidence: finding.evidence ?? null,
-      suggested: finding.suggested ?? null,
-    })),
+    findings: yield* findingsWithStatus(run.dir),
     verifications: Arr.map(
       yield* readVerifications(run.evidence).pipe(Effect.orElseSucceed(() => [])),
       ({ id, name, result, expect, exit, at, by, step, place }) => ({

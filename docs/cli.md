@@ -1472,6 +1472,37 @@ again, while the record itself stays.
 This is integrated here and not yet on the board: the Home's rows and Live region do not
 read it, so a Run whose work shipped still reads as a plain failure there.
 
+## A Run's findings
+
+```sh
+collie --json run findings <run-id>
+collie --json run finding <run-id> <finding-id> --dismiss "superseded by the new client"
+collie --json run finding <run-id> <finding-id> --reopen
+```
+
+Every Run that left findings — a review, an investigation, an architecture pass, an
+implement rally's leftovers — keeps them in `findings.json`, and Collie gives each one an
+id, `<run>-F<n>`. `run findings` lists them with the status each has now; `run show` prints
+the same line under **Findings**.
+
+A finding's status is the latest line the host recorded for it in the Run's own record,
+or else the `status` its file gives it, or else `open`. It is open while that is `open` or
+`disputed`: a dispute is something a person still has to answer, so it reaches the board
+like an open finding. `fixed`, `obsolete`, `dismissed` and `taken` are not open, and only
+the first two are the rally's to write.
+
+`--dismiss` records `dismissed` and `--reopen` records `open`, each a new line with who set
+it and when, so a correction is another line rather than an edit. `--dismiss` needs a
+reason of its own: a blank one is refused with `invalid_input` and nothing is recorded.
+So is an id the Run does not have, and the refusal names it. Give exactly one of the two
+flags. The CLI, the board, chat's `collie_do` `set_finding` and Desktop take the same
+operation, under a request id, so a retried one answers with the line it first recorded.
+
+The Run's open count is kept as a fact of its own, `open-findings`, written when the Run
+settles and after every line. An offer that needs something open — a review's
+**Improve** — reads that count, so dismissing the last open finding takes the offer away
+until one is reopened.
+
 ## Acknowledging a finished Run
 
 ```sh

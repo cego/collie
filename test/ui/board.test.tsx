@@ -1504,6 +1504,11 @@ test("Review lists the findings, the files the Run changed and its verifications
           detail: record({
             findings: [
               {
+                id: "r1-F1",
+                status: "open",
+                reason: null,
+                offer: null,
+                run: null,
                 severity: "major",
                 title: "Seeds twice",
                 file: "seed.ts",

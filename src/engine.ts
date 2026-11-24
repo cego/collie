@@ -260,7 +260,7 @@ import {
 } from "./intent";
 import type { IntentSeed } from "./intent";
 import { latest, readDispositions } from "./disposition";
-import { openFindingsIn } from "./output";
+import { openFindingsFact, storeOpenCount } from "./finding-status";
 import {
   changeKey,
   changeOfKey,
@@ -3084,6 +3084,14 @@ const ended = (runId: string, status: typeof RunStatus.Type) =>
         return yield* Effect.die(`${runId} ended with no records to keep it`);
       }
       yield* records.value.put(runId, TERMINAL, asJsonText(status));
+      // WARNING: findings.json can change until the Run ends, so the count is kept again here.
+      const host = yield* Effect.serviceOption(Host);
+      if (Option.isSome(host)) {
+        yield* storeOpenCount(runDir(host.value.dir, runId)).pipe(
+          Effect.provideService(RunRecords, records.value),
+          Effect.orElseSucceed(() => 0),
+        );
+      }
       // WARNING: requests its agents made after their last delivery are read nowhere else.
       const agents = yield* Effect.serviceOption(Agents);
       if (Option.isSome(agents)) {
@@ -10161,7 +10169,7 @@ const makeRegistry: (
       nothingToLand: (yield* runRecords.fact(runId, NOTHING_TO_LAND)) !== null,
       planIssues: yield* planIssuesIn(where),
       disposed: disposition !== null,
-      openFindings: yield* openFindingsIn(where),
+      openFindings: yield* openFindingsFact(where),
       diffTarget: pointedAt(generation, input),
       claim: yield* claimOf(runId),
     };

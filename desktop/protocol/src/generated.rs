@@ -1923,6 +1923,11 @@ pub struct DetailMr2 {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Finding {
+    pub id: String,
+    pub status: FindingStatus,
+    pub reason: Option<String>,
+    pub offer: Option<String>,
+    pub run: Option<String>,
     pub severity: String,
     pub title: String,
     pub file: Option<String>,
@@ -1931,6 +1936,22 @@ pub struct Finding {
     pub basis: Option<Basis>,
     pub evidence: Option<String>,
     pub suggested: Option<Suggested>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum FindingStatus {
+    #[serde(rename = "open")]
+    Open,
+    #[serde(rename = "fixed")]
+    Fixed,
+    #[serde(rename = "disputed")]
+    Disputed,
+    #[serde(rename = "obsolete")]
+    Obsolete,
+    #[serde(rename = "dismissed")]
+    Dismissed,
+    #[serde(rename = "taken")]
+    Taken,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

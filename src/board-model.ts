@@ -590,7 +590,32 @@ export const VerificationView = Schema.Struct({
 
 export type VerificationView = typeof VerificationView.Type;
 
+export const FindingStatus = Schema.Struct({
+  id: Schema.String,
+  status: Schema.Literals(["dismissed", "open", "taken"]),
+  reason: Schema.NullOr(Schema.String),
+  offer: Schema.NullOr(Schema.String),
+  run: Schema.NullOr(Schema.String),
+  by: Schema.String,
+  at: Schema.String,
+});
+export type FindingStatus = typeof FindingStatus.Type;
+
+export const FindingStatusName = Schema.Literals([
+  "open",
+  "fixed",
+  "disputed",
+  "obsolete",
+  "dismissed",
+  "taken",
+]);
+
 export const ReviewFinding = Schema.Struct({
+  id: Schema.String,
+  status: FindingStatusName,
+  reason: Schema.NullOr(Schema.String),
+  offer: Schema.NullOr(Schema.String),
+  run: Schema.NullOr(Schema.String),
   severity: Schema.String,
   title: Schema.String,
   file: Schema.NullOr(Schema.String),
@@ -1589,6 +1614,17 @@ export const FrontDoorRpcs = RpcGroup.make(
     payload: { proposal: Schema.String, hash: Schema.String, request: Schema.String },
     success: Schema.Struct({ proposal: Schema.String }),
     error: Schema.Union([HostRefused, ProposalRefused, RequestConflict]),
+  }),
+  Rpc.make("setFinding", {
+    payload: {
+      runId: Schema.String,
+      id: Schema.String,
+      status: Schema.Literals(["dismissed", "open"]),
+      reason: Schema.NullOr(Schema.String),
+      request: Schema.String,
+    },
+    success: FindingStatus,
+    error: Schema.Union([HostRefused, RequestConflict]),
   }),
   Rpc.make("dispose", {
     payload: {
