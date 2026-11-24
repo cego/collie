@@ -7,6 +7,7 @@ import { connect } from "../src/host";
 import { MODULES, hosted } from "./support/hosted";
 import { hostRecords, registeredAt } from "./support/records";
 import { readFindingStatuses } from "../src/finding-status";
+import { RunRecords } from "../src/run-records";
 import { sectionOf } from "../src/board-model";
 import { runDir } from "../src/engine";
 import { until } from "./support/host";
@@ -90,6 +91,12 @@ const started = (
     return { id: began.runId, dir: runDir(state, began.runId), client };
   });
 
+const openCount = (state: string, run: string) =>
+  hostRecords(
+    state,
+    RunRecords.use((records) => records.fact(run, "open-findings")),
+  ).pipe(Effect.map(Number));
+
 const cardOf = (state: string, run: string) =>
   Effect.gen(function* () {
     const client = yield* connect(state).pipe(Effect.orDie);
@@ -130,6 +137,7 @@ test("an investigate Run's findings hold the card, and choosing two of them star
         expect(
           Arr.map(yield* run.client.runFindings({ runId: run.id }), (one) => one.status),
         ).toEqual(["open", "open", "open"]);
+        expect(yield* openCount(world.state, run.id)).toBe(3);
         const held = yield* cardOf(world.state, run.id);
         expect({ landed: held.landed, section: sectionOf(held) }).toEqual({
           landed: false,
@@ -174,6 +182,7 @@ test("an investigate Run's findings hold the card, and choosing two of them star
             ),
           ).unavailable,
         ).not.toBeNull();
+        expect(yield* openCount(world.state, run.id)).toBe(0);
       }),
     [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
   ));
