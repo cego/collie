@@ -106,7 +106,8 @@ import type { BenchmarkPlan, Measurement } from "../../src/measurement-model";
 import { NOTHING_TO_LAND } from "../../src/standing";
 import { MERGE_REQUEST } from "../../src/oversight";
 import { VerifySpecSchema } from "../../src/verify-spec";
-import { findingsIn } from "../../src/output";
+import { findingsIn, leaveFindings } from "../../src/output";
+import { findingText, findingsWithStatus, reportIn } from "../../src/finding-status";
 import {
   FINGERPRINT_MAX_BYTES,
   collect,
@@ -147,6 +148,7 @@ const UNRELATED = {
   stage: "try-it-out",
   "tune-up": "make-haste",
   heal: "mend-it",
+  "file-issue": "raise-the-issue",
 } as const;
 type Shipped = keyof typeof UNRELATED;
 
@@ -578,6 +580,7 @@ const undeclaredWork = () =>
           "self-improve",
           "tune-up",
           "heal",
+          "file-issue",
         ] as const,
         shipped,
       ),
@@ -1019,7 +1022,12 @@ scenario(
           offersFrom(declared, { ...architectureFacts, openFindings: 2 }),
           (one) => one.id,
         );
-        expect(offered).toEqual(["implement-selected", "investigate-further", "plan-this"]);
+        expect(offered).toEqual([
+          "implement-selected",
+          "investigate-further",
+          "plan-this",
+          "file-to-linear",
+        ]);
         expect(Arr.map(offersFrom(declared, architectureFacts), (one) => one.id)).toEqual([]);
       }),
     ),
@@ -1050,6 +1058,62 @@ scenario(
         expect(yield* fs.exists(`${runDir(dir, "r-arch-nothing")}/findings.json`)).toBe(false);
         expect(yield* findingsIn(runDir(dir, "r-arch-nothing"))).toEqual([]);
         expect(yield* factOf("r-arch-nothing", "open-findings")).toBe("0");
+      }),
+    ),
+);
+
+scenario(
+  "file-issue: the issue Run is told the finding it files and answers with the issue's URL",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const finding = {
+          severity: "major",
+          title: "Two registries read the same table",
+          file: "src/registry.ts",
+          line: 12,
+          basis: "fact" as const,
+          evidence: "both names are constructed in main.ts",
+          suggested: "ticket" as const,
+        };
+        const filed = { identifier: "CEGO-12", url: "https://linear.app/cego/issue/CEGO-12/one" };
+        yield* rig.queueOutputs([filed]);
+        const where = runDir(dir, "r-file-issue");
+        yield* (yield* FileSystem.FileSystem).makeDirectory(where, { recursive: true });
+        yield* leaveFindings(where, [finding]);
+        const [only] = yield* findingsWithStatus(where);
+        const goal = findingText(only!, yield* reportIn(where));
+        const result = yield* ran({
+          entry: shipped("file-issue"),
+          runId: "r-file-issue",
+          input: { goal },
+        });
+
+        expect(result).toMatchObject({ _tag: "Success", success: filed.url });
+        const prompt = yield* asked("r-file-issue", "file-issue");
+        expect(prompt).toContain("Two registries read the same table");
+        expect(prompt).toContain("both names are constructed in main.ts");
+        expect(yield* persona("r-file-issue", "file-issue")).toContain("generalist");
+        const offering = offersFrom(
+          declaredByModule((yield* loadEntry(shipped("investigate"))).metadata),
+          {
+            outcome: "unspecified",
+            succeeded: true,
+            branch: null,
+            mrUrl: null,
+            planIssues: 0,
+            disposed: false,
+            openFindings: 2,
+            diffTarget: null,
+            claim: null,
+          },
+        );
+        expect(
+          Arr.map(
+            Arr.filter(offering, (one) => one.id === "file-to-linear"),
+            (one) => [one.workflow, one.selects],
+          ),
+        ).toEqual([["file-issue", "one"]]);
       }),
     ),
 );
@@ -3910,6 +3974,7 @@ scenario("what a finished Run of each shipped module offers is the module's own 
         ["run-again", idOf("review"), true],
         ["investigate-further", "investigate", false],
         ["plan-this", "plan", false],
+        ["file-to-linear", "file-issue", false],
       ]);
       expect(
         Arr.map(
@@ -3965,6 +4030,7 @@ scenario("what a finished Run of each shipped module offers is the module's own 
         ["implement-selected", "many"],
         ["investigate-further", "one"],
         ["plan-this", "one"],
+        ["file-to-linear", "one"],
       ]);
       expect(
         Arr.map(offersFrom(yield* declaredIn(shipped("architecture")), facts({})), (o) => o.id),
@@ -4125,6 +4191,7 @@ scenario(
           "implement-selected",
           "investigate-further",
           "plan-this",
+          "file-to-linear",
         ]);
       }),
     ),

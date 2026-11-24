@@ -42,7 +42,7 @@ import {
 import type { Finding, SynthesisReport, Woke, Answered } from "collie";
 import { Effect, FileSystem, Schema } from "effect";
 import { connection } from "./connections.ts";
-import { investigateFurther, planThis } from "./selected.ts";
+import { fileToLinear, investigateFurther, planThis } from "./selected.ts";
 import { reassess, repliesTo, formatReplies } from "./reassessment.ts";
 import * as Activity from "effect/workflow/Activity";
 import {
@@ -115,6 +115,10 @@ export default defineWorkflow({
         with: "Reads and answers the pull request",
         without: "Reviews the local diff only",
       },
+      linear: {
+        with: "Files a finding as an issue through its Linear MCP",
+        without: "Keeps its findings in Collie",
+      },
     },
   },
   title: "review — an MR, a branch diff, or the working tree",
@@ -143,7 +147,7 @@ export default defineWorkflow({
   hints: { target: "diff-target", slack: "internal", improving: "internal" },
   follows: FOLLOW,
   outcome: { fixed: "review" },
-  followUps: [investigateFurther, planThis],
+  followUps: [investigateFurther, planThis, fileToLinear],
   actions: [
     {
       id: "improve",

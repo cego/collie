@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { Effect, FileSystem, Option, Stream } from "effect";
 import type { Schema } from "effect";
 import { stringifyJson } from "../src/json";
@@ -62,6 +63,8 @@ const install = (world: {
       "measuring.ts",
       "measuring.md",
       "selected.ts",
+      "file-issue.workflow.ts",
+      "file-issue.md",
     ]) {
       yield* fs.copyFile(`${root}workflows/${name}`, `${world.user}/${name}`);
     }
@@ -511,6 +514,129 @@ test("Investigate further starts an investigate Run told the one finding it was 
           { id: `${run.id}-F2`, status: "open", run: null },
           { id: `${run.id}-F3`, status: "open", run: null },
         ]);
+      }),
+    [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
+  ));
+
+const filed = { identifier: "CEGO-12", url: "https://linear.app/cego/issue/CEGO-12/one-issue" };
+
+test("File to Linear files the one finding chosen, and the Run it starts answers with the issue's URL", () =>
+  hosted(
+    "hw-file-issue-",
+    ({ world }) =>
+      Effect.gen(function* () {
+        const run = yield* Effect.gen(function* () {
+          yield* install(world);
+          // WARNING: a used Connection is read once and kept, so Linear is set up before the Run that offers it starts.
+          yield* (yield* FileSystem.FileSystem).writeFileString(
+            `${world.project}/.mcp.json`,
+            '{"mcpServers":{"linear":{"url":"https://mcp.linear.app/mcp"}}}',
+          );
+          yield* (yield* FileSystem.FileSystem).writeFileString(
+            `${world.home}/outputs.json`,
+            encode([filed]),
+          );
+          return yield* started(world.state, world.project, "submits", { note: "three" });
+        });
+        const [first] = idsOf(run.id);
+        // WARNING: a listing reads the Connection as the syncer kept it, once it has read it.
+        const offered = yield* until(
+          () =>
+            run.client
+              .offers({ runId: run.id })
+              .pipe(
+                Effect.map((offers) =>
+                  Option.getOrUndefined(
+                    Arr.findFirst(offers, (one) => one.id === "file-to-linear"),
+                  ),
+                ),
+              ),
+          (one) => one !== undefined && !Str.includes("still being read")(one.unavailable ?? ""),
+        );
+        expect([offered?.workflow, offered?.selects, offered?.unavailable ?? null]).toEqual([
+          "file-issue",
+          "one",
+          null,
+        ]);
+
+        const child = yield* run.client
+          .invoke({
+            runId: run.id,
+            offer: "file-to-linear",
+            input: { findings: first },
+            request: "file-first",
+          })
+          .pipe(Effect.orDie);
+        const goal = String(
+          (yield* run.client.run({ runId: child.runId }).pipe(Effect.orDie))?.input.goal,
+        );
+        expect(goal).toContain("The first");
+        expect(goal).toContain("the log names it twice");
+        expect(
+          Arr.map(yield* run.client.runFindings({ runId: run.id }), (one) => [
+            one.id,
+            one.status,
+            one.offer,
+          ]),
+        ).toEqual([
+          [first, "taken", "file-to-linear"],
+          [`${run.id}-F2`, "open", null],
+          [`${run.id}-F3`, "open", null],
+        ]);
+
+        const done = yield* until(
+          () => run.client.run({ runId: child.runId }).pipe(Effect.orDie),
+          (view) => view !== null && isSettled(view),
+        );
+        expect(done?.status).toMatchObject({ status: "complete", value: filed.url });
+      }),
+    [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
+  ));
+
+test("with no Linear, File to Linear is listed with the Connection's fix and starts nothing when taken", () =>
+  hosted(
+    "hw-file-issue-absent-",
+    ({ world }) =>
+      Effect.gen(function* () {
+        const run = yield* Effect.gen(function* () {
+          yield* install(world);
+          yield* (yield* FileSystem.FileSystem).writeFileString(
+            `${world.home}/outputs.json`,
+            encode([filed]),
+          );
+          return yield* started(world.state, world.project, "submits", { note: "three" });
+        });
+        const [first] = idsOf(run.id);
+        const absent = yield* until(
+          () =>
+            run.client
+              .offers({ runId: run.id })
+              .pipe(
+                Effect.map((offers) =>
+                  Option.getOrUndefined(
+                    Arr.findFirst(offers, (one) => one.id === "file-to-linear"),
+                  ),
+                ),
+              ),
+          (one) => one !== undefined && !Str.includes("still being read")(one.unavailable ?? ""),
+        );
+        expect(absent?.unavailable ?? "").toStartWith("needs linear: ");
+        expect(absent?.unavailable ?? "").toContain("Fix: ");
+
+        const before = (yield* registeredAt(world.state)).length;
+        const refused = yield* run.client
+          .invoke({
+            runId: run.id,
+            offer: "file-to-linear",
+            input: { findings: first },
+            request: "file-without-linear",
+          })
+          .pipe(Effect.flip);
+        expect(refused.reason).toContain("Fix: ");
+        expect((yield* registeredAt(world.state)).length).toBe(before);
+        expect(
+          Arr.map(yield* run.client.runFindings({ runId: run.id }), (one) => one.status),
+        ).toEqual(["open", "open", "open"]);
       }),
     [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
   ));

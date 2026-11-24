@@ -14,7 +14,7 @@ import * as Str from "effect/String";
 import { Effect, FileSystem, Schema } from "effect";
 import markdown from "./investigate.md" with { type: "text" };
 import { measuredBy } from "./measuring.ts";
-import { implementSelected, investigateFurther, planThis } from "./selected.ts";
+import { selected } from "./selected.ts";
 import type { Finding } from "collie";
 
 const MAX_FINDINGS = 7;
@@ -83,6 +83,14 @@ export default defineWorkflow({
   id: "investigate",
   title: "investigate — find and report",
   description: "One agent investigates a goal, reports its evidence and closes after reporting.",
+  connections: {
+    uses: {
+      linear: {
+        with: "Files a finding as an issue through its Linear MCP",
+        without: "Keeps its findings in Collie",
+      },
+    },
+  },
   input: Schema.Struct({ goal: Schema.String }),
   output: InvestigationOutput,
   agents: { effort: "high" },
@@ -90,7 +98,7 @@ export default defineWorkflow({
   hints: { goal: "goal" },
   checkout: "branch",
   closes: "reported",
-  followUps: [implementSelected, investigateFurther, planThis],
+  followUps: selected,
   run: ({ input }) =>
     Effect.gen(function* () {
       const run = yield* Run;

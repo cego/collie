@@ -1,6 +1,6 @@
 # Workflows
 
-Collie ships twelve workflows. This page is the "which one do I want" level: what each is
+Collie ships thirteen workflows. This page is the "which one do I want" level: what each is
 for, what it needs from you, and how they chain. The files under
 [`workflows/`](../workflows) are canonical for step-by-step behavior: each is a TypeScript
 module with its Markdown beside it as content ([the SDK](sdk.md)). Any of them is a fork
@@ -1231,6 +1231,7 @@ Every other shipped step clears nothing.
 - `review` → `implement`, from **Fix findings in a full implement run**. See
   [Hand-offs](using.md#hand-offs-between-runs).
 - `general` chains into nothing.
+- `file-issue` chains into nothing; one finding in, one issue out.
 - `release` chains into nothing; a failed one offers **Release again** of the same merge
   request.
 - `stage` chains into nothing; a failed one offers **Stage again** of the same merge request.
@@ -1263,9 +1264,11 @@ When the investigator's Output is collected, the Run writes `findings.json` and
 with its location, basis, evidence and suggestion — into the Run's directory, through the
 same leave path a review uses. It changes only what the goal asks and has no proof gate.
 What it found is what it offers next: **Implement selected** builds the findings you choose,
-**Investigate further** investigates one of them, and **Plan this** plans it — the child's
-goal is that finding as text, with the path of `investigation.md` it came from, and it reads
-`taken` by the Run that was started for it. The host reports the result to the agent that
+**Investigate further** investigates one of them, **Plan this** plans it and **File to
+Linear** files one as an issue — the child's goal is that finding as text, with the path of
+`investigation.md` it came from, and it reads `taken` by the Run that was started for it.
+File to Linear is listed unavailable, naming the fix, while the Machine has no Linear MCP
+server: the offer is never hidden, since the finding is still yours to file elsewhere. The host reports the result to the agent that
 started it, then
 closes the investigator and its Task workspace unless another Run or a human pane needs it
 (`closes: "reported"`).
@@ -1279,6 +1282,38 @@ Its Flow forecasts one Step, Investigate, which produces evidence.
 
 Module: [`workflows/investigate.workflow.ts`](../workflows/investigate.workflow.ts),
 with its prompt in [`workflows/investigate.md`](../workflows/investigate.md).
+
+## `file-issue`
+
+**For:** turning one finding into one Linear issue, through the Linear MCP an agent already
+has, without opening Linear yourself.
+
+**Input:** `goal`, the finding as text — its title, where it is, its detail, its evidence,
+its basis and the report it came from. Nothing infers it: `collie run start file-issue
+--input goal="…"` takes words, and the shipped offers fill it from a finding.
+
+**What happens:** one agent files it on the team the Run remembers, as a fresh Run has
+none, so it asks you in its pane which team once and files there. It is told the project
+and commit the finding names, and nothing about Collie, a Run or a step: the issue reads
+as anybody's. Its Output is the issue's `identifier` and `url`, and the Run's result is the
+URL, which is what its card shows and what a list of Runs prints.
+
+**What it needs:** a Linear MCP server on the Machine — `claude mcp add --transport http
+--scope user linear-server https://mcp.linear.app/mcp`, which is the fix
+[`collie connections`](cli.md#connections) and the offer that starts it both name. Collie
+has no Linear client or credential of its own; what the agent may reach is its own MCP
+server's.
+
+It is reached from **File to Linear** on a Run whose findings are a review's, an
+investigation's or an architecture Run's deferred candidates, which takes exactly one
+finding and starts this Workflow with it as the goal. Where the Machine has no Linear MCP
+server the offer is listed unavailable with that fix rather than hidden, and taking it
+starts nothing.
+
+Its Flow forecasts one Step, File the issue. It chains into nothing.
+
+Module: [`workflows/file-issue.workflow.ts`](../workflows/file-issue.workflow.ts), with its
+prompt in [`workflows/file-issue.md`](../workflows/file-issue.md).
 
 ## `self-improve`
 

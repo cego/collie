@@ -143,12 +143,12 @@ test("an architecture Run's deferred candidates hold its card as findings to cho
           Arr.map(yield* run.client.offers({ runId: run.id }), (one) => [
             one.id,
             one.selects ?? null,
-            one.unavailable,
           ]),
         ).toEqual([
-          ["implement-selected", "many", null],
-          ["investigate-further", "one", null],
-          ["plan-this", "one", null],
+          ["implement-selected", "many"],
+          ["investigate-further", "one"],
+          ["plan-this", "one"],
+          ["file-to-linear", "one"],
         ]);
         const held = yield* cardOf(world.state, run.id);
         expect({ landed: held.landed, section: sectionOf(held) }).toEqual({

@@ -31,4 +31,21 @@ export const planThis: FollowUp = {
   eligible: (facts) => facts.openFindings > 0,
 };
 
-export const selected: ReadonlyArray<FollowUp> = [implementSelected, investigateFurther, planThis];
+// WARNING: the Connection is the one it starts, so the fixing advice is the absent Linear's own.
+export const fileToLinear: FollowUp = {
+  id: "file-to-linear",
+  title: "File to Linear",
+  workflow: "file-issue",
+  when: "succeeded",
+  selects: "one",
+  inputs: { goal: "finding" },
+  connections: ["linear"],
+  eligible: (facts) => facts.openFindings > 0,
+};
+
+export const selected: ReadonlyArray<FollowUp> = [
+  implementSelected,
+  investigateFurther,
+  planThis,
+  fileToLinear,
+];
