@@ -364,14 +364,14 @@ export const branchMovement = Effect.fn("Recovery.branchMovement")(function* (ru
       ? yield* shell("git", ["merge-base", "--is-ancestor", finished, head], run.cwd)
       : fetched;
   if (ancestry.code !== 0) {
-    return `Pushed branch diverged or was force-pushed: ${finished} → ${head}; forward progress is unproved.`;
+    return `Pushed branch diverged from ${finished} to ${head}; forward progress is unproved.`;
   }
   const count = yield* shell("git", ["rev-list", "--count", `${finished}..${head}`], run.cwd);
   if (count.code !== 0) {
     return `Pushed branch history unavailable at ${head}.`;
   }
   const n = Str.trim(count.stdout);
-  return `Pushed branch: ${n} commit${n === "1" ? "" : "s"} past ${finished}, now ${head}.${run.state === "failed" ? " The failed record is stale." : " The succeeded record describes the earlier head."}`;
+  return `Pushed branch moved past ${finished}: ${n} commit${n === "1" ? "" : "s"} since, now ${head}.${run.state === "failed" ? " The failed record is stale." : " The succeeded record describes the earlier head."}`;
 });
 
 export const ConsumedCard = Schema.Struct({

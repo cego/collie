@@ -5,7 +5,7 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
 import type { Path } from "effect";
-import { Clock, DateTime, Effect, Fiber, FileSystem, Schema } from "effect";
+import { Clock, DateTime, Effect, Fiber, FileSystem, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import {
   boardLines,
@@ -20,7 +20,15 @@ import {
 } from "../src/board";
 import type { Sentence } from "../src/board";
 import { mrLabel } from "../src/board-model";
-import type { Flow, ForgeChecks, Mergeability, MrState, OfferView } from "../src/board-model";
+import type {
+  BoardMessage,
+  Flow,
+  ForgeChecks,
+  Mergeability,
+  MrState,
+  OfferView,
+  TaskView as TaskCard,
+} from "../src/board-model";
 import { Branches, branchKey } from "../src/branches";
 import { appendStepLine } from "../src/steps";
 import type { StepLine, StepMeta } from "../src/steps";
@@ -78,6 +86,7 @@ import { hostRecords, hostRunRecords, madeRun, recordsAt } from "./support/recor
 import { RUNNING_CHECK, RunRecords } from "../src/run-records";
 import { exec } from "./support/command";
 import { collie, proves } from "./support/world";
+import type { World } from "./support/world";
 import { stopHost, until } from "./support/host";
 import type { Launched } from "../src/launches";
 import { orderLaunch, recordLaunch } from "../src/launches";
@@ -85,7 +94,7 @@ import { epochMs } from "../src/time";
 import { seedIntent, writeIntent } from "../src/intent";
 import { updateApproved } from "../src/verify-spec";
 import { planDirOf } from "../src/run-detail";
-import { connect } from "../src/host";
+import { connect, frontDoor, socketOf } from "../src/host";
 import { readCards } from "../src/cards";
 import { toolNamed } from "../src/tools";
 import { fixtures } from "./support/host";
@@ -165,7 +174,7 @@ test("a finished Run shows pushed branch movement without rewriting its failed r
                     tasks: Schema.Array(
                       Schema.Struct({
                         state: Schema.String,
-                        drift: Schema.NullOr(Schema.String),
+                        moved: Schema.NullOr(Schema.String),
                       }),
                     ),
                   }),
@@ -173,12 +182,13 @@ test("a finished Run shows pushed branch movement without rewriting its failed r
               ),
               Effect.orDie,
             ),
-          (data) => data.tasks[0]?.drift != null,
+          (data) => data.tasks[0]?.moved != null,
         );
         expect(data.tasks[0]?.state).toBe("failed");
-        expect(data.tasks[0]?.drift).toContain(`1 commit past ${ended}`);
-        expect(data.tasks[0]?.drift).toContain(head);
-        expect(data.tasks[0]?.drift).toContain("failed record is stale");
+        expect(data.tasks[0]?.moved).toContain(`moved past ${ended}`);
+        expect(data.tasks[0]?.moved).toContain("1 commit");
+        expect(data.tasks[0]?.moved).toContain(head);
+        expect(data.tasks[0]?.moved).toContain("failed record is stale");
         const shown = yield* collie(world, ["run", "show", started.runId]);
         expect(
           (yield* Schema.decodeUnknownEffect(Schema.Struct({ branchProgress: Schema.String }))(
@@ -289,6 +299,180 @@ test("a finished Run shows pushed branch movement without rewriting its failed r
             readVerifications(`${world.state}/evidence/${stale.runId}`),
           ),
         ).toHaveLength(0);
+      }),
+    ["recovery.workflow.ts"],
+  ));
+
+const endedWithPushedBranch = (world: World) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const clean = {
+      verdict: "clean",
+      summary: "The requested work is complete.",
+      scope_met: true,
+      findings: [],
+      dropped: [],
+      fixed: [],
+    };
+    yield* fs.writeFileString(
+      `${world.home}/outputs.json`,
+      yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))([clean]),
+    );
+    yield* fs.writeFileString(
+      `${world.user}/historical-builder.workflow.ts`,
+      `export { default } from "${fixtures}/reviewed-parent.workflow.ts";\n`,
+    );
+    const origin = `${world.home}/origin.git`;
+    yield* exec(["git", "init", "--bare", "-q", origin], { cwd: world.project });
+    for (const args of [
+      ["init", "-q"],
+      ["config", "user.name", "test"],
+      ["config", "user.email", "test@example.com"],
+      ["remote", "add", "origin", origin],
+      ["remote", "add", "upstream", "https://gitlab.example.com/group/project.git"],
+      ["commit", "--allow-empty", "-qm", "base"],
+      ["push", "-qu", "origin", "HEAD"],
+      ["remote", "set-head", "origin", "-a"],
+    ]) {
+      yield* exec(["git", ...args], { cwd: world.project });
+    }
+    const base = Str.trim(
+      (yield* exec(["git", "rev-parse", "--abbrev-ref", "HEAD"], { cwd: world.project })).stdout,
+    );
+    yield* exec(["git", "switch", "-qc", "feature"], { cwd: world.project });
+    yield* exec(["git", "commit", "--allow-empty", "-qm", "the Run's own work"], {
+      cwd: world.project,
+    });
+    yield* exec(["git", "push", "-qu", "origin", "HEAD"], { cwd: world.project });
+    yield* exec(["git", "switch", "-q", base], { cwd: world.project });
+    const client = yield* connect(world.state).pipe(Effect.orDie);
+    const started = yield* client
+      .start({
+        project: world.project,
+        id: "recovery",
+        request: "failed",
+        taskLabel: "recover work",
+        input: { goal: "recover work" },
+        options: { branch: "feature" },
+        verify: [{ name: "unit", executable: "true", argv: [], cwd: "worktree" }],
+      })
+      .pipe(Effect.orDie);
+    const finished = yield* until(
+      () => client.run({ runId: started.runId }).pipe(Effect.orDie),
+      (view) => view?.status.status === "failed",
+    );
+    const cards = yield* until(
+      () => hostRecords(world.state, readCards(`${world.state}/runs/${started.runId}`)),
+      (read) => Arr.some(read, (card) => card.kind === "final"),
+    );
+    const ended = cards.at(-1)!.revision.head_sha;
+    const cwd = finished!.cwd;
+    yield* exec(["git", "push", "-qu", "origin", "HEAD"], { cwd });
+    return { started, ended, cwd };
+  });
+
+const followingBoard = Effect.fn("Board.following")(function* (state: string) {
+  const door = yield* frontDoor(socketOf(state)).pipe(Effect.orDie);
+  const told: Array<BoardMessage> = [];
+  yield* door.board().pipe(
+    Stream.runForEach((message) => Effect.sync(() => told.push(message))),
+    Effect.forkScoped,
+  );
+  return told;
+});
+
+const cardIn = (told: ReadonlyArray<BoardMessage>) => {
+  let card: TaskCard | undefined;
+  for (const message of told) {
+    if (message._tag === "Snapshot") {
+      card = message.tasks[0] ?? undefined;
+    } else if (message._tag === "Upsert") {
+      card = message.task;
+    } else if (message._tag === "Remove") {
+      card = undefined;
+    }
+  }
+  return card;
+};
+
+test("a finished Run's card says its branch moved past its last head, beside the offer and its step", () =>
+  proves(
+    "collie-board-moved-on-",
+    (world) =>
+      Effect.gen(function* () {
+        const { ended, cwd } = yield* endedWithPushedBranch(world);
+        yield* exec(["git", "commit", "--allow-empty", "-qm", "finish after the Run"], { cwd });
+        yield* exec(["git", "push", "-qu", "origin", "HEAD"], { cwd });
+        const head = Str.trim((yield* exec(["git", "rev-parse", "HEAD"], { cwd })).stdout);
+        yield* stopHost(world.state);
+        yield* connect(world.state).pipe(Effect.orDie);
+        const told = yield* followingBoard(world.state);
+        const card = yield* until(
+          () => Effect.sync(() => cardIn(told)),
+          (one) =>
+            one?.moved !== null &&
+            one?.moved !== undefined &&
+            Arr.some(one.offers ?? [], (offer) => offer.title === "Recover — Review"),
+        );
+        const shown = card!;
+        expect(shown.state).toBe("failed");
+        expect(shown.moved).toContain(`moved past ${ended}`);
+        expect(shown.moved).toContain("1 commit");
+        expect(shown.moved).toContain(head);
+        expect(shown.drift).toBeNull();
+        expect(Arr.map(shown.offers ?? [], (one) => one.title)).toContain("Recover — Review");
+      }),
+    ["recovery.workflow.ts"],
+  ));
+
+test("a finished Run's card says its branch diverged, and its offer enters at Build", () =>
+  proves(
+    "collie-board-diverged-",
+    (world) =>
+      Effect.gen(function* () {
+        const { ended, cwd } = yield* endedWithPushedBranch(world);
+        yield* exec(["git", "checkout", "-q", "--orphan", "rewritten"], { cwd });
+        yield* exec(["git", "commit", "--allow-empty", "-qm", "a history without the Run"], {
+          cwd,
+        });
+        yield* exec(["git", "push", "-q", "--force", "origin", "rewritten:feature"], { cwd });
+        const head = Str.trim((yield* exec(["git", "rev-parse", "HEAD"], { cwd })).stdout);
+        yield* stopHost(world.state);
+        yield* connect(world.state).pipe(Effect.orDie);
+        const told = yield* followingBoard(world.state);
+        const card = yield* until(
+          () => Effect.sync(() => cardIn(told)),
+          (one) =>
+            one?.moved !== null &&
+            one?.moved !== undefined &&
+            Arr.some(one.offers ?? [], (offer) => offer.title === "Recover — Build"),
+        );
+        const shown = card!;
+        expect(shown.moved).toContain(`diverged from ${ended}`);
+        expect(shown.moved).not.toContain("moved past");
+        expect(shown.moved).toContain(head);
+        expect(Arr.map(shown.offers ?? [], (one) => one.title)).toContain("Recover — Build");
+      }),
+    ["recovery.workflow.ts"],
+  ));
+
+test("a finished Run whose branch is still at its last head shows no moved-on line", () =>
+  proves(
+    "collie-board-still-at-head-",
+    (world) =>
+      Effect.gen(function* () {
+        yield* endedWithPushedBranch(world);
+        yield* stopHost(world.state);
+        yield* connect(world.state).pipe(Effect.orDie);
+        const told = yield* followingBoard(world.state);
+        const card = yield* until(
+          () => Effect.sync(() => cardIn(told)),
+          (one) => Arr.some(one?.offers ?? [], (offer) => offer.title === "Recover — Review"),
+        );
+        const shown = card!;
+        expect(shown.moved ?? null).toBeNull();
+        expect(shown.drift).toBeNull();
+        expect(Arr.map(shown.offers ?? [], (one) => one.title)).toContain("Recover — Review");
       }),
     ["recovery.workflow.ts"],
   ));

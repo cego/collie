@@ -87,6 +87,7 @@ import {
   readMrRef,
   forgeOfRef,
   readyToRelease,
+  isSettled,
   ENDED_AGENT,
   SECTIONS,
   sectionOf,
@@ -1643,9 +1644,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           disposed: disposition !== null,
           asking: decision !== null,
         });
-        const movement = landed
-          ? null
-          : ((yield* syncedBranch(leader, true))?.movement?.said ?? null);
+        const moved = landed ? null : ((yield* syncedBranch(leader, true))?.movement?.said ?? null);
         const judged = Effect.fnUntraced(function* (
           id: string | null,
           mr: string | null,
@@ -1817,7 +1816,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
             offers,
           })),
         );
-        const offers = Arr.flatMap(ownedOffers, (one) =>
+        const carriedOffers = Arr.flatMap(ownedOffers, (one) =>
           Arr.map(one.offers, (offer) => {
             const listed = {
               id: offer.id,
@@ -1828,10 +1827,6 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
               offer.unavailable === null ? listed : { ...listed, unavailable: offer.unavailable };
             return returned;
           }),
-        );
-        offers.sort(
-          (one, other) =>
-            Number(one.unavailable !== undefined) - Number(other.unavailable !== undefined),
         );
         const offered = planReady
           ? offerOf(yield* offersFor(leader.id))
@@ -1844,6 +1839,20 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
             : null;
         const offer =
           offered === null || planReady ? offered : { ...offered, run: shippingOwner.id };
+        const ownOffers =
+          mrs.length === 0 && offer === null && isSettled(state)
+            ? Arr.map(yield* offersFor(leader.id), (one) => {
+                const listed: BoardOffer = { id: one.id, title: one.title, run: leader.id };
+                return one.unavailable === null
+                  ? listed
+                  : { ...listed, unavailable: one.unavailable };
+              })
+            : [];
+        const offers = [...carriedOffers, ...ownOffers];
+        offers.sort(
+          (one, other) =>
+            Number(one.unavailable !== undefined) - Number(other.unavailable !== undefined),
+        );
         const holders = new Map<string, string | null>();
         for (const run of everyRun) {
           if (waitsOf(run).held) {
@@ -2030,11 +2039,11 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           steps: glyphsOf(runs),
           sentence: sentenceAt(now),
           age: agoShort(first, now),
+          moved,
           drift:
-            movement ??
-            (open.length === 0
+            open.length === 0
               ? null
-              : `${open[0]!.constraint}${open.length > 1 ? ` (and ${open.length - 1} more)` : ""}`),
+              : `${open[0]!.constraint}${open.length > 1 ? ` (and ${open.length - 1} more)` : ""}`,
           held: held === undefined ? null : heldLine(null),
           park: leader.park ?? null,
           recovery: leader.recovery ?? [],
@@ -2064,7 +2073,8 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           at: at === 0 ? first : at,
           flow: stripOf(flow, leader.id, planReady ? null : offer),
         };
-        const view: TaskView = mrs.length === 0 ? bare : { ...bare, mrs, offers };
+        const view: TaskView =
+          mrs.length === 0 && ownOffers.length === 0 ? bare : { ...bare, mrs, offers };
         opts.flows?.set(
           id,
           flowActions(
@@ -2248,6 +2258,7 @@ function textSection(
 ) {
   const rows = Arr.flatMap(views, (view) => [
     `  ${GLYPH_FOR[view.state]} ${view.name} · ${view.project} — ${shippingLabel(view)}${view.sentence}`,
+    ...(view.moved == null ? [] : [`    ⤴ ${view.moved}`]),
     ...(view.drift === null ? [] : [`    ↯ ${view.drift}`]),
     ...(view.held === null ? [] : [`    ${view.held}`]),
     ...(under !== null && under.run === view.run ? under.lines : []),

@@ -421,6 +421,7 @@ export const TaskView = Schema.Struct({
   sentence: Schema.String,
   age: Schema.String,
   drift: Schema.NullOr(Schema.String),
+  moved: Schema.optionalKey(Schema.NullOr(Schema.String)),
   held: Schema.NullOr(Schema.String),
   park: Schema.optionalKey(Schema.NullOr(Park)),
   recovery: Schema.optionalKey(Schema.Array(Schema.String)),

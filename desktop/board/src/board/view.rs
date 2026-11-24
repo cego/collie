@@ -977,6 +977,16 @@ fn card(
                 .w_full(),
         );
     }
+    if let Some(Some(moved)) = &task.moved {
+        card = card.child(
+            text(moved.clone())
+                .key("moved")
+                .font(k.ty.small)
+                .color(c.text_muted)
+                .wrap()
+                .w_full(),
+        );
+    }
     if let Some(drift) = &task.drift {
         card = card.child(
             text(drift.clone())

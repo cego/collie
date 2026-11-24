@@ -93,6 +93,7 @@ test("a build with no synced row for a branch runs no git, shows no movement and
       const { env, run } = yield* finishedOnFeature;
       const { views, started } = yield* drawn(env, run);
       expect(started).toEqual([]);
+      expect(views[0]?.moved ?? null).toBeNull();
       expect(views[0]?.drift).toBeNull();
       const wanted = yield* Branches.use((branches) => branches.wanted);
       expect(Arr.map(wanted, (one) => branchKey(one.cwd, one.branch))).toContain(
@@ -118,7 +119,8 @@ test("a card whose synced row records the branch moving says so", () =>
       );
       const { views, started } = yield* drawn(env, run);
       expect(started).toEqual([]);
-      expect(views[0]?.drift).toBe(said);
+      expect(views[0]?.moved).toBe(said);
+      expect(views[0]?.drift).toBeNull();
     }),
   ));
 

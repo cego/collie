@@ -1133,7 +1133,11 @@ the piece of work, the revision it was written against, and how
 
 A card on the board says there is something here to see without your opening the record:
 drift is one amber `↯` line in the task's own words, and a held task carries its `⏸` line
-under the sentence. Nothing about any of this takes your focus — only a pending question
+under the sentence. A finished Run whose pushed branch has moved past the head it recorded
+carries a dim `⤴` line instead: the new head, how many commits came after the end, and its
+follow-up offer with the step that offer enters at. A branch that diverged or was
+force-pushed says so and offers its follow-up at Build. This is not drift: nothing it was
+asked for changed, and the finished record is left as it was. Nothing about any of this takes your focus — only a pending question
 does that.
 
 A report about a Run that had already finished when it was judged is shown as

@@ -490,6 +490,10 @@ function Card(props: {
         <Deciding decision={props.view.decision!} decide={props.decide} />
       </Show>
 
+      <Show when={props.view.moved != null}>
+        <text fg={C.dim}>{`⤴ ${props.view.moved}`}</text>
+      </Show>
+
       <Show when={props.view.drift !== null}>
         <text fg={C.amber}>{`↯ ${props.view.drift}`}</text>
       </Show>

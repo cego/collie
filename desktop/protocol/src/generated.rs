@@ -102,6 +102,8 @@ pub struct Task {
     pub sentence: String,
     pub age: String,
     pub drift: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub moved: Option<Option<String>>,
     pub held: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
     pub park: Option<Option<Park>>,

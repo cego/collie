@@ -166,7 +166,11 @@ External issue bodies also need a fresh review while the host cannot
 snapshot their current requirements.
 
 Where the branch already carries implementation, the follow-up starts at Review and uses
-the same bounded fix-and-review rally. Reviewers see commits since the previous review,
+the same bounded fix-and-review rally. A finished Run's card shows a `⤴` line when commits
+were pushed to its branch after it ended; the offer then enters at Review for the commits
+made since the last reviewed head, and only then, with a clean review at that new head,
+at Checks. A branch that diverged or was force-pushed shows that instead and enters at
+Build. Reviewers see commits since the previous review,
 the original requirements, and any additional work you requested. A missing requirement
 goes to the builder as a finding. With no established implementation, it starts at Build.
 The host reads the facts again when you take the offer. A clean checkout behind the
