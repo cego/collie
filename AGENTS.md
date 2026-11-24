@@ -1,7 +1,7 @@
 # Collie
 
 Collie codifies agent workflows — `plan`, `implement`, `review`, `architecture`,
-`renovate`, `release`, `general`, `investigate`, `self-improve` — as TypeScript modules run by one Effect v4 program.
+`renovate`, `release`, `general`, `investigate`, `file-issue`, `self-improve` — as TypeScript modules run by one Effect v4 program.
 The CLI, Desktop and Collie tools reach the same services; agents run in herdr-core (`hc`).
 
 ## Where to look

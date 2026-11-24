@@ -10111,7 +10111,6 @@ const makeRegistry: (
       })),
     );
 
-  // WARNING: a selecting offer starts nothing until every id agrees with the Run's own findings.
   const chosenFor = Effect.fn("Engine.Registry.chosen")(function* (
     offer: Offer,
     given: Schema.Json | undefined,
@@ -10138,7 +10137,6 @@ const makeRegistry: (
     return ids;
   });
 
-  // WARNING: a child is told what the finding says, and where its report is, so it need not go looking.
   const findingFor = Effect.fn("Engine.Registry.finding")(function* (runDir: string, id: string) {
     const found = Option.getOrUndefined(
       Arr.findFirst(yield* findingsWithStatus(runDir), (one) => one.id === id),
@@ -10946,7 +10944,6 @@ const makeRegistry: (
         onSyncedRevisions,
       ),
 
-    // WARNING: a selecting offer starts nothing until every id it was given is one of the Run's open.
     invoke: Effect.fn("Engine.Registry.invoke")(function* (options: {
       readonly runId: string;
       readonly offer: string;
@@ -10995,7 +10992,6 @@ const makeRegistry: (
       };
       const chosen =
         offer.selects === undefined ? [] : yield* chosenFor(offer, given.findings, where);
-      // WARNING: the ids are the selection, so only an offer that asks for them passes them on.
       const filled: Record<string, Schema.Json> = Rec.filter(
         given,
         (_, name) => name !== "findings" || offer.inputs.findings === "findings",

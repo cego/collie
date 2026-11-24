@@ -244,7 +244,6 @@ export default defineWorkflow({
               .readFileString(`${earlierPlace.dir}/review-head`)
               .pipe(Effect.orElseSucceed(() => ledger?.[0]?.head ?? ""));
       const improving = requested.improving === true;
-      // WARNING: an Improve Run taken for ids is told only those findings, and keeps their ids.
       const chosen = improving ? (requested.findings ?? []) : [];
       const selected = chosen.length > 0 ? (ledger ?? []) : [];
       if (chosen.length > 0) {

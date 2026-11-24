@@ -107,7 +107,6 @@ export default defineWorkflow({
           output: Report,
         }),
       );
-      // WARNING: only what was deferred is a finding, so a Run that deferred nothing leaves none.
       if ((report.deferred ?? []).length > 0) {
         yield* leaveFindings(place.dir, report.deferred ?? []);
       }

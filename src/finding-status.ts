@@ -33,7 +33,6 @@ export const readFindingStatuses = Effect.fn("FindingStatus.read")(function* (ru
 const saidAbout = (lines: ReadonlyArray<FindingStatus>, id: string | undefined) =>
   id === undefined ? undefined : Option.getOrUndefined(Arr.findLast(lines, (one) => one.id === id));
 
-// WARNING: a dispute is someone's still to answer, so it counts as open.
 export const isOpenFinding = (status: string) => status === "open" || status === "disputed";
 
 const isIds = Schema.is(Schema.Array(Schema.String));
@@ -110,7 +109,6 @@ export const findingsWithStatus = Effect.fn("FindingStatus.findings")(function* 
 
 const REPORT_FILES = [REVIEW_FILE, "investigation.md"];
 
-// WARNING: findings.json is the fallback, so a Run that left no report still names a path.
 export const reportIn = Effect.fn("FindingStatus.report")(function* (runDir: string) {
   const fs = yield* FileSystem.FileSystem;
   for (const name of REPORT_FILES) {

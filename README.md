@@ -65,6 +65,7 @@ and `collie host restart` restarts the host.
 | `review`       | Reviews a merge request, a branch diff, or the working tree, writes one review, and offers to post it                                                     |
 | `architecture` | Runs the architect over the project, reports into the run directory, then offers: implement now or stop                                                   |
 | `investigate`  | Runs one investigator on the Machine that can observe the problem, reports findings to the requesting agent, then closes                                  |
+| `file-issue`   | Files one finding as an issue through the Linear MCP an agent has, and answers with the issue's URL                                                       |
 | `renovate`     | Merges the month's Renovate merge requests on one repository, tags a release, and checks the repository off the team's Renovate issue                     |
 | `general`      | One agent does one ad-hoc task where you started it, with no branch or merge request, and the run ends with its summary                                   |
 | `heal`         | Started by the host, not you, for a park its own recovery could not clear: gets the Run moving through its own agents before it needs you                 |
