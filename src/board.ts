@@ -959,7 +959,7 @@ const movedOn = (run: RunFacts) =>
     const synced = yield* SyncedBranches;
     const row = yield* syncedBranch(run);
     const line = Option.getOrUndefined(
-      Arr.findFirst(row?.movements ?? [], (one) => one.finished === finished),
+      Arr.findFirst(row?.movements ?? [], (one) => one.run === run.id && one.finished === finished),
     );
     if (line === undefined) {
       yield* synced.want(run);

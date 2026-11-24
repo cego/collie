@@ -332,6 +332,62 @@ export const recoveryFrom = Effect.fn("Recovery.from")(
   })),
 );
 
+export interface RemoteRead {
+  readonly head: string | null;
+  readonly fetched: boolean;
+}
+
+export const readRemote = Effect.fn("Recovery.readRemote")(function* (
+  cwd: string,
+  branch: string,
+  finished: ReadonlyArray<string>,
+) {
+  const read = yield* shell(
+    "git",
+    ["ls-remote", "--exit-code", "origin", `refs/heads/${branch}`],
+    cwd,
+  );
+  if (read.code !== 0) {
+    return { head: null, fetched: false } satisfies RemoteRead;
+  }
+  const head = Str.split(Str.trim(read.stdout), /\s/)[0] ?? "";
+  if (head === "" || Arr.contains(finished, head)) {
+    return { head, fetched: true } satisfies RemoteRead;
+  }
+  const fetched = yield* shell("git", ["fetch", "-q", "origin", head], cwd);
+  return { head, fetched: fetched.code === 0 } satisfies RemoteRead;
+});
+
+export const movementText = Effect.fn("Recovery.movementText")(function* (
+  cwd: string,
+  state: string,
+  finished: string,
+  remote: RemoteRead,
+) {
+  if (remote.head === null) {
+    return "Pushed branch head unavailable; the finished record is unchanged.";
+  }
+  if (remote.head === finished) {
+    return null;
+  }
+  if (!remote.fetched) {
+    return `Pushed branch at ${remote.head} could not be read; whether it holds ${finished} is unknown.`;
+  }
+  const ancestry = yield* shell("git", ["merge-base", "--is-ancestor", finished, remote.head], cwd);
+  if (ancestry.code !== 0 && ancestry.code !== 1) {
+    return `Pushed branch at ${remote.head} could not be compared with ${finished}; forward progress is unproved.`;
+  }
+  if (ancestry.code === 1) {
+    return `Pushed branch diverged from ${finished} to ${remote.head}; forward progress is unproved.`;
+  }
+  const count = yield* shell("git", ["rev-list", "--count", `${finished}..${remote.head}`], cwd);
+  if (count.code !== 0) {
+    return `Pushed branch history unavailable at ${remote.head}.`;
+  }
+  const n = Str.trim(count.stdout);
+  return `Pushed branch moved past ${finished}: ${n} commit${n === "1" ? "" : "s"} since, now ${remote.head}.${state === "failed" ? " The failed record is stale." : " The succeeded record describes the earlier head."}`;
+});
+
 export const branchMovement = Effect.fn("Recovery.branchMovement")(function* (run: {
   readonly cwd: string;
   readonly dir: string;
@@ -346,35 +402,8 @@ export const branchMovement = Effect.fn("Recovery.branchMovement")(function* (ru
     return null;
   }
   const finished = final.value.revision.head_sha;
-  const read = yield* shell(
-    "git",
-    ["ls-remote", "--exit-code", "origin", `refs/heads/${run.branch}`],
-    run.cwd,
-  );
-  if (read.code !== 0) {
-    return "Pushed branch head unavailable; the finished record is unchanged.";
-  }
-  const head = Str.split(Str.trim(read.stdout), /\s/)[0] ?? "";
-  if (head === finished) {
-    return null;
-  }
-  const fetched = yield* shell("git", ["fetch", "-q", "origin", head], run.cwd);
-  if (fetched.code !== 0) {
-    return `Pushed branch at ${head} could not be read; whether it holds ${finished} is unknown.`;
-  }
-  const ancestry = yield* shell("git", ["merge-base", "--is-ancestor", finished, head], run.cwd);
-  if (ancestry.code !== 0 && ancestry.code !== 1) {
-    return `Pushed branch at ${head} could not be compared with ${finished}; forward progress is unproved.`;
-  }
-  if (ancestry.code === 1) {
-    return `Pushed branch diverged from ${finished} to ${head}; forward progress is unproved.`;
-  }
-  const count = yield* shell("git", ["rev-list", "--count", `${finished}..${head}`], run.cwd);
-  if (count.code !== 0) {
-    return `Pushed branch history unavailable at ${head}.`;
-  }
-  const n = Str.trim(count.stdout);
-  return `Pushed branch moved past ${finished}: ${n} commit${n === "1" ? "" : "s"} since, now ${head}.${run.state === "failed" ? " The failed record is stale." : " The succeeded record describes the earlier head."}`;
+  const remote = yield* readRemote(run.cwd, run.branch, [finished]);
+  return yield* movementText(run.cwd, run.state, finished, remote);
 });
 
 export const ConsumedCard = Schema.Struct({

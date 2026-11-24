@@ -5,9 +5,11 @@ import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
 import { readFinalCard } from "./cards";
 import { projectHere, shell } from "./mr";
-import { branchMovement } from "./recovery";
+import { movementText, readRemote } from "./recovery";
 
 export const Movement = Schema.Struct({
+  // WARNING: a legacy row held the line without the Run it belongs to.
+  run: Schema.optionalKey(Schema.String),
   finished: Schema.String,
   said: Schema.NullOr(Schema.String),
 });
@@ -21,8 +23,6 @@ export const Branch = Schema.Struct({
 });
 export type Branch = typeof Branch.Type;
 
-const KEPT_MOVEMENTS = 8;
-
 const BranchJson = Schema.fromJsonString(Branch);
 const encodeBranch = flow(Schema.encodeResult(BranchJson), Result.getOrThrow);
 const decodeBranch = Schema.decodeUnknownOption(BranchJson);
@@ -30,6 +30,7 @@ const decodeBranch = Schema.decodeUnknownOption(BranchJson);
 export const branchKey = (cwd: string, branch: string | null) => `${cwd}\0${branch ?? ""}`;
 
 export interface BranchRun {
+  readonly id: string;
   readonly cwd: string;
   readonly dir: string;
   readonly branch: string | null;
@@ -108,10 +109,7 @@ export const branchesLayer = Layer.effect(Branches)(
   }),
 );
 
-export const readBranch = Effect.fn("Branches.read")(function* (
-  runs: ReadonlyArray<BranchRun>,
-  kept: ReadonlyArray<Movement> = [],
-) {
+export const readBranch = Effect.fn("Branches.read")(function* (runs: ReadonlyArray<BranchRun>) {
   const first = Arr.head(runs).pipe(Option.getOrThrow);
   const project = yield* projectHere(first.cwd, shell);
   if (first.branch === null) {
@@ -123,28 +121,25 @@ export const readBranch = Effect.fn("Branches.read")(function* (
     first.cwd,
   );
   const head = read.code === 0 && Str.trim(read.stdout) !== "" ? Str.trim(read.stdout) : null;
-  const fresh = yield* Effect.forEach(runs, (run) =>
-    readFinalCard(run.dir).pipe(
-      Effect.orElseSucceed(() => Option.none()),
-      Effect.flatMap((final) =>
-        Option.match(final, {
-          onNone: () => Effect.succeed([]),
-          onSome: (card) =>
-            branchMovement(run).pipe(
-              Effect.orElseSucceed(() => null),
-              Effect.map((said) => [{ finished: card.revision.head_sha, said }]),
-            ),
-        }),
-      ),
-    ),
+  const finals = yield* Effect.forEach(runs, (run) =>
+    readFinalCard(run.dir).pipe(Effect.orElseSucceed(() => Option.none())),
   );
-  const finished = Arr.map(Arr.flatten(fresh), (one) => one.finished);
-  return {
-    head,
-    project,
-    movements: [
-      ...Arr.flatten(fresh),
-      ...Arr.filter(kept, (one) => !Arr.contains(finished, one.finished)),
-    ].slice(0, KEPT_MOVEMENTS),
-  } satisfies Branch;
+  const finished = Arr.flatMap(finals, (final) =>
+    Option.match(final, {
+      onNone: () => [],
+      onSome: (card) => [card.revision.head_sha],
+    }),
+  );
+  const remote = yield* readRemote(first.cwd, first.branch, finished);
+  const movements = yield* Effect.forEach(runs, (run, index) =>
+    Option.match(finals[index] ?? Option.none(), {
+      onNone: () => Effect.succeed([]),
+      onSome: (card) =>
+        movementText(first.cwd, run.state, card.revision.head_sha, remote).pipe(
+          Effect.orElseSucceed(() => null),
+          Effect.map((said) => [{ run: run.id, finished: card.revision.head_sha, said }]),
+        ),
+    }),
+  );
+  return { head, project, movements: Arr.flatten(movements) } satisfies Branch;
 });

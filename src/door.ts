@@ -497,8 +497,8 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
           Context.add(Context.merge(bun, records), Branches, {
             ...Context.get(records, Branches),
             // WARNING: only the engine's Git sync reads what is wanted, so the door posts it there.
-            want: ({ cwd, dir, branch, state }) =>
-              Effect.sync(() => port.post({ _tag: "Want", run: { cwd, dir, branch, state } })),
+            want: ({ id, cwd, dir, branch, state }) =>
+              Effect.sync(() => port.post({ _tag: "Want", run: { id, cwd, dir, branch, state } })),
           }),
         ),
       ),
