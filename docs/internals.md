@@ -68,11 +68,13 @@ the client reports it as
 successor holds the lock before it writes `host.build`, so the client waits up to five
 seconds for that record and signals nothing if it never comes, reporting `HostUnavailable`
 rather than end a check the successor may already have adopted. One that arrives in the wait
-is judged as any other. The record names the pid, the start token, the build and the
-installation it serves, because a pid alone is reused. That host is asked for the same handover
-before it is
-signalled: one too slow to answer still hears its signal and hands its checks over, and one
-that never hears it is killed and hands over nothing.
+is judged as any other, a newer build as `HostVersionMismatch`. The record names the pid, the
+start token, the build and the installation it serves: a pid alone is reused, so one whose
+token disagrees with `host.lock` is another owner's and is not signalled. A build from before
+the token is therefore reported, not replaced, while it is silent; one that answers is
+replaced as any host is. That host is asked for the same handover before it is signalled: one
+too slow to answer still hears its signal and hands its checks over, and one that never hears
+it is killed and hands over nothing.
 
 Desktop starts a host the way any client does: it runs `collie bridge --as desktop` (or
 `--as chat`), and the bridge starts `collie host --dir <state>` where none answers. Desktop

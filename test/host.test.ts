@@ -1692,6 +1692,45 @@ test("a record left by the owner whose pid this one took is not read as this own
     }),
   ));
 
+test("a record with no start token does not make a live owner the one to signal", () =>
+  proves(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { state } = yield* workspace("collie-host-tokenless-record-");
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const owner = yield* spawner.spawn(
+        ChildProcess.make("sleep", ["30"], { stdout: "ignore", stderr: "ignore" }),
+      );
+      yield* Effect.addFinalizer(() => signalProcess(owner.pid, "SIGKILL"));
+      yield* fs.writeFileString(
+        `${state}/host.lock`,
+        `{"pid":${owner.pid},"start":${stringifyJson(yield* startedOf(owner.pid))}}\n`,
+      );
+      yield* fs.writeFileString(
+        `${state}/host.build`,
+        `{"pid":${owner.pid},"build":${stringifyJson(OLDER)},"root":${stringifyJson(root)}}\n`,
+      );
+
+      const restarted = yield* restartHost(state).pipe(
+        (effect) => fastForward(effect, 5),
+        Effect.flip,
+      );
+      if (restarted._tag !== "HostUnavailable") {
+        throw new Error(`restarted, or refused with ${restarted._tag}`);
+      }
+      expect(yield* signalProcess(owner.pid)).toBe(true);
+      const connected = yield* Effect.scoped(connect(state)).pipe(
+        (effect) => fastForward(effect, 5),
+        Effect.flip,
+      );
+      if (connected._tag !== "HostUnavailable") {
+        throw new Error(`connected, or refused with ${connected._tag}`);
+      }
+      expect(yield* signalProcess(owner.pid)).toBe(true);
+      expect((yield* ownerOf(state))?.pid).toBe(owner.pid);
+    }),
+  ));
+
 test("a host that will not start is said out loud rather than waited on forever", () =>
   proves(
     Effect.gen(function* () {
