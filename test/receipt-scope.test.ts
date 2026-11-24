@@ -393,6 +393,7 @@ test("a request meeting another Run's in-progress receipt neither replays nor ov
           );
           const receipt = receiptOf(world, "run-publish", "publish-slow");
           const during = yield* fs.readFileString(receipt);
+          expect(during).toContain('"digest"');
           const foreign = yield* publish(runB, { ...env(), COLLIE_CWD: other });
           expect(foreign.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
           expect(foreign.envelope.data).toBeUndefined();
