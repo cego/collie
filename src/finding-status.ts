@@ -131,6 +131,7 @@ export const findingText = (finding: ReviewFinding, report: string) =>
         finding.detail === null ? "" : `Detail: ${finding.detail}`,
         finding.evidence === null ? "" : `Evidence: ${finding.evidence}`,
         finding.basis === null ? "" : `Basis: ${finding.basis}`,
+        finding.suggested === null ? "" : `Suggested: ${finding.suggested}`,
         `From: ${report}`,
       ],
       (one) => one !== "",

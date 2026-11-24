@@ -37,6 +37,7 @@ export default defineWorkflow({
           line: 4,
           basis: "fact",
           evidence: "the log names it twice",
+          suggested: "fix",
         },
         { severity: "major", title: "The second" },
         { severity: "minor", title: "The third" },

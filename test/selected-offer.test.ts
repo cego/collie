@@ -572,6 +572,7 @@ test("File to Linear files the one finding chosen, and the Run it starts answers
         );
         expect(goal).toContain("The first");
         expect(goal).toContain("the log names it twice");
+        expect(goal).toContain("Suggested: fix");
         expect(
           Arr.map(yield* run.client.runFindings({ runId: run.id }), (one) => [
             one.id,
