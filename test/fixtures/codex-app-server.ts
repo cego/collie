@@ -83,6 +83,21 @@ const servers = () => {
 };
 const server = "collie_desktop";
 
+const ownServers: () => Promise<Server> = async () =>
+  Option.getOrElse(
+    Schema.decodeUnknownOption(ServerSchema)(
+      await Bun.file(`${codexHome}/own-servers.json`)
+        .json()
+        .catch(() => ({})),
+    ),
+    () => ({}),
+  );
+
+if (await Bun.file(`${process.cwd()}/restart-fails`).exists()) {
+  process.stderr.write("codex: the stand-in refused to start again\n");
+  process.exit(1);
+}
+
 const tomlValue: (raw: string) => Schema.Json = (raw) =>
   flow(
     Schema.decodeUnknownResult(Schema.Record(Schema.String, Schema.Json)),
@@ -565,6 +580,10 @@ for await (const chunk of Bun.stdin.stream()) {
           data: all.slice(from, from + 2),
           nextCursor: from + 2 < all.length ? String(from + 2) : null,
         });
+        break;
+      }
+      case "config/read": {
+        answer({ config: { mcp_servers: { ...servers(), ...(await ownServers()) } } });
         break;
       }
       case "mcpServerStatus/list": {

@@ -478,9 +478,7 @@ test("Codex is given the human's own MCP server, lists its tools, and reads thro
       yield* session.offer("inspect");
       const details = inspected(yield* turn(session));
       expect(details.args).toContain(`mcp_servers.docs.url="${fixture.url}"`);
-      expect(details.start.developerInstructions).toEqual(
-        expect.stringContaining("docs (read_doc)"),
-      );
+      expect(instruct(details)).toEqual(expect.stringContaining("docs (read_doc)"));
       yield* session.offer("servers");
       const events = yield* turn(session);
       expect(called(events)).toEqual(["mcp__docs__read_doc"]);
@@ -552,6 +550,10 @@ test("A server Codex holds no login for is said to need `codex mcp login`, and t
       expect(after.thread).toBe(before.thread);
       expect(after.pid).not.toBe(before.pid);
       expect(instruct(after)).toEqual(expect.stringContaining("linear-server (linear_read)"));
+      expect(instruct(after)).not.toBe(instruct(before));
+      expect(after.start.developerInstructions).toEqual(
+        expect.not.stringContaining("linear-server"),
+      );
       expect(Arr.join(after.args, " ")).not.toContain("linear-token");
       yield* session.offer("servers");
       expect(called(yield* turn(session))).toEqual(["mcp__linear-server__linear_read"]);
@@ -561,8 +563,19 @@ test("A server Codex holds no login for is said to need `codex mcp login`, and t
 
 const occurrences = (text: string, word: string) => Str.split(text, word).length - 1;
 
-const instruct = (details: ReturnType<typeof inspected>) =>
-  Option.getOrThrow(Schema.decodeUnknownOption(Schema.String)(details.start.developerInstructions));
+const instruct = (details: ReturnType<typeof inspected>) => {
+  const input = details.turn.input;
+  return Schema.is(Schema.Array(Schema.Json))(input)
+    ? Arr.join(
+        Arr.flatMap(input, (part) =>
+          Schema.is(Schema.Record(Schema.String, Schema.Json))(part) && Str.isString(part.text)
+            ? [part.text]
+            : [],
+        ),
+        "\n",
+      )
+    : "";
+};
 
 test("A server Codex itself configures keeps Codex's entry, shown once, and its own settings work", () => {
   const mine = serveDocs({ tool: "user_read" });
@@ -856,6 +869,72 @@ test("The login command a server is told parses, even when its url holds a quote
   expect(told).toContain("codex mcp login 'stdio-one'");
 });
 
+test("A stdio server may not take a variable the chat's own environment already sets", () => {
+  return withServers(
+    {
+      leaky: {
+        command: process.execPath,
+        args: [`${import.meta.dir}/fixtures/mcp-stdio-echo.ts`],
+        env: { HOME: "/nowhere" },
+      },
+    },
+    (driver) =>
+      Effect.gen(function* () {
+        const session = yield* driver.open("codex-leaky", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("inspect");
+        const details = inspected(yield* turn(session));
+        expect(Arr.join(details.args, " ")).not.toContain("mcp_servers.leaky.");
+        expect(instruct(details)).toContain(
+          "Left out: leaky (HOME is set in the environment Codex already runs in)",
+        );
+      }),
+  );
+});
+
+test("Codex's own report decides which servers it has, not Collie's reading of its files", () => {
+  const mine = serveDocs({ tool: "user_read" });
+  return withServers({ docs: { type: "http", url: mine.url } }, (driver, context) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(
+        `${context.dir}/codex-home/own-servers.json`,
+        `{"docs":{"url":"http://127.0.0.1:1/codex"}}`,
+      );
+      const session = yield* driver.open("codex-reported", "default", null);
+      yield* Effect.addFinalizer(() => session.close);
+      yield* session.offer("inspect");
+      const details = inspected(yield* turn(session));
+      expect(Arr.join(details.args, " ")).not.toContain("mcp_servers.docs.");
+      expect(occurrences(instruct(details), "docs")).toBe(1);
+    }),
+  ).finally(() => void mine.stop());
+});
+
+test("A Codex that cannot start again says so, and the next message does not wait on the one it stopped", () => {
+  const fixture = serveDocs({ tool: "linear_read", token: "linear-token" });
+  return withServers({ "linear-server": { type: "http", url: fixture.url } }, (driver, context) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const session = yield* driver.open("codex-refused", "default", null);
+      yield* Effect.addFinalizer(() => session.close);
+      yield* session.offer("inspect");
+      const before = inspected(yield* turn(session));
+      yield* fs.writeFileString(`${context.dir}/restart-fails`, "");
+      yield* session.offer("inspect");
+      const ended = (yield* turn(session)).at(-1);
+      expect(ended).toMatchObject({ type: "RUN_ERROR" });
+      expect(ended).toMatchObject({
+        type: "RUN_ERROR",
+        message: expect.stringContaining("refused to start again"),
+      });
+      yield* session.offer("inspect");
+      expect((yield* turn(session)).at(-1)).toMatchObject({ type: "RUN_ERROR" });
+      expect(before.pid).not.toBe(0);
+    }),
+  ).finally(() => void fixture.stop());
+});
+
 test("A user server named collie_desktop does not replace Collie's own", () => {
   const mine = serveDocs({ tool: "hijack" });
   return withServers({ collie_desktop: { type: "http", url: mine.url } }, (driver) =>
@@ -865,7 +944,7 @@ test("A user server named collie_desktop does not replace Collie's own", () => {
       yield* session.offer("inspect");
       const details = inspected(yield* turn(session));
       expect(Arr.join(details.args, " ")).not.toContain(`url="${mine.url}"`);
-      expect(details.start.developerInstructions).toEqual(
+      expect(instruct(details)).toEqual(
         expect.stringContaining("collie_desktop (the name of Collie's own server)"),
       );
       yield* session.offer("question");

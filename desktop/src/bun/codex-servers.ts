@@ -2,11 +2,11 @@ import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
-import { homedir } from "node:os";
-import { Option, Schema } from "effect";
+import { Schema } from "effect";
 import { childEnv } from "./login-env";
 import type { UserMcpServers } from "./session";
 
+const env_has = (key: string) => Rec.has(childEnv(), key);
 const RESERVED = "collie_desktop";
 const OWN = "COLLIE_CHAT_";
 const NAME = /^[A-Za-z0-9_-]+$/;
@@ -22,15 +22,6 @@ const Http = Schema.Struct({
   url: Schema.String,
   headers: Schema.optionalKey(Strings),
 });
-
-const CodexConfig = Schema.Struct({
-  mcp_servers: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
-  projects: Schema.optionalKey(
-    Schema.Record(Schema.String, Schema.Struct({ trust_level: Schema.optionalKey(Schema.String) })),
-  ),
-});
-const decodeConfig = Schema.decodeUnknownOption(CodexConfig);
-const NO_CONFIG: typeof CodexConfig.Type = { mcp_servers: {} };
 
 export const CodexStatus = Schema.Struct({
   name: Schema.String,
@@ -115,6 +106,10 @@ export const codexServers: (
           why = `${key} is in Collie's own namespace`;
           break;
         }
+        if (env_has(key)) {
+          why = `${key} is set in the environment Codex already runs in`;
+          break;
+        }
         if (held !== undefined && held.value !== resolved) {
           why = `it needs a different ${key} than ${held.name}, and Codex gives every server one variable of that name`;
           break;
@@ -155,48 +150,6 @@ export const codexServers: (
   }
   return { args, env, given, left };
 };
-
-const readConfig = (path: string) =>
-  Bun.file(path)
-    .text()
-    .then((text) => Option.getOrElse(decodeConfig(Bun.TOML.parse(text)), () => NO_CONFIG))
-    .catch(() => NO_CONFIG);
-
-const namesIn = (path: string) =>
-  readConfig(path).then((config) => Rec.keys(config.mcp_servers ?? {}));
-
-const parentOf = (path: string) =>
-  pipe(
-    path,
-    Str.slice(
-      0,
-      Option.getOrElse(pipe(path, Str.lastIndexOf("/")), () => 0),
-    ),
-  );
-
-// WARNING: Codex ignores a project's .codex/config.toml unless that project is trusted.
-const configPaths = (dir: string, projects: Readonly<Record<string, { trust_level?: string }>>) => {
-  const home = homedir();
-  const paths: Array<string> = [];
-  for (let at = dir; at.length > 1; at = parentOf(at)) {
-    if (projects[at]?.trust_level === "trusted") {
-      paths.push(`${at}/.codex/config.toml`);
-    }
-    if (at === home) {
-      break;
-    }
-  }
-  return paths;
-};
-
-const config = () => `${childEnv().CODEX_HOME ?? `${homedir()}/.codex`}/config.toml`;
-
-export const codexConfigured: (dir: string) => Promise<ReadonlyArray<string>> = (dir) =>
-  readConfig(config()).then((user) =>
-    Promise.all(Arr.map(configPaths(dir, user.projects ?? {}), namesIn)).then((found) =>
-      Arr.dedupe([...Rec.keys(user.mcp_servers ?? {}), ...Arr.flatten(found)]),
-    ),
-  );
 
 const toolsOf = (status: CodexStatus | undefined) => Rec.keys(status?.tools ?? {});
 

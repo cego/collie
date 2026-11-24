@@ -28,13 +28,7 @@ import { isNumber, isString } from "../../../src/schema";
 import type { JsonObject } from "../../../src/schema";
 import { standingDirectionContext } from "../../../src/standing-direction";
 import type { ChatEndpoint } from "./chat-endpoint";
-import {
-  CodexStatus,
-  NO_SERVERS,
-  codexConfigured,
-  codexConnections,
-  codexServers,
-} from "./codex-servers";
+import { CodexStatus, NO_SERVERS, codexConnections, codexServers } from "./codex-servers";
 import type { CodexServers } from "./codex-servers";
 import type { ListedModel } from "./claude-models";
 import type { ChatDriver, ContentBlock, DriverContext, TurnCost } from "./driver";
@@ -627,7 +621,16 @@ type Live = {
 
 const decodeStatuses = decoded(Schema.Struct({ data: Schema.Array(CodexStatus) }));
 const NO_STATUS: ReadonlyArray<CodexStatus> = [];
-const instructions = (said: string) => `${systemPrompt(hostname())}\n\n${said}`;
+const Effective = Schema.Struct({
+  config: Schema.optionalKey(
+    Schema.Struct({
+      mcp_servers: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+    }),
+  ),
+});
+const decodeEffective = decoded(Effective);
+const NO_CONFIGURED: ReadonlyArray<string> = [];
+const instructions = () => systemPrompt(hostname());
 
 const noThreads: Readonly<Record<string, string>> = {};
 
@@ -731,15 +734,30 @@ export const codexDriver: (
           Effect.map(({ data }) => data),
           Effect.orElseSucceed(() => NO_STATUS),
         );
+      // WARNING: Codex's own resolution decides which names it already has; reading its files guesses.
+      const readConfigured = () =>
+        Effect.gen(function* () {
+          if (command === null) {
+            return NO_CONFIGURED;
+          }
+          return yield* Effect.scoped(
+            Effect.gen(function* () {
+              const probe = yield* appServer(command, context.dir, [], childEnv());
+              const { config } = yield* probe
+                .call("config/read", { cwd: context.dir })
+                .pipe(Effect.flatMap(decodeEffective));
+              return Arr.filter(Rec.keys(config?.mcp_servers ?? {}), (name) => name !== SERVER);
+            }),
+          ).pipe(Effect.orElseSucceed(() => NO_CONFIGURED));
+        });
+      const ownServers = yield* Effect.cached(readConfigured());
       const connect = (own: Scope.Scope) =>
         Effect.gen(function* () {
           if (command === null) {
             return yield* new CodexError({ message: NOT_INSTALLED });
           }
           const { url, token } = yield* endpoint.start;
-          configured = yield* Effect.tryPromise(() => codexConfigured(context.dir)).pipe(
-            Effect.orElseSucceed(() => []),
-          );
+          configured = yield* ownServers;
           given = codexServers(
             yield* Effect.tryPromise(userServers).pipe(Effect.orElseSucceed(() => ({}))),
             configured,
@@ -765,8 +783,7 @@ export const codexDriver: (
           if (account === null && requiresOpenaiAuth) {
             return yield* new CodexError({ message: SIGNED_OUT });
           }
-          const told = codexConnections(given, yield* statusesOf(server), configured);
-          const started = { ...setting, developerInstructions: instructions(told) };
+          const started = { ...setting, developerInstructions: instructions() };
           const resumed = yield* server
             .call("thread/resume", { threadId: yield* threadOf(id), ...started })
             .pipe(
@@ -790,19 +807,26 @@ export const codexDriver: (
         Effect.gen(function* () {
           const own = yield* Scope.make();
           owned = own;
-          const built = yield* connect(own);
+          const built = yield* connect(own).pipe(
+            Effect.onError(() => Scope.close(own, Exit.void).pipe(Effect.ignore)),
+          );
           const made: Live = { scope: own, ...built };
           live = made;
           return made;
         });
-      const ready = yield* Effect.cached(establish());
-      yield* ready.pipe(
+      let first = yield* Deferred.make<Live, CodexError>();
+      const connectOnce = () =>
+        establish().pipe(
+          Effect.tap((made) => Deferred.succeed(first, made)),
+          Effect.tapError((error) => Deferred.fail(first, error)),
+        );
+      yield* connectOnce().pipe(
         Effect.catch(({ message }) => Queue.fail(output, message)),
         Effect.forkScoped,
       );
       const settle = Effect.gen(function* () {
         if (live === undefined) {
-          return Option.getOrUndefined(yield* ready.pipe(Effect.option));
+          return Option.getOrUndefined(yield* Deferred.await(first).pipe(Effect.option));
         }
         if (!signingIn) {
           return live;
@@ -811,7 +835,8 @@ export const codexDriver: (
         live = undefined;
         signingIn = false;
         yield* Scope.close(stale.scope, Exit.void).pipe(Effect.ignore);
-        return Option.getOrUndefined(yield* establish().pipe(Effect.option));
+        first = yield* Deferred.make<Live, CodexError>();
+        return yield* connectOnce();
       });
       const note = () => {
         const placement = context.placement();
@@ -835,14 +860,28 @@ export const codexDriver: (
             yield* endpoint.begin;
             started = yield* Clock.currentTimeMillis;
             yield* Queue.offer(output, state.begin());
-            live = yield* settle.pipe(Effect.orElseSucceed(() => live));
-            if (live === undefined) {
-              return;
+            const settled = yield* settle.pipe(Effect.result);
+            const current = Result.isSuccess(settled) ? settled.success : undefined;
+            if (current === undefined) {
+              return yield* Queue.offer(output, {
+                type: "RUN_ERROR",
+                runId: id,
+                message: Result.isFailure(settled)
+                  ? settled.failure.message
+                  : "Codex could not start its session",
+              });
             }
-            const asked = yield* live.server
+            live = current;
+            const said = codexConnections(
+              given,
+              yield* statusesOf(current.server, current.thread),
+              configured,
+            );
+            const noted = Arr.filter([note(), said], (text) => text !== "");
+            const asked = yield* current.server
               .call("turn/start", {
-                threadId: live.thread,
-                input: inputOf(content, note()),
+                threadId: current.thread,
+                input: inputOf(content, Arr.join(noted, "\n\n")),
                 ...(model !== "default" && { model }),
                 ...(effort !== null && { effort }),
               })
