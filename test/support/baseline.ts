@@ -43,7 +43,13 @@ import { Rig } from "./recorder";
 import { exec } from "./command";
 import { fastForward, runEffect as runShared } from "./effect";
 import { FakeBin } from "./bin";
-import { FORGE_HOST, PROJECT, forgeOnPath as modelOnPath, serveForges } from "./forge";
+import {
+  FORGE_HOST,
+  LONG_GITLAB_PATH,
+  PROJECT,
+  forgeOnPath as modelOnPath,
+  serveForges,
+} from "./forge";
 import type { FakeJob, FakeComment, FakeMr, ForgeModel } from "./forge";
 import { platformLayer } from "../../src/platform";
 import type { PlatformServices } from "../../src/platform";
@@ -14540,6 +14546,13 @@ scenario("a fork changes what lands and keeps everything that decides whether it
 
 const byRun = (prompt: string) => pipe(prompt, Str.replaceAll(/r-(fork|shipped)/g, "<run>"));
 
+const LONG_PROJECT = `${FORGE_HOST.gitlab}/${LONG_GITLAB_PATH}`;
+const LONG_URL = `https://${LONG_PROJECT}`;
+const LONG_MR = `${LONG_URL}/-/merge_requests/30`;
+const LONG_TARGET = `mr:${LONG_PROJECT}!30`;
+const LONG_TAG_CLEARANCE = `a release commit to the repository's default branch, where it makes one; pushing an annotated version tag to origin; creating its release there, where the package publishes from its tags; watching the tag's pipeline there, never playing a production job.`;
+const LONG_STAGE_CLEARANCE = `a release commit to the repository's default branch, where it makes one; pushing an annotated version tag to origin, with no forge release; playing, retrying and watching the tag's stage deploy and check jobs; rolling stage back to the newest release production carries; never a production job.`;
+
 const RELEASING = {
   gitlab: {
     remote: "git@gitlab.example.com:group/app.git",
@@ -14656,9 +14669,13 @@ const releasable = (name: MrForge, over: Partial<FakeMr> = {}, tagged = true) =>
     if (tagged) {
       yield* tagOnOrigin(merged);
     }
-    yield* exec(["git", "remote", "set-url", "upstream", RELEASING[name].remote], {
-      cwd: rig.projectDir,
-    });
+    const project = over.project ?? PROJECT[name];
+    yield* exec(
+      ["git", "remote", "set-url", "upstream", `git@${pipe(project, Str.replace("/", ":"))}.git`],
+      {
+        cwd: rig.projectDir,
+      },
+    );
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
     const model: ForgeModel = {
       installed: true,
@@ -16577,6 +16594,65 @@ scenario(
             offPath: false,
           });
         }
+      }),
+    ),
+);
+
+scenario(
+  "release on gitlab: a package whose project URL is too long for a Clearance is merged, tagged and read back under the claim",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, merged } = yield* releasable("gitlab", { project: LONG_PROJECT });
+        claimed.length = 0;
+        const runId = "r-release-long-url";
+        yield* rig.queueOutputs([PACKAGED, TAGGED]);
+        const status = yield* driven(
+          { entry: shipped("release"), runId, input: { mr: LONG_TARGET }, host: releaseHost() },
+          (run) =>
+            Effect.gen(function* () {
+              yield* goAsked(run.asked, "go-1");
+              yield* run.answer("go-1", "Release");
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+        expect(outcomeText(status)).toBe(`${LONG_MR} merged at ${merged}, released as v1.2.0`);
+        const cleared = yield* clearance(runId, "tag");
+        expect(cleared).toBe(`Cleared for this step: ${LONG_TAG_CLEARANCE}`);
+        expect(Str.replace("Cleared for this step: ", "")(cleared).length).toBeLessThanOrEqual(400);
+      }),
+    ),
+);
+
+scenario(
+  "release on gitlab: an application whose tag stages, on a project URL too long for a Clearance, stages on Clearances that fit and reaches production's go",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin } = yield* stageable("gitlab", {}, { project: LONG_PROJECT });
+        claimed.length = 0;
+        const runId = "r-app-long-url";
+        yield* rig.queueOutputs([
+          APP_ASSESSED,
+          stagedTag("gitlab", LONG_URL, `${LONG_URL}/-/pipelines/7`),
+        ]);
+        yield* driven(
+          { entry: shipped("release"), runId, input: { mr: LONG_TARGET }, host: releaseHost() },
+          (run) =>
+            Effect.gen(function* () {
+              yield* goAsked(run.asked, "go-1");
+              yield* run.answer("go-1", "Merge, tag and stage");
+              const production = yield* goAsked(run.asked, "production");
+              expect(production.shipping).toEqual({ action: "deploy", tag: "v1.2.0" });
+              const cleared = yield* clearance(runId, "tag");
+              expect(cleared).toBe(`Cleared for this step: ${LONG_STAGE_CLEARANCE}`);
+              expect(
+                Str.replace("Cleared for this step: ", "")(cleared).length,
+              ).toBeLessThanOrEqual(400);
+            }),
+        );
+        yield* bin.restore();
       }),
     ),
 );
@@ -20289,11 +20365,15 @@ const tagJob = (name: MrForge, job: TagJob) => {
     : `https://github.com/owner/repo/actions/runs/7/job/${id}`;
 };
 
-const stagedTag = (name: MrForge) => ({
+const stagedTag = (
+  name: MrForge,
+  url: string = RELEASING[name].url,
+  pipeline: string = PIPELINE_OF[name],
+) => ({
   ...TAGGED,
-  pipeline_url: PIPELINE_OF[name],
+  pipeline_url: pipeline,
   stage_jobs: ["deploy-stage", "e2e-stage"],
-  production_jobs: [{ name: "deploy-production", url: `${RELEASING[name].url}/said-by-the-agent` }],
+  production_jobs: [{ name: "deploy-production", url: `${url}/said-by-the-agent` }],
 });
 
 const deploys = (stage: string, production: string) => [
@@ -20304,9 +20384,10 @@ const deploys = (stage: string, production: string) => [
 const stageable = (
   name: MrForge,
   states: Partial<Record<TagJob, "passed" | "failed" | "manual" | "running">> = {},
+  over: Partial<FakeMr> = {},
 ) =>
   Effect.gen(function* () {
-    const made = yield* releasable(name);
+    const made = yield* releasable(name, over);
     const jobs = {
       build: "passed",
       "deploy-stage": "passed",

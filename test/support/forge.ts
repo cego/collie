@@ -346,6 +346,9 @@ export const PROJECT = {
   github: "github.com/owner/repo",
 } as const;
 
+export const LONG_GITLAB_PATH =
+  "group/npm-packages/backoffice-core/platform/services/billing/invoicing/statements/rendering/templates/shared/common/utils/helpers/testing/fixtures/mocks/stubs/samples/examples/archive/v1";
+
 export const CLI = { gitlab: "glab", github: "gh" } as const;
 
 interface Answer {

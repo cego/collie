@@ -105,13 +105,19 @@ export const RELEASE_ON = { gitlab: stepsOf(onGitlab), github: stepsOf(onGithub)
 const pushing = (url: string) =>
   `committing to the merge request's source branch on ${url} and pushing it with a plain push, never a force push`;
 
-const rollingBack = (url: string) =>
-  `rolling ${url}'s stage back to the newest release production carries`;
+const rollingBack = (whose: string) =>
+  `rolling ${whose} back to the newest release production carries`;
 
-const releaseCommit = (url: string) =>
-  `a release commit to ${url}'s default branch, where it makes one`;
+const releaseCommit = (whose: string) => `a release commit to ${whose}, where it makes one`;
 
 const watching = "watching the tag's pipeline there, never playing a production job";
+
+const tagged = "pushing an annotated version tag to origin";
+const taggedOnly = "pushing an annotated version tag to origin, with no forge release";
+const publishedFromTags = "creating its release there, where the package publishes from its tags";
+const stageJobs = "playing, retrying and watching the tag's stage deploy and check jobs";
+const backToProduction = "rolling stage back to the newest release production carries";
+const noProductionJob = "never a production job";
 
 export const RELEASE_CLEARS = {
   answer: (url: string) => [
@@ -121,28 +127,41 @@ export const RELEASE_CLEARS = {
   fix: (url: string) => [pushing(url)],
   stageMergeRequest: (url: string) => [
     `playing, retrying and watching ${url}'s stage deploy job and stage check jobs (e2e-stage, smoke or the like) of the merge request's pipeline`,
-    "rolling stage back to the newest release production carries",
-    "never a production job",
+    backToProduction,
+    noProductionJob,
   ],
-  tag: (url: string) => [
-    releaseCommit(url),
-    "pushing an annotated version tag to origin",
-    "creating its release there, where the package publishes from its tags",
-    watching,
-  ],
-  stage: (url: string) => [
-    releaseCommit(url),
-    "pushing an annotated version tag to origin, with no forge release",
-    "playing, retrying and watching the tag's stage deploy and check jobs",
-    "rolling stage back to the newest release production carries",
-    "never a production job",
-  ],
-  tagTested: (url: string) => [
-    releaseCommit(url),
-    "pushing an annotated version tag to origin, with no forge release",
-    watching,
-  ],
-  rollback: (url: string) => [`${rollingBack(url)}, never a production job`],
+  tag: (url: string) =>
+    fitting(
+      [releaseCommit(`${url}'s default branch`), tagged, publishedFromTags, watching],
+      [releaseCommit("the repository's default branch"), tagged, publishedFromTags, watching],
+    ),
+  stage: (url: string) =>
+    fitting(
+      [
+        releaseCommit(`${url}'s default branch`),
+        taggedOnly,
+        stageJobs,
+        backToProduction,
+        noProductionJob,
+      ],
+      [
+        releaseCommit("the repository's default branch"),
+        taggedOnly,
+        stageJobs,
+        backToProduction,
+        noProductionJob,
+      ],
+    ),
+  tagTested: (url: string) =>
+    fitting(
+      [releaseCommit(`${url}'s default branch`), taggedOnly, watching],
+      [releaseCommit("the repository's default branch"), taggedOnly, watching],
+    ),
+  rollback: (url: string) =>
+    fitting(
+      [`${rollingBack(`${url}'s stage`)}, ${noProductionJob}`],
+      [`${rollingBack("the repository's stage")}, ${noProductionJob}`],
+    ),
   production: (url: string, jobs: ReadonlyArray<JobLink>) => {
     const playing = (named: string) => [`playing ${named} on ${url}, and no other job`];
     const under = (job: JobLink) =>

@@ -1151,7 +1151,9 @@ prompt in [`workflows/general.md`](../workflows/general.md).
 
 A step that pushes, merges, tags or plays a job says so in its agent's own turn, as its
 Clearance ([`docs/sdk.md`](sdk.md#having-an-agent-do-the-work)), in the forge's own noun.
-Each names only what that step's content tells the agent to do:
+Each names only what that step's content tells the agent to do, and one that would overrun the
+400 characters a Clearance is allowed names the repository's default branch or origin instead of
+the project's URL:
 
 - **`implement`'s `mr`**: pushing the checkout's branch to origin (its web address) and
   opening or updating its merge request there. Not merging: it merges only when a message

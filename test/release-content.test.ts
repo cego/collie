@@ -6,6 +6,7 @@ import { expect, test } from "bun:test";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { Checked, RELEASE_CLEARS, RELEASE_ON } from "../workflows/release.workflow";
+import { LONG_GITLAB_PATH } from "./support/forge";
 import { contentOf } from "../src/sdk";
 import onGitlab from "../workflows/release.gitlab.md" with { type: "text" };
 import onGithub from "../workflows/release.github.md" with { type: "text" };
@@ -160,6 +161,26 @@ test("every Clearance fits a 120-character repository URL, and names it exactly 
     return [step, gated(lines) <= 400, times(Arr.join(lines, "; "), url)];
   });
   expect(measured).toEqual(Arr.map(Rec.keys(RELEASE_CLEARS), (step) => [step, true, 1]));
+});
+
+test("the Clearances that name the project give it up rather than overrun the 400 characters an agent launch allows", () => {
+  const long = `https://gitlab.example.com/${LONG_GITLAB_PATH}`;
+  const huge = `https://gitlab.example.com/${Str.repeat(400)("x")}`;
+  const named = {
+    tag: RELEASE_CLEARS.tag,
+    stage: RELEASE_CLEARS.stage,
+    tagTested: RELEASE_CLEARS.tagTested,
+    rollback: RELEASE_CLEARS.rollback,
+  };
+  for (const [step, clears] of Rec.toEntries(named)) {
+    const atHuge = Arr.join(clears(huge), "; ");
+    expect([
+      step,
+      gated(clears(long)) <= 400,
+      gated(clears(huge)) <= 400,
+      times(atHuge, "https://"),
+    ]).toEqual([step, true, true, 0]);
+  }
 });
 
 test("production names its jobs with their URLs, then by name, then by count, whichever first fits", () => {
