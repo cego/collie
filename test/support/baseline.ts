@@ -4746,6 +4746,7 @@ scenario("a follow-up on a moved pushed head starts at Review", () =>
       const prompt = yield* asked(child, "review-1");
       expect(prompt).toContain(head);
       expect(prompt).toContain("work the waiting review never saw");
+      expect(prompt).not.toContain("finish the implementation");
       expect(prompt).not.toContain(finished);
       yield* bin.restore();
     }),
