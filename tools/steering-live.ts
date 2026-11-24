@@ -82,6 +82,7 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
     return { version, rows: allNotRun(addressed.reason) };
   }
   const hookDir = yield* controlDir(env.stateDir, agent);
+  const terminalId = entry.incarnation?.terminalId ?? null;
 
   const acked = Effect.fn("live.acked")(function* (id: string, budgetMs: number) {
     const deadline = (yield* Clock.currentTimeMillis) + budgetMs;
@@ -159,7 +160,7 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
     });
   } else {
     // WARNING: only a live Run's oversight writes manual_override; read the hook's record, not the ledger.
-    const deliveredAsCollie = yield* submittedDelivery(hookDir, nowId);
+    const deliveredAsCollie = yield* submittedDelivery(hookDir, nowId, terminalId);
     const before = yield* externalSubmissions(hookDir);
     yield* Effect.log(`Type any line into ${agent}'s pane now, then Enter. Waiting 90 seconds.`);
     yield* Effect.sleep(90_000);

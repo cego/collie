@@ -9,6 +9,8 @@ import { HerdrError, herdrFailureReason, isSettled } from "./herdr";
 import type { Herdr, Submission } from "./herdr";
 import { verifyIncarnation } from "./registry";
 import type { AgentEntry, Incarnation } from "./registry";
+import { controlDir } from "./compaction";
+import { submittedDelivery } from "./compactors";
 import {
   appendLine,
   blocked,
@@ -336,6 +338,29 @@ function refuse(id: string | null, reason: Refusal, detail: string) {
   return returned;
 }
 
+export const SUBMIT_RECORDED = "taken: its submit hook recorded it";
+
+// WARNING: only the incarnation it went to settles it; absent, another incarnation's or another delivery's record leaves it unknown.
+export const settleFromSubmit = Effect.fn("Dispatcher.settleFromSubmit")(function* (
+  stateDir: string,
+  delivery: Delivery,
+) {
+  const dir = yield* controlDir(stateDir, delivery.agent);
+  const recorded = yield* submittedDelivery(dir, delivery.id, delivery.incarnation).pipe(
+    Effect.orElseSucceed(() => false),
+  );
+  if (!recorded) {
+    return false;
+  }
+  yield* appendLine({
+    ...delivery,
+    at: yield* nowIso,
+    state: "acknowledged",
+    note: SUBMIT_RECORDED,
+  });
+  return true;
+});
+
 const agentsNow = (deps: DispatcherDeps) =>
   deps.herdr.agentList().pipe(Effect.orElseSucceed(() => []));
 
@@ -380,7 +405,14 @@ const send = Effect.fn("Dispatcher.send")(function* (
   const lines = yield* readLedger(terminalId);
   const now = yield* Clock.currentTimeMillis;
   for (const stale of settleStaleReservations(lines, now, SUBMIT_TIMEOUT_MS, at)) {
-    yield* appendLine(stale);
+    if (!(yield* settleFromSubmit(deps.stateDir, stale))) {
+      yield* appendLine(stale);
+    }
+  }
+  for (const unsure of newestById(lines).values()) {
+    if (unsure.state === "unknown") {
+      yield* settleFromSubmit(deps.stateDir, unsure);
+    }
   }
 
   const key = causalKey(draft.run, draft.cause, draft.intentVersion);

@@ -2679,7 +2679,7 @@ const heldReminder = (runId: string) =>
     Arr.findFirst(deliveries, (one) => pipe(one.cause.ref, Str.endsWith(".remind-1"))),
   );
 
-const enteredBehindHeldReminder = (landed: boolean) =>
+const enteredBehindHeldReminder = (landed: "itself" | "otherwise" | "no-one") =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     yield* rig.queueOutputs([null, null, null]);
@@ -2689,12 +2689,13 @@ const enteredBehindHeldReminder = (landed: boolean) =>
       { herdr: new HeldReminder(), collectMs: 600_000 },
     );
     const held = Option.getOrThrow(yield* heldReminder("r1"));
-    if (landed) {
+    if (landed !== "no-one") {
       yield* writeEvent(yield* controlDir(rig.pluginEnv().stateDir, agentFor("r1")), {
         session: null,
         kind: "submit",
         reason: "collie",
         delivery: held.id,
+        incarnation: landed === "itself" ? held.incarnation : `${held.incarnation}-before`,
       });
     }
     const result = yield* session(
@@ -2721,17 +2722,27 @@ const enteredBehindHeldReminder = (landed: boolean) =>
 test("a reminder held behind an earlier copy that landed settles it and is not parked", () =>
   runEffect(
     Effect.gen(function* () {
-      const { result, now } = yield* enteredBehindHeldReminder(true);
+      const { result, now } = yield* enteredBehindHeldReminder("itself");
       expect(result !== "parked" && result._tag === "Success" && result.success.note).toBe("late");
       expect(now).toMatchObject({ state: "acknowledged" });
       expect(yield* halts("r1")).toEqual([]);
     }),
   ));
 
+test("a reminder held behind a copy that only an earlier incarnation recorded parks as delivery-unsettled", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { result, now } = yield* enteredBehindHeldReminder("otherwise");
+      expect(result).toBe("parked");
+      expect(now).not.toMatchObject({ state: "acknowledged" });
+      expect(yield* controlOf(PARK_CAUSE, "r1")).toBe("delivery-unsettled");
+    }),
+  ));
+
 test("a reminder held behind an earlier copy that never landed parks as delivery-unsettled and claims no Heal", () =>
   runEffect(
     Effect.gen(function* () {
-      const { result, now } = yield* enteredBehindHeldReminder(false);
+      const { result, now } = yield* enteredBehindHeldReminder("no-one");
       expect(result).toBe("parked");
       expect(now).not.toMatchObject({ state: "acknowledged" });
       expect(yield* controlOf(PARK_CAUSE, "r1")).toBe("delivery-unsettled");
@@ -2837,7 +2848,11 @@ const asksTwo = Effect.gen(function* () {
     hostLockOf(rig.pluginEnv().stateDir),
     `{"pid":${process.pid},"start":null}`,
   );
-  yield* recordClaudeEvent(yield* controlDir(rig.pluginEnv().stateDir, agentFor("r1")), askedTwo);
+  yield* recordClaudeEvent(
+    yield* controlDir(rig.pluginEnv().stateDir, agentFor("r1")),
+    askedTwo,
+    null,
+  );
 }).pipe(Effect.orDie);
 
 const questionsOf = (count: number) =>
@@ -2912,6 +2927,94 @@ test("an agent's two questions are open Decisions on its Run, and both answers g
           pollMs: 1000,
         },
       );
+    }),
+  ));
+
+class LostAnswers extends Turns {
+  lost = false;
+  answers = 0;
+  override agentPrompt(...args: Parameters<Herdr["agentPrompt"]>) {
+    if (!pipe(args[1], Str.includes(ANSWERED))) {
+      return super.agentPrompt(...args);
+    }
+    this.answers += 1;
+    if (!this.lost) {
+      return super.agentPrompt(...args);
+    }
+    this.lost = false;
+    return Effect.fail(new HerdrError({ message: "socket closed", detail: "" }));
+  }
+}
+
+const answerDelivery = Effect.gen(function* () {
+  return Arr.findFirst(yield* deliveredTo(dir, "r1"), (one) => one.cause.kind === "steer");
+});
+
+test("an answer whose send result was lost parks as delivery-unsettled naming it, and the human is not asked again", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null]);
+      const herdr = new LostAnswers();
+      const askedNow: Array<Array<string | null>> = [];
+      yield* session(
+        Effect.gen(function* () {
+          yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
+          yield* asksTwo;
+          yield* questionsOf(2);
+          herdr.lost = true;
+          yield* answer("ask-review-1", "SQLite");
+          yield* answer("ask-review-2", "lint");
+          yield* untilParked("r1");
+          const asked = yield* (yield* Store).asked("r1");
+          askedNow.push(...Arr.map(asked, (one) => [one.decision, one.answer]));
+        }),
+        { herdr, collectMs: 600_000, pollMs: 100 },
+      );
+      const lost = Option.getOrThrow(yield* answerDelivery);
+      expect(lost.state).toBe("unknown");
+      expect(yield* controlOf(PARK_CAUSE, "r1")).toBe("delivery-unsettled");
+      expect(yield* controlOf(PARKED, "r1")).toContain(lost.id);
+      expect(askedNow).toEqual([
+        ["ask-review-1", "SQLite"],
+        ["ask-review-2", "lint"],
+      ]);
+      expect(herdr.answers).toBe(1);
+    }),
+  ));
+
+test("an answer whose submit hook recorded it settles and reaches the agent, so the Run is not parked on it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* rig.queueOutputs([null]);
+      const herdr = new LostAnswers();
+      const result = yield* session(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(started("r1"));
+          yield* asksTwo;
+          yield* questionsOf(2);
+          herdr.lost = true;
+          yield* answer("ask-review-1", "SQLite");
+          yield* answer("ask-review-2", "lint");
+          const lost = yield* until(Effect.map(answerDelivery, Option.isSome)).pipe(
+            Effect.andThen(answerDelivery),
+          );
+          yield* writeEvent(yield* controlDir(rig.pluginEnv().stateDir, agentFor("r1")), {
+            session: null,
+            kind: "submit",
+            reason: "collie",
+            delivery: Option.getOrThrow(lost).id,
+            incarnation: Option.getOrThrow(lost).incarnation,
+          });
+          yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"answered"}`);
+          return yield* Fiber.join(fiber);
+        }),
+        { herdr, collectMs: 600_000, pollMs: 100 },
+      );
+      expect(result._tag === "Success" && result.success.note).toBe("answered");
+      expect(yield* controlOf(PARK_CAUSE, "r1")).not.toBe("delivery-unsettled");
+      expect(Option.getOrThrow(yield* answerDelivery).state).toBe("acknowledged");
+      expect(herdr.answers).toBe(1);
     }),
   ));
 
@@ -4065,7 +4168,7 @@ const runsOut = (agent: string, times = 1) =>
     while (!(yield* given)) {
       yield* TestClock.withLive(Effect.sleep("10 millis"));
     }
-    yield* recordClaudeEvent(yield* controlDir(rig.pluginEnv().stateDir, agent), rateLimited);
+    yield* recordClaudeEvent(yield* controlDir(rig.pluginEnv().stateDir, agent), rateLimited, null);
   }).pipe(Effect.orDie);
 
 const closedPanes = (calls: ReadonlyArray<Call>) =>
@@ -4308,6 +4411,7 @@ test("an agent that ran out with nothing to take over, and whose harness then st
               error: "authentication_failed",
               error_details: EXPIRED,
             }),
+            null,
           ).pipe(Effect.orDie);
           yield* until(parkedSays("ran out (rate_limit) before writing"));
           expect(yield* controlOf(PARKED, "r1")).toContain(EXPIRED);
@@ -5082,6 +5186,7 @@ test("a wait across a restart, an answer to its question and an Output repair du
           yield* recordClaudeEvent(
             yield* controlDir(rig.pluginEnv().stateDir, onTicket("build-02-second")),
             askedTwo,
+            null,
           );
           const [first, second] = yield* questionsOf(2);
           yield* answer(first!.decision, "SQLite");
@@ -5179,6 +5284,7 @@ test("a late turn of a ticket's agent after it was stopped changes nothing for t
       yield* recordClaudeEvent(
         yield* controlDir(rig.pluginEnv().stateDir, onTicket("build")),
         rateLimited,
+        null,
       );
       yield* FileSystem.FileSystem.pipe(
         Effect.flatMap((fs) =>
@@ -8805,7 +8911,7 @@ class UnreadyClaude extends Herdr {
 const statusLineCall = (agent: string) =>
   Effect.gen(function* () {
     const dir = yield* controlDir(hostOf().env.stateDir, agent);
-    yield* recordClaudeEvent(dir, encodeJson({ session_id: "s1", context_window: null }));
+    yield* recordClaudeEvent(dir, encodeJson({ session_id: "s1", context_window: null }), null);
   });
 
 const untilStarted = Effect.gen(function* () {
@@ -8893,6 +8999,7 @@ test("a step pointer the harness took is recorded as Collie's, with its delivery
       yield* recordClaudeEvent(
         dir,
         encodeJson({ session_id: "s1", hook_event_name: "UserPromptSubmit", prompt: pointer }),
+        null,
       );
       const events = Arr.map(
         Arr.filter(Str.split(yield* read(`${dir}/events.jsonl`), "\n"), (line) =>

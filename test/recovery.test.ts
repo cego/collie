@@ -34,7 +34,11 @@ import {
   rememberFailedCi,
   rememberNotQuiet,
   rememberStaleHandOver,
+  rememberUnsettled,
 } from "../src/park-recheck";
+import { appendLine } from "../src/steering";
+import { writeEvent } from "../src/compactors";
+import { controlDir } from "../src/compaction";
 import { processOf, startedOf } from "../src/processes";
 import { SURVIVES_HANGUP, paneTree } from "./support/pane-tree";
 
@@ -1214,6 +1218,62 @@ test("a ci-failed park with no failed head recorded stays, saying so", () =>
       error: false,
       note: expect.stringContaining("no failed pipeline recorded"),
     }),
+  ));
+
+test("a delivery-unsettled park clears once the agent's submit hook records the delivery it waits on", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "collie-unsettled-" });
+      yield* appendLine({
+        id: "r1-q-steer-1",
+        at: "2026-11-20T10:00:00Z",
+        run: "r1",
+        incarnation: "term-1",
+        agent: "r1-review",
+        causal_key: "answer-question",
+        request_id: "r1-q-steer",
+        cause: { kind: "steer", ref: "q" },
+        mode: "now",
+        text_hash: "the-answer",
+        intent_version: 0,
+        attempt: 1,
+        state: "unknown",
+      });
+      yield* rememberUnsettled(`${root}/runs/r1`, { terminal: "term-1", delivery: "r1-q-steer-1" });
+      const recheck = () =>
+        recheckPark(
+          {
+            runId: "r1",
+            cwd: root,
+            branch: null,
+            mr: null,
+            park: { cause: "delivery-unsettled", kind: "rechecks" },
+          },
+          root,
+          { agentList: () => Effect.die("a delivery's recheck asks core nothing") },
+        );
+
+      expect(yield* recheck()).toEqual({
+        cleared: false,
+        note: "delivery r1-q-steer-1 is unknown",
+        error: false,
+      });
+
+      yield* writeEvent(yield* controlDir(root, "r1-review"), {
+        session: null,
+        kind: "submit",
+        reason: "collie",
+        delivery: "r1-q-steer-1",
+        incarnation: "term-1",
+      });
+
+      expect(yield* recheck()).toEqual({
+        cleared: true,
+        note: "delivery r1-q-steer-1 is acknowledged",
+        error: false,
+      });
+    }).pipe(Effect.scoped, Effect.provide(forgeHttpOnPath)),
   ));
 
 test("a predecessor-not-quiet park clears once nothing its predecessor left is running, and starts no agent", () =>

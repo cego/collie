@@ -183,9 +183,11 @@ test("an agent's questions are answered from the CLI and the card, and each answ
         const fs = yield* FileSystem.FileSystem;
         const { env, client } = yield* hostedOver(world, core, [null]);
         const { runId, launched } = yield* launchedRun(world, client);
-        yield* recordClaudeEvent(yield* controlDir(world.state, launched.agent), askedTwo).pipe(
-          Effect.orDie,
-        );
+        yield* recordClaudeEvent(
+          yield* controlDir(world.state, launched.agent),
+          askedTwo,
+          null,
+        ).pipe(Effect.orDie);
         yield* until(
           () => client.run({ runId }).pipe(Effect.orDie),
           (view) => (view?.waiting.length ?? 0) === 2,
@@ -222,9 +224,11 @@ test("an agent's questions are answered from the CLI and the card, and each answ
           /From the human, on the board, [^\n]*\.\\nYour question Checks is answered: lint and typecheck/,
         );
 
-        yield* recordClaudeEvent(yield* controlDir(world.state, launched.agent), askedOne).pipe(
-          Effect.orDie,
-        );
+        yield* recordClaudeEvent(
+          yield* controlDir(world.state, launched.agent),
+          askedOne,
+          null,
+        ).pipe(Effect.orDie);
         yield* until(
           () => client.run({ runId }).pipe(Effect.orDie),
           (view) => Arr.some(view?.waiting ?? [], (one) => one.name === "ask-build-3"),
@@ -276,8 +280,10 @@ test("an answer relayed to an agent sets none of its other open questions aside"
         const { env, client } = yield* hostedOver(world, core, [null]);
         const { runId, launched } = yield* launchedRun(world, client);
         const control = yield* controlDir(world.state, launched.agent);
-        yield* recordClaudeEvent(control, askedAlone("toolu_a", "Database")).pipe(Effect.orDie);
-        yield* recordClaudeEvent(control, askedAlone("toolu_b", "Checks")).pipe(Effect.orDie);
+        yield* recordClaudeEvent(control, askedAlone("toolu_a", "Database"), null).pipe(
+          Effect.orDie,
+        );
+        yield* recordClaudeEvent(control, askedAlone("toolu_b", "Checks"), null).pipe(Effect.orDie);
         yield* until(
           () => client.run({ runId }).pipe(Effect.orDie),
           (view) => (view?.waiting.length ?? 0) === 2,
@@ -293,7 +299,7 @@ test("an answer relayed to an agent sets none of its other open questions aside"
           () => fs.readFileString(core.logPath).pipe(Effect.orElseSucceed(() => "")),
           (all) => pipe_(all, Str.includes("Your question Database is answered: first")),
         );
-        yield* recordClaudeEvent(control, askedAlone("toolu_c", "Region")).pipe(Effect.orDie);
+        yield* recordClaudeEvent(control, askedAlone("toolu_c", "Region"), null).pipe(Effect.orDie);
         const view = yield* until(
           () => client.run({ runId }).pipe(Effect.orDie),
           (one) => Arr.some(one?.waiting ?? [], (q) => q.name === "ask-build-3"),
@@ -338,6 +344,7 @@ test("a question from a succeeded Run's agent after a steer is a Choice, and its
         const printed = yield* recordClaudeEvent(
           yield* controlDir(world.state, launched.agent),
           askedOne,
+          null,
         ).pipe(Effect.orDie);
         expect(printed).toContain("on your Run");
 
@@ -396,7 +403,7 @@ test("a yes/no question is repaired once, and the paths the agent asks next reac
         const { runId, launched, dir } = yield* launchedRun(world, client);
 
         const repair = toldBy(
-          yield* recordClaudeEvent(dir, asking("toolu_1", YES_NO)).pipe(Effect.orDie),
+          yield* recordClaudeEvent(dir, asking("toolu_1", YES_NO), null).pipe(Effect.orDie),
         );
         expect(repair.permissionDecision).toBe("deny");
         expect(repair.permissionDecisionReason).toContain(
@@ -407,7 +414,7 @@ test("a yes/no question is repaired once, and the paths the agent asks next reac
         expect(repair.permissionDecisionReason).not.toContain("on your Run");
 
         const posted = toldBy(
-          yield* recordClaudeEvent(dir, asking("toolu_2", PATHS)).pipe(Effect.orDie),
+          yield* recordClaudeEvent(dir, asking("toolu_2", PATHS), null).pipe(Effect.orDie),
         );
         expect(posted.permissionDecisionReason).toContain("on your Run");
         const open = yield* openOf(client, runId);
@@ -486,11 +493,11 @@ test("a question still short after its repair is posted flagged, and a multiSele
         const { runId, dir } = yield* launchedRun(world, client);
 
         const first = toldBy(
-          yield* recordClaudeEvent(dir, asking("toolu_1", YES_NO)).pipe(Effect.orDie),
+          yield* recordClaudeEvent(dir, asking("toolu_1", YES_NO), null).pipe(Effect.orDie),
         );
         expect(first.permissionDecisionReason).not.toContain("on your Run");
         const again = toldBy(
-          yield* recordClaudeEvent(dir, asking("toolu_2", YES_NO)).pipe(Effect.orDie),
+          yield* recordClaudeEvent(dir, asking("toolu_2", YES_NO), null).pipe(Effect.orDie),
         );
         expect(again.permissionDecisionReason).toContain("on your Run");
         expect(yield* openOf(client, runId)).toMatchObject([
@@ -508,6 +515,7 @@ test("a question still short after its repair is posted flagged, and a multiSele
           yield* recordClaudeEvent(
             dir,
             asking("toolu_3", [{ ...PATHS[0], header: "Checks", multiSelect: true }]),
+            null,
           ).pipe(Effect.orDie),
         );
         expect(many.permissionDecision).toBe("deny");
@@ -545,6 +553,7 @@ test("a question an older host posted in words is answered to the agent in those
               multiSelect: false,
             },
           ]),
+          null,
         ).pipe(Effect.orDie);
         yield* openOf(client, runId);
         const answered = yield* collie(world, [

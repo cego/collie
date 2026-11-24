@@ -5140,6 +5140,7 @@ scenario(
             error: "rate_limit",
             transcript_path: "/home/mk/.claude/projects/p/s-out.jsonl",
           }),
+          null,
         );
         const result = yield* Fiber.join(running);
         yield* bin.restore();

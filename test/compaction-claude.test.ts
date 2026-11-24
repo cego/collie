@@ -157,7 +157,7 @@ test("the sample is input plus output, with the cache folded in exactly once", (
   runEffect(
     Effect.gen(function* () {
       // WARNING: 15,500 already contains the cache writes and reads; do not add them again.
-      const line = yield* recordClaudeEvent(dir, measured("s-1", 15_500, 1200, 8));
+      const line = yield* recordClaudeEvent(dir, measured("s-1", 15_500, 1200, 8), null);
 
       expect(yield* claude.usage(ctx())).toBe(16_700);
       expect(line).toBe("context: 8%");
@@ -167,7 +167,7 @@ test("the sample is input plus output, with the cache folded in exactly once", (
 test("no measurement yet is unavailable, not a context of zero tokens", () =>
   runEffect(
     Effect.gen(function* () {
-      const line = yield* recordClaudeEvent(dir, unmeasured("s-1"));
+      const line = yield* recordClaudeEvent(dir, unmeasured("s-1"), null);
 
       expect(yield* claude.usage(ctx())).toBeNull();
       expect(line).toBe("context: not measured yet");
@@ -177,9 +177,9 @@ test("no measurement yet is unavailable, not a context of zero tokens", () =>
 test("a compaction invalidates the sample before it, until the next API call", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* recordClaudeEvent(dir, measured("s-1", 400_000, 1000, 99));
-      yield* recordClaudeEvent(dir, post("s-1", "manual"));
-      yield* recordClaudeEvent(dir, unmeasured("s-1"));
+      yield* recordClaudeEvent(dir, measured("s-1", 400_000, 1000, 99), null);
+      yield* recordClaudeEvent(dir, post("s-1", "manual"), null);
+      yield* recordClaudeEvent(dir, unmeasured("s-1"), null);
 
       expect(yield* claude.usage(ctx())).toBeNull();
     }),
@@ -188,16 +188,16 @@ test("a compaction invalidates the sample before it, until the next API call", (
 test("the marked PreCompact is the start, and the PostCompact after it the success", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* recordClaudeEvent(dir, measured("s-1", 400_000, 1000, 99));
+      yield* recordClaudeEvent(dir, measured("s-1", 400_000, 1000, 99), null);
       yield* claude.request(ctx(), "req-1");
       const instructions = pipe_(prompted[0]!, Str.replace(/^\/compact /, ""));
       expect(prompted[0]).toStartWith("/compact ");
       expect(instructions).toContain("(collie:req-1)");
 
       // WARNING: PostCompact carries no marker, so the next manual completion on the session is what finishes the attempt.
-      yield* recordClaudeEvent(dir, pre("s-1", "manual", instructions));
+      yield* recordClaudeEvent(dir, pre("s-1", "manual", instructions), null);
       expect(yield* claude.poll(ctx(), "req-1")).toBeNull();
-      yield* recordClaudeEvent(dir, post("s-1", "manual"));
+      yield* recordClaudeEvent(dir, post("s-1", "manual"), null);
       expect(yield* claude.poll(ctx(), "req-1")).toEqual({ kind: "success" });
     }),
   ));
@@ -205,9 +205,9 @@ test("the marked PreCompact is the start, and the PostCompact after it the succe
 test("a completion before Collie asked is not the answer to what it asked", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* recordClaudeEvent(dir, post("s-1", "manual"));
+      yield* recordClaudeEvent(dir, post("s-1", "manual"), null);
       yield* claude.request(ctx(), "req-1");
-      yield* recordClaudeEvent(dir, pre("s-1", "manual", `x (collie:req-1)`));
+      yield* recordClaudeEvent(dir, pre("s-1", "manual", `x (collie:req-1)`), null);
 
       expect(yield* claude.poll(ctx(), "req-1")).toBeNull();
     }),
@@ -217,9 +217,9 @@ test("an automatic compaction cannot complete Collie's request", () =>
   runEffect(
     Effect.gen(function* () {
       yield* claude.request(ctx(), "req-1");
-      yield* recordClaudeEvent(dir, pre("s-1", "manual", `x (collie:req-1)`));
-      yield* recordClaudeEvent(dir, pre("s-1", "auto", null));
-      yield* recordClaudeEvent(dir, post("s-1", "auto"));
+      yield* recordClaudeEvent(dir, pre("s-1", "manual", `x (collie:req-1)`), null);
+      yield* recordClaudeEvent(dir, pre("s-1", "auto", null), null);
+      yield* recordClaudeEvent(dir, post("s-1", "auto"), null);
 
       expect(yield* claude.poll(ctx(), "req-1")).toBeNull();
     }),
@@ -229,9 +229,9 @@ test("a human typing /compact in the pane cannot complete it either", () =>
   runEffect(
     Effect.gen(function* () {
       yield* claude.request(ctx(), "req-1");
-      yield* recordClaudeEvent(dir, pre("s-1", "manual", `x (collie:req-1)`));
-      yield* recordClaudeEvent(dir, pre("s-1", "manual", "just tidy it up please"));
-      yield* recordClaudeEvent(dir, post("s-1", "manual"));
+      yield* recordClaudeEvent(dir, pre("s-1", "manual", `x (collie:req-1)`), null);
+      yield* recordClaudeEvent(dir, pre("s-1", "manual", "just tidy it up please"), null);
+      yield* recordClaudeEvent(dir, post("s-1", "manual"), null);
 
       expect(yield* claude.poll(ctx(), "req-1")).toBeNull();
     }),
@@ -240,10 +240,10 @@ test("a human typing /compact in the pane cannot complete it either", () =>
 test("another session's hooks cannot complete it, and rebind what is current", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* recordClaudeEvent(dir, measured("s-1", 400_000, 1000, 99));
+      yield* recordClaudeEvent(dir, measured("s-1", 400_000, 1000, 99), null);
       yield* claude.request(ctx(), "req-1");
-      yield* recordClaudeEvent(dir, pre("s-1", "manual", `x (collie:req-1)`));
-      yield* recordClaudeEvent(dir, post("s-2", "manual"));
+      yield* recordClaudeEvent(dir, pre("s-1", "manual", `x (collie:req-1)`), null);
+      yield* recordClaudeEvent(dir, post("s-2", "manual"), null);
 
       expect(yield* claude.usage(ctx())).toBeNull();
       expect(yield* claude.poll(ctx(), "req-1")).toBeNull();
@@ -254,9 +254,9 @@ test("a duplicate PostCompact says success once, not twice, and never a failure"
   runEffect(
     Effect.gen(function* () {
       yield* claude.request(ctx(), "req-1");
-      yield* recordClaudeEvent(dir, pre("s-1", "manual", `x (collie:req-1)`));
-      yield* recordClaudeEvent(dir, post("s-1", "manual"));
-      yield* recordClaudeEvent(dir, post("s-1", "manual"));
+      yield* recordClaudeEvent(dir, pre("s-1", "manual", `x (collie:req-1)`), null);
+      yield* recordClaudeEvent(dir, post("s-1", "manual"), null);
+      yield* recordClaudeEvent(dir, post("s-1", "manual"), null);
 
       expect(yield* claude.poll(ctx(), "req-1")).toEqual({ kind: "success" });
     }),
@@ -270,29 +270,37 @@ test("a background task finishing is Claude's own turn, not a person typing", ()
         submit(
           "<task-notification>\n<task-id>b11e8rx1q</task-id>\n<status>completed</status>\n</task-notification>",
         ),
+        null,
       );
       yield* recordClaudeEvent(
         dir,
         submit('<agent-message from="reviewer">\nthe review is done\n</agent-message>'),
+        null,
       );
 
       yield* recordClaudeEvent(
         dir,
         submit("<task-notification>\n<summary>grep collie-delivery:run-1-steer-1</summary>"),
+        null,
       );
 
       expect(yield* externalSubmissions(dir)).toBe(0);
-      expect(yield* submittedDelivery(dir, "run-1-steer-1")).toBe(false);
+      expect(yield* submittedDelivery(dir, "run-1-steer-1", null)).toBe(false);
     }),
   ));
 
 test("a submission is Collie's when it carries a delivery token, and a person's otherwise", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* recordClaudeEvent(dir, submit("collie-delivery:run-1-steer-1\nStop and do this."));
-      yield* recordClaudeEvent(dir, submit("wait, use the other branch"));
+      yield* recordClaudeEvent(
+        dir,
+        submit("collie-delivery:run-1-steer-1\nStop and do this."),
+        "term-7",
+      );
+      yield* recordClaudeEvent(dir, submit("wait, use the other branch"), "term-7");
 
-      expect(yield* submittedDelivery(dir, "run-1-steer-1")).toBe(true);
+      expect(yield* submittedDelivery(dir, "run-1-steer-1", "term-7")).toBe(true);
+      expect(yield* submittedDelivery(dir, "run-1-steer-1", "term-2")).toBe(false);
       expect(yield* externalSubmissions(dir)).toBe(1);
       const written = yield* fs.readFileString(path.join(dir, "events.jsonl"));
       expect(written).not.toContain("other branch");
@@ -302,7 +310,7 @@ test("a submission is Collie's when it carries a delivery token, and a person's 
 test("a payload Collie cannot decode records nothing and prints nothing", () =>
   runEffect(
     Effect.gen(function* () {
-      expect(yield* recordClaudeEvent(dir, "not json")).toBe("");
+      expect(yield* recordClaudeEvent(dir, "not json", null)).toBe("");
       expect(yield* claude.usage(ctx())).toBeNull();
     }),
   ));
@@ -359,7 +367,7 @@ test("an AskUserQuestion call is recorded whole for its Run, and denied at once"
   runEffect(
     Effect.gen(function* () {
       yield* hostLive;
-      const printed = yield* recordClaudeEvent(dir, asking("AskUserQuestion", TWO));
+      const printed = yield* recordClaudeEvent(dir, asking("AskUserQuestion", TWO), null);
 
       expect(yield* questionsSince(dir, 0)).toEqual([
         { at: expect.any(Number), session: "s-1", id: "toolu_1", questions: TWO },
@@ -379,12 +387,12 @@ test("an AskUserQuestion call is recorded whole for its Run, and denied at once"
 test("with no live host, a question is left to the agent's pane and never said to be on its Run", () =>
   runEffect(
     Effect.gen(function* () {
-      expect(yield* recordClaudeEvent(dir, asking("AskUserQuestion", TWO))).toBe("");
+      expect(yield* recordClaudeEvent(dir, asking("AskUserQuestion", TWO), null)).toBe("");
       yield* fs.writeFileString(
         path.join(rig.root, "host.lock"),
         encodeJsonText({ pid: 2 ** 22 + 1, start: null }),
       );
-      expect(yield* recordClaudeEvent(dir, asking("AskUserQuestion", TWO))).toBe("");
+      expect(yield* recordClaudeEvent(dir, asking("AskUserQuestion", TWO), null)).toBe("");
       expect(yield* questionsSince(dir, 0)).toEqual([]);
     }),
   ));
@@ -392,9 +400,11 @@ test("with no live host, a question is left to the agent's pane and never said t
 test("another tool, and a question Collie cannot decode, record and print nothing", () =>
   runEffect(
     Effect.gen(function* () {
-      expect(yield* recordClaudeEvent(dir, asking("Bash", TWO))).toBe("");
-      expect(yield* recordClaudeEvent(dir, asking("AskUserQuestion", [{ header: 1 }]))).toBe("");
-      expect(yield* recordClaudeEvent(dir, asking("AskUserQuestion", "which?"))).toBe("");
+      expect(yield* recordClaudeEvent(dir, asking("Bash", TWO), null)).toBe("");
+      expect(yield* recordClaudeEvent(dir, asking("AskUserQuestion", [{ header: 1 }]), null)).toBe(
+        "",
+      );
+      expect(yield* recordClaudeEvent(dir, asking("AskUserQuestion", "which?"), null)).toBe("");
       expect(yield* questionsSince(dir, 0)).toEqual([]);
     }),
   ));
@@ -405,6 +415,7 @@ test("the helpers record identity, usage and outcome — never conversation cont
       yield* recordClaudeEvent(
         dir,
         `{"session_id":"s-1","transcript_path":"/home/mk/.claude/x.jsonl","hook_event_name":"PostCompact","trigger":"manual","compact_summary":"The user asked about their salary."}`,
+        null,
       );
 
       const written = yield* fs.readFileString(path.join(dir, "events.jsonl"));
@@ -507,11 +518,12 @@ test("a status line's rate_limits are the Machine's newest Claude sample, and it
       const agentDir = path.join(stateDir, "compaction", "build-r1");
 
       expect(yield* newestRateLimits(stateDir)).toBeNull();
-      expect(yield* recordClaudeEvent(agentDir, limited(fiveHour(31)))).toBe("context: 8%");
+      expect(yield* recordClaudeEvent(agentDir, limited(fiveHour(31)), null)).toBe("context: 8%");
       yield* TestClock.adjust("1 second");
       yield* recordClaudeEvent(
         path.join(stateDir, "compaction", "review-r1"),
         limited(fiveHour(40)),
+        null,
       );
 
       expect((yield* newestRateLimits(stateDir))?.limits).toEqual(fiveHour(40));
@@ -524,9 +536,9 @@ test("the status-line reader decodes again only the agents whose telemetry chang
       const stateDir = path.join(rig.root, "state");
       const build = path.join(stateDir, "compaction", "build-r1");
       const review = path.join(stateDir, "compaction", "review-r1");
-      yield* recordClaudeEvent(build, limited(fiveHour(31)));
+      yield* recordClaudeEvent(build, limited(fiveHour(31)), null);
       yield* TestClock.adjust("1 second");
-      yield* recordClaudeEvent(review, limited(fiveHour(40)));
+      yield* recordClaudeEvent(review, limited(fiveHour(40)), null);
 
       const fs = yield* FileSystem.FileSystem;
       const decoded: Array<string> = [];
@@ -548,7 +560,7 @@ test("the status-line reader decodes again only the agents whose telemetry chang
       expect(decoded).toEqual([]);
 
       yield* TestClock.adjust("1 second");
-      yield* recordClaudeEvent(build, limited(fiveHour(55)));
+      yield* recordClaudeEvent(build, limited(fiveHour(55)), null);
       expect((yield* read)?.limits).toEqual(fiveHour(55));
       expect(decoded).toEqual(["build-r1"]);
     }).pipe(Effect.provide(TestClock.layer())),
@@ -560,9 +572,9 @@ test("a status line the reader could not read is read again, and its last sample
       const stateDir = path.join(rig.root, "state");
       const build = path.join(stateDir, "compaction", "build-r1");
       const review = path.join(stateDir, "compaction", "review-r1");
-      yield* recordClaudeEvent(build, limited(fiveHour(31)));
+      yield* recordClaudeEvent(build, limited(fiveHour(31)), null);
       yield* TestClock.adjust("1 second");
-      yield* recordClaudeEvent(review, limited(fiveHour(40)));
+      yield* recordClaudeEvent(review, limited(fiveHour(40)), null);
 
       const fs = yield* FileSystem.FileSystem;
       let failReview = true;
@@ -587,7 +599,7 @@ test("a status line the reader could not read is read again, and its last sample
       expect((yield* read)?.limits).toEqual(fiveHour(40));
 
       yield* TestClock.adjust("1 second");
-      yield* recordClaudeEvent(review, limited(fiveHour(60)));
+      yield* recordClaudeEvent(review, limited(fiveHour(60)), null);
       failReview = true;
       expect((yield* read)?.limits).toEqual(fiveHour(40));
       failReview = false;
@@ -599,7 +611,7 @@ test("rate_limits Collie cannot read leave the context line alone", () =>
   runEffect(
     Effect.gen(function* () {
       const payload = limited({ five_hour: { used_percentage: "lots" } });
-      expect(yield* recordClaudeEvent(dir, payload)).toBe("context: 8%");
+      expect(yield* recordClaudeEvent(dir, payload, null)).toBe("context: 8%");
       expect(yield* claude.usage(ctx())).toBe(16_700);
     }),
   ));
@@ -617,8 +629,8 @@ const stopFailure = (error: string, details?: string) =>
 test("a StopFailure on a spent subscription is the agent running out, with its transcript", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* recordClaudeEvent(dir, limited({}));
-      yield* recordClaudeEvent(dir, stopFailure("rate_limit"));
+      yield* recordClaudeEvent(dir, limited({}), null);
+      yield* recordClaudeEvent(dir, stopFailure("rate_limit"), null);
       expect(yield* ranOutSince(dir, 0)).toEqual({
         why: "rate_limit",
         transcript: "/home/mk/.claude/projects/p/s-1.jsonl",
@@ -633,6 +645,7 @@ test("a StopFailure on any other error is its harness stopping, saying its detai
       yield* recordClaudeEvent(
         dir,
         stopFailure("authentication_failed", "OAuth token has expired. Please run /login."),
+        null,
       );
       expect(yield* stoppedSince(dir, 0)).toEqual({
         why: "OAuth token has expired. Please run /login.",
@@ -645,8 +658,8 @@ test("a StopFailure on any other error is its harness stopping, saying its detai
 test("a transient overload is not running out", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* recordClaudeEvent(dir, limited({}));
-      yield* recordClaudeEvent(dir, stopFailure("overloaded"));
+      yield* recordClaudeEvent(dir, limited({}), null);
+      yield* recordClaudeEvent(dir, stopFailure("overloaded"), null);
       expect(yield* ranOutSince(dir, 0)).toBeNull();
       expect(yield* stoppedSince(dir, 0)).toBeNull();
     }),
@@ -655,9 +668,9 @@ test("a transient overload is not running out", () =>
 test("a status line with a window at 100% is the agent running out, saying the window and reset", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* recordClaudeEvent(dir, limited(fiveHour(99)));
+      yield* recordClaudeEvent(dir, limited(fiveHour(99)), null);
       expect(yield* ranOutSince(dir, 0)).toBeNull();
-      yield* recordClaudeEvent(dir, limited(fiveHour(100)));
+      yield* recordClaudeEvent(dir, limited(fiveHour(100)), null);
       expect((yield* ranOutSince(dir, 0))?.why).toMatch(/^session 100%, resets .+ \(in .+\)$/);
     }).pipe(Effect.provide(TestClock.layer())),
   ));
@@ -666,7 +679,7 @@ test("a status line's full window whose reset has passed is not the agent runnin
   runEffect(
     Effect.gen(function* () {
       yield* TestClock.setTime(1_791_457_799 * 1000 + 60_000);
-      yield* recordClaudeEvent(dir, limited(fiveHour(100)));
+      yield* recordClaudeEvent(dir, limited(fiveHour(100)), null);
       expect(yield* ranOutSince(dir, 0)).toBeNull();
     }).pipe(Effect.provide(TestClock.layer())),
   ));
@@ -697,10 +710,11 @@ const lostCompletion = (transcript: (askedIso: string) => string) =>
         attempt: { id: "req-1", run: "run-1", step: "02-ui", deadline: asked + 5 * 60_000, asked },
       }),
     );
-    yield* recordClaudeEvent(control, asJson({ session_id: "s-1", transcript_path: file }));
+    yield* recordClaudeEvent(control, asJson({ session_id: "s-1", transcript_path: file }), null);
     yield* recordClaudeEvent(
       control,
       pre("s-1", "manual", "Keep the work in progress. (collie:req-1)"),
+      null,
     );
     const said: Array<string> = [];
     const deps: CompactionDeps = {

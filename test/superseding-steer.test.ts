@@ -786,6 +786,7 @@ test("a human's message to one agent closes that agent's own question, and anoth
               tool_use_id: `toolu-${agent}`,
               tool_input: { questions: [{ question, header: question, options: PICKS }] },
             }),
+            null,
           ).pipe(Effect.orDie);
         }
         yield* until(
@@ -812,6 +813,7 @@ const typedIn = (at: AtQuestion, prompt: string, agent = at.agent) =>
     yield* recordClaudeEvent(
       yield* controlDir(at.world.state, agent),
       encode({ session_id: "s-1", hook_event_name: "UserPromptSubmit", prompt }),
+      null,
     ).pipe(Effect.orDie);
   });
 
@@ -871,6 +873,7 @@ test("typing into the agent's Claude pane closes its own question, which is not 
             questions: [{ question: "Which database?", header: "Database", options: PICKS }],
           },
         }),
+        null,
       ).pipe(Effect.orDie);
       yield* until(
         () => waitingOf(at),

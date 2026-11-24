@@ -134,6 +134,8 @@ const EventSchema = Schema.Struct({
   tokens: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
   request: Schema.optionalKey(Schema.String),
   delivery: Schema.optionalKey(Schema.String),
+  // WARNING: the terminal that wrote the event: an agent's name outlives the process it named.
+  incarnation: Schema.optionalKey(Schema.NullOr(Schema.String)),
   message: Schema.optionalKey(Schema.String),
   reason: Schema.optionalKey(Schema.String),
   // WARNING: Claude's PostCompact carries no marker, so a completion is told from its start by position.
@@ -823,6 +825,7 @@ function claudeInstructions(requestId: string) {
 export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(function* (
   dir: string,
   stdin: string,
+  incarnation: string | null,
 ) {
   const decoded = decodeClaudePayload(stdin);
   if (decoded._tag === "None") {
@@ -847,7 +850,7 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
         ? { session, kind: "submit", reason: "harness" }
         : delivery === null
           ? { session, kind: "submit", reason: "external" }
-          : { session, kind: "submit", reason: "collie", delivery },
+          : { session, kind: "submit", reason: "collie", delivery, incarnation },
     );
     return "";
   }
@@ -1820,9 +1823,11 @@ export const externalSubmits = Effect.fn("Compactors.externalSubmits")(function*
 export const submittedDelivery = Effect.fn("Compactors.submittedDelivery")(function* (
   dir: string,
   delivery: string,
+  incarnation: string | null,
 ) {
   return Arr.some(
     yield* readEvents(dir),
-    (event) => event.kind === "submit" && event.delivery === delivery,
+    (event) =>
+      event.kind === "submit" && event.delivery === delivery && event.incarnation === incarnation,
   );
 });

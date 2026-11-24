@@ -1015,10 +1015,11 @@ A park whose cause rechecks can resume automatically. The host checks for the na
 at the parked head, an answering forge, core listing its agents as a launch asks it to, a
 clean Collie checkout, a delivery that has settled, or, for `predecessor-not-quiet`, that
 nothing the agent a Fallback replaces left is still running, or, for `hand-over-stale`, that
-the checkout's head and plan revision held still since they were last read. `delivery-unsettled` is set when an
-Output reminder is held behind an earlier copy of itself whose fate nobody knows: the host
-first settles that copy as sent where the agent's own submit record shows it landed, and
-checks once more after a poll, and only then parks. It never gets a Heal. Rechecks start
+the checkout's head and plan revision held still since they were last read. `delivery-unsettled` is set when a delivery Collie could not
+confirm landed holds the Run's next step or the answers to its question: the host first
+settles that delivery as sent where the agent's own submit record names it, from the
+incarnation it was sent to, and checks once more after a poll, and only then parks. Its
+recheck settles it the same way, so evidence that arrives later still clears the park. It never gets a Heal. Rechecks start
 after one minute and double up to one hour. Host startup, a peer reconnecting, or a matching
 forge or pipeline update resets that wait to one minute. A forge that answered rate limited
 with a reset time, to a recheck or to the host's own read of the merge request, is not asked

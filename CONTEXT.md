@@ -280,8 +280,9 @@ gate. No action kind confirms anything, so a Proposal can never contain its own.
 **Delivery** — One message to one live agent incarnation, with states `queued` (a boundary
 delivery an older Collie held for the agent's next prompt), `reserved`, `deferred` (core answered that the
 pane cannot take it yet, so it is tried again under the same id), `submitted` (sent),
-`acknowledged` (the agent took a turn after it) and the terminal `failed` and `superseded`;
-`unknown` blocks the same work until a human settles it. They are separate because they are
+`acknowledged` (the agent took a turn after it, or its own submit hook recorded this
+delivery from the incarnation it went to) and the terminal `failed` and `superseded`;
+`unknown` blocks the same work until that same evidence settles it, or a human does. They are separate because they are
 separate facts, and whether the work then went where it was told is the drift judgement's.
 A `deliver` with no mode is `now`. One that names no agent reaches **the agent at work**:
 the agent whose step is active, else the Run's builder (its implementer); `to` names a role

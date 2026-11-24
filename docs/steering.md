@@ -125,7 +125,7 @@ Dispatcher:
 | `reserved`     | Written **before** core was called. A crash here leaves this.                                                                                           |
 | `deferred`     | Core answered that the terminal cannot take a prompt yet, with a code that says it clears by itself. Nothing was delivered; the same id is tried again. |
 | `submitted`    | Sent: core submitted it to the terminal. Not: the agent read it.                                                                                        |
-| `acknowledged` | The agent took a turn after it: core saw one start, or Claude's prompt-submit hook recorded the delivery's token.                                       |
+| `acknowledged` | The agent took a turn after it: core saw one start, or Claude's prompt-submit hook recorded the delivery's token, from the incarnation it was sent to.  |
 
 [PRODUCT.md](../PRODUCT.md) names three facts: a message sent, an instruction acknowledged
 and an outcome verified. Sent is `submitted`. Acknowledged is `acknowledged`, a turn taken
@@ -143,7 +143,14 @@ ignored look the same from here, and the note is what tells a later reader that.
 
 The terminal states are `failed` (core refused) and `superseded` (a human reconciled it).
 `unknown` (core never answered, so nobody can say) blocks further deliveries about the
-same work until a human reconciles it, and Collie never retries out of it on its own.
+same work. It does not expire, and Collie never retries out of it on its own; it is settled
+by evidence instead. That evidence names both the delivery and the incarnation it went to:
+the agent's own prompt-submit hook recorded that delivery id, written from that terminal. A
+record of the same id from another incarnation of the agent's name, a record naming another
+delivery, and no record at all leave it `unknown`, and nothing is sent again. Every path
+that meets an `unknown` settles it the same way — the Output reminder held behind an earlier
+copy, the next delivery to that agent, and the recheck of a Run parked `delivery-unsettled` —
+and a human settles it the rest of the way with `--reconcile`.
 A step's prompt or repair left `unobserved` with nothing to show it was taken parks its
 Run the same way, and is reconciled the same way; `not-sent` has the resume send it again.
 

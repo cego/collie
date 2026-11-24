@@ -286,6 +286,7 @@ test("one pass over the human's messages reads its Runs' questions once, however
                 hook_event_name: "UserPromptSubmit",
                 prompt: `Over to you, ${agent}`,
               }).pipe(Effect.orDie),
+              null,
             ).pipe(Effect.provideService(Clock.Clock, submitted));
             yield* submitted.adjust(1);
           }

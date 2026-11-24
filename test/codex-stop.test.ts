@@ -898,6 +898,7 @@ const runsOut = Effect.gen(function* () {
       error: "rate_limit",
       transcript_path: "/tmp/s-out.jsonl",
     }),
+    null,
   );
 }).pipe(Effect.orDie);
 

@@ -221,7 +221,6 @@ import { Collecting, collectingLayer } from "./collecting";
 import type { CollectingApi } from "./collecting";
 import { holdsBudgetOf, waitForMemory } from "./memory-wait";
 import {
-  appendLine,
   causalKey,
   deliveriesAbout,
   deliveriesOf,
@@ -1982,6 +1981,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
   const personaOf = (role: string) => personaText(host.env, role);
 
   const openQuestions = new Map<string, Set<string>>();
+  const unsettledAnswers = new Map<string, { terminal: string; delivery: string }>();
   const deps: dispatch.DispatcherDeps = {
     stateDir: host.env.stateDir,
     herdr: host.herdr,
@@ -2199,7 +2199,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       gone: inactive(outcome.detail),
       blockedBy:
         outcome.reason === "blocked" && outcome.id != null && terminal !== undefined
-          ? { terminal, delivery: outcome.id }
+          ? { terminal, delivery: outcome.id, state: outcome.held ?? null }
           : undefined,
     };
   });
@@ -2218,8 +2218,8 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           herdr,
           log: (line) => log(about.runId, line),
           taken: (delivery) =>
-            submittedDelivery(dir, delivery.id).pipe(
-              Effect.map((recorded) => (recorded ? "its submit hook recorded it" : null)),
+            submittedDelivery(dir, delivery.id, delivery.incarnation).pipe(
+              Effect.map((recorded) => (recorded ? dispatch.SUBMIT_RECORDED : null)),
               Effect.orElseSucceed(() => null),
             ),
           pollMs: host.pollMs ?? DEFAULT_POLL_MS,
@@ -3081,8 +3081,8 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           herdr: host.herdr,
           log: (line) => log(launched.runId, line),
           taken: (delivery) =>
-            submittedDelivery(dir, delivery.id).pipe(
-              Effect.map((recorded) => (recorded ? "its submit hook recorded it" : null)),
+            submittedDelivery(dir, delivery.id, delivery.incarnation).pipe(
+              Effect.map((recorded) => (recorded ? dispatch.SUBMIT_RECORDED : null)),
               Effect.orElseSucceed(() => null),
             ),
           pollMs: host.pollMs ?? DEFAULT_POLL_MS,
@@ -3235,6 +3235,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             }
             fencedCalls.delete(key);
             let sentAll = true;
+            let unsure = false;
             const label = (at: number) =>
               call.questions[at]?.header || call.questions[at]?.question || names[at];
             const answered = (at: number) => answerTitle(given[at]);
@@ -3258,6 +3259,10 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               if (!sent.sent) {
                 sentAll = false;
               }
+              if (sent.blockedBy?.state === "unknown") {
+                unsure = true;
+                unsettledAnswers.set(launched.agent, sent.blockedBy);
+              }
               if (sent.refused) {
                 answeredCalls.add(key);
                 yield* log(
@@ -3275,8 +3280,10 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             }
             if (sentAll) {
               answeredCalls.add(key);
+              unsettledAnswers.delete(launched.agent);
             }
-            holds(!answeredCalls.has(key));
+            // WARNING: an answer nobody could confirm landed is the Delivery's problem; holding the question would hide it.
+            holds(!answeredCalls.has(key) && !unsure);
           }
           return open;
         }).pipe(
@@ -3550,21 +3557,13 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
 
   const settledNow = (launched: Launched, held: { terminal: string; delivery: string }) =>
     Effect.gen(function* () {
-      const lines = yield* readLedger(held.terminal);
-      const now = newestById(lines).get(held.delivery);
+      const now = newestById(yield* readLedger(held.terminal)).get(held.delivery);
       if (now === undefined || isSettledDelivery(now)) {
         return true;
       }
-      const dir = yield* controlDir(host.env.stateDir, launched.agent);
-      if (!(yield* submittedDelivery(dir, held.delivery).pipe(Effect.orElseSucceed(() => false)))) {
+      if (!(yield* dispatch.settleFromSubmit(host.env.stateDir, now))) {
         return false;
       }
-      yield* appendLine({
-        ...now,
-        at: yield* nowIso,
-        state: "acknowledged",
-        note: "taken: its submit hook recorded it",
-      });
       yield* log(
         launched.runId,
         `${launched.agent}: ${held.delivery} had landed; settled it as sent`,
@@ -3572,9 +3571,34 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       return true;
     });
 
+  const unsettledDelivery = (
+    launched: Launched,
+    held: { terminal: string; delivery: string },
+    what: string,
+  ) =>
+    Effect.gen(function* () {
+      yield* rememberUnsettled(`${host.dir}/runs/${launched.runId}`, held);
+      return yield* new AgentParked({
+        operation: launched.operation,
+        reason: `${launched.agent} could not ${what}: delivery ${held.delivery} has not settled. Collie rechecks it; \`collie run deliveries ${launched.runId} --reconcile ${held.delivery} --as sent|not-sent\` settles it now.`,
+        cause: "delivery-unsettled",
+      });
+    });
+
   const remind = (launched: Launched, ordinal: number) =>
     under(
       Effect.gen(function* () {
+        const unsure = unsettledAnswers.get(launched.agent);
+        if (unsure !== undefined) {
+          if (!(yield* settledNow(launched, unsure))) {
+            return yield* unsettledDelivery(
+              launched,
+              unsure,
+              "be sent the answers to its question",
+            );
+          }
+          unsettledAnswers.delete(launched.agent);
+        }
         const sent = yield* deliver(launched, reminderText(launched.output), {
           kind: "repair",
           ref: `${stemOf(launched)}.remind-${ordinal}`,
@@ -3587,12 +3611,11 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               Effect.andThen(settledNow(launched, held)),
             ));
           if (!settled) {
-            yield* rememberUnsettled(`${host.dir}/runs/${launched.runId}`, held);
-            return yield* new AgentParked({
-              operation: launched.operation,
-              reason: `${launched.agent} could not be reminded to write ${launched.operation}.json: delivery ${held.delivery} has not settled. Collie rechecks it; \`collie run deliveries ${launched.runId} --reconcile ${held.delivery} --as sent|not-sent\` settles it now.`,
-              cause: "delivery-unsettled",
-            });
+            return yield* unsettledDelivery(
+              launched,
+              held,
+              `be reminded to write ${launched.operation}.json`,
+            );
           }
         }
         const wasSent = sent.sent || held !== undefined;

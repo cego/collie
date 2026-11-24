@@ -98,7 +98,7 @@ test("a human's message closes the agent's own question: nothing asks it again, 
           (lines) =>
             Arr.some(lines, (one) => one.cause.kind === "step" && SENT_STATES.has(one.state)),
         );
-        yield* recordClaudeEvent(yield* controlDir(world.state, launched.agent), asked).pipe(
+        yield* recordClaudeEvent(yield* controlDir(world.state, launched.agent), asked, null).pipe(
           Effect.orDie,
         );
         const waiting = () =>

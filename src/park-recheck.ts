@@ -13,6 +13,7 @@ import { parkText } from "./park-cause";
 import type { ParkCause } from "./park-cause";
 import { readStepLines } from "./steps";
 import { isSettledDelivery, newestById, readLedger } from "./steering";
+import { settleFromSubmit } from "./dispatcher";
 import { keptFor, readControl } from "./compaction";
 import { stillRunning } from "./processes";
 import { planRevision } from "./hand-over";
@@ -327,6 +328,10 @@ export const recheckPark = (
         const held = yield* lastUnsettled(`${stateDir}/runs/${view.runId}`);
         if (held === undefined) {
           return reply(false, "no unsettled delivery recorded");
+        }
+        const before = newestById(yield* readLedger(held.terminal)).get(held.delivery);
+        if (before !== undefined && !isSettledDelivery(before)) {
+          yield* settleFromSubmit(stateDir, before);
         }
         const now = newestById(yield* readLedger(held.terminal)).get(held.delivery);
         return now === undefined || !isSettledDelivery(now)

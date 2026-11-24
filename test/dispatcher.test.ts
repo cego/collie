@@ -14,6 +14,7 @@ import {
   interrupt,
   transaction,
   MAX_DELIVERY_BYTES,
+  SUBMIT_TIMEOUT_MS,
   submitPatiently,
   marked,
   carriedDelivery,
@@ -23,6 +24,9 @@ import {
   DELIVERY_TOKEN,
 } from "../src/dispatcher";
 import { appendLine, causalKey, readLedger } from "../src/steering";
+import { writeEvent } from "../src/compactors";
+import { controlDir } from "../src/compaction";
+import { isoAt } from "../src/time";
 import type { Delivery } from "../src/steering";
 import type { Records } from "../src/records";
 import { reason } from "../src/naming";
@@ -505,6 +509,133 @@ test("the same work is not sent twice while the first attempt is unsettled", () 
       expect(again).toMatchObject({ ok: false, reason: "blocked" });
       expect(Arr.some(h.calls, (c) => pipe_(c, Str.startsWith("agentPrompt")))).toBe(false);
       expect(yield* states()).not.toContain("req-9-1 reserved");
+    }),
+  ));
+
+const answerDraft = {
+  ...draft,
+  cause: { kind: "steer" as const, ref: "ask-review-1" },
+  requestId: "answer-1",
+};
+
+const answerKey = causalKey(answerDraft.run, answerDraft.cause, answerDraft.intentVersion);
+
+const answerLine = (state: "reserved" | "unknown", at: string) =>
+  appendLine({
+    id: "answer-1-1",
+    at,
+    run: answerDraft.run,
+    incarnation: "term-1",
+    agent: entry.agent,
+    causal_key: answerKey,
+    request_id: answerDraft.requestId,
+    cause: answerDraft.cause,
+    mode: answerDraft.mode,
+    text_hash: "answer-text",
+    intent_version: answerDraft.intentVersion,
+    attempt: 1,
+    state,
+  });
+
+const recordedSubmit = (delivery: string, incarnation: string) =>
+  Effect.flatMap(controlDir(stateDir, entry.agent), (dir) =>
+    writeEvent(dir, { session: null, kind: "submit", reason: "collie", delivery, incarnation }),
+  );
+
+const answerNow = Effect.fn("test.answerNow")(function* () {
+  return Option.getOrThrow(Arr.findLast(yield* ledgerLines(), (line) => line.id === "answer-1-1"));
+});
+
+const nudge = { ...draft, cause: { kind: "nudge" as const, ref: "n-1" }, requestId: "n-1" };
+
+test("a lost send result settles as acknowledged when the agent's submit hook recorded that delivery from the incarnation it went to", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* answerLine(
+        "reserved",
+        isoAt((yield* Clock.currentTimeMillis) - SUBMIT_TIMEOUT_MS - 1000),
+      );
+      yield* recordedSubmit("answer-1-1", "term-1");
+
+      const h = fake();
+      const follow = yield* transaction(h.deps, entry, (channel) =>
+        channel.submit("carry on", nudge),
+      );
+
+      expect(follow).toMatchObject({ ok: true });
+      expect(prompted(h.calls)).toBe(1);
+      expect(yield* answerNow()).toMatchObject({
+        state: "acknowledged",
+        note: "taken: its submit hook recorded it",
+      });
+      expect(yield* states()).not.toContain("answer-1-1 unknown");
+    }),
+  ));
+
+test("a delivery already unknown settles once its submit hook records it, and a restarted host settles it as it reaches the agent again", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* answerLine("unknown", isoAt(yield* Clock.currentTimeMillis));
+
+      const before = fake();
+      const held = yield* transaction(before.deps, entry, (channel) =>
+        channel.submit("the answer", { ...answerDraft, requestId: "answer-2" }),
+      );
+      expect(held).toMatchObject({ ok: false, reason: "blocked", held: "unknown" });
+      expect(prompted(before.calls)).toBe(0);
+
+      yield* recordedSubmit("answer-1-1", "term-1");
+
+      const restarted = fake();
+      const again = yield* transaction(restarted.deps, entry, (channel) =>
+        channel.submit("the answer", { ...answerDraft, requestId: "answer-2" }),
+      );
+
+      expect(again).toMatchObject({ ok: false, reason: "blocked", held: "acknowledged" });
+      expect(prompted(restarted.calls)).toBe(0);
+      expect(yield* answerNow()).toMatchObject({
+        state: "acknowledged",
+        note: "taken: its submit hook recorded it",
+      });
+    }),
+  ));
+
+test.each([
+  ["another incarnation's record", "answer-1-1", "term-2"],
+  ["another delivery's record", "answer-9-1", "term-1"],
+] as const)(
+  "%s leaves an unknown delivery unknown, and nothing is resent",
+  (_case, delivery, incarnation) =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* answerLine("unknown", isoAt(yield* Clock.currentTimeMillis));
+        yield* recordedSubmit(delivery, incarnation);
+
+        const h = fake();
+        const again = yield* transaction(h.deps, entry, (channel) =>
+          channel.submit("the answer", { ...answerDraft, requestId: "answer-2" }),
+        );
+
+        expect(again).toMatchObject({ ok: false, reason: "blocked", held: "unknown" });
+        expect(prompted(h.calls)).toBe(0);
+        expect(yield* answerNow()).toMatchObject({ state: "unknown" });
+      }),
+    ),
+);
+
+test("no submit record at all leaves an unknown delivery unknown, and nothing is resent", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* answerLine("unknown", isoAt(yield* Clock.currentTimeMillis));
+
+      const h = fake();
+      const again = yield* transaction(h.deps, entry, (channel) =>
+        channel.submit("the answer", { ...answerDraft, requestId: "answer-2" }),
+      );
+
+      expect(again).toMatchObject({ ok: false, reason: "blocked", held: "unknown" });
+      expect(prompted(h.calls)).toBe(0);
+      expect(yield* answerNow()).toMatchObject({ state: "unknown" });
     }),
   ));
 

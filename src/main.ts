@@ -1,5 +1,5 @@
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
-import { Config, Console, Effect } from "effect";
+import { Config, Console, Effect, Option } from "effect";
 
 // WARNING: Bun.argv, not Stdio's args: this choice is made before any Effect runs.
 const args = Bun.argv.slice(2);
@@ -10,7 +10,10 @@ const compactionProgram = Effect.gen(function* () {
   const [stdin, { recordClaudeEvent }] = yield* Effect.promise(() =>
     Promise.all([Bun.stdin.text(), import("./compactors")]),
   );
-  const line = yield* recordClaudeEvent(dir, stdin).pipe(Effect.orElseSucceed(() => ""));
+  const incarnation = Option.getOrNull(yield* Config.option(Config.String("HC_TERMINAL_ID")));
+  const line = yield* recordClaudeEvent(dir, stdin, incarnation).pipe(
+    Effect.orElseSucceed(() => ""),
+  );
   if (line !== "") {
     yield* Console.log(line);
   }
