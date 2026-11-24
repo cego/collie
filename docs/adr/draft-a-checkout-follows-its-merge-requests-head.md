@@ -31,19 +31,24 @@ The commit is not lost: the forge carried it. Published means either of these:
 
 - origin's remote-tracking branch for this branch has carried that commit — the commit is
   one of that ref's reflog entries, or one of their ancestors — or origin still has the
-  branch and that ref carries the checkout's own head, however far past it the forge has
-  since moved the branch. "Origin still has the branch" is asked of origin
-  (`git ls-remote`), never of the tracking ref, because a fetch refspec can leave a ref
-  behind that `--prune` does not reach;
+  branch and carries the checkout's own head, however far past it the forge has since
+  moved the branch. Both questions are asked of origin (`git ls-remote`, whose answer is
+  the tip ancestry is tested against), never of the tracking ref, because a fetch refspec
+  can leave behind a ref that `--prune` does not reach and that a force push has since
+  passed;
 - this Run recorded it as a head earlier, journaled in the Run's own `heads.jsonl`, which
   covers a reflog that was expired or a ref fetched fresh.
 
 A move that would write over a file the checkout keeps out of git — an ignored file at a
 path the new head tracks, in either direction — is refused instead, naming those files
 under `branch-force-pushed`, before either a reset or a fast-forward runs: `git status`
-does not show them, and both git commands overwrite them. Whether the checkout is dirty is
-read with `--untracked-files=all`, since a person's `status.showUntrackedFiles` would
-otherwise hide a file a reset goes on to replace.
+does not show them, and both git commands overwrite them. That guard is asked only where
+Git would actually move the checkout, since a checkout already carrying a published head
+answers `At` and writes nothing. Whether the checkout is dirty is read with
+`--untracked-files=all`, since a person's `status.showUntrackedFiles` would otherwise hide
+a file a reset goes on to replace; and an entry marked `--assume-unchanged` is compared
+with its index blob by content, because `status` cannot see an edit to one either, while a
+`--skip-worktree` entry is left alone: it is what a sparse checkout is made of.
 
 **D3. A checkout holding commits that were never published is not reset.** The refusal
 names every commit at risk that origin never carried, by short sha and subject, and carries

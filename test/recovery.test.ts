@@ -1378,6 +1378,48 @@ test("a ci-failed park with no failed head recorded stays, saying so", () =>
     }),
   ));
 
+test("a checkout park does not clear on a tracked edit git status was told to hide", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const outer = yield* fs.makeTempDirectoryScoped({ prefix: "collie-hidden-edit-" });
+      const root = `${outer}/checkout`;
+      yield* fs.makeDirectory(root, { recursive: true });
+      const git = (...args: Array<string>) => exec(["git", ...args], { cwd: root });
+      const commit = (...args: Array<string>) =>
+        git("-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-qm", ...args);
+      yield* git("init", "-q", "-b", "main");
+      yield* commit("initial", "--allow-empty");
+      yield* fs.writeFileString(`${root}/one.ts`, "one\n");
+      yield* git("add", "one.ts");
+      yield* commit("one");
+      const origin = `${outer}/origin.git`;
+      yield* git("init", "-q", "--bare", origin);
+      yield* git("remote", "add", "origin", origin);
+      yield* git("push", "-q", "origin", "HEAD:refs/heads/main");
+      yield* git("update-index", "--assume-unchanged", "one.ts");
+      yield* fs.writeFileString(`${root}/one.ts`, "edited\n");
+      const said = yield* recheckPark(
+        {
+          runId: "r1",
+          cwd: root,
+          branch: "main",
+          mr: null,
+          park: { cause: "checkout-dirty-collie", kind: "rechecks" },
+        },
+        root,
+        { agentList: () => Effect.die("a checkout recheck must not ask core") },
+      );
+      expect(said).toMatchObject({ cleared: false });
+      expect(said.note).toContain("one.ts");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        fakeForge("gitlab", { installed: true, loggedIn: [], login: "me", mrs: [] }).layer,
+      ),
+    ),
+  ));
+
 test("a predecessor-not-quiet park clears once nothing its predecessor left is running, and starts no agent", () =>
   runEffect(
     Effect.gen(function* () {

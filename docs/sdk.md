@@ -1051,15 +1051,19 @@ answers `At` with the `head` and where it moved `from`:
   says `moved the checkout from <from> to <head>, which origin's <branch> no longer
   carries`. Published means origin's remote-tracking branch carried it — it is one of that
   ref's reflog entries or an ancestor of one — or the Run recorded it in its own
-  `heads.jsonl`, which survives an expired reflog or a fresh fetch.
+  `heads.jsonl`, which survives an expired reflog or a fresh fetch. Whether origin still
+  carries the checkout's own head is asked of origin (`git ls-remote`, ancestry against the
+  tip it answers with), never of a remote-tracking ref, which a narrowed fetch refspec can
+  leave stale.
 
 Otherwise it answers `Refused` with a `why` and a park `cause`, naming what it protects:
 `checkout-dirty-collie` for a checkout Collie made and `checkout-dirty-human` for one it
 did not, each naming the changed files — an untracked one its own `status` configuration
-hides among them — or the unpushed commits; `branch-force-pushed` for a checkout holding
+hides among them, and a tracked one edited behind `--assume-unchanged`, which `status`
+cannot see either — or the unpushed commits; `branch-force-pushed` for a checkout holding
 commits origin never carried, naming every one by short sha and subject, and for a move
-that would overwrite a file the checkout keeps out of git, on a reset or a fast-forward
-alike; and
+that would overwrite a file the checkout keeps out of git, asked only where Git would
+actually move the checkout, and on a reset or a fast-forward alike; and
 `release-failed` for a wrong branch, an unreadable checkout, an unreadable origin, a head
 origin lacks or a failed merge. Nothing is reset or discarded while anything at risk is
 unpublished. With optional `branch`, it refuses a detached checkout or a different source

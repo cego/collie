@@ -55,6 +55,7 @@ import * as WorkflowModules from "effect/workflow";
 import * as ProcessModules from "effect/process";
 import * as CryptoModules from "effect/crypto";
 import * as EffectRoot from "effect";
+import { waitForAgents } from "./agent-wait";
 import * as AgentsSdk from "./agents";
 import { HOLD, STOP, controlOf, controlSet } from "./controls";
 import manifest from "../package.json";
@@ -4477,53 +4478,34 @@ export const hostLayer: (options: {
             return "clear" as const;
           }
           const { herdr } = yield* placing;
-          const deadline =
-            (yield* Clock.currentTimeMillis) +
-            Duration.toMillis(options.collectMs ?? Duration.minutes(120));
-          let told = false;
-          for (;;) {
-            const listing = Effect.gen(function* () {
-              const left = Math.max(0, deadline - (yield* Clock.currentTimeMillis));
-              const read = yield* herdr
-                .agentList()
-                .pipe(
-                  Effect.provideContext(bun),
-                  Effect.timeoutOption(Math.min(AGENT_LIST_BUDGET, left)),
-                );
-              return Option.getOrNull(read);
-            }).pipe(Effect.result, Effect.map(Result.getOrNull));
-            const listed = yield* Effect.raceFirst(
-              listing.pipe(Effect.asSome),
-              untilStopped(runId).pipe(Effect.as(Option.none<ReadonlyArray<AgentInfo> | null>())),
-            );
-            if (Option.isNone(listed) || (yield* set(STOP, runId))) {
-              return "stopped" as const;
-            }
-            const roster = listed.value;
-            const busy =
-              roster === null ? mine : Arr.filter(mine, (one) => workingIn(one, roster, cwd));
-            if (roster !== null && busy.length === 0) {
-              return "clear" as const;
-            }
-            if (!told) {
-              told = true;
-              yield* under(
+          return yield* waitForAgents({
+            budget: Duration.toMillis(options.collectMs ?? Duration.minutes(120)),
+            poll: AGENT_WAIT_POLL,
+            rosterBudget: AGENT_LIST_BUDGET,
+            working: herdr.agentList().pipe(
+              Effect.provideContext(bun),
+              Effect.map((roster) =>
+                Arr.map(
+                  Arr.filter(mine, (one) => workingIn(one, roster, cwd)),
+                  (one) => one.agent,
+                ),
+              ),
+              Effect.orElseSucceed(() => null),
+            ),
+            stopped: set(STOP, runId),
+            tell: (names, unknown) =>
+              under(
                 appendLog(
                   runDir(dir, runId),
                   `waiting for ${Arr.join(
-                    Arr.map(roster === null ? mine : busy, (one) => one.agent),
+                    unknown ? Arr.map(mine, (one) => one.agent) : names,
                     ", ",
                   )} to stop working in ${cwd}${
-                    roster === null ? `, where core cannot list its agents yet` : ""
+                    unknown ? `, where core cannot list its agents yet` : ""
                   }`,
                 ),
-              );
-            }
-            if ((yield* Clock.currentTimeMillis) >= deadline) {
-              return "overrun" as const;
-            }
-            yield* Effect.sleep(AGENT_WAIT_POLL);
-          }
+              ).pipe(Effect.orDie),
+          });
         });
       const madeByCollie = (cwd: string) =>
         Effect.gen(function* () {
@@ -7580,7 +7562,7 @@ const reviewFacts = <R>(
     };
   });
 
-const AGENT_WAIT_POLL = Duration.millis(100);
+const AGENT_WAIT_POLL = 100;
 
 // WARNING: core answers a terminal.list with no deadline of its own, so a silent socket must not hold the wait.
 const AGENT_LIST_BUDGET = 10_000;

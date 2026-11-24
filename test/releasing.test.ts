@@ -457,6 +457,89 @@ test("a branch origin no longer has is not read from a remote-tracking ref the f
     }).pipe(Effect.scoped),
   ));
 
+test("a checkout is not read as published from a remote-tracking ref the forge has pushed back", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { fs, root, cwd, first } = yield* repository;
+      yield* fs.writeFileString(`${cwd}/two.ts`, "two");
+      yield* git(cwd, "add", "two.ts");
+      yield* git(cwd, "commit", "-q", "-m", "two.ts");
+      yield* git(cwd, "push", "-q", "origin", "HEAD:refs/heads/main");
+      const carried = yield* git(cwd, "rev-parse", "HEAD");
+      yield* git(
+        cwd,
+        "config",
+        "remote.origin.fetch",
+        "+refs/heads/other:refs/remotes/origin/other",
+      );
+      yield* git(cwd, "push", "-q", "origin", "HEAD:refs/heads/other");
+      yield* git(root, "--git-dir", `${root}/origin.git`, "update-ref", "refs/heads/main", first);
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: first,
+        run: runner(),
+      });
+      expect(moved._tag).toBe("Refused");
+      if (moved._tag === "Refused") {
+        expect(moved.cause).toBe("checkout-dirty-human");
+        expect(moved.why).toContain("ahead of origin's main");
+      }
+      expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(carried);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a checkout that would not move is not refused for a file only the older head tracks", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { fs, root, cwd, first } = yield* repository;
+      yield* fs.writeFileString(`${cwd}/settings`, "the checked-in one");
+      yield* git(cwd, "add", "settings");
+      yield* git(cwd, "commit", "-q", "-m", "settings");
+      yield* git(cwd, "push", "-q", "origin", "HEAD:refs/heads/main");
+      const older = yield* git(cwd, "rev-parse", "HEAD");
+      yield* git(cwd, "rm", "-q", "--cached", "settings");
+      yield* fs.writeFileString(`${cwd}/.gitignore`, "settings\n");
+      yield* git(cwd, "add", ".gitignore");
+      yield* git(cwd, "commit", "-q", "-m", "keep settings out of git");
+      yield* git(cwd, "push", "-q", "origin", "HEAD:refs/heads/main");
+      const carried = yield* git(cwd, "rev-parse", "HEAD");
+      expect(carried).not.toBe(first);
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: older,
+        run: runner(),
+      });
+      expect(moved._tag).toBe("At");
+      if (moved._tag === "At") {
+        expect(moved.head).toBe(carried);
+      }
+      expect(yield* fs.readFileString(`${cwd}/settings`)).toBe("the checked-in one");
+    }).pipe(Effect.scoped),
+  ));
+
+test("a tracked edit git status was told to hide is refused, not read as the head", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { fs, root, cwd, first } = yield* repository;
+      yield* git(cwd, "update-index", "--assume-unchanged", "one.ts");
+      yield* fs.writeFileString(`${cwd}/one.ts`, "an edit git was told to forget");
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: first,
+        run: runner(),
+      });
+      expect(moved._tag).toBe("Refused");
+      if (moved._tag === "Refused") {
+        expect(moved.cause).toBe("checkout-dirty-human");
+        expect(moved.why).toContain("one.ts");
+      }
+      expect(yield* fs.readFileString(`${cwd}/one.ts`)).toBe("an edit git was told to forget");
+    }).pipe(Effect.scoped),
+  ));
+
 test("a force-push refusal names every unpublished commit, past the tenth", () =>
   runEffect(
     Effect.gen(function* () {
