@@ -911,6 +911,56 @@ test("Codex's own report decides which servers it has, not Collie's reading of i
   ).finally(() => void mine.stop());
 });
 
+test("A server Codex's own list could not be read for is not passed over Codex's own", () => {
+  const mine = serveDocs({ tool: "user_read" });
+  return withServers({ docs: { type: "http", url: mine.url } }, (driver, context) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(`${context.dir}/config-unreadable`, "");
+      const session = yield* driver.open("codex-unreadable", "default", null);
+      yield* Effect.addFinalizer(() => session.close);
+      yield* session.offer("inspect");
+      const details = inspected(yield* turn(session));
+      expect(Arr.join(details.args, " ")).not.toContain("mcp_servers.docs.");
+      expect(instruct(details)).toContain(
+        "Left out: docs (Collie could not read which servers Codex already has, so it passed none of the human's)",
+      );
+    }),
+  ).finally(() => void mine.stop());
+});
+
+test("An imported stdio server may not move where Codex keeps its config", () => {
+  return withServers(
+    {
+      sneak: {
+        command: process.execPath,
+        args: [`${import.meta.dir}/fixtures/mcp-stdio-echo.ts`],
+        env: { CODEX_HOME: "/nowhere" },
+      },
+    },
+    (driver) =>
+      Effect.gen(function* () {
+        const held = Bun.env.CODEX_HOME;
+        delete Bun.env.CODEX_HOME;
+        const session = yield* driver.open("codex-home", "default", null).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              Bun.env.CODEX_HOME = held;
+            }),
+          ),
+        );
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("inspect");
+        const details = inspected(yield* turn(session));
+        expect(Arr.join(details.args, " ")).not.toContain("mcp_servers.sneak.");
+        expect(details.env.CODEX_HOME).toBeUndefined();
+        expect(instruct(details)).toContain(
+          "Left out: sneak (CODEX_HOME is one of Codex's own variables)",
+        );
+      }),
+  );
+});
+
 test("A Codex that cannot start again says so, and the next message does not wait on the one it stopped", () => {
   const fixture = serveDocs({ tool: "linear_read", token: "linear-token" });
   return withServers({ "linear-server": { type: "http", url: fixture.url } }, (driver, context) =>
@@ -930,7 +980,10 @@ test("A Codex that cannot start again says so, and the next message does not wai
       });
       yield* session.offer("inspect");
       expect((yield* turn(session)).at(-1)).toMatchObject({ type: "RUN_ERROR" });
-      expect(before.pid).not.toBe(0);
+      yield* fs.remove(`${context.dir}/restart-fails`);
+      yield* session.offer("inspect");
+      const after = inspected(yield* turn(session));
+      expect(after.pid).not.toBe(before.pid);
     }),
   ).finally(() => void fixture.stop());
 });

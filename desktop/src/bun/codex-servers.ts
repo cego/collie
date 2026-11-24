@@ -7,6 +7,7 @@ import { childEnv } from "./login-env";
 import type { UserMcpServers } from "./session";
 
 const env_has = (key: string) => Rec.has(childEnv(), key);
+const codex_has = (key: string) => pipe(key, Str.startsWith("CODEX_"));
 const RESERVED = "collie_desktop";
 const OWN = "COLLIE_CHAT_";
 const NAME = /^[A-Za-z0-9_-]+$/;
@@ -70,10 +71,20 @@ const referenced: (value: string, env: Readonly<Record<string, string | undefine
     return pipe(so, Str.replace(whole, env[reference] ?? whole));
   });
 
+// WARNING: `null` means Codex's own names are unknown: passing the human's would override them.
 export const codexServers: (
   servers: UserMcpServers,
-  configured: ReadonlyArray<string>,
+  configured: ReadonlyArray<string> | null,
 ) => CodexServers = (servers, configured) => {
+  if (configured === null) {
+    return {
+      ...NO_SERVERS,
+      left: Arr.map(Rec.keys(servers), (name) => ({
+        name,
+        why: "Collie could not read which servers Codex already has, so it passed none of the human's",
+      })),
+    };
+  }
   const args: Array<string> = [];
   const env: Record<string, string> = {};
   const given: Array<{ name: string; url?: string }> = [];
@@ -104,6 +115,11 @@ export const codexServers: (
         const resolved = referenced(value, childEnv());
         if (pipe(key, Str.startsWith(OWN))) {
           why = `${key} is in Collie's own namespace`;
+          break;
+        }
+
+        if (codex_has(key)) {
+          why = `${key} is one of Codex's own variables`;
           break;
         }
         if (env_has(key)) {

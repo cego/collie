@@ -583,6 +583,10 @@ for await (const chunk of Bun.stdin.stream()) {
         break;
       }
       case "config/read": {
+        if (await Bun.file(`${process.cwd()}/config-unreadable`).exists()) {
+          send({ id: message.id!, error: { code: -32_603, message: "config/read failed" } });
+          break;
+        }
         answer({ config: { mcp_servers: { ...servers(), ...(await ownServers()) } } });
         break;
       }

@@ -629,7 +629,6 @@ const Effective = Schema.Struct({
   ),
 });
 const decodeEffective = decoded(Effective);
-const NO_CONFIGURED: ReadonlyArray<string> = [];
 const instructions = () => systemPrompt(hostname());
 
 const noThreads: Readonly<Record<string, string>> = {};
@@ -724,7 +723,7 @@ export const codexDriver: (
           Effect.catch(({ message }) => Queue.fail(output, message)),
         );
       let given: CodexServers = NO_SERVERS;
-      let configured: ReadonlyArray<string> = [];
+      let configured: ReadonlyArray<string> | null = null;
       let signingIn = false;
       let live: Live | undefined;
       let owned: Scope.Closeable | undefined;
@@ -738,7 +737,7 @@ export const codexDriver: (
       const readConfigured = () =>
         Effect.gen(function* () {
           if (command === null) {
-            return NO_CONFIGURED;
+            return Option.none<ReadonlyArray<string>>();
           }
           return yield* Effect.scoped(
             Effect.gen(function* () {
@@ -746,9 +745,13 @@ export const codexDriver: (
               const { config } = yield* probe
                 .call("config/read", { cwd: context.dir })
                 .pipe(Effect.flatMap(decodeEffective));
-              return Arr.filter(Rec.keys(config?.mcp_servers ?? {}), (name) => name !== SERVER);
+              const names: ReadonlyArray<string> = Arr.filter(
+                Rec.keys(config?.mcp_servers ?? {}),
+                (name) => name !== SERVER,
+              );
+              return Option.some(names);
             }),
-          ).pipe(Effect.orElseSucceed(() => NO_CONFIGURED));
+          ).pipe(Effect.orElseSucceed(() => Option.none<ReadonlyArray<string>>()));
         });
       const ownServers = yield* Effect.cached(readConfigured());
       const connect = (own: Scope.Scope) =>
@@ -757,7 +760,7 @@ export const codexDriver: (
             return yield* new CodexError({ message: NOT_INSTALLED });
           }
           const { url, token } = yield* endpoint.start;
-          configured = yield* ownServers;
+          configured = Option.getOrNull(yield* ownServers);
           given = codexServers(
             yield* Effect.tryPromise(userServers).pipe(Effect.orElseSucceed(() => ({}))),
             configured,
@@ -815,28 +818,38 @@ export const codexDriver: (
           return made;
         });
       let first = yield* Deferred.make<Live, CodexError>();
+      let failed = false;
       const connectOnce = () =>
         establish().pipe(
           Effect.tap((made) => Deferred.succeed(first, made)),
-          Effect.tapError((error) => Deferred.fail(first, error)),
+          Effect.tapError((error) =>
+            Effect.sync(() => {
+              failed = true;
+            }).pipe(Effect.andThen(Deferred.fail(first, error))),
+          ),
         );
       yield* connectOnce().pipe(
         Effect.catch(({ message }) => Queue.fail(output, message)),
         Effect.forkScoped,
       );
       const settle = Effect.gen(function* () {
-        if (live === undefined) {
+        if (live !== undefined) {
+          if (!signingIn) {
+            return live;
+          }
+          const stale = live;
+          live = undefined;
+          signingIn = false;
+          yield* Scope.close(stale.scope, Exit.void).pipe(Effect.ignore);
+          first = yield* Deferred.make<Live, CodexError>();
+          return yield* connectOnce();
+        }
+        if (!failed) {
           return Option.getOrUndefined(yield* Deferred.await(first).pipe(Effect.option));
         }
-        if (!signingIn) {
-          return live;
-        }
-        const stale = live;
-        live = undefined;
-        signingIn = false;
-        yield* Scope.close(stale.scope, Exit.void).pipe(Effect.ignore);
+        failed = false;
         first = yield* Deferred.make<Live, CodexError>();
-        return yield* connectOnce();
+        return Option.getOrUndefined(yield* connectOnce().pipe(Effect.option));
       });
       const note = () => {
         const placement = context.placement();
@@ -875,7 +888,7 @@ export const codexDriver: (
             const said = codexConnections(
               given,
               yield* statusesOf(current.server, current.thread),
-              configured,
+              configured ?? [],
             );
             const noted = Arr.filter([note(), said], (text) => text !== "");
             const asked = yield* current.server

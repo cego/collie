@@ -2366,8 +2366,10 @@ once; `collie_desktop` is Collie's own and no server of yours takes its place. A
 static headers, such as a bearer token, and a stdio server's environment reach Codex through
 the App Server's own environment, never its command line, and never the chat. Codex forwards
 an environment variable to a stdio server under the same name, so a variable Codex's own
-environment already sets, or one another such server claimed first, cannot be given to a
-second server: the chat says which was left out and why. Codex keeps its own sign-ins: a
+environment already sets, one Codex reads for itself such as `CODEX_HOME`, or one another
+such server claimed first, cannot be given to a second server: the chat says which was left
+out and why. If Codex will not say which servers it has, none of yours is passed at all —
+better a server missing from the chat than one overriding Codex's own — and the chat says so. Codex keeps its own sign-ins: a
 server that needs a browser login, such as Linear, works once you run, in a terminal,
 `codex mcp login <server> -c 'mcp_servers.<server>.url="<the server's url>"'` — the `-c` is
 what shows a standalone `codex` a server Desktop passes it at launch. Because Codex never
