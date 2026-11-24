@@ -162,10 +162,12 @@ test("a blocking finding the implementer disputed is the human's call, not anoth
     }),
   ));
 
-test("the same blocking findings twice running is not progress, and the rally says so", () =>
+test("a blocking set that comes back once goes to the fixer, and the next time it is no progress", () =>
   runEffect(
     Effect.gen(function* () {
       yield* rig.queueOutputs([
+        { verdict: "findings", findings: [blocker("empty list")] },
+        { verdict: "clean", fixed: [], checks: [] },
         { verdict: "findings", findings: [blocker("empty list")] },
         { verdict: "clean", fixed: [], checks: [] },
         { verdict: "findings", findings: [blocker("empty list")] },
@@ -173,6 +175,35 @@ test("the same blocking findings twice running is not progress, and the rally sa
       const result = yield* rally("r-stuck", 4);
       expect(said(result)).toContain("no_progress");
       expect(said(result)).toContain("raised the same 1 blocking finding(s)");
+      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.send")).toHaveLength(5);
+    }),
+  ));
+
+test("a final review that repeats the review before it hands its blockers back in the last fix, with no review after it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const runId = "r-last-again";
+      yield* collect(evidenceDir(dir, runId), {
+        run: runId,
+        name: "unit",
+        executable: "true",
+        argv: [],
+        cwd: rig.projectDir,
+        by: "agent",
+      }).pipe(Effect.orDie);
+      yield* rig.queueOutputs([
+        { verdict: "findings", findings: [blocker("empty list")] },
+        { verdict: "clean", fixed: [{ title: "empty list", file: "src/thing.ts" }], checks: [] },
+        { verdict: "findings", findings: [blocker("empty list")] },
+        {
+          verdict: "clean",
+          fixed: [{ title: "empty list", file: "src/thing.ts" }],
+          checks: [{ name: "unit" }],
+        },
+      ]);
+      const result = yield* rally(runId, 2);
+      expect(said(result)).toContain("exhausted after 2 round(s)");
+      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.send")).toHaveLength(4);
     }),
   ));
 

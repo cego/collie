@@ -754,6 +754,11 @@ export function blockingKeys(findings: ReadonlyArray<Finding>) {
   ].sort();
 }
 
+export interface HandedBack {
+  readonly finding: Finding;
+  readonly rejected: boolean;
+}
+
 export type Rally =
   | { readonly go: "clean"; readonly remaining: Array<Finding> }
   | {
@@ -761,6 +766,8 @@ export type Rally =
       readonly live: Array<Finding>;
       readonly blocking: Array<Finding>;
       readonly keys: ReadonlyArray<string>;
+      readonly handedBack: ReadonlyArray<HandedBack>;
+      readonly handed: ReadonlyArray<string>;
     }
   | {
       readonly go: "halt";
@@ -769,14 +776,19 @@ export type Rally =
       readonly outstanding: Array<Finding>;
     };
 
-// WARNING: the same blocking set twice is no progress, since a third attempt would raise it again.
+// WARNING: a repeat goes back to the fixer once; only a set it has already answered halts the rally.
 export function settleRound(round: {
   readonly live: ReadonlyArray<Finding>;
   readonly disputed: ReadonlyArray<Finding>;
   // WARNING: reopened disputes drive the loop whatever their severity, as a human resumed the Run for them.
   readonly reopened?: ReadonlyArray<Finding>;
   readonly at: number;
-  readonly seen?: { readonly at: number; readonly keys: ReadonlyArray<string> } | null;
+  readonly seen?: {
+    readonly at: number;
+    readonly keys: ReadonlyArray<string>;
+    readonly claimed?: ReadonlyArray<Fixed>;
+    readonly handed?: ReadonlyArray<string>;
+  } | null;
 }) {
   const live = Arr.filter(round.live, (f) => f.status !== "fixed" && f.status !== "obsolete");
   const reopened = [...(round.reopened ?? [])];
@@ -800,22 +812,39 @@ export function settleRound(round: {
   }
   const keys = blockingKeys(live);
   const seen = round.seen;
+  const previous = seen !== null && seen !== undefined && seen.at < round.at ? seen : null;
+  const handed = new Set(previous?.handed ?? []);
+  const repeated = previous === null ? [] : Arr.filter(keys, (key) => previous.keys.includes(key));
   if (
-    seen &&
-    seen.at < round.at &&
     keys.length > 0 &&
-    keys.length === seen.keys.length &&
-    Arr.every(keys, (key, at) => key === seen.keys[at])
+    repeated.length === keys.length &&
+    Arr.every(repeated, (key) => handed.has(key))
   ) {
     const returned: Rally = {
       go: "halt",
       halt: "no_progress",
-      reason: `no progress: review ${round.at} raised the same ${keys.length} blocking finding(s) as review ${seen.at}`,
+      reason: `no progress: review ${round.at} raised the same ${keys.length} blocking finding(s) as review ${previous?.at}, after each was handed back once`,
       outstanding: live,
     };
     return returned;
   }
-  const returned: Rally = { go: "fix", live: [...live, ...reopened], blocking, keys };
+  const claimedFixed = new Set(Arr.map(previous?.claimed ?? [], findingKey));
+  const byKey = new Map(Arr.map(live, (one) => [findingKey(one), one] as const));
+  const handedBack = Arr.map(
+    Arr.filter(repeated, (key) => !handed.has(key)),
+    (key) => ({
+      finding: byKey.get(key)!,
+      rejected: claimedFixed.has(key),
+    }),
+  );
+  const returned: Rally = {
+    go: "fix",
+    live: [...live, ...reopened],
+    blocking,
+    keys,
+    handedBack,
+    handed: Arr.dedupe([...handed, ...Arr.map(handedBack, (one) => findingKey(one.finding))]),
+  };
   return returned;
 }
 
@@ -1118,6 +1147,33 @@ export function splitDisputed(findings: ReadonlyArray<Finding>, disputed: Readon
     }
   }
   return split;
+}
+
+const REJECTED_FIX =
+  "The review after your fix raised this again, so the claim that it was fixed was not accepted. Answer each with new evidence that meets it, or record it under `disputed` with your reason.";
+
+const REPEATED_BLOCKER =
+  "Raised again, and your fix did not claim it fixed. Answer each with a fix, or record it under `disputed` with your reason.";
+
+export function formatFixBrief(
+  live: ReadonlyArray<Finding>,
+  handedBack: ReadonlyArray<HandedBack>,
+) {
+  const rejected = Arr.filter(handedBack, (one) => one.rejected);
+  const repeated = Arr.filter(handedBack, (one) => !one.rejected);
+  const section = (heading: string, said: string, going: ReadonlyArray<HandedBack>) =>
+    Arr.join([heading, said, formatFindings(Arr.map(going, (one) => one.finding))], "\n\n");
+  return Arr.join(
+    Arr.filter(
+      [
+        rejected.length === 0 ? "" : section("Rejected fix:", REJECTED_FIX, rejected),
+        repeated.length === 0 ? "" : section("Raised again:", REPEATED_BLOCKER, repeated),
+        formatFindings(live),
+      ],
+      (one) => one !== "",
+    ),
+    "\n\n",
+  );
 }
 
 export function formatFindings(findings: ReadonlyArray<Finding>) {

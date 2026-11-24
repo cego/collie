@@ -1,6 +1,7 @@
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import {
+  blockingKeys,
   findingKey,
   formatFindings,
   isBlocking,
@@ -103,6 +104,94 @@ test("resolved ledger findings leave the rally clean and a dispute remains the h
   });
   expect(isBlocking(fixed)).toBe(false);
   expect(isBlocking(obsolete)).toBe(false);
+});
+
+const LIST: Finding = {
+  file: "src/list.ts",
+  severity: "blocker",
+  title: "empty list",
+  detail: "it throws on an empty list",
+};
+const LIST_AGAIN: Finding = { ...LIST, detail: "it throws on a null list too" };
+const CLAIMED_LIST = [{ file: "src/list.ts", title: "empty list" }];
+
+const keysOf = (findings: ReadonlyArray<Finding>) => blockingKeys(findings);
+
+test("a fix the review after it rejects goes back to the fixer once, marked rejected, and halts on the next repeat", () => {
+  expect(settleRound({ live: [LIST], disputed: [], at: 1 })).toMatchObject({ go: "fix" });
+  expect(
+    settleRound({
+      live: [LIST_AGAIN],
+      disputed: [],
+      at: 2,
+      seen: { at: 1, keys: keysOf([LIST]), claimed: CLAIMED_LIST },
+    }),
+  ).toMatchObject({
+    go: "fix",
+    handedBack: [{ finding: LIST_AGAIN, rejected: true }],
+  });
+  expect(
+    settleRound({
+      live: [LIST_AGAIN],
+      disputed: [],
+      at: 3,
+      seen: {
+        at: 2,
+        keys: keysOf([LIST_AGAIN]),
+        claimed: CLAIMED_LIST,
+        handed: [findingKey(LIST)],
+      },
+    }),
+  ).toMatchObject({ go: "halt", halt: "no_progress" });
+});
+
+test("a blocker raised again that no fix claimed fixed goes back once, unmarked, and halts on the next repeat", () => {
+  expect(
+    settleRound({
+      live: [LIST_AGAIN],
+      disputed: [],
+      at: 2,
+      seen: { at: 1, keys: keysOf([LIST]), claimed: [] },
+    }),
+  ).toMatchObject({ go: "fix", handedBack: [{ finding: LIST_AGAIN, rejected: false }] });
+  expect(
+    settleRound({
+      live: [LIST_AGAIN],
+      disputed: [],
+      at: 3,
+      seen: { at: 2, keys: keysOf([LIST_AGAIN]), claimed: [], handed: [findingKey(LIST_AGAIN)] },
+    }),
+  ).toMatchObject({ go: "halt", halt: "no_progress" });
+});
+
+test("a handed-back finding that is then met leaves a later blocker its own hand-back", () => {
+  const retry: Finding = {
+    file: "src/job.ts",
+    severity: "major",
+    title: "unbounded retry",
+    detail: "it retries forever",
+  };
+  const retryAgain: Finding = { ...retry, detail: "it retries forever on a failed job" };
+  const third = settleRound({
+    live: [retry],
+    disputed: [],
+    at: 3,
+    seen: { at: 2, keys: keysOf([LIST_AGAIN]), claimed: [], handed: [findingKey(LIST)] },
+  });
+  expect(third).toMatchObject({ go: "fix", handedBack: [] });
+  expect(
+    settleRound({
+      live: [retryAgain],
+      disputed: [],
+      at: 4,
+      seen: {
+        at: 3,
+        keys: keysOf([retry]),
+        claimed: [],
+        handed: [findingKey(LIST)],
+      },
+    }),
+  ).toMatchObject({ go: "fix", handedBack: [{ finding: retryAgain, rejected: false }] });
 });
 
 const ok = (text: string) => {

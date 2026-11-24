@@ -15,6 +15,7 @@ import {
   findingKey,
   findingsIn,
   panelOf,
+  formatFixBrief,
   formatFindings,
   isBlocking,
   leaveOutstanding,
@@ -31,7 +32,7 @@ import {
   step,
   targetKind,
 } from "collie";
-import type { Finding, Integration, SynthesisReport } from "collie";
+import type { Finding, Fixed, Integration, SynthesisReport } from "collie";
 import { Effect, FileSystem, Option, Result, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import type { WorkflowEngine, WorkflowInstance } from "effect/workflow/WorkflowEngine";
@@ -531,7 +532,12 @@ export const rally = (ask: {
     const runId = (yield* Run).id;
     const { prefix } = ask;
     let disputed: Array<Finding> = [];
-    let seen: { readonly at: number; readonly keys: ReadonlyArray<string> } | null = null;
+    let seen: {
+      readonly at: number;
+      readonly keys: ReadonlyArray<string>;
+      readonly claimed?: ReadonlyArray<Fixed>;
+      readonly handed?: ReadonlyArray<string>;
+    } | null = null;
     const delta =
       ask.resume === undefined && (yield* host.place(runId)).features?.review_delta === true;
     let prior: { readonly head: string; readonly open: ReadonlyArray<Finding> } | null = null;
@@ -702,16 +708,15 @@ export const rally = (ask: {
               reviewed: synthesis,
             };
           }
-          seen = { at, keys: round.keys };
-
           const fixed = yield* ask.fix({
             operation: `${prefix}fix-${at}`,
             at,
             proves,
-            findings: formatFindings(round.live),
+            findings: formatFixBrief(round.live, round.handedBack),
             open: round.live,
             head,
           });
+          seen = { at, keys: round.keys, handed: round.handed, claimed: fixed.fixed };
           const settledNow = new Set(Arr.map([...fixed.fixed, ...fixed.disputed], findingKey));
           disputed = [
             ...Arr.filter(disputed, (one) => !settledNow.has(findingKey(one))),

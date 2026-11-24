@@ -14,20 +14,26 @@ import {
   agentWork,
   defineWorkflow,
   findingKey,
+  formatFixBrief,
   settleFinalFix,
   settleRound,
   splitDisputed,
   template,
   type Finding,
+  type Fixed,
 } from "collie";
 import { Effect, Schema } from "effect";
 
 const REVIEW = template("Review {{target}}. Report every finding you can stand behind.", {
   target: Schema.String,
 });
-const FIX = template("Fix what the review raised in {{target}}, or say why you will not.", {
-  target: Schema.String,
-});
+const FIX = template(
+  "Fix what the review raised in {{target}}, or say why you will not.\n\n{{findings}}",
+  {
+    target: Schema.String,
+    findings: Schema.String,
+  },
+);
 
 export default defineWorkflow({
   id: "rally",
@@ -47,7 +53,12 @@ export default defineWorkflow({
       const host = yield* Host;
       const runId = (yield* Run).id;
       let disputed: Finding[] = [];
-      let seen: { readonly at: number; readonly keys: ReadonlyArray<string> } | null = null;
+      let seen: {
+        readonly at: number;
+        readonly keys: ReadonlyArray<string>;
+        readonly claimed?: ReadonlyArray<Fixed>;
+        readonly handed?: ReadonlyArray<string>;
+      } | null = null;
 
       for (let at = 1; at <= asked.rounds; at++) {
         const review = yield* agentWork({
@@ -68,16 +79,15 @@ export default defineWorkflow({
           yield* host.record(runId, `clean after ${at}`);
           return `clean after ${at} round(s), ${rally.remaining.length} non-blocking left`;
         }
-        seen = { at, keys: rally.keys };
-
         const fix = yield* agentWork({
           operation: `fix-${at}`,
           role: "implementer",
           cwd: asked.cwd,
           instructions: FIX,
-          input: { target: asked.target },
+          input: { target: asked.target, findings: formatFixBrief(rally.live, rally.handedBack) },
           output: FixOutputSchema,
         });
+        seen = { at, keys: rally.keys, handed: rally.handed, claimed: fix.fixed };
         // A dispute is carried, not re-argued: the next review either answers it with a
         // rebuttal or it stops driving the loop.
         const known = new Set(disputed.map(findingKey));

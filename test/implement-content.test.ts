@@ -4,6 +4,8 @@ import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { contentOf } from "../src/sdk";
+import { blockingKeys, formatFixBrief, settleRound } from "../src/output";
+import type { Finding } from "../src/output";
 import { runEffect } from "./support/effect";
 import { root } from "./support/host";
 import implement from "../workflows/implement.md" with { type: "text" };
@@ -69,6 +71,37 @@ test("implement's reviewer rates a test the branch adds, never seen failing, `ma
   expect(pipe(REVIEW.text, Str.replaceAll(/\s+/g, " "))).toContain(
     "A test this branch adds with no recorded failing run (`collie verify --expect fail`, or a failing record of it before the change that makes it pass) is `major`: never seen failing, it may be a Tautology. Where it is also the only proof of a criterion, the Tautology rule above makes it a `blocker`.",
   );
+});
+
+test("a fix round told a rejected fix names it with the reviewer's latest detail, and one that is not says nothing of it", () => {
+  const fix = contentOf(implement).sections.get("fix") ?? "";
+  const list: Finding = {
+    file: "src/list.ts",
+    severity: "blocker",
+    title: "empty list",
+    detail: "it throws on an empty list",
+  };
+  const again: Finding = { ...list, detail: "it throws on a null list too" };
+  const round = settleRound({
+    live: [again],
+    disputed: [],
+    at: 2,
+    seen: {
+      at: 1,
+      keys: blockingKeys([list]),
+      claimed: [{ file: list.file, title: list.title }],
+    },
+  });
+  expect(round.go).toBe("fix");
+  const told = renderTemplate(fix, {
+    findings: round.go === "fix" ? formatFixBrief(round.live, round.handedBack) : "",
+  }).text;
+  expect(told).toContain("Rejected fix");
+  expect(told).toContain("empty list");
+  expect(told).toContain("it throws on a null list too");
+  const plain = renderTemplate(fix, { findings: formatFixBrief([list], []) }).text;
+  expect(plain).not.toContain("Rejected fix");
+  expect(plain).not.toContain("was not accepted");
 });
 
 test("no shipped content or prompt text Collie types spells out `collie verify --run`", () =>

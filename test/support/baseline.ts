@@ -1454,12 +1454,8 @@ scenario("a repository's share that stops on a blocking finding parks with its w
       };
       yield* approve("r-impl-share", ["unit"]);
       const reviewed = { ...CLEAN_SYNTHESIS, verdict: "findings", findings: blocked.findings };
-      yield* rig.queueOutputs([
-        blocked,
-        reviewed,
-        { verdict: "clean", fixed: [], disputed: [], checks: [] },
-        reviewed,
-      ]);
+      const fixed = { verdict: "clean", fixed: [], disputed: [], checks: [] };
+      yield* rig.queueOutputs([blocked, reviewed, fixed, reviewed, fixed, reviewed]);
 
       const result = yield* stalled({
         entry: shipped("implement"),
@@ -1473,9 +1469,64 @@ scenario("a repository's share that stops on a blocking finding parks with its w
       expect(yield* asked("r-impl-share", "build.review-1")).toContain(
         "the schema will not migrate",
       );
-      expect(yield* prompts()).toHaveLength(4);
+      expect(yield* prompts()).toHaveLength(6);
     }),
   ),
+);
+
+scenario(
+  "a fix the next review rejects goes back to the fixer once, and the Run reaches its gate",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        const runId = "r-impl-rejected";
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve(runId, ["unit"]);
+        const schema = {
+          severity: "blocker",
+          title: "the schema will not migrate",
+          file: "db",
+          detail: "existing rows cannot be decoded",
+        };
+        const reviewed = { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [schema] };
+        const rejected = {
+          ...reviewed,
+          findings: [{ ...schema, detail: "a null column still cannot be decoded" }],
+        };
+        const claimed = {
+          verdict: "clean",
+          fixed: [{ title: schema.title, file: schema.file }],
+          disputed: [],
+          checks: [],
+        };
+        yield* rig.queueOutputs([
+          BUILT,
+          reviewed,
+          claimed,
+          rejected,
+          claimed,
+          CLEAN_SYNTHESIS,
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan, ...FINISH },
+        });
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* parkedWhy(runId)).toBe("");
+        expect(
+          Arr.filter(yield* readStepLines(runDir(dir, runId)), (line) => line.kind === "fail"),
+        ).toEqual([]);
+        expect(yield* asked(runId, "fix-2")).toContain("Rejected fix");
+        expect(yield* asked(runId, "fix-2")).toContain("a null column still cannot be decoded");
+      }),
+    ),
 );
 
 const resumeImplementPark = (
@@ -1572,6 +1623,8 @@ scenario(
         const reviewed = { ...CLEAN_SYNTHESIS, verdict: "findings", findings: blocked.findings };
         yield* rig.queueOutputs([
           blocked,
+          reviewed,
+          { verdict: "clean", fixed: [], disputed: [], checks: [] },
           reviewed,
           { verdict: "clean", fixed: [], disputed: [], checks: [] },
           reviewed,
@@ -5771,6 +5824,8 @@ scenario("implement parks again with the new reason when a resumed round does no
       yield* approve(runId, ["unit"]);
       yield* rig.queueOutputs([
         BUILT,
+        blocking("first stop"),
+        fixed,
         blocking("first stop"),
         fixed,
         blocking("first stop"),

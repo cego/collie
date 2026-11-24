@@ -2257,6 +2257,12 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     rebutted: Finding[];
   }
 
+  /** A finding a rally hands back to the fixer, and whether the fix before it claimed it fixed. */
+  export interface HandedBack {
+    readonly finding: Finding;
+    readonly rejected: boolean;
+  }
+
   /** Where a review/fix rally goes after one review. */
   export type Rally =
     | { readonly go: "clean"; readonly remaining: Finding[] }
@@ -2265,6 +2271,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
         readonly live: Finding[];
         readonly blocking: Finding[];
         readonly keys: ReadonlyArray<string>;
+        readonly handedBack: ReadonlyArray<HandedBack>;
+        readonly handed: ReadonlyArray<string>;
       }
     | {
         readonly go: "halt";
@@ -2320,7 +2328,12 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly disputed: ReadonlyArray<Finding>;
     readonly reopened?: ReadonlyArray<Finding>;
     readonly at: number;
-    readonly seen?: { readonly at: number; readonly keys: ReadonlyArray<string> } | null;
+    readonly seen?: {
+      readonly at: number;
+      readonly keys: ReadonlyArray<string>;
+      readonly claimed?: ReadonlyArray<Fixed>;
+      readonly handed?: ReadonlyArray<string>;
+    } | null;
   }): Rally;
   /** The last fix has no review after it, so its own account and the journal decide. */
   /** A fix report as a reader takes one; a decoded Output is one without being copied. */
@@ -2338,6 +2351,10 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   ): FinalFix;
   export function renderReview(synthesis: SynthesisReport): string;
   export function renderPublicReview(synthesis: SynthesisReport): string;
+  export function formatFixBrief(
+    live: ReadonlyArray<Finding>,
+    handedBack: ReadonlyArray<HandedBack>,
+  ): string;
   export function formatFindings(findings: ReadonlyArray<Finding>): string;
 
   /** The prose a human reads, and the findings a card counts, where both are looked for. */

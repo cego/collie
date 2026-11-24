@@ -1572,8 +1572,15 @@ rally converges, stands on a dispute and runs out of rounds where these decide.
   that reason with a `rebuttal` puts it back.
 - **`settleRound({ live, disputed, at, seen })`** — where this round goes: `fix` with the
   blocking set that drives it, `clean` when nothing blocking is left, or `halt` when a
-  dispute stands unanswered or the same blocking findings came back unchanged. `seen` is
-  the previous round's `keys`; without it nothing can notice a rally going round.
+  dispute stands unanswered or the round makes no progress. `seen` is the previous round's
+  `keys`, `claimed` — what that round's fix reported as fixed — and the keys this rally has
+  already `handed` back; without it nothing can notice a rally going round. A key the review
+  raises again that has not been handed back yet is handed back once in this round's `fix`,
+  in `handedBack`: marked `rejected` where the fix between the two reviews listed it under
+  `fixed`, and unmarked where it did not. The fix's prompt names each with the reviewer's
+  latest detail, and tells it that only new evidence or a `disputed` entry with a reason
+  answers it. It is the same blocking set coming back after every one of its keys was
+  handed back that halts `no_progress`.
 - **`settleFinalFix(live, fix, evidence)`** — the last round has no review after it, so the
   fix's own account is what is left. Every blocking finding needs a disposition, and every
   check it names needs a passing verification on the tree as it stands, or is left to the

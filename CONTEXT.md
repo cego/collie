@@ -816,6 +816,8 @@ not one: a **Stage Run** asks for no Go, because its rollback takes it back.
 
 **Disputed** — A finding the implementer declined, with its reason. The reviewers are shown the reason, and a disputed finding no longer drives the loop, so the Run converges and the human decides. A reviewer who can answer the reason raises it again with a `rebuttal`, which puts the finding back in front of the implementer.
 
+**Rejected fix** — A blocking finding the implementer listed as fixed that the next review raises again. The rally hands it back once, marked rejected with the reviewer's latest detail; the implementer answers with new evidence that meets it or disputes it with a reason. The same finding raised again after that is no progress.
+
 ## Baseline Workflows
 
 What each is for, what it needs, and how they chain: `docs/workflows.md`.
