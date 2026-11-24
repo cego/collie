@@ -7703,6 +7703,70 @@ test("a role no live agent of the Run has is refused, naming the live agents and
     }),
   ));
 
+test("a listing that failed is not a Run agent gone, so a refusal says liveness could not be read", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* rig.queueOutputs([null]);
+      const launched = yield* session(
+        Agents.pipe(Effect.flatMap((agents) => agents.launch(implementerAsk()))),
+      );
+      yield* fs.writeFileString(launched.output, `{"verdict":"clean","note":"finished"}`);
+      yield* fs.writeFileString(`${dir}/list-fails`, "x");
+      const herdr = new FailsOnceReused(rig.pluginEnv(), `${dir}/list-fails`);
+      const refused = yield* session(
+        Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.steer({
+              runId: "r1",
+              to: "healer",
+              text: "Look at this",
+              request: "to-healer-3",
+            }),
+          ),
+        ),
+        { herdr },
+      );
+      expect(refused).toMatchObject({ agent: "", delivered: false, gone: false });
+      expect(refused.detail).toContain("liveness could not be read");
+    }),
+  ));
+
+test("a send that failed while the listing failed does not say the Run ended", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null, null]);
+      yield* session(Agents.pipe(Effect.flatMap((agents) => agents.launch(implementerAsk()))));
+      yield* session(
+        Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.launch({
+              ...implementerAsk(),
+              operation: "review",
+              agent: null,
+              output: `${dir}/review.json`,
+            }),
+          ),
+        ),
+      );
+      const herdr = new Refusing({ "terminal.send": "blocked", "terminal.list": "socket closed" });
+      const failed = yield* session(
+        Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.steer({
+              runId: "r1",
+              to: "implementer",
+              text: "Look at this",
+              request: "to-implementer-9",
+            }),
+          ),
+        ),
+        { herdr },
+      );
+      expect(failed).toMatchObject({ delivered: false, gone: false });
+    }),
+  ));
+
 test("a launch that has written its Output is still an agent the Run can reach, so a refusal names it", () =>
   runEffect(
     Effect.gen(function* () {
