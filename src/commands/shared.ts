@@ -21,7 +21,7 @@ import { FrontDoor } from "../board-model";
 import { connect } from "../host";
 import { actorName } from "../proposals";
 import { attempt, mutation } from "../envelope";
-import type { CollieError, Result } from "../envelope";
+import type { Call, CollieError, Result } from "../envelope";
 import type { YamlMap } from "../yaml";
 import { isHostName } from "../gitlab-token";
 
@@ -303,11 +303,11 @@ export function answering<E, R>(
 }
 
 export function mutating(
-  operation: string,
+  call: Call,
   requestId: Option.Option<string>,
   apply: (env: PluginEnv, id: string) => Effect.Effect<Result, CollieError, PlatformServices>,
 ) {
-  return answering((env) => mutation(env, operation, requestId, (id) => apply(env, id)));
+  return answering((env) => mutation(env, call, requestId, (id) => apply(env, id)));
 }
 
 export function cliOrigin(at: { readonly terminal: boolean; readonly agent: boolean }) {

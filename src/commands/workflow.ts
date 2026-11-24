@@ -295,18 +295,21 @@ const workflowCreate = Command.make(
     requestId: requestIdFlag,
   },
   ({ workflow, layer, requestId: request }) =>
-    mutating("workflow-create", request, (env) =>
-      Effect.gen(function* () {
-        const refused = notAnId(workflow);
-        if (refused) {
-          return refused;
-        }
-        const written = yield* createEntry({ dir: moduleDir(env, layer), id: workflow });
-        if (written.ok) {
-          yield* tellHost(env.stateDir, [written.path]);
-        }
-        return asWritten(written, "Wrote");
-      }),
+    mutating(
+      { operation: "workflow-create", run: null, args: { workflow, layer } },
+      request,
+      (env) =>
+        Effect.gen(function* () {
+          const refused = notAnId(workflow);
+          if (refused) {
+            return refused;
+          }
+          const written = yield* createEntry({ dir: moduleDir(env, layer), id: workflow });
+          if (written.ok) {
+            yield* tellHost(env.stateDir, [written.path]);
+          }
+          return asWritten(written, "Wrote");
+        }),
     ),
 ).pipe(
   Command.withDescription("Write a new Workflow module where a Run will find it"),
@@ -333,23 +336,31 @@ const workflowFork = Command.make(
           if (base._tag === "ContextFailure") {
             return base.result;
           }
-          return yield* mutation(base.env, "workflow-fork", request, (_id) =>
-            Effect.gen(function* () {
-              const module = Option.getOrUndefined(
-                Arr.findFirst(
-                  (yield* savedModules(base.env)).entries,
-                  (one) => one.id === workflow,
-                ),
-              );
-              if (module) {
-                const forked = yield* forkModule(base.env, { from: module, id: name, layer });
-                yield* tellHost(base.env.stateDir, [moduleDir(base.env, layer)]);
-                return forked;
-              }
-              return err("workflow_not_found", `Workflow "${workflow}" was not found.`, {
-                workflow,
-              });
-            }),
+          return yield* mutation(
+            base.env,
+            {
+              operation: "workflow-fork",
+              run: null,
+              args: { workflow, layer, name },
+            },
+            request,
+            (_id) =>
+              Effect.gen(function* () {
+                const module = Option.getOrUndefined(
+                  Arr.findFirst(
+                    (yield* savedModules(base.env)).entries,
+                    (one) => one.id === workflow,
+                  ),
+                );
+                if (module) {
+                  const forked = yield* forkModule(base.env, { from: module, id: name, layer });
+                  yield* tellHost(base.env.stateDir, [moduleDir(base.env, layer)]);
+                  return forked;
+                }
+                return err("workflow_not_found", `Workflow "${workflow}" was not found.`, {
+                  workflow,
+                });
+              }),
           );
         }),
         global.json,

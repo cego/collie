@@ -361,7 +361,8 @@ A path that does not exist, is not a regular file, cannot be read or is larger t
 workspace is made. The files are part of the request: at the host, the same request id with other
 attachments is `RequestConflict`, and with the same ones it is the same Run. The CLI
 answers a `--request-id` it already has a receipt for from that receipt, before the host
-is asked, so there it is the first Run whatever is attached. They are not
+is asked — but only to the same request, so a retry with other attachments is refused
+rather than answered with the first Run. They are not
 an Input, so the Workflow's own input, and with it the execution, is the same either way.
 The operation's line in the Run's audit trail, kept in `host.db`, names each file under `asked`, by the
 name the Run keeps it under and the path it came from. Chat's `start`, `followup`,
@@ -2514,6 +2515,14 @@ collie --json run start implement --input plan="$PWD/plan" --input recovery= --r
 A receipt is reserved before the action starts. If execution is interrupted before its
 result is saved, retrying reports `outcome: unknown` instead of running the action again.
 Check the Run and its recorded effects before submitting a new request.
+
+A receipt belongs to one request: the same operation, the same Run and the same arguments,
+with the Run read from who asked rather than from what the arguments say. A request that
+reuses an id for anything else is refused as `invalid_input`, with none of the stored
+answer, and applies nothing; check that first request's effect before retrying under a new
+id. A receipt written before Collie scoped receipts to their requests is replayed only to
+the same operation for the Run its stored answer names; every other request under that id
+is refused the same way.
 
 A failure carries the request id back in `error.details.requestId`, including when the id
 was generated for you — so a failed send always leaves you something to retry with rather

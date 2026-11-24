@@ -85,33 +85,41 @@ const personaFork = Command.make(
           if (base._tag === "ContextFailure") {
             return base.result;
           }
-          return yield* mutation(base.env, "persona-fork", request, (_id) =>
-            Effect.gen(function* () {
-              const resolved = yield* context(global, layer === "project", layer === "project");
-              if (resolved._tag === "ContextFailure") {
-                return resolved.result;
-              }
-              const found = (yield* definitions(resolved.env)).personas.get(persona);
-              if (!found) {
-                return err("persona_not_found", `Persona "${persona}" was not found.`);
-              }
-              const result = yield* forkResolvedDefinition(
-                { path: found.path, kind: "personas", steps: [], body: found.body },
-                yield* layerDir(resolved.env, layer),
-                {
-                  name,
-                  full: true,
-                },
-              );
-              if (!result.ok) {
-                return err(result.code, result.message, { path: result.path });
-              }
-              return {
-                ok: true,
-                data: { path: result.path, name, layer },
-                human: `Forked ${persona} to ${result.path}.`,
-              };
-            }),
+          return yield* mutation(
+            base.env,
+            {
+              operation: "persona-fork",
+              run: null,
+              args: { persona, layer, name },
+            },
+            request,
+            (_id) =>
+              Effect.gen(function* () {
+                const resolved = yield* context(global, layer === "project", layer === "project");
+                if (resolved._tag === "ContextFailure") {
+                  return resolved.result;
+                }
+                const found = (yield* definitions(resolved.env)).personas.get(persona);
+                if (!found) {
+                  return err("persona_not_found", `Persona "${persona}" was not found.`);
+                }
+                const result = yield* forkResolvedDefinition(
+                  { path: found.path, kind: "personas", steps: [], body: found.body },
+                  yield* layerDir(resolved.env, layer),
+                  {
+                    name,
+                    full: true,
+                  },
+                );
+                if (!result.ok) {
+                  return err(result.code, result.message, { path: result.path });
+                }
+                return {
+                  ok: true,
+                  data: { path: result.path, name, layer },
+                  human: `Forked ${persona} to ${result.path}.`,
+                };
+              }),
           );
         }),
         global.json,

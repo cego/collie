@@ -29,14 +29,22 @@ export const cleanup = Command.make(
             human: cleanupLines(listed.value, false),
           };
         }
-        return yield* mutation(env, "cleanup", requestId, (request) =>
-          Effect.gen(function* () {
-            const swept = yield* sweepNow(env, { door, request });
-            if (!swept.ok) {
-              return swept;
-            }
-            return { ok: true as const, data: swept.value, human: cleanupLines(swept.value, true) };
-          }),
+        return yield* mutation(
+          env,
+          { operation: "cleanup", run: null, args: {} },
+          requestId,
+          (request) =>
+            Effect.gen(function* () {
+              const swept = yield* sweepNow(env, { door, request });
+              if (!swept.ok) {
+                return swept;
+              }
+              return {
+                ok: true as const,
+                data: swept.value,
+                human: cleanupLines(swept.value, true),
+              };
+            }),
         );
       }),
     ),
