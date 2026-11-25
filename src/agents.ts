@@ -86,6 +86,7 @@ import {
   postUnrepaired,
   UNREPAIRED,
   QUESTIONS,
+  TURNS,
   takeHarnessQuestions,
   ranOutSince,
   stoppedSince,
@@ -2574,7 +2575,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           },
           env,
           mcp.args,
-          session?.resumed === true ? { session: session.id, keep: [QUESTIONS] } : undefined,
+          session?.resumed === true ? { session: session.id, keep: [QUESTIONS, TURNS] } : undefined,
         ).pipe(
           Effect.catchIf(isNotQuiet, (refused) =>
             Effect.gen(function* () {

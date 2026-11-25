@@ -119,7 +119,15 @@ import {
   withControlLock,
 } from "../src/compaction";
 import type { AgentContext, CompactionOutcome, CompactionPorts } from "../src/compaction";
-import { COMPACTION_PORTS, questionsSince, recordClaudeEvent, writeEvent } from "../src/compactors";
+import {
+  COMPACTION_PORTS,
+  QUESTIONS,
+  TURNS,
+  questionsSince,
+  recordClaudeEvent,
+  turnTaken,
+  writeEvent,
+} from "../src/compactors";
 import { hostLockOf } from "../src/lock";
 import { claudeTrust } from "../src/trust";
 import { FALLBACK_DEFAULTS } from "../src/settings";
@@ -1550,6 +1558,32 @@ class StaleWorkingTerminal extends UnseenTurn {
     return super.agentLaunch(...args);
   }
 }
+
+test("a resumed launch keeps the turn record that says its conversation exists", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const host = hostOf();
+      const agent = agentFor("r1");
+      const dir = `${host.env.stateDir}/compaction/${agent}`;
+      yield* fs.makeDirectory(dir, { recursive: true });
+      yield* fs.writeFileString(`${dir}/${TURNS}`, "s-1\n");
+      yield* installControls(
+        {
+          stateDir: host.env.stateDir,
+          ports: COMPACTION_PORTS,
+          configured: host.compactAtTokens,
+          herdr: host.herdr,
+          log: () => Effect.void,
+        },
+        { agent, harness: "claude", cwd: rig.projectDir, runLog: `${dir}/agents.log` },
+        [],
+        [],
+        { session: "s-1", keep: [QUESTIONS, TURNS] },
+      );
+      expect(yield* turnTaken(dir, "s-1")).toBe(true);
+    }).pipe(Effect.scoped),
+  ));
 
 test("a server whose command line is empty during exec keeps its identity for recovery", () =>
   runEffect(

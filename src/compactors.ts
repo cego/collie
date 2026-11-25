@@ -199,14 +199,18 @@ const readEvents = Effect.fn("Compactors.readEvents")(function* (dir: string) {
 
 // WARNING: Claude writes a --session-id conversation only on its first submitted turn, so an id with none cannot be resumed.
 // WARNING: the turn record outlives the telemetry cap; a relaunch reads it to know the session has a conversation.
-const TURNS = "turns.jsonl";
+export const TURNS = "turns.jsonl";
 
 // WARNING: the hook runs inside the harness's process, so the launch Collie gave it is in the environment it inherited.
-const launchLabel = Config.String("COLLIE_LAUNCH").pipe(
-  Config.withDefault(""),
-  Effect.map((one) => (one === "" ? null : one)),
-  Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnv()),
-);
+const launchLabel = Effect.gen(function* () {
+  const supplied = yield* Effect.serviceOption(ConfigProvider.ConfigProvider);
+  const provider = Option.getOrElse(supplied, () => ConfigProvider.fromEnv());
+  const label = yield* Config.String("COLLIE_LAUNCH").pipe(
+    Config.withDefault(""),
+    Effect.provideService(ConfigProvider.ConfigProvider, provider),
+  );
+  return label === "" ? null : label;
+});
 
 export const turnTaken = Effect.fn("Compactors.turnTaken")(function* (
   dir: string,
@@ -221,7 +225,6 @@ export const turnTaken = Effect.fn("Compactors.turnTaken")(function* (
   if (Arr.some(Str.split(recorded, "\n"), (line) => Str.trim(line) === session)) {
     return true;
   }
-  // WARNING: a session from before the turn record was written has its own submit or its own conversation to go on.
   const events = yield* readEvents(dir).pipe(Effect.orElseSucceed(() => []));
   if (Arr.some(events, (one) => one.kind === "submit" && one.session === session)) {
     return true;
@@ -1086,9 +1089,11 @@ export const claudeMark = Effect.fn("Compactors.claudeMark")(function* (dir: str
 // WARNING: PostCompact carries nothing of the request, so only the marked start's own session finishing it counts.
 const claudeOutcome = Effect.fn("Compactors.claudeOutcome")(function* (dir: string, mark: Marked) {
   const events = yield* readEvents(dir);
+  // WARNING: a conversation id outlives a launch, so only the launch's own events prove this request finished.
   const fromMarked = (event: TelemetryEvent) =>
-    (mark.session === null || event.session === mark.session) &&
-    (mark.launch === null || event.launch === mark.launch);
+    mark.launch !== null &&
+    event.launch === mark.launch &&
+    (mark.session === null || event.session === mark.session);
   const at = Option.getOrElse(
     Arr.findLastIndex(
       events,
@@ -1141,8 +1146,8 @@ const claudeReconcile = Effect.fn("Compactors.claudeReconcile")(function* (
     if (entry === undefined) {
       continue;
     }
-    const request = Str.isEmpty(line) ? null : namedRequest(line);
-    if (entry.type === "user" && request !== null) {
+    if (entry.type === "user") {
+      const request = Str.isEmpty(line) ? null : namedRequest(line);
       named = request === mark.id;
       markers += named ? 1 : 0;
       continue;
@@ -1282,8 +1287,8 @@ const transcriptCompacted = Effect.fn("Compactors.transcriptCompacted")(function
       continue;
     }
     // WARNING: a boundary the transcript does not tie to this request is time, not proof; two of either is none.
-    const request = namedRequest(line);
-    if (request !== null) {
+    if (entry.type === "user") {
+      const request = namedRequest(line);
       named = request === mark.id;
       markers += named ? 1 : 0;
       continue;
@@ -1318,7 +1323,7 @@ const manualBoundary = (line: {
 const writerOf = (
   entry: { readonly sessionId?: string },
   mark: { readonly session: string | null },
-) => entry.sessionId === undefined || mark.session === null || entry.sessionId === mark.session;
+) => mark.session !== null && entry.sessionId === mark.session;
 
 const decodeTranscriptLine = Schema.decodeUnknownOption(
   Schema.fromJsonString(

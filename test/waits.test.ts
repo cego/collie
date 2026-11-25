@@ -13,7 +13,7 @@ import {
   Unsubmitted,
 } from "../src/compaction";
 import type { CompactionPort, CompactionOutcome } from "../src/compaction";
-import { COMPACTION_PORTS, codexPort, servedEndpoint } from "../src/compactors";
+import { COMPACTION_PORTS, claudeMark, codexPort, servedEndpoint } from "../src/compactors";
 import type { Channel } from "../src/dispatcher";
 import { handOverClaim } from "../src/engine";
 import { rememberCompactionWait, recheckPark } from "../src/park-recheck";
@@ -53,6 +53,7 @@ const port = (over: Partial<CompactionPort>) => ({
   install: () => Effect.die(new Error("not installed here")),
   usage: () => Effect.succeed(null),
   request: () => Effect.succeed(null),
+  mark: (ctx: { readonly dir: string }) => claudeMark(ctx.dir),
   poll: () => Effect.succeed(null),
   ...over,
 });
@@ -69,7 +70,14 @@ const controlled = (attempt: { readonly deadline: number } | null) =>
         harness: "claude",
         cwd: stateDir,
         dir: `${stateDir}/compaction/build-r1`,
-        attempt: attempt && { id: "build-r1-1", run: "r1", step: "01-api", ...attempt },
+        attempt: attempt && {
+          id: "build-r1-1",
+          run: "r1",
+          step: "01-api",
+          session: "s-1",
+          launch: "l-1",
+          ...attempt,
+        },
       }),
     );
     return stateDir;
@@ -131,6 +139,32 @@ test("a launch that never came up is named by the exit that ended it", () =>
       expect(
         yield* awaitReady(deps(stateDir, never), "build-r1", 300, { mustStayListed: true }),
       ).toBe("claude exited before it was up");
+    }),
+  ));
+
+test("a pane core lists as finished is named by its exit, with no pid to read", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const stateDir = yield* controlled(null);
+      const finished = {
+        ...deps(stateDir, port({ ready: () => Effect.succeed(false) })),
+        herdr: {
+          agentList: () =>
+            Effect.succeed([
+              {
+                name: "build-r1",
+                paneId: "pane-1",
+                status: "done" as const,
+                terminalId: "pane-1",
+                cwd: stateDir,
+                foregroundCwd: null,
+              },
+            ]),
+        },
+      };
+      expect(yield* awaitReady(finished, "build-r1", 300, { mustStayListed: true })).toBe(
+        "claude exited before it was up",
+      );
     }),
   ));
 
@@ -558,6 +592,7 @@ const startEvent = (id: string) => ({
   session: "s-1",
   kind: "start",
   request: id,
+  launch: "l-1",
 });
 
 const postEvent = () => ({
@@ -566,9 +601,10 @@ const postEvent = () => ({
   kind: "auto",
   reason: "manual",
   phase: "post",
+  launch: "l-1",
 });
 
-const binding = { at: 1_791_457_799_000, session: "s-1", kind: "session" };
+const binding = { at: 1_791_457_799_000, session: "s-1", kind: "session", launch: "l-1" };
 
 const hooks = (control: string, events: ReadonlyArray<typeof binding>) =>
   Effect.gen(function* () {
@@ -577,9 +613,7 @@ const hooks = (control: string, events: ReadonlyArray<typeof binding>) =>
     yield* fs.writeFileString(
       `${control}/events.jsonl`,
       `${Arr.join(
-        Arr.map([{ at: 1_791_457_799_000, session: "s-1", kind: "session" }, ...events], (event) =>
-          JSON.stringify(event),
-        ),
+        Arr.map([binding, ...events], (event) => JSON.stringify(event)),
         "\n",
       )}\n`,
       { flag: "a" },
@@ -612,6 +646,7 @@ test("a compaction that never completes parks under its own cause at its bound, 
         Effect.gen(function* () {
           const deadline = (yield* Clock.currentTimeMillis) + 1000;
           const stateDir = yield* controlled({ deadline });
+          yield* hooks(`${stateDir}/compaction/build-r1`, []);
           const waiting = yield* atBoundary(
             deps(
               stateDir,
@@ -671,6 +706,7 @@ test("a restart keeps the request it marked, its bound and its park, and a match
         Effect.gen(function* () {
           const deadline = (yield* Clock.currentTimeMillis) + 1000;
           const stateDir = yield* controlled({ deadline });
+          yield* hooks(`${stateDir}/compaction/build-r1`, []);
           const first = yield* atBoundary(
             deps(stateDir, port({ poll: () => ask.pipe(Effect.as(null)) })),
             { agent: "build-r1", run: "r1", step: "02-ui" },
@@ -722,6 +758,7 @@ test("a stopped agent's compaction is recorded as cancelled, no later boundary s
         Effect.gen(function* () {
           const deadline = (yield* Clock.currentTimeMillis) + 1000;
           const stateDir = yield* controlled({ deadline });
+          yield* hooks(`${stateDir}/compaction/build-r1`, []);
           yield* atBoundary(
             deps(stateDir, port({ poll: () => ask.pipe(Effect.as(null)) })),
             { agent: "build-r1", run: "r1", step: "02-ui" },
@@ -749,7 +786,7 @@ test("a stopped agent's compaction is recorded as cancelled, no later boundary s
       const settled = yield* COMPACTION_PORTS.claude!.poll(ctx(control), {
         id: "build-r1-1",
         session: null,
-        launch: null,
+        launch: "l-1",
         transcript: null,
       });
       const cleared = yield* recheckPark(lostPark(stateDir), stateDir, {

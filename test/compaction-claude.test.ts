@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Clock, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
+import { Clock, ConfigProvider, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
 import { parseJson } from "../src/json";
 import { epochMs, isoAt } from "../src/time";
 import { TestClock } from "effect/testing";
@@ -36,8 +36,19 @@ let path: Path.Path;
 let dir: string;
 
 const claude = COMPACTION_PORTS.claude!;
-const marked = (id: string) => ({ id, session: null, launch: null, transcript: null });
 const markedOn = (id: string, launch: string) => ({ id, session: null, launch, transcript: null });
+const marked = (id: string) => markedOn(id, "l-1");
+const withLaunch: <A, E>(
+  effect: Parameters<typeof runEffect<A, E>>[0],
+) => ReturnType<typeof runEffect<A, E>> = (effect) =>
+  runEffect(
+    effect.pipe(
+      Effect.provideService(
+        ConfigProvider.ConfigProvider,
+        ConfigProvider.fromUnknown({ COLLIE_LAUNCH: "l-1" }),
+      ),
+    ),
+  );
 const prompted: Array<string> = [];
 
 const ctx = () => ({
@@ -144,7 +155,7 @@ const unmeasured = (session: string) =>
   });
 
 beforeEach(() =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       fs = yield* FileSystem.FileSystem;
       path = yield* Path.Path;
@@ -159,7 +170,7 @@ beforeEach(() =>
 afterEach(() => runEffect(rig.close()));
 
 test("the sample is input plus output, with the cache folded in exactly once", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       // WARNING: 15,500 already contains the cache writes and reads; do not add them again.
       const line = yield* recordClaudeEvent(dir, measured("s-1", 15_500, 1200, 8));
@@ -170,7 +181,7 @@ test("the sample is input plus output, with the cache folded in exactly once", (
   ));
 
 test("no measurement yet is unavailable, not a context of zero tokens", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       const line = yield* recordClaudeEvent(dir, unmeasured("s-1"));
 
@@ -180,7 +191,7 @@ test("no measurement yet is unavailable, not a context of zero tokens", () =>
   ));
 
 test("a compaction invalidates the sample before it, until the next API call", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       yield* recordClaudeEvent(dir, measured("s-1", 400_000, 1000, 99));
       yield* recordClaudeEvent(dir, post("s-1", "manual"));
@@ -191,7 +202,7 @@ test("a compaction invalidates the sample before it, until the next API call", (
   ));
 
 test("the marked PreCompact is the start, and the PostCompact after it the success", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       yield* recordClaudeEvent(dir, measured("s-1", 400_000, 1000, 99));
       yield* claude.request(ctx(), "req-1");
@@ -208,7 +219,7 @@ test("the marked PreCompact is the start, and the PostCompact after it the succe
   ));
 
 test("a completion before Collie asked is not the answer to what it asked", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       yield* recordClaudeEvent(dir, post("s-1", "manual"));
       yield* claude.request(ctx(), "req-1");
@@ -219,7 +230,7 @@ test("a completion before Collie asked is not the answer to what it asked", () =
   ));
 
 test("an automatic compaction cannot complete Collie's request", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       yield* claude.request(ctx(), "req-1");
       yield* recordClaudeEvent(dir, pre("s-1", "manual", `x (collie:req-1)`));
@@ -231,7 +242,7 @@ test("an automatic compaction cannot complete Collie's request", () =>
   ));
 
 test("a human typing /compact in the pane cannot complete it either", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       yield* claude.request(ctx(), "req-1");
       yield* recordClaudeEvent(dir, pre("s-1", "manual", `x (collie:req-1)`));
@@ -243,7 +254,7 @@ test("a human typing /compact in the pane cannot complete it either", () =>
   ));
 
 test("another session's hooks cannot complete it, and rebind what is current", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       yield* recordClaudeEvent(dir, measured("s-1", 400_000, 1000, 99));
       yield* claude.request(ctx(), "req-1");
@@ -256,7 +267,7 @@ test("another session's hooks cannot complete it, and rebind what is current", (
   ));
 
 test("a duplicate PostCompact says success once, not twice, and never a failure", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       yield* claude.request(ctx(), "req-1");
       yield* recordClaudeEvent(dir, pre("s-1", "manual", `x (collie:req-1)`));
@@ -268,7 +279,7 @@ test("a duplicate PostCompact says success once, not twice, and never a failure"
   ));
 
 test("a background task finishing is Claude's own turn, not a person typing", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       yield* recordClaudeEvent(
         dir,
@@ -292,7 +303,7 @@ test("a background task finishing is Claude's own turn, not a person typing", ()
   ));
 
 test("a submission is Collie's when it carries a delivery token, and a person's otherwise", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       yield* recordClaudeEvent(dir, submit("collie-delivery:run-1-steer-1\nStop and do this."));
       yield* recordClaudeEvent(dir, submit("wait, use the other branch"));
@@ -305,7 +316,7 @@ test("a submission is Collie's when it carries a delivery token, and a person's 
   ));
 
 test("a payload Collie cannot decode records nothing and prints nothing", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       expect(yield* recordClaudeEvent(dir, "not json")).toBe("");
       expect(yield* claude.usage(ctx())).toBeNull();
@@ -361,7 +372,7 @@ const hostLive = Effect.suspend(() =>
 );
 
 test("an AskUserQuestion call is recorded whole for its Run, and denied at once", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       yield* hostLive;
       const printed = yield* recordClaudeEvent(dir, asking("AskUserQuestion", TWO));
@@ -382,7 +393,7 @@ test("an AskUserQuestion call is recorded whole for its Run, and denied at once"
   ));
 
 test("with no live host, a question is left to the agent's pane and never said to be on its Run", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       expect(yield* recordClaudeEvent(dir, asking("AskUserQuestion", TWO))).toBe("");
       yield* fs.writeFileString(
@@ -395,7 +406,7 @@ test("with no live host, a question is left to the agent's pane and never said t
   ));
 
 test("another tool, and a question Collie cannot decode, record and print nothing", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       expect(yield* recordClaudeEvent(dir, asking("Bash", TWO))).toBe("");
       expect(yield* recordClaudeEvent(dir, asking("AskUserQuestion", [{ header: 1 }]))).toBe("");
@@ -405,7 +416,7 @@ test("another tool, and a question Collie cannot decode, record and print nothin
   ));
 
 test("the helpers record identity, usage and outcome — never conversation content", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       yield* recordClaudeEvent(
         dir,
@@ -420,7 +431,7 @@ test("the helpers record identity, usage and outcome — never conversation cont
   ));
 
 test("install writes run-scoped settings and passes them with Claude's own flag", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       const args = yield* claude.install({
         agent: "build-r1",
@@ -445,7 +456,7 @@ test("install writes run-scoped settings and passes them with Claude's own flag"
 onMachineWith("claude")(
   "the installed Claude is at least the release these controls were verified against",
   () =>
-    runEffect(
+    withLaunch(
       Effect.gen(function* () {
         const wanted = VERIFIED_VERSIONS.get("claude") ?? "";
         const installed = yield* Effect.promise(() => Bun.$`claude --version`.text());
@@ -463,7 +474,7 @@ onMachineWith("claude")(
 onMachineWith("claude")(
   "Claude still takes the settings flag the adapter launches an agent with",
   () =>
-    runEffect(
+    withLaunch(
       Effect.gen(function* () {
         const [flag = ""] = (yield* claude.install({
           agent: "r1",
@@ -506,7 +517,7 @@ const fiveHour = (percent: number) => ({
 });
 
 test("a status line's rate_limits are the Machine's newest Claude sample, and its line still prints", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       const stateDir = path.join(rig.root, "state");
       const agentDir = path.join(stateDir, "compaction", "build-r1");
@@ -524,7 +535,7 @@ test("a status line's rate_limits are the Machine's newest Claude sample, and it
   ));
 
 test("the status-line reader decodes again only the agents whose telemetry changed", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       const stateDir = path.join(rig.root, "state");
       const build = path.join(stateDir, "compaction", "build-r1");
@@ -560,7 +571,7 @@ test("the status-line reader decodes again only the agents whose telemetry chang
   ));
 
 test("a status line the reader could not read is read again, and its last sample stands meanwhile", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       const stateDir = path.join(rig.root, "state");
       const build = path.join(stateDir, "compaction", "build-r1");
@@ -601,7 +612,7 @@ test("a status line the reader could not read is read again, and its last sample
   ));
 
 test("rate_limits Collie cannot read leave the context line alone", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       const payload = limited({ five_hour: { used_percentage: "lots" } });
       expect(yield* recordClaudeEvent(dir, payload)).toBe("context: 8%");
@@ -620,7 +631,7 @@ const stopFailure = (error: string, details?: string) =>
   });
 
 test("a StopFailure on a spent subscription is the agent running out, with its transcript", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       yield* recordClaudeEvent(dir, limited({}));
       yield* recordClaudeEvent(dir, stopFailure("rate_limit"));
@@ -633,7 +644,7 @@ test("a StopFailure on a spent subscription is the agent running out, with its t
   ));
 
 test("a StopFailure on any other error is its harness stopping, saying its details", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       yield* recordClaudeEvent(
         dir,
@@ -648,7 +659,7 @@ test("a StopFailure on any other error is its harness stopping, saying its detai
   ));
 
 test("a transient overload is not running out", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       yield* recordClaudeEvent(dir, limited({}));
       yield* recordClaudeEvent(dir, stopFailure("overloaded"));
@@ -658,7 +669,7 @@ test("a transient overload is not running out", () =>
   ));
 
 test("a status line with a window at 100% is the agent running out, saying the window and reset", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       yield* recordClaudeEvent(dir, limited(fiveHour(99)));
       expect(yield* ranOutSince(dir, 0)).toBeNull();
@@ -668,7 +679,7 @@ test("a status line with a window at 100% is the agent running out, saying the w
   ));
 
 test("a status line's full window whose reset has passed is not the agent running out", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       yield* TestClock.setTime(1_791_457_799 * 1000 + 60_000);
       yield* recordClaudeEvent(dir, limited(fiveHour(100)));
@@ -730,7 +741,7 @@ const lostCompletion = (
   });
 
 test("a lost completion is reconciled as done after the bound, where the transcript names the marked request", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       const { due, said, left } = yield* lostCompletion(
         (at) => `${naming("req-1", at)}\n${boundaryAt(at)}\n`,
@@ -742,7 +753,7 @@ test("a lost completion is reconciled as done after the bound, where the transcr
   ));
 
 test("a lost completion whose transcript shows no completion of it stays unresolved", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       const { due, left } = yield* lostCompletion(
         (at) =>
@@ -754,10 +765,10 @@ test("a lost completion whose transcript shows no completion of it stays unresol
   ));
 
 const naming = (request: string, at: string) =>
-  `{"type":"user","timestamp":"${at}","message":{"role":"user","content":"/compact Keep the work in progress. (collie:${request})"}}`;
+  `{"type":"user","timestamp":"${at}","sessionId":"s-1","message":{"role":"user","content":"/compact Keep the work in progress. (collie:${request})"}}`;
 
-const boundaryAt = (at: string, trigger = "manual") =>
-  `{"type":"system","subtype":"compact_boundary","timestamp":"${at}","compactMetadata":{"trigger":"${trigger}","preTokens":180000}}`;
+const boundaryAt = (at: string, trigger = "manual", session = "s-1") =>
+  `{"type":"system","subtype":"compact_boundary","timestamp":"${at}","sessionId":"${session}","compactMetadata":{"trigger":"${trigger}","preTokens":180000}}`;
 
 const lostAttempt = (evidence: {
   transcript?: (after: string, asked: string) => string;
@@ -808,7 +819,7 @@ const lostAttempt = (evidence: {
   });
 
 test("a completion the hook can record nowhere exits non-zero", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       yield* claude.request(ctx(), "req-1");
       const instructions = pipe_(prompted[0]!, Str.replace(/^\/compact /, ""));
@@ -830,7 +841,7 @@ test("a completion the hook can record nowhere exits non-zero", () =>
   ));
 
 test("a boundary from an earlier compaction, before the mark, does not settle it", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       const { due, left } = yield* lostAttempt({
         transcript: (_after, asked) =>
@@ -842,7 +853,7 @@ test("a boundary from an earlier compaction, before the mark, does not settle it
   ));
 
 test("a boundary from another request does not settle it", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       const { due, left } = yield* lostAttempt({
         transcript: (after) =>
@@ -854,7 +865,7 @@ test("a boundary from another request does not settle it", () =>
   ));
 
 test("a boundary from another incarnation of the same agent does not settle it", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       const { due, left } = yield* lostAttempt({
         also: (control, after) =>
@@ -872,7 +883,7 @@ test("a boundary from another incarnation of the same agent does not settle it",
   ));
 
 test("two candidate completions settle nothing", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       const { due, left } = yield* lostAttempt({
         transcript: (after) =>
@@ -884,7 +895,7 @@ test("two candidate completions settle nothing", () =>
   ));
 
 test("a lost completion that is an automatic compaction is not the marked request's", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       const { due, left } = yield* lostAttempt({
         transcript: (after) => `${naming("req-1", after)}\n${boundaryAt(after, "auto")}\n`,
@@ -895,7 +906,7 @@ test("a lost completion that is an automatic compaction is not the marked reques
   ));
 
 test("the same request named twice in the transcript settles nothing", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       const { due, left } = yield* lostAttempt({
         transcript: (after) =>
@@ -907,7 +918,7 @@ test("the same request named twice in the transcript settles nothing", () =>
   ));
 
 test("a transcript the mark did not name is not read, whoever wrote it there", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       const { due, left } = yield* lostCompletion(
         (after) => `${naming("req-1", after)}\n${boundaryAt(after)}\n`,
@@ -919,7 +930,7 @@ test("a transcript the mark did not name is not read, whoever wrote it there", (
   ));
 
 test("a completion from another launch of the same session does not settle it", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       const events = [
         { at: 0, session: "s-1", kind: "session" },
@@ -940,19 +951,28 @@ test("a completion from another launch of the same session does not settle it", 
   ));
 
 test("a session from before the turn record is still taken when its own submit is in the telemetry", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       const dir = path.join(rig.root, "aged");
       yield* fs.makeDirectory(dir, { recursive: true });
       expect(yield* turnTaken(dir, "s-1")).toBe(false);
-      yield* recordEvent(dir, { session: "s-1", kind: "submit", reason: "collie" });
+      yield* fs.writeFileString(
+        `${dir}/events.jsonl`,
+        `${asJson({ at: 0, session: "s-1", kind: "session" })}\n${asJson({
+          at: 1,
+          session: "s-1",
+          kind: "submit",
+          reason: "collie",
+        })}\n`,
+      );
+      expect(yield* fs.exists(`${dir}/turns.jsonl`)).toBe(false);
       expect(yield* turnTaken(dir, "s-1")).toBe(true);
       expect(yield* turnTaken(dir, "s-2")).toBe(false);
     }),
   ));
 
 test("a session from before the turn record is still taken when its transcript holds a conversation", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       const dir = path.join(rig.root, "aged-conversation");
       const transcript = path.join(rig.root, "s-3.jsonl");
@@ -966,7 +986,7 @@ test("a session from before the turn record is still taken when its transcript h
   ));
 
 test("a boundary whose trigger nobody recorded settles nothing", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       const { due, left } = yield* lostAttempt({
         transcript: (after) =>
@@ -978,11 +998,10 @@ test("a boundary whose trigger nobody recorded settles nothing", () =>
   ));
 
 test("a boundary another session wrote into the same transcript settles nothing", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       const { due, left } = yield* lostAttempt({
-        transcript: (after) =>
-          `${naming("req-1", after)}\n{"sessionId":"s-2",${Str.slice(1)(boundaryAt(after))}\n`,
+        transcript: (after) => `${naming("req-1", after)}\n${boundaryAt(after, "manual", "s-2")}\n`,
       });
       expect(due).toBeNull();
       expect(left).not.toBeNull();
@@ -990,7 +1009,7 @@ test("a boundary another session wrote into the same transcript settles nothing"
   ));
 
 test("a boundary that names no request settles nothing", () =>
-  runEffect(
+  withLaunch(
     Effect.gen(function* () {
       const { due, left } = yield* lostAttempt({
         transcript: (after) => `${boundaryAt(after)}\n`,

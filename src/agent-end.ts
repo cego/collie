@@ -168,10 +168,13 @@ const ending = Effect.fnUntraced(function* (
       .pipe(Effect.mapError((cause) => new PaneOpen({ paneId: one.paneId, cause })));
   }
   const stopMs = deps.stopMs ?? STOP_WAIT_MS;
+  const unread = pane !== null && "unread" in pane;
   const left =
-    pane === null || "unconfirmed" in pane ? [] : yield* settled(pane.roots, pane.noted, stopMs);
+    pane === null || "empty" in pane || unread
+      ? []
+      : yield* settled(pane.roots, pane.noted, stopMs);
   // WARNING: only once nothing it started is left running, or an agent still able to finish has its attempt cancelled under it.
-  if (left.length === 0) {
+  if (left.length === 0 && !unread) {
     yield* cancelCompaction(deps, launched.agent, why).pipe(Effect.ignore);
   }
   if (left.length > 0) {
@@ -187,11 +190,13 @@ const ending = Effect.fnUntraced(function* (
   const ended =
     one !== undefined ||
     reached.success !== null ||
-    (pane !== null && !("unconfirmed" in pane) && pane.noted.length > 0);
+    (pane !== null && "noted" in pane && (pane.noted?.length ?? 0) > 0);
   if (ended && closes === "close") {
-    if (pane !== null && "unconfirmed" in pane) {
+    if (pane !== null && ("unread" in pane || "empty" in pane)) {
       yield* deps
-        .log(`${launched.agent}: Quiet not confirmed: ${pane.unconfirmed}`)
+        .log(
+          `${launched.agent}: Quiet not confirmed: ${"unread" in pane ? pane.unread : pane.empty}`,
+        )
         .pipe(Effect.ignore);
     }
     yield* deps.log(endedLine(launched.agent, why)).pipe(Effect.ignore);
@@ -220,7 +225,7 @@ const paneProcesses = Effect.fnUntraced(function* (
     ...(current === undefined || current.pid === recorded?.pid ? [] : [current]),
   ];
   if (named.length === 0) {
-    return { unconfirmed: "no process of its pane could be named" };
+    return { empty: "no process of its pane could be named" };
   }
   const roots: Array<SeenProcess> = [];
   const noted: Array<SeenProcess> = [];
@@ -232,7 +237,7 @@ const paneProcesses = Effect.fnUntraced(function* (
     const session = yield* sessionOf(root.pid).pipe(Effect.result);
     if (session._tag === "Failure") {
       return {
-        unconfirmed: `its pane's processes could not be listed (${reason(session.failure)})`,
+        unread: `its pane's processes could not be listed (${reason(session.failure)})`,
       };
     }
     roots.push(root);
@@ -244,7 +249,7 @@ const paneProcesses = Effect.fnUntraced(function* (
     }
   }
   if (roots.length === 0) {
-    return { unconfirmed: `its pane's root, pid ${named[0]!.pid}, is now another process` };
+    return { unread: `its pane's root, pid ${named[0]!.pid}, is now another process` };
   }
   return { roots, noted };
 });

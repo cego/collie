@@ -752,8 +752,7 @@ export const awaitReady = Effect.fn("Compaction.awaitReady")(function* (
       schedule: Schedule.spaced(deps.pollMs).pipe(Schedule.while(({ now }) => now < deadline)),
     }),
   );
-  // WARNING: a launch that never came up is best named by the exit that ended it, which the elapsed budget hides.
-  const exited = yield* record.pid === null
+  const gone = yield* record.pid === null
     ? Effect.succeed(false)
     : processOf(record.pid).pipe(
         Effect.map(
@@ -761,10 +760,15 @@ export const awaitReady = Effect.fn("Compaction.awaitReady")(function* (
         ),
         Effect.orElseSucceed(() => false),
       );
+  const finished = yield* deps.herdr.agentList().pipe(
+    Effect.map((agents) => Arr.some(agents, (one) => one.name === agent && one.status === "done")),
+    Effect.orElseSucceed(() => false),
+  );
+  const exited = gone || finished;
   const lost = (fallback: string) =>
     exited ? `${record.harness} exited before it was up` : fallback;
   if (asked._tag === "Gone") {
-    return lost("core no longer lists it");
+    return gone ? `${record.harness} exited before it was up` : "core no longer lists it";
   }
   if (asked._tag === "Up") {
     return null;
@@ -1011,7 +1015,6 @@ export const cancelCompaction = Effect.fn("Compaction.cancelCompaction")(functio
   const port = deps.ports[record.harness];
   const cancelling = port === undefined ? undefined : port.cancel;
   if (cancelling === undefined) {
-    // WARNING: a port with nothing to cancel still owes the record, or a later reconcile can settle an attempt nobody finished.
     yield* recordCancelled(record.dir, { id: attempt.id, session: attempt.session ?? null }, why);
   } else {
     const ctx = readingContext(record, attempt.run);
