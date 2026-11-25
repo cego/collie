@@ -248,17 +248,27 @@ export const recheckPark = (
                 : `job ${target.job} absent at ${target.head}`,
             );
           }
-          reads.push(`${target.job}@${target.head}:${read.state}#${read.id ?? ""}`);
+          if (read.state !== "passed") {
+            reads.push(`${target.job}@${target.head}:${read.state}#${read.id ?? ""}`);
+          }
         }
         const jobs = Arr.join([...latest.keys()], ", ");
         const evidence = Arr.join(reads, " ");
-        if ((yield* lastSettledClear(`${stateDir}/runs/${view.runId}`)) === evidence) {
+        if (
+          evidence !== "" &&
+          (yield* lastSettledClear(`${stateDir}/runs/${view.runId}`)) === evidence
+        ) {
           return reply(
             false,
             `jobs ${jobs} settled at the parked head, and nothing changed since the resume`,
           );
         }
-        return reply(true, `jobs ${jobs} settled at parked head`, false, evidence);
+        return reply(
+          true,
+          `jobs ${jobs} settled at parked head`,
+          false,
+          evidence === "" ? undefined : evidence,
+        );
       }
       case "ci-failed": {
         const targets = yield* readRunJournal(

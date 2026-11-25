@@ -749,11 +749,14 @@ running when the wait runs out, or a forge read that was refused, is not a failu
 parks at once with the cause `ci-job-absent`, spends no round and starts no Heal, and
 Collie rechecks it until every job it recorded at that head has settled, so a job still
 running when the wait ran out is waited for, and a job that ends cancelled or skipped lets
-the resume through without spending a round. What the recheck read is recorded only when
-that resume is applied — every job at the head, each with its own attempt — so a resume
-held back by the recovery setting or by a machine short of memory records nothing and is
-not lost, and a park for the same reads is not resumed again until the forge says something
-new. Terminal failed CI at the proved head goes to the same agent's fixer, even when local
+the resume through without spending a round. The jobs that settled without passing are
+recorded — each with its head, its own attempt and the forge's job id — and only once the
+resume is applied, so a resume held back by the recovery setting or by a machine short of
+memory records nothing and is not lost. A park is then not resumed again for those same
+reads until the forge says something new, and never for a head where every job passed: a
+fresh outage that comes back green recovers as often as it parks. The record travels in the
+recovery claim itself, so a host that restarts and replays the claim keeps the guard.
+Terminal failed CI at the proved head goes to the same agent's fixer, even when local
 Checks pass or none are configured. The finding
 names the failed head, check or pipeline, and its forge URL when available. A failure the target branch's newest pipeline shares, test by test, is not the
 fixer's. The Run parks with the cause `target-red`, naming the target branch, its

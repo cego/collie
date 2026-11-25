@@ -278,6 +278,27 @@ test("a job newly settling clears a parked head while another job stays cancelle
     }),
   ));
 
+test("a green read clears a fresh park at the same head even after a green snapshot was recorded", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, at, root, forge } = yield* waiting("passed");
+      yield* rememberCiTarget(`${root}/runs/r1`, {
+        head: at,
+        job: "nuxi-typecheck",
+        mr: MR,
+        cwd: asked.cwd,
+      });
+      const view = { runId: "r1", cwd: asked.cwd, branch: "main", mr: MR };
+      const recheck = () => cancelledRecheck(view, root, asked.run, forge);
+      const first = yield* recheck();
+      expect(first).toMatchObject({ cleared: true, error: false });
+      if (first.reads !== undefined) {
+        yield* rememberSettledClear(`${root}/runs/r1`, first.reads);
+      }
+      expect(yield* recheck()).toMatchObject({ cleared: true, error: false });
+    }),
+  ));
+
 test("a target-red park clears only once every recorded job passed on the target branch's newest commit", () =>
   runEffect(
     Effect.gen(function* () {

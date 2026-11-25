@@ -138,12 +138,7 @@ export const recoverParks = <E, R>(opts: {
     yield* Effect.gen(function* () {
       let failed = false;
       let checked = false;
-      const candidates: Array<{
-        view: RunView;
-        claimed: Metric;
-        fresh: boolean;
-        reads?: string;
-      }> = [];
+      const candidates: Array<{ view: RunView; claimed: Metric; fresh: boolean }> = [];
       const reconnects = yield* opts.reconnects;
       const forge = yield* readForge(opts.env.stateDir);
       const views = yield* opts.views;
@@ -238,7 +233,7 @@ export const recoverParks = <E, R>(opts: {
                 view.park.id ??
                 Option.getOrUndefined(Arr.findLast(lines, (line) => line.kind === "halt"))?.at ??
                 view.created;
-              claimed = {
+              const claim = {
                 ...line,
                 action: "resumed",
                 outcome: "claimed",
@@ -249,8 +244,9 @@ export const recoverParks = <E, R>(opts: {
                   yield* readStepLines(`${opts.env.stateDir}/runs/${view.runId}`),
                   (line) => line.kind === "entry",
                 ).length,
-              };
-              candidates.push({ view, claimed, fresh: true, reads });
+              } satisfies Metric;
+              claimed = reads === undefined ? claim : { ...claim, reads };
+              candidates.push({ view, claimed, fresh: true });
             } else {
               candidates.push({ view, claimed, fresh: false });
             }
@@ -268,7 +264,7 @@ export const recoverParks = <E, R>(opts: {
       }
       yield* Effect.forEach(
         candidates,
-        ({ view, claimed, fresh, reads }) =>
+        ({ view, claimed, fresh }) =>
           Effect.gen(function* () {
             if (
               configValue(yield* readConfig(opts.env.userDir), "recovery.resume") === false ||
@@ -284,8 +280,8 @@ export const recoverParks = <E, R>(opts: {
               }
             }
             const result = yield* opts.resume(view, claimed.recoveryId!, claimed.park!);
-            if (result.applied && reads !== undefined) {
-              yield* rememberSettledClear(`${opts.env.stateDir}/runs/${view.runId}`, reads);
+            if (result.applied && claimed.reads !== undefined) {
+              yield* rememberSettledClear(`${opts.env.stateDir}/runs/${view.runId}`, claimed.reads);
             }
             const ended = yield* Clock.currentTimeMillis;
             yield* appendMetric(dir, {

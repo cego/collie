@@ -75,6 +75,7 @@ export const MetricSchema = Schema.Struct({
   park: Schema.optionalKey(Schema.String),
   since: Schema.optionalKey(Schema.String),
   entries: Schema.optionalKey(Schema.Int),
+  reads: Schema.optionalKey(Schema.String),
   heal: Schema.optionalKey(Schema.String),
   diagnosisComplete: Schema.optionalKey(Schema.Boolean),
   finding: Schema.optionalKey(HealFinding),
