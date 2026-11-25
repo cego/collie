@@ -1397,10 +1397,9 @@ test("Improve builds only the findings it was given, and the rest stay open on t
           expect(prompt).toContain(F1.title);
           expect(prompt).toContain(F3.title);
           expect(prompt).not.toContain(F2.title);
-          expect(yield* findingsIn(`${host.dir()}/runs/${improved.runId}`)).toMatchObject([
-            { id: ids[0], title: F1.title },
-            { id: ids[2], title: F3.title },
-          ]);
+          expect(
+            Arr.map(yield* findingsIn(`${host.dir()}/runs/${improved.runId}`), (one) => one.title),
+          ).toEqual([F1.title, F3.title]);
           expect(yield* findingsWithStatus(reviewed)).toMatchObject([
             { id: ids[0], status: "taken", offer: "improve", run: improved.runId },
             { id: ids[1], status: "open", run: null },
@@ -1447,6 +1446,74 @@ test("Improve builds only the findings it was given, and the rest stay open on t
             (view) => view?.status.status === "complete" || view?.status.status === "failed",
           );
           expect(done?.status.status).toBe("complete");
+        }),
+      );
+    }),
+  ));
+
+test("Improve taken without ids builds only the findings still open on the reviewed Run", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      yield* repository;
+      yield* git(["checkout", "-q", "-b", "feature"]);
+      const first = yield* pushed("needs a guard");
+      yield* git(["push", "-q", "origin", "feature"]);
+      yield* git(["config", "--unset-all", `url.${rig.root}/origin.git.insteadOf`]);
+      yield* git(["remote", "set-url", "origin", `https://${PROJECT}.git`]);
+      yield* git(["remote", "set-url", "--push", "origin", `${rig.root}/origin.git`]);
+      const forge = yield* host.gitlab(model(first, { mrs: [mr(first, { author: "mk" })] }));
+      yield* rig.queueOutputs([
+        review([F1, F2, F3]),
+        { writes: [], output: null, status: "working" },
+        review([
+          { ...F1, status: "fixed" },
+          { ...F3, status: "fixed" },
+        ]),
+      ]);
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          const registry = yield* Registry;
+          yield* registry.load(`${ROOT}workflows/review-improve.workflow.ts`);
+          const parent = yield* host.started(yield* entryOf("review"), "review-open", {
+            target: TARGET,
+          });
+          yield* until(
+            () => asked(parent.runId),
+            (rows) => rows.length > 0,
+          );
+          const reviewed = `${host.dir()}/runs/${parent.runId}`;
+          const ids = Arr.map(yield* findingsIn(reviewed), (one) => one.id ?? "");
+          expect(ids).toHaveLength(3);
+          yield* recordFindingStatus(reviewed, {
+            id: ids[1]!,
+            status: "dismissed",
+            reason: "not worth it",
+            offer: null,
+            run: null,
+            by: "mk",
+            at: "2026-11-24T10:00:00.000Z",
+          });
+
+          const improved = yield* registry.invoke({
+            runId: parent.runId,
+            offer: "improve",
+            input: {},
+            request: "improve-open",
+          });
+          const fs = yield* FileSystem.FileSystem;
+          const promptFile = `${host.dir()}/agents/${improved.runId}/fix.prompt.md`;
+          yield* until(
+            () => fs.exists(promptFile),
+            (exists) => exists,
+          );
+          const prompt = yield* fs.readFileString(promptFile);
+          expect(prompt).toContain(F1.title);
+          expect(prompt).toContain(F3.title);
+          expect(prompt).not.toContain(F2.title);
+          expect(
+            Arr.map(yield* findingsIn(`${host.dir()}/runs/${improved.runId}`), (one) => one.title),
+          ).toEqual([F1.title, F3.title]);
         }),
       );
     }),

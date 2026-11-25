@@ -107,7 +107,12 @@ import { NOTHING_TO_LAND } from "../../src/standing";
 import { MERGE_REQUEST } from "../../src/oversight";
 import { VerifySpecSchema } from "../../src/verify-spec";
 import { findingsIn, leaveFindings } from "../../src/output";
-import { findingText, findingsWithStatus, reportIn } from "../../src/finding-status";
+import {
+  findingText,
+  findingsWithStatus,
+  recordFindingStatus,
+  reportIn,
+} from "../../src/finding-status";
 import {
   FINGERPRINT_MAX_BYTES,
   collect,
@@ -9645,6 +9650,55 @@ scenario("implement is asked to build only the findings whose ids it was given",
       yield* bin.restore();
 
       const building = yield* asked("r-impl-chosen", "build");
+      expect(building).toContain("the guard");
+      expect(building).toContain("the log line");
+      expect(building).not.toContain("the retry");
+    }),
+  ),
+);
+
+scenario("implement builds only the findings still open when it is given no ids", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const bin = yield* FakeBin.make(`${rig.root}/bin`);
+      yield* noGitlabMrs(bin);
+      yield* repository();
+      const fs = yield* FileSystem.FileSystem;
+      const found = `${rig.root}/opened`;
+      yield* fs.makeDirectory(found, { recursive: true });
+      yield* fs.writeFileString(
+        `${found}/findings.json`,
+        asJson([
+          { id: "r-investigated-F1", severity: "major", title: "the guard", suggested: "fix" },
+          { id: "r-investigated-F2", severity: "major", title: "the retry", suggested: "fix" },
+          {
+            id: "r-investigated-F3",
+            severity: "minor",
+            title: "the log line",
+            suggested: "ticket",
+          },
+        ]),
+      );
+      yield* recordFindingStatus(found, {
+        id: "r-investigated-F2",
+        status: "dismissed",
+        reason: "not worth it",
+        offer: null,
+        run: null,
+        by: "mk",
+        at: "2026-11-24T10:00:00.000Z",
+      });
+      yield* approve("r-impl-open", ["unit"]);
+      yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+
+      yield* ran({
+        entry: shipped("implement"),
+        runId: "r-impl-open",
+        input: { plan: found, ...FINISH },
+      });
+      yield* bin.restore();
+
+      const building = yield* asked("r-impl-open", "build");
       expect(building).toContain("the guard");
       expect(building).toContain("the log line");
       expect(building).not.toContain("the retry");

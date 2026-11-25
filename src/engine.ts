@@ -451,6 +451,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     " | ",
   )};
   export const ParkCause: Schema.Codec<ParkCause, unknown, never, never>;
+  export type FindingWord = "open" | "fixed" | "disputed" | "obsolete" | "dismissed" | "taken";
   export interface ReviewScope { readonly source: string; readonly requirements: string; readonly target: string; readonly head: string; readonly fingerprint: string; readonly outcome: string; readonly risks: string }
   export const ReviewScope: Schema.Codec<ReviewScope, unknown, never, never>;
   export interface Recovery { readonly implementation: boolean; readonly reason: string; readonly previous: string; readonly commits: string; readonly review: SynthesisReport | null; readonly lineage?: ReadonlyArray<string> }
@@ -1221,6 +1222,14 @@ export const SDK_DECLARATIONS = `declare module "collie" {
      * Take it inside an Activity.
      */
     readonly nothingToLand: (runId: string, cwd: string) => Effect.Effect<string | null>;
+    /** Each finding the Run at dir left, with the status its journal last set on it. */
+    readonly findingStatuses: (dir: string) => Effect.Effect<
+      ReadonlyArray<{
+        readonly id: string;
+        readonly status: FindingWord;
+        readonly run: string | null;
+      }>
+    >;
     /**
      * Merges the merge request this Run recorded at \`head\`, recording the landing first and
      * its outcome after; fails for a Run that recorded none. Take it inside an Activity.
@@ -2356,6 +2365,15 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export function renderReview(synthesis: SynthesisReport): string;
   export function renderPublicReview(synthesis: SynthesisReport): string;
   export function formatFindings(findings: ReadonlyArray<Finding>): string;
+  export function buildable(
+    findings: ReadonlyArray<Finding>,
+    statuses: ReadonlyArray<{
+      readonly id: string;
+      readonly status: FindingWord;
+      readonly run: string | null;
+    }>,
+    by: string,
+  ): ReadonlyArray<Finding>;
 
   /** The prose a human reads, and the findings a card counts, where both are looked for. */
   export const REVIEW_FILE: string;
@@ -6103,6 +6121,12 @@ export const hostLayer: (options: {
               return why;
             }),
           ).pipe(Effect.provideService(FileSystem.FileSystem, fs), Effect.orDie),
+        findingStatuses: (where) =>
+          under(
+            Effect.map(findingsWithStatus(where), (ones) =>
+              Arr.map(ones, (one) => ({ id: one.id, status: one.status, run: one.run })),
+            ),
+          ),
         merge: (asked) =>
           Effect.gen(function* () {
             return yield* land({

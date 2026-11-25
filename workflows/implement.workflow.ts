@@ -29,6 +29,7 @@ import {
   PlanOutputSchema,
   defineWorkflow,
   evidenceRoots,
+  buildable,
   findingsIn,
   formatFindings,
   identityProblem,
@@ -139,6 +140,12 @@ const inlinePlanRefusal = (
 const chosenFindingsOf = (
   source: { readonly kind: string; readonly value: string },
   ids: ReadonlyArray<string>,
+  said: ReadonlyArray<{
+    readonly id: string;
+    readonly status: string;
+    readonly run: string | null;
+  }>,
+  by: string,
 ) =>
   Effect.gen(function* () {
     if (source.kind !== "findings" && source.kind !== "review") {
@@ -146,9 +153,7 @@ const chosenFindingsOf = (
     }
     const all = yield* findingsIn(source.value);
     if (ids.length === 0) {
-      return formatFindings(
-        Arr.filter(all, (one) => one.status !== "fixed" && one.status !== "obsolete"),
-      );
+      return formatFindings(buildable(all, said, by));
     }
     const chosen = Arr.filter(all, (one) => one.id !== undefined && Arr.contains(ids, one.id));
     const unknown = Arr.filter(ids, (id) => !Arr.some(chosen, (one) => one.id === id));
@@ -458,7 +463,9 @@ export default defineWorkflow({
         name: "findings",
         success: text,
         error: WorkflowError,
-        execute: chosenFindingsOf(source, asked.findings ?? []),
+        execute: Effect.flatMap(host.findingStatuses(source.value), (said) =>
+          chosenFindingsOf(source, asked.findings ?? [], said, runId),
+        ),
       });
       const share = place.options.repo ?? "";
       if (source.kind === "linear") {

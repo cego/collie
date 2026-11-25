@@ -181,6 +181,16 @@ export {
   SynthesisSchema,
 } from "./output";
 
+/** The words a finding's status can be: what is still open, what a fix settled, and what a human set. */
+export type FindingWord = "open" | "fixed" | "disputed" | "obsolete" | "dismissed" | "taken";
+
+/**
+ * The findings still somebody's to build: what a human dismissed or another Run took is
+ * left out, and one the reading Run took itself reads open to it. The statuses come from
+ * the Host's `findingStatuses`, never from `findings.json` alone.
+ */
+export { buildable } from "./finding-status";
+
 /**
  * What a review/fix rally is made of: a workflow that writes its loop in TypeScript
  * converges, stands on a dispute and runs out of rounds where these say, and every
@@ -1124,6 +1134,18 @@ export interface HostApi {
    * that base cannot be read, null. Take it inside an Activity.
    */
   readonly nothingToLand: (runId: string, cwd: string) => Effect.Effect<string | null>;
+  /**
+   * Each finding the Run at `dir` left, with the status its journal last set on it, so a
+   * workflow reads what is still open from the host rather than from `findings.json` alone.
+   */
+  readonly findingStatuses: (dir: string) => Effect.Effect<
+    ReadonlyArray<{
+      readonly id: string;
+      readonly status: FindingWord;
+      /** The Run the finding was taken by, where it was taken. */
+      readonly run: string | null;
+    }>
+  >;
   /**
    * Merges the merge request this Run recorded at `head`, through the forge's REST merge,
    * never as an admin and never by auto-merge. The Run's landing record is written before

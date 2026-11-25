@@ -89,6 +89,7 @@ export const findingsWithStatus = Effect.fn("FindingStatus.findings")(function* 
   const returned: ReadonlyArray<ReviewFinding> = Arr.map(findings, (finding) => {
     const said = saidAbout(lines, finding.id);
     return {
+      ...finding,
       id: finding.id ?? "",
       status: effectiveStatusOf(finding, lines),
       reason: said?.reason ?? null,
@@ -138,6 +139,35 @@ export const findingText = (finding: ReviewFinding, report: string) =>
     ),
     "\n",
   );
+
+// WARNING: a finding taken by the Run reading it is its own work, so it reads open to that Run alone.
+export const buildable = (
+  findings: ReadonlyArray<Finding>,
+  statuses: ReadonlyArray<{
+    readonly id: string;
+    readonly status: string;
+    readonly run: string | null;
+  }>,
+  by: string,
+) => {
+  const said = new Map(Arr.map(statuses, (one) => [one.id, one] as const));
+  return Arr.flatMap(findings, (finding): ReadonlyArray<Finding> => {
+    const last = finding.id === undefined ? undefined : said.get(finding.id);
+    if (last === undefined) {
+      return [{ ...finding, status: finding.status ?? "open" }];
+    }
+    if (last.status === "dismissed") {
+      return [];
+    }
+    if (last.status === "taken") {
+      return last.run === by ? [{ ...finding, status: "open" }] : [];
+    }
+    if (isOpenFinding(last.status) || last.status === "fixed" || last.status === "obsolete") {
+      return [{ ...finding, status: last.status }];
+    }
+    return [];
+  });
+};
 
 export const openCountIn = Effect.fn("FindingStatus.count")(function* (runDir: string) {
   return openFindingsOf(yield* findingsIn(runDir), yield* readFindingStatuses(runDir));

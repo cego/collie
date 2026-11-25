@@ -18,6 +18,7 @@ import {
   isBlocking,
   mrLabel,
   watch,
+  buildable,
   formatFindings,
   findingKey,
   findingsIn,
@@ -229,14 +230,23 @@ export default defineWorkflow({
           : yield* fs
               .readFileString(`${earlierPlace.dir}/${REVIEW_FILE}`)
               .pipe(Effect.orElseSucceed(() => ""));
+      const earlierFindings = earlierPlace === null ? [] : yield* findingsIn(earlierPlace.dir);
+      const earlierSaid =
+        earlierPlace === null ? [] : yield* host.findingStatuses(earlierPlace.dir);
+      const buildableEarlier = new Map(
+        Arr.map(
+          buildable(earlierFindings, earlierSaid, run.id),
+          (one) => [one.id ?? "", one.status ?? "open"] as const,
+        ),
+      );
       let ledger: ReadonlyArray<Finding> | undefined =
         earlierPlace === null
           ? undefined
-          : Arr.map(yield* findingsIn(earlierPlace.dir), (one, index) => ({
-              ...one,
-              id: one.id ?? `${previous}-F${index + 1}`,
-              status: one.status ?? "open",
-            }));
+          : Arr.flatMap(earlierFindings, (one, index) => {
+              const id = one.id ?? `${previous}-F${index + 1}`;
+              const status: Finding["status"] = buildableEarlier.get(id);
+              return status === undefined ? [] : [{ ...one, id, status }];
+            });
       const earlierHead =
         earlierPlace === null
           ? ""
