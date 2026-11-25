@@ -119,15 +119,7 @@ import {
   withControlLock,
 } from "../src/compaction";
 import type { AgentContext, CompactionOutcome, CompactionPorts } from "../src/compaction";
-import {
-  COMPACTION_PORTS,
-  QUESTIONS,
-  TURNS,
-  questionsSince,
-  recordClaudeEvent,
-  turnTaken,
-  writeEvent,
-} from "../src/compactors";
+import { COMPACTION_PORTS, questionsSince, recordClaudeEvent, writeEvent } from "../src/compactors";
 import { hostLockOf } from "../src/lock";
 import { claudeTrust } from "../src/trust";
 import { FALLBACK_DEFAULTS } from "../src/settings";
@@ -1559,30 +1551,53 @@ class StaleWorkingTerminal extends UnseenTurn {
   }
 }
 
-test("a resumed launch keeps the turn record that says its conversation exists", () =>
+test("a conversation resumed on a transcript alone is resumed again after a loss before its first turn", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const host = hostOf();
-      const agent = agentFor("r1");
-      const dir = `${host.env.stateDir}/compaction/${agent}`;
-      yield* fs.makeDirectory(dir, { recursive: true });
-      yield* fs.writeFileString(`${dir}/${TURNS}`, "s-1\n");
-      yield* installControls(
-        {
-          stateDir: host.env.stateDir,
-          ports: COMPACTION_PORTS,
-          configured: host.compactAtTokens,
-          herdr: host.herdr,
-          log: () => Effect.void,
-        },
-        { agent, harness: "claude", cwd: rig.projectDir, runLog: `${dir}/agents.log` },
-        [],
-        [],
-        { session: "s-1", keep: [QUESTIONS, TURNS] },
+      core.reportedOnly([agentFor("r1")]);
+      yield* rig.queueOutputs([null]);
+      const herdr = new UnseenTurn(rig.pluginEnv());
+      const result = yield* session(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(started("r1"));
+          yield* untilStarted;
+          const first = yield* claudeSessionOf("r1");
+          const at = yield* controlDir(hostOf().env.stateDir, agentFor("r1"));
+          yield* fs.makeDirectory(at, { recursive: true });
+          const transcript = `${at}/transcript.jsonl`;
+          yield* fs.writeFileString(transcript, '{"type":"user","message":{"role":"user"}}\n');
+          yield* writeEvent(at, { kind: "submit", session: first, transcript });
+          yield* killThePane(herdr, "r1");
+          yield* (yield* Agents).resumeLost("r1", runningNow);
+          yield* until(
+            rig.cmds().pipe(
+              Effect.orDie,
+              Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run").length === 2),
+            ),
+          );
+          const resumed = yield* claudeLaunches(2);
+          yield* killThePane(herdr, "r1");
+          yield* (yield* Agents).resumeLost("r1", runningNow);
+          yield* until(
+            rig.cmds().pipe(
+              Effect.orDie,
+              Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run").length === 3),
+            ),
+          );
+          const again = yield* claudeLaunches(3);
+          yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"resumed"}`);
+          const done = yield* Fiber.join(fiber);
+          return { first, resumed, again, done };
+        }),
+        { herdr, collectMs: 400, readyMs: 200 },
       );
-      expect(yield* turnTaken(dir, "s-1")).toBe(true);
-    }).pipe(Effect.scoped),
+      expect(result.resumed).toContain("--resume");
+      expect(result.again).toContain("--resume");
+      expect(result.again).toContain(result.first);
+      expect(result.again).not.toContain("--session-id");
+      expect(result.done._tag).toBe("Success");
+    }),
   ));
 
 test("a server whose command line is empty during exec keeps its identity for recovery", () =>

@@ -348,12 +348,17 @@ asked for; it waits with `memory: false`, for disk alone. `COLLIE_DF` names a fi
 `atBoundary` in `src/compaction.ts` records when an attempt was `asked`. An attempt still
 unresolved `RECONCILE_AFTER_MS` (ten minutes) after that is settled by its port's
 `reconcile`, where the port has one, in `resolved`, so a boundary's own wait and
-`pollCompaction` past the budget both settle it. Claude's and Pi's read the transcript their
-harness last named in the agent's telemetry (`transcriptCompacted` in
-`src/compactors.ts`): a compaction line stamped since the ask is success, none is failure,
-and a transcript that cannot be read is failure too. Codex and OpenCode poll their own
-server, so they have no `reconcile`. An attempt recorded before `asked` existed counts from
-its deadline.
+`pollCompaction` past the budget both settle it. Claude's reads the transcript its harness
+last named in the agent's telemetry (`claudeReconcile` in `src/compactors.ts`): exactly one
+marker row names the request, and exactly one manual compaction boundary follows it in that
+marker's own turn, written by the marked session. A boundary an automatic compaction wrote,
+one another turn or another launch reached, and a request marker it cannot tie to a
+boundary are none of them success: the attempt stays unresolved and the Step stays parked,
+which is the same answer a completion that never arrived gets. Pi's compaction rows record
+neither a trigger nor a writer, so its completions are settled only by the callbacks
+`ctx.compact` gave, and a lost one parks rather than being guessed at. Codex and OpenCode
+poll their own server, so they have no `reconcile`. An attempt recorded before `asked`
+existed counts from its deadline.
 
 ### The next Fallback
 

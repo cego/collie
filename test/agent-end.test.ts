@@ -92,7 +92,7 @@ const arranged = (agent: string) =>
 const depsOf = (over: Partial<EndDeps> = {}) => {
   const lines: Array<string> = [];
   const deps: EndDeps = {
-    herdr: new Herdr(rig.pluginEnv()),
+    herdr: over.herdr ?? new Herdr(rig.pluginEnv()),
     ports: {},
     stateDir: rig.stateDir,
     log: (line) => Effect.sync(() => void lines.push(line)),

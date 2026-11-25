@@ -397,9 +397,9 @@ const latestUsage = Effect.fn("Compactors.latestUsage")(function* (dir: string) 
   return Arr.filter(events, (event) => event.kind === "usage").at(-1)?.tokens ?? null;
 });
 
-const outcomeOf = Effect.fn("Compactors.outcomeOf")(function* (dir: string, requestId: string) {
+const outcomeOf = Effect.fn("Compactors.outcomeOf")(function* (dir: string, mark: Marked) {
   const events = yield* readEvents(dir);
-  const mine = Arr.filter(events, (event) => event.request === requestId);
+  const mine = Arr.filter(events, (event) => event.request === mark.id && fromMarked(event, mark));
   if (Arr.some(mine, (event) => event.kind === "done")) {
     return { kind: "success" } as const;
   }
@@ -673,9 +673,7 @@ const pi: CompactionPort = {
   // WARNING: the human's channel, so a refusal from herdr is a request that never left.
   request: (ctx, requestId) => submitCompaction(ctx, requestId, `/collie-compact ${requestId}`),
   mark: (ctx) => claudeMark(ctx.dir),
-  poll: (ctx, mark) => outcomeOf(ctx.dir, mark.id),
-  reconcile: (ctx, mark, since) =>
-    transcriptCompacted(ctx.dir, mark, since, (line) => line.type === "compaction"),
+  poll: (ctx, mark) => outcomeOf(ctx.dir, mark),
 };
 
 export class Submitting extends Data.TaggedError("Submitting")<{
@@ -1086,6 +1084,14 @@ export const claudeMark = Effect.fn("Compactors.claudeMark")(function* (dir: str
   };
 });
 
+// WARNING: the request id alone is not the caller: another launch of the same session writes the same one.
+const fromMarked = (
+  event: TelemetryEvent,
+  mark: { readonly session: string | null; readonly launch: string | null },
+) =>
+  (mark.session === null || event.session === mark.session) &&
+  (mark.launch === null || (event.launch ?? null) === mark.launch);
+
 // WARNING: PostCompact carries nothing of the request, so only the marked start's own session finishing it counts.
 const claudeOutcome = Effect.fn("Compactors.claudeOutcome")(function* (dir: string, mark: Marked) {
   const events = yield* readEvents(dir);
@@ -1146,10 +1152,15 @@ const claudeReconcile = Effect.fn("Compactors.claudeReconcile")(function* (
     if (entry === undefined) {
       continue;
     }
+    // WARNING: the turn that typed the marker is the only turn whose compaction is the request's.
     if (entry.type === "user") {
       const request = Str.isEmpty(line) ? null : namedRequest(line);
       named = request === mark.id;
       markers += named ? 1 : 0;
+      continue;
+    }
+    if (entry.type === "assistant") {
+      named = false;
       continue;
     }
     // WARNING: an automatic compaction is the harness tidying itself, never the request Collie made.
@@ -1266,43 +1277,6 @@ const claudeRecords = Effect.fn("Compactors.claudeRecords")(function* (ctx: Agen
   return sources;
 });
 
-// WARNING: this is what settles a request whose completion was lost.
-const transcriptCompacted = Effect.fn("Compactors.transcriptCompacted")(function* (
-  dir: string,
-  mark: Marked,
-  since: number,
-  boundary: (line: { readonly type?: string; readonly subtype?: string }) => boolean,
-) {
-  if (mark.transcript === null) {
-    return { kind: "failure", reason: "it never said where its transcript is" } as const;
-  }
-  const transcript = mark.transcript;
-  const text = yield* (yield* FileSystem.FileSystem).readFileString(transcript);
-  let named = false;
-  let markers = 0;
-  let candidates = 0;
-  for (const line of Str.split(text, "\n")) {
-    const entry = Option.getOrUndefined(decodeTranscriptLine(line));
-    if (entry === undefined) {
-      continue;
-    }
-    // WARNING: a boundary the transcript does not tie to this request is time, not proof; two of either is none.
-    if (entry.type === "user") {
-      const request = namedRequest(line);
-      named = request === mark.id;
-      markers += named ? 1 : 0;
-      continue;
-    }
-    if (named && boundary(entry) && writerOf(entry, mark) && epochMs(entry.timestamp) >= since) {
-      candidates += 1;
-      if (candidates > 1) {
-        return null;
-      }
-    }
-  }
-  return markers === 1 && candidates === 1 ? ({ kind: "success" } as const) : null;
-});
-
 const MARK_REQUEST = /\(collie:([A-Za-z0-9-]+)\)|\/collie-compact ([A-Za-z0-9-]+)/;
 
 const namedRequest = (line: string) => {
@@ -1342,9 +1316,16 @@ const decodeTranscriptLine = Schema.decodeUnknownOption(
 // WARNING: for a harness whose attempt cannot be told to stop, the record is the only disposition left.
 export const recordCancelled = (
   dir: string,
-  mark: { readonly id: string; readonly session: string | null },
+  mark: { readonly id: string; readonly session: string | null; readonly launch?: string | null },
   why: string,
-) => recordEvent(dir, { session: mark.session, kind: "cancelled", request: mark.id, reason: why });
+) =>
+  recordEvent(dir, {
+    session: mark.session,
+    launch: mark.launch ?? undefined,
+    kind: "cancelled",
+    request: mark.id,
+    reason: why,
+  });
 
 const claude: CompactionPort = {
   gate: gateVersion("claude"),

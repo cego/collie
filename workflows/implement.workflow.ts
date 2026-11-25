@@ -1251,6 +1251,17 @@ export default defineWorkflow({
         }
         tickets = yield* ticketsNow;
       }
+      // WARNING: a plan whose every ticket was skipped built nothing, which no review of the whole can stand in for.
+      if (recovery.entry === "Build" && built.size === 0) {
+        return yield* parkStep(
+          `no ticket was built (${
+            Arr.join(
+              Arr.map(tickets, (one) => one.file),
+              ", ",
+            ) || "the plan names none"
+          }). Correct the plan, then resume ${runId}.`,
+        );
+      }
       input = { ...input, verify: yield* checksNow };
       // WARNING: work that stayed on its first agent keeps it to the end.
       const delivers = () => handing.sessions !== "run" && handing.agent !== BUILDER;

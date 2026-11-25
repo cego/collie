@@ -169,12 +169,16 @@ const ending = Effect.fnUntraced(function* (
   }
   const stopMs = deps.stopMs ?? STOP_WAIT_MS;
   const unread = pane !== null && "unread" in pane;
+  // WARNING: an unread pane is nothing Collie can say has stopped, so nothing of it is cancelled and no work is handed on.
+  if (unread) {
+    return { _tag: "Unprovable", reason: `${launched.agent} ${pane.unread}` } satisfies Ended;
+  }
   const left =
     pane === null || "empty" in pane || unread
       ? []
       : yield* settled(pane.roots, pane.noted, stopMs);
   // WARNING: only once nothing it started is left running, or an agent still able to finish has its attempt cancelled under it.
-  if (left.length === 0 && !unread) {
+  if (left.length === 0) {
     yield* cancelCompaction(deps, launched.agent, why).pipe(Effect.ignore);
   }
   if (left.length > 0) {
@@ -192,24 +196,33 @@ const ending = Effect.fnUntraced(function* (
     reached.success !== null ||
     (pane !== null && "noted" in pane && (pane.noted?.length ?? 0) > 0);
   if (ended && closes === "close") {
-    if (pane !== null && ("unread" in pane || "empty" in pane)) {
-      yield* deps
-        .log(
-          `${launched.agent}: Quiet not confirmed: ${"unread" in pane ? pane.unread : pane.empty}`,
-        )
-        .pipe(Effect.ignore);
+    if (pane !== null && "empty" in pane) {
+      yield* deps.log(`${launched.agent}: Quiet not confirmed: ${pane.empty}`).pipe(Effect.ignore);
     }
     yield* deps.log(endedLine(launched.agent, why)).pipe(Effect.ignore);
   }
   return { _tag: "Closed", ended } satisfies Ended;
 });
 
-export const rootOf = (herdr: Pick<Herdr, "terminalRoot">, address: string) =>
+// WARNING: a root core could not be asked for is not a pane with nothing in it; only a process that is gone is.
+export const rootRead = (herdr: Pick<Herdr, "terminalRoot">, address: string) =>
   Effect.gen(function* () {
-    const pid = yield* herdr.terminalRoot(address).pipe(Effect.orElseSucceed(() => null));
-    const started = pid === null ? null : yield* startedOf(pid);
-    return pid === null || started === null ? undefined : { pid, started };
+    const read = yield* herdr.terminalRoot(address).pipe(Effect.result);
+    if (read._tag === "Failure") {
+      return { unread: `its pane's root could not be read (${reason(read.failure)})` } as const;
+    }
+    const pid = read.success;
+    if (pid === null) {
+      return { none: true } as const;
+    }
+    const started = yield* startedOf(pid);
+    return started === null ? ({ none: true } as const) : ({ pid, started } as const);
   });
+
+export const rootOf = (herdr: Pick<Herdr, "terminalRoot">, address: string) =>
+  Effect.map(rootRead(herdr, address), (read) =>
+    "unread" in read || "none" in read ? undefined : { pid: read.pid, started: read.started },
+  );
 
 const HANGUP_GRACE_MS = 2000;
 
@@ -219,7 +232,12 @@ const paneProcesses = Effect.fnUntraced(function* (
   recorded: SeenProcess | undefined,
   paneId: string | undefined,
 ) {
-  const current = paneId === undefined ? undefined : yield* rootOf(deps.herdr, paneId);
+  const read =
+    paneId === undefined ? ({ none: true } as const) : yield* rootRead(deps.herdr, paneId);
+  if ("unread" in read) {
+    return { unread: read.unread };
+  }
+  const current = "none" in read ? undefined : { pid: read.pid, started: read.started };
   const named = [
     ...(recorded === undefined ? [] : [recorded]),
     ...(current === undefined || current.pid === recorded?.pid ? [] : [current]),

@@ -29,7 +29,7 @@ import type {
   Submitting,
   TelemetryUnwritten,
 } from "./compactors";
-import { recordCancelled } from "./compactors";
+import { TURNS, recordCancelled } from "./compactors";
 import { LOCK_CLAIM_SPACING_MS, ensureLockDir, withLock } from "./lock";
 import { reason } from "./naming";
 import type { ParkCause } from "./park-cause";
@@ -406,6 +406,11 @@ export const installControls = Effect.fn("Compaction.installControls")(function*
     yield* fs.makeDirectory(dir, { recursive: true });
     yield* fs.writeFileString(`${dir}/${name}`, text);
   }
+  // WARNING: resuming the conversation is what says it has one, so the turn record outlives the evidence it was read from.
+  if (resumed !== undefined) {
+    yield* fs.makeDirectory(dir, { recursive: true });
+    yield* fs.writeFileString(`${dir}/${TURNS}`, `${resumed.session}\n`, { flag: "a" });
+  }
   const port = deps.ports[agent.harness];
   if (!limit && port?.questions === undefined) {
     return [];
@@ -760,15 +765,11 @@ export const awaitReady = Effect.fn("Compaction.awaitReady")(function* (
         ),
         Effect.orElseSucceed(() => false),
       );
-  const finished = yield* deps.herdr.agentList().pipe(
-    Effect.map((agents) => Arr.some(agents, (one) => one.name === agent && one.status === "done")),
-    Effect.orElseSucceed(() => false),
-  );
-  const exited = gone || finished;
   const lost = (fallback: string) =>
-    exited ? `${record.harness} exited before it was up` : fallback;
+    gone ? `${record.harness} exited before it was up` : fallback;
+  // WARNING: core lists a terminal only while it runs, so one of ours that is absent has exited.
   if (asked._tag === "Gone") {
-    return gone ? `${record.harness} exited before it was up` : "core no longer lists it";
+    return `${record.harness} exited before it was up`;
   }
   if (asked._tag === "Up") {
     return null;
@@ -1015,7 +1016,11 @@ export const cancelCompaction = Effect.fn("Compaction.cancelCompaction")(functio
   const port = deps.ports[record.harness];
   const cancelling = port === undefined ? undefined : port.cancel;
   if (cancelling === undefined) {
-    yield* recordCancelled(record.dir, { id: attempt.id, session: attempt.session ?? null }, why);
+    yield* recordCancelled(
+      record.dir,
+      { id: attempt.id, session: attempt.session ?? null, launch: attempt.launch ?? null },
+      why,
+    );
   } else {
     const ctx = readingContext(record, attempt.run);
     // WARNING: an attempt marked before Collie knew the incarnation is still bound to the session it asks of now.

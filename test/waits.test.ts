@@ -142,27 +142,15 @@ test("a launch that never came up is named by the exit that ended it", () =>
     }),
   ));
 
-test("a pane core lists as finished is named by its exit, with no pid to read", () =>
+test("a launch core has stopped listing is named by its exit, with no pid to read", () =>
   runEffect(
     Effect.gen(function* () {
       const stateDir = yield* controlled(null);
-      const finished = {
+      const dropped = {
         ...deps(stateDir, port({ ready: () => Effect.succeed(false) })),
-        herdr: {
-          agentList: () =>
-            Effect.succeed([
-              {
-                name: "build-r1",
-                paneId: "pane-1",
-                status: "done" as const,
-                terminalId: "pane-1",
-                cwd: stateDir,
-                foregroundCwd: null,
-              },
-            ]),
-        },
+        herdr: { agentList: () => Effect.succeed([]) },
       };
-      expect(yield* awaitReady(finished, "build-r1", 300, { mustStayListed: true })).toBe(
+      expect(yield* awaitReady(dropped, "build-r1", 300, { mustStayListed: true })).toBe(
         "claude exited before it was up",
       );
     }),
