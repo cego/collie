@@ -69,7 +69,8 @@ import {
 import type { ProcessInfo } from "./processes";
 import { holderLives, hostLockOf, lockHolder, withLock } from "./lock";
 import { tellHost } from "./tell-host";
-import { carriedDelivery } from "./delivery-marker";
+import { carriedPrompt } from "./delivery-marker";
+import { textHash } from "./steering";
 import { epochMs } from "./time";
 import { stringifyJson } from "./json";
 
@@ -134,6 +135,8 @@ const EventSchema = Schema.Struct({
   tokens: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
   request: Schema.optionalKey(Schema.String),
   delivery: Schema.optionalKey(Schema.String),
+  // WARNING: the digest of the text Collie sent, so a marker alone does not settle a delivery that carried other words.
+  body: Schema.optionalKey(Schema.String),
   // WARNING: the terminal that wrote the event: an agent's name outlives the process it named.
   incarnation: Schema.optionalKey(Schema.NullOr(Schema.String)),
   message: Schema.optionalKey(Schema.String),
@@ -844,16 +847,23 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
 
   const event = payload.hook_event_name;
   if (event === "UserPromptSubmit") {
-    // WARNING: the prompt is not stored whole; only who submitted it is kept.
+    // WARNING: the prompt is not stored whole; only who submitted it, and a digest of the words it carried, are kept.
     const prompt = payload.prompt ?? "";
-    const delivery = carriedDelivery(prompt);
+    const carried = carriedPrompt(prompt);
     yield* writeEvent(
       dir,
       Arr.some(CLAUDE_INJECTED, (tag) => pipe(prompt, Str.startsWith(tag)))
         ? { session, kind: "submit", reason: "harness" }
-        : delivery === null
+        : carried === null
           ? { session, kind: "submit", reason: "external" }
-          : { session, kind: "submit", reason: "collie", delivery, incarnation },
+          : {
+              session,
+              kind: "submit",
+              reason: "collie",
+              delivery: carried.delivery,
+              body: textHash(carried.body),
+              incarnation,
+            },
     );
     return "";
   }
@@ -1825,8 +1835,11 @@ export const externalSubmits = Effect.fn("Compactors.externalSubmits")(function*
 
 export const submittedDelivery = Effect.fn("Compactors.submittedDelivery")(function* (
   dir: string,
-  delivery: string,
-  incarnation: string | null,
+  delivery: {
+    readonly id: string;
+    readonly incarnation: string | null;
+    readonly text_hash: string;
+  },
 ) {
   const lines = yield* telemetryLines(dir);
   return Arr.some(lines, (line) => {
@@ -1834,8 +1847,9 @@ export const submittedDelivery = Effect.fn("Compactors.submittedDelivery")(funct
     return (
       decoded._tag === "Some" &&
       decoded.value.kind === "submit" &&
-      decoded.value.delivery === delivery &&
-      decoded.value.incarnation === incarnation
+      decoded.value.delivery === delivery.id &&
+      decoded.value.incarnation === delivery.incarnation &&
+      decoded.value.body === delivery.text_hash
     );
   });
 });

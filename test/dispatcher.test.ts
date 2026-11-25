@@ -660,9 +660,16 @@ const answerLine = (state: "reserved" | "unknown", at: string) =>
     state,
   });
 
-const recordedSubmit = (delivery: string, incarnation: string) =>
+const recordedSubmit = (delivery: string, incarnation: string, body = "answer-text") =>
   Effect.flatMap(controlDir(stateDir, entry.agent), (dir) =>
-    writeEvent(dir, { session: null, kind: "submit", reason: "collie", delivery, incarnation }),
+    writeEvent(dir, {
+      session: null,
+      kind: "submit",
+      reason: "collie",
+      delivery,
+      body,
+      incarnation,
+    }),
   );
 
 const answerNow = Effect.fn("test.answerNow")(function* () {
@@ -724,15 +731,16 @@ test("a delivery already unknown settles once its submit hook records it, and a 
   ));
 
 test.each([
-  ["another incarnation's record", "answer-1-1", "term-2"],
-  ["another delivery's record", "answer-9-1", "term-1"],
+  ["another incarnation's record", "answer-1-1", "term-2", "answer-text"],
+  ["another delivery's record", "answer-9-1", "term-1", "answer-text"],
+  ["a record carrying other words", "answer-1-1", "term-1", "other-text"],
 ] as const)(
   "%s leaves an unknown delivery unknown, and nothing is resent",
-  (_case, delivery, incarnation) =>
+  (_case, delivery, incarnation, body) =>
     runEffect(
       Effect.gen(function* () {
         yield* answerLine("unknown", isoAt(yield* Clock.currentTimeMillis));
-        yield* recordedSubmit(delivery, incarnation);
+        yield* recordedSubmit(delivery, incarnation, body);
 
         const h = fake();
         const again = yield* transaction(h.deps, entry, (channel) =>

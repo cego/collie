@@ -144,9 +144,11 @@ ignored look the same from here, and the note is what tells a later reader that.
 The terminal states are `failed` (core refused) and `superseded` (a human reconciled it).
 `unknown` (core never answered, so nobody can say) blocks further deliveries about the
 same work. It does not expire, and Collie never retries out of it on its own; it is settled
-by evidence instead. That evidence names both the delivery and the incarnation it went to:
-the agent's own prompt-submit hook recorded that delivery id, written from that terminal. A
-record of the same id from another incarnation of the agent's name, a record naming another
+by evidence instead. That evidence names both the delivery and the incarnation it went to,
+and the words it carried: the agent's own prompt-submit hook recorded that delivery id with
+a digest of the text that followed it, written from that terminal. A
+record of the same id from another incarnation of the agent's name, one carrying other
+words — a marker a human pasted back, or a task's output quoting one — a record naming another
 delivery, and no record at all leave it `unknown`, and nothing is sent again. Every path
 that meets an `unknown` settles it the same way — the Output reminder held behind an earlier
 copy, the next delivery to that agent, and the recheck of a Run parked `delivery-unsettled` —

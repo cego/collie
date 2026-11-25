@@ -168,7 +168,12 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
   const refusals = new Map<string, { code: number; message: string; kind: string }>();
   const conditionalRefusals = new Map<
     string,
-    Array<{ matches: (params: Schema.JsonObject) => boolean; code: number; message: string; kind: string }>
+    Array<{
+      matches: (params: Schema.JsonObject) => boolean;
+      code: number;
+      message: string;
+      kind: string;
+    }>
   >();
   const refusalsOnce = new Map<
     string,
@@ -398,9 +403,8 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
           return { failure: once };
         }
       }
-      const conditional = Arr.findFirst(
-        conditionalRefusals.get(method) ?? [],
-        (one) => one.matches(params),
+      const conditional = Arr.findFirst(conditionalRefusals.get(method) ?? [], (one) =>
+        one.matches(params),
       );
       if (Option.isSome(conditional)) {
         return { failure: conditional.value };

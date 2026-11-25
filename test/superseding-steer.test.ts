@@ -32,6 +32,7 @@ import { root, stopHost, until } from "./support/host";
 import { collie, proves } from "./support/world";
 import type { World } from "./support/world";
 import type { FakeHc } from "./support/fake-hc";
+import { isJsonObject, isString } from "../src/schema";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 // WARNING: a restart runs the host's own recovery, which outlasts the default timeout.
@@ -648,6 +649,29 @@ test("a Run stopped while its agent works on the message does not ask the questi
     }),
   ));
 
+const CoreCall = Schema.fromJsonString(
+  Schema.Struct({ cmd: Schema.String, params: Schema.optionalKey(Schema.Json) }),
+);
+
+// WARNING: the words core was handed, so a fixture submits what Collie sent instead of words of its own.
+const sentTexts = (log: string) =>
+  Arr.flatMap(Str.split(log, "\n"), (line) => {
+    const decoded = Schema.decodeOption(CoreCall)(line);
+    if (Option.isNone(decoded) || decoded.value.cmd !== "terminal.send") {
+      return [];
+    }
+    const params = decoded.value.params;
+    return isJsonObject(params) && isString(params.text) ? [params.text] : [];
+  });
+
+// WARNING: the words core was handed, so a fixture submits what Collie sent instead of words of its own.
+const sentWords = (needle: string) =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) =>
+    Effect.map(fs.readFileString(core.logPath).pipe(Effect.orElseSucceed(() => "")), (log) =>
+      Arr.findFirst(sentTexts(log), (text) => pipe(text, Str.includes(needle))),
+    ),
+  );
+
 const answerSends = (at: AtQuestion, needle: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) =>
     fs.readFileString(core.logPath).pipe(
@@ -668,6 +692,7 @@ for (const evidence of [
   "no-submit",
   "another-delivery",
   "another-incarnation",
+  "another-text",
   "its-own-submit",
 ] as const) {
   test(`an agent-owned question stays answered across a restart, with ${evidence} for its delivery`, () =>
@@ -726,14 +751,22 @@ for (const evidence of [
           yield* stopHost(at.world.state);
           const before = Arr.length(yield* metricsOf(at));
           if (evidence !== "no-submit") {
+            const prompt =
+              evidence === "its-own-submit"
+                ? Option.getOrThrow(yield* sentWords(delivery.id))
+                : `collie-delivery:${
+                    evidence === "another-delivery" ? `${delivery.id}-elsewhere` : delivery.id
+                  }\n${
+                    evidence === "another-text"
+                      ? "another matter entirely"
+                      : "Your task for this step is next."
+                  }`;
             yield* recordClaudeEvent(
               yield* controlDir(at.world.state, at.agent),
               encode({
                 session_id: at.agent,
                 hook_event_name: "UserPromptSubmit",
-                prompt: `collie-delivery:${
-                  evidence === "another-delivery" ? `${delivery.id}-elsewhere` : delivery.id
-                }\nYour task for this step is next.`,
+                prompt,
               }),
               evidence === "another-incarnation" ? "not-its-terminal" : delivery.incarnation,
             ).pipe(Effect.orDie);
@@ -748,7 +781,10 @@ for (const evidence of [
                 line.park === parkId &&
                 pipe(line.note ?? "", Str.includes(delivery.id)),
             );
-          const rechecked = yield* until(() => metricsOf(at), (lines) => rechecks(lines).length > 0);
+          const rechecked = yield* until(
+            () => metricsOf(at),
+            (lines) => rechecks(lines).length > 0,
+          );
           expect(rechecks(rechecked)[0]).toMatchObject({
             outcome: evidence === "its-own-submit" ? "cleared" : "uncleared",
           });

@@ -2695,6 +2695,7 @@ const enteredBehindHeldReminder = (landed: "itself" | "otherwise" | "no-one") =>
         kind: "submit",
         reason: "collie",
         delivery: held.id,
+        body: held.text_hash,
         incarnation: landed === "itself" ? held.incarnation : `${held.incarnation}-before`,
       });
     }
@@ -3039,7 +3040,6 @@ test("an answer left unknown is not forgotten when another call's answers go unk
           yield* answer("ask-review-2", "lint");
           yield* answer("ask-review-3", "Redis");
           yield* untilParked("r1");
-
         }),
         { herdr: new Turns(), collectMs: 600_000, pollMs: 100 },
       ).pipe(Effect.orDie);
@@ -3080,6 +3080,7 @@ test("an answer whose submit hook recorded it settles and reaches the agent, so 
             kind: "submit",
             reason: "collie",
             delivery: Option.getOrThrow(lost).id,
+            body: Option.getOrThrow(lost).text_hash,
             incarnation: Option.getOrThrow(lost).incarnation,
           });
           yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"answered"}`);

@@ -10,6 +10,7 @@ import { Herdr } from "../src/herdr";
 import { externalSubmissions, installedVersion, submittedDelivery } from "../src/compactors";
 import { controlDir } from "../src/compaction";
 import { entryFromLive, transaction, INTERRUPT_WAIT_MS } from "../src/dispatcher";
+import { textHash } from "../src/steering";
 import { nowIso } from "../src/time";
 import { recordsAt } from "../src/records";
 
@@ -160,7 +161,11 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
     });
   } else {
     // WARNING: only a live Run's oversight writes manual_override; read the hook's record, not the ledger.
-    const deliveredAsCollie = yield* submittedDelivery(hookDir, nowId, terminalId);
+    const deliveredAsCollie = yield* submittedDelivery(hookDir, {
+      id: nowId,
+      incarnation: terminalId,
+      text_hash: textHash(askFor(runDir, nowId)),
+    });
     const before = yield* externalSubmissions(hookDir);
     yield* Effect.log(`Type any line into ${agent}'s pane now, then Enter. Waiting 90 seconds.`);
     yield* Effect.sleep(90_000);

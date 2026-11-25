@@ -2218,7 +2218,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           herdr,
           log: (line) => log(about.runId, line),
           taken: (delivery) =>
-            submittedDelivery(dir, delivery.id, delivery.incarnation).pipe(
+            submittedDelivery(dir, delivery).pipe(
               Effect.map((recorded) => (recorded ? dispatch.SUBMIT_RECORDED : null)),
               Effect.orElseSucceed(() => null),
             ),
@@ -3081,7 +3081,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           herdr: host.herdr,
           log: (line) => log(launched.runId, line),
           taken: (delivery) =>
-            submittedDelivery(dir, delivery.id, delivery.incarnation).pipe(
+            submittedDelivery(dir, delivery).pipe(
               Effect.map((recorded) => (recorded ? dispatch.SUBMIT_RECORDED : null)),
               Effect.orElseSucceed(() => null),
             ),

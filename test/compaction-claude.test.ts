@@ -25,6 +25,7 @@ import {
   VERIFIED_VERSIONS,
 } from "../src/compactors";
 import { pollCompaction, readControl } from "../src/compaction";
+import { textHash } from "../src/steering";
 import type { CompactionDeps } from "../src/compaction";
 
 let rig: Rig;
@@ -285,7 +286,13 @@ test("a background task finishing is Claude's own turn, not a person typing", ()
       );
 
       expect(yield* externalSubmissions(dir)).toBe(0);
-      expect(yield* submittedDelivery(dir, "run-1-steer-1", null)).toBe(false);
+      expect(
+        yield* submittedDelivery(dir, {
+          id: "run-1-steer-1",
+          incarnation: null,
+          text_hash: textHash("Stop and do this."),
+        }),
+      ).toBe(false);
     }),
   ));
 
@@ -299,11 +306,42 @@ test("a submission is Collie's when it carries a delivery token, and a person's 
       );
       yield* recordClaudeEvent(dir, submit("wait, use the other branch"), "term-7");
 
-      expect(yield* submittedDelivery(dir, "run-1-steer-1", "term-7")).toBe(true);
-      expect(yield* submittedDelivery(dir, "run-1-steer-1", "term-2")).toBe(false);
+      expect(
+        yield* submittedDelivery(dir, {
+          id: "run-1-steer-1",
+          incarnation: "term-7",
+          text_hash: textHash("Stop and do this."),
+        }),
+      ).toBe(true);
+      expect(
+        yield* submittedDelivery(dir, {
+          id: "run-1-steer-1",
+          incarnation: "term-2",
+          text_hash: textHash("Stop and do this."),
+        }),
+      ).toBe(false);
       expect(yield* externalSubmissions(dir)).toBe(1);
       const written = yield* fs.readFileString(path.join(dir, "events.jsonl"));
       expect(written).not.toContain("other branch");
+    }),
+  ));
+
+test("a submit that names a delivery but carried other words does not settle it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* recordClaudeEvent(
+        dir,
+        submit("collie-delivery:run-1-steer-1\nanother matter entirely"),
+        "term-7",
+      );
+
+      expect(
+        yield* submittedDelivery(dir, {
+          id: "run-1-steer-1",
+          incarnation: "term-7",
+          text_hash: textHash("Stop and do this."),
+        }),
+      ).toBe(false);
     }),
   ));
 

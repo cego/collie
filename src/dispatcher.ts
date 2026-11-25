@@ -357,9 +357,7 @@ export const settleFromSubmit = Effect.fn("Dispatcher.settleFromSubmit")(functio
   delivery: Delivery,
 ) {
   const dir = yield* controlDir(stateDir, delivery.agent);
-  const recorded = yield* submittedDelivery(dir, delivery.id, delivery.incarnation).pipe(
-    Effect.orElseSucceed(() => false),
-  );
+  const recorded = yield* submittedDelivery(dir, delivery).pipe(Effect.orElseSucceed(() => false));
   if (!recorded) {
     return false;
   }
@@ -680,9 +678,7 @@ export const entryFromLive = Effect.fn("Dispatcher.entryFromLive")(function* (
     };
     return returned;
   }
-  const live = Option.getOrUndefined(
-    Arr.findFirst(listed.value, (a) => a.name === about.agent),
-  );
+  const live = Option.getOrUndefined(Arr.findFirst(listed.value, (a) => a.name === about.agent));
   if (!live) {
     return { entry: null, reason: `${about.agent} is gone — core no longer has it`, gone: true };
   }

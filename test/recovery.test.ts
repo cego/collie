@@ -1265,6 +1265,7 @@ test("a delivery-unsettled park clears once the agent's submit hook records the 
         kind: "submit",
         reason: "collie",
         delivery: "r1-q-steer-1",
+        body: "the-answer",
         incarnation: "term-1",
       });
 
@@ -1319,6 +1320,7 @@ const submit = (
       kind: "submit",
       reason: "collie",
       delivery: event.delivery,
+      body: "the-answer",
       incarnation: event.incarnation,
     });
   });
