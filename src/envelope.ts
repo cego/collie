@@ -108,7 +108,7 @@ export function guarded<E, R>(operation: Effect.Effect<void, E, R>, json: boolea
   );
 }
 
-const requestId = Effect.fn("collie.requestId")(function* (value: Option.Option<string>) {
+export const requestId = Effect.fn("collie.requestId")(function* (value: Option.Option<string>) {
   return Option.isSome(value) ? value.value : yield* newRequestId();
 });
 
@@ -166,7 +166,7 @@ export type Call = {
   readonly operation: string;
   readonly run: string | null;
   readonly destination?: "cwd";
-  readonly selector?: string | null;
+  readonly at?: string | null;
   readonly files?: ReadonlyArray<string>;
   readonly args: Given;
 };
@@ -202,14 +202,12 @@ const digestOf = (call: Call, env: PluginEnv, files: ReadonlyArray<string>) =>
       operation: call.operation,
       caller: env.caller ?? null,
       run: call.run,
-      where:
-        call.destination === "cwd"
-          ? {
-              machine: env.machine ?? null,
-              cwd: env.cwd,
-              asked: call.selector === undefined ? (env.asked ?? null) : call.selector,
-            }
-          : { machine: env.machine ?? null },
+      where: {
+        machine: env.machine ?? null,
+        cwd: call.destination === "cwd" ? env.cwd : null,
+        asked: call.destination === "cwd" ? (env.asked ?? null) : null,
+        at: call.at ?? null,
+      },
       files,
       args: call.args,
     }),
@@ -238,7 +236,7 @@ const replayOf =
   };
 
 // WARNING: failures carry the request id too, so a retry replays rather than starting a second Run.
-function withRequestId(result: Result, id: string) {
+export function withRequestId(result: Result, id: string) {
   if (!result.ok) {
     return err(result.error.code, result.error.message, {
       ...result.error.details,

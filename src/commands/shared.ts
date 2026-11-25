@@ -129,6 +129,9 @@ export const context = Effect.fn("collie.context")(function* (
   );
 });
 
+export const resolvedAt = (resolved: Extract<ContextResolution, { _tag: "ResolvedContext" }>) =>
+  resolved.workspace?.cwd ?? resolved.env.cwd;
+
 export const discoveryContext = Effect.fn("collie.discoveryContext")(function* (global: Global) {
   if (Option.isSome(global.workspace)) {
     return yield* context(global, true);

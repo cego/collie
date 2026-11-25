@@ -346,7 +346,7 @@ const workflowFork = Command.make(
             {
               operation: "workflow-fork",
               run: null,
-              destination: layer === "project" ? "cwd" : undefined,
+              destination: "cwd",
               args: { workflow, layer, name },
             },
             request,

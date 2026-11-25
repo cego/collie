@@ -4,7 +4,7 @@ import { Effect, Fiber, FileSystem, Option, Schema, flow, Result } from "effect"
 import { readAudit } from "../src/audit";
 import { runDir } from "../src/engine";
 import { recordsReadLayer } from "../src/records";
-import { collie, proves } from "./support/world";
+import { collie, proves, save } from "./support/world";
 import type { World } from "./support/world";
 import { until } from "./support/host";
 import { registeredAt } from "./support/records";
@@ -61,6 +61,26 @@ const held = (
 
 const legacyHold = (runId: string) =>
   `{"ok":true,"data":{"run":"${runId}","runId":"${runId}","control":"hold","set":true,"applied":true,"detail":"","left":[]},"human":"Held ${runId}."}`;
+
+const pointProjectsAt = (world: World, root: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const Config = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json));
+    const file = `${world.config}/config.json`;
+    const text = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => "{}"));
+    const kept = Option.getOrElse(Schema.decodeOption(Config)(text), () => ({}));
+    yield* fs.writeFileString(
+      file,
+      yield* Schema.encodeEffect(Config)({ ...kept, projects: { root } }),
+    );
+  });
+
+const checkoutAt = (at: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.makeDirectory(at, { recursive: true });
+    yield* exec(["git", "init", "-q"], { cwd: at });
+  });
 
 test("the same Run repeats a request with the same id and is answered from its receipt", () =>
   proves(
@@ -632,9 +652,8 @@ test("a start's decision and workspace are part of its request", () =>
     "collie-receipt-scope-start-",
     (world) =>
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
         const elsewhere = `${world.home}/elsewhere`;
-        yield* fs.makeDirectory(elsewhere, { recursive: true });
+        yield* checkoutAt(elsewhere);
         const start = (extra: ReadonlyArray<string>) =>
           collie(world, [
             "run",
@@ -691,25 +710,45 @@ test("a Schedule's checkout is the one it resolved, not the way it was named", (
     "collie-receipt-scope-sched-resolved-",
     (world) =>
       Effect.gen(function* () {
-        const add = (workspace: string) =>
-          collie(world, [
-            "schedule",
-            "add",
-            "resolved",
-            "lingers",
-            "--cron",
-            "0 7 * * *",
-            "--paused",
-            "--input",
-            "note=cache",
-            "--workspace",
-            workspace,
-            "--request-id",
-            "sched-resolved",
-          ]);
-        const dot = yield* add(".");
+        const other = `${world.home}/other`;
+        yield* checkoutAt(other);
+        const add = (
+          name: string,
+          id: string,
+          workspace: string,
+          extra: Readonly<Record<string, string>> = {},
+        ) =>
+          collie(
+            world,
+            [
+              "schedule",
+              "add",
+              name,
+              "lingers",
+              "--cron",
+              "0 7 * * *",
+              "--paused",
+              "--input",
+              "note=cache",
+              "--workspace",
+              workspace,
+              "--request-id",
+              id,
+            ],
+            extra,
+          );
+        const Added = Schema.Struct({
+          schedule: Schema.Struct({ checkout: Schema.NullOr(Schema.String) }),
+        });
+        const dot = yield* add("resolved-dot", "sched-dot", ".");
         expect(dot.envelope.ok).toBe(true);
-        expect((yield* add(world.project)).envelope).toEqual(dot.envelope);
+        const named = yield* add("resolved-abs", "sched-abs", world.project);
+        const dotSaved = yield* Schema.decodeUnknownEffect(Added)(dot.envelope.data);
+        const namedSaved = yield* Schema.decodeUnknownEffect(Added)(named.envelope.data);
+        expect(namedSaved.schedule.checkout).toBe(dotSaved.schedule.checkout);
+        expect(
+          (yield* add("resolved-dot", "sched-dot", world.project, { COLLIE_CWD: other })).envelope,
+        ).toEqual(dot.envelope);
       }),
     ["lingers.workflow.ts"],
   ));
@@ -718,22 +757,8 @@ test("a Schedule's id does not replay from the checkout it was resolved to", () 
     "collie-receipt-scope-sched-retargeted-",
     (world) =>
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const Config = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json));
-        const point = (root: string) =>
-          Effect.gen(function* () {
-            const file = `${world.config}/config.json`;
-            const text = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => "{}"));
-            const kept = Option.getOrElse(Schema.decodeOption(Config)(text), () => ({}));
-            yield* fs.writeFileString(
-              file,
-              yield* Schema.encodeEffect(Config)({ ...kept, projects: { root } }),
-            );
-          });
         for (const team of ["team-a", "team-b"]) {
-          const checkout = `${world.home}/${team}/landing`;
-          yield* fs.makeDirectory(checkout, { recursive: true });
-          yield* exec(["git", "init", "-q"], { cwd: checkout });
+          yield* checkoutAt(`${world.home}/${team}/landing`);
         }
         const add = (name: string, id: string) =>
           collie(world, [
@@ -751,10 +776,10 @@ test("a Schedule's id does not replay from the checkout it was resolved to", () 
             "--request-id",
             id,
           ]);
-        yield* point(`${world.home}/team-a`);
+        yield* pointProjectsAt(world, `${world.home}/team-a`);
         const first = yield* add("retargeted", "sched-retargeted");
         expect(first.envelope.ok).toBe(true);
-        yield* point(`${world.home}/team-b`);
+        yield* pointProjectsAt(world, `${world.home}/team-b`);
         const moved = yield* add("retargeted", "sched-retargeted");
         expect(moved.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
         expect(moved.envelope.data).toBeUndefined();
@@ -765,6 +790,112 @@ test("a Schedule's id does not replay from the checkout it was resolved to", () 
         expect(
           (yield* Schema.decodeUnknownEffect(Added)(fresh.envelope.data)).schedule.checkout,
         ).toBe(`${world.home}/team-b/landing`);
+      }),
+    ["lingers.workflow.ts"],
+  ));
+test("a start does not replay from a workspace that now resolves elsewhere", () =>
+  proves(
+    "collie-receipt-scope-start-retarget-",
+    (world) =>
+      Effect.gen(function* () {
+        for (const team of ["team-a", "team-b"]) {
+          yield* checkoutAt(`${world.home}/${team}/landing`);
+        }
+        const start = (id: string) =>
+          collie(world, [
+            "run",
+            "start",
+            "lingers",
+            "--input",
+            "note=cache",
+            "--workspace",
+            "landing",
+            "--request-id",
+            id,
+          ]);
+        yield* pointProjectsAt(world, `${world.home}/team-a`);
+        expect((yield* start("start-retarget")).envelope.ok).toBe(true);
+        yield* pointProjectsAt(world, `${world.home}/team-b`);
+        const moved = yield* start("start-retarget");
+        expect(moved.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+        expect(moved.envelope.data).toBeUndefined();
+        expect((yield* start("start-retarget-fresh")).envelope.ok).toBe(true);
+      }),
+    ["lingers.workflow.ts"],
+  ));
+test("a user fork replays only from the project whose source it read", () =>
+  proves(
+    "collie-receipt-scope-fork-source-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const first = `${world.home}/first`;
+        const second = `${world.home}/second`;
+        yield* checkoutAt(first);
+        yield* checkoutAt(second);
+        yield* save(`${first}/.collie/workflows`, ["plain.workflow.ts"]);
+        yield* fs.makeDirectory(`${first}/.collie/personas`, { recursive: true });
+        yield* fs.writeFileString(
+          `${first}/.collie/personas/local.md`,
+          "---\nname: local\ndescription: A persona only this checkout has.\n---\n\nYou are local.\n",
+        );
+        const forked = (at: string, id: string, name: string) =>
+          collie(
+            world,
+            ["workflow", "fork", "plain", "--name", name, "--layer", "user", "--request-id", id],
+            { COLLIE_CWD: at },
+          );
+        const copied = (at: string, id: string, name: string) =>
+          collie(
+            world,
+            ["persona", "fork", "local", "--name", name, "--layer", "user", "--request-id", id],
+            { COLLIE_CWD: at },
+          );
+        expect((yield* forked(first, "fork-once", "mine")).envelope.ok).toBe(true);
+        expect((yield* copied(first, "copy-once", "copied")).envelope.ok).toBe(true);
+        const replayed = yield* forked(second, "fork-once", "mine");
+        expect(replayed.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+        expect(replayed.envelope.data).toBeUndefined();
+        const copiedAgain = yield* copied(second, "copy-once", "copied");
+        expect(copiedAgain.envelope).toMatchObject({
+          ok: false,
+          error: { code: "invalid_input" },
+        });
+        expect((yield* forked(second, "fork-fresh", "mine-two")).envelope).toMatchObject({
+          ok: false,
+          error: { code: "workflow_not_found" },
+        });
+        expect((yield* copied(second, "copy-fresh", "copied-two")).envelope).toMatchObject({
+          ok: false,
+          error: { code: "persona_not_found" },
+        });
+      }),
+    ["lingers.workflow.ts"],
+  ));
+test("a Schedule refused before it is saved still names the request", () =>
+  proves(
+    "collie-receipt-scope-sched-refused-",
+    (world) =>
+      Effect.gen(function* () {
+        const add = (extra: ReadonlyArray<string>) =>
+          collie(world, [
+            "schedule",
+            "add",
+            "refused",
+            "lingers",
+            "--cron",
+            "0 7 * * *",
+            ...extra,
+            "--request-id",
+            "sched-refused",
+          ]);
+        const named = {
+          ok: false,
+          error: { code: "invalid_input", details: { requestId: "sched-refused" } },
+        };
+        expect((yield* add(["--input", "novalue"])).envelope).toMatchObject(named);
+        expect((yield* add(["--verify", "not-json"])).envelope).toMatchObject(named);
+        expect((yield* add(["--workspace", "nowhere"])).envelope).toMatchObject(named);
       }),
     ["lingers.workflow.ts"],
   ));

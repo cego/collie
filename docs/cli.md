@@ -2524,13 +2524,14 @@ upload, or `--snapshot` on an upload, changes nothing. A file the CLI sends from
 Machine — an `--attach`, an upload's `--path` — is the path it resolves to, so `note.md`
 and its absolute path are one request; a path the host is given as typed, such as an
 artefact's `--path` without `--upload`, is not. A Schedule counts the checkout its
-`--workspace` resolved, so `.` and that checkout's absolute path are one request, and a
-checkout that now resolves elsewhere is another; a start counts the workspace as it was
-named as well as the directory it was placed in. A request that reuses an id for anything
-else is refused as `invalid_input`, with none of the stored
-answer, and applies nothing; check that first request's effect before retrying under a new
-id. A receipt written before Collie scoped receipts to their requests is replayed only to
-the same operation for the Run its stored answer names; every other request under that id
+`--workspace` resolved, so `.` and that checkout's absolute path are one request; a start
+and a project fork count the workspace as it was named as well as the checkout it
+resolved; a user fork counts the directory it forks from, which is the project whose source
+it copies. For any of them, a selector that now resolves elsewhere is another request. A
+request that reuses an id for anything else is refused as `invalid_input`, with none of the
+stored answer, and applies nothing; check that first request's effect before retrying under
+a new id. A receipt written before Collie scoped receipts to their requests is replayed only
+to the same operation for the Run its stored answer names; every other request under that id
 is refused the same way.
 
 A failure carries the request id back in `error.details.requestId`, including when the id

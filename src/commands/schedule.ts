@@ -5,7 +5,7 @@ import * as Rec from "effect/Record";
 import { Effect, Option, Schema } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import { agentStartRefusal, insideCheckout } from "../agent-start";
-import { mutation } from "../envelope";
+import { mutation, requestId as requested, withRequestId } from "../envelope";
 import { canonical } from "../canonical";
 import type { Given } from "../canonical";
 import type { PluginEnv } from "../env";
@@ -61,9 +61,9 @@ const savedCheckout = Effect.fn("schedule.savedCheckout")(function* (
   env: PluginEnv,
   where: string,
 ) {
-  // WARNING: a Schedule on another Machine keeps the workspace as named; this one saves the resolved path.
+  const named = Str.trim(where);
   if (env.machine !== undefined) {
-    return { workspace: Str.trim(where), at: null, local: false };
+    return { workspace: named, at: named, local: false };
   }
   const checkout = yield* checkoutOf(env, where);
   if ("error" in checkout) {
@@ -84,10 +84,9 @@ const changing = (
   change: (
     env: PluginEnv,
   ) => Effect.Effect<ScheduleChange | { readonly refused: OpResult }, never, PlatformServices>,
-  destination?: "cwd",
-  selector?: string | null,
+  at?: string | null,
 ) =>
-  mutation(env, { operation, run: null, destination, selector, args }, requestId, (request) =>
+  mutation(env, { operation, run: null, at, args }, requestId, (request) =>
     Effect.gen(function* () {
       const asked = yield* change(env);
       if ("refused" in asked) {
@@ -151,13 +150,15 @@ const scheduleAdd = Command.make(
   ({ name, workflow, cron, tz, paused, input, inputsJson, verify, requestId }) =>
     Effect.flatMap(root, (global) =>
       Effect.gen(function* () {
+        const id = yield* requested(requestId);
+        const withId = (failure: OpResult) => withRequestId(failure, id);
         const parsed = yield* parseInput(input, inputsJson);
         if (!parsed.ok) {
-          return yield* answering(() => Effect.succeed(parsed.error));
+          return yield* answering(() => Effect.succeed(withId(parsed.error)));
         }
         const checks = givenVerifications(verify);
         if (!checks.ok) {
-          return yield* answering(() => Effect.succeed(err("invalid_input", checks.error)));
+          return yield* answering(() => Effect.succeed(withId(err("invalid_input", checks.error))));
         }
         const given = Rec.fromEntries([
           ...Rec.toEntries(parsed.given.text),
@@ -174,7 +175,7 @@ const scheduleAdd = Command.make(
           Effect.gen(function* () {
             const checkout = yield* savedCheckout(env, where);
             if ("error" in checkout) {
-              return checkout.error;
+              return withId(checkout.error);
             }
             return yield* changing(
               env,
@@ -188,7 +189,7 @@ const scheduleAdd = Command.make(
                 inputs,
                 verify: checks.specs,
               },
-              requestId,
+              Option.some(id),
               () =>
                 Effect.gen(function* () {
                   const refused = (failure: OpResult) => ({ refused: failure });
@@ -234,7 +235,6 @@ const scheduleAdd = Command.make(
                   }
                   return scheduled;
                 }).pipe(Effect.orDie),
-              "cwd",
               checkout.workspace,
             );
           }),

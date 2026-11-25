@@ -6,7 +6,15 @@ import { Argument, Command } from "effect/cli";
 import { forkResolvedDefinition } from "../fork";
 import { err } from "../operations";
 import { attempt, mutation } from "../envelope";
-import { context, definitions, discoveryContext, forkFlags, layerDir, root } from "./shared";
+import {
+  context,
+  definitions,
+  discoveryContext,
+  forkFlags,
+  layerDir,
+  resolvedAt,
+  root,
+} from "./shared";
 import { personaData } from "../definitions";
 
 const personaArg = Argument.String("persona").pipe(
@@ -81,25 +89,22 @@ const personaFork = Command.make(
       const global = yield* root;
       yield* attempt(
         Effect.gen(function* () {
-          const base = yield* context(global, false);
-          if (base._tag === "ContextFailure") {
-            return base.result;
+          const resolved = yield* context(global, layer === "project", layer === "project");
+          if (resolved._tag === "ContextFailure") {
+            return resolved.result;
           }
           return yield* mutation(
-            base.env,
+            resolved.env,
             {
               operation: "persona-fork",
               run: null,
-              destination: layer === "project" ? "cwd" : undefined,
+              destination: layer === "project" ? undefined : "cwd",
+              at: layer === "project" ? resolvedAt(resolved) : undefined,
               args: { persona, layer, name },
             },
             request,
             (_id) =>
               Effect.gen(function* () {
-                const resolved = yield* context(global, layer === "project", layer === "project");
-                if (resolved._tag === "ContextFailure") {
-                  return resolved.result;
-                }
                 const found = (yield* definitions(resolved.env)).personas.get(persona);
                 if (!found) {
                   return err("persona_not_found", `Persona "${persona}" was not found.`);

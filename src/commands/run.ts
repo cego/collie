@@ -29,7 +29,7 @@ import { redactedField, withNotice } from "../redact";
 import type { PlatformServices } from "../platform";
 import { Argument, Command, Flag } from "effect/cli";
 import { err } from "../operations";
-import type { Failure } from "../operations";
+import type { Failure, OpResult } from "../operations";
 import { GIVEN, INFERRED } from "../engine";
 import { textOf } from "../runs";
 import { DEFAULT_LIMIT, LIST_STATES, listAsked, outputSummary } from "../run-list";
@@ -99,7 +99,16 @@ import { latest, statusLine } from "../disposition";
 import { replyLine } from "../replies";
 import { epochMs } from "../time";
 import type { PluginEnv } from "../env";
-import { attempt, guarded, mutation, ResultBoundary, printResult, say } from "../envelope";
+import {
+  attempt,
+  guarded,
+  mutation,
+  printResult,
+  requestId as requested,
+  ResultBoundary,
+  say,
+  withRequestId,
+} from "../envelope";
 import type { Call, CollieError, Result } from "../envelope";
 import {
   PrettyUnknownJson,
@@ -112,6 +121,7 @@ import {
   runFacts,
   runScope,
   requestIdFlag,
+  resolvedAt,
   runIdArg,
   root,
   selected,
@@ -282,21 +292,27 @@ const runStart = Command.make(
       const global = yield* root;
       yield* attempt(
         Effect.gen(function* () {
+          const id = yield* requested(request);
+          const withId = (failure: OpResult) => withRequestId(failure, id);
           const base = yield* context(global, false);
           if (base._tag === "ContextFailure") {
-            return base.result;
+            return withId(base.result);
+          }
+          const resolved = yield* context(global, (yield* selected(global)) !== null);
+          if (resolved._tag === "ContextFailure") {
+            return withId(resolved.result);
           }
           const explicit = yield* parseInput(input, inputsJson);
           if (!explicit.ok) {
-            return explicit.error;
+            return withId(explicit.error);
           }
           const named = namedConstraints(constraint, severity);
           if (named.error !== null) {
-            return err("invalid_input", named.error);
+            return withId(err("invalid_input", named.error));
           }
           const given = givenVerifications(verify);
           if (!given.ok) {
-            return err("invalid_input", given.error);
+            return withId(err("invalid_input", given.error));
           }
           return yield* mutation(
             base.env,
@@ -304,6 +320,7 @@ const runStart = Command.make(
               operation: "run-start",
               run: null,
               destination: "cwd",
+              at: resolvedAt(resolved),
               files: attach,
               args: {
                 workflow,
@@ -319,14 +336,9 @@ const runStart = Command.make(
                 effort: Option.getOrNull(effort),
               },
             },
-            request,
+            Option.some(id),
             (requestId) =>
               Effect.gen(function* () {
-                // WARNING: resolved inside the mutation so a replayed request returns its recorded result whether or not the workspace is still open.
-                const resolved = yield* context(global, (yield* selected(global)) !== null);
-                if (resolved._tag === "ContextFailure") {
-                  return resolved.result;
-                }
                 // WARNING: inference is task-local, so a continuation sees its own Task's plans and a fresh start sees only the Runs recorded before Tasks.
                 const task = yield* chosenTask(resolved.env, taskId);
                 if (!task.ok) {
