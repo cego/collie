@@ -261,10 +261,13 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
   }
   open.add(terminalId);
   return yield* Effect.gen(function* () {
-    let listing = yield* aliveNow(deps);
+    let listing = yield* agentsNow(deps);
     let listedAt = yield* Clock.currentTimeMillis;
+    if (Option.isNone(listing)) {
+      return yield* new NotDeliverable({ agent: entry.agent, reason: "roster_unread" });
+    }
 
-    const identified = verifyIncarnation(entry, listing);
+    const identified = verifyIncarnation(entry, listing.value);
     if (!identified.ok) {
       yield* settlePending(terminalId, identified.reason);
       return yield* new NotDeliverable({ agent: entry.agent, reason: identified.reason });
@@ -310,9 +313,16 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
           }
           // WARNING: a whole compaction can happen inside one transaction, so a listing older than a few seconds is re-read.
           if ((yield* Clock.currentTimeMillis) - listedAt > LISTING_MAX_AGE_MS) {
-            listing = yield* aliveNow(deps);
+            listing = yield* agentsNow(deps);
             listedAt = yield* Clock.currentTimeMillis;
-            const again = verifyIncarnation(entry, listing);
+            if (Option.isNone(listing)) {
+              return refuse(
+                null,
+                "deferred",
+                `${entry.agent}'s liveness could not be read — core did not answer`,
+              );
+            }
+            const again = verifyIncarnation(entry, listing.value);
             if (!again.ok) {
               yield* settlePending(terminalId, again.reason);
               return refuse(null, "incarnation_changed", again.reason);
@@ -366,10 +376,6 @@ const agentsNow = (deps: DispatcherDeps) =>
     Effect.asSome,
     Effect.orElseSucceed(() => Option.none<ReadonlyArray<AgentInfo>>()),
   );
-
-// WARNING: a roster that did not answer is not an empty one; only a send that cannot verify its terminal treats it as nothing.
-const aliveNow = (deps: DispatcherDeps) =>
-  agentsNow(deps).pipe(Effect.map(Option.getOrElse(() => Arr.empty<AgentInfo>())));
 
 // WARNING: reserved before herdr is called and never removed; a crash between them settles as unknown, not guessed.
 function deliveryOf(
@@ -665,7 +671,7 @@ export const entryFromLive = Effect.fn("Dispatcher.entryFromLive")(function* (
 ) {
   const listed = yield* agentsNow(deps);
   if (Option.isNone(listed)) {
-    // WARNING: a launch reads gone as "look again", so an unanswered roster still says gone; only its wording is honest.
+    // WARNING: a launch reads gone as "look again", so an unanswered roster still says gone.
     const returned = {
       entry: null,
       reason: `${about.agent}'s liveness could not be read — core did not answer`,
