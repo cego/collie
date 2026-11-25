@@ -376,6 +376,9 @@ const answered = Effect.fn("Tools.answered")(function* (
 });
 
 export const callTool = (env: PluginEnv, name: string, input: JsonObject) =>
+  routed(env, name, input).pipe(Effect.catchCause((cause) => broken(name, cause)));
+
+const routed = (env: PluginEnv, name: string, input: JsonObject) =>
   name === SubmitTool.name
     ? submitted(env, input)
     : !isToolName(name)

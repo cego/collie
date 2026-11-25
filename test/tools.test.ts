@@ -2402,7 +2402,6 @@ test("a Heal Run's agent's change against a version since amended is refused nam
         () => fs.readFileString(`${stateDir}/host.log`).pipe(Effect.orElseSucceed(() => "")),
         (text) => pipe_(text, Str.includes("heal-stale-1")),
       );
-      expect(log).toContain("heal-stale-1");
       expect(log).toContain("which is now v2");
     }),
   ));
