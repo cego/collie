@@ -791,7 +791,7 @@ export const rally = (ask: {
               head,
             });
             lastFix = `${prefix}fix-${ROUNDS + 1}`;
-            open = shrink(open, report);
+            open = shrink(standing, report);
             continue;
           }
           const name = `${prefix}fix-unverified-${++unverifiedAsks}`;
@@ -816,7 +816,7 @@ export const rally = (ask: {
             yield* ask.proves,
             head,
           );
-          open = shrink(open, report);
+          open = shrink(standing, report);
         }
       });
 

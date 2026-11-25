@@ -5841,6 +5841,60 @@ scenario(
 );
 
 scenario(
+  "a hand-back at the last round keeps the blockers it was not asked about, and the next fix is told of them",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "only", checks: "unit" }]);
+        const runId = "r-last-back-keeps";
+        yield* approve(runId, ["unit"]);
+        const guard = { severity: "blocker", title: "the guard is missing", file: "src/b.ts" };
+        const list = { severity: "blocker", title: "the list is empty", file: "src/c.ts" };
+        const disputed = [{ ...list, reason: "upstream must release it" }];
+        const nothing = { verdict: "clean", fixed: [], disputed: [], checks: [] };
+        const raising = { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [guard, list] };
+        const repeating = {
+          ...CLEAN_SYNTHESIS,
+          verdict: "findings",
+          findings: [guard, { ...list, status: "disputed" }],
+        };
+        yield* rig.queueOutputs([
+          BUILT,
+          raising,
+          { ...nothing, fixed: [{ file: guard.file, title: guard.title }] },
+          raising,
+          { ...nothing, disputed },
+          repeating,
+          { ...nothing, disputed },
+          repeating,
+          { ...nothing, disputed },
+          { ...nothing, fixed: [{ file: list.file, title: list.title }] },
+          { ...nothing, fixed: [{ file: guard.file, title: guard.title }] },
+        ]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              for (const name of ["dispute-1", "dispute-2", "dispute-3"]) {
+                yield* stallAsked(run, name);
+                yield* run.answer(name, "Send it back");
+              }
+              yield* stallAsked(run, "fix-unverified-1");
+              yield* run.answer("fix-unverified-1", "Stop");
+              return yield* ended(run.status);
+            }),
+        );
+        expect(status.status).toBe("failed");
+        expect(yield* wasAsked(runId, "fix-5-back-3")).toBe(true);
+        expect(yield* asked(runId, "fix-5")).toContain("no disposition for");
+        expect(yield* asked(runId, "fix-5")).toContain("the guard is missing");
+      }),
+    ),
+);
+
+scenario(
   "a reviewer's rebuttal puts the disputed finding back with the fixer instead of in front of a person",
   () =>
     runEffect(
