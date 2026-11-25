@@ -138,12 +138,12 @@ const handsIn = (dir: string, runId: string, operation: string, text: string) =>
       launch.operation === operation || launch.output.endsWith(`/${operation}.json`);
     // WARNING: the prompt is written before the launch is recorded, so the record is waited for.
     const found = yield* Effect.gen(function* () {
-      for (let tries = 0; tries < 500; tries++) {
+      for (let tries = 0; tries < 5000; tries++) {
         const one = Option.getOrUndefined(Arr.findLast(yield* launchesAt(dir, runId), matches));
         if (one !== undefined) {
           return one;
         }
-        yield* Effect.sleep("20 millis");
+        yield* Effect.yieldNow;
       }
       return undefined;
     });

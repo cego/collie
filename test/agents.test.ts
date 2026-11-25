@@ -51,7 +51,7 @@ import {
   repairText,
 } from "../src/agents";
 import { awaitOutput, submitOutput } from "../src/output-submit";
-import { acceptedName, outputOf } from "../src/step-output";
+import { acceptedName, acceptOutput, outputOf } from "../src/step-output";
 import type { AgentHost, RanOut, RunNow } from "../src/agents";
 import { Children, Host, Run, WorkflowAgents, jsonSchemaFor, step, withAgents } from "../src/sdk";
 import { asRun, enveloped } from "./support/enveloped";
@@ -1084,7 +1084,7 @@ test("finished work leaves a card of what it wrote, and a ticket it said it fini
       yield* session(started("r1"));
       expect(yield* cardsOf("r1")).toEqual([
         "slice:review:parses the file",
-        `review:review:wrote ${outputPath("r1")}`,
+        `review:review:handed in ${outputPath("r1")}`,
       ]);
     }),
   ));
@@ -1118,7 +1118,7 @@ test("work that parked and came back is judged and carded once, not once per att
       const result = yield* releasedInto("r1");
       expect(result._tag).toBe("Success");
       yield* session(started("r1"));
-      expect(yield* cardsOf("r1")).toEqual([`review:review:wrote ${outputPath("r1")}`]);
+      expect(yield* cardsOf("r1")).toEqual([`review:review:handed in ${outputPath("r1")}`]);
       expect(
         Arr.map(
           yield* readDrift(runDir(dir, "r1")).pipe(Effect.provide(recordsAt(dir))),
@@ -1138,7 +1138,11 @@ test("work the workflow skips starts no agent", () =>
     }),
   ));
 
-type Reached = Effect.Effect<boolean, never, WorkflowEngine.WorkflowEngine | FileSystem.FileSystem>;
+type Reached = Effect.Effect<
+  boolean,
+  never,
+  WorkflowEngine.WorkflowEngine | FileSystem.FileSystem | RunRecords
+>;
 
 const suspended = (runId: string) =>
   Effect.gen(function* () {
@@ -1156,9 +1160,9 @@ const prompted = (about: string, times = 1) =>
   );
 
 const wrote = (runId: string, about: string) =>
-  FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) => fs.readFileString(outputPath(runId))),
-    Effect.map((text) => pipe(text, Str.includes(about))),
+  RunRecords.pipe(
+    Effect.flatMap((records) => outputOf(records, { runId, output: outputPath(runId) })),
+    Effect.map((held) => held !== null && pipe(held.text, Str.includes(about))),
     Effect.orElseSucceed(() => false),
   );
 
@@ -4217,9 +4221,9 @@ test("an agent that ran out and stays idle past its budget parks the Run, and on
         Effect.gen(function* () {
           yield* Effect.forkChild(runsOut(agentFor("r1")));
           const fiber = yield* Effect.forkChild(started("r1"));
-          yield* until(parkedSays("before writing"));
+          yield* until(parkedSays("before its Output was accepted"));
           const why = yield* controlOf(PARKED, "r1");
-          expect(why).toContain("ran out (rate_limit) before writing");
+          expect(why).toContain("ran out (rate_limit) before its Output was accepted");
           expect(why).toEndWith("Collie keeps collecting it.");
           expect(why).not.toContain("Resume");
           yield* spend(5000);
@@ -4424,7 +4428,7 @@ test("an agent that ran out with nothing to take over, and whose harness then st
               error_details: EXPIRED,
             }),
           ).pipe(Effect.orDie);
-          yield* until(parkedSays("ran out (rate_limit) before writing"));
+          yield* until(parkedSays("ran out (rate_limit) before its Output was accepted"));
           expect(yield* controlOf(PARKED, "r1")).toContain(EXPIRED);
         }),
         { fallbacks: Effect.succeed([]), collectMs: 2000 },
@@ -5741,7 +5745,7 @@ test("a quota wait does not revive a dead managed Codex server before its usage 
       const result = yield* session(
         Effect.gen(function* () {
           const waiting = yield* Effect.forkChild(started("r1"));
-          yield* until(parkedSays("before writing"));
+          yield* until(parkedSays("before its Output was accepted"));
           herdr.stale = true;
           managed.state.reachable = false;
           managed.children[0]!.kill();
@@ -5829,7 +5833,7 @@ test("a quota fallback keeps valid late Output written while retiring its manage
       const result = yield* session(
         Effect.gen(function* () {
           const waiting = yield* Effect.forkChild(started("r1"));
-          yield* until(parkedSays("before writing"));
+          yield* until(parkedSays("before its Output was accepted"));
           expect(harnessesStarted(yield* rig.calls())).toEqual(["codex"]);
           fallbacks = ["claude/opus"];
           yield* TestClock.adjust("1 minute");
@@ -5891,7 +5895,7 @@ for (const recovery of ["a newer matching reset", "its known reset passing"]) {
         const result = yield* session(
           Effect.gen(function* () {
             const waiting = yield* Effect.forkChild(started("r1"));
-            yield* until(parkedSays("before writing"));
+            yield* until(parkedSays("before its Output was accepted"));
             expect(harnessesStarted(yield* rig.calls())).toEqual(["codex"]);
             if (recovery === "its known reset passing") {
               yield* TestClock.adjust("3 minutes");
@@ -8691,10 +8695,14 @@ const tasksOf = (calls: ReadonlyArray<Call>) =>
   );
 
 const firstDone = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem;
-  yield* fs
-    .writeFileString(`${dir}/agents/r1/01-api.json`, `{"verdict":"clean","note":"first"}`)
-    .pipe(Effect.orDie);
+  const first = yield* launchedAt(dir, "r1", "01-api");
+  yield* RunRecords.use((records) =>
+    acceptOutput(
+      records,
+      { runId: "r1", output: first.output },
+      `{"verdict":"clean","note":"first"}`,
+    ),
+  ).pipe(Effect.provide(recordsAt(dir)));
   const [started] = Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.run");
   yield* core.report(
     Option.getOrThrow(Schema.decodeUnknownOption(Schema.String)(started?.params?.name)),
@@ -9089,7 +9097,11 @@ test("a step pointer whose Enter was lost is sent with one Enter, never the text
         herdr: promptNotTaken("enter"),
         confirmGraceMs: 300,
       });
-      expect(yield* read(outputPath("r1"))).toContain("after the Enter");
+      expect(
+        (yield* RunRecords.pipe(
+          Effect.flatMap((records) => outputOf(records, { runId: "r1", output: outputPath("r1") })),
+        ))?.text,
+      ).toContain("after the Enter");
       const calls = yield* rig.calls();
       expect(sent(calls, "Your task for this step")).toBe(1);
       expect(enters(calls)).toBe(1);
