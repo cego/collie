@@ -3025,7 +3025,7 @@ test("an answer left unknown is not forgotten when another call's answers go unk
       yield* rig.queueOutputs([null]);
       core.refuseWhen(
         "terminal.send",
-        (params) => pipe(params.text, Str.includes("answered:")),
+        (params) => isString(params.text) && pipe(params.text, Str.includes("answered:")),
         "unreachable",
         "the core did not answer",
       );

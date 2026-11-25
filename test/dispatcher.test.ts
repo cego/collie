@@ -213,7 +213,7 @@ function fake(
             calls.push("agentList");
             const next = (options.list ?? []).at(listed++);
             if (next instanceof HerdrError) {
-              return yield* Effect.fail(next);
+              return yield* next;
             }
             return next ?? options.agents ?? [alive];
           }),
