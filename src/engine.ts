@@ -10989,7 +10989,7 @@ const makeRegistry: (
         parent: options.runId,
         offer: options.offer,
         input: options.input,
-        attachments: Arr.sort(options.attachments ?? [], Str.Order),
+        attachments: options.attachments ?? [],
       });
       // WARNING: the request id is the claim, so a caller that lost the answer is given the Run it started.
       const claimed = yield* store.requested(options.request);
@@ -10997,7 +10997,13 @@ const makeRegistry: (
         const before = Option.flatMap(decodePlacing(claimed.placing ?? ""), (one) =>
           Option.fromNullishOr(one.invoked),
         );
-        if (Option.isSome(before) && before.value !== invoked) {
+        if (Option.isNone(before)) {
+          return yield* new RequestConflict({
+            request: options.request,
+            reason: `request "${options.request}" is already ${claimed.run}, started directly rather than by an offer`,
+          });
+        }
+        if (before.value !== invoked) {
           return yield* new RequestConflict({
             request: options.request,
             reason: `request "${options.request}" is already ${claimed.run}, started with other arguments`,

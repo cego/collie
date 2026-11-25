@@ -616,6 +616,62 @@ test("a repeated request answers with its Run for the same work, whatever the ke
     [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
   ));
 
+test("a request id is refused for other files, even in another order, and for a Run a direct start made", () =>
+  hosted(
+    "hw-selected-replay-files-",
+    ({ world }) =>
+      Effect.gen(function* () {
+        const run = yield* Effect.gen(function* () {
+          yield* install(world);
+          yield* (yield* FileSystem.FileSystem).writeFileString(
+            `${world.home}/outputs.json`,
+            encode([empty]),
+          );
+          return yield* started(world.state, world.project, "submits", { note: "two" });
+        });
+        const [first] = idsOf(run.id);
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.makeDirectory(`${world.home}/one`, { recursive: true });
+        yield* fs.makeDirectory(`${world.home}/two`, { recursive: true });
+        yield* fs.writeFileString(`${world.home}/one/same.txt`, "first");
+        yield* fs.writeFileString(`${world.home}/two/same.txt`, "second");
+        const inOrder = [`${world.home}/one/same.txt`, `${world.home}/two/same.txt`];
+        const asked = (attachments: ReadonlyArray<string>) =>
+          run.client.invoke({
+            runId: run.id,
+            offer: "implement-selected",
+            input: { findings: [first] },
+            request: "same-files",
+            attachments,
+          });
+        yield* asked(inOrder).pipe(Effect.orDie);
+        const reversed = yield* asked([inOrder[1]!, inOrder[0]!]).pipe(Effect.flip);
+        expect(reversed._tag === "RequestConflict" ? reversed.reason : "").toContain(
+          "other arguments",
+        );
+        const direct = yield* run.client
+          .start({
+            project: world.project,
+            id: "submits",
+            request: "direct-start",
+            input: { note: "direct" },
+          })
+          .pipe(Effect.orDie);
+        const overStart = yield* run.client
+          .invoke({
+            runId: run.id,
+            offer: "implement-selected",
+            input: { findings: [first] },
+            request: "direct-start",
+          })
+          .pipe(Effect.flip);
+        expect(overStart._tag === "RequestConflict" ? overStart.reason : "").toContain(
+          direct.runId,
+        );
+      }),
+    [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
+  ));
+
 const filed = { identifier: "CEGO-12", url: "https://linear.app/cego/issue/CEGO-12/one-issue" };
 
 test("File to Linear files the one finding chosen, and the Run it starts answers with the issue's URL", () =>

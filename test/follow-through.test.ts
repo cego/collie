@@ -1405,6 +1405,15 @@ test("Improve builds only the findings it was given, and the rest stay open on t
             { id: ids[1], status: "open", run: null },
             { id: ids[2], status: "taken", offer: "improve", run: improved.runId },
           ]);
+          const section = Effect.gen(function* () {
+            const { board } = yield* host.mergeWatched;
+            const { views } = yield* board;
+            const card = Option.getOrThrow(
+              Arr.findFirst(views, (view) => Arr.some(view.runs, (one) => one === parent.runId)),
+            );
+            return sectionOf(card);
+          });
+          expect(yield* section).toBe("needs-you");
           yield* recordFindingStatus(reviewed, {
             id: ids[1]!,
             status: "dismissed",

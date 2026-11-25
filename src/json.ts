@@ -23,7 +23,6 @@ const ordered: (value: Schema.Json) => Schema.Json = (value) => {
   );
 };
 
-// WARNING: key order is immaterial, so two objects that differ only in it are one value.
 export const canonicalJson = (value: Schema.Json) => stringifyJson(ordered(value));
 
 export const parseJson = <S extends Schema.Decoder<unknown>>(schema: S, text: string) =>
