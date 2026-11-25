@@ -1604,8 +1604,9 @@ missing — asks `<prefix>fix-unverified-<n>`, each with Send it back (recommend
 Waiving keeps the finding `disputed` with a `waived` note naming who answered and the
 Choice, tells the next reviewer not to raise it again, and the merge request lists it as
 waived and unverified. A waiver settles nothing outside the rally: the outcome gate is not
-told about it. Sending it back is one more fix, told that a person declined, and a dispute
-that comes back asks the next number. Stop ends the Run naming what it could not settle.
+told about it. Sending it back is one more fix, told that a person declined; it answers only
+what it was asked, so every disposition the last fix already gave stands and a dispute that
+comes back from it asks the next number. Stop ends the Run naming what it could not settle.
 
 From round 2 on, `rally` tells each round's reviewers what the round before it reviewed,
 through `followUp`: that round's head, the commits and files changed since it as

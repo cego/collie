@@ -719,6 +719,30 @@ export const rally = (ask: {
           const settled = new Set(Arr.map([...fixed.fixed, ...fixed.disputed], findingKey));
           return Arr.filter(asked, (one) => !settled.has(findingKey(one)));
         };
+        const carry = (
+          prior: typeof FixOutputSchema.Type,
+          answered: typeof FixOutputSchema.Type,
+        ) => {
+          const fixed = new Map<string, Fixed>();
+          const disputes = new Map<string, Finding>();
+          for (const one of prior.fixed) {
+            fixed.set(findingKey(one), one);
+          }
+          for (const one of prior.disputed) {
+            disputes.set(findingKey(one), one);
+          }
+          for (const one of answered.fixed) {
+            const key = findingKey(one);
+            disputes.delete(key);
+            fixed.set(key, one);
+          }
+          for (const one of answered.disputed) {
+            const key = findingKey(one);
+            fixed.delete(key);
+            disputes.set(key, one);
+          }
+          return { ...answered, fixed: [...fixed.values()], disputed: [...disputes.values()] };
+        };
         for (;;) {
           const standing = Arr.filter(offered(disputed), isBlocking);
           if (standing.length > 0) {
@@ -736,7 +760,10 @@ export const rally = (ask: {
                 `a person answered Stop to ${name}: ${Arr.join(disputesOf(standing), "; ")}`,
               );
             } else {
-              report = yield* sendBack(declinedLine, standing, ROUNDS + 1, yield* ask.proves, head);
+              report = carry(
+                report,
+                yield* sendBack(declinedLine, standing, ROUNDS + 1, yield* ask.proves, head),
+              );
               open = shrink(open, report);
               continue;
             }
@@ -773,23 +800,30 @@ export const rally = (ask: {
                 `a person answered Stop to ${name}: ${Arr.join(disputesOf(standing), "; ")}`,
               );
             }
-            report = yield* sendBack(declinedLine, standing, ROUNDS + 1, yield* ask.proves, head);
+            report = carry(
+              report,
+              yield* sendBack(declinedLine, standing, ROUNDS + 1, yield* ask.proves, head),
+            );
             open = shrink(open, report);
             continue;
           }
           if (!handedUnverified) {
             handedUnverified = true;
-            report = yield* ask.fix({
-              operation: `${prefix}fix-${ROUNDS + 1}`,
-              at: ROUNDS + 1,
-              proves: yield* ask.proves,
-              findings: `Your fix could not be verified, so this is the one hand-back past ${ROUNDS} rounds and no review follows it:\n\n${Arr.join(
-                Arr.map(judged.reasons, (one) => `- ${one}`),
-                "\n",
-              )}\n\nRun each check you name through \`collie verify\`, and answer every blocking finding above with a fix or a dispute.`,
-              open,
-              head,
-            });
+            // WARNING: a hand-back answers only what it names, so every disposition already on record stands.
+            report = carry(
+              report,
+              yield* ask.fix({
+                operation: `${prefix}fix-${ROUNDS + 1}`,
+                at: ROUNDS + 1,
+                proves: yield* ask.proves,
+                findings: `Your fix could not be verified, so this is the one hand-back past ${ROUNDS} rounds and no review follows it:\n\n${Arr.join(
+                  Arr.map(judged.reasons, (one) => `- ${one}`),
+                  "\n",
+                )}\n\nRun each check you name through \`collie verify\`, and answer every blocking finding above with a fix or a dispute.`,
+                open,
+                head,
+              }),
+            );
             lastFix = `${prefix}fix-${ROUNDS + 1}`;
             open = shrink(open, report);
             continue;
@@ -809,12 +843,15 @@ export const rally = (ask: {
               `a person answered Stop to ${name}: the last fix is unverified: ${Arr.join(judged.reasons, "; ")}`,
             );
           }
-          report = yield* sendBack(
-            "A person sent this fix back rather than stop the Run: the evidence its checks need is still missing.",
-            open,
-            ROUNDS + 1,
-            yield* ask.proves,
-            head,
+          report = carry(
+            report,
+            yield* sendBack(
+              "A person sent this fix back rather than stop the Run: the evidence its checks need is still missing.",
+              open,
+              ROUNDS + 1,
+              yield* ask.proves,
+              head,
+            ),
           );
           open = shrink(open, report);
         }

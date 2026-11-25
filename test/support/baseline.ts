@@ -13142,6 +13142,133 @@ scenario(
     ),
 );
 
+const lastRoundBlockers = (runId: string) =>
+  Effect.gen(function* () {
+    const bin = yield* FakeBin.make(`${rig.root}/bin`);
+    yield* noGitlabMrs(bin);
+    yield* repository();
+    const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+    yield* approve(runId, ["unit"]);
+    yield* collect(evidenceDir(dir, runId), {
+      run: runId,
+      name: "unit",
+      executable: "true",
+      argv: [],
+      cwd: rig.projectDir,
+      by: "agent",
+    }).pipe(Effect.orDie);
+    return { bin, plan };
+  });
+
+const blocking = (title: string) => ({
+  severity: "blocker",
+  title,
+  file: "src/a.ts",
+  detail: "it breaks",
+});
+
+const fixedRound = (title: string) => {
+  const returned: Array<Schema.Json> = [
+    { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [blocking(title)] },
+    { verdict: "clean", fixed: [{ title, file: "src/a.ts" }], checks: [{ name: "unit" }] },
+  ];
+  return returned;
+};
+
+scenario(
+  "a send-back answers only the dispute, and a blocker the last fix fixed is not asked again",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-back-keeps-fixed";
+        const { bin, plan } = yield* lastRoundBlockers(runId);
+        const queued: Array<Schema.Json> = [
+          BUILT,
+          ...fixedRound("one"),
+          ...fixedRound("two"),
+          ...fixedRound("three"),
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [blocking("A"), blocking("B")] },
+          {
+            verdict: "clean",
+            fixed: [{ title: "A", file: "src/a.ts" }],
+            disputed: [{ ...blocking("B"), reason: "B is by design" }],
+            checks: [{ name: "unit" }],
+          },
+          {
+            verdict: "clean",
+            fixed: [{ title: "B", file: "src/a.ts" }],
+            checks: [{ name: "unit" }],
+          },
+          OPENED,
+        ];
+        yield* rig.queueOutputs(queued);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              yield* stallAsked(run, "dispute-1");
+              yield* run.answer("dispute-1", "Send it back");
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+
+        expect(outcomeText(status)).toBe(OPENED.mr_url);
+        expect(yield* asked(runId, "fix-5-back-1")).toContain("B");
+        expect(yield* asked(runId, "fix-5-back-1")).not.toContain("A (src/a.ts)");
+        expect(yield* wasAsked(runId, "fix-5")).toBe(false);
+      }),
+    ),
+);
+
+scenario(
+  "a dispute raised in the automatic hand-back is still the person's call after a send-back",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-auto-back-dispute";
+        const { bin, plan } = yield* lastRoundBlockers(runId);
+        const unproved = (reason: string) => ({
+          verdict: "clean",
+          fixed: [],
+          disputed: [{ ...blocking("A"), reason }],
+          checks: [{ name: "pending" }],
+        });
+        const queued: Array<Schema.Json> = [
+          BUILT,
+          ...fixedRound("one"),
+          ...fixedRound("two"),
+          ...fixedRound("three"),
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [blocking("A")] },
+          { verdict: "clean", fixed: [], disputed: [], checks: [{ name: "pending" }] },
+          unproved("A is by design"),
+          { verdict: "clean", fixed: [], disputed: [], checks: [{ name: "unit" }] },
+          OPENED,
+        ];
+        yield* rig.queueOutputs(queued);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              yield* stallAsked(run, "fix-unverified-1");
+              yield* run.answer("fix-unverified-1", "Send it back");
+              const rows = yield* stallAsked(run, "dispute-1");
+              expect(rows).toHaveLength(1);
+              expect(rows[0]!.prompt).toContain("A is by design");
+              yield* run.answer("dispute-1", "Waive it");
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+
+        expect(outcomeText(status)).toBe(OPENED.mr_url);
+        expect(yield* asked(runId, "mr")).toContain(
+          "A (src/a.ts) — waived by a person to dispute-1",
+        );
+      }),
+    ),
+);
+
 interface ShippedRun {
   readonly entry: string;
   readonly runId: string;
