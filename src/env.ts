@@ -80,7 +80,6 @@ export function readEnv(
     ".";
   // WARNING: PWD goes stale after any chdir; the real directory never does.
   const explicitCwd = first(env, "COLLIE_CWD");
-  // WARNING: `.` names a different checkout in every process, so cwd is one resolved path here.
   const cwd = paths.resolve(explicitCwd ?? process.cwd());
 
   const raw: Record<string, string> = {};

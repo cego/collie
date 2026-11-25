@@ -854,6 +854,40 @@ test("a start does not replay from a workspace that now resolves elsewhere", () 
       }),
     ["lingers.workflow.ts"],
   ));
+test("a start follows a link to the checkout it resolves now", () =>
+  proves(
+    "collie-receipt-scope-start-link-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const first = `${world.home}/first/landing`;
+        const second = `${world.home}/second/landing`;
+        const link = `${world.home}/link`;
+        yield* checkoutAt(first);
+        yield* checkoutAt(second);
+        yield* fs.symlink(first, link);
+        const start = (id: string) =>
+          collie(world, [
+            "run",
+            "start",
+            "lingers",
+            "--input",
+            "note=cache",
+            "--workspace",
+            link,
+            "--request-id",
+            id,
+          ]);
+        expect((yield* start("start-link")).envelope.ok).toBe(true);
+        yield* fs.remove(link);
+        yield* fs.symlink(second, link);
+        const moved = yield* start("start-link");
+        expect(moved.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+        expect(moved.envelope.data).toBeUndefined();
+        expect((yield* start("start-link-fresh")).envelope.ok).toBe(true);
+      }),
+    ["lingers.workflow.ts"],
+  ));
 test("a user fork replays only from the project whose source it read", () =>
   proves(
     "collie-receipt-scope-fork-source-",
@@ -1175,31 +1209,32 @@ test("a fork follows the directory it runs in, not the path that named it", () =
           { command: ["persona", "fork", "local", "--layer", "user"], project: false },
         ];
         const Forked = Schema.Struct({ path: Schema.String });
-        const writtenIn = (envelope: { readonly data?: unknown }) =>
-          Effect.gen(function* () {
-            const written = (yield* Schema.decodeUnknownEffect(Forked)(envelope.data)).path;
-            expect(yield* fs.exists(written)).toBe(true);
-            return yield* fs.realPath(written);
-          });
+        const reported = (envelope: { readonly data?: unknown }) =>
+          Schema.decodeUnknownEffect(Forked)(envelope.data).pipe(Effect.map((one) => one.path));
         const forked = (from: string, command: ReadonlyArray<string>, name: string, id: string) =>
           collie(world, [...command, "--name", name, "--request-id", id], { COLLIE_CWD: from });
         for (const [index, one] of Arr.map(forks, (fork, at) => [at, fork] as const)) {
           const id = `fork-link-${index}`;
           const once = yield* forked(link, one.command, "mine", id);
           expect(once.envelope).toMatchObject({ ok: true });
-          const written = yield* writtenIn(once.envelope);
+          const written = yield* reported(once.envelope);
+          expect(yield* fs.exists(written)).toBe(true);
           if (one.project) {
             expect(Str.startsWith(first)(written)).toBe(true);
+          } else if (one.command[0] === "workflow") {
+            expect(Str.includes(`${link}/`)(yield* fs.readFileString(written))).toBe(false);
           }
           expect((yield* forked(first, one.command, "mine", id)).envelope).toEqual(once.envelope);
           yield* fs.remove(link);
           yield* fs.symlink(second, link);
+          expect(yield* fs.exists(written)).toBe(true);
           const moved = yield* forked(link, one.command, "mine", id);
           expect(moved.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
           expect(moved.envelope.data).toBeUndefined();
           const fresh = yield* forked(link, one.command, "mine-two", `${id}-fresh`);
           expect(fresh.envelope).toMatchObject({ ok: true });
-          const freshWritten = yield* writtenIn(fresh.envelope);
+          const freshWritten = yield* reported(fresh.envelope);
+          expect(yield* fs.exists(freshWritten)).toBe(true);
           if (one.project) {
             expect(Str.startsWith(second)(freshWritten)).toBe(true);
           }
@@ -1238,6 +1273,37 @@ test("a fork follows the directory it runs in, not the path that named it", () =
             "fork-gone-fresh",
           )).envelope,
         ).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+      }),
+    ["lingers.workflow.ts"],
+  ));
+test("a workflow fork refused before it is saved still names the request", () =>
+  proves(
+    "collie-receipt-scope-fork-refused-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const vanished = `${world.home}/vanished`;
+        yield* checkoutAt(vanished);
+        yield* fs.remove(vanished, { recursive: true });
+        const refused = yield* collie(
+          world,
+          [
+            "workflow",
+            "fork",
+            "plain",
+            "--name",
+            "mine",
+            "--layer",
+            "project",
+            "--request-id",
+            "fork-vanished",
+          ],
+          { COLLIE_CWD: vanished },
+        );
+        expect(refused.envelope).toMatchObject({
+          ok: false,
+          error: { code: "invalid_input", details: { requestId: "fork-vanished" } },
+        });
       }),
     ["lingers.workflow.ts"],
   ));

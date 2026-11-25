@@ -2528,9 +2528,11 @@ it resolves to: a symlink and its target are one request, and a link pointed at 
 checkout is another. A Schedule counts the checkout its `--workspace` resolved. A start
 counts the workspace as it was named as well as the checkout it resolved, so one whose
 workspace now resolves elsewhere is refused. A fork counts the physical directory it reads
-and writes — for a project fork the `.collie` of the directory the command runs in, which
-`COLLIE_CWD` sets, and for a user fork the project whose source it copies — and a selector
-picks that directory only where no cwd was given. A local path that has gone is refused
+and writes — the `.collie` of the directory the command runs in, which `COLLIE_CWD` sets —
+and a user fork also counts the project whose source it copies. Only `persona fork --layer
+project` takes that directory from `--workspace`, and only where no cwd was given:
+`workflow fork` and a user persona fork always read and write the directory they run in,
+whatever `--workspace` names. A local path that has gone is refused
 before its receipt is looked up, for a Schedule's `--workspace` and for the directory a fork
 runs in, so neither replays the answer it was given while the directory was there. A
 request that reuses an id for anything else is refused as `invalid_input`, with none of the

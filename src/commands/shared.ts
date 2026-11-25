@@ -69,13 +69,24 @@ export type ContextResolution =
     }
   | { readonly _tag: "ContextFailure"; readonly result: Failure };
 
-const resolvedContext: (env: PluginEnv, workspace: NamedDirectory | null) => ContextResolution = (
-  env,
-  workspace,
-) => ({
-  _tag: "ResolvedContext",
-  env,
-  workspace,
+// WARNING: a link is resolved to its target, so one directory has one path for a receipt and its work.
+export const physicalDir = Effect.fn("collie.physicalDir")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const returned: string | null = yield* fs.realPath(dir).pipe(Effect.orElseSucceed(() => null));
+  return returned;
+});
+
+const resolvedContext = Effect.fn("collie.resolvedContext")(function* (
+  env: PluginEnv,
+  workspace: NamedDirectory | null,
+) {
+  const physical = yield* physicalDir(env.cwd);
+  const found: Extract<ContextResolution, { _tag: "ResolvedContext" }> = {
+    _tag: "ResolvedContext",
+    env: physical === null ? env : { ...env, cwd: physical },
+    workspace,
+  };
+  return found;
 });
 
 const contextFailure: (result: Failure) => ContextResolution = (result) => ({
@@ -102,10 +113,10 @@ export const context = Effect.fn("collie.context")(function* (
   if (!id) {
     return requireScope
       ? contextFailure(err("workspace_required", "This operation requires a workspace."))
-      : resolvedContext(base, null);
+      : yield* resolvedContext(base, null);
   }
   if (!resolveLive) {
-    return resolvedContext(base, null);
+    return yield* resolvedContext(base, null);
   }
 
   const named = yield* workspaceNamed(base, id);
@@ -122,7 +133,7 @@ export const context = Effect.fn("collie.context")(function* (
     }
     return contextFailure(err("workspace_not_found", `Workspace "${id}" was not found.`, details));
   }
-  return resolvedContext(
+  return yield* resolvedContext(
     { ...base, cwd: base.cwdExplicit ? base.cwd : lookup.workspace.cwd || base.cwd },
     lookup.workspace,
   );
@@ -212,13 +223,6 @@ export const layerDir = Effect.fn("collie.layerDir")(function* (
 ) {
   const available = yield* layers(env);
   return available[layer].dir;
-});
-
-// WARNING: receipts compare directories across Machines and processes, so a checkout is the last link's target.
-export const physicalDir = Effect.fn("collie.physicalDir")(function* (dir: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const returned: string | null = yield* fs.realPath(dir).pipe(Effect.orElseSucceed(() => null));
-  return returned;
 });
 
 type ParsedInputs = { ok: true; given: Given } | { ok: false; error: Result };

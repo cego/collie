@@ -10,7 +10,7 @@ import { savedModules } from "../lifecycle";
 import { loadEntry } from "../engine";
 import { isWorkflowId } from "../sdk";
 import { err } from "../operations";
-import { attempt, mutation } from "../envelope";
+import { attempt, mutation, requestId as requested, withRequestId } from "../envelope";
 import { tellHost } from "../tell-host";
 import {
   UnknownJson,
@@ -336,6 +336,7 @@ const workflowFork = Command.make(
   ({ workflow, layer, name, requestId: request }) =>
     Effect.gen(function* () {
       const global = yield* root;
+      const id = yield* requested(request);
       yield* attempt(
         Effect.gen(function* () {
           const base = yield* context(global, false);
@@ -344,9 +345,12 @@ const workflowFork = Command.make(
           }
           const reads = yield* physicalDir(base.env.cwd);
           if (reads === null) {
-            return err("invalid_input", `This Machine has no directory "${base.env.cwd}".`, {
-              cwd: base.env.cwd,
-            });
+            return withRequestId(
+              err("invalid_input", `This Machine has no directory "${base.env.cwd}".`, {
+                cwd: base.env.cwd,
+              }),
+              id,
+            );
           }
           return yield* mutation(
             base.env,
