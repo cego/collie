@@ -25,6 +25,7 @@ import {
   VERIFIED_VERSIONS,
 } from "../src/compactors";
 import { pollCompaction, readControl } from "../src/compaction";
+import { marked } from "../src/dispatcher";
 import { textHash } from "../src/steering";
 import type { CompactionDeps } from "../src/compaction";
 
@@ -342,6 +343,22 @@ test("a submit that names a delivery but carried other words does not settle it"
           text_hash: textHash("Stop and do this."),
         }),
       ).toBe(false);
+    }),
+  ));
+
+test("a submit for a slash-command step settles on the words the Dispatcher hashed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const words = "/collie:tdd\nwrite the test first";
+      yield* recordClaudeEvent(dir, submit(marked(words, "run-1-steer-1")), "term-7");
+
+      expect(
+        yield* submittedDelivery(dir, {
+          id: "run-1-steer-1",
+          incarnation: "term-7",
+          text_hash: textHash(words),
+        }),
+      ).toBe(true);
     }),
   ));
 

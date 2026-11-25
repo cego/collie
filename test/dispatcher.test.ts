@@ -18,6 +18,7 @@ import {
   submitPatiently,
   marked,
   carriedDelivery,
+  carriedPrompt,
   confirmSubmitted,
   deliveryText,
   fitDelivery,
@@ -987,6 +988,13 @@ test("a prompt's delivery token is near its top, and a slash command keeps its f
     "/implement do the thing\ncollie-delivery:d1\nmore",
   );
   expect(carriedDelivery(marked("item\ncollie-delivery:item-1", "d1"))).toBe("d1");
+});
+
+test("what a prompt carried is the words the Dispatcher hashed, a slash command included", () => {
+  expect(carriedPrompt(marked("do the thing", "d1"))?.body).toBe("do the thing");
+  expect(carriedPrompt(marked("/implement do the thing\nmore", "d1"))?.body).toBe(
+    "/implement do the thing\nmore",
+  );
 });
 
 test("a prompt quoting a delivery token is not read as that delivery being submitted", () => {

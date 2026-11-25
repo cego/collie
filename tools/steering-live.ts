@@ -161,11 +161,13 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
     });
   } else {
     // WARNING: only a live Run's oversight writes manual_override; read the hook's record, not the ledger.
-    const deliveredAsCollie = yield* submittedDelivery(hookDir, {
-      id: nowId,
-      incarnation: terminalId,
-      text_hash: textHash(askFor(runDir, nowId)),
-    });
+    const deliveredAsCollie =
+      sent.ok &&
+      (yield* submittedDelivery(hookDir, {
+        id: sent.id,
+        incarnation: terminalId,
+        text_hash: textHash(askFor(runDir, nowId)),
+      }));
     const before = yield* externalSubmissions(hookDir);
     yield* Effect.log(`Type any line into ${agent}'s pane now, then Enter. Waiting 90 seconds.`);
     yield* Effect.sleep(90_000);
@@ -173,7 +175,7 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
     rows.push({
       capability: "attribution",
       result: deliveredAsCollie && typed === 1 ? "pass" : "fail",
-      note: `${nowId} recorded as collie: ${deliveredAsCollie}; external submissions while typing: ${typed}`,
+      note: `${sent.ok ? sent.id : nowId} recorded as collie: ${deliveredAsCollie}; external submissions while typing: ${typed}`,
     });
   }
 

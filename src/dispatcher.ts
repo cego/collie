@@ -655,7 +655,7 @@ export function marked(text: string, id: string) {
   return Arr.join([command, token, ...rest], "\n");
 }
 
-export { DELIVERY_TOKEN, carriedDelivery } from "./delivery-marker";
+export { DELIVERY_TOKEN, carriedDelivery, carriedPrompt } from "./delivery-marker";
 
 export const entryFromLive = Effect.fn("Dispatcher.entryFromLive")(function* (
   deps: DispatcherDeps,

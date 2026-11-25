@@ -664,7 +664,6 @@ const sentTexts = (log: string) =>
     return isJsonObject(params) && isString(params.text) ? [params.text] : [];
   });
 
-// WARNING: the words core was handed, so a fixture submits what Collie sent instead of words of its own.
 const sentWords = (needle: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) =>
     Effect.map(fs.readFileString(core.logPath).pipe(Effect.orElseSucceed(() => "")), (log) =>
@@ -751,16 +750,14 @@ for (const evidence of [
           yield* stopHost(at.world.state);
           const before = Arr.length(yield* metricsOf(at));
           if (evidence !== "no-submit") {
+            const captured = Option.getOrThrow(yield* sentWords(delivery.id));
+            const [marker, ...words] = Str.split(captured, "\n");
             const prompt =
-              evidence === "its-own-submit"
-                ? Option.getOrThrow(yield* sentWords(delivery.id))
-                : `collie-delivery:${
-                    evidence === "another-delivery" ? `${delivery.id}-elsewhere` : delivery.id
-                  }\n${
-                    evidence === "another-text"
-                      ? "another matter entirely"
-                      : "Your task for this step is next."
-                  }`;
+              evidence === "another-delivery"
+                ? Arr.join([`${marker}-elsewhere`, ...words], "\n")
+                : evidence === "another-text"
+                  ? Arr.join([marker, "another matter entirely"], "\n")
+                  : captured;
             yield* recordClaudeEvent(
               yield* controlDir(at.world.state, at.agent),
               encode({

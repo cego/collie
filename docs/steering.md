@@ -146,7 +146,8 @@ The terminal states are `failed` (core refused) and `superseded` (a human reconc
 same work. It does not expire, and Collie never retries out of it on its own; it is settled
 by evidence instead. That evidence names both the delivery and the incarnation it went to,
 and the words it carried: the agent's own prompt-submit hook recorded that delivery id with
-a digest of the text that followed it, written from that terminal. A
+a digest of the prompt without its token line — a slash command's first line included —
+written from that terminal. A
 record of the same id from another incarnation of the agent's name, one carrying other
 words — a marker a human pasted back, or a task's output quoting one — a record naming another
 delivery, and no record at all leave it `unknown`, and nothing is sent again. Every path

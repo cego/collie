@@ -17,14 +17,13 @@ export function carriedPrompt(prompt: string) {
   const returned: { delivery: string; body: string } | null =
     token === null || token === "" || SPACED.test(token)
       ? null
-      : { delivery: token, body: Arr.join(Arr.drop(lines, at + 1), "\n") };
+      : {
+          delivery: token,
+          body: Arr.join([...Arr.take(lines, at), ...Arr.drop(lines, at + 1)], "\n"),
+        };
   return returned;
 }
 
 export function carriedDelivery(prompt: string) {
   return carriedPrompt(prompt)?.delivery ?? null;
-}
-
-export function carriedBody(prompt: string) {
-  return carriedPrompt(prompt)?.body ?? null;
 }
