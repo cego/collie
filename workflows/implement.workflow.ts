@@ -715,6 +715,26 @@ export default defineWorkflow({
           : measuredBy("measure.own", `${place.dir}/plan/issues/NN-<slug>.benchmark.json`);
       const measuredTicket = () =>
         Option.getOrUndefined(Arr.findFirst(tickets, (one) => one.benchmark !== null))?.benchmark;
+      // WARNING: a direct start's builder names the benchmark on the ticket it writes, so it is read after the build.
+      let ownReadings = 0;
+      const ownBenchmark = Effect.gen(function* () {
+        ownReadings += 1;
+        return yield* Activity.make({
+          name: `measure.own.${ownReadings}`,
+          success: Schema.NullOr(Schema.String),
+          execute: orderedTicketsOf(
+            `${place.dir}/plan`,
+            place.options.repo ?? "",
+            place.options.change ?? "",
+          ).pipe(
+            Effect.map(
+              (read) =>
+                Option.getOrUndefined(Arr.findFirst(read, (one) => one.benchmark !== null))
+                  ?.benchmark ?? null,
+            ),
+          ),
+        });
+      });
       // WARNING: read only after the build, which is what writes SPEC.md for any source but a plan.
       let specReadings = 0;
       const specNow = Effect.gen(function* () {
@@ -1279,7 +1299,12 @@ export default defineWorkflow({
       }
 
       // WARNING: the last ticket built is not the Run's Measurement, which is the one its tickets name.
-      input = { ...input, measure: benchmarkMeasure(measuredTicket()) };
+      input = {
+        ...input,
+        measure: benchmarkMeasure(
+          work.kind === "plan-dir" ? measuredTicket() : yield* ownBenchmark,
+        ),
+      };
       if (rallied === null || rallied.unreviewed !== "") {
         rallied = kept(
           yield* builderRally({

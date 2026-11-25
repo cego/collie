@@ -10851,6 +10851,57 @@ scenario("a Run without a Measurement renders none in any fix round", () =>
   ),
 );
 
+scenario("a direct start's fix rounds carry the benchmark its builder wrote on the ticket", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* noMergeRequests;
+      yield* repository();
+      const runId = "r-own-benchmark";
+      yield* approve(runId, ["unit"]);
+      const where = runDir(dir, runId);
+      const finding = {
+        severity: "blocker",
+        title: "the runner walks the whole list",
+        file: "src/a.ts",
+        detail: "so a long list takes seconds",
+      };
+      yield* rig.queueOutputs([
+        {
+          writes: [
+            { path: `${where}/plan/SPEC.md`, text: "# The spec\n" },
+            {
+              path: `${where}/plan/issues/01-only.md`,
+              text: "# only\n\n**Checks:** unit\n**Benchmark:** 01-only.benchmark.json\n",
+            },
+          ],
+          output: BUILT,
+        },
+        { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [finding] },
+        {
+          verdict: "clean",
+          fixed: [{ title: finding.title, file: finding.file }],
+          disputed: [],
+          checks: [],
+        },
+        CLEAN_SYNTHESIS,
+        OPENED,
+      ]);
+      const status = yield* driven(
+        {
+          entry: shipped("implement"),
+          runId,
+          input: { plan: "Make the runner faster.", ...FINISH },
+        },
+        (run) => ended(run.status),
+      );
+      expect(outcomeText(status)).toBe(OPENED.mr_url);
+      const fix = yield* asked(runId, "fix-1");
+      expect(fix).toContain("01-only.benchmark.json");
+      expect(fix).toContain(MEASURE_LEADS[0]!);
+    }),
+  ),
+);
+
 scenario(
   "a job red where the branch leaves its target is reported on the merge request and the record, and gets no round",
   () =>
