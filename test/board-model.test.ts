@@ -20,6 +20,7 @@ import {
   readMrRef,
   readinessOfRun,
   readyToRelease,
+  ReviewFinding,
   RunDetail,
   TaskView,
 } from "../src/board-model";
@@ -145,6 +146,27 @@ test.each([
   expect(acting(node, over).lanes[0]!.nodes[0]!).toMatchObject({
     primary: null,
     actions: [...actions],
+  });
+});
+
+test("a finding a host from before ids sent still decodes, as open and with no id", () => {
+  const older = {
+    severity: "major",
+    title: "the guard is missing",
+    file: "src/a.ts",
+    line: 3,
+    detail: "nothing checks it",
+  };
+  expect(Result.getOrThrow(Schema.decodeUnknownResult(ReviewFinding)(older))).toMatchObject({
+    id: "",
+    status: "open",
+    reason: null,
+    offer: null,
+    run: null,
+    basis: null,
+    evidence: null,
+    suggested: null,
+    title: "the guard is missing",
   });
 });
 

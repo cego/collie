@@ -1923,19 +1923,27 @@ pub struct DetailMr2 {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Finding {
-    pub id: String,
-    pub status: FindingStatus,
-    pub reason: Option<String>,
-    pub offer: Option<String>,
-    pub run: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<FindingStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub reason: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub offer: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub run: Option<Option<String>>,
     pub severity: String,
     pub title: String,
     pub file: Option<String>,
     pub line: Option<f64>,
     pub detail: Option<String>,
-    pub basis: Option<Basis>,
-    pub evidence: Option<String>,
-    pub suggested: Option<Suggested>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub basis: Option<Option<Basis>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub evidence: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub suggested: Option<Option<Suggested>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

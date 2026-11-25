@@ -610,20 +610,25 @@ export const FindingStatusName = Schema.Literals([
   "taken",
 ]);
 
+// WARNING: every key added after findings were first drawn decodes to a default, so a host from before them still reads.
 export const ReviewFinding = Schema.Struct({
-  id: Schema.String,
-  status: FindingStatusName,
-  reason: Schema.NullOr(Schema.String),
-  offer: Schema.NullOr(Schema.String),
-  run: Schema.NullOr(Schema.String),
+  id: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed(""))),
+  status: FindingStatusName.pipe(Schema.withDecodingDefaultKey(Effect.succeed("open" as const))),
+  reason: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  offer: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  run: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   severity: Schema.String,
   title: Schema.String,
   file: Schema.NullOr(Schema.String),
   line: Schema.NullOr(Schema.Finite),
   detail: Schema.NullOr(Schema.String),
-  basis: Schema.NullOr(Schema.Literals(["fact", "inference"])),
-  evidence: Schema.NullOr(Schema.String),
-  suggested: Schema.NullOr(Schema.Literals(["fix", "ticket", "investigate", "plan", "none"])),
+  basis: Schema.NullOr(Schema.Literals(["fact", "inference"])).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  ),
+  evidence: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  suggested: Schema.NullOr(Schema.Literals(["fix", "ticket", "investigate", "plan", "none"])).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  ),
 });
 export type ReviewFinding = typeof ReviewFinding.Type;
 
