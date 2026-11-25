@@ -56,3 +56,7 @@ release is one of two, both of them proof the agent had its result:
 An Output is read again after the release is decided: the status that releases it is a
 read of its own, and the file may have been written again while it was in flight. A verify
 no longer under way, such as one a host swap ended, holds nothing.
+
+A write is the file's time as every poll reads it, so a rewrite that keeps the same bytes
+is still a write, and a verify under way when one landed stays owed its tell after a later
+write replaces that time. While an Output waits, the Run's log says why.
