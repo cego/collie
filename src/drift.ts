@@ -806,13 +806,26 @@ export const judge = Effect.fn("Drift.judge")(function* (
     }
   }
   const cut = cutIn(evidence.blocks, evidence.outputs);
-  // WARNING: one path can appear in two batches, so the same report is found twice; the worst verdict stands.
+  // WARNING: one path can appear in two batches, so the same report is found twice; the worst verdict stands, with the batches that gave it.
   const worst = new Map<string, DriftReport>();
   for (const report of reports) {
     const seen = worst.get(report.id);
-    if (seen === undefined || (report.severity === "block" && seen.severity === "warn")) {
-      worst.set(report.id, seen === undefined ? report : { ...seen, severity: report.severity });
+    if (seen === undefined) {
+      worst.set(report.id, report);
+      continue;
     }
+    const blocked = report.severity === "block" && seen.severity === "warn";
+    const worstOf = blocked ? report : seen;
+    const other = blocked ? seen : report;
+    const batches = [
+      ...new Set(
+        Arr.filter([worstOf.batch, other.batch], (one): one is string => one !== undefined),
+      ),
+    ];
+    worst.set(
+      report.id,
+      batches.length > 1 ? { ...worstOf, batch: Arr.join(batches, "; ") } : worstOf,
+    );
   }
   const found = [...worst.values()];
   if (whole) {
