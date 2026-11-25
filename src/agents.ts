@@ -218,7 +218,7 @@ import type { JsonObject } from "./schema";
 import { awaitOutput, outputCollected } from "./output-submit";
 import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } from "./subagents";
 import { Collecting, collectingLayer } from "./collecting";
-import { owedEver, released } from "./collecting";
+import { owedEver, released, underWhileWritten } from "./collecting";
 import type { CollectingApi, VerifyHold } from "./collecting";
 import { holdsBudgetOf, waitForMemory } from "./memory-wait";
 import {
@@ -3457,7 +3457,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         Effect.gen(function* () {
           const asking = questions === undefined ? null : yield* questionsOf(launched, questions);
           const turnOver = Effect.suspend(() => host.herdr.agentStatus(launched.agent)).pipe(
-            Effect.map((status) => status !== "working" && status !== "blocked"),
+            Effect.map(isSettled),
             Effect.orElseSucceed(() => false),
           );
           const text = yield* Effect.raceFirst(
@@ -5091,7 +5091,7 @@ const undeliverable = (cause: unknown) => ({
 });
 
 // WARNING: a blank file is a write not yet happened, and null means uncertain, never that nothing happened.
-const waitForOutput = <R>(
+export const waitForOutput = <R>(
   path: string,
   unless: string | null,
   every: {
@@ -5115,13 +5115,15 @@ const waitForOutput = <R>(
         : Option.match(info.mtime, { onNone: () => began, onSome: (at) => at.getTime() }),
     );
     const everOwed: Array<string> = [];
+    let firstSeen: number | null = null;
     const free = Effect.gen(function* () {
       if (every.holding !== undefined) {
         const now = yield* every.holding;
-        if (now.under) {
+        const at = firstSeen ?? (yield* writtenAt);
+        if (underWhileWritten(at, now)) {
           return false;
         }
-        const owed = owedEver(everOwed, yield* writtenAt, now);
+        const owed = owedEver(everOwed, at, now);
         if (owed.length === 0) {
           return true;
         }
@@ -5150,7 +5152,11 @@ const waitForOutput = <R>(
     let spent = 0;
     for (;;) {
       const text = yield* read;
-      if (fresh(text) && (yield* free)) {
+      const here = fresh(text);
+      if (here) {
+        firstSeen ??= yield* writtenAt;
+      }
+      if (here && (yield* free)) {
         // WARNING: the read came before the status the release was decided on, so the Output is read once more.
         const after = yield* read;
         const now = fresh(after) ? after : text;

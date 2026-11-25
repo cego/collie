@@ -3,6 +3,7 @@ import * as Str from "effect/String";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Fiber, Schema, flow, pipe as pipe_, Result } from "effect";
 import { connect } from "../src/host";
+import { runDir } from "../src/engine";
 import { resetExecutors } from "../src/executors";
 import { deliveredTo, launchOf } from "./support/records";
 import { exec } from "./support/command";
@@ -70,6 +71,13 @@ const held = (world: World, runId: string, agent: string, operation = "build") =
       () => fs.exists(underway),
       (one) => one,
     );
+    yield* until(
+      () =>
+        fs
+          .readFileString(`${runDir(world.state, runId)}/log.txt`)
+          .pipe(Effect.orElseSucceed(() => "")),
+      (text) => pipe_(text, Str.includes('"unit" started')),
+    );
     return { go, running };
   });
 
@@ -113,6 +121,35 @@ test("an Output written while its own verify runs is not taken, and the one afte
         expect(asked).toBe("collected fresh");
         yield* fs.writeFileString(go, "").pipe(Effect.orDie);
         yield* Fiber.await(running);
+      }).pipe(Effect.ensuring(stopHost(world.state))),
+    ["collected.workflow.ts"],
+  ));
+
+test("an unread status does not stand in for the end of the agent's turn", () =>
+  proves(
+    "collie-output-waits-8-",
+    (world, core) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* setUp(world, [{ output: null, status: "idle" }]);
+        const { client, runId } = yield* began(world, "collected", {});
+        const build = yield* buildOf(world, runId);
+        const { go, running } = yield* held(world, runId, build.agent);
+        yield* fs.writeFileString(build.output, encode({ verdict: "unread" })).pipe(Effect.orDie);
+        yield* core.report(build.agent, "working");
+        yield* Effect.sleep("2500 millis");
+        yield* fs.writeFileString(go, "").pipe(Effect.orDie);
+        yield* Fiber.await(running);
+        yield* core.report(build.agent, "halfway");
+        yield* Effect.sleep("6000 millis");
+        expect(prompts(yield* client.run({ runId }).pipe(Effect.orDie))).toEqual([]);
+
+        yield* core.report(build.agent, "idle");
+        const [asked] = yield* until(
+          () => client.run({ runId }).pipe(Effect.orDie),
+          (view) => prompts(view).length > 0,
+        ).pipe(Effect.map((view) => prompts(view)));
+        expect(asked).toBe("collected unread");
       }).pipe(Effect.ensuring(stopHost(world.state))),
     ["collected.workflow.ts"],
   ));
@@ -169,11 +206,10 @@ test("a verify another agent of the same Run started holds nothing back", () =>
         const check = yield* buildOf(world, runId, "check");
         const { go, running } = yield* held(world, runId, build.agent, "check");
         yield* fs.writeFileString(check.output, encode({ verdict: "checked" })).pipe(Effect.orDie);
-        const done = yield* until(
+        yield* until(
           () => client.run({ runId }).pipe(Effect.orDie),
           (view) => view?.status.status === "complete",
         );
-        expect(done?.status.status).toBe("complete");
         yield* fs.writeFileString(go, "").pipe(Effect.orDie);
         yield* Fiber.await(running);
       }).pipe(Effect.ensuring(stopHost(world.state))),

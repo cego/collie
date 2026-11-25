@@ -2284,7 +2284,7 @@ const frontDoorHandlers = (
                 isSettled,
               ),
             steer: (tell) =>
-              Effect.asVoid(
+              Effect.flatMap(
                 registry.steer({
                   runId: tell.run,
                   agent: tell.agent,
@@ -2292,6 +2292,12 @@ const frontDoorHandlers = (
                   request: tell.request,
                   text: tell.text,
                 }),
+                (sent) =>
+                  sent.delivered
+                    ? Effect.void
+                    : Effect.fail(
+                        new HostRefused({ reason: sent.detail || "the tell was not delivered" }),
+                      ),
               ),
           },
           { run, agent },

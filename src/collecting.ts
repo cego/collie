@@ -19,8 +19,11 @@ export interface CollectingApi {
   readonly markUntold: (run: string, agent: string, verified: string) => Effect.Effect<void>;
 }
 
+const MILLISECOND_SKEW = 1;
+
 export interface VerifyHold {
   readonly under: boolean;
+  readonly since: number | null;
   readonly ended: ReadonlyArray<{
     readonly id: string;
     readonly at: number;
@@ -29,13 +32,20 @@ export interface VerifyHold {
   readonly untold: ReadonlyArray<string>;
 }
 
+// WARNING: an mtime is truncated to the millisecond where the clock rounds, so a write as a verify began can look a millisecond older.
 export const owedFor = (writtenAt: number, now: VerifyHold) => {
   const owed: ReadonlyArray<string> = Arr.map(
-    Arr.filter(now.ended, (one) => one.began <= writtenAt && one.at >= writtenAt),
+    Arr.filter(
+      now.ended,
+      (one) => one.began <= writtenAt + MILLISECOND_SKEW && one.at >= writtenAt,
+    ),
     (one) => one.id,
   );
   return owed;
 };
+
+export const underWhileWritten = (writtenAt: number, now: VerifyHold) =>
+  now.under && (now.since === null || writtenAt + MILLISECOND_SKEW >= now.since);
 
 export const owedEver = (known: ReadonlyArray<string>, writtenAt: number, now: VerifyHold) => {
   const owed: ReadonlyArray<string> = [...new Set([...known, ...owedFor(writtenAt, now)])];
@@ -49,7 +59,7 @@ export const released = (
 ) => settled && Arr.every(owed, told);
 
 interface Held {
-  under: number;
+  started: Map<number, number>;
   ended: Map<string, { readonly at: number; readonly began: number }>;
   untold: Set<string>;
 }
@@ -67,6 +77,7 @@ export const collectingLayer = Layer.effect(Collecting)(
   Effect.sync(() => {
     const collections = new Map<string, Uses>();
     const verifies = new Map<string, Held>();
+    let nextVerify = 0;
     const usesOf = (run: string, agent: string) => {
       const known = collections.get(key(run, agent));
       if (known !== undefined) {
@@ -81,7 +92,7 @@ export const collectingLayer = Layer.effect(Collecting)(
       if (known !== undefined) {
         return known;
       }
-      const fresh: Held = { under: 0, ended: new Map(), untold: new Set() };
+      const fresh: Held = { started: new Map(), ended: new Map(), untold: new Set() };
       verifies.set(key(run, agent), fresh);
       return fresh;
     };
@@ -90,7 +101,7 @@ export const collectingLayer = Layer.effect(Collecting)(
         const held = verifies.get(key(run, agent));
         if (
           held !== undefined &&
-          held.under === 0 &&
+          held.started.size === 0 &&
           (collections.get(key(run, agent))?.all ?? 0) === 0
         ) {
           verifies.delete(key(run, agent));
@@ -128,8 +139,9 @@ export const collectingLayer = Layer.effect(Collecting)(
         Effect.acquireUseRelease(
           Effect.map(Clock.currentTimeMillis, (at) => {
             const held = heldOf(run, agent);
-            held.under += 1;
-            return { held, at };
+            nextVerify += 1;
+            held.started.set(nextVerify, at);
+            return { held, handle: nextVerify, at };
           }),
           ({ held, at }) =>
             named === undefined
@@ -142,10 +154,9 @@ export const collectingLayer = Layer.effect(Collecting)(
                     }
                   }),
                 ),
-          () =>
+          ({ held, handle }) =>
             Effect.sync(() => {
-              const held = heldOf(run, agent);
-              held.under = Math.max(0, held.under - 1);
+              held.started.delete(handle);
             }).pipe(Effect.andThen(retire(run, agent))),
         ),
       markUntold: (run, agent, verified) =>
@@ -156,8 +167,10 @@ export const collectingLayer = Layer.effect(Collecting)(
         Effect.sync(() => {
           const held = verifies.get(key(run, agent));
           const ended = Arr.map([...(held?.ended ?? [])], ([id, one]) => ({ id, ...one }));
+          const began = [...(held?.started ?? new Map<number, number>()).values()];
           const returned: VerifyHold = {
-            under: (held?.under ?? 0) > 0,
+            under: began.length > 0,
+            since: began.length === 0 ? null : Math.min(...began),
             ended,
             untold: [...(held?.untold ?? [])],
           };
