@@ -3,7 +3,9 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { Config, Effect, Option, Schema } from "effect";
 import { expect, test } from "bun:test";
+import { FileSystem, Stream } from "effect";
 import { connect } from "../src/host";
+import { sectionOf } from "../src/board-model";
 import { RunRecords } from "../src/run-records";
 import { OPEN_FINDINGS, readFindingStatuses } from "../src/finding-status";
 import { hosted, settledRun } from "./support/hosted";
@@ -174,6 +176,108 @@ test("a Run settled before the open count was a fact reports it, and the fact is
       expect((yield* client.runFindings({ runId: run.id })).length).toBe(2);
       expect(yield* countOf(world.state, run.id)).toBe("2");
     }),
+  ));
+
+test("the CLI takes an offer over two findings, lists both taken, and a dismissal takes the card out of Waiting on you", () =>
+  hosted(
+    "hw-findings-select-",
+    ({ world }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.copyFile(`${root}workflows/selected.ts`, `${world.user}/selected.ts`);
+        const run = yield* settledRun(world, "submits");
+        const env = envOf(world);
+        const [first, second, third] = [`${run.id}-F1`, `${run.id}-F2`, `${run.id}-F3`];
+
+        const listed = yield* cli(["--json", "run", "findings", run.id], env);
+        expect(listed.exit).toBe(0);
+        const ids = Arr.map(
+          (
+            (yield* parseEnvelope(listed.stdout)).data as {
+              readonly findings: ReadonlyArray<{ readonly id: string }>;
+            }
+          ).findings,
+          (one) => one.id,
+        );
+        expect(ids).toEqual([first, second, third]);
+
+        const card = (() =>
+          Effect.gen(function* () {
+            const client = yield* connect(world.state).pipe(Effect.orDie);
+            const sent = yield* client.board().pipe(Stream.runHead, Effect.orDie);
+            const board = yield* Option.match(sent, {
+              onNone: () => Effect.die("the board sent nothing"),
+              onSome: (one) => Effect.succeed(one),
+            });
+            const tasks = board._tag === "Snapshot" ? board.tasks : [];
+            return yield* Option.match(
+              Arr.findFirst(tasks, (one) => one.run === run.id),
+              {
+                onNone: () => Effect.die(`no card for ${run.id}`),
+                onSome: (one) => Effect.succeed(`${one.landed}/${sectionOf(one)}`),
+              },
+            );
+          }))();
+        expect(yield* card).toBe("false/waiting");
+
+        const chosen = yield* cli(
+          [
+            "--json",
+            "run",
+            "action",
+            run.id,
+            "implement-selected",
+            "--input",
+            `findings=${first}, ${second}`,
+            "--request-id",
+            "choose-two",
+          ],
+          env,
+        );
+        expect(chosen.exit).toBe(0);
+        const taken = yield* cli(["--json", "run", "findings", run.id], env);
+        const rows = Arr.map(
+          (
+            (yield* parseEnvelope(taken.stdout)).data as {
+              readonly findings: ReadonlyArray<{
+                readonly id: string;
+                readonly status: string;
+                readonly run: string | null;
+              }>;
+            }
+          ).findings,
+          (one) => [one.id, one.status, one.run] as const,
+        );
+        expect(Arr.map(rows, ([id, status]) => [id, status])).toEqual([
+          [first, "taken"],
+          [second, "taken"],
+          [third, "open"],
+        ]);
+        const child = rows[0]?.[2] ?? "";
+        expect(child).not.toBe("");
+        expect(rows[1]?.[2]).toBe(child);
+        const shown = yield* cli(["--json", "run", "show", child], env);
+        expect(shown.exit).toBe(0);
+        expect(shown.stdout).toContain("implement");
+
+        const dismissed = yield* cli(
+          [
+            "--json",
+            "run",
+            "finding",
+            run.id,
+            third!,
+            "--dismiss",
+            "not worth it",
+            "--request-id",
+            "dismiss-third",
+          ],
+          env,
+        );
+        expect(dismissed.exit).toBe(0);
+        expect(yield* card).toBe("true/finished");
+      }),
+    ["leaves.workflow.ts", "submits.workflow.ts", "implement.workflow.ts"],
   ));
 
 test("the CLI lists a Run's findings and dismisses one, and run show says what it reads", () =>
