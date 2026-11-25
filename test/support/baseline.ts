@@ -5899,6 +5899,139 @@ scenario(
     ),
 );
 
+scenario("a hand-back that answers one finding twice still reports a duplicate disposition", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* noMergeRequests;
+      yield* repository();
+      const plan = yield* planOf([{ file: "01-only.md", title: "only", checks: "unit" }]);
+      const runId = "r-handback-twice";
+      yield* approve(runId, ["unit"]);
+      yield* collect(evidenceDir(dir, runId), {
+        run: runId,
+        name: "unit",
+        executable: "true",
+        argv: [],
+        cwd: rig.projectDir,
+        by: "agent",
+      }).pipe(Effect.orDie);
+      const one = { severity: "blocker", title: "the list is empty", file: "src/a.ts" };
+      const round = (title: string) => {
+        const returned: Array<Schema.Json> = [
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [{ ...one, title }] },
+          { verdict: "clean", fixed: [{ title, file: one.file }], checks: [{ name: "unit" }] },
+        ];
+        return returned;
+      };
+      yield* rig.queueOutputs([
+        BUILT,
+        ...round("one"),
+        ...round("two"),
+        ...round("three"),
+        { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [one] },
+        { verdict: "clean", fixed: [{ title: one.title, file: one.file }], checks: [] },
+        {
+          verdict: "clean",
+          fixed: [
+            { title: one.title, file: one.file },
+            { title: one.title, file: one.file },
+          ],
+          checks: [{ name: "unit" }],
+        },
+        OPENED,
+      ]);
+      const status = yield* driven(
+        { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+        (run) =>
+          Effect.gen(function* () {
+            const rows = yield* stallAsked(run, "fix-unverified-1");
+            expect(
+              Option.getOrUndefined(
+                Arr.findFirst(rows, (decision) => decision.decision === "fix-unverified-1"),
+              )?.prompt ?? "",
+            ).toContain("duplicate disposition");
+            yield* run.answer("fix-unverified-1", "Stop");
+            return yield* ended(run.status);
+          }),
+      );
+      expect(status.status).toBe("failed");
+    }),
+  ),
+);
+
+scenario("a hand-back leaves a finding it was not asked about alone", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* noMergeRequests;
+      yield* repository();
+      const plan = yield* planOf([{ file: "01-only.md", title: "only", checks: "unit" }]);
+      const runId = "r-handback-scope";
+      yield* approve(runId, ["unit"]);
+      yield* collect(evidenceDir(dir, runId), {
+        run: runId,
+        name: "unit",
+        executable: "true",
+        argv: [],
+        cwd: rig.projectDir,
+        by: "agent",
+      }).pipe(Effect.orDie);
+      const found = (title: string) => ({ severity: "blocker", title, file: "src/a.ts" });
+      const round = (title: string) => {
+        const returned: Array<Schema.Json> = [
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [found(title)] },
+          { verdict: "clean", fixed: [{ title, file: "src/a.ts" }], checks: [{ name: "unit" }] },
+        ];
+        return returned;
+      };
+      const guard = found("the guard is missing");
+      const list = found("the list is empty");
+      yield* rig.queueOutputs([
+        BUILT,
+        ...round("one"),
+        ...round("two"),
+        ...round("three"),
+        { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [guard, list] },
+        {
+          verdict: "clean",
+          fixed: [{ title: guard.title, file: guard.file }],
+          disputed: [{ ...list, reason: "upstream must release it" }],
+          checks: [{ name: "unit" }],
+        },
+        {
+          verdict: "clean",
+          fixed: [{ title: list.title, file: list.file }],
+          disputed: [{ ...guard, reason: "the caller is meant to check it" }],
+          checks: [{ name: "unit" }],
+        },
+        OPENED,
+      ]);
+      const status = yield* driven(
+        { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+        (run) =>
+          Effect.gen(function* () {
+            yield* stallAsked(run, "dispute-1");
+            yield* run.answer("dispute-1", "Send it back");
+            const rows = yield* stallAsked(run, "dispute-2");
+            const again = Option.getOrUndefined(
+              Arr.findFirst(rows, (decision) => decision.decision === "dispute-2"),
+            );
+            if (again !== undefined && again.answer === null) {
+              yield* run.answer("dispute-2", "Stop");
+            }
+            const endedAt = yield* ended(run.status);
+            expect(Arr.map(yield* run.asked, (decision) => decision.decision)).not.toContain(
+              "dispute-2",
+            );
+            return endedAt;
+          }),
+      );
+      expect(outcomeText(status)).toBe(OPENED.mr_url);
+      expect(yield* asked(runId, "fix-5-back-1")).toContain(list.title);
+      expect(yield* asked(runId, "fix-5-back-1")).not.toContain(guard.title);
+    }),
+  ),
+);
+
 scenario(
   "a waiver answered by an agent records that agent, not the door the answer came through",
   () =>

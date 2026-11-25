@@ -697,10 +697,14 @@ export const rally = (ask: {
           open,
           head,
         });
-        const settled = new Set(Arr.map([...fixed.fixed, ...fixed.disputed], findingKey));
+        const askedKeys = new Set(Arr.map(open, findingKey));
+        const answered = Arr.filter([...fixed.fixed, ...fixed.disputed], (one) =>
+          askedKeys.has(findingKey(one)),
+        );
+        const settled = new Set(Arr.map(answered, findingKey));
         disputed = [
           ...Arr.filter(disputed, (one) => !settled.has(findingKey(one))),
-          ...fixed.disputed,
+          ...Arr.filter(fixed.disputed, (one) => settled.has(findingKey(one))),
         ];
         return fixed;
       });
@@ -721,27 +725,21 @@ export const rally = (ask: {
         };
         const carry = (
           prior: typeof FixOutputSchema.Type,
+          asked: ReadonlyArray<Finding>,
           answered: typeof FixOutputSchema.Type,
         ) => {
-          const fixed = new Map<string, Fixed>();
-          const disputes = new Map<string, Finding>();
-          for (const one of prior.fixed) {
-            fixed.set(findingKey(one), one);
-          }
-          for (const one of prior.disputed) {
-            disputes.set(findingKey(one), one);
-          }
-          for (const one of answered.fixed) {
-            const key = findingKey(one);
-            disputes.delete(key);
-            fixed.set(key, one);
-          }
-          for (const one of answered.disputed) {
-            const key = findingKey(one);
-            fixed.delete(key);
-            disputes.set(key, one);
-          }
-          return { ...answered, fixed: [...fixed.values()], disputed: [...disputes.values()] };
+          const askedKeys = new Set(Arr.map(asked, findingKey));
+          const answers = {
+            fixed: Arr.filter(answered.fixed, (one) => askedKeys.has(findingKey(one))),
+            disputed: Arr.filter(answered.disputed, (one) => askedKeys.has(findingKey(one))),
+          };
+          const answering = new Set(Arr.map([...answers.fixed, ...answers.disputed], findingKey));
+          const kept = (one: Finding | Fixed) => !answering.has(findingKey(one));
+          return {
+            ...answered,
+            fixed: [...Arr.filter(prior.fixed, kept), ...answers.fixed],
+            disputed: [...Arr.filter(prior.disputed, kept), ...answers.disputed],
+          };
         };
         for (;;) {
           const standing = Arr.filter(offered(disputed), isBlocking);
@@ -762,6 +760,7 @@ export const rally = (ask: {
             } else {
               report = carry(
                 report,
+                standing,
                 yield* sendBack(declinedLine, standing, ROUNDS + 1, yield* ask.proves, head),
               );
               open = shrink(open, report);
@@ -802,6 +801,7 @@ export const rally = (ask: {
             }
             report = carry(
               report,
+              standing,
               yield* sendBack(declinedLine, standing, ROUNDS + 1, yield* ask.proves, head),
             );
             open = shrink(open, report);
@@ -812,6 +812,7 @@ export const rally = (ask: {
             // WARNING: a hand-back answers only what it names, so every disposition already on record stands.
             report = carry(
               report,
+              open,
               yield* ask.fix({
                 operation: `${prefix}fix-${ROUNDS + 1}`,
                 at: ROUNDS + 1,
@@ -845,6 +846,7 @@ export const rally = (ask: {
           }
           report = carry(
             report,
+            open,
             yield* sendBack(
               "A person sent this fix back rather than stop the Run: the evidence its checks need is still missing.",
               open,
