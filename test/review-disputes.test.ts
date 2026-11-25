@@ -123,6 +123,40 @@ test("a withdrawn dispute raised again open with a changed detail is a renewed f
   });
 });
 
+test("a rebuttal that renames the finding puts it back with the fixer, and its dispute stops standing", () => {
+  const stood: Finding = {
+    id: "r-1-F1",
+    file: "src/worker.ts",
+    title: "Restore the requested scope",
+    severity: "blocker",
+    reason: "The recorded decision includes this change.",
+  };
+  const renamed: Finding = {
+    id: "r-1-F1",
+    file: "src/worker.ts",
+    title: "Keep the requested scope in the write",
+    severity: "blocker",
+    rebuttal: "The write at line 40 still skips the check.",
+  };
+  const split = splitDisputed([renamed], [stood]);
+  expect(split.standing).toEqual([]);
+  expect(settleRound({ live: split.live, disputed: split.standing, at: 2 })).toMatchObject({
+    go: "fix",
+    blocking: [renamed],
+  });
+});
+
+test("a dispute a review repeats as minor keeps its severity and takes the reviewer's latest detail", () => {
+  const repeated: Finding = {
+    ...dispute,
+    status: "disputed",
+    severity: "minor",
+    detail: "The write at line 40 skips the check.",
+  };
+  const split = splitDisputed([repeated], [dispute]);
+  expect(split.standing).toEqual([{ ...dispute, detail: "The write at line 40 skips the check." }]);
+});
+
 test("a finding withdrawn and raised open with the same evidence in one review is a conflict, and its dispute stays", () => {
   const synthesis = review({ findings: [{ ...dispute, reason: undefined }], dropped: [accepted] });
   const disputed = remainingDisputes([dispute], synthesis);

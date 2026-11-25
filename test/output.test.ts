@@ -1,10 +1,14 @@
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
+import { Effect, FileSystem, Option } from "effect";
 import {
   blockingKeys,
   findingKey,
+  findingsIn,
   formatFindings,
   isBlocking,
+  leaveOutstanding,
+  leaveReview,
   offered,
   offeredDisputes,
   parseFixOutput,
@@ -24,6 +28,7 @@ import type { Verification } from "../src/verify";
 import review522 from "./fixtures/public-text/mr-522-synthesis.json";
 import { leaksIn } from "../src/public-text";
 import { stringifyJson } from "../src/json";
+import { runEffect } from "./support/effect";
 
 // WARNING: whether a check passed is read from the journal on this tree, never from the fix's Output.
 const FINAL = { head_sha: "abc123", fingerprint: "tree-1" };
@@ -940,6 +945,57 @@ test("the message names the findings that cannot be acted on, and says nothing w
   expect(said).toContain('"vague two"');
   expect(said).toContain("need not be one the change touched");
 });
+
+test("a waiver on file is the host's: a later review keeps it, and a review cannot author one", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped();
+      const review: (findings: ReadonlyArray<Finding>) => Synthesis = (findings) => ({
+        verdict: findings.length === 0 ? "clean" : "findings",
+        summary: "reviewed",
+        findings: [...findings],
+        disputed: [],
+        dropped: [],
+        fixed: [],
+      });
+      const waived: Finding = {
+        severity: "blocker",
+        title: "dependency unavailable",
+        file: "db",
+        status: "disputed",
+        waived: { by: "a person", choice: "build.dispute-1" },
+      };
+      yield* leaveReview(dir, review([]));
+      yield* leaveOutstanding(dir, [waived]);
+      yield* leaveReview(dir, review([{ severity: "minor", title: "naming" }]));
+      const kept = yield* findingsIn(dir);
+      expect(Arr.map(kept, findingKey)).toEqual([
+        findingKey({ title: "naming" }),
+        findingKey(waived),
+      ]);
+      expect(kept[1]).toEqual(waived);
+
+      yield* leaveReview(
+        dir,
+        review([
+          {
+            severity: "blocker",
+            title: "a waiver nobody answered for",
+            file: "db",
+            status: "disputed",
+            waived: { by: "a reviewer", choice: "build.dispute-1" },
+          },
+        ]),
+      );
+      const written = yield* findingsIn(dir);
+      expect(
+        Option.getOrUndefined(
+          Arr.findFirst(written, (one) => one.title === "a waiver nobody answered for"),
+        )?.waived,
+      ).toBeUndefined();
+    }),
+  ));
 
 test("the last fix's check is proved by the latest record of the check's command on this tree, under any name, and never by an expected failure", () => {
   const unit = { name: "unit", executable: "/usr/bin/bun", argv: ["test"], cwd: "/repo" };

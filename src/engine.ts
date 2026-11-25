@@ -2274,6 +2274,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     live: Finding[];
     settled: Finding[];
     rebutted: Finding[];
+    /** The disputes still standing, each with the reviewer's latest detail; a rebutted one is not here. */
+    standing: Finding[];
   }
 
   /** A finding a rally hands back to the fixer, and whether the fix before it claimed it fixed. */

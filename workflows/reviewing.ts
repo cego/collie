@@ -652,17 +652,6 @@ export const rally = (ask: {
         yield* host.record(runId, `waived by ${by} to ${name}: ${titled(marked)}`);
       });
 
-    // WARNING: the review after a waiver writes its own findings file, which would forget the waiver.
-    const keepWaived = Effect.gen(function* () {
-      if (waived.length === 0) {
-        return;
-      }
-      const onFile = yield* findingsIn(dir);
-      const keys = new Set(Arr.map(waived, findingKey));
-      const merged = [...Arr.filter(onFile, (one) => !keys.has(findingKey(one))), ...waived];
-      yield* leaveOutstanding(dir, merged);
-    });
-
     const cleaned: (reviewed: SynthesisReport, unreviewed?: string) => Rallied = (
       reviewed,
       unreviewed = "",
@@ -904,7 +893,6 @@ export const rally = (ask: {
           if (ledger !== undefined) {
             ledger = synthesis.findings;
           }
-          yield* keepWaived;
           const unresolved = Arr.filter(synthesis.findings, (one) => !isResolved(one));
           for (const conflict of conflictingDispositions(synthesis)) {
             yield* host.record(runId, `review ${at}: ${conflict}`);
@@ -915,16 +903,10 @@ export const rally = (ask: {
             Arr.filter(synthesis.findings, (one) => !waivedKeys.has(findingKey(one))),
             disputed,
           );
-          const rebutted = new Set(Arr.map(split.rebutted, findingKey));
-          disputed = Arr.filter(disputed, (one) => !rebutted.has(findingKey(one)));
-          const round = settleRound({
-            live: split.live,
-            disputed: [...disputed, ...split.settled],
-            at,
-            seen,
-          });
+          disputed = split.standing;
+          const round = settleRound({ live: split.live, disputed, at, seen });
           if (round.go === "halt" && round.halt === "dispute_unresolved") {
-            const standing = Arr.filter(offered(disputed), isBlocking);
+            const standing = Arr.filter(disputed, isBlocking);
             const name = `${prefix}dispute-${++disputeAsks}`;
             const chosen = yield* ask.choose({
               name,

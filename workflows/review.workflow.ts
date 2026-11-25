@@ -821,9 +821,10 @@ export default defineWorkflow({
         }
         disputed = remainingDisputes(disputed, synthesis);
         const split = splitDisputed(synthesis.findings, disputed);
+        disputed = split.standing;
         const round = settleRound({
           live: split.live,
-          disputed: [...disputed, ...split.settled],
+          disputed,
           at: reviews,
           seen,
         });

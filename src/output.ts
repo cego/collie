@@ -295,18 +295,24 @@ const FindingsJson = Schema.fromJsonString(Schema.Array(FindingSchema));
 const decodeFindings = Schema.decodeUnknownEffect(FindingsJson);
 const encodeFindings = flow(Schema.encodeResult(FindingsJson), Result.getOrThrow);
 
-// WARNING: written together: a review with no findings file is one nothing can count.
+// WARNING: written together, and a waiver on file is the host's: a review neither writes one away nor records one.
 export const leaveReview = (dir: string, synthesis: typeof SynthesisSchema.Type) =>
-  FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) =>
-      Effect.all([
-        fs.writeFileString(`${dir}/${REVIEW_FILE}`, renderReview(synthesis)),
-        fs.writeFileString(`${dir}/${FINDINGS_FILE}`, encodeFindings(synthesis.findings)),
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const recorded = Arr.filter(yield* findingsIn(dir), (one) => one.waived !== undefined);
+    const keys = new Set(Arr.map(recorded, findingKey));
+    yield* fs.writeFileString(`${dir}/${REVIEW_FILE}`, renderReview(synthesis));
+    yield* fs.writeFileString(
+      `${dir}/${FINDINGS_FILE}`,
+      encodeFindings([
+        ...Arr.map(
+          Arr.filter(synthesis.findings, (one) => !keys.has(findingKey(one))),
+          ({ waived: _, ...one }) => one,
+        ),
+        ...recorded,
       ]),
-    ),
-    Effect.asVoid,
-    Effect.orDie,
-  );
+    );
+  }).pipe(Effect.orDie);
 
 export const leaveOutstanding = (dir: string, outstanding: ReadonlyArray<Finding>) =>
   FileSystem.FileSystem.pipe(
@@ -1098,6 +1104,7 @@ export interface Split {
   live: Array<Finding>;
   settled: Array<Finding>;
   rebutted: Array<Finding>;
+  standing: Array<Finding>;
 }
 
 type Disposed = {
@@ -1157,7 +1164,7 @@ export function conflictingDispositions(review: Disposed) {
 
 // WARNING: a rejected finding stops driving the loop; only a reviewer's rebuttal brings it back.
 export function splitDisputed(findings: ReadonlyArray<Finding>, disputed: ReadonlyArray<Finding>) {
-  const split: Split = { live: [], settled: [], rebutted: [] };
+  const split: Split = { live: [], settled: [], rebutted: [], standing: [] };
   for (const finding of findings) {
     if (finding.status === "fixed" || finding.status === "obsolete") {
       continue;
@@ -1173,6 +1180,11 @@ export function splitDisputed(findings: ReadonlyArray<Finding>, disputed: Readon
       split.settled.push(finding);
     }
   }
+  const putBack = Arr.filter(
+    disputed,
+    (one) => !Arr.some(split.rebutted, (echo) => sameFinding(echo, one)),
+  );
+  split.standing = offered([...putBack, ...split.settled]);
   return split;
 }
 
