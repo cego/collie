@@ -3965,6 +3965,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           (one.state === "unknown" || one.state === "reserved" || isUnobserved(one)),
       );
       if (Option.isSome(held)) {
+        if (yield* dispatch.settleFromSubmit(host.env.stateDir, held.value)) {
+          return;
+        }
         return yield* new AgentParked({
           operation: ask.operation,
           reason: `${agent}: delivery ${held.value.id} remains ${held.value.state}; server loss does not say whether it was received. Settle it with \`collie run deliveries ${ask.runId} --reconcile ${held.value.id} --as sent|not-sent\`, then \`collie run resume ${ask.runId}\`.`,
@@ -4513,7 +4516,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           if (found.entry === null) {
             const now = yield* listedAgents();
             const live = stillListed(candidates, now);
-            const others = Arr.filter(live, (one) => one.agent !== launched.agent);
             const here = Arr.some(live, (one) => one.agent === launched.agent);
             return {
               agent: launched.agent,
@@ -4522,7 +4524,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
                 here
                   ? `${launched.agent} is listed, but its terminal could not be read`
                   : (found.reason ?? "no such agent")
-              }${others.length === 0 ? "" : `; live: ${rosterOf(others)}`}`,
+              }${live.length === 0 ? "" : `; live: ${rosterOf(live)}`}`,
               gone: Option.isSome(now) && live.length === 0,
             };
           }
@@ -4539,7 +4541,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
                 "Queued durably; the host will deliver when this agent is idle, without answering its Run's choices.",
             };
           }
-          const previous = Option.getOrUndefined(
+          const held = Option.getOrUndefined(
             Arr.findFirst(
               yield* deliveriesOf(options.runId),
               (one) =>
@@ -4548,6 +4550,12 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
                 !Arr.contains(["failed", "superseded"], one.state),
             ),
           );
+          const previous =
+            held === undefined ||
+            SENT_STATES.has(held.state) ||
+            !(yield* dispatch.settleFromSubmit(host.env.stateDir, held))
+              ? held
+              : { ...held, state: "acknowledged" as const };
           if (previous !== undefined) {
             const result = SENT_STATES.has(previous.state)
               ? receipt(previous.agent, {
@@ -4594,12 +4602,8 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           };
         }
         const now = yield* listedAgents();
-        const liveNow = stillListed(
-          Arr.filter(candidates, (one) => one.agent !== launched.agent),
-          now,
-        );
-        const gone =
-          Option.isSome(now) && liveNow.length === 0 && isGone(launched.agent, now.value, sent.why);
+        const liveNow = stillListed(candidates, now);
+        const gone = Option.isSome(now) && isGone(launched.agent, now.value, sent.why);
         return {
           agent: launched.agent,
           delivered: false,

@@ -36,6 +36,8 @@ import { installBaseline } from "./support/engine";
 import { mentionedSkills } from "../src/template";
 import type { FakeHc } from "./support/fake-hc";
 import { isJsonObject, isString } from "../src/schema";
+import { marked } from "../src/dispatcher";
+import { keepQueued } from "../src/delivery-queue";
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { onMachineWith } from "./support/live";
 import {
@@ -7258,6 +7260,51 @@ test("a message nobody can say arrived is not called delivered when it is said a
     }),
   ));
 
+test("a lost answer whose exact submit is recorded settles, instead of being refused as unknown", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const again = yield* session(
+        Effect.gen(function* () {
+          core.refuse("terminal.send", "unreachable", "the core did not answer");
+          const first = yield* say("r1", "stay in src", "steer-1");
+          expect(first.delivered).toBe(false);
+          core.restore("terminal.send");
+          const lost = Option.getOrThrow(
+            Arr.head(
+              Arr.filter(
+                yield* deliveredTo(dir, "r1"),
+                (one) => one.cause.kind === "steer" && one.state === "unknown",
+              ),
+            ),
+          );
+          yield* recordClaudeEvent(
+            yield* controlDir(rig.pluginEnv().stateDir, lost.agent),
+            flow(
+              Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+              Result.getOrThrow,
+            )({
+              session_id: lost.agent,
+              hook_event_name: "UserPromptSubmit",
+              prompt: marked("stay in src", lost.id),
+            }),
+            lost.incarnation,
+          ).pipe(Effect.orDie);
+          yield* keepQueued(`${dir}/agents/r1`, {
+            runId: "r1",
+            request: "steer-1",
+            text: "stay in src",
+            result: null,
+          });
+          return { sent: yield* say("r1", "stay in src", "steer-1"), lost };
+        }),
+      );
+      expect(again.sent.detail).not.toContain("is unknown");
+      expect(again.sent).toMatchObject({ agent: again.lost.agent, delivered: true });
+    }),
+  ));
+
 test("an idle Codex takes a now message through the supported boundary transport", () =>
   runEffect(
     Effect.gen(function* () {
@@ -7852,6 +7899,32 @@ test("a send that failed reads liveness again, so a Run whose agents all exited 
       const failed = yield* Fiber.join(steering);
       expect(failed).toMatchObject({ agent: leaving.agent, delivered: false, gone: true });
       expect(failed.detail).not.toContain("live:");
+      core.restore("terminal.send");
+    }),
+  ));
+
+test("a send that failed names the live target and its role, and is not gone", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null]);
+      const launched = yield* session(
+        Agents.pipe(Effect.flatMap((agents) => agents.launch(implementerAsk()))),
+      );
+      core.refuse("terminal.send", "unreachable", "the core did not answer");
+      const refused = yield* session(
+        Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.steer({
+              runId: "r1",
+              to: "implementer",
+              text: "Look at this",
+              request: "to-live-implementer-roster",
+            }),
+          ),
+        ),
+      );
+      expect(refused).toMatchObject({ agent: launched.agent, delivered: false, gone: false });
+      expect(refused.detail).toContain(`live: ${launched.agent} (implementer)`);
       core.restore("terminal.send");
     }),
   ));
