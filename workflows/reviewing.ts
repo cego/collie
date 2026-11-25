@@ -737,7 +737,7 @@ export const rally = (ask: {
               );
             } else {
               report = yield* sendBack(declinedLine, standing, ROUNDS + 1, yield* ask.proves, head);
-              open = shrink(standing, report);
+              open = shrink(open, report);
               continue;
             }
           }
@@ -774,7 +774,7 @@ export const rally = (ask: {
               );
             }
             report = yield* sendBack(declinedLine, standing, ROUNDS + 1, yield* ask.proves, head);
-            open = shrink(standing, report);
+            open = shrink(open, report);
             continue;
           }
           if (!handedUnverified) {
@@ -791,7 +791,7 @@ export const rally = (ask: {
               head,
             });
             lastFix = `${prefix}fix-${ROUNDS + 1}`;
-            open = shrink(standing, report);
+            open = shrink(open, report);
             continue;
           }
           const name = `${prefix}fix-unverified-${++unverifiedAsks}`;
@@ -816,7 +816,7 @@ export const rally = (ask: {
             yield* ask.proves,
             head,
           );
-          open = shrink(standing, report);
+          open = shrink(open, report);
         }
       });
 
