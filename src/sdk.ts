@@ -459,6 +459,8 @@ export interface EvidenceAsk {
   readonly outputs: Readonly<Record<string, Schema.Json>>;
   /** Which of those are a reviewer's judgement rather than the implementer's claim. */
   readonly reviewed: ReadonlyArray<string>;
+  /** Which Outputs may state the implementer's claim: a repair is read for a name, never as one. */
+  readonly claims?: ReadonlyArray<string>;
   /** The tree each of those reviewed. A `performance` verdict counts only from a review of the tree in front of it. */
   readonly reviewedOn?: Readonly<Record<string, Snapshot>>;
   /** The directories this Run owns, which a reference it gives has to point inside. */
@@ -475,6 +477,7 @@ const collectedOf = (options: EvidenceAsk) => ({
   approved: options.approved,
   commands: options.evidence.commands,
   outputs: new Map(Rec.toEntries(options.outputs)),
+  claims: options.claims === undefined ? undefined : new Set(options.claims),
   reviewed: new Set(options.reviewed),
   reviewedOn: new Map(Rec.toEntries(options.reviewedOn ?? {})),
   measurements: options.evidence.measurements,

@@ -732,9 +732,11 @@ export default defineWorkflow({
         ledgered ? { ledger: given, taken: [...ledger.keys()] } : {};
       const fixers: Array<string> = [];
       const wrote: Array<string> = [];
-      const written = (name: string) => {
-        if (!wrote.includes(name)) {
-          wrote.push(name);
+      const repaired: Array<string> = [];
+      const written = (name: string, claims = true) => {
+        const into = claims ? wrote : repaired;
+        if (!into.includes(name)) {
+          into.push(name);
         }
       };
       const kept = (done: Rallied) => {
@@ -1108,7 +1110,7 @@ export default defineWorkflow({
               }
               const before = yield* treeAt(`${operation}.criteria-${turn}.before`);
               yield* restateKind;
-              written(`${operation}.criteria-${turn}`);
+              written(`${operation}.criteria-${turn}`, false);
               const answered = yield* agentWork({
                 operation: `${operation}.criteria-${turn}`,
                 ...onHolder(handing),
@@ -1326,6 +1328,7 @@ export default defineWorkflow({
         outcomeJournaled: kindNow,
         outputs: () => ({ build: { ...build } }),
         operations: () => [...wrote],
+        repairs: () => [...repaired],
         tickets: Arr.map(tickets, (ticket) => ({ file: ticket.file, checks: ticket.checks })),
         roots: evidenceRoots(place.dir, cwd, source.value),
         rallied: rallied === null ? rallied : { ...rallied, fixed: [...fixers] },

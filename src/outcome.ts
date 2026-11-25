@@ -50,6 +50,7 @@ export interface Collected {
   readonly approved: ReadonlyArray<VerifySpec>;
   readonly commands?: ReadonlyArray<CheckCommand>;
   readonly outputs: ReadonlyMap<string, YamlValue>;
+  readonly claims?: ReadonlySet<string>;
   readonly reviewed: ReadonlySet<string>;
   readonly reviewedOn?: ReadonlyMap<string, Snapshot>;
   readonly measurements?: ReadonlyArray<Measurement>;
@@ -367,7 +368,10 @@ function approvedSetGaps(got: Collected) {
 }
 
 function anyField(got: Collected, key: string) {
-  for (const output of [...got.outputs.values()].reverse()) {
+  for (const [id, output] of [...got.outputs.entries()].reverse()) {
+    if (got.claims !== undefined && !got.claims.has(id)) {
+      continue;
+    }
     if (isYamlMap(output) && key in output) {
       return output[key];
     }

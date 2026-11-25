@@ -196,8 +196,8 @@ export interface Delivery<I extends Told, O extends Opened> {
   readonly outcome: Effect.Effect<string, never, Needs>;
   readonly outcomeJournaled: Effect.Effect<string, never, Needs>;
   readonly outputs: () => Parameters<typeof evidenceGapsOf>[0]["outputs"];
-  // WARNING: a build's retries and criteria repairs are the same claim, written under names of their own.
   readonly operations?: () => ReadonlyArray<string>;
+  readonly repairs?: () => ReadonlyArray<string>;
   readonly tickets: ReadonlyArray<{
     readonly file: string;
     readonly checks: ReadonlyArray<string>;
@@ -295,10 +295,17 @@ export function gateOperations(ask: {
   readonly tickets: ReadonlyArray<string>;
   readonly fixed: ReadonlyArray<string>;
   readonly fixing: ReadonlyArray<string>;
-  readonly wrote: ReadonlyArray<string>;
+  readonly claims: ReadonlyArray<string>;
+  readonly repairs: ReadonlyArray<string>;
 }) {
-  const build = ["build", ...ask.tickets, ...ask.wrote];
-  return ask.kind === "bug" ? [...build, ...ask.fixed, ...ask.fixing] : build;
+  const claims = ["build", ...ask.tickets, ...ask.claims];
+  const outputs = [...claims, ...ask.repairs];
+  return ask.kind === "bug"
+    ? {
+        claims: [...claims, ...ask.fixed, ...ask.fixing],
+        outputs: [...outputs, ...ask.fixed, ...ask.fixing],
+      }
+    : { claims, outputs };
 }
 
 export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =>
@@ -345,22 +352,23 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
     ) {
       const now = yield* ask.outcome;
       const kind = isOutcome(now) ? now : ("unspecified" as const);
+      const gate = gateOperations({
+        kind,
+        tickets: Arr.map(ask.tickets, (one) => one.file),
+        fixed: rallied.fixed ?? [],
+        fixing: fixers,
+        claims: ask.operations?.() ?? [],
+        repairs: ask.repairs?.() ?? [],
+      });
       const asked = {
         kind,
         evidence: yield* host.evidence(runId, cwd),
         approved,
         outputs: {
-          ...(yield* inventory(
-            gateOperations({
-              kind,
-              tickets: Arr.map(ask.tickets, (one) => one.file),
-              fixed: rallied.fixed ?? [],
-              fixing: fixers,
-              wrote: ask.operations?.() ?? [],
-            }),
-          )),
+          ...(yield* inventory(gate.outputs)),
           synthesize: { ...reviewed },
         },
+        claims: gate.claims,
         reviewed: ["synthesize"],
         reviewedOn: on === undefined ? undefined : { synthesize: on },
         roots: ask.roots,
