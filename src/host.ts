@@ -193,7 +193,7 @@ import { once, readAudit, recordAudit, startedBy, trimAudit, whoActed, actorOf }
 import { usagePhrase } from "./usage-model";
 import { currentEnv, leaveLauncher, withoutHerdrOne, withoutLauncher } from "./env";
 import { installation as installedRelease, RELEASE_TAG } from "./release";
-import { Herdr, isSettled } from "./herdr";
+import { Herdr } from "./herdr";
 import type { AgentInfo } from "./herdr";
 import { taskOffers } from "./offers";
 import type { Offer } from "./offers";
@@ -2278,11 +2278,8 @@ const frontDoorHandlers = (
         return tellVerifyEnded(
           {
             collecting,
-            settled: (named) =>
-              Effect.map(
-                Effect.suspend(() => herdr.agentStatus(named)).pipe(Effect.provideContext(bun)),
-                isSettled,
-              ),
+            status: (named) =>
+              Effect.suspend(() => herdr.agentStatus(named)).pipe(Effect.provideContext(bun)),
             steer: (tell) =>
               Effect.flatMap(
                 registry.steer({

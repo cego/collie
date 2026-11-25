@@ -8458,10 +8458,9 @@ const ownVerifyScenario = (runId: string) =>
                     tellVerifyEnded(
                       {
                         collecting,
-                        settled: (named) =>
-                          Effect.map(
-                            agents.statusOf(named),
-                            (status) => status === "idle" || status === "done",
+                        status: (named) =>
+                          Effect.map(agents.statusOf(named), (one) =>
+                            one === "gone" ? "done" : one,
                           ),
                         steer: (tell) =>
                           Effect.asVoid(

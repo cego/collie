@@ -1,10 +1,11 @@
 import { Effect } from "effect";
 import type { CollectingApi } from "./collecting";
+import type { AgentStatus } from "./herdr";
 import type { Verification } from "./verify-model";
 
 export interface VerifyTell<Settled, Steered, R> {
   readonly collecting: CollectingApi;
-  readonly settled: (agent: string) => Effect.Effect<boolean, Settled, R>;
+  readonly status: (agent: string) => Effect.Effect<AgentStatus, Settled, R>;
   readonly steer: (tell: {
     readonly run: string;
     readonly agent: string;
@@ -23,7 +24,8 @@ export const tellVerifyEnded: <Settled, Steered, R>(
     if (!(yield* tell.collecting.has(asker.run, asker.agent))) {
       return;
     }
-    if (!(yield* tell.settled(asker.agent))) {
+    const now = yield* tell.status(asker.agent);
+    if (now === "working" || now === "blocked") {
       return;
     }
     yield* tell.steer({
