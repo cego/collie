@@ -33,7 +33,8 @@ const ran = (status: AgentStatus) =>
             during: (_run, _agent, collection) => collection,
             has: () => Effect.succeed(true),
             duringVerify: (_run, _agent, verify) => verify,
-            verifying: () => Effect.succeed({ under: false, since: null, ended: [], untold: [] }),
+            verifying: () =>
+              Effect.succeed({ under: false, since: null, starts: [], ended: [], untold: [] }),
             markUntold: () => Effect.void,
           },
           status: () => Effect.succeed(status),

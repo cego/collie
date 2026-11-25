@@ -25,6 +25,7 @@ const MILLISECOND_SKEW = 1;
 export interface VerifyHold {
   readonly under: boolean;
   readonly since: number | null;
+  readonly starts: ReadonlyArray<number>;
   readonly ended: ReadonlyArray<{
     readonly id: string;
     readonly at: number;
@@ -179,6 +180,7 @@ export const collectingLayer = Layer.effect(Collecting)(
           const returned: VerifyHold = {
             under: began.length > 0,
             since: began.length === 0 ? null : Math.min(...began),
+            starts: began,
             ended,
             untold: [...(held?.untold ?? [])],
           };

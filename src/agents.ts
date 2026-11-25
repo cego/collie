@@ -5131,14 +5131,18 @@ export const waitForOutput = <R>(
         said = line;
         yield* every.note(line);
       });
+    let owedNow: ReadonlyArray<string> = [];
     const free = Effect.gen(function* () {
+      owedNow = [];
       if (every.holding !== undefined) {
         const now = yield* every.holding;
         const first = firstSeen ?? (yield* writtenAt);
         const latest = seenAt ?? first;
         if (underWhileWritten(first, now) || underWhileWritten(latest, now)) {
-          if (now.since !== null && !Arr.contains(heldStarts, now.since)) {
-            heldStarts.push(now.since);
+          for (const began of now.starts) {
+            if (!Arr.contains(heldStarts, began)) {
+              heldStarts.push(began);
+            }
           }
           yield* says("a verify is still running, so its Output waits");
           return false;
@@ -5149,6 +5153,7 @@ export const waitForOutput = <R>(
             ...heldOwed(heldStarts, now),
           ]),
         ];
+        owedNow = owed;
         if (owed.length === 0) {
           return true;
         }
@@ -5189,18 +5194,24 @@ export const waitForOutput = <R>(
         firstSeen ??= seenAt;
       }
       if (here && (yield* free)) {
-        // WARNING: the read came before the status the release was decided on, so the Output is read once more.
+        // WARNING: the read came before the status the release was decided on, so the Output and its time are read once more: a rewrite can keep the same bytes.
         const after = yield* read;
-        if (after !== text) {
+        const afterAt = yield* writtenAt;
+        if (after !== text || afterAt !== seenAt) {
           continue;
         }
         if (every.usable(after)) {
           return after;
         }
         const state = yield* every.status;
-        if (state !== "working" && state !== "blocked" && state !== "unread") {
+        if (
+          state !== "working" &&
+          state !== "blocked" &&
+          (state !== "unread" || owedNow.length === 0)
+        ) {
           const last = yield* read;
-          if (fresh(last) && last === after) {
+          const lastAt = yield* writtenAt;
+          if (fresh(last) && last === after && lastAt === afterAt) {
             return last;
           }
         }
