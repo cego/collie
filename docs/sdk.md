@@ -1818,9 +1818,10 @@ creates every job up front. A pass is recorded once per tree as the
 check's `ci` pass, with `job` (`{ name, url, merge? }`, `merge` being the merged-results
 commit) beside its command, start and end tree. That Verification answers `{ proved }`; anything
 else answers `{ unproved, state, url }`, the sentence naming the check, the job and the
-commit. A job that has settled without passing — `failed`, `cancelled` or `skipped`, which
-`failedJob(state)` names — is a failure the Run repairs, never a read it waits on; only a
-job the forge has not decided, `pending`, `running` or `missing`, parks as unproved. A job
+commit. A job that has failed is a failure the Run repairs. Every other unproved answer
+parks as unproved instead, and spends no round: a job the forge has not decided yet
+(`pending`, `running` or `missing`), one that settled without passing (`cancelled` or
+`skipped`), and a read the forge refused, which answers with `state: null`. A job
 `missing` from the pipeline of a merge request the forge says conflicts with its
 target branch answers `{ unproved, state: "missing", url, conflicts: true }` instead, the
 sentence saying the merge request conflicts with its target branch and its branch must take

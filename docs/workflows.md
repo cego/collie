@@ -749,9 +749,8 @@ running when the wait runs out, or a forge read that was refused, is not a failu
 parks at once with the cause `ci-job-absent`, spends no round and starts no Heal, and
 Collie rechecks it until every job it recorded at that head has settled, so a job still
 running when the wait ran out is waited for, and a job that ends cancelled or skipped lets
-the resume through. Terminal CI at the proved head that did not pass — failed, cancelled or
-skipped — goes to the same agent's fixer, even when local Checks pass or none are
-configured. The finding
+the resume through without spending a round. Terminal failed CI at the proved head goes to
+the same agent's fixer, even when local Checks pass or none are configured. The finding
 names the failed head, check or pipeline, and its forge URL when available. A failure the target branch's newest pipeline shares, test by test, is not the
 fixer's. The Run parks with the cause `target-red`, naming the target branch, its
 commit and its job. It spends no round on it and starts no Heal. Collie rechecks the

@@ -17152,28 +17152,36 @@ for (const name of ["gitlab", "github"] as const) {
   );
 
   scenario(
-    `release on ${name}: a check cancelled at the head spends a CI fix round rather than parking as an unproved read`,
+    `release on ${name}: a check cancelled at the head parks as unproved and spends no CI fix round, and the settled recheck lets the resume through`,
     () =>
       runEffect(
         Effect.gen(function* () {
-          const { bin } = yield* releasable(name, {
+          const { bin, reviewed } = yield* releasable(name, {
             jobs: [{ name: "test", state: "cancelled" }],
           });
-          const runId = "r-ci-cancelled-fix-round";
+          const runId = "r-ci-cancelled-unproved";
           yield* ownCheck(runId);
           yield* rig.queueOutputs([PACKAGED, { verdict: "clean", fixed: [] }]);
-          yield* driven(
+          const resumed = yield* driven(
             { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
             (run) =>
               Effect.gen(function* () {
-                const started = yield* until(
-                  () => Effect.all({ fixing: wasAsked(runId, "fix-1"), why: parkedWhy(runId) }),
-                  ({ fixing, why }) => fixing || why !== "",
+                yield* until(
+                  () => parkedWhy(runId),
+                  (why) => why !== "",
                 );
-                expect(started).toMatchObject({ fixing: true, why: "" });
-                expect(yield* asked(runId, "fix-1")).toContain("cancelled");
+                expect(yield* parkedCause(runId)).toBe("ci-job-absent");
+                expect(yield* parkedWhy(runId)).toContain("cancelled");
+                expect(yield* wasAsked(runId, "fix-1")).toBe(false);
+                const host = yield* rechecking(run, runId, RELEASING[name].mr, reviewed);
+                yield* until(
+                  () => host.rounds,
+                  (count) => count >= 2,
+                );
+                return yield* wasAsked(runId, "fix-1");
               }),
           );
+          expect(resumed).toBe(false);
           yield* bin.restore();
         }),
       ),

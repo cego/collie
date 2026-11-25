@@ -239,8 +239,6 @@ export {
 export type { FailedTest, Snapshot, Verification } from "./verify";
 export type { VerifySpec } from "./verify-spec";
 export type { CiJob, TakeTarget, TargetFailure } from "./ci-job";
-/** A job that ended without proving the check: failed, cancelled or skipped, so it earns a fix round rather than a wait. */
-export { failedJob } from "./ci-job";
 export type { JobState, PipelineStart } from "./forge/forge";
 
 /** This Run's checks as a human would type them, for a prompt to name what it faces. */
