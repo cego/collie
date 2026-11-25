@@ -5895,6 +5895,57 @@ scenario(
 );
 
 scenario(
+  "a waiver answered by an agent records that agent, not the door the answer came through",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "only", checks: "unit" }]);
+        const runId = "r-waived-by-agent";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([
+          BLOCKED_BUILD,
+          disputedReview,
+          disputedFix,
+          disputedReview,
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              yield* stallAsked(run, "build.dispute-1");
+              const store = yield* Store;
+              yield* store.settle({
+                run: runId,
+                decision: "build.dispute-1",
+                value: "Waive it",
+                request: "answered-by-agent",
+                answerer: {
+                  origin: "agent",
+                  requestId: "answered-by-agent",
+                  from: { run: runId, agent: "reviewer" },
+                },
+              });
+              yield* run.answer("build.dispute-1", "Waive it");
+              return yield* ended(run.status);
+            }),
+        );
+        expect(outcomeText(status)).toBe(OPENED.mr_url);
+        const kept = Option.getOrThrow(
+          Arr.findFirst(
+            yield* findingsIn(runDir(dir, runId)),
+            (one) => one.title === "dependency unavailable",
+          ),
+        );
+        expect(kept.waived).toEqual({ by: "reviewer", choice: "build.dispute-1" });
+      }),
+    ),
+);
+
+scenario(
   "a reviewer's rebuttal puts the disputed finding back with the fixer instead of in front of a person",
   () =>
     runEffect(
@@ -15486,7 +15537,7 @@ const driven = <A, E>(
     readonly answer: (decision: string, value: string) => Effect.Effect<void>;
     readonly taken: (decision: string) => Effect.Effect<boolean>;
     readonly resume: Effect.Effect<void>;
-  }) => Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | Records>,
+  }) => Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | Records | Store>,
 ) =>
   session(
     Effect.gen(function* () {
