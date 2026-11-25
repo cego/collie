@@ -2,6 +2,7 @@ import { setSetting } from "../../src/config";
 import { Herdr } from "../../src/herdr";
 import { isString } from "../../src/schema";
 import { hostRecords, hostRunRecords, launchesAt, overHost } from "./records";
+import { recordOutput } from "../../src/step-output";
 
 // WARNING: Every scenario runs as shipped and under unrelated ids; the same assertions must hold both times.
 import * as Arr from "effect/Array";
@@ -130,6 +131,20 @@ import type { CompactionPorts } from "../../src/compaction";
 import { PARK_CAUSES, ParkCause } from "../../src/park-cause";
 import { recheckPark } from "../../src/park-recheck";
 import { GOLDEN, matchGolden } from "../../tools/prompt-golden";
+
+// WARNING: A step this build dispatched completes only from an accepted submit, which a driven scenario records as one.
+const handsIn = (dir: string, runId: string, operation: string, text: string) =>
+  Effect.gen(function* () {
+    const one = Option.getOrUndefined(
+      Arr.findLast(yield* launchesAt(dir, runId), (launch) => launch.operation === operation),
+    );
+    if (one === undefined) {
+      return yield* Effect.die(new Error(`no launch of ${runId} ran ${operation}`));
+    }
+    yield* RunRecords.use((records) =>
+      recordOutput(records, { runId, output: one.output }, text),
+    ).pipe(Effect.provide(recordsAt(dir)));
+  });
 
 const ROOT = new URL("../../", import.meta.url).pathname;
 
@@ -531,12 +546,9 @@ const laneWhen = (options: {
         };
         // WARNING: The fake reads its queue by position, so taken entries must stay where they were.
         yield* rig.queueOutputs([...options.outputs, null, ...completing.rest]).pipe(Effect.orDie);
-        yield* (yield* FileSystem.FileSystem)
-          .writeFileString(
-            `${dir}/agents/${options.runId}/${completing.operation}.json`,
-            asJson(completing.output),
-          )
-          .pipe(Effect.orDie);
+        yield* handsIn(dir, options.runId, completing.operation, asJson(completing.output)).pipe(
+          Effect.orDie,
+        );
         const execution = yield* made.workflow.executionId(payload);
         if (options.finish !== undefined) {
           const finish = options.finish;
@@ -1482,8 +1494,16 @@ const resumeImplementPark = (
   options: ShippedRun,
   reason: string,
   hooks: {
-    beforePark?: Effect.Effect<void, never, FileSystem.FileSystem | Records>;
-    beforeResume?: Effect.Effect<void, never, FileSystem.FileSystem | Records>;
+    beforePark?: Effect.Effect<
+      void,
+      never,
+      FileSystem.FileSystem | Path.Path | Records | RunRecords
+    >;
+    beforeResume?: Effect.Effect<
+      void,
+      never,
+      FileSystem.FileSystem | Path.Path | Records | RunRecords
+    >;
     stop?: { decision: string; answer: string };
   } = {},
 ) =>
@@ -5457,7 +5477,7 @@ scenario(
           `${plan}/issues/03-third.md`,
           "# the third one\n\n**Checks:** unit\n",
         );
-        yield* fs.writeFileString(`${agents}/01-first.md.json`, asJson(BUILT));
+        yield* handsIn(dir, "r-live", "01-first.md", asJson(BUILT));
         const result = yield* Fiber.join(running);
         yield* bin.restore();
 
@@ -5490,7 +5510,7 @@ scenario("a ticket added to a one-ticket plan while it is being built is built n
         `${plan}/issues/02-second.md`,
         "# the second one\n\n**Checks:** unit\n",
       );
-      yield* fs.writeFileString(`${agents}/build.json`, asJson(BUILT));
+      yield* handsIn(dir, "r-grow", "build", asJson(BUILT));
       const result = yield* Fiber.join(running);
       yield* bin.restore();
 
@@ -5738,9 +5758,7 @@ scenario(
                 (said) => pipe(said, Str.includes(": launched for build\n")),
               );
               yield* fs.remove(`${plan}/SPEC.md`).pipe(Effect.orDie);
-              yield* fs
-                .writeFileString(`${dir}/agents/${runId}/build.json`, asJson(BUILT))
-                .pipe(Effect.orDie);
+              yield* handsIn(dir, runId, "build", asJson(BUILT)).pipe(Effect.orDie);
             }).pipe(Effect.orDie),
             beforeResume: Effect.gen(function* () {
               expect(yield* prompts()).not.toContainEqual(
@@ -6041,7 +6059,7 @@ scenario(
             Str.replace("The second is checked.", "The second is checked twice."),
           ),
         );
-        yield* fs.writeFileString(`${agents}/01-first.md.criteria-1.json`, asJson(BUILT));
+        yield* handsIn(dir, "r-amended", "01-first.md.criteria-1", asJson(BUILT));
         const result = yield* Fiber.join(running);
         yield* bin.restore();
 
@@ -6884,7 +6902,7 @@ scenario(
           (there) => there,
         );
         yield* rig.dropAgent(planner).pipe(Effect.orDie);
-        yield* fs.writeFileString(`${agents}/01-first.md.json`, asJson(BUILT));
+        yield* handsIn(dir, "r-planned", "01-first.md", asJson(BUILT));
         const result = yield* Fiber.join(running);
         yield* bin.restore();
 
@@ -7135,8 +7153,7 @@ const implementing = (
             pipe(said, Str.includes(`: launched for ${operation}\n`)) ||
             pipe(said, Str.includes(`: reattached to ${operation}\n`)),
         ),
-      answer: (operation: string) =>
-        fs.writeFileString(`${agents}/${operation}.json`, asJson(BUILT)),
+      answer: (operation: string) => handsIn(dir, runId, operation, asJson(BUILT)),
       untilParked: Effect.gen(function* () {
         yield* until(logged, (said) => pipe(said, Str.includes("Cannot open the merge request")));
         yield* Fiber.interrupt(running);
@@ -7292,7 +7309,7 @@ const builtUntilParked = (
       );
       expect(yield* prompts()).toContainEqual(expect.stringContaining(`${operation}.prompt.md`));
       yield* step;
-      yield* fs.writeFileString(`${agents}/${operation}.json`, asJson(BUILT));
+      yield* handsIn(dir, runId, operation, asJson(BUILT));
     }
     const logged = () =>
       fs.readFileString(`${runDir(dir, runId)}/log.txt`).pipe(Effect.orElseSucceed(() => ""));

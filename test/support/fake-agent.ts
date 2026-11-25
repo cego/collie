@@ -65,6 +65,28 @@ const toolServerOf = (prompt: string) =>
     return Option.map(found, (one) => one.mcpServers.collie).pipe(Option.getOrNull);
   });
 
+// WARNING: a harness whose tool server is not written beside the prompt names it on the address line.
+const toolServerIn = (
+  prompt: string,
+  path: string | undefined,
+  found: ToolServer | null,
+): ToolServer | null => {
+  const at = path === undefined ? null : /^(.*)\/agents\/[^/]+\/[^/]+$/.exec(path);
+  if (at === null) {
+    return found;
+  }
+  const address = /^You are (\S+) of (\S+) on /m.exec(prompt);
+  return {
+    command: found?.command ?? "",
+    args: found?.args ?? [],
+    env: {
+      ...(found?.env ?? {}),
+      COLLIE_STATE_DIR: at[1]!,
+      ...(address === null ? {} : { COLLIE_RUN: address[2]!, COLLIE_AGENT: address[1]! }),
+    },
+  };
+};
+
 // WARNING: the prompt no longer names the Output; the step's file keeps the prompt's name.
 const outputOfPrompt = (prompt: string) =>
   prompt.replace(/\.prompt\.md$/, ".json").replace(/\.r\d+\.json$/, ".json");
@@ -72,27 +94,20 @@ const outputOfPrompt = (prompt: string) =>
 export interface HandIn {
   readonly server: ToolServer;
   readonly output: Schema.Json;
-  readonly at: string | null;
 }
 
-// WARNING: The host keeps the last step's entry until the next one registers, so a submit is this step's only once its Output file is there.
-const ours = (answer: string, at: string | null) =>
-  answer !== "accepted"
-    ? Effect.succeed(
-        !Str.startsWith("No step of")(answer) && !Str.includes("was already collected")(answer),
-      )
-    : at === null
-      ? Effect.succeed(false)
-      : FileSystem.FileSystem.pipe(
-          Effect.flatMap((fs) => fs.exists(at)),
-          Effect.orElseSucceed(() => false),
-        );
+// WARNING: "accepted" is the host recording this step's Output, so it is this step's whatever a later step is doing.
+const ours = (answer: string) =>
+  answer === "accepted" ||
+  (!Str.startsWith("No step of")(answer) &&
+    !Str.includes("was already collected")(answer) &&
+    !Str.includes("was already accepted")(answer));
 
 // WARNING: A launch can take a while before the host registers its step for a submit.
 const RETRIES = 6000;
 
 // WARNING: A scenario's host runs in this process; a `collie host` a test started is one of its own.
-export const handIn = ({ server, output, at }: HandIn) => {
+export const handIn = ({ server, output }: HandIn) => {
   const run = server.env.COLLIE_RUN;
   const agent = server.env.COLLIE_AGENT;
   const stateDir = server.env.COLLIE_STATE_DIR;
@@ -120,7 +135,7 @@ export const handIn = ({ server, output, at }: HandIn) => {
   return Effect.gen(function* () {
     const separate = yield* elsewhere;
     for (let tries = 0; tries < RETRIES; tries++) {
-      if (yield* ours(yield* answer(separate), at)) {
+      if (ours(yield* answer(separate))) {
         return;
       }
       // WARNING: Live, never the test's clock: waiting on that one would spend the very budget the host is using.
@@ -148,14 +163,14 @@ const answerFrom = Effect.fn("fakeAgent.answer")(function* (
       ? null
       : prompt === undefined
         ? (known?.tool ?? null)
-        : ((yield* toolServerOf(prompt)) ?? known?.tool ?? null);
+        : (toolServerIn(text, prompt, yield* toolServerOf(prompt)) ?? known?.tool ?? null);
   const written = match === null ? null : Str.trim(match[1]!);
   const outputPath =
     written ?? (prompt === undefined ? (known?.output ?? null) : outputOfPrompt(prompt));
   const hand: StepHand = { tool: server, output: outputPath };
   let submit: HandIn | null = null;
-  // WARNING: An agent no launch of this build started has no Collie tool server, so the file is all it has.
-  const byFile = written !== null || server === null;
+  // WARNING: Only a prompt an older build wrote names a path, so only that one is handed in as a file.
+  const byFile = written !== null;
   const owes: string | undefined = undefined;
   const unanswered = {
     answered,
@@ -193,7 +208,7 @@ const answerFrom = Effect.fn("fakeAgent.answer")(function* (
       );
     } else if (server !== null) {
       // WARNING: The caller submits it before reporting the turn over, so what it wrote is there when the host reads.
-      submit = { server, output, at: outputPath };
+      submit = { server, output };
     }
   }
   return {

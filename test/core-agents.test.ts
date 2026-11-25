@@ -1,4 +1,4 @@
-import { launchedAt } from "./support/records";
+import { launchedAt, overHost } from "./support/records";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
@@ -8,6 +8,7 @@ import { Clock, Effect, Fiber, FileSystem, Layer, Option, Schema } from "effect"
 import { TestClock } from "effect/testing";
 import type * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import type { PlatformServices } from "../src/platform";
+import { RunRecords } from "../src/run-records";
 import { Agents, agentWork, agentsLayer } from "../src/agents";
 import type { AgentHost } from "../src/agents";
 import { foundationLayer } from "../src/engine";
@@ -48,8 +49,9 @@ beforeEach(() =>
 
 afterEach(() => runLive(rig.close()));
 
-const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices>) =>
-  runLive(fastForward(effect));
+// WARNING: the fake core and the agents layer must write the same database, or a submit goes nowhere.
+const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices | RunRecords>) =>
+  runLive(fastForward(effect).pipe(overHost(() => dir)));
 
 const Verdict = Schema.Struct({ verdict: Schema.String });
 
@@ -157,7 +159,7 @@ const session = <A, E>(
   run: Effect.Effect<
     A,
     E,
-    WorkflowEngine.WorkflowEngine | Agents | Collecting | Store | PlatformServices
+    WorkflowEngine.WorkflowEngine | Agents | Collecting | Store | RunRecords | PlatformServices
   >,
   env: Record<string, string>,
   workflows: typeof body = body,

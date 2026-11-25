@@ -1,4 +1,5 @@
 import { Herdr } from "../../src/herdr";
+import { RunRecords } from "../../src/run-records";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { ConfigProvider, Effect, FileSystem, Layer, Result, Schedule, Schema, flow } from "effect";
@@ -194,7 +195,9 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
   );
 
   // WARNING: Every intervening timer still fires, so the fast clock steps over the five-minute poll.
-  const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices | Scope.Scope>) =>
+  const runEffect = <A, E>(
+    effect: Effect.Effect<A, E, PlatformServices | RunRecords | Scope.Scope>,
+  ) =>
     runLive(
       fastForward(
         Effect.scoped(

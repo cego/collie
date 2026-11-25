@@ -22,6 +22,9 @@ import { insideKnown } from "./conversation";
 import { reserve, settle as settleBudget } from "./steering";
 import type { CallLimits } from "./steering";
 import { stringifyJson } from "./json";
+import { RunRecords } from "./run-records";
+import { ACCEPTED, acceptedText } from "./step-output";
+import { runOfDir } from "./run-records";
 
 export const MAX_LINES_PER_FILE = 200;
 export const MAX_FILES = 20;
@@ -375,33 +378,43 @@ export interface ShownOutput {
 
 const NOT_OUTPUTS = [".launch.json", ".mcp.json", ".settings.json"];
 
+const isAnOutput = (name: string) => !Arr.some(NOT_OUTPUTS, (not) => pipe(name, Str.endsWith(not)));
+
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 const printJson = flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown, { space: 2 })),
   Result.getOrThrow,
 );
 
-export const outputsIn = Effect.fn("Drift.outputsIn")(function* (agentsDir: string) {
+export const outputsIn = Effect.fn("Drift.outputsIn")(function* (agentsDir: string, run: string) {
   const fs = yield* FileSystem.FileSystem;
+  const records = yield* RunRecords;
   const names = Arr.filter(
     yield* fs.readDirectory(agentsDir).pipe(Effect.orElseSucceed(() => [])),
-    (name) =>
-      pipe(name, Str.endsWith(".json")) &&
-      !Arr.some(NOT_OUTPUTS, (not) => pipe(name, Str.endsWith(not))),
+    (name) => pipe(name, Str.endsWith(".json")) && isAnOutput(name),
   ).sort();
-  const outputs: Array<ShownOutput & { readonly truncated: boolean }> = [];
+  const shown = new Map<string, string>();
   for (const name of names.slice(0, MAX_FILES)) {
+    shown.set(
+      name,
+      yield* fs.readFileString(`${agentsDir}/${name}`).pipe(Effect.orElseSucceed(() => "")),
+    );
+  }
+  for (const fact of yield* records.factsUnder(run, ACCEPTED)) {
+    const name = Str.slice(ACCEPTED.length)(fact.name);
+    if (pipe(name, Str.endsWith(".json")) && isAnOutput(name)) {
+      shown.set(name, acceptedText(fact.data));
+    }
+  }
+  const outputs: Array<ShownOutput & { readonly truncated: boolean }> = [];
+  for (const name of [...shown.keys()].sort()) {
     const operation = pipe(name, Str.slice(0, -".json".length));
     if (looksSecret(name)) {
       outputs.push({ operation, text: "<redacted>", truncated: false });
       continue;
     }
-    const raw = yield* fs
-      .readFileString(`${agentsDir}/${name}`)
-      .pipe(Effect.orElseSucceed(() => ""));
-    const decoded = decodeJson(raw);
-    const printed = decoded._tag === "None" ? raw : printJson(decoded.value);
-    const lines = Str.split(printed, "\n");
+    const raw = shown.get(name) ?? "";
+    const lines = Str.split(printedJson(raw), "\n");
     outputs.push({
       operation,
       text: Arr.join(lines.slice(0, MAX_LINES_PER_FILE), "\n"),
@@ -410,9 +423,17 @@ export const outputsIn = Effect.fn("Drift.outputsIn")(function* (agentsDir: stri
   }
   return {
     outputs: Arr.map(outputs, ({ operation, text }) => ({ operation, text })),
-    truncated: names.length > MAX_FILES || Arr.some(outputs, (one) => one.truncated),
+    truncated:
+      names.length > MAX_FILES ||
+      shown.size > MAX_FILES ||
+      Arr.some(outputs, (one) => one.truncated),
   };
 });
+
+const printedJson = (raw: string) => {
+  const decoded = decodeJson(raw);
+  return decoded._tag === "None" ? raw : printJson(decoded.value);
+};
 
 export function newReports(found: ReadonlyArray<DriftReport>, existing: ReadonlyArray<DriftLine>) {
   const known = new Map(
@@ -667,7 +688,7 @@ export const judge = Effect.fn("Drift.judge")(function* (
   const shown =
     what.agentsDir === undefined
       ? { outputs: [], truncated: false }
-      : yield* outputsIn(what.agentsDir);
+      : yield* outputsIn(what.agentsDir, runOfDir(what.runDir));
   const evidence = {
     blocks: diff.blocks,
     outputs: shown.outputs,

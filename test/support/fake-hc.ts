@@ -9,6 +9,7 @@ import { Clock, Effect, FileSystem, Option, Schema, Scope } from "effect";
 import { isString } from "../../src/schema";
 import { Kind } from "../../src/hc";
 import { answerPrompt, handIn } from "./fake-agent";
+import { RunRecords } from "../../src/run-records";
 import type { StepHand } from "./fake-agent";
 import { jsonText, replyViolation } from "./hc-schema";
 
@@ -151,7 +152,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
   dialEnv: Readonly<Record<string, string>> = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const services = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
+  const services = yield* Effect.context<FileSystem.FileSystem | Path.Path | RunRecords>();
   const terminals = new Map<string, Terminal>();
   const answers = new Map<string, Schema.Json>();
   const refusals = new Map<string, { code: number; message: string; kind: string }>();

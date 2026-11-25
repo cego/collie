@@ -7,6 +7,8 @@ import { readFinalCard, REVIEW_ROLE } from "./cards";
 import { checkProof } from "./check-proof";
 import { readIntent } from "./intent";
 import { readLaunches } from "./launches";
+import { RunRecords } from "./run-records";
+import { outputOf } from "./step-output";
 import { readVerifications } from "./verify";
 import { interventionsIn, ReviewedFinding } from "./trial-model";
 import type { TrialRecords } from "./trial-model";
@@ -19,16 +21,19 @@ export const trialRecordsOf = Effect.fn("Trial.records")(function* (
   stateDir: string,
   runId: string,
 ) {
-  const fs = yield* FileSystem.FileSystem;
+  const records = yield* RunRecords;
   const dir = runDir(stateDir, runId);
   const reviews = yield* Effect.forEach(
     Arr.filter(yield* readLaunches(runId), (one) => one.role === REVIEW_ROLE),
     (one) =>
-      fs.readFileString(one.output).pipe(
-        Effect.flatMap(Schema.decodeUnknownEffect(ReviewedOutput)),
-        Effect.map((read) => Option.some(read.findings ?? [])),
-        Effect.orElseSucceed(() => Option.none()),
-      ),
+      Effect.gen(function* () {
+        const held = yield* outputOf(records, one);
+        return held === null
+          ? Option.none()
+          : Schema.decodeUnknownOption(ReviewedOutput)(held.text).pipe(
+              Option.map((read) => read.findings ?? []),
+            );
+      }),
   );
   const final = Option.getOrUndefined(
     yield* readFinalCard(dir).pipe(Effect.orElseSucceed(() => Option.none())),

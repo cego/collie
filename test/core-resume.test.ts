@@ -24,13 +24,14 @@ import { PARK_CAUSE, Registry, foundationLayer, registryLayer } from "../src/eng
 import type { Generation, HostServices } from "../src/engine";
 import type { Store } from "../src/store";
 import { agentName } from "../src/naming";
-import { deliveredTo, hostRecords, hostRunRecords, recordsAt } from "./support/records";
+import { deliveredTo, hostRecords, hostRunRecords, overHost, recordsAt } from "./support/records";
 import { RELAUNCH, RunRecords } from "../src/run-records";
 import { appendLine } from "../src/steering";
 import { registerAgent, scopeFor } from "../src/registry";
 import { COMPACT_AT_TOKENS } from "../src/settings";
 import { COMPACTION_PORTS, codexPort } from "../src/compactors";
 import { isString } from "../src/schema";
+import { submitOutput } from "../src/output-submit";
 
 const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
@@ -79,8 +80,9 @@ afterEach(() =>
   ),
 );
 
-const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices>) =>
-  runLive(fastForward(effect));
+// WARNING: the fake core and the agents layer must write the same database, or a submit goes nowhere.
+const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices | RunRecords>) =>
+  runLive(fastForward(effect).pipe(overHost(dir)));
 
 const until = <A, E, R>(read: () => Effect.Effect<A, E, R>, wanted: (value: A) => boolean) =>
   Effect.gen(function* () {
@@ -147,6 +149,7 @@ const hosted = <A, E>(
     | HostServices
     | MessageStorage.MessageStorage
     | SqlClient.SqlClient
+    | RunRecords
     | PlatformServices
   >,
   host: AgentHost = hostOf(),
@@ -304,7 +307,7 @@ test("a dead owned server on core resumes its conversation once despite competin
           expect(again).toHaveLength(1);
           expect(again[0]!.argv.slice(0, 3)).toEqual(["codex", "resume", session.value]);
           expect(again[0]!.cwd).toBe(rig.projectDir);
-          yield* fs.writeFileString(now.output, '{"verdict":"recovered"}');
+          yield* submitOutput(runId, agent, '{"verdict":"recovered"}');
           expect((yield* finished(runId))?.status.status).toBe("complete");
           recovering = null;
           const replacement = (yield* readControl(dir(), agent))!;

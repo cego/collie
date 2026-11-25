@@ -4502,15 +4502,7 @@ const frontDoorHandlers = (
         submitOutput: ({ runId, output }, { client }) => {
           const who = whoOf(client);
           return who.origin === "agent" && who.from?.run === runId && who.from.agent !== undefined
-            ? submitOutput(runId, who.from.agent, output).pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new HostRefused({
-                      reason: `Your Output could not be written: ${cause.message}`,
-                    }),
-                ),
-                Effect.provideContext(bun),
-              )
+            ? submitOutput(runId, who.from.agent, output).pipe(Effect.provideContext(bun))
             : Effect.fail(
                 new HostRefused({ reason: `Only an agent of ${runId} submits its Output.` }),
               );

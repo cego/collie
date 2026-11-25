@@ -333,8 +333,8 @@ const verdict =
 - **`instructions` is a template or text of your own**, rendered with `{{name}}` from
   `input`, plus `{{role}}`, `{{cwd}}` and `{{output_path}}`, which every piece of work is
   given. The prompt then names `collie_submit` and carries the JSON Schema `output` draws
-  to. `{{output_path}}` still renders, so a Workflow that names it loads, but it names the
-  file an accepted submit writes, not a path to hand anything in by. A field's
+  to. `{{output_path}}` still renders, so a Workflow that names it loads, but nothing writes
+  to it: an accepted Output is kept in the host's database, not in a file. A field's
   `description` is the judgment being asked for, so write it as one.
 - **`output` decides.** A file that does not decode is unusable however plausible it reads,
   and every issue with it is reported at once. Leave `output` out and the agent answers in
@@ -342,12 +342,15 @@ const verdict =
   validated answer.
 - **An agent hands its Output in with `collie_submit`.** The Collie tool is offered to every
   agent launched for a Run, and a submit is decoded at once and answered with every issue,
-  writing nothing, or with "accepted", which writes the file the step is collecting. So
-  collection, the reminders, the repairs and the park below are the same either way, and a
-  second submit of the same Output is collected once. The prompt names the tool instead of a
-  path and keeps the whole contract, every field's description included; the reminders and
-  the repairs name the tool too. A step an older build dispatched still keeps its file
-  wording, and that file is still collected. Pi has no Collie MCP server, so its agents
+  writing nothing, or with "accepted", which records it on the Run as a fact named after
+  the step's Output file, with the time it was accepted. The step collects that fact, and
+  nothing is written at the Output path. "Accepted" is final across a host restart: the same
+  Output answers "accepted" again, a different one is refused, and the fact is unchanged.
+  The prompt names the tool instead of a path and keeps the whole contract, every field's
+  description included; the reminders and the repairs name the tool too. A step an older
+  build dispatched still keeps its file wording, and that file is still collected. An alive
+  agent launched before this build is ended and started again on its recorded session, so
+  its next step has the tool. Pi has no Collie MCP server, so its agents
   reach the tool through `collie tools call collie_submit`. An Output that decodes is never
   proof of the work: the gate still reads the Run's journal
   ([proving it](#proving-it-rather-than-saying-so)).

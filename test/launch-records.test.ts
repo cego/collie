@@ -1,6 +1,6 @@
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Deferred, Effect, Fiber, FileSystem, Result, Schema, Stream } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Option, Result, Schema, Stream } from "effect";
 import {
   Launched,
   launchesOf,
@@ -56,6 +56,20 @@ const stems = (launches: ReadonlyArray<Launched>) =>
   Arr.map(launches, (one) =>
     one.sequence === undefined ? one.operation : `${one.operation}.r${one.sequence}`,
   );
+
+test("a launch this build marks submit-only decodes, and an older build's record still decodes with the mark", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const decode = Schema.decodeUnknownOption(Schema.fromJsonString(Launched));
+      const marked = decode(asJson(launch({ submitOnly: true })));
+      expect(Option.getOrNull(marked)).toMatchObject({ submitOnly: true });
+      const older = decode(
+        JSON.stringify({ ...launch(), submitOnly: undefined, aKeyNoBuildKnows: 1 }),
+      );
+      expect(Option.getOrNull(older)).toMatchObject({ operation: "implement" });
+      expect(Option.getOrNull(older)).not.toHaveProperty("aKeyNoBuildKnows");
+    }),
+  ));
 
 test("an agent's launches are read in one read across every Run it launched in", () =>
   runEffect(

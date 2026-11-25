@@ -51,6 +51,7 @@ import {
   repairText,
 } from "../src/agents";
 import { awaitOutput, submitOutput } from "../src/output-submit";
+import { acceptedName, outputOf } from "../src/step-output";
 import type { AgentHost, RanOut, RunNow } from "../src/agents";
 import { Children, Host, Run, WorkflowAgents, jsonSchemaFor, step, withAgents } from "../src/sdk";
 import { asRun, enveloped } from "./support/enveloped";
@@ -142,6 +143,8 @@ interface Clearing {
   readonly role?: string;
 }
 let clearing: Clearing = {};
+// WARNING: the tests ticket 01 kept on the repair of a bad Output file replay a dispatch an older build wrote.
+let legacyOutput = false;
 
 let core: FakeHc;
 
@@ -152,6 +155,7 @@ beforeEach(() =>
       const fs = yield* FileSystem.FileSystem;
       dir = `${rig.root}/host`;
       clearing = {};
+      legacyOutput = false;
       yield* fs.makeDirectory(dir, { recursive: true });
       yield* fs.makeDirectory(rig.projectDir, { recursive: true });
     }),
@@ -184,6 +188,7 @@ const reviewWork = () =>
     instructions: "Review {{target}} as the {{role}}.",
     input: { target: "the diff" },
     output: Verdict,
+    ...(legacyOutput ? { outputSubmit: "file" as const } : {}),
     ...clearing,
   });
 
@@ -294,7 +299,13 @@ const session = <A, E>(
   run: Effect.Effect<
     A,
     E,
-    WorkflowEngine.WorkflowEngine | Agents | Collecting | Store | Host | PlatformServices
+    | WorkflowEngine.WorkflowEngine
+    | Agents
+    | Collecting
+    | Store
+    | Host
+    | RunRecords
+    | PlatformServices
   >,
   over?: Partial<AgentHost>,
 ) =>
@@ -596,7 +607,14 @@ test("a valid Output reaches the workflow as a typed value, from a real launch",
       expect(Arr.filter(cmds, (cmd) => cmd === "terminal.run")).toHaveLength(1);
       expect(yield* read(promptPath("r1"))).toContain("collie_submit");
       expect(yield* read(promptPath("r1"))).not.toContain("OUTPUT_PATH");
-      expect(yield* read(outputPath("r1"))).toContain("two things");
+      expect(yield* fileExists(outputPath("r1"))).toBe(false);
+      expect(
+        yield* outputOf(yield* RunRecords, {
+          runId: "r1",
+          output: outputPath("r1"),
+          submitOnly: true,
+        }),
+      ).toMatchObject({ text: expect.stringContaining("two things") });
     }),
   ));
 
@@ -631,6 +649,7 @@ test("work asked for inside a Run needs no run id, checkout or contract, and ans
       const prompt = yield* read(`${dir}/agents/r1/summary.prompt.md`);
       expect(prompt).toContain("as plain text");
       expect(prompt).not.toContain("```json");
+      expect(yield* fileExists(`${dir}/agents/r1/summary.json`)).toBe(false);
       const runs = Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.run");
       expect(Arr.map(runs, (call) => call.params?.cwd)).toContain(dir);
     }),
@@ -639,6 +658,7 @@ test("work asked for inside a Run needs no run id, checkout or contract, and ans
 test("an Output the schema refuses buys one repair, and the rewritten one is the answer", () =>
   runEffect(
     Effect.gen(function* () {
+      legacyOutput = true;
       yield* rig.queueOutputs([
         {
           writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }],
@@ -660,6 +680,7 @@ test("an Output the schema refuses buys one repair, and the rewritten one is the
 test("a step's message and its repair are Collie's own and carry no sender line, and its prompt says how to read one", () =>
   runEffect(
     Effect.gen(function* () {
+      legacyOutput = true;
       yield* rig.queueOutputs([
         { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
         { verdict: "clean", note: "fixed" },
@@ -888,6 +909,7 @@ const starts = () =>
 test("an Output still unusable after its repair parks the Step, saying what to correct", () =>
   runEffect(
     Effect.gen(function* () {
+      legacyOutput = true;
       yield* rig.queueOutputs([
         { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
         { writes: [{ path: outputPath("r1"), text: `{"verdict":"still maybe"}` }], output: null },
@@ -909,6 +931,7 @@ test("an Output still unusable after its repair parks the Step, saying what to c
 test("a parked Output corrected by hand is taken on resume, with no launch or repair", () =>
   runEffect(
     Effect.gen(function* () {
+      legacyOutput = true;
       const fs = yield* FileSystem.FileSystem;
       yield* rig.queueOutputs([
         { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
@@ -926,6 +949,7 @@ test("a parked Output corrected by hand is taken on resume, with no launch or re
 test("a parked Output still unusable on resume gets one more repair, and a good one finishes", () =>
   runEffect(
     Effect.gen(function* () {
+      legacyOutput = true;
       yield* rig.queueOutputs([
         { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
         { writes: [{ path: outputPath("r1"), text: `{"verdict":"still maybe"}` }], output: null },
@@ -942,6 +966,7 @@ test("a parked Output still unusable on resume gets one more repair, and a good 
 test("a parked Output whose next repair is unusable too parks again, launching nothing", () =>
   runEffect(
     Effect.gen(function* () {
+      legacyOutput = true;
       yield* rig.queueOutputs([
         { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
         { writes: [{ path: outputPath("r1"), text: `{"verdict":"still maybe"}` }], output: null },
@@ -1160,7 +1185,7 @@ test("a restart while the wait is out reattaches rather than launching a second 
       yield* interrupted("r1", prompted("Your task for this step"));
       expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
 
-      yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"late"}`);
+      yield* submitOutput("r1", agentFor("r1"), `{"verdict":"clean","note":"late"}`);
       const result = yield* session(started("r1"));
 
       expect(result._tag === "Success" && result.success.note).toBe("late");
@@ -1223,7 +1248,7 @@ test("an agent idle past its budget parks the Run and is still collected, so its
         Effect.gen(function* () {
           const fiber = yield* Effect.forkChild(started("r1"));
           yield* pastTheBudget;
-          yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"late"}`);
+          yield* submitOutput("r1", agentFor("r1"), `{"verdict":"clean","note":"late"}`);
           return yield* Fiber.join(fiber);
         }),
         { herdr: new UnseenTurn(rig.pluginEnv()), collectMs: 400 },
@@ -1264,7 +1289,7 @@ test("an agent that goes while it is collected past its budget is started again,
           yield* herdr.terminalKill(pane ?? "");
           yield* (yield* Agents).resumeLost("r1", runningNow);
           yield* until(starts.pipe(Effect.map((count) => count === 2)));
-          yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"revived"}`);
+          yield* submitOutput("r1", agentFor("r1"), `{"verdict":"clean","note":"revived"}`);
           return yield* Fiber.join(fiber);
         }),
         { herdr, collectMs: 400 },
@@ -1424,7 +1449,7 @@ test.each([false, true])(
             }
             yield* until(prompted("Your task for this step", 2));
             expect(everyLaunch(yield* rig.calls())).toHaveLength(2);
-            yield* fs.writeFileString(outputPath("r1"), '{"verdict":"clean","note":"recovered"}');
+            yield* submitOutput("r1", agentFor("r1"), '{"verdict":"clean","note":"recovered"}');
             return yield* Fiber.join(fiber);
           }),
           over,
@@ -1471,7 +1496,7 @@ test("an unreachable managed Codex server that is still alive is never given a s
           expect(sent(yield* rig.calls(), "Your task for this step")).toBe(1);
           managed.state.reachable = true;
           herdr.stale = false;
-          yield* fs.writeFileString(outputPath("r1"), '{"verdict":"clean","note":"still mine"}');
+          yield* submitOutput("r1", agentFor("r1"), '{"verdict":"clean","note":"still mine"}');
           return yield* Fiber.join(fiber);
         }),
         { herdr, harness: "codex", model: "default", ports: managed.ports },
@@ -1492,6 +1517,7 @@ test.each([
   (identity) =>
     runEffect(
       Effect.gen(function* () {
+        legacyOutput = true;
         const fs = yield* FileSystem.FileSystem;
         const managed = yield* managedCodex;
         yield* rig.queueOutputs([null]);
@@ -1646,6 +1672,7 @@ test("a reused managed Codex server that died after its first Output is replaced
 test("a managed Codex server's late Output during retirement prevents rebuilding finished work", () =>
   runEffect(
     Effect.gen(function* () {
+      legacyOutput = true;
       const fs = yield* FileSystem.FileSystem;
       const managed = yield* managedCodex;
       const ports: CompactionPorts = {
@@ -1767,6 +1794,7 @@ test.each([
 ] as const)("managed server health has its own readiness bound with late Output (%s)", (failure) =>
   runEffect(
     Effect.gen(function* () {
+      legacyOutput = true;
       const fs = yield* FileSystem.FileSystem;
       const managed = yield* managedCodex;
       let unhealthy = false;
@@ -1994,6 +2022,7 @@ test.each(["before detection", "repair collection"] as const)(
   (when) =>
     runEffect(
       Effect.gen(function* () {
+        legacyOutput = true;
         const fs = yield* FileSystem.FileSystem;
         const managed = yield* managedCodex;
         const herdr = new (class extends StaleWorkingTerminal {
@@ -2072,6 +2101,7 @@ test.each(["before retirement", "during retirement"] as const)(
   (when) =>
     runEffect(
       Effect.gen(function* () {
+        legacyOutput = true;
         const fs = yield* FileSystem.FileSystem;
         const managed = yield* managedCodex;
         const partial = '{"verdict":"clean","note":';
@@ -2113,7 +2143,7 @@ test.each(["before retirement", "during retirement"] as const)(
             );
             herdr.stale = true;
             if (when === "before retirement") {
-              yield* fs.writeFileString(outputPath("r1"), partial);
+              yield* submitOutput("r1", agentFor("r1"), partial);
             }
             managed.state.reachable = false;
             managed.children[0]!.kill();
@@ -2230,7 +2260,7 @@ test("a resume sent while the Run is collected past its budget starts no second 
             yield* work.executionId({ runId: "r1", input: { skip: false } }),
           );
           yield* spend(5000);
-          yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"late"}`);
+          yield* submitOutput("r1", agentFor("r1"), `{"verdict":"clean","note":"late"}`);
           return yield* Fiber.join(fiber);
         }),
         { herdr: new UnseenTurn(rig.pluginEnv()), collectMs: 400 },
@@ -2300,7 +2330,7 @@ test("an agent collected past its budget stays collected while Collie looks for 
           const marked = yield* (yield* Collecting).has("r1", agentFor("r1"));
           blocking = false;
           yield* Deferred.succeed(release, undefined);
-          yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"revived"}`);
+          yield* submitOutput("r1", agentFor("r1"), `{"verdict":"clean","note":"revived"}`);
           yield* Fiber.join(recovering);
           yield* Fiber.join(fiber);
           return marked;
@@ -2344,7 +2374,7 @@ test("an agent is still collected while its Run is parked past its budget", () =
       yield* Effect.gen(function* () {
         const fiber = yield* Effect.forkChild(started("r1"));
         yield* pastTheBudget;
-        yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"late"}`);
+        yield* submitOutput("r1", agentFor("r1"), `{"verdict":"clean","note":"late"}`);
         yield* Fiber.join(fiber);
       }).pipe(
         Effect.provide(
@@ -2397,7 +2427,7 @@ test("a restart while the Run is collected past its budget reattaches and return
       yield* interrupted("r1", parked("r1"), { collectMs: 400 });
       expect(yield* suspended("r1").pipe(session)).toBe(false);
 
-      yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"late"}`);
+      yield* submitOutput("r1", agentFor("r1"), `{"verdict":"clean","note":"late"}`);
       const result = yield* session(started("r1"), { collectMs: 400 });
       expect(result._tag === "Success" && result.success.note).toBe("late");
       expect(yield* isSet(PARKED, "r1")).toBe(false);
@@ -2435,10 +2465,7 @@ for (const busy of ["working", "blocked"] as const) {
           while (herdr.reads < 100) {
             yield* TestClock.withLive(Effect.sleep("10 millis"));
           }
-          yield* (yield* FileSystem.FileSystem).writeFileString(
-            outputPath("r1"),
-            `{"verdict":"clean","note":"after the suite"}`,
-          );
+          yield* submitOutput("r1", agentFor("r1"), `{"verdict":"clean","note":"after the suite"}`);
           herdr.written = true;
         });
         const result = yield* session(
@@ -2469,6 +2496,7 @@ class RewritingAfterRepair extends Herdr {
 test("a repaired Output caught half rewritten is judged when the agent's turn ends", () =>
   runEffect(
     Effect.gen(function* () {
+      legacyOutput = true;
       const fs = yield* FileSystem.FileSystem;
       yield* rig.queueOutputs([
         { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
@@ -2520,6 +2548,7 @@ class FinishingWhileAsked extends Herdr {
 test("a repaired Output finished between its read and the turn ending is read again", () =>
   runEffect(
     Effect.gen(function* () {
+      legacyOutput = true;
       yield* rig.queueOutputs([
         { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
         null,
@@ -2610,6 +2639,7 @@ const halts = (runId: string) =>
 test("a reminder counts as recovered once the Output decodes, including after its existing repair", () =>
   runEffect(
     Effect.gen(function* () {
+      legacyOutput = true;
       yield* rig.queueOutputs([
         null,
         { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
@@ -2657,7 +2687,7 @@ test("an agent whose turn ends without its Output is reminded to submit it with 
   ));
 
 test("a new step's repair quotes the problems and names collie_submit, and an older step's names its file", () => {
-  const step = (outputSubmit: "file" | "tool") => ({
+  const step = (submitOnly: boolean) => ({
     agent: "worker",
     output: "/state/agents/r1/review.json",
     reused: false,
@@ -2666,16 +2696,16 @@ test("a new step's repair quotes the problems and names collie_submit, and an ol
     role: "reviewer",
     workflow: "w",
     harness: "claude",
-    outputSubmit,
+    ...(submitOnly ? { submitOnly: true as const } : { outputSubmit: "file" as const }),
   });
   const problems = `Missing key\n  at ["verdict"]`;
-  const fresh = repairText(step("tool"), problems);
+  const fresh = repairText(step(true), problems);
   expect(fresh).toContain(problems);
   expect(fresh).toContain("collie_submit");
   expect(fresh).not.toContain("OUTPUT_PATH");
-  expect(reminderText(step("tool"))).toContain("collie_submit");
-  expect(reminderText(step("tool"))).not.toContain("OUTPUT_PATH");
-  const legacy = repairText(step("file"), problems);
+  expect(reminderText(step(true))).toContain("collie_submit");
+  expect(reminderText(step(true))).not.toContain("OUTPUT_PATH");
+  const legacy = repairText(step(false), problems);
   expect(legacy).toContain(problems);
   expect(legacy).toContain("OUTPUT_PATH: /state/agents/r1/review.json");
   expect(legacy).not.toContain("collie_submit");
@@ -2725,7 +2755,7 @@ test("a host stopped once its first reminder went out does not send that reminde
         Effect.gen(function* () {
           const fiber = yield* Effect.forkChild(started("r1"));
           yield* TestClock.withLive(Effect.sleep("500 millis"));
-          yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"late"}`);
+          yield* submitOutput("r1", agentFor("r1"), `{"verdict":"clean","note":"late"}`);
           return yield* Fiber.join(fiber);
         }),
         { herdr: new Turns(), collectMs: 600_000 },
@@ -2774,7 +2804,7 @@ const enteredBehindHeldReminder = (landed: boolean) =>
         Effect.gen(function* () {
           const fiber = yield* Effect.forkChild(started("r1"));
           yield* TestClock.withLive(Effect.sleep("500 millis"));
-          yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"late"}`);
+          yield* submitOutput("r1", agentFor("r1"), `{"verdict":"clean","note":"late"}`);
           return yield* Fiber.join(fiber);
         }),
         untilParked("r1"),
@@ -2825,7 +2855,7 @@ test("an agent herdr reports blocked when its turn stops is not reminded", () =>
           const fiber = yield* Effect.forkChild(started("r1"));
           yield* until(prompted("Your task for this step"));
           yield* spend(30_000);
-          yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"answered"}`);
+          yield* submitOutput("r1", agentFor("r1"), `{"verdict":"clean","note":"answered"}`);
           return yield* Fiber.join(fiber);
         }),
         { herdr: new Turns("blocked"), collectMs: 600_000 },
@@ -3135,8 +3165,9 @@ test("a question still open when the Output comes is closed, and nothing is sent
           yield* asksTwo;
           yield* questionsOf(2);
           yield* answer("ask-review-1", "Postgres");
-          yield* (yield* FileSystem.FileSystem).writeFileString(
-            outputPath("r1"),
+          yield* submitOutput(
+            "r1",
+            agentFor("r1"),
             `{"verdict":"clean","note":"decided for itself"}`,
           );
           const done = yield* Fiber.join(fiber);
@@ -3270,6 +3301,7 @@ test("a question asked before the agent's next launch is answered while that lau
 test("a restart between the attempts hands out no second repair", () =>
   runEffect(
     Effect.gen(function* () {
+      legacyOutput = true;
       const fs = yield* FileSystem.FileSystem;
       yield* rig.queueOutputs([
         { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
@@ -3429,6 +3461,12 @@ test("a pane that stays busy parks the step beside its agent, and a resume hands
   ));
 
 const launchArgs = (calls: ReadonlyArray<Call>) => (everyLaunch(calls)[0] ?? []).slice(1);
+
+const fileExists = (path: string) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.exists(path)),
+    Effect.orElseSucceed(() => false),
+  );
 
 const permissionModeOf = (args: ReadonlyArray<string>) =>
   args[args.indexOf("--permission-mode") + 1];
@@ -3767,10 +3805,7 @@ test("the agent chosen for a piece of work is the one it comes back to, whatever
         Effect.gen(function* () {
           const resumed = yield* Effect.forkChild(started("r1"));
           yield* until(rig.calls().pipe(Effect.map((calls) => everyLaunch(calls).length === 2)));
-          yield* (yield* FileSystem.FileSystem).writeFileString(
-            outputPath("r1"),
-            `{"verdict":"clean","note":"back"}`,
-          );
+          yield* submitOutput("r1", agentFor("r1"), `{"verdict":"clean","note":"back"}`);
           return yield* Fiber.join(resumed);
         }),
         { model: "sonnet" },
@@ -4104,10 +4139,7 @@ test("a replay after a restart starts the agent the work fell back to, whatever 
         Effect.gen(function* () {
           const resumed = yield* Effect.forkChild(started("r1"));
           yield* until(rig.calls().pipe(Effect.map((calls) => everyLaunch(calls).length === 2)));
-          yield* (yield* FileSystem.FileSystem).writeFileString(
-            outputPath("r1"),
-            `{"verdict":"clean","note":"back"}`,
-          );
+          yield* submitOutput("r1", agentFor("r1"), `{"verdict":"clean","note":"back"}`);
           return yield* Fiber.join(resumed);
         }),
         chain,
@@ -4287,7 +4319,7 @@ test("a Run parked on a harness stop goes on with the Output its agent writes af
           const fiber = yield* Effect.forkChild(started("r1"));
           yield* stopsOnError(agentFor("r1"), EXPIRED);
           yield* until(parkedSays(EXPIRED));
-          yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"carried on"}`);
+          yield* submitOutput("r1", agentFor("r1"), `{"verdict":"clean","note":"carried on"}`);
           return yield* Fiber.join(fiber);
         }),
         { ...onPi, collectMs: 3_600_000, pollMs: 1000 },
@@ -4322,6 +4354,7 @@ test("an agent whose harness stopped and that stays idle past its budget is park
 test("a turn its harness will not retry while it repairs its Output parks the Run within a poll, quoting the harness", () =>
   runEffect(
     Effect.gen(function* () {
+      legacyOutput = true;
       yield* rig.queueOutputs([
         { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
         null,
@@ -4341,6 +4374,7 @@ test("a turn its harness will not retry while it repairs its Output parks the Ru
 test("a harness stop during a repair still parks its wait after a restart, and a late Output finishes it", () =>
   runEffect(
     Effect.gen(function* () {
+      legacyOutput = true;
       const fs = yield* FileSystem.FileSystem;
       const over = { ...onPi, collectMs: 3_600_000, pollMs: 1000 };
       yield* rig.queueOutputs([
@@ -4469,6 +4503,7 @@ test("an agent that runs out mid-work is closed and replaced by one on the next 
 test("a repair after a Fallback goes to the agent that took over, and starts no other", () =>
   runEffect(
     Effect.gen(function* () {
+      legacyOutput = true;
       yield* rig.queueOutputs([
         null,
         { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
@@ -4828,7 +4863,7 @@ test("a hand-over sent before a host crash, delivered again and replayed, is one
       expect(again.agent).toBe(successor);
       yield* FileSystem.FileSystem.pipe(
         Effect.flatMap((fs) =>
-          fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"from the new agent"}`),
+          submitOutput("r1", agentFor("r1"), `{"verdict":"clean","note":"from the new agent"}`),
         ),
       );
       const result = yield* session(started("r1"), chain);
@@ -4914,9 +4949,16 @@ const ticketsUntil = (reached: Reached, over?: Partial<AgentHost>) =>
   );
 const onTicket = (name: string, sequence = 1) => agentName("r1", name, null, sequence);
 const ticketOutput = (operation: string, text: string) =>
-  FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) => fs.writeFileString(`${dir}/agents/r1/${operation}.json`, text)),
-  );
+  Effect.gen(function* () {
+    const path = `${dir}/agents/r1/${operation}.json`;
+    const one = Option.getOrUndefined(
+      Arr.findLast(yield* launchesAt(dir, "r1"), (launch) => launch.output === path),
+    );
+    if (one === undefined) {
+      return yield* Effect.die(new Error(`no launch wrote ${path}`));
+    }
+    return yield* submitOutput("r1", one.agent, text);
+  });
 const OPENED_MR = { verdict: "clean", note: "opened" };
 const MR_OPENED = `{"verdict":"clean","note":"opened"}`;
 const writesWhenGiven = (operation: string, text: string) =>
@@ -5149,7 +5191,7 @@ test("a resume after a host restart mid-ticket carries on with that ticket's age
     }).pipe(Effect.scoped),
   ));
 
-test("a wait across a restart, an answer to its question and an Output repair during a ticket go to that ticket's agent and start none", () =>
+test("a wait across a restart, an answer to its question and a refused Output sent again go to that ticket's agent and start none", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -5172,8 +5214,7 @@ test("a wait across a restart, an answer to its question and an Output repair du
           yield* answer(first!.decision, "SQLite");
           yield* answer(second!.decision, "lint");
           yield* until(prompted(ANSWERED));
-          yield* ticketOutput("02-second.md", `{"verdict":3}`);
-          yield* until(prompted("not usable"));
+          expect(yield* ticketOutput("02-second.md", `{"verdict":3}`)).toContain("not usable");
           yield* ticketOutput("02-second.md", `{"verdict":"clean"}`);
           yield* writesWhenGiven("mr", MR_OPENED);
           return yield* tickets.execute({ runId: "r1", input: {} }).pipe(Effect.result);
@@ -5190,10 +5231,7 @@ test("a wait across a restart, an answer to its question and an Output repair du
             call.cmd === "terminal.send" && call.params?.terminal === onTicket("build-02-second"),
         ),
       );
-      expect([
-        Arr.some(toSecond, Str.includes(ANSWERED)),
-        Arr.some(toSecond, Str.includes("not usable")),
-      ]).toEqual([true, true]);
+      expect(Arr.some(toSecond, Str.includes(ANSWERED))).toBe(true);
     }).pipe(Effect.scoped),
   ));
 
@@ -5748,16 +5786,18 @@ test("a quota fallback keeps valid late Output written while retiring its manage
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
+      const records = yield* RunRecords;
       const managed = yield* managedCodex;
       const ports: CompactionPorts = {
         codex: {
           ...managed.ports.codex!,
           stop: (target, note, budgetMs) =>
             Effect.gen(function* () {
-              yield* fs.writeFileString(
-                outputPath("r1"),
+              yield* submitOutput(
+                "r1",
+                agentFor("r1"),
                 '{"verdict":"clean","note":"finished during retirement"}',
-              );
+              ).pipe(Effect.provideService(RunRecords, records));
               managed.children[0]!.kill();
               yield* Effect.promise(() => managed.children[0]!.exited);
               return yield* COMPACTION_PORTS.codex!.stop!(target, note, budgetMs);
@@ -7630,7 +7670,7 @@ test("a stop while the collection is out parks the wait, and what comes back rea
       expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
 
       yield* control("stop", "r1", false);
-      yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"resumed"}`);
+      yield* submitOutput("r1", agentFor("r1"), `{"verdict":"clean","note":"resumed"}`);
       const result = yield* releasedInto("r1");
       expect(result._tag === "Success" && result.success.note).toBe("resumed");
       expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
@@ -7647,6 +7687,7 @@ class StopsAtRepair extends Herdr {
 test("a stop while the repair is awaited parks the wait, and the resume starts the halted agent again", () =>
   runEffect(
     Effect.gen(function* () {
+      legacyOutput = true;
       yield* rig.queueOutputs([
         { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
         null,
@@ -7688,6 +7729,7 @@ class ClosedAtRepair extends Herdr {
 test("a stop while the repair waits on a blocked pane parks the work, and the resume starts the halted agent again", () =>
   runEffect(
     Effect.gen(function* () {
+      legacyOutput = true;
       yield* rig.queueOutputs([
         { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
         { verdict: "clean", note: "after the stop" },
@@ -7710,6 +7752,7 @@ test("a stop while the repair waits on a blocked pane parks the work, and the re
 test("an Output made good while the Run was stopping is the answer on resume, with no repair sent", () =>
   runEffect(
     Effect.gen(function* () {
+      legacyOutput = true;
       const fs = yield* FileSystem.FileSystem;
       yield* rig.queueOutputs([
         { writes: [{ path: outputPath("r1"), text: `{"verdict":"maybe"}` }], output: null },
@@ -7945,7 +7988,7 @@ const builderBusy = Effect.gen(function* () {
   yield* reviewed.execute({ runId: "r1", input: {} });
   const launches = yield* launchesAt(dir, "r1");
   const build = Option.getOrUndefined(Arr.findFirst(launches, (one) => one.operation === "build"))!;
-  yield* (yield* FileSystem.FileSystem).remove(build.output);
+  yield* RunRecords.use((records) => records.put("r1", acceptedName(build.output), null));
   return build.agent;
 });
 
@@ -9190,7 +9233,7 @@ test("a vanished step pointer settled as sent is not sent again: the resume wait
       });
       yield* reconciled("r1", "sent");
 
-      yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"typed by hand"}`);
+      yield* submitOutput("r1", agentFor("r1"), `{"verdict":"clean","note":"typed by hand"}`);
       const result = yield* releasedInto("r1");
       expect(result._tag === "Success" && result.success.note).toBe("typed by hand");
       expect(pointersTyped(yield* rig.calls(), herdr)).toBe(1);
@@ -9440,16 +9483,82 @@ test("a submit that does not decode is answered with every problem, and writes n
       expect(answer).toContain(`["verdict"]`);
       expect(answer).toContain(`["note"]`);
       expect(answer).toContain("Nothing was written");
-      expect(yield* read(output)).toBe("");
+      expect(yield* fileExists(output)).toBe(false);
       expect(yield* submitOutput("r1", "one", { verdict: "clean", note: "kept" })).toBe("accepted");
-      expect(yield* read(output)).toContain("kept");
+      expect(yield* fileExists(output)).toBe(false);
+      const records = yield* RunRecords;
+      expect(yield* outputOf(records, { runId: "r1", output })).toMatchObject({
+        text: expect.stringContaining("kept"),
+      });
     }),
   ));
 
-test("an agent launched before the upgrade is still told its Output's path", () =>
+test("a file a new step's agent writes completes nothing, and its later submit completes the step", () =>
   runEffect(
     Effect.gen(function* () {
-      const continued = enveloped({ name: "submit-reuse", input: {}, success: Schema.String });
+      const output = `${dir}/agents/r1/review.json`;
+      yield* rig.queueOutputs([
+        {
+          writes: [{ path: output, text: `{"verdict":"clean","note":"from the file"}` }],
+          output: null,
+        },
+        { verdict: "clean", note: "from the submit" },
+      ]);
+      const result = yield* session(started("r1"), { herdr: new Turns(), collectMs: 60_000 });
+      expect(result._tag === "Success" && result.success.note).toBe("from the submit");
+      expect(yield* read(output)).toContain("from the file");
+    }),
+  ));
+
+test("a submitted Output completes a new step, and no file is left at its path", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      const result = yield* session(started("r1"));
+      expect(result._tag === "Success" && result.success.note).toBe("done");
+      expect(yield* fileExists(`${dir}/agents/r1/review.json`)).toBe(false);
+      const records = yield* RunRecords;
+      expect(
+        yield* outputOf(records, {
+          runId: "r1",
+          output: `${dir}/agents/r1/review.json`,
+          submitOnly: true,
+        }),
+      ).toMatchObject({ text: expect.stringContaining("done") });
+    }),
+  ));
+
+test("a step an older build dispatched completes from the file its agent writes", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const output = `${dir}/agents/r1/review.json`;
+      yield* fs.makeDirectory(`${dir}/agents/r1`, { recursive: true });
+      yield* fs.writeFileString(output, `{"verdict":"clean","note":"from the old file"}`);
+      const read = yield* session(
+        Effect.gen(function* () {
+          const agents = yield* Agents;
+          return yield* agents.collect({
+            agent: "r1-review-r1",
+            output,
+            reused: true,
+            runId: "r1",
+            operation: "review",
+            role: "reviewer",
+            workflow: "w",
+            harness: "claude",
+            outputSubmit: "file",
+          });
+        }),
+      );
+      expect(read).toContain("from the old file");
+    }),
+  ));
+
+test("an agent launched before this build is ended and started again on its session, and its step is submit-only", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const continued = enveloped({ name: "submit-restart", input: {}, success: Schema.String });
       const body = continued.toLayer((payload) =>
         Effect.gen(function* () {
           yield* agentWork({ operation: "first", agent: "worker", instructions: "One." });
@@ -9467,17 +9576,23 @@ test("an agent launched before the upgrade is still told its Output's path", () 
           Effect.result,
           Effect.provide(
             body.pipe(
-              Layer.provideMerge(agentsLayer(hostOf())),
+              Layer.provideMerge(agentsLayer({ ...hostOf(), stopMs: 500 })),
               Layer.provideMerge(foundationLayer({ dir })),
             ),
           ),
           Effect.scoped,
         );
       expect(result).toMatchObject({ _tag: "Success", success: "second" });
-      expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
+      const launches = everyLaunch(yield* rig.calls());
+      expect(launches).toHaveLength(2);
+      expect(launches[1]!.slice(1)).toContain("--resume");
       const prompt = yield* read(`${dir}/agents/r1/second.prompt.md`);
-      expect(prompt).not.toContain("collie_submit");
-      expect(prompt).toContain(`${dir}/agents/r1/second`);
+      expect(prompt).toContain("collie_submit");
+      expect(prompt).not.toContain("OUTPUT_PATH");
+      expect(yield* launchedAt(dir, "r1", "second")).toMatchObject({ submitOnly: true });
+      expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain(
+        "launched before this build, so it was ended and started again on its session",
+      );
     }),
   ));
 
@@ -10336,7 +10451,7 @@ test("a launch waits while its Machine is short of memory, with no tab or agent 
           expect(yield* runLogOf("r1")).toMatch(
             new RegExp(`${agentFor("r1")}'s launch: waited \\S+ for memory`),
           );
-          yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"after"}`);
+          yield* submitOutput("r1", agentFor("r1"), `{"verdict":"clean","note":"after"}`);
           return yield* Fiber.join(fiber);
         }),
         { collectMs: 400 },
@@ -10396,7 +10511,7 @@ test("a verify an idle agent asked for, held for memory past its budget, keeps i
           herdr.written = false;
           yield* rig.memory(50);
           expect(yield* Fiber.join(verify)).toBe("waited");
-          yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"verified"}`);
+          yield* submitOutput("r1", agentFor("r1"), `{"verdict":"clean","note":"verified"}`);
           herdr.written = true;
           return yield* Fiber.join(fiber);
         }),

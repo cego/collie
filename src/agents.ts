@@ -215,7 +215,9 @@ import {
 import type { ClaudeOverlay, RoleProfile } from "./profile";
 import { isString } from "./schema";
 import type { JsonObject } from "./schema";
-import { awaitOutput, outputCollected } from "./output-submit";
+import { awaitOutput as registerOutput, submitOutput } from "./output-submit";
+import { acceptOutput, markCollected, outputOf } from "./step-output";
+import type { Step } from "./step-output";
 import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } from "./subagents";
 import { Collecting, collectingLayer } from "./collecting";
 import type { CollectingApi } from "./collecting";
@@ -270,6 +272,7 @@ export interface AgentAsk {
   readonly sequence?: number;
   readonly step?: At;
   readonly outputSubmit?: "file" | "tool";
+  readonly submitOnly?: boolean;
 }
 
 export const AgentChoiceSchema = Schema.Struct({
@@ -450,6 +453,10 @@ export interface AgentsApi {
     budgetMs?: number,
     usable?: (text: string) => boolean,
   ) => Effect.Effect<string | null, AgentUncertain | AgentParked>;
+  readonly awaitOutput: (
+    launched: Launched,
+    problem: (text: string) => string | null,
+  ) => Effect.Effect<void>;
   readonly peekOutput: (launched: Launched) => Effect.Effect<string | null>;
   readonly usageWaiting: (launched: Launched, incident: RanOut | null) => Effect.Effect<void>;
   readonly usageIncident: (launched: Launched) => Effect.Effect<RanOut | null>;
@@ -572,6 +579,8 @@ interface Doing<Output extends OutputContract> {
   readonly handOver?: HandOverGiven;
   // WARNING: set only where `agent` has not yet run in this Run; the agent it names is ended and found Quiet first.
   readonly takesOver?: { readonly agent: string; readonly why: string };
+  // WARNING: "file" replays a dispatch an older build wrote, which a recovered step or a test does.
+  readonly outputSubmit?: "file" | "tool";
 }
 
 // WARNING: suspending inside the Activity leaves it unrecorded, so a resume asks the forge again; once it has said no, a replay does not.
@@ -659,7 +668,8 @@ export const agentWork: <
     const role = work.role ?? work.operation;
     const skills = yield* agents.skills(skillsIn(work.instructions));
     const held = work.agent === undefined ? null : yield* agents.choiceOf(runId, work.agent);
-    const outputSubmit = held?.outputSubmit ?? "tool";
+    const outputSubmit = (work.outputSubmit ?? "tool") === "tool" ? "tool" : "file";
+    const submitOnly = outputSubmit === "tool";
     const parts: PromptParts = {
       role,
       instructions: work.instructions,
@@ -731,6 +741,7 @@ export const agentWork: <
       permissions: work.permissions ?? null,
       authority: place.authority,
       outputSubmit,
+      submitOnly,
     };
     if (choice.claudeSubagents !== undefined) {
       ask.claudeSubagents = choice.claudeSubagents;
@@ -885,7 +896,7 @@ export const agentWork: <
       return !Arr.some(yield* host.asked(runId), (one) => one.answer === null);
     });
     const collecting = (on: Launched, from: AgentAsk, waiting?: string) => {
-      const awaited = awaitOutput(runId, on.agent, on.output, problemIn);
+      const awaited = agents.awaitOutput(on, problemIn);
       const output = agents.collectedDuring(
         on,
         Effect.raceFirst(
@@ -1029,7 +1040,7 @@ export const agentWork: <
           return yield* Workflow.suspend(instance);
         }
         // WARNING: before its prompt, so an agent that submits as it finishes is not told no step is waiting.
-        yield* awaitOutput(runId, launched.agent, launched.output, problemIn);
+        yield* agents.awaitOutput(launched, problemIn);
         return launched;
       });
     const handOverFrom = (outgoing: Launched, transcript: string | null) =>
@@ -1283,7 +1294,6 @@ export const agentWork: <
     }
     const read = decodeOutput(work.output, first, plain);
     if (read.ok) {
-      yield* outputCollected(runId, current.agent, first);
       yield* agents.usageWaiting(current, null);
       yield* recovered();
       return yield* carded(read.value);
@@ -1292,7 +1302,7 @@ export const agentWork: <
     let latest = first;
     const recollecting = (unusable: string, since: number) =>
       Effect.gen(function* () {
-        yield* awaitOutput(runId, current.agent, current.output, problemIn);
+        yield* agents.awaitOutput(current, problemIn);
         for (;;) {
           const text = yield* watching(
             agents.collect(current, unusable, questions, undefined, usable),
@@ -1387,7 +1397,6 @@ export const agentWork: <
       const reread = decodeOutput(work.output, now, plain);
       repaired = reread.ok ? reread : yield* repairing(round + 1, now, reread.problem);
     }
-    yield* outputCollected(runId, current.agent, latest);
     yield* recovered();
     yield* agents.usageWaiting(current, null);
     return yield* carded(repaired.value);
@@ -2782,6 +2791,35 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           return yield* launch(ask, false, note);
         }
         const alive = live !== undefined && !fresh;
+        // WARNING: a launch from before this build has a tool server without collie_submit, so it is ended and started again on its session.
+        const launchedBefore = Option.getOrNull(
+          Arr.findLast(yield* launchesOf(ask.runId), (one) => one.agent === agent),
+        );
+        if (
+          alive &&
+          ask.submitOnly === true &&
+          launchedBefore !== null &&
+          launchedBefore.outputSubmit !== "tool"
+        ) {
+          const ended = yield* endAgent(
+            endsOf(ask.runId),
+            launchedBefore,
+            "it was launched before this build's tool server, which offers collie_submit",
+            "close",
+            listing.success,
+          ).pipe(Effect.result);
+          if (ended._tag === "Failure" || ended.success._tag !== "Closed" || !ended.success.ended) {
+            return yield* unsettled(
+              ask,
+              `${agent} was launched before this build and could not be ended to start it again on its session (${ended._tag === "Failure" ? reason(ended.failure) : "reason" in ended.success ? ended.success.reason : "its terminal changed"})`,
+            );
+          }
+          yield* log(
+            ask.runId,
+            `${agent}: launched before this build, so it was ended and started again${launchedBefore?.agentSession == null ? " with no session to resume" : " on its session"}`,
+          );
+          return yield* launch(ask, true, note);
+        }
         const back = live === undefined ? comingBack.get(agent) : undefined;
         if (back !== undefined) {
           yield* Deferred.await(back);
@@ -2840,6 +2878,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               landed.step = ask.step;
             }
             landed.outputSubmit = ask.outputSubmit ?? "tool";
+            if (ask.submitOnly === true) {
+              landed.submitOnly = true;
+            }
             landed.at = yield* Clock.currentTimeMillis;
             fellBack(landed, ask.from, ask.why);
             if (ask.next !== undefined) {
@@ -3435,7 +3476,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             Effect.map((status) => status !== "working" && status !== "blocked"),
           );
           const text = yield* Effect.raceFirst(
-            waitForOutput(launched.output, unless ?? null, {
+            waitForOutput(launched, unless ?? null, {
               pollMs: host.pollMs ?? DEFAULT_POLL_MS,
               budgetMs: budgetMs ?? host.collectMs ?? DEFAULT_COLLECT_MS,
               counts: Effect.gen(function* () {
@@ -3464,9 +3505,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
   const repair = (launched: Launched, problem: string, unusable: string, round = 1) =>
     under(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const now = yield* fs.readFileString(launched.output).pipe(Effect.orElseSucceed(() => ""));
-        if (Str.trim(now) !== "" && now !== unusable) {
+        const records = yield* RunRecords;
+        const now = yield* outputOf(records, launched);
+        if (now !== null && Str.trim(now.text) !== "" && now.text !== unusable) {
           return true;
         }
         const text = repairText(launched, problem);
@@ -3509,10 +3550,10 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
   ) =>
     under(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const absent = fs.readFileString(launched.output).pipe(
-          Effect.map((text) => Str.trim(text) === ""),
-          Effect.orElseSucceed(() => true),
+        const records = yield* RunRecords;
+        const absent = Effect.map(
+          outputOf(records, launched),
+          (held) => held === null || Str.trim(held.text) === "",
         );
         // WARNING: read here too: a turn that ended on a question may not be on its Run yet.
         const asking = questions === undefined ? null : yield* questionsOf(launched, questions);
@@ -3723,9 +3764,8 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           Option.flatMap((one) => Option.fromNullishOr(one.agentSession?.value)),
         ),
       );
-      const out =
-        Str.trim(yield* fs.readFileString(latest.output).pipe(Effect.orElseSucceed(() => ""))) ===
-        "";
+      const heldNow = yield* outputOf(yield* RunRecords, latest);
+      const out = heldNow === null || Str.trim(heldNow.text) === "";
       const asking = out && (yield* (yield* questionsOf(latest, run.questions))(null));
       const pointer = yield* fs.readFileString(sentPath(latest, "step")).pipe(Effect.option);
       const told =
@@ -4000,7 +4040,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         if (onlyDeadServer && lost === null) {
           return false;
         }
-        const completed = waitForOutput(ask.output, unless ?? null, {
+        const completed = waitForOutput(ask, unless ?? null, {
           pollMs: host.pollMs ?? DEFAULT_POLL_MS,
           budgetMs: 0,
           counts: Effect.succeed(false),
@@ -4336,12 +4376,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
 
   const candidatesOf = (runId: string) =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
+      const records = yield* RunRecords;
       return yield* Effect.forEach(yield* launchesOf(runId), (one) =>
-        fs.exists(one.output).pipe(
-          Effect.orElseSucceed(() => false),
-          Effect.map((done) => ({ ...one, done })),
-        ),
+        Effect.map(outputOf(records, one), (held) => ({ ...one, done: held !== null })),
       );
     });
 
@@ -4733,6 +4770,8 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           }
         }).pipe(Effect.ignore),
       ),
+    awaitOutput: (launched, problem) =>
+      registerOutput(launched.runId, launched.agent, launched.output, problem),
     collect: (...args: Parameters<typeof collect>) =>
       Effect.tap(collect(...args), (text) =>
         text === null
@@ -4741,11 +4780,11 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       ),
     peekOutput: (launched) =>
       under(
-        FileSystem.FileSystem.pipe(
-          Effect.flatMap((fs) => fs.readFileString(launched.output)),
-          Effect.map((text) => (Str.trim(text) === "" ? null : text)),
-          Effect.orElseSucceed(() => null),
-        ),
+        Effect.gen(function* () {
+          const records = yield* RunRecords;
+          const held = yield* outputOf(records, launched);
+          return held === null || Str.trim(held.text) === "" ? null : held.text;
+        }),
       ),
     usageWaiting,
     usageIncident,
@@ -4759,9 +4798,11 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       under(
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
+          const records = yield* RunRecords;
           const marker = `${dirFor(launched.runId)}/${stemOf(launched)}.parked-${round}`;
           if (yield* fs.exists(marker)) {
-            return yield* fs.readFileString(launched.output).pipe(Effect.orElseSucceed(() => ""));
+            const held = yield* outputOf(records, launched);
+            return held === null ? "" : held.text;
           }
           yield* fs.writeFileString(marker, "");
           return null;
@@ -5018,9 +5059,9 @@ const roleBody = (role: string) => `You are the ${role}.`;
 
 const OUTPUT_REMINDERS = 2;
 
-const submitsOnly = (launched: Pick<Launched, "outputSubmit">) => launched.outputSubmit === "tool";
+const submitsOnly = (launched: Pick<Launched, "submitOnly">) => launched.submitOnly === true;
 
-export const reminderText: (launched: Pick<Launched, "output" | "outputSubmit">) => string = (
+export const reminderText: (launched: Pick<Launched, "output" | "submitOnly">) => string = (
   launched,
 ) =>
   submitsOnly(launched)
@@ -5029,7 +5070,7 @@ export const reminderText: (launched: Pick<Launched, "output" | "outputSubmit">)
 
 // WARNING: the Output goes back to the same agent, which still holds the work; restarting would throw a whole round away over a write.
 export const repairText: (
-  launched: Pick<Launched, "output" | "outputSubmit">,
+  launched: Pick<Launched, "output" | "submitOnly">,
   problem: string,
 ) => string = (launched, problem) =>
   submitsOnly(launched)
@@ -5066,9 +5107,9 @@ const undeliverable = (cause: unknown) => ({
   detail: reason(cause) || Formatter.formatJson(cause),
 });
 
-// WARNING: a blank file is a write not yet happened, and null means uncertain, never that nothing happened.
+// WARNING: null means uncertain, never that nothing happened.
 const waitForOutput = <R>(
-  path: string,
+  step: Step,
   unless: string | null,
   every: {
     readonly pollMs: number;
@@ -5079,21 +5120,20 @@ const waitForOutput = <R>(
   },
 ) =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const read = fs.readFileString(path).pipe(Effect.orElseSucceed(() => ""));
-    const fresh = (text: string) => Str.trim(text) !== "" && text !== unless;
+    const records = yield* RunRecords;
+    const read = outputOf(records, step);
+    const fresh = (one: { readonly text: string } | null) =>
+      one !== null && Str.trim(one.text) !== "" && one.text !== unless;
     let spent = 0;
     for (;;) {
-      const text = yield* read;
-      if (fresh(text)) {
-        if (every.usable(text)) {
-          return text;
-        }
-        if (yield* every.settled) {
-          const after = yield* read;
-          if (fresh(after)) {
-            return after;
-          }
+      const held = yield* read;
+      if (fresh(held) && every.usable(held!.text)) {
+        return yield* markCollected(records, step, held!.text);
+      }
+      if (held !== null && fresh(held) && (yield* every.settled)) {
+        const after = yield* read;
+        if (fresh(after)) {
+          return yield* markCollected(records, step, after!.text);
         }
       }
       if (spent >= every.budgetMs) {

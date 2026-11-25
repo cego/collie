@@ -242,6 +242,7 @@ import { hostDatabase, recordsLayer } from "./records";
 import type { Records } from "./records";
 import { ModuleRevisions, RevisionRows, onSyncedRevisions } from "./module-revisions";
 import { addressOf, RunRecords } from "./run-records";
+import { outputOf } from "./step-output";
 import { featuresOf, recordFeatures } from "./run-features";
 import { Steered } from "./delivery-queue";
 import type { JudgementDeps } from "./drift";
@@ -7979,6 +7980,7 @@ export const foundationLayer: (options: {
   | Reliance
   | Store
   | Records
+  | RunRecords
   | WorkflowEngine.WorkflowEngine
   | MessageStorage.MessageStorage
   | SqlClient.SqlClient
@@ -9488,13 +9490,10 @@ const makeRegistry: (
     if (!Arr.some(waiting, isUnanswered)) {
       return waiting;
     }
-    const fs = yield* FileSystem.FileSystem;
     const launches = yield* readLaunches(runId).pipe(Effect.orElseSucceed(() => []));
+    const records = yield* RunRecords;
     const candidates = yield* Effect.forEach(launches, (one) =>
-      fs.exists(one.output).pipe(
-        Effect.orElseSucceed(() => false),
-        Effect.map((done) => ({ ...one, done })),
-      ),
+      Effect.map(outputOf(records, one), (held) => ({ ...one, done: held !== null })),
     );
     const steer = steerTarget(candidates, {})?.agent ?? null;
     return Arr.map(waiting, (one) =>
@@ -11259,7 +11258,10 @@ const makeRegistry: (
             (one) => one.step?.step === options.step,
           ),
         );
-        if (launch !== undefined && !(yield* fs.exists(launch.output).pipe(Effect.orDie))) {
+        if (
+          launch !== undefined &&
+          (yield* outputOf(yield* RunRecords, launch).pipe(Effect.orDie)) === null
+        ) {
           const sent = yield* (yield* Agents).steer({
             ...options,
             agent: launch.agent,

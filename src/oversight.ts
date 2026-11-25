@@ -680,7 +680,7 @@ const versionVector = Effect.fn("Oversight.versionVector")(function* (
         : yield* committedWork(cwd, card.revision.head_sha);
     const diff =
       read.kind === "shown" ? { ...read, blocks: read.blocks.slice(0, MAX_FILES) } : read;
-    const outputs = yield* outputsIn(`${at.stateDir}/agents/${id}`);
+    const outputs = yield* outputsIn(`${at.stateDir}/agents/${id}`, id);
     targets.push({
       id,
       dir,

@@ -18,6 +18,8 @@ import type { PluginEnv } from "./env";
 import { runTitle } from "./naming";
 import { REVIEW_FILE, findingsIn, openFindingsIn } from "./output";
 import { findRun, settled } from "./runs";
+import { RunRecords } from "./run-records";
+import { outputOf } from "./step-output";
 import type { RunFacts, RunState } from "./runs";
 import { diffTargetOf } from "./strategies";
 import { isString } from "./schema";
@@ -286,6 +288,7 @@ const finishedTickets = Effect.fn("Views.finishedTickets")(function* (
     if (launches.length === 0) {
       continue;
     }
+    const records = yield* RunRecords;
     tickets ??= yield* ticketRepoLines(issues);
     const known = one.repo ? Arr.filter(tickets, (t) => t.text !== null) : tickets;
     const mine = Arr.map(
@@ -297,7 +300,7 @@ const finishedTickets = Effect.fn("Views.finishedTickets")(function* (
       (t) => t.file,
     );
     for (const launch of launches) {
-      const output = yield* writtenAt(launch.output);
+      const output = (yield* outputOf(records, launch))?.at;
       if (output === undefined) {
         continue;
       }

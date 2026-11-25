@@ -10,6 +10,8 @@ import type { PluginEnv } from "./env";
 import { currentOf, laneOf, linkSaid, linkState, releaseRow } from "./flow";
 import type { ChildFact, LaneWait } from "./flow";
 import { readLaunches } from "./launches";
+import { RunRecords } from "./run-records";
+import { outputOf } from "./step-output";
 import { runTitle } from "./naming";
 import { machineName } from "./peers";
 import type { RunFacts, RunState } from "./runs";
@@ -92,12 +94,9 @@ export const laneFor = Effect.fn("Flow.lane")(function* (
   context: LaneContext = ALONE,
   usual?: ReadonlyMap<string, number>,
 ) {
-  const fs = yield* FileSystem.FileSystem;
+  const records = yield* RunRecords;
   const launches = yield* Effect.forEach(yield* readLaunches(run.id), (launch) =>
-    fs.exists(launch.output).pipe(
-      Effect.orElseSucceed(() => false),
-      Effect.map((done) => ({ launch, done })),
-    ),
+    Effect.map(outputOf(records, launch), (held) => ({ launch, done: held !== null })),
   );
   const stop =
     run.state === "stopped"

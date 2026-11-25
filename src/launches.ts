@@ -20,7 +20,8 @@ import type { RunStep } from "./board-model";
 import { StepPlace } from "./steps";
 import { ClaudeSubagents } from "./subagents";
 import { StoreWrites } from "./store-writes";
-import { markWorked } from "./run-records";
+import { markWorked, RunRecords } from "./run-records";
+import { outputOf } from "./step-output";
 
 export const LaunchedIn = Schema.Struct({
   step: Schema.String,
@@ -61,6 +62,7 @@ export const Launched = Schema.Struct({
   step: Schema.optionalKey(LaunchedIn),
   // WARNING: Fixed at launch: its tool server cannot change afterwards.
   outputSubmit: Schema.optionalKey(Schema.Literals(["file", "tool"])),
+  submitOnly: Schema.optionalKey(Schema.Literal(true)),
 });
 export type Launched = typeof Launched.Type;
 
@@ -381,10 +383,10 @@ export const runAgents = (runId: string) =>
   readLaunches(runId).pipe(Effect.map(Arr.map(agentOfLaunch)));
 
 export const operationsOf = Effect.fn("Launches.operations")(function* (runId: string) {
-  const fs = yield* FileSystem.FileSystem;
+  const records = yield* RunRecords;
   const steps = new Map<string, RunStep>();
   for (const one of yield* readLaunches(runId)) {
-    const done = yield* fs.exists(one.output).pipe(Effect.orElseSucceed(() => false));
+    const done = (yield* outputOf(records, one)) !== null;
     steps.set(one.operation, { operation: one.operation, agent: one.agent, done });
   }
   return [...steps.values()];
