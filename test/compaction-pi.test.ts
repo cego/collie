@@ -36,6 +36,7 @@ const ctx = () => ({
 interface Line {
   at: number;
   session: string;
+  launch?: string;
   kind: string;
   tokens?: number | string | null;
   request?: string;
@@ -48,6 +49,7 @@ const encodeLine = flow(
       Schema.Struct({
         at: Schema.Finite,
         session: Schema.String,
+        launch: Schema.optionalKey(Schema.String),
         kind: Schema.String,
         tokens: Schema.optionalKey(Schema.NullOr(Schema.Union([Schema.Finite, Schema.String]))),
         request: Schema.optionalKey(Schema.String),
@@ -60,7 +62,13 @@ const encodeLine = flow(
 );
 
 const event = (line: Line) =>
-  fs.writeFileString(path.join(dir, "events.jsonl"), `${encodeLine(line)}\n`, { flag: "a" });
+  fs.writeFileString(
+    path.join(dir, "events.jsonl"),
+    `${encodeLine({ launch: "l-1", ...line })}\n`,
+    {
+      flag: "a",
+    },
+  );
 
 beforeEach(() =>
   runEffect(

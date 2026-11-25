@@ -1014,7 +1014,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       wait: {
         readonly account: string;
         readonly resetsAt: string | null;
-        readonly question?: RoomQuestion;
+        readonly question?: unknown;
       } | null,
     ) => Effect.Effect<void>;
     /** Records where the Run's work is among its Steps; \`step\` and \`forecast\` call it. */
@@ -1825,6 +1825,12 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   /** Records that the Step the work is in failed, for a Run that parks to be resumed. */
   export function stepFailed(why: string): Effect.Effect<void, never, Run | Host>;
+
+  /** Parks the Step the work is in, with the cause a recheck reads; the Step continues once it clears. */
+  export function parkStep(
+    why: string,
+    cause?: ParkCause,
+  ): Effect.Effect<never, never, Run | Host | WorkflowEngine | WorkflowInstance>;
 
   /** A schema that decodes an agent's Output without services of its own. */
   export type OutputContract = Schema.Codec<unknown, unknown, never, never>;

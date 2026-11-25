@@ -647,7 +647,19 @@ export const RanOn = Schema.Struct({
 });
 
 // WARNING: the question a usage park was raised on, recorded so a recheck asks it and not the Machine's defaults.
+// WARNING: the layers and the chain are what the selector is given, so a recheck reaches the same choices, ceilings and otherwise entries it would.
+const PreferencesJson = Schema.Struct({
+  harness: Schema.optionalKey(Schema.String),
+  model: Schema.optionalKey(Schema.String),
+  effort: Schema.optionalKey(Schema.String),
+  upTo: Schema.optionalKey(Schema.Finite),
+  otherwise: Schema.optionalKey(Schema.Array(Schema.Json)),
+});
+
 export const RoomQuestion = Schema.Struct({
+  layers: Schema.Array(PreferencesJson),
+  chain: Schema.Array(Schema.String),
+  models: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(Schema.String))),
   choices: Schema.Array(RanOn),
   spent: Schema.Array(
     Schema.Struct({

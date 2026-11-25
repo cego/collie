@@ -713,6 +713,7 @@ const lostCompletion = (
       deadline: asked + 5 * 60_000,
       asked,
       session: "s-1",
+      launch: "l-1",
       transcript: written.unmarked === true ? undefined : file,
     };
     yield* fs.writeFileString(
@@ -764,6 +765,18 @@ test("a lost completion whose transcript shows no completion of it stays unresol
     }),
   ));
 
+test("a transcript that merely mentions the marked request settles nothing", () =>
+  withLaunch(
+    Effect.gen(function* () {
+      const { due, left } = yield* lostCompletion(
+        (at) =>
+          `{"type":"user","timestamp":"${at}","sessionId":"s-1","message":{"role":"user","content":"please compact later with the marker (collie:req-1)"}}\n${boundaryAt(at)}\n`,
+      );
+      expect(due).toBeNull();
+      expect(left).not.toBeNull();
+    }),
+  ));
+
 const naming = (request: string, at: string) =>
   `{"type":"user","timestamp":"${at}","sessionId":"s-1","message":{"role":"user","content":"/compact Keep the work in progress. (collie:${request})"}}`;
 
@@ -795,11 +808,15 @@ const lostAttempt = (evidence: {
           deadline: asked + 5 * 60_000,
           asked,
           session: "s-1",
+          launch: "l-1",
           transcript: file,
         },
       }),
     );
-    yield* recordClaudeEvent(control, asJson({ session_id: "s-1", transcript_path: file }));
+    yield* recordClaudeEvent(
+      control,
+      asJson({ session_id: "s-1", transcript_path: file, hook_event_name: "SessionStart" }),
+    );
     if (evidence.also !== undefined) {
       yield* evidence.also(control, afterIso, askedIso);
     }

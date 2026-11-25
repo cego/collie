@@ -1154,7 +1154,7 @@ const claudeReconcile = Effect.fn("Compactors.claudeReconcile")(function* (
     }
     // WARNING: the turn that typed the marker is the only turn whose compaction is the request's.
     if (entry.type === "user") {
-      const request = Str.isEmpty(line) ? null : namedRequest(line);
+      const request = namedRequest(entry);
       named = request === mark.id;
       markers += named ? 1 : 0;
       continue;
@@ -1163,7 +1163,6 @@ const claudeReconcile = Effect.fn("Compactors.claudeReconcile")(function* (
       named = false;
       continue;
     }
-    // WARNING: an automatic compaction is the harness tidying itself, never the request Collie made.
     if (
       named &&
       manualBoundary(entry) &&
@@ -1279,8 +1278,16 @@ const claudeRecords = Effect.fn("Compactors.claudeRecords")(function* (ctx: Agen
 
 const MARK_REQUEST = /\(collie:([A-Za-z0-9-]+)\)|\/collie-compact ([A-Za-z0-9-]+)/;
 
-const namedRequest = (line: string) => {
-  const found = MARK_REQUEST.exec(line);
+// WARNING: a request is named by the command that asked for it, not by a message that mentions its marker.
+const namedRequest = (entry: {
+  readonly message?: { readonly content?: string | null };
+  readonly type?: string;
+}) => {
+  const said = Str.trim(entry.message?.content ?? "");
+  if (!Str.startsWith(entry.type === "message" ? "/collie-compact" : "/compact")(said)) {
+    return null;
+  }
+  const found = MARK_REQUEST.exec(said);
   return found === null ? null : (found[1] ?? found[2] ?? null);
 };
 
@@ -1309,6 +1316,9 @@ const decodeTranscriptLine = Schema.decodeUnknownOption(
       ),
       timestamp: Schema.String,
       sessionId: Schema.optionalKey(Schema.String),
+      message: Schema.optionalKey(
+        Schema.Struct({ content: Schema.optionalKey(Schema.NullOr(Schema.String)) }),
+      ),
     }),
   ),
 );

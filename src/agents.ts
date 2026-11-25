@@ -1710,8 +1710,48 @@ const choiceOfLaunch: (launched: Launched) => AgentChoice = (launched) => {
 const nothingHasRoom = (chosen: ChosenAgent) =>
   chosen.from === undefined && chosen.why !== undefined;
 
-// WARNING: a park on room is cleared only on an agent the Run may use, so the wake-up asks what `choose` asked.
-// WARNING: the eligible choices are what the Run may use, so a park on room is asked of them and not of one agent.
+// WARNING: the question is stored as JSON, so a preference keeps only what decides room.
+const preferenceJson: (one: Preferences | undefined) => RoomQuestion["layers"][number] = (one) => {
+  const written: Types.Mutable<RoomQuestion["layers"][number]> = {};
+  if (one === undefined) {
+    return written;
+  }
+  if (one.harness !== undefined) {
+    written.harness = one.harness;
+  }
+  if (one.model !== undefined) {
+    written.model = one.model;
+  }
+  if (one.effort !== undefined) {
+    written.effort = one.effort;
+  }
+  if (one.upTo !== undefined) {
+    written.upTo = one.upTo;
+  }
+  if (one.otherwise !== undefined) {
+    written.otherwise = Arr.map(one.otherwise, (entry) => preferenceJson(entry));
+  }
+  return written;
+};
+
+const preferenceOf: (one: RoomQuestion["layers"][number]) => Preferences = (one) => {
+  const read: Types.Mutable<Preferences> = {};
+  if (one.harness !== undefined) {
+    read.harness = one.harness;
+  }
+  if (one.model !== undefined) {
+    read.model = one.model;
+  }
+  if (one.effort !== undefined) {
+    read.effort = one.effort;
+  }
+  if (one.upTo !== undefined) {
+    read.upTo = one.upTo;
+  }
+  return read;
+};
+
+// WARNING: a park on room is cleared only on an agent the Run may use, so the wake-up is given what `choose` was given.
 export const roomQuestionOf = (
   inputs: {
     readonly configured: Preferences;
@@ -1722,13 +1762,14 @@ export const roomQuestionOf = (
   layers: ReadonlyArray<Preferences | undefined>,
   spent: ReadonlyArray<SpentChoice>,
 ) => {
+  const own: ReadonlyArray<Preferences | undefined> = [inputs.configured, ...layers];
   const stacks: ReadonlyArray<ReadonlyArray<Preferences | undefined>> = [
-    [inputs.configured, ...layers],
-    ...Arr.map(inputs.fallbacks, (name) => [inputs.configured, ...layers, chainEntry(name)]),
+    own,
+    ...Arr.map(inputs.fallbacks, (name) => [...own, chainEntry(name)]),
   ];
   const choices = Arr.getSomes(
-    Arr.map(stacks, (stack) => {
-      const resolved = resolveChoice(stack, inputs.models, inputs.catalogue);
+    Arr.map(stacks, (one) => {
+      const resolved = resolveChoice(one, inputs.models, inputs.catalogue);
       return resolved.ok
         ? Option.some({
             harness: resolved.choice.harness,
@@ -1761,7 +1802,15 @@ export const roomQuestionOf = (
     }
     records.push(record);
   }
-  const question: RoomQuestion = { choices, spent: records };
+  const question: Types.Mutable<RoomQuestion> = {
+    layers: Arr.map(own, preferenceJson),
+    chain: [...inputs.fallbacks],
+    choices,
+    spent: records,
+  };
+  if (inputs.models !== undefined) {
+    question.models = inputs.models;
+  }
   return question;
 };
 
@@ -1769,6 +1818,7 @@ export const roomForQuestion = (
   question: RoomQuestion,
   readings: ReadonlyArray<UsageReading>,
   now: number,
+  catalogue?: MachineCatalogue,
 ) => {
   const read = roomFor(readings, now);
   const out: ReadonlyArray<SpentChoice> = Arr.map(question.spent, (one) => ({
@@ -1795,16 +1845,24 @@ export const roomForQuestion = (
           },
     on: pinned(one.on),
   }));
-  return Arr.some(question.choices, (one) => {
-    const choice: AgentChoice = pinned(one);
+  const room: Room = (choice, upTo) => {
+    const judged = read(choice, upTo);
     const ran = Option.getOrUndefined(
       Arr.findFirst(
         out,
         (spent) => sameUsage(spent.on, choice) && !usageRecovered(spent, readings, now),
       ),
     );
-    return read(choice, undefined).room && ran === undefined;
-  });
+    return judged.room && ran !== undefined ? { room: false, why: ran.why } : judged;
+  };
+  const resolved = resolveWithRoom(
+    Arr.map(question.layers, preferenceOf),
+    question.chain,
+    room,
+    question.models ?? {},
+    catalogue,
+  );
+  return !resolved.ok || resolved.chosen.from !== null || resolved.chosen.why === null;
 };
 
 const sameUsage = (one: AgentChoice, other: AgentChoice) => {

@@ -169,15 +169,12 @@ const ending = Effect.fnUntraced(function* (
   }
   const stopMs = deps.stopMs ?? STOP_WAIT_MS;
   const unread = pane !== null && "unread" in pane;
-  // WARNING: an unread pane is nothing Collie can say has stopped, so nothing of it is cancelled and no work is handed on.
   if (unread) {
     return { _tag: "Unprovable", reason: `${launched.agent} ${pane.unread}` } satisfies Ended;
   }
   const left =
-    pane === null || "empty" in pane || unread
-      ? []
-      : yield* settled(pane.roots, pane.noted, stopMs);
-  // WARNING: only once nothing it started is left running, or an agent still able to finish has its attempt cancelled under it.
+    pane === null || "empty" in pane ? [] : yield* settled(pane.roots, pane.noted, stopMs);
+  // WARNING: a cancelled attempt is removed from the record, so only a stop nothing of the pane survived may cancel one.
   if (left.length === 0) {
     yield* cancelCompaction(deps, launched.agent, why).pipe(Effect.ignore);
   }

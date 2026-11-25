@@ -1253,14 +1253,18 @@ export default defineWorkflow({
       }
       // WARNING: a plan whose every ticket was skipped built nothing, which no review of the whole can stand in for.
       if (recovery.entry === "Build" && built.size === 0) {
-        return yield* parkStep(
-          `no ticket was built (${
-            Arr.join(
-              Arr.map(tickets, (one) => one.file),
-              ", ",
-            ) || "the plan names none"
-          }). Correct the plan, then resume ${runId}.`,
+        yield* building(
+          unbuilt(
+            `tickets-none-${cycles}`,
+            `no ticket was built (${
+              Arr.join(
+                Arr.map(tickets, (one) => one.file),
+                ", ",
+              ) || "the plan names none"
+            })`,
+          ),
         );
+        tickets = yield* ticketsNow;
       }
       input = { ...input, verify: yield* checksNow };
       // WARNING: work that stayed on its first agent keeps it to the end.
