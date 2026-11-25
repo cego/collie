@@ -7,7 +7,7 @@ import {
   OPEN_FINDINGS,
   findingsWithStatus,
   openCountIn,
-  openFindingsFact,
+  openFindingsRead,
   readFindingStatuses,
   recordFindingStatus,
   storeOpenCount,
@@ -107,15 +107,18 @@ test("the count is the Run's fact, computed and kept the first time a Run that p
     inRun([{ id: "r1-F1", severity: "major", title: "one" }], (dir) =>
       Effect.gen(function* () {
         const records = yield* RunRecords;
+        const fs = yield* FileSystem.FileSystem;
         expect(yield* records.fact("r1", OPEN_FINDINGS)).toBeNull();
 
-        expect(yield* openFindingsFact(dir)).toBe(1);
+        expect(yield* openFindingsRead(dir)).toBe(1);
         expect(yield* records.fact("r1", OPEN_FINDINGS)).toBe("1");
+        yield* fs.remove(`${dir}/findings.json`);
+        expect(yield* openFindingsRead(dir)).toBe(1);
 
         yield* recordFindingStatus(dir, line({ reason: "gone" }));
         yield* storeOpenCount(dir);
 
-        expect(yield* openFindingsFact(dir)).toBe(0);
+        expect(yield* openFindingsRead(dir)).toBe(0);
       }),
     ),
   ));

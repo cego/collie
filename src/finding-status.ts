@@ -185,15 +185,8 @@ export const storeOpenCount = Effect.fn("FindingStatus.storeCount")(function* (r
   return count;
 });
 
-// WARNING: a reader that must not move a card writes nothing, so the count is computed and not kept.
-export const openFindingsRead = Effect.fn("FindingStatus.readCount")(function* (runDir: string) {
-  const kept = yield* RunRecords.use((records) => records.fact(runOfDir(runDir), OPEN_FINDINGS));
-  const count = kept === null ? Number.NaN : Number(kept);
-  return Number.isFinite(count) ? count : yield* openCountIn(runDir);
-});
-
 // WARNING: a Run settled before this fact existed has its count computed and kept the first time it is read.
-export const openFindingsFact = Effect.fn("FindingStatus.fact")(function* (runDir: string) {
+export const openFindingsRead = Effect.fn("FindingStatus.readCount")(function* (runDir: string) {
   const kept = yield* RunRecords.use((records) => records.fact(runOfDir(runDir), OPEN_FINDINGS));
   const count = kept === null ? Number.NaN : Number(kept);
   return Number.isFinite(count) ? count : yield* storeOpenCount(runDir);

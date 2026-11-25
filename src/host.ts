@@ -250,7 +250,7 @@ import { boardMessages, shareBoard } from "./board-stream";
 import { recordDisposition, refRuns, qualifiedRuns } from "./disposition";
 import {
   findingsWithStatus,
-  openFindingsFact,
+  openFindingsRead,
   recordFindingStatus,
   storeOpenCount,
 } from "./finding-status";
@@ -1044,7 +1044,7 @@ const handlers = (
             Effect.gen(function* () {
               const at = runDir(dir, runId);
               // WARNING: the count is kept here for a Run settled before the fact existed.
-              yield* openFindingsFact(at);
+              yield* openFindingsRead(at);
               return yield* findingsWithStatus(at);
             }),
           ),
