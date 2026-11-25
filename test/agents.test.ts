@@ -9414,6 +9414,33 @@ test("a step pointer the harness took is recorded as Collie's, with its delivery
     }),
   ));
 
+test("a prompt that quotes a delivery token is not recorded as that delivery's submit", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const [step] = yield* steps("r1");
+      const dir = yield* controlDir(hostOf().env.stateDir, agentFor("r1"));
+      yield* recordClaudeEvent(
+        dir,
+        encodeJson({
+          session_id: "s1",
+          hook_event_name: "UserPromptSubmit",
+          prompt: `the agent wrote collie-delivery:${step!.id} in its notes`,
+        }),
+        null,
+      );
+      const events = Arr.map(
+        Arr.filter(Str.split(yield* read(`${dir}/events.jsonl`), "\n"), (line) =>
+          pipe(line, Str.includes('"submit"')),
+        ),
+        (line) => decodeJson(line),
+      );
+      expect(events).toMatchObject([{ kind: "submit", reason: "external" }]);
+      expect(events[0]).not.toHaveProperty("delivery");
+    }),
+  ));
+
 class TextLost extends Herdr {
   lost = true;
   readonly typed: Array<string> = [];

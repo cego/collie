@@ -857,3 +857,10 @@ test("a prompt's delivery token is near its top, and a slash command keeps its f
   );
   expect(carriedDelivery(marked("item\ncollie-delivery:item-1", "d1"))).toBe("d1");
 });
+
+test("a prompt quoting a delivery token is not read as that delivery being submitted", () => {
+  expect(carriedDelivery("see collie-delivery:d1 for the last one")).toBeNull();
+  expect(carriedDelivery("collie-delivery:d1 is what the agent quoted")).toBeNull();
+  expect(carriedDelivery("a note\ncollie-delivery:d1\nmore")).toBeNull();
+  expect(carriedDelivery("collie-delivery:\nno id")).toBeNull();
+});
