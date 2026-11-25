@@ -222,15 +222,8 @@ export const recheckPark = (
                 : `job ${target.job} absent at ${target.head}`,
             );
           }
-          // WARNING: a cancelled or skipped job is settled but proves nothing, so resuming would park again unchanged.
-          if (read.state !== "passed" && read.state !== "failed") {
-            return reply(false, `job ${target.job} is ${read.state} at ${target.head}`);
-          }
         }
-        return reply(
-          true,
-          `jobs ${Arr.join([...latest.keys()], ", ")} passed or failed at parked head`,
-        );
+        return reply(true, `jobs ${Arr.join([...latest.keys()], ", ")} settled at parked head`);
       }
       case "ci-failed": {
         const targets = yield* readRunJournal(

@@ -165,7 +165,7 @@ test("a CI park with no pipeline stays uncleared until the named job exists", ()
     }),
   ));
 
-test("a job cancelled or skipped at the parked head keeps its CI park, and one that failed clears it", () =>
+test("a CI park clears once every recorded job at the parked head has settled, cancelled and skipped included", () =>
   runEffect(
     Effect.gen(function* () {
       const recheck = (state: FakeJob["state"]) =>
@@ -190,10 +190,11 @@ test("a job cancelled or skipped at the parked head keeps its CI park, and one t
           ).pipe(Effect.provide(forgeHttpTest(asked.run, forge.fetch)));
         });
       const cancelled = yield* recheck("cancelled");
-      expect(cancelled).toMatchObject({ cleared: false, error: false });
-      expect(cancelled.note).toContain("cancelled");
-      expect((yield* recheck("skipped")).cleared).toBe(false);
-      expect((yield* recheck("failed")).cleared).toBe(true);
+      expect(cancelled).toMatchObject({ cleared: true, error: false });
+      expect(cancelled.note).toContain("settled");
+      expect((yield* recheck("skipped")).cleared).toBe(true);
+      expect((yield* recheck("running")).cleared).toBe(false);
+      expect((yield* recheck("pending")).cleared).toBe(false);
     }),
   ));
 

@@ -20,6 +20,7 @@ import {
   ask,
   contentOf,
   defineWorkflow,
+  failedJob,
   forecast,
   forgeOfRef,
   formatFindings,
@@ -1072,7 +1073,7 @@ export default defineWorkflow({
                 }
                 if (read.conflicts === true) {
                   conflicting = true;
-                } else if (read.state === "failed") {
+                } else if (failedJob(read.state)) {
                   failed.push(read.unproved);
                 } else {
                   unproved.push(read.unproved);

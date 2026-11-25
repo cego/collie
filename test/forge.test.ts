@@ -4223,11 +4223,11 @@ test("GitHub reads a head it has not started Actions on as pending, and one it r
 });
 
 test("GitHub reports a rerun lookup it could not read rather than the failed attempt it found", () => {
-  const read = (match: string) => {
+  const read = (urlIncludes: string) => {
     const fake = fakeForge(
       "github",
       model("github", {
-        httpFault: { status: 429, message: "API rate limit exceeded", match },
+        httpFault: { status: 429, message: "API rate limit exceeded", urlIncludes },
         mrs: [
           mr("github", {
             jobs: [{ name: "test", state: "failed" }],

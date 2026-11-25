@@ -183,6 +183,9 @@ export const takeTarget = Effect.fn("CiJob.takeTarget")(function* <R>(
   return { _tag: "Retried" } satisfies TakeTarget;
 });
 
+export const failedJob = (state: JobState | null) =>
+  state === "failed" || state === "cancelled" || state === "skipped";
+
 export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
   readonly runId: string;
   readonly runDir: string;

@@ -17151,6 +17151,34 @@ for (const name of ["gitlab", "github"] as const) {
       ),
   );
 
+  scenario(
+    `release on ${name}: a check cancelled at the head spends a CI fix round rather than parking as an unproved read`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const { bin } = yield* releasable(name, {
+            jobs: [{ name: "test", state: "cancelled" }],
+          });
+          const runId = "r-ci-cancelled-fix-round";
+          yield* ownCheck(runId);
+          yield* rig.queueOutputs([PACKAGED, { verdict: "clean", fixed: [] }]);
+          yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                const started = yield* until(
+                  () => Effect.all({ fixing: wasAsked(runId, "fix-1"), why: parkedWhy(runId) }),
+                  ({ fixing, why }) => fixing || why !== "",
+                );
+                expect(started).toMatchObject({ fixing: true, why: "" });
+                expect(yield* asked(runId, "fix-1")).toContain("cancelled");
+              }),
+          );
+          yield* bin.restore();
+        }),
+      ),
+  );
+
   for (const advances of [false, true]) {
     scenario(
       `release on ${name}: failed CI ${advances ? "exhausts four advancing repairs across Review wait" : "parks when its fixer claims success without remote progress"} despite green local Checks`,

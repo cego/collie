@@ -186,8 +186,7 @@ export const ForgeModel = Schema.Struct({
         status: Schema.Finite,
         message: Schema.optionalKey(Schema.String),
         headers: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
-        // WARNING: a fault that names its URL keeps the other reads answerable.
-        match: Schema.optionalKey(Schema.String),
+        urlIncludes: Schema.optionalKey(Schema.String),
       }),
       Schema.Literals(["network", "hold"]),
     ]),
@@ -2845,9 +2844,9 @@ export function httpFace(
     const matches =
       declared === undefined
         ? false
-        : declared === "network" || declared === "hold" || declared.match === undefined
+        : declared === "network" || declared === "hold" || declared.urlIncludes === undefined
           ? true
-          : Str.includes(declared.match)(input);
+          : Str.includes(declared.urlIncludes)(input);
     const fault = matches ? declared : undefined;
     if (fault === "network") {
       return yield* Effect.die(new TypeError("fetch failed"));
