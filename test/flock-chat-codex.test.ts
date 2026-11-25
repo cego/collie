@@ -703,6 +703,93 @@ test("An imported server keeps the human's keyed shell filters", () => {
   });
 });
 
+test("A keyed include narrows the shell the way Codex narrows it", () => {
+  return withServers({}, (driver, context) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(
+        `${context.dir}/codex-home/config.toml`,
+        `[shell_environment_policy]\ninherit = "all"\n[shell_environment_policy.filters]\n"HOME" = "include"\n`,
+      );
+      const session = yield* driver.open("codex-keyed-include", "default", null);
+      yield* Effect.addFinalizer(() => session.close);
+      yield* session.offer("shell");
+      const shell = message(yield* turn(session));
+      expect(shell).toContain("HOME=");
+      expect(shell).not.toContain("LANG=");
+    }),
+  );
+});
+
+test("An empty allowlist narrows nothing, as Codex reads one", () => {
+  return withServers({}, (driver, context) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(
+        `${context.dir}/codex-home/config.toml`,
+        `[shell_environment_policy]\ninherit = "all"\ninclude_only = []\n`,
+      );
+      const session = yield* driver.open("codex-empty-allowlist", "default", null);
+      yield* Effect.addFinalizer(() => session.close);
+      yield* session.offer("shell");
+      expect(message(yield* turn(session))).toContain("PATH=");
+    }),
+  );
+});
+
+test("An import that names a variable the human's filters include keeps that include", () => {
+  const fixture = serveDocs({ tool: "read_doc", token: "kept" });
+  Bun.env.APP_VAR = "app-value";
+  return withServers(
+    { docs: { type: "http", url: fixture.url, headers: { Authorization: "Bearer ${APP_VAR}" } } },
+    (driver, context) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(
+          `${context.dir}/codex-home/config.toml`,
+          `[shell_environment_policy]\ninherit = "all"\n[shell_environment_policy.filters]\n"APP_VAR" = "include"\n`,
+        );
+        const session = yield* driver.open("codex-include-collision", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("inspect");
+        const given = Arr.join(inspected(yield* turn(session)).args, " ");
+        expect(given).toContain('"APP_VAR" = "include"');
+        expect(occurrences(Str.toLowerCase(given), "app_var")).toBe(1);
+        yield* session.offer("shell");
+        const shell = message(yield* turn(session));
+        expect(shell).toContain("APP_VAR=");
+        expect(shell).not.toContain("LANG=");
+      }),
+  ).finally(() => {
+    void fixture.stop();
+    delete Bun.env.APP_VAR;
+  });
+});
+
+test("An exclusion never doubles a filter key the human spelled in another case", () => {
+  const fixture = serveDocs({ tool: "read_doc", token: "kept" });
+  Bun.env.APP_VAR = "app-value";
+  return withServers(
+    { docs: { type: "http", url: fixture.url, headers: { Authorization: "Bearer ${APP_VAR}" } } },
+    (driver, context) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(
+          `${context.dir}/codex-home/config.toml`,
+          `[shell_environment_policy.filters]\n"app_var" = "include"\n`,
+        );
+        const session = yield* driver.open("codex-case-collision", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("inspect");
+        const given = Str.toLowerCase(Arr.join(inspected(yield* turn(session)).args, " "));
+        expect(occurrences(given, '"app_var"')).toBe(1);
+      }),
+  ).finally(() => {
+    void fixture.stop();
+    delete Bun.env.APP_VAR;
+  });
+});
+
 test("The shell stand-in keeps an exclusion the human's allowlist would readmit", () => {
   return withServers({}, (driver, context) =>
     Effect.gen(function* () {
@@ -1147,6 +1234,48 @@ test("The login command a server is told parses, even when its url holds a quote
     `mcp_servers.linear-server.url="http://127.0.0.1:1/it${quote}s"`,
   ]);
   expect(told).toContain("codex mcp login 'stdio-one'");
+});
+
+test("A launcher reads every staged value before it applies the server's own environment", () => {
+  return withServers(
+    {
+      second: {
+        command: process.execPath,
+        args: [`${import.meta.dir}/fixtures/mcp-stdio-echo.fixture.ts`],
+        env: { PATH: "", API_TOKEN: "later-value" },
+      },
+    },
+    (driver) =>
+      Effect.gen(function* () {
+        const session = yield* driver.open("codex-empty-path", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("servers");
+        expect(
+          Arr.filter(yield* turn(session), (event) => event.type === "TOOL_CALL_RESULT"),
+        ).toMatchObject([{ content: "later-value" }]);
+      }),
+  );
+});
+
+test("A staged value keeps the newlines it ends with", () => {
+  return withServers(
+    {
+      echo: {
+        command: process.execPath,
+        args: [`${import.meta.dir}/fixtures/mcp-stdio-echo.fixture.ts`],
+        env: { API_TOKEN: "one\ntwo\n\n" },
+      },
+    },
+    (driver) =>
+      Effect.gen(function* () {
+        const session = yield* driver.open("codex-newlines", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("servers");
+        expect(
+          Arr.filter(yield* turn(session), (event) => event.type === "TOOL_CALL_RESULT"),
+        ).toMatchObject([{ content: "one\ntwo\n\n" }]);
+      }),
+  );
 });
 
 test("A stdio server's variables reach that server alone, not Codex or the chat's other servers", () => {

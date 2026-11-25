@@ -150,23 +150,34 @@ export const codexServers: (
         continue;
       }
       // WARNING: a value in Codex's own environment is one its shell can read, so it waits in a file.
-      const passing = Arr.map(held, ([key, value]) => {
+      const passing = Arr.map(held, ([key, value], index) => {
         carried += 1;
         const path = `${secrets}/${carried}`;
         files.push({ path, text: resolve(value) });
-        return { key, path };
+        return { key, path, temp: `${OWN}STAGE_${index + 1}` };
       });
+      // WARNING: the sentinel keeps the newlines a command substitution would strip, and every value is read before any export replaces `PATH`.
+      const staged = Arr.map(passing, ({ path, temp }) => ({
+        ready: `[ -r ${shQuote(path)} ] || exit 1`,
+        read: `${temp}=$(cat ${shQuote(path)}; printf x); ${temp}=\${${temp}%x}`,
+      }));
       args.push(
         ...setting(`mcp_servers.${name}.command`, SHELL),
         ...list(`mcp_servers.${name}.args`, [
           "-c",
           Arr.join(
             [
-              ...Arr.map(
-                passing,
-                ({ key, path }) =>
-                  `export ${key}="$(cat ${shQuote(path)})"; rm -f ${shQuote(path)}`,
-              ),
+              ...Arr.map(staged, (one) => one.ready),
+              ...Arr.map(staged, (one) => one.read),
+              ...(passing.length === 0
+                ? []
+                : [
+                    `rm -f ${Arr.join(
+                      Arr.map(passing, (one) => shQuote(one.path)),
+                      " ",
+                    )}`,
+                  ]),
+              ...Arr.map(passing, ({ key, temp }) => `export ${key}="$${temp}"`),
               'exec "$0" "$@"',
             ],
             "; ",
@@ -193,18 +204,22 @@ export const codexServers: (
     args.push(...table(`mcp_servers.${name}.env_http_headers`, headers));
     given.push({ name, url: server.url });
   }
+  // WARNING: Codex rejects two filter keys that differ only in case, and a key the human includes outranks Collie's exclusion.
+  const keyed = Rec.toEntries(policy.filters);
+  const spelled = (name: string) =>
+    Arr.some(keyed, ([glob]) => Str.toLowerCase(glob) === Str.toLowerCase(name));
+  const own = Arr.filter(
+    Arr.dedupe([`${OWN}*`, ...Arr.filter(used, (name) => !Arr.contains(STANDARD, name))]),
+    (name) => !spelled(name),
+  );
   // WARNING: Codex drops its keyed `filters` table when a legacy exclude is set beside it.
-  if (Rec.size(env) > 0 || used.length > 0) {
-    const own = Arr.dedupe([
-      `${OWN}*`,
-      ...Arr.filter(used, (name) => !Arr.contains(STANDARD, name)),
-    ]);
+  if (Rec.size(env) > 0 || own.length > 0) {
     const added: Record<string, string> = {};
     for (const name of own) {
       added[name] = "exclude";
     }
     args.push(
-      ...(Rec.size(policy.filters) > 0
+      ...(keyed.length > 0
         ? table("shell_environment_policy.filters", { ...policy.filters, ...added })
         : list("shell_environment_policy.exclude", Arr.dedupe([...own, ...policy.excludes]))),
     );

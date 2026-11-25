@@ -231,6 +231,13 @@ const shellEnv = () => {
       ([glob]) => glob,
     ),
   ];
+  const allows = [
+    ...(policy.include_only ?? []),
+    ...Arr.map(
+      Arr.filter(Rec.toEntries(policy.filters ?? {}), ([, rule]) => rule === "include"),
+      ([glob]) => glob,
+    ),
+  ];
   return Rec.filter(
     Rec.getSomes(Rec.map(childEnv(), (value) => Option.fromUndefinedOr(value))),
     (_value, key) => {
@@ -238,11 +245,7 @@ const shellEnv = () => {
         return false;
       }
       const inherited = inherit === "all" || (inherit === "core" && Arr.contains(CORE, key));
-      return (
-        inherited &&
-        (policy.include_only === undefined ||
-          Arr.some(policy.include_only, (glob) => wildcard(glob, key)))
-      );
+      return inherited && (allows.length === 0 || Arr.some(allows, (glob) => wildcard(glob, key)));
     },
   );
 };

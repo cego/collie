@@ -2372,10 +2372,14 @@ every variable an imported server's value came from — bar the standard ones a 
 work without — and the names Collie makes, in whichever way your
 `shell_environment_policy` is written: a keyed `filters` table keeps its entries and gains
 ours, and legacy `exclude` names gain them, since Codex drops the first when the second is
-set beside it. A command Codex runs therefore does not inherit them, while a variable of
-yours that Codex's own server still reads, such as its `bearer_token_env_var`, still reaches
-that server. A process running as you can read what any other of your processes holds, so a
-header's value is kept out of the command's own environment and from nothing beyond it. A
+set beside it. A name your own keyed `filters` includes keeps its entry, because your policy
+decides what may enter that shell. A command Codex runs therefore does not inherit them,
+while a variable of yours that Codex's own server still reads, such as its
+`bearer_token_env_var`, still reaches that server. Neither value is isolated from a command
+Codex runs, and none can be: that shell runs as you do, so it can read the file before the
+launcher unlinks it, the environment of any of your processes, and the configuration the
+value was imported from — keep a credential out of that shell by keeping it out of your MCP
+configuration, or by running the chat on a Machine where it does not sit. A
 stdio server whose environment names something a shell cannot set, or a name in Collie's own
 `COLLIE_CHAT_` namespace, is left out and the chat says so. If Codex will not say which
 servers it has, none of yours is passed at all — better a server missing from the chat than
