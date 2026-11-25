@@ -6283,23 +6283,27 @@ scenario(
           four.fix,
           four.fix,
         ]);
-        yield* driven({ entry: shipped("implement"), runId, input: { plan, ...FINISH } }, (run) =>
-          Effect.gen(function* () {
-            const rows = yield* stallAsked(run, "fix-unverified-1");
-            expect(rows).toHaveLength(1);
-            expect(optionsOf(rows, "fix-unverified-1")).toEqual(["Send it back", "Stop"]);
-            expect(recommendedOf(rows, "fix-unverified-1")).toEqual({
-              recommended: "Send it back",
-              shortfall: null,
-            });
-            expect(yield* asked(runId, "fix-5")).toContain(
-              'check "manual" has no verification record',
-            );
-            expect(yield* wasAsked(runId, "review-5")).toBe(false);
-            yield* run.answer("fix-unverified-1", "Stop");
-            return yield* stepPark(run, runId, "the last fix is unverified");
-          }),
+        const status = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              const rows = yield* stallAsked(run, "fix-unverified-1");
+              expect(rows).toHaveLength(1);
+              expect(optionsOf(rows, "fix-unverified-1")).toEqual(["Send it back", "Stop"]);
+              expect(recommendedOf(rows, "fix-unverified-1")).toEqual({
+                recommended: "Send it back",
+                shortfall: null,
+              });
+              expect(yield* asked(runId, "fix-5")).toContain(
+                'check "manual" has no verification record',
+              );
+              expect(yield* wasAsked(runId, "review-5")).toBe(false);
+              yield* run.answer("fix-unverified-1", "Stop");
+              return yield* ended(run.status);
+            }),
         );
+        expect(outcomeText(status)).toContain("a person answered Stop to fix-unverified-1");
+        expect(yield* parkedMarkers(runId)).toEqual([]);
       }),
     ),
 );
