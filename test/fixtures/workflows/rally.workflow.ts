@@ -186,6 +186,8 @@ export default defineWorkflow({
           review.findings.filter((one) => !waivedKeys.has(findingKey(one))),
           disputed,
         );
+        const rebutted = new Set(split.rebutted.map(findingKey));
+        disputed = disputed.filter((one) => !rebutted.has(findingKey(one)));
         const rally = settleRound({ live: split.live, disputed, at, seen });
         if (rally.go === "halt" && rally.halt === "dispute_unresolved") {
           const standing = rally.outstanding.filter(isBlocking);

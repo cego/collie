@@ -5841,6 +5841,46 @@ scenario(
 );
 
 scenario(
+  "a reviewer's rebuttal puts the disputed finding back with the fixer instead of in front of a person",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "only", checks: "unit" }]);
+        const runId = "r-rebutted";
+        yield* approve(runId, ["unit"]);
+        const rebuttal = "the CLI path does not validate it";
+        yield* rig.queueOutputs([
+          BLOCKED_BUILD,
+          disputedReview,
+          disputedFix,
+          {
+            ...CLEAN_SYNTHESIS,
+            verdict: "findings",
+            findings: [{ ...DISPUTED_FINDING, rebuttal }],
+          },
+          {
+            verdict: "clean",
+            fixed: [{ file: DISPUTED_FINDING.file, title: DISPUTED_FINDING.title }],
+            disputed: [],
+            checks: [],
+          },
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          (run) => ended(run.status),
+        );
+        expect(outcomeText(status)).toBe(OPENED.mr_url);
+        expect(yield* wasAsked(runId, "build.dispute-1")).toBe(false);
+        expect(yield* asked(runId, "build.fix-2")).toContain(rebuttal);
+      }),
+    ),
+);
+
+scenario(
   "a ticket's build and its own fix carry that ticket's benchmark, and an unmeasured ticket carries none",
   () =>
     runEffect(
