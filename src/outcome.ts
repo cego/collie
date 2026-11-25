@@ -539,11 +539,26 @@ function gapsOf(kind: Outcome, got: Collected) {
         withoutSearches(got, "regression").verifications,
         (one) => one.name === "regression" && passed(one) && one.expect !== "fail",
       );
-      const green = fixedBy ?? Option.getOrUndefined(Arr.last(greens));
-      const pair =
-        green === undefined
-          ? undefined
-          : Option.getOrUndefined(Arr.findLast(before, (one) => sameAsked(one, green)));
+      // WARNING: a red and a green on one tree prove nothing, and a green of another command cannot answer for an earlier red.
+      const precedes = (first: Verification, second: Verification) => {
+        const at = got.verifications.indexOf(first);
+        const after = got.verifications.indexOf(second);
+        return at >= 0 && after >= 0 && at < after;
+      };
+      const pair = Option.getOrUndefined(
+        Arr.last(
+          Arr.flatMap(greens, (green) => {
+            const red = Option.getOrUndefined(
+              Arr.findLast(
+                before,
+                (one) =>
+                  sameAsked(one, green) && !sameTree(one.end, green.end) && precedes(one, green),
+              ),
+            );
+            return red === undefined ? [] : [red];
+          }),
+        ),
+      );
       if (named === undefined) {
         if (pair === undefined) {
           claim("the Output does not name the verification that reproduced the bug");

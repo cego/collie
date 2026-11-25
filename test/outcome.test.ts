@@ -31,6 +31,7 @@ import type { YamlValue } from "../src/yaml";
 
 const FINAL = { head_sha: "abc123", fingerprint: "tree-1" };
 const EARLIER = { head_sha: "abc000", fingerprint: "tree-0" };
+const MIDDLE = { head_sha: "abc050", fingerprint: "tree-m" };
 
 const TESTS: VerifySpec = { name: "tests", executable: "bun", argv: ["test"], cwd: "." };
 
@@ -363,12 +364,59 @@ test("a pair on earlier trees is still a name a gate fix is asked for after the 
     start: EARLIER,
     end: EARLIER,
   });
-  const green = record({ name: "regression", start: EARLIER, end: EARLIER });
+  const green = record({ name: "regression", start: MIDDLE, end: MIDDLE });
   const moved = collected({ verifications: [record({ name: "tests" }), reproduced, green] });
   expect(evidenceGaps("bug", moved)).not.toContain(
     "the Output does not name the verification that reproduced the bug",
   );
   expect(checkGaps("bug", moved)).toContain(UNNAMED_REPRODUCTION);
+});
+
+test("an earlier pair is named though a later green ran a different command", () => {
+  const red = record({
+    name: "regression",
+    argv: ["test", "a.test.ts"],
+    expect: "fail",
+    exit: 1,
+    result: "pass",
+    start: EARLIER,
+    end: EARLIER,
+  });
+  const green = record({
+    name: "regression",
+    argv: ["test", "a.test.ts"],
+    start: MIDDLE,
+    end: MIDDLE,
+  });
+  const other = record({
+    name: "regression",
+    argv: ["test", "b.test.ts"],
+    start: MIDDLE,
+    end: MIDDLE,
+  });
+  const gaps = evidenceGaps(
+    "bug",
+    collected({ verifications: [record({ name: "tests" }), red, green, other] }),
+  );
+  expect(gaps).toContain(UNNAMED_REPRODUCTION);
+  expect(gaps).not.toContain("the Output does not name the verification that reproduced the bug");
+});
+
+test("a red and a green on the same tree are not a pair", () => {
+  const red = record({
+    name: "regression",
+    expect: "fail",
+    exit: 1,
+    result: "pass",
+    start: EARLIER,
+    end: EARLIER,
+  });
+  const green = record({ name: "regression", start: EARLIER, end: EARLIER });
+  const gaps = evidenceGaps(
+    "bug",
+    collected({ verifications: [record({ name: "tests" }), red, green] }),
+  );
+  expect(gaps).toContain("the Output does not name the verification that reproduced the bug");
 });
 
 test("the newest Output that names a reproduction is the one the gate reads", () => {
