@@ -7305,6 +7305,64 @@ test("a lost answer whose exact submit is recorded settles, instead of being ref
     }),
   ));
 
+test("a queued Delivery left unknown settles when its exact submit arrives later, without another send", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const outcome = yield* session(
+        Effect.gen(function* () {
+          core.refuse("terminal.send", "unreachable", "the core did not answer");
+          yield* say("r1", "stay in src", "steer-1");
+          core.restore("terminal.send");
+          const lost = Option.getOrThrow(
+            Arr.head(
+              Arr.filter(
+                yield* deliveredTo(dir, "r1"),
+                (one) => one.cause.kind === "steer" && one.state === "unknown",
+              ),
+            ),
+          );
+          yield* keepQueued(`${dir}/agents/r1`, {
+            runId: "r1",
+            request: "steer-1",
+            text: "stay in src",
+            result: null,
+          });
+          const before = yield* say("r1", "stay in src", "steer-1");
+          yield* recordClaudeEvent(
+            yield* controlDir(rig.pluginEnv().stateDir, lost.agent),
+            flow(
+              Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+              Result.getOrThrow,
+            )({
+              session_id: lost.agent,
+              hook_event_name: "UserPromptSubmit",
+              prompt: marked("stay in src", lost.id),
+            }),
+            lost.incarnation,
+          ).pipe(Effect.orDie);
+          return {
+            before,
+            after: yield* say("r1", "stay in src", "steer-1"),
+            lost,
+            rows: Arr.filter(
+              yield* deliveredTo(dir, "r1"),
+              (one) => one.cause.kind === "steer" && one.cause.ref === "steer-1",
+            ),
+          };
+        }),
+      );
+      expect(outcome.before.detail).toMatch(new RegExp(`live: ${outcome.lost.agent} \\([a-z]+\\)`));
+      expect(outcome.after).toMatchObject({
+        agent: outcome.lost.agent,
+        delivered: true,
+        delivery: outcome.lost.id,
+      });
+      expect(new Set(Arr.map(outcome.rows, (one) => one.id)).size).toBe(1);
+    }),
+  ));
+
 test("an idle Codex takes a now message through the supported boundary transport", () =>
   runEffect(
     Effect.gen(function* () {
@@ -7899,6 +7957,46 @@ test("a send that failed reads liveness again, so a Run whose agents all exited 
       const failed = yield* Fiber.join(steering);
       expect(failed).toMatchObject({ agent: leaving.agent, delivered: false, gone: true });
       expect(failed.detail).not.toContain("live:");
+      core.restore("terminal.send");
+    }),
+  ));
+
+test("a send that failed, whose target exited but a sibling remains, keeps the Run reachable", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null, null]);
+      const leaving = yield* session(
+        Agents.pipe(Effect.flatMap((agents) => agents.launch(implementerAsk()))),
+      );
+      const reviewer = yield* session(
+        Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.launch({ ...implementerAsk(), operation: "review", role: "reviewer" }),
+          ),
+        ),
+      );
+      const release = core.hold("terminal.send");
+      const steering = yield* Effect.forkChild(
+        session(
+          Agents.pipe(
+            Effect.flatMap((agents) =>
+              agents.steer({
+                runId: "r1",
+                to: "implementer",
+                text: "Look at this",
+                request: "to-exiting-implementer",
+              }),
+            ),
+          ),
+        ),
+      );
+      yield* until(prompted("Look at this"));
+      yield* core.exit(leaving.agent, 0);
+      core.refuse("terminal.send", "unreachable", "the core did not answer");
+      release();
+      const failed = yield* Fiber.join(steering);
+      expect(failed).toMatchObject({ agent: leaving.agent, delivered: false, gone: false });
+      expect(failed.detail).toContain(`live: ${reviewer.agent} (reviewer)`);
       core.restore("terminal.send");
     }),
   ));

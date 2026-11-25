@@ -4398,6 +4398,26 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       }),
     );
 
+  const rosterOf = (agents: ReadonlyArray<{ agent: string; role: string }>) =>
+    Arr.join(
+      Arr.map(agents, (one) => `${one.agent} (${one.role})`),
+      ", ",
+    );
+
+  const unresolvedRefusal = (
+    previous: { readonly id: string; readonly state: string },
+    candidates: ReadonlyArray<{ readonly agent: string; readonly role: string }>,
+  ) =>
+    Effect.gen(function* () {
+      const now = yield* listedAgents();
+      const live = stillListed(candidates, now);
+      const returned =
+        `${previous.id} is ${previous.state}; reconcile before resending` +
+        `${live.length === 0 ? "" : `; live: ${rosterOf(live)}`}` +
+        `${Option.isNone(now) ? "; liveness could not be read" : ""}`;
+      return returned;
+    });
+
   const steer = (options: {
     readonly runId: string;
     readonly text: string;
@@ -4433,11 +4453,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               onSome: (all) => Arr.some(all, (live) => live.name === one.agent),
             }),
         );
-        const rosterOf = (agents: ReadonlyArray<{ agent: string; role: string }>) =>
-          Arr.join(
-            Arr.map(agents, (one) => `${one.agent} (${one.role})`),
-            ", ",
-          );
         if (launched === undefined) {
           const live = stillListed(candidates, listed);
           const named = agent ?? operation ?? to;
@@ -4557,17 +4572,18 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               ? held
               : { ...held, state: "acknowledged" as const };
           if (previous !== undefined) {
-            const result = SENT_STATES.has(previous.state)
-              ? receipt(previous.agent, {
-                  id: previous.id,
-                  observed:
-                    previous.state === "acknowledged" ? "taken when it was first sent" : null,
-                })
-              : {
-                  agent: previous.agent,
-                  delivered: false,
-                  detail: `${previous.id} is ${previous.state}; reconcile before resending`,
-                };
+            // WARNING: an unresolved receipt stays queued without a result, so a later recheck can settle it from evidence alone.
+            if (!SENT_STATES.has(previous.state)) {
+              return {
+                agent: previous.agent,
+                delivered: false,
+                detail: yield* unresolvedRefusal(previous, candidates),
+              };
+            }
+            const result = receipt(previous.agent, {
+              id: previous.id,
+              observed: previous.state === "acknowledged" ? "taken when it was first sent" : null,
+            });
             yield* keepQueued(dirFor(options.runId), { ...pending, result }).pipe(Effect.orDie);
             return result;
           }
@@ -4603,7 +4619,11 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         }
         const now = yield* listedAgents();
         const liveNow = stillListed(candidates, now);
-        const gone = Option.isSome(now) && isGone(launched.agent, now.value, sent.why);
+        const remaining = Arr.filter(liveNow, (one) => one.agent !== launched.agent);
+        const gone =
+          Option.isSome(now) &&
+          isGone(launched.agent, now.value, sent.why) &&
+          remaining.length === 0;
         return {
           agent: launched.agent,
           delivered: false,
