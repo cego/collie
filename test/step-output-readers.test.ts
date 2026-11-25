@@ -7,8 +7,9 @@ import { outputsIn } from "../src/drift";
 import { operationsOf, recordLaunch } from "../src/launches";
 import type { Launched } from "../src/launches";
 import { RunRecords } from "../src/run-records";
-import { acceptOutput } from "../src/step-output";
+import { acceptOutput, outputOf } from "../src/step-output";
 import { trialRecordsOf } from "../src/trial";
+import { steerTarget } from "../src/steer-target";
 import { REVIEW_ROLE } from "../src/cards";
 import { runEffect } from "./support/effect";
 import { runFacts } from "./support/records";
@@ -141,5 +142,25 @@ test("drift is shown no more than 20 Outputs, however many facts a Run has", () 
       const shown = yield* outputsIn(`${stateDir}/agents/r1`, "r1");
       expect(shown.outputs).toHaveLength(20);
       expect(shown.truncated).toBe(true);
+    }),
+  ));
+
+test("the agent a steer reaches is the one whose step has no accepted Output", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const records = yield* RunRecords;
+      yield* accepted(`${stateDir}/agents/r1/build.json`, `{"verdict":"clean"}`);
+      const launches = yield* Effect.forEach(
+        [
+          launched({
+            operation: "build",
+            agent: "r1-build-r1",
+            output: `${stateDir}/agents/r1/build.json`,
+          }),
+          launched({ operation: "review", agent: "r1-review-r1" }),
+        ],
+        (one) => Effect.map(outputOf(records, one), (held) => ({ ...one, done: held !== null })),
+      );
+      expect(steerTarget(launches, {})?.agent).toBe("r1-review-r1");
     }),
   ));

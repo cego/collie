@@ -11,7 +11,7 @@ import { currentOf, laneOf, linkSaid, linkState, releaseRow } from "./flow";
 import type { ChildFact, LaneWait } from "./flow";
 import { readLaunches } from "./launches";
 import { RunRecords } from "./run-records";
-import { outputOf } from "./step-output";
+import { ACCEPTED, outputOf } from "./step-output";
 import { runTitle } from "./naming";
 import { machineName } from "./peers";
 import type { RunFacts, RunState } from "./runs";
@@ -95,8 +95,9 @@ export const laneFor = Effect.fn("Flow.lane")(function* (
   usual?: ReadonlyMap<string, number>,
 ) {
   const records = yield* RunRecords;
+  const facts = yield* records.factsUnder(run.id, ACCEPTED);
   const launches = yield* Effect.forEach(yield* readLaunches(run.id), (launch) =>
-    Effect.map(outputOf(records, launch), (held) => ({ launch, done: held !== null })),
+    Effect.map(outputOf(records, launch, facts), (held) => ({ launch, done: held !== null })),
   );
   const stop =
     run.state === "stopped"

@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Clock, Duration, Effect, FileSystem, Schedule, Schema } from "effect";
 import type { Launched } from "./launches";
@@ -25,8 +26,16 @@ export interface StepOutput {
 
 export type Step = Pick<Launched, "runId" | "output"> & { readonly submitOnly?: boolean };
 
-export const outputOf = Effect.fn("StepOutput.of")(function* (records: RunRecordsApi, step: Step) {
-  const fact = yield* records.fact(step.runId, acceptedName(step.output));
+export const outputOf = Effect.fn("StepOutput.of")(function* (
+  records: RunRecordsApi,
+  step: Step,
+  known?: ReadonlyArray<{ readonly name: string; readonly data: string }>,
+) {
+  const name = acceptedName(step.output);
+  const fact =
+    known === undefined
+      ? yield* records.fact(step.runId, name)
+      : (Option.getOrNull(Arr.findFirst(known, (one) => one.name === name))?.data ?? null);
   if (fact !== null) {
     const accepted = decodeAccepted(fact);
     if (Option.isSome(accepted)) {

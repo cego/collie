@@ -9510,6 +9510,49 @@ test("a file a new step's agent writes completes nothing, and its later submit c
     }),
   ));
 
+test("a step registers its Output before its agent is prompted", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs(["a turn of its own"]);
+      const before: Array<number> = [];
+      const fs = yield* FileSystem.FileSystem;
+      yield* session(
+        Effect.gen(function* () {
+          const agents = yield* Agents;
+          return yield* agents.launch(
+            {
+              runId: "r1",
+              operation: "review",
+              role: "reviewer",
+              workflow: "agent-work",
+              harness: "claude",
+              agent: null,
+              model: "default",
+              effort: null,
+              permissions: null,
+              task: null,
+              cwd: rig.projectDir,
+              prompt: "Review the diff.",
+              output: `${dir}/agents/r1/review.json`,
+              skill: null,
+            },
+            undefined,
+            (agent) =>
+              awaitOutput("r1", agent, `${dir}/agents/r1/review.json`, () => null).pipe(
+                Effect.andThen(rig.calls()),
+                Effect.map((calls) => void before.push(sent(calls, "review.r1.prompt.md"))),
+                Effect.orDie,
+                Effect.provideService(FileSystem.FileSystem, fs),
+                Effect.asVoid,
+              ),
+          );
+        }),
+      );
+      expect(before).toEqual([0]);
+      expect(Arr.map(sentTexts(yield* rig.calls()), (text) => text.slice(0, 80))).not.toEqual([]);
+    }),
+  ));
+
 test("a submitted Output completes a new step, and no file is left at its path", () =>
   runEffect(
     Effect.gen(function* () {

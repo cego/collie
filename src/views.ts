@@ -19,7 +19,7 @@ import { runTitle } from "./naming";
 import { REVIEW_FILE, findingsIn, openFindingsIn } from "./output";
 import { findRun, settled } from "./runs";
 import { RunRecords } from "./run-records";
-import { outputOf } from "./step-output";
+import { ACCEPTED, outputOf } from "./step-output";
 import type { RunFacts, RunState } from "./runs";
 import { diffTargetOf } from "./strategies";
 import { isString } from "./schema";
@@ -299,8 +299,9 @@ const finishedTickets = Effect.fn("Views.finishedTickets")(function* (
       ),
       (t) => t.file,
     );
+    const facts = yield* records.factsUnder(one.id, ACCEPTED);
     for (const launch of launches) {
-      const output = (yield* outputOf(records, launch))?.at;
+      const output = (yield* outputOf(records, launch, facts))?.at;
       if (output === undefined) {
         continue;
       }

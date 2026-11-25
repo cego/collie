@@ -427,6 +427,7 @@ export interface AgentsApi {
   readonly launch: (
     ask: AgentAsk,
     note?: (why: string | null) => Effect.Effect<void>,
+    beforePrompt?: (agent: string) => Effect.Effect<void>,
   ) => Effect.Effect<Launched, AgentUncertain | AgentParked>;
   readonly revive: (
     ask: AgentAsk,
@@ -1021,7 +1022,11 @@ export const agentWork: <
         }
         const launched = yield* parkedWhenStuck(
           agents
-            .launch(next, (why) => host.parked(work.runId, why))
+            .launch(
+              next,
+              (why) => host.parked(work.runId, why),
+              (agent) => registerOutput(next.runId, agent, next.output, problemIn),
+            )
             .pipe(
               // WARNING: a stop that landed while a start failed or parked still reaches the server it left.
               Effect.tapError(() =>
@@ -2728,13 +2733,16 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     ask: AgentAsk,
     fresh?: boolean,
     note?: (why: string | null) => Effect.Effect<void>,
+    beforePrompt?: (agent: string) => Effect.Effect<void>,
   ) => Effect.Effect<Launched, AgentUncertain | AgentParked> = (
     ask: AgentAsk,
     fresh = false,
     note: (why: string | null) => Effect.Effect<void> = () => Effect.void,
+    beforePrompt: (agent: string) => Effect.Effect<void> = () => Effect.void,
   ) =>
     Effect.gen(function* () {
       const agent = yield* nameFor(ask);
+      yield* beforePrompt(agent);
       const out = yield* Deferred.make<void>();
       stepsGoingOut.set(agent, out);
       return yield* launching(ask, fresh, note, agent).pipe(
@@ -4740,7 +4748,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           return running;
         }),
       ),
-    launch: (ask, note) => launch(ask, false, note),
+    launch: (ask, note, beforePrompt) => launch(ask, false, note, beforePrompt),
     revive,
     ranOut,
     stopped: (launched, since) =>
