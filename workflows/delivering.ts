@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -267,20 +268,39 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
     let latest: Pick<Reviewed, "reviewed" | "on"> = rallied;
     const { dir } = yield* host.place(runId);
     const fixers: Array<string> = [];
-    const fixes = Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const outputs: Record<string, Schema.Json> = {};
-      for (const operation of [...(rallied.fixed ?? []), ...fixers]) {
-        const text = yield* fs
-          .readFileString(agents.outputFor(runId, operation))
-          .pipe(Effect.orElseSucceed(() => ""));
-        const output = parseJson(text);
-        if (Option.isSome(output)) {
-          outputs[operation] = output.value;
+    const written = (operations: ReadonlyArray<string>) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dated = yield* Effect.forEach(operations, (operation) =>
+          Effect.gen(function* () {
+            const file = agents.outputFor(runId, operation);
+            const text = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+            const output = parseJson(text);
+            const info = yield* fs.stat(file).pipe(Effect.orElseSucceed(() => null));
+            const at =
+              info === null
+                ? 0
+                : Option.match(info.mtime, { onNone: () => 0, onSome: (at) => at.getTime() });
+            return { operation, output, at };
+          }),
+        );
+        const outputs: Record<string, Schema.Json> = {};
+        // WARNING: the newest Output naming a reproduction wins, and the newest is the one written last.
+        const kept: ReadonlyArray<{
+          operation: string;
+          output: Option.Option<Schema.Json>;
+          at: number;
+        }> = Arr.filter(dated, (one) => Option.isSome(one.output));
+        const byTime = Arr.sort(
+          kept,
+          Order.mapInput(Order.Number, (one: (typeof kept)[number]) => one.at),
+        );
+        for (const one of byTime) {
+          outputs[one.operation] = Option.getOrThrow(one.output);
         }
-      }
-      return outputs;
-    });
+        return outputs;
+      });
+    const fixes = written([...(rallied.fixed ?? []), ...fixers]);
     const treeNow = Effect.map(host.evidence(runId, cwd), ({ final }) => ({
       head: final.head_sha,
       fingerprint: final.fingerprint,
@@ -299,7 +319,16 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         kind: isOutcome(now) ? now : ("unspecified" as const),
         evidence: yield* host.evidence(runId, cwd),
         approved,
-        outputs: { ...ask.outputs(), ...(yield* fixes), synthesize: { ...reviewed } },
+        outputs: {
+          ...(yield* written([
+            "build",
+            ...Arr.map(ask.tickets, (one) => one.file),
+            ...(rallied.fixed ?? []),
+            ...fixers,
+          ])),
+          ...(yield* fixes),
+          synthesize: { ...reviewed },
+        },
         reviewed: ["synthesize"],
         reviewedOn: on === undefined ? undefined : { synthesize: on },
         roots: ask.roots,

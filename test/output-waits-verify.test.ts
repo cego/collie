@@ -208,6 +208,30 @@ test("an Output a foreground verify held is taken once the turn it ended in is o
     ["collected.workflow.ts"],
   ));
 
+test("an Output written after its verify ended is taken while the agent still works", () =>
+  proves(
+    "collie-output-waits-7-",
+    (world, core) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* setUp(world, [{ output: null, status: "idle" }]);
+        const { client, runId } = yield* began(world, "collected", {});
+        const build = yield* buildOf(world, runId);
+        const { go, running } = yield* held(world, runId, build.agent);
+        yield* core.report(build.agent, "working");
+        yield* fs.writeFileString(go, "").pipe(Effect.orDie);
+        yield* Fiber.await(running);
+        yield* fs.writeFileString(build.output, encode({ verdict: "later" })).pipe(Effect.orDie);
+
+        const [asked] = yield* until(
+          () => client.run({ runId }).pipe(Effect.orDie),
+          (view) => prompts(view).length > 0,
+        ).pipe(Effect.map((view) => prompts(view)));
+        expect(asked).toBe("collected later");
+      }).pipe(Effect.ensuring(stopHost(world.state))),
+    ["collected.workflow.ts"],
+  ));
+
 test("a tell the agent never received does not release the Output it was about", () =>
   proves(
     "collie-output-waits-5-",

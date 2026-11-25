@@ -219,7 +219,7 @@ import { awaitOutput, outputCollected } from "./output-submit";
 import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } from "./subagents";
 import { Collecting, collectingLayer } from "./collecting";
 import { owedFor, released } from "./collecting";
-import type { CollectingApi, Owed, VerifyHold } from "./collecting";
+import type { CollectingApi, VerifyHold } from "./collecting";
 import { holdsBudgetOf, waitForMemory } from "./memory-wait";
 import {
   appendLine,
@@ -3421,26 +3421,26 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       }),
     );
 
-  // WARNING: the tell is a delivery, so only the ledger says whether its prompt was taken.
-  const tellTaken = (launched: Launched, since: number, verified: string) =>
+  // WARNING: the tell is a delivery, so only the ledger says whether its prompt was taken; a read that fails says nothing.
+  const tellTaken = (launched: Launched, verified: string, untold: ReadonlyArray<string>) =>
     launched.terminalId === undefined
       ? Effect.succeed(true)
       : readLedger(launched.terminalId).pipe(
           Effect.map((lines) => {
             const tells = Arr.filter(
               [...newestById(lines).values()],
-              (one) =>
-                one.cause.kind === "steer" &&
-                one.cause.ref === `verify-${verified}` &&
-                epochMs(one.at) >= since,
+              (one) => one.cause.kind === "steer" && one.cause.ref === `verify-${verified}`,
             );
-            // WARNING: no tell means the agent was working when its verify ended, so that turn ending is enough.
-            return (
-              tells.length === 0 ||
-              Arr.some(tells, (one) => SENT_STATES.has(one.state) && !isUnobserved(one))
-            );
+            const returned: boolean | null =
+              tells.length === 0
+                ? !Arr.contains(untold, verified)
+                : Arr.some(tells, (one) => SENT_STATES.has(one.state) && !isUnobserved(one));
+            return returned;
           }),
-          Effect.orElseSucceed(() => true),
+          Effect.orElseSucceed(() => {
+            const unknown: boolean | null = null;
+            return unknown;
+          }),
         );
 
   const collect = (
@@ -3476,7 +3476,10 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               usable: usable ?? (() => true),
               settled: turnOver,
               holding: collecting.verifying(launched.runId, launched.agent),
-              told: (since, verified) => tellTaken(launched, since, verified),
+              told: (verified) =>
+                Effect.flatMap(collecting.verifying(launched.runId, launched.agent), (now) =>
+                  tellTaken(launched, verified, now.untold),
+                ),
             }),
             confirmed(launched, unless ?? null).pipe(Effect.andThen(Effect.never)),
           );
@@ -5098,7 +5101,7 @@ const waitForOutput = <R>(
     readonly usable: (text: string) => boolean;
     readonly settled: Effect.Effect<boolean, never, R>;
     readonly holding?: Effect.Effect<VerifyHold, never, R>;
-    readonly told?: (since: number, verified: string) => Effect.Effect<boolean, never, R>;
+    readonly told?: (verified: string) => Effect.Effect<boolean | null, never, R>;
   },
 ) =>
   Effect.gen(function* () {
@@ -5106,30 +5109,38 @@ const waitForOutput = <R>(
     const read = fs.readFileString(path).pipe(Effect.orElseSucceed(() => ""));
     const fresh = (text: string) => Str.trim(text) !== "" && text !== unless;
     const began = yield* Clock.currentTimeMillis;
-    // WARNING: a verify that ends between two polls is owed its tell too, so the wait follows the time it ended, not a hold it was seen under.
-    let owed: Owed | null = null;
+    // WARNING: a verify that ended before this Output was written is not something it waits on.
+    const writtenAt = Effect.map(fs.stat(path).pipe(Effect.orElseSucceed(() => null)), (info) =>
+      info === null
+        ? began
+        : Option.match(info.mtime, { onNone: () => began, onSome: (at) => at.getTime() }),
+    );
     const free = Effect.gen(function* () {
       if (every.holding !== undefined) {
         const now = yield* every.holding;
         if (now.under) {
           return false;
         }
-        const due = owedFor(began, now);
-        if (due !== null) {
-          owed = due;
+        const owed = owedFor(yield* writtenAt, now);
+        if (owed.length === 0) {
+          return true;
         }
+        if (!(yield* every.settled)) {
+          return false;
+        }
+        const told = every.told;
+        if (told === undefined) {
+          return true;
+        }
+        const taken = yield* Effect.forEach(
+          owed,
+          (verified) => Effect.map(told(verified), (ok) => [verified, ok === true] as const),
+          { concurrency: "unbounded" },
+        );
+        const byId = new Map(taken);
+        return released(owed, true, (one) => byId.get(one) === true);
       }
-      if (owed === null) {
-        return true;
-      }
-      if (!(yield* every.settled)) {
-        return false;
-      }
-      return released(
-        owed,
-        true,
-        every.told === undefined || (yield* every.told(owed.since, owed.id)),
-      );
+      return true;
     });
     let spent = 0;
     for (;;) {

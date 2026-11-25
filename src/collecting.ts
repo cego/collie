@@ -1,6 +1,4 @@
 import * as Arr from "effect/Array";
-import * as Str from "effect/String";
-import { pipe } from "effect/Function";
 import { Clock, Context, Effect, Layer } from "effect";
 
 export interface CollectingApi {
@@ -18,89 +16,109 @@ export interface CollectingApi {
     named?: (verified: A) => string | null,
   ) => Effect.Effect<A, E, R>;
   readonly verifying: (run: string, agent: string) => Effect.Effect<VerifyHold>;
+  readonly markUntold: (run: string, agent: string, verified: string) => Effect.Effect<void>;
 }
 
 export interface VerifyHold {
   readonly under: boolean;
-  readonly ended: string | null;
-  readonly endedAt: number | null;
+  readonly ended: ReadonlyArray<{ readonly id: string; readonly at: number }>;
+  readonly untold: ReadonlyArray<string>;
 }
 
-export type Owed = { readonly since: number; readonly id: string };
+export const owedFor = (writtenAt: number, now: VerifyHold) => {
+  const owed: ReadonlyArray<string> = Arr.map(
+    Arr.filter(now.ended, (one) => one.at >= writtenAt),
+    (one) => one.id,
+  );
+  return owed;
+};
 
-export const released = (owed: Owed | null, settled: boolean, told: boolean) =>
-  owed === null || (settled && told);
+export const released = (
+  owed: ReadonlyArray<string>,
+  settled: boolean,
+  told: (id: string) => boolean,
+) => settled && Arr.every(owed, told);
 
-export const owedFor = (began: number, now: VerifyHold) =>
-  now.ended === null || now.endedAt === null || now.endedAt < began
-    ? null
-    : { since: began, id: now.ended };
-
-interface VerifyCount {
+interface Held {
   under: number;
-  ended: string | null;
-  endedAt: number | null;
+  ended: Map<string, number>;
+  untold: Set<string>;
 }
+
+interface Uses {
+  all: number;
+  byLaunch: Map<string, number>;
+}
+
+const key = (run: string, agent: string) => `${run}\n${agent}`;
 
 export class Collecting extends Context.Service<Collecting, CollectingApi>()("collie/Collecting") {}
 
 export const collectingLayer = Layer.effect(Collecting)(
   Effect.sync(() => {
-    // WARNING: counted, so one collection ending never takes another of the same agent off.
-    const collections = new Map<string, number>();
-    const verifies = new Map<string, VerifyCount>();
-    const add = (now: Map<string, number>, keys: ReadonlyArray<string>, by: number) =>
-      Effect.sync(() => {
-        for (const key of keys) {
-          const count = (now.get(key) ?? 0) + by;
-          if (count > 0) {
-            now.set(key, count);
-          } else {
-            now.delete(key);
-          }
-        }
-      });
-    const keysOf = (run: string, agent: string, launch?: string) =>
-      launch === undefined
-        ? [`${run}\n${agent}`]
-        : [`${run}\n${agent}`, `${run}\n${agent}\n${launch}`];
-    const of = (run: string, agent: string) => `${run}\n${agent}`;
-    const holding = (run: string, agent: string) => {
-      const known = verifies.get(of(run, agent));
+    const collections = new Map<string, Uses>();
+    const verifies = new Map<string, Held>();
+    const usesOf = (run: string, agent: string) => {
+      const known = collections.get(key(run, agent));
       if (known !== undefined) {
         return known;
       }
-      const fresh: VerifyCount = { under: 0, ended: null, endedAt: null };
-      verifies.set(of(run, agent), fresh);
+      const fresh: Uses = { all: 0, byLaunch: new Map() };
+      collections.set(key(run, agent), fresh);
+      return fresh;
+    };
+    const heldOf = (run: string, agent: string) => {
+      const known = verifies.get(key(run, agent));
+      if (known !== undefined) {
+        return known;
+      }
+      const fresh: Held = { under: 0, ended: new Map(), untold: new Set() };
+      verifies.set(key(run, agent), fresh);
       return fresh;
     };
     const retire = (run: string, agent: string) =>
       Effect.sync(() => {
-        const held = verifies.get(of(run, agent));
-        const collecting = Arr.some(
-          [...collections.keys()],
-          (key) => key === of(run, agent) || pipe(key, Str.startsWith(`${of(run, agent)}\n`)),
-        );
-        if (held !== undefined && held.under === 0 && !collecting) {
-          verifies.delete(of(run, agent));
+        const held = verifies.get(key(run, agent));
+        if (
+          held !== undefined &&
+          held.under === 0 &&
+          (collections.get(key(run, agent))?.all ?? 0) === 0
+        ) {
+          verifies.delete(key(run, agent));
+        }
+      });
+    const take = (run: string, agent: string, launch: string | undefined, by: number) =>
+      Effect.sync(() => {
+        const uses = usesOf(run, agent);
+        const next = uses.all + by;
+        const launchNext = launch === undefined ? 0 : (uses.byLaunch.get(launch) ?? 0) + by;
+        if (launch !== undefined && launchNext <= 0) {
+          uses.byLaunch.delete(launch);
+        } else if (launch !== undefined) {
+          uses.byLaunch.set(launch, launchNext);
+        }
+        if (next <= 0) {
+          collections.delete(key(run, agent));
+        } else {
+          uses.all = next;
         }
       });
     return Collecting.of({
       during: (run, agent, collection, launch) =>
         Effect.acquireUseRelease(
-          add(collections, keysOf(run, agent, launch), 1),
+          take(run, agent, launch, 1),
           () => collection,
-          () =>
-            add(collections, keysOf(run, agent, launch), -1).pipe(
-              Effect.andThen(retire(run, agent)),
-            ),
+          () => take(run, agent, launch, -1).pipe(Effect.andThen(retire(run, agent))),
         ),
       has: (run, agent, launch) =>
-        Effect.sync(() => collections.has(keysOf(run, agent, launch).at(-1)!)),
+        Effect.sync(() => {
+          const uses = collections.get(key(run, agent));
+          return launch === undefined ? uses !== undefined : (uses?.byLaunch.has(launch) ?? false);
+        }),
       duringVerify: (run, agent, verify, named) =>
         Effect.acquireUseRelease(
           Effect.sync(() => {
-            holding(run, agent).under += 1;
+            heldOf(run, agent).under += 1;
           }),
           () =>
             named === undefined
@@ -109,26 +127,28 @@ export const collectingLayer = Layer.effect(Collecting)(
                   Effect.gen(function* () {
                     const id = named(verified);
                     if (id !== null) {
-                      const at = yield* Clock.currentTimeMillis;
-                      const held = holding(run, agent);
-                      held.ended = id;
-                      held.endedAt = at;
+                      heldOf(run, agent).ended.set(id, yield* Clock.currentTimeMillis);
                     }
                   }),
                 ),
           () =>
             Effect.sync(() => {
-              const held = holding(run, agent);
+              const held = heldOf(run, agent);
               held.under = Math.max(0, held.under - 1);
             }).pipe(Effect.andThen(retire(run, agent))),
         ),
+      markUntold: (run, agent, verified) =>
+        Effect.sync(() => {
+          heldOf(run, agent).untold.add(verified);
+        }),
       verifying: (run, agent) =>
         Effect.sync(() => {
-          const held = verifies.get(of(run, agent));
+          const held = verifies.get(key(run, agent));
+          const ended = Arr.map([...(held?.ended ?? [])], ([id, at]) => ({ id, at }));
           const returned: VerifyHold = {
             under: (held?.under ?? 0) > 0,
-            ended: held?.ended ?? null,
-            endedAt: held?.endedAt ?? null,
+            ended,
+            untold: [...(held?.untold ?? [])],
           };
           return returned;
         }),

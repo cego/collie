@@ -9842,7 +9842,7 @@ const bugReproduction = () => ({
 });
 
 scenario(
-  "a bug whose earlier ticket's rally fix records the red and the green and names it, so the gate asks nothing of the last ticket",
+  "a bug whose gate fix records the red and the green itself and names it, so the last ticket's blank name is no gap",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -9886,7 +9886,11 @@ scenario(
         yield* rig.queueOutputs([
           { ...BUILT, verdict: "findings", findings: [GUARD_FINDING] },
           FOUND_GUARD,
-          { writes: [], sh: script, output: names },
+          {
+            verdict: "clean",
+            fixed: [{ title: GUARD_FINDING.title, file: GUARD_FINDING.file }],
+            checks: [],
+          },
           {
             ...CLEAN_SYNTHESIS,
             findings: [{ ...GUARD_FINDING, id: `${runId}-F1`, status: "fixed" }],
@@ -9898,6 +9902,8 @@ scenario(
             ...CLEAN_SYNTHESIS,
             findings: [{ ...later, id: `${runId}-F2`, status: "fixed" }],
           },
+          { writes: [], sh: script, output: names },
+          { verdict: 42 },
           OPENED,
         ]);
         const reached = (what: string) =>
@@ -9934,7 +9940,7 @@ scenario(
         yield* bin.restore();
 
         expect(said(result)).toBe(OPENED.mr_url);
-        expect(yield* wasAsked(runId, "gate-fix-1")).toBe(false);
+        expect(yield* wasAsked(runId, "gate-fix-1")).toBe(true);
         expect(yield* wasAsked(runId, "gate-fix-2")).toBe(false);
       }),
     ),
