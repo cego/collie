@@ -5938,6 +5938,7 @@ scenario("a hand-back that answers one finding twice still reports a duplicate d
           ],
           checks: [{ name: "unit" }],
         },
+        { verdict: "clean", fixed: [{ title: one.title, file: one.file }], checks: [{ name: "unit" }] },
         OPENED,
       ]);
       const status = yield* driven(
@@ -5950,11 +5951,12 @@ scenario("a hand-back that answers one finding twice still reports a duplicate d
                 Arr.findFirst(rows, (decision) => decision.decision === "fix-unverified-1"),
               )?.prompt ?? "",
             ).toContain("duplicate disposition");
-            yield* run.answer("fix-unverified-1", "Stop");
+            yield* run.answer("fix-unverified-1", "Send it back");
             return yield* ended(run.status);
           }),
       );
-      expect(status.status).toBe("failed");
+      expect(outcomeText(status)).toBe(OPENED.mr_url);
+      expect(yield* asked(runId, "fix-5-back-1")).toContain(one.title);
     }),
   ),
 );

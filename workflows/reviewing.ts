@@ -10,6 +10,7 @@ import {
   SynthesisSchema,
   WorkflowError,
   agentWork,
+  blockingKeys,
   contentOf,
   conflictingDispositions,
   findingKey,
@@ -601,6 +602,14 @@ export const rally = (ask: {
     let prior: { readonly head: string; readonly open: ReadonlyArray<Finding> } | null = null;
     let ledger = ask.ledger;
 
+    // WARNING: a hand-back a person asked for is still what the next review is judged against, claims included.
+    const remember = (
+      at: number,
+      keys: ReadonlyArray<string>,
+      fixed: typeof FixOutputSchema.Type,
+    ) => {
+      seen = { at, keys, handed: seen?.handed ?? [], claimed: fixed.fixed };
+    };
     const repair = Effect.gen(function* () {
       const resumed = ask.resume;
       if (resumed === undefined) {
@@ -679,6 +688,8 @@ export const rally = (ask: {
 
     const declinedLine =
       "A person declined the dispute on these findings, so they are open again: fix them, or answer each with new evidence or a dispute.";
+    const stillOpenLine =
+      "These blocking findings are still open: fix them, or answer each with new evidence or a dispute.";
 
     const sendBack = (
       line: string,
@@ -720,8 +731,23 @@ export const rally = (ask: {
       Effect.gen(function* () {
         let report = first;
         let open: ReadonlyArray<Finding> = live;
+        // WARNING: a key answered twice or both ways is not settled; settleFinalFix has to judge it, and the fixer has to repair it.
+        const answeredOnce = (fixed: typeof FixOutputSchema.Type) => {
+          const counts = new Map<string, number>();
+          for (const one of [...fixed.fixed, ...fixed.disputed]) {
+            const key = findingKey(one);
+            counts.set(key, (counts.get(key) ?? 0) + 1);
+          }
+          const honest = new Set<string>();
+          for (const [key, times] of counts) {
+            if (times === 1) {
+              honest.add(key);
+            }
+          }
+          return honest;
+        };
         const shrink = (asked: ReadonlyArray<Finding>, fixed: typeof FixOutputSchema.Type) => {
-          const settled = new Set(Arr.map([...fixed.fixed, ...fixed.disputed], findingKey));
+          const settled = answeredOnce(fixed);
           return Arr.filter(asked, (one) => !settled.has(findingKey(one)));
         };
         const carry = (
@@ -947,6 +973,7 @@ export const rally = (ask: {
           );
           disputed = split.standing;
           const standing = Arr.filter(disputed, isBlocking);
+          const raised = blockingKeys([...split.live, ...standing]);
           const round = settleRound({ live: split.live, disputed, at, seen });
           if (standing.length > 0) {
             const outstanding =
@@ -970,7 +997,7 @@ export const rally = (ask: {
               if (rest.length === 0) {
                 return cleaned(synthesis);
               }
-              const fixed = yield* sendBack(declinedLine, rest, at, proves, head);
+              const fixed = yield* sendBack(stillOpenLine, rest, at, proves, head);
               return yield* finish(synthesis, rest, fixed, head);
             }
             if (chosen !== SEND_IT_BACK) {
@@ -980,6 +1007,7 @@ export const rally = (ask: {
               );
             }
             const fixed = yield* sendBack(declinedLine, standing, at, proves, head);
+            remember(at, raised, fixed);
             return at < ROUNDS ? null : yield* finish(synthesis, outstanding, fixed, head);
           }
           if (round.go === "halt") {
@@ -1002,6 +1030,7 @@ export const rally = (ask: {
               proves,
               head,
             );
+            remember(at, raised, fixed);
             return at < ROUNDS ? null : yield* finish(synthesis, round.outstanding, fixed, head);
           }
           if (round.go === "clean") {
