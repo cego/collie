@@ -422,7 +422,6 @@ export interface Batch {
   readonly outputs: ReadonlyArray<ShownOutput>;
 }
 
-// WARNING: an item is never split across batches; only one longer than the line cap is cut.
 export function batchesOf(
   blocks: ReadonlyArray<EvidenceBlock>,
   outputs: ReadonlyArray<ShownOutput>,
@@ -807,11 +806,20 @@ export const judge = Effect.fn("Drift.judge")(function* (
     }
   }
   const cut = cutIn(evidence.blocks, evidence.outputs);
+  // WARNING: one path can appear in two batches, so the same report is found twice; the worst verdict stands.
+  const worst = new Map<string, DriftReport>();
+  for (const report of reports) {
+    const seen = worst.get(report.id);
+    if (seen === undefined || (report.severity === "block" && seen.severity === "warn")) {
+      worst.set(report.id, seen === undefined ? report : { ...seen, severity: report.severity });
+    }
+  }
+  const found = [...worst.values()];
   if (whole) {
     yield* deps.log(
       `judged ${semantic.length} semantic constraint(s) at ${what.at}${
         batches.length > 1 ? ` in ${batches.length} batch(es)` : ""
-      }: ${reports.length} report(s)${cut.length > 0 ? ", on evidence cut at the cap" : ""}`,
+      }: ${found.length} report(s)${cut.length > 0 ? ", on evidence cut at the cap" : ""}`,
     );
   }
   return {
@@ -821,7 +829,7 @@ export const judge = Effect.fn("Drift.judge")(function* (
       ...(cut.length > 0 && { cut }),
       ...(missed.length > 0 && { missed }),
     },
-    reports,
+    reports: found,
   };
 });
 

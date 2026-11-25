@@ -1084,6 +1084,45 @@ test("a drifting report names the batch it came from and what that batch held", 
     }),
   ));
 
+test("a later batch's warning does not replace an earlier batch's block on the same line", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, base, evaluator } = yield* capped(MAX_FILES + 1);
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(`${dir}/src/f00.ts`, "export const f0 = 99;\n");
+      const report = (severity: "block" | "warn") =>
+        envelope({
+          result: {
+            reports: [
+              {
+                id: severity,
+                at: "t",
+                run: "r1",
+                intent_version: 1,
+                constraint: "no-new-deps",
+                kind: "semantic",
+                severity,
+                evidence: [{ kind: "diff", path: "src/f00.ts", line: 2 }],
+                evidence_truncated: false,
+                resolution: "open",
+              },
+            ],
+          },
+        });
+      yield* evaluator.replyFor(1, report("block"));
+      yield* evaluator.replyFor(2, report("warn"));
+      const out = yield* judge(judgementDeps(dir), semanticIntent(), {
+        runDir: dir,
+        worktree: dir,
+        base,
+        at: "t0",
+      });
+      evaluator.restore();
+      expect(Arr.map(out.reports, (one) => one.severity)).toEqual(["block"]);
+      expect(out.reports[0]?.batch).toContain("batch 1 of 2");
+    }),
+  ));
+
 test("a report of the same drift from a later batch keeps that batch", () => {
   const intent = intentWith({ kind: "protected_paths", globs: ["src/**"] });
   const found = checkRules(intent, facts({ changedFiles: ["docs/using.md"] }), "t");
