@@ -6,7 +6,7 @@ import type { PlatformServices } from "./platform";
 import type { FileSystem, Path } from "effect";
 import { Clock, Data, DateTime, Duration, Effect, Predicate, Result } from "effect";
 import { HerdrError, herdrFailureReason, isSettled } from "./herdr";
-import type { Herdr, Submission } from "./herdr";
+import type { AgentInfo, Herdr, Submission } from "./herdr";
 import { verifyIncarnation } from "./registry";
 import type { AgentEntry, Incarnation } from "./registry";
 import { controlDir } from "./compaction";
@@ -261,7 +261,7 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
   }
   open.add(terminalId);
   return yield* Effect.gen(function* () {
-    let listing = yield* agentsNow(deps);
+    let listing = yield* aliveNow(deps);
     let listedAt = yield* Clock.currentTimeMillis;
 
     const identified = verifyIncarnation(entry, listing);
@@ -310,7 +310,7 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
           }
           // WARNING: a whole compaction can happen inside one transaction, so a listing older than a few seconds is re-read.
           if ((yield* Clock.currentTimeMillis) - listedAt > LISTING_MAX_AGE_MS) {
-            listing = yield* agentsNow(deps);
+            listing = yield* aliveNow(deps);
             listedAt = yield* Clock.currentTimeMillis;
             const again = verifyIncarnation(entry, listing);
             if (!again.ok) {
@@ -362,7 +362,14 @@ export const settleFromSubmit = Effect.fn("Dispatcher.settleFromSubmit")(functio
 });
 
 const agentsNow = (deps: DispatcherDeps) =>
-  deps.herdr.agentList().pipe(Effect.orElseSucceed(() => []));
+  deps.herdr.agentList().pipe(
+    Effect.asSome,
+    Effect.orElseSucceed(() => Option.none<ReadonlyArray<AgentInfo>>()),
+  );
+
+// WARNING: a roster that did not answer is not an empty one; only a send that cannot verify its terminal treats it as nothing.
+const aliveNow = (deps: DispatcherDeps) =>
+  agentsNow(deps).pipe(Effect.map(Option.getOrElse(() => Arr.empty<AgentInfo>())));
 
 // WARNING: reserved before herdr is called and never removed; a crash between them settles as unknown, not guessed.
 function deliveryOf(
@@ -656,8 +663,18 @@ export const entryFromLive = Effect.fn("Dispatcher.entryFromLive")(function* (
     readonly workflow: string;
   },
 ) {
+  const listed = yield* agentsNow(deps);
+  if (Option.isNone(listed)) {
+    // WARNING: a launch reads gone as "look again", so an unanswered roster still says gone; only its wording is honest.
+    const returned = {
+      entry: null,
+      reason: `${about.agent}'s liveness could not be read — core did not answer`,
+      gone: true,
+    };
+    return returned;
+  }
   const live = Option.getOrUndefined(
-    Arr.findFirst(yield* agentsNow(deps), (a) => a.name === about.agent),
+    Arr.findFirst(listed.value, (a) => a.name === about.agent),
   );
   if (!live) {
     return { entry: null, reason: `${about.agent} is gone — core no longer has it`, gone: true };

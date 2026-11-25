@@ -33,7 +33,13 @@ export interface FakeHc {
   readonly hold: (method: string) => () => void;
   readonly answer: (method: string, reply: Schema.Json) => void;
   readonly refuse: (method: string, kind: string, message: string) => void;
-  readonly refuseOnce: (method: string, kind: string, message: string, after?: number) => void;
+  readonly refuseOnce: (
+    method: string,
+    kind: string,
+    message: string,
+    after?: number,
+    times?: number,
+  ) => void;
   readonly restore: (method: string) => void;
   readonly report: (name: string, state: string) => Effect.Effect<void>;
   readonly stallNextSend: () => void;
@@ -156,7 +162,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
   const refusals = new Map<string, { code: number; message: string; kind: string }>();
   const refusalsOnce = new Map<
     string,
-    { code: number; message: string; kind: string; after: number }
+    { code: number; message: string; kind: string; after: number; left: number }
   >();
   const holds = new Map<string, Promise<void>>();
   const subscribers = new Set<(line: string) => Effect.Effect<void>>();
@@ -375,7 +381,10 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
         if (once.after > 0) {
           once.after -= 1;
         } else {
-          refusalsOnce.delete(method);
+          once.left -= 1;
+          if (once.left <= 0) {
+            refusalsOnce.delete(method);
+          }
           return { failure: once };
         }
       }
@@ -776,8 +785,8 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
     refuse: (method, kind, message) => {
       refusals.set(method, { code: -32_000, kind, message });
     },
-    refuseOnce: (method, kind, message, after = 0) => {
-      refusalsOnce.set(method, { code: -32_000, kind, message, after });
+    refuseOnce: (method, kind, message, after = 0, times = 1) => {
+      refusalsOnce.set(method, { code: -32_000, kind, message, after, left: times });
     },
     restore: (method) => {
       refusals.delete(method);

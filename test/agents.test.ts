@@ -7780,6 +7780,41 @@ test("a send that failed reads liveness again, so a Run whose agents all exited 
     }),
   ));
 
+test("a send that failed, whose fresh roster read failed too, reports unread liveness", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null]);
+      const launched = yield* session(
+        Agents.pipe(Effect.flatMap((agents) => agents.launch(implementerAsk()))),
+      );
+      const release = core.hold("terminal.send");
+      const steering = yield* Effect.forkChild(
+        session(
+          Agents.pipe(
+            Effect.flatMap((agents) =>
+              agents.steer({
+                runId: "r1",
+                to: "implementer",
+                text: "Look at this",
+                request: "to-unread-implementer",
+              }),
+            ),
+          ),
+        ),
+      );
+      yield* until(prompted("Look at this"));
+      core.refuse("terminal.send", "unreachable", "the core did not answer");
+      core.refuse("terminal.list", "unavailable", "core is restarting");
+      release();
+      const failed = yield* Fiber.join(steering);
+      expect(failed).toMatchObject({ agent: launched.agent, delivered: false, gone: false });
+      expect(failed.detail).toContain("could not be read");
+      expect(failed.detail).not.toContain("is gone");
+      core.restore("terminal.send");
+      core.restore("terminal.list");
+    }),
+  ));
+
 test("a roster read that failed inside the entry lookup does not report the live agent gone", () =>
   runEffect(
     Effect.gen(function* () {
@@ -7802,6 +7837,35 @@ test("a roster read that failed inside the entry lookup does not report the live
         ),
       );
       expect(refused).toMatchObject({ agent: launched.agent, delivered: false, gone: false });
+      expect(refused.detail).toContain("could not be read");
+      expect(refused.detail).not.toContain("is gone");
+    }),
+  ));
+
+test("a roster read that failed twice reports unread liveness, not the live agent gone", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null]);
+      const launched = yield* session(
+        Agents.pipe(Effect.flatMap((agents) => agents.launch(implementerAsk()))),
+      );
+      core.refuseOnce("terminal.list", "unavailable", "core is restarting", 1, 2);
+      const refused = yield* session(
+        Agents.pipe(
+          Effect.flatMap((agents) =>
+            agents.steer({
+              runId: "r1",
+              to: "implementer",
+              text: "Look at this",
+              request: "to-live-implementer-yet-again",
+              mode: "now",
+            }),
+          ),
+        ),
+      );
+      expect(refused).toMatchObject({ agent: launched.agent, delivered: false, gone: false });
+      expect(refused.detail).toContain("could not be read");
+      expect(refused.detail).not.toContain("is gone");
     }),
   ));
 
