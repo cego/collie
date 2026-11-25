@@ -100,10 +100,11 @@ if (await Bun.file(`${process.cwd()}/restart-fails`).exists()) {
 }
 
 const starts = `${process.cwd()}/app-server-starts.jsonl`;
-await Bun.write(
-  starts,
-  `${(await Bun.file(starts).exists()) ? await Bun.file(starts).text() : ""}${JSON.stringify({ pid: process.pid, chat: Bun.argv.length > 3 })}\n`,
-);
+const record = async (line: JsonObject) => {
+  const held = (await Bun.file(starts).exists()) ? await Bun.file(starts).text() : "";
+  await Bun.write(starts, `${held}${JSON.stringify(line)}\n`);
+};
+await record({ pid: process.pid, chat: Bun.argv.length > 3 });
 
 const tomlValue: (raw: string) => Schema.Json = (raw) =>
   flow(
@@ -705,6 +706,9 @@ for await (const chunk of Bun.stdin.stream()) {
           data.push({ name, tools, authStatus, toolsError });
         }
         answer({ data, nextCursor: null });
+        if (scoped) {
+          await record({ pid: process.pid, scoped: true });
+        }
         break;
       }
       case "model/list":

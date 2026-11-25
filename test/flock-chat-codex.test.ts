@@ -6,7 +6,7 @@ import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
 import { platformLayer } from "../src/platform";
 import type { Path, Scope } from "effect";
-import { Effect, FileSystem, Schema, Stream, flow, Result } from "effect";
+import { Effect, FileSystem, Schedule, Schema, Stream, flow, Result } from "effect";
 import type * as SecureRandom from "effect/crypto/SecureRandom";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
@@ -572,6 +572,7 @@ test("A signed-out server's hint is shown by the first Codex, which is kept unti
       const fs = yield* FileSystem.FileSystem;
       const session = yield* driver.open("codex-first-hint", "default", null);
       yield* Effect.addFinalizer(() => session.close);
+      yield* connected(context.dir);
       yield* session.offer("inspect");
       const before = inspected(yield* turn(session));
       expect(instruct(before)).toEqual(
@@ -635,14 +636,28 @@ test("A server's credential reaches that server, and never Codex's own shell", (
 
 const occurrences = (text: string, word: string) => Str.split(text, word).length - 1;
 
-const chatStarts = (dir: string) =>
+const startLines = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const written = yield* fs.readFileString(`${dir}/app-server-starts.jsonl`);
-    return Arr.length(
-      Arr.filter(Str.split(written, "\n"), (line) => pipe(line, Str.includes('"chat":true'))),
-    );
+    return Str.split(written, "\n");
   });
+
+const chatStarts = (dir: string) =>
+  Effect.map(startLines(dir), (lines) =>
+    Arr.length(Arr.filter(lines, (line) => pipe(line, Str.includes('"chat":true')))),
+  );
+
+const connected: (dir: string) => Effect.Effect<void, never, FileSystem.FileSystem> = (dir) =>
+  Effect.suspend(() => startLines(dir).pipe(Effect.orElseSucceed(() => Arr.empty<string>()))).pipe(
+    Effect.repeat({
+      until: (lines) => Arr.some(lines, (line) => pipe(line, Str.includes('"scoped":true'))),
+      schedule: Schedule.spaced("10 millis"),
+      times: 500,
+    }),
+    Effect.asVoid,
+    Effect.andThen(Effect.yieldNow),
+  );
 
 const instruct = (details: ReturnType<typeof inspected>) => {
   const input = details.turn.input;
