@@ -256,7 +256,7 @@ const stampOf = (file: string) =>
     Effect.orElseSucceed(() => ""),
   );
 
-const finishedTickets = Effect.fn("Views.finishedTickets")(function* (
+export const finishedTickets = Effect.fn("Views.finishedTickets")(function* (
   run: RunFacts,
   runs: ReadonlyArray<RunFacts>,
 ) {

@@ -23,7 +23,6 @@ export const ROLES = {
 const rolesFor = (to: string) =>
   Option.getOrUndefined(Arr.findFirst(Rec.toEntries(ROLES), ([name]) => name === to))?.[1];
 
-/** A step is done when its Output is on record, so a steer never reaches an agent that already handed in. */
 export const candidatesOf = <A extends Step>(records: RunRecordsApi, launches: ReadonlyArray<A>) =>
   Effect.forEach(launches, (one) =>
     Effect.map(outputOf(records, one), (held) => ({ ...one, done: held !== null })),

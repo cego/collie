@@ -13,7 +13,8 @@ import { trialRecordsOf } from "../src/trial";
 import { candidatesOf, steerTarget } from "../src/steer-target";
 import { REVIEW_ROLE } from "../src/cards";
 import { runEffect } from "./support/effect";
-import { runFacts } from "./support/records";
+import { recordsAt, runFacts } from "./support/records";
+import { finishedTickets } from "../src/views";
 
 let stateDir: string;
 beforeEach(() =>
@@ -113,6 +114,16 @@ test("an older Run's steps still read as done from their files", () =>
       expect(Arr.map(yield* operationsOf("r1"), (one) => one.done)).toEqual([true]);
       const shown = yield* outputsIn(`${stateDir}/agents/r1`, "r1");
       expect(shown.outputs[0]!.text).toContain("findings");
+      const lane = yield* laneFor(
+        readEnv({
+          COLLIE_ROOT: stateDir,
+          COLLIE_STATE_DIR: stateDir,
+          COLLIE_USER_DIR: `${stateDir}/user`,
+          COLLIE_CWD: stateDir,
+        }),
+        runFacts({ id: "r1", dir: `${stateDir}/runs/r1`, evidence: `${stateDir}/evidence/r1` }),
+      );
+      expect(Arr.map(lane.nodes, (one) => one.state)).toContain("done");
     }),
   ));
 
@@ -252,4 +263,26 @@ test("a trial's findings are read from the fact, and from a file only where an o
         Arr.map((yield* trialRecordsOf(stateDir, "r1")).reviews, (one) => one[0]?.title),
       ).toEqual(["from the fact", "from the file"]);
     }),
+  ));
+
+test("a ticket is finished by the time its step accepted, not by any file", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const run = runFacts({
+        id: "r1",
+        dir: `${stateDir}/runs/r1`,
+        evidence: `${stateDir}/evidence/r1`,
+        state: "succeeded",
+      });
+      yield* fs.makeDirectory(`${run.dir}/plan/issues`, { recursive: true });
+      yield* fs.writeFileString(`${run.dir}/plan/issues/01-a.md`, "# 01 — a ticket\n\nWork.\n");
+      const output = `${stateDir}/agents/r1/build.json`;
+      yield* recordLaunch({ ...launched(), operation: "build", output, role: "implementer" });
+      yield* fs.makeDirectory(`${stateDir}/agents/r1`, { recursive: true });
+      yield* fs.writeFileString(output, `{"summary":"written by the agent"}`);
+      expect([...(yield* finishedTickets(run, [run]))]).toEqual([]);
+      yield* accepted(output, `{"summary":"built"}`);
+      expect([...(yield* finishedTickets(run, [run]))]).toEqual(["01-a.md"]);
+    }).pipe(Effect.provide(recordsAt(stateDir))),
   ));

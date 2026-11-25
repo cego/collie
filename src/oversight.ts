@@ -61,6 +61,7 @@ import { pendingFor, proposalsOf, record as recordProposal } from "./proposals";
 import { appendLine, deliveriesOf, newestById, overrideActive, readLedger } from "./steering";
 import type { Records } from "./records";
 import { RunRecords, runOfDir } from "./run-records";
+import { ACCEPTED, acceptedText } from "./step-output";
 import { capabilitiesOf } from "./steering-caps";
 import { externalSubmissions } from "./compactors";
 import { controlDir } from "./compaction";
@@ -276,6 +277,13 @@ export const ruleFacts = Effect.fn("Oversight.ruleFacts")(function* (at: Watched
     if (text !== "") {
       outputs[pipe_(name, Str.slice(0, -".json".length))] = flattenOutput(text);
     }
+  }
+  const records = yield* RunRecords;
+  for (const one of yield* records.factsUnder(at.runId, ACCEPTED)) {
+    const key = pipe_(one.name, Str.slice(ACCEPTED.length), (name) =>
+      pipe_(name, Str.endsWith(".json")) ? pipe_(name, Str.slice(0, -".json".length)) : name,
+    );
+    outputs[key] = flattenOutput(acceptedText(one.data));
   }
   const verifications: Record<string, { exit: number; ref: string }> = {};
   const verified = yield* readVerifications(at.evidenceDir).pipe(Effect.orElseSucceed(() => []));

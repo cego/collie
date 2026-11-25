@@ -1,12 +1,14 @@
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { RunRecords, runOfDir } from "../src/run-records";
+import { appendStepLine } from "../src/steps";
 import {
   clearReachedPause,
   leaveStepNote,
   pauseBefore,
   readStepSteering,
   reachPause,
+  stepTarget,
   takeStepNotes,
   withdrawStepNote,
 } from "../src/step-steering";
@@ -87,5 +89,45 @@ test("pause transitions and note consumption persist while a prompt retry return
           expect(yield* withdrawStepNote(dir, "note-1")).toBe(false);
         }),
       );
+    }),
+  ));
+
+test("a step that has handed in takes no note when it will not run again", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const where = yield* fs.makeTempDirectoryScoped({ prefix: "collie-step-target-" });
+      const meta = (id: string) => ({
+        id,
+        title: id,
+        description: "",
+        kind: "agent" as const,
+        role: null,
+        produces: null,
+      });
+      yield* appendStepLine(where, {
+        kind: "forecast",
+        at: "2026-11-25T00:00:00Z",
+        steps: [meta("build"), meta("looped")],
+      });
+      yield* appendStepLine(where, {
+        kind: "enter",
+        at: "2026-11-25T00:00:01Z",
+        key: "build#1",
+        step: meta("build"),
+        place: { round: 1, of: 1 },
+      });
+      yield* appendStepLine(where, {
+        kind: "enter",
+        at: "2026-11-25T00:00:02Z",
+        key: "looped#1",
+        step: meta("looped"),
+        place: { round: 1, of: 2 },
+      });
+      expect((yield* stepTarget(where, "build")).step).toMatchObject({ id: "build" });
+      expect(yield* stepTarget(where, "build", true)).toMatchObject({
+        refused: "Step build has handed in its Output and will not run again",
+      });
+      expect((yield* stepTarget(where, "looped", true)).step).toMatchObject({ id: "looped" });
     }),
   ));

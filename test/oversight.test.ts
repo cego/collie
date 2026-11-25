@@ -18,6 +18,7 @@ import { agentsLayer } from "../src/agents";
 import type { Host } from "../src/sdk";
 import { Children } from "../src/sdk";
 import { foundationLayer, loadEntry, runDir } from "../src/engine";
+import { acceptOutput } from "../src/step-output";
 import type { Herd } from "../src/engine";
 import {
   Oversight,
@@ -1608,4 +1609,22 @@ test("a boundary reached with an integration's conflicts open is not judged, and
         expect(yield* fs.exists(`${rig.root}/pack.txt`)).toBe(true);
       }),
     ),
+  ));
+
+test("an Output accepted for a step is in the facts the rules judge, with no file", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* repository();
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(`${dir}/agents/r1`, { recursive: true });
+      yield* RunRecords.use((records) =>
+        acceptOutput(
+          records,
+          { runId: "r1", output: `${dir}/agents/r1/review.json` },
+          `{"summary":"from the fact"}`,
+        ),
+      );
+      const facts = yield* ruleFacts(watchedAt("r1"));
+      expect(facts.outputs.review?.summary).toBe("from the fact");
+    }),
   ));

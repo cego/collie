@@ -215,13 +215,19 @@ import {
 import type { ClaudeOverlay, RoleProfile } from "./profile";
 import { isString } from "./schema";
 import type { JsonObject } from "./schema";
-import { awaitOutput as registerOutput, submitOutput, takeOutput } from "./output-submit";
+import {
+  awaitOutput as registerOutput,
+  forgetStep,
+  submitOutput,
+  takeOutput,
+} from "./output-submit";
 import {
   acceptOutput,
   dispatchOf,
+  carriedFor,
   markCollected,
   outputOf,
-  recordOutput,
+  recordCarried,
   stepOf,
 } from "./step-output";
 import type { Step } from "./step-output";
@@ -2873,61 +2879,61 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               stopped: stoppedRun(ask.runId),
             });
         if (memory === "waited") {
-          return yield* launch(ask, fresh, note);
+          return yield* launch(ask, fresh, note, armed);
         }
         const replayed = yield* wasOrdered(ask);
-        const landedOn = (incarnation: Rooted | undefined, chosen: AgentSession | null = null) =>
-          Effect.gen(function* () {
-            const landed: Types.Mutable<Launched> = {
-              agent,
-              output: ask.output,
-              reused: alive,
-              runId: ask.runId,
-              operation: ask.operation,
-              role: ask.role,
-              workflow: ask.workflow,
-              harness: ask.harness ?? host.harness,
-              model: ask.model ?? host.model,
-              effort: ask.effort,
-            };
-            if (ask.claudeSubagents !== undefined) {
-              landed.claudeSubagents = ask.claudeSubagents;
+        const stamped = yield* Clock.currentTimeMillis;
+        const landedOn = (incarnation: Rooted | undefined, chosen: AgentSession | null = null) => {
+          const landed: Types.Mutable<Launched> = {
+            agent,
+            output: ask.output,
+            reused: alive,
+            runId: ask.runId,
+            operation: ask.operation,
+            role: ask.role,
+            workflow: ask.workflow,
+            harness: ask.harness ?? host.harness,
+            model: ask.model ?? host.model,
+            effort: ask.effort,
+          };
+          if (ask.claudeSubagents !== undefined) {
+            landed.claudeSubagents = ask.claudeSubagents;
+          }
+          if ((ask.sequence ?? 1) > 1) {
+            landed.sequence = ask.sequence;
+          }
+          if (ask.step !== undefined) {
+            landed.step = ask.step;
+          }
+          landed.outputSubmit = ask.outputSubmit ?? "tool";
+          if (ask.submitOnly === true) {
+            landed.submitOnly = true;
+          }
+          landed.at = stamped;
+          fellBack(landed, ask.from, ask.why);
+          if (ask.next !== undefined) {
+            landed.next = ask.next;
+          }
+          if (incarnation !== undefined) {
+            landed.terminalId = incarnation.terminalId;
+            if (incarnation.agentSession !== null) {
+              landed.agentSession = incarnation.agentSession;
             }
-            if ((ask.sequence ?? 1) > 1) {
-              landed.sequence = ask.sequence;
+            if (incarnation.root !== undefined) {
+              landed.root = incarnation.root;
             }
-            if (ask.step !== undefined) {
-              landed.step = ask.step;
-            }
-            landed.outputSubmit = ask.outputSubmit ?? "tool";
-            if (ask.submitOnly === true) {
-              landed.submitOnly = true;
-            }
-            landed.at = yield* Clock.currentTimeMillis;
-            fellBack(landed, ask.from, ask.why);
-            if (ask.next !== undefined) {
-              landed.next = ask.next;
-            }
-            if (incarnation !== undefined) {
-              landed.terminalId = incarnation.terminalId;
-              if (incarnation.agentSession !== null) {
-                landed.agentSession = incarnation.agentSession;
-              }
-              if (incarnation.root !== undefined) {
-                landed.root = incarnation.root;
-              }
-            }
-            if (chosen !== null) {
-              landed.agentSession = chosen;
-            }
-            return landed;
-          });
+          }
+          if (chosen !== null) {
+            landed.agentSession = chosen;
+          }
+          return landed;
+        };
         if (memory === "stopped") {
-          return yield* landedOn(undefined);
+          return landedOn(undefined);
         }
         const recorded = (incarnation: Rooted | undefined, chosen: AgentSession | null = null) =>
           Effect.gen(function* () {
-            const landed = yield* landedOn(incarnation, chosen);
+            const landed = landedOn(incarnation, chosen);
             yield* recordLaunch(landed);
             return landed;
           });
@@ -2975,17 +2981,23 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
                 ),
               );
             })
-          : yield* Effect.uninterruptible(
-              start(
-                ask,
-                agent,
-                { agents: listing.success, listedAt },
-                atLaunch ? pointer : null,
-                session,
-              ).pipe(Effect.flatMap((incarnation) => recorded(incarnation, chosen))),
-            );
+          : atLaunch
+            ? yield* Effect.gen(function* () {
+                // WARNING: OpenCode's prompt goes in with the process, so its step is armed before the process is.
+                yield* armed(landedOn(undefined, chosen));
+                return yield* Effect.uninterruptible(
+                  start(ask, agent, { agents: listing.success, listedAt }, pointer, session).pipe(
+                    Effect.flatMap((incarnation) => recorded(incarnation, chosen)),
+                    Effect.onError(() => forgetStep(ask.runId, ask.output)),
+                  ),
+                );
+              })
+            : yield* Effect.uninterruptible(
+                start(ask, agent, { agents: listing.success, listedAt }, null, session).pipe(
+                  Effect.flatMap((incarnation) => recorded(incarnation, chosen)),
+                ),
+              );
         if (atLaunch) {
-          yield* armed(launched);
           if (!replayed) {
             yield* orderLaunch(ask);
           }
@@ -4606,13 +4618,19 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           );
           const records = yield* RunRecords;
           const held = yield* outputOf(records, step);
-          return held === null ? null : { text: held.text, at: held.at };
+          if (held !== null) {
+            return { text: held.text, at: held.at };
+          }
+          const carried = yield* carriedFor(records, step);
+          return carried === null
+            ? null
+            : { text: carried.text, at: carried.at, carried: true as const };
         }).pipe(Effect.catchCause(() => Effect.succeed(null))),
       ),
     carry: (runId, operation, text) =>
       under(
         RunRecords.use((records) =>
-          recordOutput(records, { runId, output: outputFor(runId, operation) }, text),
+          recordCarried(records, { runId, output: outputFor(runId, operation) }, text, runId),
         ),
       ),
     handOver: (about) =>

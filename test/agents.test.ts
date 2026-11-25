@@ -50,7 +50,7 @@ import {
   reminderText,
   repairText,
 } from "../src/agents";
-import { awaitOutput, submitOutput } from "../src/output-submit";
+import { awaitOutput, forgetAwaited, submitOutput } from "../src/output-submit";
 import { acceptedName, acceptOutput, dispatchOf, outputOf } from "../src/step-output";
 import type { AgentHost, RanOut, RunNow } from "../src/agents";
 import { Children, Host, Run, WorkflowAgents, jsonSchemaFor, step, withAgents } from "../src/sdk";
@@ -2424,7 +2424,7 @@ test("a stop while the Run is collected past its budget ends the wait", () =>
     }),
   ));
 
-test("a restart while the Run is collected past its budget reattaches and returns the late Output", () =>
+test("a restart while the Run is collected past its budget reattaches and takes the accepted Output, prompting no one", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -2432,9 +2432,22 @@ test("a restart while the Run is collected past its budget reattaches and return
       yield* interrupted("r1", parked("r1"), { collectMs: 400 });
       expect(yield* suspended("r1").pipe(session)).toBe(false);
 
-      yield* submitOutput("r1", agentFor("r1"), `{"verdict":"clean","note":"late"}`);
+      expect(yield* submitOutput("r1", agentFor("r1"), `{"verdict":"clean","note":"late"}`)).toBe(
+        "accepted",
+      );
+      expect(
+        yield* RunRecords.use((records) => records.fact("r1", acceptedName(outputPath("r1")))).pipe(
+          Effect.provide(recordsAt(dir)),
+        ),
+      ).toContain("late");
+      // WARNING: a restart keeps nothing in memory, so what it returns has to come from the fact.
+      yield* forgetAwaited;
+      const before = (yield* rig.calls()).length;
       const result = yield* session(started("r1"), { collectMs: 400 });
       expect(result._tag === "Success" && result.success.note).toBe("late");
+      expect(
+        Arr.filter(Arr.drop(yield* rig.calls(), before), (call) => call.cmd === "terminal.send"),
+      ).toHaveLength(0);
       expect(yield* isSet(PARKED, "r1")).toBe(false);
       expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
     }),
@@ -4867,8 +4880,8 @@ test("a hand-over sent before a host crash, delivered again and replayed, is one
       );
       expect(again.agent).toBe(successor);
       yield* FileSystem.FileSystem.pipe(
-        Effect.flatMap((fs) =>
-          submitOutput("r1", agentFor("r1"), `{"verdict":"clean","note":"from the new agent"}`),
+        Effect.flatMap(() =>
+          submitOutput("r1", successor, `{"verdict":"clean","note":"from the new agent"}`),
         ),
       );
       const result = yield* session(started("r1"), chain);
@@ -9498,6 +9511,28 @@ test("an opencode launch's written MCP config is told the Run and the agent, so 
       expect(config.mcpServers.collie.env).not.toHaveProperty("COLLIE_OUTPUT_SUBMIT");
       expect(yield* read(promptPath("r1"))).not.toContain("OUTPUT_PATH");
       expect(result._tag === "Success" && result.success.note).toBe("done");
+    }),
+  ));
+
+test("a submit that lands while an OpenCode launch is starting is accepted, not refused", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const answers: string[] = [];
+      class Starting extends Herdr {
+        override agentLaunch(...args: Parameters<Herdr["agentLaunch"]>) {
+          return submitOutput("r1", agentFor("r1"), { verdict: "clean", note: "during the start" })
+            .pipe(Effect.provide(recordsAt(dir)))
+            .pipe(Effect.tap((said) => Effect.sync(() => void answers.push(said))))
+            .pipe(Effect.andThen(super.agentLaunch(...args)));
+        }
+      }
+      const result = yield* session(started("r1"), {
+        harness: "opencode",
+        model: "anthropic/claude-opus-4-1",
+        herdr: new Starting(rig.pluginEnv()),
+      });
+      expect(answers).toEqual(["accepted"]);
+      expect(result._tag === "Success" && result.success.note).toBe("during the start");
     }),
   ));
 

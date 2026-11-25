@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
-import { acceptOutput, outputOf } from "../src/step-output";
+import { acceptOutput, carriedFor, outputOf, recordCarried } from "../src/step-output";
 import { awaitOutput, submitOutput, takeOutput } from "../src/output-submit";
 import { RunRecords } from "../src/run-records";
 import { runEffect } from "./support/effect";
@@ -133,7 +133,6 @@ test("a replay of the dispatch whose Output was collected cannot replace it", ()
         yield* awaitOutput("r1", "a", fileAt(), () => null, "review@1");
         expect(yield* submitOutput("r1", "a", "first")).toBe("accepted");
         yield* takeOutput(records, step, "first");
-        // WARNING: A resumed Run re-registers the dispatch its launch record already fixed.
         yield* awaitOutput("r1", "a", fileAt(), () => null, "review@1");
         expect(yield* submitOutput("r1", "a", "second")).toContain("differs from it");
         expect((yield* outputOf(records, step))?.text).toBe("first");
@@ -157,6 +156,38 @@ test("a step dispatched again in a new round takes its new Output", () =>
     ),
   ));
 
+test("a new round refuses a differing submit once it has accepted one of its own", () =>
+  runEffect(
+    withRecords(
+      Effect.gen(function* () {
+        const records = yield* RunRecords;
+        const step = { runId: "r1", output: fileAt(), submitOnly: true };
+        yield* awaitOutput("r1", "a", fileAt(), () => null, "review@1");
+        yield* submitOutput("r1", "a", "first");
+        yield* takeOutput(records, step, "first");
+        yield* awaitOutput("r1", "a", fileAt(), () => null, "review@2");
+        expect(yield* submitOutput("r1", "a", "second")).toBe("accepted");
+        expect(yield* submitOutput("r1", "a", "different")).toContain("differs from it");
+        expect((yield* outputOf(records, step))?.text).toBe("second");
+      }),
+    ),
+  ));
+
+test("a reader at a new dispatch does not read the round before it", () =>
+  runEffect(
+    withRecords(
+      Effect.gen(function* () {
+        const records = yield* RunRecords;
+        const step = { runId: "r1", output: fileAt(), submitOnly: true };
+        yield* awaitOutput("r1", "a", fileAt(), () => null, "review@1");
+        yield* submitOutput("r1", "a", "first");
+        yield* takeOutput(records, step, "first");
+        const next = { ...step, dispatch: "review@2" };
+        expect(yield* outputOf(records, next)).toBeNull();
+      }),
+    ),
+  ));
+
 test("a step's time is when its Output was accepted, not when a file beside it was written", () =>
   runEffect(
     withRecords(
@@ -169,6 +200,22 @@ test("a step's time is when its Output was accepted, not when a file beside it w
         expect(accepted.text).toBe("submitted");
         expect(accepted.file).toBe(false);
         expect(accepted.at).toBeGreaterThanOrEqual(file.at);
+      }),
+    ),
+  ));
+
+test("a carried Output is a copy, kept apart from what the step accepted", () =>
+  runEffect(
+    withRecords(
+      Effect.gen(function* () {
+        const records = yield* RunRecords;
+        const step = { runId: "r1", output: fileAt(), submitOnly: true };
+        yield* recordCarried(records, step, "the parent's words", "the-parent");
+        expect(yield* outputOf(records, step)).toBeNull();
+        expect(yield* carriedFor(records, step)).toMatchObject({
+          text: "the parent's words",
+          from: "the-parent",
+        });
       }),
     ),
   ));

@@ -294,7 +294,6 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
               }
               yield* setStatus(terminal, submit === null ? status : "idle");
               if (owed === undefined) {
-                // WARNING: a scripted working turn is a fixture saying the agent is still busy, not a turn that ended.
                 if (submit === null && status !== "working" && status !== "blocked") {
                   yield* setStatus(terminal, "idle");
                 }

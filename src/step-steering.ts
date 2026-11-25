@@ -3,6 +3,7 @@ import * as Option from "effect/Option";
 import { Effect, Schema } from "effect";
 import { RunRecords, runOfDir } from "./run-records";
 import { readStepLines } from "./steps";
+import type { StepPlace } from "./steps";
 import { nowIso } from "./time";
 
 export const StepPause = Schema.Struct({
@@ -61,7 +62,17 @@ const change = <A>(
     return value as A;
   });
 
-export const stepTarget = Effect.fn("StepSteering.target")(function* (dir: string, id: string) {
+const repeatsOf = (place: StepPlace | null) =>
+  place !== null &&
+  ("item" in place
+    ? place.items.indexOf(place.item) < place.items.length - 1
+    : place.of === null || place.round < place.of);
+
+export const stepTarget = Effect.fn("StepSteering.target")(function* (
+  dir: string,
+  id: string,
+  handedIn = false,
+) {
   const lines = yield* readStepLines(dir);
   const latest = Option.getOrUndefined(Arr.findLast(lines, (one) => one.kind === "forecast"));
   const entered = Option.getOrUndefined(
@@ -75,18 +86,14 @@ export const stepTarget = Effect.fn("StepSteering.target")(function* (dir: strin
   if (step === undefined) {
     return { refused: `No Step ${id} is declared by this Run` } as const;
   }
-  if (
-    entered?.kind === "enter" &&
-    Arr.some(lines, (one) => one.kind === "leave" && one.key === entered.key)
-  ) {
-    const place = entered.place;
-    const repeats =
-      place !== null &&
-      ("item" in place
-        ? place.items.indexOf(place.item) < place.items.length - 1
-        : place.of === null || place.round < place.of);
-    if (!repeats) {
+  if (entered?.kind === "enter" && !repeatsOf(entered.place)) {
+    if (Arr.some(lines, (one) => one.kind === "leave" && one.key === entered.key)) {
       return { refused: `Step ${id} has already been left and will not run again` } as const;
+    }
+    if (handedIn) {
+      return {
+        refused: `Step ${id} has handed in its Output and will not run again`,
+      } as const;
     }
   }
   return { step } as const;

@@ -7,12 +7,16 @@ import type { RunRecordsApi } from "./run-records";
 
 export const ACCEPTED = "accepted/";
 export const COLLECTED = "collected/";
+export const CARRIED = "carried/";
 
 export const acceptedName = (output: string) =>
   `${ACCEPTED}${output.slice(output.lastIndexOf("/") + 1)}`;
 
 export const collectedName = (output: string) =>
   `${COLLECTED}${output.slice(output.lastIndexOf("/") + 1)}`;
+
+export const carriedName = (output: string) =>
+  `${CARRIED}${output.slice(output.lastIndexOf("/") + 1)}`;
 
 const Accepted = Schema.Struct({
   text: Schema.String,
@@ -32,12 +36,21 @@ export interface StepOutput {
 export type Step = Pick<Launched, "runId" | "output"> & {
   readonly submitOnly?: boolean;
   readonly dispatch?: string;
+  readonly operation?: string;
+  readonly sequence?: number;
+  readonly at?: number;
 };
 
 // WARNING: The clock a harness is stamped with is not the host's, so a dispatch is named by what the record fixes.
-export const dispatchOf = (launched: Launched) => `${stemOf(launched)}@${launched.at ?? 0}`;
+export const dispatchOf = (launched: { operation: string; sequence?: number; at?: number }) =>
+  `${stemOf(launched)}@${launched.at ?? 0}`;
 
-/** A step at a path is the dispatch that was recorded for it; a path with no launch is nobody's Output. */
+const dispatchIn = (step: Step) =>
+  step.dispatch ??
+  (step.operation === undefined || step.at === undefined
+    ? undefined
+    : dispatchOf({ operation: step.operation, sequence: step.sequence, at: step.at }));
+
 export const stepOf = (
   launches: ReadonlyArray<Launched>,
   runId: string,
@@ -62,7 +75,14 @@ export const outputOf = Effect.fn("StepOutput.of")(function* (
       : (Option.getOrNull(Arr.findFirst(known, (one) => one.name === name))?.data ?? null);
   if (fact !== null) {
     const accepted = decodeAccepted(fact);
-    if (Option.isSome(accepted)) {
+    const dispatch = dispatchIn(step);
+    // WARNING: a fact that names its dispatch is that dispatch's alone, or the round before it would be read as this one.
+    const ours =
+      Option.isSome(accepted) &&
+      (accepted.value.dispatch === undefined ||
+        dispatch === undefined ||
+        accepted.value.dispatch === dispatch);
+    if (Option.isSome(accepted) && ours) {
       return {
         text: accepted.value.text,
         at: accepted.value.at,
@@ -109,6 +129,61 @@ export const recordOutput = Effect.fn("StepOutput.record")(function* (
   };
   yield* records.put(step.runId, acceptedName(step.output), encodeAccepted(accepted));
 });
+const retrying = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  // WARNING: another connection may hold the database for a moment, and a refusal must not lose an accepted Output.
+  effect.pipe(Effect.retry({ times: 20, schedule: Schedule.spaced(Duration.millis(50)) }));
+
+/** One transaction: what this dispatch submits is compared against the fact as it stands, never a read before it. */
+export const submitFor = Effect.fn("StepOutput.submit")(function* (
+  records: RunRecordsApi,
+  step: Step,
+  text: string,
+) {
+  const at = yield* Clock.currentTimeMillis;
+  const offered = encodeAccepted({
+    text,
+    at,
+    ...(dispatchIn(step) === undefined ? {} : { dispatch: dispatchIn(step) }),
+  });
+  const held = yield* retrying(
+    records.update(step.runId, acceptedName(step.output), (was) =>
+      Effect.succeed(
+        Option.match(was === null ? Option.none() : decodeAccepted(was), {
+          onNone: () => offered,
+          onSome: (prev) => (prev.dispatch === dispatchIn(step) ? was! : offered),
+        }),
+      ),
+    ),
+  );
+  return Option.getOrNull(decodeAccepted(held ?? ""));
+});
+
+const Carried = Schema.Struct({ text: Schema.String, at: Schema.Finite, from: Schema.String });
+
+export const recordCarried = Effect.fn("StepOutput.carry")(function* (
+  records: RunRecordsApi,
+  step: Pick<Step, "runId" | "output">,
+  text: string,
+  from: string,
+) {
+  const at = yield* Clock.currentTimeMillis;
+  yield* records.put(
+    step.runId,
+    carriedName(step.output),
+    Schema.encodeSync(Schema.fromJsonString(Carried))({ text, at, from }),
+  );
+});
+
+export const carriedFor = Effect.fn("StepOutput.carried")(function* (
+  records: RunRecordsApi,
+  step: Pick<Step, "runId" | "output">,
+) {
+  const fact = yield* records.fact(step.runId, carriedName(step.output));
+  return fact === null
+    ? null
+    : Option.getOrNull(Schema.decodeOption(Schema.fromJsonString(Carried))(fact));
+});
+
 export const acceptedFor = Effect.fn("StepOutput.acceptedFor")(function* (
   records: RunRecordsApi,
   step: Step,

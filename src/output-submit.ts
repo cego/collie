@@ -1,7 +1,7 @@
 import { Effect, flow, Result, Schema } from "effect";
 import { isString } from "./schema";
 import { RunRecords } from "./run-records";
-import { acceptedFor, collectedFor, markCollected, recordOutput } from "./step-output";
+import { markCollected, submitFor } from "./step-output";
 import type { RunRecordsApi } from "./run-records";
 
 interface Awaited {
@@ -30,7 +30,6 @@ export const forgetStep = (runId: string, output: string) =>
     }
   });
 
-/** What the collector does with the Output it takes: the step is done, and no later submit reaches it. */
 export const takeOutput = (
   records: RunRecordsApi,
   step: { runId: string; output: string },
@@ -61,18 +60,8 @@ export const submitOutput = Effect.fn("OutputSubmit.submit")(function* (
     return `Your Output is not usable: ${problem}\n\nNothing was written. Correct it and submit it again.`;
   }
   const step = { runId, output: entry.output, dispatch: entry.dispatch };
-  const accepted = yield* acceptedFor(records, step);
-  const taken = yield* collectedFor(records, step);
-  const nextRound =
-    taken !== null &&
-    taken.dispatch !== undefined &&
-    entry.dispatch !== undefined &&
-    taken.dispatch !== entry.dispatch;
-  if (accepted !== null && !nextRound) {
-    return accepted.text === text
-      ? "accepted"
-      : "An Output was already accepted for this step, and this one differs from it. Nothing was written.";
-  }
-  yield* recordOutput(records, step, text);
-  return "accepted";
+  const held = yield* submitFor(records, step, text);
+  return held !== null && held.text !== text
+    ? "An Output was already accepted for this step, and this one differs from it. Nothing was written."
+    : "accepted";
 });
