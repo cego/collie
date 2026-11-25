@@ -1168,9 +1168,7 @@ export function splitDisputed(findings: ReadonlyArray<Finding>, disputed: Readon
     if (finding.status === "fixed" || finding.status === "obsolete") {
       continue;
     }
-    if (finding.status === "disputed" && !finding.rebuttal) {
-      split.settled.push(finding);
-    } else if (!Arr.some(disputed, (one) => sameFinding(one, finding))) {
+    if (!Arr.some(disputed, (one) => sameFinding(one, finding))) {
       split.live.push(finding);
     } else if (finding.rebuttal) {
       split.live.push(finding);

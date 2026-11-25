@@ -84,6 +84,23 @@ test("a dispute survives a rename by id and counts once across ledger versions",
   expect(splitDisputed([renamed], [legacy]).settled).toEqual([renamed]);
 });
 
+test("a blocker only the review called disputed is the fixer's work, not a person's to waive", () => {
+  const reviewerOnly: Finding = {
+    severity: "blocker",
+    file: "src/guard.ts",
+    title: "guard the input",
+    status: "disputed",
+    detail: "the CLI path does not validate it",
+  };
+  const split = splitDisputed([reviewerOnly], []);
+  expect(split.settled).toEqual([]);
+  expect(split.standing).toEqual([]);
+  expect(split.live).toEqual([reviewerOnly]);
+  expect(settleRound({ live: split.live, disputed: split.standing, at: 1 })).toMatchObject({
+    go: "fix",
+  });
+});
+
 const GUARD: Finding = {
   file: "src/guard.ts",
   severity: "blocker",
@@ -152,7 +169,7 @@ test("resolved ledger findings leave the rally clean and a dispute remains the h
     severity: "major",
     title: "keep the behavior",
   };
-  const split = splitDisputed([fixed, obsolete, dispute], []);
+  const split = splitDisputed([fixed, obsolete, dispute], [dispute]);
   expect(split.live).toEqual([]);
   expect(split.settled).toEqual([dispute]);
   expect(settleRound({ live: [fixed, obsolete], disputed: [], at: 2 })).toEqual({
