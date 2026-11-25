@@ -24,7 +24,7 @@ import type { CallLimits } from "./steering";
 import { stringifyJson } from "./json";
 import { Launches } from "./launches";
 import { RunRecords } from "./run-records";
-import { ACCEPTED, acceptedText } from "./step-output";
+import { ACCEPTED, acceptedIn, dispatchOf } from "./step-output";
 import { runOfDir } from "./run-records";
 
 export const MAX_LINES_PER_FILE = 200;
@@ -410,11 +410,24 @@ export const outputsIn = Effect.fn("Drift.outputsIn")(function* (agentsDir: stri
       yield* fs.readFileString(`${agentsDir}/${name}`).pipe(Effect.orElseSucceed(() => "")),
     );
   }
+  const latest = new Map(Arr.map(marked, (one) => [one.operation, one] as const));
   for (const fact of yield* records.factsUnder(run, ACCEPTED)) {
     const name = Str.slice(ACCEPTED.length)(fact.name);
-    if (pipe(name, Str.endsWith(".json")) && isAnOutput(name)) {
-      shown.set(name, acceptedText(fact.data));
+    if (!pipe(name, Str.endsWith(".json")) || !isAnOutput(name)) {
+      continue;
     }
+    const launch = latest.get(pipe(name, Str.slice(0, -".json".length)));
+    const accepted = acceptedIn(fact.data);
+    const dispatch = launch === undefined ? undefined : dispatchOf(launch);
+    // WARNING: a fact that names its dispatch is that dispatch's, not whatever round is running now.
+    if (
+      accepted?.dispatch !== undefined &&
+      dispatch !== undefined &&
+      accepted.dispatch !== dispatch
+    ) {
+      continue;
+    }
+    shown.set(name, accepted?.text ?? fact.data);
   }
   const outputs: Array<ShownOutput & { readonly truncated: boolean }> = [];
   for (const name of [...shown.keys()].sort().slice(0, MAX_FILES)) {

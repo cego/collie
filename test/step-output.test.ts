@@ -219,3 +219,18 @@ test("a carried Output is a copy, kept apart from what the step accepted", () =>
       }),
     ),
   ));
+
+test("a stale dispatch cannot replace the round that has already handed in", () =>
+  runEffect(
+    withRecords(
+      Effect.gen(function* () {
+        const records = yield* RunRecords;
+        const step = { runId: "r1", output: fileAt(), submitOnly: true, dispatch: "review@2" };
+        yield* awaitOutput("r1", "a", fileAt(), () => null, "review@2");
+        expect(yield* submitOutput("r1", "a", "the new round")).toBe("accepted");
+        yield* awaitOutput("r1", "a", fileAt(), () => null, "review@1");
+        expect(yield* submitOutput("r1", "a", "the round before")).toContain("differs from it");
+        expect((yield* outputOf(records, step))?.text).toBe("the new round");
+      }),
+    ),
+  ));

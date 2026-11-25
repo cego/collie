@@ -2440,7 +2440,6 @@ test("a restart while the Run is collected past its budget reattaches and takes 
           Effect.provide(recordsAt(dir)),
         ),
       ).toContain("late");
-      // WARNING: a restart keeps nothing in memory, so what it returns has to come from the fact.
       yield* forgetAwaited;
       const before = (yield* rig.calls()).length;
       const result = yield* session(started("r1"), { collectMs: 400 });
@@ -10732,5 +10731,58 @@ test("requests an agent made after its last delivery are in the ledger once it i
       );
       expect(Arr.sort(ended, Order.String)).toEqual(["msg_A", "msg_B", "msg_C"]);
       expect(Arr.sort(settled, Order.String)).toEqual(["msg_A", "msg_B", "msg_C"]);
+    }),
+  ));
+
+test("a round before is not the round a dead agent is revived for", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null]);
+      yield* session(
+        Effect.gen(function* () {
+          const agents = yield* Agents;
+          const ask = {
+            runId: "r1",
+            operation: "review",
+            role: "reviewer",
+            workflow: "agent-work",
+            harness: "claude",
+            agent: null,
+            model: "default",
+            effort: null,
+            permissions: null,
+            task: null,
+            cwd: rig.projectDir,
+            prompt: "Review the diff.",
+            output: outputPath("r1"),
+            skill: null,
+          };
+          const played = {
+            ...Struct.pick(ask, [
+              "runId",
+              "operation",
+              "role",
+              "workflow",
+              "harness",
+              "model",
+              "output",
+            ]),
+            agent: agentFor("r1"),
+            reused: false,
+          };
+          yield* Effect.gen(function* () {
+            const records = yield* RunRecords;
+            yield* recordLaunch({ ...played, at: 1000 });
+            yield* acceptOutput(
+              records,
+              { runId: "r1", output: ask.output, dispatch: "review@1000" },
+              `{"verdict":"clean","note":"round one"}`,
+            );
+            yield* recordLaunch({ ...played, at: 2000 });
+          }).pipe(Effect.provide(recordsAt(dir)));
+          expect(yield* agents.revive(ask)).toBe(true);
+          expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
+        }),
+      );
     }),
   ));

@@ -40,7 +40,6 @@ import {
   FileSystem,
   Hash,
   Option,
-  Path,
   Schema,
   flow,
   Result,
@@ -1145,7 +1144,6 @@ export default defineWorkflow({
           success: schema,
           error: WorkflowError,
           execute: Effect.gen(function* () {
-            const fs = yield* FileSystem.FileSystem;
             let raw: string | null = null;
             for (const operation of operations) {
               const found = yield* agents.outputOf(from, operation);
@@ -1167,10 +1165,6 @@ export default defineWorkflow({
             const read = yield* Schema.decodeEffect(Schema.fromJsonString(schema))(raw).pipe(
               Effect.mapError(unreadable),
             );
-            const own = agents.outputFor(runId, name);
-            yield* fs
-              .makeDirectory((yield* Path.Path).dirname(own), { recursive: true })
-              .pipe(Effect.andThen(fs.writeFileString(own, raw)), Effect.mapError(unreadable));
             yield* agents.carry(runId, name, raw);
             yield* host.record(runId, `${name} carried from ${from}`);
             return read;

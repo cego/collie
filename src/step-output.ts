@@ -1,5 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { Clock, Duration, Effect, FileSystem, Schedule, Schema } from "effect";
 import type { Launched } from "./launches";
 import { stemOf } from "./launches";
@@ -45,6 +46,19 @@ export type Step = Pick<Launched, "runId" | "output"> & {
 export const dispatchOf = (launched: { operation: string; sequence?: number; at?: number }) =>
   `${stemOf(launched)}@${launched.at ?? 0}`;
 
+const stampOf = (dispatch: string | undefined) => {
+  if (dispatch === undefined) {
+    return Number.NEGATIVE_INFINITY;
+  }
+  const at = Option.getOrElse(Str.lastIndexOf("@")(dispatch), () => -1);
+  const digits = Str.slice(at + 1)(dispatch);
+  const value = Number(digits);
+  return Str.trim(digits) === "" || Number.isNaN(value) ? Number.NEGATIVE_INFINITY : value;
+};
+
+const newer = (ours: string | undefined, held: string | undefined) =>
+  ours !== undefined && stampOf(ours) > stampOf(held);
+
 const dispatchIn = (step: Step) =>
   step.dispatch ??
   (step.operation === undefined || step.at === undefined
@@ -76,7 +90,6 @@ export const outputOf = Effect.fn("StepOutput.of")(function* (
   if (fact !== null) {
     const accepted = decodeAccepted(fact);
     const dispatch = dispatchIn(step);
-    // WARNING: a fact that names its dispatch is that dispatch's alone, or the round before it would be read as this one.
     const ours =
       Option.isSome(accepted) &&
       (accepted.value.dispatch === undefined ||
@@ -110,11 +123,9 @@ export const outputOf = Effect.fn("StepOutput.of")(function* (
   } satisfies StepOutput;
 });
 
-export const acceptedText = (data: string) =>
-  Option.match(decodeAccepted(data), {
-    onNone: () => data,
-    onSome: (one) => one.text,
-  });
+export const acceptedIn = (data: string) => Option.getOrNull(decodeAccepted(data));
+
+export const acceptedText = (data: string) => acceptedIn(data)?.text ?? data;
 
 export const recordOutput = Effect.fn("StepOutput.record")(function* (
   records: RunRecordsApi,
@@ -133,7 +144,6 @@ const retrying = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   // WARNING: another connection may hold the database for a moment, and a refusal must not lose an accepted Output.
   effect.pipe(Effect.retry({ times: 20, schedule: Schedule.spaced(Duration.millis(50)) }));
 
-/** One transaction: what this dispatch submits is compared against the fact as it stands, never a read before it. */
 export const submitFor = Effect.fn("StepOutput.submit")(function* (
   records: RunRecordsApi,
   step: Step,
@@ -150,7 +160,7 @@ export const submitFor = Effect.fn("StepOutput.submit")(function* (
       Effect.succeed(
         Option.match(was === null ? Option.none() : decodeAccepted(was), {
           onNone: () => offered,
-          onSome: (prev) => (prev.dispatch === dispatchIn(step) ? was! : offered),
+          onSome: (prev) => (newer(dispatchIn(step), prev.dispatch) ? offered : was!),
         }),
       ),
     ),

@@ -3562,22 +3562,6 @@ export const evidenceDir: (dir: string, runId: string) => string = (dir, runId) 
 export const runDir: (dir: string, runId: string) => string = (dir, runId) =>
   `${dir}/runs/${runId}`;
 
-/** A step has handed in when a launch recorded for it has an Output at its path. */
-const handedInAt = (runId: string, step: string) =>
-  Effect.gen(function* () {
-    const launched = Arr.filter(
-      yield* readLaunches(runId).pipe(Effect.orElseSucceed(() => [])),
-      (one) => one.step?.step === step,
-    );
-    const records = yield* RunRecords;
-    for (const one of launched) {
-      if ((yield* outputOf(records, one)) !== null) {
-        return true;
-      }
-    }
-    return false;
-  }).pipe(Effect.orElseSucceed(() => false));
-
 const lineageIn = (store: StoreApi) =>
   Effect.fn("Engine.lineageOf")(function* (runId: string) {
     const lineage = [runId];
@@ -11250,11 +11234,7 @@ const makeRegistry: (
           });
         }
         const where = runDir(dir, options.runId);
-        const target = yield* stepTarget(
-          where,
-          options.step,
-          yield* handedInAt(options.runId, options.step),
-        );
+        const target = yield* stepTarget(where, options.step);
         if (target.refused !== undefined) {
           return yield* new HostRefused({ reason: target.refused });
         }

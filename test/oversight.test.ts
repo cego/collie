@@ -19,6 +19,7 @@ import type { Host } from "../src/sdk";
 import { Children } from "../src/sdk";
 import { foundationLayer, loadEntry, runDir } from "../src/engine";
 import { acceptOutput } from "../src/step-output";
+import { recordLaunch } from "../src/launches";
 import type { Herd } from "../src/engine";
 import {
   Oversight,
@@ -1626,5 +1627,30 @@ test("an Output accepted for a step is in the facts the rules judge, with no fil
       );
       const facts = yield* ruleFacts(watchedAt("r1"));
       expect(facts.outputs.review?.summary).toBe("from the fact");
+    }),
+  ));
+
+test("a marked step's file is not among the facts the rules judge, unless an Output was accepted", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* repository();
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(`${dir}/agents/r1`, { recursive: true });
+      yield* fs.writeFileString(
+        `${dir}/agents/r1/review.json`,
+        `{"summary":"written by the agent"}`,
+      );
+      yield* recordLaunch({
+        agent: "r1-review-r1",
+        output: `${dir}/agents/r1/review.json`,
+        reused: false,
+        runId: "r1",
+        operation: "review",
+        role: "reviewer",
+        workflow: "implement",
+        harness: "claude",
+        submitOnly: true,
+      });
+      expect((yield* ruleFacts(watchedAt("r1"))).outputs.review).toBeUndefined();
     }),
   ));

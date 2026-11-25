@@ -4076,16 +4076,26 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         if (onlyDeadServer && lost === null) {
           return false;
         }
-        const completed = waitForOutput(ask, unless ?? null, {
-          pollMs: host.pollMs ?? DEFAULT_POLL_MS,
-          budgetMs: 0,
-          counts: Effect.succeed(false),
-          usable: usable ?? (() => true),
-          settled: Effect.suspend(() => host.herdr.agentStatus(agent)).pipe(
-            Effect.orElseSucceed(() => null),
-            Effect.map((status) => status !== "working" && status !== "blocked"),
+        const recorded = Option.getOrUndefined(
+          Arr.findLast(
+            yield* launchesOf(ask.runId).pipe(Effect.orElseSucceed(() => [])),
+            (one) => one.output === ask.output && one.agent === agent,
           ),
-        });
+        );
+        const completed = waitForOutput(
+          recorded === undefined ? ask : { ...ask, dispatch: dispatchOf(recorded) },
+          unless ?? null,
+          {
+            pollMs: host.pollMs ?? DEFAULT_POLL_MS,
+            budgetMs: 0,
+            counts: Effect.succeed(false),
+            usable: usable ?? (() => true),
+            settled: Effect.suspend(() => host.herdr.agentStatus(agent)).pipe(
+              Effect.orElseSucceed(() => null),
+              Effect.map((status) => status !== "working" && status !== "blocked"),
+            ),
+          },
+        );
         if ((yield* completed) !== null) {
           return false;
         }

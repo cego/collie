@@ -4,6 +4,8 @@ import { Effect, Schema } from "effect";
 import { RunRecords, runOfDir } from "./run-records";
 import { readStepLines } from "./steps";
 import type { StepPlace } from "./steps";
+import { Launches } from "./launches";
+import { outputOf } from "./step-output";
 import { nowIso } from "./time";
 
 export const StepPause = Schema.Struct({
@@ -68,11 +70,7 @@ const repeatsOf = (place: StepPlace | null) =>
     ? place.items.indexOf(place.item) < place.items.length - 1
     : place.of === null || place.round < place.of);
 
-export const stepTarget = Effect.fn("StepSteering.target")(function* (
-  dir: string,
-  id: string,
-  handedIn = false,
-) {
+export const stepTarget = Effect.fn("StepSteering.target")(function* (dir: string, id: string) {
   const lines = yield* readStepLines(dir);
   const latest = Option.getOrUndefined(Arr.findLast(lines, (one) => one.kind === "forecast"));
   const entered = Option.getOrUndefined(
@@ -90,7 +88,7 @@ export const stepTarget = Effect.fn("StepSteering.target")(function* (
     if (Arr.some(lines, (one) => one.kind === "leave" && one.key === entered.key)) {
       return { refused: `Step ${id} has already been left and will not run again` } as const;
     }
-    if (handedIn) {
+    if (yield* handedIn(dir, entered.key)) {
       return {
         refused: `Step ${id} has handed in its Output and will not run again`,
       } as const;
@@ -98,6 +96,23 @@ export const stepTarget = Effect.fn("StepSteering.target")(function* (
   }
   return { step } as const;
 });
+
+const handedIn = (dir: string, key: string) =>
+  Effect.gen(function* () {
+    const maybe = yield* Effect.serviceOption(Launches);
+    if (Option.isNone(maybe)) {
+      return false;
+    }
+    const run = runOfDir(dir);
+    const launched = (yield* maybe.value.of([run])).get(run) ?? [];
+    const records = yield* RunRecords;
+    for (const one of launched) {
+      if (one.step?.key === key && (yield* outputOf(records, one)) !== null) {
+        return true;
+      }
+    }
+    return false;
+  }).pipe(Effect.orElseSucceed(() => false));
 
 export const pauseBefore = (dir: string, step: string, by: string, armed: boolean) =>
   change(dir, (state) =>

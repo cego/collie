@@ -61,7 +61,8 @@ import { pendingFor, proposalsOf, record as recordProposal } from "./proposals";
 import { appendLine, deliveriesOf, newestById, overrideActive, readLedger } from "./steering";
 import type { Records } from "./records";
 import { RunRecords, runOfDir } from "./run-records";
-import { ACCEPTED, acceptedText } from "./step-output";
+import { ACCEPTED, acceptedIn, dispatchOf } from "./step-output";
+import { Launches } from "./launches";
 import { capabilitiesOf } from "./steering-caps";
 import { externalSubmissions } from "./compactors";
 import { controlDir } from "./compaction";
@@ -266,16 +267,28 @@ export const ruleFacts = Effect.fn("Oversight.ruleFacts")(function* (at: Watched
   const untracked = yield* gitOutput(["ls-files", "--others", "--exclude-standard"], at.cwd);
   const branch = yield* shell("git", ["rev-parse", "--abbrev-ref", "HEAD"], at.cwd);
   const outputs: Record<string, Record<string, string>> = {};
+  const launches = Option.getOrUndefined(yield* Effect.serviceOption(Launches));
+  const marked =
+    launches === undefined ? [] : ((yield* launches.of([at.runId])).get(at.runId) ?? []);
+  const submitted = Arr.map(
+    Arr.filter(marked, (one) => one.submitOnly === true),
+    (one) => one.operation,
+  );
+  const latest = new Map(Arr.map(marked, (one) => [one.operation, one] as const));
   const names = yield* fs.readDirectory(at.agentsDir).pipe(Effect.orElseSucceed(() => []));
   for (const name of names) {
     if (!pipe_(name, Str.endsWith(".json"))) {
+      continue;
+    }
+    const operation = pipe_(name, Str.slice(0, -".json".length));
+    if (Arr.contains(submitted, operation)) {
       continue;
     }
     const text = yield* fs
       .readFileString(`${at.agentsDir}/${name}`)
       .pipe(Effect.orElseSucceed(() => ""));
     if (text !== "") {
-      outputs[pipe_(name, Str.slice(0, -".json".length))] = flattenOutput(text);
+      outputs[operation] = flattenOutput(text);
     }
   }
   const records = yield* RunRecords;
@@ -283,7 +296,18 @@ export const ruleFacts = Effect.fn("Oversight.ruleFacts")(function* (at: Watched
     const key = pipe_(one.name, Str.slice(ACCEPTED.length), (name) =>
       pipe_(name, Str.endsWith(".json")) ? pipe_(name, Str.slice(0, -".json".length)) : name,
     );
-    outputs[key] = flattenOutput(acceptedText(one.data));
+    const launch = latest.get(key);
+    const accepted = acceptedIn(one.data);
+    const dispatch = launch === undefined ? undefined : dispatchOf(launch);
+    // WARNING: a fact that names its dispatch is that dispatch's, not whatever round is running now.
+    if (
+      accepted?.dispatch !== undefined &&
+      dispatch !== undefined &&
+      accepted.dispatch !== dispatch
+    ) {
+      continue;
+    }
+    outputs[key] = flattenOutput(accepted?.text ?? one.data);
   }
   const verifications: Record<string, { exit: number; ref: string }> = {};
   const verified = yield* readVerifications(at.evidenceDir).pipe(Effect.orElseSucceed(() => []));
