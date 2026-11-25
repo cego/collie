@@ -33,6 +33,12 @@ export interface FakeHc {
   readonly hold: (method: string) => () => void;
   readonly answer: (method: string, reply: Schema.Json) => void;
   readonly refuse: (method: string, kind: string, message: string) => void;
+  readonly refuseWhen: (
+    method: string,
+    matches: (params: Schema.JsonObject) => boolean,
+    kind: string,
+    message: string,
+  ) => void;
   readonly refuseOnce: (
     method: string,
     kind: string,
@@ -160,6 +166,10 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
   const terminals = new Map<string, Terminal>();
   const answers = new Map<string, Schema.Json>();
   const refusals = new Map<string, { code: number; message: string; kind: string }>();
+  const conditionalRefusals = new Map<
+    string,
+    Array<{ matches: (params: Schema.JsonObject) => boolean; code: number; message: string; kind: string }>
+  >();
   const refusalsOnce = new Map<
     string,
     { code: number; message: string; kind: string; after: number; left: number }
@@ -387,6 +397,13 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
           }
           return { failure: once };
         }
+      }
+      const conditional = Arr.findFirst(
+        conditionalRefusals.get(method) ?? [],
+        (one) => one.matches(params),
+      );
+      if (Option.isSome(conditional)) {
+        return { failure: conditional.value };
       }
       const refused = refusals.get(method);
       if (refused !== undefined) {
@@ -785,11 +802,18 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
     refuse: (method, kind, message) => {
       refusals.set(method, { code: -32_000, kind, message });
     },
+    refuseWhen: (method, matches, kind, message) => {
+      conditionalRefusals.set(method, [
+        ...(conditionalRefusals.get(method) ?? []),
+        { matches, code: -32_000, kind, message },
+      ]);
+    },
     refuseOnce: (method, kind, message, after = 0, times = 1) => {
       refusalsOnce.set(method, { code: -32_000, kind, message, after, left: times });
     },
     restore: (method) => {
       refusals.delete(method);
+      conditionalRefusals.delete(method);
       refusalsOnce.delete(method);
       answers.delete(method);
     },

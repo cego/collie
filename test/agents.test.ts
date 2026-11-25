@@ -2983,17 +2983,6 @@ class LostAnswers extends Turns {
   }
 }
 
-class LosesEveryAnswer extends Turns {
-  answers = 0;
-  override agentPrompt(...args: Parameters<Herdr["agentPrompt"]>) {
-    if (!pipe(args[1], Str.includes("answered:"))) {
-      return super.agentPrompt(...args);
-    }
-    this.answers += 1;
-    return Effect.fail(new HerdrError({ message: "socket closed", detail: "" }));
-  }
-}
-
 const answerDelivery = Effect.gen(function* () {
   return Arr.findFirst(yield* deliveredTo(dir, "r1"), (one) => one.cause.kind === "steer");
 });
@@ -3034,7 +3023,12 @@ test("an answer left unknown is not forgotten when another call's answers go unk
   runEffect(
     Effect.gen(function* () {
       yield* rig.queueOutputs([null]);
-      const herdr = new LosesEveryAnswer();
+      core.refuseWhen(
+        "terminal.send",
+        (params) => pipe(params.text, Str.includes("answered:")),
+        "unreachable",
+        "the core did not answer",
+      );
       yield* session(
         Effect.gen(function* () {
           yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
@@ -3047,17 +3041,19 @@ test("an answer left unknown is not forgotten when another call's answers go unk
           yield* untilParked("r1");
 
         }),
-        { herdr, collectMs: 600_000, pollMs: 100 },
+        { herdr: new Turns(), collectMs: 600_000, pollMs: 100 },
       ).pipe(Effect.orDie);
-      const [first] = Arr.filter(
+      core.restore("terminal.send");
+      const unknown = Arr.filter(
         yield* deliveredTo(dir, "r1"),
         (one) => one.cause.kind === "steer" && one.state === "unknown",
       );
+      expect(unknown).toHaveLength(2);
+      const [first] = unknown;
       expect(first?.cause.ref).toBe("ask-review-1");
       expect(yield* controlOf(PARK_CAUSE, "r1")).toBe("delivery-unsettled");
       expect(yield* controlOf(PARKED, "r1")).toContain(first!.id);
       expect(yield* reminders).toEqual([]);
-      expect(herdr.answers).toBe(2);
     }),
   ));
 

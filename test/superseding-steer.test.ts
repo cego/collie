@@ -18,6 +18,7 @@ import { carryOutAsked } from "../src/run-actions";
 import { SENT_STATES, appendLine } from "../src/steering";
 import { deliveredTo, hostRecords, recordsAt } from "./support/records";
 import { readMetrics } from "../src/metrics";
+import type { Metric } from "../src/metrics";
 import { NOTIFIED, RunRecords } from "../src/run-records";
 import { TaskView } from "../src/board-model";
 import { read as readProposals, record as recordProposal } from "../src/proposals";
@@ -724,7 +725,6 @@ for (const evidence of [
 
           yield* stopHost(at.world.state);
           const before = Arr.length(yield* metricsOf(at));
-          const again = yield* startHost(at.world);
           if (evidence !== "no-submit") {
             yield* recordClaudeEvent(
               yield* controlDir(at.world.state, at.agent),
@@ -738,23 +738,20 @@ for (const evidence of [
               evidence === "another-incarnation" ? "not-its-terminal" : delivery.incarnation,
             ).pipe(Effect.orDie);
           }
+          const again = yield* startHost(at.world);
 
-          const rechecked = yield* until(
-            () => metricsOf(at),
-            (lines) => Arr.length(lines) > before,
-          );
-          const fresh = Arr.drop(rechecked, before);
-          expect(
-              Option.getOrUndefined(
-                Arr.findFirst(
-                  fresh,
-                  (line) =>
-                    line.action === "rechecked" &&
-                    line.park === parkId &&
-                    pipe(line.note ?? "", Str.includes(delivery.id)),
-                ),
-              ),
-            ).toMatchObject({ outcome: evidence === "its-own-submit" ? "cleared" : "uncleared" });
+          const rechecks = (lines: ReadonlyArray<Metric>) =>
+            Arr.filter(
+              Arr.drop(lines, before),
+              (line) =>
+                line.action === "rechecked" &&
+                line.park === parkId &&
+                pipe(line.note ?? "", Str.includes(delivery.id)),
+            );
+          const rechecked = yield* until(() => metricsOf(at), (lines) => rechecks(lines).length > 0);
+          expect(rechecks(rechecked)[0]).toMatchObject({
+            outcome: evidence === "its-own-submit" ? "cleared" : "uncleared",
+          });
 
           const after = yield* until(
             () => viewOf(at, again),
