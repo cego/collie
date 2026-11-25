@@ -703,7 +703,7 @@ test("an offer child admitted before the fingerprint existed still answers its r
         const placing = parseJson(Schema.Record(Schema.String, Schema.Json), row.placing);
         const legacy = Rec.filter(
           placing,
-          (_, key) => !["direct", "child", "took", "invoked"].includes(key),
+          (_, key) => !["direct", "child", "took", "invoked", "by"].includes(key),
         );
         db.run("UPDATE collie_runs SET placing = ? WHERE run = ?", [
           stringifyJson(legacy),
@@ -713,6 +713,102 @@ test("an offer child admitted before the fingerprint existed still answers its r
         const again = yield* asked().pipe(Effect.orDie);
         expect(again.runId).toBe(child.runId);
         expect(again.fresh).toBe(false);
+      }),
+    [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
+  ));
+
+test("a fresh take writes one taken line for each id", () =>
+  hosted(
+    "hw-selected-one-line-",
+    ({ world }) =>
+      Effect.gen(function* () {
+        const run = yield* Effect.gen(function* () {
+          yield* install(world);
+          yield* (yield* FileSystem.FileSystem).writeFileString(
+            `${world.home}/outputs.json`,
+            encode([empty]),
+          );
+          return yield* started(world.state, world.project, "submits", { note: "two" });
+        });
+        const [first, second] = idsOf(run.id);
+        yield* run.client
+          .invoke({
+            runId: run.id,
+            offer: "implement-selected",
+            input: { findings: [first, second] },
+            request: "one-line",
+          })
+          .pipe(Effect.orDie);
+        const db = new Database(`${world.state}/host.db`);
+        const rows = db
+          .query("SELECT line FROM collie_run_lines WHERE run = ? AND line LIKE ?")
+          .all(run.id, '%"taken"%');
+        db.close();
+        const texts = Arr.map(rows, (one) =>
+          Option.getOrElse(
+            Option.map(
+              Schema.decodeUnknownOption(Schema.Struct({ line: Schema.String }))(one),
+              (row) => row.line,
+            ),
+            () => "",
+          ),
+        );
+        expect(
+          Arr.map(
+            [first, second],
+            (id) => Arr.filter(texts, (one) => Str.includes(id)(one)).length,
+          ),
+        ).toEqual([1, 1]);
+      }),
+    [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
+  ));
+
+test("a retry refuses a child the SDK admitted under its own Run id as the request", () =>
+  hosted(
+    "hw-selected-sdk-child-",
+    ({ world }) =>
+      Effect.gen(function* () {
+        const run = yield* Effect.gen(function* () {
+          yield* install(world);
+          yield* (yield* FileSystem.FileSystem).writeFileString(
+            `${world.home}/outputs.json`,
+            encode([empty]),
+          );
+          return yield* started(world.state, world.project, "submits", { note: "two" });
+        });
+        const [first, second] = idsOf(run.id);
+        const child = yield* run.client
+          .invoke({
+            runId: run.id,
+            offer: "implement-selected",
+            input: { findings: [first, second] },
+            request: "sdk-child",
+          })
+          .pipe(Effect.orDie);
+        const db = new Database(`${world.state}/host.db`);
+        const row = yield* Schema.decodeUnknownEffect(Schema.Struct({ placing: Schema.String }))(
+          db.query("SELECT placing FROM collie_runs WHERE run = ?").get(child.runId),
+        ).pipe(Effect.orDie);
+        const placing = parseJson(Schema.Record(Schema.String, Schema.Json), row.placing);
+        const legacy = Rec.filter(
+          placing,
+          (_, key) => !["direct", "child", "took", "invoked", "by"].includes(key),
+        );
+        db.run("UPDATE collie_runs SET placing = ?, request = ? WHERE run = ?", [
+          stringifyJson(legacy),
+          child.runId,
+          child.runId,
+        ]);
+        db.close();
+        const again = yield* run.client
+          .invoke({
+            runId: run.id,
+            offer: "implement-selected",
+            input: { findings: [first, second] },
+            request: child.runId,
+          })
+          .pipe(Effect.flip);
+        expect(again._tag).toBe("RequestConflict");
       }),
     [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
   ));
@@ -789,7 +885,8 @@ test("a retry saves the parent's open count when its taken lines are already the
             request: "count-lost",
           });
         yield* asked().pipe(Effect.orDie);
-        yield* RunRecords.use((records) => records.put(run.id, OPEN_FINDINGS, null)).pipe(
+        // WARNING: the count a reader trusts before the take, left behind when the host stopped between the writes.
+        yield* RunRecords.use((records) => records.put(run.id, OPEN_FINDINGS, "2")).pipe(
           Effect.provide(recordsAt(world.state)),
         );
         expect(
@@ -797,7 +894,7 @@ test("a retry saves the parent's open count when its taken lines are already the
             world.state,
             RunRecords.use((records) => records.fact(run.id, OPEN_FINDINGS)),
           ),
-        ).toBeNull();
+        ).toBe("2");
         yield* asked().pipe(Effect.orDie);
         expect(
           yield* hostRecords(

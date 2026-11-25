@@ -7408,6 +7408,7 @@ const Placing = Schema.Struct({
   direct: Schema.optionalKey(Schema.Literal(true)),
   child: Schema.optionalKey(Schema.Literal(true)),
   took: Schema.optionalKey(Schema.Array(Schema.String)),
+  by: Schema.optionalKey(Schema.String),
 });
 type Placing = typeof Placing.Type;
 const PlacingJson = Schema.fromJsonString(Placing);
@@ -7980,6 +7981,7 @@ export interface StartOptions {
   readonly continues?: ConsumedCard | undefined;
   readonly invoked?: string | undefined;
   readonly took?: ReadonlyArray<string> | undefined;
+  readonly by?: string | undefined;
   readonly intent?: IntentSeed;
   readonly verify?: ReadonlyArray<VerifySpec> | undefined;
   readonly attachments?: ReadonlyArray<string> | undefined;
@@ -9055,7 +9057,7 @@ const makeRegistry: (
         () => "",
       ),
       row.run,
-      by ?? row.run,
+      by ?? placing.by ?? row.run,
     ).pipe(Effect.provideService(RunRecords, runRecords));
   });
 
@@ -10696,6 +10698,7 @@ const makeRegistry: (
           ? { direct: true as const }
           : { invoked: options.invoked }),
         ...(options.took !== undefined && { took: options.took }),
+        ...(options.by !== undefined && { by: options.by }),
       }),
       generation: generation.name,
       execution: yield* generation.registration.workflow.executionId(payload),
@@ -11048,7 +11051,12 @@ const makeRegistry: (
       const claimed = yield* store.requested(options.request);
       if (claimed !== null) {
         const placing = Option.getOrUndefined(decodePlacing(claimed.placing ?? ""));
-        if (placing?.direct === true || placing?.child === true || claimed.parent === null) {
+        if (
+          placing?.direct === true ||
+          placing?.child === true ||
+          claimed.parent === null ||
+          claimed.request === claimed.run
+        ) {
           return yield* new RequestConflict({
             request: options.request,
             reason: `request "${options.request}" is already ${claimed.run}, started directly rather than by an offer`,
@@ -11171,21 +11179,14 @@ const makeRegistry: (
         input: Rec.filter(filled, (_, name) => !(name in RESERVED_INPUTS)),
         invoked,
         took: chosen,
+        by: options.by ?? options.request,
         task: row.task,
         parent: row.run,
         verify: inherited,
         attachments: options.attachments,
         started: options.started,
         options: launch,
-      }).pipe(
-        Effect.tap((started) =>
-          chosen.length === 0
-            ? Effect.void
-            : markTaken(where, chosen, offer.id, started.runId, options.by ?? options.request).pipe(
-                Effect.provideService(RunRecords, runRecords),
-              ),
-        ),
-      );
+      });
     }, invoking.withPermits(1)),
 
     start: startWork,
