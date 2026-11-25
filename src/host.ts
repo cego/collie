@@ -2298,15 +2298,21 @@ const frontDoorHandlers = (
           verified,
         ).pipe(
           Effect.catch((cause) =>
-            runLog(
-              env.stateDir,
-              run,
-            )(
-              `${agent}: could not be told its verify ${verified.id} ended (${reason(cause)})`,
-            ).pipe(Effect.provideContext(bun), Effect.ignore),
+            collecting
+              .markUntold(run, agent, verified.id)
+              .pipe(
+                Effect.andThen(
+                  runLog(
+                    env.stateDir,
+                    run,
+                  )(
+                    `${agent}: could not be told its verify ${verified.id} ended (${reason(cause)})`,
+                  ),
+                ),
+                Effect.provideContext(bun),
+                Effect.ignore,
+              ),
           ),
-          // WARNING: a tell is only sent to an agent that is settled, so it is tried again until the agent is.
-          Effect.tapError(() => collecting.markUntold(run, agent, verified.id)),
         );
       };
       const whileVerifying =

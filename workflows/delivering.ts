@@ -285,7 +285,6 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
           }),
         );
         const outputs: Record<string, Schema.Json> = {};
-        // WARNING: the newest Output naming a reproduction wins, and the newest is the one written last.
         const kept: ReadonlyArray<{
           operation: string;
           output: Option.Option<Schema.Json>;
@@ -300,7 +299,8 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         }
         return outputs;
       });
-    const fixes = written([...(rallied.fixed ?? []), ...fixers]);
+    const inventory = (operations: ReadonlyArray<string>) =>
+      Effect.map(written(operations), (from) => ({ ...from, ...ask.outputs() }));
     const treeNow = Effect.map(host.evidence(runId, cwd), ({ final }) => ({
       head: final.head_sha,
       fingerprint: final.fingerprint,
@@ -320,13 +320,12 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         evidence: yield* host.evidence(runId, cwd),
         approved,
         outputs: {
-          ...(yield* written([
+          ...(yield* inventory([
             "build",
             ...Arr.map(ask.tickets, (one) => one.file),
             ...(rallied.fixed ?? []),
             ...fixers,
           ])),
-          ...(yield* fixes),
           synthesize: { ...reviewed },
         },
         reviewed: ["synthesize"],

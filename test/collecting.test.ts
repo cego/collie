@@ -1,13 +1,30 @@
 import { expect, test } from "bun:test";
 import * as Arr from "effect/Array";
 import { Effect } from "effect";
-import { Collecting, collectingLayer, owedFor, released } from "../src/collecting";
+import { Collecting, collectingLayer, owedEver, owedFor, released } from "../src/collecting";
 import { runEffect } from "./support/effect";
 
 const ended = (...ids: ReadonlyArray<[string, number]>) => ({
   under: false,
-  ended: Arr.map(ids, ([id, at]) => ({ id, at })),
+  ended: Arr.map(ids, ([id, at]) => ({ id, at, began: 0 })),
   untold: [],
+});
+
+test("a rewrite after the verify ended keeps that verify owed for the rest of the turn", () => {
+  const hold = ended(["v1", 150]);
+  expect(owedFor(200, hold)).toEqual([]);
+  expect(owedEver(["v1"], 200, hold)).toEqual(["v1"]);
+  expect(released(owedEver(["v1"], 200, hold), false, () => true)).toBe(false);
+});
+
+test("a verify that began after the Output was written is not one it waits on", () => {
+  const hold = {
+    under: false,
+    ended: [{ id: "v1", began: 120, at: 150 }],
+    untold: [],
+  };
+  expect(owedFor(100, hold)).toEqual([]);
+  expect(owedFor(130, hold)).toEqual(["v1"]);
 });
 
 test("every verify that ended after the Output was written is owed its tell, not only the last", () => {

@@ -367,7 +367,7 @@ function approvedSetGaps(got: Collected) {
 }
 
 function anyField(got: Collected, key: string) {
-  for (const output of got.outputs.values()) {
+  for (const output of [...got.outputs.values()].reverse()) {
     if (isYamlMap(output) && key in output) {
       return output[key];
     }

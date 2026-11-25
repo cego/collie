@@ -21,15 +21,24 @@ export interface CollectingApi {
 
 export interface VerifyHold {
   readonly under: boolean;
-  readonly ended: ReadonlyArray<{ readonly id: string; readonly at: number }>;
+  readonly ended: ReadonlyArray<{
+    readonly id: string;
+    readonly at: number;
+    readonly began: number;
+  }>;
   readonly untold: ReadonlyArray<string>;
 }
 
 export const owedFor = (writtenAt: number, now: VerifyHold) => {
   const owed: ReadonlyArray<string> = Arr.map(
-    Arr.filter(now.ended, (one) => one.at >= writtenAt),
+    Arr.filter(now.ended, (one) => one.began <= writtenAt && one.at >= writtenAt),
     (one) => one.id,
   );
+  return owed;
+};
+
+export const owedEver = (known: ReadonlyArray<string>, writtenAt: number, now: VerifyHold) => {
+  const owed: ReadonlyArray<string> = [...new Set([...known, ...owedFor(writtenAt, now)])];
   return owed;
 };
 
@@ -41,7 +50,7 @@ export const released = (
 
 interface Held {
   under: number;
-  ended: Map<string, number>;
+  ended: Map<string, { readonly at: number; readonly began: number }>;
   untold: Set<string>;
 }
 
@@ -117,17 +126,19 @@ export const collectingLayer = Layer.effect(Collecting)(
         }),
       duringVerify: (run, agent, verify, named) =>
         Effect.acquireUseRelease(
-          Effect.sync(() => {
-            heldOf(run, agent).under += 1;
+          Effect.map(Clock.currentTimeMillis, (at) => {
+            const held = heldOf(run, agent);
+            held.under += 1;
+            return { held, at };
           }),
-          () =>
+          ({ held, at }) =>
             named === undefined
               ? verify
               : Effect.tap(verify, (verified) =>
                   Effect.gen(function* () {
                     const id = named(verified);
                     if (id !== null) {
-                      heldOf(run, agent).ended.set(id, yield* Clock.currentTimeMillis);
+                      held.ended.set(id, { began: at, at: yield* Clock.currentTimeMillis });
                     }
                   }),
                 ),
@@ -144,7 +155,7 @@ export const collectingLayer = Layer.effect(Collecting)(
       verifying: (run, agent) =>
         Effect.sync(() => {
           const held = verifies.get(key(run, agent));
-          const ended = Arr.map([...(held?.ended ?? [])], ([id, at]) => ({ id, at }));
+          const ended = Arr.map([...(held?.ended ?? [])], ([id, one]) => ({ id, ...one }));
           const returned: VerifyHold = {
             under: (held?.under ?? 0) > 0,
             ended,

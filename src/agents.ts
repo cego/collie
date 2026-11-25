@@ -218,7 +218,7 @@ import type { JsonObject } from "./schema";
 import { awaitOutput, outputCollected } from "./output-submit";
 import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } from "./subagents";
 import { Collecting, collectingLayer } from "./collecting";
-import { owedFor, released } from "./collecting";
+import { owedEver, released } from "./collecting";
 import type { CollectingApi, VerifyHold } from "./collecting";
 import { holdsBudgetOf, waitForMemory } from "./memory-wait";
 import {
@@ -3457,8 +3457,8 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         Effect.gen(function* () {
           const asking = questions === undefined ? null : yield* questionsOf(launched, questions);
           const turnOver = Effect.suspend(() => host.herdr.agentStatus(launched.agent)).pipe(
-            Effect.orElseSucceed(() => null),
             Effect.map((status) => status !== "working" && status !== "blocked"),
+            Effect.orElseSucceed(() => false),
           );
           const text = yield* Effect.raceFirst(
             waitForOutput(launched.output, unless ?? null, {
@@ -5109,21 +5109,26 @@ const waitForOutput = <R>(
     const read = fs.readFileString(path).pipe(Effect.orElseSucceed(() => ""));
     const fresh = (text: string) => Str.trim(text) !== "" && text !== unless;
     const began = yield* Clock.currentTimeMillis;
-    // WARNING: a verify that ended before this Output was written is not something it waits on.
     const writtenAt = Effect.map(fs.stat(path).pipe(Effect.orElseSucceed(() => null)), (info) =>
       info === null
         ? began
         : Option.match(info.mtime, { onNone: () => began, onSome: (at) => at.getTime() }),
     );
+    const everOwed: Array<string> = [];
     const free = Effect.gen(function* () {
       if (every.holding !== undefined) {
         const now = yield* every.holding;
         if (now.under) {
           return false;
         }
-        const owed = owedFor(yield* writtenAt, now);
+        const owed = owedEver(everOwed, yield* writtenAt, now);
         if (owed.length === 0) {
           return true;
+        }
+        for (const one of owed) {
+          if (!Arr.contains(everOwed, one)) {
+            everOwed.push(one);
+          }
         }
         if (!(yield* every.settled)) {
           return false;

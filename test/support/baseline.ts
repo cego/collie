@@ -9930,18 +9930,28 @@ scenario(
             yield* fs.writeFileString(waits("green-done"), "");
           }),
         );
-        const result = yield* ran({
-          entry: shipped("implement"),
-          runId,
-          input: { plan, ...FINISH },
-          options: { outcome: "bug" },
-        });
+        const result = yield* Effect.raceFirst(
+          ran({
+            entry: shipped("implement"),
+            runId,
+            input: { plan, ...FINISH },
+            options: { outcome: "bug" },
+          }),
+          Effect.gen(function* () {
+            yield* until(
+              () => wasAsked(runId, "gate-fix-2"),
+              (there) => there,
+            );
+            return yield* Effect.fail(
+              new Error("the gate asked gate-fix-2 for a name its own fix already gave"),
+            );
+          }),
+        );
         yield* Fiber.join(recording);
         yield* bin.restore();
 
         expect(said(result)).toBe(OPENED.mr_url);
         expect(yield* wasAsked(runId, "gate-fix-1")).toBe(true);
-        expect(yield* wasAsked(runId, "gate-fix-2")).toBe(false);
       }),
     ),
 );
