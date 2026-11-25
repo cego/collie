@@ -189,9 +189,11 @@ export default defineWorkflow({
           ),
         );
         disputed = split.standing;
+        const standingNow = disputed.filter(isBlocking);
         const rally = settleRound({ live: split.live, disputed, at, seen });
-        if (rally.go === "halt" && rally.halt === "dispute_unresolved") {
-          const standing = rally.outstanding.filter(isBlocking);
+        if (standingNow.length > 0) {
+          const standing = standingNow;
+          const liveNow = rally.go === "halt" ? rally.outstanding : [...standing, ...split.live];
           const answer = choose(`dispute-${++disputes}`, DISPUTE_OPTIONS);
           if (answer === WAIVE) {
             waiveNow(standing);
@@ -213,7 +215,7 @@ export default defineWorkflow({
           if (at < asked.rounds) {
             continue;
           }
-          return yield* finish(rally.live, fixed);
+          return yield* finish(liveNow, fixed);
         }
         if (rally.go === "halt" && rally.halt === "no_progress") {
           const answer = choose(`no-progress-${++progress}`, AGAIN_OPTIONS);

@@ -946,9 +946,11 @@ export const rally = (ask: {
             ),
           );
           disputed = split.standing;
+          const standing = Arr.filter(disputed, isBlocking);
           const round = settleRound({ live: split.live, disputed, at, seen });
-          if (round.go === "halt" && round.halt === "dispute_unresolved") {
-            const standing = Arr.filter(disputed, isBlocking);
+          if (standing.length > 0) {
+            const outstanding =
+              round.go === "halt" ? round.outstanding : [...standing, ...split.live];
             const name = `${prefix}dispute-${++disputeAsks}`;
             const chosen = yield* ask.choose({
               name,
@@ -962,7 +964,7 @@ export const rally = (ask: {
               }
               const gone = new Set(Arr.map(waived, findingKey));
               const rest = Arr.filter(
-                round.outstanding,
+                outstanding,
                 (one) => isBlocking(one) && !gone.has(findingKey(one)),
               );
               if (rest.length === 0) {
@@ -978,7 +980,7 @@ export const rally = (ask: {
               );
             }
             const fixed = yield* sendBack(declinedLine, standing, at, proves, head);
-            return at < ROUNDS ? null : yield* finish(synthesis, round.outstanding, fixed, head);
+            return at < ROUNDS ? null : yield* finish(synthesis, outstanding, fixed, head);
           }
           if (round.go === "halt") {
             const name = `${prefix}no-progress-${++progressAsks}`;

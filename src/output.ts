@@ -822,17 +822,17 @@ export function settleRound(round: {
   const live = Arr.filter(round.live, (f) => f.status !== "fixed" && f.status !== "obsolete");
   const reopened = [...(round.reopened ?? [])];
   const blocking = [...Arr.filter(live, isBlocking), ...reopened];
-  const standing = Arr.filter(offered(round.disputed), isBlocking);
-  if (standing.length > 0) {
-    const returned: Rally = {
-      go: "halt",
-      halt: "dispute_unresolved",
-      reason: `${standing.length} disputed blocking finding(s) stand unanswered — your call, not the loop's`,
-      outstanding: [...standing, ...live],
-    };
-    return returned;
-  }
   if (blocking.length === 0) {
+    const standing = Arr.filter(offered(round.disputed), isBlocking);
+    if (standing.length > 0) {
+      const returned: Rally = {
+        go: "halt",
+        halt: "dispute_unresolved",
+        reason: `${standing.length} disputed blocking finding(s) stand unanswered — your call, not the loop's`,
+        outstanding: [...standing, ...live],
+      };
+      return returned;
+    }
     const returned: Rally = { go: "clean", remaining: live };
     return returned;
   }

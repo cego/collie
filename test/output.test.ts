@@ -112,11 +112,12 @@ const GUARD_LATEST: Finding = {
   detail: "the CLI path does not validate it",
 };
 
-test("a disputed blocker is the person's call even when the review also raised a live one", () => {
-  expect(settleRound({ live: [LIST], disputed: [GUARD], at: 2 })).toMatchObject({
+test("a live blocker is fixed while a disputed one stands, and only the rally asks a person", () => {
+  expect(settleRound({ live: [LIST], disputed: [GUARD], at: 2 })).toMatchObject({ go: "fix" });
+  expect(settleRound({ live: [], disputed: [GUARD], at: 2 })).toMatchObject({
     go: "halt",
     halt: "dispute_unresolved",
-    outstanding: [GUARD, LIST],
+    outstanding: [GUARD],
   });
 });
 
@@ -128,9 +129,9 @@ test("a person is offered the fixer's finding with the reviewer's latest detail"
       detail: "the CLI path does not validate it",
     },
   ]);
-  expect(settleRound({ live: [LIST], disputed: [GUARD, repeatedAsMinor], at: 2 })).toMatchObject({
+  expect(settleRound({ live: [], disputed: [GUARD, repeatedAsMinor], at: 2 })).toMatchObject({
     halt: "dispute_unresolved",
-    outstanding: [GUARD_LATEST, LIST],
+    outstanding: [GUARD_LATEST],
   });
 });
 

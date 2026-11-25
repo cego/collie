@@ -164,6 +164,35 @@ test("a blocking finding the implementer disputed asks the dispute Choice instea
     }),
   ));
 
+test("a disputed blocker is asked about while the review also raised a live one", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([
+        { verdict: "findings", findings: [blocker("empty list")] },
+        {
+          verdict: "clean",
+          disputed: [blocker("empty list")],
+          fixed: [],
+          checks: [],
+        },
+        {
+          verdict: "findings",
+          findings: [blocker("empty list"), blocker("wrong order")],
+        },
+        {
+          verdict: "clean",
+          fixed: [{ title: "wrong order", file: "src/thing.ts" }],
+          checks: [],
+        },
+        { verdict: "clean" },
+      ]);
+      const waived = yield* rally("r-disputed-live", 3, ["Waive it"]);
+      expect(said(waived)).toContain("dispute-1: Waive it | Send it back | Stop → Waive it");
+      expect(said(waived)).toContain("waived empty list");
+      expect(said(waived)).toContain("clean after 3 round(s)");
+    }),
+  ));
+
 test("Stop on the dispute Choice ends the rally naming the dispute", () =>
   runEffect(
     Effect.gen(function* () {
