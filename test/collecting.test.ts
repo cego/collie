@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import { Deferred, Effect, Fiber, FileSystem } from "effect";
+import { DateTime, Deferred, Effect, Fiber, FileSystem } from "effect";
 import { waitForOutput } from "../src/agents";
 import { Collecting, collectingLayer, owedFor, released } from "../src/collecting";
 import { runEffect } from "./support/effect";
@@ -73,8 +73,9 @@ test("an Output written before its verify began is taken while that verify is st
         "r",
         "a",
         Effect.gen(function* () {
+          const earlier = DateTime.toDate(DateTime.subtract(DateTime.nowUnsafe(), { seconds: 30 }));
           yield* fs.writeFileString(output, '{"verdict":"done"}');
-          yield* Effect.sleep("50 millis");
+          yield* fs.utimes(output, earlier, earlier);
           const underway = yield* Deferred.make<void>();
           const verify = yield* Effect.forkChild(
             held.duringVerify(
@@ -105,11 +106,11 @@ test("a verify that began after the Output was written is not one it waits on", 
   const hold = {
     under: false,
     since: null,
-    ended: [{ id: "v1", began: 120, at: 150 }],
+    ended: [{ id: "v1", began: 4000, at: 5000 }],
     untold: [],
   };
   expect(owedFor(100, hold)).toEqual([]);
-  expect(owedFor(130, hold)).toEqual(["v1"]);
+  expect(owedFor(4500, hold)).toEqual(["v1"]);
 });
 
 test("every verify that ended after the Output was written is owed its tell, not only the last", () => {
