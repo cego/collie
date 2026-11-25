@@ -6749,6 +6749,87 @@ scenario("a Send it back reply earns nothing for a blocker it was not asked abou
 );
 
 scenario(
+  "a Send it back reply's claim on a blocker it was not asked about is not a rejected fix",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "only", checks: "unit" }]);
+        const runId = "r-send-back-claim";
+        yield* approve(runId, ["unit"]);
+        yield* collect(evidenceDir(dir, runId), {
+          run: runId,
+          name: "unit",
+          executable: "true",
+          argv: [],
+          cwd: rig.projectDir,
+          by: "agent",
+        }).pipe(Effect.orDie);
+        const breaks = (title: string) => ({
+          severity: "blocker",
+          title,
+          file: "src/a.ts",
+          detail: "it breaks",
+        });
+        const raised = (title: string) => ({
+          ...CLEAN_SYNTHESIS,
+          verdict: "findings",
+          findings: [breaks(title)],
+        });
+        const claims = (title: string) => ({
+          verdict: "clean",
+          fixed: [{ title, file: "src/a.ts" }],
+          checks: [],
+        });
+        yield* rig.queueOutputs([
+          BLOCKED_BUILD,
+          raised("one blocks"),
+          claims("one blocks"),
+          raised("two blocks"),
+          {
+            verdict: "clean",
+            fixed: [],
+            disputed: [{ ...breaks("two blocks"), reason: "it is by design" }],
+            checks: [],
+          },
+          raised("three blocks"),
+          {
+            verdict: "clean",
+            fixed: [
+              { title: "two blocks", file: "src/a.ts" },
+              { title: "three blocks", file: "src/a.ts" },
+            ],
+            checks: [],
+          },
+          raised("three blocks"),
+          {
+            verdict: "clean",
+            fixed: [{ title: "three blocks", file: "src/a.ts" }],
+            checks: [{ name: "unit" }],
+          },
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              yield* stallAsked(run, "build.dispute-1");
+              yield* run.answer("build.dispute-1", "Send it back");
+              return yield* ended(run.status);
+            }),
+        );
+        expect(yield* asked(runId, "build.fix-3-back-1")).toContain("two blocks");
+        const raisedAgain = yield* asked(runId, "build.fix-4");
+        expect(raisedAgain).toContain("Raised again:");
+        expect(raisedAgain).not.toContain("Rejected fix:");
+        expect(outcomeText(status)).toBe(OPENED.mr_url);
+      }),
+    ),
+);
+
+scenario(
   "a waiver is not proof of a ticket's check, so the gate still reports that check unproved",
   () =>
     runEffect(
