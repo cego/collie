@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import { DateTime, Deferred, Effect, Fiber, FileSystem } from "effect";
+import { DateTime, Deferred, Effect, Fiber, FileSystem, Ref } from "effect";
 import { waitForOutput } from "../src/agents";
+import type { CollectingApi } from "../src/collecting";
 import { Collecting, collectingLayer, owedFor, released } from "../src/collecting";
 import { runEffect } from "./support/effect";
 
@@ -12,6 +13,38 @@ const ended = (...ids: ReadonlyArray<[string, number]>) => ({
   ended: Arr.map(ids, ([id, at]) => ({ id, at, began: 0 })),
   untold: [],
 });
+
+const polls = (counter: Ref.Ref<number>, wanted: number) =>
+  Effect.gen(function* () {
+    for (let i = 0; i < 400; i += 1) {
+      if ((yield* Ref.get(counter)) >= wanted) {
+        return;
+      }
+      yield* Effect.sleep("5 millis");
+    }
+    return yield* Effect.die(new Error(`the collector did not poll ${wanted} times`));
+  });
+
+const verifyUnder = (held: CollectingApi, id: string) =>
+  Effect.gen(function* () {
+    const under = yield* Deferred.make<void>();
+    const end = yield* Deferred.make<void>();
+    const running = yield* Effect.forkChild(
+      held.duringVerify(
+        "r",
+        "a",
+        Deferred.succeed(under, undefined).pipe(Effect.andThen(Deferred.await(end))),
+        () => id,
+      ),
+    );
+    yield* Deferred.await(under);
+    return {
+      end: () => Deferred.succeed(end, undefined).pipe(Effect.andThen(Fiber.await(running))),
+    };
+  });
+
+const waiting = (collector: Fiber.Fiber<string | null, never>) =>
+  Effect.sync(() => collector.pollUnsafe() === undefined);
 
 test("an Output rewritten after its verify ended is not taken until that verify is told", () =>
   runEffect(
@@ -44,7 +77,7 @@ test("an Output rewritten after its verify ended is not taken until that verify 
               budgetMs: 1000,
               counts: Effect.succeed(false),
               usable: () => true,
-              settled: Effect.sync(() => settled),
+              status: Effect.sync(() => (settled ? "idle" : "working")),
               holding: Effect.tap(held.verifying("r", "a"), () =>
                 Deferred.succeed(polling, undefined).pipe(Effect.ignore),
               ),
@@ -59,6 +92,98 @@ test("an Output rewritten after its verify ended is not taken until that verify 
           expect(Option.isNone(waiting)).toBe(true);
           settled = true;
           expect(yield* Fiber.join(collector)).toBe('{"verdict":"rewritten"}');
+        }),
+      );
+    }).pipe(Effect.provide(collectingLayer)),
+  ));
+
+test("a byte-identical rewrite during a verify waits for that verify's tell", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collector-" });
+      const output = `${dir}/build.json`;
+      const held = yield* Collecting;
+      yield* held.during(
+        "r",
+        "a",
+        Effect.gen(function* () {
+          const counter = yield* Ref.make(0);
+          const settled = yield* Ref.make(false);
+          const told = new Set<string>();
+          const collector = yield* Effect.forkChild(
+            waitForOutput(output, null, {
+              pollMs: 5,
+              budgetMs: 5000,
+              counts: Effect.succeed(false),
+              usable: () => true,
+              status: Effect.map(Ref.get(settled), (over) => (over ? "idle" : "working")),
+              holding: Effect.tap(held.verifying("r", "a"), () =>
+                Ref.update(counter, (seen) => seen + 1),
+              ),
+              told: (id) => Effect.sync(() => told.has(id)),
+            }),
+          );
+          const first = yield* verifyUnder(held, "v1");
+          yield* fs.writeFileString(output, '{"verdict":"same"}');
+          yield* polls(counter, 2);
+          yield* first.end();
+          told.add("v1");
+          const second = yield* verifyUnder(held, "v2");
+          const marked = yield* Ref.get(counter);
+          yield* fs.writeFileString(output, '{"verdict":"same"}');
+          yield* polls(counter, marked + 2);
+          yield* Ref.set(settled, true);
+          yield* polls(counter, marked + 4);
+          expect(yield* waiting(collector)).toBe(true);
+          yield* second.end();
+          yield* polls(counter, marked + 6);
+          expect(yield* waiting(collector)).toBe(true);
+          told.add("v2");
+          expect(yield* Fiber.join(collector)).toBe('{"verdict":"same"}');
+        }),
+      );
+    }).pipe(Effect.provide(collectingLayer)),
+  ));
+
+test("a write during a verify keeps that verify owed after a later write", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collector-" });
+      const output = `${dir}/build.json`;
+      const held = yield* Collecting;
+      yield* held.during(
+        "r",
+        "a",
+        Effect.gen(function* () {
+          const counter = yield* Ref.make(0);
+          const told = new Set<string>();
+          const collector = yield* Effect.forkChild(
+            waitForOutput(output, null, {
+              pollMs: 5,
+              budgetMs: 5000,
+              counts: Effect.succeed(false),
+              usable: () => true,
+              status: Effect.succeed("idle"),
+              holding: Effect.tap(held.verifying("r", "a"), () =>
+                Ref.update(counter, (seen) => seen + 1),
+              ),
+              told: (id) => Effect.sync(() => told.has(id)),
+            }),
+          );
+          const only = yield* verifyUnder(held, "v2");
+          const marked = yield* Ref.get(counter);
+          yield* fs.writeFileString(output, '{"verdict":"middle"}');
+          yield* polls(counter, marked + 1);
+          expect(yield* waiting(collector)).toBe(true);
+          yield* only.end();
+          const later = yield* Ref.get(counter);
+          yield* fs.writeFileString(output, '{"verdict":"later"}');
+          yield* polls(counter, later + 2);
+          expect(yield* waiting(collector)).toBe(true);
+          told.add("v2");
+          expect(yield* Fiber.join(collector)).toBe('{"verdict":"later"}');
         }),
       );
     }).pipe(Effect.provide(collectingLayer)),
@@ -96,7 +221,7 @@ test("a rewrite during a second verify waits for that verify too", () =>
               budgetMs: 5000,
               counts: Effect.succeed(false),
               usable: () => true,
-              settled: Effect.sync(() => settled),
+              status: Effect.sync(() => (settled ? "idle" : "working")),
               holding: Effect.tap(held.verifying("r", "a"), () =>
                 Deferred.succeed(polling, undefined).pipe(Effect.ignore),
               ),
@@ -160,7 +285,7 @@ test("an Output written before its verify began is taken while that verify is st
             budgetMs: 100,
             counts: Effect.succeed(true),
             usable: () => true,
-            settled: Effect.succeed(false),
+            status: Effect.succeed("working"),
             holding: held.verifying("r", "a"),
             told: () => Effect.succeed(true),
           });

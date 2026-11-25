@@ -806,7 +806,7 @@ export const judge = Effect.fn("Drift.judge")(function* (
     }
   }
   const cut = cutIn(evidence.blocks, evidence.outputs);
-  // WARNING: one path can appear in two batches, so the same report is found twice; the worst verdict stands, with the batches that gave it.
+  // WARNING: one path can appear in two batches, so the same report is found twice.
   const worst = new Map<string, DriftReport>();
   for (const report of reports) {
     const seen = worst.get(report.id);

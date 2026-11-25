@@ -47,6 +47,14 @@ export const owedFor = (writtenAt: number, now: VerifyHold) => {
 export const underWhileWritten = (writtenAt: number, now: VerifyHold) =>
   now.under && (now.since === null || writtenAt + MILLISECOND_SKEW >= now.since);
 
+export const heldOwed = (held: ReadonlyArray<number>, now: VerifyHold) => {
+  const owed: ReadonlyArray<string> = Arr.map(
+    Arr.filter(now.ended, (one) => Arr.contains(held, one.began)),
+    (one) => one.id,
+  );
+  return owed;
+};
+
 export const owedEver = (known: ReadonlyArray<string>, writtenAt: number, now: VerifyHold) => {
   const owed: ReadonlyArray<string> = [...new Set([...known, ...owedFor(writtenAt, now)])];
   return owed;

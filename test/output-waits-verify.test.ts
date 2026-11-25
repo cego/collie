@@ -80,6 +80,18 @@ const held = (world: World, runId: string, agent: string, operation = "build") =
     return { go, running };
   });
 
+const waitsFor = (world: World, runId: string, line: string) =>
+  until(
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        return yield* fs
+          .readFileString(`${world.state}/agents/${runId}/agents.log`)
+          .pipe(Effect.orElseSucceed(() => ""));
+      }),
+    (text) => pipe_(text, Str.includes(line)),
+  );
+
 const told = (world: World, runId: string) =>
   until(
     () => deliveredTo(world.state, runId),
@@ -104,7 +116,7 @@ test("an Output written while its own verify runs is not taken, and the one afte
         const build = yield* buildOf(world, runId);
         const { go, running } = yield* held(world, runId, build.agent);
         yield* fs.writeFileString(build.output, encode({ verdict: "stale" })).pipe(Effect.orDie);
-        yield* Effect.sleep("2500 millis");
+        yield* waitsFor(world, runId, "a verify is still running");
         expect(prompts(yield* client.run({ runId }).pipe(Effect.orDie))).toEqual([]);
 
         yield* fs.writeFileString(go, "").pipe(Effect.orDie);
@@ -136,11 +148,11 @@ test("an unread status does not stand in for the end of the agent's turn", () =>
         const { go, running } = yield* held(world, runId, build.agent);
         yield* fs.writeFileString(build.output, encode({ verdict: "unread" })).pipe(Effect.orDie);
         yield* core.report(build.agent, "working");
-        yield* Effect.sleep("2500 millis");
+        yield* waitsFor(world, runId, "a verify is still running");
         yield* fs.writeFileString(go, "").pipe(Effect.orDie);
         yield* Fiber.await(running);
         yield* core.report(build.agent, "halfway");
-        yield* Effect.sleep("6000 millis");
+        yield* waitsFor(world, runId, "its status is unknown");
         expect(prompts(yield* client.run({ runId }).pipe(Effect.orDie))).toEqual([]);
 
         yield* core.report(build.agent, "idle");
@@ -164,7 +176,7 @@ test("an agent that lets its Output stand after the tell has that one taken at t
         const build = yield* buildOf(world, runId);
         const { go, running } = yield* held(world, runId, build.agent);
         yield* fs.writeFileString(build.output, encode({ verdict: "stood" })).pipe(Effect.orDie);
-        yield* Effect.sleep("2500 millis");
+        yield* waitsFor(world, runId, "a verify is still running");
         expect(prompts(yield* client.run({ runId }).pipe(Effect.orDie))).toEqual([]);
 
         yield* fs.writeFileString(go, "").pipe(Effect.orDie);
@@ -229,7 +241,7 @@ test("an Output a foreground verify held is taken once the turn it ended in is o
           .writeFileString(build.output, encode({ verdict: "foreground" }))
           .pipe(Effect.orDie);
         yield* core.report(build.agent, "working");
-        yield* Effect.sleep("2500 millis");
+        yield* waitsFor(world, runId, "a verify is still running");
         yield* fs.writeFileString(go, "").pipe(Effect.orDie);
         yield* Fiber.await(running);
         yield* core.report(build.agent, "idle");
@@ -278,18 +290,18 @@ test("a tell the agent never received does not release the Output it was about",
         const build = yield* buildOf(world, runId);
         const { go, running } = yield* held(world, runId, build.agent);
         yield* fs.writeFileString(build.output, encode({ verdict: "unheard" })).pipe(Effect.orDie);
-        yield* Effect.sleep("2500 millis");
+        yield* waitsFor(world, runId, "a verify is still running");
         core.refuse("terminal.send", "invalid_argument", "the pane refused the prompt");
         yield* fs.writeFileString(go, "").pipe(Effect.orDie);
         yield* Fiber.await(running);
-        yield* Effect.sleep("6000 millis");
+        yield* waitsFor(world, runId, "was not taken, so its Output waits");
 
         expect(prompts(yield* client.run({ runId }).pipe(Effect.orDie))).toEqual([]);
       }).pipe(Effect.ensuring(stopHost(world.state))),
     ["collected.workflow.ts"],
   ));
 
-test("the Output read again after the wait is released is the one taken", () =>
+test("the Output written while the collector waited is the one taken", () =>
   proves(
     "collie-output-waits-6-",
     (world, core) =>
@@ -303,13 +315,9 @@ test("the Output read again after the wait is released is the one taken", () =>
         yield* core.report(build.agent, "working");
         yield* fs.writeFileString(go, "").pipe(Effect.orDie);
         yield* Fiber.await(running);
-        yield* Effect.sleep("2500 millis");
-
-        const release = core.hold("terminal.get");
-        yield* Effect.sleep("2500 millis");
+        yield* waitsFor(world, runId, "its status is working, so its Output waits");
         yield* fs.writeFileString(build.output, encode({ verdict: "fresh" })).pipe(Effect.orDie);
         yield* core.report(build.agent, "idle");
-        release();
 
         const [asked] = yield* until(
           () => client.run({ runId }).pipe(Effect.orDie),

@@ -218,7 +218,7 @@ import type { JsonObject } from "./schema";
 import { awaitOutput, outputCollected } from "./output-submit";
 import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } from "./subagents";
 import { Collecting, collectingLayer } from "./collecting";
-import { owedEver, released, underWhileWritten } from "./collecting";
+import { heldOwed, owedEver, released, underWhileWritten } from "./collecting";
 import type { CollectingApi, VerifyHold } from "./collecting";
 import { holdsBudgetOf, waitForMemory } from "./memory-wait";
 import {
@@ -3456,9 +3456,10 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         launched.agent,
         Effect.gen(function* () {
           const asking = questions === undefined ? null : yield* questionsOf(launched, questions);
+          // WARNING: a status that cannot be read is time passing with nothing written, so it counts against the budget.
           const turnOver = Effect.suspend(() => host.herdr.agentStatus(launched.agent)).pipe(
-            Effect.map(isSettled),
-            Effect.orElseSucceed(() => false),
+            Effect.map((status) => status !== "working" && status !== "blocked"),
+            Effect.orElseSucceed(() => true),
           );
           const text = yield* Effect.raceFirst(
             waitForOutput(launched.output, unless ?? null, {
@@ -3474,12 +3475,15 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
                 return yield* turnOver;
               }),
               usable: usable ?? (() => true),
-              settled: turnOver,
+              status: Effect.suspend(() => host.herdr.agentStatus(launched.agent)).pipe(
+                Effect.orElseSucceed(() => "unread" as const),
+              ),
               holding: collecting.verifying(launched.runId, launched.agent),
               told: (verified) =>
                 Effect.flatMap(collecting.verifying(launched.runId, launched.agent), (now) =>
                   tellTaken(launched, verified, now.untold),
                 ),
+              note: (line) => log(launched.runId, `${launched.agent}: ${line}`),
             }),
             confirmed(launched, unless ?? null).pipe(Effect.andThen(Effect.never)),
           );
@@ -4036,9 +4040,8 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           budgetMs: 0,
           counts: Effect.succeed(false),
           usable: usable ?? (() => true),
-          settled: Effect.suspend(() => host.herdr.agentStatus(agent)).pipe(
-            Effect.orElseSucceed(() => null),
-            Effect.map((status) => status !== "working" && status !== "blocked"),
+          status: Effect.suspend(() => host.herdr.agentStatus(agent)).pipe(
+            Effect.orElseSucceed(() => "unread" as const),
           ),
         });
         if ((yield* completed) !== null) {
@@ -5099,9 +5102,10 @@ export const waitForOutput = <R>(
     readonly budgetMs: number;
     readonly counts: Effect.Effect<boolean, never, R>;
     readonly usable: (text: string) => boolean;
-    readonly settled: Effect.Effect<boolean, never, R>;
+    readonly status: Effect.Effect<AgentStatus | "unknown" | "unread", never, R>;
     readonly holding?: Effect.Effect<VerifyHold, never, R>;
     readonly told?: (verified: string) => Effect.Effect<boolean | null, never, R>;
+    readonly note?: (line: string) => Effect.Effect<void, never, R>;
   },
 ) =>
   Effect.gen(function* () {
@@ -5115,18 +5119,36 @@ export const waitForOutput = <R>(
         : Option.match(info.mtime, { onNone: () => began, onSome: (at) => at.getTime() }),
     );
     const everOwed: Array<string> = [];
+    const heldStarts: Array<number> = [];
     let firstSeen: number | null = null;
-    let seen: string | null = null;
     let seenAt: number | null = null;
+    let said: string | null = null;
+    const says = (line: string) =>
+      Effect.gen(function* () {
+        if (every.note === undefined || said === line) {
+          return;
+        }
+        said = line;
+        yield* every.note(line);
+      });
     const free = Effect.gen(function* () {
       if (every.holding !== undefined) {
         const now = yield* every.holding;
         const first = firstSeen ?? (yield* writtenAt);
         const latest = seenAt ?? first;
         if (underWhileWritten(first, now) || underWhileWritten(latest, now)) {
+          if (now.since !== null && !Arr.contains(heldStarts, now.since)) {
+            heldStarts.push(now.since);
+          }
+          yield* says("a verify is still running, so its Output waits");
           return false;
         }
-        const owed = owedEver(owedEver(everOwed, first, now), latest, now);
+        const owed: ReadonlyArray<string> = [
+          ...new Set([
+            ...owedEver(owedEver(everOwed, first, now), latest, now),
+            ...heldOwed(heldStarts, now),
+          ]),
+        ];
         if (owed.length === 0) {
           return true;
         }
@@ -5135,7 +5157,9 @@ export const waitForOutput = <R>(
             everOwed.push(one);
           }
         }
-        if (!(yield* every.settled)) {
+        const state = yield* every.status;
+        if (state !== "idle" && state !== "done") {
+          yield* says(`its status is ${state}, so its Output waits`);
           return false;
         }
         const told = every.told;
@@ -5148,7 +5172,11 @@ export const waitForOutput = <R>(
           { concurrency: "unbounded" },
         );
         const byId = new Map(taken);
-        return released(owed, true, (one) => byId.get(one) === true);
+        if (!released(owed, true, (one) => byId.get(one) === true)) {
+          yield* says(`the tell for ${Arr.join(owed, ", ")} was not taken, so its Output waits`);
+          return false;
+        }
+        return true;
       }
       return true;
     });
@@ -5156,8 +5184,7 @@ export const waitForOutput = <R>(
     for (;;) {
       const text = yield* read;
       const here = fresh(text);
-      if (here && text !== seen) {
-        seen = text;
+      if (here) {
         seenAt = yield* writtenAt;
         firstSeen ??= seenAt;
       }
@@ -5170,7 +5197,8 @@ export const waitForOutput = <R>(
         if (every.usable(after)) {
           return after;
         }
-        if (yield* every.settled) {
+        const state = yield* every.status;
+        if (state !== "working" && state !== "blocked" && state !== "unread") {
           const last = yield* read;
           if (fresh(last) && last === after) {
             return last;
