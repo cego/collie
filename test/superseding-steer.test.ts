@@ -17,6 +17,7 @@ import { connect } from "../src/host";
 import { carryOutAsked } from "../src/run-actions";
 import { SENT_STATES, appendLine } from "../src/steering";
 import { deliveredTo, hostRecords, recordsAt } from "./support/records";
+import { readMetrics } from "../src/metrics";
 import { NOTIFIED, RunRecords } from "../src/run-records";
 import { TaskView } from "../src/board-model";
 import { read as readProposals, record as recordProposal } from "../src/proposals";
@@ -58,6 +59,7 @@ interface AtQuestion {
 interface Setup {
   readonly mode: "declared" | "pair" | "moves";
   readonly task?: string;
+  readonly awaiting?: "question" | "step";
 }
 
 const startHost = (world: World) => connect(world.state).pipe(Effect.orDie);
@@ -79,19 +81,38 @@ const waitingRun = Effect.fn("test.waitingRun")(function* (
       task: setup.task,
     })
     .pipe(Effect.orDie);
-  yield* until(
-    () => client.run({ runId }).pipe(Effect.orDie),
-    (view) =>
-      view?.status.status === "suspended" &&
-      Arr.some(view.waiting, (one) => one.name === "go" && one.answer === null),
-  );
-  const live = yield* new Herdr(readEnv({ HC_SOCKET: core.socketPath }))
-    .agentList()
-    .pipe(Effect.orDie);
   const agents = Arr.map(setup.mode === "pair" ? ["build", "check"] : ["build"], (step) =>
     agentName(runId, step, null, 1),
   );
-  expect(Arr.map(live, (one) => one.name)).toEqual(expect.arrayContaining(agents));
+  const listed = () =>
+    new Herdr(readEnv({ HC_SOCKET: core.socketPath })).agentList().pipe(Effect.orDie);
+  // WARNING: a question asked before the launch is recorded is before the point its Run reads from.
+  const taken = () =>
+    deliveredTo(world.state, runId).pipe(
+      Effect.map((rows) =>
+        Arr.some(rows, (one) => one.cause.kind === "step" && one.state !== "reserved"),
+      ),
+      Effect.orElseSucceed(() => false),
+    );
+  yield* until(
+    () =>
+      setup.awaiting === "step"
+        ? Effect.gen(function* () {
+            return (
+              (yield* taken()) && Arr.some(yield* listed(), (one) => one.name === agents.at(-1))
+            );
+          })
+        : client.run({ runId }).pipe(
+            Effect.orDie,
+            Effect.map(
+              (view) =>
+                view?.status.status === "suspended" &&
+                Arr.some(view.waiting, (one) => one.name === "go" && one.answer === null),
+            ),
+          ),
+    (ready) => ready,
+  );
+  expect(Arr.map(yield* listed(), (one) => one.name)).toEqual(expect.arrayContaining(agents));
   return { runId, agent: agents.at(-1)!, agents };
 });
 
@@ -109,13 +130,24 @@ const atQuestion = <A, E>(
         const fs = yield* FileSystem.FileSystem;
         const outputs = `${world.home}/outputs.json`;
         yield* fs
-          .writeFileString(outputs, encode(Arr.makeBy(6, () => ({ verdict: "done" }))))
+          .writeFileString(
+            outputs,
+            encode(
+              setup.awaiting === "step"
+                ? [
+                    { writes: [], output: null, owed: true },
+                    ...Arr.makeBy(6, () => ({ verdict: "done" })),
+                  ]
+                : Arr.makeBy(6, () => ({ verdict: "done" })),
+            ),
+          )
           .pipe(Effect.orDie);
         const set = {
           COLLIE_STATE_DIR: world.state,
           COLLIE_USER_DIR: world.config,
           COLLIE_HOST_SUPERSEDE_GRACE_MS: String(GRACE_MS),
           COLLIE_BOARD_TICK: `${TICK_MS} millis`,
+          COLLIE_RECOVERY_EVERY: `${TICK_MS} millis`,
         };
         yield* Effect.acquireRelease(
           Effect.sync(() => {
@@ -167,11 +199,11 @@ const tell = (at: AtQuestion, text: string, by: Actor, agent = at.agent) =>
     ([done]) => done,
   );
 
+const viewOf = (at: AtQuestion, client: Client = at.client) =>
+  client.run({ runId: at.runId }).pipe(Effect.orDie);
+
 const waitingOf = (at: AtQuestion, client: Client = at.client) =>
-  client.run({ runId: at.runId }).pipe(
-    Effect.orDie,
-    Effect.map((view) => view?.waiting ?? []),
-  );
+  viewOf(at, client).pipe(Effect.map((view) => view?.waiting ?? []));
 
 const rowOf = (waiting: Effect.Success<ReturnType<typeof waitingOf>>, name: string) =>
   Option.getOrUndefined(Arr.findFirst(waiting, (one) => one.name === name));
@@ -628,81 +660,119 @@ const answerSends = (at: AtQuestion, needle: string) =>
     ),
   );
 
-for (const evidence of ["no-submit", "another-delivery", "another-incarnation"] as const) {
+for (const evidence of [
+  "no-submit",
+  "another-delivery",
+  "another-incarnation",
+  "its-own-submit",
+] as const) {
   test(`an agent-owned question stays answered across a restart, with ${evidence} for its delivery`, () =>
-    atQuestion(`collie-answered-restart-${evidence}-`, (at) =>
-      Effect.gen(function* () {
-        yield* recordClaudeEvent(
-          yield* controlDir(at.world.state, at.agent),
-          encode({
-            session_id: at.agent,
-            hook_event_name: "PreToolUse",
-            tool_name: "AskUserQuestion",
-            tool_use_id: `toolu-${at.agent}`,
-            tool_input: {
-              questions: [{ question: "Which database?", header: "DB", options: PICKS }],
-            },
-          }),
-          null,
-        ).pipe(Effect.orDie);
-        yield* until(
-          () => waitingOf(at),
-          (rows) => rowOf(rows, "ask-build-1")?.answer === null,
-        );
-
-        core.refuse("terminal.send", "unreachable", "the core did not answer");
-        expect((yield* answer(at, "SQLite", "ask-build-1")).envelope).toMatchObject({ ok: true });
-        const lost = yield* until(
-          () =>
-            deliveredTo(at.world.state, at.runId).pipe(
-              Effect.map((rows) => Arr.filter(rows, (one) => one.cause.kind === "steer")),
-              Effect.orElseSucceed(() => []),
-            ),
-          (rows) => Arr.some(rows, (one) => one.state === "unknown"),
-        ).pipe(Effect.map((rows) => Arr.findFirst(rows, (one) => one.state === "unknown")));
-        core.restore("terminal.send");
-        const delivery = Option.getOrThrow(lost);
-        const answered = yield* until(
-          () => waitingOf(at),
-          (rows) => rowOf(rows, "ask-build-1")?.answer !== null,
-        );
-        const held = rowOf(answered, "ask-build-1")?.answer;
-        expect(held).toBe("2");
-
-        if (evidence !== "no-submit") {
+    atQuestion(
+      `collie-answered-restart-${evidence}-`,
+      (at) =>
+        Effect.gen(function* () {
           yield* recordClaudeEvent(
             yield* controlDir(at.world.state, at.agent),
             encode({
               session_id: at.agent,
-              hook_event_name: "UserPromptSubmit",
-              prompt: `collie-delivery:${
-                evidence === "another-delivery" ? `${delivery.id}-elsewhere` : delivery.id
-              }\nYour task for this step is next.`,
+              hook_event_name: "PreToolUse",
+              tool_name: "AskUserQuestion",
+              tool_use_id: `toolu-${at.agent}`,
+              tool_input: {
+                questions: [{ question: "Which database?", header: "DB", options: PICKS }],
+              },
             }),
-            evidence === "another-incarnation" ? "not-its-terminal" : delivery.incarnation,
+            null,
           ).pipe(Effect.orDie);
-        }
-        yield* answer(at, "yes", "go");
+          yield* until(
+            () => waitingOf(at),
+            (rows) => rowOf(rows, "ask-build-1")?.answer === null,
+          );
 
-        yield* stopHost(at.world.state);
-        const again = yield* startHost(at.world);
-        const after = yield* until(
-          () => again.run({ runId: at.runId }).pipe(Effect.orDie),
-          (view) => view?.status.status === "complete" || view?.parked != null,
-        );
-        expect(Arr.filter(after?.waiting ?? [], (one) => one.name === "ask-build-1")).toHaveLength(
-          1,
-        );
-        expect(revisionOf(after?.waiting ?? [], "ask-build-1")).toBeUndefined();
-        expect(rowOf(after?.waiting ?? [], "ask-build-1")?.answer).toBe(held);
-        expect(yield* answerSends(at, "SQLite")).toBe(1);
-        const ledger = yield* deliveredTo(at.world.state, at.runId).pipe(
-          Effect.orElseSucceed(() => []),
-        );
-        expect(Arr.findFirst(ledger, (one) => one.id === delivery.id)).toMatchObject(
-          Option.some({ state: "unknown" }),
-        );
-      }),
+          core.refuse("terminal.send", "unreachable", "the core did not answer");
+          expect((yield* answer(at, "SQLite", "ask-build-1")).envelope).toMatchObject({
+            ok: true,
+          });
+          const lost = yield* until(
+            () =>
+              deliveredTo(at.world.state, at.runId).pipe(
+                Effect.map((rows) => Arr.filter(rows, (one) => one.cause.kind === "steer")),
+                Effect.orElseSucceed(() => []),
+              ),
+            (rows) => Arr.some(rows, (one) => one.state === "unknown"),
+          ).pipe(Effect.map((rows) => Arr.findFirst(rows, (one) => one.state === "unknown")));
+          core.restore("terminal.send");
+          const delivery = Option.getOrThrow(lost);
+          const answered = yield* until(
+            () => waitingOf(at),
+            (rows) => rowOf(rows, "ask-build-1")?.answer !== null,
+          );
+          const held = rowOf(answered, "ask-build-1")?.answer;
+          expect(held).toBe("2");
+
+          yield* at.status("idle");
+          const parked = yield* until(
+            () => viewOf(at),
+            (view) => view?.park?.cause === "delivery-unsettled",
+          );
+          expect(parked?.parked).toContain(delivery.id);
+
+          yield* stopHost(at.world.state);
+          const again = yield* startHost(at.world);
+          if (evidence !== "no-submit") {
+            yield* recordClaudeEvent(
+              yield* controlDir(at.world.state, at.agent),
+              encode({
+                session_id: at.agent,
+                hook_event_name: "UserPromptSubmit",
+                prompt: `collie-delivery:${
+                  evidence === "another-delivery" ? `${delivery.id}-elsewhere` : delivery.id
+                }\nYour task for this step is next.`,
+              }),
+              evidence === "another-incarnation" ? "not-its-terminal" : delivery.incarnation,
+            ).pipe(Effect.orDie);
+          }
+
+          const rechecked = yield* until(
+            () =>
+              readMetrics(`${at.world.state}/evidence/${at.runId}`).pipe(
+                Effect.orElseSucceed(() => []),
+              ),
+            (lines) =>
+              Arr.some(
+                lines,
+                (line) =>
+                  line.action === "rechecked" && pipe(line.note ?? "", Str.includes(delivery.id)),
+              ),
+          );
+          expect(
+            Option.getOrUndefined(
+              Arr.findLast(
+                rechecked,
+                (line) =>
+                  line.action === "rechecked" && pipe(line.note ?? "", Str.includes(delivery.id)),
+              ),
+            )?.outcome,
+          ).toBe(evidence === "its-own-submit" ? "cleared" : "uncleared");
+
+          const after = yield* until(
+            () => again.run({ runId: at.runId }).pipe(Effect.orDie),
+            (view) => view !== null && (view.parked != null || view.status.status === "complete"),
+          );
+          expect(
+            Arr.filter(after?.waiting ?? [], (one) => one.name === "ask-build-1"),
+          ).toHaveLength(1);
+          expect(revisionOf(after?.waiting ?? [], "ask-build-1")).toBeUndefined();
+          expect(rowOf(after?.waiting ?? [], "ask-build-1")?.answer).toBe(held);
+          expect(yield* answerSends(at, "SQLite")).toBe(1);
+          const ledger = yield* deliveredTo(at.world.state, at.runId).pipe(
+            Effect.orElseSucceed(() => []),
+          );
+          expect(Arr.findFirst(ledger, (one) => one.id === delivery.id)).toMatchObject(
+            Option.some({ state: evidence === "its-own-submit" ? "acknowledged" : "unknown" }),
+          );
+        }),
+      { mode: "declared", awaiting: "step" },
     ));
 }
 
