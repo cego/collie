@@ -4222,6 +4222,56 @@ test("GitHub reads a head it has not started Actions on as pending, and one it r
   );
 });
 
+test("GitHub reports a rerun lookup it could not read rather than the failed attempt it found", () => {
+  const read = (match: string) => {
+    const fake = fakeForge(
+      "github",
+      model("github", {
+        httpFault: { status: 429, message: "API rate limit exceeded", match },
+        mrs: [
+          mr("github", {
+            jobs: [{ name: "test", state: "failed" }],
+            workflowRun: { attempt: 2, status: "in_progress" },
+          }),
+        ],
+      }),
+    );
+    return FORGES.github
+      .job(ref("github"), "test", "/w", fake.run)
+      .pipe(Effect.provide(fake.layer));
+  };
+  return runEffect(
+    Effect.gen(function* () {
+      expect(yield* read("/actions/jobs/")).toMatchObject({ ok: false });
+      expect(yield* read("/actions/runs/")).toMatchObject({ ok: false });
+    }),
+  );
+});
+
+test("GitHub accepts a check run whose app is null", () => {
+  const read = (over: Partial<FakeMr>) => {
+    const fake = fakeForge("github", model("github", { mrs: [mr("github", over)] }));
+    return FORGES.github
+      .job(ref("github"), "test", "/w", fake.run)
+      .pipe(Effect.provide(fake.layer));
+  };
+  return runEffect(
+    Effect.gen(function* () {
+      expect(yield* read({ jobs: [{ name: "vercel", state: "passed", app: null }] })).toMatchObject(
+        { ok: true, state: "pending", id: null },
+      );
+      expect(
+        yield* read({
+          jobs: [
+            { name: "vercel", state: "passed", app: null },
+            { name: "test", state: "passed" },
+          ],
+        }),
+      ).toMatchObject({ ok: true, state: "passed" });
+    }),
+  );
+});
+
 test("GitHub finds a failed attempt beyond a page of passing reruns", () => {
   const fake = fakeForge(
     "github",

@@ -136,6 +136,9 @@ import { readUsage } from "../../src/usage-ledger";
 import type { CompactionPorts } from "../../src/compaction";
 import { PARK_CAUSES, ParkCause } from "../../src/park-cause";
 import { recheckPark } from "../../src/park-recheck";
+import { recoverParks } from "../../src/park-recovery";
+import type { MrPanels } from "../../src/merges";
+import type { RunView } from "../../src/engine";
 import { GOLDEN, matchGolden } from "../../tools/prompt-golden";
 
 const ROOT = new URL("../../", import.meta.url).pathname;
@@ -14551,6 +14554,8 @@ const LONG_URL = `https://${LONG_PROJECT}`;
 const LONG_MR = `${LONG_URL}/-/merge_requests/30`;
 const LONG_TARGET = `mr:${LONG_PROJECT}!30`;
 const LONG_TAG_CLEARANCE = `a release commit to the repository's default branch, where it makes one; pushing an annotated version tag to origin; creating its release there, where the package publishes from its tags; watching the tag's pipeline there, never playing a production job.`;
+const LONG_TAGGED_CLEARANCE = `a release commit to the repository's default branch, where it makes one; pushing an annotated version tag to origin, with no forge release; watching the tag's pipeline there, never playing a production job.`;
+const LONG_ROLLBACK = `rolling ${LONG_URL}'s stage back to the newest release production carries, never a production job.`;
 const LONG_STAGE_CLEARANCE = `a release commit to the repository's default branch, where it makes one; pushing an annotated version tag to origin, with no forge release; playing, retrying and watching the tag's stage deploy and check jobs; rolling stage back to the newest release production carries; never a production job.`;
 
 const RELEASING = {
@@ -15115,6 +15120,24 @@ const targetTaken = (
     output: { verdict: "clean", fixed: [{ title: "took the target" }] },
   };
 };
+
+const ownChecks = (runId: string, specs: ReadonlyArray<{ name: string; ci: string }>) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) =>
+      fs.makeDirectory(evidenceDir(dir, runId), { recursive: true }).pipe(
+        Effect.andThen(
+          freeze(
+            runId,
+            Arr.map(specs, (one) => ({
+              ...counting(one.name, `${rig.root}/${one.name}-runs`),
+              ci: one.ci,
+            })),
+          ),
+        ),
+      ),
+    ),
+    Effect.orDie,
+  );
 
 const ownCheck = (runId: string) =>
   FileSystem.FileSystem.pipe(
@@ -16132,17 +16155,73 @@ const rechecking = (
 ) =>
   Effect.gen(function* () {
     const rounds = yield* Ref.make(0);
+    const panels: MrPanels = new Map();
+    const env = rig.pluginEnv({ COLLIE_ROOT: ROOT, GITLAB_HOST: FORGE_HOST.gitlab });
+    const views = Effect.gen(function* () {
+      const cause = yield* parkedCause(runId).pipe(Effect.orElseSucceed(() => ""));
+      if (cause === "") {
+        return [];
+      }
+      const decoded = yield* Schema.decodeUnknownEffect(ParkCause)(cause);
+      yield* Ref.update(rounds, (count) => count + 1);
+      const parked: RunView = {
+        runId,
+        workflow: "release",
+        project: rig.projectDir,
+        task: null,
+        parent: null,
+        registration: "release@1",
+        entry: "release.workflow.ts",
+        input: {},
+        provenance: {},
+        strategies: {},
+        options: {},
+        cwd,
+        branch: "feature",
+        workspace: null,
+        worktree: null,
+        outcome: "feature",
+        created: "2026-01-01T00:00:00.000Z",
+        status: { status: "suspended" },
+        waiting: [],
+        controls: [],
+        diagnostic: null,
+        parked: cause,
+        park: {
+          id: "p1",
+          since: "2026-01-01T00:00:00.000Z",
+          cause: decoded,
+          kind: PARK_CAUSES[decoded].kind,
+        },
+        awaiting: null,
+        mr,
+        landing: null,
+      };
+      return [parked];
+    });
     yield* Effect.forkChild(
-      Effect.gen(function* () {
-        for (;;) {
-          const read = yield* parkRecheck(runId, mr, cwd);
-          yield* Ref.update(rounds, (count) => count + 1);
-          if (read.cleared) {
-            return yield* run.resume;
-          }
-          yield* Effect.sleep("20 millis");
-        }
-      }),
+      recoverParks({
+        env,
+        herdr: new Herdr(env),
+        reconnects: Effect.succeed(0),
+        panels,
+        views,
+        resume: () => Effect.as(run.resume, { applied: true }),
+      }).pipe(
+        Effect.provide(
+          forgeHttpLayer.pipe(
+            Layer.provideMerge(platformLayer),
+            Layer.provideMerge(
+              ConfigProvider.layerAdd(
+                ConfigProvider.fromUnknown({
+                  COLLIE_FORGE_API: forgeApi,
+                  COLLIE_RECOVERY_EVERY: "20 millis",
+                }),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
     return { rounds: Ref.get(rounds) };
   });
@@ -16272,6 +16351,49 @@ scenario(
         expect(more).toEqual([]);
         expect(proof).toMatchObject({ name: "check", result: "pass", end: { head_sha: head } });
         expect(yield* healed).toEqual([]);
+      }),
+    ),
+);
+
+scenario(
+  "a Release with two checks left to CI parks the first unproved read at once rather than waiting on the check after it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        ciBound = "20 millis";
+        ciPoll = "1 millis";
+        const { bin } = yield* releasable("github", {
+          jobs: [
+            { name: "test", state: "cancelled" },
+            { name: "build", state: "running" },
+          ],
+        });
+        const runId = "r-release-two-checks";
+        yield* ownChecks(runId, [
+          { name: "check-a", ci: "test" },
+          { name: "check-b", ci: "build" },
+        ]);
+        yield* rig.queueOutputs([PACKAGED]);
+        yield* driven(
+          {
+            entry: shipped("release"),
+            runId,
+            input: { mr: RELEASING.github.target },
+            host: releaseHost(),
+          },
+          (run) =>
+            Effect.gen(function* () {
+              const [why] = yield* until(
+                () => Effect.zip(parkedWhy(runId), run.status),
+                ([text, status]) => text !== "" && status.status === "suspended",
+              );
+              expect(yield* parkedCause(runId)).toBe("ci-job-absent");
+              expect(why).toContain("check-a is left to CI and unproved: job test");
+              expect(why).not.toContain("check-b");
+              expect(yield* wasAsked(runId, "fix-1")).toBe(false);
+            }),
+        );
+        yield* bin.restore();
       }),
     ),
 );
@@ -16653,6 +16775,81 @@ scenario(
             }),
         );
         yield* bin.restore();
+      }),
+    ),
+);
+
+scenario(
+  "release on gitlab: an application whose tag's pipeline deploys no stage, on a project URL too long for a Clearance, is tagged on Clearances that fit",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, merged } = yield* stageable("gitlab", {}, { project: LONG_PROJECT });
+        claimed.length = 0;
+        const runId = "r-app-long-url-tag-tested";
+        yield* rig.queueOutputs([
+          { ...APP_ASSESSED, stage_jobs: { merge_request: ["deploy-stage"], tag: [] } },
+          {
+            ...TAGGED,
+            pipeline_url: `${LONG_URL}/-/pipelines/7`,
+            stage_jobs: [],
+            production_jobs: [{ name: "deploy-production", url: `${LONG_URL}/said-by-the-agent` }],
+          },
+        ]);
+        yield* driven(
+          { entry: shipped("release"), runId, input: { mr: LONG_TARGET }, host: releaseHost() },
+          (run) =>
+            Effect.gen(function* () {
+              yield* goAsked(run.asked, "go-1");
+              yield* run.answer("go-1", "Release");
+              const production = yield* goAsked(run.asked, "production");
+              expect(production.shipping).toEqual({ action: "deploy", tag: "v1.2.0" });
+              const cleared = yield* clearance(runId, "tag");
+              expect(cleared).toBe(`Cleared for this step: ${LONG_TAGGED_CLEARANCE}`);
+              expect(
+                Str.replace("Cleared for this step: ", "")(cleared).length,
+              ).toBeLessThanOrEqual(400);
+            }),
+        );
+        yield* bin.restore();
+        expect(merged).not.toBe("");
+      }),
+    ),
+);
+
+scenario(
+  "release on gitlab: a stage check failing on a project URL too long for a Clearance is rolled back under a Clearance that fits",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, forge, base, model } = yield* stageable(
+          "gitlab",
+          { "e2e-stage": "failed" },
+          { project: LONG_PROJECT },
+        );
+        claimed.length = 0;
+        const runId = "r-app-long-url-rollback";
+        yield* rig.queueOutputs([
+          APP_ASSESSED,
+          stagedTag("gitlab", LONG_URL, `${LONG_URL}/-/pipelines/7`),
+          {
+            writes: [forge.holding({ ...model, environments: deploys(base, base) })],
+            output: { verdict: "clean", stage: "v1.1.0" },
+          },
+        ]);
+        yield* driven(
+          { entry: shipped("release"), runId, input: { mr: LONG_TARGET }, host: releaseHost() },
+          (run) =>
+            Effect.gen(function* () {
+              yield* goAsked(run.asked, "go-1");
+              yield* run.answer("go-1", "Merge, tag and stage");
+              yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+        const cleared = yield* clearance(runId, "rollback");
+        expect(cleared).toBe(`Cleared for this step: ${LONG_ROLLBACK}`);
+        expect(Str.replace("Cleared for this step: ", "")(cleared).length).toBeLessThanOrEqual(400);
       }),
     ),
 );

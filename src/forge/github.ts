@@ -511,7 +511,7 @@ const CheckRuns = Schema.Struct({
       status: Schema.String,
       conclusion: optionalText,
       html_url: optionalText,
-      app: Schema.optional(Schema.Struct({ slug: optionalText })),
+      app: Schema.optional(Schema.NullOr(Schema.Struct({ slug: optionalText }))),
     }),
   ),
 });
@@ -609,8 +609,14 @@ function job(ref: MrRef, name: string, cwd: string) {
       }
     }
     // WARNING: a gated job's rerun creates its new check run only once its needs finish.
-    const rerunning =
-      state === "failed" && id !== null ? yield* rerunInProgress(repo, id, cwd) : false;
+    let rerunning = false;
+    if (state === "failed" && id !== null) {
+      const seen = yield* rerunInProgress(repo, id, cwd);
+      if ("unreadable" in seen) {
+        return { ok: false, reason: seen.unreadable };
+      }
+      rerunning = seen.rerunning;
+    }
     return {
       ok: true,
       head,
@@ -637,14 +643,19 @@ const actionsJob = (url: string | null | undefined) => {
 
 const rerunInProgress = (repo: string, id: string, cwd: string) =>
   Effect.gen(function* () {
+    const unreadable = (why: string) =>
+      ({ unreadable: `could not read the rerun of the job: ${why}` }) as const;
     const ran = yield* rest(AttemptJob, cwd, `repos/${repo}/actions/jobs/${Str.split(id, "/")[1]}`);
     if (!ran.ok) {
-      return false;
+      return unreadable(ran.reason);
     }
     const run = yield* rest(WorkflowRun, cwd, `repos/${repo}/actions/runs/${ran.value.run_id}`);
-    return (
-      run.ok && run.value.run_attempt > ran.value.run_attempt && run.value.status !== "completed"
-    );
+    if (!run.ok) {
+      return unreadable(run.reason);
+    }
+    return {
+      rerunning: run.value.run_attempt > ran.value.run_attempt && run.value.status !== "completed",
+    } as const;
   });
 
 const checkRun = (repo: string, ref: string, name: string, cwd: string) =>

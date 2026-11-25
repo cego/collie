@@ -286,7 +286,11 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
             return before;
           }
         }
-        if (read.id !== null && (yield* forge.retryJob(ref, read.id, cwd, asked.run)).ok) {
+        if (
+          !reread &&
+          read.id !== null &&
+          (yield* forge.retryJob(ref, read.id, cwd, asked.run)).ok
+        ) {
           retried = read.id;
           yield* appendLog(asked.runDir, `ci: retried job ${job} for ${spec.name} on ${head}`).pipe(
             Effect.ignore,

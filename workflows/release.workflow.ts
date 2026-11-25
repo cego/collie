@@ -1076,10 +1076,10 @@ export default defineWorkflow({
                   failed.push(read.unproved);
                 } else {
                   unproved.push(read.unproved);
+                  break;
                 }
               }
               const head = (yield* host.evidence(runId, cwd)).final.head_sha;
-              // WARNING: only a job that actually failed earns a fix round; every other unproved read is rechecked.
               if (unproved.length > 0) {
                 return yield* park(
                   `The checks at ${short(head)} are unproved, not failed: ${Arr.join([...unproved, ...failed], "; ")}`,

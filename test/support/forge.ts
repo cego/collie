@@ -55,7 +55,7 @@ export const FakeJob = Schema.Struct({
   retried: Schema.optionalKey(JobStates),
   id: Schema.optionalKey(Schema.Finite),
   trace: Schema.optionalKey(Schema.String),
-  app: Schema.optionalKey(Schema.String),
+  app: Schema.optionalKey(Schema.NullOr(Schema.String)),
   attempts: Schema.optionalKey(
     Schema.Array(
       Schema.Struct({
@@ -186,6 +186,8 @@ export const ForgeModel = Schema.Struct({
         status: Schema.Finite,
         message: Schema.optionalKey(Schema.String),
         headers: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+        // WARNING: a fault that names its URL keeps the other reads answerable.
+        match: Schema.optionalKey(Schema.String),
       }),
       Schema.Literals(["network", "hold"]),
     ]),
@@ -2218,7 +2220,7 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>) {
                   id: job.id,
                   name: job.name,
                   head_sha: at,
-                  app: { slug: job.app ?? "github-actions" },
+                  app: job.app === null ? null : { slug: job.app ?? "github-actions" },
                   ...GITHUB_RUN[job.state],
                   html_url: `https://github.com/${repo}/actions/runs/${run}/job/${job.id}`,
                 },
@@ -2839,7 +2841,14 @@ export function httpFace(
             ),
     });
     const model = yield* state.read;
-    const fault = model.httpFault;
+    const declared = model.httpFault;
+    const matches =
+      declared === undefined
+        ? false
+        : declared === "network" || declared === "hold" || declared.match === undefined
+          ? true
+          : Str.includes(declared.match)(input);
+    const fault = matches ? declared : undefined;
     if (fault === "network") {
       return yield* Effect.die(new TypeError("fetch failed"));
     }

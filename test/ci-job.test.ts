@@ -165,6 +165,38 @@ test("a CI park with no pipeline stays uncleared until the named job exists", ()
     }),
   ));
 
+test("a job cancelled or skipped at the parked head keeps its CI park, and one that failed clears it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const recheck = (state: FakeJob["state"]) =>
+        Effect.gen(function* () {
+          const { asked, at, root, forge } = yield* waiting(state);
+          yield* rememberCiTarget(`${root}/runs/r1`, {
+            head: at,
+            job: "nuxi-typecheck",
+            mr: MR,
+            cwd: asked.cwd,
+          });
+          return yield* recheckPark(
+            {
+              runId: "r1",
+              cwd: asked.cwd,
+              branch: "main",
+              mr: MR,
+              park: { cause: "ci-job-absent", kind: "rechecks" },
+            },
+            root,
+            { agentList: () => Effect.die("CI rechecks must not ask core") },
+          ).pipe(Effect.provide(forgeHttpTest(asked.run, forge.fetch)));
+        });
+      const cancelled = yield* recheck("cancelled");
+      expect(cancelled).toMatchObject({ cleared: false, error: false });
+      expect(cancelled.note).toContain("cancelled");
+      expect((yield* recheck("skipped")).cleared).toBe(false);
+      expect((yield* recheck("failed")).cleared).toBe(true);
+    }),
+  ));
+
 test("a target-red park clears only once every recorded job passed on the target branch's newest commit", () =>
   runEffect(
     Effect.gen(function* () {
@@ -1042,6 +1074,30 @@ test("a GitHub job whose rerun the forge refuses is read again, and a rerun alre
             pipe_(request.url, Str.endsWith("/rerun-failed-jobs")),
           ),
         ).toHaveLength(1);
+      }),
+      1000,
+    ),
+  ));
+
+test("a rerun the forge refuses twice is written once, and the job stays failed", () =>
+  runEffect(
+    fastForward(
+      Effect.gen(function* () {
+        const { asked, forge } = yield* waiting(
+          "failed",
+          PULL,
+          undefined,
+          {
+            jobs: [{ name: "test", state: "failed" }],
+            workflowRun: { attempt: 1, status: "in_progress" },
+            rerunRefused: "403 Already running",
+          },
+          "github",
+        );
+        const refused = yield* read({ ...asked, spec: GATE, settle: true }, forge);
+        expect("proved" in refused).toBe(false);
+        expect("unproved" in refused && refused.state).toBe("failed");
+        expect(reruns(forge.requests)).toHaveLength(1);
       }),
       1000,
     ),
