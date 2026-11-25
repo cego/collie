@@ -2106,7 +2106,9 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | "diff-target"
     | "branch"
     | "merge-request"
-    | "started-with";
+    | "started-with"
+    | "findings"
+    | "finding";
 
   export interface FollowUp {
     readonly entry?: (facts: ActionFacts) => string;
@@ -2118,6 +2120,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly when: "succeeded" | "failed" | "always";
     /** What Collie fills in from the Run itself; the rest is the caller's to give. */
     readonly inputs?: Readonly<Record<string, Source>>;
+    /** How many findings the offer takes, where its input is a selection. */
+    readonly selects?: "many" | "one";
     /** A further condition on the facts, where how it ended is not the whole of it. */
     readonly eligible?: (facts: ActionFacts) => boolean;
     readonly given?: OfferGiven;
@@ -2160,6 +2164,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly eligible: (facts: ActionFacts) => boolean;
     /** What Collie fills in from the Run itself; the rest is the caller's to give. */
     readonly inputs?: Readonly<Record<string, Source>>;
+    /** How many findings the offer takes, where its input is a selection. */
+    readonly selects?: "many" | "one";
     readonly given?: OfferGiven;
     readonly ships?: Ships;
     /** What taking it does, which a front door shows and asks about before taking it. */
@@ -2374,7 +2380,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     findings: ReadonlyArray<Finding>,
     statuses: ReadonlyArray<{
       readonly id: string;
-      readonly status: FindingWord;
+      readonly status: string;
       readonly run: string | null;
     }>,
     by: string,
@@ -7400,6 +7406,7 @@ const Placing = Schema.Struct({
   continues: Schema.optionalKey(ConsumedCard),
   invoked: Schema.optionalKey(Schema.String),
   direct: Schema.optionalKey(Schema.Literal(true)),
+  child: Schema.optionalKey(Schema.Literal(true)),
   took: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 type Placing = typeof Placing.Type;
@@ -8909,7 +8916,7 @@ const makeRegistry: (
       input: settled.input,
       provenance: settled.provenance,
       options: launchOptions(generation, asked),
-      placing: encodePlacing({ from, taskLabel, root, closes: generation.closes }),
+      placing: encodePlacing({ from, taskLabel, root, closes: generation.closes, child: true }),
       generation: generation.name,
       execution: yield* generation.registration.workflow.executionId(payload),
       task: ask.ownTask === true ? null : parent.task,
@@ -9018,6 +9025,40 @@ const makeRegistry: (
     );
 
   // WARNING: nothing happens where the module is unregistered or no longer takes its input; the row stays for a repair.
+  // WARNING: the selection the child took is finished here too, so recovery never leaves them open for a second child.
+  const finishTaken = Effect.fn("Engine.finishTaken")(function* (row: RunRow, by?: string) {
+    const placing = Option.getOrUndefined(decodePlacing(row.placing ?? ""));
+    if (placing?.took === undefined || row.parent === null) {
+      return;
+    }
+    const parentDir = `${dir}/runs/${row.parent}`;
+    const said = yield* readFindingStatuses(parentDir).pipe(
+      Effect.provideService(RunRecords, runRecords),
+    );
+    const owed = Arr.filter(
+      placing.took,
+      (id) =>
+        !Arr.some(said, (one) => one.id === id && one.status === "taken" && one.run === row.run),
+    );
+    if (owed.length === 0) {
+      yield* storeOpenCount(parentDir).pipe(Effect.provideService(RunRecords, runRecords));
+      return;
+    }
+    const named = Option.flatMap(Option.fromNullishOr(placing.invoked), (text) =>
+      Schema.decodeOption(NamedInvocation)(text),
+    );
+    yield* markTaken(
+      parentDir,
+      owed,
+      Option.getOrElse(
+        Option.map(named, (one) => one.offer),
+        () => "",
+      ),
+      row.run,
+      by ?? row.run,
+    ).pipe(Effect.provideService(RunRecords, runRecords));
+  });
+
   const handOver = Effect.fn("Engine.handOver")(function* (row: RunRow, clear = true) {
     const generation = live.get(row.generation);
     if (generation === undefined || unplaced(row)) {
@@ -9029,6 +9070,7 @@ const makeRegistry: (
     }
     yield* attachInto(row);
     yield* crash("admitted");
+    yield* finishTaken(row);
     const before = entriesOf.get(generation.registration.workflow)?.get(row.run) ?? 0;
     const old = yield* parkedOf(row.run);
     if (clear) {
@@ -11004,7 +11046,7 @@ const makeRegistry: (
       const claimed = yield* store.requested(options.request);
       if (claimed !== null) {
         const placing = Option.getOrUndefined(decodePlacing(claimed.placing ?? ""));
-        if (placing?.direct === true) {
+        if (placing?.direct === true || placing?.child === true || claimed.parent === null) {
           return yield* new RequestConflict({
             request: options.request,
             reason: `request "${options.request}" is already ${claimed.run}, started directly rather than by an offer`,
@@ -11017,35 +11059,7 @@ const makeRegistry: (
             reason: `request "${options.request}" is already ${claimed.run}, started with other arguments`,
           });
         }
-        if (placing?.took !== undefined && claimed.parent !== null) {
-          const parentDir = `${dir}/runs/${claimed.parent}`;
-          const said = yield* readFindingStatuses(parentDir).pipe(
-            Effect.provideService(RunRecords, runRecords),
-          );
-          const owed = Arr.filter(
-            placing.took,
-            (id) =>
-              !Arr.some(
-                said,
-                (one) => one.id === id && one.status === "taken" && one.run === claimed.run,
-              ),
-          );
-          if (owed.length > 0) {
-            const named = Option.flatMap(Option.fromNullishOr(placing.invoked), (text) =>
-              Schema.decodeOption(NamedInvocation)(text),
-            );
-            yield* markTaken(
-              parentDir,
-              owed,
-              Option.getOrElse(
-                Option.map(named, (one) => one.offer),
-                () => "",
-              ),
-              claimed.run,
-              options.by ?? options.request,
-            ).pipe(Effect.provideService(RunRecords, runRecords));
-          }
-        }
+        yield* finishTaken(claimed, options.by ?? options.request);
         return {
           runId: claimed.run,
           registration: claimed.generation,

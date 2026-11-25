@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { Effect, FileSystem, Option, Stream } from "effect";
 import { Schema } from "effect";
@@ -7,8 +8,8 @@ import { parseJson, stringifyJson } from "../src/json";
 import { expect, test } from "bun:test";
 import { connect } from "../src/host";
 import { MODULES, hosted } from "./support/hosted";
-import { hostRecords, registeredAt } from "./support/records";
-import { readFindingStatuses } from "../src/finding-status";
+import { hostRecords, recordsAt, registeredAt } from "./support/records";
+import { OPEN_FINDINGS, readFindingStatuses } from "../src/finding-status";
 import { RunRecords } from "../src/run-records";
 import { sectionOf } from "../src/board-model";
 import { runDir } from "../src/engine";
@@ -695,21 +696,19 @@ test("an offer child admitted before the fingerprint existed still answers its r
             request: "pre-upgrade",
           });
         const child = yield* asked().pipe(Effect.orDie);
-        // WARNING: a child admitted before this branch carries no fingerprint at all.
         const db = new Database(`${world.state}/host.db`);
-        // WARNING: the column holds the placing this branch wrote, so these are its keys.
         const row = yield* Schema.decodeUnknownEffect(Schema.Struct({ placing: Schema.String }))(
           db.query("SELECT placing FROM collie_runs WHERE run = ?").get(child.runId),
         ).pipe(Effect.orDie);
-        const placing = parseJson(
-          Schema.Struct({
-            direct: Schema.optional(Schema.Boolean),
-            invoked: Schema.optional(Schema.String),
-          }),
-          row.placing,
+        const placing = parseJson(Schema.Record(Schema.String, Schema.Json), row.placing);
+        const legacy = Rec.filter(
+          placing,
+          (_, key) => !["direct", "child", "took", "invoked"].includes(key),
         );
-        const stripped = stringifyJson({ ...placing, direct: null, invoked: null });
-        db.run("UPDATE collie_runs SET placing = ? WHERE run = ?", [stripped, child.runId]);
+        db.run("UPDATE collie_runs SET placing = ? WHERE run = ?", [
+          stringifyJson(legacy),
+          child.runId,
+        ]);
         db.close();
         const again = yield* asked().pipe(Effect.orDie);
         expect(again.runId).toBe(child.runId);
@@ -764,6 +763,48 @@ test("a retry finishes the parent's taken lines before it answers with the child
           [second, "taken"],
           [third, "open"],
         ]);
+      }),
+    [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
+  ));
+
+test("a retry saves the parent's open count when its taken lines are already there", () =>
+  hosted(
+    "hw-selected-retry-count-",
+    ({ world }) =>
+      Effect.gen(function* () {
+        const run = yield* Effect.gen(function* () {
+          yield* install(world);
+          yield* (yield* FileSystem.FileSystem).writeFileString(
+            `${world.home}/outputs.json`,
+            encode([empty]),
+          );
+          return yield* started(world.state, world.project, "submits", { note: "two" });
+        });
+        const [first, second] = idsOf(run.id);
+        const asked = () =>
+          run.client.invoke({
+            runId: run.id,
+            offer: "implement-selected",
+            input: { findings: [first, second] },
+            request: "count-lost",
+          });
+        yield* asked().pipe(Effect.orDie);
+        yield* RunRecords.use((records) => records.put(run.id, OPEN_FINDINGS, null)).pipe(
+          Effect.provide(recordsAt(world.state)),
+        );
+        expect(
+          yield* hostRecords(
+            world.state,
+            RunRecords.use((records) => records.fact(run.id, OPEN_FINDINGS)),
+          ),
+        ).toBeNull();
+        yield* asked().pipe(Effect.orDie);
+        expect(
+          yield* hostRecords(
+            world.state,
+            RunRecords.use((records) => records.fact(run.id, OPEN_FINDINGS)),
+          ),
+        ).toBe("1");
       }),
     [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
   ));
