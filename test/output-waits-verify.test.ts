@@ -3,7 +3,6 @@ import * as Str from "effect/String";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Fiber, Schema, flow, pipe as pipe_, Result } from "effect";
 import { connect } from "../src/host";
-import { runDir } from "../src/engine";
 import { resetExecutors } from "../src/executors";
 import { deliveredTo, launchOf } from "./support/records";
 import { exec } from "./support/command";
@@ -63,7 +62,7 @@ const held = (world: World, runId: string, agent: string, operation = "build") =
         "--",
         "sh",
         "-c",
-        `printf underway > '${underway}'; until [ -f '${go}' ]; do sleep 0.05; done`,
+        `printf underway > '${underway}'; echo running; until [ -f '${go}' ]; do sleep 0.05; done`,
       ],
       { COLLIE_AGENT: agent },
     ).pipe(Effect.forkScoped);
@@ -74,9 +73,9 @@ const held = (world: World, runId: string, agent: string, operation = "build") =
     yield* until(
       () =>
         fs
-          .readFileString(`${runDir(world.state, runId)}/log.txt`)
-          .pipe(Effect.orElseSucceed(() => "")),
-      (text) => pipe_(text, Str.includes('"unit" started')),
+          .readDirectory(`${world.state}/evidence/${runId}/verify`)
+          .pipe(Effect.orElseSucceed(() => [])),
+      (names) => Arr.some(names, (one) => pipe_(one, Str.includes("unit"))),
     );
     return { go, running };
   });

@@ -19,9 +19,6 @@ export interface CollectingApi {
   readonly markUntold: (run: string, agent: string, verified: string) => Effect.Effect<void>;
 }
 
-// WARNING: the host records a verify when its request reaches it, which can lag the agent's own start by seconds, so a write just before it counts as interim.
-const RECORD_LAG_MS = 3000;
-
 // WARNING: an mtime is truncated to the millisecond where the clock rounds, so a write as a verify began can look a millisecond older.
 const MILLISECOND_SKEW = 1;
 
@@ -38,14 +35,17 @@ export interface VerifyHold {
 
 export const owedFor = (writtenAt: number, now: VerifyHold) => {
   const owed: ReadonlyArray<string> = Arr.map(
-    Arr.filter(now.ended, (one) => one.began <= writtenAt + RECORD_LAG_MS && one.at >= writtenAt),
+    Arr.filter(
+      now.ended,
+      (one) => one.began <= writtenAt + MILLISECOND_SKEW && one.at >= writtenAt,
+    ),
     (one) => one.id,
   );
   return owed;
 };
 
 export const underWhileWritten = (writtenAt: number, now: VerifyHold) =>
-  now.under && (now.since === null || writtenAt + RECORD_LAG_MS + MILLISECOND_SKEW >= now.since);
+  now.under && (now.since === null || writtenAt + MILLISECOND_SKEW >= now.since);
 
 export const owedEver = (known: ReadonlyArray<string>, writtenAt: number, now: VerifyHold) => {
   const owed: ReadonlyArray<string> = [...new Set([...known, ...owedFor(writtenAt, now)])];
