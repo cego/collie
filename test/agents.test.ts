@@ -1514,14 +1514,27 @@ test("a conversation resumed on a transcript alone is resumed again rather than 
             ),
           );
           const resumed = yield* claudeLaunches(2);
+          yield* fs.remove(`${at}/events.jsonl`).pipe(Effect.orElseSucceed(() => undefined));
+          yield* fs.remove(`${at}/transcript.jsonl`).pipe(Effect.orElseSucceed(() => undefined));
+          yield* killThePane(herdr, "r1");
+          yield* (yield* Agents).resumeLost("r1", runningNow);
+          yield* until(
+            rig.cmds().pipe(
+              Effect.orDie,
+              Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run").length === 3),
+            ),
+          );
+          const again = yield* claudeLaunches(3);
           yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"resumed"}`);
           const done = yield* Fiber.join(fiber);
-          return { first, resumed, done };
+          return { first, resumed, again, done };
         }),
         { herdr, collectMs: 400, readyMs: 200 },
       );
       expect(result.resumed).toContain("--resume");
       expect(result.resumed).toContain(result.first);
+      expect(result.again).toContain("--resume");
+      expect(result.again).toContain(result.first);
       expect(result.done._tag).toBe("Success");
     }),
   ));

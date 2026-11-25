@@ -699,6 +699,7 @@ const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), 
 const lostCompletion = (
   transcript: (askedIso: string) => string,
   written: { unmarked?: boolean } = {},
+  takeover?: { launch: string },
 ) =>
   Effect.gen(function* () {
     const control = `${rig.stateDir}/compaction/build-r1`;
@@ -725,6 +726,14 @@ const lostCompletion = (
       control,
       pre("s-1", "manual", "Keep the work in progress. (collie:req-1)"),
     );
+    if (takeover !== undefined) {
+      const now = yield* Clock.currentTimeMillis;
+      yield* fs.writeFileString(
+        `${control}/events.jsonl`,
+        `${asJson({ at: now, session: "s-1", kind: "start", launch: takeover.launch })}\n`,
+        { flag: "a" },
+      );
+    }
     const said: Array<string> = [];
     const deps: CompactionDeps = {
       ports: COMPACTION_PORTS,
@@ -759,6 +768,19 @@ test("a lost completion whose transcript shows no completion of it stays unresol
       const { due, left } = yield* lostCompletion(
         (at) =>
           `{"type":"user","timestamp":"${at}","message":{"role":"user","content":"/compact"}}\n`,
+      );
+      expect(due).toBeNull();
+      expect(left).not.toBeNull();
+    }),
+  ));
+
+test("a boundary a replacement launch appended to the same session settles nothing", () =>
+  withLaunch(
+    Effect.gen(function* () {
+      const { due, left } = yield* lostCompletion(
+        (at) => `${naming("req-1", at)}\n${boundaryAt(at)}\n`,
+        {},
+        { launch: "l-2" },
       );
       expect(due).toBeNull();
       expect(left).not.toBeNull();

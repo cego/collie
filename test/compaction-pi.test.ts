@@ -1,6 +1,6 @@
 import * as Str from "effect/String";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Path, Schedule, Schema, flow, Result } from "effect";
+import { ConfigProvider, Effect, FileSystem, Path, Schedule, Schema, flow, Result } from "effect";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
 import { onMachineWith, removesCache } from "./support/live";
@@ -21,7 +21,7 @@ let dir: string;
 const pi = COMPACTION_PORTS.pi!;
 
 const prompted: Array<string> = [];
-const marked = (id: string) => ({ id, session: null, launch: null, transcript: null });
+const marked = (id: string) => ({ id, session: null, launch: "l-1", transcript: null });
 
 const ctx = () => ({
   agent: "reuse-run-two-r1",
@@ -245,7 +245,14 @@ interface PiHost {
 test("the extension it installs keeps the identity and the outcome past its own cap", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* pi.install({ agent: "reuse-run-two-r1", harness: "pi", cwd: rig.projectDir, dir });
+      yield* pi
+        .install({ agent: "reuse-run-two-r1", harness: "pi", cwd: rig.projectDir, dir })
+        .pipe(
+          Effect.provideService(
+            ConfigProvider.ConfigProvider,
+            ConfigProvider.fromUnknown({ COLLIE_LAUNCH: "l-1" }),
+          ),
+        );
       const handlers = new Map<string, (event: PiEvent, ctx: PiContext) => void>();
       const commands = new Map<string, { handler: (args: string, ctx: PiContext) => void }>();
       const extension: { default: (host: PiHost) => void } = yield* Effect.promise(
