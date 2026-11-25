@@ -3,14 +3,15 @@ import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { Schema } from "effect";
+import * as Option from "effect/Option";
 import { childEnv } from "./login-env";
 import type { UserMcpServers } from "./session";
 
-const env_has = (key: string) => Rec.has(childEnv(), key);
-const codex_has = (key: string) => pipe(key, Str.startsWith("CODEX_"));
 const RESERVED = "collie_desktop";
 const OWN = "COLLIE_CHAT_";
+const SHELL = "/bin/sh";
 const NAME = /^[A-Za-z0-9_-]+$/;
+const SETTABLE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const REFERENCE = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 const Strings = Schema.Record(Schema.String, Schema.String);
 const Stdio = Schema.Struct({
@@ -89,7 +90,6 @@ export const codexServers: (
   const env: Record<string, string> = {};
   const given: Array<{ name: string; url?: string }> = [];
   const left: Array<{ name: string; why: string }> = [];
-  const claimed: Record<string, { name: string; value: string }> = {};
   let carried = 0;
   for (const [name, server] of Rec.toEntries(servers)) {
     if (name === RESERVED) {
@@ -108,44 +108,43 @@ export const codexServers: (
       continue;
     }
     if (Schema.is(Stdio)(server)) {
-      const variables: Array<string> = [];
-      let why: string | undefined;
-      for (const [key, value] of Rec.toEntries(server.env ?? {})) {
-        const held = claimed[key];
-        const resolved = referenced(value, childEnv());
-        if (pipe(key, Str.startsWith(OWN))) {
-          why = `${key} is in Collie's own namespace`;
-          break;
-        }
-
-        if (codex_has(key)) {
-          why = `${key} is one of Codex's own variables`;
-          break;
-        }
-        if (env_has(key)) {
-          why = `${key} is set in the environment Codex already runs in`;
-          break;
-        }
-        if (held !== undefined && held.value !== resolved) {
-          why = `it needs a different ${key} than ${held.name}, and Codex gives every server one variable of that name`;
-          break;
-        }
-      }
-      if (why !== undefined) {
-        left.push({ name, why });
+      const held = Rec.toEntries(server.env ?? {});
+      const own = Arr.findFirst(held, ([key]) => pipe(key, Str.startsWith(OWN)));
+      const unsettable = Arr.findFirst(held, ([key]) => !SETTABLE.test(key));
+      if (Option.isSome(own)) {
+        left.push({ name, why: `${own.value[0]} is in Collie's own namespace` });
         continue;
       }
-      for (const [key, value] of Rec.toEntries(server.env ?? {})) {
-        const resolved = referenced(value, childEnv());
-        env[key] = resolved;
-        claimed[key] = { name, value: resolved };
-        variables.push(key);
+      if (Option.isSome(unsettable)) {
+        left.push({ name, why: `${unsettable.value[0]} is a name a shell cannot set` });
+        continue;
       }
-      args.push(...setting(`mcp_servers.${name}.command`, server.command));
-      if (server.args !== undefined) {
-        args.push(...list(`mcp_servers.${name}.args`, server.args));
-      }
-      args.push(...list(`mcp_servers.${name}.env_vars`, variables));
+      // WARNING: a stdio value under the name the human gave it would reach Codex's other servers too.
+      const passing = Arr.map(held, ([key, value]) => {
+        carried += 1;
+        const variable = `${OWN}STDIO_${carried}`;
+        env[variable] = referenced(value, childEnv());
+        return { key, variable };
+      });
+      args.push(
+        ...setting(`mcp_servers.${name}.command`, SHELL),
+        ...list(`mcp_servers.${name}.args`, [
+          "-c",
+          Arr.join(
+            [
+              ...Arr.map(passing, ({ key, variable }) => `export ${key}="$${variable}"`),
+              'exec "$0" "$@"',
+            ],
+            "; ",
+          ),
+          server.command,
+          ...(server.args ?? []),
+        ]),
+        ...list(
+          `mcp_servers.${name}.env_vars`,
+          Arr.map(passing, (one) => one.variable),
+        ),
+      );
       given.push({ name });
       continue;
     }

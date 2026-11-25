@@ -508,11 +508,15 @@ test("Codex gets a server's token through its environment, never its command lin
         yield* session.offer("inspect");
         const details = inspected(yield* turn(session));
         const given = Arr.join(details.args, " ");
-        const [variable, carried] = Rec.toEntries(details.env)[0] ?? ["", ""];
+        const carried = Arr.findFirst(
+          Rec.toEntries(details.env),
+          ([, value]) => value === `Bearer ${token}`,
+        );
+        const variable = Option.map(carried, ([name]) => name).pipe(Option.getOrElse(() => ""));
+        expect(carried).toBeDefined();
         expect(given).toContain("mcp_servers.docs.env_http_headers={");
         expect(given).toContain(`= "${variable}"`);
         expect(given).not.toContain(token);
-        expect(carried).toBe(`Bearer ${token}`);
         expect(details.start.developerInstructions).toEqual(expect.not.stringContaining(token));
         yield* session.offer("servers");
         expect(called(yield* turn(session))).toEqual(["mcp__docs__read_doc"]);
@@ -683,9 +687,12 @@ test("Two servers' headers get an environment variable each, and a header keeps 
         yield* session.offer("inspect");
         const details = inspected(yield* turn(session));
         const given = Arr.join(details.args, " ");
-        expect(Rec.size(details.env)).toBe(2);
-        expect(Rec.values(details.env)).toContain("Bearer first");
-        expect(Rec.values(details.env)).toContain("Bearer second");
+        const carried = Rec.filter(details.env, (_value, key) =>
+          pipe(key, Str.startsWith("COLLIE_CHAT_SERVER_")),
+        );
+        expect(Rec.size(carried)).toBe(2);
+        expect(Rec.values(carried)).toContain("Bearer first");
+        expect(Rec.values(carried)).toContain("Bearer second");
         expect(given).toContain("mcp_servers.one.env_http_headers={");
         expect(given).toContain('"X.Api.Key" = ');
         expect(given).toContain("mcp_servers.one_X.env_http_headers={");
@@ -716,9 +723,12 @@ test("A stdio server's environment reaches it through the process, never the arg
         const session = yield* driver.open("codex-stdio", "default", null);
         yield* Effect.addFinalizer(() => session.close);
         yield* session.offer("inspect");
-        const given = Arr.join(inspected(yield* turn(session)).args, " ");
-        expect(given).toContain('mcp_servers.tool.env_vars=["API_TOKEN"]');
+        const details = inspected(yield* turn(session));
+        const given = Arr.join(details.args, " ");
+        expect(given).toContain("mcp_servers.tool.env_vars=[");
         expect(given).not.toContain(secret);
+        expect(details.env.API_TOKEN).toBeUndefined();
+        expect(Rec.values(details.env)).toContain(secret);
         yield* session.offer("servers");
         const events = yield* turn(session);
         expect(called(events)).toEqual(["mcp__tool__read_token"]);
@@ -729,7 +739,7 @@ test("A stdio server's environment reaches it through the process, never the arg
   );
 });
 
-test("Two stdio servers needing one variable of their own are not both given it", () => {
+test("Two stdio servers needing one variable of their own are each given it", () => {
   return withServers(
     {
       first: {
@@ -750,18 +760,17 @@ test("Two stdio servers needing one variable of their own are not both given it"
         yield* session.offer("inspect");
         const details = inspected(yield* turn(session));
         const given = Arr.join(details.args, " ");
-        expect(given).toContain("mcp_servers.first.env_vars");
-        expect(given).not.toContain("mcp_servers.second.");
+        expect(given).toContain("mcp_servers.first.env_vars=[");
+        expect(given).toContain("mcp_servers.second.env_vars=[");
         expect(given).not.toContain("first-secret");
-        expect(given).toContain('mcp_servers.first.env_vars=["API_TOKEN"]');
-        const told = instruct(details);
-        expect(told).toContain("Left out: second (");
-        expect(told).toContain("API_TOKEN");
+        expect(given).not.toContain("second-secret");
+        expect(details.env.API_TOKEN).toBeUndefined();
         yield* session.offer("servers");
         const events = yield* turn(session);
-        expect(called(events)).toEqual(["mcp__first__read_token"]);
+        expect(called(events)).toEqual(["mcp__first__read_token", "mcp__second__read_token"]);
         expect(Arr.filter(events, (event) => event.type === "TOOL_CALL_RESULT")).toMatchObject([
           { content: "first-secret" },
+          { content: "second-secret" },
         ]);
       }),
   );
@@ -869,25 +878,26 @@ test("The login command a server is told parses, even when its url holds a quote
   expect(told).toContain("codex mcp login 'stdio-one'");
 });
 
-test("A stdio server may not take a variable the chat's own environment already sets", () => {
+test("A stdio server's variables reach that server alone, not Codex or the chat's other servers", () => {
   return withServers(
     {
       leaky: {
         command: process.execPath,
         args: [`${import.meta.dir}/fixtures/mcp-stdio-echo.ts`],
-        env: { HOME: "/nowhere" },
+        env: { HOME: "/nowhere", CODEX_HOME: "/nowhere" },
       },
     },
-    (driver) =>
+    (driver, context) =>
       Effect.gen(function* () {
         const session = yield* driver.open("codex-leaky", "default", null);
         yield* Effect.addFinalizer(() => session.close);
         yield* session.offer("inspect");
         const details = inspected(yield* turn(session));
-        expect(Arr.join(details.args, " ")).not.toContain("mcp_servers.leaky.");
-        expect(instruct(details)).toContain(
-          "Left out: leaky (HOME is set in the environment Codex already runs in)",
-        );
+        expect(Arr.join(details.args, " ")).toContain("mcp_servers.leaky.env_vars=[");
+        expect(details.env.HOME).not.toBe("/nowhere");
+        expect(details.env.CODEX_HOME).toBe(`${context.dir}/codex-home`);
+        yield* session.offer("servers");
+        expect(called(yield* turn(session))).toEqual(["mcp__leaky__read_token"]);
       }),
   );
 });
@@ -929,36 +939,42 @@ test("A server Codex's own list could not be read for is not passed over Codex's
   ).finally(() => void mine.stop());
 });
 
-test("An imported stdio server may not move where Codex keeps its config", () => {
-  return withServers(
-    {
-      sneak: {
-        command: process.execPath,
-        args: [`${import.meta.dir}/fixtures/mcp-stdio-echo.ts`],
-        env: { CODEX_HOME: "/nowhere" },
-      },
-    },
-    (driver) =>
-      Effect.gen(function* () {
-        const held = Bun.env.CODEX_HOME;
-        delete Bun.env.CODEX_HOME;
-        const session = yield* driver.open("codex-home", "default", null).pipe(
-          Effect.ensuring(
-            Effect.sync(() => {
-              Bun.env.CODEX_HOME = held;
-            }),
-          ),
-        );
-        yield* Effect.addFinalizer(() => session.close);
-        yield* session.offer("inspect");
-        const details = inspected(yield* turn(session));
-        expect(Arr.join(details.args, " ")).not.toContain("mcp_servers.sneak.");
-        expect(details.env.CODEX_HOME).toBeUndefined();
-        expect(instruct(details)).toContain(
-          "Left out: sneak (CODEX_HOME is one of Codex's own variables)",
-        );
-      }),
-  );
+test("A Codex configuration Collie could not read is read again when Codex restarts", () => {
+  const mine = serveDocs({ tool: "user_read" });
+  const login = serveDocs({ tool: "linear_read", token: "linear-token" });
+  return withServers({ docs: { type: "http", url: mine.url } }, (driver, context) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(
+        `${context.dir}/codex-home/config.toml`,
+        `[mcp_servers.linear-server]\nurl = "${login.url}"\n`,
+      );
+      yield* fs.writeFileString(`${context.dir}/config-unreadable`, "");
+      const session = yield* driver.open("codex-reread", "default", null);
+      yield* Effect.addFinalizer(() => session.close);
+      yield* session.offer("inspect");
+      const before = inspected(yield* turn(session));
+      expect(Arr.join(before.args, " ")).not.toContain("mcp_servers.docs.");
+      expect(instruct(before)).toContain(
+        "Left out: docs (Collie could not read which servers Codex already has, so it passed none of the human's)",
+      );
+      yield* fs.remove(`${context.dir}/config-unreadable`);
+      yield* fs.writeFileString(
+        `${context.dir}/codex-home/mcp-logins.json`,
+        `{"linear-server":"linear-token"}`,
+      );
+      yield* session.offer("inspect");
+      const after = inspected(yield* turn(session));
+      expect(after.pid).not.toBe(before.pid);
+      expect(Arr.join(after.args, " ")).toContain(`mcp_servers.docs.url="${mine.url}"`);
+      expect(instruct(after)).toEqual(expect.stringContaining("docs (user_read)"));
+      yield* session.offer("servers");
+      expect(called(yield* turn(session))).toContain("mcp__docs__user_read");
+    }),
+  ).finally(() => {
+    void mine.stop();
+    void login.stop();
+  });
 });
 
 test("A Codex that cannot start again says so, and the next message does not wait on the one it stopped", () => {

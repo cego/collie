@@ -304,10 +304,7 @@ const play = async (turn: Turn, params: JsonObject) => {
         args: Bun.argv.slice(2),
         cwd: process.cwd(),
         hasToken: childEnv().COLLIE_CHAT_MCP_TOKEN !== undefined,
-        env: Rec.filter(
-          Rec.getSomes(Rec.map(childEnv(), (value) => Option.fromUndefinedOr(value))),
-          (_value, key) => pipe(key, Str.startsWith("COLLIE_CHAT_SERVER_")),
-        ),
+        env: Rec.getSomes(Rec.map(childEnv(), (value) => Option.fromUndefinedOr(value))),
         thread: loaded!.id,
         pid: process.pid,
         start: loaded!.params,

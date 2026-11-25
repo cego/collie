@@ -753,14 +753,26 @@ export const codexDriver: (
             }),
           ).pipe(Effect.orElseSucceed(() => Option.none<ReadonlyArray<string>>()));
         });
-      const ownServers = yield* Effect.cached(readConfigured());
+      let discovered: Option.Option<ReadonlyArray<string>> | undefined;
+      // WARNING: an unreadable configuration stays unknown, so a relaunch reads it again.
+      const ownServers = () =>
+        Effect.gen(function* () {
+          if (discovered !== undefined) {
+            return discovered;
+          }
+          const found = yield* readConfigured();
+          if (Option.isSome(found)) {
+            discovered = found;
+          }
+          return found;
+        });
       const connect = (own: Scope.Scope) =>
         Effect.gen(function* () {
           if (command === null) {
             return yield* new CodexError({ message: NOT_INSTALLED });
           }
           const { url, token } = yield* endpoint.start;
-          configured = Option.getOrNull(yield* ownServers);
+          configured = Option.getOrNull(yield* ownServers());
           given = codexServers(
             yield* Effect.tryPromise(userServers).pipe(Effect.orElseSucceed(() => ({}))),
             configured,

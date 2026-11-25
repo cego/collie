@@ -2364,13 +2364,15 @@ Codex reports it has — its own `config.toml` and any project's `.codex/config.
 trusts — so a server Codex already configures keeps Codex's entry and the chat names it
 once; `collie_desktop` is Collie's own and no server of yours takes its place. A server's
 static headers, such as a bearer token, and a stdio server's environment reach Codex through
-the App Server's own environment, never its command line, and never the chat. Codex forwards
-an environment variable to a stdio server under the same name, so a variable Codex's own
-environment already sets, one Codex reads for itself such as `CODEX_HOME`, or one another
-such server claimed first, cannot be given to a second server: the chat says which was left
-out and why. If Codex will not say which servers it has, none of yours is passed at all —
-better a server missing from the chat than one overriding Codex's own — and the chat says so. Codex keeps its own sign-ins: a
-server that needs a browser login, such as Linear, works once you run, in a terminal,
+the App Server's own environment under a name Collie makes, never its command line, and
+never the chat. A stdio server is started through a shell that gives it those values under
+the names you set, so they are that server's alone and no other server reads them. A stdio
+server whose environment names something a shell cannot set, or a name in Collie's own
+`COLLIE_CHAT_` namespace, is left out and the chat says so. If Codex will not say which
+servers it has, none of yours is passed at all — better a server missing from the chat than
+one overriding Codex's own — and the chat says so, until Codex starts again and it can be
+asked once more. Codex keeps its own sign-ins: a server that needs a browser login, such as
+Linear, works once you run, in a terminal,
 `codex mcp login <server> -c 'mcp_servers.<server>.url="<the server's url>"'` — the `-c` is
 what shows a standalone `codex` a server Desktop passes it at launch. Because Codex never
 takes new instructions for a thread it already has, what the chat is told about its servers
