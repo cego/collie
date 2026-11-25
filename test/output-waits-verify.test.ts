@@ -81,16 +81,19 @@ const held = (world: World, runId: string, agent: string, operation = "build") =
   });
 
 const waitsFor = (world: World, runId: string, line: string) =>
-  until(
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        return yield* fs
-          .readFileString(`${world.state}/agents/${runId}/agents.log`)
-          .pipe(Effect.orElseSucceed(() => ""));
-      }),
-    (text) => pipe_(text, Str.includes(line)),
-  );
+  Effect.gen(function* () {
+    for (let i = 0; i < 300; i += 1) {
+      const fs = yield* FileSystem.FileSystem;
+      const text = yield* fs
+        .readFileString(`${world.state}/agents/${runId}/agents.log`)
+        .pipe(Effect.orElseSucceed(() => ""));
+      if (pipe_(text, Str.includes(line))) {
+        return;
+      }
+      yield* Effect.sleep("200 millis");
+    }
+    return yield* Effect.die(new Error(`no line "${line}" in the Run's log`));
+  });
 
 const told = (world: World, runId: string) =>
   until(
