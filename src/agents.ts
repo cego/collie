@@ -4505,14 +4505,17 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           const found = yield* entryFor(launched, launched.agent, null);
           if (found.entry === null) {
             const now = yield* listedAgents();
-            const live = stillListed(
-              Arr.filter(candidates, (one) => one.agent !== launched.agent),
-              now,
-            );
+            const live = stillListed(candidates, now);
+            const others = Arr.filter(live, (one) => one.agent !== launched.agent);
+            const here = Arr.some(live, (one) => one.agent === launched.agent);
             return {
               agent: launched.agent,
               delivered: false,
-              detail: `${found.reason ?? "no such agent"}${live.length === 0 ? "" : `; live: ${rosterOf(live)}`}`,
+              detail: `${
+                here
+                  ? `${launched.agent} is listed, but its terminal could not be read`
+                  : (found.reason ?? "no such agent")
+              }${others.length === 0 ? "" : `; live: ${rosterOf(others)}`}`,
               gone: Option.isSome(now) && live.length === 0,
             };
           }

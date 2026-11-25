@@ -33,6 +33,7 @@ export interface FakeHc {
   readonly hold: (method: string) => () => void;
   readonly answer: (method: string, reply: Schema.Json) => void;
   readonly refuse: (method: string, kind: string, message: string) => void;
+  readonly refuseOnce: (method: string, kind: string, message: string, after?: number) => void;
   readonly restore: (method: string) => void;
   readonly report: (name: string, state: string) => Effect.Effect<void>;
   readonly stallNextSend: () => void;
@@ -153,6 +154,10 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
   const terminals = new Map<string, Terminal>();
   const answers = new Map<string, Schema.Json>();
   const refusals = new Map<string, { code: number; message: string; kind: string }>();
+  const refusalsOnce = new Map<
+    string,
+    { code: number; message: string; kind: string; after: number }
+  >();
   const holds = new Map<string, Promise<void>>();
   const subscribers = new Set<(line: string) => Effect.Effect<void>>();
   let made = 0;
@@ -365,6 +370,15 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
 
   const answer = (method: string, params: Schema.JsonObject, link: Link) =>
     Effect.gen(function* () {
+      const once = refusalsOnce.get(method);
+      if (once !== undefined) {
+        if (once.after > 0) {
+          once.after -= 1;
+        } else {
+          refusalsOnce.delete(method);
+          return { failure: once };
+        }
+      }
       const refused = refusals.get(method);
       if (refused !== undefined) {
         return { failure: refused };
@@ -762,8 +776,12 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
     refuse: (method, kind, message) => {
       refusals.set(method, { code: -32_000, kind, message });
     },
+    refuseOnce: (method, kind, message, after = 0) => {
+      refusalsOnce.set(method, { code: -32_000, kind, message, after });
+    },
     restore: (method) => {
       refusals.delete(method);
+      refusalsOnce.delete(method);
       answers.delete(method);
     },
     hold: (method) => {

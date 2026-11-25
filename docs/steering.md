@@ -200,10 +200,10 @@ Run's implementer; the roles are read from what launches record, so a role added
 workflow is addressed without Collie being taught it. `--to <agent>` names an agent or an
 operation, and `--operation` still works; where both are given, an agent's name wins, then
 `--operation`, then `--to`. A `--to` no live agent of the Run has is refused with the live
-agents and their roles, and the refusal says the Run is gone only when none is live. An
-agent is also named by the short name it was launched
-under, such as `build` for `run-…-build-r1`, which reaches it in a Run whose operations are
-its tickets, finished or not.
+agents and their roles, and the refusal says the Run is gone only when the roster answered
+and none of them is live. An agent is also named by the short name it was launched under,
+such as `build` for `run-…-build-r1`, which reaches it in a Run whose operations are its
+tickets, finished or not.
 
 Desktop defaults plan comments to the planner when one is live, including after a second
 opinion. An explicit recipient selection takes precedence. Other comments default to the
