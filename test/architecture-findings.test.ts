@@ -42,7 +42,14 @@ const install = (world: { readonly install: string; readonly user: string }) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     yield* fs.makeDirectory(`${world.install}/personas`, { recursive: true });
-    for (const name of ["architecture.workflow.ts", "architecture.md", "selected.ts"]) {
+    for (const name of [
+      "architecture.workflow.ts",
+      "architecture.md",
+      "selected.ts",
+      "plan.workflow.ts",
+      "plan.md",
+      "connections.ts",
+    ]) {
       yield* fs.copyFile(`${root}workflows/${name}`, `${world.user}/${name}`);
     }
     yield* fs.copyFile(`${root}personas/architect.md`, `${world.install}/personas/architect.md`);
@@ -155,6 +162,20 @@ test("an architecture Run's deferred candidates hold its card as findings to cho
           landed: false,
           section: "waiting",
         });
+
+        const planned = yield* run.client
+          .invoke({
+            runId: run.id,
+            offer: "plan-this",
+            input: { findings: [first] },
+            request: "plan-first",
+          })
+          .pipe(Effect.orDie);
+        const goal = String(
+          (yield* run.client.run({ runId: planned.runId }).pipe(Effect.orDie))?.input.goal,
+        );
+        expect(goal).toContain("plan/ARCHITECTURE.md");
+        expect(goal).not.toContain("findings.json");
       }),
     [],
   ));

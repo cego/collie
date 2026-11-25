@@ -565,7 +565,8 @@ the list a board fills in — and the Improve Run's `findings.json` and its fix 
 only those, under the ids they already had. Both read `taken` by it on the reviewed Run,
 where an unchosen finding stays `open` until somebody improves or dismisses it: nothing
 else is silently dropped. Taken with no ids — an older start, or a plain
-`collie run action <run> improve` — it takes every open finding, as it always has. There is
+`collie run action <run> improve` — it takes every finding still open, as it always has:
+one somebody dismissed, or another Run took, is not built again. There is
 no Improve for somebody else's merge request: Collie never pushes to a branch that is not
 yours.
 
@@ -1109,8 +1110,8 @@ each candidate with an id of its own, and nothing written at all when nothing wa
 So a Run that deferred something offers its deferred candidates the way an investigation
 offers what it found — **Implement selected** builds the ones you choose, **Investigate
 further** investigates one of them, **Plan this** plans it, and the one taken reads `taken`
-by the Run it started. A deferred candidate's `From:` line names `findings.json`, since
-the report the architect named is written wherever it chose.
+by the Run it started. A deferred candidate's `From:` line names the report the architect
+wrote, which its Output names and which is kept beside the findings.
 
 **Ends with a menu:** **Implement now** (chains `implement` on the report) or **Stop here**.
 **Implement now** names the branch after the `slug` the architect put in its Output, which

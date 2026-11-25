@@ -32,6 +32,7 @@ import {
   buildable,
   findingsIn,
   formatFindings,
+  reportIn,
   identityProblem,
   isBlocking,
   isSingleRepo,
@@ -73,7 +74,14 @@ const recoveryEntry = (facts: Recovery | undefined) =>
   facts?.review != null ? "Checks" : facts?.implementation === true ? "Review" : "Build";
 
 const Implementing = Schema.Struct({
-  inputs: Schema.Struct({ plan: text, plan_kind: text, repo: text, outcome: text, findings: text }),
+  inputs: Schema.Struct({
+    plan: text,
+    plan_kind: text,
+    repo: text,
+    outcome: text,
+    findings: text,
+    report: text,
+  }),
   run: Schema.Struct({ dir: text, id: text }),
   verify: text,
 });
@@ -90,6 +98,7 @@ const inlinePlanRefusal = (
   plan: string,
   root: string,
   source: { readonly kind: string; readonly value: string },
+  chosen: ReadonlyArray<string>,
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -126,6 +135,7 @@ const inlinePlanRefusal = (
       (one) =>
         one.status !== "fixed" &&
         one.status !== "obsolete" &&
+        (chosen.length === 0 || (one.id !== undefined && Arr.contains(chosen, one.id))) &&
         !Arr.some(texts, Str.includes(one.title)),
     );
     return dropped.length === 0
@@ -544,6 +554,14 @@ export default defineWorkflow({
         });
       const checksNow = Effect.map(host.approved(runId), renderApproved);
 
+      const reportFile = yield* Activity.make({
+        name: "report",
+        success: text,
+        execute:
+          source.kind === "findings" || source.kind === "review"
+            ? reportIn(source.value)
+            : Effect.succeed(""),
+      });
       let input: typeof Implementing.Type = {
         inputs: {
           plan: source.value,
@@ -551,6 +569,7 @@ export default defineWorkflow({
           repo: place.options.repo ?? "",
           outcome: place.options.outcome ?? "",
           findings: findingsText,
+          report: reportFile,
         },
         run: { dir: place.dir, id: runId },
         verify: yield* checksNow,
@@ -695,7 +714,7 @@ export default defineWorkflow({
               const refused = yield* Activity.make({
                 name: `${operation}.check`,
                 success: Schema.NullOr(Schema.String),
-                execute: inlinePlanRefusal(planDir, cwd, source),
+                execute: inlinePlanRefusal(planDir, cwd, source, asked.findings ?? []),
               });
               if (refused === null) {
                 break;

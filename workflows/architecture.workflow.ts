@@ -108,7 +108,7 @@ export default defineWorkflow({
         }),
       );
       if ((report.deferred ?? []).length > 0) {
-        yield* leaveFindings(place.dir, report.deferred ?? []);
+        yield* leaveFindings(place.dir, report.deferred ?? [], [], report.report);
       }
       const next = yield* menu(
         ask({

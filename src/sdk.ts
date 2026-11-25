@@ -189,7 +189,7 @@ export type FindingWord = "open" | "fixed" | "disputed" | "obsolete" | "dismisse
  * left out, and one the reading Run took itself reads open to it. The statuses come from
  * the Host's `findingStatuses`, never from `findings.json` alone.
  */
-export { buildable } from "./finding-status";
+export { buildable, reportIn } from "./finding-status";
 
 /**
  * What a review/fix rally is made of: a workflow that writes its loop in TypeScript

@@ -5,7 +5,7 @@ import { Effect, FileSystem, Schema } from "effect";
 import type { ReviewFinding } from "./board-model";
 import { FindingStatus } from "./board-model";
 import type { Finding } from "./output";
-import { FINDINGS_FILE, REVIEW_FILE, findingsIn } from "./output";
+import { FINDINGS_FILE, REPORT_FILE, REVIEW_FILE, findingsIn } from "./output";
 import { appendRunJournal, readRunJournal, runJournal } from "./journal";
 import { RunRecords, runOfDir } from "./run-records";
 import { nowIso } from "./time";
@@ -112,6 +112,12 @@ const REPORT_FILES = [REVIEW_FILE, "investigation.md"];
 
 export const reportIn = Effect.fn("FindingStatus.report")(function* (runDir: string) {
   const fs = yield* FileSystem.FileSystem;
+  const stated = yield* fs
+    .readFileString(`${runDir}/${REPORT_FILE}`)
+    .pipe(Effect.orElseSucceed(() => ""));
+  if (Str.trim(stated) !== "") {
+    return Str.trim(stated);
+  }
   for (const name of REPORT_FILES) {
     const there = yield* fs.exists(`${runDir}/${name}`).pipe(Effect.orElseSucceed(() => false));
     if (there) {

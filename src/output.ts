@@ -352,14 +352,20 @@ const withIds = (
   return { written, handed };
 };
 
+export const REPORT_FILE = "findings-report";
+
 export const leaveFindings = (
   dir: string,
   findings: ReadonlyArray<Finding>,
   ledger: ReadonlyArray<Finding> = [],
+  report?: string,
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const run = runOf(dir);
+    if (report !== undefined && Str.trim(report) !== "") {
+      yield* fs.writeFileString(`${dir}/${REPORT_FILE}`, Str.trim(report));
+    }
     const counted = yield* fs.readFileString(`${dir}/${FINDINGS_NEXT}`).pipe(
       Effect.orElseSucceed(() => "0"),
       Effect.map((text) => Number(Str.trim(text)) || 0),

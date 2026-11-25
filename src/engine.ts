@@ -2365,6 +2365,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export function renderReview(synthesis: SynthesisReport): string;
   export function renderPublicReview(synthesis: SynthesisReport): string;
   export function formatFindings(findings: ReadonlyArray<Finding>): string;
+  /** Where the report a findings-kind source's findings were written is: review.md, investigation.md, or findings.json. */
+  export function reportIn(dir: string): Effect.Effect<string>;
   export function buildable(
     findings: ReadonlyArray<Finding>,
     statuses: ReadonlyArray<{
