@@ -30,11 +30,11 @@ import {
   PlanOutputSchema,
   defineWorkflow,
   evidenceRoots,
-  findingKey,
   findingsIn,
   formatFindings,
   identityProblem,
   isBlocking,
+  isWaived,
   isSingleRepo,
   orderedTicketsOf,
   planReposOf,
@@ -781,8 +781,7 @@ export default defineWorkflow({
             ledger.set(one.id, one);
           }
         }
-        const again = new Set(Arr.map(done.waived, findingKey));
-        waived = [...Arr.filter(waived, (one) => !again.has(findingKey(one))), ...done.waived];
+        waived = [...Arr.filter(waived, (one) => !isWaived(done.waived, one)), ...done.waived];
         return done;
       };
       let parentDir = "";

@@ -6007,7 +6007,11 @@ scenario("a hand-back that answers one finding twice still reports a duplicate d
           ],
           checks: [{ name: "unit" }],
         },
-        { verdict: "clean", fixed: [{ title: one.title, file: one.file }], checks: [{ name: "unit" }] },
+        {
+          verdict: "clean",
+          fixed: [{ title: one.title, file: one.file }],
+          checks: [{ name: "unit" }],
+        },
         OPENED,
       ]);
       const status = yield* driven(

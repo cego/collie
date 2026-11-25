@@ -17,6 +17,7 @@ import {
   formatFixBrief,
   formatFindings,
   isBlocking,
+  isWaived,
   settleFinalFix,
   rallyFrom,
   settleRound,
@@ -181,10 +182,9 @@ export default defineWorkflow({
           input: { target: asked.target },
           output: ReviewOutputSchema,
         });
-        const waivedKeys = new Set(waived.map(findingKey));
         const split = rallyFrom(
           splitDisputed(
-            review.findings.filter((one) => !waivedKeys.has(findingKey(one))),
+            review.findings.filter((one) => !isWaived(waived, one)),
             disputed,
           ),
         );

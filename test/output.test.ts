@@ -7,6 +7,7 @@ import {
   findingsIn,
   formatFindings,
   isBlocking,
+  isWaived,
   leaveOutstanding,
   leaveReview,
   offered,
@@ -1012,6 +1013,61 @@ test("a waiver on file is the host's: a later review keeps it, and a review cann
           Arr.findFirst(written, (one) => one.title === "a waiver nobody answered for"),
         )?.waived,
       ).toBeUndefined();
+    }),
+  ));
+
+test("a waiver follows the finding's id, so a review that renames it does not put it back", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped();
+      const waived: Finding = {
+        id: "F1",
+        severity: "blocker",
+        title: "dependency unavailable",
+        file: "db",
+        status: "disputed",
+        waived: { by: "a person", choice: "build.dispute-1" },
+      };
+      const renamed: Finding = {
+        id: "F1",
+        severity: "blocker",
+        title: "the dependency is still unavailable",
+        file: "db",
+        status: "open",
+      };
+      yield* leaveReview(dir, {
+        verdict: "clean",
+        summary: "reviewed",
+        findings: [],
+        disputed: [],
+        dropped: [],
+        fixed: [],
+      });
+      yield* leaveOutstanding(dir, [waived]);
+      yield* leaveReview(dir, {
+        verdict: "findings",
+        summary: "reviewed",
+        findings: [renamed],
+        disputed: [],
+        dropped: [],
+        fixed: [],
+      });
+      expect(yield* findingsIn(dir)).toEqual([waived]);
+      expect(isWaived([waived], renamed)).toBe(true);
+      expect(isWaived([waived], { ...renamed, id: "F2" })).toBe(false);
+      expect(
+        offeredDisputes(
+          {
+            verdict: "clean",
+            findings: [],
+            fixed: [],
+            disputed: [{ ...renamed, reason: "the caller decodes it" }],
+            checks: [],
+          },
+          [waived],
+        ),
+      ).toEqual([]);
     }),
   ));
 

@@ -19,6 +19,7 @@ import {
   formatFixBrief,
   formatFindings,
   isBlocking,
+  isWaived,
   leaveOutstanding,
   leaveReview,
   offered,
@@ -651,14 +652,13 @@ export const rally = (ask: {
       Effect.gen(function* () {
         const by = yield* answererOf(name);
         const marked = waiveFindings(standing, { by, choice: name });
-        const keys = new Set(Arr.map(marked, findingKey));
         const onFile = yield* findingsIn(dir);
         yield* leaveOutstanding(dir, [
-          ...Arr.filter(onFile, (one) => !keys.has(findingKey(one))),
+          ...Arr.filter(onFile, (one) => !isWaived(marked, one)),
           ...marked,
         ]);
         waived = [...waived, ...marked];
-        disputed = Arr.filter(disputed, (one) => !keys.has(findingKey(one)));
+        disputed = Arr.filter(disputed, (one) => !isWaived(marked, one));
         yield* host.record(runId, `waived by ${by} to ${name}: ${titled(marked)}`);
       });
 
@@ -795,12 +795,11 @@ export const rally = (ask: {
             }
           }
           // WARNING: a waiver settles the finding for the last fix too, or its own dispute record asks again.
-          const gone = new Set(Arr.map(waived, findingKey));
           const judged = settleFinalFix(
-            Arr.filter(open, (one) => !gone.has(findingKey(one))),
+            Arr.filter(open, (one) => !isWaived(waived, one)),
             {
               ...report,
-              disputed: Arr.filter(report.disputed, (one) => !gone.has(findingKey(one))),
+              disputed: Arr.filter(report.disputed, (one) => !isWaived(waived, one)),
             },
             yield* host.evidence(runId, ask.cwd),
           );
@@ -964,10 +963,9 @@ export const rally = (ask: {
             yield* host.record(runId, `review ${at}: ${conflict}`);
           }
           disputed = remainingDisputes(disputed, synthesis);
-          const waivedKeys = new Set(Arr.map(waived, findingKey));
           const split = rallyFrom(
             splitDisputed(
-              Arr.filter(synthesis.findings, (one) => !waivedKeys.has(findingKey(one))),
+              Arr.filter(synthesis.findings, (one) => !isWaived(waived, one)),
               disputed,
             ),
           );
@@ -989,10 +987,9 @@ export const rally = (ask: {
               if (at < ROUNDS) {
                 return null;
               }
-              const gone = new Set(Arr.map(waived, findingKey));
               const rest = Arr.filter(
                 outstanding,
-                (one) => isBlocking(one) && !gone.has(findingKey(one)),
+                (one) => isBlocking(one) && !isWaived(waived, one),
               );
               if (rest.length === 0) {
                 return cleaned(synthesis);

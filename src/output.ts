@@ -312,13 +312,12 @@ export const leaveReview = (dir: string, synthesis: typeof SynthesisSchema.Type)
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const recorded = Arr.filter(yield* findingsIn(dir), (one) => one.waived !== undefined);
-    const keys = new Set(Arr.map(recorded, findingKey));
     yield* fs.writeFileString(`${dir}/${REVIEW_FILE}`, renderReview(synthesis));
     yield* fs.writeFileString(
       `${dir}/${FINDINGS_FILE}`,
       encodeFindings([
         ...Arr.map(
-          Arr.filter(synthesis.findings, (one) => !keys.has(findingKey(one))),
+          Arr.filter(synthesis.findings, (one) => !isWaived(recorded, one)),
           unwaived,
         ),
         ...recorded,
@@ -534,6 +533,10 @@ export function sameFinding(left: Finding, right: Finding) {
     ? left.id === right.id
     : findingKey(left) === findingKey(right);
 }
+
+// WARNING: a waiver names a finding, so a renamed finding with the same id is still the one a person waived.
+export const isWaived = (waived: ReadonlyArray<Finding>, one: Finding) =>
+  Arr.some(waived, (w) => sameFinding(w, one));
 
 export function parseSynthesis(text: string, where: string) {
   const base = parseReviewOutput(text, where);
@@ -1044,8 +1047,7 @@ export function offered(disputed: ReadonlyArray<Finding>) {
 }
 
 export function offeredDisputes(fix: FixReport, waived: ReadonlyArray<Finding>) {
-  const gone = new Set(Arr.map(waived, findingKey));
-  return Arr.filter(fix.disputed, (one) => isBlocking(one) && !gone.has(findingKey(one)));
+  return Arr.filter(fix.disputed, (one) => isBlocking(one) && !isWaived(waived, one));
 }
 
 const oneLine = (f: Finding) => `[${f.severity}] ${f.title}${f.file ? ` (${f.file})` : ""}`;
