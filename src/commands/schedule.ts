@@ -1,5 +1,4 @@
 import * as Str from "effect/String";
-import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import { Effect, Option, Schema } from "effect";
@@ -32,7 +31,7 @@ const checkoutOf: (
 ) => Effect.Effect<CheckoutOf, never, PlatformServices> = Effect.fn("schedule.checkoutOf")(
   function* (env: PluginEnv, given: string) {
     const named = Str.trim(given);
-    if (named === SCHEDULE_PROJECTS_ROOT || pipe_(named, Str.startsWith("/"))) {
+    if (named === SCHEDULE_PROJECTS_ROOT) {
       return { path: named };
     }
     if (named === "") {

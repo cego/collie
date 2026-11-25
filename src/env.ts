@@ -3,10 +3,12 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
+import * as Path from "effect/Path";
 import type { Asker } from "./proposals";
 import { Config, Effect, Option } from "effect";
-
 export const PLUGIN_ID = "cego.collie";
+
+const paths = Effect.runSync(Effect.provide(Path.Path, Path.layer));
 
 export interface PluginEnv {
   pluginRoot: string;
@@ -78,7 +80,8 @@ export function readEnv(
     ".";
   // WARNING: PWD goes stale after any chdir; the real directory never does.
   const explicitCwd = first(env, "COLLIE_CWD");
-  const cwd = explicitCwd ?? process.cwd();
+  // WARNING: two processes name the same checkout by different relative cwds, so cwd is resolved here.
+  const cwd = paths.resolve(explicitCwd ?? process.cwd());
 
   const raw: Record<string, string> = {};
   for (const [key, value] of Rec.toEntries(env)) {

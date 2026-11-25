@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { expect, test } from "bun:test";
 import { Effect, Fiber, FileSystem, Option, Schema, flow, Result } from "effect";
 import { readAudit } from "../src/audit";
@@ -978,6 +979,111 @@ test("a project persona fork refused before it writes still names the request", 
           );
         yield* refused(["--workspace", "nowhere"], "workspace_not_found", "persona-fork-named");
         yield* refused([], "workspace_required", "persona-fork-scoped");
+      }),
+    ["lingers.workflow.ts"],
+  ));
+test("a fork replays only from the absolute checkout it reads and writes", () =>
+  proves(
+    "collie-receipt-scope-fork-relative-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const first = `${world.home}/first`;
+        const second = `${world.home}/second`;
+        for (const at of [first, second]) {
+          yield* checkoutAt(at);
+          yield* fs.makeDirectory(`${at}/.collie/personas`, { recursive: true });
+          yield* fs.writeFileString(
+            `${at}/.collie/personas/local.md`,
+            "---\nname: local\ndescription: A persona in this checkout.\n---\n\nYou are local.\n",
+          );
+          yield* save(`${at}/.collie/workflows`, ["plain.workflow.ts"]);
+        }
+        const forks: ReadonlyArray<{
+          readonly command: ReadonlyArray<string>;
+          readonly project: boolean;
+        }> = [
+          {
+            command: [
+              "persona",
+              "fork",
+              "local",
+              "--layer",
+              "project",
+              "--workspace",
+              world.project,
+            ],
+            project: true,
+          },
+          { command: ["workflow", "fork", "plain", "--layer", "project"], project: true },
+          { command: ["persona", "fork", "local", "--layer", "user"], project: false },
+        ];
+        const forked = (from: string, command: ReadonlyArray<string>, name: string, id: string) =>
+          collie(
+            world,
+            [...command, "--name", name, "--request-id", id],
+            { COLLIE_CWD: "." },
+            () => Effect.void,
+            from,
+          );
+        const Forked = Schema.Struct({ path: Schema.String });
+        for (const [index, one] of Arr.map(forks, (fork, at) => [at, fork] as const)) {
+          const id = `fork-relative-${index}`;
+          const once = yield* forked(first, one.command, "mine", id);
+          expect(once.envelope).toMatchObject({ ok: true });
+          const written = (yield* Schema.decodeUnknownEffect(Forked)(once.envelope.data)).path;
+          expect(yield* fs.exists(written)).toBe(true);
+          if (one.project) {
+            expect(Str.startsWith(first)(written)).toBe(true);
+          }
+          const replayed = yield* forked(second, one.command, "mine", id);
+          expect(replayed.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+          expect(replayed.envelope.data).toBeUndefined();
+          expect((yield* forked(second, one.command, "mine-two", `${id}-fresh`)).envelope.ok).toBe(
+            true,
+          );
+        }
+      }),
+    ["lingers.workflow.ts"],
+  ));
+test("a Schedule resolves a local path before its receipt", () =>
+  proves(
+    "collie-receipt-scope-sched-path-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const add = (name: string, id: string, workspace: string) =>
+          collie(world, [
+            "schedule",
+            "add",
+            name,
+            "lingers",
+            "--cron",
+            "0 7 * * *",
+            "--paused",
+            "--input",
+            "note=cache",
+            "--workspace",
+            workspace,
+            "--request-id",
+            id,
+          ]);
+        const dot = yield* add("spelled-dot", "sched-spelled", ".");
+        expect(dot.envelope.ok).toBe(true);
+        expect((yield* add("spelled-dot", "sched-spelled", `${world.project}/.`)).envelope).toEqual(
+          dot.envelope,
+        );
+        const gone = `${world.home}/gone/landing`;
+        yield* checkoutAt(gone);
+        expect((yield* add("spelled-gone", "sched-gone", gone)).envelope.ok).toBe(true);
+        yield* fs.rename(gone, `${gone}-moved`);
+        const replayed = yield* add("spelled-gone", "sched-gone", gone);
+        expect(replayed.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+        expect(replayed.envelope.data).toBeUndefined();
+        expect((yield* add("spelled-gone-two", "sched-gone-fresh", gone)).envelope).toMatchObject({
+          ok: false,
+          error: { code: "invalid_input" },
+        });
       }),
     ["lingers.workflow.ts"],
   ));
