@@ -302,12 +302,12 @@ const FindingsJson = Schema.fromJsonString(Schema.Array(FindingSchema));
 const decodeFindings = Schema.decodeUnknownEffect(FindingsJson);
 const encodeFindings = flow(Schema.encodeResult(FindingsJson), Result.getOrThrow);
 
-// WARNING: written together, and a waiver on file is the host's: a review neither writes one away nor records one.
 const unwaived = (one: Finding) => {
   const { waived: _, ...rest } = one;
   return rest;
 };
 
+// WARNING: written together, and a waiver on file is the host's: a review neither writes one away nor records one.
 export const leaveReview = (dir: string, synthesis: typeof SynthesisSchema.Type) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
