@@ -6517,6 +6517,78 @@ scenario(
 );
 
 scenario(
+  "Waive it at the last round sends the blockers it did not waive back without saying a person declined them",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "only", checks: "unit" }]);
+        const runId = "r-waive-at-cap";
+        yield* approve(runId, ["unit"]);
+        yield* collect(evidenceDir(dir, runId), {
+          run: runId,
+          name: "unit",
+          executable: "true",
+          argv: [],
+          cwd: rig.projectDir,
+          by: "agent",
+        }).pipe(Effect.orDie);
+        const spin = { severity: "blocker", title: "the retry loop spins", file: "src/retry.ts" };
+        const kept = {
+          ...CLEAN_SYNTHESIS,
+          verdict: "findings",
+          findings: [{ ...DISPUTED_FINDING, rebuttal: "it is not by design" }],
+        };
+        const disputing = {
+          verdict: "clean",
+          fixed: [],
+          disputed: [{ ...DISPUTED_FINDING, reason: "it is by design" }],
+          checks: [{ name: "unit" }],
+        };
+        const capped = {
+          ...CLEAN_SYNTHESIS,
+          verdict: "findings",
+          findings: [DISPUTED_FINDING, spin],
+        };
+        yield* rig.queueOutputs([
+          BLOCKED_BUILD,
+          disputedReview,
+          disputing,
+          kept,
+          disputing,
+          kept,
+          disputing,
+          capped,
+          {
+            verdict: "clean",
+            fixed: [{ title: spin.title, file: spin.file }],
+            disputed: [],
+            checks: [{ name: "unit" }],
+          },
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              yield* stallAsked(run, "build.dispute-1");
+              yield* run.answer("build.dispute-1", "Waive it");
+              return yield* ended(run.status);
+            }),
+        );
+        expect(outcomeText(status)).toBe(OPENED.mr_url);
+        const back = yield* asked(runId, "build.fix-4-back-1");
+        expect(back).toContain("These blocking findings are still open");
+        expect(back).toContain(spin.title);
+        expect(back).not.toContain("A person declined the dispute");
+        expect(back).not.toContain(DISPUTED_FINDING.title);
+      }),
+    ),
+);
+
+scenario(
   "a waiver is not proof of a ticket's check, so the gate still reports that check unproved",
   () =>
     runEffect(
