@@ -1536,6 +1536,75 @@ scenario(
     ),
 );
 
+scenario(
+  "a fix a person sent back that claims its finding fixed is still a rejected fix when the review raises it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* noMergeRequests;
+        yield* repository();
+        const runId = "r-sent-back-claim";
+        const plan = yield* planOf([{ file: "01-only.md", title: "only", checks: "unit" }]);
+        yield* approve(runId, ["unit"]);
+        yield* collect(evidenceDir(dir, runId), {
+          run: runId,
+          name: "unit",
+          executable: "true",
+          argv: [],
+          cwd: rig.projectDir,
+          by: "agent",
+        }).pipe(Effect.orDie);
+        const schema = {
+          severity: "blocker",
+          title: "the schema will not migrate",
+          file: "db",
+          detail: "existing rows cannot be decoded",
+        };
+        const disputed = {
+          verdict: "clean",
+          fixed: [],
+          disputed: [{ ...schema, reason: "the caller decodes it" }],
+          checks: [{ name: "unit" }],
+        };
+        const kept = {
+          ...CLEAN_SYNTHESIS,
+          verdict: "findings",
+          findings: [{ ...schema, status: "disputed" }],
+        };
+        const claimed = {
+          verdict: "clean",
+          fixed: [{ title: schema.title, file: schema.file }],
+          checks: [{ name: "unit" }],
+        };
+        const raised = { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [schema] };
+        yield* rig.queueOutputs([
+          BUILT,
+          raised,
+          disputed,
+          kept,
+          claimed,
+          raised,
+          claimed,
+          CLEAN_SYNTHESIS,
+          CLEAN_SYNTHESIS,
+          OPENED,
+        ]);
+        const result = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              yield* stallAsked(run, "dispute-1");
+              yield* run.answer("dispute-1", "Send it back");
+              return yield* ended(run.status);
+            }),
+        );
+        expect(outcomeText(result)).toBe(OPENED.mr_url);
+        expect(yield* asked(runId, "fix-3")).toContain("Rejected fix");
+        expect(yield* asked(runId, "fix-3")).toContain(schema.title);
+      }),
+    ),
+);
+
 const resumeImplementPark = (
   options: ShippedRun,
   reason: string,
