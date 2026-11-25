@@ -1981,7 +1981,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
   const personaOf = (role: string) => personaText(host.env, role);
 
   const openQuestions = new Map<string, Set<string>>();
-  const unsettledAnswers = new Map<string, { terminal: string; delivery: string }>();
+  const unsettledAnswers = new Map<string, { agent: string; call: string; terminal: string }>();
   const deps: dispatch.DispatcherDeps = {
     stateDir: host.env.stateDir,
     herdr: host.herdr,
@@ -3261,7 +3261,11 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               }
               if (sent.blockedBy?.state === "unknown") {
                 unsure = true;
-                unsettledAnswers.set(launched.agent, sent.blockedBy);
+                unsettledAnswers.set(sent.blockedBy.delivery, {
+                  agent: launched.agent,
+                  call: key,
+                  terminal: sent.blockedBy.terminal,
+                });
               }
               if (sent.refused) {
                 answeredCalls.add(key);
@@ -3280,7 +3284,11 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             }
             if (sentAll) {
               answeredCalls.add(key);
-              unsettledAnswers.delete(launched.agent);
+              for (const [delivery, one] of unsettledAnswers) {
+                if (one.agent === launched.agent && one.call === key) {
+                  unsettledAnswers.delete(delivery);
+                }
+              }
             }
             // WARNING: an answer nobody could confirm landed is the Delivery's problem; holding the question would hide it.
             holds(!answeredCalls.has(key) && !unsure);
@@ -3588,16 +3596,15 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
   const remind = (launched: Launched, ordinal: number) =>
     under(
       Effect.gen(function* () {
-        const unsure = unsettledAnswers.get(launched.agent);
-        if (unsure !== undefined) {
-          if (!(yield* settledNow(launched, unsure))) {
-            return yield* unsettledDelivery(
-              launched,
-              unsure,
-              "be sent the answers to its question",
-            );
+        const unsettled = Arr.filter(
+          Arr.map([...unsettledAnswers], ([delivery, one]) => ({ ...one, delivery })),
+          (one) => one.agent === launched.agent,
+        );
+        for (const one of unsettled) {
+          if (!(yield* settledNow(launched, one))) {
+            return yield* unsettledDelivery(launched, one, "be sent the answers to its question");
           }
-          unsettledAnswers.delete(launched.agent);
+          unsettledAnswers.delete(one.delivery);
         }
         const sent = yield* deliver(launched, reminderText(launched.output), {
           kind: "repair",

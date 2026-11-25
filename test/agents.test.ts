@@ -2834,6 +2834,43 @@ const askedTwo = flow(
 
 const ANSWERED = "Your questions are answered:";
 
+const askedOneMore = flow(
+  Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+  Result.getOrThrow,
+)({
+  session_id: "s-1",
+  hook_event_name: "PreToolUse",
+  tool_name: "AskUserQuestion",
+  tool_use_id: "toolu_2",
+  tool_input: {
+    questions: [
+      {
+        question: "Which cache?",
+        header: "Cache",
+        options: [
+          { label: "Redis (Recommended)", description: "a shared one" },
+          { label: "In memory", description: "per process" },
+          { label: "None", description: "read through every time" },
+        ],
+        multiSelect: false,
+      },
+    ],
+  },
+});
+
+const asksOneMore = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs.writeFileString(
+    hostLockOf(rig.pluginEnv().stateDir),
+    `{"pid":${process.pid},"start":null}`,
+  );
+  yield* recordClaudeEvent(
+    yield* controlDir(rig.pluginEnv().stateDir, agentFor("r1")),
+    askedOneMore,
+    null,
+  );
+}).pipe(Effect.orDie);
+
 const asksTwo = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   while (
@@ -2946,6 +2983,17 @@ class LostAnswers extends Turns {
   }
 }
 
+class LosesEveryAnswer extends Turns {
+  answers = 0;
+  override agentPrompt(...args: Parameters<Herdr["agentPrompt"]>) {
+    if (!pipe(args[1], Str.includes("answered:"))) {
+      return super.agentPrompt(...args);
+    }
+    this.answers += 1;
+    return Effect.fail(new HerdrError({ message: "socket closed", detail: "" }));
+  }
+}
+
 const answerDelivery = Effect.gen(function* () {
   return Arr.findFirst(yield* deliveredTo(dir, "r1"), (one) => one.cause.kind === "steer");
 });
@@ -2979,6 +3027,37 @@ test("an answer whose send result was lost parks as delivery-unsettled naming it
         ["ask-review-2", "lint"],
       ]);
       expect(herdr.answers).toBe(1);
+    }),
+  ));
+
+test("an answer left unknown is not forgotten when another call's answers go unknown too", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([null]);
+      const herdr = new LosesEveryAnswer();
+      yield* session(
+        Effect.gen(function* () {
+          yield* work.execute({ runId: "r1", input: { skip: false } }, { discard: true });
+          yield* asksTwo;
+          yield* asksOneMore;
+          yield* questionsOf(3);
+          yield* answer("ask-review-1", "SQLite");
+          yield* answer("ask-review-2", "lint");
+          yield* answer("ask-review-3", "Redis");
+          yield* untilParked("r1");
+
+        }),
+        { herdr, collectMs: 600_000, pollMs: 100 },
+      ).pipe(Effect.orDie);
+      const [first] = Arr.filter(
+        yield* deliveredTo(dir, "r1"),
+        (one) => one.cause.kind === "steer" && one.state === "unknown",
+      );
+      expect(first?.cause.ref).toBe("ask-review-1");
+      expect(yield* controlOf(PARK_CAUSE, "r1")).toBe("delivery-unsettled");
+      expect(yield* controlOf(PARKED, "r1")).toContain(first!.id);
+      expect(yield* reminders).toEqual([]);
+      expect(herdr.answers).toBe(2);
     }),
   ));
 
