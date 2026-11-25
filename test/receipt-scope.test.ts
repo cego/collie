@@ -710,14 +710,45 @@ test("a Schedule's checkout is the one it resolved, not the way it was named", (
     "collie-receipt-scope-sched-resolved-",
     (world) =>
       Effect.gen(function* () {
+        const add = (name: string, id: string, workspace: string) =>
+          collie(world, [
+            "schedule",
+            "add",
+            name,
+            "lingers",
+            "--cron",
+            "0 7 * * *",
+            "--paused",
+            "--input",
+            "note=cache",
+            "--workspace",
+            workspace,
+            "--request-id",
+            id,
+          ]);
+        const Added = Schema.Struct({
+          schedule: Schema.Struct({ checkout: Schema.NullOr(Schema.String) }),
+        });
+        const dot = yield* add("resolved-dot", "sched-dot", ".");
+        expect(dot.envelope.ok).toBe(true);
+        const named = yield* add("resolved-abs", "sched-abs", world.project);
+        const dotSaved = yield* Schema.decodeUnknownEffect(Added)(dot.envelope.data);
+        const namedSaved = yield* Schema.decodeUnknownEffect(Added)(named.envelope.data);
+        expect(namedSaved.schedule.checkout).toBe(dotSaved.schedule.checkout);
+        expect((yield* add("resolved-dot", "sched-dot", world.project)).envelope).toEqual(
+          dot.envelope,
+        );
+      }),
+    ["lingers.workflow.ts"],
+  ));
+test("a Schedule's id does not replay from the checkout `.` resolves to", () =>
+  proves(
+    "collie-receipt-scope-sched-dot-moved-",
+    (world) =>
+      Effect.gen(function* () {
         const other = `${world.home}/other`;
         yield* checkoutAt(other);
-        const add = (
-          name: string,
-          id: string,
-          workspace: string,
-          extra: Readonly<Record<string, string>> = {},
-        ) =>
+        const add = (name: string, id: string, at: string) =>
           collie(
             world,
             [
@@ -731,24 +762,23 @@ test("a Schedule's checkout is the one it resolved, not the way it was named", (
               "--input",
               "note=cache",
               "--workspace",
-              workspace,
+              ".",
               "--request-id",
               id,
             ],
-            extra,
+            { COLLIE_CWD: at },
           );
+        expect((yield* add("dot-moved", "sched-dot-moved", world.project)).envelope.ok).toBe(true);
+        const moved = yield* add("dot-moved", "sched-dot-moved", other);
+        expect(moved.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+        expect(moved.envelope.data).toBeUndefined();
+        const fresh = yield* add("dot-moved-two", "sched-dot-moved-fresh", other);
         const Added = Schema.Struct({
           schedule: Schema.Struct({ checkout: Schema.NullOr(Schema.String) }),
         });
-        const dot = yield* add("resolved-dot", "sched-dot", ".");
-        expect(dot.envelope.ok).toBe(true);
-        const named = yield* add("resolved-abs", "sched-abs", world.project);
-        const dotSaved = yield* Schema.decodeUnknownEffect(Added)(dot.envelope.data);
-        const namedSaved = yield* Schema.decodeUnknownEffect(Added)(named.envelope.data);
-        expect(namedSaved.schedule.checkout).toBe(dotSaved.schedule.checkout);
         expect(
-          (yield* add("resolved-dot", "sched-dot", world.project, { COLLIE_CWD: other })).envelope,
-        ).toEqual(dot.envelope);
+          (yield* Schema.decodeUnknownEffect(Added)(fresh.envelope.data)).schedule.checkout,
+        ).toBe(other);
       }),
     ["lingers.workflow.ts"],
   ));
@@ -869,6 +899,85 @@ test("a user fork replays only from the project whose source it read", () =>
           ok: false,
           error: { code: "persona_not_found" },
         });
+      }),
+    ["lingers.workflow.ts"],
+  ));
+test("a project persona fork replays only from the checkout it writes", () =>
+  proves(
+    "collie-receipt-scope-persona-project-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const first = `${world.home}/first`;
+        const second = `${world.home}/second`;
+        for (const at of [first, second]) {
+          yield* checkoutAt(at);
+          yield* fs.makeDirectory(`${at}/.collie/personas`, { recursive: true });
+          yield* fs.writeFileString(
+            `${at}/.collie/personas/local.md`,
+            "---\nname: local\ndescription: A persona in this checkout.\n---\n\nYou are local.\n",
+          );
+        }
+        const forked = (at: string, id: string, name: string) =>
+          collie(
+            world,
+            [
+              "persona",
+              "fork",
+              "local",
+              "--name",
+              name,
+              "--layer",
+              "project",
+              "--workspace",
+              world.project,
+              "--request-id",
+              id,
+            ],
+            { COLLIE_CWD: at },
+          );
+        const Forked = Schema.Struct({ path: Schema.String });
+        const once = yield* forked(first, "persona-project-once", "mine");
+        expect((yield* Schema.decodeUnknownEffect(Forked)(once.envelope.data)).path).toBe(
+          `${first}/.collie/personas/mine.md`,
+        );
+        const replayed = yield* forked(second, "persona-project-once", "mine");
+        expect(replayed.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+        expect(replayed.envelope.data).toBeUndefined();
+        const fresh = yield* forked(second, "persona-project-fresh", "mine-two");
+        expect((yield* Schema.decodeUnknownEffect(Forked)(fresh.envelope.data)).path).toBe(
+          `${second}/.collie/personas/mine-two.md`,
+        );
+      }),
+    ["lingers.workflow.ts"],
+  ));
+test("a project persona fork refused before it writes still names the request", () =>
+  proves(
+    "collie-receipt-scope-persona-refused-",
+    (world) =>
+      Effect.gen(function* () {
+        const refused = (args: ReadonlyArray<string>, code: string, id: string) =>
+          collie(world, [
+            "persona",
+            "fork",
+            "local",
+            "--name",
+            "mine",
+            "--layer",
+            "project",
+            ...args,
+            "--request-id",
+            id,
+          ]).pipe(
+            Effect.map((answer) =>
+              expect(answer.envelope).toMatchObject({
+                ok: false,
+                error: { code, details: { requestId: id } },
+              }),
+            ),
+          );
+        yield* refused(["--workspace", "nowhere"], "workspace_not_found", "persona-fork-named");
+        yield* refused([], "workspace_required", "persona-fork-scoped");
       }),
     ["lingers.workflow.ts"],
   ));

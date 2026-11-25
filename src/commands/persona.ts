@@ -1,20 +1,13 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import { Argument, Command } from "effect/cli";
 import { forkResolvedDefinition } from "../fork";
 import { err } from "../operations";
-import { attempt, mutation } from "../envelope";
-import {
-  context,
-  definitions,
-  discoveryContext,
-  forkFlags,
-  layerDir,
-  resolvedAt,
-  root,
-} from "./shared";
+import type { OpResult } from "../operations";
+import { attempt, mutation, requestId as requested, withRequestId } from "../envelope";
+import { context, definitions, discoveryContext, forkFlags, layerDir, root } from "./shared";
 import { personaData } from "../definitions";
 
 const personaArg = Argument.String("persona").pipe(
@@ -87,11 +80,13 @@ const personaFork = Command.make(
   ({ persona, layer, name, requestId: request }) =>
     Effect.gen(function* () {
       const global = yield* root;
+      const id = yield* requested(request);
+      const withId = (failure: OpResult) => withRequestId(failure, id);
       yield* attempt(
         Effect.gen(function* () {
           const resolved = yield* context(global, layer === "project", layer === "project");
           if (resolved._tag === "ContextFailure") {
-            return resolved.result;
+            return withId(resolved.result);
           }
           return yield* mutation(
             resolved.env,
@@ -99,10 +94,10 @@ const personaFork = Command.make(
               operation: "persona-fork",
               run: null,
               destination: layer === "project" ? undefined : "cwd",
-              at: layer === "project" ? resolvedAt(resolved) : undefined,
+              at: layer === "project" ? resolved.env.cwd : undefined,
               args: { persona, layer, name },
             },
-            request,
+            Option.some(id),
             (_id) =>
               Effect.gen(function* () {
                 const found = (yield* definitions(resolved.env)).personas.get(persona);
