@@ -788,20 +788,6 @@ export type Rally =
       readonly outstanding: Array<Finding>;
     };
 
-// WARNING: the Choice shows the reviewer's latest word on a finding beside the fixer's reason, which only its own entry carries.
-function mergeDisputes(findings: ReadonlyArray<Finding>) {
-  return Arr.reduce(findings, Arr.empty<Finding>(), (kept, one) => {
-    const at = Arr.findFirstIndex(kept, (other) => sameFinding(other, one));
-    if (Option.isNone(at)) {
-      return [...kept, one];
-    }
-    // WARNING: the index comes from findFirstIndex on this same array.
-    const earlier = kept[at.value]!;
-    const merged = { ...one, reason: one.reason ?? earlier.reason };
-    return Arr.map(kept, (other, index) => (index === at.value ? merged : other));
-  });
-}
-
 // WARNING: a repeat goes back to the fixer once; only a set it has already answered halts the rally.
 export function settleRound(round: {
   readonly live: ReadonlyArray<Finding>;
@@ -819,8 +805,7 @@ export function settleRound(round: {
   const live = Arr.filter(round.live, (f) => f.status !== "fixed" && f.status !== "obsolete");
   const reopened = [...(round.reopened ?? [])];
   const blocking = [...Arr.filter(live, isBlocking), ...reopened];
-  // WARNING: a disputed blocker is the person's call whatever else the review raised.
-  const standing = mergeDisputes(Arr.filter(round.disputed, isBlocking));
+  const standing = Arr.filter(offered(round.disputed), isBlocking);
   if (standing.length > 0) {
     const returned: Rally = {
       go: "halt",
@@ -1029,7 +1014,18 @@ export function settleFinalFix(
   return returned;
 }
 
-// WARNING: what a person is offered are the fix's own disputes, never the findings it reported fixed.
+// WARNING: severity comes from the first entry, so a repeat as minor cannot lower a disputed blocker; detail comes from the last.
+export function offered(disputed: ReadonlyArray<Finding>) {
+  const unique = Arr.dedupeWith(disputed, (left: Finding, right: Finding) =>
+    sameFinding(left, right),
+  );
+  return Arr.map(unique, (one) => {
+    const latest = Option.getOrUndefined(Arr.findLast(disputed, (echo) => sameFinding(echo, one)));
+    const detail = latest?.detail;
+    return detail === undefined || detail === one.detail ? one : { ...one, detail };
+  });
+}
+
 export function offeredDisputes(fix: FixReport, waived: ReadonlyArray<Finding>) {
   const gone = new Set(Arr.map(waived, findingKey));
   return Arr.filter(fix.disputed, (one) => isBlocking(one) && !gone.has(findingKey(one)));
@@ -1224,6 +1220,14 @@ export function formatFindings(findings: ReadonlyArray<Finding>) {
     "\n",
   );
 }
+
+export const waiverNote = (one: Finding) =>
+  one.waived === undefined
+    ? one
+    : {
+        ...one,
+        detail: `${Str.trim(one.detail ?? "")}\nWaived by ${one.waived.by} to ${one.waived.choice}: do not raise it again.`,
+      };
 
 export const waivedIn = (findings: ReadonlyArray<Finding>) =>
   Arr.filter(findings, (one) => one.waived !== undefined);

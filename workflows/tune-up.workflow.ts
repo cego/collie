@@ -18,6 +18,7 @@ import {
   agentWork,
   ask,
   calibrationOf,
+  waiverNote,
   contentOf,
   defineWorkflow,
   endsWithoutPatchOf,
@@ -31,7 +32,7 @@ import {
   step,
   stepFailed,
 } from "collie";
-import type { Integration, Measurement, SynthesisReport } from "collie";
+import type { Finding, Integration, Measurement, SynthesisReport } from "collie";
 import {
   Array as Arr,
   Clock,
@@ -2045,6 +2046,7 @@ export default defineWorkflow({
           execute: Effect.map(host.evidence(runId, cwd), ({ final }) => final),
         });
       });
+      let waived: ReadonlyArray<Finding> = [];
       const reviewOf = (prefix: string, answered: string) =>
         Effect.gen(function* () {
           yield* measureFinal;
@@ -2060,7 +2062,7 @@ export default defineWorkflow({
             base: reviewBase,
             at: 1,
             of: 1,
-            disputed: [],
+            disputed: Arr.map(waived, waiverNote),
             prefix,
             obstacle: REVIEWING,
           });
@@ -2197,6 +2199,7 @@ export default defineWorkflow({
             output: FixOutputSchema,
           }),
       });
+      waived = rallied.waived;
       const on = reviewedOn.at(-1);
       if (rallied.halted !== null || on === undefined) {
         return yield* new WorkflowError({ reason: rallied.halted ?? "the rally reviewed nothing" });

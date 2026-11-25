@@ -20,6 +20,7 @@ import {
   isBlocking,
   leaveOutstanding,
   leaveReview,
+  offered,
   offeredDisputes,
   mrForgeFacts,
   parseMrTarget,
@@ -33,6 +34,7 @@ import {
   step,
   targetKind,
   waiveFindings,
+  waiverNote,
   whoActed,
 } from "collie";
 import type { Finding, Fixed, Integration, SynthesisReport } from "collie";
@@ -545,15 +547,6 @@ export interface Rallied extends Reviewed {
   readonly halted: string | null;
 }
 
-// WARNING: a waived finding is told to the next reviewer, or it is raised again as if nobody had decided.
-const waiverNote = (one: Finding) =>
-  one.waived === undefined
-    ? one
-    : {
-        ...one,
-        detail: `${Str.trim(one.detail ?? "")}\nWaived by ${one.waived.by} to ${one.waived.choice}: do not raise it again.`,
-      };
-
 export const rally = (ask: {
   readonly rounds: { n: number };
   readonly cwd: string;
@@ -692,7 +685,7 @@ export const rally = (ask: {
     });
 
     const disputedPrompt = (standing: ReadonlyArray<Finding>) =>
-      `The implementer disputed these blocking findings and the reviewers kept them, so a person decides.\n\n${formatDisputes(standing)}\n\n${WAIVER_IS_NOT_PROOF}`;
+      `The implementer disputed these blocking findings and the reviewers kept them, so a person decides.\n\n${formatDisputes(offered(standing))}\n\n${WAIVER_IS_NOT_PROOF}`;
 
     const declinedLine =
       "A person declined the dispute on these findings, so they are open again: fix them, or answer each with new evidence or a dispute.";
@@ -733,12 +726,12 @@ export const rally = (ask: {
       Effect.gen(function* () {
         let report = first;
         let open: ReadonlyArray<Finding> = live;
-        const shrink = (fixed: typeof FixOutputSchema.Type) => {
+        const shrink = (asked: ReadonlyArray<Finding>, fixed: typeof FixOutputSchema.Type) => {
           const settled = new Set(Arr.map([...fixed.fixed, ...fixed.disputed], findingKey));
-          return Arr.filter(live, (one) => !settled.has(findingKey(one)));
+          return Arr.filter(asked, (one) => !settled.has(findingKey(one)));
         };
         for (;;) {
-          const standing = Arr.filter(disputed, isBlocking);
+          const standing = Arr.filter(offered(disputed), isBlocking);
           if (standing.length > 0) {
             const name = `${prefix}dispute-${++disputeAsks}`;
             const chosen = yield* ask.choose({
@@ -755,7 +748,7 @@ export const rally = (ask: {
               );
             } else {
               report = yield* sendBack(declinedLine, standing, ROUNDS + 1, yield* ask.proves, head);
-              open = shrink(report);
+              open = shrink(standing, report);
               continue;
             }
           }
@@ -792,7 +785,7 @@ export const rally = (ask: {
               );
             }
             report = yield* sendBack(declinedLine, standing, ROUNDS + 1, yield* ask.proves, head);
-            open = shrink(report);
+            open = shrink(standing, report);
             continue;
           }
           if (!handedUnverified) {
@@ -809,7 +802,7 @@ export const rally = (ask: {
               head,
             });
             lastFix = `${prefix}fix-${ROUNDS + 1}`;
-            open = shrink(report);
+            open = shrink(open, report);
             continue;
           }
           const name = `${prefix}fix-unverified-${++unverifiedAsks}`;
@@ -834,15 +827,15 @@ export const rally = (ask: {
             yield* ask.proves,
             head,
           );
-          open = shrink(report);
+          open = shrink(open, report);
         }
       });
 
+    yield* repair;
     for (let at = 1; at <= ROUNDS; at++) {
       ask.rounds.n += 1;
       const ended = yield* reviewRound(
         Effect.gen(function* () {
-          yield* repair;
           const merged = yield* ask.integrate(`${prefix}merge-${at}`);
           const proves = yield* ask.proves;
           const unopened = yield* checkedBeforeReview({
@@ -922,6 +915,8 @@ export const rally = (ask: {
             Arr.filter(synthesis.findings, (one) => !waivedKeys.has(findingKey(one))),
             disputed,
           );
+          const rebutted = new Set(Arr.map(split.rebutted, findingKey));
+          disputed = Arr.filter(disputed, (one) => !rebutted.has(findingKey(one)));
           const round = settleRound({
             live: split.live,
             disputed: [...disputed, ...split.settled],
@@ -929,7 +924,7 @@ export const rally = (ask: {
             seen,
           });
           if (round.go === "halt" && round.halt === "dispute_unresolved") {
-            const standing = Arr.filter(round.outstanding, isBlocking);
+            const standing = Arr.filter(offered(disputed), isBlocking);
             const name = `${prefix}dispute-${++disputeAsks}`;
             const chosen = yield* ask.choose({
               name,
@@ -938,7 +933,19 @@ export const rally = (ask: {
             });
             if (chosen === WAIVE_IT) {
               yield* waiveAll(name, standing);
-              return at < ROUNDS ? null : cleaned(synthesis);
+              if (at < ROUNDS) {
+                return null;
+              }
+              const gone = new Set(Arr.map(waived, findingKey));
+              const rest = Arr.filter(
+                round.outstanding,
+                (one) => isBlocking(one) && !gone.has(findingKey(one)),
+              );
+              if (rest.length === 0) {
+                return cleaned(synthesis);
+              }
+              const fixed = yield* sendBack(declinedLine, rest, at, proves, head);
+              return yield* finish(synthesis, rest, fixed, head);
             }
             if (chosen !== SEND_IT_BACK) {
               return stopped(

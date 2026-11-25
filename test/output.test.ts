@@ -5,6 +5,7 @@ import {
   findingKey,
   formatFindings,
   isBlocking,
+  offered,
   offeredDisputes,
   parseFixOutput,
   parseReviewOutput,
@@ -71,7 +72,7 @@ test("a dispute survives a rename by id and counts once across ledger versions",
     settleRound({ live: split.live, disputed: [before, ...split.settled], at: 2 }),
   ).toMatchObject({
     reason: "1 disputed blocking finding(s) stand unanswered — your call, not the loop's",
-    outstanding: [renamed],
+    outstanding: [before],
   });
   expect(splitDisputed([{ ...renamed, id: "F2" }], [renamed]).live).toHaveLength(1);
   const legacy = { file: renamed.file, title: renamed.title, severity: "major" };
@@ -97,12 +98,17 @@ test("a disputed blocker is the person's call even when the review also raised a
   });
 });
 
-test("a kept dispute carries the reviewer's latest detail beside the fixer's reason", () => {
-  const standing = { ...GUARD_LATEST, status: "disputed" as const };
-  expect(settleRound({ live: [], disputed: [GUARD, standing], at: 2 })).toMatchObject({
-    outstanding: [
-      { detail: "the CLI path does not validate it", reason: "the caller already validates it" },
-    ],
+test("a person is offered the fixer's finding with the reviewer's latest detail", () => {
+  const repeatedAsMinor = { ...GUARD_LATEST, severity: "minor" as const };
+  expect(offered([GUARD, repeatedAsMinor])).toEqual([
+    {
+      ...GUARD,
+      detail: "the CLI path does not validate it",
+    },
+  ]);
+  expect(settleRound({ live: [LIST], disputed: [GUARD, repeatedAsMinor], at: 2 })).toMatchObject({
+    halt: "dispute_unresolved",
+    outstanding: [GUARD_LATEST, LIST],
   });
 });
 

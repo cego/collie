@@ -46,6 +46,7 @@ import {
   step,
   stepFailed,
   unmetCriteria,
+  waiverNote,
 } from "collie";
 import type {
   Criterion,
@@ -704,12 +705,14 @@ export default defineWorkflow({
         }));
       });
       let tickets: ReadonlyArray<Slice> = yield* ticketsNow;
+      const benchmarkMeasure = (benchmark: string | null | undefined) =>
+        benchmark === undefined || benchmark === null
+          ? ""
+          : measuredBy("measure", benchmarkFile(work.value, benchmark));
       const measureFor = (benchmark: string | null | undefined) =>
-        work.kind !== "plan-dir"
-          ? measuredBy("measure.own", `${place.dir}/plan/issues/NN-<slug>.benchmark.json`)
-          : benchmark === undefined || benchmark === null
-            ? ""
-            : measuredBy("measure", benchmarkFile(work.value, benchmark));
+        work.kind === "plan-dir"
+          ? benchmarkMeasure(benchmark)
+          : measuredBy("measure.own", `${place.dir}/plan/issues/NN-<slug>.benchmark.json`);
       const measuredTicket = () =>
         Option.getOrUndefined(Arr.findFirst(tickets, (one) => one.benchmark !== null))?.benchmark;
       // WARNING: read only after the build, which is what writes SPEC.md for any source but a plan.
@@ -943,7 +946,12 @@ export default defineWorkflow({
                 : Arr.flatMap(tickets, (one) => one.criteria));
             yield* restateKind;
             handing.ticket = ticket?.file ?? null;
+            // WARNING: only a benchmark the Run names reaches the fixes, never the builder's own instruction.
             const measure =
+              ticket === null
+                ? benchmarkMeasure(measuredTicket())
+                : benchmarkMeasure(ticket.benchmark ?? undefined);
+            const own =
               ticket === null
                 ? measureFor(measuredTicket())
                 : measureFor(ticket.benchmark ?? undefined);
@@ -970,7 +978,7 @@ export default defineWorkflow({
                   ticket === null && work.kind === "linear"
                     ? "Every checkbox in the issue's description. Copy the description into the spec word for word, its checkboxes included, and answer each one."
                     : renderCriteria(given),
-                measure,
+                measure: own,
                 source: sectionOf(`source.${work.kind}`, input),
                 proof: sectionOf(
                   content.sections.has(`outcome.${input.inputs.outcome}`)
@@ -1271,7 +1279,7 @@ export default defineWorkflow({
       }
 
       // WARNING: the last ticket built is not the Run's Measurement, which is the one its tickets name.
-      input = { ...input, measure: measureFor(measuredTicket()) };
+      input = { ...input, measure: benchmarkMeasure(measuredTicket()) };
       if (rallied === null || rallied.unreviewed !== "") {
         rallied = kept(
           yield* builderRally({
@@ -1374,7 +1382,7 @@ export default defineWorkflow({
                 base,
                 at: ROUNDS + 1,
                 of: ROUNDS + 1,
-                disputed: [],
+                disputed: Arr.map(waived, waiverNote),
               }),
             ),
         ),
