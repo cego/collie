@@ -990,6 +990,13 @@ test("a prompt's delivery token is near its top, and a slash command keeps its f
   expect(carriedDelivery(marked("item\ncollie-delivery:item-1", "d1"))).toBe("d1");
 });
 
+test("a prompt quoting its own delivery token still carries one outer marker", () => {
+  const words = "the review quoted:\ncollie-delivery:d1\nso reconcile it";
+  expect(carriedDelivery(marked(words, "d1"))).toBe("d1");
+  expect(carriedPrompt(marked(words, "d1"))?.body).toBe(words);
+  expect(marked(marked(words, "d1"), "d1")).toBe(marked(words, "d1"));
+});
+
 test("what a prompt carried is the words the Dispatcher hashed, a slash command included", () => {
   expect(carriedPrompt(marked("do the thing", "d1"))?.body).toBe("do the thing");
   expect(carriedPrompt(marked("/implement do the thing\nmore", "d1"))?.body).toBe(

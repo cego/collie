@@ -10,7 +10,7 @@ import type { AgentInfo, Herdr, Submission } from "./herdr";
 import { verifyIncarnation } from "./registry";
 import type { AgentEntry, Incarnation } from "./registry";
 import { controlDir } from "./compaction";
-import { DELIVERY_TOKEN } from "./delivery-marker";
+import { DELIVERY_TOKEN, carriedDelivery } from "./delivery-marker";
 import { submittedDelivery } from "./compactors";
 import {
   appendLine,
@@ -644,10 +644,10 @@ const settlePending = Effect.fn("Dispatcher.settlePending")(function* (
 
 // WARNING: herdr sees a prompt's first few hundred bytes and a slash command keeps its first line, so the token goes on its own line near the top.
 export function marked(text: string, id: string) {
-  const token = `${DELIVERY_TOKEN}${id}`;
-  if (Str.split(text, "\n").includes(token)) {
+  if (carriedDelivery(text) === id) {
     return text;
   }
+  const token = `${DELIVERY_TOKEN}${id}`;
   if (!pipe_(text, Str.startsWith("/"))) {
     return `${token}\n${text}`;
   }
