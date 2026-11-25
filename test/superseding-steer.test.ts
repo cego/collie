@@ -199,6 +199,9 @@ const tell = (at: AtQuestion, text: string, by: Actor, agent = at.agent) =>
     ([done]) => done,
   );
 
+const metricsOf = (at: AtQuestion) =>
+  readMetrics(`${at.world.state}/evidence/${at.runId}`).pipe(Effect.orElseSucceed(() => []));
+
 const viewOf = (at: AtQuestion, client: Client = at.client) =>
   client.run({ runId: at.runId }).pipe(Effect.orDie);
 
@@ -716,8 +719,11 @@ for (const evidence of [
             (view) => view?.park?.cause === "delivery-unsettled",
           );
           expect(parked?.parked).toContain(delivery.id);
+          const parkId = parked?.park?.id;
+          expect(parkId).toBeDefined();
 
           yield* stopHost(at.world.state);
+          const before = Arr.length(yield* metricsOf(at));
           const again = yield* startHost(at.world);
           if (evidence !== "no-submit") {
             yield* recordClaudeEvent(
@@ -734,30 +740,28 @@ for (const evidence of [
           }
 
           const rechecked = yield* until(
-            () =>
-              readMetrics(`${at.world.state}/evidence/${at.runId}`).pipe(
-                Effect.orElseSucceed(() => []),
-              ),
-            (lines) =>
-              Arr.some(
-                lines,
-                (line) =>
-                  line.action === "rechecked" && pipe(line.note ?? "", Str.includes(delivery.id)),
-              ),
+            () => metricsOf(at),
+            (lines) => Arr.length(lines) > before,
           );
+          const fresh = Arr.drop(rechecked, before);
           expect(
-            Option.getOrUndefined(
-              Arr.findLast(
-                rechecked,
-                (line) =>
-                  line.action === "rechecked" && pipe(line.note ?? "", Str.includes(delivery.id)),
+              Option.getOrUndefined(
+                Arr.findFirst(
+                  fresh,
+                  (line) =>
+                    line.action === "rechecked" &&
+                    line.park === parkId &&
+                    pipe(line.note ?? "", Str.includes(delivery.id)),
+                ),
               ),
-            )?.outcome,
-          ).toBe(evidence === "its-own-submit" ? "cleared" : "uncleared");
+            ).toMatchObject({ outcome: evidence === "its-own-submit" ? "cleared" : "uncleared" });
 
           const after = yield* until(
-            () => again.run({ runId: at.runId }).pipe(Effect.orDie),
-            (view) => view !== null && (view.parked != null || view.status.status === "complete"),
+            () => viewOf(at, again),
+            (view) =>
+              evidence === "its-own-submit"
+                ? view != null && view.park == null
+                : view?.park?.id === parkId,
           );
           expect(
             Arr.filter(after?.waiting ?? [], (one) => one.name === "ask-build-1"),
