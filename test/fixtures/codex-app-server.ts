@@ -226,21 +226,23 @@ const shellEnv = () => {
   const excluded = [
     ...(policy.ignore_default_excludes === true ? [] : DEFAULT_EXCLUDES),
     ...(policy.exclude ?? []),
+    ...Arr.map(
+      Arr.filter(Rec.toEntries(policy.filters ?? {}), ([, rule]) => rule === "exclude"),
+      ([glob]) => glob,
+    ),
   ];
-  const filtered = Rec.toEntries(policy.filters ?? {});
   return Rec.filter(
     Rec.getSomes(Rec.map(childEnv(), (value) => Option.fromUndefinedOr(value))),
     (_value, key) => {
       if (Arr.some(excluded, (glob) => wildcard(glob, key))) {
         return false;
       }
-      const keyed = Arr.findFirst(filtered, ([glob]) => wildcard(glob, key));
-      if (Option.isSome(keyed)) {
-        return keyed.value[1] === "include";
-      }
-      return policy.include_only === undefined
-        ? inherit === "all" || (inherit === "core" && Arr.contains(CORE, key))
-        : Arr.some(policy.include_only, (glob) => wildcard(glob, key));
+      const inherited = inherit === "all" || (inherit === "core" && Arr.contains(CORE, key));
+      return (
+        inherited &&
+        (policy.include_only === undefined ||
+          Arr.some(policy.include_only, (glob) => wildcard(glob, key)))
+      );
     },
   );
 };

@@ -662,6 +662,36 @@ export const codexDriver: (
   command = which("codex") === null ? null : [which("codex")!],
 ) => {
   const mapping = `${context.dir}/codex-threads.json`;
+  const secrets = `${context.dir}/codex-secrets`;
+  const keep = (files: CodexServers["files"]) =>
+    files.length === 0
+      ? Effect.void
+      : Effect.promise(() =>
+          context.run(
+            FileSystem.FileSystem.pipe(
+              Effect.flatMap((fs) =>
+                Effect.gen(function* () {
+                  yield* fs.makeDirectory(secrets, { recursive: true });
+                  yield* fs.chmod(secrets, 0o700);
+                  yield* Effect.forEach(
+                    files,
+                    (one) => fs.writeFileString(one.path, one.text, { mode: 0o600 }),
+                    { discard: true },
+                  );
+                }),
+              ),
+              Effect.orDie,
+            ),
+          ),
+        );
+  const forget = Effect.promise(() =>
+    context.run(
+      FileSystem.FileSystem.pipe(
+        Effect.flatMap((fs) => fs.remove(secrets, { recursive: true })),
+        Effect.ignore,
+      ),
+    ),
+  );
   const threads = Effect.promise(() =>
     context.run(
       FileSystem.FileSystem.pipe(
@@ -787,11 +817,9 @@ export const codexDriver: (
             yield* Effect.tryPromise(userServers).pipe(Effect.orElseSucceed(() => ({}))),
             configured,
             discovery?.policy ?? NO_POLICY,
+            secrets,
           );
-          // WARNING: a variable an imported server's reference used is a credential Codex's shell can read.
-          const kept = Rec.fromEntries(
-            Arr.filter(Rec.toEntries(childEnv()), ([name]) => !Arr.contains(given.used, name)),
-          );
+          yield* keep(given.files);
           const server = yield* appServer(
             command,
             context.dir,
@@ -804,7 +832,7 @@ export const codexDriver: (
               "-c",
               `mcp_servers.${SERVER}.tool_timeout_sec=${TOOL_TIMEOUT}`,
             ],
-            { ...kept, ...given.env, [TOKEN_ENV]: token },
+            { ...childEnv(), ...given.env, [TOKEN_ENV]: token },
           );
           yield* Effect.forkScoped(pump(server));
           const { account, requiresOpenaiAuth } = yield* server
@@ -950,7 +978,7 @@ export const codexDriver: (
           live = undefined;
           owned = undefined;
           return ending === undefined ? Effect.void : Scope.close(ending, Exit.void);
-        }).pipe(Effect.flatten, Effect.andThen(endpoint.finish)),
+        }).pipe(Effect.flatten, Effect.andThen(forget), Effect.andThen(endpoint.finish)),
         lastTurn: () => lastTurn,
         limited: state.limited,
       };

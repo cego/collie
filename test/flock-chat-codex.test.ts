@@ -598,6 +598,51 @@ const message = (events: ReadonlyArray<AguiEvent>) =>
     "",
   );
 
+test("A shell started empty holds nothing its allowlist only names", () => {
+  return withServers({}, (driver, context) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(
+        `${context.dir}/codex-home/config.toml`,
+        `[shell_environment_policy]\ninherit = "none"\ninclude_only = ["PATH"]\n`,
+      );
+      const session = yield* driver.open("codex-empty", "default", null);
+      yield* Effect.addFinalizer(() => session.close);
+      yield* session.offer("shell");
+      expect(message(yield* turn(session))).not.toContain("PATH=");
+    }),
+  );
+});
+
+test("Codex keeps a variable its own server reads, even when an import names it", () => {
+  const mine = serveDocs({ tool: "user_read", token: "mine-token" });
+  Bun.env.SHARED_SERVER_TOKEN = "shared-token";
+  return withServers(
+    {
+      docs: {
+        type: "http",
+        url: mine.url,
+        headers: { Authorization: "Bearer ${SHARED_SERVER_TOKEN}" },
+      },
+    },
+    (driver, context) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(
+          `${context.dir}/codex-home/config.toml`,
+          `[mcp_servers.native]\nurl = "http://127.0.0.1:1/mcp"\nbearer_token_env_var = "SHARED_SERVER_TOKEN"\n`,
+        );
+        const session = yield* driver.open("codex-shared", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("inspect");
+        expect(inspected(yield* turn(session)).env.SHARED_SERVER_TOKEN).toBe("shared-token");
+      }),
+  ).finally(() => {
+    void mine.stop();
+    delete Bun.env.SHARED_SERVER_TOKEN;
+  });
+});
+
 test("A server's credential reaches that server, and never Codex's own shell", () => {
   const fixture = serveDocs({ tool: "read_doc", token: "mine" });
   Bun.env.MY_THING = "mine";
@@ -866,7 +911,7 @@ test("Two servers' headers get an environment variable each, and a header keeps 
   });
 });
 
-test("A stdio server's environment reaches it through the process, never the arguments", () => {
+test("A stdio server's environment reaches it without reaching Codex or its arguments", () => {
   const secret = "stdio-secret-value";
   return withServers(
     {
@@ -883,16 +928,59 @@ test("A stdio server's environment reaches it through the process, never the arg
         yield* session.offer("inspect");
         const details = inspected(yield* turn(session));
         const given = Arr.join(details.args, " ");
-        expect(given).toContain("mcp_servers.tool.env_vars=[");
+        expect(given).not.toContain("env_vars");
         expect(given).not.toContain(secret);
         expect(details.env.API_TOKEN).toBeUndefined();
-        expect(Rec.values(details.env)).toContain(secret);
+        expect(Arr.some(Rec.values(details.env), (value) => value === secret)).toBe(false);
+        expect(
+          Arr.some(Rec.keys(details.env), (key) => pipe(key, Str.startsWith("COLLIE_CHAT_STDIO_"))),
+        ).toBe(false);
         yield* session.offer("servers");
         const events = yield* turn(session);
         expect(called(events)).toEqual(["mcp__tool__read_token"]);
         expect(Arr.filter(events, (event) => event.type === "TOOL_CALL_RESULT")).toMatchObject([
           { content: secret },
         ]);
+      }),
+  );
+});
+
+test("A stdio credential is not left in the chat's directory once the session closes", () => {
+  return withServers(
+    {
+      tool: {
+        command: process.execPath,
+        args: [`${import.meta.dir}/fixtures/mcp-stdio-echo.fixture.ts`],
+        env: { API_TOKEN: "stdio-secret-value" },
+      },
+    },
+    (driver, context) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const session = yield* driver.open("codex-residue", "default", null);
+        yield* session.offer("inspect");
+        yield* turn(session);
+        yield* session.close;
+        expect(yield* fs.exists(`${context.dir}/codex-secrets`)).toBe(false);
+      }),
+  );
+});
+
+test("A value taken from a variable Codex needs itself leaves its shell whole", () => {
+  return withServers(
+    {
+      tool: {
+        command: process.execPath,
+        args: [`${import.meta.dir}/fixtures/mcp-stdio-echo.fixture.ts`],
+        env: { API_TOKEN: "${PATH}" },
+      },
+    },
+    (driver) =>
+      Effect.gen(function* () {
+        const session = yield* driver.open("codex-standard", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("shell");
+        expect(message(yield* turn(session))).toContain("PATH=");
       }),
   );
 });
@@ -942,8 +1030,8 @@ test("Two stdio servers needing one variable of their own are each given it", ()
         yield* session.offer("inspect");
         const details = inspected(yield* turn(session));
         const given = Arr.join(details.args, " ");
-        expect(given).toContain("mcp_servers.first.env_vars=[");
-        expect(given).toContain("mcp_servers.second.env_vars=[");
+        expect(given).toContain("mcp_servers.first.args=[");
+        expect(given).toContain("mcp_servers.second.args=[");
         expect(given).not.toContain("first-secret");
         expect(given).not.toContain("second-secret");
         expect(details.env.API_TOKEN).toBeUndefined();
@@ -1036,8 +1124,8 @@ test("The login command a server is told parses, even when its url holds a quote
       { name: "linear-server", url: `http://127.0.0.1:1/it${quote}s` },
       { name: "stdio-one" },
     ],
+    files: [],
     left: [],
-    used: [],
   } as const;
   const told = codexConnections(
     servers,
@@ -1076,7 +1164,10 @@ test("A stdio server's variables reach that server alone, not Codex or the chat'
         yield* Effect.addFinalizer(() => session.close);
         yield* session.offer("inspect");
         const details = inspected(yield* turn(session));
-        expect(Arr.join(details.args, " ")).toContain("mcp_servers.leaky.env_vars=[");
+        const given = Arr.join(details.args, " ");
+        expect(given).toContain("export HOME=");
+        expect(given).toContain("$(cat ");
+        expect(given).not.toContain("env_vars");
         expect(details.env.HOME).not.toBe("/nowhere");
         expect(details.env.CODEX_HOME).toBe(`${context.dir}/codex-home`);
         yield* session.offer("servers");

@@ -2363,16 +2363,20 @@ Desktop reads the same list and passes each one to the App Server as
 Codex reports it has — its own `config.toml` and any project's `.codex/config.toml` it
 trusts — so a server Codex already configures keeps Codex's entry and the chat names it
 once; `collie_desktop` is Collie's own and no server of yours takes its place. A server's
-static headers, such as a bearer token, and a stdio server's environment reach Codex through
-the App Server's own environment under a name Collie makes, never its command line, and
-never the chat. A stdio server is started through a shell that gives it those values under
-the names you set, so they are that server's alone and no other server reads them, and a
-variable one of those values was taken from is not given to Codex at all, so neither its
-own shell nor any server of Codex's reads it. Codex's own shell is told to exclude Collie's
-`COLLIE_CHAT_*` names, in whichever way your `shell_environment_policy` is written — a
-keyed `filters` table keeps its entries and gains one, and legacy `exclude` names gain
-Collie's — since Codex drops the first when the second is set beside it. A stdio
-server whose environment names something a shell cannot set, or a name in Collie's own
+static headers, such as a bearer token, and a stdio server's environment reach Codex as
+values Collie holds, never in the server's command line and never in the chat. A header's
+value sits in the environment Codex runs with, under a name Collie makes, because that is
+where Codex sends a header from; a stdio server's value does not, and waits in a file its
+own launcher reads and deletes as the server starts. Codex's own shell is told to exclude
+every variable an imported server's value came from — bar the standard ones a shell cannot
+work without — and the names Collie makes, in whichever way your
+`shell_environment_policy` is written: a keyed `filters` table keeps its entries and gains
+ours, and legacy `exclude` names gain them, since Codex drops the first when the second is
+set beside it. A command Codex runs therefore does not inherit them, while a variable of
+yours that Codex's own server still reads, such as its `bearer_token_env_var`, still reaches
+that server. A process running as you can read what any other of your processes holds, so a
+header's value is kept out of the command's own environment and from nothing beyond it. A
+stdio server whose environment names something a shell cannot set, or a name in Collie's own
 `COLLIE_CHAT_` namespace, is left out and the chat says so. If Codex will not say which
 servers it has, none of yours is passed at all — better a server missing from the chat than
 one overriding Codex's own — and the chat says so, until Codex starts again and it can be

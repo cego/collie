@@ -13,6 +13,7 @@ const SHELL = "/bin/sh";
 const NAME = /^[A-Za-z0-9_-]+$/;
 const SETTABLE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const REFERENCE = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+const STANDARD = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "TERM", "PWD"];
 const Strings = Schema.Record(Schema.String, Schema.String);
 const Stdio = Schema.Struct({
   command: Schema.String,
@@ -43,12 +44,12 @@ export const NO_POLICY: ShellPolicy = { excludes: [], filters: {} };
 export interface CodexServers {
   readonly args: ReadonlyArray<string>;
   readonly env: Readonly<Record<string, string>>;
+  readonly files: ReadonlyArray<{ readonly path: string; readonly text: string }>;
   readonly given: ReadonlyArray<{ readonly name: string; readonly url?: string }>;
   readonly left: ReadonlyArray<{ readonly name: string; readonly why: string }>;
-  readonly used: ReadonlyArray<string>;
 }
 
-export const NO_SERVERS: CodexServers = { args: [], env: {}, given: [], left: [], used: [] };
+export const NO_SERVERS: CodexServers = { args: [], env: {}, files: [], given: [], left: [] };
 
 // WARNING: Codex reads a `-c` value as TOML: a table's keys are quoted so a dot stays a header's name.
 const quoted = (value: string) => JSON.stringify(value);
@@ -90,12 +91,15 @@ const substituted: (
   };
 };
 
+const shQuote = (word: string) => `'${pipe(word, Str.replaceAll("'", String.raw`'\''`))}'`;
+
 // WARNING: `null` means Codex's own names are unknown: passing the human's would override them.
 export const codexServers: (
   servers: UserMcpServers,
   configured: ReadonlyArray<string> | null,
   policy: ShellPolicy,
-) => CodexServers = (servers, configured, policy) => {
+  secrets: string,
+) => CodexServers = (servers, configured, policy, secrets) => {
   if (configured === null) {
     return {
       ...NO_SERVERS,
@@ -107,6 +111,7 @@ export const codexServers: (
   }
   const args: Array<string> = [];
   const env: Record<string, string> = {};
+  const files: Array<{ path: string; text: string }> = [];
   const given: Array<{ name: string; url?: string }> = [];
   const left: Array<{ name: string; why: string }> = [];
   const used: Array<string> = [];
@@ -144,12 +149,12 @@ export const codexServers: (
         left.push({ name, why: `${unsettable.value[0]} is a name a shell cannot set` });
         continue;
       }
-      // WARNING: a stdio value under the name the human gave it would reach Codex's other servers too.
+      // WARNING: a value in Codex's own environment is one its shell can read, so it waits in a file.
       const passing = Arr.map(held, ([key, value]) => {
         carried += 1;
-        const variable = `${OWN}STDIO_${carried}`;
-        env[variable] = resolve(value);
-        return { key, variable };
+        const path = `${secrets}/${carried}`;
+        files.push({ path, text: resolve(value) });
+        return { key, path };
       });
       args.push(
         ...setting(`mcp_servers.${name}.command`, SHELL),
@@ -157,7 +162,11 @@ export const codexServers: (
           "-c",
           Arr.join(
             [
-              ...Arr.map(passing, ({ key, variable }) => `export ${key}="$${variable}"`),
+              ...Arr.map(
+                passing,
+                ({ key, path }) =>
+                  `export ${key}="$(cat ${shQuote(path)})"; rm -f ${shQuote(path)}`,
+              ),
               'exec "$0" "$@"',
             ],
             "; ",
@@ -165,10 +174,6 @@ export const codexServers: (
           server.command,
           ...(server.args ?? []),
         ]),
-        ...list(
-          `mcp_servers.${name}.env_vars`,
-          Arr.map(passing, (one) => one.variable),
-        ),
       );
       given.push({ name });
       continue;
@@ -189,22 +194,25 @@ export const codexServers: (
     given.push({ name, url: server.url });
   }
   // WARNING: Codex drops its keyed `filters` table when a legacy exclude is set beside it.
-  if (Rec.size(env) > 0) {
+  if (Rec.size(env) > 0 || used.length > 0) {
+    const own = Arr.dedupe([
+      `${OWN}*`,
+      ...Arr.filter(used, (name) => !Arr.contains(STANDARD, name)),
+    ]);
+    const added: Record<string, string> = {};
+    for (const name of own) {
+      added[name] = "exclude";
+    }
     args.push(
       ...(Rec.size(policy.filters) > 0
-        ? table("shell_environment_policy.filters", {
-            ...policy.filters,
-            [`${OWN}*`]: "exclude",
-          })
-        : list("shell_environment_policy.exclude", Arr.dedupe([`${OWN}*`, ...policy.excludes]))),
+        ? table("shell_environment_policy.filters", { ...policy.filters, ...added })
+        : list("shell_environment_policy.exclude", Arr.dedupe([...own, ...policy.excludes]))),
     );
   }
-  return { args, env, given, left, used: Arr.dedupe(used) };
+  return { args, env, files, given, left };
 };
 
 const toolsOf = (status: CodexStatus | undefined) => Rec.keys(status?.tools ?? {});
-
-const shQuote = (word: string) => `'${pipe(word, Str.replaceAll("'", String.raw`'\''`))}'`;
 
 export const codexConnections: (
   servers: CodexServers,
