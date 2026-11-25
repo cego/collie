@@ -201,7 +201,7 @@ import {
   recoveryLine,
 } from "./park-cause";
 import { healOn, healRequest, healerFor, passedOver } from "./heal";
-import type { Metrics, Solution, Answered, Controlled, RequestConflict } from "./board-model";
+import type { Metrics, Solution, Answered, Controlled } from "./board-model";
 import {
   forgeOfRef,
   mrId,
@@ -294,7 +294,7 @@ import {
   supersededReason,
 } from "./store";
 import type { Superseded, Admission, DecisionRow, RunRow, StoreApi } from "./store";
-import { HostRefused, RequestedBy, RunReport } from "./board-model";
+import { HostRefused, RequestConflict, RequestedBy, RunReport } from "./board-model";
 import type { Disposition } from "./board-model";
 import {
   TASK_INPUT,
@@ -2367,6 +2367,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export function formatFindings(findings: ReadonlyArray<Finding>): string;
   /** Where the report a findings-kind source's findings were written is: review.md, investigation.md, or findings.json. */
   export function reportIn(dir: string): Effect.Effect<string>;
+  /** Whether a finding's status still asks somebody to build it. */
+  export function isOpenFinding(status: string): boolean;
   export function buildable(
     findings: ReadonlyArray<Finding>,
     statuses: ReadonlyArray<{
@@ -2388,6 +2390,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     dir: string,
     findings: ReadonlyArray<Finding>,
     ledger?: ReadonlyArray<Finding>,
+    report?: string,
   ): Effect.Effect<ReadonlyArray<Finding>, never, FileSystem.FileSystem>;
   export function leaveReview(
     dir: string,
@@ -7392,6 +7395,7 @@ const Placing = Schema.Struct({
   workspace: Schema.optionalKey(Schema.NullOr(Schema.String)),
   checkout: Schema.optionalKey(Schema.NullOr(Cut)),
   continues: Schema.optionalKey(ConsumedCard),
+  invoked: Schema.optionalKey(Schema.String),
 });
 type Placing = typeof Placing.Type;
 const PlacingJson = Schema.fromJsonString(Placing);
@@ -7962,6 +7966,7 @@ export interface StartOptions {
   readonly taskLabel?: string | undefined;
   readonly parent?: string | null;
   readonly continues?: ConsumedCard | undefined;
+  readonly invoked?: string | undefined;
   readonly intent?: IntentSeed;
   readonly verify?: ReadonlyArray<VerifySpec> | undefined;
   readonly attachments?: ReadonlyArray<string> | undefined;
@@ -10637,6 +10642,7 @@ const makeRegistry: (
         taskLabel: options.taskLabel ?? null,
         root: options.root ?? null,
         ...(options.continues !== undefined && { continues: options.continues }),
+        ...(options.invoked !== undefined && { invoked: options.invoked }),
       }),
       generation: generation.name,
       execution: yield* generation.registration.workflow.executionId(payload),
@@ -10979,9 +10985,19 @@ const makeRegistry: (
       readonly started?: Started | undefined;
       readonly by?: string | undefined;
     }) {
+      const invoked = stringifyJson({ offer: options.offer, input: options.input });
       // WARNING: the request id is the claim, so a caller that lost the answer is given the Run it started.
       const claimed = yield* store.requested(options.request);
       if (claimed !== null) {
+        const before = Option.flatMap(decodePlacing(claimed.placing ?? ""), (one) =>
+          Option.fromNullishOr(one.invoked),
+        );
+        if (Option.isSome(before) && before.value !== invoked) {
+          return yield* new RequestConflict({
+            request: options.request,
+            reason: `request "${options.request}" is already ${claimed.run}, started with other arguments`,
+          });
+        }
         return {
           runId: claimed.run,
           registration: claimed.generation,
@@ -11089,6 +11105,7 @@ const makeRegistry: (
         request: options.request,
         project: row.project,
         input: Rec.filter(filled, (_, name) => !(name in RESERVED_INPUTS)),
+        invoked,
         task: row.task,
         parent: row.run,
         verify: inherited,

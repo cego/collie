@@ -157,7 +157,7 @@ test("a finding a host from before ids sent still decodes, as open and with no i
     line: 3,
     detail: "nothing checks it",
   };
-  expect(Result.getOrThrow(Schema.decodeUnknownResult(ReviewFinding)(older))).toMatchObject({
+  expect(Result.getOrThrow(Schema.decodeResult(ReviewFinding)(older))).toMatchObject({
     id: "",
     status: "open",
     reason: null,

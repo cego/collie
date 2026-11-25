@@ -191,14 +191,11 @@ test("the CLI takes an offer over two findings, lists both taken, and a dismissa
 
         const listed = yield* cli(["--json", "run", "findings", run.id], env);
         expect(listed.exit).toBe(0);
-        const ids = Arr.map(
-          (
-            (yield* parseEnvelope(listed.stdout)).data as {
-              readonly findings: ReadonlyArray<{ readonly id: string }>;
-            }
-          ).findings,
-          (one) => one.id,
-        );
+        // WARNING: the CLI's envelope is JSON the command wrote, so this is what it carries.
+        const listedData = (yield* parseEnvelope(listed.stdout)).data as {
+          readonly findings: ReadonlyArray<{ readonly id: string }>;
+        };
+        const ids = Arr.map(listedData.findings, (one) => one.id);
         expect(ids).toEqual([first, second, third]);
 
         const card = (() =>
@@ -236,18 +233,15 @@ test("the CLI takes an offer over two findings, lists both taken, and a dismissa
         );
         expect(chosen.exit).toBe(0);
         const taken = yield* cli(["--json", "run", "findings", run.id], env);
-        const rows = Arr.map(
-          (
-            (yield* parseEnvelope(taken.stdout)).data as {
-              readonly findings: ReadonlyArray<{
-                readonly id: string;
-                readonly status: string;
-                readonly run: string | null;
-              }>;
-            }
-          ).findings,
-          (one) => [one.id, one.status, one.run] as const,
-        );
+        // WARNING: the CLI's envelope is JSON the command wrote, so this is what it carries.
+        const takenData = (yield* parseEnvelope(taken.stdout)).data as {
+          readonly findings: ReadonlyArray<{
+            readonly id: string;
+            readonly status: string;
+            readonly run: string | null;
+          }>;
+        };
+        const rows = Arr.map(takenData.findings, (one) => [one.id, one.status, one.run] as const);
         expect(Arr.map(rows, ([id, status]) => [id, status])).toEqual([
           [first, "taken"],
           [second, "taken"],
@@ -266,7 +260,7 @@ test("the CLI takes an offer over two findings, lists both taken, and a dismissa
             "run",
             "finding",
             run.id,
-            third!,
+            third,
             "--dismiss",
             "not worth it",
             "--request-id",

@@ -35,6 +35,7 @@ import {
   reportIn,
   identityProblem,
   isBlocking,
+  isOpenFinding,
   isSingleRepo,
   orderedTicketsOf,
   planReposOf,
@@ -99,6 +100,12 @@ const inlinePlanRefusal = (
   root: string,
   source: { readonly kind: string; readonly value: string },
   chosen: ReadonlyArray<string>,
+  said: ReadonlyArray<{
+    readonly id: string;
+    readonly status: string;
+    readonly run: string | null;
+  }>,
+  by: string,
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -130,14 +137,12 @@ const inlinePlanRefusal = (
     const texts = yield* Effect.forEach(tickets, (one) =>
       fs.readFileString(`${plan}/issues/${one.file}`),
     );
-    const dropped = Arr.filter(
-      yield* findingsIn(source.value),
-      (one) =>
-        one.status !== "fixed" &&
-        one.status !== "obsolete" &&
-        (chosen.length === 0 || (one.id !== undefined && Arr.contains(chosen, one.id))) &&
-        !Arr.some(texts, Str.includes(one.title)),
-    );
+    const all = yield* findingsIn(source.value);
+    const work =
+      chosen.length === 0
+        ? Arr.filter(buildable(all, said, by), (one) => isOpenFinding(one.status ?? "open"))
+        : Arr.filter(all, (one) => one.id !== undefined && Arr.contains(chosen, one.id));
+    const dropped = Arr.filter(work, (one) => !Arr.some(texts, Str.includes(one.title)));
     return dropped.length === 0
       ? null
       : `these findings of the review are no ticket's: ${Arr.join(
@@ -163,7 +168,9 @@ const chosenFindingsOf = (
     }
     const all = yield* findingsIn(source.value);
     if (ids.length === 0) {
-      return formatFindings(buildable(all, said, by));
+      return formatFindings(
+        Arr.filter(buildable(all, said, by), (one) => isOpenFinding(one.status ?? "open")),
+      );
     }
     const chosen = Arr.filter(all, (one) => one.id !== undefined && Arr.contains(ids, one.id));
     const unknown = Arr.filter(ids, (id) => !Arr.some(chosen, (one) => one.id === id));
@@ -469,13 +476,22 @@ export default defineWorkflow({
           Effect.orElseSucceed(() => ({ kind: "text", value: asked.plan })),
         ),
       });
+      const said = yield* Activity.make({
+        name: "finding-statuses",
+        success: Schema.Array(
+          Schema.Struct({
+            id: Schema.String,
+            status: Schema.String,
+            run: Schema.NullOr(Schema.String),
+          }),
+        ),
+        execute: host.findingStatuses(source.value),
+      });
       const findingsText = yield* Activity.make({
         name: "findings",
         success: text,
         error: WorkflowError,
-        execute: Effect.flatMap(host.findingStatuses(source.value), (said) =>
-          chosenFindingsOf(source, asked.findings ?? [], said, runId),
-        ),
+        execute: chosenFindingsOf(source, asked.findings ?? [], said, runId),
       });
       const share = place.options.repo ?? "";
       if (source.kind === "linear") {
@@ -714,7 +730,7 @@ export default defineWorkflow({
               const refused = yield* Activity.make({
                 name: `${operation}.check`,
                 success: Schema.NullOr(Schema.String),
-                execute: inlinePlanRefusal(planDir, cwd, source, asked.findings ?? []),
+                execute: inlinePlanRefusal(planDir, cwd, source, asked.findings ?? [], said, runId),
               });
               if (refused === null) {
                 break;

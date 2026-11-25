@@ -9,6 +9,7 @@ import {
   leaveFindings,
   step,
 } from "collie";
+import * as Activity from "effect/workflow/Activity";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Effect, FileSystem, Schema } from "effect";
@@ -102,7 +103,8 @@ export default defineWorkflow({
   run: ({ input }) =>
     Effect.gen(function* () {
       const run = yield* Run;
-      const place = yield* (yield* Host).place(run.id);
+      const host = yield* Host;
+      const place = yield* host.place(run.id);
       const found = yield* investigate(
         agentWork({
           operation: "investigate",
@@ -121,6 +123,11 @@ export default defineWorkflow({
         }),
       );
       yield* leaveInvestigation(place.dir, found);
+      yield* Activity.make({
+        name: "nothing-to-land",
+        success: Schema.NullOr(Schema.String),
+        execute: host.nothingToLand(run.id, place.cwd),
+      });
       return found;
     }),
 });

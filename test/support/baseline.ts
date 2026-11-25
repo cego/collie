@@ -9286,6 +9286,60 @@ scenario(
 );
 
 scenario(
+  "under inline_plan: on, an ID-less review start plans and builds only the findings still open, and a dismissed one needs no ticket",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-inline-dismissed";
+        const fs = yield* FileSystem.FileSystem;
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const reviewed = `${rig.root}/reviewed-dismissed`;
+        yield* fs.makeDirectory(reviewed, { recursive: true });
+        yield* fs.writeFileString(`${reviewed}/review.md`, "# Review\n\nThree things are wrong.\n");
+        yield* fs.writeFileString(
+          `${reviewed}/findings.json`,
+          asJson([
+            { id: "r-reviewed-F1", severity: "major", title: "the guard is wrong" },
+            { id: "r-reviewed-F2", severity: "major", title: "the retry drops the body" },
+            { id: "r-reviewed-F3", severity: "minor", title: "the log line misses the id" },
+          ]),
+        );
+        yield* recordFindingStatus(reviewed, {
+          id: "r-reviewed-F2",
+          status: "dismissed",
+          reason: "not worth it",
+          offer: null,
+          run: null,
+          by: "mk",
+          at: "2026-11-24T10:00:00.000Z",
+        });
+        yield* approve(runId, ["unit"]);
+        yield* plansFirst(runId);
+        const openPlan = plannedAs(runId, [
+          { file: "01-guard.md", title: "the guard is wrong", blockedBy: "None" },
+          { file: "02-log.md", title: "the log line misses the id", blockedBy: "None" },
+        ]);
+        yield* rig.queueOutputs([openPlan, openPlan, BUILT, BUILT, CLEAN_SYNTHESIS, OPENED]);
+
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan: reviewed, ...FINISH },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        const planning = yield* asked(runId, "plan");
+        expect(planning).toContain("the guard is wrong");
+        expect(planning).not.toContain("the retry drops the body");
+        expect(yield* asked(runId, "01-guard.md")).not.toContain("the retry drops the body");
+      }),
+    ),
+);
+
+scenario(
   "under inline_plan: on, a plan whose tickets cannot be read goes back to planning once, and halts naming why",
   () =>
     runEffect(

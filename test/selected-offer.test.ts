@@ -6,11 +6,10 @@ import { stringifyJson } from "../src/json";
 import { expect, test } from "bun:test";
 import { connect } from "../src/host";
 import { MODULES, hosted } from "./support/hosted";
-import { hostRecords, hostRunRecords, registeredAt } from "./support/records";
+import { hostRecords, registeredAt } from "./support/records";
 import { readFindingStatuses } from "../src/finding-status";
 import { RunRecords } from "../src/run-records";
 import { sectionOf } from "../src/board-model";
-import { NOTHING_TO_LAND } from "../src/standing";
 import { runDir } from "../src/engine";
 import { until } from "./support/host";
 import { isSettled } from "../src/lifecycle";
@@ -152,8 +151,6 @@ test("an investigate Run's findings hold the card, and choosing two of them star
           { workspace: world.project, branch: "topic" },
         );
         const [first, second, third] = idsOf(run.id);
-        // WARNING: an investigation writes nothing, so the host records that its branch has nothing to land.
-        yield* hostRunRecords(() => world.state).put(run.id, NOTHING_TO_LAND, "nothing to land\n");
 
         expect(
           Arr.map(yield* run.client.runFindings({ runId: run.id }), (one) => one.status),

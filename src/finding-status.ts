@@ -157,7 +157,7 @@ export const buildable = (
   by: string,
 ) => {
   const said = new Map(Arr.map(statuses, (one) => [one.id, one] as const));
-  return Arr.flatMap(findings, (finding): ReadonlyArray<Finding> => {
+  const still: (finding: Finding) => ReadonlyArray<Finding> = (finding) => {
     const last = finding.id === undefined ? undefined : said.get(finding.id);
     if (last === undefined) {
       return [{ ...finding, status: finding.status ?? "open" }];
@@ -172,7 +172,8 @@ export const buildable = (
       return [{ ...finding, status: last.status }];
     }
     return [];
-  });
+  };
+  return Arr.flatMap(findings, still);
 };
 
 export const openCountIn = Effect.fn("FindingStatus.count")(function* (runDir: string) {
