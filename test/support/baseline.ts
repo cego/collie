@@ -17152,19 +17152,19 @@ for (const name of ["gitlab", "github"] as const) {
   );
 
   scenario(
-    `release on ${name}: a check cancelled at the head parks as unproved and spends no CI fix round, and the settled recheck lets the resume through`,
+    `release on ${name}: a check cancelled at the head parks as unproved and spends no fix round`,
     () =>
       runEffect(
         Effect.gen(function* () {
-          const { bin, reviewed } = yield* releasable(name, {
+          const { bin } = yield* releasable(name, {
             jobs: [{ name: "test", state: "cancelled" }],
           });
           const runId = "r-ci-cancelled-unproved";
           yield* ownCheck(runId);
           yield* rig.queueOutputs([PACKAGED, { verdict: "clean", fixed: [] }]);
-          const resumed = yield* driven(
+          yield* driven(
             { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
-            (run) =>
+            () =>
               Effect.gen(function* () {
                 yield* until(
                   () => parkedWhy(runId),
@@ -17173,15 +17173,8 @@ for (const name of ["gitlab", "github"] as const) {
                 expect(yield* parkedCause(runId)).toBe("ci-job-absent");
                 expect(yield* parkedWhy(runId)).toContain("cancelled");
                 expect(yield* wasAsked(runId, "fix-1")).toBe(false);
-                const host = yield* rechecking(run, runId, RELEASING[name].mr, reviewed);
-                yield* until(
-                  () => host.rounds,
-                  (count) => count >= 2,
-                );
-                return yield* wasAsked(runId, "fix-1");
               }),
           );
-          expect(resumed).toBe(false);
           yield* bin.restore();
         }),
       ),

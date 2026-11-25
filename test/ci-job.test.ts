@@ -198,6 +198,44 @@ test("a CI park clears once every recorded job at the parked head has settled, c
     }),
   ));
 
+test("a job that settled without passing resumes its Run once, and the same read resumes it no more", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, at, root, forge } = yield* waiting("cancelled");
+      yield* rememberCiTarget(`${root}/runs/r1`, {
+        head: at,
+        job: "nuxi-typecheck",
+        mr: MR,
+        cwd: asked.cwd,
+      });
+      const recheck = () =>
+        recheckPark(
+          {
+            runId: "r1",
+            cwd: asked.cwd,
+            branch: "main",
+            mr: MR,
+            park: { cause: "ci-job-absent", kind: "rechecks" },
+          },
+          root,
+          { agentList: () => Effect.die("CI rechecks must not ask core") },
+        ).pipe(Effect.provide(forgeHttpTest(asked.run, forge.fetch)));
+      expect(yield* recheck()).toMatchObject({ cleared: true, error: false });
+      const again = yield* recheck();
+      expect(again).toMatchObject({ cleared: false, error: false });
+      expect(again.note).toContain("cancelled");
+      const before = forge.model();
+      forge.set({
+        ...before,
+        mrs: Arr.map(before.mrs ?? [], (mr) => ({
+          ...mr,
+          jobs: [{ name: "nuxi-typecheck", state: "passed" }],
+        })),
+      });
+      expect(yield* recheck()).toMatchObject({ cleared: true, error: false });
+    }),
+  ));
+
 test("a target-red park clears only once every recorded job passed on the target branch's newest commit", () =>
   runEffect(
     Effect.gen(function* () {

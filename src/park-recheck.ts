@@ -29,6 +29,33 @@ const CiTarget = Schema.fromJsonString(
 export const rememberCiTarget = (dir: string, target: typeof CiTarget.Type) =>
   appendRunJournal(runJournal(dir, "ci-rechecks.jsonl"), CiTarget, target);
 
+const SettledRead = Schema.fromJsonString(
+  Schema.Struct({
+    head: Schema.String,
+    job: Schema.String,
+    state: Schema.String,
+  }),
+);
+
+const settledReads = (dir: string) => runJournal(dir, "ci-settled.jsonl");
+
+const rememberSettledRead = (dir: string, read: typeof SettledRead.Type) =>
+  Effect.gen(function* () {
+    const seen = yield* readRunJournal(settledReads(dir), SettledRead).pipe(
+      Effect.orElseSucceed(() => []),
+    );
+    if (
+      Arr.some(
+        seen,
+        (one) => one.head === read.head && one.job === read.job && one.state === read.state,
+      )
+    ) {
+      return false;
+    }
+    yield* appendRunJournal(settledReads(dir), SettledRead, read);
+    return true;
+  });
+
 const FailedCi = Schema.fromJsonString(
   Schema.Struct({
     head: Schema.String,
@@ -200,6 +227,7 @@ export const recheckPark = (
         if (latest.size === 0) {
           return reply(false, "no parked CI job recorded");
         }
+        const unpassed: Array<typeof SettledRead.Type> = [];
         for (const target of latest.values()) {
           const ref = mrRefOf(target.mr);
           if (ref === null) {
@@ -220,6 +248,17 @@ export const recheckPark = (
               read.state === "pending" || read.state === "running"
                 ? `job ${target.job} is still ${read.state} at ${target.head}`
                 : `job ${target.job} absent at ${target.head}`,
+            );
+          }
+          if (read.state !== "passed") {
+            unpassed.push({ head: target.head, job: target.job, state: read.state });
+          }
+        }
+        for (const read of unpassed) {
+          if (!(yield* rememberSettledRead(`${stateDir}/runs/${view.runId}`, read))) {
+            return reply(
+              false,
+              `job ${read.job} is ${read.state} at ${read.head}, which a resume already read`,
             );
           }
         }
