@@ -1087,6 +1087,146 @@ test("a Schedule resolves a local path before its receipt", () =>
       }),
     ["lingers.workflow.ts"],
   ));
+test("a Schedule follows a link to its checkout", () =>
+  proves(
+    "collie-receipt-scope-sched-link-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const first = `${world.home}/first/landing`;
+        const second = `${world.home}/second/landing`;
+        const link = `${world.home}/link`;
+        yield* checkoutAt(first);
+        yield* checkoutAt(second);
+        yield* fs.symlink(first, link);
+        const add = (name: string, id: string, workspace: string) =>
+          collie(world, [
+            "schedule",
+            "add",
+            name,
+            "lingers",
+            "--cron",
+            "0 7 * * *",
+            "--paused",
+            "--input",
+            "note=cache",
+            "--workspace",
+            workspace,
+            "--request-id",
+            id,
+          ]);
+        const Added = Schema.Struct({
+          schedule: Schema.Struct({ checkout: Schema.NullOr(Schema.String) }),
+        });
+        const through = yield* add("linked", "sched-linked", link);
+        expect(through.envelope.ok).toBe(true);
+        expect(
+          (yield* Schema.decodeUnknownEffect(Added)(through.envelope.data)).schedule.checkout,
+        ).toBe(first);
+        expect((yield* add("linked", "sched-linked", first)).envelope).toEqual(through.envelope);
+        yield* fs.remove(link);
+        yield* fs.symlink(second, link);
+        const moved = yield* add("linked", "sched-linked", link);
+        expect(moved.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+        expect(moved.envelope.data).toBeUndefined();
+        const fresh = yield* add("linked-two", "sched-linked-fresh", link);
+        expect(
+          (yield* Schema.decodeUnknownEffect(Added)(fresh.envelope.data)).schedule.checkout,
+        ).toBe(second);
+      }),
+    ["lingers.workflow.ts"],
+  ));
+test("a fork follows the directory it runs in, not the path that named it", () =>
+  proves(
+    "collie-receipt-scope-fork-link-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const first = `${world.home}/first`;
+        const second = `${world.home}/second`;
+        const link = `${world.home}/link`;
+        for (const at of [first, second]) {
+          yield* checkoutAt(at);
+          yield* fs.makeDirectory(`${at}/.collie/personas`, { recursive: true });
+          yield* fs.writeFileString(
+            `${at}/.collie/personas/local.md`,
+            "---\nname: local\ndescription: A persona in this checkout.\n---\n\nYou are local.\n",
+          );
+          yield* save(`${at}/.collie/workflows`, ["plain.workflow.ts"]);
+        }
+        yield* fs.symlink(first, link);
+        const forks: ReadonlyArray<{
+          readonly command: ReadonlyArray<string>;
+          readonly project: boolean;
+        }> = [
+          {
+            command: [
+              "persona",
+              "fork",
+              "local",
+              "--layer",
+              "project",
+              "--workspace",
+              world.project,
+            ],
+            project: true,
+          },
+          { command: ["workflow", "fork", "plain", "--layer", "project"], project: true },
+          { command: ["persona", "fork", "local", "--layer", "user"], project: false },
+        ];
+        const forked = (from: string, command: ReadonlyArray<string>, name: string, id: string) =>
+          collie(world, [...command, "--name", name, "--request-id", id], { COLLIE_CWD: from });
+        for (const [index, one] of Arr.map(forks, (fork, at) => [at, fork] as const)) {
+          const id = `fork-link-${index}`;
+          const once = yield* forked(link, one.command, "mine", id);
+          expect(once.envelope).toMatchObject({ ok: true });
+          expect((yield* forked(first, one.command, "mine", id)).envelope).toEqual(once.envelope);
+          yield* fs.remove(link);
+          yield* fs.symlink(second, link);
+          const moved = yield* forked(link, one.command, "mine", id);
+          expect(moved.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+          expect(moved.envelope.data).toBeUndefined();
+          expect((yield* forked(link, one.command, "mine-two", `${id}-fresh`)).envelope.ok).toBe(
+            true,
+          );
+          yield* fs.remove(link);
+          yield* fs.symlink(first, link);
+        }
+        const gone = `${world.home}/gone`;
+        yield* checkoutAt(gone);
+        yield* fs.makeDirectory(`${gone}/.collie/personas`, { recursive: true });
+        yield* fs.writeFileString(
+          `${gone}/.collie/personas/local.md`,
+          "---\nname: local\ndescription: A persona in this checkout.\n---\n\nYou are local.\n",
+        );
+        expect(
+          (yield* forked(
+            gone,
+            ["persona", "fork", "local", "--layer", "user"],
+            "kept",
+            "fork-gone",
+          )).envelope.ok,
+        ).toBe(true);
+        yield* fs.remove(gone, { recursive: true });
+        const vanished = yield* forked(
+          gone,
+          ["persona", "fork", "local", "--layer", "user"],
+          "kept",
+          "fork-gone",
+        );
+        expect(vanished.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+        expect(vanished.envelope.data).toBeUndefined();
+        expect(
+          (yield* forked(
+            gone,
+            ["persona", "fork", "local", "--layer", "user"],
+            "kept-two",
+            "fork-gone-fresh",
+          )).envelope,
+        ).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+      }),
+    ["lingers.workflow.ts"],
+  ));
 test("a Schedule refused before it is saved still names the request", () =>
   proves(
     "collie-receipt-scope-sched-refused-",

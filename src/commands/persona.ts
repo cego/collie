@@ -7,7 +7,15 @@ import { forkResolvedDefinition } from "../fork";
 import { err } from "../operations";
 import type { OpResult } from "../operations";
 import { attempt, mutation, requestId as requested, withRequestId } from "../envelope";
-import { context, definitions, discoveryContext, forkFlags, layerDir, root } from "./shared";
+import {
+  context,
+  definitions,
+  discoveryContext,
+  forkFlags,
+  layerDir,
+  physicalDir,
+  root,
+} from "./shared";
 import { personaData } from "../definitions";
 
 const personaArg = Argument.String("persona").pipe(
@@ -88,13 +96,21 @@ const personaFork = Command.make(
           if (resolved._tag === "ContextFailure") {
             return withId(resolved.result);
           }
+          const writes = yield* physicalDir(resolved.env.cwd);
+          if (writes === null) {
+            return withId(
+              err("invalid_input", `This Machine has no directory "${resolved.env.cwd}".`, {
+                cwd: resolved.env.cwd,
+              }),
+            );
+          }
           return yield* mutation(
             resolved.env,
             {
               operation: "persona-fork",
               run: null,
               destination: layer === "project" ? undefined : "cwd",
-              at: layer === "project" ? resolved.env.cwd : undefined,
+              at: layer === "project" ? writes : undefined,
               args: { persona, layer, name },
             },
             Option.some(id),

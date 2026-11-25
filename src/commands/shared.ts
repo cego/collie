@@ -2,8 +2,7 @@ import * as ParseResult from "effect/Result";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import type { PlatformServices } from "../platform";
-import type { FileSystem } from "effect";
-import { Effect, Option, Schema, Stdio, Stream } from "effect";
+import { Effect, FileSystem, Option, Schema, Stdio, Stream } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { Argument, Command, Flag } from "effect/cli";
 import { layers, loadDefinitions } from "../definitions";
@@ -213,6 +212,13 @@ export const layerDir = Effect.fn("collie.layerDir")(function* (
 ) {
   const available = yield* layers(env);
   return available[layer].dir;
+});
+
+// WARNING: receipts compare directories across Machines and processes, so a checkout is the last link's target.
+export const physicalDir = Effect.fn("collie.physicalDir")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const returned: string | null = yield* fs.realPath(dir).pipe(Effect.orElseSucceed(() => null));
+  return returned;
 });
 
 type ParsedInputs = { ok: true; given: Given } | { ok: false; error: Result };

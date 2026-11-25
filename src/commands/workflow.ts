@@ -18,6 +18,7 @@ import {
   discoveryContext,
   forkFlags,
   mutating,
+  physicalDir,
   requestIdFlag,
   root,
 } from "./shared";
@@ -340,6 +341,12 @@ const workflowFork = Command.make(
           const base = yield* context(global, false);
           if (base._tag === "ContextFailure") {
             return base.result;
+          }
+          const reads = yield* physicalDir(base.env.cwd);
+          if (reads === null) {
+            return err("invalid_input", `This Machine has no directory "${base.env.cwd}".`, {
+              cwd: base.env.cwd,
+            });
           }
           return yield* mutation(
             base.env,

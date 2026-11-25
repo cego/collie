@@ -196,7 +196,7 @@ const scopeRefusal = (id: string, unscoped: boolean) =>
     { requestId: id },
   );
 
-const digestOf = (call: Call, env: PluginEnv, files: ReadonlyArray<string>) =>
+const digestOf = (call: Call, env: PluginEnv, files: ReadonlyArray<string>, cwd: string) =>
   sha256Hex(
     canonical({
       operation: call.operation,
@@ -204,7 +204,7 @@ const digestOf = (call: Call, env: PluginEnv, files: ReadonlyArray<string>) =>
       run: call.run,
       where: {
         machine: env.machine ?? null,
-        cwd: call.destination === "cwd" ? env.cwd : null,
+        cwd: call.destination === "cwd" ? cwd : null,
         asked: call.destination === "cwd" ? (env.asked ?? null) : null,
         at: call.at ?? null,
       },
@@ -256,10 +256,12 @@ export const mutation = Effect.fn("collie.mutation")(function* (
   const pathSvc = yield* Path.Path;
   const id = yield* requestId(requested);
   const path = yield* receiptPath(env, id);
+  const cwd: string = yield* fs.realPath(env.cwd).pipe(Effect.orElseSucceed(() => env.cwd));
   const digest = digestOf(
     call,
     env,
     Arr.map(call.files ?? [], (one) => pathSvc.resolve(env.cwd, one)),
+    cwd,
   );
   const replay = replayOf(call, id, env.caller ?? null, digest);
   const recorded = Effect.gen(function* () {

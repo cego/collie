@@ -18,7 +18,7 @@ import type { Failure, OpResult } from "../operations";
 import { SCHEDULE_PROJECTS_ROOT, changedLine, machineOf, scheduleLine } from "../schedule-model";
 import type { ScheduleChange } from "../schedule-model";
 import { givenVerifications } from "../verify-spec";
-import { answering, cliDoor, parseInput, requestIdFlag, root } from "./shared";
+import { answering, cliDoor, parseInput, physicalDir, requestIdFlag, root } from "./shared";
 
 const SCHEDULE_CHECKOUT_FIX = `Name the checkout with --workspace <absolute path>, a workspace's id or label, or ${SCHEDULE_PROJECTS_ROOT}.`;
 
@@ -68,11 +68,22 @@ const savedCheckout = Effect.fn("schedule.savedCheckout")(function* (
   if ("error" in checkout) {
     return checkout;
   }
-  return {
-    workspace: checkout.path ?? "",
-    at: checkout.path === SCHEDULE_PROJECTS_ROOT ? null : checkout.path,
-    local: true,
-  };
+  if (checkout.path === null || checkout.path === SCHEDULE_PROJECTS_ROOT) {
+    return { workspace: checkout.path ?? "", at: null, local: true };
+  }
+  const physical = yield* physicalDir(checkout.path);
+  if (physical === null) {
+    return {
+      error: err(
+        "invalid_input",
+        `This Machine has no directory "${checkout.path}". ${SCHEDULE_CHECKOUT_FIX}`,
+        {
+          workspace: checkout.path,
+        },
+      ),
+    };
+  }
+  return { workspace: physical, at: physical, local: true };
 });
 
 const changing = (

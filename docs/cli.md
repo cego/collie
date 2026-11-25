@@ -2523,15 +2523,16 @@ request, and an upload's own flags are the ones it sends: `--upload` with no pat
 upload, or `--snapshot` on an upload, changes nothing. A file the CLI sends from this
 Machine — an `--attach`, an upload's `--path` — is the path it resolves to, so `note.md`
 and its absolute path are one request; a path the host is given as typed, such as an
-artefact's `--path` without `--upload`, is not. A directory is counted as the absolute path
-it resolves to, so `.`, its absolute path, and `/checkout/.` are one request. A Schedule
-counts the checkout its `--workspace` resolved; a start counts that checkout as well as the
-workspace as it was named; a fork counts the directory it reads and writes — for a project
-fork the `.collie` of the directory the command runs in, which `COLLIE_CWD` sets, and for a
-user fork the project whose source it copies. A selector that now resolves elsewhere is
-another request, and so is a checkout that is no longer there: a local path is resolved
-before its receipt is looked up, so a named one that has gone is refused instead of
-replayed. A
+artefact's `--path` without `--upload`, is not. A directory is counted as the physical path
+it resolves to: a symlink and its target are one request, and a link pointed at another
+checkout is another. A Schedule counts the checkout its `--workspace` resolved. A start
+counts the workspace as it was named as well as the checkout it resolved, so one whose
+workspace now resolves elsewhere is refused. A fork counts the physical directory it reads
+and writes — for a project fork the `.collie` of the directory the command runs in, which
+`COLLIE_CWD` sets, and for a user fork the project whose source it copies — and a selector
+picks that directory only where no cwd was given. A local path that has gone is refused
+before its receipt is looked up, for a Schedule's `--workspace` and for the directory a fork
+runs in, so neither replays the answer it was given while the directory was there. A
 request that reuses an id for anything else is refused as `invalid_input`, with none of the
 stored answer, and applies nothing; check that first request's effect before retrying under
 a new id. A receipt written before Collie scoped receipts to their requests is replayed only
