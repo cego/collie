@@ -1174,21 +1174,35 @@ test("a fork follows the directory it runs in, not the path that named it", () =
           { command: ["workflow", "fork", "plain", "--layer", "project"], project: true },
           { command: ["persona", "fork", "local", "--layer", "user"], project: false },
         ];
+        const Forked = Schema.Struct({ path: Schema.String });
+        const writtenIn = (envelope: { readonly data?: unknown }) =>
+          Effect.gen(function* () {
+            const written = (yield* Schema.decodeUnknownEffect(Forked)(envelope.data)).path;
+            expect(yield* fs.exists(written)).toBe(true);
+            return yield* fs.realPath(written);
+          });
         const forked = (from: string, command: ReadonlyArray<string>, name: string, id: string) =>
           collie(world, [...command, "--name", name, "--request-id", id], { COLLIE_CWD: from });
         for (const [index, one] of Arr.map(forks, (fork, at) => [at, fork] as const)) {
           const id = `fork-link-${index}`;
           const once = yield* forked(link, one.command, "mine", id);
           expect(once.envelope).toMatchObject({ ok: true });
+          const written = yield* writtenIn(once.envelope);
+          if (one.project) {
+            expect(Str.startsWith(first)(written)).toBe(true);
+          }
           expect((yield* forked(first, one.command, "mine", id)).envelope).toEqual(once.envelope);
           yield* fs.remove(link);
           yield* fs.symlink(second, link);
           const moved = yield* forked(link, one.command, "mine", id);
           expect(moved.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
           expect(moved.envelope.data).toBeUndefined();
-          expect((yield* forked(link, one.command, "mine-two", `${id}-fresh`)).envelope.ok).toBe(
-            true,
-          );
+          const fresh = yield* forked(link, one.command, "mine-two", `${id}-fresh`);
+          expect(fresh.envelope).toMatchObject({ ok: true });
+          const freshWritten = yield* writtenIn(fresh.envelope);
+          if (one.project) {
+            expect(Str.startsWith(second)(freshWritten)).toBe(true);
+          }
           yield* fs.remove(link);
           yield* fs.symlink(first, link);
         }
