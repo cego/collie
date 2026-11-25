@@ -374,7 +374,7 @@ import type { CheckPass, CheckRun, FailedTest, Verification } from "./verify";
 import * as Workflow from "effect/workflow/Workflow";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import type * as MessageStorage from "effect/cluster/MessageStorage";
-import { stringifyJson } from "./json";
+import { canonicalJson, stringifyJson } from "./json";
 
 export class EntryError extends Schema.TaggedError<EntryError, { readonly brand: unique symbol }>()(
   "EntryError",
@@ -10985,7 +10985,12 @@ const makeRegistry: (
       readonly started?: Started | undefined;
       readonly by?: string | undefined;
     }) {
-      const invoked = stringifyJson({ offer: options.offer, input: options.input });
+      const invoked = canonicalJson({
+        parent: options.runId,
+        offer: options.offer,
+        input: options.input,
+        attachments: Arr.sort(options.attachments ?? [], Str.Order),
+      });
       // WARNING: the request id is the claim, so a caller that lost the answer is given the Run it started.
       const claimed = yield* store.requested(options.request);
       if (claimed !== null) {

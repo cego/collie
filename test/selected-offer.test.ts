@@ -568,6 +568,54 @@ test("a request id already started answers with the Run it started, once its fin
     [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
   ));
 
+test("a repeated request answers with its Run for the same work, whatever the key order, and refuses another parent's or another file's", () =>
+  hosted(
+    "hw-selected-replay-work-",
+    ({ world }) =>
+      Effect.gen(function* () {
+        const run = yield* Effect.gen(function* () {
+          yield* install(world);
+          yield* (yield* FileSystem.FileSystem).writeFileString(
+            `${world.home}/outputs.json`,
+            encode([empty]),
+          );
+          return yield* started(world.state, world.project, "submits", { note: "two" });
+        });
+        const [first, second] = idsOf(run.id);
+        const asked = (
+          input: Readonly<Record<string, Schema.Json>>,
+          attachments?: ReadonlyArray<string>,
+          runId = run.id,
+        ) => {
+          const ask = { runId, offer: "implement-selected", input, request: "same-work" };
+          return run.client.invoke(attachments === undefined ? ask : { ...ask, attachments });
+        };
+        const child = yield* asked({ findings: [first, second], plan: "the plan" }).pipe(
+          Effect.orDie,
+        );
+        const reordered = yield* asked({ plan: "the plan", findings: [first, second] }).pipe(
+          Effect.orDie,
+        );
+        expect(reordered.runId).toBe(child.runId);
+        const elsewhere = yield* started(world.state, world.project, "submits", { note: "two" });
+        const otherParent = yield* asked(
+          { findings: [first, second], plan: "the plan" },
+          undefined,
+          elsewhere.id,
+        ).pipe(Effect.flip);
+        expect(otherParent._tag === "RequestConflict" ? otherParent.reason : "").toContain(
+          "other arguments",
+        );
+        const otherFiles = yield* asked({ findings: [first, second], plan: "the plan" }, [
+          `${world.home}/outputs.json`,
+        ]).pipe(Effect.flip);
+        expect(otherFiles._tag === "RequestConflict" ? otherFiles.reason : "").toContain(
+          "other arguments",
+        );
+      }),
+    [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
+  ));
+
 const filed = { identifier: "CEGO-12", url: "https://linear.app/cego/issue/CEGO-12/one-issue" };
 
 test("File to Linear files the one finding chosen, and the Run it starts answers with the issue's URL", () =>

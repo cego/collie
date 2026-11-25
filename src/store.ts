@@ -1,6 +1,5 @@
 import * as Struct from "effect/Struct";
 import * as Arr from "effect/Array";
-import * as Rec from "effect/Record";
 import type { FileSystem, Path, Stream } from "effect";
 import {
   Context,
@@ -35,6 +34,7 @@ import { importMrStates } from "./merge-requests";
 import { RequestConflict, RunReport } from "./board-model";
 import type { Solution } from "./board-model";
 import { nowIso } from "./time";
+import { canonicalJson } from "./json";
 import { Observed, WatchCursor, Woke } from "./mr-watch-model";
 import { ShippingGo } from "./shipping";
 import { PROOF_SQL } from "./verify-model";
@@ -1045,7 +1045,7 @@ function makeStore(stateDir: string | undefined) {
       }),
 
       admit: Effect.fn("Store.admit")(function* (admission: Admission) {
-        const input = canonical(admission.input);
+        const input = canonicalJson(admission.input);
         const askedFor: AskedFor = {
           options: { ...admission.options },
           task: admission.task,
@@ -1054,7 +1054,7 @@ function makeStore(stateDir: string | undefined) {
         if (admission.attachments?.length) {
           askedFor.attachments = [...admission.attachments];
         }
-        const asked = canonical(askedFor);
+        const asked = canonicalJson(askedFor);
         const at = yield* nowIso;
         // WARNING: the claim is the insert: the database, not a read, decides which caller made it.
         const claimed = yield* mutation(
@@ -1277,25 +1277,9 @@ const watchRowOf = (row: {
         : Schema.decodeEffect(Schema.fromJsonString(Woke))(row.woke),
   }).pipe(Effect.map((decoded) => ({ run: row.run, mr: row.mr, name: row.name, ...decoded })));
 
-const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Json));
 const asJsonText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
 
 const answererText = flow(
   Schema.encodeResult(Schema.fromJsonString(AuditLine.fields.actor)),
   Result.getOrThrow,
 );
-
-// WARNING: key order is ignored: two objects that differ only in key order are one request.
-const canonical = (value: Schema.Json) => asJsonText(ordered(value));
-
-const ordered: (value: Schema.Json) => Schema.Json = (value) => {
-  if (Arr.isArray<typeof value>(value)) {
-    return Arr.map(value, ordered);
-  }
-  if (!isRecord(value)) {
-    return value;
-  }
-  return Rec.fromEntries(
-    Arr.map(Struct.keys(value).sort(), (key) => [key, ordered(value[key] ?? null)] as const),
-  );
-};

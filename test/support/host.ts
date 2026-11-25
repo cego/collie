@@ -568,6 +568,7 @@ export const workspace = Effect.fn("HostTest.workspace")(function* (prefix: stri
     "tune-up.workflow.ts",
     "tune-up.md",
     "reviewing.ts",
+    "selected.ts",
     "reassessment.ts",
     "reassess.md",
     "delivering.ts",

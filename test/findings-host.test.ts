@@ -25,6 +25,17 @@ const Envelope = Schema.fromJsonString(
 );
 const parseEnvelope = Schema.decodeUnknownEffect(Envelope);
 
+const FindingsData = Schema.Struct({
+  findings: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      status: Schema.String,
+      run: Schema.NullOr(Schema.String),
+    }),
+  ),
+});
+const parseFindings = Schema.decodeUnknownEffect(FindingsData);
+
 const cli = Effect.fn("test.cli")(function* (args: Array<string>, env: Record<string, string>) {
   const suite = yield* suiteEnv;
   const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
@@ -191,10 +202,7 @@ test("the CLI takes an offer over two findings, lists both taken, and a dismissa
 
         const listed = yield* cli(["--json", "run", "findings", run.id], env);
         expect(listed.exit).toBe(0);
-        // WARNING: the CLI's envelope is JSON the command wrote, so this is what it carries.
-        const listedData = (yield* parseEnvelope(listed.stdout)).data as {
-          readonly findings: ReadonlyArray<{ readonly id: string }>;
-        };
+        const listedData = yield* parseFindings((yield* parseEnvelope(listed.stdout)).data);
         const ids = Arr.map(listedData.findings, (one) => one.id);
         expect(ids).toEqual([first, second, third]);
 
@@ -233,14 +241,7 @@ test("the CLI takes an offer over two findings, lists both taken, and a dismissa
         );
         expect(chosen.exit).toBe(0);
         const taken = yield* cli(["--json", "run", "findings", run.id], env);
-        // WARNING: the CLI's envelope is JSON the command wrote, so this is what it carries.
-        const takenData = (yield* parseEnvelope(taken.stdout)).data as {
-          readonly findings: ReadonlyArray<{
-            readonly id: string;
-            readonly status: string;
-            readonly run: string | null;
-          }>;
-        };
+        const takenData = yield* parseFindings((yield* parseEnvelope(taken.stdout)).data);
         const rows = Arr.map(takenData.findings, (one) => [one.id, one.status, one.run] as const);
         expect(Arr.map(rows, ([id, status]) => [id, status])).toEqual([
           [first, "taken"],
