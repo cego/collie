@@ -311,9 +311,8 @@ export const reviewPass = (ask: ReviewAsk) =>
         if (ask.source === null || (ask.target !== "" && ask.target !== "worktree")) {
           return null;
         }
-        const fs = yield* FileSystem.FileSystem;
         const collected = yield* Effect.forEach(seats, ({ operation }) =>
-          fs.exists(agents.outputFor(id, operation)),
+          agents.outputOf(id, operation).pipe(Effect.map((held) => held !== null)),
         );
         // WARNING: earlier passes without a journaled scope cannot acquire one on replay.
         if (Arr.some(collected, Boolean)) {
@@ -358,6 +357,16 @@ export const reviewPass = (ask: ReviewAsk) =>
       { concurrency: "unbounded" },
     );
 
+    const seatReports = yield* Effect.forEach(seats, ({ seat, operation }) =>
+      agents
+        .outputOf(id, operation)
+        .pipe(
+          Effect.map(
+            (held) =>
+              `### ${seat.name ?? operation}\n\n${held === null ? "(no Output)" : held.text}`,
+          ),
+        ),
+    );
     const reconciled: SynthesisReport = yield* synthesisStep(
       agentWork({
         operation: synthesis,
@@ -366,10 +375,7 @@ export const reviewPass = (ask: ReviewAsk) =>
         instructions: SYNTHESIZE,
         input: {
           ...input,
-          fan_in: Arr.join(
-            Arr.map(seats, ({ operation }) => `- ${agents.outputFor(id, operation)}`),
-            "\n",
-          ),
+          fan_in: Arr.join(seatReports, "\n\n"),
         },
         output: SynthesisSchema,
       }),

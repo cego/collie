@@ -1874,6 +1874,15 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   /** What a host lends a workflow that needs an agent. */
   export interface AgentsApi {
     readonly outputFor: (runId: string, operation: string) => string;
+    /**
+     * The Output a step of a Run hands in — the one a submit accepted, or for a step an
+     * older build dispatched, its file — so a Workflow reads what another step produced
+     * without knowing where it was kept.
+     */
+    readonly outputOf: (
+      runId: string,
+      operation: string,
+    ) => Effect.Effect<{ readonly text: string; readonly at: number } | null>;
     /** Where each named skill is installed, for the mentions a prompt carries. */
     readonly skills: (
       names: ReadonlyArray<string>,

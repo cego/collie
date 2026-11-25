@@ -166,8 +166,8 @@ Change nothing outside your Output.
 
 ## synthesize
 
-The reviewing is done; do not run the review skills again. Every reviewer has written
-their own review of this change:
+The reviewing is done; do not run the review skills again. Every reviewer's own review of
+this change is quoted below:
 
 {{fan_in}}
 

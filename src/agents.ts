@@ -385,6 +385,10 @@ const answerTitle = (asked: AskedQuestion | undefined) =>
 
 export interface AgentsApi {
   readonly outputFor: (runId: string, operation: string) => string;
+  readonly outputOf: (
+    runId: string,
+    operation: string,
+  ) => Effect.Effect<{ readonly text: string; readonly at: number } | null>;
   readonly skills: (names: ReadonlyArray<string>) => Effect.Effect<ReadonlyMap<string, string>>;
   readonly attachments: (runId: string) => Effect.Effect<ReadonlyArray<Attachment>>;
   readonly handOver: (
@@ -4580,6 +4584,15 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
 
   return {
     outputFor,
+    outputOf: (runId, operation) =>
+      under(
+        RunRecords.use((records) =>
+          outputOf(records, { runId, output: outputFor(runId, operation) }),
+        ).pipe(
+          Effect.map((held) => (held === null ? null : { text: held.text, at: held.at })),
+          Effect.catchCause(() => Effect.succeed(null)),
+        ),
+      ),
     handOver: (about) =>
       under(
         Effect.gen(function* () {

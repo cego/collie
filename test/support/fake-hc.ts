@@ -272,7 +272,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
       }
       const parts = owed.split("/");
       const records = yield* RunRecords;
-      const fact = yield* records.fact(parts[parts.length - 4]!, acceptedName(owed));
+      const fact = yield* records.fact(parts[parts.length - 2]!, acceptedName(owed));
       return fact !== null;
     });
 

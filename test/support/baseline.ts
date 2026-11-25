@@ -134,12 +134,23 @@ import { GOLDEN, matchGolden } from "../../tools/prompt-golden";
 
 const handsIn = (dir: string, runId: string, operation: string, text: string) =>
   Effect.gen(function* () {
-    const one = Option.getOrUndefined(
-      Arr.findLast(yield* launchesAt(dir, runId), (launch) => launch.operation === operation),
-    );
-    if (one === undefined) {
+    const matches = (launch: { readonly operation: string; readonly output: string }) =>
+      launch.operation === operation || launch.output.endsWith(`/${operation}.json`);
+    // WARNING: the prompt is written before the launch is recorded, so the record is waited for.
+    const found = yield* Effect.gen(function* () {
+      for (let tries = 0; tries < 500; tries++) {
+        const one = Option.getOrUndefined(Arr.findLast(yield* launchesAt(dir, runId), matches));
+        if (one !== undefined) {
+          return one;
+        }
+        yield* Effect.sleep("20 millis");
+      }
+      return undefined;
+    });
+    if (found === undefined) {
       return yield* Effect.die(new Error(`no launch of ${runId} ran ${operation}`));
     }
+    const one = found;
     yield* RunRecords.use((records) =>
       recordOutput(records, { runId, output: one.output }, text),
     ).pipe(Effect.provide(recordsAt(dir)));
@@ -1994,10 +2005,7 @@ scenario(
           cwd: rig.projectDir,
         });
         const { measurement: final } = yield* measured("final");
-        yield* fs.writeFileString(
-          `${agents}/01-faster.md.json`,
-          asJson(builtFor("search answers in less time")),
-        );
+        yield* handsIn(dir, build, "01-faster.md", asJson(builtFor("search answers in less time")));
         yield* (yield* rig.startCore()).report(`${build}-build-r1`, "idle");
         yield* Fiber.join(running);
         yield* bin.restore();
@@ -2201,8 +2209,12 @@ once(
         );
         expect(byPersona).toEqual({ "review-1": "claude", "review-2": "pi", synthesize: "claude" });
         const fanIn = yield* asked("r-review-panel", "synthesize");
-        expect(fanIn).toContain(`${dir}/agents/r-review-panel/review-1.json`);
-        expect(fanIn).toContain(`${dir}/agents/r-review-panel/review-2.json`);
+        expect(fanIn).toContain("### review-1");
+        expect(fanIn).toContain("### review-2");
+        expect(
+          Str.split(fanIn, "the guard is on the wrong side").length - 1,
+        ).toBeGreaterThanOrEqual(2);
+        expect(fanIn).not.toContain(`${dir}/agents/r-review-panel/review-1.json`);
       }),
     ),
 );
@@ -2529,7 +2541,6 @@ for (const name of ["gitlab", "github"] as const) {
             (run) =>
               Effect.gen(function* () {
                 const fs = yield* FileSystem.FileSystem;
-                const output = `${dir}/agents/${runId}/review-1.json`;
                 yield* until(
                   () => fs.exists(`${dir}/agents/${runId}/review-1.prompt.md`).pipe(Effect.orDie),
                   (ready) => ready,
@@ -2542,7 +2553,7 @@ for (const name of ["gitlab", "github"] as const) {
                     head: "abcdef1234567890abcdef1234567890abcdef12",
                   })),
                 });
-                yield* fs.writeFileString(output, asJson(SYNTHESIS)).pipe(Effect.orDie);
+                yield* handsIn(dir, runId, "review-1", asJson(SYNTHESIS));
                 yield* until(
                   () => Effect.all([run.status, run.asked]),
                   ([status, rows]) =>
@@ -8231,8 +8242,9 @@ once("a partial build review keeps its scope through a reviewer panel", () =>
       const synthesis = yield* asked("r-impl-build-panel", "build.synthesize");
       expect(synthesis).toContain("Later tickets have not started");
       expect(synthesis).toContain("the guard is missing");
-      expect(synthesis).toContain(`${dir}/agents/r-impl-build-panel/build.review-1.json`);
-      expect(synthesis).toContain(`${dir}/agents/r-impl-build-panel/build.review-2.json`);
+      expect(synthesis).toContain("### build.review-1");
+      expect(synthesis).toContain("### build.review-2");
+      expect(synthesis).not.toContain(`${dir}/agents/r-impl-build-panel/build.review-1.json`);
       const reviews = yield* session(
         RunRecords.use((records) => records.lines("r-impl-build-panel", "reviews.jsonl")),
       );
@@ -11664,12 +11676,11 @@ once(
         expect(yield* asked(runId, "review-2-1")).toContain(
           "the caller rejects empty lists before this branch",
         );
-        const fs = yield* FileSystem.FileSystem;
         for (const seat of [1, 2]) {
-          const output = `${dir}/agents/${runId}/review-2-${seat}.json`;
-          expect(fanIn).toContain(output);
-          expect(yield* fs.readFileString(output)).toContain(accepted.reason);
+          expect(fanIn).toContain(`### review-2-${seat}`);
         }
+        // WARNING: the seats' reviews are quoted into the synthesis, which is their only reader now.
+        expect(Str.split(fanIn, accepted.reason).length - 1).toBeGreaterThanOrEqual(2);
         expect(yield* findingsIn(runDir(dir, runId))).toEqual([]);
       }),
     ),

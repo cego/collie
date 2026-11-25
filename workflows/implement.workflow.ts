@@ -748,12 +748,19 @@ export default defineWorkflow({
           operations: ReadonlyArray<string> = ["build", ...Arr.map(tickets, (one) => one.file)],
         ) =>
           Effect.gen(function* () {
-            const fs = yield* FileSystem.FileSystem;
             const outputs = yield* Effect.forEach(operations, (operation) =>
-              fs.readFileString(agents.outputFor(from, operation)).pipe(
-                Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Built))),
-                Effect.orElseSucceed(() => null),
-              ),
+              agents
+                .outputOf(from, operation)
+                .pipe(
+                  Effect.flatMap((held) =>
+                    held === null
+                      ? Effect.succeed(null)
+                      : Effect.orElseSucceed(
+                          Schema.decodeUnknownEffect(Schema.fromJsonString(Built))(held.text),
+                          () => null,
+                        ),
+                  ),
+                ),
             );
             const found = Arr.filter(outputs, Predicate.isNotNull);
             const last = found.at(-1);
