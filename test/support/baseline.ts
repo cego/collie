@@ -9942,9 +9942,9 @@ scenario(
               () => wasAsked(runId, "gate-fix-2"),
               (there) => there,
             );
-            return yield* Effect.fail(
-              new Error("the gate asked gate-fix-2 for a name its own fix already gave"),
-            );
+            return yield* new WorkflowError({
+              reason: "the gate asked gate-fix-2 for a name its own fix already gave",
+            });
           }),
         );
         yield* Fiber.join(recording);
