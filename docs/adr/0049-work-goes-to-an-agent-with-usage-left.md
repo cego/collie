@@ -56,7 +56,10 @@ it.
 **D4. Usage chooses where work runs, never whether it runs.** No reading refuses, holds or
 delays work. A subscription is **Exhausted** when one of its windows that applies to the
 model is used up and the reset is still ahead. Used up means fully used, or reported as
-reached by its source; a team plan's spend limit is reported that way. A choice that draws on an Exhausted
+reached by its source: Claude's `locked_reason`, Codex's `rateLimitReachedType`, or Codex
+saying ordinary included usage is not allowed. A spend limit on credits beyond included
+usage does not make a subscription Exhausted by itself; Codex reports it through those
+signals once it blocks included work. A choice that draws on an Exhausted
 subscription moves to the next agent that has room. If every agent is Exhausted, the work
 starts on the agent it preferred, as before, and the Run's record says why. A
 subscription Collie cannot read counts as having room.

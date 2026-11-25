@@ -5,8 +5,9 @@ import { foldCeiling, resolveWithRoom } from "../src/harness";
 import type { Preferences } from "../src/harness";
 import { parseSetting } from "../src/settings";
 import { epochMs } from "../src/time";
-import { roomFor } from "../src/usage-model";
+import { codexUsage, roomFor } from "../src/usage-model";
 import type { UsageReading, UsageWindow } from "../src/usage-model";
+import codexRateLimits from "./fixtures/usage/codex-account-ratelimits-read.json";
 
 const NOW = epochMs("2026-10-08T08:00:00Z");
 
@@ -39,6 +40,28 @@ const reading: (
 const opus: Preferences = { harness: "claude", model: "opus", effort: "xhigh" };
 const claudeOut = reading("claude", [window(100)]);
 const chatgptOut = reading("chatgpt", [window(100)]);
+const spentCreditCap = (
+  over: {
+    ordinaryUsageAllowed?: boolean;
+    rateLimitReachedType?: string | null;
+    weeklyPercent?: number;
+  } = {},
+) => ({
+  ...codexRateLimits.result,
+  ordinaryUsageAllowed: over.ordinaryUsageAllowed ?? true,
+  rateLimits: {
+    ...codexRateLimits.result.rateLimits,
+    primary: {
+      usedPercent: over.weeklyPercent ?? 2,
+      windowDurationMins: 10_080,
+      resetsAt: 1_791_973_608,
+    },
+    secondary: null,
+    individualLimit: { limit: "5000", used: "5000.0", remainingPercent: 0 },
+    spendControlReached: true,
+    rateLimitReachedType: over.rateLimitReachedType ?? null,
+  },
+});
 
 const resolved = (
   layers: ReadonlyArray<Preferences>,
@@ -191,6 +214,32 @@ describe("resolveWithRoom", () => {
 
   test("an unread Subscription has room", () => {
     expect(on(resolved([opus], ["codex"], []))).toBe("claude/opus xhigh");
+  });
+  test("a spent credit cap keeps work on Codex, with nothing to say", () => {
+    const chosen = resolved(
+      [{ harness: "codex", otherwise: [{ harness: "claude" }] }],
+      [],
+      [reading("chatgpt", codexUsage(spentCreditCap()).windows)],
+    );
+    expect(on(chosen)).toBe("codex/default");
+    expect(chosen.from).toBeNull();
+    expect(chosen.why).toBeNull();
+  });
+  test("Codex's own block signals still move work off it", () => {
+    for (const cap of [
+      spentCreditCap({ ordinaryUsageAllowed: false }),
+      spentCreditCap({ rateLimitReachedType: "workspace_member_credits_depleted" }),
+      spentCreditCap({ weeklyPercent: 100 }),
+    ]) {
+      const chosen = resolved(
+        [{ harness: "codex", otherwise: [{ harness: "claude" }] }],
+        [],
+        [reading("chatgpt", codexUsage(cap).windows)],
+      );
+      expect(on(chosen)).toBe("claude/default");
+      expect(chosen.from?.harness).toBe("codex");
+      expect(chosen.why).toMatch(/^weekly 100%/);
+    }
   });
 });
 

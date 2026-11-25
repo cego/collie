@@ -329,7 +329,6 @@ const CodexLimit = Schema.Struct({
   secondary: Schema.optionalKey(Schema.NullOr(CodexWindow)),
   planType: Schema.optionalKey(Schema.NullOr(Schema.String)),
   rateLimitReachedType: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  spendControlReached: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
 });
 type CodexLimit = typeof CodexLimit.Type;
 export const CodexRateLimits = Schema.Struct({
@@ -370,8 +369,7 @@ const kindOfLength = (length: number | null) =>
 
 function codexWindows(limit: CodexLimit, model: string | null, blocked: boolean) {
   const rows = Arr.filter([limit.primary, limit.secondary], (row) => row != null);
-  const reached =
-    blocked || (limit.rateLimitReachedType ?? null) !== null || limit.spendControlReached === true;
+  const reached = blocked || (limit.rateLimitReachedType ?? null) !== null;
   const full = Arr.some(rows, (row) => row.usedPercent >= 100);
   const returned: ReadonlyArray<UsageWindow> = Arr.map(rows, (row) => {
     const length = row.windowDurationMins ?? null;
