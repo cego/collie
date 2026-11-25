@@ -17475,7 +17475,7 @@ for (const name of ["gitlab", "github"] as const) {
 
   for (const conflicting of [false, true]) {
     scenario(
-      `release on ${name}: a force-pushed head parks the Run, naming why, with nothing reset${conflicting ? " during a target conflict" : ""}`,
+      `release on ${name}: a force-pushed head parks the Run rather than drop an unpublished commit, naming why, with nothing reset${conflicting ? " during a target conflict" : ""}`,
       () =>
         runEffect(
           Effect.gen(function* () {
@@ -17484,6 +17484,7 @@ for (const name of ["gitlab", "github"] as const) {
               checks: running,
             });
             const runId = `r-forced-${name}`;
+            let local = "";
             yield* rig.queueOutputs([PACKAGED]);
             const why = yield* driven(
               { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
@@ -17493,6 +17494,10 @@ for (const name of ["gitlab", "github"] as const) {
                     () => awaitingOn(runId),
                     (why) => why !== "",
                   );
+                  yield* exec(["git", "commit", "-qm", "only here", "--allow-empty"], {
+                    cwd: reviewed,
+                  });
+                  local = yield* revParse("HEAD", reviewed);
                   const forced = yield* pushedBySomebody(`${head}~1`, true);
                   yield* changed({
                     head: forced,
@@ -17505,14 +17510,15 @@ for (const name of ["gitlab", "github"] as const) {
                   );
                   return yield* until(
                     () => parkedWhy(runId),
-                    (why) => pipe(why, Str.includes("fast-forward")),
+                    (why) => pipe(why, Str.includes("never carried")),
                   );
                 }),
             );
             yield* bin.restore();
-            expect(why).toContain(`does not fast-forward ${pipe(head, Str.slice(0, 8))}`);
+            expect(why).toContain("holds commits origin's feature never carried");
+            expect(why).toContain("only here");
             expect(why).toContain(`Repair it, then resume ${runId}.`);
-            expect(yield* revParse("HEAD", reviewed)).toBe(head);
+            expect(yield* revParse("HEAD", reviewed)).toBe(local);
             expect(
               Str.trim(
                 (yield* exec(["git", "branch", "--show-current"], { cwd: reviewed })).stdout,

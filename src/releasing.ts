@@ -127,7 +127,7 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
   }
   if (Str.trim(status.stdout) !== "") {
     return refused(
-      `the checkout at ${opts.cwd} has uncommitted changes, so it is not taken as ${short(opts.head)}: ${changedFiles(status.stdout)}`,
+      `the checkout at ${opts.cwd} has uncommitted changes, so it is not taken as ${short(opts.head)}. It holds ${changedFiles(status.stdout)}.`,
       dirty,
     );
   }
@@ -137,7 +137,7 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
   }
   if (hidden.length > 0) {
     return refused(
-      `the checkout at ${opts.cwd} hides changes to tracked files from git status, so it is not taken as ${short(opts.head)}: ${atMost(hidden)}`,
+      `the checkout at ${opts.cwd} has changes to ${atMost(hidden)} that git status does not show, so it is not taken as ${short(opts.head)}.`,
       dirty,
     );
   }
@@ -176,7 +176,7 @@ export const fastForward = Effect.fn("Releasing.fastForward")(function* <R>(opts
       }
       const ahead = yield* git(["log", "--format=%H %s", `${opts.head}..${from}`]);
       return refused(
-        `the checkout at ${opts.cwd} is ahead of ${where}: ${commitsLike(ahead.stdout)}, so it is not taken as ${short(opts.head)}`,
+        `the checkout at ${opts.cwd} is ahead of ${where}, so it does not fast-forward ${short(from)}: ${where} no longer carries ${commitsLike(ahead.stdout)}, and it is not taken as ${short(opts.head)}`,
         dirty,
       );
     }
