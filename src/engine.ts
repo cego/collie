@@ -10979,6 +10979,16 @@ const makeRegistry: (
       readonly started?: Started | undefined;
       readonly by?: string | undefined;
     }) {
+      // WARNING: the request id is the claim, so a caller that lost the answer is given the Run it started.
+      const claimed = yield* store.requested(options.request);
+      if (claimed !== null) {
+        return {
+          runId: claimed.run,
+          registration: claimed.generation,
+          execution: claimed.execution,
+          fresh: false,
+        };
+      }
       const { row, generation, facts, where, refused, input } = yield* offeredBy(
         options.runId,
         options.request,

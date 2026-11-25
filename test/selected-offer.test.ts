@@ -541,6 +541,34 @@ test("an offer that names its selection something else launches with the ids cho
     [...MODULES, "chooses.workflow.ts", "given.workflow.ts"],
   ));
 
+test("a request id already started answers with the Run it started, once its finding is taken", () =>
+  hosted(
+    "hw-selected-replay-",
+    ({ world }) =>
+      Effect.gen(function* () {
+        yield* install(world);
+        const run = yield* started(world.state, world.project, "submits", { note: "two" });
+        const [first, second] = idsOf(run.id);
+        const asked = () =>
+          run.client.invoke({
+            runId: run.id,
+            offer: "implement-selected",
+            input: { findings: [first, second] },
+            request: "choose-twice",
+          });
+        const child = yield* asked().pipe(Effect.orDie);
+        const again = yield* asked().pipe(Effect.orDie);
+        expect(again.runId).toBe(child.runId);
+        expect(
+          Arr.filter(
+            yield* run.client.offers({ runId: run.id }),
+            (one) => one.unavailable === null,
+          ),
+        ).toEqual([]);
+      }),
+    [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
+  ));
+
 const filed = { identifier: "CEGO-12", url: "https://linear.app/cego/issue/CEGO-12/one-issue" };
 
 test("File to Linear files the one finding chosen, and the Run it starts answers with the issue's URL", () =>
