@@ -29,32 +29,18 @@ const CiTarget = Schema.fromJsonString(
 export const rememberCiTarget = (dir: string, target: typeof CiTarget.Type) =>
   appendRunJournal(runJournal(dir, "ci-rechecks.jsonl"), CiTarget, target);
 
-const SettledRead = Schema.fromJsonString(
-  Schema.Struct({
-    head: Schema.String,
-    job: Schema.String,
-    state: Schema.String,
-  }),
-);
+const CiSettled = Schema.fromJsonString(Schema.Struct({ reads: Schema.String }));
 
-const settledReads = (dir: string) => runJournal(dir, "ci-settled.jsonl");
+const settledClears = (dir: string) => runJournal(dir, "ci-settled.jsonl");
 
-const rememberSettledRead = (dir: string, read: typeof SettledRead.Type) =>
-  Effect.gen(function* () {
-    const seen = yield* readRunJournal(settledReads(dir), SettledRead).pipe(
-      Effect.orElseSucceed(() => []),
-    );
-    if (
-      Arr.some(
-        seen,
-        (one) => one.head === read.head && one.job === read.job && one.state === read.state,
-      )
-    ) {
-      return false;
-    }
-    yield* appendRunJournal(settledReads(dir), SettledRead, read);
-    return true;
-  });
+const lastSettledClear = (dir: string) =>
+  Effect.map(
+    readRunJournal(settledClears(dir), CiSettled).pipe(Effect.orElseSucceed(() => [])),
+    (entries) => entries.at(-1)?.reads,
+  );
+
+export const rememberSettledClear = (dir: string, reads: string) =>
+  appendRunJournal(settledClears(dir), CiSettled, { reads });
 
 const FailedCi = Schema.fromJsonString(
   Schema.Struct({
@@ -161,7 +147,19 @@ export const parkEvidence = (
     }
   });
 
-const reply = (cleared: boolean, note: string, error = false) => ({ cleared, note, error });
+type Reply = {
+  readonly cleared: boolean;
+  readonly note: string;
+  readonly error: boolean;
+  readonly reads?: string;
+};
+
+const reply: (cleared: boolean, note: string, error?: boolean, reads?: string) => Reply = (
+  cleared,
+  note,
+  error = false,
+  reads,
+) => (reads === undefined ? { cleared, note, error } : { cleared, note, error, reads });
 
 const lastCiTargets = (stateDir: string, runId: string) =>
   Effect.map(
@@ -227,7 +225,7 @@ export const recheckPark = (
         if (latest.size === 0) {
           return reply(false, "no parked CI job recorded");
         }
-        const unpassed: Array<typeof SettledRead.Type> = [];
+        const reads: Array<string> = [];
         for (const target of latest.values()) {
           const ref = mrRefOf(target.mr);
           if (ref === null) {
@@ -250,19 +248,17 @@ export const recheckPark = (
                 : `job ${target.job} absent at ${target.head}`,
             );
           }
-          if (read.state !== "passed") {
-            unpassed.push({ head: target.head, job: target.job, state: read.state });
-          }
+          reads.push(`${target.job}@${target.head}:${read.state}#${read.id ?? ""}`);
         }
-        for (const read of unpassed) {
-          if (!(yield* rememberSettledRead(`${stateDir}/runs/${view.runId}`, read))) {
-            return reply(
-              false,
-              `job ${read.job} is ${read.state} at ${read.head}, which a resume already read`,
-            );
-          }
+        const jobs = Arr.join([...latest.keys()], ", ");
+        const evidence = Arr.join(reads, " ");
+        if ((yield* lastSettledClear(`${stateDir}/runs/${view.runId}`)) === evidence) {
+          return reply(
+            false,
+            `jobs ${jobs} settled at the parked head, and nothing changed since the resume`,
+          );
         }
-        return reply(true, `jobs ${Arr.join([...latest.keys()], ", ")} settled at parked head`);
+        return reply(true, `jobs ${jobs} settled at parked head`, false, evidence);
       }
       case "ci-failed": {
         const targets = yield* readRunJournal(

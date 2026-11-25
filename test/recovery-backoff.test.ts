@@ -2,12 +2,13 @@ import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
-import { Clock, ConfigProvider, Effect, Layer } from "effect";
+import { Clock, ConfigProvider, Effect, FileSystem, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import type { RunView } from "../src/engine";
 import type { ParkCause } from "../src/park-cause";
 import { recoverParks } from "../src/park-recovery";
 import { readMetrics } from "../src/metrics";
+import type { RunRecords } from "../src/run-records";
 import { mrId } from "../src/board-model";
 import type { MrPanels } from "../src/merges";
 import { forgeHttpLayer } from "../src/forge/http";
@@ -322,6 +323,135 @@ const rechecksAgainst = (fault: ForgeModel["httpFault"]) =>
       ),
     );
   });
+
+test("a settled CI park cleared while recovery is off is resumed once it is turned on, and not again for the same reads", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const rig = yield* Rig.scoped();
+      const env = rig.pluginEnv();
+      const bin = yield* Effect.acquireRelease(FakeBin.make(`${rig.root}/bin`), (one) =>
+        one.restore(),
+      );
+      const head = "4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6";
+      const forge = yield* forgeOnPath(bin, "gitlab", {
+        installed: true,
+        loggedIn: [FORGE_HOST.gitlab],
+        login: "tester",
+        mrs: [
+          {
+            project: "gitlab.example.com/mk/project",
+            iid: "7",
+            state: "open",
+            head,
+            jobs: [{ name: "test", state: "cancelled", id: 1 }],
+          },
+        ],
+      });
+      const forgeApi = yield* serveForges(forge);
+      const mr = "https://gitlab.example.com/mk/project/-/merge_requests/7";
+      yield* rememberCiTarget(`${env.stateDir}/runs/r1`, {
+        head,
+        job: "test",
+        mr,
+        cwd: rig.projectDir,
+      });
+      const files = yield* FileSystem.FileSystem;
+      const settings = (resume: boolean) =>
+        files
+          .writeFileString(
+            `${env.userDir}/config.json.next`,
+            `{"memory_hold":0,"recovery":{"resume":${resume}}}`,
+          )
+          .pipe(
+            Effect.andThen(
+              files.rename(`${env.userDir}/config.json.next`, `${env.userDir}/config.json`),
+            ),
+          );
+      yield* settings(false);
+      yield* Effect.gen(function* () {
+        let resumed = 0;
+        const view: RunView = {
+          runId: "r1",
+          workflow: "any",
+          project: rig.projectDir,
+          task: null,
+          parent: null,
+          registration: "any@1",
+          entry: "any.workflow.ts",
+          input: {},
+          provenance: {},
+          strategies: {},
+          options: {},
+          cwd: rig.projectDir,
+          branch: "work",
+          workspace: null,
+          worktree: null,
+          outcome: "feature",
+          created: "1970-01-01T00:00:00.000Z",
+          status: { status: "suspended" },
+          waiting: [],
+          controls: [],
+          diagnostic: null,
+          parked: "job absent",
+          park: {
+            id: "p1",
+            since: "1970-01-01T00:00:00.000Z",
+            cause: "ci-job-absent",
+            kind: "rechecks",
+          },
+          awaiting: null,
+          mr,
+          landing: null,
+        };
+        yield* Effect.forkScoped(
+          recoverParks({
+            env,
+            herdr: new Herdr(env),
+            reconnects: Effect.succeed(0),
+            panels: new Map(),
+            views: Effect.succeed([view]),
+            resume: () =>
+              Effect.sync(() => {
+                resumed += 1;
+                return { applied: true };
+              }),
+          }).pipe(
+            Effect.provide(
+              ConfigProvider.layerAdd(
+                ConfigProvider.fromUnknown({ COLLIE_RECOVERY_EVERY: "10 millis" }),
+              ),
+            ),
+          ),
+        );
+        const rechecks = (outcome: "cleared" | "uncleared") =>
+          Effect.map(readMetrics(`${env.stateDir}/evidence/r1`), (lines) =>
+            Arr.filter(lines, (line) => line.action === "rechecked" && line.outcome === outcome),
+          );
+        const settles = (done: Effect.Effect<boolean, never, RunRecords>) =>
+          Effect.gen(function* () {
+            for (let tries = 0; tries < 500 && !(yield* done); tries++) {
+              yield* Effect.sleep("10 millis");
+            }
+          });
+        yield* settles(Effect.map(rechecks("cleared"), (lines) => lines.length > 0));
+        expect(resumed).toBe(0);
+        yield* settings(true);
+        yield* settles(Effect.sync(() => resumed > 0));
+        expect(resumed).toBe(1);
+        yield* settles(Effect.map(rechecks("uncleared"), (lines) => lines.length > 0));
+        expect(resumed).toBe(1);
+      }).pipe(
+        Effect.provide(
+          forgeHttpLayer.pipe(
+            Layer.provideMerge(platformLayer),
+            Layer.provideMerge(
+              ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: forgeApi })),
+            ),
+          ),
+        ),
+      );
+    }),
+  ));
 
 test("three recheck rounds the forge answers rate-limited raise no Recovery is failing News item", () =>
   runEffect(

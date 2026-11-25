@@ -8,7 +8,7 @@ import type { PluginEnv } from "./env";
 import { configValue, readConfig } from "./config";
 import { appendMetric, readMetrics, recoveriesIn } from "./metrics";
 import type { Metric } from "./metrics";
-import { recheckPark } from "./park-recheck";
+import { recheckPark, rememberSettledClear } from "./park-recheck";
 import { PARK_CAUSES, healInFlight } from "./park-cause";
 import type { ParkCause } from "./park-cause";
 import type { Herdr } from "./herdr";
@@ -138,7 +138,12 @@ export const recoverParks = <E, R>(opts: {
     yield* Effect.gen(function* () {
       let failed = false;
       let checked = false;
-      const candidates: Array<{ view: RunView; claimed: Metric; fresh: boolean }> = [];
+      const candidates: Array<{
+        view: RunView;
+        claimed: Metric;
+        fresh: boolean;
+        reads?: string;
+      }> = [];
       const reconnects = yield* opts.reconnects;
       const forge = yield* readForge(opts.env.stateDir);
       const views = yield* opts.views;
@@ -197,7 +202,7 @@ export const recoverParks = <E, R>(opts: {
                 return;
               }
               checked = true;
-              const { cleared, note, error } = yield* recheckPark(
+              const { cleared, note, error, reads } = yield* recheckPark(
                 view,
                 opts.env.stateDir,
                 opts.herdr,
@@ -245,7 +250,7 @@ export const recoverParks = <E, R>(opts: {
                   (line) => line.kind === "entry",
                 ).length,
               };
-              candidates.push({ view, claimed, fresh: true });
+              candidates.push({ view, claimed, fresh: true, reads });
             } else {
               candidates.push({ view, claimed, fresh: false });
             }
@@ -263,7 +268,7 @@ export const recoverParks = <E, R>(opts: {
       }
       yield* Effect.forEach(
         candidates,
-        ({ view, claimed, fresh }) =>
+        ({ view, claimed, fresh, reads }) =>
           Effect.gen(function* () {
             if (
               configValue(yield* readConfig(opts.env.userDir), "recovery.resume") === false ||
@@ -279,6 +284,9 @@ export const recoverParks = <E, R>(opts: {
               }
             }
             const result = yield* opts.resume(view, claimed.recoveryId!, claimed.park!);
+            if (result.applied && reads !== undefined) {
+              yield* rememberSettledClear(`${opts.env.stateDir}/runs/${view.runId}`, reads);
+            }
             const ended = yield* Clock.currentTimeMillis;
             yield* appendMetric(dir, {
               ...claimed,

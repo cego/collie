@@ -6,7 +6,7 @@ import * as Rec from "effect/Record";
 import { Effect, Fiber, FileSystem, Path, Schedule } from "effect";
 import { ciJob, takeTarget } from "../src/ci-job";
 import { mrRefOf } from "../src/board-model";
-import { recheckPark, rememberCiTarget } from "../src/park-recheck";
+import { recheckPark, rememberCiTarget, rememberSettledClear } from "../src/park-recheck";
 import type { MrForge } from "../src/board-model";
 import type { Runner } from "../src/mr";
 import type { FetchLike } from "forges";
@@ -198,38 +198,80 @@ test("a CI park clears once every recorded job at the parked head has settled, c
     }),
   ));
 
-test("a job that settled without passing resumes its Run once, and the same read resumes it no more", () =>
+const cancelledRecheck = (
+  asked: Parameters<typeof recheckPark>[0],
+  root: string,
+  run: Runner,
+  forge: { readonly fetch: FetchLike },
+) =>
+  recheckPark({ ...asked, park: { cause: "ci-job-absent", kind: "rechecks" } }, root, {
+    agentList: () => Effect.die("CI rechecks must not ask core"),
+  }).pipe(Effect.provide(forgeHttpTest(run, forge.fetch)));
+
+test("a CI park clears while nothing is recorded, and a recorded read clears no more until the forge says something new", () =>
   runEffect(
     Effect.gen(function* () {
-      const { asked, at, root, forge } = yield* waiting("cancelled");
+      const { asked, at, root, forge } = yield* waiting("failed", MR, undefined, {
+        jobs: [{ name: "nuxi-typecheck", state: "cancelled", id: 1 }],
+      });
       yield* rememberCiTarget(`${root}/runs/r1`, {
         head: at,
         job: "nuxi-typecheck",
         mr: MR,
         cwd: asked.cwd,
       });
-      const recheck = () =>
-        recheckPark(
-          {
-            runId: "r1",
-            cwd: asked.cwd,
-            branch: "main",
-            mr: MR,
-            park: { cause: "ci-job-absent", kind: "rechecks" },
-          },
-          root,
-          { agentList: () => Effect.die("CI rechecks must not ask core") },
-        ).pipe(Effect.provide(forgeHttpTest(asked.run, forge.fetch)));
+      const view = {
+        runId: "r1",
+        cwd: asked.cwd,
+        branch: "main",
+        mr: MR,
+      };
+      const recheck = () => cancelledRecheck(view, root, asked.run, forge);
+      const first = yield* recheck();
+      expect(first).toMatchObject({ cleared: true, error: false });
       expect(yield* recheck()).toMatchObject({ cleared: true, error: false });
-      const again = yield* recheck();
-      expect(again).toMatchObject({ cleared: false, error: false });
-      expect(again.note).toContain("cancelled");
+      yield* rememberSettledClear(`${root}/runs/r1`, first.reads ?? "");
+      const refused = yield* recheck();
+      expect(refused).toMatchObject({ cleared: false, error: false });
+      expect(refused.note).toContain("nuxi-typecheck");
       const before = forge.model();
       forge.set({
         ...before,
         mrs: Arr.map(before.mrs ?? [], (mr) => ({
           ...mr,
-          jobs: [{ name: "nuxi-typecheck", state: "passed" }],
+          jobs: [{ name: "nuxi-typecheck", state: "cancelled", id: 2 }],
+        })),
+      });
+      expect(yield* recheck()).toMatchObject({ cleared: true, error: false });
+    }),
+  ));
+
+test("a job newly settling clears a parked head while another job stays cancelled there", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, at, root, forge } = yield* waiting("failed", MR, undefined, {
+        jobs: [
+          { name: "nuxi-typecheck", state: "cancelled", id: 1 },
+          { name: "lint", state: "failed", id: 2 },
+        ],
+      });
+      const dir = `${root}/runs/r1`;
+      yield* rememberCiTarget(dir, { head: at, job: "nuxi-typecheck", mr: MR, cwd: asked.cwd });
+      yield* rememberCiTarget(dir, { head: at, job: "lint", mr: MR, cwd: asked.cwd });
+      const view = { runId: "r1", cwd: asked.cwd, branch: "main", mr: MR };
+      const recheck = () => cancelledRecheck(view, root, asked.run, forge);
+      const first = yield* recheck();
+      expect(first).toMatchObject({ cleared: true, error: false });
+      yield* rememberSettledClear(dir, first.reads ?? "");
+      const before = forge.model();
+      forge.set({
+        ...before,
+        mrs: Arr.map(before.mrs ?? [], (mr) => ({
+          ...mr,
+          jobs: [
+            { name: "nuxi-typecheck", state: "cancelled", id: 1 },
+            { name: "lint", state: "passed", id: 2 },
+          ],
         })),
       });
       expect(yield* recheck()).toMatchObject({ cleared: true, error: false });
