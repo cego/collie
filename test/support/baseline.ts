@@ -10952,7 +10952,7 @@ scenario("a direct start's fix rounds carry the benchmark its builder wrote on t
       );
       expect(outcomeText(status)).toBe(OPENED.mr_url);
       const fix = yield* asked(runId, "fix-1");
-      expect(fix).toContain("01-only.benchmark.json");
+      expect(fix).toContain(`${where}/plan/issues/01-only.benchmark.json`);
       expect(fix).toContain(MEASURE_LEADS[0]!);
     }),
   ),

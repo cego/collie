@@ -705,10 +705,11 @@ export default defineWorkflow({
         }));
       });
       let tickets: ReadonlyArray<Slice> = yield* ticketsNow;
+      const planDirOf = () => (work.kind === "plan-dir" ? work.value : `${place.dir}/plan`);
       const benchmarkMeasure = (benchmark: string | null | undefined) =>
         benchmark === undefined || benchmark === null
           ? ""
-          : measuredBy("measure", benchmarkFile(work.value, benchmark));
+          : measuredBy("measure", benchmarkFile(planDirOf(), benchmark));
       const measureFor = (benchmark: string | null | undefined) =>
         work.kind === "plan-dir"
           ? benchmarkMeasure(benchmark)
@@ -738,7 +739,7 @@ export default defineWorkflow({
       // WARNING: read only after the build, which is what writes SPEC.md for any source but a plan.
       let specReadings = 0;
       const specNow = Effect.gen(function* () {
-        const plan = work.kind === "plan-dir" ? work.value : `${place.dir}/plan`;
+        const plan = planDirOf();
         for (;;) {
           specReadings += 1;
           const readable = yield* Activity.make({
