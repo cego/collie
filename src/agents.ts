@@ -5164,13 +5164,15 @@ export const waitForOutput = <R>(
       if (here && (yield* free)) {
         // WARNING: the read came before the status the release was decided on, so the Output is read once more.
         const after = yield* read;
-        const now = fresh(after) ? after : text;
-        if (every.usable(now)) {
-          return now;
+        if (after !== text) {
+          continue;
+        }
+        if (every.usable(after)) {
+          return after;
         }
         if (yield* every.settled) {
           const last = yield* read;
-          if (fresh(last)) {
+          if (fresh(last) && last === after) {
             return last;
           }
         }

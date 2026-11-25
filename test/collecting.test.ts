@@ -36,6 +36,7 @@ test("an Output rewritten after its verify ended is not taken until that verify 
           );
           yield* Deferred.await(underway);
           yield* fs.writeFileString(output, '{"verdict":"interim"}');
+          const polling = yield* Deferred.make<void>();
           let settled = false;
           const collector = yield* Effect.forkChild(
             waitForOutput(output, null, {
@@ -44,19 +45,20 @@ test("an Output rewritten after its verify ended is not taken until that verify 
               counts: Effect.succeed(false),
               usable: () => true,
               settled: Effect.sync(() => settled),
-              holding: held.verifying("r", "a"),
+              holding: Effect.tap(held.verifying("r", "a"), () =>
+                Deferred.succeed(polling, undefined).pipe(Effect.ignore),
+              ),
               told: () => Effect.succeed(true),
             }),
           );
-          yield* Effect.sleep("20 millis");
+          yield* Deferred.await(polling);
           yield* Deferred.succeed(finish, undefined);
-          yield* Effect.sleep("10 millis");
+          yield* Fiber.await(verify);
           yield* fs.writeFileString(output, '{"verdict":"rewritten"}');
           const waiting = yield* Fiber.await(collector).pipe(Effect.timeoutOption("150 millis"));
           expect(Option.isNone(waiting)).toBe(true);
           settled = true;
           expect(yield* Fiber.join(collector)).toBe('{"verdict":"rewritten"}');
-          yield* Fiber.await(verify);
         }),
       );
     }).pipe(Effect.provide(collectingLayer)),
