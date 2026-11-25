@@ -174,6 +174,24 @@ test("a dismissal with no reason, or of a finding the Run does not have, is refu
     }),
   ));
 
+const cardOf = (world: { readonly state: string }, runId: string) =>
+  Effect.gen(function* () {
+    const client = yield* connect(world.state).pipe(Effect.orDie);
+    const sent = yield* client.board().pipe(Stream.runHead, Effect.orDie);
+    const board = yield* Option.match(sent, {
+      onNone: () => Effect.die("the board sent nothing"),
+      onSome: (one) => Effect.succeed(one),
+    });
+    const tasks = board._tag === "Snapshot" ? board.tasks : [];
+    return yield* Option.match(
+      Arr.findFirst(tasks, (one) => one.run === runId),
+      {
+        onNone: () => Effect.die(`no card for ${runId}`),
+        onSome: (one) => Effect.succeed(`${one.landed}/${sectionOf(one)}`),
+      },
+    );
+  });
+
 test("a Run settled before the open count was a fact reports it, and the fact is there afterwards", () =>
   hosted("hw-findings-upgrade-", ({ world }) =>
     Effect.gen(function* () {
@@ -206,23 +224,7 @@ test("the CLI takes an offer over two findings, lists both taken, and a dismissa
         const ids = Arr.map(listedData.findings, (one) => one.id);
         expect(ids).toEqual([first, second, third]);
 
-        const card = (() =>
-          Effect.gen(function* () {
-            const client = yield* connect(world.state).pipe(Effect.orDie);
-            const sent = yield* client.board().pipe(Stream.runHead, Effect.orDie);
-            const board = yield* Option.match(sent, {
-              onNone: () => Effect.die("the board sent nothing"),
-              onSome: (one) => Effect.succeed(one),
-            });
-            const tasks = board._tag === "Snapshot" ? board.tasks : [];
-            return yield* Option.match(
-              Arr.findFirst(tasks, (one) => one.run === run.id),
-              {
-                onNone: () => Effect.die(`no card for ${run.id}`),
-                onSome: (one) => Effect.succeed(`${one.landed}/${sectionOf(one)}`),
-              },
-            );
-          }))();
+        const card = cardOf(world, run.id);
         expect(yield* card).toBe("false/waiting");
 
         const chosen = yield* cli(
@@ -271,6 +273,43 @@ test("the CLI takes an offer over two findings, lists both taken, and a dismissa
         );
         expect(dismissed.exit).toBe(0);
         expect(yield* card).toBe("true/finished");
+      }),
+    ["leaves.workflow.ts", "submits.workflow.ts", "implement.workflow.ts"],
+  ));
+
+test("the CLI's last dismissal is what takes the card out of Waiting on you", () =>
+  hosted(
+    "hw-findings-card-",
+    ({ world }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.copyFile(`${root}workflows/selected.ts`, `${world.user}/selected.ts`);
+        const run = yield* settledRun(world, "submits");
+        const env = envOf(world);
+        const ids = Arr.map([1, 2, 3], (one) => `${run.id}-F${one}`);
+
+        expect(yield* cardOf(world, run.id)).toBe("false/waiting");
+        const dismiss = (id: string, request: string) =>
+          cli(
+            [
+              "--json",
+              "run",
+              "finding",
+              run.id,
+              id,
+              "--dismiss",
+              "by design",
+              "--request-id",
+              request,
+            ],
+            env,
+          );
+        expect((yield* dismiss(ids[0]!, "dismiss-1")).exit).toBe(0);
+        expect(yield* cardOf(world, run.id)).toBe("false/waiting");
+        expect((yield* dismiss(ids[1]!, "dismiss-2")).exit).toBe(0);
+        expect(yield* cardOf(world, run.id)).toBe("false/waiting");
+        expect((yield* dismiss(ids[2]!, "dismiss-3")).exit).toBe(0);
+        expect(yield* cardOf(world, run.id)).toBe("true/finished");
       }),
     ["leaves.workflow.ts", "submits.workflow.ts", "implement.workflow.ts"],
   ));
