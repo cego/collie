@@ -2519,10 +2519,15 @@ Check the Run and its recorded effects before submitting a new request.
 A receipt belongs to one request: the same operation, the same Run and the same arguments,
 with the Run read from who asked rather than from what the arguments say. The arguments are
 the ones the command decoded, so an object written in another key order is the same
-request; the files it names are the paths they resolve to, so `note.md` and its absolute
-path are one request too; and a command that resolves its destination from `--workspace`
-counts the workspace it was rooted at. A request that
-reuses an id for anything else is refused as `invalid_input`, with none of the stored
+request, and an upload's own flags are the ones it sends: `--upload` with no path to
+upload, or `--snapshot` on an upload, changes nothing. A file the CLI sends from this
+Machine — an `--attach`, an upload's `--path` — is the path it resolves to, so `note.md`
+and its absolute path are one request; a path the host is given as typed, such as an
+artefact's `--path` without `--upload`, is not. A Schedule counts the checkout its
+`--workspace` resolved, so `.` and that checkout's absolute path are one request, and a
+checkout that now resolves elsewhere is another; a start counts the workspace as it was
+named as well as the directory it was placed in. A request that reuses an id for anything
+else is refused as `invalid_input`, with none of the stored
 answer, and applies nothing; check that first request's effect before retrying under a new
 id. A receipt written before Collie scoped receipts to their requests is replayed only to
 the same operation for the Run its stored answer names; every other request under that id

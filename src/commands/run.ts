@@ -2540,7 +2540,7 @@ const artefactResult = (read: {
           }
           const input = { ...read.registration, metadata: metadata.value };
           const path = input.path;
-          const upload = read.upload === true;
+          const uploaded = read.upload === true ? path : undefined;
           const files = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
           const pathSvc = yield* Path.Path;
           return yield* mutation(
@@ -2548,13 +2548,14 @@ const artefactResult = (read: {
             {
               operation: "artefact-register",
               run: runId,
-              files: upload && path !== undefined ? [path] : [],
+              files: uploaded === undefined ? [] : [uploaded],
               args: {
-                registration: upload
-                  ? { ...read.registration, path: undefined }
-                  : read.registration,
+                registration:
+                  uploaded === undefined
+                    ? read.registration
+                    : { ...read.registration, path: undefined, snapshot: true },
                 metadata: metadata.value ?? null,
-                upload,
+                upload: uploaded !== undefined,
               },
             },
             read.requestId ?? Option.none(),
@@ -2567,15 +2568,15 @@ const artefactResult = (read: {
                     client.board(),
                     Effect.gen(function* () {
                       const sent =
-                        upload && path !== undefined
-                          ? {
+                        uploaded === undefined
+                          ? {}
+                          : {
                               path: yield* uploadArtefact(
                                 client,
-                                pathSvc.resolve(resolved.env.cwd, path),
+                                pathSvc.resolve(resolved.env.cwd, uploaded),
                               ),
                               snapshot: true,
-                            }
-                          : {};
+                            };
                       return yield* client.artefactRegister({ runId, request, ...input, ...sent });
                     }).pipe(Effect.provideContext(files)),
                   ),

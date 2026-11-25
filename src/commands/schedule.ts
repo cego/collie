@@ -57,7 +57,27 @@ const nameArg = Argument.String("name").pipe(
   ),
 );
 
+const savedCheckout = Effect.fn("schedule.savedCheckout")(function* (
+  env: PluginEnv,
+  where: string,
+) {
+  // WARNING: a Schedule on another Machine keeps the workspace as named; this one saves the resolved path.
+  if (env.machine !== undefined) {
+    return { workspace: Str.trim(where), at: null, local: false };
+  }
+  const checkout = yield* checkoutOf(env, where);
+  if ("error" in checkout) {
+    return checkout;
+  }
+  return {
+    workspace: checkout.path ?? "",
+    at: checkout.path === SCHEDULE_PROJECTS_ROOT ? null : checkout.path,
+    local: true,
+  };
+});
+
 const changing = (
+  env: PluginEnv,
   operation: string,
   args: Given,
   requestId: Option.Option<string>,
@@ -67,24 +87,22 @@ const changing = (
   destination?: "cwd",
   selector?: string | null,
 ) =>
-  answering((env) =>
-    mutation(env, { operation, run: null, destination, selector, args }, requestId, (request) =>
-      Effect.gen(function* () {
-        const asked = yield* change(env);
-        if ("refused" in asked) {
-          return asked.refused;
-        }
-        const changed = yield* changeSchedule(env, {
-          door: yield* cliDoor(env),
-          change: asked,
-          request,
-        });
-        if (!changed.ok) {
-          return changed;
-        }
-        return { ok: true as const, data: changed.value, human: changedLine(changed.value) };
-      }),
-    ),
+  mutation(env, { operation, run: null, destination, selector, args }, requestId, (request) =>
+    Effect.gen(function* () {
+      const asked = yield* change(env);
+      if ("refused" in asked) {
+        return asked.refused;
+      }
+      const changed = yield* changeSchedule(env, {
+        door: yield* cliDoor(env),
+        change: asked,
+        request,
+      });
+      if (!changed.ok) {
+        return changed;
+      }
+      return { ok: true as const, data: changed.value, human: changedLine(changed.value) };
+    }),
   );
 
 const savedText = (value: Schema.Json) =>
@@ -152,63 +170,74 @@ const scheduleAdd = Command.make(
         const inputs = Rec.fromEntries(
           Arr.filter(Rec.toEntries(given), ([key]) => key !== "workspace"),
         );
-        return yield* changing(
-          "schedule-add",
-          {
-            name,
-            workflow,
-            cron,
-            tz: Option.getOrNull(tz),
-            paused,
-            inputs,
-            workspace: where,
-            verify: checks.specs,
-          },
-          requestId,
-          (env) =>
-            Effect.gen(function* () {
-              const refused = (failure: OpResult) => ({ refused: failure });
-              const scheduled = (workspace: string) => ({
-                change: "add" as const,
+        return yield* answering((env) =>
+          Effect.gen(function* () {
+            const checkout = yield* savedCheckout(env, where);
+            if ("error" in checkout) {
+              return checkout.error;
+            }
+            return yield* changing(
+              env,
+              "schedule-add",
+              {
                 name,
+                workflow,
                 cron,
+                tz: Option.getOrNull(tz),
                 paused,
-                start: { workflow, inputs, workspace, verify: checks.specs },
-                ...Option.match(tz, { onNone: () => ({}), onSome: (zone) => ({ tz: zone }) }),
-              });
-              if (env.machine !== undefined) {
-                return scheduled(Str.trim(where));
-              }
-              const checkout = yield* checkoutOf(env, where);
-              if ("error" in checkout) {
-                return refused(checkout.error);
-              }
-              const at = checkout.path === SCHEDULE_PROJECTS_ROOT ? null : checkout.path;
-              const saved = yield* moduleFor({ ...env, cwd: at ?? env.cwd }, workflow);
-              if (saved === null) {
-                return refused(
-                  err(
-                    "workflow_not_found",
-                    `No workflow module is saved as "${workflow}". \`collie workflow list\` is what this installation has.`,
-                    { workflow },
-                  ),
-                );
-              }
-              if ("inputs" in saved) {
-                const needed = yield* agentStartRefusal(
-                  { ...env, cwd: at ?? env.cwd },
-                  saved,
-                  { json: {}, text: inputs },
-                  { named: checkout.path, fix: SCHEDULE_CHECKOUT_FIX },
-                );
-                if (needed !== null) {
-                  return refused(needed);
-                }
-              }
-              return scheduled(checkout.path ?? "");
-            }).pipe(Effect.orDie),
-          "cwd",
-          where,
+                inputs,
+                verify: checks.specs,
+              },
+              requestId,
+              () =>
+                Effect.gen(function* () {
+                  const refused = (failure: OpResult) => ({ refused: failure });
+                  const scheduled: ScheduleChange = {
+                    change: "add" as const,
+                    name,
+                    cron,
+                    paused,
+                    start: {
+                      workflow,
+                      inputs,
+                      workspace: checkout.workspace,
+                      verify: checks.specs,
+                    },
+                    ...Option.match(tz, { onNone: () => ({}), onSome: (zone) => ({ tz: zone }) }),
+                  };
+                  if (!checkout.local) {
+                    return scheduled;
+                  }
+                  const saved = yield* moduleFor({ ...env, cwd: checkout.at ?? env.cwd }, workflow);
+                  if (saved === null) {
+                    return refused(
+                      err(
+                        "workflow_not_found",
+                        `No workflow module is saved as "${workflow}". \`collie workflow list\` is what this installation has.`,
+                        { workflow },
+                      ),
+                    );
+                  }
+                  if ("inputs" in saved) {
+                    const needed = yield* agentStartRefusal(
+                      { ...env, cwd: checkout.at ?? env.cwd },
+                      saved,
+                      { json: {}, text: inputs },
+                      {
+                        named: checkout.workspace === "" ? null : checkout.workspace,
+                        fix: SCHEDULE_CHECKOUT_FIX,
+                      },
+                    );
+                    if (needed !== null) {
+                      return refused(needed);
+                    }
+                  }
+                  return scheduled;
+                }).pipe(Effect.orDie),
+              "cwd",
+              checkout.workspace,
+            );
+          }),
         );
       }),
     ),
@@ -321,7 +350,11 @@ const scheduleMove = Command.make(
 
 const named = (change: "pause" | "resume" | "remove", description: string) =>
   Command.make(change, { name: nameArg, requestId: requestIdFlag }, ({ name, requestId }) =>
-    changing(`schedule-${change}`, { name }, requestId, () => Effect.succeed({ change, name })),
+    answering((env) =>
+      changing(env, `schedule-${change}`, { name }, requestId, () =>
+        Effect.succeed({ change, name }),
+      ),
+    ),
   ).pipe(Command.withDescription(description));
 
 export const schedule = Command.make("schedule").pipe(
