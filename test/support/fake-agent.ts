@@ -197,6 +197,17 @@ const answerFrom = Effect.fn("fakeAgent.answer")(function* (
     }
   }
   const output = scripted === null ? next : scripted.output;
+  // WARNING: an agent whose script wrote its work to the Output path still hands it in through the tool.
+  if (
+    output === null &&
+    scripted?.sh !== undefined &&
+    submit === null &&
+    server !== null &&
+    outputPath !== null &&
+    (yield* fs.exists(outputPath).pipe(Effect.orElseSucceed(() => false)))
+  ) {
+    submit = { server, output: yield* fs.readFileString(outputPath) };
+  }
   if (output !== undefined && output !== null) {
     if (byFile) {
       yield* fs.makeDirectory(path.dirname(outputPath), { recursive: true });

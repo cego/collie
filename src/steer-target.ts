@@ -1,6 +1,10 @@
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
+import { Effect } from "effect";
+import { outputOf } from "./step-output";
+import type { Step } from "./step-output";
+import type { RunRecordsApi } from "./run-records";
 export interface Candidate {
   readonly agent: string;
   readonly operation: string;
@@ -18,6 +22,12 @@ export const ROLES = {
 
 const rolesFor = (to: string) =>
   Option.getOrUndefined(Arr.findFirst(Rec.toEntries(ROLES), ([name]) => name === to))?.[1];
+
+/** A step is done when its Output is on record, so a steer never reaches an agent that already handed in. */
+export const candidatesOf = <A extends Step>(records: RunRecordsApi, launches: ReadonlyArray<A>) =>
+  Effect.forEach(launches, (one) =>
+    Effect.map(outputOf(records, one), (held) => ({ ...one, done: held !== null })),
+  );
 
 export interface Asked {
   readonly to?: string | undefined;

@@ -1070,7 +1070,7 @@ export default defineWorkflow({
         }
         synthesis = yield* reviewedAgain(
           (reviews += 1),
-          agents.outputFor(run.id, operation),
+          (yield* agents.outputOf(run.id, operation))?.text ?? "",
           fixed.fixed,
         );
       }

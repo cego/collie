@@ -122,6 +122,7 @@ import { recordsAt } from "../../src/records";
 import type { Records } from "../../src/records";
 import { registerAgent, scopeFor } from "../../src/registry";
 import { deliveriesOf, SENT_STATES } from "../../src/steering";
+import { submitOutput } from "../../src/output-submit";
 import { fixtures, until } from "./host";
 import { BUILD } from "../../src/host";
 import { metricsOf, readMetrics } from "../../src/metrics";
@@ -151,9 +152,23 @@ const handsIn = (dir: string, runId: string, operation: string, text: string) =>
       return yield* Effect.die(new Error(`no launch of ${runId} ran ${operation}`));
     }
     const one = found;
-    yield* RunRecords.use((records) =>
-      recordOutput(records, { runId, output: one.output }, text),
-    ).pipe(Effect.provide(recordsAt(dir)));
+    const submitted = (json: Schema.Json) =>
+      RunRecords.use(() => submitOutput(runId, one.agent, json)).pipe(
+        Effect.provide(recordsAt(dir)),
+      );
+    const plain = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(text);
+    const answer: Schema.Json = Option.isSome(plain) ? plain.value : text;
+    for (let tries = 0; tries < 5000; tries++) {
+      const said = yield* submitted(answer);
+      if (!pipe(said, Str.startsWith("No step of"))) {
+        if (said !== "accepted") {
+          return yield* Effect.die(new Error(`${runId} refused ${operation}: ${said}`));
+        }
+        return;
+      }
+      yield* Effect.yieldNow;
+    }
+    return yield* Effect.die(new Error(`no step of ${runId} was waiting for ${operation}`));
   });
 
 const ROOT = new URL("../../", import.meta.url).pathname;
@@ -8161,7 +8176,7 @@ scenario("a blocking build finding is reviewed and fixed before the next ticket 
       expect(fix).toContain(finding.title);
       expect(fix).toContain(`- unit: true (in ${rig.projectDir})`);
       expect(yield* asked("r-impl-build-findings", "01-first.md.review-2-1")).toContain(
-        `${dir}/agents/r-impl-build-findings/01-first.md.fix-1.json`,
+        `"fixed":[{"title":"${finding.title}"`,
       );
       const build = yield* asked("r-impl-build-findings", "01-first.md");
       expect(build).not.toContain("from the checks above");
@@ -8373,7 +8388,7 @@ scenario(
         expect(fixing).toContain("Iteration 1 of at most 4");
         const followUp = yield* asked("r-impl-fix", "review-2-1");
         expect(followUp).toContain("Iteration 2 of at most 4");
-        expect(followUp).toContain(`${dir}/agents/r-impl-fix/fix-1.json`);
+        expect(followUp).toContain(`"fixed":[{"title":"the guard is on the wrong side"`);
       }),
     ),
 );
@@ -11679,7 +11694,6 @@ once(
         for (const seat of [1, 2]) {
           expect(fanIn).toContain(`### review-2-${seat}`);
         }
-        // WARNING: the seats' reviews are quoted into the synthesis, which is their only reader now.
         expect(Str.split(fanIn, accepted.reason).length - 1).toBeGreaterThanOrEqual(2);
         expect(yield* findingsIn(runDir(dir, runId))).toEqual([]);
       }),
@@ -24081,10 +24095,9 @@ scenario(
           { ...tunePlan(commit, [STEADY_PRIMARY]), harness: { commits: [], paths: [] } },
         ]);
         const why = yield* parkedOn({ entry: shipped("tune-up"), runId, input: {} });
-        expect(why).toContain("harness.json again: Missing key");
-        expect(why).toContain(`at ["harness"]["commits"][0]`);
-        expect(why).toContain(`Correct it, then resume ${runId}.`);
-        expect(yield* parkedCause(runId)).toBe("step-failed");
+        expect(why).toContain("ended its turn without its Output being accepted");
+        expect(why).toContain("ask it to submit its Output, or why it cannot");
+        expect(yield* parkedCause(runId)).toBe("output-absent");
         expect(yield* runLog(runId)).not.toContain("benchmark plan 1");
         expect(yield* calibrations(runId)).toEqual([]);
       }),

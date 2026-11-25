@@ -46,10 +46,12 @@ The first review of a change — iteration 1, with no earlier review above — i
 comprehensive one: both review skills, the whole spec, the whole change, and the code
 around it. A later iteration is a follow-up, and so is any review with an earlier review
 above it: do not run the full review skills again over the whole change. The previous
-round's review is at `{{run.dir}}/review.md` and the implementer's account of it — what
-it fixed, what it disputed, what it checked — is its Output at `{{previous.fix}}`. Check each of its
+round's review is at `{{run.dir}}/review.md`, and the implementer's account of it — what
+it fixed, what it disputed, what it checked — is below, in its own words. Check each of its
 findings against the code as it is now and say what happened to it — still there,
-changed but not fixed, or fixed. Then review what has changed since that review, and the
+changed but not fixed, or fixed.
+
+{{previous.fix}} Then review what has changed since that review, and the
 callers and tests the fixes touched, and raise what is new. A finding you carry forward
 is the same finding: keep its file and title unless the code moved under it.
 

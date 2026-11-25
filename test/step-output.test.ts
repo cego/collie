@@ -86,7 +86,6 @@ test("a step registered again after a restart accepts the same Output, refuses a
         yield* awaitOutput("r1", "a", fileAt(), () => null);
         expect(yield* submitOutput("r1", "a", "first")).toBe("accepted");
         const accepted = yield* outputOf(records, step);
-        // WARNING: A restart rebuilds the registration with nothing in memory, which a second awaitOutput is.
         yield* awaitOutput("r1", "a", fileAt(), () => null);
         expect(yield* submitOutput("r1", "a", "first")).toBe("accepted");
         expect(yield* submitOutput("r1", "a", "second")).toContain("differs from it");
@@ -121,6 +120,55 @@ test("the same Output submitted again is accepted without moving its time", () =
         const first = (yield* outputOf(records, step))!.at;
         expect(yield* submitOutput("r1", "a", { summary: "kept" })).toBe("accepted");
         expect((yield* outputOf(records, step))!.at).toBe(first);
+      }),
+    ),
+  ));
+
+test("a replay of the dispatch whose Output was collected cannot replace it", () =>
+  runEffect(
+    withRecords(
+      Effect.gen(function* () {
+        const records = yield* RunRecords;
+        const step = { runId: "r1", output: fileAt(), submitOnly: true };
+        yield* awaitOutput("r1", "a", fileAt(), () => null, "review@1");
+        expect(yield* submitOutput("r1", "a", "first")).toBe("accepted");
+        yield* takeOutput(records, step, "first");
+        // WARNING: A resumed Run re-registers the dispatch its launch record already fixed.
+        yield* awaitOutput("r1", "a", fileAt(), () => null, "review@1");
+        expect(yield* submitOutput("r1", "a", "second")).toContain("differs from it");
+        expect((yield* outputOf(records, step))?.text).toBe("first");
+      }),
+    ),
+  ));
+
+test("a step dispatched again in a new round takes its new Output", () =>
+  runEffect(
+    withRecords(
+      Effect.gen(function* () {
+        const records = yield* RunRecords;
+        const step = { runId: "r1", output: fileAt(), submitOnly: true };
+        yield* awaitOutput("r1", "a", fileAt(), () => null, "review@1");
+        yield* submitOutput("r1", "a", "first");
+        yield* takeOutput(records, step, "first");
+        yield* awaitOutput("r1", "a", fileAt(), () => null, "review@2");
+        expect(yield* submitOutput("r1", "a", "second")).toBe("accepted");
+        expect((yield* outputOf(records, step))?.text).toBe("second");
+      }),
+    ),
+  ));
+
+test("a step's time is when its Output was accepted, not when a file beside it was written", () =>
+  runEffect(
+    withRecords(
+      Effect.gen(function* () {
+        const records = yield* RunRecords;
+        yield* writeFile(`{"verdict":"clean","note":"from the file"}`);
+        const file = (yield* outputOf(records, { runId: "r1", output: fileAt() }))!;
+        yield* acceptOutput(records, { runId: "r1", output: fileAt() }, "submitted");
+        const accepted = (yield* outputOf(records, { runId: "r1", output: fileAt() }))!;
+        expect(accepted.text).toBe("submitted");
+        expect(accepted.file).toBe(false);
+        expect(accepted.at).toBeGreaterThanOrEqual(file.at);
       }),
     ),
   ));

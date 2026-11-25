@@ -51,7 +51,7 @@ import {
   repairText,
 } from "../src/agents";
 import { awaitOutput, submitOutput } from "../src/output-submit";
-import { acceptedName, acceptOutput, outputOf } from "../src/step-output";
+import { acceptedName, acceptOutput, dispatchOf, outputOf } from "../src/step-output";
 import type { AgentHost, RanOut, RunNow } from "../src/agents";
 import { Children, Host, Run, WorkflowAgents, jsonSchemaFor, step, withAgents } from "../src/sdk";
 import { asRun, enveloped } from "./support/enveloped";
@@ -1229,7 +1229,7 @@ class UnseenTurn extends Herdr {
 const pastTheBudget = Effect.gen(function* () {
   yield* until(parked("r1"));
   expect(yield* controlOf(PARKED, "r1")).toContain(
-    `has written nothing to ${outputPath("r1")} after 0 minutes idle. Collie keeps collecting it;`,
+    `has submitted nothing after 0 minutes idle. Collie keeps collecting it;`,
   );
   expect(yield* controlOf(PARKED, "r1")).not.toContain("resume");
   yield* spend(5000);
@@ -1260,6 +1260,7 @@ test("an agent idle past its budget parks the Run and is still collected, so its
       expect(result._tag === "Success" && result.success.note).toBe("late");
       expect(yield* isSet(PARKED, "r1")).toBe(false);
       expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
+      expect(sent(yield* rig.calls(), "review.prompt.md")).toBe(1);
     }),
   ));
 
@@ -2363,7 +2364,7 @@ test("an agent is still collected while its Run is parked past its budget", () =
                 if (
                   Option.getOrUndefined(
                     Option.map(Option.fromNullishOr(why), (present_) =>
-                      pipe(present_, Str.includes("has written nothing")),
+                      pipe(present_, Str.includes("has submitted nothing")),
                     ),
                   ) &&
                   marked === undefined
@@ -2587,7 +2588,7 @@ for (const [what, herdr] of [
           collectMs: 120_000,
         });
         expect(yield* controlOf(PARKED, "r1")).toContain(
-          `has written nothing to ${outputPath("r1")} after 2 minutes idle. Collie keeps collecting it;`,
+          `has submitted nothing after 2 minutes idle. Collie keeps collecting it;`,
         );
         expect(yield* controlOf(PARK_CAUSE, "r1")).toBe("idle-budget");
         expect(Arr.map(yield* halts("r1"), (line) => line.cause)).toEqual(["idle-budget"]);
@@ -4305,7 +4306,7 @@ test("a turn its harness will not retry parks the Run within a poll, quoting the
           const why = yield* controlOf(PARKED, "r1");
           expect(why).toContain(EXPIRED);
           expect(why).toContain("pi/openai-codex/gpt-5.5");
-          expect(why).toContain(outputPath("r1"));
+          expect(why).toContain("stopped before submitting its Output");
           expect(why).not.toContain("minutes idle");
         }),
         { ...onPi, collectMs: 3_600_000, pollMs: 1000 },
@@ -8544,7 +8545,11 @@ const waitingAtBoundary = Effect.gen(function* () {
 });
 
 const busyAfterFirst = <A, E>(
-  run: Effect.Effect<A, E, WorkflowEngine.WorkflowEngine | Agents | FileSystem.FileSystem>,
+  run: Effect.Effect<
+    A,
+    E,
+    WorkflowEngine.WorkflowEngine | Agents | FileSystem.FileSystem | RunRecords
+  >,
 ) =>
   run.pipe(
     Effect.provide(
@@ -8566,6 +8571,22 @@ const busyAfterFirst = <A, E>(
     Effect.scoped,
     Effect.orDie,
   );
+
+test("a step that is still waiting for the old turn to end takes no Output", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const early = yield* busyAfterFirst(
+        Effect.gen(function* () {
+          yield* waitingAtBoundary;
+          const said = yield* submitOutput("r1", sweeper, `{"verdict":"clean","note":"early"}`);
+          yield* control("stop", "r1", true);
+          yield* TestClock.withLive(Effect.sleep("300 millis"));
+          return said;
+        }),
+      );
+      expect(early).toContain("No step of r1");
+    }),
+  ));
 
 test("a steer reaches an agent whose boundary is waiting for its turn to end", () =>
   runEffect(
@@ -9549,10 +9570,16 @@ test("a step registers its Output before its agent is prompted", () =>
               skill: null,
             },
             undefined,
-            (agent) =>
-              awaitOutput("r1", agent, `${dir}/agents/r1/review.json`, () => null).pipe(
+            (launched) =>
+              awaitOutput(
+                "r1",
+                launched.agent,
+                launched.output,
+                () => null,
+                dispatchOf(launched),
+              ).pipe(
                 Effect.andThen(rig.calls()),
-                Effect.map((calls) => void before.push(sent(calls, "review.r1.prompt.md"))),
+                Effect.map((calls) => void before.push(sent(calls, "review.prompt.md"))),
                 Effect.orDie,
                 Effect.provideService(FileSystem.FileSystem, fs),
                 Effect.asVoid,

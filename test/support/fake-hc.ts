@@ -264,7 +264,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
       yield* fs.writeFileString(logPath, `${entry}\n`, { flag: "a" }).pipe(Effect.orDie);
       yield* emit(terminal.address, "status", { status: { state }, records: {}, reported: true });
     });
-  // WARNING: A step this build submits to never writes its Output path, so an owed file is also settled by an accepted fact.
+  // WARNING: a step this build submits to never writes its Output path.
   const settled = (owed: string) =>
     Effect.gen(function* () {
       if (yield* fs.exists(owed).pipe(Effect.orElseSucceed(() => false))) {
@@ -294,7 +294,8 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
               }
               yield* setStatus(terminal, submit === null ? status : "idle");
               if (owed === undefined) {
-                if (submit === null) {
+                // WARNING: a scripted working turn is a fixture saying the agent is still busy, not a turn that ended.
+                if (submit === null && status !== "working" && status !== "blocked") {
                   yield* setStatus(terminal, "idle");
                 }
                 return;

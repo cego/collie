@@ -783,19 +783,10 @@ export default defineWorkflow({
             name: "recovery-build-claims-ancestry",
             success: Schema.NullOr(Built),
             execute: Effect.gen(function* () {
-              const fs = yield* FileSystem.FileSystem;
-              const path = yield* Path.Path;
               for (const from of recovered.lineage ?? [parent]) {
-                const files = yield* fs
-                  .readDirectory(path.dirname(agents.outputFor(from, "build")))
-                  .pipe(Effect.orElseSucceed(() => []));
-                const tickets = Arr.sort(
-                  Arr.filter(files, (name) => pipe_(name, Str.endsWith(".md.json"))),
-                  Str.Order,
-                );
                 const claims = yield* claimsAt(from, [
                   "build",
-                  ...Arr.map(tickets, (name) => pipe_(name, Str.slice(0, -5))),
+                  ...Arr.map(tickets, (one) => one.file),
                 ]);
                 if (claims !== null) {
                   return claims;

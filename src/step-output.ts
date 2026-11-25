@@ -2,6 +2,7 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Clock, Duration, Effect, FileSystem, Schedule, Schema } from "effect";
 import type { Launched } from "./launches";
+import { stemOf } from "./launches";
 import type { RunRecordsApi } from "./run-records";
 
 export const ACCEPTED = "accepted/";
@@ -13,7 +14,11 @@ export const acceptedName = (output: string) =>
 export const collectedName = (output: string) =>
   `${COLLECTED}${output.slice(output.lastIndexOf("/") + 1)}`;
 
-const Accepted = Schema.Struct({ text: Schema.String, at: Schema.Finite });
+const Accepted = Schema.Struct({
+  text: Schema.String,
+  at: Schema.Finite,
+  dispatch: Schema.optionalKey(Schema.String),
+});
 const AcceptedJson = Schema.fromJsonString(Accepted);
 const decodeAccepted = Schema.decodeOption(AcceptedJson);
 const encodeAccepted = Schema.encodeSync(AcceptedJson);
@@ -24,7 +29,26 @@ export interface StepOutput {
   readonly file: boolean;
 }
 
-export type Step = Pick<Launched, "runId" | "output"> & { readonly submitOnly?: boolean };
+export type Step = Pick<Launched, "runId" | "output"> & {
+  readonly submitOnly?: boolean;
+  readonly dispatch?: string;
+};
+
+// WARNING: The clock a harness is stamped with is not the host's, so a dispatch is named by what the record fixes.
+export const dispatchOf = (launched: Launched) => `${stemOf(launched)}@${launched.at ?? 0}`;
+
+/** A step at a path is the dispatch that was recorded for it; a path with no launch is nobody's Output. */
+export const stepOf = (
+  launches: ReadonlyArray<Launched>,
+  runId: string,
+  operation: string,
+  output: string,
+): Step => {
+  const dispatched = Option.getOrNull(Arr.findLast(launches, (one) => one.operation === operation));
+  return dispatched === null
+    ? { runId, output, submitOnly: true }
+    : { ...dispatched, dispatch: dispatchOf(dispatched) };
+};
 
 export const outputOf = Effect.fn("StepOutput.of")(function* (
   records: RunRecordsApi,
@@ -78,23 +102,27 @@ export const recordOutput = Effect.fn("StepOutput.record")(function* (
   text: string,
 ) {
   const at = yield* Clock.currentTimeMillis;
-  yield* records.put(step.runId, acceptedName(step.output), encodeAccepted({ text, at }));
+  const accepted = {
+    text,
+    at,
+    ...(step.dispatch === undefined ? {} : { dispatch: step.dispatch }),
+  };
+  yield* records.put(step.runId, acceptedName(step.output), encodeAccepted(accepted));
 });
-export const uncollected = Effect.fn("StepOutput.uncollected")(function* (
+export const acceptedFor = Effect.fn("StepOutput.acceptedFor")(function* (
   records: RunRecordsApi,
   step: Step,
 ) {
   const fact = yield* records.fact(step.runId, acceptedName(step.output));
-  if (fact === null) {
-    return false;
-  }
-  const collected = yield* records.fact(step.runId, collectedName(step.output));
-  const accepted = decodeAccepted(fact);
-  const taken = collected === null ? Option.none() : decodeAccepted(collected);
-  if (Option.isNone(accepted)) {
-    return false;
-  }
-  return Option.isNone(taken) || taken.value.at < accepted.value.at;
+  return fact === null ? null : Option.getOrNull(decodeAccepted(fact));
+});
+
+export const collectedFor = Effect.fn("StepOutput.collectedFor")(function* (
+  records: RunRecordsApi,
+  step: Step,
+) {
+  const fact = yield* records.fact(step.runId, collectedName(step.output));
+  return fact === null ? null : Option.getOrNull(decodeAccepted(fact));
 });
 
 export const markCollected = Effect.fn("StepOutput.collected")(function* (
@@ -115,10 +143,11 @@ export const acceptOutput = Effect.fn("StepOutput.accept")(function* (
   text: string,
 ) {
   const at = yield* Clock.currentTimeMillis;
+  const offered = { text, at, ...(step.dispatch === undefined ? {} : { dispatch: step.dispatch }) };
   // WARNING: another connection may hold the database for a moment, and a refusal must not lose an accepted Output.
   const held = yield* records
     .update(step.runId, acceptedName(step.output), (was) =>
-      Effect.succeed(was !== null ? was : encodeAccepted({ text, at })),
+      Effect.succeed(was !== null ? was : encodeAccepted(offered)),
     )
     .pipe(Effect.retry({ times: 20, schedule: Schedule.spaced(Duration.millis(50)) }));
   const accepted = held === null ? Option.none() : decodeAccepted(held);

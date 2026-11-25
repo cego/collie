@@ -355,11 +355,12 @@ const verdict =
   proof of the work: the gate still reads the Run's journal
   ([proving it](#proving-it-rather-than-saying-so)).
 - **One unusable Output buys one repair**, sent back to the agent that wrote it, with the
-  schema's own issues. For a step this build dispatched, a submit that does not decode is
-  refused at once and nothing is kept, so the repair repeats the issues and the agent submits
-  again; for a step an older build dispatched, a rewrite the schema still refuses is judged
-  once the agent's turn has ended, so a file caught half rewritten is not the answer; one
-  still unusable then parks the Step, naming the file, the agent and the schema's issues. A
+  schema's own issues, and the allowance belongs to the file a step an older build dispatched
+  is collected from. A submit that does not decode is refused at once, before anything is
+  collected, so no repair is scheduled: the agent has the issues in the refusal and submits
+  again. A rewrite the schema still refuses is judged once the agent's turn has ended, so a
+  file caught half rewritten is not the answer; one still unusable then parks the Step,
+  naming the file, the agent and the schema's issues. A
   resume reads the Output again — the accepted fact, or the older step's file — and goes on
   if it decodes now; if not, the agent gets one more repair, and the Step parks again where
   that is unusable too

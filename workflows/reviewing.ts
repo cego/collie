@@ -630,10 +630,10 @@ export const rally = (ask: {
             delta: given,
             answered:
               ask.resume !== undefined
-                ? agents.outputFor(runId, `${prefix}fix`)
+                ? ((yield* agents.outputOf(runId, `${prefix}fix`))?.text ?? "")
                 : at === 1
                   ? ""
-                  : agents.outputFor(runId, `${prefix}fix-${at - 1}`),
+                  : ((yield* agents.outputOf(runId, `${prefix}fix-${at - 1}`))?.text ?? ""),
             prefix,
             ledger,
             stamped: head,

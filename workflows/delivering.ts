@@ -550,7 +550,9 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
               reviewed = {
                 on: (yield* host.evidence(runId, cwd)).final,
                 reviewed: yield* review(
-                  fixes === 0 ? "" : agents.outputFor(runId, `gate-fix-${fixes}`),
+                  fixes === 0
+                    ? ""
+                    : ((yield* agents.outputOf(runId, `gate-fix-${fixes}`))?.text ?? ""),
                 ),
               };
               missing = yield* reading;

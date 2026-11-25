@@ -4,12 +4,13 @@ import { Effect, FileSystem } from "effect";
 import { readEnv } from "../src/env";
 import { laneFor } from "../src/flow-read";
 import { outputsIn } from "../src/drift";
-import { operationsOf, recordLaunch } from "../src/launches";
+import { Launches, operationsOf, recordLaunch } from "../src/launches";
 import type { Launched } from "../src/launches";
 import { RunRecords } from "../src/run-records";
-import { acceptOutput, outputOf } from "../src/step-output";
+import { acceptOutput, outputOf, stepOf } from "../src/step-output";
+import { leaveStepNote, takeStepNotes } from "../src/step-steering";
 import { trialRecordsOf } from "../src/trial";
-import { steerTarget } from "../src/steer-target";
+import { candidatesOf, steerTarget } from "../src/steer-target";
 import { REVIEW_ROLE } from "../src/cards";
 import { runEffect } from "./support/effect";
 import { runFacts } from "./support/records";
@@ -44,6 +45,11 @@ const launched = (over: Partial<Launched> = {}): Launched => ({
   submitOnly: true,
   ...over,
 });
+
+const launchesOn = (runId: string) =>
+  Launches.use((launches) => launches.of([runId])).pipe(
+    Effect.map((found) => found.get(runId) ?? []),
+  );
 
 const accepted = (output: string, text: string) =>
   RunRecords.use((records) => acceptOutput(records, { runId: "r1", output }, text));
@@ -150,17 +156,60 @@ test("the agent a steer reaches is the one whose step has no accepted Output", (
     Effect.gen(function* () {
       const records = yield* RunRecords;
       yield* accepted(`${stateDir}/agents/r1/build.json`, `{"verdict":"clean"}`);
-      const launches = yield* Effect.forEach(
-        [
-          launched({
-            operation: "build",
-            agent: "r1-build-r1",
-            output: `${stateDir}/agents/r1/build.json`,
-          }),
-          launched({ operation: "review", agent: "r1-review-r1" }),
-        ],
-        (one) => Effect.map(outputOf(records, one), (held) => ({ ...one, done: held !== null })),
-      );
+      const launches = yield* candidatesOf(records, [
+        launched({
+          operation: "build",
+          agent: "r1-build-r1",
+          output: `${stateDir}/agents/r1/build.json`,
+        }),
+        launched({ operation: "review", agent: "r1-review-r1" }),
+      ]);
       expect(steerTarget(launches, {})?.agent).toBe("r1-review-r1");
+    }),
+  ));
+
+test("a workflow's read of a step is its dispatch, so a marked step's stray file is no Output", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const records = yield* RunRecords;
+      const fs = yield* FileSystem.FileSystem;
+      yield* recordLaunch(launched());
+      yield* fs.makeDirectory(`${stateDir}/agents/r1`, { recursive: true });
+      yield* fs.writeFileString(reviewOutput(), `{"findings":["stale"]}`);
+      const marked = stepOf(yield* launchesOn("r1"), "r1", "review", reviewOutput());
+      expect(yield* outputOf(records, marked)).toBeNull();
+      yield* accepted(reviewOutput(), `{"findings":[]}`);
+      expect((yield* outputOf(records, marked))?.text).toContain("[]");
+    }),
+  ));
+
+test("a workflow's read of a step an older build dispatched still reads its file", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const records = yield* RunRecords;
+      const fs = yield* FileSystem.FileSystem;
+      const { submitOnly: _marked, ...older } = launched();
+      yield* recordLaunch({ ...older, outputSubmit: "file" });
+      yield* fs.makeDirectory(`${stateDir}/agents/r1`, { recursive: true });
+      yield* fs.writeFileString(reviewOutput(), `{"findings":["from the file"]}`);
+      const step = stepOf(yield* launchesOn("r1"), "r1", "review", reviewOutput());
+      expect((yield* outputOf(records, step))?.text).toContain("from the file");
+    }),
+  ));
+
+test("a Step Note reaches the step it names once, and no other", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* leaveStepNote(stateDir, {
+        id: "note-1",
+        step: "review",
+        by: "human",
+        text: "look at the second call site",
+      });
+      const prompt = `${stateDir}/agents/r1/review.prompt.md`;
+      expect(yield* takeStepNotes(stateDir, "review", prompt)).toBe("look at the second call site");
+      // WARNING: a reply goes back to the prompt it was left at, and a replayed launch reads it again.
+      expect(yield* takeStepNotes(stateDir, "fix", `${stateDir}/agents/r1/fix.prompt.md`)).toBe("");
+      expect(yield* takeStepNotes(stateDir, "review", prompt)).toBe("look at the second call site");
     }),
   ));

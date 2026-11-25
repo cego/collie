@@ -1146,20 +1146,24 @@ export default defineWorkflow({
           error: WorkflowError,
           execute: Effect.gen(function* () {
             const fs = yield* FileSystem.FileSystem;
-            const files = Arr.map(operations, (one) => agents.outputFor(from, one));
-            const file = Option.getOrUndefined(
-              yield* Effect.findFirst(files, (one) =>
-                fs.exists(one).pipe(Effect.orElseSucceed(() => false)),
-              ),
-            );
-            if (file === undefined) {
+            let raw: string | null = null;
+            for (const operation of operations) {
+              const found = yield* agents.outputOf(from, operation);
+              if (found !== null) {
+                raw = found.text;
+                break;
+              }
+            }
+            if (raw === null) {
+              const files = Arr.map(operations, (one) => agents.outputFor(from, one));
               return yield* new WorkflowError({
                 reason: `${from} has no ${name} Output to carry: none of ${Arr.join(files, ", ")}`,
               });
             }
             const unreadable = (cause: { readonly message: string }) =>
-              new WorkflowError({ reason: `${file} cannot be carried: ${cause.message}` });
-            const raw = yield* fs.readFileString(file).pipe(Effect.mapError(unreadable));
+              new WorkflowError({
+                reason: `${from}'s ${name} cannot be carried: ${cause.message}`,
+              });
             const read = yield* Schema.decodeEffect(Schema.fromJsonString(schema))(raw).pipe(
               Effect.mapError(unreadable),
             );
@@ -1167,7 +1171,8 @@ export default defineWorkflow({
             yield* fs
               .makeDirectory((yield* Path.Path).dirname(own), { recursive: true })
               .pipe(Effect.andThen(fs.writeFileString(own, raw)), Effect.mapError(unreadable));
-            yield* host.record(runId, `${name} carried from ${from}: ${file}`);
+            yield* agents.carry(runId, name, raw);
+            yield* host.record(runId, `${name} carried from ${from}`);
             return read;
           }),
         });
@@ -2302,7 +2307,7 @@ export default defineWorkflow({
             if (pass === "ci") {
               yield* failingChecks(`${fix}.checks`);
             }
-            const again = reviewOf(`${fix}.`, agents.outputFor(runId, fix));
+            const again = reviewOf(`${fix}.`, (yield* agents.outputOf(runId, fix))?.text ?? "");
             latest = yield* pass === "ci" ? reviewRound(again) : again;
             const body = yield* writeBody;
             if (pass === "ci") {

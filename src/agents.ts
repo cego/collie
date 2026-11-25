@@ -191,7 +191,7 @@ import {
   verifyIncarnation,
 } from "./registry";
 import type { AgentEntry, Incarnation } from "./registry";
-import { ROLES, steerTarget } from "./steer-target";
+import { candidatesOf as candidatesOn, ROLES, steerTarget } from "./steer-target";
 import {
   jsonSchemaFor,
   AgentScopes,
@@ -216,7 +216,14 @@ import type { ClaudeOverlay, RoleProfile } from "./profile";
 import { isString } from "./schema";
 import type { JsonObject } from "./schema";
 import { awaitOutput as registerOutput, submitOutput, takeOutput } from "./output-submit";
-import { acceptOutput, markCollected, outputOf } from "./step-output";
+import {
+  acceptOutput,
+  dispatchOf,
+  markCollected,
+  outputOf,
+  recordOutput,
+  stepOf,
+} from "./step-output";
 import type { Step } from "./step-output";
 import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } from "./subagents";
 import { Collecting, collectingLayer } from "./collecting";
@@ -389,6 +396,7 @@ export interface AgentsApi {
     runId: string,
     operation: string,
   ) => Effect.Effect<{ readonly text: string; readonly at: number } | null>;
+  readonly carry: (runId: string, operation: string, text: string) => Effect.Effect<void>;
   readonly skills: (names: ReadonlyArray<string>) => Effect.Effect<ReadonlyMap<string, string>>;
   readonly attachments: (runId: string) => Effect.Effect<ReadonlyArray<Attachment>>;
   readonly handOver: (
@@ -431,7 +439,7 @@ export interface AgentsApi {
   readonly launch: (
     ask: AgentAsk,
     note?: (why: string | null) => Effect.Effect<void>,
-    beforePrompt?: (agent: string) => Effect.Effect<void>,
+    armed?: (launched: Launched) => Effect.Effect<void>,
   ) => Effect.Effect<Launched, AgentUncertain | AgentParked>;
   readonly revive: (
     ask: AgentAsk,
@@ -812,13 +820,17 @@ export const agentWork: <
       Effect.map(agents.stopped(on), (why) => {
         const idle =
           waiting ??
-          `${on.agent} has written nothing to ${output} after ${Math.round(agents.collectMs / 60_000)} minutes idle`;
+          (on.submitOnly === true
+            ? `${on.agent} has submitted nothing after ${Math.round(agents.collectMs / 60_000)} minutes idle`
+            : `${on.agent} has written nothing to ${output} after ${Math.round(agents.collectMs / 60_000)} minutes idle`);
+        const ask =
+          on.submitOnly === true
+            ? "Collie keeps collecting it; if it has stopped, ask it to submit."
+            : "Collie keeps collecting it; if it has stopped, ask it to write it.";
         if (why !== null) {
           return `${idle}; ${harnessSaid(on, why)}`;
         }
-        return waiting === undefined
-          ? `${idle}. Collie keeps collecting it; if it has stopped, ask it to write it.`
-          : `${idle}. Collie keeps collecting it.`;
+        return waiting === undefined ? `${idle}. ${ask}` : `${idle}. Collie keeps collecting it.`;
       });
     const parksOnStop = (on: Launched, since?: number) =>
       Effect.gen(function* () {
@@ -829,7 +841,7 @@ export const agentWork: <
         }
         yield* host.parked(
           runId,
-          `${on.agent} stopped before writing ${output}: ${harnessSaid(on, why)}`,
+          `${on.agent} stopped before ${on.submitOnly === true ? "submitting its Output" : `writing ${output}`}: ${harnessSaid(on, why)}`,
           "output-absent",
         );
         return yield* Effect.never;
@@ -976,8 +988,8 @@ export const agentWork: <
           if (asked === null) {
             const why =
               sent.length === 0
-                ? `${on.agent} ended its turn without its Output being accepted, and could not be reminded to; its log says why. A chat message is not its Output. Collie keeps collecting it; ask it to submit it.`
-                : `${on.agent} ended its turn without its Output being accepted, and again after each of ${sent.length} reminders, sent ${Arr.join(sent, " and ")}. A chat message is not its Output. Collie keeps collecting it; ask it to submit it, or why it cannot.`;
+                ? `${on.agent} ended its turn without ${withoutOutput(on)}, and could not be reminded to; its log says why. A chat message is not its Output. Collie keeps collecting it; ask it to ${handedIn(on)}.`
+                : `${on.agent} ended its turn without ${withoutOutput(on)}, and again after each of ${sent.length} reminders, sent ${Arr.join(sent, " and ")}. A chat message is not its Output. Collie keeps collecting it; ask it to ${handedIn(on)}, or why it cannot.`;
             return yield* Activity.make({
               name: `${at}.output-absent`,
               success: Collected,
@@ -1029,7 +1041,7 @@ export const agentWork: <
             .launch(
               next,
               (why) => host.parked(work.runId, why),
-              (agent) => registerOutput(next.runId, agent, next.output, problemIn),
+              (launched) => agents.awaitOutput(launched, problemIn),
             )
             .pipe(
               // WARNING: a stop that landed while a start failed or parked still reaches the server it left.
@@ -1048,7 +1060,6 @@ export const agentWork: <
           yield* haltLate;
           return yield* Workflow.suspend(instance);
         }
-        yield* agents.awaitOutput(launched, problemIn);
         return launched;
       });
     const handOverFrom = (outgoing: Launched, transcript: string | null) =>
@@ -2737,19 +2748,18 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     ask: AgentAsk,
     fresh?: boolean,
     note?: (why: string | null) => Effect.Effect<void>,
-    beforePrompt?: (agent: string) => Effect.Effect<void>,
+    armed?: (launched: Launched) => Effect.Effect<void>,
   ) => Effect.Effect<Launched, AgentUncertain | AgentParked> = (
     ask: AgentAsk,
     fresh = false,
     note: (why: string | null) => Effect.Effect<void> = () => Effect.void,
-    beforePrompt: (agent: string) => Effect.Effect<void> = () => Effect.void,
+    armed: (launched: Launched) => Effect.Effect<void> = () => Effect.void,
   ) =>
     Effect.gen(function* () {
       const agent = yield* nameFor(ask);
-      yield* beforePrompt(agent);
       const out = yield* Deferred.make<void>();
       stepsGoingOut.set(agent, out);
-      return yield* launching(ask, fresh, note, agent).pipe(
+      return yield* launching(ask, fresh, note, agent, armed).pipe(
         Effect.ensuring(stepGoneOut(agent, out)),
       );
     });
@@ -2769,7 +2779,8 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     fresh: boolean,
     note: (why: string | null) => Effect.Effect<void>,
     agent: string,
-  ) => Effect.Effect<Launched, AgentUncertain | AgentParked> = (ask, fresh, note, agent) =>
+    armed: (launched: Launched) => Effect.Effect<void>,
+  ) => Effect.Effect<Launched, AgentUncertain | AgentParked> = (ask, fresh, note, agent, armed) =>
     under(
       Effect.gen(function* () {
         const listedAt = yield* nowIso;
@@ -2799,7 +2810,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           );
         }
         if (live !== undefined && (yield* retireLost(ask, agent, listing.success))) {
-          return yield* launch(ask, false, note);
+          return yield* launch(ask, false, note, armed);
         }
         const alive = live !== undefined && !fresh;
         // WARNING: a launch from before this build has a tool server without collie_submit, so it is ended and started again on its session.
@@ -2834,7 +2845,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         const back = live === undefined ? comingBack.get(agent) : undefined;
         if (back !== undefined) {
           yield* Deferred.await(back);
-          return yield* launch(ask, false, note);
+          return yield* launch(ask, false, note, armed);
         }
         if (alive) {
           yield* stepGoneOut(agent);
@@ -2974,6 +2985,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               ).pipe(Effect.flatMap((incarnation) => recorded(incarnation, chosen))),
             );
         if (atLaunch) {
+          yield* armed(launched);
           if (!replayed) {
             yield* orderLaunch(ask);
           }
@@ -3018,6 +3030,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             });
           }
         }
+        yield* armed(launched);
         if (!replayed) {
           yield* orderLaunch(ask);
         }
@@ -3039,7 +3052,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               ask.runId,
               `${agent}: ${asked.why} before it was given ${ask.operation}; starting it again`,
             );
-            return yield* launch(ask, true);
+            return yield* launch(ask, true, note, armed);
           }
           if (again._tag === "Success") {
             asked = yield* deliver(launched, pointer, {
@@ -3531,13 +3544,13 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         yield* log(
           launched.runId,
           sent.sent
-            ? `${launched.agent}: asked to write ${launched.operation}.json again`
+            ? `${launched.agent}: asked to ${handedIn(launched)} again`
             : `${launched.agent}: could not be asked to write it again (${sent.why})`,
         );
         if (sent.refused) {
           return yield* refusedWith(
             launched,
-            `${launched.agent} was not asked to write ${launched.operation}.json again (${sent.why})`,
+            `${launched.agent} was not asked to ${handedIn(launched)} again (${sent.why})`,
             file,
           );
         }
@@ -3639,7 +3652,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             yield* rememberUnsettled(`${host.dir}/runs/${launched.runId}`, held);
             return yield* new AgentParked({
               operation: launched.operation,
-              reason: `${launched.agent} could not be reminded to write ${launched.operation}.json: delivery ${held.delivery} has not settled. Collie rechecks it; \`collie run deliveries ${launched.runId} --reconcile ${held.delivery} --as sent|not-sent\` settles it now.`,
+              reason: `${launched.agent} could not be reminded to ${handedIn(launched)}: delivery ${held.delivery} has not settled. Collie rechecks it; \`collie run deliveries ${launched.runId} --reconcile ${held.delivery} --as sent|not-sent\` settles it now.`,
               cause: "delivery-unsettled",
             });
           }
@@ -3648,8 +3661,8 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         yield* log(
           launched.runId,
           wasSent
-            ? `${launched.agent}: ended its turn without ${launched.operation}.json, so was reminded to write it (${ordinal} of ${OUTPUT_REMINDERS})`
-            : `${launched.agent}: ended its turn without ${launched.operation}.json, and could not be reminded to write it (${sent.why})`,
+            ? `${launched.agent}: ended its turn without ${withoutOutput(launched)}, so was reminded to ${handedIn(launched)} (${ordinal} of ${OUTPUT_REMINDERS})`
+            : `${launched.agent}: ended its turn without ${withoutOutput(launched)}, and could not be reminded to ${handedIn(launched)} (${sent.why})`,
         );
         if (wasSent) {
           yield* reminded(launched, ordinal, "still-absent", 0);
@@ -3661,7 +3674,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           (cause) =>
             log(
               launched.runId,
-              `${launched.agent}: could not be reminded to write ${launched.operation}.json (${reason(cause)})`,
+              `${launched.agent}: could not be reminded to ${handedIn(launched)} (${reason(cause)})`,
             ).pipe(Effect.as(null)),
         ),
       ),
@@ -4388,9 +4401,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
   const candidatesOf = (runId: string) =>
     Effect.gen(function* () {
       const records = yield* RunRecords;
-      return yield* Effect.forEach(yield* launchesOf(runId), (one) =>
-        Effect.map(outputOf(records, one), (held) => ({ ...one, done: held !== null })),
-      );
+      return yield* candidatesOn(records, yield* launchesOf(runId));
     });
 
   const steer = (options: {
@@ -4586,11 +4597,22 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     outputFor,
     outputOf: (runId, operation) =>
       under(
+        Effect.gen(function* () {
+          const step = stepOf(
+            yield* launchesOf(runId),
+            runId,
+            operation,
+            outputFor(runId, operation),
+          );
+          const records = yield* RunRecords;
+          const held = yield* outputOf(records, step);
+          return held === null ? null : { text: held.text, at: held.at };
+        }).pipe(Effect.catchCause(() => Effect.succeed(null))),
+      ),
+    carry: (runId, operation, text) =>
+      under(
         RunRecords.use((records) =>
-          outputOf(records, { runId, output: outputFor(runId, operation) }),
-        ).pipe(
-          Effect.map((held) => (held === null ? null : { text: held.text, at: held.at })),
-          Effect.catchCause(() => Effect.succeed(null)),
+          recordOutput(records, { runId, output: outputFor(runId, operation) }, text),
         ),
       ),
     handOver: (about) =>
@@ -4791,7 +4813,13 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         }).pipe(Effect.ignore),
       ),
     awaitOutput: (launched, problem) =>
-      registerOutput(launched.runId, launched.agent, launched.output, problem),
+      registerOutput(
+        launched.runId,
+        launched.agent,
+        launched.output,
+        problem,
+        dispatchOf(launched),
+      ),
     collect: (...args: Parameters<typeof collect>) =>
       Effect.tap(collect(...args), (text) =>
         text === null
@@ -5119,6 +5147,11 @@ const compactionDeps: (host: AgentHost, runId: string) => CompactionDeps = (host
   pollMs: host.pollMs ?? DEFAULT_POLL_MS,
   stopMs: host.stopMs ?? STOP_WAIT_MS,
 });
+
+const handedIn = (on: Launched) =>
+  on.submitOnly === true ? "submit its Output" : `write ${on.operation}.json`;
+const withoutOutput = (on: Launched) =>
+  on.submitOnly === true ? "its Output being accepted" : `writing ${on.operation}.json`;
 
 const undeliverable = (cause: unknown) => ({
   ok: false as const,
