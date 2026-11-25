@@ -2527,14 +2527,16 @@ artefact's `--path` without `--upload`, is not. A directory is counted as the ph
 it resolves to: a symlink and its target are one request, and a link pointed at another
 checkout is another. A Schedule counts the checkout its `--workspace` resolved. A start
 counts the workspace as it was named as well as the checkout it resolved, so one whose
-workspace now resolves elsewhere is refused. A fork counts the physical directory it reads
-and writes — the `.collie` of the directory the command runs in, which `COLLIE_CWD` sets —
-and a user fork also counts the project whose source it copies. Only `persona fork --layer
-project` takes that directory from `--workspace`, and only where no cwd was given:
-`workflow fork` and a user persona fork always read and write the directory they run in,
-whatever `--workspace` names. A local path that has gone is refused
-before its receipt is looked up, for a Schedule's `--workspace` and for the directory a fork
-runs in, so neither replays the answer it was given while the directory was there. A
+workspace now resolves elsewhere is refused. A fork counts the physical directory it reads —
+the `.collie` of the directory the command runs in, which `COLLIE_CWD` sets — and a user
+fork also counts the project its source is copied from. A project fork writes in that
+directory; a user fork writes under this Machine's user config directory instead. Only
+`persona fork --layer project` takes the directory from `--workspace`, and only where no cwd
+was given: `workflow fork` and a user persona fork always read the directory they run in,
+whatever `--workspace` names. A local path that has gone, or that is no longer a
+directory, is refused before its receipt is looked up, for a Schedule's `--workspace` and
+for the directory a fork runs in, so neither replays the answer it was given while the
+directory was there. A
 request that reuses an id for anything else is refused as `invalid_input`, with none of the
 stored answer, and applies nothing; check that first request's effect before retrying under
 a new id. A receipt written before Collie scoped receipts to their requests is replayed only

@@ -72,6 +72,10 @@ export type ContextResolution =
 // WARNING: a link is resolved to its target, so one directory has one path for a receipt and its work.
 export const physicalDir = Effect.fn("collie.physicalDir")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
+  const info = yield* fs.stat(dir).pipe(Effect.orElseSucceed(() => null));
+  if (info === null || info.type !== "Directory") {
+    return null;
+  }
   const returned: string | null = yield* fs.realPath(dir).pipe(Effect.orElseSucceed(() => null));
   return returned;
 });

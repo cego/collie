@@ -1,7 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { expect, test } from "bun:test";
-import { Effect, Fiber, FileSystem, Option, Schema, flow, Result } from "effect";
+import { Effect, Fiber, FileSystem, Option, Path, Schema, flow, Result } from "effect";
 import { readAudit } from "../src/audit";
 import { runDir } from "../src/engine";
 import { recordsReadLayer } from "../src/records";
@@ -1206,6 +1206,7 @@ test("a fork follows the directory it runs in, not the path that named it", () =
             project: true,
           },
           { command: ["workflow", "fork", "plain", "--layer", "project"], project: true },
+          { command: ["workflow", "fork", "plain", "--layer", "user"], project: false },
           { command: ["persona", "fork", "local", "--layer", "user"], project: false },
         ];
         const Forked = Schema.Struct({ path: Schema.String });
@@ -1221,13 +1222,21 @@ test("a fork follows the directory it runs in, not the path that named it", () =
           expect(yield* fs.exists(written)).toBe(true);
           if (one.project) {
             expect(Str.startsWith(first)(written)).toBe(true);
-          } else if (one.command[0] === "workflow") {
-            expect(Str.includes(`${link}/`)(yield* fs.readFileString(written))).toBe(false);
           }
           expect((yield* forked(first, one.command, "mine", id)).envelope).toEqual(once.envelope);
           yield* fs.remove(link);
           yield* fs.symlink(second, link);
           expect(yield* fs.exists(written)).toBe(true);
+          if (one.command[0] === "workflow") {
+            const text = yield* fs.readFileString(written);
+            const from = /^import original from "(.+)";$/m.exec(text)?.[1] ?? "";
+            const imported = yield* Effect.map(Path.Path, (path) =>
+              Str.startsWith("/")(from) ? from : path.join(path.dirname(written), from),
+            );
+            expect(yield* fs.realPath(imported)).toBe(
+              `${first}/.collie/workflows/plain.workflow.ts`,
+            );
+          }
           const moved = yield* forked(link, one.command, "mine", id);
           expect(moved.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
           expect(moved.envelope.data).toBeUndefined();
@@ -1273,6 +1282,43 @@ test("a fork follows the directory it runs in, not the path that named it", () =
             "fork-gone-fresh",
           )).envelope,
         ).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+      }),
+    ["lingers.workflow.ts"],
+  ));
+test("a fork whose checkout became a file replays nothing", () =>
+  proves(
+    "collie-receipt-scope-fork-file-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const at = `${world.home}/landing`;
+        const forks: ReadonlyArray<ReadonlyArray<string>> = [
+          ["workflow", "fork", "plain", "--layer", "project"],
+          ["persona", "fork", "local", "--layer", "project", "--workspace", world.project],
+        ];
+        const forked = (one: ReadonlyArray<string>, name: string, id: string) =>
+          collie(world, [...one, "--name", name, "--request-id", id], { COLLIE_CWD: at });
+        for (const [index, one] of Arr.map(forks, (fork, at) => [at, fork] as const)) {
+          yield* checkoutAt(at);
+          yield* save(`${at}/.collie/workflows`, ["plain.workflow.ts"]);
+          yield* fs.makeDirectory(`${at}/.collie/personas`, { recursive: true });
+          yield* fs.writeFileString(
+            `${at}/.collie/personas/local.md`,
+            "---\nname: local\ndescription: A persona in this checkout.\n---\n\nYou are local.\n",
+          );
+          const id = `fork-file-${index}`;
+          expect((yield* forked(one, "mine", id)).envelope).toMatchObject({ ok: true });
+          yield* fs.remove(at, { recursive: true });
+          yield* fs.writeFileString(at, "not a checkout");
+          const replayed = yield* forked(one, "mine", id);
+          expect(replayed.envelope).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+          expect(replayed.envelope.data).toBeUndefined();
+          expect((yield* forked(one, "mine-two", `${id}-fresh`)).envelope).toMatchObject({
+            ok: false,
+          });
+          yield* fs.remove(at);
+          yield* checkoutAt(at);
+        }
       }),
     ["lingers.workflow.ts"],
   ));
