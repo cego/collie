@@ -355,11 +355,14 @@ const verdict =
   proof of the work: the gate still reads the Run's journal
   ([proving it](#proving-it-rather-than-saying-so)).
 - **One unusable Output buys one repair**, sent back to the agent that wrote it, with the
-  schema's own issues. A rewrite the schema still refuses is judged once the agent's turn
-  has ended, so a file caught half rewritten is not the answer; one still unusable then parks
-  the Step, naming the file, the agent and the schema's issues. A resume reads the file
-  again and goes on if it decodes now; if not, the agent gets one more repair, and the Step
-  parks again where that is unusable too
+  schema's own issues. For a step this build dispatched, a submit that does not decode is
+  refused at once and nothing is kept, so the repair repeats the issues and the agent submits
+  again; for a step an older build dispatched, a rewrite the schema still refuses is judged
+  once the agent's turn has ended, so a file caught half rewritten is not the answer; one
+  still unusable then parks the Step, naming the file, the agent and the schema's issues. A
+  resume reads the Output again — the accepted fact, or the older step's file — and goes on
+  if it decodes now; if not, the agent gets one more repair, and the Step parks again where
+  that is unusable too
   ([ADR-draft-a-fixable-failure-parks-its-step](adr/draft-a-fixable-failure-parks-its-step.md)).
   A stop while the
   rewrite is awaited parks the wait, as it does the first; the resume starts an agent that

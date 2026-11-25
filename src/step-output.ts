@@ -25,7 +25,6 @@ export interface StepOutput {
 
 export type Step = Pick<Launched, "runId" | "output"> & { readonly submitOnly?: boolean };
 
-/** The Output a step has: the fact it was accepted with, or for a step an older build dispatched, its file. */
 export const outputOf = Effect.fn("StepOutput.of")(function* (records: RunRecordsApi, step: Step) {
   const fact = yield* records.fact(step.runId, acceptedName(step.output));
   if (fact !== null) {
@@ -64,7 +63,6 @@ export const acceptedText = (data: string) =>
     onSome: (one) => one.text,
   });
 
-/** Records an Output that replaces an earlier round's, which a step that has moved on may submit. */
 export const recordOutput = Effect.fn("StepOutput.record")(function* (
   records: RunRecordsApi,
   step: Step,
@@ -90,7 +88,6 @@ export const uncollected = Effect.fn("StepOutput.uncollected")(function* (
   return Option.isNone(taken) || taken.value.at < accepted.value.at;
 });
 
-/** Notes that the step has taken the accepted Output, so a later submit is the next round, not this one. */
 export const markCollected = Effect.fn("StepOutput.collected")(function* (
   records: RunRecordsApi,
   step: Step,
@@ -103,7 +100,6 @@ export const markCollected = Effect.fn("StepOutput.collected")(function* (
   return text;
 });
 
-/** Records the text a step accepted, and answers the text the step holds: a later, different one is refused. */
 export const acceptOutput = Effect.fn("StepOutput.accept")(function* (
   records: RunRecordsApi,
   step: Step,

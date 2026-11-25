@@ -4,7 +4,7 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
 import type { PlatformServices } from "./platform";
-import { Data, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
+import { Data, Effect, FileSystem, Option, Path, Result, Schema, flow } from "effect";
 import type { Constraint, Intent, RuleSpec } from "./intent";
 import {
   appendJournal,
@@ -22,6 +22,7 @@ import { insideKnown } from "./conversation";
 import { reserve, settle as settleBudget } from "./steering";
 import type { CallLimits } from "./steering";
 import { stringifyJson } from "./json";
+import { Launches } from "./launches";
 import { RunRecords } from "./run-records";
 import { ACCEPTED, acceptedText } from "./step-output";
 import { runOfDir } from "./run-records";
@@ -389,9 +390,18 @@ const printJson = flow(
 export const outputsIn = Effect.fn("Drift.outputsIn")(function* (agentsDir: string, run: string) {
   const fs = yield* FileSystem.FileSystem;
   const records = yield* RunRecords;
+  const launches = Option.getOrUndefined(yield* Effect.serviceOption(Launches));
+  const marked = launches === undefined ? [] : ((yield* launches.of([run])).get(run) ?? []);
+  const submitted = Arr.map(
+    Arr.filter(marked, (one) => one.submitOnly === true),
+    (one) => one.operation,
+  );
   const names = Arr.filter(
     yield* fs.readDirectory(agentsDir).pipe(Effect.orElseSucceed(() => [])),
-    (name) => pipe(name, Str.endsWith(".json")) && isAnOutput(name),
+    (name) =>
+      pipe(name, Str.endsWith(".json")) &&
+      isAnOutput(name) &&
+      !Arr.some(submitted, (operation) => name === `${operation}.json`),
   ).sort();
   const shown = new Map<string, string>();
   for (const name of names.slice(0, MAX_FILES)) {
@@ -407,7 +417,7 @@ export const outputsIn = Effect.fn("Drift.outputsIn")(function* (agentsDir: stri
     }
   }
   const outputs: Array<ShownOutput & { readonly truncated: boolean }> = [];
-  for (const name of [...shown.keys()].sort()) {
+  for (const name of [...shown.keys()].sort().slice(0, MAX_FILES)) {
     const operation = pipe(name, Str.slice(0, -".json".length));
     if (looksSecret(name)) {
       outputs.push({ operation, text: "<redacted>", truncated: false });

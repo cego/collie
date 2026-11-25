@@ -132,7 +132,6 @@ import { PARK_CAUSES, ParkCause } from "../../src/park-cause";
 import { recheckPark } from "../../src/park-recheck";
 import { GOLDEN, matchGolden } from "../../tools/prompt-golden";
 
-// WARNING: A step this build dispatched completes only from an accepted submit, which a driven scenario records as one.
 const handsIn = (dir: string, runId: string, operation: string, text: string) =>
   Effect.gen(function* () {
     const one = Option.getOrUndefined(
@@ -13451,7 +13450,7 @@ scenario("a Run whose outcome needs no evidence is not stopped for having no che
           input: { plan: "why is the board slow?", ...FINISH },
           options: { outcome: "investigation" },
         });
-        expect(why).toContain("without writing");
+        expect(why).toContain("without its Output being accepted");
         expect(why).not.toContain("approved");
         expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
       }),

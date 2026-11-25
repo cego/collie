@@ -2143,7 +2143,7 @@ test.each(["before retirement", "during retirement"] as const)(
             );
             herdr.stale = true;
             if (when === "before retirement") {
-              yield* submitOutput("r1", agentFor("r1"), partial);
+              yield* fs.writeFileString(outputPath("r1"), partial).pipe(Effect.orDie);
             }
             managed.state.reachable = false;
             managed.children[0]!.kill();
@@ -9555,7 +9555,7 @@ test("a step an older build dispatched completes from the file its agent writes"
     }),
   ));
 
-test("an agent launched before this build is ended and started again on its session, and its step is submit-only", () =>
+const restartedOnItsSession = (stamp: "file" | undefined) =>
   runEffect(
     Effect.gen(function* () {
       const continued = enveloped({ name: "submit-restart", input: {}, success: Schema.String });
@@ -9563,9 +9563,10 @@ test("an agent launched before this build is ended and started again on its sess
         Effect.gen(function* () {
           yield* agentWork({ operation: "first", agent: "worker", instructions: "One." });
           const held = yield* launchedAt(dir, "r1", "first");
-          yield* recordLaunch({ ...held, outputSubmit: "file" }).pipe(
-            Effect.provide(recordsAt(dir)),
-          );
+          const { outputSubmit: _older, submitOnly: _marked, ...unmarked } = held;
+          yield* recordLaunch(
+            stamp === undefined ? unmarked : { ...unmarked, outputSubmit: stamp },
+          ).pipe(Effect.provide(recordsAt(dir)));
           return yield* agentWork({ operation: "second", agent: "worker", instructions: "Two." });
         }).pipe(asRun(payload)),
       );
@@ -9585,7 +9586,11 @@ test("an agent launched before this build is ended and started again on its sess
       expect(result).toMatchObject({ _tag: "Success", success: "second" });
       const launches = everyLaunch(yield* rig.calls());
       expect(launches).toHaveLength(2);
+      const started = launches[0]!;
+      const session = started[started.indexOf("--session-id") + 1];
+      expect(session).toBeDefined();
       expect(launches[1]!.slice(1)).toContain("--resume");
+      expect(launches[1]![launches[1]!.indexOf("--resume") + 1]).toBe(session);
       const prompt = yield* read(`${dir}/agents/r1/second.prompt.md`);
       expect(prompt).toContain("collie_submit");
       expect(prompt).not.toContain("OUTPUT_PATH");
@@ -9594,7 +9599,13 @@ test("an agent launched before this build is ended and started again on its sess
         "launched before this build, so it was ended and started again on its session",
       );
     }),
-  ));
+  );
+
+test("an agent launched before this build is ended and started again on its session, and its step is submit-only", () =>
+  restartedOnItsSession("file"));
+
+test("an agent whose launch record carries no hand-in mode is also started again", () =>
+  restartedOnItsSession(undefined));
 
 test("under role_tools: role a role the table does not name keeps every tool, and its start line says so", () =>
   runEffect(

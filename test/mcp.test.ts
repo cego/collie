@@ -18,6 +18,9 @@ import {
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import manifest from "../package.json";
 import type { JsonObject } from "../src/schema";
+import { RunRecords } from "../src/run-records";
+import { acceptedName } from "../src/step-output";
+import { recordsAt } from "./support/records";
 import { rebuiltAnswer } from "../src/mcp";
 import { connect } from "../src/host";
 import { readAudit } from "../src/audit";
@@ -239,7 +242,7 @@ test("the Collie server started for a reviewer under role_tools: role lists and 
     }).pipe(Effect.scoped),
   ));
 
-test("collie_submit decodes an agent's Output as the file does, and writes only an accepted one, once", () =>
+test("collie_submit decodes an agent's Output as the file did, and records only an accepted one", () =>
   runEffect(
     twoMachines(
       "collie-mcp-submit-",
@@ -268,19 +271,8 @@ test("collie_submit decodes an agent's Output as the file does, and writes only 
 
           const missing = yield* until(
             () => submit({}),
-            (answer) => !Str.includes("No step of")(encodeValue(answer.result)),
+            (answer) => Str.includes("not usable")(encodeValue(answer.result)),
           );
-          // WARNING: `until` above may still have seen a submit answered before the step registered.
-          expect((yield* submit({ verdict: 7 })).result).toMatchObject({
-            content: [
-              {
-                type: "text",
-                text: expect.stringMatching(
-                  /^Your Output is not usable:[\s\S]*Nothing was written/,
-                ),
-              },
-            ],
-          });
           expect(missing.result).toMatchObject({
             content: [
               { type: "text", text: expect.stringContaining('Missing key\n  at ["verdict"]') },
@@ -291,24 +283,27 @@ test("collie_submit decodes an agent's Output as the file does, and writes only 
           expect((yield* submit({ verdict: "done" })).result).toMatchObject({
             content: [{ type: "text", text: "accepted" }],
           });
-          const host = yield* connect(first.world.state);
-          const asked = (view: { readonly waiting?: ReadonlyArray<{ answer: unknown }> } | null) =>
-            Arr.filter(view?.waiting ?? [], (one) => one.answer === null);
-          yield* until(
-            () => host.run({ runId }),
-            (view) => asked(view).length > 0,
-          );
-          expect(yield* fs.readFileString(launch!.output)).toBe(encodeValue({ verdict: "done" }));
-          const written = (yield* fs.stat(launch!.output)).ino;
+          expect(yield* fs.exists(launch!.output)).toBe(false);
+          const fact = (name: string) =>
+            RunRecords.use((records) => records.fact(runId, name)).pipe(
+              Effect.provide(recordsAt(first.world.state)),
+            );
+          const accepted = acceptedName(launch!.output);
 
-          expect((yield* submit({ verdict: "done" })).result).toMatchObject({
-            content: [{ type: "text", text: "accepted" }],
-          });
-          expect((yield* fs.stat(launch!.output)).ino).toEqual(written);
-          expect((yield* submit({ verdict: "changed" })).result).toMatchObject({
-            content: [{ type: "text", text: expect.stringContaining("already collected") }],
-          });
-          expect(yield* fs.readFileString(launch!.output)).toBe(encodeValue({ verdict: "done" }));
+          // WARNING: A submit that reaches no step is answered "submit it again", so the retry is the tool's own advice.
+          yield* until(
+            () => submit({ verdict: "done" }),
+            (answer) => Str.includes("accepted")(encodeValue(answer.result)),
+          );
+          const held = yield* fact(accepted);
+          expect(held).not.toBeNull();
+          const retried = encodeValue((yield* submit({ verdict: "changed" })).result);
+          expect(retried).not.toEqual(
+            JSON.stringify({ content: [{ type: "text", text: "accepted" }] }),
+          );
+          expect(retried).toContain("differs");
+          expect(yield* fact(accepted)).toEqual(held);
+          expect(yield* fs.exists(launch!.output)).toBe(false);
           yield* server.close;
         }),
       ["attended.workflow.ts"],

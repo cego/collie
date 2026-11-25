@@ -1,12 +1,18 @@
 import { Effect, flow, Result, Schema } from "effect";
 import { isString } from "./schema";
 import { RunRecords } from "./run-records";
-import { acceptedName, acceptedText, recordOutput, uncollected } from "./step-output";
+import {
+  acceptedName,
+  acceptedText,
+  markCollected,
+  recordOutput,
+  uncollected,
+} from "./step-output";
+import type { RunRecordsApi } from "./run-records";
 
 interface Awaited {
   readonly output: string;
   readonly problem: (text: string) => string | null;
-  /** The text this step already collected, which a new submit replaces. */
   readonly held: string | null;
 }
 
@@ -20,6 +26,26 @@ export const awaitOutput = (
   problem: (text: string) => string | null,
   held: string | null = null,
 ) => Effect.sync(() => void awaiting.set(keyOf(runId, agent), { output, problem, held }));
+
+export const forgetStep = (runId: string, output: string) =>
+  Effect.sync(() => {
+    for (const [key, entry] of awaiting) {
+      if (key.startsWith(`${runId}\n`) && entry.output === output) {
+        awaiting.delete(key);
+      }
+    }
+  });
+
+/** What the collector does with the Output it takes: the step is done, and no later submit reaches it. */
+export const takeOutput = (
+  records: RunRecordsApi,
+  step: { runId: string; output: string },
+  text: string,
+) =>
+  Effect.gen(function* () {
+    yield* forgetStep(step.runId, step.output);
+    return yield* markCollected(records, step, text);
+  });
 
 /** Only a test can start a second Run on one process's agent names, and no host ever does. */
 export const forgetAwaited = Effect.sync(() => awaiting.clear());

@@ -10,6 +10,7 @@ import { isString } from "../../src/schema";
 import { Kind } from "../../src/hc";
 import { answerPrompt, handIn } from "./fake-agent";
 import { RunRecords } from "../../src/run-records";
+import { acceptedName } from "../../src/step-output";
 import type { StepHand } from "./fake-agent";
 import { jsonText, replyViolation } from "./hc-schema";
 
@@ -263,6 +264,18 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
       yield* fs.writeFileString(logPath, `${entry}\n`, { flag: "a" }).pipe(Effect.orDie);
       yield* emit(terminal.address, "status", { status: { state }, records: {}, reported: true });
     });
+  // WARNING: A step this build submits to never writes its Output path, so an owed file is also settled by an accepted fact.
+  const settled = (owed: string) =>
+    Effect.gen(function* () {
+      if (yield* fs.exists(owed).pipe(Effect.orElseSucceed(() => false))) {
+        return true;
+      }
+      const parts = owed.split("/");
+      const records = yield* RunRecords;
+      const fact = yield* records.fact(parts[parts.length - 4]!, acceptedName(owed));
+      return fact !== null;
+    });
+
   const take = (terminal: Terminal, prompt: string) =>
     Effect.gen(function* () {
       terminal.turn += 1;
@@ -279,12 +292,15 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
               if (submit !== null) {
                 yield* handIn(submit).pipe(Effect.provideContext(services), Effect.orDie);
               }
-              yield* setStatus(terminal, status);
+              yield* setStatus(terminal, submit === null ? status : "idle");
               if (owed === undefined) {
+                if (submit === null) {
+                  yield* setStatus(terminal, "idle");
+                }
                 return;
               }
               const turn = terminal.turn;
-              while (!(yield* fs.exists(owed).pipe(Effect.orElseSucceed(() => false)))) {
+              while (!(yield* settled(owed))) {
                 yield* Effect.sleep(TURN);
               }
               if (terminal.turn === turn) {

@@ -169,7 +169,6 @@ const answerFrom = Effect.fn("fakeAgent.answer")(function* (
     written ?? (prompt === undefined ? (known?.output ?? null) : outputOfPrompt(prompt));
   const hand: StepHand = { tool: server, output: outputPath };
   let submit: HandIn | null = null;
-  // WARNING: Only a prompt an older build wrote names a path, so only that one is handed in as a file.
   const byFile = written !== null;
   const owes: string | undefined = undefined;
   const unanswered = {

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
-import { acceptOutput, acceptedName, outputOf } from "../src/step-output";
+import { acceptOutput, outputOf } from "../src/step-output";
+import { awaitOutput, submitOutput, takeOutput } from "../src/output-submit";
 import { RunRecords } from "../src/run-records";
 import { runEffect } from "./support/effect";
 import { recordsAt } from "./support/records";
@@ -76,38 +77,50 @@ test("a step an older build dispatched reads the file its agent wrote, and keeps
     ),
   ));
 
-test("accepted is final: the same text is accepted again, a different one is refused, and the fact stands", () =>
+test("a step registered again after a restart accepts the same Output, refuses a different one, and keeps the fact", () =>
   runEffect(
     withRecords(
       Effect.gen(function* () {
         const records = yield* RunRecords;
         const step = { runId: "r1", output: fileAt(), submitOnly: true };
-        expect(yield* acceptOutput(records, step, "first")).toBe("first");
-        const at = (yield* outputOf(records, step))?.at;
-        expect(yield* acceptOutput(records, step, "first")).toBe("first");
-        expect(yield* acceptOutput(records, step, "second")).toBe("first");
-        const after = yield* outputOf(records, step);
-        expect(after?.text).toBe("first");
-        expect(after?.at).toBe(at);
-        expect(yield* records.fact("r1", acceptedName(fileAt()))).not.toBeNull();
+        yield* awaitOutput("r1", "a", fileAt(), () => null);
+        expect(yield* submitOutput("r1", "a", "first")).toBe("accepted");
+        const accepted = yield* outputOf(records, step);
+        // WARNING: A restart rebuilds the registration with nothing in memory, which a second awaitOutput is.
+        yield* awaitOutput("r1", "a", fileAt(), () => null);
+        expect(yield* submitOutput("r1", "a", "first")).toBe("accepted");
+        expect(yield* submitOutput("r1", "a", "second")).toContain("differs from it");
+        expect(yield* outputOf(records, step)).toEqual(accepted);
+        expect(yield* records.fact("r1", "accepted/review.json")).not.toBeNull();
       }),
     ),
   ));
 
-test("a fact written before the step was collected is what the step collects, with no agent asked again", () =>
+test("a differing submit after the step took its Output writes nothing", () =>
   runEffect(
     withRecords(
       Effect.gen(function* () {
+        const step = { runId: "r1", output: fileAt() };
+        yield* awaitOutput("r1", "a", fileAt(), () => null);
+        expect(yield* submitOutput("r1", "a", { summary: "kept" })).toBe("accepted");
+        yield* takeOutput(yield* RunRecords, step, "kept");
+        expect(yield* submitOutput("r1", "a", { summary: "later" })).toContain("No step of r1");
+        expect((yield* outputOf(yield* RunRecords, step))?.text).toContain("kept");
+      }),
+    ),
+  ));
+
+test("the same Output submitted again is accepted without moving its time", () =>
+  runEffect(
+    withRecords(
+      Effect.gen(function* () {
+        const step = { runId: "r1", output: fileAt() };
         const records = yield* RunRecords;
-        const step = { runId: "r1", output: fileAt(), submitOnly: true };
-        yield* acceptOutput(records, step, "submitted before the restart");
-        expect(yield* outputOf(records, step)).toMatchObject({
-          text: "submitted before the restart",
-          file: false,
-        });
-        expect((yield* records.factsUnder("r1", "accepted/")).map((one) => one.name)).toEqual([
-          acceptedName(fileAt()),
-        ]);
+        yield* awaitOutput("r1", "a", fileAt(), () => null);
+        yield* submitOutput("r1", "a", { summary: "kept" });
+        const first = (yield* outputOf(records, step))!.at;
+        expect(yield* submitOutput("r1", "a", { summary: "kept" })).toBe("accepted");
+        expect((yield* outputOf(records, step))!.at).toBe(first);
       }),
     ),
   ));

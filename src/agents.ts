@@ -215,7 +215,7 @@ import {
 import type { ClaudeOverlay, RoleProfile } from "./profile";
 import { isString } from "./schema";
 import type { JsonObject } from "./schema";
-import { awaitOutput as registerOutput, submitOutput } from "./output-submit";
+import { awaitOutput as registerOutput, submitOutput, takeOutput } from "./output-submit";
 import { acceptOutput, markCollected, outputOf } from "./step-output";
 import type { Step } from "./step-output";
 import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } from "./subagents";
@@ -795,7 +795,7 @@ export const agentWork: <
                   ...narrativeOf(value),
                   kind: kindForRole(role),
                   step: work.operation,
-                  claims: [`wrote ${output}`],
+                  claims: [`handed in ${output}`],
                 }),
               ),
             ),
@@ -971,8 +971,8 @@ export const agentWork: <
           if (asked === null) {
             const why =
               sent.length === 0
-                ? `${on.agent} ended its turn without writing ${output}, and could not be reminded to; its log says why. A chat message is not its Output. Collie keeps collecting it; ask it to write it.`
-                : `${on.agent} ended its turn without writing ${output}, and again after each of ${sent.length} reminders, sent ${Arr.join(sent, " and ")}. A chat message is not its Output. Collie keeps collecting it; ask it to write it, or why it cannot.`;
+                ? `${on.agent} ended its turn without its Output being accepted, and could not be reminded to; its log says why. A chat message is not its Output. Collie keeps collecting it; ask it to submit it.`
+                : `${on.agent} ended its turn without its Output being accepted, and again after each of ${sent.length} reminders, sent ${Arr.join(sent, " and ")}. A chat message is not its Output. Collie keeps collecting it; ask it to submit it, or why it cannot.`;
             return yield* Activity.make({
               name: `${at}.output-absent`,
               success: Collected,
@@ -1039,7 +1039,6 @@ export const agentWork: <
           yield* haltLate;
           return yield* Workflow.suspend(instance);
         }
-        // WARNING: before its prompt, so an agent that submits as it finishes is not told no step is waiting.
         yield* agents.awaitOutput(launched, problemIn);
         return launched;
       });
@@ -1196,7 +1195,7 @@ export const agentWork: <
                   collecting(
                     current,
                     currentAsk,
-                    `${current.agent} ran out (${out.why}) before writing ${output}; ${next.why}`,
+                    `${current.agent} ran out (${out.why}) before its Output was accepted; ${next.why}`,
                   ),
                   room,
                 ),
@@ -1289,7 +1288,7 @@ export const agentWork: <
     const first = isString(collected) ? collected : null;
     if (first === null) {
       return yield* new WorkflowError({
-        reason: `${current.agent} wrote nothing to ${output}`,
+        reason: `${current.agent} submitted nothing for ${output}`,
       });
     }
     const read = decodeOutput(work.output, first, plain);
@@ -5128,12 +5127,12 @@ const waitForOutput = <R>(
     for (;;) {
       const held = yield* read;
       if (fresh(held) && every.usable(held!.text)) {
-        return yield* markCollected(records, step, held!.text);
+        return yield* takeOutput(records, step, held!.text);
       }
       if (held !== null && fresh(held) && (yield* every.settled)) {
         const after = yield* read;
         if (fresh(after)) {
-          return yield* markCollected(records, step, after!.text);
+          return yield* takeOutput(records, step, after!.text);
         }
       }
       if (spent >= every.budgetMs) {
