@@ -611,6 +611,23 @@ export const rally = (ask: {
     ) => {
       seen = { at, keys, handed: seen?.handed ?? [], claimed: fixed.fixed };
     };
+    const dispositions = (fixed: typeof FixOutputSchema.Type) => {
+      const counts = new Map<string, number>();
+      for (const one of [...fixed.fixed, ...fixed.disputed]) {
+        const key = findingKey(one);
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+      return counts;
+    };
+    // WARNING: a finding a reply also claims fixed, or answers twice, is the judgement's; a waiver would settle nothing.
+    const notAwaiver = (fixed: typeof FixOutputSchema.Type) => {
+      const counts = dispositions(fixed);
+      const claimed = new Set(Arr.map(fixed.fixed, findingKey));
+      return (one: Finding) => {
+        const key = findingKey(one);
+        return claimed.has(key) || (counts.get(key) ?? 0) > 1;
+      };
+    };
     const repair = Effect.gen(function* () {
       const resumed = ask.resume;
       if (resumed === undefined) {
@@ -636,9 +653,10 @@ export const rally = (ask: {
         open,
       });
       const settled = new Set(Arr.map([...fixed.fixed, ...fixed.disputed], findingKey));
+      const judged = notAwaiver(fixed);
       disputed = [
         ...Arr.filter(resumed.previous.disputes, (one) => !settled.has(findingKey(one))),
-        ...fixed.disputed,
+        ...Arr.filter(fixed.disputed, (one) => !judged(one)),
       ];
     });
 
@@ -710,15 +728,19 @@ export const rally = (ask: {
           head,
         });
         const askedKeys = new Set(Arr.map(open, findingKey));
-        const answered = Arr.filter([...fixed.fixed, ...fixed.disputed], (one) =>
-          askedKeys.has(findingKey(one)),
-        );
-        const settled = new Set(Arr.map(answered, findingKey));
+        // WARNING: the reply answers only what the hand-back asked; anything else earns nothing in the judgement or the next round.
+        const scoped = {
+          ...fixed,
+          fixed: Arr.filter(fixed.fixed, (one) => askedKeys.has(findingKey(one))),
+          disputed: Arr.filter(fixed.disputed, (one) => askedKeys.has(findingKey(one))),
+        };
+        const settled = new Set(Arr.map([...scoped.fixed, ...scoped.disputed], findingKey));
+        const judged = notAwaiver(scoped);
         disputed = [
           ...Arr.filter(disputed, (one) => !settled.has(findingKey(one))),
-          ...Arr.filter(fixed.disputed, (one) => settled.has(findingKey(one))),
+          ...Arr.filter(scoped.disputed, (one) => !judged(one)),
         ];
-        return fixed;
+        return scoped;
       });
 
     // WARNING: no review follows the last fix, so what judges it is the journal; a hand-back past ROUNDS never gets one either.
@@ -733,13 +755,8 @@ export const rally = (ask: {
         let open: ReadonlyArray<Finding> = live;
         // WARNING: a key answered twice or both ways is not settled; settleFinalFix has to judge it, and the fixer has to repair it.
         const answeredOnce = (fixed: typeof FixOutputSchema.Type) => {
-          const counts = new Map<string, number>();
-          for (const one of [...fixed.fixed, ...fixed.disputed]) {
-            const key = findingKey(one);
-            counts.set(key, (counts.get(key) ?? 0) + 1);
-          }
           const honest = new Set<string>();
-          for (const [key, times] of counts) {
+          for (const [key, times] of dispositions(fixed)) {
             if (times === 1) {
               honest.add(key);
             }
@@ -769,7 +786,11 @@ export const rally = (ask: {
           };
         };
         for (;;) {
-          const standing = Arr.filter(offered(disputed), isBlocking);
+          const settledByJudgement = notAwaiver(report);
+          const standing = Arr.filter(
+            offered(disputed),
+            (one) => isBlocking(one) && !settledByJudgement(one),
+          );
           if (standing.length > 0) {
             const name = `${prefix}dispute-${++disputeAsks}`;
             const chosen = yield* ask.choose({
@@ -1064,9 +1085,10 @@ export const rally = (ask: {
           });
           seen = { at, keys: round.keys, handed: round.handed, claimed: fixed.fixed };
           const settledNow = new Set(Arr.map([...fixed.fixed, ...fixed.disputed], findingKey));
+          const judged = notAwaiver(fixed);
           disputed = [
             ...Arr.filter(disputed, (one) => !settledNow.has(findingKey(one))),
-            ...fixed.disputed,
+            ...Arr.filter(fixed.disputed, (one) => !judged(one)),
           ];
           const answered = new Set(Arr.map([...fixed.fixed, ...disputed], findingKey));
           if (head !== "") {
