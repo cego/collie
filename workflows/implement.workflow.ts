@@ -731,6 +731,12 @@ export default defineWorkflow({
       const ledgering = (given: ReadonlyArray<Finding>) =>
         ledgered ? { ledger: given, taken: [...ledger.keys()] } : {};
       const fixers: Array<string> = [];
+      const wrote: Array<string> = [];
+      const written = (name: string) => {
+        if (!wrote.includes(name)) {
+          wrote.push(name);
+        }
+      };
       const kept = (done: Rallied) => {
         for (const one of ledgered ? done.reviewed.findings : []) {
           if (one.id !== undefined) {
@@ -908,6 +914,7 @@ export default defineWorkflow({
             attempt += 1;
             const item = ticket?.file ?? "build";
             const operation = attempt === 1 ? item : `${item}-${attempt}`;
+            written(operation);
             const before = (yield* host.evidence(runId, cwd)).verifications.length;
             if (ticket !== null) {
               yield* host.checkpoint(runId, { ticket: ticket.file, status: "started", claims: [] });
@@ -1101,6 +1108,7 @@ export default defineWorkflow({
               }
               const before = yield* treeAt(`${operation}.criteria-${turn}.before`);
               yield* restateKind;
+              written(`${operation}.criteria-${turn}`);
               const answered = yield* agentWork({
                 operation: `${operation}.criteria-${turn}`,
                 ...onHolder(handing),
@@ -1317,6 +1325,7 @@ export default defineWorkflow({
         outcome: outcomeOf,
         outcomeJournaled: kindNow,
         outputs: () => ({ build: { ...build } }),
+        operations: () => [...wrote],
         tickets: Arr.map(tickets, (ticket) => ({ file: ticket.file, checks: ticket.checks })),
         roots: evidenceRoots(place.dir, cwd, source.value),
         rallied: rallied === null ? rallied : { ...rallied, fixed: [...fixers] },

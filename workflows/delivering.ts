@@ -1,6 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import {
@@ -38,6 +39,7 @@ import {
 import type {
   Finding,
   HandOverGiven,
+  Outcome,
   Snapshot,
   SynthesisReport,
   Template,
@@ -194,6 +196,8 @@ export interface Delivery<I extends Told, O extends Opened> {
   readonly outcome: Effect.Effect<string, never, Needs>;
   readonly outcomeJournaled: Effect.Effect<string, never, Needs>;
   readonly outputs: () => Parameters<typeof evidenceGapsOf>[0]["outputs"];
+  // WARNING: a build's retries and criteria repairs are the same claim, written under names of their own.
+  readonly operations?: () => ReadonlyArray<string>;
   readonly tickets: ReadonlyArray<{
     readonly file: string;
     readonly checks: ReadonlyArray<string>;
@@ -259,6 +263,44 @@ const deliveredBy = (ask: Pick<Delivery<Told, Opened>, "agent" | "takesOver" | "
 
 const parseJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
 
+export interface DatedOutput {
+  readonly operation: string;
+  readonly output: Option.Option<Schema.Json>;
+  readonly at: number;
+}
+
+export function inventoryOf(
+  dated: ReadonlyArray<DatedOutput>,
+  memory: Readonly<Record<string, Schema.Json>>,
+) {
+  const outputs: Record<string, Schema.Json> = {};
+  const kept = Arr.filter(dated, (one) => Option.isSome(one.output));
+  for (const one of Arr.sort(
+    kept,
+    Order.mapInput(Order.Number, (one: DatedOutput) => one.at),
+  )) {
+    outputs[one.operation] = Option.getOrThrow(one.output);
+  }
+  for (const [id, output] of Rec.toEntries(memory)) {
+    if (!(id in outputs)) {
+      outputs[id] = output;
+    }
+  }
+  return outputs;
+}
+
+// WARNING: only a bug's proof is read from a fixer's Output; a fixer's stray `tickets_done` is no build claim.
+export function gateOperations(ask: {
+  readonly kind: Outcome;
+  readonly tickets: ReadonlyArray<string>;
+  readonly fixed: ReadonlyArray<string>;
+  readonly fixing: ReadonlyArray<string>;
+  readonly wrote: ReadonlyArray<string>;
+}) {
+  const build = ["build", ...ask.tickets, ...ask.wrote];
+  return ask.kind === "bug" ? [...build, ...ask.fixed, ...ask.fixing] : build;
+}
+
 export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =>
   Effect.gen(function* () {
     const host = yield* Host;
@@ -271,7 +313,7 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
     const written = (operations: ReadonlyArray<string>) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const dated = yield* Effect.forEach(operations, (operation) =>
+        return yield* Effect.forEach(operations, (operation) =>
           Effect.gen(function* () {
             const file = agents.outputFor(runId, operation);
             const text = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
@@ -281,26 +323,13 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
               info === null
                 ? 0
                 : Option.match(info.mtime, { onNone: () => 0, onSome: (at) => at.getTime() });
-            return { operation, output, at };
+            const dated: DatedOutput = { operation, output, at };
+            return dated;
           }),
         );
-        const outputs: Record<string, Schema.Json> = {};
-        const kept: ReadonlyArray<{
-          operation: string;
-          output: Option.Option<Schema.Json>;
-          at: number;
-        }> = Arr.filter(dated, (one) => Option.isSome(one.output));
-        const byTime = Arr.sort(
-          kept,
-          Order.mapInput(Order.Number, (one: (typeof kept)[number]) => one.at),
-        );
-        for (const one of byTime) {
-          outputs[one.operation] = Option.getOrThrow(one.output);
-        }
-        return outputs;
       });
     const inventory = (operations: ReadonlyArray<string>) =>
-      Effect.map(written(operations), (from) => ({ ...from, ...ask.outputs() }));
+      Effect.map(written(operations), (dated) => inventoryOf(dated, ask.outputs()));
     const treeNow = Effect.map(host.evidence(runId, cwd), ({ final }) => ({
       head: final.head_sha,
       fingerprint: final.fingerprint,
@@ -315,17 +344,21 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
       { reviewed, on }: Pick<Reviewed, "reviewed" | "on">,
     ) {
       const now = yield* ask.outcome;
+      const kind = isOutcome(now) ? now : ("unspecified" as const);
       const asked = {
-        kind: isOutcome(now) ? now : ("unspecified" as const),
+        kind,
         evidence: yield* host.evidence(runId, cwd),
         approved,
         outputs: {
-          ...(yield* inventory([
-            "build",
-            ...Arr.map(ask.tickets, (one) => one.file),
-            ...(rallied.fixed ?? []),
-            ...fixers,
-          ])),
+          ...(yield* inventory(
+            gateOperations({
+              kind,
+              tickets: Arr.map(ask.tickets, (one) => one.file),
+              fixed: rallied.fixed ?? [],
+              fixing: fixers,
+              wrote: ask.operations?.() ?? [],
+            }),
+          )),
           synthesize: { ...reviewed },
         },
         reviewed: ["synthesize"],
