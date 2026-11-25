@@ -35,7 +35,7 @@ const EARLIER = { head_sha: "abc000", fingerprint: "tree-0" };
 const TESTS: VerifySpec = { name: "tests", executable: "bun", argv: ["test"], cwd: "." };
 
 const UNNAMED_REPRODUCTION =
-  'no Output names the reproduction, though "regression" failed before the fix and passes on this tree';
+  'no Output names the reproduction, though "regression" failed before the fix and passed after it';
 
 function record(over: Partial<Verification> & { name: string }) {
   const returned: Verification = {
@@ -352,6 +352,23 @@ test("a red then green pair no Output names is a gap the gate fix is asked to cl
   ).toEqual([
     "no regression verification recorded with --expect fail, so the bug was never reproduced",
   ]);
+});
+
+test("a pair on earlier trees is still a name a gate fix is asked for after the tree moved", () => {
+  const reproduced = record({
+    name: "regression",
+    expect: "fail",
+    exit: 1,
+    result: "pass",
+    start: EARLIER,
+    end: EARLIER,
+  });
+  const green = record({ name: "regression", start: EARLIER, end: EARLIER });
+  const moved = collected({ verifications: [record({ name: "tests" }), reproduced, green] });
+  expect(evidenceGaps("bug", moved)).not.toContain(
+    "the Output does not name the verification that reproduced the bug",
+  );
+  expect(checkGaps("bug", moved)).toContain(UNNAMED_REPRODUCTION);
 });
 
 test("the newest Output that names a reproduction is the one the gate reads", () => {
