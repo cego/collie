@@ -53,7 +53,7 @@ export interface Waiver {
   choice: string;
 }
 
-export const FindingSchema = Schema.Struct({
+const FindingFields = {
   id: Schema.optionalKey(Schema.String.pipe(said("id"))),
   status: Schema.optionalKey(Schema.Literals(["open", "fixed", "disputed", "obsolete"])),
   head: Schema.optionalKey(Schema.String),
@@ -70,6 +70,13 @@ export const FindingSchema = Schema.Struct({
   ),
   rebuttal: Schema.optionalKey(Schema.String),
   reason: Schema.optionalKey(Schema.String),
+};
+
+// WARNING: a waiver is the host's record of a person's answer, so no agent Output carries one.
+const GivenFindingSchema = Schema.Struct(FindingFields);
+
+export const FindingSchema = Schema.Struct({
+  ...FindingFields,
   waived: Schema.optionalKey(WaiverSchema),
 });
 
@@ -129,8 +136,8 @@ const JUDGEMENTS = {
 
 export const ReviewOutputSchema = Schema.Struct({
   verdict: VerdictSchema,
-  findings: optionalList(FindingSchema),
-  disputed: optionalList(FindingSchema),
+  findings: optionalList(GivenFindingSchema),
+  disputed: optionalList(GivenFindingSchema),
   ...JUDGEMENTS,
 }).pipe(listed());
 
@@ -169,9 +176,9 @@ export const FixedSchema = Schema.Struct({
 });
 
 // WARNING: a dropped finding must say why, or it is lost rather than resolved.
-const DroppedSchema = FindingSchema.pipe(
-  Schema.refine<typeof FindingSchema, typeof FindingSchema.Type>(
-    (value): value is typeof FindingSchema.Type => Str.trim(value.reason ?? "") !== "",
+const DroppedSchema = GivenFindingSchema.pipe(
+  Schema.refine<typeof GivenFindingSchema, typeof GivenFindingSchema.Type>(
+    (value): value is typeof GivenFindingSchema.Type => Str.trim(value.reason ?? "") !== "",
     {
       title: "reason is required",
       message: "a dropped finding needs a reason saying why it was dropped",
@@ -183,8 +190,8 @@ export const SynthesisSchema = Schema.Struct({
   verdict: VerdictSchema,
   summary: Schema.String.pipe(said("summary")),
   public_summary: Schema.optionalKey(Schema.String.pipe(said("public_summary"))),
-  findings: optionalList(FindingSchema),
-  disputed: optionalList(FindingSchema),
+  findings: optionalList(GivenFindingSchema),
+  disputed: optionalList(GivenFindingSchema),
   dropped: optionalList(DroppedSchema),
   fixed: optionalList(FixedSchema),
   ...JUDGEMENTS,
@@ -267,9 +274,9 @@ export const FixOutputSchema = Schema.Struct({
     description:
       '"findings" only where findings are left unresolved, each listed in "findings"; what you fixed goes in "fixed" and what you dispute in "disputed", and with nothing left unresolved the verdict is "clean"',
   }),
-  findings: optionalList(FindingSchema),
+  findings: optionalList(GivenFindingSchema),
   fixed: optionalList(FixedSchema),
-  disputed: optionalList(FindingSchema),
+  disputed: optionalList(GivenFindingSchema),
   checks: optionalList(CheckSchema),
   ...OutgoingFields,
 }).pipe(listed());
@@ -296,6 +303,11 @@ const decodeFindings = Schema.decodeUnknownEffect(FindingsJson);
 const encodeFindings = flow(Schema.encodeResult(FindingsJson), Result.getOrThrow);
 
 // WARNING: written together, and a waiver on file is the host's: a review neither writes one away nor records one.
+const unwaived = (one: Finding) => {
+  const { waived: _, ...rest } = one;
+  return rest;
+};
+
 export const leaveReview = (dir: string, synthesis: typeof SynthesisSchema.Type) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -307,7 +319,7 @@ export const leaveReview = (dir: string, synthesis: typeof SynthesisSchema.Type)
       encodeFindings([
         ...Arr.map(
           Arr.filter(synthesis.findings, (one) => !keys.has(findingKey(one))),
-          ({ waived: _, ...one }) => one,
+          unwaived,
         ),
         ...recorded,
       ]),

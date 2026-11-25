@@ -104,6 +104,21 @@ test("a review decodes the finding ledger and names an invalid status", () => {
   }
 });
 
+test("an agent's Output cannot say who waived a finding", () => {
+  const waived = { by: "reviewer", choice: "build.dispute-1" };
+  const output = {
+    verdict: "findings",
+    findings: [{ severity: "minor", title: "naming", waived }],
+    disputed: [{ severity: "major", title: "naming", waived }],
+  };
+  const review = Result.getOrThrow(Schema.decodeUnknownResult(ReviewOutputSchema)(output));
+  expect(review.findings[0]).not.toHaveProperty("waived");
+  expect(review.disputed[0]).not.toHaveProperty("waived");
+  const fix = Result.getOrThrow(Schema.decodeUnknownResult(FixOutputSchema)(output));
+  expect(fix.findings[0]).not.toHaveProperty("waived");
+  expect(fix.disputed[0]).not.toHaveProperty("waived");
+});
+
 const SYNTHESES = [
   `{"verdict": "clean", "summary": "s"}`,
   `{"verdict": "findings", "summary": "Adds a flag. It exits wrong.",
