@@ -55,7 +55,6 @@ export function steerTarget<C extends Candidate>(
   );
   const among =
     roles === undefined ? newest : Arr.filter(newest, (one) => roles.includes(one.role));
-  // WARNING: a role goes to an agent herdr still lists, since an exited one recorded later is not a target at all.
   const stillThere = Arr.filter(among, live);
   const pool = stillThere.length === 0 ? among : stillThere;
   const active = Option.getOrUndefined(Arr.findLast(pool, (one) => !one.done));
