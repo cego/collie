@@ -1373,6 +1373,58 @@ test("an agent whose harness exits at once is started again only to its cap, and
     }),
   ));
 
+test("a launch that refuses its conversation is started fresh under its own id, not resumed again", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      core.reportedOnly([agentFor("r1")]);
+      yield* rig.queueOutputs([null]);
+      const herdr = new UnseenTurn(rig.pluginEnv());
+      const result = yield* session(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(started("r1"));
+          yield* untilStarted;
+          const session = yield* claudeSessionOf("r1");
+          const state = hostOf().env.stateDir;
+          const at = yield* controlDir(state, agentFor("r1"));
+          yield* fs.writeFileString(`${at}/turns.jsonl`, `${session}\n`);
+          yield* acknowledged("r1");
+          yield* killThePane(herdr, "r1");
+          const relost = yield* Effect.forkChild((yield* Agents).resumeLost("r1", runningNow));
+          yield* until(
+            rig.cmds().pipe(
+              Effect.orDie,
+              Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run").length === 2),
+            ),
+          );
+          yield* writeEvent(at, {
+            session,
+            kind: "stopped",
+            reason: `No conversation found with session ID: ${session}`,
+          });
+          yield* killThePane(herdr, "r1");
+          yield* Fiber.join(relost);
+          const refresh = yield* Effect.forkChild((yield* Agents).resumeLost("r1", runningNow));
+          yield* until(
+            rig.cmds().pipe(
+              Effect.orDie,
+              Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run").length === 3),
+            ),
+          );
+          const again = yield* claudeLaunches(3);
+          yield* Fiber.interrupt(refresh);
+          yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"fresh"}`);
+          const done = yield* Fiber.join(fiber);
+          return { again, done };
+        }),
+        { herdr, collectMs: 60_000, readyMs: 200, compactAtTokens: 1000 },
+      );
+      expect(result.again).toContain("--session-id");
+      expect(result.again).not.toContain("--resume");
+      expect(result.done._tag).toBe("Success");
+    }),
+  ));
+
 test("a relaunch that comes up is not counted against its cap, however often it is lost", () =>
   runEffect(
     Effect.gen(function* () {

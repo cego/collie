@@ -671,6 +671,7 @@ const pi: CompactionPort = {
       Effect.map(Arr.map((path) => ({ path, format: "pi", parent: null }) satisfies Source)),
     ),
   ready: reported,
+  exitOf: (ctx) => Effect.map(stoppedSince(ctx.dir, 0), (one) => one?.why ?? null),
   // WARNING: the human's channel, so a refusal from herdr is a request that never left.
   request: (ctx, requestId) => submitCompaction(ctx, requestId, `/collie-compact ${requestId}`),
   mark: (ctx) => claudeMark(ctx.dir),
@@ -1381,6 +1382,7 @@ const claude: CompactionPort = {
   records: claudeRecords,
   // WARNING: the status line is drawn with the REPL, so its first call means the prompt is there.
   ready: reported,
+  exitOf: (ctx) => Effect.map(stoppedSince(ctx.dir, 0), (one) => one?.why ?? null),
   request: (ctx, requestId) =>
     submitCompaction(ctx, requestId, `/compact ${claudeInstructions(requestId)}`),
   mark: (ctx) => claudeMark(ctx.dir),
