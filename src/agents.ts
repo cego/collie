@@ -3808,7 +3808,6 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         runId,
         `${agent}: started again on core after core lost it, ${had === null ? "in a new session: none was recorded to resume" : `resuming its ${adapter.id} session ${had}`}`,
       );
-      // WARNING: a launch that came up is no failure; one that never did counts against the cap.
       const failed = yield* awaitReady(
         compactionDeps(host, runId),
         agent,

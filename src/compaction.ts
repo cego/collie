@@ -29,6 +29,7 @@ import type {
   Submitting,
   TelemetryUnwritten,
 } from "./compactors";
+import { recordCancelled } from "./compactors";
 import { LOCK_CLAIM_SPACING_MS, ensureLockDir, withLock } from "./lock";
 import { reason } from "./naming";
 import type { ParkCause } from "./park-cause";
@@ -998,7 +999,10 @@ export const cancelCompaction = Effect.fn("Compaction.cancelCompaction")(functio
   }
   const port = deps.ports[record.harness];
   const cancelling = port === undefined ? undefined : port.cancel;
-  if (cancelling !== undefined) {
+  if (cancelling === undefined) {
+    // WARNING: a port with nothing to cancel still owes the record, or a later reconcile can settle an attempt nobody finished.
+    yield* recordCancelled(record.dir, { id: attempt.id, session: attempt.session ?? null }, why);
+  } else {
     const ctx = readingContext(record, attempt.run);
     // WARNING: an attempt marked before Collie knew the incarnation is still bound to the session it asks of now.
     const session =

@@ -21,8 +21,10 @@ import {
   rateLimitsReader,
   ranOutSince,
   recordClaudeEvent,
+  recordEvent,
   stoppedSince,
   submittedDelivery,
+  turnTaken,
   VERIFIED_VERSIONS,
 } from "../src/compactors";
 import { pollCompaction, readControl } from "../src/compaction";
@@ -934,6 +936,56 @@ test("a completion from another launch of the same session does not settle it", 
 
       expect(yield* claude.poll(ctx(), markedOn("req-1", "l-1"))).toEqual({ kind: "success" });
       expect(yield* claude.poll(ctx(), markedOn("req-1", "l-2"))).toBeNull();
+    }),
+  ));
+
+test("a session from before the turn record is still taken when its own submit is in the telemetry", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const dir = path.join(rig.root, "aged");
+      yield* fs.makeDirectory(dir, { recursive: true });
+      expect(yield* turnTaken(dir, "s-1")).toBe(false);
+      yield* recordEvent(dir, { session: "s-1", kind: "submit", reason: "collie" });
+      expect(yield* turnTaken(dir, "s-1")).toBe(true);
+      expect(yield* turnTaken(dir, "s-2")).toBe(false);
+    }),
+  ));
+
+test("a session from before the turn record is still taken when its transcript holds a conversation", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const dir = path.join(rig.root, "aged-conversation");
+      const transcript = path.join(rig.root, "s-3.jsonl");
+      yield* fs.makeDirectory(dir, { recursive: true });
+      yield* fs.writeFileString(transcript, `${naming("req-9", isoAt(1))}\n`);
+      yield* recordEvent(dir, { session: "s-3", kind: "usage", transcript });
+      expect(yield* turnTaken(dir, "s-3")).toBe(true);
+      yield* fs.writeFileString(transcript, "");
+      expect(yield* turnTaken(dir, "s-3")).toBe(false);
+    }),
+  ));
+
+test("a boundary whose trigger nobody recorded settles nothing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { due, left } = yield* lostAttempt({
+        transcript: (after) =>
+          `${naming("req-1", after)}\n{"type":"system","subtype":"compact_boundary","timestamp":"${after}"}\n`,
+      });
+      expect(due).toBeNull();
+      expect(left).not.toBeNull();
+    }),
+  ));
+
+test("a boundary another session wrote into the same transcript settles nothing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { due, left } = yield* lostAttempt({
+        transcript: (after) =>
+          `${naming("req-1", after)}\n{"sessionId":"s-2",${Str.slice(1)(boundaryAt(after))}\n`,
+      });
+      expect(due).toBeNull();
+      expect(left).not.toBeNull();
     }),
   ));
 

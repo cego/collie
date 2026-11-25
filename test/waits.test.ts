@@ -684,7 +684,6 @@ test("a restart keeps the request it marked, its bound and its park, and a match
         cause: "compaction-unsettled",
       });
       expect(saidBy(again)).toBe(saidBy(result.first));
-      // WARNING: what a restart reads is the stored attempt, whole; a park identity derived from it follows.
       expect(still?.attempt).toEqual(marked?.attempt);
       expect(resumed).toEqual({ dispatch: true });
     }).pipe(Effect.provide(forgeHttpOnPath)),

@@ -270,6 +270,28 @@ test("the extension it installs keeps the identity and the outcome past its own 
     }),
   ));
 
+test("a Pi launch stamps its telemetry with the label a relaunch asks about", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* pi.install({ agent: "reuse-run-two-r1", harness: "pi", cwd: rig.projectDir, dir });
+      const ran = Bun.spawnSync({
+        cmd: [
+          process.execPath,
+          path.join(import.meta.dir, "support", "pi-launch.fixture.ts"),
+          path.join(dir, "collie.ts"),
+          "pi-agent-1",
+        ],
+      });
+      expect(Str.trim(ran.stdout.toString())).toBe("loaded");
+      const ready = pi.ready;
+      if (ready === undefined) {
+        return yield* Effect.die("the pi port reads readiness");
+      }
+      expect(yield* ready({ ...ctx(), launch: "pi-agent-1" })).toBe(true);
+      expect(yield* ready({ ...ctx(), launch: "pi-agent-2" })).toBe(false);
+    }),
+  ));
+
 onMachineWith("pi")(
   "the installed Pi is at least the release these controls were verified against",
   () =>

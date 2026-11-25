@@ -167,11 +167,13 @@ const ending = Effect.fnUntraced(function* (
       .terminalKill(one.paneId)
       .pipe(Effect.mapError((cause) => new PaneOpen({ paneId: one.paneId, cause })));
   }
-  // WARNING: after the close, so a close that failed leaves the agent's compaction exactly as it found it.
-  yield* cancelCompaction(deps, launched.agent, why).pipe(Effect.ignore);
   const stopMs = deps.stopMs ?? STOP_WAIT_MS;
   const left =
     pane === null || "unconfirmed" in pane ? [] : yield* settled(pane.roots, pane.noted, stopMs);
+  // WARNING: only once nothing it started is left running, or an agent still able to finish has its attempt cancelled under it.
+  if (left.length === 0) {
+    yield* cancelCompaction(deps, launched.agent, why).pipe(Effect.ignore);
+  }
   if (left.length > 0) {
     return {
       _tag: "NotQuiet",

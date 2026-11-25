@@ -1433,7 +1433,6 @@ test("an agent whose harness exits at once is started again only to its cap, and
       );
       expect(why).toContain("was started again 3 times");
       expect(why).toContain("gave no sign");
-      // WARNING: a launch that never came up is not sent the Step, so nothing is lost to its unread prompt.
       expect(sent(yield* rig.calls(), "Carry on with your step")).toBe(0);
       expect(
         Arr.filter(everyLaunch(yield* rig.calls()), (argv) =>
@@ -1477,7 +1476,6 @@ test("a relaunch that comes up is not counted against its cap, however often it 
           compactAtTokens: 1000,
           ports: {
             ...hostOf().ports,
-            // WARNING: the harness of every relaunch comes up, which is what a recovery that worked looks like.
             claude: { ...claudeControls().claude, ready: () => Effect.succeed(true) },
           },
         },

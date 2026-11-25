@@ -2687,7 +2687,6 @@ const frontDoorHandlers = (
         const readings = yield* usage.readings;
         return hasAnyRoom(defaults, readings, yield* Clock.currentTimeMillis);
       }).pipe(Effect.provideContext(hosted));
-      // WARNING: room is asked of the agents this Run runs on, not of the Machine's defaults, or a Codex account's room clears a Claude Run.
       const roomHere = (view: { readonly runId: string }) =>
         Effect.gen(function* () {
           const defaults = yield* loadDefaults(env.userDir).pipe(
