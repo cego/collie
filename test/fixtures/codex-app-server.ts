@@ -166,11 +166,13 @@ const forwarded = (cfg: Server) => {
 
 const DEFAULT_EXCLUDES = ["*KEY*", "*TOKEN*", "*SECRET*", "*PASSWORD*"];
 const CORE = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "TERM", "PWD"];
+const Filter = Schema.Literals(["include", "exclude"]);
 const ShellPolicy = Schema.Struct({
   inherit: Schema.optionalKey(Schema.String),
   ignore_default_excludes: Schema.optionalKey(Schema.Boolean),
   exclude: Schema.optionalKey(Schema.Array(Schema.String)),
   include_only: Schema.optionalKey(Schema.Array(Schema.String)),
+  filters: Schema.optionalKey(Schema.Record(Schema.String, Filter)),
 });
 const wildcard = (glob: string, key: string) =>
   new RegExp(
@@ -179,6 +181,8 @@ const wildcard = (glob: string, key: string) =>
 
 const shellPolicy = () => {
   const merged = { ...own.shell_environment_policy };
+  let legacy = false;
+  let keyed = false;
   for (const [at, arg] of Bun.argv.entries()) {
     if (Bun.argv[at - 1] !== "-c") {
       continue;
@@ -187,13 +191,33 @@ const shellPolicy = () => {
     if (!pipe(key, Str.startsWith("shell_environment_policy."))) {
       continue;
     }
-    merged[Str.split(key, ".")[1] ?? ""] = tomlValue(Arr.join(held, "="));
+    const name = Str.split(key, ".")[1] ?? "";
+    merged[name] = tomlValue(Arr.join(held, "="));
+    legacy = legacy || name === "exclude" || name === "include_only";
+    keyed = keyed || name === "filters";
+  }
+  // WARNING: Codex drops a keyed `filters` table when a legacy name is set beside it.
+  if (legacy && !keyed) {
+    delete merged.filters;
   }
   const held: typeof ShellPolicy.Type = Option.getOrElse(
     Schema.decodeOption(ShellPolicy)(merged),
     () => ({}),
   );
   return held;
+};
+
+const reportedPolicy = () => {
+  const policy = shellPolicy();
+  return {
+    inherit: policy.inherit ?? null,
+    ignore_default_excludes: policy.ignore_default_excludes ?? null,
+    exclude: policy.exclude ?? null,
+    set: null,
+    include_only: policy.include_only ?? null,
+    filters: policy.filters ?? null,
+    experimental_use_profile: null,
+  };
 };
 
 const shellEnv = () => {
@@ -203,13 +227,21 @@ const shellEnv = () => {
     ...(policy.ignore_default_excludes === true ? [] : DEFAULT_EXCLUDES),
     ...(policy.exclude ?? []),
   ];
+  const filtered = Rec.toEntries(policy.filters ?? {});
   return Rec.filter(
     Rec.getSomes(Rec.map(childEnv(), (value) => Option.fromUndefinedOr(value))),
-    (_value, key) =>
-      policy.include_only === undefined
-        ? (inherit === "all" || (inherit === "core" && Arr.contains(CORE, key))) &&
-          !Arr.some(excluded, (glob) => wildcard(glob, key))
-        : Arr.some(policy.include_only, (glob) => wildcard(glob, key)),
+    (_value, key) => {
+      if (Arr.some(excluded, (glob) => wildcard(glob, key))) {
+        return false;
+      }
+      const keyed = Arr.findFirst(filtered, ([glob]) => wildcard(glob, key));
+      if (Option.isSome(keyed)) {
+        return keyed.value[1] === "include";
+      }
+      return policy.include_only === undefined
+        ? inherit === "all" || (inherit === "core" && Arr.contains(CORE, key))
+        : Arr.some(policy.include_only, (glob) => wildcard(glob, key));
+    },
   );
 };
 
@@ -654,7 +686,7 @@ for await (const chunk of Bun.stdin.stream()) {
         answer({
           config: {
             mcp_servers: { ...servers(), ...(await ownServers()) },
-            shell_environment_policy: shellPolicy(),
+            shell_environment_policy: reportedPolicy(),
           },
         });
         break;

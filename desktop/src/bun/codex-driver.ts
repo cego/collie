@@ -28,8 +28,14 @@ import { isNumber, isString } from "../../../src/schema";
 import type { JsonObject } from "../../../src/schema";
 import { standingDirectionContext } from "../../../src/standing-direction";
 import type { ChatEndpoint } from "./chat-endpoint";
-import { CodexStatus, NO_SERVERS, codexConnections, codexServers } from "./codex-servers";
-import type { CodexServers } from "./codex-servers";
+import {
+  CodexStatus,
+  NO_POLICY,
+  NO_SERVERS,
+  codexConnections,
+  codexServers,
+} from "./codex-servers";
+import type { CodexServers, ShellPolicy } from "./codex-servers";
 import type { ListedModel } from "./claude-models";
 import type { ChatDriver, ContentBlock, DriverContext, TurnCost } from "./driver";
 import { listedIn } from "./harness-lists";
@@ -625,7 +631,12 @@ const Effective = Schema.Struct({
     Schema.Struct({
       mcp_servers: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
       shell_environment_policy: Schema.optionalKey(
-        Schema.Struct({ exclude: Schema.optionalKey(Schema.Array(Schema.String)) }),
+        Schema.NullOr(
+          Schema.Struct({
+            exclude: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.String))),
+            filters: Schema.optionalKey(Schema.NullOr(Schema.Record(Schema.String, Schema.String))),
+          }),
+        ),
       ),
     }),
   ),
@@ -633,7 +644,7 @@ const Effective = Schema.Struct({
 const decodeEffective = decoded(Effective);
 type Configured = {
   readonly native: ReadonlyArray<string>;
-  readonly excludes: ReadonlyArray<string>;
+  readonly policy: ShellPolicy;
 };
 const instructions = () => systemPrompt(hostname());
 
@@ -755,10 +766,11 @@ export const codexDriver: (
                 Rec.keys(config?.mcp_servers ?? {}),
                 (name) => name !== SERVER,
               );
-              const held: Configured = {
-                native,
+              const policy: ShellPolicy = {
                 excludes: config?.shell_environment_policy?.exclude ?? [],
+                filters: config?.shell_environment_policy?.filters ?? {},
               };
+              const held: Configured = { native, policy };
               return Option.some(held);
             }),
           ).pipe(Effect.orElseSucceed(() => Option.none<Configured>()));
@@ -774,7 +786,11 @@ export const codexDriver: (
           given = codexServers(
             yield* Effect.tryPromise(userServers).pipe(Effect.orElseSucceed(() => ({}))),
             configured,
-            discovery?.excludes ?? [],
+            discovery?.policy ?? NO_POLICY,
+          );
+          // WARNING: a variable an imported server's reference used is a credential Codex's shell can read.
+          const kept = Rec.fromEntries(
+            Arr.filter(Rec.toEntries(childEnv()), ([name]) => !Arr.contains(given.used, name)),
           );
           const server = yield* appServer(
             command,
@@ -788,7 +804,7 @@ export const codexDriver: (
               "-c",
               `mcp_servers.${SERVER}.tool_timeout_sec=${TOOL_TIMEOUT}`,
             ],
-            { ...childEnv(), ...given.env, [TOKEN_ENV]: token },
+            { ...kept, ...given.env, [TOKEN_ENV]: token },
           );
           yield* Effect.forkScoped(pump(server));
           const { account, requiresOpenaiAuth } = yield* server

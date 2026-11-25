@@ -599,34 +599,31 @@ const message = (events: ReadonlyArray<AguiEvent>) =>
   );
 
 test("A server's credential reaches that server, and never Codex's own shell", () => {
-  const fixture = serveDocs({ tool: "read_doc" });
-  const token = "shell-secret";
+  const fixture = serveDocs({ tool: "read_doc", token: "mine" });
   Bun.env.MY_THING = "mine";
   return withServers(
     {
       docs: {
         type: "http",
         url: fixture.url,
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: "Bearer ${MY_THING}" },
       },
     },
-    (driver, context) =>
+    (driver) =>
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.writeFileString(
-          `${context.dir}/codex-home/config.toml`,
-          `[shell_environment_policy]\nexclude = ["MY_*"]\n`,
-        );
         const session = yield* driver.open("codex-shell", "default", null);
         yield* Effect.addFinalizer(() => session.close);
         yield* session.offer("shell");
         const shell = message(yield* turn(session));
         expect(shell).not.toContain("COLLIE_CHAT_SERVER_1");
-        expect(shell).not.toContain(token);
         expect(shell).not.toContain("MY_THING");
         expect(shell).toContain("PATH=");
         yield* session.offer("servers");
-        expect(called(yield* turn(session))).toEqual(["mcp__docs__read_doc"]);
+        const events = yield* turn(session);
+        expect(called(events)).toEqual(["mcp__docs__read_doc"]);
+        expect(Arr.filter(events, (event) => event.type === "TOOL_CALL_RESULT")).toMatchObject([
+          { content: "read_doc read a page" },
+        ]);
       }),
   ).finally(() => {
     void fixture.stop();
@@ -635,6 +632,75 @@ test("A server's credential reaches that server, and never Codex's own shell", (
 });
 
 const occurrences = (text: string, word: string) => Str.split(text, word).length - 1;
+test("An imported server keeps the human's keyed shell filters", () => {
+  const fixture = serveDocs({ tool: "read_doc", token: "kept" });
+  return withServers(
+    { docs: { type: "http", url: fixture.url, headers: { Authorization: "Bearer kept" } } },
+    (driver, context) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(
+          `${context.dir}/codex-home/config.toml`,
+          `[shell_environment_policy.filters]\n"LANG" = "exclude"\n`,
+        );
+        const session = yield* driver.open("codex-filters", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("shell");
+        const shell = message(yield* turn(session));
+        expect(shell).not.toContain("LANG=");
+        expect(shell).not.toContain("COLLIE_CHAT_SERVER_1");
+        expect(shell).toContain("PATH=");
+        yield* session.offer("servers");
+        expect(called(yield* turn(session))).toEqual(["mcp__docs__read_doc"]);
+      }),
+  ).finally(() => {
+    void fixture.stop();
+  });
+});
+
+test("The shell stand-in keeps an exclusion the human's allowlist would readmit", () => {
+  return withServers({}, (driver, context) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(
+        `${context.dir}/codex-home/config.toml`,
+        `[shell_environment_policy]\ninclude_only = ["LANG", "PATH"]\nexclude = ["LANG"]\n`,
+      );
+      const session = yield* driver.open("codex-allowlist", "default", null);
+      yield* Effect.addFinalizer(() => session.close);
+      yield* session.offer("shell");
+      const shell = message(yield* turn(session));
+      expect(shell).not.toContain("LANG=");
+      expect(shell).toContain("PATH=");
+    }),
+  );
+});
+
+test("A value holding a later reference is substituted in the original text", () => {
+  Bun.env.LATER = "tail";
+  Bun.env.EARLIER = "a${LATER}b";
+  return withServers(
+    {
+      tool: {
+        command: process.execPath,
+        args: [`${import.meta.dir}/fixtures/mcp-stdio-echo.fixture.ts`],
+        env: { API_TOKEN: "${EARLIER}${LATER}" },
+      },
+    },
+    (driver) =>
+      Effect.gen(function* () {
+        const session = yield* driver.open("codex-later", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("servers");
+        expect(
+          Arr.filter(yield* turn(session), (event) => event.type === "TOOL_CALL_RESULT"),
+        ).toMatchObject([{ content: "a${LATER}btail" }]);
+      }),
+  ).finally(() => {
+    delete Bun.env.LATER;
+    delete Bun.env.EARLIER;
+  });
+});
 
 const startLines = (dir: string) =>
   Effect.gen(function* () {
@@ -971,6 +1037,7 @@ test("The login command a server is told parses, even when its url holds a quote
       { name: "stdio-one" },
     ],
     left: [],
+    used: [],
   } as const;
   const told = codexConnections(
     servers,

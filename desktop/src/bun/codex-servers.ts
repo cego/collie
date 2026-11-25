@@ -33,14 +33,22 @@ export const CodexStatus = Schema.Struct({
 });
 export type CodexStatus = typeof CodexStatus.Type;
 
+export interface ShellPolicy {
+  readonly excludes: ReadonlyArray<string>;
+  readonly filters: Readonly<Record<string, string>>;
+}
+
+export const NO_POLICY: ShellPolicy = { excludes: [], filters: {} };
+
 export interface CodexServers {
   readonly args: ReadonlyArray<string>;
   readonly env: Readonly<Record<string, string>>;
   readonly given: ReadonlyArray<{ readonly name: string; readonly url?: string }>;
   readonly left: ReadonlyArray<{ readonly name: string; readonly why: string }>;
+  readonly used: ReadonlyArray<string>;
 }
 
-export const NO_SERVERS: CodexServers = { args: [], env: {}, given: [], left: [] };
+export const NO_SERVERS: CodexServers = { args: [], env: {}, given: [], left: [], used: [] };
 
 // WARNING: Codex reads a `-c` value as TOML: a table's keys are quoted so a dot stays a header's name.
 const quoted = (value: string) => JSON.stringify(value);
@@ -62,29 +70,32 @@ const table = (key: string, values: Readonly<Record<string, string>>) => {
       ];
 };
 
-const replacedOnce = (text: string, whole: string, carried: string) =>
-  Option.match(pipe(text, Str.indexOf(whole)), {
-    onNone: () => text,
-    onSome: (at) =>
-      `${pipe(text, Str.slice(0, at))}${carried}${pipe(text, Str.slice(at + whole.length))}`,
-  });
-
-const referenced: (value: string, env: Readonly<Record<string, string | undefined>>) => string = (
-  value,
-  env,
-) =>
-  Arr.reduce(Arr.fromIterable(pipe(value, Str.matchAll(REFERENCE))), value, (so, match) => {
+// WARNING: the matches come from the original text, so a value holding a reference is not resolved twice.
+const substituted: (
+  value: string,
+  env: Readonly<Record<string, string | undefined>>,
+) => { readonly text: string; readonly used: ReadonlyArray<string> } = (value, env) => {
+  const pieces = Arr.fromIterable(pipe(value, Str.matchAll(REFERENCE)));
+  const { text, at } = Arr.reduce(pieces, { text: "", at: 0 }, (so, match) => {
     const whole = match[0] ?? "";
-    const reference = match[1] ?? "";
-    return replacedOnce(so, whole, env[reference] ?? whole);
+    const found = match.index ?? so.at;
+    return {
+      text: `${so.text}${pipe(value, Str.slice(so.at, found))}${env[match[1] ?? ""] ?? whole}`,
+      at: found + whole.length,
+    };
   });
+  return {
+    text: `${text}${pipe(value, Str.slice(at))}`,
+    used: Arr.map(pieces, (one) => one[1] ?? ""),
+  };
+};
 
 // WARNING: `null` means Codex's own names are unknown: passing the human's would override them.
 export const codexServers: (
   servers: UserMcpServers,
   configured: ReadonlyArray<string> | null,
-  excludes: ReadonlyArray<string>,
-) => CodexServers = (servers, configured, excludes) => {
+  policy: ShellPolicy,
+) => CodexServers = (servers, configured, policy) => {
   if (configured === null) {
     return {
       ...NO_SERVERS,
@@ -98,6 +109,12 @@ export const codexServers: (
   const env: Record<string, string> = {};
   const given: Array<{ name: string; url?: string }> = [];
   const left: Array<{ name: string; why: string }> = [];
+  const used: Array<string> = [];
+  const resolve = (value: string) => {
+    const made = substituted(value, childEnv());
+    used.push(...made.used);
+    return made.text;
+  };
   let carried = 0;
   for (const [name, server] of Rec.toEntries(servers)) {
     if (name === RESERVED) {
@@ -131,7 +148,7 @@ export const codexServers: (
       const passing = Arr.map(held, ([key, value]) => {
         carried += 1;
         const variable = `${OWN}STDIO_${carried}`;
-        env[variable] = referenced(value, childEnv());
+        env[variable] = resolve(value);
         return { key, variable };
       });
       args.push(
@@ -165,16 +182,24 @@ export const codexServers: (
     for (const [header, value] of Rec.toEntries(server.headers ?? {})) {
       carried += 1;
       const variable = `${OWN}SERVER_${carried}`;
-      env[variable] = referenced(value, childEnv());
+      env[variable] = resolve(value);
       headers[header] = variable;
     }
     args.push(...table(`mcp_servers.${name}.env_http_headers`, headers));
     given.push({ name, url: server.url });
   }
+  // WARNING: Codex drops its keyed `filters` table when a legacy exclude is set beside it.
   if (Rec.size(env) > 0) {
-    args.push(...list("shell_environment_policy.exclude", Arr.dedupe([`${OWN}*`, ...excludes])));
+    args.push(
+      ...(Rec.size(policy.filters) > 0
+        ? table("shell_environment_policy.filters", {
+            ...policy.filters,
+            [`${OWN}*`]: "exclude",
+          })
+        : list("shell_environment_policy.exclude", Arr.dedupe([`${OWN}*`, ...policy.excludes]))),
+    );
   }
-  return { args, env, given, left };
+  return { args, env, given, left, used: Arr.dedupe(used) };
 };
 
 const toolsOf = (status: CodexStatus | undefined) => Rec.keys(status?.tools ?? {});
