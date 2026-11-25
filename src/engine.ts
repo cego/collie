@@ -10458,7 +10458,9 @@ const makeRegistry: (
       }
       const workflow = offer.workflow === SELF ? generation.id : offer.workflow;
       // WARNING: a selecting offer taken over ids goes on beside its siblings; one taken for every finding does not.
-      const oneAtATime = offer.selects === undefined || (idsIn(given.findings) ?? []).length === 0;
+      const oneAtATime =
+        offer.selects !== "many" &&
+        (offer.selects === undefined || (idsIn(given.findings) ?? []).length === 0);
       for (const candidate of oneAtATime ? runs : []) {
         if (candidate.workflow !== workflow || candidate.request === request) {
           continue;

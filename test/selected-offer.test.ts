@@ -565,7 +565,7 @@ test("a request id already started answers with the Run it started, once its fin
             yield* run.client.offers({ runId: run.id }),
             (one) => one.unavailable === null,
           ),
-        ).toEqual([]);
+        ).toMatchObject([{ id: "implement-selected" }]);
       }),
     [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
   ));

@@ -256,6 +256,7 @@ test("the CLI takes an offer over two findings, lists both taken, and a dismissa
         const shown = yield* cli(["--json", "run", "show", child], env);
         expect(shown.exit).toBe(0);
         expect(shown.stdout).toContain("implement");
+        expect(yield* card).toBe("false/waiting");
 
         const dismissed = yield* cli(
           [
