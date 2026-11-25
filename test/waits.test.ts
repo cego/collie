@@ -108,6 +108,32 @@ test("a harness's readiness is asked every poll, and past its budget the wait sa
     }),
   ));
 
+test("a launch that never came up is named by the exit that ended it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* controlled(null);
+      const child = Bun.spawn(["sh", "-c", "exit 0"]);
+      yield* Effect.promise(() => child.exited);
+      yield* fs.writeFileString(
+        `${stateDir}/compaction/build-r1/control.json`,
+        encode({
+          agent: "build-r1",
+          harness: "claude",
+          cwd: stateDir,
+          dir: `${stateDir}/compaction/build-r1`,
+          pid: child.pid,
+          started: "whenever it started",
+          attempt: null,
+        }),
+      );
+      const never = port({ ready: () => Effect.succeed(false) });
+      expect(
+        yield* awaitReady(deps(stateDir, never), "build-r1", 300, { mustStayListed: true }),
+      ).toBe("claude exited before it was up");
+    }),
+  ));
+
 test("a readiness ask still running at the budget is waited for, and its yes is taken", () =>
   runEffect(
     Effect.gen(function* () {

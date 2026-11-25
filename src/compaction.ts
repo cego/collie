@@ -752,15 +752,26 @@ export const awaitReady = Effect.fn("Compaction.awaitReady")(function* (
       schedule: Schedule.spaced(deps.pollMs).pipe(Schedule.while(({ now }) => now < deadline)),
     }),
   );
+  // WARNING: a launch that never came up is best named by the exit that ended it, which the elapsed budget hides.
+  const exited = yield* record.pid === null
+    ? Effect.succeed(false)
+    : processOf(record.pid).pipe(
+        Effect.map(
+          (one) => one === null || (record.started !== null && one.started !== record.started),
+        ),
+        Effect.orElseSucceed(() => false),
+      );
+  const lost = (fallback: string) =>
+    exited ? `${record.harness} exited before it was up` : fallback;
   if (asked._tag === "Gone") {
-    return "core no longer lists it";
+    return lost("core no longer lists it");
   }
   if (asked._tag === "Up") {
     return null;
   }
   // WARNING: the harness's own words are the exit; the elapsed budget hides which failure it was.
   return why === ""
-    ? `${record.harness} gave no sign it was up within ${Math.round(budgetMs / 1000)}s`
+    ? lost(`${record.harness} gave no sign it was up within ${Math.round(budgetMs / 1000)}s`)
     : why;
 });
 
