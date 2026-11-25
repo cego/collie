@@ -213,3 +213,43 @@ test("a Step Note reaches the step it names once, and no other", () =>
       expect(yield* takeStepNotes(stateDir, "review", prompt)).toBe("look at the second call site");
     }),
   ));
+
+test("a trial's findings are read from the fact, and from a file only where an older build wrote one", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const records = yield* RunRecords;
+      const text = `{"findings":[{"severity":"major","title":"from the fact","file":"a.ts","detail":"d"}]}`;
+      yield* recordLaunch({
+        ...launched(),
+        operation: "review-1",
+        output: `${stateDir}/agents/r1/review-1.json`,
+      });
+      yield* accepted(`${stateDir}/agents/r1/review-1.json`, text);
+      expect(
+        Arr.map((yield* trialRecordsOf(stateDir, "r1")).reviews, (one) => one[0]?.title),
+      ).toEqual(["from the fact"]);
+      const { submitOnly: _marked, ...older } = launched();
+      const fileStep = {
+        ...older,
+        operation: "review-2",
+        output: `${stateDir}/agents/r1/review-2.json`,
+        outputSubmit: "file" as const,
+      };
+      yield* recordLaunch(fileStep);
+      yield* fs.makeDirectory(`${stateDir}/agents/r1`, { recursive: true });
+      yield* fs.writeFileString(fileStep.output, text.replace("from the fact", "from the file"));
+      expect(
+        Arr.map((yield* trialRecordsOf(stateDir, "r1")).reviews, (one) => one[0]?.title),
+      ).toEqual(["from the fact", "from the file"]);
+      yield* recordLaunch({
+        ...launched(),
+        operation: "review-3",
+        output: `${stateDir}/agents/r1/review-3.json`,
+      });
+      yield* fs.writeFileString(`${stateDir}/agents/r1/review-3.json`, text);
+      expect(
+        Arr.map((yield* trialRecordsOf(stateDir, "r1")).reviews, (one) => one[0]?.title),
+      ).toEqual(["from the fact", "from the file"]);
+    }),
+  ));
