@@ -118,6 +118,7 @@ import type { ForgeHttp } from "./forge/http";
 import { parseDocument } from "./yaml";
 import type { YamlMap } from "./yaml";
 import { RanOn } from "./board-model";
+import type { RoomQuestion } from "./board-model";
 import { humanOf } from "./proposals";
 import type { Asker } from "./proposals";
 import { STOP, controlSet } from "./controls";
@@ -138,7 +139,9 @@ import {
   personaPrefix,
   ceilingIn,
   DEFAULT_MODEL,
+  chainEntry,
   pinned,
+  resolveChoice,
   preferencesIn,
   preferencesFromOptions,
   resolveWithRoom,
@@ -407,6 +410,10 @@ export interface AgentsApi {
     work: { readonly runId: string; readonly operation: string },
     spent?: ReadonlyArray<SpentChoice>,
   ) => Effect.Effect<ChosenAgent, WorkflowError>;
+  readonly roomQuestion: (
+    layers: ReadonlyArray<Preferences | undefined>,
+    spent: ReadonlyArray<SpentChoice>,
+  ) => Effect.Effect<RoomQuestion>;
   readonly choiceOf: (
     runId: string,
     agent: string,
@@ -1180,7 +1187,13 @@ export const agentWork: <
           execute: agents
             .say(runId, `${work.operation}: ${said(on)} ran out (${out.why}); ${next.why}`)
             .pipe(
-              Effect.andThen(host.usageWait(runId, { account, resetsAt })),
+              Effect.andThen(
+                host.usageWait(runId, {
+                  account,
+                  resetsAt,
+                  question: yield* agents.roomQuestion(layers, spent),
+                }),
+              ),
               Effect.andThen(
                 Effect.raceFirst(collecting(current, currentAsk, waiting), room).pipe(
                   Effect.tap(() => host.parked(runId, null)),
@@ -1697,6 +1710,100 @@ const choiceOfLaunch: (launched: Launched) => AgentChoice = (launched) => {
 const nothingHasRoom = (chosen: ChosenAgent) =>
   chosen.from === undefined && chosen.why !== undefined;
 
+// WARNING: a park on room is cleared only on an agent the Run may use, so the wake-up asks what `choose` asked.
+// WARNING: the eligible choices are what the Run may use, so a park on room is asked of them and not of one agent.
+export const roomQuestionOf = (
+  inputs: {
+    readonly configured: Preferences;
+    readonly fallbacks: ReadonlyArray<string>;
+    readonly models?: Readonly<Record<string, ReadonlyArray<string>>>;
+    readonly catalogue?: MachineCatalogue;
+  },
+  layers: ReadonlyArray<Preferences | undefined>,
+  spent: ReadonlyArray<SpentChoice>,
+): RoomQuestion => {
+  const stacks: ReadonlyArray<ReadonlyArray<Preferences | undefined>> = [
+    [inputs.configured, ...layers],
+    ...Arr.map(inputs.fallbacks, (name) => [inputs.configured, ...layers, chainEntry(name)]),
+  ];
+  const choices = Arr.getSomes(
+    Arr.map(stacks, (stack) => {
+      const resolved = resolveChoice(stack, inputs.models, inputs.catalogue);
+      return resolved.ok
+        ? Option.some({
+            harness: resolved.choice.harness,
+            model: resolved.choice.model,
+            effort: resolved.choice.effort,
+          })
+        : Option.none<{ harness: string; model: string; effort: string | null }>();
+    }),
+  );
+  return {
+    choices,
+    spent: Arr.map(spent, (one) => ({
+      on: { harness: one.on.harness, model: one.on.model, effort: one.on.effort },
+      why: one.why,
+      resetsAt: one.resetsAt ?? null,
+      ...(one.observedAt === undefined ? {} : { observedAt: one.observedAt }),
+      ...(one.exhaustion === undefined
+        ? {}
+        : {
+            exhaustion: {
+              at: one.exhaustion.at,
+              account: one.exhaustion.account,
+              windows: Arr.map(one.exhaustion.windows, (window) => ({
+                kind: window.kind,
+                model: window.model,
+                resetsAt: window.resetsAt,
+              })),
+            },
+          }),
+    })),
+  };
+};
+
+export const roomForQuestion = (
+  question: RoomQuestion,
+  readings: ReadonlyArray<UsageReading>,
+  now: number,
+) => {
+  const read = roomFor(readings, now);
+  const out: ReadonlyArray<SpentChoice> = Arr.map(question.spent, (one) => ({
+    why: one.why,
+    resetsAt: one.resetsAt ?? null,
+    observedAt: one.observedAt,
+    exhaustion:
+      one.exhaustion === undefined
+        ? undefined
+        : {
+            at: one.exhaustion.at,
+            account: one.exhaustion.account ?? null,
+            windows: Arr.map(one.exhaustion.windows, (window) => ({
+              kind:
+                window.kind === "session" ||
+                window.kind === "weekly" ||
+                window.kind === "weekly-model" ||
+                window.kind === "other"
+                  ? window.kind
+                  : ("other" as const),
+              model: window.model ?? null,
+              resetsAt: window.resetsAt ?? null,
+            })),
+          },
+    on: pinned(one.on),
+  }));
+  return Arr.some(question.choices, (one) => {
+    const choice: AgentChoice = pinned(one);
+    const ran = Option.getOrUndefined(
+      Arr.findFirst(
+        out,
+        (spent) => sameUsage(spent.on, choice) && !usageRecovered(spent, readings, now),
+      ),
+    );
+    return read(choice, undefined).room && ran === undefined;
+  });
+};
+
 const sameUsage = (one: AgentChoice, other: AgentChoice) => {
   const drawn = subscriptionOf(one);
   return said(one) === said(other) || (drawn !== null && drawn === subscriptionOf(other));
@@ -1793,6 +1900,12 @@ const READY_TIMEOUT_MS = 120_000;
 const CONFIRM_GRACE_MS = 15_000;
 const confirmGrace = Config.Duration("COLLIE_CONFIRM_GRACE").pipe(
   Config.withDefault(Duration.millis(CONFIRM_GRACE_MS)),
+  Effect.orDie,
+);
+
+// WARNING: a host test must not wait the production five minutes to see a compaction park.
+const compactionWait = Config.Duration("COLLIE_COMPACTION_WAIT_MS").pipe(
+  Config.withDefault(Duration.millis(COMPACTION_WAIT_MS)),
   Effect.orDie,
 );
 
@@ -4723,6 +4836,27 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           return chosen;
         }),
       ),
+    roomQuestion: (
+      layers: ReadonlyArray<Preferences | undefined>,
+      spent: ReadonlyArray<SpentChoice>,
+    ) =>
+      under(
+        Effect.gen(function* () {
+          const configured = { harness: host.harness, model: host.model, effort: host.effort };
+          const chain =
+            host.fallbacks ??
+            loadDefaults(host.env.userDir).pipe(
+              Effect.map(({ fallbacks }) => fallbacks),
+              Effect.orElseSucceed(() => []),
+            );
+          const catalogue = host.catalogue === undefined ? undefined : yield* host.catalogue;
+          return roomQuestionOf(
+            { configured, fallbacks: yield* chain, models: host.models, catalogue },
+            layers,
+            spent,
+          );
+        }),
+      ),
     choiceOf: (runId, agent) =>
       under(
         Effect.gen(function* () {
@@ -5260,6 +5394,7 @@ export const configuredAgents = Effect.fn("Agents.configured")(function* (
     trust: defaults.trust,
     compactAtTokens: defaults.compactAtTokens,
     confirmGraceMs: Duration.toMillis(yield* confirmGrace),
+    compactionWaitMs: Duration.toMillis(yield* compactionWait),
     readings,
     catalogue,
     ownReading: (agent) =>

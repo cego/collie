@@ -3,6 +3,7 @@ import * as Str from "effect/String";
 import * as Rec from "effect/Record";
 import { Effect, Schema } from "effect";
 import { mrRefOf } from "./board-model";
+import type { RoomQuestion } from "./board-model";
 import { forgeOf } from "./forge/forge";
 import { appendRunJournal, readRunJournal, runJournal } from "./journal";
 import { projectHere, shell, whatItSaid } from "./mr";
@@ -183,7 +184,10 @@ export const recheckPark = (
     Partial<Pick<RunView, "input" | "strategies" | "usage">>,
   stateDir: string,
   herdr: Pick<Herdr, "agentList">,
-  hasRoom?: (view: { readonly runId: string }) => Effect.Effect<boolean, never, never>,
+  hasRoom?: (view: {
+    readonly runId: string;
+    readonly usage?: { readonly question?: RoomQuestion } | null;
+  }) => Effect.Effect<boolean, never, never>,
 ) =>
   Effect.gen(function* () {
     switch (view.park?.cause) {

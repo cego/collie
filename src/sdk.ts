@@ -109,7 +109,7 @@ export {
 } from "./board-model";
 export type { WatchChange, WatchCursor, Woke } from "./mr-watch-model";
 import { AuthoredSolution } from "./board-model";
-import type { Solution } from "./board-model";
+import type { RoomQuestion, Solution } from "./board-model";
 /** What merging the default branch into a Run's branch did (`HostApi.integrate`). */
 export { IntegrationSchema, type Integration } from "./integrate";
 /** A Measurement as the host recorded it (`HostApi.measure`), an infinite ratio kept as JSON. */
@@ -859,7 +859,11 @@ export interface HostApi {
   /** Records that its work waits on a Subscription to reset; null says it no longer does. */
   readonly usageWait: (
     runId: string,
-    wait: { readonly account: string; readonly resetsAt: string | null } | null,
+    wait: {
+      readonly account: string;
+      readonly resetsAt: string | null;
+      readonly question?: RoomQuestion;
+    } | null,
   ) => Effect.Effect<void>;
   /** Records where the Run's work is among its Steps (ADR-draft-a-step-is-declared-where-its-work-is-written D4). */
   readonly step: (runId: string, note: StepNote) => Effect.Effect<void>;

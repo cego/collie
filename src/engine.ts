@@ -212,6 +212,7 @@ import {
   parseMrTarget,
   readMrRef,
   RecordedSolution,
+  RoomQuestion,
   recommendedFirst,
 } from "./board-model";
 import { readMrStates } from "./merges";
@@ -1008,7 +1009,14 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly stopRequested: (runId: string) => Effect.Effect<boolean>;
     readonly record: (runId: string, event: string) => Effect.Effect<void>;
     /** Records that its work waits on a Subscription to reset; null says it no longer does. */
-    readonly usageWait: (runId: string, wait: { readonly account: string; readonly resetsAt: string | null } | null) => Effect.Effect<void>;
+    readonly usageWait: (
+      runId: string,
+      wait: {
+        readonly account: string;
+        readonly resetsAt: string | null;
+        readonly question?: RoomQuestion;
+      } | null,
+    ) => Effect.Effect<void>;
     /** Records where the Run's work is among its Steps; \`step\` and \`forecast\` call it. */
     readonly step: (runId: string, note: { readonly kind: string } & Record<string, unknown>) => Effect.Effect<void>;
     /** Records what an implementer says it has done with a ticket, carded while it works. */
@@ -3545,6 +3553,7 @@ const parkCauseOf: (text: string | null) => ParkCause = (text) =>
 export const UsageWaitSchema = Schema.Struct({
   account: Schema.String,
   resetsAt: Schema.NullOr(Schema.String),
+  question: Schema.optionalKey(RoomQuestion),
 });
 const UsageWaitJson = Schema.fromJsonString(UsageWaitSchema);
 

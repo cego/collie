@@ -646,6 +646,33 @@ export const RanOn = Schema.Struct({
   effort: Schema.NullOr(Schema.String),
 });
 
+// WARNING: the question a usage park was raised on, recorded so a recheck asks it and not the Machine's defaults.
+export const RoomQuestion = Schema.Struct({
+  choices: Schema.Array(RanOn),
+  spent: Schema.Array(
+    Schema.Struct({
+      on: RanOn,
+      why: Schema.String,
+      resetsAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
+      observedAt: Schema.optionalKey(Schema.Finite),
+      exhaustion: Schema.optionalKey(
+        Schema.Struct({
+          at: Schema.Finite,
+          account: Schema.optionalKey(Schema.NullOr(Schema.String)),
+          windows: Schema.Array(
+            Schema.Struct({
+              kind: Schema.optionalKey(Schema.String),
+              model: Schema.optionalKey(Schema.NullOr(Schema.String)),
+              resetsAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
+            }),
+          ),
+        }),
+      ),
+    }),
+  ),
+});
+export type RoomQuestion = typeof RoomQuestion.Type;
+
 export const MachineRef = Schema.Struct({ installation: Schema.String, name: Schema.String });
 export type MachineRef = typeof MachineRef.Type;
 

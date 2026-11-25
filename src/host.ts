@@ -140,7 +140,7 @@ import {
 import { ChangedIntent } from "./intent-model";
 import { donePasses, markersOf, runningCheck, followLog } from "./checks";
 import { startCheckout } from "./agent-start";
-import { configuredAgents } from "./agents";
+import { configuredAgents, roomForQuestion } from "./agents";
 import { hasAnyRoom, hasRoomFor } from "./harness";
 import { Collecting } from "./collecting";
 import { memoryWaitOf, waitForMemory, waitLine } from "./memory-wait";
@@ -235,7 +235,15 @@ import {
   SteerOutcome,
   Attachments,
 } from "./board-model";
-import type { RunRevision, Toasted, FrontDoor, OfferView, TaskView, Where } from "./board-model";
+import type {
+  RunRevision,
+  RoomQuestion,
+  Toasted,
+  FrontDoor,
+  OfferView,
+  TaskView,
+  Where,
+} from "./board-model";
 import {
   attachedLine,
   attachmentRefusal,
@@ -2687,15 +2695,22 @@ const frontDoorHandlers = (
         const readings = yield* usage.readings;
         return hasAnyRoom(defaults, readings, yield* Clock.currentTimeMillis);
       }).pipe(Effect.provideContext(hosted));
-      const roomHere = (view: { readonly runId: string }) =>
+      const roomHere = (view: {
+        readonly runId: string;
+        readonly usage?: { readonly question?: RoomQuestion } | null;
+      }) =>
         Effect.gen(function* () {
+          const readings = yield* usage.readings;
+          const asked = view.usage?.question;
+          if (asked !== undefined) {
+            return roomForQuestion(asked, readings, yield* Clock.currentTimeMillis);
+          }
           const defaults = yield* loadDefaults(env.userDir).pipe(
             Effect.orElseSucceed(() => FALLBACK_DEFAULTS),
           );
           const latest = Option.getOrUndefined(
             Arr.last(yield* readLaunches(view.runId).pipe(Effect.orElseSucceed(() => []))),
           );
-          const readings = yield* usage.readings;
           return hasRoomFor(
             defaults,
             latest === undefined

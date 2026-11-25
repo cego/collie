@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Schema, flow, Result } from "effect";
 import { AgentChoiceSchema } from "../src/agents";
 import { foldCeiling, hasAnyRoom, hasRoomFor, resolveWithRoom } from "../src/harness";
+import { roomForQuestion } from "../src/agents";
 import type { Preferences } from "../src/harness";
 import { parseSetting } from "../src/settings";
 import { epochMs } from "../src/time";
@@ -311,4 +312,53 @@ test("a choice recorded by an earlier build decodes, saying it fell back from no
       Result.getOrThrow,
     )({ harness: "claude", model: "opus", effort: null }),
   ).toEqual({ harness: "claude", model: "opus", effort: null });
+});
+
+test("a usage park is asked of the Run's own eligible choices, not of an account another agent has room on", () => {
+  const spent = {
+    on: { harness: "claude", model: "opus", effort: "xhigh" },
+    why: "its five-hour window is spent",
+    resetsAt: "2026-10-08T10:00:00Z",
+  };
+  const question = {
+    choices: [{ harness: "claude", model: "opus", effort: "xhigh" }],
+    spent: [spent],
+  };
+  const chatgptRoom = reading("chatgpt", [window(10, { kind: "weekly" })]);
+  // WARNING: the defaults answer this one wrong, which is why the park records the question it was raised on.
+  expect(
+    hasRoomFor(
+      { harness: "claude", model: "opus" },
+      { harness: "claude", model: "opus" },
+      [chatgptRoom],
+      NOW,
+    ),
+  ).toBe(true);
+  expect(roomForQuestion(question, [chatgptRoom], NOW)).toBe(false);
+  expect(roomForQuestion(question, [], NOW)).toBe(false);
+  const afterReset = epochMs("2026-10-08T10:00:01Z");
+  expect(roomForQuestion(question, [], afterReset)).toBe(true);
+});
+
+test("a usage park clears on any of its eligible choices that has room, and not on one still spent", () => {
+  const spent = {
+    on: { harness: "codex", model: "gpt-5", effort: null },
+    why: "its weekly window is spent",
+    resetsAt: "2026-10-08T12:00:00Z",
+  };
+  const question = {
+    choices: [
+      { harness: "codex", model: "gpt-5", effort: null },
+      { harness: "claude", model: "opus", effort: null },
+    ],
+    spent: [spent],
+  };
+  expect(roomForQuestion(question, [reading("claude", [window(40)])], NOW)).toBe(true);
+  expect(
+    roomForQuestion(
+      question,
+      [reading("claude", [window(100)]), reading("chatgpt", [window(100)])],
+      NOW,
+    ),
+  ).toBe(false);
 });
