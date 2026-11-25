@@ -62,6 +62,73 @@ test("an Output rewritten after its verify ended is not taken until that verify 
     }).pipe(Effect.provide(collectingLayer)),
   ));
 
+test("a rewrite during a second verify waits for that verify too", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collector-" });
+      const output = `${dir}/build.json`;
+      const held = yield* Collecting;
+      yield* held.during(
+        "r",
+        "a",
+        Effect.gen(function* () {
+          const under1 = yield* Deferred.make<void>();
+          const end1 = yield* Deferred.make<void>();
+          const first = yield* Effect.forkChild(
+            held.duringVerify(
+              "r",
+              "a",
+              Deferred.succeed(under1, undefined).pipe(Effect.andThen(Deferred.await(end1))),
+              () => "v1",
+            ),
+          );
+          yield* Deferred.await(under1);
+          yield* fs.writeFileString(output, '{"verdict":"interim"}');
+          const polling = yield* Deferred.make<void>();
+          let settled = false;
+          const told = new Set<string>();
+          const collector = yield* Effect.forkChild(
+            waitForOutput(output, null, {
+              pollMs: 5,
+              budgetMs: 5000,
+              counts: Effect.succeed(false),
+              usable: () => true,
+              settled: Effect.sync(() => settled),
+              holding: Effect.tap(held.verifying("r", "a"), () =>
+                Deferred.succeed(polling, undefined).pipe(Effect.ignore),
+              ),
+              told: (id) => Effect.sync(() => told.has(id)),
+            }),
+          );
+          yield* Deferred.await(polling);
+          yield* Deferred.succeed(end1, undefined);
+          yield* Fiber.await(first);
+          const under2 = yield* Deferred.make<void>();
+          const end2 = yield* Deferred.make<void>();
+          const second = yield* Effect.forkChild(
+            held.duringVerify(
+              "r",
+              "a",
+              Deferred.succeed(under2, undefined).pipe(Effect.andThen(Deferred.await(end2))),
+              () => "v2",
+            ),
+          );
+          yield* Deferred.await(under2);
+          yield* fs.writeFileString(output, '{"verdict":"rewritten"}');
+          told.add("v1");
+          settled = true;
+          const waiting = yield* Fiber.await(collector).pipe(Effect.timeoutOption("300 millis"));
+          expect(Option.isNone(waiting)).toBe(true);
+          told.add("v2");
+          yield* Deferred.succeed(end2, undefined);
+          yield* Fiber.await(second);
+          expect(yield* Fiber.join(collector)).toBe('{"verdict":"rewritten"}');
+        }),
+      );
+    }).pipe(Effect.provide(collectingLayer)),
+  ));
+
 test("an Output written before its verify began is taken while that verify is still under", () =>
   runEffect(
     Effect.gen(function* () {

@@ -5116,14 +5116,17 @@ export const waitForOutput = <R>(
     );
     const everOwed: Array<string> = [];
     let firstSeen: number | null = null;
+    let seen: string | null = null;
+    let seenAt: number | null = null;
     const free = Effect.gen(function* () {
       if (every.holding !== undefined) {
         const now = yield* every.holding;
-        const at = firstSeen ?? (yield* writtenAt);
-        if (underWhileWritten(at, now)) {
+        const first = firstSeen ?? (yield* writtenAt);
+        const latest = seenAt ?? first;
+        if (underWhileWritten(first, now) || underWhileWritten(latest, now)) {
           return false;
         }
-        const owed = owedEver(everOwed, at, now);
+        const owed = owedEver(owedEver(everOwed, first, now), latest, now);
         if (owed.length === 0) {
           return true;
         }
@@ -5153,8 +5156,10 @@ export const waitForOutput = <R>(
     for (;;) {
       const text = yield* read;
       const here = fresh(text);
-      if (here) {
-        firstSeen ??= yield* writtenAt;
+      if (here && text !== seen) {
+        seen = text;
+        seenAt = yield* writtenAt;
+        firstSeen ??= seenAt;
       }
       if (here && (yield* free)) {
         // WARNING: the read came before the status the release was decided on, so the Output is read once more.
