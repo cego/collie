@@ -1501,7 +1501,7 @@ test("a conversation resumed on a transcript alone is resumed again rather than 
             '{"type":"user","message":{"role":"user"}}\n',
           );
           yield* writeEvent(at, {
-            kind: "submit",
+            kind: "session",
             session: first,
             transcript: `${at}/transcript.jsonl`,
           });

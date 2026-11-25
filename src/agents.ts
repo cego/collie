@@ -1748,6 +1748,12 @@ const preferenceOf: (one: RoomQuestion["layers"][number]) => Preferences = (one)
   if (one.upTo !== undefined) {
     read.upTo = one.upTo;
   }
+  if (one.otherwise !== undefined) {
+    read.otherwise = Arr.map(one.otherwise, (entry) =>
+      // WARNING: preferenceJson is the only writer of these entries, so each holds a Preferences shape.
+      preferenceOf(entry as RoomQuestion["layers"][number]),
+    );
+  }
   return read;
 };
 

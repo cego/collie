@@ -647,7 +647,6 @@ export const RanOn = Schema.Struct({
 });
 
 // WARNING: the question a usage park was raised on, recorded so a recheck asks it and not the Machine's defaults.
-// WARNING: the layers and the chain are what the selector is given, so a recheck reaches the same choices, ceilings and otherwise entries it would.
 const PreferencesJson = Schema.Struct({
   harness: Schema.optionalKey(Schema.String),
   model: Schema.optionalKey(Schema.String),

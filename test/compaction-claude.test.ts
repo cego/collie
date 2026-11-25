@@ -698,7 +698,7 @@ const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), 
 
 const lostCompletion = (
   transcript: (askedIso: string) => string,
-  written: { unmarked?: boolean } = {},
+  written: { unmarked?: boolean; noEvents?: boolean } = {},
   takeover?: { launch: string },
 ) =>
   Effect.gen(function* () {
@@ -721,11 +721,13 @@ const lostCompletion = (
       `${control}/control.json`,
       asJson({ agent: "build-r1", harness: "claude", cwd: rig.projectDir, dir: control, attempt }),
     );
-    yield* recordClaudeEvent(control, asJson({ session_id: "s-1", transcript_path: file }));
-    yield* recordClaudeEvent(
-      control,
-      pre("s-1", "manual", "Keep the work in progress. (collie:req-1)"),
-    );
+    if (written.noEvents !== true) {
+      yield* recordClaudeEvent(control, asJson({ session_id: "s-1", transcript_path: file }));
+      yield* recordClaudeEvent(
+        control,
+        pre("s-1", "manual", "Keep the work in progress. (collie:req-1)"),
+      );
+    }
     if (takeover !== undefined) {
       const now = yield* Clock.currentTimeMillis;
       yield* fs.writeFileString(
@@ -774,6 +776,18 @@ test("a lost completion whose transcript shows no completion of it stays unresol
     }),
   ));
 
+test("a boundary with no evidence of the launch that asked settles nothing", () =>
+  withLaunch(
+    Effect.gen(function* () {
+      const { due, left } = yield* lostCompletion(
+        (at) => `${naming("req-1", at)}\n${boundaryAt(at)}\n`,
+        { noEvents: true },
+      );
+      expect(due).toBeNull();
+      expect(left).not.toBeNull();
+    }),
+  ));
+
 test("a boundary a replacement launch appended to the same session settles nothing", () =>
   withLaunch(
     Effect.gen(function* () {
@@ -781,6 +795,30 @@ test("a boundary a replacement launch appended to the same session settles nothi
         (at) => `${naming("req-1", at)}\n${boundaryAt(at)}\n`,
         {},
         { launch: "l-2" },
+      );
+      expect(due).toBeNull();
+      expect(left).not.toBeNull();
+    }),
+  ));
+
+test("a command word that merely starts like /compact settles nothing", () =>
+  withLaunch(
+    Effect.gen(function* () {
+      const { due, left } = yield* lostCompletion(
+        (at) =>
+          `{"type":"user","timestamp":"${at}","sessionId":"s-1","message":{"role":"user","content":"/compactly (collie:req-1)"}}\n${boundaryAt(at)}\n`,
+      );
+      expect(due).toBeNull();
+      expect(left).not.toBeNull();
+    }),
+  ));
+
+test("a user row of parts between the ask and the boundary ends the marked turn", () =>
+  withLaunch(
+    Effect.gen(function* () {
+      const { due, left } = yield* lostCompletion(
+        (at) =>
+          `${naming("req-1", at)}\n{"type":"user","timestamp":"${at}","sessionId":"s-1","message":{"role":"user","content":[{"type":"text","text":"and one more thing"}]}}\n${boundaryAt(at)}\n`,
       );
       expect(due).toBeNull();
       expect(left).not.toBeNull();

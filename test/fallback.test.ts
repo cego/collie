@@ -353,6 +353,37 @@ test("a usage park honours the upTo ceiling its selector refuses, whatever the a
   expect(roomForQuestion(question, [reading("claude", [window(40)])], NOW)).toBe(true);
 });
 
+test("a usage park reaches the scoped otherwise a preference carries", () => {
+  const question: RoomQuestion = {
+    layers: [
+      {
+        harness: "claude",
+        model: "opus",
+        upTo: 50,
+        otherwise: [{ harness: "codex", model: "gpt-5" }],
+      },
+    ],
+    chain: [],
+    choices: [{ harness: "claude", model: "opus", effort: null }],
+    spent: [
+      {
+        on: { harness: "claude", model: "opus", effort: null },
+        why: "its five-hour window is spent",
+        resetsAt: "2026-10-08T12:00:00Z",
+      },
+    ],
+  };
+  const readings = [reading("claude", [window(75)]), reading("chatgpt", [window(10)])];
+  expect(roomForQuestion(question, readings, NOW)).toBe(true);
+  expect(
+    roomForQuestion(
+      { ...question, layers: [{ harness: "claude", model: "opus", upTo: 50 }] },
+      readings,
+      NOW,
+    ),
+  ).toBe(false);
+});
+
 test("a usage park clears on a fallback the Run's chain reaches, and not on one it cannot", () => {
   const question: RoomQuestion = {
     layers: [{ harness: "claude", model: "opus" }],

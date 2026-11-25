@@ -1156,7 +1156,15 @@ const claudeReconcile = Effect.fn("Compactors.claudeReconcile")(function* (
       (one.launch ?? null) !== mark.launch &&
       one.at >= since,
   );
-  if (takenOver) {
+  // WARNING: a marked request leaves its own launch's start in the telemetry; without it nothing says who wrote the boundary.
+  const asked = Arr.some(
+    events,
+    (one) =>
+      (one.kind === "start" || one.kind === "session") &&
+      (one.launch ?? null) === mark.launch &&
+      one.session === mark.session,
+  );
+  if (takenOver || !asked) {
     return null;
   }
   const text = yield* (yield* FileSystem.FileSystem).readFileString(mark.transcript);
@@ -1295,13 +1303,18 @@ const claudeRecords = Effect.fn("Compactors.claudeRecords")(function* (ctx: Agen
 
 const MARK_REQUEST = /\(collie:([A-Za-z0-9-]+)\)|\/collie-compact ([A-Za-z0-9-]+)/;
 
+const CLAUDE_COMMAND = /^\/compact(\s|$)/;
+const PI_COMMAND = /^\/collie-compact(\s|$)/;
+const asText = Schema.decodeUnknownOption(Schema.String);
+
 // WARNING: a request is named by the command that asked for it, not by a message that mentions its marker.
 const namedRequest = (entry: {
-  readonly message?: { readonly content?: string | null };
+  readonly message?: { readonly content?: unknown };
   readonly type?: string;
 }) => {
-  const said = Str.trim(entry.message?.content ?? "");
-  if (!Str.startsWith(entry.type === "message" ? "/collie-compact" : "/compact")(said)) {
+  const said = Str.trim(Option.getOrElse(asText(entry.message?.content), () => ""));
+  const command = entry.type === "message" ? PI_COMMAND : CLAUDE_COMMAND;
+  if (!command.test(said)) {
     return null;
   }
   const found = MARK_REQUEST.exec(said);
@@ -1333,9 +1346,7 @@ const decodeTranscriptLine = Schema.decodeUnknownOption(
       ),
       timestamp: Schema.String,
       sessionId: Schema.optionalKey(Schema.String),
-      message: Schema.optionalKey(
-        Schema.Struct({ content: Schema.optionalKey(Schema.NullOr(Schema.String)) }),
-      ),
+      message: Schema.optionalKey(Schema.Struct({ content: Schema.optionalKey(Schema.Json) })),
     }),
   ),
 );
