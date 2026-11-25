@@ -2377,11 +2377,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     handedBack: ReadonlyArray<HandedBack>,
   ): string;
   export function formatFindings(findings: ReadonlyArray<Finding>): string;
-  /** What a person is offered at a dispute: the fix's own blocking disputes, never what it reported fixed. */
   /** What a person is offered at a dispute: the fixer's entries with the reviewer's latest detail and no lowered severity. */
   export function offered(disputed: ReadonlyArray<Finding>): Array<Finding>;
   /** A waived finding as the next reviewer must see it: told who waived it and not to raise it again. */
   export const waiverNote: (one: Finding) => Finding;
+  /** What a person is offered at a dispute: the fix's own blocking disputes, never what it reported fixed. */
   export function offeredDisputes(
     fix: FixReport,
     waived: ReadonlyArray<Finding>,

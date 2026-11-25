@@ -794,7 +794,6 @@ export type Rally =
       readonly outstanding: Array<Finding>;
     };
 
-// WARNING: a repeat goes back to the fixer once; only a set it has already answered halts the rally.
 export function settleRound(round: {
   readonly live: ReadonlyArray<Finding>;
   readonly disputed: ReadonlyArray<Finding>;

@@ -53,7 +53,6 @@ export default defineWorkflow({
     cwd: Schema.String,
     /** How many reviews at most. A rally that runs out says so rather than going again. */
     rounds: Schema.Int,
-    /** What a person answers, one per Choice asked; a Choice with nothing left is Stop. */
     answers: Schema.optionalKey(Schema.Array(Schema.String)),
   }),
   output: Schema.String,
