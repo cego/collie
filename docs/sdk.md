@@ -1577,8 +1577,9 @@ rally converges, stands on a dispute and runs out of rounds where these decide.
   `live` alone, or a blocker the review called disputed without the implementer disputing it
   stops driving the loop and reaches nobody.
 - **`settleRound({ live, disputed, at, seen })`** — where this round goes: `fix` with the
-  blocking set that drives it, `clean` when nothing blocking is left, or `halt` when a
-  dispute stands unanswered or the round makes no progress. `seen` is the previous round's
+  blocking set that drives it, `clean` when nothing blocking is left, or `halt` when the
+  round makes no progress, or when a dispute stands and nothing blocking is live to fix
+  first — a standing dispute never stops a live blocker being fixed. `seen` is the previous round's
   `keys`, `claimed` — what that round's fix reported as fixed — and the keys this rally has
   already `handed` back; without it nothing can notice a rally going round. A key the review
   raises again that has not been handed back yet is handed back once in this round's `fix`,
@@ -1601,7 +1602,10 @@ The shipped workflows' rally is one such loop, `rally` in
 [`workflows/reviewing.ts`](../workflows/reviewing.ts): `implement` and `tune-up` both call
 it, each with its own fix. A module of your own can import it the same way.
 
-A rally never parks on what only a person can settle. `rally` turns each of the three halts
+A rally never parks on what only a person can settle, and it asks about a standing dispute
+before it fixes anything beside it: `rally` reads that dispute from the round's split, so a
+blocker the review raised alongside one is fixed after the person has answered. `rally` turns
+each of the three halts
 into a Choice it asks through the `choose` its caller supplies: a disputed blocker the
 reviewers kept asks `<prefix>dispute-<n>`, with Waive it (recommended), Send it back and
 Stop; a repeated blocking set asks `<prefix>no-progress-<n>`, and a last fix the journal
