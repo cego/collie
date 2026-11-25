@@ -267,6 +267,7 @@ import {
   isOpenFinding,
   markTaken,
   openFindingsRead,
+  readFindingStatuses,
   reportIn,
   storeOpenCount,
 } from "./finding-status";
@@ -7383,6 +7384,8 @@ const Cut = Schema.Struct({
 });
 type Cut = typeof Cut.Type;
 
+const NamedInvocation = Schema.fromJsonString(Schema.Struct({ offer: Schema.String }));
+
 const Placing = Schema.Struct({
   requestedBy: Schema.optional(RequestedBy),
   heals: Schema.optionalKey(Schema.String),
@@ -7396,6 +7399,8 @@ const Placing = Schema.Struct({
   checkout: Schema.optionalKey(Schema.NullOr(Cut)),
   continues: Schema.optionalKey(ConsumedCard),
   invoked: Schema.optionalKey(Schema.String),
+  direct: Schema.optionalKey(Schema.Literal(true)),
+  took: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 type Placing = typeof Placing.Type;
 const PlacingJson = Schema.fromJsonString(Placing);
@@ -7967,6 +7972,7 @@ export interface StartOptions {
   readonly parent?: string | null;
   readonly continues?: ConsumedCard | undefined;
   readonly invoked?: string | undefined;
+  readonly took?: ReadonlyArray<string> | undefined;
   readonly intent?: IntentSeed;
   readonly verify?: ReadonlyArray<VerifySpec> | undefined;
   readonly attachments?: ReadonlyArray<string> | undefined;
@@ -10642,7 +10648,10 @@ const makeRegistry: (
         taskLabel: options.taskLabel ?? null,
         root: options.root ?? null,
         ...(options.continues !== undefined && { continues: options.continues }),
-        ...(options.invoked !== undefined && { invoked: options.invoked }),
+        ...(options.invoked === undefined
+          ? { direct: true as const }
+          : { invoked: options.invoked }),
+        ...(options.took !== undefined && { took: options.took }),
       }),
       generation: generation.name,
       execution: yield* generation.registration.workflow.executionId(payload),
@@ -10994,20 +11003,48 @@ const makeRegistry: (
       // WARNING: the request id is the claim, so a caller that lost the answer is given the Run it started.
       const claimed = yield* store.requested(options.request);
       if (claimed !== null) {
-        const before = Option.flatMap(decodePlacing(claimed.placing ?? ""), (one) =>
-          Option.fromNullishOr(one.invoked),
-        );
-        if (Option.isNone(before)) {
+        const placing = Option.getOrUndefined(decodePlacing(claimed.placing ?? ""));
+        if (placing?.direct === true) {
           return yield* new RequestConflict({
             request: options.request,
             reason: `request "${options.request}" is already ${claimed.run}, started directly rather than by an offer`,
           });
         }
-        if (before.value !== invoked) {
+        // WARNING: a child admitted before this branch carries no fingerprint, and its retry is still a replay.
+        if (placing?.invoked !== undefined && placing.invoked !== invoked) {
           return yield* new RequestConflict({
             request: options.request,
             reason: `request "${options.request}" is already ${claimed.run}, started with other arguments`,
           });
+        }
+        if (placing?.took !== undefined && claimed.parent !== null) {
+          const parentDir = `${dir}/runs/${claimed.parent}`;
+          const said = yield* readFindingStatuses(parentDir).pipe(
+            Effect.provideService(RunRecords, runRecords),
+          );
+          const owed = Arr.filter(
+            placing.took,
+            (id) =>
+              !Arr.some(
+                said,
+                (one) => one.id === id && one.status === "taken" && one.run === claimed.run,
+              ),
+          );
+          if (owed.length > 0) {
+            const named = Option.flatMap(Option.fromNullishOr(placing.invoked), (text) =>
+              Schema.decodeOption(NamedInvocation)(text),
+            );
+            yield* markTaken(
+              parentDir,
+              owed,
+              Option.getOrElse(
+                Option.map(named, (one) => one.offer),
+                () => "",
+              ),
+              claimed.run,
+              options.by ?? options.request,
+            ).pipe(Effect.provideService(RunRecords, runRecords));
+          }
         }
         return {
           runId: claimed.run,
@@ -11117,6 +11154,7 @@ const makeRegistry: (
         project: row.project,
         input: Rec.filter(filled, (_, name) => !(name in RESERVED_INPUTS)),
         invoked,
+        took: chosen,
         task: row.task,
         parent: row.run,
         verify: inherited,

@@ -1,8 +1,9 @@
+import { Database } from "bun:sqlite";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Effect, FileSystem, Option, Stream } from "effect";
-import type { Schema } from "effect";
-import { stringifyJson } from "../src/json";
+import { Schema } from "effect";
+import { parseJson, stringifyJson } from "../src/json";
 import { expect, test } from "bun:test";
 import { connect } from "../src/host";
 import { MODULES, hosted } from "./support/hosted";
@@ -668,6 +669,101 @@ test("a request id is refused for other files, even in another order, and for a 
         expect(overStart._tag === "RequestConflict" ? overStart.reason : "").toContain(
           direct.runId,
         );
+      }),
+    [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
+  ));
+
+test("an offer child admitted before the fingerprint existed still answers its retry", () =>
+  hosted(
+    "hw-selected-upgrade-",
+    ({ world }) =>
+      Effect.gen(function* () {
+        const run = yield* Effect.gen(function* () {
+          yield* install(world);
+          yield* (yield* FileSystem.FileSystem).writeFileString(
+            `${world.home}/outputs.json`,
+            encode([empty]),
+          );
+          return yield* started(world.state, world.project, "submits", { note: "two" });
+        });
+        const [first, second] = idsOf(run.id);
+        const asked = () =>
+          run.client.invoke({
+            runId: run.id,
+            offer: "implement-selected",
+            input: { findings: [first, second] },
+            request: "pre-upgrade",
+          });
+        const child = yield* asked().pipe(Effect.orDie);
+        // WARNING: a child admitted before this branch carries no fingerprint at all.
+        const db = new Database(`${world.state}/host.db`);
+        // WARNING: the column holds the placing this branch wrote, so these are its keys.
+        const row = yield* Schema.decodeUnknownEffect(Schema.Struct({ placing: Schema.String }))(
+          db.query("SELECT placing FROM collie_runs WHERE run = ?").get(child.runId),
+        ).pipe(Effect.orDie);
+        const placing = parseJson(
+          Schema.Struct({
+            direct: Schema.optional(Schema.Boolean),
+            invoked: Schema.optional(Schema.String),
+          }),
+          row.placing,
+        );
+        const stripped = stringifyJson({ ...placing, direct: null, invoked: null });
+        db.run("UPDATE collie_runs SET placing = ? WHERE run = ?", [stripped, child.runId]);
+        db.close();
+        const again = yield* asked().pipe(Effect.orDie);
+        expect(again.runId).toBe(child.runId);
+        expect(again.fresh).toBe(false);
+      }),
+    [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
+  ));
+
+test("a retry finishes the parent's taken lines before it answers with the child", () =>
+  hosted(
+    "hw-selected-retry-taken-",
+    ({ world }) =>
+      Effect.gen(function* () {
+        const run = yield* Effect.gen(function* () {
+          yield* install(world);
+          yield* (yield* FileSystem.FileSystem).writeFileString(
+            `${world.home}/outputs.json`,
+            encode([empty]),
+          );
+          return yield* started(world.state, world.project, "submits", { note: "two" });
+        });
+        const [first, second, third] = idsOf(run.id);
+        const asked = () =>
+          run.client.invoke({
+            runId: run.id,
+            offer: "implement-selected",
+            input: { findings: [first, second] },
+            request: "half-done",
+          });
+        const child = yield* asked().pipe(Effect.orDie);
+        const said = Effect.map(run.client.runFindings({ runId: run.id }), (rows) =>
+          Arr.map(rows, (one) => [one.id, one.status]),
+        );
+        expect(yield* said).toEqual([
+          [first, "taken"],
+          [second, "taken"],
+          [third, "open"],
+        ]);
+        // WARNING: this is the claim made and the answer lost, before the parent's lines were written.
+        const lines = new Database(`${world.state}/host.db`);
+        lines.run("DELETE FROM collie_run_lines WHERE run = ?", [run.id]);
+        lines.close();
+        expect(yield* said).toEqual([
+          [first, "open"],
+          [second, "open"],
+          [third, "open"],
+        ]);
+        const again = yield* asked().pipe(Effect.orDie);
+        expect(again.runId).toBe(child.runId);
+        expect(yield* said).toEqual([
+          [first, "taken"],
+          [second, "taken"],
+          [third, "open"],
+        ]);
       }),
     [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
   ));
