@@ -1721,7 +1721,7 @@ export const roomQuestionOf = (
   },
   layers: ReadonlyArray<Preferences | undefined>,
   spent: ReadonlyArray<SpentChoice>,
-): RoomQuestion => {
+) => {
   const stacks: ReadonlyArray<ReadonlyArray<Preferences | undefined>> = [
     [inputs.configured, ...layers],
     ...Arr.map(inputs.fallbacks, (name) => [inputs.configured, ...layers, chainEntry(name)]),
@@ -1738,28 +1738,31 @@ export const roomQuestionOf = (
         : Option.none<{ harness: string; model: string; effort: string | null }>();
     }),
   );
-  return {
-    choices,
-    spent: Arr.map(spent, (one) => ({
+  const records: Array<RoomQuestion["spent"][number]> = [];
+  for (const one of spent) {
+    const record: Types.Mutable<RoomQuestion["spent"][number]> = {
       on: { harness: one.on.harness, model: one.on.model, effort: one.on.effort },
       why: one.why,
       resetsAt: one.resetsAt ?? null,
-      ...(one.observedAt === undefined ? {} : { observedAt: one.observedAt }),
-      ...(one.exhaustion === undefined
-        ? {}
-        : {
-            exhaustion: {
-              at: one.exhaustion.at,
-              account: one.exhaustion.account,
-              windows: Arr.map(one.exhaustion.windows, (window) => ({
-                kind: window.kind,
-                model: window.model,
-                resetsAt: window.resetsAt,
-              })),
-            },
-          }),
-    })),
-  };
+    };
+    if (one.observedAt !== undefined) {
+      record.observedAt = one.observedAt;
+    }
+    if (one.exhaustion !== undefined) {
+      record.exhaustion = {
+        at: one.exhaustion.at,
+        account: one.exhaustion.account,
+        windows: Arr.map(one.exhaustion.windows, (window) => ({
+          kind: window.kind,
+          model: window.model,
+          resetsAt: window.resetsAt,
+        })),
+      };
+    }
+    records.push(record);
+  }
+  const question: RoomQuestion = { choices, spent: records };
+  return question;
 };
 
 export const roomForQuestion = (
