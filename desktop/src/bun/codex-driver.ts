@@ -159,7 +159,6 @@ const appServer = Effect.fnUntraced(function* (
             id,
             error: { code: -32_601, message: `Desktop's chat does not answer ${method}` },
           }),
-    kill: () => child.kill(),
   };
 });
 type AppServer = Effect.Success<ReturnType<typeof appServer>>;
@@ -625,10 +624,17 @@ const Effective = Schema.Struct({
   config: Schema.optionalKey(
     Schema.Struct({
       mcp_servers: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+      shell_environment_policy: Schema.optionalKey(
+        Schema.Struct({ exclude: Schema.optionalKey(Schema.Array(Schema.String)) }),
+      ),
     }),
   ),
 });
 const decodeEffective = decoded(Effective);
+type Configured = {
+  readonly native: ReadonlyArray<string>;
+  readonly excludes: ReadonlyArray<string>;
+};
 const instructions = () => systemPrompt(hostname());
 
 const noThreads: Readonly<Record<string, string>> = {};
@@ -737,7 +743,7 @@ export const codexDriver: (
       const readConfigured = () =>
         Effect.gen(function* () {
           if (command === null) {
-            return Option.none<ReadonlyArray<string>>();
+            return Option.none<Configured>();
           }
           return yield* Effect.scoped(
             Effect.gen(function* () {
@@ -745,26 +751,17 @@ export const codexDriver: (
               const { config } = yield* probe
                 .call("config/read", { cwd: context.dir })
                 .pipe(Effect.flatMap(decodeEffective));
-              const names: ReadonlyArray<string> = Arr.filter(
+              const native: ReadonlyArray<string> = Arr.filter(
                 Rec.keys(config?.mcp_servers ?? {}),
                 (name) => name !== SERVER,
               );
-              return Option.some(names);
+              const held: Configured = {
+                native,
+                excludes: config?.shell_environment_policy?.exclude ?? [],
+              };
+              return Option.some(held);
             }),
-          ).pipe(Effect.orElseSucceed(() => Option.none<ReadonlyArray<string>>()));
-        });
-      let discovered: Option.Option<ReadonlyArray<string>> | undefined;
-      // WARNING: an unreadable configuration stays unknown, so a relaunch reads it again.
-      const ownServers = () =>
-        Effect.gen(function* () {
-          if (discovered !== undefined) {
-            return discovered;
-          }
-          const found = yield* readConfigured();
-          if (Option.isSome(found)) {
-            discovered = found;
-          }
-          return found;
+          ).pipe(Effect.orElseSucceed(() => Option.none<Configured>()));
         });
       const connect = (own: Scope.Scope) =>
         Effect.gen(function* () {
@@ -772,10 +769,12 @@ export const codexDriver: (
             return yield* new CodexError({ message: NOT_INSTALLED });
           }
           const { url, token } = yield* endpoint.start;
-          configured = Option.getOrNull(yield* ownServers());
+          const discovery = Option.getOrNull(yield* readConfigured());
+          configured = discovery?.native ?? null;
           given = codexServers(
             yield* Effect.tryPromise(userServers).pipe(Effect.orElseSucceed(() => ({}))),
             configured,
+            discovery?.excludes ?? [],
           );
           const server = yield* appServer(
             command,
@@ -844,9 +843,10 @@ export const codexDriver: (
         Effect.catch(({ message }) => Queue.fail(output, message)),
         Effect.forkScoped,
       );
+      let hinted = false;
       const settle = Effect.gen(function* () {
         if (live !== undefined) {
-          if (!signingIn) {
+          if (!signingIn || !hinted) {
             return live;
           }
           const stale = live;
@@ -897,11 +897,9 @@ export const codexDriver: (
               });
             }
             live = current;
-            const said = codexConnections(
-              given,
-              yield* statusesOf(current.server, current.thread),
-              configured ?? [],
-            );
+            const stated = yield* statusesOf(current.server, current.thread);
+            hinted = hinted || Arr.some(stated, (one) => one.authStatus === "notLoggedIn");
+            const said = codexConnections(given, stated, configured ?? []);
             const noted = Arr.filter([note(), said], (text) => text !== "");
             const asked = yield* current.server
               .call("turn/start", {

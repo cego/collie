@@ -512,8 +512,8 @@ test("Codex gets a server's token through its environment, never its command lin
           Rec.toEntries(details.env),
           ([, value]) => value === `Bearer ${token}`,
         );
-        const variable = Option.map(carried, ([name]) => name).pipe(Option.getOrElse(() => ""));
-        expect(carried).toBeDefined();
+        const [variable = ""] = Option.getOrElse(carried, () => ["", ""]);
+        expect(variable).not.toBe("");
         expect(given).toContain("mcp_servers.docs.env_http_headers={");
         expect(given).toContain(`= "${variable}"`);
         expect(given).not.toContain(token);
@@ -565,7 +565,84 @@ test("A server Codex holds no login for is said to need `codex mcp login`, and t
   ).finally(() => void fixture.stop());
 });
 
+test("A signed-out server's hint is shown by the first Codex, which is kept until the next message", () => {
+  const linear = serveDocs({ tool: "linear_read", token: "linear-token" });
+  return withServers({ "linear-server": { type: "http", url: linear.url } }, (driver, context) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const session = yield* driver.open("codex-first-hint", "default", null);
+      yield* Effect.addFinalizer(() => session.close);
+      yield* session.offer("inspect");
+      const before = inspected(yield* turn(session));
+      expect(instruct(before)).toEqual(
+        expect.stringContaining("linear-server is not signed in to Codex"),
+      );
+      expect(yield* chatStarts(context.dir)).toBe(1);
+      yield* fs.writeFileString(
+        `${context.dir}/codex-home/mcp-logins.json`,
+        `{"linear-server":"linear-token"}`,
+      );
+      yield* session.offer("inspect");
+      const after = inspected(yield* turn(session));
+      expect(after.pid).not.toBe(before.pid);
+      expect(yield* chatStarts(context.dir)).toBe(2);
+      expect(instruct(after)).toEqual(expect.stringContaining("linear-server (linear_read)"));
+    }),
+  ).finally(() => void linear.stop());
+});
+
+const message = (events: ReadonlyArray<AguiEvent>) =>
+  Arr.join(
+    Arr.flatMap(events, (event) => (event.type === "TEXT_MESSAGE_CONTENT" ? [event.delta] : [])),
+    "",
+  );
+
+test("A server's credential reaches that server, and never Codex's own shell", () => {
+  const fixture = serveDocs({ tool: "read_doc" });
+  const token = "shell-secret";
+  Bun.env.MY_THING = "mine";
+  return withServers(
+    {
+      docs: {
+        type: "http",
+        url: fixture.url,
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    },
+    (driver, context) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(
+          `${context.dir}/codex-home/config.toml`,
+          `[shell_environment_policy]\nexclude = ["MY_*"]\n`,
+        );
+        const session = yield* driver.open("codex-shell", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("shell");
+        const shell = message(yield* turn(session));
+        expect(shell).not.toContain("COLLIE_CHAT_SERVER_1");
+        expect(shell).not.toContain(token);
+        expect(shell).not.toContain("MY_THING");
+        expect(shell).toContain("PATH=");
+        yield* session.offer("servers");
+        expect(called(yield* turn(session))).toEqual(["mcp__docs__read_doc"]);
+      }),
+  ).finally(() => {
+    void fixture.stop();
+    delete Bun.env.MY_THING;
+  });
+});
+
 const occurrences = (text: string, word: string) => Str.split(text, word).length - 1;
+
+const chatStarts = (dir: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const written = yield* fs.readFileString(`${dir}/app-server-starts.jsonl`);
+    return Arr.length(
+      Arr.filter(Str.split(written, "\n"), (line) => pipe(line, Str.includes('"chat":true'))),
+    );
+  });
 
 const instruct = (details: ReturnType<typeof inspected>) => {
   const input = details.turn.input;
@@ -714,7 +791,7 @@ test("A stdio server's environment reaches it through the process, never the arg
     {
       tool: {
         command: process.execPath,
-        args: [`${import.meta.dir}/fixtures/mcp-stdio-echo.ts`],
+        args: [`${import.meta.dir}/fixtures/mcp-stdio-echo.fixture.ts`],
         env: { API_TOKEN: secret },
       },
     },
@@ -739,17 +816,41 @@ test("A stdio server's environment reaches it through the process, never the arg
   );
 });
 
+test("A stdio server's environment keeps every dollar a referenced variable holds", () => {
+  Bun.env.DOLLAR_SECRET = "a$$b";
+  return withServers(
+    {
+      tool: {
+        command: process.execPath,
+        args: [`${import.meta.dir}/fixtures/mcp-stdio-echo.fixture.ts`],
+        env: { API_TOKEN: "${DOLLAR_SECRET}" },
+      },
+    },
+    (driver) =>
+      Effect.gen(function* () {
+        const session = yield* driver.open("codex-dollars", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("servers");
+        expect(
+          Arr.filter(yield* turn(session), (event) => event.type === "TOOL_CALL_RESULT"),
+        ).toMatchObject([{ content: "a$$b" }]);
+      }),
+  ).finally(() => {
+    delete Bun.env.DOLLAR_SECRET;
+  });
+});
+
 test("Two stdio servers needing one variable of their own are each given it", () => {
   return withServers(
     {
       first: {
         command: process.execPath,
-        args: [`${import.meta.dir}/fixtures/mcp-stdio-echo.ts`],
+        args: [`${import.meta.dir}/fixtures/mcp-stdio-echo.fixture.ts`],
         env: { API_TOKEN: "first-secret" },
       },
       second: {
         command: process.execPath,
-        args: [`${import.meta.dir}/fixtures/mcp-stdio-echo.ts`],
+        args: [`${import.meta.dir}/fixtures/mcp-stdio-echo.fixture.ts`],
         env: { API_TOKEN: "second-secret" },
       },
     },
@@ -782,7 +883,7 @@ test("A stdio server naming a variable Collie generates is left out", () => {
       docs: { type: "http", url: "http://127.0.0.1:1/mcp", headers: { Authorization: "x" } },
       sneaky: {
         command: process.execPath,
-        args: [`${import.meta.dir}/fixtures/mcp-stdio-echo.ts`],
+        args: [`${import.meta.dir}/fixtures/mcp-stdio-echo.fixture.ts`],
         env: { COLLIE_CHAT_SERVER_1: "taken" },
       },
     },
@@ -883,7 +984,7 @@ test("A stdio server's variables reach that server alone, not Codex or the chat'
     {
       leaky: {
         command: process.execPath,
-        args: [`${import.meta.dir}/fixtures/mcp-stdio-echo.ts`],
+        args: [`${import.meta.dir}/fixtures/mcp-stdio-echo.fixture.ts`],
         env: { HOME: "/nowhere", CODEX_HOME: "/nowhere" },
       },
     },
@@ -937,6 +1038,39 @@ test("A server Codex's own list could not be read for is not passed over Codex's
       );
     }),
   ).finally(() => void mine.stop());
+});
+
+test("A server Codex gains under an imported server's name keeps Codex's entry when Codex starts again", () => {
+  const mine = serveDocs({ tool: "user_read" });
+  const native = serveDocs({ tool: "codex_read" });
+  const linear = serveDocs({ tool: "linear_read", token: "linear-token" });
+  return withServers({ docs: { type: "http", url: mine.url } }, (driver, context) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(
+        `${context.dir}/codex-home/config.toml`,
+        `[mcp_servers.linear-server]\nurl = "${linear.url}"\n`,
+      );
+      const session = yield* driver.open("codex-gained", "default", null);
+      yield* Effect.addFinalizer(() => session.close);
+      yield* session.offer("inspect");
+      const before = inspected(yield* turn(session));
+      expect(Arr.join(before.args, " ")).toContain(`mcp_servers.docs.url="${mine.url}"`);
+      yield* fs.writeFileString(
+        `${context.dir}/codex-home/config.toml`,
+        `[mcp_servers.linear-server]\nurl = "${linear.url}"\n\n[mcp_servers.docs]\nurl = "${native.url}"\n`,
+      );
+      yield* session.offer("inspect");
+      const after = inspected(yield* turn(session));
+      expect(after.pid).not.toBe(before.pid);
+      expect(Arr.join(after.args, " ")).not.toContain("mcp_servers.docs.");
+      expect(instruct(after)).toEqual(expect.stringContaining("docs (codex_read)"));
+    }),
+  ).finally(() => {
+    void mine.stop();
+    void native.stop();
+    void linear.stop();
+  });
 });
 
 test("A Codex configuration Collie could not read is read again when Codex restarts", () => {

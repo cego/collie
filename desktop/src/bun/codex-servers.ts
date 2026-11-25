@@ -62,6 +62,13 @@ const table = (key: string, values: Readonly<Record<string, string>>) => {
       ];
 };
 
+const replacedOnce = (text: string, whole: string, carried: string) =>
+  Option.match(pipe(text, Str.indexOf(whole)), {
+    onNone: () => text,
+    onSome: (at) =>
+      `${pipe(text, Str.slice(0, at))}${carried}${pipe(text, Str.slice(at + whole.length))}`,
+  });
+
 const referenced: (value: string, env: Readonly<Record<string, string | undefined>>) => string = (
   value,
   env,
@@ -69,14 +76,15 @@ const referenced: (value: string, env: Readonly<Record<string, string | undefine
   Arr.reduce(Arr.fromIterable(pipe(value, Str.matchAll(REFERENCE))), value, (so, match) => {
     const whole = match[0] ?? "";
     const reference = match[1] ?? "";
-    return pipe(so, Str.replace(whole, env[reference] ?? whole));
+    return replacedOnce(so, whole, env[reference] ?? whole);
   });
 
 // WARNING: `null` means Codex's own names are unknown: passing the human's would override them.
 export const codexServers: (
   servers: UserMcpServers,
   configured: ReadonlyArray<string> | null,
-) => CodexServers = (servers, configured) => {
+  excludes: ReadonlyArray<string>,
+) => CodexServers = (servers, configured, excludes) => {
   if (configured === null) {
     return {
       ...NO_SERVERS,
@@ -162,6 +170,9 @@ export const codexServers: (
     }
     args.push(...table(`mcp_servers.${name}.env_http_headers`, headers));
     given.push({ name, url: server.url });
+  }
+  if (Rec.size(env) > 0) {
+    args.push(...list("shell_environment_policy.exclude", Arr.dedupe([`${OWN}*`, ...excludes])));
   }
   return { args, env, given, left };
 };

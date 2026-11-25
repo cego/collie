@@ -2366,7 +2366,10 @@ once; `collie_desktop` is Collie's own and no server of yours takes its place. A
 static headers, such as a bearer token, and a stdio server's environment reach Codex through
 the App Server's own environment under a name Collie makes, never its command line, and
 never the chat. A stdio server is started through a shell that gives it those values under
-the names you set, so they are that server's alone and no other server reads them. A stdio
+the names you set, so they are that server's alone and no other server reads them, and
+Codex's own shell is told to exclude Collie's `COLLIE_CHAT_*` names so a command it runs
+never carries them; whatever `shell_environment_policy` your own configuration sets is kept,
+with those names added to it. A stdio
 server whose environment names something a shell cannot set, or a name in Collie's own
 `COLLIE_CHAT_` namespace, is left out and the chat says so. If Codex will not say which
 servers it has, none of yours is passed at all — better a server missing from the chat than

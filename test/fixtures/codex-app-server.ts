@@ -33,6 +33,7 @@ const OwnConfig = Schema.Struct({
   projects: Schema.optionalKey(
     Schema.Record(Schema.String, Schema.Struct({ trust_level: Schema.optionalKey(Schema.String) })),
   ),
+  shell_environment_policy: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
 });
 const codexHome = childEnv().CODEX_HOME ?? `${homedir()}/.codex`;
 const emptyConfig: typeof OwnConfig.Type = { mcp_servers: {}, projects: {} };
@@ -98,6 +99,12 @@ if (await Bun.file(`${process.cwd()}/restart-fails`).exists()) {
   process.exit(1);
 }
 
+const starts = `${process.cwd()}/app-server-starts.jsonl`;
+await Bun.write(
+  starts,
+  `${(await Bun.file(starts).exists()) ? await Bun.file(starts).text() : ""}${JSON.stringify({ pid: process.pid, chat: Bun.argv.length > 3 })}\n`,
+);
+
 const tomlValue: (raw: string) => Schema.Json = (raw) =>
   flow(
     Schema.decodeUnknownResult(Schema.Record(Schema.String, Schema.Json)),
@@ -154,6 +161,55 @@ const forwarded = (cfg: Server) => {
     }
   }
   return env;
+};
+
+const DEFAULT_EXCLUDES = ["*KEY*", "*TOKEN*", "*SECRET*", "*PASSWORD*"];
+const CORE = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "TERM", "PWD"];
+const ShellPolicy = Schema.Struct({
+  inherit: Schema.optionalKey(Schema.String),
+  ignore_default_excludes: Schema.optionalKey(Schema.Boolean),
+  exclude: Schema.optionalKey(Schema.Array(Schema.String)),
+  include_only: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+const wildcard = (glob: string, key: string) =>
+  new RegExp(
+    `^${pipe(glob, Str.replaceAll(/[.+?^${}()|[\]\\]/g, String.raw`\$&`), Str.replaceAll("*", ".*"))}$`,
+  ).test(key);
+
+const shellPolicy = () => {
+  const merged = { ...own.shell_environment_policy };
+  for (const [at, arg] of Bun.argv.entries()) {
+    if (Bun.argv[at - 1] !== "-c") {
+      continue;
+    }
+    const [key, ...held] = Str.split(arg, "=");
+    if (!pipe(key, Str.startsWith("shell_environment_policy."))) {
+      continue;
+    }
+    merged[Str.split(key, ".")[1] ?? ""] = tomlValue(Arr.join(held, "="));
+  }
+  const held: typeof ShellPolicy.Type = Option.getOrElse(
+    Schema.decodeOption(ShellPolicy)(merged),
+    () => ({}),
+  );
+  return held;
+};
+
+const shellEnv = () => {
+  const policy = shellPolicy();
+  const inherit = policy.inherit ?? "all";
+  const excluded = [
+    ...(policy.ignore_default_excludes === true ? [] : DEFAULT_EXCLUDES),
+    ...(policy.exclude ?? []),
+  ];
+  return Rec.filter(
+    Rec.getSomes(Rec.map(childEnv(), (value) => Option.fromUndefinedOr(value))),
+    (_value, key) =>
+      policy.include_only === undefined
+        ? (inherit === "all" || (inherit === "core" && Arr.contains(CORE, key))) &&
+          !Arr.some(excluded, (glob) => wildcard(glob, key))
+        : Arr.some(policy.include_only, (glob) => wildcard(glob, key)),
+  );
 };
 
 const openConnection = async (name: string) => {
@@ -310,6 +366,16 @@ const play = async (turn: Turn, params: JsonObject) => {
         start: loaded!.params,
         turn: params,
       }),
+    );
+    return finish(turn, "completed");
+  }
+  if (pipe(said, Str.startsWith("shell"))) {
+    reply(
+      `${turn.id}-shell`,
+      Arr.join(
+        Arr.map(Rec.toEntries(shellEnv()), ([key, value]) => `${key}=${value}`),
+        "\n",
+      ),
     );
     return finish(turn, "completed");
   }
@@ -584,7 +650,12 @@ for await (const chunk of Bun.stdin.stream()) {
           send({ id: message.id!, error: { code: -32_603, message: "config/read failed" } });
           break;
         }
-        answer({ config: { mcp_servers: { ...servers(), ...(await ownServers()) } } });
+        answer({
+          config: {
+            mcp_servers: { ...servers(), ...(await ownServers()) },
+            shell_environment_policy: shellPolicy(),
+          },
+        });
         break;
       }
       case "mcpServerStatus/list": {
