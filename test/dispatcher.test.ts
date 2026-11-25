@@ -7,7 +7,7 @@ import type { PlatformServices } from "../src/platform";
 import { Clock, DateTime, Deferred, Effect, Fiber, FileSystem } from "effect";
 import { TestClock } from "effect/testing";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { HerdrError } from "../src/herdr";
+import { Herdr, HerdrError } from "../src/herdr";
 import type { AgentInfo } from "../src/herdr";
 import {
   dispatchOrder,
@@ -33,6 +33,7 @@ import { reason } from "../src/naming";
 import type { AgentEntry } from "../src/registry";
 import { fastForward, runEffect } from "./support/effect";
 import { FakeBin } from "./support/bin";
+import { Rig } from "./support/recorder";
 
 test("every delivery mode carries the agent Actor's sender line before its unchanged words", () =>
   runEffect(
@@ -194,7 +195,6 @@ const draft = {
 function fake(
   options: {
     agents?: Array<AgentInfo>;
-    list?: ReadonlyArray<Array<AgentInfo> | HerdrError>;
     fail?: HerdrError;
     failing?: number;
     saw?: "observed" | "unobserved";
@@ -202,20 +202,15 @@ function fake(
   } = {},
 ) {
   const calls: Array<string> = [];
-  let listed = 0;
   return {
     calls,
     deps: {
       stateDir,
       herdr: {
         agentList: () =>
-          Effect.gen(function* () {
+          Effect.sync(() => {
             calls.push("agentList");
-            const next = (options.list ?? []).at(listed++);
-            if (next instanceof HerdrError) {
-              return yield* next;
-            }
-            return next ?? options.agents ?? [alive];
+            return options.agents ?? [alive];
           }),
         agentSendKeys: (target: string, keys: ReadonlyArray<string>) =>
           Effect.sync(() => {
@@ -385,12 +380,12 @@ const ledgerLines = Effect.fn("test.ledgerLines")(function* () {
 const prompted = (calls: ReadonlyArray<string>) =>
   Arr.filter(calls, (call) => pipe_(call, Str.startsWith("agentPrompt"))).length;
 
-const pending = (state: "reserved" | "deferred", id: string) =>
+const pending = (state: "reserved" | "deferred", id: string, incarnation = "term-1") =>
   appendLine({
     id,
     at: entry.at,
     run: draft.run,
-    incarnation: "term-1",
+    incarnation,
     agent: entry.agent,
     causal_key: causalKey(draft.run, { kind: "step", ref: id }, draft.intentVersion),
     request_id: id,
@@ -402,29 +397,59 @@ const pending = (state: "reserved" | "deferred", id: string) =>
     state,
   });
 
-const unread = new HerdrError({ message: "core is restarting", detail: "" });
-
-const pendingStates = Effect.fn("test.pendingStates")(function* () {
-  return Arr.map(
-    Arr.filter(yield* ledgerLines(), (line) =>
-      Arr.some(["pending-1", "pending-2"], (id) => id === line.id),
+const pendingStates = (incarnation = "term-1") =>
+  Effect.map(
+    Effect.map(readLedger(incarnation), (lines) =>
+      Arr.filter(lines, (line): line is Delivery => "state" in line),
     ),
-    (line) => `${line.id} ${line.state}`,
+    (lines) =>
+      Arr.map(
+        Arr.filter(lines, (line) => Arr.some(["pending-1", "pending-2"], (id) => id === line.id)),
+        (line) => `${line.id} ${line.state}`,
+      ),
   );
+
+const overCore = Effect.fn("test.overCore")(function* () {
+  const rig = yield* Rig.scoped();
+  const core = yield* rig.startCore();
+  const address = yield* rig.addAgent("impl-1");
+  const env = rig.pluginEnv();
+  const mine: AgentEntry = {
+    ...entry,
+    paneId: address,
+    incarnation: { terminalId: address, agentSession: null, backend: "core" },
+  };
+  const deps = {
+    stateDir: env.stateDir,
+    herdr: new Herdr(env),
+    log: () => Effect.void,
+  };
+  const sends = Effect.map(
+    Effect.flatMap(FileSystem.FileSystem, (fs) =>
+      fs.readFileString(rig.logPath).pipe(Effect.orElseSucceed(() => "")),
+    ),
+    (text) =>
+      Arr.filter(Str.split(text, "\n"), (line) => pipe_(line, Str.includes('"terminal.send"'))),
+  );
+  return { rig, core, address, mine, deps, sends };
 });
 
 test("a roster that did not answer refuses the send and settles no pending delivery", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* pending("reserved", "pending-1");
-      yield* pending("deferred", "pending-2");
-      const h = fake({ list: [unread] });
-      const outcome = yield* transaction(h.deps, entry, (channel) =>
+      const at = yield* overCore();
+      yield* pending("reserved", "pending-1", at.address);
+      yield* pending("deferred", "pending-2", at.address);
+      at.core.refuseOnce("terminal.list", "unreachable", "the core is restarting");
+      const outcome = yield* transaction(at.deps, at.mine, (channel) =>
         channel.submit("carry on", draft),
       ).pipe(Effect.flip);
       expect(outcome).toMatchObject({ _tag: "NotDeliverable", reason: "roster_unread" });
-      expect(h.calls).toEqual(["agentList"]);
-      expect(yield* pendingStates()).toEqual(["pending-1 reserved", "pending-2 deferred"]);
+      expect(yield* pendingStates(at.address)).toEqual([
+        "pending-1 reserved",
+        "pending-2 deferred",
+      ]);
+      expect(yield* at.sends).toEqual([]);
     }),
   ));
 
@@ -432,9 +457,10 @@ test("a roster that did not answer when the listing went stale refuses the send 
   runEffect(
     fastForward(
       Effect.gen(function* () {
-        yield* pending("reserved", "pending-1");
-        const h = fake({ list: [[alive], unread] });
-        const outcome = yield* transaction(h.deps, entry, (channel) =>
+        const at = yield* overCore();
+        yield* pending("reserved", "pending-1", at.address);
+        at.core.refuseOnce("terminal.list", "unreachable", "the core is restarting", 1);
+        const outcome = yield* transaction(at.deps, at.mine, (channel) =>
           Effect.gen(function* () {
             yield* TestClock.adjust("6 seconds");
             return yield* channel.submit("carry on", draft);
@@ -445,8 +471,33 @@ test("a roster that did not answer when the listing went stale refuses the send 
           reason: "deferred",
           detail: expect.stringContaining("could not be read"),
         });
-        expect(prompted(h.calls)).toBe(0);
-        expect(yield* pendingStates()).toEqual(["pending-1 reserved"]);
+        expect(yield* pendingStates(at.address)).toEqual(["pending-1 reserved"]);
+        expect(yield* at.sends).toEqual([]);
+      }),
+    ),
+  ));
+
+test("a listing that no longer holds the agent refuses its next submit too, rather than sending to the name", () =>
+  runEffect(
+    fastForward(
+      Effect.gen(function* () {
+        const at = yield* overCore();
+        const outcomes = yield* transaction(at.deps, at.mine, (channel) =>
+          Effect.gen(function* () {
+            yield* at.rig.dropAgent("impl-1");
+            yield* at.rig.addAgent("impl-1");
+            yield* TestClock.adjust("6 seconds");
+            const first = yield* channel.submit("carry on", draft);
+            const second = yield* channel.submit("carry on again", {
+              ...draft,
+              requestId: "req-2",
+            });
+            return [first, second];
+          }),
+        );
+        expect(outcomes[0]).toMatchObject({ ok: false, reason: "incarnation_changed" });
+        expect(outcomes[1]).toMatchObject({ ok: false, reason: "incarnation_changed" });
+        expect(yield* at.sends).toEqual([]);
       }),
     ),
   ));

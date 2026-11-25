@@ -314,7 +314,6 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
           // WARNING: a whole compaction can happen inside one transaction, so a listing older than a few seconds is re-read.
           if ((yield* Clock.currentTimeMillis) - listedAt > LISTING_MAX_AGE_MS) {
             listing = yield* agentsNow(deps);
-            listedAt = yield* Clock.currentTimeMillis;
             if (Option.isNone(listing)) {
               return refuse(
                 null,
@@ -327,6 +326,8 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
               yield* settlePending(terminalId, again.reason);
               return refuse(null, "incarnation_changed", again.reason);
             }
+            // WARNING: only a listing that still holds this very incarnation may be relied on by the next send.
+            listedAt = yield* Clock.currentTimeMillis;
           }
           return yield* send(deps, entry, terminalId, text, draft);
         }).pipe(Effect.orDie),
