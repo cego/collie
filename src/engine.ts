@@ -2276,6 +2276,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     rebutted: Finding[];
     /** The disputes still standing, each with the reviewer's latest detail; a rebutted one is not here. */
     standing: Finding[];
+    /** Statuses the review called disputed that no dispute of the implementer's backs: their work, not a person's. */
+    reopened: Finding[];
   }
 
   /** A finding a rally hands back to the fixer, and whether the fix before it claimed it fixed. */
@@ -2338,11 +2340,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly dropped: ReadonlyArray<Finding>;
     readonly fixed: ReadonlyArray<Fixed>;
   }): string[];
-  /** A finding the implementer already rejected stops driving the loop. */
+  /** A finding the implementer already rejected stops driving the loop; a status only the review disputed is in \`reopened\`. */
   export function splitDisputed(
     findings: ReadonlyArray<Finding>,
     disputed: ReadonlyArray<Finding>,
   ): Split;
+  /** What a round is judged on: \`live\` with \`reopened\` among it, and the disputes a person may settle. */
+  export function rallyFrom(split: Split): { live: Finding[]; standing: Finding[] };
   /** Where one round goes next: another fix, clean, or the human's call. */
   export function settleRound(round: {
     readonly live: ReadonlyArray<Finding>;

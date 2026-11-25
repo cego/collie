@@ -35,6 +35,7 @@ import {
   conflictingDispositions,
   remainingDisputes,
   renderPublicReview,
+  rallyFrom,
   settleRound,
   splitDisputed,
   step,
@@ -820,7 +821,7 @@ export default defineWorkflow({
           yield* host.record(run.id, line);
         }
         disputed = remainingDisputes(disputed, synthesis);
-        const split = splitDisputed(synthesis.findings, disputed);
+        const split = rallyFrom(splitDisputed(synthesis.findings, disputed));
         disputed = split.standing;
         const round = settleRound({
           live: split.live,

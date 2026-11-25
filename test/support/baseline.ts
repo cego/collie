@@ -8969,7 +8969,7 @@ scenario("a blocking build finding is reviewed and fixed before the next ticket 
       expect(build).toContain("never the whole suite");
       expect(yield* asked("r-impl-build-findings", "02-second.md")).toContain("the first one");
       expect(yield* asked("r-impl-build-findings", "review-1")).toContain("Iteration 1");
-      expect(yield* prompts()).toHaveLength(6);
+      expect(yield* prompts()).toHaveLength(7);
     }),
   ),
 );

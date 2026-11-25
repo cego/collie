@@ -1116,6 +1116,7 @@ export interface Split {
   settled: Array<Finding>;
   rebutted: Array<Finding>;
   standing: Array<Finding>;
+  reopened: Array<Finding>;
 }
 
 type Disposed = {
@@ -1174,13 +1175,16 @@ export function conflictingDispositions(review: Disposed) {
 }
 
 // WARNING: a rejected finding stops driving the loop; only a reviewer's rebuttal brings it back.
+// WARNING: a status only the review disputed is the implementer's work: read a split through rallyFrom, never `live` alone.
 export function splitDisputed(findings: ReadonlyArray<Finding>, disputed: ReadonlyArray<Finding>) {
-  const split: Split = { live: [], settled: [], rebutted: [], standing: [] };
+  const split: Split = { live: [], settled: [], rebutted: [], standing: [], reopened: [] };
   for (const finding of findings) {
     if (finding.status === "fixed" || finding.status === "obsolete") {
       continue;
     }
-    if (!Arr.some(disputed, (one) => sameFinding(one, finding))) {
+    if (finding.status === "disputed" && !finding.rebuttal) {
+      split.settled.push(finding);
+    } else if (!Arr.some(disputed, (one) => sameFinding(one, finding))) {
       split.live.push(finding);
     } else if (finding.rebuttal) {
       split.live.push(finding);
@@ -1189,12 +1193,18 @@ export function splitDisputed(findings: ReadonlyArray<Finding>, disputed: Readon
       split.settled.push(finding);
     }
   }
+  const backed = (one: Finding) => Arr.some(disputed, (echo) => sameFinding(echo, one));
   const putBack = Arr.filter(
     disputed,
     (one) => !Arr.some(split.rebutted, (echo) => sameFinding(echo, one)),
   );
-  split.standing = offered([...putBack, ...split.settled]);
+  split.reopened = Arr.filter(split.settled, (one) => !backed(one));
+  split.standing = offered([...putBack, ...Arr.filter(split.settled, backed)]);
   return split;
+}
+
+export function rallyFrom(split: Split) {
+  return { live: [...split.live, ...split.reopened], standing: split.standing };
 }
 
 const REJECTED_FIX =

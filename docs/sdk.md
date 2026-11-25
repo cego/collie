@@ -1567,9 +1567,15 @@ rally converges, stands on a dispute and runs out of rounds where these decide.
 - **`conflictingDispositions(review)`** — one line per finding the review both raises open
   and withdraws or confirms fixed. The shipped rally records each in the Run's log as
   `review <n>: conflicting dispositions of …`; the dispute stays for the human.
-- **`splitDisputed(findings, disputed)`** — what is still the implementer's. A finding the
-  implementer already rejected with a reason stops driving the loop; a reviewer who answers
-  that reason with a `rebuttal` puts it back.
+- **`splitDisputed(findings, disputed)`** — what is still the implementer's, as the review's
+  statuses and this Run's ledger together say. A finding the implementer already rejected
+  with a reason stops driving the loop; a reviewer who answers that reason with a `rebuttal`
+  puts it back. A finding the review itself calls `disputed` that no dispute of the
+  implementer's backs is not settled: it is `reopened`.
+- **`rallyFrom(split)`** — what the round is judged on: `live` with `reopened` among it,
+  and `standing` as the disputes only a person may settle. Read a split through it, never
+  `live` alone, or a blocker the review called disputed without the implementer disputing it
+  stops driving the loop and reaches nobody.
 - **`settleRound({ live, disputed, at, seen })`** — where this round goes: `fix` with the
   blocking set that drives it, `clean` when nothing blocking is left, or `halt` when a
   dispute stands unanswered or the round makes no progress. `seen` is the previous round's

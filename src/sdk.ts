@@ -200,6 +200,7 @@ export {
   isBlocking,
   offered,
   offeredDisputes,
+  rallyFrom,
   remainingDisputes,
   renderPublicReview,
   renderReview,

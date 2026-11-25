@@ -14,6 +14,7 @@ import {
   parseFixOutput,
   parseReviewOutput,
   parseSynthesis,
+  rallyFrom,
   renderPublicReview,
   renderReview,
   settleRound,
@@ -92,10 +93,9 @@ test("a blocker only the review called disputed is the fixer's work, not a perso
     status: "disputed",
     detail: "the CLI path does not validate it",
   };
-  const split = splitDisputed([reviewerOnly], []);
-  expect(split.settled).toEqual([]);
-  expect(split.standing).toEqual([]);
+  const split = rallyFrom(splitDisputed([reviewerOnly], []));
   expect(split.live).toEqual([reviewerOnly]);
+  expect(split.standing).toEqual([]);
   expect(settleRound({ live: split.live, disputed: split.standing, at: 1 })).toMatchObject({
     go: "fix",
   });
@@ -169,7 +169,7 @@ test("resolved ledger findings leave the rally clean and a dispute remains the h
     severity: "major",
     title: "keep the behavior",
   };
-  const split = splitDisputed([fixed, obsolete, dispute], [dispute]);
+  const split = splitDisputed([fixed, obsolete, dispute], []);
   expect(split.live).toEqual([]);
   expect(split.settled).toEqual([dispute]);
   expect(settleRound({ live: [fixed, obsolete], disputed: [], at: 2 })).toEqual({

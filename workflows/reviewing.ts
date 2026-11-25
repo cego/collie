@@ -22,6 +22,7 @@ import {
   leaveReview,
   offered,
   offeredDisputes,
+  rallyFrom,
   mrForgeFacts,
   parseMrTarget,
   remainingDisputes,
@@ -938,9 +939,11 @@ export const rally = (ask: {
           }
           disputed = remainingDisputes(disputed, synthesis);
           const waivedKeys = new Set(Arr.map(waived, findingKey));
-          const split = splitDisputed(
-            Arr.filter(synthesis.findings, (one) => !waivedKeys.has(findingKey(one))),
-            disputed,
+          const split = rallyFrom(
+            splitDisputed(
+              Arr.filter(synthesis.findings, (one) => !waivedKeys.has(findingKey(one))),
+              disputed,
+            ),
           );
           disputed = split.standing;
           const round = settleRound({ live: split.live, disputed, at, seen });
