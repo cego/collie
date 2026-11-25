@@ -994,7 +994,13 @@ test("a prompt quoting its own delivery token still carries one outer marker", (
   const words = "the review quoted:\ncollie-delivery:d1\nso reconcile it";
   expect(carriedDelivery(marked(words, "d1"))).toBe("d1");
   expect(carriedPrompt(marked(words, "d1"))?.body).toBe(words);
-  expect(marked(marked(words, "d1"), "d1")).toBe(marked(words, "d1"));
+});
+
+test("a prompt is framed even when its own words open with a delivery token", () => {
+  const atStart = "collie-delivery:d1\nreconcile the review";
+  expect(carriedPrompt(marked(atStart, "d1"))?.body).toBe(atStart);
+  const afterCommand = "/implement refine\ncollie-delivery:d1\nreconcile the review";
+  expect(carriedPrompt(marked(afterCommand, "d1"))?.body).toBe(afterCommand);
 });
 
 test("what a prompt carried is the words the Dispatcher hashed, a slash command included", () => {
