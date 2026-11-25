@@ -6,10 +6,11 @@ import { stringifyJson } from "../src/json";
 import { expect, test } from "bun:test";
 import { connect } from "../src/host";
 import { MODULES, hosted } from "./support/hosted";
-import { hostRecords, registeredAt } from "./support/records";
+import { hostRecords, hostRunRecords, registeredAt } from "./support/records";
 import { readFindingStatuses } from "../src/finding-status";
 import { RunRecords } from "../src/run-records";
 import { sectionOf } from "../src/board-model";
+import { NOTHING_TO_LAND } from "../src/standing";
 import { runDir } from "../src/engine";
 import { until } from "./support/host";
 import { isSettled } from "../src/lifecycle";
@@ -151,6 +152,8 @@ test("an investigate Run's findings hold the card, and choosing two of them star
           { workspace: world.project, branch: "topic" },
         );
         const [first, second, third] = idsOf(run.id);
+        // WARNING: an investigation writes nothing, so the host records that its branch has nothing to land.
+        yield* hostRunRecords(() => world.state).put(run.id, NOTHING_TO_LAND, "nothing to land\n");
 
         expect(
           Arr.map(yield* run.client.runFindings({ runId: run.id }), (one) => one.status),
@@ -201,11 +204,10 @@ test("an investigate Run's findings hold the card, and choosing two of them star
           ).unavailable,
         ).not.toBeNull();
         expect(yield* openCount(world.state, run.id)).toBe(0);
-        // WARNING: an investigate Run owes a merge request for the branch it checked out, so its card waits whatever its findings say; the hold lifting is the next test's.
         const settledAll = yield* cardOf(world.state, run.id);
         expect({ landed: settledAll.landed, section: sectionOf(settledAll) }).toEqual({
-          landed: false,
-          section: "waiting",
+          landed: true,
+          section: "finished",
         });
       }),
     [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
