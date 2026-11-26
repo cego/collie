@@ -1250,6 +1250,37 @@ test("an agent that goes while it is collected past its budget is started again,
     }),
   ));
 
+test("Collie writes a launch down as it installs the controls, without the harness's own hooks", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const binDir = `${rig.root}/bin`;
+      yield* fs.makeDirectory(binDir, { recursive: true });
+      yield* fs.writeFileString(
+        `${binDir}/claude`,
+        `#!/bin/sh\n[ "$1" = --version ] && echo "2.10.0 (Claude Code)" && exit 0\n[ "$1" = --help ] && echo "  --autocompact <auto|tokens>" && exit 0\nexit 1\n`,
+      );
+      yield* fs.chmod(`${binDir}/claude`, 0o755);
+      Bun.env.PATH = `${binDir}:${Bun.env.PATH}`;
+      yield* rig.queueOutputs([`{"verdict":"clean","note":"ok"}`]);
+      const result = yield* session(started("r1"), { compactAtTokens: 300_000 });
+      expect(result._tag).toBe("Success");
+      const events = `${rig.stateDir}/compaction/${agentFor("r1")}/events.jsonl`;
+      const lines = Arr.filter(
+        Str.split(yield* fs.readFileString(events), "\n"),
+        (one) => Str.trim(one) !== "",
+      );
+      const launches = Arr.filter(
+        Arr.map(lines, (line) => JSON.parse(line)),
+        (one) => Schema.is(Schema.JsonObject)(one) && one.kind === "launch",
+      );
+      expect(launches).toHaveLength(1);
+      expect(launches[0]).toEqual(
+        expect.objectContaining({ kind: "launch", launch: expect.any(String) }),
+      );
+    }),
+  ));
+
 const claudeSessionOf = (runId: string) =>
   Effect.gen(function* () {
     for (;;) {

@@ -2783,6 +2783,8 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       agent,
       Effect.gen(function* () {
         const env = envLines(profile.env ?? {}, host.env.home);
+        // WARNING: installed and spawned under one launch, or the controls record a launch this agent never ran as.
+        const launch = label ?? `${agent}@${yield* Clock.currentTimeMillis}`;
         const controls = yield* installControls(
           compactionDeps(host, ask.runId),
           {
@@ -2791,7 +2793,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             cwd: ask.cwd,
             runLog: `${dirFor(ask.runId)}/agents.log`,
           },
-          env,
+          [...env, `COLLIE_LAUNCH=${launch}`],
           mcp.args,
           session?.resumed === true ? { session: session.id, keep: [QUESTIONS, TURNS] } : undefined,
         ).pipe(
@@ -2874,7 +2876,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               ...mcp.env,
               ...(yield* envValues(profile.env ?? {}, host.env.home)),
               // WARNING: the harness's hooks inherit this, which is how a compaction completion names the launch that asked.
-              COLLIE_LAUNCH: label ?? `${agent}@${yield* Clock.currentTimeMillis}`,
+              COLLIE_LAUNCH: launch,
             },
             labels,
           })
