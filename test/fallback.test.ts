@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Schema, flow, Result } from "effect";
 import { AgentChoiceSchema } from "../src/agents";
 import { foldCeiling, hasAnyRoom, hasRoomFor, resolveWithRoom } from "../src/harness";
-import { roomForQuestion } from "../src/agents";
+import { questionOf, roomForQuestion } from "../src/agents";
 import type { RoomQuestion } from "../src/board-model";
 import type { Preferences } from "../src/harness";
 import { parseSetting } from "../src/settings";
@@ -351,6 +351,19 @@ test("a usage park honours the upTo ceiling its selector refuses, whatever the a
   };
   expect(roomForQuestion(question, [reading("claude", [window(75)])], NOW)).toBe(false);
   expect(roomForQuestion(question, [reading("claude", [window(40)])], NOW)).toBe(true);
+});
+
+test("a persisted usage question is decoded before it is asked", () => {
+  const good: RoomQuestion = {
+    layers: [{ harness: "claude", model: "opus" }],
+    chain: [],
+    choices: [{ harness: "claude", model: "opus", effort: null }],
+    spent: [],
+  };
+  expect(questionOf(good)).toEqual(good);
+  // WARNING: a record written by another build is untrusted input, so it is spelled out as one.
+  const older = structuredClone({ ...good, spent: [{ on: "claude", why: "spent" }] });
+  expect(questionOf(older)).toBeUndefined();
 });
 
 test("a usage park reaches the scoped otherwise a preference carries", () => {

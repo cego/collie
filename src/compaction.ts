@@ -510,16 +510,18 @@ const stopRecord = Effect.fn("Compaction.stopRecord")(function* (
     yield* note(`${record.agent}: quiet — ${stopFacts(target, reached.turns)}`);
     // WARNING: the disposition is written before the controls go, or a stopped agent's attempt is left as if it may finish.
     const give = deps.ports[record.harness]?.cancel;
-    if (record.attempt !== null && give !== undefined) {
-      yield* give(
-        readingContext(record, record.attempt.run),
-        {
-          id: record.attempt.id,
-          session: record.attempt.session ?? null,
-          launch: record.attempt.launch ?? null,
-          transcript: record.attempt.transcript ?? null,
-        },
-        `${record.agent} was stopped`,
+    if (record.attempt !== null) {
+      const mark = {
+        id: record.attempt.id,
+        session: record.attempt.session ?? null,
+        launch: record.attempt.launch ?? null,
+        transcript: record.attempt.transcript ?? null,
+      };
+      const why = `${record.agent} was stopped`;
+      yield* (
+        give === undefined
+          ? recordCancelled(record.dir, mark, why)
+          : give(readingContext(record, record.attempt.run), mark, why)
       ).pipe(Effect.orElseSucceed(() => void 0));
     }
     const fs = yield* FileSystem.FileSystem;

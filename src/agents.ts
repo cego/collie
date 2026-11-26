@@ -118,7 +118,7 @@ import type { ForgeHttp } from "./forge/http";
 import { parseDocument } from "./yaml";
 import type { YamlMap } from "./yaml";
 import { RanOn } from "./board-model";
-import type { RoomQuestion } from "./board-model";
+import { RoomQuestion } from "./board-model";
 import { humanOf } from "./proposals";
 import type { Asker } from "./proposals";
 import { STOP, controlSet } from "./controls";
@@ -1819,6 +1819,10 @@ export const roomQuestionOf = (
   }
   return question;
 };
+
+// WARNING: a persisted question is decoded before it drives a wake-up, so a record written by another build cannot.
+export const questionOf = (persisted: Schema.Json | undefined) =>
+  Option.getOrUndefined(Schema.decodeUnknownOption(RoomQuestion)(persisted));
 
 export const roomForQuestion = (
   question: RoomQuestion,

@@ -140,7 +140,7 @@ import {
 import { ChangedIntent } from "./intent-model";
 import { donePasses, markersOf, runningCheck, followLog } from "./checks";
 import { startCheckout } from "./agent-start";
-import { configuredAgents, roomForQuestion } from "./agents";
+import { configuredAgents, questionOf, roomForQuestion } from "./agents";
 import { hasAnyRoom, hasRoomFor } from "./harness";
 import { Collecting } from "./collecting";
 import { memoryWaitOf, waitForMemory, waitLine } from "./memory-wait";
@@ -235,15 +235,7 @@ import {
   SteerOutcome,
   Attachments,
 } from "./board-model";
-import type {
-  RunRevision,
-  RoomQuestion,
-  Toasted,
-  FrontDoor,
-  OfferView,
-  TaskView,
-  Where,
-} from "./board-model";
+import type { RunRevision, Toasted, FrontDoor, OfferView, TaskView, Where } from "./board-model";
 import {
   attachedLine,
   attachmentRefusal,
@@ -2697,11 +2689,11 @@ const frontDoorHandlers = (
       }).pipe(Effect.provideContext(hosted));
       const roomHere = (view: {
         readonly runId: string;
-        readonly usage?: { readonly question?: RoomQuestion } | null;
+        readonly usage?: { readonly question?: Schema.Json } | null;
       }) =>
         Effect.gen(function* () {
           const readings = yield* usage.readings;
-          const asked = view.usage?.question;
+          const asked = questionOf(view.usage?.question);
           if (asked !== undefined) {
             return roomForQuestion(asked, readings, yield* Clock.currentTimeMillis);
           }
