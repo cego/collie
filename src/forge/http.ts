@@ -118,22 +118,39 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
       return slot;
     };
 
-    const providerOf = (login: ForgeLogin, slot: Slot) =>
-      (slot.provider ??= library().then(({ github, gitlab }) => {
+    const built = (login: ForgeLogin, slot: Slot, transport: FetchLike | undefined) =>
+      library().then(({ github, gitlab }) => {
         const auth = { type: "token" as const, token: () => slot.token ?? "" };
         if (login.forge === "github") {
           return github({
             auth,
-            fetch,
+            fetch: transport,
             baseUrl: base === null ? undefined : `${base}/api.github.com`,
           });
         }
         return gitlab({
           auth,
-          fetch,
+          fetch: transport,
           baseUrl: base === null ? `https://${login.host}` : `${base}/${login.host}`,
         });
-      }));
+      });
+
+    const providerOf = (login: ForgeLogin, slot: Slot) =>
+      (slot.provider ??= built(login, slot, fetch));
+
+    // WARNING: the library retries a 429 by itself, so only the transport sees every request a call made.
+    const counted = (spend: Asked): FetchLike => {
+      const transport: FetchLike = (input, init) => (fetch ?? globalThis.fetch)(input, init);
+      return (input, init) => {
+        spend.attempts += 1;
+        return transport(input, init).then((response) => {
+          if (response.status === 429) {
+            spend.limited += 1;
+          }
+          return response;
+        });
+      };
+    };
 
     const tokenOf = (login: ForgeLogin, cwd: string, slot: Slot) =>
       lockOf(login.host).withPermits(1)(
@@ -171,9 +188,14 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
     ) =>
       Effect.gen(function* () {
         const slot = slotOf(login.key);
+        const spend = Option.getOrUndefined(yield* Effect.serviceOption(Asking));
         const once = (token: string) =>
           Effect.tryPromise({
-            try: (signal) => providerOf(login, slot).then((provider) => call(provider, signal)),
+            try: (signal) =>
+              (spend === undefined
+                ? providerOf(login, slot)
+                : built(login, slot, counted(spend))
+              ).then((provider) => call(provider, signal)),
             catch: (error) => new Cause.UnknownError(error),
           }).pipe(
             Effect.map((value) => {
@@ -211,19 +233,7 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
         const send = (token: string) =>
           Effect.gen(function* () {
             attempts += 1;
-            const asked = yield* Effect.serviceOption(Asking);
-            if (Option.isSome(asked)) {
-              asked.value.attempts += 1;
-            }
-            const sent = yield* once(token);
-            if (
-              Option.isSome(asked) &&
-              !sent.sent.ok &&
-              Str.includes("rate limited")(sent.sent.reason)
-            ) {
-              asked.value.limited += 1;
-            }
-            return sent;
+            return yield* once(token);
           });
         const notReady = { ok: false, reason: login.notReady } as const;
         const first = yield* tokenOf(login, cwd, slot);

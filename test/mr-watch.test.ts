@@ -769,6 +769,65 @@ test("a poll's attempts count only the reads it made, not a concurrent one", () 
     }),
   ));
 
+test("a poll's attempts count the request the forge retried, and the rate limit it answered", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const forge = yield* gitlab;
+      const runId = yield* session(
+        forge,
+        Effect.gen(function* () {
+          const runId = yield* started("watches-mr", "w1", {
+            target: WATCHED,
+            head: H1,
+            cwd: rig.projectDir,
+          });
+          yield* until(
+            () => watchOf(runId),
+            (row) => row !== null,
+          );
+          return runId;
+        }),
+      );
+      yield* session(
+        forge,
+        Effect.gen(function* () {
+          yield* watchingMerges;
+          yield* Effect.sleep("6 minutes");
+          const before = reads(forge, "7");
+          let limited = false;
+          forge.after((url, _init, response) => {
+            const asked = decodeURIComponent(url);
+            if (limited || !Str.endsWith("merge_requests/7")(asked)) {
+              return Promise.resolve(response);
+            }
+            limited = true;
+            return Promise.resolve(
+              new Response('{"message":"Too many requests"}', {
+                status: 429,
+                headers: { "content-type": "application/json", "retry-after": "0" },
+              }),
+            );
+          });
+          yield* until(
+            () => watchOf(runId),
+            () => reads(forge, "7") > before,
+          );
+          yield* Effect.sleep("1 minute");
+          const poll = Option.getOrUndefined(
+            Arr.findLast(
+              tagged(yield* readWatchJournal(host.dir()), "poll"),
+              (event) => event.result === "read",
+            ),
+          );
+          expect(poll?.attempts).toBe(reads(forge, "7") - before);
+          expect(poll?.attempts).toBe(4);
+          expect(poll?.rateLimit).toBe(1);
+          expect(runId).toStartWith("run-");
+        }),
+      );
+    }),
+  ));
+
 test("a held Run's Watch asks for nothing until the hold is released, then takes the head it missed", () =>
   runEffect(
     Effect.gen(function* () {
