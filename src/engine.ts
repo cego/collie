@@ -326,7 +326,7 @@ import { WorktreeRecordSchema } from "./run";
 import type { WorktreeRecord } from "./run";
 import { isOpen, listTasks, newTask, readTask, taskOfWorkspace, writeTask } from "./task";
 import { nowIso, epochMs, isoAt } from "./time";
-import { readWatchJournal, recordWatchEvent } from "./watch-journal";
+import { recordWatchEvent } from "./watch-journal";
 import type { WatchEvent } from "./watch-journal";
 import {
   pauseBefore,
@@ -3545,6 +3545,10 @@ export const AWAITING = "awaiting";
 export const USAGE = "usage";
 const AWAITED = "awaited";
 const NOTIFIED = "notified";
+// WARNING: the round a Watch woke began its work; the host's journal is not asked which round that was.
+const STARTED_ROUND = "started-round";
+const BeganRound = Schema.Struct({ name: Schema.String, head: Schema.String });
+const BeganRoundJson = Schema.fromJsonString(BeganRound);
 
 const decodeParkCause = Schema.decodeUnknownOption(ParkCause);
 const parkCauseOf: (text: string | null) => ParkCause = (text) =>
@@ -4106,6 +4110,12 @@ export const hostLayer: (options: {
       const under = <A, E>(effect: Effect.Effect<A, E, Collecting>) =>
         Effect.provideContext(effect, services);
       const journalWatch = (event: WatchEvent) => under(recordWatchEvent(dir)(event));
+      const beganRoundOf = (runId: string) =>
+        Effect.flatMap(runRecords.control(STARTED_ROUND, runId), (text) =>
+          text === null
+            ? Effect.succeed(null)
+            : Schema.decodeEffect(BeganRoundJson)(text).pipe(Effect.orElseSucceed(() => null)),
+        );
       const parkReview = (reason: string) =>
         Effect.gen(function* () {
           const run = yield* Effect.serviceOption(Run);
@@ -6193,32 +6203,21 @@ export const hostLayer: (options: {
                 reason: `${asked.target} names no merge request the merge watch can read`,
               });
             }
-            const woken = Arr.some(
-              yield* readWatchJournal(dir).pipe(
-                Effect.orElseSucceed(() => []),
-                Effect.provideService(FileSystem.FileSystem, fs),
-              ),
-              (one) =>
-                (one._tag === "woke" || one._tag === "published" || one._tag === "discarded") &&
-                one.run === asked.runId &&
-                one.mr === mr,
-            );
+            // WARNING: the round that began is the round that ended here; no earlier round's journal entry answers for it.
+            const began = yield* beganRoundOf(asked.runId);
+            if (began !== null) {
+              yield* journalWatch({
+                _tag: "completed",
+                at: yield* nowIso,
+                mr,
+                run: asked.runId,
+                name: began.name,
+                head: began.head,
+              });
+              yield* runRecords.setControl(STARTED_ROUND, asked.runId, null);
+            }
             yield* store.watch({ run: asked.runId, mr, name: asked.name, cursor: asked.cursor });
-            const completed = () =>
-              woken
-                ? Effect.flatMap(nowIso, (at) =>
-                    journalWatch({
-                      _tag: "completed",
-                      at,
-                      mr,
-                      run: asked.runId,
-                      name: asked.name,
-                      head: asked.cursor.head,
-                    }),
-                  )
-                : Effect.void;
             if (asked.asking === true) {
-              yield* completed();
               return;
             }
             const slack = yield* reviewSlackTrouble(
@@ -6228,7 +6227,31 @@ export const hostLayer: (options: {
               on: `${asked.author ?? THE_AUTHOR} to change ${mrLabel(asked.target)}${asked.approved === undefined ? "" : `, approved at ${Str.slice(0, 7)(asked.approved)}`}${slack === undefined ? "" : `. ${slack}`}`,
               who: THE_AUTHOR,
             });
-            yield* completed();
+          }),
+        startedRound: (asked) =>
+          Effect.gen(function* () {
+            const mr = mrId(asked.target);
+            if (mr === null) {
+              return yield* new WorkflowError({
+                reason: `${asked.target} names no merge request the merge watch can read`,
+              });
+            }
+            yield* journalWatch({
+              _tag: "started",
+              at: yield* nowIso,
+              mr,
+              run: asked.runId,
+              name: asked.name,
+              head: asked.head,
+            });
+            yield* runRecords.setControl(
+              STARTED_ROUND,
+              asked.runId,
+              yield* Schema.encodeEffect(BeganRoundJson)({
+                name: asked.name,
+                head: asked.head,
+              }).pipe(Effect.orDie),
+            );
           }),
         mrReading: (asked) =>
           Effect.gen(function* () {

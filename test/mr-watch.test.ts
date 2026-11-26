@@ -487,6 +487,8 @@ test("a wake a dead host persisted is delivered once by the next host, with no p
           });
           expect(yield* watchOf(runId)).toBeNull();
           expect(yield* agentStarts).toEqual([]);
+          const woken = tagged(yield* readWatchJournal(host.dir()), "woke");
+          expect(Arr.map(woken, (event) => [event.run, event.head])).toEqual([[runId, H2]]);
         }),
       );
     }),
@@ -662,7 +664,11 @@ test("a Stop landing while one Run's answer is written keeps the next Run's answ
                 mrId(UNWATCHED)!,
                 {
                   at: now,
-                  panel: { _tag: "Unavailable", reason: "the forge did not answer", transient: true },
+                  panel: {
+                    _tag: "Unavailable",
+                    reason: "the forge did not answer",
+                    transient: true,
+                  },
                 },
               ],
             ]),
@@ -673,13 +679,11 @@ test("a Stop landing while one Run's answer is written keeps the next Run's answ
               observe: (run, name, observed) =>
                 store.observe(run, name, observed).pipe(
                   Effect.andThen(
-                    registry
-                      .control({ runId: runs.second, control: STOP, set: true })
-                      .pipe(
-                        Effect.provideContext(hosted),
-                        Effect.orElseSucceed(() => undefined),
-                        Effect.asVoid,
-                      ),
+                    registry.control({ runId: runs.second, control: STOP, set: true }).pipe(
+                      Effect.provideContext(hosted),
+                      Effect.orElseSucceed(() => undefined),
+                      Effect.asVoid,
+                    ),
                   ),
                 ),
               unavailable: (run) => Effect.sync(() => parked.push(run)),
@@ -694,9 +698,9 @@ test("a Stop landing while one Run's answer is written keeps the next Run's answ
           expect(parked).toEqual([]);
           expect(Arr.map(observed, (one) => one.run)).toEqual([runs.first]);
           expect((yield* status(runs.second))?.controls ?? []).toContain(STOP);
-          expect(
-            Arr.map(yield* store.watches([mrId(UNWATCHED)!]), (row) => row.observed),
-          ).toEqual([null]);
+          expect(Arr.map(yield* store.watches([mrId(UNWATCHED)!]), (row) => row.observed)).toEqual([
+            null,
+          ]);
         }),
       );
     }),
@@ -1037,6 +1041,66 @@ for (const state of ["closed", "merged"] as const) {
     ));
 }
 
+test("a round the Run never began is neither started nor completed, however the Watch woke it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const H4 = "4444444444444444444444444444444444444444";
+      const forge = yield* host.gitlab({
+        ...OPEN,
+        ancestry: { ...OPEN.ancestry, [H4]: [H3] },
+      });
+      const runId = yield* session(
+        forge,
+        Effect.gen(function* () {
+          const runId = yield* started("watches-mr", "w1", {
+            target: WATCHED,
+            head: H1,
+            cwd: rig.projectDir,
+            rounds: 3,
+            skipped: [2],
+          });
+          yield* until(
+            () => watchOf(runId),
+            (row) => row !== null,
+          );
+          return runId;
+        }),
+      );
+      yield* session(
+        forge,
+        Effect.gen(function* () {
+          yield* watchingMerges;
+          yield* forge.set(PUSHED);
+          yield* until(
+            () => watchOf(runId),
+            (row) => row?.name === "round-2",
+          );
+          yield* forge.set(PUSHED_AGAIN);
+          yield* until(
+            () => watchOf(runId),
+            (row) => row?.name === "round-3",
+          );
+          yield* forge.set({ ...OPEN, mrs: [mr("7", { head: H4 }), mr("8")] });
+          yield* until(
+            () => status(runId),
+            (view) => view?.status.status === "complete",
+          );
+        }),
+      );
+      const journal = yield* readWatchJournal(host.dir());
+      expect(Arr.map(tagged(journal, "woke"), (event) => event.name)).toEqual([
+        "round-1",
+        "round-2",
+        "round-3",
+      ]);
+      expect(Arr.map(tagged(journal, "started"), (event) => [event.name, event.head])).toEqual([
+        ["round-1", H2],
+        ["round-3", H4],
+      ]);
+      expect(Arr.map(tagged(journal, "completed"), (event) => event.name)).toEqual(["round-1"]);
+    }),
+  ));
+
 test("the !604 replay reads detection, eligibility, each start and a failed read back out of what the host recorded", () =>
   runEffect(
     Effect.gen(function* () {
@@ -1106,7 +1170,8 @@ test("the !604 replay reads detection, eligibility, each start and a failed read
       const journal = yield* readWatchJournal(host.dir());
       const polls = pollsIn(journal);
       const seen = tagged(journal, "observed");
-      const starts = tagged(journal, "woke");
+      const woken = tagged(journal, "woke");
+      const began = tagged(journal, "started");
 
       const firstSeen = (head: string) =>
         Math.min(
@@ -1116,23 +1181,36 @@ test("the !604 replay reads detection, eligibility, each start and a failed read
           ),
         );
       expect(firstSeen(H2)).toBeGreaterThan(0);
-      for (const start of starts) {
+      for (const wake of woken) {
         const detected = Arr.findLast(
           seen,
-          (event) => event.head === start.head && epochMs(event.at) <= epochMs(start.at),
+          (event) => event.head === wake.head && epochMs(event.at) <= epochMs(wake.at),
         );
         expect(Option.isSome(detected)).toBe(true);
-        expect(epochMs(start.at) - Option.getOrThrow(detected).since).toBeGreaterThanOrEqual(
+        expect(epochMs(wake.at) - Option.getOrThrow(detected).since).toBeGreaterThanOrEqual(
           QUIET_MS,
         );
       }
-      expect(Arr.map(starts, (event) => event.name)).toEqual([
+      expect(Arr.map(woken, (event) => event.name)).toEqual([
         "round-1",
         "round-2",
         "round-3",
         "round-4",
       ]);
-      expect(Arr.map(starts, (event) => event.head)).toEqual([H2, H3, H4, H5]);
+      expect(Arr.map(woken, (event) => event.head)).toEqual([H2, H3, H4, H5]);
+      expect(Arr.map(began, (event) => [event.name, event.head])).toEqual([
+        ["round-1", H2],
+        ["round-2", H3],
+        ["round-3", H4],
+        ["round-4", H5],
+      ]);
+      for (const start of began) {
+        const why = Arr.findLast(
+          woken,
+          (event) => event.name === start.name && epochMs(event.at) <= epochMs(start.at),
+        );
+        expect(Option.isSome(why)).toBe(true);
+      }
 
       const published = tagged(journal, "published");
       expect(Arr.map(published, (event) => event.head)).toEqual([H2]);
@@ -1140,13 +1218,13 @@ test("the !604 replay reads detection, eligibility, each start and a failed read
       expect(Arr.map(discarded, (event) => [event.head, event.moved])).toEqual([[H4, H5]]);
       const completed = tagged(journal, "completed");
       expect(Arr.map(completed, (event) => event.name)).toEqual([
+        "round-1",
         "round-2",
         "round-3",
         "round-4",
-        "round-5",
       ]);
-      const noFeedback = Arr.findFirst(completed, (event) => event.name === "round-3");
-      const wokeSecond = Arr.findFirst(starts, (event) => event.name === "round-2");
+      const noFeedback = Arr.findFirst(completed, (event) => event.name === "round-2");
+      const wokeSecond = Arr.findFirst(began, (event) => event.name === "round-2");
       expect(
         Arr.some(
           [...published, ...discarded],

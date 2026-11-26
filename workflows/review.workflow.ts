@@ -288,6 +288,17 @@ export default defineWorkflow({
             });
       const fact = (name: string, line: string) =>
         Activity.make({ name, execute: host.record(run.id, line) });
+      const began = (round: number) =>
+        Activity.make({
+          name: `follow-begin-${round}`,
+          error: WorkflowError,
+          execute: host.startedRound({
+            runId: run.id,
+            target: asked.target,
+            name: `follow-${round}`,
+            head,
+          }),
+        });
       const roundAt = (
         round: number,
         changes: string,
@@ -453,6 +464,7 @@ export default defineWorkflow({
             forcePush || reviewedAt === "" ? Effect.succeed("") : changesAt(at, reviewedAt);
           if (round > 1 && !(yield* following(round))) {
             yield* fact(`follow-off-${round}`, `${FOLLOW} is off: back to asking what next`);
+            yield* began(round);
             const review = yield* roundAt(round, yield* changes(round), false);
             return { menu: review ?? last, at: round };
           }
@@ -555,6 +567,9 @@ export default defineWorkflow({
               return yield* new WorkflowError({
                 reason: `no checkout of ${label} at ${head}: ${pinned.refused}`,
               });
+            }
+            if (!("moved" in pinned)) {
+              yield* began(round);
             }
             const reviewed: SynthesisReport | null =
               "moved" in pinned

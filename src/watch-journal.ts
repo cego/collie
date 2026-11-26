@@ -33,6 +33,13 @@ export const WatchEvent = Schema.Union([
     previous: Schema.NullOr(Schema.String),
     newHead: Schema.Boolean,
   }),
+  Schema.TaggedStruct("started", {
+    at: Schema.String,
+    mr: Schema.String,
+    run: Schema.String,
+    name: Schema.String,
+    head: Schema.String,
+  }),
   Schema.TaggedStruct("ended", {
     at: Schema.String,
     mr: Schema.String,

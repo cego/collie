@@ -20,6 +20,8 @@ export default defineWorkflow({
     rounds: Schema.optionalKey(Schema.Finite),
     /** The rounds whose review found something to post. */
     notes: Schema.optionalKey(Schema.Array(Schema.Finite)),
+    /** The rounds that began no review, as one a moved head or a refused wake leaves it. */
+    skipped: Schema.optionalKey(Schema.Array(Schema.Finite)),
     /** Minutes a round's review takes, so the head can move under it. */
     review: Schema.optionalKey(Schema.Finite),
   }),
@@ -42,6 +44,17 @@ export default defineWorkflow({
         });
         const next = seen._tag === "Changed" ? seen.change.head : head;
         yield* host.record(run.id, `round-${round}: ${head} -> ${next}`);
+        if (input.skipped?.includes(round) !== true) {
+          yield* Activity.make({
+            name: `begin-${round}`,
+            execute: host.startedRound({
+              runId: run.id,
+              target: input.target,
+              name: `round-${round}`,
+              head: next,
+            }),
+          });
+        }
         yield* host.record(run.id, `round-${round}: reviewing ${next}`);
         if ((input.review ?? 0) > 0) {
           yield* Effect.sleep(`${input.review} minutes`);

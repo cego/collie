@@ -1198,6 +1198,17 @@ export interface HostApi {
     /** A question shares the wake, so the card says it waits on whoever answers that. */
     readonly asking?: boolean;
   }) => Effect.Effect<void, WorkflowError>;
+  /**
+   * Records that this Run's round `name` began its work at `head`. A watch that woke it is only
+   * the offer: a round whose head the forge moved under it, or that a control refused, never
+   * gets here, so the journal tells a round that started from one that never did.
+   */
+  readonly startedRound: (options: {
+    readonly runId: string;
+    readonly target: string;
+    readonly name: string;
+    readonly head: string;
+  }) => Effect.Effect<void, WorkflowError>;
   /** The merge request `target` as the forge reads it now: what a watch's cursor starts from. */
   readonly mrReading: (options: {
     readonly target: string;
