@@ -1918,25 +1918,34 @@ const runFinding = Command.make(
           if (why !== null && Str.trim(why) === "") {
             return err("invalid_input", "--dismiss needs a reason of its own.");
           }
-          return yield* mutation(resolved.env, "run-finding", requestId, (request) =>
-            Effect.gen(function* () {
-              const set = yield* setFindingRun(resolved.env, {
-                door: yield* cliDoor(resolved.env),
-                runId: facts.id,
-                id,
-                status: why === null ? "open" : "dismissed",
-                reason: why,
-                request,
-              });
-              if (!set.ok) {
-                return set;
-              }
-              return {
-                ok: true,
-                data: { run: facts.id, finding: set.value },
-                human: `${set.value.id} ${set.value.status}${set.value.reason === null ? "" : ` — ${set.value.reason}`}`,
-              };
-            }),
+          const status = why === null ? "open" : "dismissed";
+          return yield* mutation(
+            resolved.env,
+            {
+              operation: "run-finding",
+              run: facts.id,
+              args: { runId: facts.id, id, status, reason: why ?? null },
+            },
+            requestId,
+            (request) =>
+              Effect.gen(function* () {
+                const set = yield* setFindingRun(resolved.env, {
+                  door: yield* cliDoor(resolved.env),
+                  runId: facts.id,
+                  id,
+                  status,
+                  reason: why,
+                  request,
+                });
+                if (!set.ok) {
+                  return set;
+                }
+                return {
+                  ok: true,
+                  data: { run: facts.id, finding: set.value },
+                  human: `${set.value.id} ${set.value.status}${set.value.reason === null ? "" : ` — ${set.value.reason}`}`,
+                };
+              }),
           );
         }),
         global.json,

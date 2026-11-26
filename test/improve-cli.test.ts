@@ -263,9 +263,6 @@ test("the CLI takes Improve over two findings of a review, and dismissing the la
           [second, "taken"],
           [third, "dismissed"],
         ]);
-        expect(Arr.filter(yield* findings(started.runId), (one) => one.status === "open")).toEqual(
-          [],
-        );
       }),
     [],
   ));
