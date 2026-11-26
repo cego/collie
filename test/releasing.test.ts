@@ -2,9 +2,17 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem } from "effect";
+import { Effect, FileSystem, Schema } from "effect";
 import type { Runner } from "../src/mr";
-import { fastForward, readProduction, readTag, stackOrder } from "../src/releasing";
+import {
+  fastForward,
+  readProduction,
+  readTag,
+  SavedAlignmentSchema,
+  savedHead,
+  savedRefusalWhy,
+  stackOrder,
+} from "../src/releasing";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 import { FORGE_HOST, PROJECT, fakeForge } from "./support/forge";
@@ -66,6 +74,22 @@ const repository = Effect.gen(function* () {
   return { fs, root, cwd, commit, first, tag };
 });
 
+test("an alignment a Release saved as a bare head before the refusal carried a cause still reads as a head", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const saved = yield* Schema.decodeEffect(SavedAlignmentSchema)("a1b2c3d4");
+      expect(savedHead(saved)).toBe("a1b2c3d4");
+      expect(savedRefusalWhy(saved)).toBeNull();
+      const refused = yield* Schema.decodeEffect(SavedAlignmentSchema)({
+        _tag: "Refused",
+        why: "the checkout has uncommitted changes",
+        cause: "checkout-dirty-collie",
+      });
+      expect(savedHead(refused)).toBeNull();
+      expect(savedRefusalWhy(refused)).toBe("the checkout has uncommitted changes");
+    }),
+  ));
+
 test("a checkout with uncommitted changes is refused even where it is already at the head", () =>
   runEffect(
     Effect.gen(function* () {
@@ -116,26 +140,518 @@ test("a plain push past the journaled head is not refused; the checkout is taken
     }).pipe(Effect.scoped),
   ));
 
-test("a true force push (a head the checkout neither is at nor sits behind) is still refused", () =>
+// WARNING: a target that does not carry `onto` is what makes the new head a rebase rather than a descent from it.
+const rebaseOnto = (cwd: string, onto: string, target: string) =>
+  Effect.gen(function* () {
+    const tree = yield* git(cwd, "rev-parse", `${onto}^{tree}`);
+    const rebased = yield* git(
+      cwd,
+      "commit-tree",
+      tree,
+      "-p",
+      target,
+      "-m",
+      "rebased onto the target",
+    );
+    yield* git(cwd, "push", "-q", "--force", "origin", `${rebased}:refs/heads/main`);
+    return rebased;
+  });
+
+const newerTarget = (cwd: string) =>
+  Effect.gen(function* () {
+    const tree = yield* git(cwd, "rev-parse", "HEAD^{tree}");
+    const target = yield* git(cwd, "commit-tree", tree, "-m", "the newer target");
+    yield* git(cwd, "push", "-q", "--force", "origin", `${target}:refs/heads/main`);
+    return target;
+  });
+
+test("a clean checkout at a published head is reset to the head the forge moved to, as after a rebase", () =>
   runEffect(
     Effect.gen(function* () {
       const { fs, root, cwd, first } = yield* repository;
-      // WARNING: the first head stays a loose object so the journaled head still resolves, as a rewritten remote leaves it.
-      yield* git(cwd, "update-ref", "-d", "refs/heads/main");
-      yield* git(cwd, "checkout", "-q", "--orphan", "main");
-      yield* fs.writeFileString(`${cwd}/rewrite.ts`, "rewrite.ts");
-      yield* git(cwd, "add", "rewrite.ts");
-      yield* git(cwd, "commit", "-q", "-m", "rewrite");
-      const rewritten = yield* git(cwd, "rev-parse", "HEAD");
-      yield* git(cwd, "push", "-q", "--force", "origin", "main");
-      expect(rewritten).not.toBe(first);
-      const moved = yield* fastForward({ runDir: `${root}/run`, cwd, head: first, run: runner() });
-      expect(moved._tag).toBe("Refused");
-      if (moved._tag === "Refused") {
-        expect(moved.why).toContain("force push");
+      const target = yield* newerTarget(cwd);
+      const rebased = yield* rebaseOnto(cwd, first, target);
+      yield* git(cwd, "reset", "-q", "--hard", first);
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: rebased,
+        run: runner(),
+      });
+      expect(moved._tag).toBe("At");
+      if (moved._tag === "At") {
+        expect(moved.head).toBe(rebased);
+        expect(moved.from).toBe(first);
       }
+      expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(rebased);
+      const log = yield* fs.readFileString(`${root}/run/log.txt`);
+      expect(log).toContain(
+        `moved the checkout from ${first} to ${rebased}, which origin's main no longer carries`,
+      );
     }).pipe(Effect.scoped),
   ));
+
+test("a checkout holding a commit origin never had is refused with its cause, naming the commit and leaving it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { fs, root, cwd, first } = yield* repository;
+      const target = yield* newerTarget(cwd);
+      const rebased = yield* rebaseOnto(cwd, first, target);
+      yield* git(cwd, "reset", "-q", "--hard", first);
+      yield* fs.writeFileString(`${cwd}/local.ts`, "local");
+      yield* git(cwd, "add", "local.ts");
+      yield* git(cwd, "commit", "-q", "-m", "a local fix origin never had");
+      const local = yield* git(cwd, "rev-parse", "HEAD");
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: rebased,
+        run: runner(),
+      });
+      expect(moved._tag).toBe("Refused");
+      if (moved._tag === "Refused") {
+        expect(moved.cause).toBe("branch-force-pushed");
+        expect(moved.why).toContain(pipe_(local, Str.slice(0, 8)));
+        expect(moved.why).toContain("a local fix origin never had");
+      }
+      expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(local);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a reset that would overwrite a file the checkout keeps out of git is refused, naming it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { fs, root, cwd, first } = yield* repository;
+      yield* fs.writeFileString(`${cwd}/.gitignore`, "local.env\n");
+      yield* git(cwd, "add", ".gitignore");
+      yield* git(cwd, "commit", "-q", "-m", "keep local.env out of git");
+      yield* git(cwd, "push", "-q", "origin", "HEAD:main");
+      const base = yield* git(cwd, "rev-parse", "HEAD");
+      expect(base).not.toBe(first);
+      yield* fs.writeFileString(`${cwd}/local.env`, "the forge's");
+      yield* git(cwd, "add", "-f", "local.env");
+      yield* git(cwd, "commit", "-q", "-m", "track local.env");
+      const tracked = yield* git(cwd, "rev-parse", "HEAD");
+      const target = yield* newerTarget(cwd);
+      const tree = yield* git(cwd, "rev-parse", `${tracked}^{tree}`);
+      const rebased = yield* git(cwd, "commit-tree", tree, "-p", target, "-m", "the forge's head");
+      yield* git(cwd, "push", "-q", "-f", "origin", `${rebased}:refs/heads/main`);
+      yield* git(cwd, "reset", "-q", "--hard", base);
+      yield* fs.writeFileString(`${cwd}/local.env`, "the local one");
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: rebased,
+        run: runner(),
+      });
+      expect(moved._tag).toBe("Refused");
+      if (moved._tag === "Refused") {
+        expect(moved.cause).toBe("branch-force-pushed");
+        expect(moved.why).toContain("local.env");
+      }
+      expect(yield* fs.readFileString(`${cwd}/local.env`)).toBe("the local one");
+      expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(base);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a checkout carrying a commit origin has moved past is taken as it is, not reported as unpushed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { fs, root, cwd, first, commit } = yield* repository;
+      const carried = yield* commit("two.ts");
+      yield* commit("three.ts");
+      yield* git(cwd, "reset", "-q", "--hard", carried);
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: first,
+        run: runner(),
+      });
+      expect(moved._tag).toBe("At");
+      if (moved._tag === "At") {
+        expect(moved.head).toBe(carried);
+        expect(moved.from).toBe(carried);
+      }
+      expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(carried);
+      const log = yield* fs.readFileString(`${root}/run/log.txt`);
+      expect(log).toContain(
+        `the checkout already carries ${pipe_(first, Str.slice(0, 8))} and sits at ${pipe_(carried, Str.slice(0, 8))}, which origin's main carries`,
+      );
+    }).pipe(Effect.scoped),
+  ));
+
+test("a reset that would write a file over a directory the checkout keeps out of git is refused, naming what it holds", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { fs, root, cwd, first } = yield* repository;
+      yield* fs.writeFileString(`${cwd}/.git/info/exclude`, "local/\n");
+      yield* fs.makeDirectory(`${cwd}/local`, { recursive: true });
+      yield* fs.writeFileString(`${cwd}/local/settings`, "the local one");
+      const target = yield* newerTarget(cwd);
+      const forge = `${root}/forge`;
+      yield* git(root, "clone", "-q", `${root}/origin.git`, forge);
+      for (const [key, value] of [
+        ["user.name", "Test"],
+        ["user.email", "test@example.com"],
+        ["commit.gpgsign", "false"],
+      ] as const) {
+        yield* git(forge, "config", key, value);
+      }
+      yield* git(forge, "reset", "-q", "--hard", target);
+      yield* fs.writeFileString(`${forge}/local`, "the forge's");
+      yield* git(forge, "add", "-f", "local");
+      yield* git(forge, "commit", "-q", "-m", "track a file named local");
+      const incoming = yield* git(forge, "rev-parse", "HEAD");
+      yield* git(forge, "push", "-q", "-f", "origin", `${incoming}:refs/heads/main`);
+      expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(first);
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: incoming,
+        run: runner(),
+      });
+      expect(moved._tag).toBe("Refused");
+      if (moved._tag === "Refused") {
+        expect(moved.cause).toBe("branch-force-pushed");
+        expect(moved.why).toContain("local/settings");
+      }
+      expect(yield* fs.readFileString(`${cwd}/local/settings`)).toBe("the local one");
+      expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(first);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a checkout ahead of a cached origin tip is refused once origin's branch is gone", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { root, cwd, first } = yield* repository;
+      yield* git(cwd, "checkout", "-q", "-b", "feature");
+      yield* (yield* FileSystem.FileSystem).writeFileString(`${cwd}/two.ts`, "two");
+      yield* git(cwd, "add", "two.ts");
+      yield* git(cwd, "commit", "-q", "-m", "two.ts");
+      yield* git(cwd, "push", "-q", "origin", "HEAD:refs/heads/feature");
+      const carried = yield* git(cwd, "rev-parse", "HEAD");
+      yield* git(root, "--git-dir", `${root}/origin.git`, "update-ref", "-d", "refs/heads/feature");
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: first,
+        run: runner(),
+      });
+      expect(moved._tag).toBe("Refused");
+      if (moved._tag === "Refused") {
+        expect(moved.cause).toBe("checkout-dirty-human");
+        expect(moved.why).toContain("ahead of origin's feature");
+      }
+      expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(carried);
+    }).pipe(Effect.scoped),
+  ));
+
+const forgeAt = (root: string, cwd: string, onto: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const forge = `${root}/forge`;
+    yield* git(root, "clone", "-q", `${root}/origin.git`, forge);
+    for (const [key, value] of [
+      ["user.name", "Test"],
+      ["user.email", "test@example.com"],
+      ["commit.gpgsign", "false"],
+    ] as const) {
+      yield* git(forge, "config", key, value);
+    }
+    yield* git(forge, "reset", "-q", "--hard", onto);
+    const track = (file: string) =>
+      Effect.gen(function* () {
+        yield* fs.writeFileString(`${forge}/${file}`, "the forge's");
+        yield* git(forge, "add", "-f", file);
+      });
+    const push = () =>
+      Effect.gen(function* () {
+        yield* git(forge, "commit", "-q", "-m", "a file the forge tracks");
+        const head = yield* git(forge, "rev-parse", "HEAD");
+        yield* git(forge, "push", "-q", "-f", "origin", `${head}:refs/heads/main`);
+        return head;
+      });
+    return { forge, track, push };
+  });
+
+test("a reset does not overwrite an untracked file git status was told to hide", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { fs, root, cwd, first } = yield* repository;
+      yield* git(cwd, "config", "status.showUntrackedFiles", "no");
+      yield* fs.writeFileString(`${cwd}/settings`, "the local one");
+      const target = yield* newerTarget(cwd);
+      const forge = yield* forgeAt(root, cwd, target);
+      yield* forge.track("settings");
+      const incoming = yield* forge.push();
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: incoming,
+        run: runner(),
+      });
+      expect(moved._tag).toBe("Refused");
+      if (moved._tag === "Refused") {
+        expect(moved.cause).toBe("checkout-dirty-human");
+        expect(moved.why).toContain("settings");
+      }
+      expect(yield* fs.readFileString(`${cwd}/settings`)).toBe("the local one");
+      expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(first);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a fast-forward does not overwrite a file the checkout keeps out of git", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { fs, root, cwd, first } = yield* repository;
+      yield* fs.writeFileString(`${cwd}/.git/info/exclude`, "local.env\n");
+      yield* fs.writeFileString(`${cwd}/local.env`, "the local one");
+      const forge = yield* forgeAt(root, cwd, first);
+      yield* forge.track("local.env");
+      const incoming = yield* forge.push();
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: incoming,
+        run: runner(),
+      });
+      expect(moved._tag).toBe("Refused");
+      if (moved._tag === "Refused") {
+        expect(moved.cause).toBe("branch-force-pushed");
+        expect(moved.why).toContain("local.env");
+      }
+      expect(yield* fs.readFileString(`${cwd}/local.env`)).toBe("the local one");
+      expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(first);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a branch origin no longer has is not read from a remote-tracking ref the fetch leaves alone", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { fs, root, cwd, first } = yield* repository;
+      yield* fs.writeFileString(`${cwd}/two.ts`, "two");
+      yield* git(cwd, "add", "two.ts");
+      yield* git(cwd, "commit", "-q", "-m", "two.ts");
+      yield* git(cwd, "push", "-q", "origin", "HEAD:refs/heads/main");
+      const carried = yield* git(cwd, "rev-parse", "HEAD");
+      yield* git(cwd, "push", "-q", "origin", `${first}:refs/heads/feature`);
+      yield* git(
+        cwd,
+        "config",
+        "remote.origin.fetch",
+        "+refs/heads/feature:refs/remotes/origin/feature",
+      );
+      yield* git(root, "--git-dir", `${root}/origin.git`, "update-ref", "-d", "refs/heads/main");
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: first,
+        run: runner(),
+      });
+      expect(moved._tag).toBe("Refused");
+      if (moved._tag === "Refused") {
+        expect(moved.cause).toBe("checkout-dirty-human");
+        expect(moved.why).toContain("ahead of origin's main");
+      }
+      expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(carried);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a checkout is not read as published from a remote-tracking ref the forge has pushed back", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { fs, root, cwd, first } = yield* repository;
+      yield* fs.writeFileString(`${cwd}/two.ts`, "two");
+      yield* git(cwd, "add", "two.ts");
+      yield* git(cwd, "commit", "-q", "-m", "two.ts");
+      yield* git(cwd, "push", "-q", "origin", "HEAD:refs/heads/main");
+      const carried = yield* git(cwd, "rev-parse", "HEAD");
+      yield* git(
+        cwd,
+        "config",
+        "remote.origin.fetch",
+        "+refs/heads/other:refs/remotes/origin/other",
+      );
+      yield* git(cwd, "push", "-q", "origin", "HEAD:refs/heads/other");
+      yield* git(root, "--git-dir", `${root}/origin.git`, "update-ref", "refs/heads/main", first);
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: first,
+        run: runner(),
+      });
+      expect(moved._tag).toBe("Refused");
+      if (moved._tag === "Refused") {
+        expect(moved.cause).toBe("checkout-dirty-human");
+        expect(moved.why).toContain("ahead of origin's main");
+      }
+      expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(carried);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a checkout that would not move is not refused for a file only the older head tracks", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { fs, root, cwd, first } = yield* repository;
+      yield* fs.writeFileString(`${cwd}/settings`, "the checked-in one");
+      yield* git(cwd, "add", "settings");
+      yield* git(cwd, "commit", "-q", "-m", "settings");
+      yield* git(cwd, "push", "-q", "origin", "HEAD:refs/heads/main");
+      const older = yield* git(cwd, "rev-parse", "HEAD");
+      yield* git(cwd, "rm", "-q", "--cached", "settings");
+      yield* fs.writeFileString(`${cwd}/.gitignore`, "settings\n");
+      yield* git(cwd, "add", ".gitignore");
+      yield* git(cwd, "commit", "-q", "-m", "keep settings out of git");
+      yield* git(cwd, "push", "-q", "origin", "HEAD:refs/heads/main");
+      const carried = yield* git(cwd, "rev-parse", "HEAD");
+      expect(carried).not.toBe(first);
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: older,
+        run: runner(),
+      });
+      expect(moved._tag).toBe("At");
+      if (moved._tag === "At") {
+        expect(moved.head).toBe(carried);
+      }
+      expect(yield* fs.readFileString(`${cwd}/settings`)).toBe("the checked-in one");
+    }).pipe(Effect.scoped),
+  ));
+
+test("a tracked edit git status was told to hide is refused, not read as the head", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { fs, root, cwd, first } = yield* repository;
+      yield* git(cwd, "update-index", "--assume-unchanged", "one.ts");
+      yield* fs.writeFileString(`${cwd}/one.ts`, "an edit git was told to forget");
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: first,
+        run: runner(),
+      });
+      expect(moved._tag).toBe("Refused");
+      if (moved._tag === "Refused") {
+        expect(moved.cause).toBe("checkout-dirty-human");
+        expect(moved.why).toContain("one.ts");
+      }
+      expect(yield* fs.readFileString(`${cwd}/one.ts`)).toBe("an edit git was told to forget");
+    }).pipe(Effect.scoped),
+  ));
+
+test("a force-push refusal names every unpublished commit, past the tenth", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { fs, root, cwd, first } = yield* repository;
+      const target = yield* newerTarget(cwd);
+      const rebased = yield* rebaseOnto(cwd, first, target);
+      yield* git(cwd, "reset", "-q", "--hard", first);
+      const locals: Array<string> = [];
+      for (let n = 0; n < 12; n++) {
+        yield* fs.writeFileString(`${cwd}/local-${n}.ts`, `local ${n}`);
+        yield* git(cwd, "add", `local-${n}.ts`);
+        yield* git(cwd, "commit", "-q", "-m", `a local fix ${n}`);
+        locals.push(yield* git(cwd, "rev-parse", "HEAD"));
+      }
+      const moved = yield* fastForward({
+        runDir: `${root}/run`,
+        cwd,
+        head: rebased,
+        run: runner(),
+      });
+      expect(moved._tag).toBe("Refused");
+      if (moved._tag === "Refused") {
+        expect(moved.cause).toBe("branch-force-pushed");
+        for (const local of locals) {
+          expect(moved.why).toContain(pipe_(local, Str.slice(0, 8)));
+        }
+      }
+      expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(locals.at(-1)!);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a head this Run recorded is published even where origin's reflog never carried it, so the checkout is reset", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { fs, root, cwd, first } = yield* repository;
+      const runDir = `${root}/run`;
+      const recorded = yield* fastForward({ runDir, cwd, head: first, run: runner() });
+      expect(recorded._tag).toBe("At");
+      yield* git(cwd, "reflog", "expire", "--expire=now", "--all");
+      const target = yield* newerTarget(cwd);
+      const rebased = yield* rebaseOnto(cwd, first, target);
+      yield* git(cwd, "reset", "-q", "--hard", first);
+      const moved = yield* fastForward({ runDir, cwd, head: rebased, run: runner() });
+      expect(moved._tag).toBe("At");
+      if (moved._tag === "At") {
+        expect(moved.head).toBe(rebased);
+        expect(moved.from).toBe(first);
+      }
+      const log = yield* fs.readFileString(`${runDir}/log.txt`);
+      expect(log).toContain(
+        `moved the checkout from ${first} to ${rebased}, which origin's main no longer carries`,
+      );
+    }).pipe(Effect.scoped),
+  ));
+
+const aheadByOne = (cwd: string, file: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.writeFileString(`${cwd}/${file}`, file);
+    yield* git(cwd, "add", file);
+    yield* git(cwd, "commit", "-q", "-m", file);
+    return yield* git(cwd, "rev-parse", "HEAD");
+  });
+
+for (const createdByCollie of [true, false]) {
+  const cause = createdByCollie ? "checkout-dirty-collie" : "checkout-dirty-human";
+  const whose = createdByCollie ? "a Collie worktree" : "a plain checkout";
+
+  test(`${whose} with an uncommitted file is refused under ${cause}, naming the file`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { fs, root, cwd, first } = yield* repository;
+        yield* fs.writeFileString(`${cwd}/uncommitted.ts`, "work in progress");
+        const moved = yield* fastForward({
+          runDir: `${root}/run`,
+          cwd,
+          head: first,
+          createdByCollie,
+          run: runner(),
+        });
+        expect(moved._tag).toBe("Refused");
+        if (moved._tag === "Refused") {
+          expect(moved.cause).toBe(cause);
+          expect(moved.why).toContain("uncommitted.ts");
+        }
+        expect(yield* git(cwd, "status", "--porcelain")).toBe("?? uncommitted.ts");
+      }).pipe(Effect.scoped),
+    ));
+
+  test(`${whose} one unpushed commit ahead of the requested head is refused under ${cause}, naming the commit`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { root, cwd, first } = yield* repository;
+        const local = yield* aheadByOne(cwd, "a-local-fix.ts");
+        expect(local).not.toBe(first);
+        const moved = yield* fastForward({
+          runDir: `${root}/run`,
+          cwd,
+          head: first,
+          createdByCollie,
+          run: runner(),
+        });
+        expect(moved._tag).toBe("Refused");
+        if (moved._tag === "Refused") {
+          expect(moved.cause).toBe(cause);
+          expect(moved.why).toContain(pipe_(local, Str.slice(0, 8)));
+          expect(moved.why).toContain("a-local-fix.ts");
+        }
+        expect(yield* git(cwd, "rev-parse", "HEAD")).toBe(local);
+      }).pipe(Effect.scoped),
+    ));
+}
 
 const onGitlab = (runs: ForgeModel["runs"], over: Partial<ForgeModel> = {}) => {
   const fake = fakeForge("gitlab", {
