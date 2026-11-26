@@ -1401,6 +1401,27 @@ test("a check left behind by an attempt that ended does not keep its Task workin
     }),
   ));
 
+test("a marker left behind does not borrow a check of its Run that is still collected", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, {
+        id: "r-ended",
+        task: "task-1",
+        state: "stopped",
+        created: "2026-09-14T09:00:00Z",
+        finished: "2026-09-14T09:30:00Z",
+      });
+      yield* recordedCheck(run, "r-ended@1-a");
+      yield* recordedCheck(run, "r-ended@1-b", "test");
+      yield* marking(run, { name: "lint", pass: "recheck" });
+
+      const [left] = yield* board(env, [run], { running: new Set(["r-ended@1-b"]) });
+      expect(left?.check).toBeNull();
+      expect(left!.sentence).not.toContain("Running lint");
+    }),
+  ));
+
 test("what the host writes about a finished Run does not move when it ended", () =>
   runEffect(
     Effect.gen(function* () {

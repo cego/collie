@@ -1250,7 +1250,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
       opts.running === undefined ||
       !settledIds.has(run) ||
       marker.pass === "ci" ||
-      Arr.some(records, (record) => record.run === run),
+      Arr.some(records, (record) => record.run === run && record.name === marker.name),
   );
   const markers = new Map(running);
   const checked = new Set(Arr.map(records, (record) => record.run));
