@@ -311,6 +311,14 @@ const keepRound = (env: PluginEnv, herdr: Herdr) =>
     ),
   );
 
+export const askingOf = (runs: ReadonlyArray<RunFacts>) =>
+  new Set(
+    Arr.map(
+      Arr.filter(runs, (run) => !run.held && run.state !== "stopped" && run.state !== "failed"),
+      (run) => run.id,
+    ),
+  );
+
 const demanding = (rows: ReadonlyArray<WatchRow>) => {
   const demand = new Map<string, Array<string>>();
   for (const row of rows) {
@@ -331,6 +339,7 @@ export const mergeWatch = <E, R>(opts: {
   readonly stop: (runId: string, reason: string) => Effect.Effect<void>;
   readonly watches: Watches;
   readonly requested: Requested;
+  readonly asking: Effect.Effect<ReadonlySet<string>, E, R>;
   readonly nudged?: Set<string>;
 }) => {
   const checked = new Map<string, number>();
@@ -343,12 +352,7 @@ export const mergeWatch = <E, R>(opts: {
       const { runs, views } = yield* opts.board;
       const gitlabHost = yield* gitlabHostOf(opts.env);
       // WARNING: a held or stopped Run keeps its row, and asks for nothing, until it is resumed.
-      const asking = new Set(
-        Arr.map(
-          Arr.filter(runs, (run) => !run.held && run.state !== "stopped" && run.state !== "failed"),
-          (run) => run.id,
-        ),
-      );
+      const asking = yield* opts.asking;
       const rows = Arr.filter(yield* opts.watches.outstanding, (row) => asking.has(row.run));
       yield* settleMerges({
         stateDir: opts.env.stateDir,
@@ -368,10 +372,12 @@ export const mergeWatch = <E, R>(opts: {
         event,
         nudged: opts.nudged,
       });
+      // WARNING: a Stop or Hold that landed while the forge was read beats the answer it gave.
+      const still = yield* opts.asking;
       yield* settleWatches({
         panels: opts.panels,
         now: yield* Clock.currentTimeMillis,
-        rows,
+        rows: Arr.filter(rows, (row) => still.has(row.run)),
         watches: opts.watches,
         event,
       });
@@ -400,6 +406,7 @@ export const sideJobs = <E, R>(opts: {
   readonly stop: (runId: string, reason: string) => Effect.Effect<void>;
   readonly watches: Watches;
   readonly requested: Requested;
+  readonly asking: Effect.Effect<ReadonlySet<string>, E, R>;
   readonly sweepers: Effect.Effect<ReadonlyArray<Sweeper>, E, R>;
   readonly nudged?: Set<string>;
   readonly recover?: (runId: string) => Effect.Effect<void>;

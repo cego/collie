@@ -150,7 +150,7 @@ import { Catalogue, discover, searchPath } from "./discovery";
 import { readDefinitions } from "./authoring";
 import { SharedDefinition } from "./definitions-model";
 import { DefinitionRefused, sharedDefinitions, takeDefinitions } from "./shared-definitions";
-import { sideJobs } from "./side-jobs";
+import { askingOf, sideJobs } from "./side-jobs";
 import { healParks, recoverParks } from "./park-recovery";
 import { Notifier } from "./notify";
 import { machineMemory } from "./memory";
@@ -2034,6 +2034,7 @@ const sideJobsLayer = (panels: MrPanels) =>
         requested,
         nudged,
         recover,
+        runs,
       } = yield* SharedBoard;
       const board = Stream.runHead(boards).pipe(
         Effect.flatMap((latest) =>
@@ -2051,6 +2052,7 @@ const sideJobsLayer = (panels: MrPanels) =>
           stop,
           watches,
           requested,
+          asking: Effect.map(runs, askingOf),
           sweepers,
           nudged,
           recover,

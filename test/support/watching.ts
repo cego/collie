@@ -18,7 +18,7 @@ import { Host } from "../../src/sdk";
 import { buildBoard } from "../../src/board";
 import { mrId } from "../../src/board-model";
 import { factsOfView } from "../../src/runs";
-import { mergeWatch } from "../../src/side-jobs";
+import { askingOf, mergeWatch } from "../../src/side-jobs";
 import { requestedOver } from "../../src/review-requests";
 import { recoverParks } from "../../src/park-recovery";
 import { Woke } from "../../src/mr-watch-model";
@@ -125,6 +125,7 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
       mergeWatch({
         env: env(),
         board,
+        asking: Effect.map(board, ({ runs }) => askingOf(runs)),
         panels,
         record: () => Effect.void,
         stop: (runId) =>

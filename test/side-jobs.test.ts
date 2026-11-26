@@ -252,6 +252,7 @@ test("News and the merge watch read the host's latest board, and list no Runs of
         stop: () => Effect.void,
         watches: NO_WATCHES,
         requested: NO_REQUESTS,
+        asking: Effect.succeed(new Set<string>()),
         sweepers: Effect.succeed([]),
       }).pipe(Effect.timeout("12 seconds"), Effect.ignore, fastForward);
       expect(reads).toBeGreaterThanOrEqual(5);

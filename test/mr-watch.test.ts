@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Clock, Effect, FileSystem, Schema } from "effect";
+import { Clock, Deferred, Effect, FileSystem, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { Rig } from "./support/recorder";
 import { runEffect as runLive } from "./support/effect";
@@ -536,6 +536,63 @@ test("a Watch of a merge request recorded in production is still read by the res
       );
     }),
   ));
+
+for (const [control, said] of [
+  [STOP, "stopped"],
+  [HOLD, "held"],
+] as const) {
+  test(`a Watch's answer read while the Run is ${said} banks no head and wakes nothing`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const forge = yield* gitlab;
+        const runId = yield* session(
+          forge,
+          Effect.gen(function* () {
+            const runId = yield* started("watches-mr", "w1", {
+              target: WATCHED,
+              head: H1,
+              cwd: rig.projectDir,
+            });
+            yield* until(
+              () => watchOf(runId),
+              (row) => row !== null,
+            );
+            return runId;
+          }),
+        );
+        yield* session(
+          forge,
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            yield* watchingMerges;
+            yield* Effect.sleep("6 minutes");
+            expect((yield* watchOf(runId))?.observed?.head).toBe(H1);
+            const gate = yield* Deferred.make<void>();
+            const reached = yield* Deferred.make<void>();
+            let blocked = false;
+            forge.before((url) => {
+              if (blocked || !/merge_requests\/7$/.test(decodeURIComponent(url))) {
+                return Promise.resolve();
+              }
+              blocked = true;
+              Effect.runSync(Deferred.succeed(reached, undefined));
+              return Effect.runPromise(Deferred.await(gate));
+            });
+            yield* forge.set(PUSHED);
+            yield* Deferred.await(reached);
+            yield* registry.control({ runId, control, set: true });
+            yield* Deferred.succeed(gate, undefined);
+            yield* Effect.sleep("2 minutes");
+            const row = yield* watchOf(runId);
+            expect(row?.observed?.head).toBe(H1);
+            expect(row?.woke ?? null).toBeNull();
+            expect((yield* status(runId))?.parked ?? null).toBeNull();
+            expect((yield* status(runId))?.status.status).toBe("suspended");
+          }),
+        );
+      }),
+    ));
+}
 
 test("a held Run's Watch asks for nothing until the hold is released, then takes the head it missed", () =>
   runEffect(
