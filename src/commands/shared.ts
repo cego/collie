@@ -2,8 +2,7 @@ import * as ParseResult from "effect/Result";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import type { PlatformServices } from "../platform";
-import type { FileSystem } from "effect";
-import { Effect, Option, Schema, Stdio, Stream } from "effect";
+import { Effect, FileSystem, Option, Schema, Stdio, Stream } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { Argument, Command, Flag } from "effect/cli";
 import { layers, loadDefinitions } from "../definitions";
@@ -21,7 +20,7 @@ import { FrontDoor } from "../board-model";
 import { connect } from "../host";
 import { actorName } from "../proposals";
 import { attempt, mutation } from "../envelope";
-import type { CollieError, Result } from "../envelope";
+import type { Call, CollieError, Result } from "../envelope";
 import type { YamlMap } from "../yaml";
 import { isHostName } from "../gitlab-token";
 
@@ -70,13 +69,28 @@ export type ContextResolution =
     }
   | { readonly _tag: "ContextFailure"; readonly result: Failure };
 
-const resolvedContext: (env: PluginEnv, workspace: NamedDirectory | null) => ContextResolution = (
-  env,
-  workspace,
-) => ({
-  _tag: "ResolvedContext",
-  env,
-  workspace,
+// WARNING: a link is resolved to its target, so one directory has one path for a receipt and its work.
+export const physicalDir = Effect.fn("collie.physicalDir")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const info = yield* fs.stat(dir).pipe(Effect.orElseSucceed(() => null));
+  if (info === null || info.type !== "Directory") {
+    return null;
+  }
+  const returned: string | null = yield* fs.realPath(dir).pipe(Effect.orElseSucceed(() => null));
+  return returned;
+});
+
+const resolvedContext = Effect.fn("collie.resolvedContext")(function* (
+  env: PluginEnv,
+  workspace: NamedDirectory | null,
+) {
+  const physical = yield* physicalDir(env.cwd);
+  const found: Extract<ContextResolution, { _tag: "ResolvedContext" }> = {
+    _tag: "ResolvedContext",
+    env: physical === null ? env : { ...env, cwd: physical },
+    workspace,
+  };
+  return found;
 });
 
 const contextFailure: (result: Failure) => ContextResolution = (result) => ({
@@ -94,14 +108,19 @@ export const context = Effect.fn("collie.context")(function* (
   const reach = Option.isSome(global.machine)
     ? { pairs: true, machine: global.machine.value }
     : { pairs: true };
-  const base = { ...baseEnv, ...reach };
+  const base = {
+    ...baseEnv,
+    ...reach,
+    caller: yield* callerIn(baseEnv),
+    asked: id === null ? null : Str.trim(id),
+  };
   if (!id) {
     return requireScope
       ? contextFailure(err("workspace_required", "This operation requires a workspace."))
-      : resolvedContext(base, null);
+      : yield* resolvedContext(base, null);
   }
   if (!resolveLive) {
-    return resolvedContext(base, null);
+    return yield* resolvedContext(base, null);
   }
 
   const named = yield* workspaceNamed(base, id);
@@ -118,11 +137,14 @@ export const context = Effect.fn("collie.context")(function* (
     }
     return contextFailure(err("workspace_not_found", `Workspace "${id}" was not found.`, details));
   }
-  return resolvedContext(
+  return yield* resolvedContext(
     { ...base, cwd: base.cwdExplicit ? base.cwd : lookup.workspace.cwd || base.cwd },
     lookup.workspace,
   );
 });
+
+export const resolvedAt = (resolved: Extract<ContextResolution, { _tag: "ResolvedContext" }>) =>
+  resolved.workspace?.cwd ?? resolved.env.cwd;
 
 export const discoveryContext = Effect.fn("collie.discoveryContext")(function* (global: Global) {
   if (Option.isSome(global.workspace)) {
@@ -303,11 +325,11 @@ export function answering<E, R>(
 }
 
 export function mutating(
-  operation: string,
+  call: Call,
   requestId: Option.Option<string>,
   apply: (env: PluginEnv, id: string) => Effect.Effect<Result, CollieError, PlatformServices>,
 ) {
-  return answering((env) => mutation(env, operation, requestId, (id) => apply(env, id)));
+  return answering((env) => mutation(env, call, requestId, (id) => apply(env, id)));
 }
 
 export function cliOrigin(at: { readonly terminal: boolean; readonly agent: boolean }) {
@@ -328,6 +350,11 @@ export const cliDoor = Effect.fn("Shared.cliDoor")(function* (env: PluginEnv) {
     }
   }
   return cliOrigin({ terminal, agent: named !== "" });
+});
+
+export const callerIn = Effect.fn("Shared.callerIn")(function* (env: PluginEnv) {
+  const door = yield* cliDoor(env);
+  return Schema.is(FrontDoor)(door) ? null : door.from.run;
 });
 
 export const actorNow = Effect.fn("Shared.actorNow")(function* (env: PluginEnv, requestId: string) {
