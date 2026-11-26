@@ -141,7 +141,7 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
     // WARNING: the library retries a 429 by itself, so only the transport sees every request a call made.
     const counted = (spend: Asked) => {
       const carried: FetchLike = (input, init) => (fetch ?? globalThis.fetch)(input, init);
-      return (input, init) => {
+      const transport: FetchLike = (input, init) => {
         spend.attempts += 1;
         return carried(input, init).then((response) => {
           if (response.status === 429) {
@@ -150,6 +150,7 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
           return response;
         });
       };
+      return transport;
     };
 
     const tokenOf = (login: ForgeLogin, cwd: string, slot: Slot) =>
