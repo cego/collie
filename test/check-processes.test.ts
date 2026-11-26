@@ -41,6 +41,7 @@ import {
 import { collect, finishCheck, readVerifications, startCheck } from "../src/verify";
 import type { Verification } from "../src/verify";
 import { RUNNING_CHECK, RunRecords } from "../src/run-records";
+import type { RunRecordsApi } from "../src/run-records";
 import { runEffect } from "./support/effect";
 import { exec, startDetached } from "./support/command";
 import { until } from "./support/host";
@@ -117,6 +118,39 @@ test.skipIf(process.platform !== "linux")(
         yield* Fiber.interrupt(running);
         expect(yield* noneRunning(ones)).toBe(true);
         expect(yield* recorded).toEqual([]);
+      }),
+    ),
+);
+
+test.skipIf(process.platform !== "linux")(
+  "a check whose record its host fails to remove is no longer collected from",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const real = yield* RunRecords;
+        const failing: RunRecordsApi = {
+          ...real,
+          setControl: (control, run, data, key) =>
+            data === null
+              ? Effect.die(new Error("the store could not be written"))
+              : real.setControl(control, run, data, key),
+        };
+        const { notes, checks } = yield* worldWith().pipe(
+          Effect.provideService(RunRecords, failing),
+        );
+        const running = yield* Effect.forkScoped(
+          Effect.scoped(
+            checks
+              .run(check, { executable: held, argv: [notes], cwd: notes })
+              .pipe(Effect.flatMap((one) => one.exit)),
+          ),
+        );
+        const ones = yield* startedIn(notes);
+
+        yield* Fiber.interrupt(running);
+        expect(yield* noneRunning(ones)).toBe(true);
+        expect(yield* checks.collecting).toEqual([]);
+        expect(yield* recorded).not.toEqual([]);
       }),
     ),
 );
