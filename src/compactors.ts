@@ -1181,36 +1181,40 @@ const claudeReconcile = Effect.fn("Compactors.claudeReconcile")(function* (
   const lines = Str.split(text, "\n");
   let named = false;
   let markers = 0;
-  let candidates = 0;
-  for (const line of lines) {
-    const entry = Option.getOrUndefined(decodeTranscriptLine(line));
+  const typing: Array<number> = [];
+  const boundaries: Array<{ readonly at: number; readonly before: boolean }> = [];
+  const entries = Arr.map(lines, (line) => Option.getOrUndefined(decodeTranscriptLine(line)));
+  for (const [at, entry] of entries.entries()) {
     if (entry === undefined) {
       continue;
     }
     // WARNING: the turn that typed the marker is the only turn whose compaction is the request's.
     if (entry.type === "user") {
-      const request = namedRequest(entry);
-      named = request === mark.id;
-      markers += named ? 1 : 0;
+      named = namedRequest(entry) === mark.id;
+      if (named) {
+        markers += 1;
+        typing.push(at);
+      }
       continue;
     }
     if (entry.type === "assistant") {
       named = false;
       continue;
     }
-    if (
-      named &&
-      manualBoundary(entry) &&
-      writerOf(entry, mark) &&
-      epochMs(entry.timestamp) >= since
-    ) {
-      candidates += 1;
-      if (candidates > 1) {
-        return null;
-      }
+    if (manualBoundary(entry) && writerOf(entry, mark) && epochMs(entry.timestamp) >= since) {
+      boundaries.push({ at, before: named });
     }
   }
-  return markers === 1 && candidates === 1 ? ({ kind: "success" } as const) : null;
+  // WARNING: Claude writes the boundary first and the command it asked for inside the record it opens.
+  const opens = (one: { readonly at: number }) => {
+    const next = Option.getOrElse(
+      Arr.findFirst(boundaries, (other) => other.at > one.at),
+      () => ({ at: entries.length }),
+    ).at;
+    return Arr.some(typing, (at) => at > one.at && at < next);
+  };
+  const candidates = Arr.filter(boundaries, (one) => one.before || opens(one));
+  return markers === 1 && candidates.length === 1 ? ({ kind: "success" } as const) : null;
 });
 
 const lastFullWindow = Effect.fn("Compactors.lastFullWindow")(function* (dir: string) {
