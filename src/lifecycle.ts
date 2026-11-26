@@ -2181,8 +2181,7 @@ export const machinesListed = (env: PluginEnv) =>
         rosterFailure: Result.isFailure(roster) ? herdrFailureReason(roster.failure) : null,
         peers: Arr.map(read.value, (peer) => ({
           ...peer,
-          added:
-            peer.dials !== "out" ? null : machines === null ? null : listed.has(peer.name),
+          added: peer.dials !== "out" ? null : machines === null ? null : listed.has(peer.name),
         })),
       },
     };

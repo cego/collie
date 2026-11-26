@@ -1,6 +1,6 @@
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { Effect, Ref, Schedule, Stream } from "effect";
+import { Effect, Option, Ref, Schedule, Stream } from "effect";
 import type { Scope } from "effect";
 import { rosterFollowed } from "../desktop/src/bun/machine";
 import type { Route } from "../desktop/src/bun/machine";
@@ -26,11 +26,14 @@ const VM: HerdrMachine = {
   enabled: true,
 };
 
-const routeOf = (machine: HerdrMachine): Route => ({
-  machine: { profile: machine.id, name: machine.label, target: machine.target, route: "ssh" },
-  open: () => Effect.die("nothing connects in this test"),
-  collie: () => Effect.die("nothing is asked in this test"),
-});
+const routeOf = (machine: HerdrMachine) => {
+  const returned: Route = {
+    machine: { profile: machine.id, name: machine.label, target: machine.target, route: "ssh" },
+    open: () => Effect.die("nothing connects in this test"),
+    collie: () => Effect.die("nothing is asked in this test"),
+  };
+  return returned;
+};
 
 const nameOf = (item: FlockItem) =>
   "machine" in item ? `${item.machine.profile} ${"_tag" in item ? item._tag : ""}` : item._tag;
@@ -41,7 +44,12 @@ interface Harness {
   readonly told: Array<FlockItem>;
 }
 
-const following = (ready: Ref.Ref<boolean>, listed: ReadonlyArray<HerdrMachine>) =>
+const following = (
+  ready: Ref.Ref<boolean>,
+  listed: ReadonlyArray<HerdrMachine>,
+  dropped: ReadonlyArray<string>,
+  paired: ReadonlyArray<string>,
+) =>
   Effect.gen(function* () {
     const reads: Array<boolean> = [];
     const opened: Array<string> = [];
@@ -53,8 +61,8 @@ const following = (ready: Ref.Ref<boolean>, listed: ReadonlyArray<HerdrMachine>)
         reads.push(up);
         return up ? listed : yield* Effect.fail("core has not answered yet");
       }),
-      // Desktop's routes, as `open` leaves them.
-      Effect.sync(() => ({ profiles: [...opened] })),
+      Effect.sync(() => ({ profiles: [...opened], dropped })),
+      Effect.succeed(paired),
       (machine) =>
         Effect.sync(() => {
           opened.push(machine.id);
@@ -71,7 +79,7 @@ test("Desktop routes a Machine core lists only after it started, and never twice
   run(
     Effect.gen(function* () {
       const ready = yield* Ref.make(false);
-      const { reads, opened, told } = yield* following(ready, [VM]);
+      const { reads, opened, told } = yield* following(ready, [VM], [], []);
 
       yield* until(() => reads.length >= 2);
       expect(opened).toEqual([]);
@@ -85,3 +93,35 @@ test("Desktop routes a Machine core lists only after it started, and never twice
     }),
   ));
 
+test("a paired Machine stays visible while core's list is unread, and its row goes once core lists it", () =>
+  run(
+    Effect.gen(function* () {
+      const ready = yield* Ref.make(false);
+      const { reads, told } = yield* following(ready, [VM], [], ["vm"]);
+
+      yield* until(() => Arr.some(told, (item) => nameOf(item) === "paired:vm Lost"));
+      const lost = Arr.findFirst(told, (item) => nameOf(item) === "paired:vm Lost");
+      expect(Option.getOrUndefined(lost)).toMatchObject({
+        _tag: "Lost",
+        state: "unreachable",
+        reason: "core has not answered yet",
+      });
+
+      yield* Ref.set(ready, true);
+      yield* until(() => Arr.some(told, (item) => nameOf(item) === "vm Routed"));
+
+      expect(Arr.map(told, nameOf)).toContain("paired:vm Removed");
+      expect(Arr.filter(reads, (up) => up)).toHaveLength(1);
+    }),
+  ));
+
+test("a Machine a human removed while Desktop ran is not routed from a stale list", () =>
+  run(
+    Effect.gen(function* () {
+      const ready = yield* Ref.make(true);
+      const { reads, opened } = yield* following(ready, [VM], ["vm"], ["vm"]);
+
+      yield* until(() => reads.length >= 4);
+      expect(opened).toEqual([]);
+    }),
+  ));

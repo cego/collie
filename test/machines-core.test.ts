@@ -178,9 +178,9 @@ test("a Machine whose core list cannot be read is reported as unread, not as non
             roster: null,
             machines: [{ name: "second", added: null }],
           });
-          const { rosterFailure } = unread.envelope.data as { rosterFailure: string | null };
-          expect(rosterFailure).toContain("core");
-          expect(rosterFailure).toContain("no-such-core.sock");
+          expect(unread.envelope.data).toMatchObject({
+            rosterFailure: expect.stringContaining("no-such-core.sock"),
+          });
 
           const read = yield* first.cli(["machine", "list"]);
           expect(read.envelope.data).toMatchObject({

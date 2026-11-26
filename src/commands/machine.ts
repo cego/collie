@@ -69,9 +69,7 @@ const list = Command.make("list", {}, () =>
                   ),
                   "\n",
                 )) +
-            (roster === null
-              ? `\ncore's machine list could not be read: ${rosterFailure}`
-              : ""),
+            (roster === null ? `\ncore's machine list could not be read: ${rosterFailure}` : ""),
         };
       }),
     ),

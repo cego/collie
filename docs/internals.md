@@ -673,7 +673,10 @@ host's `unpair` tells the peer, forgets it and ends its connection, then core is
 
 **Core's machines.** `Herdr.machineList` reads core's
 `machine.list`, each machine by core's name, its ssh target the last word of the `via`
-Collie gave it (`viaTarget` in `src/ssh-argv.ts`). `collie machine add` opens the Machine's
+Collie gave it (`viaTarget` in `src/ssh-argv.ts`). A list core could not be asked for is
+`roster: null` with `rosterFailure`, never an empty one, and Desktop's `rosterOf` reads that
+as a failure: it routes nothing from it and asks again, so a Desktop started before its core
+does not stay without the Machines core goes on to list. `collie machine add` opens the Machine's
 connection with `openConnection`, then calls `machine.add {name, via}` with
 `viaCommand`: the rider's own argv (`-S <control path>`, `ControlMaster=no`,
 `ProxyCommand=false`) without its remote line, which core appends. With no master on that

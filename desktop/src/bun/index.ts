@@ -403,6 +403,8 @@ const main = Effect.gen(function* () {
   const news = yield* PubSub.unbounded<FlockItem>();
   const routes = new Map<string, { route: ShellRoute; scope?: Scope.Closeable }>();
   routes.set("local", { route: localRoute(collie, local, shell) });
+  // WARNING: a Machine a human removed is not routed again from a list read before the removal.
+  const dropped = new Set<string>();
   const open = (machine: HerdrMachine) =>
     Effect.gen(function* () {
       const held = routes.get(machine.id);
@@ -448,7 +450,12 @@ const main = Effect.gen(function* () {
     ),
   );
   // WARNING: core may start after Desktop, so a list it could not be read at first is read again.
-  yield* rosterFollowed(roster, Effect.sync(() => ({ profiles: [...routes.keys()] })), open).pipe(
+  yield* rosterFollowed(
+    roster,
+    Effect.sync(() => ({ profiles: [...routes.keys()], dropped: [...dropped] })),
+    pairedMachines(collie).pipe(Effect.map((pairs) => Arr.map(pairs, (one) => one.name))),
+    open,
+  ).pipe(
     Stream.runForEach((item) => PubSub.publish(news, item)),
     Effect.forkScoped,
   );
@@ -1225,6 +1232,7 @@ const main = Effect.gen(function* () {
         yield* PubSub.publish(changes, { _tag: "Remove", profile, done });
         yield* Deferred.await(done).pipe(Effect.timeoutOption("5 seconds"));
         routes.delete(profile);
+        dropped.add(profile);
         ownReadings.delete(profile);
         const running = onboarding.get(profile)?.fiber;
         if (running !== undefined) {
