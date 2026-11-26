@@ -160,6 +160,38 @@ test("with no master open the via fails at once and logs in nowhere, and a front
     ),
   ));
 
+test("a Machine whose core list cannot be read is reported as unread, not as none", () =>
+  runEffect(
+    twoMachines(
+      "collie-core-unread-",
+      (first, second) =>
+        Effect.gen(function* () {
+          yield* first.lists([second]);
+          expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
+
+          const unread = yield* first.cli(["machine", "list"], {
+            HC_SOCKET: `${first.world.state}/no-such-core.sock`,
+          });
+          expect(unread.envelope.ok).toBe(true);
+          expect(unread.envelope.data).toMatchObject({
+            backend: "core",
+            roster: null,
+            machines: [{ name: "second", added: null }],
+          });
+          const { rosterFailure } = unread.envelope.data as { rosterFailure: string | null };
+          expect(rosterFailure).toContain("core");
+          expect(rosterFailure).toContain("no-such-core.sock");
+
+          const read = yield* first.cli(["machine", "list"]);
+          expect(read.envelope.data).toMatchObject({
+            roster: [{ label: "second" }],
+            machines: [{ name: "second", added: true }],
+          });
+        }),
+      ["attended.workflow.ts"],
+    ),
+  ));
+
 test("a paired Machine core does not have is listed as not added, keeps its pairing, and connect adds it", () =>
   runEffect(
     twoMachines(

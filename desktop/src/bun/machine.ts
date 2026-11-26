@@ -466,13 +466,20 @@ export const collieSaid = (collie: ReadonlyArray<string>, args: ReadonlyArray<st
 
 const Roster = Schema.Struct({
   backend: Schema.Literal("core"),
-  roster: Schema.Array(HerdrMachine),
+  roster: Schema.NullOr(Schema.Array(HerdrMachine)),
+  rosterFailure: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 
+// WARNING: a list core could not be asked for is not a list of no Machines.
 export const rosterOf = (collie: ReadonlyArray<string>) =>
   collieSaid(collie, ["machine", "list"]).pipe(
     Effect.flatMap((data) =>
       Schema.decodeUnknownEffect(Roster)(data).pipe(Effect.mapError((e) => e.message)),
+    ),
+    Effect.flatMap(({ roster, rosterFailure }) =>
+      roster === null
+        ? Effect.fail(rosterFailure ?? "core's machine list could not be read")
+        : Effect.succeed({ backend: "core" as const, roster }),
     ),
   );
 

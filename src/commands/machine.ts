@@ -46,10 +46,10 @@ const list = Command.make("list", {}, () =>
         if (!read.ok) {
           return read;
         }
-        const { peers, backend, roster } = read.value;
+        const { peers, backend, roster, rosterFailure } = read.value;
         return {
           ok: true as const,
-          data: { build: BUILD, machines: peers, backend, roster },
+          data: { build: BUILD, machines: peers, backend, roster, rosterFailure },
           human:
             `This Machine: collie ${BUILD}\n` +
             (peers.length === 0
@@ -68,7 +68,10 @@ const list = Command.make("list", {}, () =>
                     ),
                   ),
                   "\n",
-                )),
+                )) +
+            (roster === null
+              ? `\ncore's machine list could not be read: ${rosterFailure}`
+              : ""),
         };
       }),
     ),
