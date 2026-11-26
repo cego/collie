@@ -364,6 +364,8 @@ test("a persisted usage question is decoded before it is asked", () => {
   // WARNING: a record written by another build is untrusted input, so it is spelled out as one.
   const older = structuredClone({ ...good, spent: [{ on: "claude", why: "spent" }] });
   expect(questionOf(older)).toBeUndefined();
+  const nested = structuredClone({ ...good, layers: [{ otherwise: [null] }] });
+  expect(questionOf(nested)).toBeUndefined();
 });
 
 test("a usage park reaches the scoped otherwise a preference carries", () => {

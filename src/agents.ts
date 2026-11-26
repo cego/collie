@@ -1750,8 +1750,8 @@ const preferenceOf: (one: RoomQuestion["layers"][number]) => Preferences = (one)
   }
   if (one.otherwise !== undefined) {
     read.otherwise = Arr.map(one.otherwise, (entry) =>
-      // WARNING: preferenceJson is the only writer of these entries, so each holds a Preferences shape.
-      preferenceOf(entry as RoomQuestion["layers"][number]),
+      // WARNING: questionOf refused any question whose nested entries are not this shape.
+      preferenceOf(entry as Preference),
     );
   }
   return read;
@@ -1820,9 +1820,32 @@ export const roomQuestionOf = (
   return question;
 };
 
+type Preference = RoomQuestion["layers"][number];
+
+// WARNING: a nested preference is validated as the same shape, since the stored question holds it as plain JSON.
+const preferencesOf: Schema.Codec<Preferences> = Schema.Struct({
+  harness: Schema.optionalKey(Schema.String),
+  model: Schema.optionalKey(Schema.String),
+  effort: Schema.optionalKey(Schema.String),
+  upTo: Schema.optionalKey(Schema.Finite),
+  otherwise: Schema.optionalKey(Schema.Array(Schema.suspend(() => preferencesOf))),
+});
+
+const preferenceHeld: (one: Preferences) => boolean = (one) =>
+  Arr.every(one.otherwise ?? [], (entry) => preferenceHeld(entry));
+
+const layerHeld = (one: Preference) =>
+  Option.match(Schema.decodeUnknownOption(preferencesOf)(one), {
+    onNone: () => false,
+    onSome: (preference) => preferenceHeld(preference),
+  });
+
 // WARNING: a persisted question is decoded before it drives a wake-up, so a record written by another build cannot.
 export const questionOf = (persisted: Schema.Json | undefined) =>
-  Option.getOrUndefined(Schema.decodeUnknownOption(RoomQuestion)(persisted));
+  Option.match(Schema.decodeUnknownOption(RoomQuestion)(persisted), {
+    onNone: () => undefined,
+    onSome: (question) => (Arr.every(question.layers, layerHeld) ? question : undefined),
+  });
 
 export const roomForQuestion = (
   question: RoomQuestion,
