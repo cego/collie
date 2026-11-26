@@ -406,7 +406,7 @@ const FORMS: Array<[string, Sentence, string]> = [
   [
     "done with a merge request open",
     facts({ state: "done", mr: "https://gitlab.cego.dk/mk/collie/-/merge_requests/65" }),
-    "mk/collie!65 is open; nothing has checked it.",
+    "mk/collie!65 is open; its checks have not been read.",
   ],
   [
     "done and abandoned",
@@ -1466,7 +1466,7 @@ test("what became of the work is the disposition's answer and nobody else's", ()
 
       const now = epochMs("2026-09-14T10:00:00Z");
       const before = yield* board(env, [run], { now });
-      expect(before[0]!.sentence).toBe("content!1 is open; nothing has checked it.");
+      expect(before[0]!.sentence).toBe("content!1 is open; its checks have not been read.");
 
       yield* recordDisposition(run.dir, {
         at: "2026-09-14T09:00:00Z",
@@ -3797,7 +3797,21 @@ test("an open merge request says whether it is ready, what failed, and the next 
     }),
   ).toBe("cego/collie#30 is open, but lint failed at 1a2b3c4. Next: fix lint, or tell builder to.");
   expect(open({ checks: { state: "unchecked" } })).toBe(
-    "cego/collie#30 is open; nothing has checked it.",
+    "cego/collie#30 is open; its checks have not been read.",
+  );
+  expect(
+    open({ checks: { state: "unchecked" }, forge: { checks: { state: "unknown" }, head: null } }),
+  ).toBe("cego/collie#30 is open; its checks have not been read.");
+  expect(
+    open({ checks: { state: "unchecked" }, forge: { checks: { state: "none" }, head: null } }),
+  ).toBe("cego/collie#30 is open; nothing has checked it.");
+  expect(
+    open({
+      checks: { state: "unchecked" },
+      forge: { checks: { state: "passed" }, head: "1a2b3c4d5e" },
+    }),
+  ).toBe(
+    "cego/collie#30 is open; its checks passed at 1a2b3c4, but Collie has not checked it there.",
   );
 });
 
@@ -3829,7 +3843,7 @@ test.each([
   );
   expect(done({ checks: { state: "running" } })).toBe(`${one.label} is open; ${one.running}.`);
   expect(done({ checks: { state: "unchecked" } })).toBe(
-    `${one.label} is open; nothing has checked it.`,
+    `${one.label} is open; its checks have not been read.`,
   );
   expect(done({ mrState: "closed" })).toBe(`${one.noun} ${one.label} closed without merging.`);
   const merged = (mrState: Sentence["mrState"]) =>
@@ -3925,7 +3939,7 @@ test("a succeeded Run's open merge request is ready only on checks at its branch
       );
       const view = Effect.map(board(env, [run]), (views) => views[0]!);
 
-      expect((yield* view).sentence).toBe("cego/collie#30 is open; nothing has checked it.");
+      expect((yield* view).sentence).toBe("cego/collie#30 is open; its checks have not been read.");
 
       yield* appendVerification(run.evidence, checked("test", "0000000older"));
       expect((yield* view).checks).toEqual({ state: "unchecked" });
@@ -3971,6 +3985,57 @@ test("a succeeded Run's open merge request is ready only on checks at its branch
       expect(unapproved[0]!.sentence).toBe(
         `cego/collie#30 is open and its checks passed at ${pipe(head, Str.slice(0, 7))}, but the forge says it cannot merge: not approved.`,
       );
+    }),
+  ));
+
+test("a card says its checks passed where the forge read them, and that Collie has not checked it there", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const { repo, head } = yield* checkout("mk/ship");
+      const run = yield* madeRun(dir, {
+        task: "task-1",
+        state: "succeeded",
+        branch: "mk/ship",
+        cwd: repo,
+        mr: PR,
+        finished: "2026-09-14T09:30:00Z",
+      });
+      yield* Branches.use((branches) =>
+        branches.put(
+          new Map([[branchKey(repo, "mk/ship"), { head, project: null, movement: null }]]),
+        ),
+      );
+      const forge = (checks: ForgeChecks) =>
+        new Map([
+          [
+            "github.com/cego/collie#30",
+            {
+              checks,
+              head,
+              mergeable: { state: "mergeable" as const, said: "mergeable" },
+              read: "2026-09-14T10:04:00Z",
+            },
+          ],
+        ]);
+      const seen = (forgeFacts?: ReturnType<typeof forge>) =>
+        board(env, [run], {
+          mrStates: new Map([["github.com/cego/collie#30", "open"]]),
+          ...(forgeFacts === undefined ? {} : { forge: forgeFacts }),
+        });
+
+      const [green] = yield* seen(forge({ state: "passed" }));
+      expect(green!.sentence).toBe(
+        `cego/collie#30 is open; its checks passed at ${pipe(head, Str.slice(0, 7))}, but Collie has not checked it there.`,
+      );
+      expect(green!.ready).toBe(false);
+      expect(Arr.map(green!.readiness!.missing, (one) => one.fact)).toEqual(["checks"]);
+
+      const [unread] = yield* seen();
+      expect(unread!.sentence).toBe("cego/collie#30 is open; its checks have not been read.");
+
+      const [none] = yield* seen(forge({ state: "none" }));
+      expect(none!.sentence).toBe("cego/collie#30 is open; nothing has checked it.");
     }),
   ));
 

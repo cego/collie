@@ -275,6 +275,7 @@ export interface Sentence {
   mrs?: ReadonlyArray<SaidMr> | undefined;
   summary: string | null;
   checks: Checks | null;
+  forge?: { readonly checks: ForgeChecks; readonly head: string | null } | null;
   readiness?: ReadyToRelease | null;
   agent: string | null;
   answered?: {
@@ -417,6 +418,7 @@ function openSentence(
   checks: Checks | null,
   agent: string | null,
   readiness: ReadyToRelease | null,
+  forge: Sentence["forge"] = null,
 ) {
   const label = mrLabel(mr);
   const ref = readMrRef(mr);
@@ -437,8 +439,18 @@ function openSentence(
       return `${label} is open, but ${seen.name} failed at ${short(seen.at)}. Next: fix ${seen.name}${handed}.`;
     case "running":
       return `${label} is open; ${running}.`;
-    case "unchecked":
+    case "unchecked": {
+      // WARNING: a forge never asked is not a forge that found no check.
+      if (forge == null || forge.checks.state === "unknown") {
+        return `${label} is open; its checks have not been read.`;
+      }
+      if (forge.checks.state === "passed") {
+        return forge.head === null
+          ? `${label} is open; its checks passed, but Collie has not checked it there.`
+          : `${label} is open; its checks passed at ${short(forge.head)}, but Collie has not checked it there.`;
+      }
       return `${label} is open; nothing has checked it.`;
+    }
   }
 }
 
@@ -452,6 +464,7 @@ function doneSentence(
   summary: string | null = null,
   readiness: ReadyToRelease | null = null,
   answered: Sentence["answered"] = null,
+  forge: Sentence["forge"] = null,
 ) {
   if (disposition === null) {
     if (planReady) {
@@ -471,7 +484,7 @@ function doneSentence(
       return `${Str.toUpperCase(noun[0]!)}${pipe(noun, Str.slice(1))} ${mrLabel(mr)} closed without merging.`;
     }
     if (answered == null) {
-      return openSentence(mr, checks, agent, readiness);
+      return openSentence(mr, checks, agent, readiness, forge);
     }
     if (answered.ago === null) {
       return `${mrLabel(mr)} has not been read.`;
@@ -538,7 +551,7 @@ export function sentenceFor(facts: Sentence) {
     facts.disposition === null &&
     facts.mr !== null
   ) {
-    return `${facts.state === "failed" ? failedSentence(facts) : facts.state === "stopped" ? "Stopped by you." : "Its Driver died."} ${doneSentence(null, facts.mr, facts.mrState, false, facts.checks, facts.agent, facts.summary, facts.readiness ?? null, facts.answered)}${answeredLine(facts.answered)}`;
+    return `${facts.state === "failed" ? failedSentence(facts) : facts.state === "stopped" ? "Stopped by you." : "Its Driver died."} ${doneSentence(null, facts.mr, facts.mrState, false, facts.checks, facts.agent, facts.summary, facts.readiness ?? null, facts.answered, facts.forge)}${answeredLine(facts.answered)}`;
   }
   if (facts.decision !== null) {
     return decisionSentence(facts.decision);
@@ -561,6 +574,7 @@ export function sentenceFor(facts: Sentence) {
               facts.summary,
               facts.readiness ?? null,
               facts.answered,
+              facts.forge,
             )
       }${answeredLine(facts.answered)}`;
     case "failed":
@@ -1722,7 +1736,16 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                 : Arr.filter(yield* findingsIn(merging.dir), (one) => isBlocking(one)).length,
             mergeable: forged?.mergeable ?? null,
           });
-          return { forged, head: verified?.head ?? forged?.head ?? null, checks, readiness };
+          return {
+            forged,
+            head: verified?.head ?? forged?.head ?? null,
+            checks,
+            forge:
+              verified === null || forged === null
+                ? null
+                : { checks: forged.checks, head: forged.head },
+            readiness,
+          };
         });
         const alone = yield* judged(
           mrIdent,
@@ -1752,6 +1775,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           : Arr.map(fates, (one) => ({ ...one, ...alone }));
         const forged = alone.forged;
         const checks = several ? each[0]!.checks : alone.checks;
+        const forgeSaid = several ? each[0]!.forge : alone.forge;
         const readiness: ReadyToRelease = several
           ? Option.match(
               Arr.findFirst(each, (one) => one.readiness.ready),
@@ -1991,6 +2015,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                 mrState,
                 state: said,
                 checks,
+                forge: forgeSaid,
                 readiness,
                 summary: leader.summary,
                 agent:
