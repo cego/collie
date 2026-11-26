@@ -55,7 +55,7 @@ const NO_REQUESTS: Requested = {
 const NO_WATCHES = {
   outstanding: Effect.succeed([]),
   observe: () => Effect.void,
-  wake: () => Effect.void,
+  wake: () => Effect.succeed(true),
   unavailable: () => Effect.void,
 };
 

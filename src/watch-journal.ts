@@ -38,6 +38,27 @@ export const WatchEvent = Schema.Union([
     name: Schema.String,
     why: Schema.Literals(["merged", "closed"]),
   }),
+  Schema.TaggedStruct("completed", {
+    at: Schema.String,
+    mr: Schema.String,
+    run: Schema.String,
+    name: Schema.String,
+    head: Schema.String,
+  }),
+  Schema.TaggedStruct("published", {
+    at: Schema.String,
+    mr: Schema.String,
+    run: Schema.String,
+    head: Schema.String,
+    round: Schema.Finite,
+  }),
+  Schema.TaggedStruct("discarded", {
+    at: Schema.String,
+    mr: Schema.String,
+    run: Schema.String,
+    head: Schema.String,
+    moved: Schema.String,
+  }),
 ]);
 export type WatchEvent = typeof WatchEvent.Type;
 

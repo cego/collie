@@ -321,6 +321,8 @@ import { WorktreeRecordSchema } from "./run";
 import type { WorktreeRecord } from "./run";
 import { isOpen, listTasks, newTask, readTask, taskOfWorkspace, writeTask } from "./task";
 import { nowIso, epochMs, isoAt } from "./time";
+import { readWatchJournal, recordWatchEvent } from "./watch-journal";
+import type { WatchEvent } from "./watch-journal";
 import {
   pauseBefore,
   reachPause,
@@ -836,6 +838,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly ok: boolean;
     readonly message: string;
     readonly signature?: string;
+    readonly superseded?: string;
   }
 
   /** A pipeline job's state; \`missing\` is a pipeline without it. */
@@ -4091,6 +4094,7 @@ export const hostLayer: (options: {
         recordedMergeRequest(runId).pipe(Effect.provideService(RunRecords, runRecords));
       const under = <A, E>(effect: Effect.Effect<A, E, Collecting>) =>
         Effect.provideContext(effect, services);
+      const journalWatch = (event: WatchEvent) => under(recordWatchEvent(dir)(event));
       const parkReview = (reason: string) =>
         Effect.gen(function* () {
           const run = yield* Effect.serviceOption(Run);
@@ -6128,7 +6132,27 @@ export const hostLayer: (options: {
                 reason: `${asked.target} names no merge request the merge watch can read`,
               });
             }
+            const woken = Arr.some(
+              yield* readWatchJournal(dir).pipe(
+                Effect.orElseSucceed(() => []),
+                Effect.provideService(FileSystem.FileSystem, fs),
+              ),
+              (one) =>
+                (one._tag === "woke" || one._tag === "published" || one._tag === "discarded") &&
+                one.run === asked.runId &&
+                one.mr === mr,
+            );
             yield* store.watch({ run: asked.runId, mr, name: asked.name, cursor: asked.cursor });
+            if (woken) {
+              yield* journalWatch({
+                _tag: "completed",
+                at: yield* nowIso,
+                mr,
+                run: asked.runId,
+                name: asked.name,
+                head: asked.cursor.head,
+              });
+            }
             if (asked.asking === true) {
               return;
             }
@@ -6225,6 +6249,17 @@ export const hostLayer: (options: {
               return { refused: pinned.refused };
             }
             if (pinned.moved !== undefined) {
+              const mr = mrId(asked.target);
+              if (mr !== null) {
+                yield* journalWatch({
+                  _tag: "discarded",
+                  at: yield* nowIso,
+                  mr,
+                  run: asked.runId,
+                  head: asked.head,
+                  moved: pinned.moved,
+                });
+              }
               return { moved: pinned.moved };
             }
             const launch = yield* decodeStrings(row.options ?? "{}").pipe(
@@ -6539,7 +6574,7 @@ export const hostLayer: (options: {
                     if (refused !== null) {
                       return { ok: false, message: refused };
                     }
-                    return yield* postNote(
+                    const posted = yield* postNote(
                       {
                         target: asked.target,
                         cwd: asked.cwd,
@@ -6549,6 +6584,30 @@ export const hostLayer: (options: {
                       },
                       runShell,
                     );
+                    const mr = mrId(asked.target);
+                    if (mr !== null) {
+                      const at = yield* nowIso;
+                      if (posted.ok) {
+                        yield* journalWatch({
+                          _tag: "published",
+                          at,
+                          mr,
+                          run: asked.runId,
+                          head: asked.head,
+                          round: asked.round,
+                        });
+                      } else if (posted.superseded !== undefined) {
+                        yield* journalWatch({
+                          _tag: "discarded",
+                          at,
+                          mr,
+                          run: asked.runId,
+                          head: asked.head,
+                          moved: posted.superseded,
+                        });
+                      }
+                    }
+                    return posted;
                   }),
                 ),
               ),
@@ -7804,7 +7863,7 @@ export interface RegistryApi {
     run: string,
     name: string,
     woke: Woke,
-  ) => Effect.Effect<void, never, HostServices>;
+  ) => Effect.Effect<boolean, never, HostServices>;
   readonly supersede: (options: {
     readonly runId: string;
     readonly decision: string;
@@ -11066,14 +11125,14 @@ const makeRegistry: (
     wake: Effect.fn("Engine.Registry.wake")(function* (run: string, name: string, woke: Woke) {
       // WARNING: a row kept by a Stop, or a round's own watch, is a wake nothing is waiting on.
       if (!(yield* store.waitingOn(run, name))) {
-        return;
+        return false;
       }
       if (Arr.some(yield* controlsOf(run), (control) => control === HOLD || control === STOP)) {
-        return;
+        return false;
       }
       yield* store.wake(run, name, woke);
       if (wakingWatches.has(run)) {
-        return;
+        return false;
       }
       if (Arr.some(yield* store.asked(run), (row) => row.decision === name)) {
         const closed = yield* store.settle({
@@ -11083,12 +11142,13 @@ const makeRegistry: (
           request: `${run}-${name}-woke`,
         });
         if (closed._tag === "refused") {
-          return yield* forgetWatch(run, name);
+          yield* forgetWatch(run, name);
+          return false;
         }
       }
       const found = yield* routed(run).pipe(Effect.option);
       if (Option.isNone(found)) {
-        return;
+        return false;
       }
       wakingWatches.add(run);
       const { generation, execution } = found.value;
@@ -11102,6 +11162,7 @@ const makeRegistry: (
         Effect.ensuring(Effect.sync(() => wakingWatches.delete(run))),
         Effect.forkIn(hostScope),
       );
+      return true;
     }),
 
     supersede: supersedeQuestion,

@@ -1543,6 +1543,8 @@ export interface Posted {
   readonly ok: boolean;
   readonly message: string;
   readonly signature?: string;
+  /** The head the merge request is on now, where the note was refused because it had moved. */
+  readonly superseded?: string;
 }
 
 // oxlint-disable-next-line effecttsgo/lazy-effect -- Host serves the published HostApi.usage() method unchanged.

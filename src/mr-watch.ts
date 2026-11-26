@@ -12,7 +12,7 @@ import type { WatchRow } from "./store";
 export interface Watches {
   readonly outstanding: Effect.Effect<ReadonlyArray<WatchRow>>;
   readonly observe: (run: string, name: string, observed: Observed) => Effect.Effect<void>;
-  readonly wake: (run: string, name: string, woke: Woke) => Effect.Effect<void>;
+  readonly wake: (run: string, name: string, woke: Woke) => Effect.Effect<boolean>;
   readonly unavailable: (run: string, reason: string) => Effect.Effect<void>;
 }
 
@@ -76,20 +76,22 @@ export const settleWatches = Effect.fn("MrWatch.settle")(function* (opts: {
         since: observed.since,
       });
     }
+    // WARNING: a wake a Stop or a stale name refuses is no start, so only an accepted one is recorded.
     if (verdict._tag === "Changed") {
-      yield* event({
-        _tag: "woke",
-        at,
-        mr: row.mr,
-        run: row.run,
-        name: row.name,
-        head: verdict.change.head,
-        previous: verdict.change.previous,
-        newHead: verdict.change.newHead,
-      });
-      yield* opts.watches.wake(row.run, row.name, verdict);
+      if (yield* opts.watches.wake(row.run, row.name, verdict)) {
+        yield* event({
+          _tag: "woke",
+          at,
+          mr: row.mr,
+          run: row.run,
+          name: row.name,
+          head: verdict.change.head,
+          previous: verdict.change.previous,
+          newHead: verdict.change.newHead,
+        });
+      }
     }
-    if (verdict._tag === "Ended") {
+    if (verdict._tag === "Ended" && (yield* opts.watches.wake(row.run, row.name, verdict))) {
       yield* event({
         _tag: "ended",
         at,
@@ -98,7 +100,6 @@ export const settleWatches = Effect.fn("MrWatch.settle")(function* (opts: {
         name: row.name,
         why: verdict.state,
       });
-      yield* opts.watches.wake(row.run, row.name, verdict);
     }
   }
 });

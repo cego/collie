@@ -165,6 +165,9 @@ export function postNote<R>(
         return {
           ok: false,
           message: `${options.target} is no longer open at ${head}; no review posted`,
+          ...(["open", "opened", "draft"].includes(current.state) && current.head !== head
+            ? { superseded: current.head }
+            : {}),
         };
       }
       body = `Review at ${head}\n\n${Str.trimEnd(body)}\n\n${signature}`;
