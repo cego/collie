@@ -1974,12 +1974,11 @@ test("a round starts after its changes read and ends before it posts, so a forge
         Effect.gen(function* () {
           yield* host.recovering;
           const runId = yield* startedWaiting(entry);
-          yield* until(() => notesOf(forge), (notes) => notes.length === 1);
-          expect(yield* marks()).toEqual([
-            "started follow-1",
-            "completed follow-1",
-            "published 1",
-          ]);
+          yield* until(
+            () => notesOf(forge),
+            (notes) => notes.length === 1,
+          );
+          expect(yield* marks()).toEqual(["started follow-1", "completed follow-1", "published 1"]);
           unavailable = true;
           yield* pushedOn(forge, first);
           const parked = yield* until(
@@ -1989,11 +1988,7 @@ test("a round starts after its changes read and ends before it posts, so a forge
               (view?.status.status === "suspended" && view.park != null),
           ).pipe(Effect.timeout("10 minutes"));
           expect(parked?.park).toMatchObject({ cause: "forge-unavailable" });
-          expect(yield* marks()).toEqual([
-            "started follow-1",
-            "completed follow-1",
-            "published 1",
-          ]);
+          expect(yield* marks()).toEqual(["started follow-1", "completed follow-1", "published 1"]);
           unavailable = false;
           yield* until(
             () => asked(runId),
