@@ -45,21 +45,37 @@ before the lock goes. Three seconds holds one slow look and keeps the exit, with
 flush, inside the five seconds a client gives a stopping host before it kills it. Its step does not complete
 and nothing is recorded for it, so the next host runs it once more.
 
-The one exception is a replacement by a newer build of the same installation: a newer client,
-or `collie host restart` from one. Before it signals the host, the client writes
-`host.handover` naming the host's pid and its own build. A host signalled while that names
-it, and a build newer than its own, hands its supervised checks over rather than ending
-them: it stops collecting them, leaves their processes and records alone, and writes
+The one exception is a replacement by a build at least as new as the host's. A newer build
+hands over whatever installation it is from; at the host's own build, only a client of the
+host's own installation does, which is what `collie host restart` is. Before it signals the
+host, the client writes `host.handover` naming the host's pid and its own build. A host
+signalled while that names it, and a build at least its own, hands its supervised checks
+over rather than ending them: it stops collecting them, leaves their processes and records
+alone, and writes
 `host.handed-over` naming itself, by pid and start token, the build and the checks before it
-lets go of its lock. It still ends any check it cannot hand over, such as a measurement's.
-Every other end ends them as above: a plain stop signal, a lost lock or directory, a watched
-process gone, a crash, and a restart onto the same build. A newer client that
+lets go of its lock. It still ends any check it cannot hand over, such as a measurement's:
+only a check a host supervises — one `collie verify` asked for, a gate's, an agent's or a
+human's — can be handed over. Every other end ends
+them as above: a plain stop signal, a lost lock or directory, and a watched process gone or
+a crash. A client whose build is older than the host's is refused before it writes anything,
+naming the build the host runs: the one it answered with, or the one it recorded in
+`host.build` when it does not answer. A newer client that
 asked a host to stop kills it five seconds after its grace. A host that does not say who it
 is within five seconds is replaced too when `host.build`, which it writes as it starts,
-names an older build of the same installation; otherwise the client reports it as
-`HostUnavailable` with its pid. That host is asked for the same handover before it is
-signalled: one too slow to answer still hears its signal and hands its checks over, and one
-that never hears it is killed and hands over nothing.
+names an older build of the same installation; a newer one is refused as above; otherwise
+the client reports it as
+`HostUnavailable` with its pid. No host is signalled before it has said which build it is: a
+successor holds the lock before it writes `host.build`, so the client waits up to five
+seconds for that record and signals nothing if it never comes, reporting `HostUnavailable`
+rather than end a check the successor may already have adopted. One that arrives in the wait
+is judged as any other, a newer build as `HostVersionMismatch`. The record names the pid, the
+start token, the build and the installation it serves: a pid alone is reused, so one whose
+token disagrees with `host.lock`, or is unknown on either side, is not this owner's and is
+not signalled. A build from before
+the token is therefore reported, not replaced, while it is silent; one that answers is
+replaced as any host is. That host is asked for the same handover before it is signalled: one
+too slow to answer still hears its signal and hands its checks over, and one that never hears
+it is killed and hands over nothing.
 
 Desktop starts a host the way any client does: it runs `collie bridge --as desktop` (or
 `--as chat`), and the bridge starts `collie host --dir <state>` where none answers. Desktop
