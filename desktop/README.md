@@ -58,6 +58,14 @@ is still streaming. Their scopes close before reconnecting, with backoff capped 
 removing a route or closing Desktop stops its reconnects. Sync now also renews a same-version
 connection. `test/desktop-channel-lifecycle.test.ts` exercises this with isolated stdio bridges.
 
+Core's machine list is read at startup and then followed: a list core could not be asked
+for — Desktop started before core, say — is read again with backoff until it answers, and
+every fifteen seconds once it does, so a Machine added to core while Desktop runs is routed
+without a restart. A Machine Desktop already routes is never opened twice. While the list
+cannot be read, each paired Machine that has no route is listed as out of reach, and the
+row goes once core is read again or does not list it. `test/desktop-roster.test.ts` holds
+this, and `rosterFollowed` in `src/bun/machine.ts` is where it lives.
+
 A transport failure does not establish a version mismatch. Chat names the transport failure
 and reserves upgrade advice for an unknown operation or an incompatible protocol. A submitted
 write cut off before its reply has an unknown outcome and is not replayed on the new connection.

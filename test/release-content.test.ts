@@ -21,6 +21,7 @@ test("both forges' release content has the steps the module asks for, and every 
     expect([...one.sections.keys()]).toEqual([
       "assess",
       "answer",
+      "checkout",
       "fix",
       "stage-merge-request",
       "unstage",
