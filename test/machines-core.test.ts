@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
 import { forgetMachine, remoteRoute, rosterOf } from "../desktop/src/bun/machine";
 import { addToCore, shOn } from "../desktop/src/bun/onboarding";
@@ -12,6 +12,8 @@ import { runEffect } from "./support/effect";
 import { twoMachines } from "./support/peers";
 import type { Side } from "./support/peers";
 import { collieCommand } from "./support/world";
+
+setDefaultTimeout(30_000);
 
 const Logged = Schema.fromJsonString(
   Schema.Struct({ cmd: Schema.String, params: Schema.optionalKey(Schema.Json) }),
@@ -155,6 +157,107 @@ test("with no master open the via fails at once and logs in nowhere, and a front
           expect(connects).toHaveLength(2);
           const [, , again] = yield* called(first, "dialled");
           expect(again?.params).toMatchObject({ machine: "second", code: 0 });
+        }),
+      ["attended.workflow.ts"],
+    ),
+  ));
+
+test("a Machine whose core list cannot be read is reported as unread, not as none", () =>
+  runEffect(
+    twoMachines(
+      "collie-core-unread-",
+      (first, second) =>
+        Effect.gen(function* () {
+          yield* first.lists([second]);
+          expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
+
+          const unread = yield* first.cli(["machine", "list"], {
+            HC_SOCKET: `${first.world.state}/no-such-core.sock`,
+          });
+          expect(unread.envelope.ok).toBe(true);
+          expect(unread.envelope.data).toMatchObject({
+            backend: "core",
+            roster: null,
+            machines: [{ name: "second", added: null }],
+          });
+          expect(unread.envelope.data).toMatchObject({
+            rosterFailure: expect.stringContaining("no-such-core.sock"),
+          });
+
+          const read = yield* first.cli(["machine", "list"]);
+          expect(read.envelope.data).toMatchObject({
+            roster: [{ label: "second" }],
+            machines: [{ name: "second", added: true }],
+          });
+        }),
+      ["attended.workflow.ts"],
+    ),
+  ));
+
+test("a roster read that core takes but never answers is reported as unread, not waited on", () =>
+  runEffect(
+    twoMachines(
+      "collie-core-silent-",
+      (first, second) =>
+        Effect.gen(function* () {
+          yield* first.lists([second]);
+          const release = first.core.hold("machine.list");
+          const unread = yield* first
+            .cli(["machine", "list"], { COLLIE_ROSTER_READ_WITHIN: "50 millis" })
+            .pipe(Effect.ensuring(Effect.sync(release)));
+
+          expect(unread.envelope.ok).toBe(true);
+          expect(unread.envelope.data).toMatchObject({
+            roster: null,
+            rosterFailure: expect.stringContaining("no reply within 50ms"),
+          });
+        }),
+      ["attended.workflow.ts"],
+    ),
+  ));
+
+test("a roster deadline that would never expire is refused rather than waited on", () =>
+  runEffect(
+    twoMachines(
+      "collie-core-endless-",
+      (first, second) =>
+        Effect.gen(function* () {
+          yield* first.lists([second]);
+          const release = first.core.hold("machine.list");
+          const unread = yield* first
+            .cli(["machine", "list"], { COLLIE_ROSTER_READ_WITHIN: "Infinity" })
+            .pipe(Effect.ensuring(Effect.sync(release)));
+
+          expect(unread.envelope.ok).toBe(true);
+          expect(unread.envelope.data).toMatchObject({
+            roster: null,
+            rosterFailure: expect.stringContaining("COLLIE_ROSTER_READ_WITHIN is Infinity"),
+          });
+        }),
+      ["attended.workflow.ts"],
+    ),
+  ));
+
+test("a roster deadline that does not parse leaves the paired Machines listed", () =>
+  runEffect(
+    twoMachines(
+      "collie-core-bad-deadline-",
+      (first, second) =>
+        Effect.gen(function* () {
+          yield* first.lists([second]);
+          expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
+          const unread = yield* first.cli(["machine", "list"], {
+            COLLIE_ROSTER_READ_WITHIN: "not-a-duration",
+          });
+
+          expect(unread.envelope.ok).toBe(true);
+          expect(unread.envelope.data).toMatchObject({
+            roster: null,
+            machines: [{ name: "second", added: null }],
+          });
+          expect(unread.envelope.data).toMatchObject({
+            rosterFailure: expect.stringContaining("COLLIE_ROSTER_READ_WITHIN"),
+          });
         }),
       ["attended.workflow.ts"],
     ),

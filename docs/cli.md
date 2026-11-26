@@ -100,7 +100,11 @@ collie machine invite --for <installation> --name <name> [--address <host>]
 
 The Machines are core's machine list, by core's name for each. `data.backend` is always
 `core`; `data.roster` is the list, with each Machine's `label` (its name), `target` (how
-SSH reaches it) and `session` (`default`).
+SSH reaches it) and `session` (`default`). A list core could not be asked for is `null`
+with `rosterFailure` saying why, never an empty one, and then a Machine core may keep is
+`added: null`: not known, rather than not there. A read core accepts but does not answer is
+given five seconds (`COLLIE_ROSTER_READ_WITHIN`, which has to be a finite positive duration),
+then reported the same way.
 
 `list` names each Machine paired with this one, which side dials (`out`: this one dials it;
 `in`: it dials this one), and whether it answers now. Its `data.machines` is each one's
