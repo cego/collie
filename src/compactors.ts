@@ -680,7 +680,7 @@ const pi: CompactionPort = {
       Effect.map(Arr.map((path) => ({ path, format: "pi", parent: null }) satisfies Source)),
     ),
   ready: reported,
-  exitOf: (ctx) => Effect.map(stoppedSince(ctx.dir, 0), (one) => one?.why ?? null),
+  exitOf: (ctx) => exitOfLaunch(ctx.dir, ctx.env),
   // WARNING: the human's channel, so a refusal from herdr is a request that never left.
   request: (ctx, requestId) => submitCompaction(ctx, requestId, `/collie-compact ${requestId}`),
   mark: (ctx) => claudeMark(ctx.dir),
@@ -1269,8 +1269,17 @@ export const stoppedSince = Effect.fn("Compactors.stoppedSince")(function* (
     : {
         why: stopped.reason ?? "its turn ended on an error",
         transcript: stopped.transcript ?? null,
+        launch: stopped.launch ?? null,
       };
 });
+
+// WARNING: an exit belongs to the launch that produced it; another one's stop is not this launch's refusal.
+const exitOfLaunch = (dir: string, env: ReadonlyArray<string> | undefined) =>
+  Effect.gen(function* () {
+    const launch = launchIn(env);
+    const stop = yield* stoppedSince(dir, 0);
+    return stop !== null && (launch === null || stop.launch === launch) ? stop.why : null;
+  });
 
 export const transcriptOf = Effect.fn("Compactors.transcriptOf")(function* (
   stateDir: string,
@@ -1405,7 +1414,7 @@ const claude: CompactionPort = {
   records: claudeRecords,
   // WARNING: the status line is drawn with the REPL, so its first call means the prompt is there.
   ready: reported,
-  exitOf: (ctx) => Effect.map(stoppedSince(ctx.dir, 0), (one) => one?.why ?? null),
+  exitOf: (ctx) => exitOfLaunch(ctx.dir, ctx.env),
   request: (ctx, requestId) =>
     submitCompaction(ctx, requestId, `/compact ${claudeInstructions(requestId)}`),
   mark: (ctx) => claudeMark(ctx.dir),
@@ -1823,6 +1832,8 @@ export const codexPort: (server: string) => CompactionPort = (server) => ({
       })),
     ),
   stop: stopCodex,
+  // WARNING: Codex has no hook to take a compaction back, so the record is the only disposition its stop can leave.
+  cancel: (ctx, mark, why) => recordCancelled(ctx.dir, mark, why),
   questions: (ctx) =>
     Effect.gen(function* () {
       const url = yield* codexAt(ctx);

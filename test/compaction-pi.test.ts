@@ -465,7 +465,11 @@ test("an error turn pi settles on is its harness stopping, with pi's message and
       driven.turn({ stopReason: "error", errorMessage: EXPIRED });
       expect(yield* stoppedSince(dir, 0)).toBeNull();
       driven.settle(false);
-      expect(yield* stoppedSince(dir, 0)).toEqual({ why: EXPIRED, transcript: PI_SESSION });
+      expect(yield* stoppedSince(dir, 0)).toEqual({
+        why: EXPIRED,
+        transcript: PI_SESSION,
+        launch: null,
+      });
     }),
   ));
 

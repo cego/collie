@@ -643,6 +643,27 @@ test("a StopFailure on a spent subscription is the agent running out, with its t
     }),
   ));
 
+test("a stop another launch left is not this launch's refusal", () =>
+  withLaunch(
+    Effect.gen(function* () {
+      yield* recordClaudeEvent(
+        dir,
+        stopFailure("authentication_failed", "OAuth token has expired. Please run /login."),
+      );
+      const exitOf = COMPACTION_PORTS.claude!.exitOf!;
+      const ctx = (launch: string) => ({
+        agent: "build-r1",
+        harness: "claude",
+        cwd: rig.projectDir,
+        dir,
+        endpoint: null,
+        env: [`COLLIE_LAUNCH=${launch}`],
+      });
+      expect(yield* exitOf(ctx("l-2"))).toBeNull();
+      expect(yield* exitOf(ctx("l-1"))).toBe("OAuth token has expired. Please run /login.");
+    }),
+  ));
+
 test("a StopFailure on any other error is its harness stopping, saying its details", () =>
   withLaunch(
     Effect.gen(function* () {
@@ -653,6 +674,7 @@ test("a StopFailure on any other error is its harness stopping, saying its detai
       expect(yield* stoppedSince(dir, 0)).toEqual({
         why: "OAuth token has expired. Please run /login.",
         transcript: "/home/mk/.claude/projects/p/s-1.jsonl",
+        launch: "l-1",
       });
       expect(yield* ranOutSince(dir, 0)).toBeNull();
     }),
