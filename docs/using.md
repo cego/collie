@@ -2384,9 +2384,13 @@ first when the second is set beside them. An import outranks the rest of your po
 one name it used: a `filters` entry that included that name is replaced by an exclusion,
 spelled as the variable, so the shell cannot hold what Codex was told; a key you spelled in
 another case is dropped rather than kept beside ours, which Codex rejects. A `${VAR}` a
-header or a value is written with is resolved from the environment Codex already runs with;
-Collie neither adds it nor takes it away, since a server of Codex's own may name the same
-variable, and the shell is kept from it as above. None of this is isolation, and Collie claims none: the value is in Desktop's own
+header or a value is written with is resolved by Desktop, and the variable itself is then
+taken out of Codex's own environment, so neither Codex nor its shell holds it. The
+exception is a variable Codex's own servers read by name (`bearer_token_env_var`,
+`env_http_headers`, `env_vars`): those stay, because taking one away would break your own
+server, and the chat says so — an import that needs one is left out rather than sharing
+it. A name a shell cannot do without — `PATH`, `HOME` and the rest of that handful — is
+never withheld, and never excluded from the shell either. None of this is isolation, and Collie claims none: the value is in Desktop's own
 process, in the configuration it was imported from and, where it names one, in your
 existing environment; a command running as you can reach all three, as it can the relay
 on loopback, and it can read a stdio server's staged file from the moment it is written

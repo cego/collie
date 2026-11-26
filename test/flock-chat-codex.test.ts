@@ -11,7 +11,7 @@ import type * as SecureRandom from "effect/crypto/SecureRandom";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { codexDriver, readCodexModels } from "../desktop/src/bun/codex-driver";
-import { codexConnections } from "../desktop/src/bun/codex-servers";
+import { NO_POLICY, codexConnections, codexServers } from "../desktop/src/bun/codex-servers";
 import { loopbackTools } from "../desktop/src/bun/chat-endpoint";
 import type { DriverContext } from "../desktop/src/bun/driver";
 import type { UserMcpServers } from "../desktop/src/bun/session";
@@ -169,9 +169,11 @@ const replied = (url: string, headers: Readonly<Record<string, string>>) =>
         ...headers,
       },
       body: asked,
+      redirect: "manual",
     }).then((answer) => ({
       status: answer.status,
       www: answer.headers.get("www-authenticate"),
+      location: answer.headers.get("location"),
     })),
   );
 
@@ -965,6 +967,140 @@ test("A relay leaves the client's own authorization alone, and passes the server
   ).finally(() => void fixture.stop());
 });
 
+test("A variable an import names is taken out of Codex's own environment", () => {
+  const fixture = serveDocs({ tool: "read_doc", token: "kept" });
+  Bun.env.SOLE_SOURCE = "kept";
+  return withServers(
+    {
+      docs: { type: "http", url: fixture.url, headers: { Authorization: "Bearer ${SOLE_SOURCE}" } },
+    },
+    (driver) =>
+      Effect.gen(function* () {
+        const session = yield* driver.open("codex-withheld", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("inspect");
+        const details = inspected(yield* turn(session));
+        expect(details.env.SOLE_SOURCE).toBeUndefined();
+        expect(
+          yield* posted(relayed(details, "docs"), { [RELAY]: relayToken(details, "docs").value }),
+        ).toBe(200);
+      }),
+  ).finally(() => {
+    void fixture.stop();
+    delete Bun.env.SOLE_SOURCE;
+  });
+});
+
+test("An import whose variable a server of Codex's own reads is left out rather than shared", () => {
+  const fixture = serveDocs({ tool: "read_doc", token: "kept" });
+  Bun.env.CODEX_OWN_TOKEN = "kept";
+  return withServers(
+    {
+      docs: {
+        type: "http",
+        url: fixture.url,
+        headers: { Authorization: "Bearer ${CODEX_OWN_TOKEN}" },
+      },
+    },
+    (driver, context) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(
+          `${context.dir}/codex-home/config.toml`,
+          `[mcp_servers.native]\nurl = "http://127.0.0.1:1/mcp"\nbearer_token_env_var = "CODEX_OWN_TOKEN"\n`,
+        );
+        const session = yield* driver.open("codex-shared-variable", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("inspect");
+        const details = inspected(yield* turn(session));
+        expect(details.env.CODEX_OWN_TOKEN).toBe("kept");
+        expect(Arr.join(details.args, " ")).not.toContain("mcp_servers.docs.");
+        expect(instruct(details)).toEqual(
+          expect.stringContaining("docs (CODEX_OWN_TOKEN is a variable Codex's own servers read)"),
+        );
+      }),
+  ).finally(() => {
+    void fixture.stop();
+    delete Bun.env.CODEX_OWN_TOKEN;
+  });
+});
+
+test("A relay hands a redirect back instead of carrying its headers to another origin", () => {
+  const elsewhere = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    idleTimeout: 0,
+    fetch: () => new Response("reached", { status: 200 }),
+  });
+  const away = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    idleTimeout: 0,
+    fetch: () =>
+      new Response(null, {
+        status: 302,
+        headers: { location: `http://127.0.0.1:${elsewhere.port}/mcp` },
+      }),
+  });
+  return withServers(
+    {
+      docs: {
+        type: "http",
+        url: `http://127.0.0.1:${away.port}/mcp`,
+        headers: { Authorization: "Bearer literal-secret" },
+      },
+    },
+    (driver) =>
+      Effect.gen(function* () {
+        const session = yield* driver.open("codex-redirect", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("inspect");
+        const details = inspected(yield* turn(session));
+        const answered = yield* replied(relayed(details, "docs"), {
+          [RELAY]: relayToken(details, "docs").value,
+        });
+        expect(answered.status).toBe(302);
+        expect(answered.location).toBe(`http://127.0.0.1:${elsewhere.port}/mcp`);
+      }),
+  ).finally(() => {
+    void away.stop(true);
+    void elsewhere.stop(true);
+  });
+});
+
+const launcherOf = (secrets: string) => {
+  const made = codexServers(
+    { notes: { command: "true", env: { NOTE_TOKEN: "staged" } } },
+    [],
+    NO_POLICY,
+    secrets,
+    [],
+  );
+  const prefix = "mcp_servers.notes.args=";
+  const held = Arr.findFirst(made.args, (one) => pipe(one, Str.startsWith(prefix)));
+  const text = Option.getOrThrow(Option.map(held, (one) => pipe(one, Str.slice(prefix.length))));
+  const argv: ReadonlyArray<string> = flow(
+    Schema.decodeResult(Schema.fromJsonString(Schema.Array(Schema.String))),
+    Result.getOrThrow,
+  )(text);
+  return { files: made.files, argv };
+};
+
+test("A staged value that cannot be read stops the server, and one that cannot be removed too", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const gone = launcherOf("/tmp/collie-nowhere");
+    expect(Bun.spawnSync(["/bin/sh", ...gone.argv]).exitCode).not.toBe(0);
+    const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-staged-" });
+    yield* Effect.forEach(launcherOf(dir).files, (one) => fs.writeFileString(one.path, one.text), {
+      discard: true,
+    });
+    yield* fs.chmod(dir, 0o500);
+    yield* Effect.addFinalizer(() => fs.chmod(dir, 0o700).pipe(Effect.ignore));
+    const sealed = launcherOf(dir);
+    expect(Bun.spawnSync(["/bin/sh", ...sealed.argv]).exitCode).not.toBe(0);
+  }).pipe(Effect.scoped, Effect.provide(platformLayer), Effect.runPromise));
+
 test("A server whose url carries a credential is left out, not shown in Codex's arguments", () =>
   withServers({ docs: { type: "http", url: "http://someone:hunter2@127.0.0.1:1/mcp" } }, (driver) =>
     Effect.gen(function* () {
@@ -1434,6 +1570,7 @@ test("The login command a server is told parses, even when its url holds a quote
     files: [],
     left: [],
     relays: [],
+    withheld: [],
   } as const;
   const told = codexConnections(
     servers,

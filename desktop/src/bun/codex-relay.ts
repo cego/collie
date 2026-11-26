@@ -14,6 +14,7 @@ const answerHeaders = [
   "last-event-id",
   "cache-control",
   "www-authenticate",
+  "location",
 ];
 const bodiless = (method: string) => method === "GET" || method === "HEAD";
 const folded = (name: string) => pipe(name, Str.toLowerCase);
@@ -42,22 +43,27 @@ export const codexRelay: (
     for (const [name, value] of Rec.toEntries(headers)) {
       held.set(name, value);
     }
-    return (bodiless(request.method) ? Promise.resolve(undefined) : request.arrayBuffer())
-      .then((body) => Bun.fetch(target, { method: request.method, headers: held, body }))
-      .then((asked) => {
-        const passing = new Headers();
-        for (const name of answerHeaders) {
-          const value = asked.headers.get(name);
-          if (value !== null) {
-            passing.set(name, value);
+    return (
+      (bodiless(request.method) ? Promise.resolve(undefined) : request.arrayBuffer())
+        // WARNING: a redirect is handed back, never followed: the headers would otherwise reach its destination.
+        .then((body) =>
+          Bun.fetch(target, { method: request.method, headers: held, body, redirect: "manual" }),
+        )
+        .then((asked) => {
+          const passing = new Headers();
+          for (const name of answerHeaders) {
+            const value = asked.headers.get(name);
+            if (value !== null) {
+              passing.set(name, value);
+            }
           }
-        }
-        return new Response(asked.status === 204 ? null : asked.body, {
-          status: asked.status,
-          headers: passing,
-        });
-      })
-      .catch(() => new Response("Bad gateway", { status: 502 }));
+          return new Response(asked.status === 204 ? null : asked.body, {
+            status: asked.status,
+            headers: passing,
+          });
+        })
+        .catch(() => new Response("Bad gateway", { status: 502 }))
+    );
   };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch: forward });
   return {

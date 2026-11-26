@@ -633,7 +633,7 @@ const NO_STATUS: ReadonlyArray<CodexStatus> = [];
 const Effective = Schema.Struct({
   config: Schema.optionalKey(
     Schema.Struct({
-      mcp_servers: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+      mcp_servers: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
       shell_environment_policy: Schema.optionalKey(
         Schema.NullOr(
           Schema.Struct({
@@ -648,8 +648,43 @@ const Effective = Schema.Struct({
 const decodeEffective = decoded(Effective);
 type Configured = {
   readonly native: ReadonlyArray<string>;
+  readonly nativeVariables: ReadonlyArray<string>;
   readonly policy: ShellPolicy;
 };
+
+// WARNING: a server of Codex's own reads these by name, so Collie may not take them out of its environment.
+const Named = Schema.Struct({ name: Schema.String });
+const variablesOf = (server: Schema.Json | undefined) => {
+  if (!Schema.is(Schema.Record(Schema.String, Schema.Json))(server)) {
+    return [];
+  }
+  const named: Array<string> = [];
+  const bearer = server.bearer_token_env_var;
+  const headers = server.env_http_headers;
+  const listed = server.env_vars;
+  if (Str.isString(bearer)) {
+    named.push(bearer);
+  }
+  if (Schema.is(Schema.Record(Schema.String, Schema.Unknown))(headers)) {
+    for (const [, value] of Rec.toEntries(headers)) {
+      if (Str.isString(value)) {
+        named.push(value);
+      }
+    }
+  }
+  if (Arr.isArray(listed)) {
+    for (const one of listed) {
+      if (Str.isString(one)) {
+        named.push(one);
+      } else if (Schema.is(Named)(one)) {
+        named.push(one.name);
+      }
+    }
+  }
+  return Arr.dedupe(named);
+};
+const variables: (server: Schema.Json | undefined) => ReadonlyArray<string> = variablesOf;
+
 const instructions = () => systemPrompt(hostname());
 
 const noThreads: Readonly<Record<string, string>> = {};
@@ -806,11 +841,14 @@ export const codexDriver: (
                 Rec.keys(config?.mcp_servers ?? {}),
                 (name) => name !== SERVER,
               );
+              const nativeVariables = Arr.dedupe(
+                Arr.flatMap(Rec.toEntries(config?.mcp_servers ?? {}), ([, one]) => variables(one)),
+              );
               const policy: ShellPolicy = {
                 excludes: config?.shell_environment_policy?.exclude ?? [],
                 filters: config?.shell_environment_policy?.filters ?? {},
               };
-              const held: Configured = { native, policy };
+              const held: Configured = { native, nativeVariables, policy };
               return Option.some(held);
             }),
           ).pipe(Effect.orElseSucceed(() => Option.none<Configured>()));
@@ -828,6 +866,7 @@ export const codexDriver: (
             configured,
             discovery?.policy ?? NO_POLICY,
             secrets,
+            discovery?.nativeVariables ?? [],
           );
           yield* keep(given.files);
           const tokens = yield* Effect.promise(() =>
@@ -871,7 +910,11 @@ export const codexDriver: (
               "-c",
               `mcp_servers.${SERVER}.tool_timeout_sec=${TOOL_TIMEOUT}`,
             ],
-            { ...childEnv(), ...relayEnv, [TOKEN_ENV]: token },
+            {
+              ...Rec.filter(childEnv(), (_value, name) => !Arr.contains(given.withheld, name)),
+              ...relayEnv,
+              [TOKEN_ENV]: token,
+            },
           );
           yield* Effect.forkScoped(pump(server));
           const { account, requiresOpenaiAuth } = yield* server

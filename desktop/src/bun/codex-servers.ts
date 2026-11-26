@@ -53,6 +53,7 @@ export interface CodexServers {
     readonly headers: Readonly<Record<string, string>>;
     readonly variable: string;
   }>;
+  readonly withheld: ReadonlyArray<string>;
 }
 
 export const NO_SERVERS: CodexServers = {
@@ -61,6 +62,7 @@ export const NO_SERVERS: CodexServers = {
   given: [],
   left: [],
   relays: [],
+  withheld: [],
 };
 
 // WARNING: Codex reads a `-c` value as TOML: a table's keys are quoted so a dot stays a header's name.
@@ -118,7 +120,8 @@ export const codexServers: (
   configured: ReadonlyArray<string> | null,
   policy: ShellPolicy,
   secrets: string,
-) => CodexServers = (servers, configured, policy, secrets) => {
+  nativeVariables: ReadonlyArray<string>,
+) => CodexServers = (servers, configured, policy, secrets, nativeVariables) => {
   if (configured === null) {
     return {
       ...NO_SERVERS,
@@ -139,9 +142,10 @@ export const codexServers: (
     variable: string;
   }> = [];
   const used: Array<string> = [];
+  let mine: Array<string> = [];
   const resolve = (value: string) => {
     const made = substituted(value, childEnv());
-    used.push(...made.used);
+    mine.push(...made.used);
     return made.text;
   };
   let carried = 0;
@@ -157,6 +161,7 @@ export const codexServers: (
     if (configured.includes(name)) {
       continue;
     }
+    mine = [];
     if ("headersHelper" in server) {
       left.push({ name, why: "its headersHelper runs only in Claude Code" });
       continue;
@@ -173,17 +178,23 @@ export const codexServers: (
         left.push({ name, why: `${unsettable.value[0]} is a name a shell cannot set` });
         continue;
       }
+      const resolvedValues = Arr.map(held, ([key, value]) => ({ key, text: resolve(value) }));
+      const shared = Arr.findFirst(mine, (variable) => Arr.contains(nativeVariables, variable));
+      if (Option.isSome(shared)) {
+        left.push({ name, why: `${shared.value} is a variable Codex's own servers read` });
+        continue;
+      }
       // WARNING: a value in Codex's own environment is one its shell can read, so it waits in a file.
-      const passing = Arr.map(held, ([key, value], index) => {
+      const passing = Arr.map(resolvedValues, ({ key, text }, index) => {
         carried += 1;
         const path = `${secrets}/${carried}`;
-        files.push({ path, text: resolve(value) });
+        files.push({ path, text });
         return { key, path, temp: `${OWN}STAGE_${index + 1}` };
       });
       // WARNING: the sentinel keeps the newlines a command substitution would strip, and every value is read before any export replaces `PATH`.
       const staged = Arr.map(passing, ({ path, temp }) => ({
         ready: `[ -r ${shQuote(path)} ] || exit 1`,
-        read: `${temp}=$(cat ${shQuote(path)}; printf x); ${temp}=\${${temp}%x}`,
+        read: `${temp}=$(cat ${shQuote(path)} || exit 1; printf x) || exit 1; ${temp}=\${${temp}%x}`,
       }));
       args.push(
         ...setting(`mcp_servers.${name}.command`, SHELL),
@@ -199,7 +210,7 @@ export const codexServers: (
                     `rm -f ${Arr.join(
                       Arr.map(passing, (one) => shQuote(one.path)),
                       " ",
-                    )}`,
+                    )} || exit 1`,
                   ]),
               ...Arr.map(passing, ({ key, temp }) => `export ${key}="$${temp}"`),
               'exec "$0" "$@"',
@@ -210,6 +221,7 @@ export const codexServers: (
           ...(server.args ?? []),
         ]),
       );
+      used.push(...mine);
       given.push({ name });
       continue;
     }
@@ -225,6 +237,11 @@ export const codexServers: (
     for (const [header, value] of Rec.toEntries(server.headers ?? {})) {
       headers[header] = resolve(value);
     }
+    const mineShared = Arr.findFirst(mine, (variable) => Arr.contains(nativeVariables, variable));
+    if (Option.isSome(mineShared)) {
+      left.push({ name, why: `${mineShared.value} is a variable Codex's own servers read` });
+      continue;
+    }
     if (Rec.size(headers) === 0) {
       args.push(...codexServerUrlArgs(name, server.url));
     } else {
@@ -233,8 +250,13 @@ export const codexServers: (
       args.push(...table(`mcp_servers.${name}.env_http_headers`, { [RELAY_HEADER]: variable }));
       relays.push({ name, url: server.url, headers, variable });
     }
+    used.push(...mine);
     given.push({ name, url: server.url });
   }
+  const withheld = Arr.filter(
+    used,
+    (name) => !Arr.contains(STANDARD, name) && !Arr.contains(nativeVariables, name),
+  );
   // WARNING: a native include of a variable an import's value came from would readmit that value, so the exclusion takes its key.
   const folded = (name: string) => Str.toLowerCase(name);
   const keyed = Rec.toEntries(policy.filters);
@@ -256,7 +278,7 @@ export const codexServers: (
         : list("shell_environment_policy.exclude", Arr.dedupe([...added, ...policy.excludes]))),
     );
   }
-  return { args, files, given, left, relays };
+  return { args, files, given, left, relays, withheld };
 };
 
 const toolsOf = (status: CodexStatus | undefined) => Rec.keys(status?.tools ?? {});
