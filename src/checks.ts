@@ -55,6 +55,14 @@ export const markersOf = Effect.fn("Checks.markersOf")(function* (
       found.set(row.run, marker);
     }
   }
+  // WARNING: a marker outlives a check that ended, so only one naming a live record of its Run is shown.
+  for (const [run, marker] of found) {
+    const live = Arr.some(records, (record) => record.run === run && record.name === marker.name);
+    const recorded = Arr.some(records, (record) => record.run === run);
+    if (marker.pass !== "ci" && recorded && !live) {
+      found.delete(run);
+    }
+  }
   for (const record of records) {
     if (!found.has(record.run)) {
       found.set(record.run, {

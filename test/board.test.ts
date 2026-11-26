@@ -1401,7 +1401,7 @@ test("a check left behind by an attempt that ended does not keep its Task workin
     }),
   ));
 
-test("a marker left behind does not borrow a check of its Run that is still collected", () =>
+test("a marker left behind does not hide a check of its Run that is still collected", () =>
   runEffect(
     Effect.gen(function* () {
       const { dir, env } = yield* scratch();
@@ -1417,8 +1417,9 @@ test("a marker left behind does not borrow a check of its Run that is still coll
       yield* marking(run, { name: "lint", pass: "recheck" });
 
       const [left] = yield* board(env, [run], { collecting: new Set(["r-ended@1-b"]) });
-      expect(left?.check).toBeNull();
-      expect(left!.sentence).not.toContain("Running lint");
+      expect(left?.check?.name).toBe("test");
+      expect(left!.sentence).toContain("Running test");
+      expect(left!.sentence).not.toContain("lint");
     }),
   ));
 
