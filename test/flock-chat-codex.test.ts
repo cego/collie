@@ -1245,6 +1245,29 @@ test("The shell stand-in keeps an exclusion the human's allowlist would readmit"
   );
 });
 
+test("A stdio import naming a variable the shell cannot do without is left out too", () => {
+  return withServers(
+    {
+      tool: {
+        command: process.execPath,
+        args: [`${import.meta.dir}/fixtures/mcp-stdio-echo.fixture.ts`],
+        env: { HOME_DIR: "${HOME}" },
+      },
+    },
+    (driver) =>
+      Effect.gen(function* () {
+        const session = yield* driver.open("codex-stdio-standard-name", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("inspect");
+        const details = inspected(yield* turn(session));
+        expect(Arr.join(details.args, " ")).not.toContain("mcp_servers.tool.");
+        expect(instruct(details)).toEqual(
+          expect.stringContaining("tool (HOME is a variable the shell cannot do without)"),
+        );
+      }),
+  );
+});
+
 test("A value holding a later reference is substituted in the original text", () => {
   Bun.env.LATER = "tail";
   Bun.env.EARLIER = "a${LATER}b";
