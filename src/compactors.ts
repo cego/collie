@@ -1283,8 +1283,15 @@ const exitOfLaunch = (dir: string, launch: string | null) =>
     if (launch === null) {
       return null;
     }
-    const stop = yield* stoppedSince(dir, 0);
-    return stop !== null && stop.launch === launch ? stop.why : null;
+    const stops = Arr.filter(
+      yield* readEvents(dir).pipe(Effect.orElseSucceed(() => [])),
+      (one) => one.kind === "stopped",
+    );
+    // WARNING: a stop that names another launch is not this one's; one that names none is all an older Collie recorded.
+    const mine = Option.getOrUndefined(
+      Arr.findLast(stops, (one) => (one.launch ?? null) === null || one.launch === launch),
+    );
+    return mine === undefined ? null : (mine.reason ?? "its turn ended on an error");
   });
 
 export const transcriptOf = Effect.fn("Compactors.transcriptOf")(function* (
