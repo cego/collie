@@ -102,15 +102,19 @@ const harness = Command.make(
         if (!isChatHarness(chosen)) {
           return err("invalid_input", `Chat is ${Arr.join(CHAT_HARNESSES, " or ")}.`);
         }
-        return yield* mutation(env, "chat-harness", requestId, () =>
-          Effect.gen(function* () {
-            yield* writeConfigValue(env.userDir, CHAT_HARNESS_KEY, chosen);
-            return {
-              ok: true as const,
-              data: { preference: chosen },
-              human: `Collie's next chat launch uses ${chosen}. Nothing running was touched.`,
-            };
-          }),
+        return yield* mutation(
+          env,
+          { operation: "chat-harness", run: null, args: { harness: chosen } },
+          requestId,
+          () =>
+            Effect.gen(function* () {
+              yield* writeConfigValue(env.userDir, CHAT_HARNESS_KEY, chosen);
+              return {
+                ok: true as const,
+                data: { preference: chosen },
+                human: `Collie's next chat launch uses ${chosen}. Nothing running was touched.`,
+              };
+            }),
         );
       }),
     ),
