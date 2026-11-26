@@ -9,6 +9,7 @@ import type { UserMcpServers } from "./session";
 
 const RESERVED = "collie_desktop";
 const OWN = "COLLIE_CHAT_";
+export const TOKEN_ENV = `${OWN}MCP_TOKEN`;
 const SHELL = "/bin/sh";
 const NAME = /^[A-Za-z0-9_-]+$/;
 const SETTABLE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -110,7 +111,14 @@ const substituted: (
 };
 
 // WARNING: a url's userinfo is a credential, and Codex takes no url but in its arguments.
-const credited = (url: string) => /^[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/?#]*@/.test(url);
+// WARNING: the url parser trims what a regex would not, so only its own reading can be trusted.
+const credited = (url: string) => {
+  if (!URL.canParse(url)) {
+    return false;
+  }
+  const parsed = new URL(url);
+  return parsed.username !== "" || parsed.password !== "";
+};
 
 const shQuote = (word: string) => `'${pipe(word, Str.replaceAll("'", String.raw`'\''`))}'`;
 
@@ -148,7 +156,6 @@ export const codexServers: (
     mine.push(...made.used);
     return made.text;
   };
-  // WARNING: a name the shell keeps whole, or one the human's allowlist admits, cannot be withheld, so an import that used it is refused.
   const included = (name: string) =>
     Arr.some(
       Rec.toEntries(policy.filters),
@@ -278,10 +285,10 @@ export const codexServers: (
     given.push({ name, url: server.url });
   }
   const withheld = Arr.dedupe(used);
-  // WARNING: a native include of a variable an import's value came from would readmit that value, so the exclusion takes its key.
+  // WARNING: a wildcard exclusion would drop a human's include for that wildcard, so only Collie's own names are excluded.
   const folded = (name: string) => Str.toLowerCase(name);
   const keyed = Rec.toEntries(policy.filters);
-  const wants = Arr.dedupe([`${OWN}*`, ...used]);
+  const wants = Arr.dedupe([TOKEN_ENV, ...Arr.map(relays, (one) => one.variable), ...used]);
   const foldedOnce = (so: ReadonlyArray<string>, name: string) =>
     Arr.some(so, (held) => folded(held) === folded(name)) ? so : Arr.append(so, name);
   const added = Arr.reduce(wants, Arr.empty<string>(), foldedOnce);

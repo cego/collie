@@ -34,6 +34,7 @@ import {
   CodexStatus,
   NO_POLICY,
   NO_SERVERS,
+  TOKEN_ENV,
   codexConnections,
   codexServerUrlArgs,
   codexServers,
@@ -47,7 +48,6 @@ import { noticedContext, placementContext, systemPrompt } from "./session";
 import type { UserMcpServers } from "./session";
 import { transcriptOf } from "./transcript";
 
-const TOKEN_ENV = "COLLIE_CHAT_MCP_TOKEN";
 const SERVER = "collie_desktop";
 const TOOL_TIMEOUT = 24 * 60 * 60;
 const CLIENT_INFO = { name: "collie_desktop", title: "Collie Desktop", version: "1" };
@@ -825,6 +825,14 @@ export const codexDriver: (
           Effect.map(({ data }) => data),
           Effect.orElseSucceed(() => NO_STATUS),
         );
+      // WARNING: a probe that inherited the imports' sources would hand them to a process Codex reads, so it gets only what it needs to start.
+      const probeEnv = () =>
+        Rec.filter(childEnv(), (_value, name) =>
+          Arr.contains(
+            ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "TERM", "CODEX_HOME"],
+            name,
+          ),
+        );
       // WARNING: Codex's own resolution decides which names it already has; reading its files guesses.
       const readConfigured = () =>
         Effect.gen(function* () {
@@ -833,7 +841,7 @@ export const codexDriver: (
           }
           return yield* Effect.scoped(
             Effect.gen(function* () {
-              const probe = yield* appServer(command, context.dir, [], childEnv());
+              const probe = yield* appServer(command, context.dir, [], probeEnv());
               const { config } = yield* probe
                 .call("config/read", { cwd: context.dir })
                 .pipe(Effect.flatMap(decodeEffective));

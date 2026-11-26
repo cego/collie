@@ -104,7 +104,11 @@ const record = async (line: JsonObject) => {
   const held = (await Bun.file(starts).exists()) ? await Bun.file(starts).text() : "";
   await Bun.write(starts, `${held}${JSON.stringify(line)}\n`);
 };
-await record({ pid: process.pid, chat: Bun.argv.length > 3 });
+await record({
+  pid: process.pid,
+  chat: Bun.argv.length > 3,
+  holds: Arr.filter(Rec.keys({ ...Bun.env }), (name) => pipe(name, Str.startsWith("DOC_"))),
+});
 
 const tomlValue: (raw: string) => Schema.Json = (raw) =>
   flow(

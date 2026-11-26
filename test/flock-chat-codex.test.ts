@@ -1012,6 +1012,78 @@ test("An import whose variable the shell's allowlist names is left out, and the 
   });
 });
 
+test("An allowlist on Collie's own namespace keeps narrowing, and the token stays out", () => {
+  const fixture = serveDocs({ tool: "read_doc" });
+  Bun.env.DOC_VAR = "kept";
+  return withServers(
+    { docs: { type: "http", url: fixture.url, headers: { Authorization: "Bearer ${DOC_VAR}" } } },
+    (driver, context) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(
+          `${context.dir}/codex-home/config.toml`,
+          `[shell_environment_policy]\ninherit = "all"\n[shell_environment_policy.filters]\n"COLLIE_CHAT_*" = "include"\n`,
+        );
+        const session = yield* driver.open("codex-own-namespace-allowlist", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("inspect");
+        const given = Arr.join(inspected(yield* turn(session)).args, " ");
+        expect(given).toContain('"COLLIE_CHAT_*" = "include"');
+        expect(given).not.toContain('"COLLIE_CHAT_*" = "exclude"');
+        expect(given).toContain('"COLLIE_CHAT_MCP_TOKEN" = "exclude"');
+        yield* session.offer("shell");
+        expect(message(yield* turn(session))).not.toContain("COLLIE_CHAT_MCP_TOKEN=");
+      }),
+  ).finally(() => {
+    void fixture.stop();
+    delete Bun.env.DOC_VAR;
+  });
+});
+
+test("A url carrying a credential is refused however the parser spells it", () => {
+  const fixture = serveDocs({ tool: "read_doc" });
+  return withServers(
+    {
+      spaced: { type: "http", url: " https://user:secret@example.test/mcp" },
+      docs: { type: "http", url: fixture.url },
+    },
+    (driver) =>
+      Effect.gen(function* () {
+        const session = yield* driver.open("codex-spelled-userinfo", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("inspect");
+        const details = inspected(yield* turn(session));
+        expect(Arr.join(details.args, " ")).not.toContain("secret");
+        expect(instruct(details)).toEqual(
+          expect.stringContaining(
+            "spaced (its url holds a credential Codex would show in its arguments)",
+          ),
+        );
+      }),
+  ).finally(() => void fixture.stop());
+});
+
+test("No Codex Collie starts inherits a variable an import reads its value from", () => {
+  const fixture = serveDocs({ tool: "read_doc" });
+  Bun.env.DOC_SOURCE = "sourced";
+  return withServers(
+    { docs: { type: "http", url: fixture.url, headers: { "X-Doc": "${DOC_SOURCE}" } } },
+    (driver, context) =>
+      Effect.gen(function* () {
+        const session = yield* driver.open("codex-probe-env", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("inspect");
+        yield* turn(session);
+        const lines = yield* startLines(context.dir);
+        expect(Arr.length(lines)).toBeGreaterThan(1);
+        expect(Arr.filter(lines, (line) => pipe(line, Str.includes("DOC_SOURCE")))).toEqual([]);
+      }),
+  ).finally(() => {
+    void fixture.stop();
+    delete Bun.env.DOC_SOURCE;
+  });
+});
+
 test("A malformed imported url is left out, so a valid server beside it still starts", () => {
   const fixture = serveDocs({ tool: "read_doc" });
   return withServers(

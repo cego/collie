@@ -2377,13 +2377,16 @@ stdio server's value waits in a file its own launcher reads and deletes as the s
 starts, and if Collie cannot write one that chat does not start Codex at all rather than
 start a server without its value.
 Codex's own shell is told to exclude every variable an imported server's value came from —
-bar the standard ones a shell cannot work without — and the names Collie makes, in whichever
-way your `shell_environment_policy` is written: a keyed `filters` table keeps every entry
-Collie is not concerned with, and legacy `exclude` names gain ours, since Codex drops the
-first when the second is set beside them. An import outranks the rest of your policy for the
-one name it used: a `filters` entry that included that name is replaced by an exclusion,
-spelled as the variable, so the shell cannot hold what Codex was told; a key you spelled in
-another case is dropped rather than kept beside ours, which Codex rejects. A `${VAR}` a
+bar the standard ones a shell cannot work without — in whichever way your
+`shell_environment_policy` is written: a keyed `filters` table keeps every entry Collie is
+not concerned with, and legacy `exclude` names gain ours, since Codex drops the first when
+the second is set beside them. Collie excludes the names it puts in Codex's environment by
+name — its own server's token and one per relay — and never a wildcard over its namespace, so
+an allowlist you wrote with a wildcard keeps narrowing. An import outranks the rest of your
+policy for the one name it used: a `filters` entry that included that name is replaced by an
+exclusion, spelled as the variable, so the shell cannot hold what Codex was told (a key you
+spelled in another case is dropped rather than kept beside ours, which Codex rejects) — and
+an import whose own allowlist admits the name is refused instead, below. A `${VAR}` a
 header or a value is written with is resolved by Desktop, and the variable itself is then
 taken out of Codex's own environment, so neither Codex nor its shell holds it. The
 exception is a variable Codex's own servers read by name (`bearer_token_env_var`,
