@@ -3545,7 +3545,7 @@ export const AWAITING = "awaiting";
 export const USAGE = "usage";
 const AWAITED = "awaited";
 const NOTIFIED = "notified";
-// WARNING: the round a Watch woke began its work; the host's journal is not asked which round that was.
+// WARNING: the round the workflow said it began is kept here; a wake is only the offer, so it is never read back from the journal.
 const STARTED_ROUND = "started-round";
 const BeganRound = Schema.Struct({ name: Schema.String, head: Schema.String });
 const BeganRoundJson = Schema.fromJsonString(BeganRound);
@@ -4125,7 +4125,6 @@ export const hostLayer: (options: {
             return yield* Workflow.suspend(instance.value);
           }
         });
-      // WARNING: the round that began is the round that ended here, whatever other round the journal holds.
       const completedRoundAt = (runId: string, mr: string) =>
         Effect.gen(function* () {
           const began = yield* beganRoundOf(runId);

@@ -67,7 +67,7 @@ export const settleWatches = Effect.fn("MrWatch.settle")(function* (opts: {
       if (!(yield* opts.watches.still(row.run, row.name))) {
         continue;
       }
-      // WARNING: a wake the last host persisted is still a start to record, delivered by this one.
+      // WARNING: a wake the last host persisted is still the Run's, delivered by this one.
       if (yield* opts.watches.wake(row.run, row.name, row.woke)) {
         yield* record(row, row.woke);
       }
@@ -105,7 +105,7 @@ export const settleWatches = Effect.fn("MrWatch.settle")(function* (opts: {
         since: observed.since,
       });
     }
-    // WARNING: a wake a Stop or a stale name refuses is no start, so only an accepted one is recorded.
+    // WARNING: a wake a Stop or a stale name refuses is not this Run's, so only an accepted one is recorded.
     if (verdict._tag === "Changed" && (yield* opts.watches.wake(row.run, row.name, verdict))) {
       yield* record(row, verdict);
     }
