@@ -17,6 +17,7 @@ import { SESSIONS_EVERY, liveHerds, type LiveHerd } from "./herds";
 import { landingNow } from "./landing";
 import { settleMerges, type MrPanels } from "./merges";
 import { recordWatchEvent } from "./watch-journal";
+import type { WatchRow } from "./store";
 import { settleWatches, type Watches } from "./mr-watch";
 import { startRequested, type Requested } from "./review-requests";
 import { shell } from "./mr";
@@ -226,6 +227,13 @@ const keepRound = (env: PluginEnv, herdr: Herdr) =>
     ),
   );
 
+/** The Runs still waiting on each merge request, by MR id. */
+const demanding = (rows: ReadonlyArray<WatchRow>) => {
+  const demand = new Map<string, string[]>();
+  for (const row of rows) demand.set(row.mr, [...(demand.get(row.mr) ?? []), row.run]);
+  return demand;
+};
+
 /**
  * The merge watch, every `MERGES_EVERY` until the host stops: each Task's merge request is
  * read when its answer is due, and the Runs watching one are judged on what was read.
@@ -255,10 +263,10 @@ export const mergeWatch = <E, R>(opts: {
       // A Run that is held or stopped waits on nothing, and asks for nothing: its row keeps
       // the cursor and the wake for a Resume to take up again.
       const asking = new Set(
-        Arr.filter(
-          runs,
-          (run) => !run.held && run.state !== "stopped" && run.state !== "failed",
-        ).map((run) => run.id),
+        Arr.map(
+          Arr.filter(runs, (run) => !run.held && run.state !== "stopped" && run.state !== "failed"),
+          (run) => run.id,
+        ),
       );
       const rows = Arr.filter(yield* opts.watches.outstanding, (row) => asking.has(row.run));
       yield* settleMerges({
@@ -275,10 +283,7 @@ export const mergeWatch = <E, R>(opts: {
         states,
         panels: opts.panels,
         making: landingNow,
-        demand: Arr.reduce(rows, new Map<string, string[]>(), (acc, row) => {
-          acc.set(row.mr, [...(acc.get(row.mr) ?? []), row.run]);
-          return acc;
-        }),
+        demand: demanding(rows),
         event,
       });
       yield* settleWatches({

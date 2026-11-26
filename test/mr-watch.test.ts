@@ -1,6 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import * as Str from "effect/String";
 import { Clock, Effect, FileSystem, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { Rig } from "./support/recorder";
@@ -86,7 +87,7 @@ const readLogLines = (runId: string) =>
           .pipe(Effect.orElseSucceed(() => "")),
       ),
     ),
-    (text) => text.split("\n"),
+    (text) => Str.split(text, "\n"),
   );
 
 /** The heads each watch round woke on, as the Run recorded them. */
@@ -99,7 +100,7 @@ const roundsOf = (runId: string) =>
           .pipe(Effect.orElseSucceed(() => "")),
       ),
     ),
-    (text) => Arr.filter(text.split("\n"), (line) => line.includes("round-")),
+    (text) => Arr.filter(Str.split(text, "\n"), (line) => Str.includes("round-")(line)),
   );
 
 const gitlab = Effect.suspend(() => host.gitlab(OPEN));
@@ -385,9 +386,9 @@ test(
             );
             const rounds = yield* roundsOf(runId);
             // A replay records its round again; the heads it woke on are the two pushes.
-            expect([...new Set(rounds.map((line) => line.replace(/^.*?round-\d+: /, "")))]).toEqual(
-              [`${H1} -> ${H2}`, `${H2} -> ${H3}`],
-            );
+            expect([
+              ...new Set(Arr.map(rounds, (line) => Str.replace(/^.*?round-\d+: /, "")(line))),
+            ]).toEqual([`${H1} -> ${H2}`, `${H2} -> ${H3}`]);
             expect(yield* agentStarts).toEqual([]);
             expect(reads(forge, "7")).toBeGreaterThan(0);
           }),
@@ -514,19 +515,19 @@ test(
               () => status(runId),
               (view) => view?.status.status === "complete",
             );
-            expect(done?.status.status === "complete" ? done.status.value : null).toBe(
-              JSON.stringify({
-                _tag: "Changed",
-                change: {
-                  head: H2,
-                  previous: H1,
-                  newHead: true,
-                  comments: [],
-                  pipeline: "passed",
-                  forcePush: false,
-                },
-              }),
-            );
+            expect(
+              yield* decodeWoke(done?.status.status === "complete" ? done.status.value : null),
+            ).toEqual({
+              _tag: "Changed",
+              change: {
+                head: H2,
+                previous: H1,
+                newHead: true,
+                comments: [],
+                pipeline: "passed",
+                forcePush: false,
+              },
+            });
             expect(yield* watchOf(runId)).toBeNull();
             expect(yield* agentStarts).toEqual([]);
           }),
@@ -668,9 +669,9 @@ for (const state of ["closed", "merged"] as const)
                 () => status(runId),
                 (view) => view?.status.status === "complete" || view?.status.status === "failed",
               );
-              expect(done?.status.status === "complete" ? done.status.value : null).toBe(
-                JSON.stringify({ _tag: "Ended", state }),
-              );
+              expect(
+                yield* decodeWoke(done?.status.status === "complete" ? done.status.value : null),
+              ).toEqual({ _tag: "Ended", state });
               expect(yield* watchOf(runId)).toBeNull();
               expect(
                 Arr.map(
@@ -715,7 +716,7 @@ test(
             yield* Effect.sleep("6 minutes");
             const readOut = pollsIn(yield* readWatchJournal(host.dir()));
             expect(readOut.length).toBeGreaterThan(0);
-            expect(readOut.reduce((total, event) => total + event.attempts, 0)).toBe(
+            expect(Arr.reduce(readOut, 0, (total, event) => total + event.attempts)).toBe(
               Arr.filter(forge.requests(), (one) =>
                 /\/merge_requests\/7(?:[/?]|$)/.test(decodeURIComponent(one.url)),
               ).length,
@@ -737,7 +738,7 @@ test(
             // is not one any start was made on.
             let refused = false;
             forge.after((url, _init, response) => {
-              if (refused || !/merge_requests\/7$/.test(decodeURIComponent(url)))
+              if (refused || !Str.endsWith("merge_requests/7")(decodeURIComponent(url)))
                 return Promise.resolve(response);
               refused = true;
               return Promise.resolve(Response.json({ message: "gone" }, { status: 404 }));
@@ -800,9 +801,13 @@ test(
         // Each round is told from the times it has. The round started on H2 published; the
         // two after it posted nothing, the first superseded by a newer head and the last
         // with no newer head and no note at all.
-        const posted = Arr.filter(yield* readLogLines(runId), (line) => line.includes("posted:"));
+        const posted = Arr.filter(yield* readLogLines(runId), (line) =>
+          Str.includes("posted:")(line),
+        );
         // A replayed round records its line again; one round published, and no other did.
-        expect([...new Set(posted.map((line) => /round-(\d+)/.exec(line)?.[1]))]).toEqual(["1"]);
+        expect([...new Set(Arr.map(posted, (line) => /round-(\d+)/.exec(line)?.[1]))]).toEqual([
+          "1",
+        ]);
         expect(firstSeen(H3)).toBeGreaterThan(epochMs(starts[0]!.at));
         expect(firstSeen(H3)).toBeLessThanOrEqual(epochMs(starts[1]!.at));
         expect(firstSeen(H4)).toBeGreaterThan(epochMs(starts[1]!.at));

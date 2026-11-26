@@ -298,16 +298,17 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
       );
       const now = DateTime.formatIso(DateTime.makeUnsafe(opts.now));
       const read = opts.panels.get(id)?.panel;
-      yield* event({
-        _tag: "poll",
+      const refused = answered === null && read?._tag === "Unavailable" ? read.reason : null;
+      const poll = {
+        _tag: "poll" as const,
         at: now,
         mr: id,
-        source: demanded && !settles ? "watch" : "task",
-        result: answered === null ? "failed" : "read",
+        source: demanded && !settles ? ("watch" as const) : ("task" as const),
+        result: answered === null ? ("failed" as const) : ("read" as const),
         attempts: (yield* http.attempts) - sent,
         head: read?._tag === "Details" ? (read.head ?? null) : null,
-        ...(answered === null && read?._tag === "Unavailable" ? { reason: read.reason } : {}),
-      });
+      };
+      yield* event(refused === null ? poll : { ...poll, reason: refused });
       if (answered === null) {
         const known = forge.get(id);
         // What it last said stands, dated as it was; only the failed ask is new.
