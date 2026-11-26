@@ -995,6 +995,25 @@ test("A relay leaves the client's own authorization alone, and passes the server
   ).finally(() => void fixture.stop());
 });
 
+test("An import naming a variable a shell cannot do without is not refused, and that name stays", () => {
+  const fixture = serveDocs({ tool: "read_doc" });
+  return withServers(
+    { docs: { type: "http", url: fixture.url, headers: { "X-Root": "${HOME}" } } },
+    (driver) =>
+      Effect.gen(function* () {
+        const session = yield* driver.open("codex-standard-name", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("inspect");
+        const details = inspected(yield* turn(session));
+        expect(relayed(details, "docs")).toStartWith("http://127.0.0.1:");
+        const home: string | undefined = Bun.env.HOME;
+        expect(details.env.HOME).toBe(home);
+        yield* session.offer("shell");
+        expect(message(yield* turn(session))).toContain("HOME=");
+      }),
+  ).finally(() => void fixture.stop());
+});
+
 test("A variable an import names is taken out of Codex's own environment", () => {
   const fixture = serveDocs({ tool: "read_doc", token: "kept" });
   Bun.env.SOLE_SOURCE = "kept";
