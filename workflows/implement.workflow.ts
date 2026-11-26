@@ -416,18 +416,11 @@ export default defineWorkflow({
       if ((asked.then ?? "") !== "") {
         yield* forecast(delivery);
       }
+      // WARNING: a park raised here is raised on every resume, or a plan that still builds nothing would go on to deliver.
       const unbuilt = (name: string, reason: string) =>
         Activity.make({
           name: `${name}.park`,
-          execute: Effect.gen(function* () {
-            const fs = yield* FileSystem.FileSystem;
-            const marker = `${place.dir}/${name}.parked`;
-            if (yield* fs.exists(marker).pipe(Effect.orDie)) {
-              return yield* host.parked(runId, null);
-            }
-            yield* fs.writeFileString(marker, "").pipe(Effect.orDie);
-            return yield* parkStep(`${reason}. Correct it, then resume ${runId}.`);
-          }),
+          execute: parkStep(`${reason}. Correct it, then resume ${runId}.`),
         });
       const source = yield* Activity.make({
         name: "work-source",
