@@ -4,6 +4,8 @@ import { openedOnce } from "../desktop/src/bun/machine";
 
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect);
 
+const nothing = () => undefined;
+
 test("two callers asking for one Machine open it once", () =>
   run(
     Effect.gen(function* () {
@@ -11,7 +13,7 @@ test("two callers asking for one Machine open it once", () =>
       const started: Array<string> = [];
       const release = yield* Deferred.make<void>();
       const open = (key: string) =>
-        once(key, () =>
+        once(key, nothing, () =>
           Effect.gen(function* () {
             started.push(key);
             yield* Deferred.await(release);
@@ -28,5 +30,32 @@ test("two callers asking for one Machine open it once", () =>
 
       expect(started).toEqual(["vm"]);
       expect(two).toBe(one);
+    }),
+  ));
+
+test("a caller that asked before the route landed takes the one that landed", () =>
+  run(
+    Effect.gen(function* () {
+      const once = openedOnce(new Map<string, Deferred.Deferred<string>>());
+      const routes = new Map<string, string>();
+      const started: Array<string> = [];
+      const open = () =>
+        once(
+          "vm",
+          () => routes.get("vm"),
+          () =>
+            Effect.sync(() => {
+              started.push("vm");
+              routes.set("vm", "opened");
+              return "opened";
+            }),
+        );
+
+      const early = open();
+      const first = yield* open();
+      const second = yield* early;
+
+      expect(started).toEqual(["vm"]);
+      expect(second).toBe(first);
     }),
   ));

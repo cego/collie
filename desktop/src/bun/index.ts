@@ -440,12 +440,12 @@ const main = Effect.gen(function* () {
       yield* PubSub.publish(changes, { _tag: "Add", route });
       return route;
     });
-  const open = (machine: HerdrMachine) => {
-    const held = routes.get(machine.id);
-    return held !== undefined
-      ? Effect.succeed(held.route)
-      : once(machine.id, () => openRoute(machine));
-  };
+  const open = (machine: HerdrMachine) =>
+    once(
+      machine.id,
+      () => routes.get(machine.id)?.route,
+      () => openRoute(machine),
+    );
   const roster = rosterOf(collie).pipe(Effect.map((said) => said.roster));
   yield* Effect.addFinalizer(() =>
     Effect.forEach(

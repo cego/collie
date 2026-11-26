@@ -857,9 +857,14 @@ export interface Routed {
 export const openedOnce = <A, E>(opening: Map<string, Deferred.Deferred<A, E>>) => {
   const returned: <R>(
     key: string,
+    held: () => A | undefined,
     start: () => Effect.Effect<A, E, R>,
-  ) => Effect.Effect<A, E, R> = (key, start) =>
+  ) => Effect.Effect<A, E, R> = (key, held, start) =>
     Effect.suspend(() => {
+      const already = held();
+      if (already !== undefined) {
+        return Effect.succeed(already);
+      }
       const found = opening.get(key);
       if (found !== undefined) {
         return Deferred.await(found);
