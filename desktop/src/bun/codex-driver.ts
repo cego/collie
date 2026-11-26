@@ -28,11 +28,13 @@ import { isNumber, isString } from "../../../src/schema";
 import type { JsonObject } from "../../../src/schema";
 import { standingDirectionContext } from "../../../src/standing-direction";
 import type { ChatEndpoint } from "./chat-endpoint";
+import { codexRelay } from "./codex-relay";
 import {
   CodexStatus,
   NO_POLICY,
   NO_SERVERS,
   codexConnections,
+  codexServerUrlArgs,
   codexServers,
 } from "./codex-servers";
 import type { CodexServers, ShellPolicy } from "./codex-servers";
@@ -820,11 +822,24 @@ export const codexDriver: (
             secrets,
           );
           yield* keep(given.files);
+          const relays = Arr.map(given.relays, (one) => ({
+            name: one.name,
+            live: codexRelay(one.url, one.headers),
+          }));
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              for (const one of relays) {
+                one.live.stop();
+              }
+            }),
+          );
+          const relayed = Arr.flatMap(relays, (one) => codexServerUrlArgs(one.name, one.live.url));
           const server = yield* appServer(
             command,
             context.dir,
             [
               ...given.args,
+              ...relayed,
               "-c",
               `mcp_servers.${SERVER}.url=${encodeLine(url)}`,
               "-c",
@@ -832,7 +847,7 @@ export const codexDriver: (
               "-c",
               `mcp_servers.${SERVER}.tool_timeout_sec=${TOOL_TIMEOUT}`,
             ],
-            { ...childEnv(), ...given.env, [TOKEN_ENV]: token },
+            { ...childEnv(), [TOKEN_ENV]: token },
           );
           yield* Effect.forkScoped(pump(server));
           const { account, requiresOpenaiAuth } = yield* server

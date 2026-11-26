@@ -2364,22 +2364,23 @@ Codex reports it has — its own `config.toml` and any project's `.codex/config.
 trusts — so a server Codex already configures keeps Codex's entry and the chat names it
 once; `collie_desktop` is Collie's own and no server of yours takes its place. A server's
 static headers, such as a bearer token, and a stdio server's environment reach Codex as
-values Collie holds, never in the server's command line and never in the chat. A header's
-value sits in the environment Codex runs with, under a name Collie makes, because that is
-where Codex sends a header from; a stdio server's value does not, and waits in a file its
-own launcher reads and deletes as the server starts. Codex's own shell is told to exclude
-every variable an imported server's value came from — bar the standard ones a shell cannot
-work without — and the names Collie makes, in whichever way your
-`shell_environment_policy` is written: a keyed `filters` table keeps its entries and gains
-ours, and legacy `exclude` names gain them, since Codex drops the first when the second is
-set beside it. A name your own keyed `filters` includes keeps its entry, because your policy
-decides what may enter that shell. A command Codex runs therefore does not inherit them,
-while a variable of yours that Codex's own server still reads, such as its
-`bearer_token_env_var`, still reaches that server. Neither value is isolated from a command
-Codex runs, and none can be: that shell runs as you do, so it can read the file before the
-launcher unlinks it, the environment of any of your processes, and the configuration the
-value was imported from — keep a credential out of that shell by keeping it out of your MCP
-configuration, or by running the chat on a Machine where it does not sit. A
+values Collie holds, never in the server's command line, never in Codex's own environment
+and never in the chat. A header's value is added by a relay Desktop runs on loopback, which
+is the address Codex is given, so the value itself is never a thing Codex holds; a stdio
+server's value waits in a file its own launcher reads and deletes as the server starts.
+Codex's own shell is told to exclude every variable an imported server's value came from —
+bar the standard ones a shell cannot work without — and the names Collie makes, in whichever
+way your `shell_environment_policy` is written: a keyed `filters` table keeps its entries and
+gains ours, and legacy `exclude` names gain them, since Codex drops the first when the second
+is set beside it. A name your own keyed `filters` includes keeps its entry, because your
+policy decides what may enter that shell. A `${VAR}` a header or a value is written with is
+resolved from the environment Codex already runs with; Collie neither adds it nor takes it
+away, since a server of Codex's own may name the same variable, and the shell is kept from
+it as above. None of this is isolation, and Collie claims none: the value is in Desktop's own
+process, in the configuration it was imported from and, where it names one, in your
+existing environment, and a command running as you can reach all three, as it can the relay
+on loopback. Keep a credential out of a Codex chat by keeping it out of your MCP
+configuration, or by running that chat on a Machine where it does not sit. A
 stdio server whose environment names something a shell cannot set, or a name in Collie's own
 `COLLIE_CHAT_` namespace, is left out and the chat says so. If Codex will not say which
 servers it has, none of yours is passed at all — better a server missing from the chat than

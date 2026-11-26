@@ -110,6 +110,50 @@ const inspected = (events: ReadonlyArray<AguiEvent>) => {
   return flow(Schema.decodeResult(Inspected), Result.getOrThrow)(text.delta);
 };
 
+const relayed = (details: ReturnType<typeof inspected>, name: string) => {
+  const found = RegExp(`mcp_servers\\.${name}\\.url="([^"]+)"`).exec(Arr.join(details.args, " "));
+  if (found?.[1] === undefined) {
+    throw new Error(`No relay for ${name}`);
+  }
+  return found[1];
+};
+
+const Initialize = Schema.fromJsonString(
+  Schema.Struct({
+    jsonrpc: Schema.Literal("2.0"),
+    id: Schema.Finite,
+    method: Schema.Literal("initialize"),
+    params: Schema.Struct({
+      protocolVersion: Schema.String,
+      capabilities: Schema.Record(Schema.String, Schema.Unknown),
+      clientInfo: Schema.Struct({ name: Schema.String, version: Schema.String }),
+    }),
+  }),
+);
+const initializeCall = {
+  jsonrpc: "2.0",
+  id: 1,
+  method: "initialize",
+  params: {
+    protocolVersion: "2025-06-18",
+    capabilities: {},
+    clientInfo: { name: "test", version: "1" },
+  },
+} as const;
+const asked = Effect.runSync(Schema.encodeEffect(Initialize)(initializeCall));
+
+const initialize = (url: string) =>
+  Effect.promise(() =>
+    Bun.fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
+      body: asked,
+    }).then((answer) => answer.status),
+  );
+
 test("Codex streams a turn's reasoning, text and one row per tool, refuses what it asks the chat to answer, and costs its usage", () =>
   withCodex((driver) =>
     Effect.gen(function* () {
@@ -489,16 +533,15 @@ test("Codex is given the human's own MCP server, lists its tools, and reads thro
   ).finally(() => void fixture.stop());
 });
 
-test("Codex gets a server's token through its environment, never its command line or prompt", () => {
-  const token = "s3cr3t-value";
+test("A credential written into a server's headers never enters Codex, and only its own server gets it", () => {
+  const token = "literal-secret";
   const fixture = serveDocs({ tool: "read_doc", token });
-  Bun.env.DOCS_TOKEN = token;
   return withServers(
     {
       docs: {
         type: "http",
         url: fixture.url,
-        headers: { Authorization: "Bearer ${DOCS_TOKEN}" },
+        headers: { Authorization: `Bearer ${token}` },
       },
     },
     (driver) =>
@@ -508,22 +551,25 @@ test("Codex gets a server's token through its environment, never its command lin
         yield* session.offer("inspect");
         const details = inspected(yield* turn(session));
         const given = Arr.join(details.args, " ");
-        const carried = Arr.findFirst(
-          Rec.toEntries(details.env),
-          ([, value]) => value === `Bearer ${token}`,
-        );
-        const [variable = ""] = Option.getOrElse(carried, () => ["", ""]);
-        expect(variable).not.toBe("");
-        expect(given).toContain("mcp_servers.docs.env_http_headers={");
-        expect(given).toContain(`= "${variable}"`);
+        const relay = relayed(details, "docs");
+        expect(given).not.toContain("env_http_headers");
         expect(given).not.toContain(token);
+        expect(Arr.some(Rec.values(details.env), (value) => pipe(value, Str.includes(token)))).toBe(
+          false,
+        );
+        expect(
+          Arr.some(Rec.keys(details.env), (key) =>
+            pipe(key, Str.startsWith("COLLIE_CHAT_SERVER_")),
+          ),
+        ).toBe(false);
         expect(details.start.developerInstructions).toEqual(expect.not.stringContaining(token));
+        expect(yield* initialize(relay)).toBe(200);
+        expect(yield* initialize(fixture.url)).toBe(401);
         yield* session.offer("servers");
         expect(called(yield* turn(session))).toEqual(["mcp__docs__read_doc"]);
       }),
   ).finally(() => {
     void fixture.stop();
-    delete Bun.env.DOCS_TOKEN;
   });
 });
 
@@ -644,8 +690,8 @@ test("Codex keeps a variable its own server reads, even when an import names it"
 });
 
 test("A server's credential reaches that server, and never Codex's own shell", () => {
-  const fixture = serveDocs({ tool: "read_doc", token: "mine" });
-  Bun.env.MY_THING = "mine";
+  const fixture = serveDocs({ tool: "read_doc", token: "mine-secret" });
+  Bun.env.MY_THING = "mine-secret";
   return withServers(
     {
       docs: {
@@ -662,6 +708,7 @@ test("A server's credential reaches that server, and never Codex's own shell", (
         const shell = message(yield* turn(session));
         expect(shell).not.toContain("COLLIE_CHAT_SERVER_1");
         expect(shell).not.toContain("MY_THING");
+        expect(shell).not.toContain("mine-secret");
         expect(shell).toContain("PATH=");
         yield* session.offer("servers");
         const events = yield* turn(session);
@@ -962,7 +1009,7 @@ test("An untrusted working directory's Codex config is ignored, so the human's o
   });
 });
 
-test("Two servers' headers get an environment variable each, and a header keeps its dots", () => {
+test("Two servers' headers each reach their own server, and a header keeps its dots", () => {
   const first = serveDocs({ tool: "first_read", header: "X.Api.Key", token: "first" });
   const second = serveDocs({ tool: "second_read", header: "Api.Key", token: "second" });
   return withServers(
@@ -976,16 +1023,13 @@ test("Two servers' headers get an environment variable each, and a header keeps 
         yield* Effect.addFinalizer(() => session.close);
         yield* session.offer("inspect");
         const details = inspected(yield* turn(session));
-        const given = Arr.join(details.args, " ");
-        const carried = Rec.filter(details.env, (_value, key) =>
+        expect(Arr.join(details.args, " ")).not.toContain("env_http_headers");
+        const here = Arr.filter(Rec.keys(details.env), (key) =>
           pipe(key, Str.startsWith("COLLIE_CHAT_SERVER_")),
         );
-        expect(Rec.size(carried)).toBe(2);
-        expect(Rec.values(carried)).toContain("Bearer first");
-        expect(Rec.values(carried)).toContain("Bearer second");
-        expect(given).toContain("mcp_servers.one.env_http_headers={");
-        expect(given).toContain('"X.Api.Key" = ');
-        expect(given).toContain("mcp_servers.one_X.env_http_headers={");
+        expect(here).toEqual([]);
+        expect(yield* initialize(relayed(details, "one"))).toBe(200);
+        expect(yield* initialize(relayed(details, "one_X"))).toBe(200);
         yield* session.offer("servers");
         expect(called(yield* turn(session))).toEqual([
           "mcp__one__first_read",
@@ -1206,13 +1250,13 @@ test("The login command a server is told parses, even when its url holds a quote
   const quote = "'";
   const servers = {
     args: [],
-    env: {},
     given: [
       { name: "linear-server", url: `http://127.0.0.1:1/it${quote}s` },
       { name: "stdio-one" },
     ],
     files: [],
     left: [],
+    relays: [],
   } as const;
   const told = codexConnections(
     servers,

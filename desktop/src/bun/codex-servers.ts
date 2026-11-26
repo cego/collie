@@ -43,17 +43,25 @@ export const NO_POLICY: ShellPolicy = { excludes: [], filters: {} };
 
 export interface CodexServers {
   readonly args: ReadonlyArray<string>;
-  readonly env: Readonly<Record<string, string>>;
   readonly files: ReadonlyArray<{ readonly path: string; readonly text: string }>;
   readonly given: ReadonlyArray<{ readonly name: string; readonly url?: string }>;
   readonly left: ReadonlyArray<{ readonly name: string; readonly why: string }>;
+  readonly relays: ReadonlyArray<{
+    readonly name: string;
+    readonly url: string;
+    readonly headers: Readonly<Record<string, string>>;
+  }>;
 }
 
-export const NO_SERVERS: CodexServers = { args: [], env: {}, files: [], given: [], left: [] };
+export const NO_SERVERS: CodexServers = { args: [], files: [], given: [], left: [], relays: [] };
 
 // WARNING: Codex reads a `-c` value as TOML: a table's keys are quoted so a dot stays a header's name.
 const quoted = (value: string) => JSON.stringify(value);
 const setting = (key: string, value: string) => ["-c", `${key}=${quoted(value)}`];
+export const codexServerUrlArgs: (name: string, url: string) => ReadonlyArray<string> = (
+  name,
+  url,
+) => setting(`mcp_servers.${name}.url`, url);
 const list = (key: string, values: ReadonlyArray<string>) => [
   "-c",
   `${key}=[${Arr.join(Arr.map(values, quoted), ", ")}]`,
@@ -110,10 +118,10 @@ export const codexServers: (
     };
   }
   const args: Array<string> = [];
-  const env: Record<string, string> = {};
   const files: Array<{ path: string; text: string }> = [];
   const given: Array<{ name: string; url?: string }> = [];
   const left: Array<{ name: string; why: string }> = [];
+  const relays: Array<{ name: string; url: string; headers: Record<string, string> }> = [];
   const used: Array<string> = [];
   const resolve = (value: string) => {
     const made = substituted(value, childEnv());
@@ -193,15 +201,15 @@ export const codexServers: (
       left.push({ name, why: "Codex does not speak SSE" });
       continue;
     }
-    args.push(...setting(`mcp_servers.${name}.url`, server.url));
     const headers: Record<string, string> = {};
     for (const [header, value] of Rec.toEntries(server.headers ?? {})) {
-      carried += 1;
-      const variable = `${OWN}SERVER_${carried}`;
-      env[variable] = resolve(value);
-      headers[header] = variable;
+      headers[header] = resolve(value);
     }
-    args.push(...table(`mcp_servers.${name}.env_http_headers`, headers));
+    if (Rec.size(headers) === 0) {
+      args.push(...codexServerUrlArgs(name, server.url));
+    } else {
+      relays.push({ name, url: server.url, headers });
+    }
     given.push({ name, url: server.url });
   }
   // WARNING: Codex rejects two filter keys that differ only in case, and a key the human includes outranks Collie's exclusion.
@@ -213,7 +221,7 @@ export const codexServers: (
     (name) => !spelled(name),
   );
   // WARNING: Codex drops its keyed `filters` table when a legacy exclude is set beside it.
-  if (Rec.size(env) > 0 || own.length > 0) {
+  if (own.length > 0) {
     const added: Record<string, string> = {};
     for (const name of own) {
       added[name] = "exclude";
@@ -224,7 +232,7 @@ export const codexServers: (
         : list("shell_environment_policy.exclude", Arr.dedupe([...own, ...policy.excludes]))),
     );
   }
-  return { args, env, files, given, left };
+  return { args, files, given, left, relays };
 };
 
 const toolsOf = (status: CodexStatus | undefined) => Rec.keys(status?.tools ?? {});
