@@ -41,17 +41,25 @@ export const steer = Command.make(
         if (run === "") {
           return err("invalid_input", "--target is `run:<id>`.");
         }
-        return yield* mutation(env, "steer", requestId, (id) =>
-          Effect.flatMap(cliDoor(env), (door) =>
-            steerAbout(env, {
-              door,
-              runId: run,
-              text,
-              from: Option.getOrNull(from),
-              dryRun,
-              request: id,
-            }),
-          ),
+        return yield* mutation(
+          env,
+          {
+            operation: "steer",
+            run,
+            args: { runId: run, text, from: Option.getOrNull(from), dryRun },
+          },
+          requestId,
+          (id) =>
+            Effect.flatMap(cliDoor(env), (door) =>
+              steerAbout(env, {
+                door,
+                runId: run,
+                text,
+                from: Option.getOrNull(from),
+                dryRun,
+                request: id,
+              }),
+            ),
         );
       }),
     ),
@@ -76,15 +84,22 @@ export const confirm = Command.make(
   "confirm",
   { proposalId: proposalIdArg, hash: hashFlag, requestId: requestIdFlag },
   ({ proposalId, hash, requestId }) =>
-    mutating("confirm", requestId, (env, id) =>
-      Effect.gen(function* () {
-        return yield* confirmProposed(env, {
-          door: yield* cliDoor(env),
-          proposal: proposalId,
-          hash: Option.isSome(hash) ? hash.value : yield* hashOf(env, proposalId),
-          request: id,
-        });
-      }),
+    mutating(
+      {
+        operation: "confirm",
+        run: null,
+        args: { proposal: proposalId, hash: Option.getOrNull(hash) },
+      },
+      requestId,
+      (env, id) =>
+        Effect.gen(function* () {
+          return yield* confirmProposed(env, {
+            door: yield* cliDoor(env),
+            proposal: proposalId,
+            hash: Option.isSome(hash) ? hash.value : yield* hashOf(env, proposalId),
+            request: id,
+          });
+        }),
     ),
 ).pipe(Command.withDescription("Carry out a proposal, naming it and its exact contents"));
 
@@ -92,15 +107,22 @@ export const decline = Command.make(
   "decline",
   { proposalId: proposalIdArg, hash: hashFlag, requestId: requestIdFlag },
   ({ proposalId, hash, requestId }) =>
-    mutating("decline", requestId, (env, id) =>
-      Effect.gen(function* () {
-        return yield* declineProposed(env, {
-          door: yield* cliDoor(env),
-          proposal: proposalId,
-          hash: Option.isSome(hash) ? hash.value : yield* hashOf(env, proposalId),
-          request: id,
-        });
-      }),
+    mutating(
+      {
+        operation: "decline",
+        run: null,
+        args: { proposal: proposalId, hash: Option.getOrNull(hash) },
+      },
+      requestId,
+      (env, id) =>
+        Effect.gen(function* () {
+          return yield* declineProposed(env, {
+            door: yield* cliDoor(env),
+            proposal: proposalId,
+            hash: Option.isSome(hash) ? hash.value : yield* hashOf(env, proposalId),
+            request: id,
+          });
+        }),
     ),
 ).pipe(Command.withDescription("Say no to a proposal, so it stops being pending"));
 
@@ -164,8 +186,16 @@ export const runDeliveries = Command.make(
           return err("invalid_input", `No delivery "${settleId}" for this Run.`);
         }
         const door = yield* cliDoor(env);
-        return yield* mutation(env, "run-deliveries-reconcile", requestId, (id) =>
-          reconcileDelivered(env, { door, runId, delivery: settleId, as: how, request: id }),
+        return yield* mutation(
+          env,
+          {
+            operation: "run-deliveries-reconcile",
+            run: runId,
+            args: { runId, delivery: settleId, as: how },
+          },
+          requestId,
+          (id) =>
+            reconcileDelivered(env, { door, runId, delivery: settleId, as: how, request: id }),
         );
       }),
     ),
@@ -197,8 +227,16 @@ export const proposal = Command.make("proposal").pipe(
               return err("invalid_input", "--as is `applied` or `not-applied`.");
             }
             const door = yield* cliDoor(env);
-            return yield* mutation(env, "proposal-reconcile", requestId, (id) =>
-              reconcileProposed(env, { door, proposal: proposalId, index: at, as, request: id }),
+            return yield* mutation(
+              env,
+              {
+                operation: "proposal-reconcile",
+                run: null,
+                args: { proposal: proposalId, index: at, as },
+              },
+              requestId,
+              (id) =>
+                reconcileProposed(env, { door, proposal: proposalId, index: at, as, request: id }),
             );
           }),
         ),
