@@ -91,7 +91,14 @@ const ROSTER_WAIT = "5 seconds" as const;
 
 const rosterWait = Config.Duration("COLLIE_ROSTER_READ_WITHIN").pipe(
   Config.withDefault(Duration.fromInputUnsafe(ROSTER_WAIT)),
-  Effect.orDie,
+  // WARNING: a typed failure, not a defect, so a Machine list is still read from the other side.
+  Effect.mapError(
+    () =>
+      new HerdrError({
+        message: "core machine.list has no deadline",
+        detail: "COLLIE_ROSTER_READ_WITHIN is not a duration",
+      }),
+  ),
   Effect.filterOrFail(
     (wait) => Duration.isFinite(wait) && Duration.toMillis(wait) > 0,
     (wait) =>

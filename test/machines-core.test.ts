@@ -238,6 +238,31 @@ test("a roster deadline that would never expire is refused rather than waited on
     ),
   ));
 
+test("a roster deadline that does not parse leaves the paired Machines listed", () =>
+  runEffect(
+    twoMachines(
+      "collie-core-bad-deadline-",
+      (first, second) =>
+        Effect.gen(function* () {
+          yield* first.lists([second]);
+          expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
+          const unread = yield* first.cli(["machine", "list"], {
+            COLLIE_ROSTER_READ_WITHIN: "not-a-duration",
+          });
+
+          expect(unread.envelope.ok).toBe(true);
+          expect(unread.envelope.data).toMatchObject({
+            roster: null,
+            machines: [{ name: "second", added: null }],
+          });
+          expect(unread.envelope.data).toMatchObject({
+            rosterFailure: expect.stringContaining("COLLIE_ROSTER_READ_WITHIN"),
+          });
+        }),
+      ["attended.workflow.ts"],
+    ),
+  ));
+
 test("a paired Machine core does not have is listed as not added, keeps its pairing, and connect adds it", () =>
   runEffect(
     twoMachines(
