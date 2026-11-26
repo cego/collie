@@ -4176,7 +4176,7 @@ test("a card says its checks passed where the forge read them, and that Collie h
       const seen = (forgeFacts?: ReturnType<typeof forge>) =>
         board(env, [run], {
           mrStates: new Map([["github.com/cego/collie#30", "open"]]),
-          ...(forgeFacts === undefined ? {} : { forge: forgeFacts }),
+          forge: forgeFacts,
         });
 
       const [green] = yield* seen(forge({ state: "passed" }));
