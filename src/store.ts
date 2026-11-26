@@ -1,6 +1,5 @@
 import * as Struct from "effect/Struct";
 import * as Arr from "effect/Array";
-import * as Rec from "effect/Record";
 import type { FileSystem, Path, Stream } from "effect";
 import {
   Context,
@@ -30,6 +29,7 @@ import {
   importRunRecords,
 } from "./records-import";
 import { StoreWrites } from "./store-writes";
+import { asJsonText, canonical } from "./canonical";
 import { RUN_RECORDS_MIGRATION } from "./run-records";
 import { importMrStates } from "./merge-requests";
 import { RequestConflict, RunReport } from "./board-model";
@@ -1277,25 +1277,7 @@ const watchRowOf = (row: {
         : Schema.decodeEffect(Schema.fromJsonString(Woke))(row.woke),
   }).pipe(Effect.map((decoded) => ({ run: row.run, mr: row.mr, name: row.name, ...decoded })));
 
-const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Json));
-const asJsonText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
-
 const answererText = flow(
   Schema.encodeResult(Schema.fromJsonString(AuditLine.fields.actor)),
   Result.getOrThrow,
 );
-
-// WARNING: key order is ignored: two objects that differ only in key order are one request.
-const canonical = (value: Schema.Json) => asJsonText(ordered(value));
-
-const ordered: (value: Schema.Json) => Schema.Json = (value) => {
-  if (Arr.isArray<typeof value>(value)) {
-    return Arr.map(value, ordered);
-  }
-  if (!isRecord(value)) {
-    return value;
-  }
-  return Rec.fromEntries(
-    Arr.map(Struct.keys(value).sort(), (key) => [key, ordered(value[key] ?? null)] as const),
-  );
-};

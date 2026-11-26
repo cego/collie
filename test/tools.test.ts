@@ -660,7 +660,12 @@ test.each(["typed failure", "defect"])(
             );
             return yield* kind === "defect" ? Effect.die(failure) : Effect.fail(failure);
           });
-        const first = yield* mutation(env, "interrupted", Option.none(), apply).pipe(
+        const first = yield* mutation(
+          env,
+          { operation: "interrupted", run: null, args: {} },
+          Option.none(),
+          apply,
+        ).pipe(
           Effect.orElseSucceed(() => null),
           Effect.catchDefect(() => Effect.succeed(null)),
         );
@@ -676,7 +681,14 @@ test.each(["typed failure", "defect"])(
         }
         const id = yield* Schema.decodeUnknownEffect(Schema.String)(first.error.details.requestId);
         expect(id).not.toBe("");
-        expect(yield* mutation(env, "interrupted", Option.some(id), apply)).toEqual(first);
+        expect(
+          yield* mutation(
+            env,
+            { operation: "interrupted", run: null, args: {} },
+            Option.some(id),
+            apply,
+          ),
+        ).toEqual(first);
         expect(executions).toBe(1);
       }),
     ),
@@ -693,7 +705,13 @@ test("cancellation after taking effect leaves a receipt that prevents replay", (
           yield* Deferred.succeed(applied, undefined);
           return yield* Effect.never;
         });
-      const invoke = () => mutation(env, "cancelled", Option.some("cancelled"), apply);
+      const invoke = () =>
+        mutation(
+          env,
+          { operation: "cancelled", run: null, args: {} },
+          Option.some("cancelled"),
+          apply,
+        );
       const pending = yield* invoke().pipe(Effect.forkScoped);
       yield* Deferred.await(applied).pipe(Effect.timeout("2 seconds"));
       yield* Fiber.interrupt(pending);
@@ -721,8 +739,18 @@ test("concurrent retries that both miss the receipt execute the request only onc
         }));
       const replies = yield* Effect.all(
         [
-          mutation(env, "concurrent", Option.some("same"), apply),
-          mutation(env, "concurrent", Option.some("same"), apply),
+          mutation(
+            env,
+            { operation: "concurrent", run: null, args: {} },
+            Option.some("same"),
+            apply,
+          ),
+          mutation(
+            env,
+            { operation: "concurrent", run: null, args: {} },
+            Option.some("same"),
+            apply,
+          ),
         ],
         { concurrency: "unbounded" },
       ).pipe(
