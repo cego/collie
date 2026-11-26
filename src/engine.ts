@@ -6143,17 +6143,21 @@ export const hostLayer: (options: {
                 one.mr === mr,
             );
             yield* store.watch({ run: asked.runId, mr, name: asked.name, cursor: asked.cursor });
-            if (woken) {
-              yield* journalWatch({
-                _tag: "completed",
-                at: yield* nowIso,
-                mr,
-                run: asked.runId,
-                name: asked.name,
-                head: asked.cursor.head,
-              });
-            }
+            const completed = () =>
+              woken
+                ? Effect.flatMap(nowIso, (at) =>
+                    journalWatch({
+                      _tag: "completed",
+                      at,
+                      mr,
+                      run: asked.runId,
+                      name: asked.name,
+                      head: asked.cursor.head,
+                    }),
+                  )
+                : Effect.void;
             if (asked.asking === true) {
+              yield* completed();
               return;
             }
             const slack = yield* reviewSlackTrouble(
@@ -6163,6 +6167,7 @@ export const hostLayer: (options: {
               on: `${asked.author ?? THE_AUTHOR} to change ${mrLabel(asked.target)}${asked.approved === undefined ? "" : `, approved at ${Str.slice(0, 7)(asked.approved)}`}${slack === undefined ? "" : `. ${slack}`}`,
               who: THE_AUTHOR,
             });
+            yield* completed();
           }),
         mrReading: (asked) =>
           Effect.gen(function* () {
