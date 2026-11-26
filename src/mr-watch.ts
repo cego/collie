@@ -11,6 +11,7 @@ import type { WatchRow } from "./store";
 
 export interface Watches {
   readonly outstanding: Effect.Effect<ReadonlyArray<WatchRow>>;
+  readonly still: (run: string, name: string) => Effect.Effect<boolean>;
   readonly observe: (run: string, name: string, observed: Observed) => Effect.Effect<void>;
   readonly wake: (run: string, name: string, woke: Woke) => Effect.Effect<boolean>;
   readonly unavailable: (run: string, reason: string) => Effect.Effect<void>;
@@ -50,7 +51,11 @@ export const settleWatches = Effect.fn("MrWatch.settle")(function* (opts: {
       continue;
     }
     const read = opts.panels.get(row.mr)?.panel;
-    if (read?._tag === "Unavailable" && read.transient) {
+    if (
+      read?._tag === "Unavailable" &&
+      read.transient &&
+      (yield* opts.watches.still(row.run, row.name))
+    ) {
       yield* opts.watches.unavailable(row.run, read.reason);
     }
     if (read?._tag !== "Details") {
@@ -64,7 +69,11 @@ export const settleWatches = Effect.fn("MrWatch.settle")(function* (opts: {
       now: opts.now,
     });
     const at = yield* nowIso;
-    if (!sameObserved(row.observed, observed)) {
+    // WARNING: each write asks again: a Stop landing while an earlier row's answer was written beats this one.
+    if (
+      !sameObserved(row.observed, observed) &&
+      (yield* opts.watches.still(row.run, row.name))
+    ) {
       yield* opts.watches.observe(row.run, row.name, observed);
       yield* event({
         _tag: "observed",

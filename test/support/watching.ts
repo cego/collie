@@ -135,6 +135,14 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
             Effect.asVoid,
           ),
         watches: {
+          still: (run, name) =>
+            Effect.gen(function* () {
+              if (!(yield* store.waitingOn(run, name))) {
+                return false;
+              }
+              const view = yield* registry.view(run);
+              return !(view?.controls ?? []).includes(STOP);
+            }).pipe(Effect.provideContext(hosted)),
           observe: store.observe,
           unavailable: (run, why) =>
             Effect.flatMap(Host, (host) => host.parked(run, why, "forge-unavailable")).pipe(

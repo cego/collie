@@ -62,7 +62,7 @@ import { RunPageAsked, RunSummary, pageOf, summaryOf } from "./run-list";
 import { recordsAt } from "./records";
 import type { Records } from "./records";
 import { RUN_RECORDS, RunRecords } from "./run-records";
-import { controlOf, controlSet } from "./controls";
+import { controlOf, controlSet, HOLD } from "./controls";
 import { FINISHED_STEPS, recordFlow, recordFrames } from "./record";
 import type { RecordSources } from "./record";
 import { markFirst } from "./record-marks";
@@ -1409,6 +1409,7 @@ const hostBoard = (dir: string) =>
     const model = Option.getOrUndefined(yield* Effect.serviceOption(RunModel));
     const registry = yield* Registry;
     const store = yield* Store;
+    const runRecords = yield* RunRecords;
     const checks = yield* CheckProcesses;
     const bun = yield* Effect.context<PlatformServices | Records>();
     const hosted = yield* Effect.context<HostServices>();
@@ -1764,6 +1765,14 @@ const hostBoard = (dir: string) =>
       record: registry.mergeRequest,
       stop,
       watches: {
+        // WARNING: asked again before each write, since a control can land while an earlier row is written.
+        still: (run: string, name: string) =>
+          Effect.gen(function* () {
+            if (!(yield* store.waitingOn(run, name))) {
+              return false;
+            }
+            return !(yield* controlSet(run, HOLD, STOP));
+          }).pipe(Effect.provideService(RunRecords, runRecords)),
         observe: store.observe,
         unavailable: (run: string, why: string) =>
           Effect.flatMap(Host, (host) => host.parked(run, why, "forge-unavailable")).pipe(

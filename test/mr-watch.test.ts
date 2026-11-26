@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Clock, Deferred, Effect, FileSystem, Schema } from "effect";
+import { Clock, Deferred, Effect, FileSystem, Order, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { Rig } from "./support/recorder";
 import { runEffect as runLive } from "./support/effect";
@@ -81,7 +81,8 @@ const started = (name: string, request: string, input: Parameters<typeof host.st
     (one) => one.runId,
   );
 const status = (runId: string) => Effect.suspend(() => host.status(runId));
-const watchOf = (runId: string) => Effect.suspend(() => host.watchOf(runId, WATCHED));
+const watchOf = (runId: string, target: string = WATCHED) =>
+  Effect.suspend(() => host.watchOf(runId, target));
 const agentStarts = Effect.suspend(() => host.agentStarts);
 const runEffect: ReturnType<typeof watching>["runEffect"] = (effect) => host.runEffect(effect);
 
@@ -596,6 +597,111 @@ for (const [control, said] of [
     ));
 }
 
+test("a Stop landing while one Run's answer is written keeps the next Run's answer out", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const forge = yield* gitlab;
+      const runs = yield* session(
+        forge,
+        Effect.gen(function* () {
+          const first = yield* started("watches-mr", "w1", {
+            target: WATCHED,
+            head: H1,
+            cwd: rig.projectDir,
+          });
+          const second = yield* started("watches-mr", "w2", {
+            target: UNWATCHED,
+            head: H1,
+            cwd: rig.projectDir,
+          });
+          yield* until(
+            () => watchOf(first),
+            (row) => row !== null,
+          );
+          yield* until(
+            () => watchOf(second, UNWATCHED),
+            (row) => row !== null,
+          );
+          return { first, second };
+        }),
+      );
+      yield* session(
+        forge,
+        Effect.gen(function* () {
+          const store = yield* Store;
+          const registry = yield* Registry;
+          const hosted = yield* Effect.context<HostServices>();
+          const now = yield* Clock.currentTimeMillis;
+          const rows = yield* store.outstanding;
+          const parked: Array<string> = [];
+          const panel: MrPanel = {
+            _tag: "Details",
+            iid: "7",
+            project: PROJECT,
+            title: "A review",
+            state: "open",
+            author: "ann",
+            assignees: [],
+            sourceBranch: "follow",
+            targetBranch: "master",
+            pipeline: "passed",
+            checks: { state: "passed" },
+            approvals: "",
+            unresolved: false,
+            notes: 0,
+            headSha: H1,
+            head: H1,
+            mergedSha: "",
+            updatedAt: now,
+            url: WATCHED,
+          };
+          yield* settleWatches({
+            panels: new Map([
+              [mrId(WATCHED)!, { at: now, panel }],
+              [
+                mrId(UNWATCHED)!,
+                {
+                  at: now,
+                  panel: { _tag: "Unavailable", reason: "the forge did not answer", transient: true },
+                },
+              ],
+            ]),
+            now,
+            rows: Arr.sortWith(rows, (row) => (row.run === runs.first ? 0 : 1), Order.Number),
+            watches: {
+              outstanding: store.outstanding,
+              observe: (run, name, observed) =>
+                store.observe(run, name, observed).pipe(
+                  Effect.andThen(
+                    registry
+                      .control({ runId: runs.second, control: STOP, set: true })
+                      .pipe(
+                        Effect.provideContext(hosted),
+                        Effect.orElseSucceed(() => undefined),
+                        Effect.asVoid,
+                      ),
+                  ),
+                ),
+              unavailable: (run) => Effect.sync(() => parked.push(run)),
+              still: (run) =>
+                Effect.map(registry.view(run), (view) => !(view?.controls ?? []).includes(STOP)),
+              wake: (run, name, woke) =>
+                registry.wake(run, name, woke).pipe(Effect.provideContext(hosted)),
+            },
+            event: recordWatchEvent(host.dir()),
+          });
+          const observed = tagged(yield* readWatchJournal(host.dir()), "observed");
+          expect(parked).toEqual([]);
+          expect(Arr.map(observed, (one) => one.run)).toEqual([runs.first]);
+          expect((yield* status(runs.second))?.controls ?? []).toContain(STOP);
+          expect(
+            Arr.map(yield* store.watches([mrId(UNWATCHED)!]), (row) => row.observed),
+          ).toEqual([null]);
+        }),
+      );
+    }),
+  ));
+
 test("a poll's attempts count only the reads it made, not a concurrent one", () =>
   runEffect(
     Effect.gen(function* () {
@@ -767,6 +873,7 @@ test("a wake the Run's control refuses is not recorded as a review start", () =>
             rows: yield* store.outstanding,
             watches: {
               outstanding: store.outstanding,
+              still: () => Effect.succeed(true),
               observe: store.observe,
               unavailable: () => Effect.void,
               wake: (run, name, woke) =>
