@@ -1044,12 +1044,13 @@ const ledgerOf = Effect.fn("Board.ledgerOf")(function* (
             return false;
           }
           const other = yield* mrIdOf(target);
-          return carried !== null && other !== null
-            ? carried === other
-            : other === null &&
-                run.branch !== null &&
-                run.branch === target.branch &&
-                run.project === target.project;
+          // WARNING: a successor with a merge request carries work this Run has none for.
+          return carried === null
+            ? other !== null ||
+                (run.branch !== null &&
+                  run.branch === target.branch &&
+                  run.project === target.project)
+            : other !== null && carried === other;
         }),
       );
       return {

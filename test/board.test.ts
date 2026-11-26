@@ -2518,6 +2518,46 @@ test("a line handing the work to a Run of another Task lands its own Task, and t
     }),
   ));
 
+test("a superseded branch-only Run hands its work to a successor that carries a merge request", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const first = yield* madeRun(dir, {
+        id: "r-first",
+        task: "task-1",
+        state: "stopped",
+        branch: "mk/old",
+        created: "2026-09-14T08:00:00Z",
+        finished: "2026-09-14T08:30:00Z",
+      });
+      const successor = yield* madeRun(dir, {
+        id: "r-successor",
+        task: "task-2",
+        state: "succeeded",
+        branch: "mk/new",
+        mr: M,
+        created: "2026-09-14T08:40:00Z",
+        finished: "2026-09-14T09:30:00Z",
+      });
+      yield* recordDisposition(first.dir, {
+        at: "2026-09-14T09:00:00Z",
+        by: "chat",
+        kind: "superseded",
+        ref: successor.id,
+        note: null,
+      });
+
+      const views = yield* board(env, [first, successor], {
+        tasks: [TASK, { ...TASK, id: "task-2" }],
+        mrStates: new Map([[M_ID, "merged"]]),
+      });
+      const firstCard = Option.getOrThrow(Arr.findFirst(views, (view) => view.id === "task-1"));
+      expect(firstCard.landed).toBe(true);
+      expect(sectionOf(firstCard)).toBe("finished");
+      expect(firstCard.sentence).toContain("Superseded by r-successor");
+    }),
+  ));
+
 test("a different local Task cannot take an unrelated carrier's obligation", () =>
   runEffect(
     Effect.gen(function* () {
