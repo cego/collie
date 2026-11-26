@@ -1044,13 +1044,16 @@ const ledgerOf = Effect.fn("Board.ledgerOf")(function* (
             return false;
           }
           const other = yield* mrIdOf(target);
-          // WARNING: a successor with a merge request carries work this Run has none for.
-          return carried === null
-            ? other !== null ||
-                (run.branch !== null &&
-                  run.branch === target.branch &&
-                  run.project === target.project)
-            : other !== null && carried === other;
+          if (carried !== null && other !== null) {
+            return carried === other;
+          }
+          if (other === null) {
+            return (
+              run.branch !== null && run.branch === target.branch && run.project === target.project
+            );
+          }
+          // WARNING: a ref whose project is not synced has no id, so only `carried` tells the two apart.
+          return mrOf(run) === null;
         }),
       );
       return {

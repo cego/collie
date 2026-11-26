@@ -2558,6 +2558,65 @@ test("a superseded branch-only Run hands its work to a successor that carries a 
     }),
   ));
 
+test("a handoff lands a Run only on the same branch, or on a successor's merge request where it records none itself", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const tasks = [TASK, { ...TASK, id: "task-other" }, { ...TASK, id: "task-third" }];
+      const landedOn = (first: RunFacts, successor: RunFacts) =>
+        Effect.gen(function* () {
+          yield* recordDisposition(first.dir, {
+            at: "2026-09-14T09:00:00Z",
+            by: "chat",
+            kind: "superseded",
+            ref: successor.id,
+            note: null,
+          });
+          const views = yield* board(env, [first, successor], { tasks });
+          return Option.getOrThrow(Arr.findFirst(views, (view) => view.id === first.task!)).landed;
+        });
+
+      const bare = yield* madeRun(dir, {
+        id: "r-bare",
+        task: "task-1",
+        state: "failed",
+        branch: "mk/support",
+        mr: "!279",
+        created: "2026-09-14T08:00:00Z",
+        finished: "2026-09-14T08:30:00Z",
+      });
+      const unrelated = yield* madeRun(dir, {
+        id: "r-unrelated",
+        task: "task-other",
+        state: "succeeded",
+        branch: "mk/other",
+        mr: "https://gitlab.cego.dk/mk/other/-/merge_requests/7",
+        created: "2026-09-14T08:40:00Z",
+        finished: "2026-09-14T09:30:00Z",
+      });
+      expect(yield* landedOn(bare, unrelated)).toBe(false);
+
+      const carried = yield* madeRun(dir, {
+        id: "r-carried",
+        task: "task-1",
+        state: "failed",
+        branch: "mk/support",
+        mr: M,
+        created: "2026-09-14T08:00:00Z",
+        finished: "2026-09-14T08:30:00Z",
+      });
+      const sameBranch = yield* madeRun(dir, {
+        id: "r-same-branch",
+        task: "task-third",
+        state: "succeeded",
+        branch: "mk/support",
+        created: "2026-09-14T08:40:00Z",
+        finished: "2026-09-14T09:30:00Z",
+      });
+      expect(yield* landedOn(carried, sameBranch)).toBe(true);
+    }),
+  ));
+
 test("a different local Task cannot take an unrelated carrier's obligation", () =>
   runEffect(
     Effect.gen(function* () {
