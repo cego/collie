@@ -8,7 +8,6 @@ import type { RunView } from "../src/engine";
 import type { ParkCause } from "../src/park-cause";
 import { recoverParks } from "../src/park-recovery";
 import { appendMetric, readMetrics } from "../src/metrics";
-import type { RunRecords } from "../src/run-records";
 import { mrId } from "../src/board-model";
 import type { MrPanels } from "../src/merges";
 import { forgeHttpLayer } from "../src/forge/http";
@@ -427,18 +426,24 @@ test("a settled CI park cleared while recovery is off is resumed once it is turn
           Effect.map(readMetrics(`${env.stateDir}/evidence/r1`), (lines) =>
             Arr.filter(lines, (line) => line.action === "rechecked" && line.outcome === outcome),
           );
-        const settles = (done: Effect.Effect<boolean, never, RunRecords>) =>
-          Effect.gen(function* () {
-            for (let tries = 0; tries < 500 && !(yield* done); tries++) {
-              yield* Effect.sleep("10 millis");
-            }
-          });
-        yield* settles(Effect.map(rechecks("cleared"), (lines) => lines.length > 0));
+        const count = (outcome: "cleared" | "uncleared") =>
+          Effect.map(rechecks(outcome), (lines) => lines.length);
+        yield* until(
+          () => count("cleared"),
+          (seen) => seen > 0,
+        );
         expect(resumed).toBe(0);
         yield* settings(true);
-        yield* settles(Effect.sync(() => resumed > 0));
+        yield* until(
+          () => Effect.sync(() => resumed),
+          (seen) => seen > 0,
+        );
         expect(resumed).toBe(1);
-        yield* settles(Effect.map(rechecks("uncleared"), (lines) => lines.length > 0));
+        const settled = yield* count("uncleared");
+        yield* until(
+          () => count("uncleared"),
+          (seen) => seen > settled,
+        );
         expect(resumed).toBe(1);
       }).pipe(
         Effect.provide(
@@ -557,18 +562,18 @@ test("a recovery claim replayed after a restart still carries the CI snapshot it
           Effect.map(readMetrics(`${env.stateDir}/evidence/r1`), (lines) =>
             Arr.filter(lines, (line) => line.action === "rechecked" && line.outcome === outcome),
           );
-        const settles = (done: Effect.Effect<boolean, never, RunRecords>) =>
-          Effect.gen(function* () {
-            for (let tries = 0; tries < 500 && !(yield* done); tries++) {
-              yield* Effect.sleep("10 millis");
-            }
-          });
-        yield* settles(Effect.sync(() => resumed > 0));
-        expect(resumed).toBe(1);
+        const count = (outcome: "cleared" | "uncleared") =>
+          Effect.map(rechecks(outcome), (lines) => lines.length);
+        yield* until(
+          () => Effect.sync(() => resumed),
+          (seen) => seen === 1,
+        );
+        const settled = yield* count("uncleared");
         view = { ...view, park: { ...view.park!, id: "p2" } };
-        yield* settles(Effect.map(rechecks("uncleared"), (lines) => lines.length > 0));
-        expect(resumed).toBe(1);
-        yield* settles(Effect.map(rechecks("uncleared"), (lines) => lines.length > 0));
+        yield* until(
+          () => count("uncleared"),
+          (seen) => seen > settled,
+        );
         expect(resumed).toBe(1);
       }).pipe(
         Effect.provide(

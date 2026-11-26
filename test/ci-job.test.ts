@@ -299,6 +299,29 @@ test("a green read clears a fresh park at the same head even after a green snaps
     }),
   ));
 
+test("a healthy read of a mixed head the forge could not be read for still reaches the fixer", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, at, root, forge } = yield* waiting("failed", MR, undefined, {
+        jobs: [
+          { name: "nuxi-typecheck", state: "passed", id: 1 },
+          { name: "lint", state: "failed", id: 2 },
+        ],
+      });
+      const dir = `${root}/runs/r1`;
+      yield* rememberCiTarget(dir, { head: at, job: "nuxi-typecheck", mr: MR, cwd: asked.cwd });
+      yield* rememberCiTarget(dir, { head: at, job: "lint", mr: MR, cwd: asked.cwd });
+      const view = { runId: "r1", cwd: asked.cwd, branch: "main", mr: MR };
+      const first = yield* cancelledRecheck(view, root, asked.run, forge);
+      expect(first).toMatchObject({ cleared: true, error: false });
+      yield* rememberSettledClear(dir, first.reads ?? "");
+      expect(yield* cancelledRecheck(view, root, asked.run, forge)).toMatchObject({
+        cleared: true,
+        error: false,
+      });
+    }),
+  ));
+
 test("a target-red park clears only once every recorded job passed on the target branch's newest commit", () =>
   runEffect(
     Effect.gen(function* () {

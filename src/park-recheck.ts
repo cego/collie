@@ -226,6 +226,7 @@ export const recheckPark = (
           return reply(false, "no parked CI job recorded");
         }
         const reads: Array<string> = [];
+        let failed = false;
         for (const target of latest.values()) {
           const ref = mrRefOf(target.mr);
           if (ref === null) {
@@ -248,6 +249,7 @@ export const recheckPark = (
                 : `job ${target.job} absent at ${target.head}`,
             );
           }
+          failed ||= read.state === "failed";
           if (read.state !== "passed") {
             reads.push(`${target.job}@${target.head}:${read.state}#${read.id ?? ""}`);
           }
@@ -256,6 +258,7 @@ export const recheckPark = (
         const evidence = Arr.join(reads, " ");
         if (
           evidence !== "" &&
+          !failed &&
           (yield* lastSettledClear(`${stateDir}/runs/${view.runId}`)) === evidence
         ) {
           return reply(
