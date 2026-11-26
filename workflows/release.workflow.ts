@@ -6,6 +6,7 @@ import {
   CONFLICTS,
   FindingSchema,
   FixOutputSchema,
+  SavedAlignmentSchema,
   Host,
   MergeOutcomeSchema,
   ProductionReadSchema,
@@ -27,6 +28,8 @@ import {
   mrSet,
   mrUrlOf,
   readMrRef,
+  savedHead,
+  savedRefusalWhy,
   renderApproved,
   settleAnswers,
   stackOrder,
@@ -88,6 +91,7 @@ const stepsOf = (markdown: string) => {
   return {
     assess: content.template("assess", ReleaseInput.fields),
     answer: content.template("answer", ReleaseInput.fields),
+    checkout: content.template("checkout", ReleaseInput.fields),
     fix: content.template("fix", ReleaseInput.fields),
     stageMergeRequest: content.template("stage-merge-request", ReleaseInput.fields),
     unstage: content.template("unstage", ReleaseInput.fields),
@@ -976,16 +980,71 @@ export default defineWorkflow({
           production: null,
         };
       } else {
-        const moveTo = (name: string, head: string, branch?: string) =>
+        const alignment = (name: string, head: string, branch: string) =>
+          Activity.make({
+            name,
+            success: SavedAlignmentSchema,
+            error: WorkflowError,
+            execute: Effect.gen(function* () {
+              const moved = yield* host.fastForward({ runId, cwd, head, branch });
+              if (moved._tag === "At" || moved.cause === "checkout-dirty-collie") {
+                return moved;
+              }
+              // WARNING: leave the refusing read unfinished when it parks; resume must read Git again.
+              return yield* park(moved.why, moved.cause);
+            }),
+          });
+        const settled = (name: string, head: string, branch: string) =>
           Activity.make({
             name,
             success: Schema.String,
+            error: WorkflowError,
             execute: Effect.gen(function* () {
               const moved = yield* host.fastForward({ runId, cwd, head, branch });
-              if (moved._tag === "Refused") {
-                return yield* park(moved.why);
+              if (moved._tag === "At") {
+                return moved.head;
               }
-              return moved.head;
+              return yield* park(moved.why, moved.cause);
+            }),
+          });
+        const moveTo = (name: string, head: string, branch: string) =>
+          Effect.gen(function* () {
+            const first = yield* alignment(name, head, branch);
+            const already = savedHead(first);
+            if (already !== null) {
+              return already;
+            }
+            yield* agentWork({
+              ...as(`${name}.commit`),
+              pushes: true,
+              instructions: steps.checkout,
+              input: {
+                ...input,
+                findings: savedRefusalWhy(first) ?? "the checkout is not on its head",
+              },
+            });
+            return yield* settled(`${name}.again`, head, branch);
+          });
+        const targetOf = (name: string) =>
+          Activity.make({
+            name,
+            success: Schema.Struct({ source: Schema.String, target: Schema.String }),
+            error: WorkflowError,
+            execute: Effect.gen(function* () {
+              const read = yield* host.readMergeRequest({ cwd, mr });
+              if (read._tag === "Unreadable") {
+                return yield* park(`Cannot read ${mr}'s branches: ${read.why}`);
+              }
+              if (
+                !["open", "opened", "draft"].includes(read.state) ||
+                read.source === "" ||
+                read.target === ""
+              ) {
+                return yield* park(
+                  `Cannot align ${mr}'s checkout: its open source and target branches could not be confirmed`,
+                );
+              }
+              return { source: read.source, target: read.target };
             }),
           });
         const checksNow = Effect.map(host.approved(runId), renderApproved);
@@ -1184,34 +1243,15 @@ export default defineWorkflow({
                 }),
               });
               yield* gone(standing);
+              const branches = yield* targetOf(`${name}.target`);
               if (standing._tag !== "Conflicting") {
                 yield* moveTo(
                   `${name}.fast-forward`,
                   standing._tag === "Moved" ? standing.head : at,
+                  branches.source,
                 );
                 return n;
               }
-              const branches = yield* Activity.make({
-                name: `${name}.target`,
-                success: Schema.Struct({ source: Schema.String, target: Schema.String }),
-                error: WorkflowError,
-                execute: Effect.gen(function* () {
-                  const read = yield* host.readMergeRequest({ cwd, mr });
-                  if (read._tag === "Unreadable") {
-                    return yield* park(`Cannot read ${mr}'s conflict target: ${read.why}`);
-                  }
-                  if (
-                    !["open", "opened", "draft"].includes(read.state) ||
-                    read.source === "" ||
-                    read.target === ""
-                  ) {
-                    return yield* park(
-                      `Cannot repair ${mr}'s conflict: its open source and target branches could not be confirmed`,
-                    );
-                  }
-                  return { source: read.source, target: read.target };
-                }),
-              });
               yield* moveTo(`${name}.fast-forward`, standing.head, branches.source);
               previous = standing.head;
               yield* fixRound(

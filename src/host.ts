@@ -356,6 +356,8 @@ const HostRecord = Schema.fromJsonString(
     build: Schema.String,
     root: Schema.String,
     herd: Schema.optionalKey(Schema.NullOr(Schema.String)),
+    // WARNING: A pid is reused; the start token is what tells this owner's record from the last one's.
+    started: Schema.optionalKey(Schema.NullOr(Schema.String)),
   }),
 );
 const encodeRecord = Schemaflow(Schema.encodeResult(HostRecord), Result.getOrThrow);
@@ -386,6 +388,7 @@ const askHandOver = (dir: string, pid: number, build: string) =>
 
 const newer = (build: string, than: string) =>
   build !== than && Bun.semver.order(build, than) === 1;
+const atLeast = (build: string, than: string) => build === than || newer(build, than);
 
 export class HostUnavailable extends Data.TaggedError("HostUnavailable")<{
   readonly dir: string;
@@ -400,6 +403,9 @@ export class HostVersionMismatch extends Data.TaggedError("HostVersionMismatch")
   readonly restart: string;
   readonly development?: string;
 }> {}
+
+const newerHostSaid = (dir: string, host: string, client: string) =>
+  `the host for ${dir} is collie ${host}, which is newer than this client's ${client}: update this collie`;
 
 const RunShown = Schema.Struct({
   branchProgress: Schema.optionalKey(Schema.NullOr(Schema.String)),
@@ -4852,7 +4858,7 @@ const boundedStop = (dir: string, lock: string, checks: CheckProcessesApi) =>
     const signalled = () => {
       // WARNING: Decided as the signal lands, before an interrupted check's Scope can end it.
       const asked = handOverAsked(dir);
-      if (asked !== null && asked.pid === process.pid && newer(asked.build, BUILD)) {
+      if (asked !== null && asked.pid === process.pid && atLeast(asked.build, BUILD)) {
         handed = { build: asked.build, checks: Effect.runSyncWith(context)(checks.handOver) };
       }
       Deferred.doneUnsafe(stopping, Effect.succeed(StopReason.Asked()));
@@ -4977,10 +4983,11 @@ const own = (
     yield* fs.remove(socketOf(dir), { force: true }).pipe(Effect.orDie);
     yield* Effect.addFinalizer(() => fs.remove(socketOf(dir), { force: true }).pipe(Effect.ignore));
     const pid = yield* currentPid;
+    const started = yield* processStarted(pid);
     const record = (herd: string | null) =>
       fs.writeFileString(
         recordOf(dir),
-        encodeRecord({ pid, build: BUILD, root: env.pluginRoot, herd }),
+        encodeRecord({ pid, build: BUILD, root: env.pluginRoot, herd, started }),
       );
     const herdSocket = yield* coreSocket(env.raw);
     yield* record(herdSocket).pipe(Effect.orDie);
@@ -5173,9 +5180,11 @@ export const connect: (
         host: who.build,
         client: build,
         pid: who.pid,
-        restart: ours
-          ? `the host for ${dir} is collie ${who.build} and this is ${build}: run \`collie host restart\` and run this again`
-          : `the host for ${dir} serves ${who.root} and this is collie ${build} from ${install}: point COLLIE_STATE_DIR at a directory of its own, or run \`collie host restart\` and run this again`,
+        restart: newer(who.build, build)
+          ? newerHostSaid(dir, who.build, build)
+          : ours
+            ? `the host for ${dir} is collie ${who.build} and this is ${build}: run \`collie host restart\` and run this again`
+            : `the host for ${dir} serves ${who.root} and this is collie ${build} from ${install}: point COLLIE_STATE_DIR at a directory of its own`,
       });
     }
     return yield* open(dir);
@@ -5191,26 +5200,41 @@ export const restartHost = Effect.fn("Host.restart")(function* (
   options?: { readonly build?: string; readonly hostEnv?: Readonly<Record<string, string>> },
 ) {
   const owner = yield* liveOwner(dir);
+  const build = options?.build ?? BUILD;
   let before: HostSeen | null = null;
   if (owner !== null) {
     const answered = yield* ask(dir).pipe(Effect.option);
-    before = {
-      pid: owner.pid,
-      build: Option.match(answered, { onNone: () => null, onSome: (who) => who.build }),
-    };
-    const build = options?.build ?? BUILD;
-    // WARNING: A host that did not answer is judged by the build it recorded.
-    const older =
-      before.build === null
-        ? (yield* olderSilentOwner(dir, build)) === owner.pid
-        : newer(build, before.build);
-    if (older) {
+    const seen =
+      Option.match(answered, {
+        onNone: () => null,
+        onSome: (who) => ({ build: who.build, root: who.root }),
+      }) ?? (yield* recordedOwnerWithin(dir, owner));
+    before = { pid: owner.pid, build: seen?.build ?? null };
+    if (seen === null) {
+      return yield* unavailable(
+        dir,
+        `pid ${owner.pid} owns the directory and has not said which build it is`,
+      );
+    }
+    if (newer(seen.build, build)) {
+      return yield* new HostVersionMismatch({
+        dir,
+        host: seen.build,
+        client: build,
+        pid: owner.pid,
+        restart: newerHostSaid(dir, seen.build, build),
+      });
+    }
+    const install = (yield* currentEnv.pipe(Effect.orDie)).pluginRoot;
+    const ours = seen.root === undefined || sameInstallation(seen.root, install);
+    const upgrades = newer(build, seen.build);
+    if (atLeast(build, seen.build) && (ours || upgrades)) {
       yield* replaceOwner(dir, owner.pid, build);
     } else {
       yield* stopOwner(dir, owner.pid);
     }
   }
-  const who = yield* ensureRunning(dir, options?.hostEnv ?? {}, options?.build ?? BUILD);
+  const who = yield* ensureRunning(dir, options?.hostEnv ?? {}, build);
   return { before, after: { pid: who.pid, build: who.build } };
 });
 
@@ -5501,23 +5525,29 @@ const REACH_TIMEOUT = Duration.sum(
   Duration.fromInputUnsafe(ASK_TIMEOUT),
 );
 
-const olderSilentOwner = Effect.fn("Host.olderSilentOwner")(function* (dir: string, build: string) {
-  const owner = yield* liveOwner(dir);
-  if (owner === null) {
-    return null;
-  }
+const recordedOwnerOf = Effect.fn("Host.recordedOwner")(function* (dir: string, owner: LockHolder) {
   const fs = yield* FileSystem.FileSystem;
   const recorded = yield* fs
     .readFileString(recordOf(dir))
     .pipe(Effect.flatMap(Schema.decodeUnknownEffect(HostRecord)), Effect.option);
-  if (Option.isNone(recorded) || recorded.value.pid !== owner.pid) {
+  if (Option.isNone(recorded)) {
     return null;
   }
-  const install = (yield* currentEnv.pipe(Effect.orDie)).pluginRoot;
-  return sameInstallation(recorded.value.root, install) && newer(build, recorded.value.build)
-    ? owner.pid
-    : null;
+  const { pid, build, root, started } = recorded.value;
+  const identified = started !== null && started !== undefined && started === owner.start;
+  return pid === owner.pid && identified ? { build, root } : null;
 });
+
+// WARNING: A successor takes the lock before it writes its record, and may already have adopted a check.
+const recordedOwnerWithin = (dir: string, owner: LockHolder) =>
+  recordedOwnerOf(dir, owner).pipe(
+    Effect.repeat({
+      until: (seen) => seen !== null,
+      schedule: Schedule.spaced("100 millis"),
+    }),
+    Effect.timeoutOption(ASK_TIMEOUT),
+    Effect.map(Option.getOrNull),
+  );
 
 const sameInstallation = (served: string, install: string) =>
   served === install || install === `${served}/release`;
@@ -5532,10 +5562,23 @@ const ensureRunning = Effect.fn("Host.ensureRunning")(function* (
   if (first._tag === "Success") {
     return first.success;
   }
-  const silent = yield* olderSilentOwner(dir, build);
-  // WARNING: Too slow to answer is not gone: it still hears its signal and hands its checks over.
-  if (silent !== null) {
-    yield* replaceOwner(dir, silent, build);
+  const owner = yield* liveOwner(dir);
+  const silent = owner === null ? null : yield* recordedOwnerOf(dir, owner);
+  if (owner !== null && silent !== null) {
+    if (newer(silent.build, build)) {
+      return yield* new HostVersionMismatch({
+        dir,
+        host: silent.build,
+        client: build,
+        pid: owner.pid,
+        restart: newerHostSaid(dir, silent.build, build),
+      });
+    }
+    const install = (yield* currentEnv.pipe(Effect.orDie)).pluginRoot;
+    if (newer(build, silent.build) && sameInstallation(silent.root, install)) {
+      // WARNING: Too slow to answer is not gone: it still hears its signal and hands its checks over.
+      yield* replaceOwner(dir, owner.pid, build);
+    }
   }
   const started = Effect.scoped(
     Effect.gen(function* () {

@@ -156,3 +156,88 @@ test("startup read connection: a board naming another installation is refused an
       expect(closed).toBe(1);
     }),
   ));
+
+test("queued route changes: a Machine queued twice as it is discovered opens one bridge", () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const doors = new Map<string, Opening>();
+        const readDoors = new Map<string, Opening>();
+        const changes = yield* Queue.unbounded<RouteChange<Opening>>();
+        let openings = 0;
+        const opened: Opening = {
+          identity: { installation: "vm", protocol: PROTOCOL, build: "1.0.5" },
+          board: Stream.never,
+        };
+        const route: Route<Opening> = {
+          machine: { profile: "p-vm", name: "vm-mk", route: "link" },
+          open: () =>
+            Effect.sync(() => {
+              openings++;
+              return opened;
+            }),
+          collie: () => Effect.die("no upgrade is due"),
+        };
+        yield* flockStream([], doors, "1.0.5", Stream.fromQueue(changes), () => {}, readDoors).pipe(
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
+        yield* Queue.offer(changes, { _tag: "Add", route });
+        yield* Queue.offer(changes, { _tag: "Add", route });
+        while (openings === 0) {
+          yield* Effect.yieldNow;
+        }
+        for (let settled = 0; settled < 20; settled++) {
+          yield* Effect.yieldNow;
+        }
+        expect(openings).toBe(1);
+        expect(readDoors.size).toBe(1);
+      }),
+    ),
+  ));
+
+test("queued route changes: a Remove queued behind its Machine's Add still stops the bridge", () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const doors = new Map<string, Opening>();
+        const readDoors = new Map<string, Opening>();
+        const changes = yield* Queue.unbounded<RouteChange<Opening>>();
+        let openings = 0;
+        let closed = 0;
+        const opened: Opening = {
+          identity: { installation: "vm", protocol: PROTOCOL, build: "1.0.5" },
+          board: Stream.make(snapshot("vm")).pipe(Stream.concat(Stream.never)),
+        };
+        const route: Route<Opening> = {
+          machine: { profile: "p-vm", name: "vm-mk", route: "link" },
+          open: () =>
+            Effect.acquireRelease(
+              Effect.sync(() => {
+                openings++;
+                return opened;
+              }),
+              () =>
+                Effect.sync(() => {
+                  closed++;
+                }),
+            ),
+          collie: () => Effect.die("no upgrade is due"),
+        };
+        yield* flockStream([], doors, "1.0.5", Stream.fromQueue(changes), () => {}, readDoors).pipe(
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
+        yield* Queue.offer(changes, { _tag: "Add", route });
+        const done = yield* Deferred.make<void>();
+        yield* Queue.offer(changes, { _tag: "Remove", profile: "p-vm", done });
+        yield* Deferred.await(done);
+        for (let settled = 0; settled < 20; settled++) {
+          yield* Effect.yieldNow;
+        }
+        expect(doors.size).toBe(0);
+        expect(readDoors.size).toBe(0);
+        expect(closed).toBe(openings);
+      }),
+    ),
+  ));

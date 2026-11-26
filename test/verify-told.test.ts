@@ -86,6 +86,10 @@ test("a settled agent being collected from is told its verify ended, and no one 
         const pane = Option.getOrUndefined(
           Arr.findFirst(yield* registeredAt(world.state), (entry) => entry.runId === runId),
         )!.agent;
+        // WARNING: held, so no reminder to write its Output starts a turn just as a verify ends.
+        yield* client
+          .control({ runId, control: "hold", set: true, request: "hold-verifies" })
+          .pipe(Effect.orDie);
         const asked = (
           name: string,
           executable: string,
@@ -175,30 +179,42 @@ test("a settled agent being collected from is told its verify ended, and no one 
         const asHuman = { COLLIE_AGENT: "not-an-agent" };
         const again = yield* verify("unit", "/bin/true", asAgent);
         expect(again).toEqual({ ...ran, ran: false });
-        for (const [extra, expecting] of [
-          [asHuman, []],
-          [asAgent, ["--expect", "fail"]],
-          [asHuman, ["--expect", "fail"]],
-        ] as const) {
+        for (const one of yield* Effect.all(
+          Arr.map(
+            [
+              [asHuman, []],
+              [asAgent, ["--expect", "fail"]],
+              [asHuman, ["--expect", "fail"]],
+            ] as const,
+            ([extra, expecting]) => asked("unit", "/bin/true", extra, expecting),
+          ),
+          { concurrency: "unbounded" },
+        )) {
           expect(
-            yield* Schema.decodeUnknownEffect(Ran)(
-              (yield* asked("unit", "/bin/true", extra, expecting)).envelope.data,
-            ).pipe(Effect.orDie),
+            yield* Schema.decodeUnknownEffect(Ran)(one.envelope.data).pipe(Effect.orDie),
           ).toEqual(again);
         }
         yield* grant("gate-only", "/bin/echo");
-        for (const [extra, expecting] of [
-          [asAgent, []],
-          [asHuman, []],
-          [asAgent, ["--expect", "fail"]],
-          [asHuman, ["--expect", "fail"]],
-        ] as const) {
-          const refused = yield* asked("gate-only", "/bin/echo", extra, expecting);
+        for (const refused of yield* Effect.all(
+          Arr.map(
+            [
+              [asAgent, []],
+              [asHuman, []],
+              [asAgent, ["--expect", "fail"]],
+              [asHuman, ["--expect", "fail"]],
+            ] as const,
+            ([extra, expecting]) => asked("gate-only", "/bin/echo", extra, expecting),
+          ),
+          { concurrency: "unbounded" },
+        )) {
           expect(refused.envelope.error?.code).toBe("invalid_state");
           expect(refused.envelope.error?.message).toContain("gate");
         }
         expect(yield* told()).toHaveLength(1);
 
+        yield* client
+          .control({ runId, control: "hold", set: false, request: "release-verifies" })
+          .pipe(Effect.orDie);
         yield* fs.writeFileString(launched.output, encode({ verdict: "built" })).pipe(Effect.orDie);
         yield* until(
           () => client.run({ runId }).pipe(Effect.orDie),
