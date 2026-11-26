@@ -425,6 +425,7 @@ test("a host restarting inside the quiet window wakes the resumed Run at the dea
             (row) => row?.name === "round-2",
           );
           const wokeAt = yield* Clock.currentTimeMillis;
+          expect(wokeAt - since).toBeGreaterThanOrEqual(QUIET_MS);
           expect(wokeAt - since).toBeLessThan(QUIET_MS + 60_000);
           expect(yield* agentStarts).toEqual([]);
         }),
