@@ -5392,20 +5392,33 @@ export const hostLayer: (options: {
                     !Str.startsWith(`${cause}-`)(info.id)
                       ? [info.id]
                       : [];
-                  if (Option.isNone(before) || causeBefore !== cause || info === null) {
-                    const tree = yield* treeOf(yield* store.run(runId), runId, dir);
-                    const id = parkIdentity(
-                      runId,
-                      cause,
-                      yield* under(parkEvidence(dir, runId, tree.cwd, cause, why)).pipe(
-                        Effect.provideContext(bun),
-                      ),
-                    );
-                    info = { ...parkOf(cause), id, since: yield* nowIso };
+                  const read =
+                    Option.isNone(before) || causeBefore !== cause || info === null
+                      ? yield* Effect.gen(function* () {
+                          const tree = yield* treeOf(yield* store.run(runId), runId, dir);
+                          const id = parkIdentity(
+                            runId,
+                            cause,
+                            yield* under(parkEvidence(dir, runId, tree.cwd, cause, why)).pipe(
+                              Effect.provideContext(bun),
+                            ),
+                          );
+                          return { ...parkOf(cause), id, since: yield* nowIso };
+                        })
+                      : null;
+                  if (read !== null) {
+                    info = read;
                     yield* put(
                       PARK_INFO,
                       yield* Schema.encodeEffect(ParkJson)(info).pipe(Effect.orDie),
                     );
+                  }
+                  if (info === null) {
+                    return;
+                  }
+                  // WARNING: a Hold or Stop admitted while the evidence was read beats a forge no watch could read.
+                  if (cause === "forge-unavailable" && (yield* anySet(runId, HOLD, STOP))) {
+                    return;
                   }
                   if (Option.getOrNull(before) === why && causeBefore === cause) {
                     yield* put(PARK_CAUSE, cause);

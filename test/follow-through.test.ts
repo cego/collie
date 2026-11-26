@@ -1927,6 +1927,43 @@ const approvals = (forge: Forge) =>
     (one) => one.body,
   );
 
+test("a Hold admitted while the head read is in flight leaves the Run un-parked", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      const { forge, entry } = yield* begun("review", [review([])]);
+      const reached = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let withheld = false;
+      forge.after((url, _init, response) => {
+        if (withheld || !Str.includes("/merge_requests/7")(url)) {
+          return Promise.resolve(response);
+        }
+        withheld = true;
+        reached.resolve();
+        return release.promise.then(
+          () => new Response('{"message":"temporarily unavailable"}', { status: 503 }),
+        );
+      });
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          const { runId } = yield* host.started(entry, "cli-1", { target: TARGET });
+          yield* Effect.promise(() => reached.promise);
+          const registry = yield* Registry;
+          yield* registry.control({ runId, control: HOLD, set: true });
+          release.resolve();
+          const held = yield* until(
+            () => host.status(runId),
+            (view) => view?.status.status === "suspended" || view?.status.status === "failed",
+          );
+          expect(held?.status.status).toBe("suspended");
+          expect(held?.park).toBeNull();
+          expect(yield* host.agentStarts).toHaveLength(0);
+        }),
+      );
+    }),
+  ));
+
 test("concurrent forge failures park the initial head read once and recover before launching a reviewer", () =>
   host.runEffect(
     Effect.gen(function* () {
