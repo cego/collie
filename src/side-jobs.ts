@@ -273,7 +273,10 @@ export const mergeWatch = <E, R>(opts: {
         states,
         panels: opts.panels,
         making: landingNow,
-        demand: new Map(Arr.map(rows, (row) => [row.mr, row.run] as const)),
+        demand: Arr.reduce(rows, new Map<string, string[]>(), (acc, row) => {
+          acc.set(row.mr, [...(acc.get(row.mr) ?? []), row.run]);
+          return acc;
+        }),
       });
       yield* settleWatches({
         panels: opts.panels,

@@ -151,10 +151,10 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
   /** The Run directories whose landing attempt this host process is making now. */
   making: ReadonlySet<string>;
   /**
-   * The merge requests a Run is still watching, by MR id with the Run that watches it:
+   * The merge requests Run waiting on a Watch still demand, by MR id with those Runs:
    * demand of their own, whoever's Task they belong to and whatever its board says.
    */
-  demand?: ReadonlyMap<string, string>;
+  demand?: ReadonlyMap<string, ReadonlyArray<string>>;
 }) {
   const fs = yield* FileSystem.FileSystem;
   // What an earlier host learned, under this one's own answers: a fresh host's empty memory
@@ -234,9 +234,15 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
   }
   // A watch reads its merge request whether or not any card names it: a Run folded into
   // History is still following one. It is read for the watch alone, and settles nothing.
-  for (const [id, row] of demandByMr) {
+  for (const [id, watchers] of demandByMr) {
     if (Arr.some(watched, (one) => mrId(one.mr) === id)) continue;
-    watched.push({ mr: `mr:${id}`, abandoned: false, runs: [row.run], owner: row.run, settles: false });
+    watched.push({
+      mr: `mr:${id}`,
+      abandoned: false,
+      runs: watchers,
+      owner: watchers[0]!,
+      settles: false,
+    });
   }
   for (const { mr, abandoned, runs, owner, settles } of watched) {
     // Whatever else a Task says of it, it is asked about: a merged one is followed to its
@@ -255,6 +261,9 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
     if (id === null) continue;
     const demanded = opts.demand?.has(id) ?? false;
     if (abandoned && !demanded) continue;
+    // A read a Watch alone asked for, or one of work its Task abandoned, feeds the Watch
+    // and writes nothing of the Task's settlement.
+    const settlesThis = settles && !abandoned;
     const dirs = Arr.map(runs, (run) => runDir(opts.stateDir, run));
     if (
       opts.states.get(id) !== "in-prod" &&
@@ -280,7 +289,12 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
         const { state, facts, by, mergedAt } = answered;
         opts.states.set(id, state);
         forge.set(id, { ...facts, read: now, asked: now });
-        if (state !== "open" && state !== "closed" && (yield* firstMerged(dirs, id)) === null)
+        if (
+          settlesThis &&
+          state !== "open" &&
+          state !== "closed" &&
+          (yield* firstMerged(dirs, id)) === null
+        )
           yield* recordDisposition(runDir(opts.stateDir, owner), {
             at: mergedAt ?? now,
             by,
@@ -291,9 +305,7 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
       }
     }
     // Every round, not only when the forge is asked: a stop that did not take is asked again.
-    // A merge, a close or an abandonment settles the Task that shows it, never a read a
-    // Watch alone asked for.
-    if (!settles || abandoned) continue;
+    if (!settlesThis) continue;
     const state = opts.states.get(id);
     if (state === undefined || state === "open" || state === "closed") continue;
     const read = opts.panels.get(id)?.panel;
@@ -307,10 +319,14 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
       yield* workingOn(id, owner, forge.get(id)?.source, opts),
       opts.runs,
     );
+    // A Run waiting on this merge request's Watch ends it on the wake it is owed, so a
+    // merge stops it no further than it stops itself.
+    const asking = new Set(opts.demand?.get(id) ?? []);
     const going = Arr.filter(
       opts.runs,
       (run) =>
         working.includes(run.id) &&
+        !asking.has(run.id) &&
         (run.state === "running" || run.state === "waiting") &&
         epochMs(run.created) < merged,
     );

@@ -2506,3 +2506,63 @@ test("a Task's one merge request is watched as the Run that owns it, so its merg
       expect(stops).toEqual([]);
     }),
   ));
+
+test("an abandoned merge request is read once per due interval for the Run still watching it, and settles nothing", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-merges-" });
+      const log: string[] = [];
+      const id = `${GITLAB}!68`;
+      const states = new Map<string, MrState>();
+      const checked = new Map<string, number>();
+      const asked = () =>
+        Arr.filter(log, (call) => /^GET .*merge_requests\/68$/.test(call));
+      const settle = (now: number, demand?: ReadonlyMap<string, ReadonlyArray<string>>, over: Partial<FakeMr> = {}) =>
+        settleMerges({
+          stateDir,
+          cwd: "/project",
+          run: forge("gitlab", { mrs: [mr65({ iid: "68", state: "open", ...over })] }, log),
+          views: [
+            task({
+              id: "abandoned",
+              state: "done",
+              landed: true,
+              mr: mrUrl("68"),
+              run: "r-abandoned",
+              disposition: "abandoned",
+              mrs: [taskMr("mk/collie", 68, { run: "r-abandoned", settled: "abandoned" })],
+            }),
+          ],
+          runs: [],
+          record: () => Effect.die("nothing is found without a Run on the branch"),
+          stop: () => Effect.die("abandoned work is settled already"),
+          now,
+          checked,
+          states,
+          panels: new Map(),
+          making: new Set(),
+          demand,
+        });
+      const ten = epochMs("2026-09-17T10:00:00Z");
+      const demand = new Map([[id, ["r-abandoned"]]]);
+
+      // No Watch: an abandonment settles it for good, and nothing is asked.
+      yield* settle(ten);
+      expect(asked()).toEqual([]);
+
+      // A Watch is demand of its own, whatever the board says of the Task.
+      yield* settle(ten, demand);
+      expect(asked()).toHaveLength(1);
+      // Within the interval the answer stands: one logical read, whoever asks.
+      yield* settle(ten, new Map([[id, ["r-abandoned", "r-other"]]]));
+      expect(asked()).toHaveLength(1);
+      yield* settle(ten + MERGE_POLL_MS, demand);
+      expect(asked()).toHaveLength(2);
+
+      // A merge it reads settles nothing: the Task stays abandoned, and no Run is stopped.
+      yield* settle(ten + 2 * MERGE_POLL_MS, demand, { state: "merged" });
+      expect(states.get(id)).toBe("merged");
+      expect(yield* readDispositions(runDir(stateDir, "r-abandoned"))).toEqual([]);
+    }),
+  ));

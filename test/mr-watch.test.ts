@@ -9,11 +9,12 @@ import { installFakeSkills } from "./support/defs";
 import { type FakeMr, type ForgeModel } from "./support/forge";
 import { fixtures } from "./support/host";
 import { decodeWoke, until, watching } from "./support/watching";
-import { Registry, runDir, STOP } from "../src/engine";
+import { HOLD, Registry, runDir, STOP } from "../src/engine";
 import { sectionOf, mrId } from "../src/board-model";
 import { QUIET_MS } from "../src/mr-watch-model";
 import { readDispositions, recordDisposition } from "../src/disposition";
 import { recordAudit } from "../src/audit";
+import { Store } from "../src/store";
 import { epochMs } from "../src/time";
 
 const PROJECT = "gitlab.cego.dk/mk/collie";
@@ -371,3 +372,294 @@ test(
     ),
   240_000,
 );
+
+test(
+  "a host restarting inside the quiet window wakes the resumed Run at the deadline the first host set, with no detail reader",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const forge = yield* gitlab;
+        const { runId, since } = yield* session(
+          forge,
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const runId = yield* started("watches-mr", "w1", {
+              target: WATCHED,
+              head: H1,
+              cwd: rig.projectDir,
+              rounds: 2,
+            });
+            yield* until(
+              () => watchOf(runId),
+              (row) => row !== null,
+            );
+            yield* registry.control({ runId, control: STOP, set: true });
+            yield* recordDisposition(runDir(host.dir(), runId), {
+              at: "2026-11-26T10:22:28Z",
+              by: "cli:recovery",
+              kind: "abandoned",
+              ref: "",
+              note: null,
+            });
+            yield* registry.resume(runId);
+            yield* recordAudit(runDir(host.dir(), runId), {
+              operation: "resume",
+              request: "resume-1",
+              origin: "cli",
+              result: Schema.Struct({}),
+              value: {},
+            });
+            yield* until(
+              () => watchOf(runId),
+              (row) => row !== null,
+            );
+            yield* forge.set(PUSHED);
+            yield* watchingMerges;
+            const seen = yield* until(
+              () => watchOf(runId),
+              (row) => row?.observed?.head === H2,
+            );
+            return { runId, since: seen!.observed!.since };
+          }),
+        );
+        // The host dies before the deadline, its panels with it.
+        yield* Effect.sleep("3 minutes");
+        yield* session(
+          forge,
+          Effect.gen(function* () {
+            yield* watchingMerges;
+            expect((yield* status(runId))?.status.status).toBe("suspended");
+            expect((yield* watchOf(runId))?.observed?.head).toBe(H2);
+            const again = yield* until(
+              () => watchOf(runId),
+              (row) => row?.name === "round-2",
+            );
+            const wokeAt = yield* Clock.currentTimeMillis;
+            expect(wokeAt - since).toBeLessThan(QUIET_MS + 60_000);
+            expect(yield* agentStarts).toEqual([]);
+          }),
+        );
+      }),
+    ),
+  240_000,
+);
+
+test(
+  "a wake a dead host persisted is delivered once by the next host, with no panel and no second round",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const forge = yield* gitlab;
+        const runId = yield* session(
+          forge,
+          Effect.gen(function* () {
+            const runId = yield* started("watches-mr", "w1", {
+              target: WATCHED,
+              head: H1,
+              cwd: rig.projectDir,
+            });
+            yield* until(
+              () => watchOf(runId),
+              (row) => row !== null,
+            );
+            // What a host that was killed between judging a head and answering the wait
+            // leaves behind: the read's verdict, kept for the next host.
+            const store = yield* Store;
+            yield* store.wake(runId, "round-1", {
+              _tag: "Changed",
+              change: {
+                head: H2,
+                previous: H1,
+                newHead: true,
+                comments: [],
+                pipeline: "passed",
+                forcePush: false,
+              },
+            });
+            return runId;
+          }),
+        );
+        // A third head arrived while no host was running: the wake that reaches the wait is
+        // the one the dead host judged, not a new one read now.
+        yield* forge.set(PUSHED_AGAIN);
+        yield* session(
+          forge,
+          Effect.gen(function* () {
+            yield* watchingMerges;
+            const done = yield* until(
+              () => status(runId),
+              (view) => view?.status.status === "complete",
+            );
+            expect(done?.status.status === "complete" ? done.status.value : null).toBe(
+              JSON.stringify({
+                _tag: "Changed",
+                change: {
+                  head: H2,
+                  previous: H1,
+                  newHead: true,
+                  comments: [],
+                  pipeline: "passed",
+                  forcePush: false,
+                },
+              }),
+            );
+            expect(yield* watchOf(runId)).toBeNull();
+            expect(yield* agentStarts).toEqual([]);
+          }),
+        );
+      }),
+    ),
+  240_000,
+);
+
+test(
+  "a held Run's Watch asks for nothing until the hold is released, then takes the head it missed",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const forge = yield* gitlab;
+        const runId = yield* session(
+          forge,
+          Effect.gen(function* () {
+            const runId = yield* started("watches-mr", "w1", {
+              target: WATCHED,
+              head: H1,
+              cwd: rig.projectDir,
+            });
+            yield* until(
+              () => watchOf(runId),
+              (row) => row !== null,
+            );
+            return runId;
+          }),
+        );
+        yield* session(
+          forge,
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            yield* watchingMerges;
+            yield* Effect.sleep("6 minutes");
+            const before = yield* watchOf(runId);
+            expect(before?.observed?.head).toBe(H1);
+            yield* registry.control({ runId, control: HOLD, set: true });
+            yield* forge.set(PUSHED);
+            yield* Effect.sleep("20 minutes");
+            const held = yield* watchOf(runId);
+            expect(held?.observed?.head).toBe(H1);
+            expect(held?.woke ?? null).toBeNull();
+            expect((yield* status(runId))?.status.status).toBe("suspended");
+
+            yield* registry.control({ runId, control: HOLD, set: false });
+            yield* until(
+              () => watchOf(runId),
+              (row) => row?.observed?.head === H2,
+            );
+            yield* Effect.sleep("6 minutes");
+            yield* until(
+              () => status(runId),
+              (view) => view?.status.status === "complete",
+            );
+            expect(yield* agentStarts).toEqual([]);
+          }),
+        );
+      }),
+    ),
+  240_000,
+);
+
+test(
+  "a Watch's answer arriving after the Run is stopped wakes nothing",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const forge = yield* gitlab;
+        const runId = yield* session(
+          forge,
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const runId = yield* started("watches-mr", "w1", {
+              target: WATCHED,
+              head: H1,
+              cwd: rig.projectDir,
+            });
+            yield* until(
+              () => watchOf(runId),
+              (row) => row !== null,
+            );
+            yield* registry.control({ runId, control: STOP, set: true });
+            // The read this Run's watch was already being judged on answers now.
+            yield* registry.wake(runId, "round-1", {
+              _tag: "Changed",
+              change: {
+                head: H2,
+                previous: H1,
+                newHead: true,
+                comments: [],
+                pipeline: "passed",
+                forcePush: false,
+              },
+            });
+            yield* Effect.sleep("1 minute");
+            expect((yield* watchOf(runId))?.woke ?? null).toBeNull();
+            expect((yield* status(runId))?.status.status).toBe("suspended");
+            expect(yield* roundsOf(runId)).toEqual([]);
+            return runId;
+          }),
+        );
+        expect(runId).toStartWith("run-");
+      }),
+    ),
+  240_000,
+);
+
+for (const state of ["closed", "merged"] as const)
+  test(
+    `a Watch whose merge request is ${state} ends once, and settles its Task no further`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          const forge = yield* gitlab;
+          const runId = yield* session(
+            forge,
+            Effect.gen(function* () {
+              const runId = yield* started("watches-mr", "w1", {
+                target: WATCHED,
+                head: H1,
+                cwd: rig.projectDir,
+              });
+              yield* until(
+                () => watchOf(runId),
+                (row) => row !== null,
+              );
+              return runId;
+            }),
+          );
+          yield* session(
+            forge,
+            Effect.gen(function* () {
+              yield* watchingMerges;
+              yield* Effect.sleep("6 minutes");
+              yield* forge.set({ ...OPEN, mrs: [mr("7", { state }), mr("8")] });
+              const done = yield* until(
+                () => status(runId),
+                (view) => view?.status.status === "complete" || view?.status.status === "failed",
+              );
+              expect(done?.status.status === "complete" ? done.status.value : null).toBe(
+                JSON.stringify({ _tag: "Ended", state }),
+              );
+              expect(yield* watchOf(runId)).toBeNull();
+              expect(
+                Arr.map(
+                  yield* readDispositions(runDir(host.dir(), runId)).pipe(
+                    Effect.orElseSucceed(() => []),
+                  ),
+                  (line) => line.kind,
+                ),
+              ).toEqual(state === "merged" ? ["merged"] : []);
+              expect((yield* status(runId))?.controls ?? []).toEqual([]);
+            }),
+          );
+        }),
+      ),
+    240_000,
+  );

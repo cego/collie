@@ -2208,14 +2208,15 @@ for (const id of ["review", "second-look"]) {
               const runId = yield* startedWaiting(entry);
               const registry = yield* Registry;
               yield* registry.control({ runId, control: HOLD, set: true });
+              const held = yield* host.watchOf(runId, TARGET);
               yield* pushedOn(forge, first);
-              yield* until(
-                () => host.watchOf(runId, TARGET),
-                (row) => row === null,
-              );
               yield* Effect.sleep("10 minutes");
               expect(yield* notesOf(forge)).toHaveLength(1);
               expect(yield* host.agentStarts).toHaveLength(1);
+              // Held, the Watch neither reads on nor wakes: its row is left as it was.
+              const still = yield* host.watchOf(runId, TARGET);
+              expect(still?.observed ?? null).toEqual(held?.observed ?? null);
+              expect(still?.woke ?? null).toBeNull();
               yield* registry.control({ runId, control: HOLD, set: false });
               yield* until(
                 () => notesOf(forge),
