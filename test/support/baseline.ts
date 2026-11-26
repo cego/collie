@@ -6579,13 +6579,72 @@ scenario(
             }),
         );
         expect(outcomeText(status)).toBe(OPENED.mr_url);
-        const back = yield* asked(runId, "build.fix-4-back-1");
-        expect(back).toContain("These blocking findings are still open");
+        const back = yield* asked(runId, "build.fix-4");
         expect(back).toContain(spin.title);
         expect(back).not.toContain("A person declined the dispute");
         expect(back).not.toContain(DISPUTED_FINDING.title);
       }),
     ),
+);
+
+scenario("Waive it keeps the blocker nobody answered going back to the fixer", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* noMergeRequests;
+      yield* repository();
+      const plan = yield* planOf([{ file: "01-only.md", title: "only", checks: "unit" }]);
+      const runId = "r-waive-live";
+      yield* approve(runId, ["unit"]);
+      yield* collect(evidenceDir(dir, runId), {
+        run: runId,
+        name: "unit",
+        executable: "true",
+        argv: [],
+        cwd: rig.projectDir,
+        by: "agent",
+      }).pipe(Effect.orDie);
+      const spin = { severity: "blocker", title: "the retry loop spins", file: "src/retry.ts" };
+      const disputing = {
+        verdict: "clean",
+        fixed: [],
+        disputed: [{ ...DISPUTED_FINDING, reason: "upstream must release it" }],
+        checks: [{ name: "unit" }],
+      };
+      const kept = {
+        ...CLEAN_SYNTHESIS,
+        verdict: "findings",
+        findings: [DISPUTED_FINDING, spin],
+      };
+      yield* rig.queueOutputs([
+        BLOCKED_BUILD,
+        disputedReview,
+        disputing,
+        kept,
+        {
+          verdict: "clean",
+          fixed: [{ title: spin.title, file: spin.file }],
+          disputed: [],
+          checks: [{ name: "unit" }],
+        },
+        CLEAN_SYNTHESIS,
+        CLEAN_SYNTHESIS,
+        OPENED,
+      ]);
+      const status = yield* driven(
+        { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+        (run) =>
+          Effect.gen(function* () {
+            yield* stallAsked(run, "build.dispute-1");
+            yield* run.answer("build.dispute-1", "Waive it");
+            return yield* ended(run.status);
+          }),
+      );
+      expect(outcomeText(status)).toBe(OPENED.mr_url);
+      const hand = yield* asked(runId, "build.fix-2");
+      expect(hand).toContain(spin.title);
+      expect(hand).not.toContain(DISPUTED_FINDING.title);
+    }),
+  ),
 );
 
 scenario("a last fix that both fixes and disputes a blocker is judged, not offered a waiver", () =>

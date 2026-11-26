@@ -706,8 +706,6 @@ export const rally = (ask: {
 
     const declinedLine =
       "A person declined the dispute on these findings, so they are open again: fix them, or answer each with new evidence or a dispute.";
-    const stillOpenLine =
-      "These blocking findings are still open: fix them, or answer each with new evidence or a dispute.";
 
     const sendBack = (
       line: string,
@@ -993,7 +991,7 @@ export const rally = (ask: {
           disputed = split.standing;
           const standing = Arr.filter(disputed, isBlocking);
           const raised = blockingKeys([...split.live, ...standing]);
-          const round = settleRound({ live: split.live, disputed, at, seen });
+          let round = settleRound({ live: split.live, disputed, at, seen });
           if (standing.length > 0) {
             const outstanding =
               round.go === "halt" ? round.outstanding : [...standing, ...split.live];
@@ -1003,30 +1001,23 @@ export const rally = (ask: {
               prompt: disputedPrompt(standing),
               options: DISPUTE_OPTIONS,
             });
-            if (chosen === WAIVE_IT) {
-              yield* waiveAll(name, standing);
-              if (at < ROUNDS) {
-                return null;
+            if (chosen !== WAIVE_IT) {
+              if (chosen !== SEND_IT_BACK) {
+                return stopped(
+                  synthesis,
+                  `a person answered Stop to ${name}: ${Arr.join(disputesOf(standing), "; ")}`,
+                );
               }
-              const rest = Arr.filter(
-                outstanding,
-                (one) => isBlocking(one) && !isWaived(waived, one),
-              );
-              if (rest.length === 0) {
-                return cleaned(synthesis);
-              }
-              const fixed = yield* sendBack(stillOpenLine, rest, at, proves, head);
-              return yield* finish(synthesis, rest, fixed, head);
+              const fixed = yield* sendBack(declinedLine, standing, at, proves, head);
+              remember(at, raised, fixed);
+              return at < ROUNDS ? null : yield* finish(synthesis, outstanding, fixed, head);
             }
-            if (chosen !== SEND_IT_BACK) {
-              return stopped(
-                synthesis,
-                `a person answered Stop to ${name}: ${Arr.join(disputesOf(standing), "; ")}`,
-              );
+            yield* waiveAll(name, standing);
+            // WARNING: a waiver settles that finding only; what the round already asked of the fixer still stands.
+            round = settleRound({ live: split.live, disputed, at, seen });
+            if (round.go === "clean") {
+              return at < ROUNDS ? null : cleaned(synthesis);
             }
-            const fixed = yield* sendBack(declinedLine, standing, at, proves, head);
-            remember(at, raised, fixed);
-            return at < ROUNDS ? null : yield* finish(synthesis, outstanding, fixed, head);
           }
           if (round.go === "halt") {
             const name = `${prefix}no-progress-${++progressAsks}`;

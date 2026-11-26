@@ -193,6 +193,26 @@ test("a disputed blocker is asked about while the review also raised a live one"
     }),
   ));
 
+test("waiving one dispute still hands the blocker nobody answered back to the fixer", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const runId = "r-waive-live";
+      yield* rig.queueOutputs([
+        { verdict: "findings", findings: [blocker("empty list"), blocker("wrong order")] },
+        { verdict: "clean", disputed: [blocker("empty list")], fixed: [], checks: [] },
+        { verdict: "findings", findings: [blocker("empty list"), blocker("wrong order")] },
+        { verdict: "clean", fixed: [{ title: "wrong order", file: "src/thing.ts" }], checks: [] },
+        { verdict: "clean" },
+      ]);
+      const waived = yield* rally(runId, 4, ["Waive it"]);
+      expect(said(waived)).toContain("dispute-1: Waive it | Send it back | Stop → Waive it");
+      const fix = yield* fs.readFileString(`${dir}/agents/${runId}/fix-2.prompt.md`);
+      expect(fix).toContain("wrong order");
+      expect(fix).not.toContain("empty list");
+    }),
+  ));
+
 test("Stop on the dispute Choice ends the rally naming the dispute", () =>
   runEffect(
     Effect.gen(function* () {

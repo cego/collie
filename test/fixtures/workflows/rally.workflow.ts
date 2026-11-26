@@ -190,32 +190,35 @@ export default defineWorkflow({
         );
         disputed = split.standing;
         const standingNow = disputed.filter(isBlocking);
-        const rally = settleRound({ live: split.live, disputed, at, seen });
+        let rally = settleRound({ live: split.live, disputed, at, seen });
         if (standingNow.length > 0) {
           const standing = standingNow;
           const liveNow = rally.go === "halt" ? rally.outstanding : [...standing, ...split.live];
           const answer = choose(`dispute-${++disputes}`, DISPUTE_OPTIONS);
-          if (answer === WAIVE) {
-            waiveNow(standing);
+          if (answer !== WAIVE) {
+            if (answer !== SEND_BACK) {
+              return `stopped: ${formatFindings(standing)}${suffix()}`;
+            }
+            const fixed = yield* fixNow(
+              `fix-${at}-back-${++sentBack}`,
+              at,
+              `A person declined the dispute, so it is open again.\n\n${formatFindings(standing)}`,
+              standing,
+            );
+            keep(fixed);
             if (at < asked.rounds) {
               continue;
             }
-            return `clean after ${at} round(s), 0 non-blocking left${suffix()}`;
+            return yield* finish(liveNow, fixed);
           }
-          if (answer !== SEND_BACK) {
-            return `stopped: ${formatFindings(standing)}${suffix()}`;
+          waiveNow(standing);
+          rally = settleRound({ live: split.live, disputed, at, seen });
+          if (rally.go === "clean") {
+            if (at < asked.rounds) {
+              continue;
+            }
+            return `clean after ${at} round(s), ${rally.remaining.length} non-blocking left${suffix()}`;
           }
-          const fixed = yield* fixNow(
-            `fix-${at}-back-${++sentBack}`,
-            at,
-            `A person declined the dispute, so it is open again.\n\n${formatFindings(standing)}`,
-            standing,
-          );
-          keep(fixed);
-          if (at < asked.rounds) {
-            continue;
-          }
-          return yield* finish(liveNow, fixed);
         }
         if (rally.go === "halt" && rally.halt === "no_progress") {
           const answer = choose(`no-progress-${++progress}`, AGAIN_OPTIONS);
