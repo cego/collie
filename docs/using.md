@@ -2366,17 +2366,27 @@ once; `collie_desktop` is Collie's own and no server of yours takes its place. A
 static headers, such as a bearer token, and a stdio server's environment reach Codex as
 values Collie holds, never in the server's command line, never in Codex's own environment
 and never in the chat. A header's value is added by a relay Desktop runs on loopback, which
-is the address Codex is given, so the value itself is never a thing Codex holds; a stdio
-server's value waits in a file its own launcher reads and deletes as the server starts.
+is the address Codex is given, so the value itself is never a thing Codex holds; that relay
+answers only a request carrying a per-chat token it puts in Codex's own environment under a
+name in Collie's `COLLIE_CHAT_` namespace, only for the address Codex is given, and only
+from the origin of the server it fronts — anything else is refused with a 401 or a 403. It
+changes only the headers you configured: an `Authorization` Codex sends itself reaches the
+server as Codex sent it, and a server's own challenge comes back with its answer, so a
+server Collie has no header for is left to Codex's own sign-in rather than put behind one. A
+stdio server's value waits in a file its own launcher reads and deletes as the server
+starts, and if Collie cannot write one that chat does not start Codex at all rather than
+start a server without its value.
 Codex's own shell is told to exclude every variable an imported server's value came from —
 bar the standard ones a shell cannot work without — and the names Collie makes, in whichever
-way your `shell_environment_policy` is written: a keyed `filters` table keeps its entries and
-gains ours, and legacy `exclude` names gain them, since Codex drops the first when the second
-is set beside it. A name your own keyed `filters` includes keeps its entry, because your
-policy decides what may enter that shell. A `${VAR}` a header or a value is written with is
-resolved from the environment Codex already runs with; Collie neither adds it nor takes it
-away, since a server of Codex's own may name the same variable, and the shell is kept from
-it as above. None of this is isolation, and Collie claims none: the value is in Desktop's own
+way your `shell_environment_policy` is written: a keyed `filters` table keeps every entry
+Collie is not concerned with, and legacy `exclude` names gain ours, since Codex drops the
+first when the second is set beside them. An import outranks the rest of your policy for the
+one name it used: a `filters` entry that included that name is replaced by an exclusion,
+spelled as the variable, so the shell cannot hold what Codex was told; a key you spelled in
+another case is dropped rather than kept beside ours, which Codex rejects. A `${VAR}` a
+header or a value is written with is resolved from the environment Codex already runs with;
+Collie neither adds it nor takes it away, since a server of Codex's own may name the same
+variable, and the shell is kept from it as above. None of this is isolation, and Collie claims none: the value is in Desktop's own
 process, in the configuration it was imported from and, where it names one, in your
 existing environment; a command running as you can reach all three, as it can the relay
 on loopback, and it can read a stdio server's staged file from the moment it is written
@@ -2384,7 +2394,8 @@ until that server's launcher unlinks it. Keep a credential out of a Codex chat b
 out of your MCP
 configuration, or by running that chat on a Machine where it does not sit. A
 stdio server whose environment names something a shell cannot set, or a name in Collie's own
-`COLLIE_CHAT_` namespace, is left out and the chat says so. If Codex will not say which
+`COLLIE_CHAT_` namespace, is left out and the chat says so — as is a server whose url carries
+a credential in it, since Codex takes a url only in its arguments, where `ps` shows them. If Codex will not say which
 servers it has, none of yours is passed at all — better a server missing from the chat than
 one overriding Codex's own — and the chat says so, until Codex starts again and it can be
 asked once more. Codex keeps its own sign-ins: a server that needs a browser login, such as

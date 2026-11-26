@@ -142,17 +142,49 @@ const initializeCall = {
 } as const;
 const asked = Effect.runSync(Schema.encodeEffect(Initialize)(initializeCall));
 
-const initialize = (url: string) =>
+const RELAY = "X-Collie-Relay";
+
+const posted = (url: string, headers: Readonly<Record<string, string>>) =>
   Effect.promise(() =>
     Bun.fetch(url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         accept: "application/json, text/event-stream",
+        ...headers,
       },
       body: asked,
     }).then((answer) => answer.status),
   );
+
+const initialize = (url: string) => posted(url, {});
+
+const replied = (url: string, headers: Readonly<Record<string, string>>) =>
+  Effect.promise(() =>
+    Bun.fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        ...headers,
+      },
+      body: asked,
+    }).then((answer) => ({
+      status: answer.status,
+      www: answer.headers.get("www-authenticate"),
+    })),
+  );
+
+const relayToken = (details: ReturnType<typeof inspected>, name: string) => {
+  const found = RegExp(
+    `mcp_servers\\.${name}\\.env_http_headers=\\{ "X-Collie-Relay" = "([^"]+)" \\}`,
+  ).exec(Arr.join(details.args, " "));
+  const variable = found?.[1];
+  if (variable === undefined) {
+    throw new Error(`No relay token for ${name}`);
+  }
+  return { variable, value: details.env[variable] ?? "" };
+};
 
 test("Codex streams a turn's reasoning, text and one row per tool, refuses what it asks the chat to answer, and costs its usage", () =>
   withCodex((driver) =>
@@ -478,6 +510,7 @@ const serveDocs = (options: {
   readonly tool: string;
   readonly header?: string;
   readonly token?: string;
+  readonly need?: { readonly header: string; readonly value: string };
 }) => {
   const header = options.header ?? "Authorization";
   const server = Bun.serve({
@@ -486,10 +519,15 @@ const serveDocs = (options: {
     idleTimeout: 0,
     fetch: (request) => {
       if (
-        options.token !== undefined &&
-        request.headers.get(header) !== `Bearer ${options.token}`
+        (options.token !== undefined &&
+          request.headers.get(header) !== `Bearer ${options.token}`) ||
+        (options.need !== undefined &&
+          request.headers.get(options.need.header) !== options.need.value)
       ) {
-        return new Response("Unauthorized", { status: 401 });
+        return new Response("Unauthorized", {
+          status: 401,
+          headers: { "www-authenticate": "Bearer" },
+        });
       }
       const mcp = new McpServer({ name: "docs", version: "1" });
       mcp.registerTool(
@@ -552,7 +590,7 @@ test("A credential written into a server's headers never enters Codex, and only 
         const details = inspected(yield* turn(session));
         const given = Arr.join(details.args, " ");
         const relay = relayed(details, "docs");
-        expect(given).not.toContain("env_http_headers");
+        expect(given).toContain('mcp_servers.docs.env_http_headers={ "X-Collie-Relay"');
         expect(given).not.toContain(token);
         expect(Arr.some(Rec.values(details.env), (value) => pipe(value, Str.includes(token)))).toBe(
           false,
@@ -563,7 +601,7 @@ test("A credential written into a server's headers never enters Codex, and only 
           ),
         ).toBe(false);
         expect(details.start.developerInstructions).toEqual(expect.not.stringContaining(token));
-        expect(yield* initialize(relay)).toBe(200);
+        expect(yield* posted(relay, { [RELAY]: relayToken(details, "docs").value })).toBe(200);
         expect(yield* initialize(fixture.url)).toBe(401);
         yield* session.offer("servers");
         expect(called(yield* turn(session))).toEqual(["mcp__docs__read_doc"]);
@@ -784,7 +822,7 @@ test("An empty allowlist narrows nothing, as Codex reads one", () => {
   );
 });
 
-test("An import that names a variable the human's filters include keeps that include", () => {
+test("An import's variable leaves the shell even where the human's filters include it", () => {
   const fixture = serveDocs({ tool: "read_doc", token: "kept" });
   Bun.env.APP_VAR = "app-value";
   return withServers(
@@ -794,18 +832,19 @@ test("An import that names a variable the human's filters include keeps that inc
         const fs = yield* FileSystem.FileSystem;
         yield* fs.writeFileString(
           `${context.dir}/codex-home/config.toml`,
-          `[shell_environment_policy]\ninherit = "all"\n[shell_environment_policy.filters]\n"APP_VAR" = "include"\n`,
+          `[shell_environment_policy]\ninherit = "all"\n[shell_environment_policy.filters]\n"APP_VAR" = "include"\n"KEEP_ME" = "exclude"\n`,
         );
         const session = yield* driver.open("codex-include-collision", "default", null);
         yield* Effect.addFinalizer(() => session.close);
         yield* session.offer("inspect");
         const given = Arr.join(inspected(yield* turn(session)).args, " ");
-        expect(given).toContain('"APP_VAR" = "include"');
+        expect(given).toContain('"APP_VAR" = "exclude"');
+        expect(given).toContain('"KEEP_ME" = "exclude"');
         expect(occurrences(Str.toLowerCase(given), "app_var")).toBe(1);
         yield* session.offer("shell");
         const shell = message(yield* turn(session));
-        expect(shell).toContain("APP_VAR=");
-        expect(shell).not.toContain("LANG=");
+        expect(shell).not.toContain("APP_VAR=");
+        expect(shell).toContain("PATH=");
       }),
   ).finally(() => {
     void fixture.stop();
@@ -828,13 +867,144 @@ test("An exclusion never doubles a filter key the human spelled in another case"
         const session = yield* driver.open("codex-case-collision", "default", null);
         yield* Effect.addFinalizer(() => session.close);
         yield* session.offer("inspect");
-        const given = Str.toLowerCase(Arr.join(inspected(yield* turn(session)).args, " "));
-        expect(occurrences(given, '"app_var"')).toBe(1);
+        const given = Arr.join(inspected(yield* turn(session)).args, " ");
+        expect(occurrences(Str.toLowerCase(given), "app_var")).toBe(1);
+        expect(given).toContain('"APP_VAR" = "exclude"');
+        yield* session.offer("shell");
+        expect(message(yield* turn(session))).not.toContain("APP_VAR=");
       }),
   ).finally(() => {
     void fixture.stop();
     delete Bun.env.APP_VAR;
   });
+});
+
+test("A relay answers only a request carrying the token Codex was given", () => {
+  const token = "literal-secret";
+  const fixture = serveDocs({ tool: "read_doc", token });
+  return withServers(
+    {
+      docs: { type: "http", url: fixture.url, headers: { Authorization: `Bearer ${token}` } },
+    },
+    (driver) =>
+      Effect.gen(function* () {
+        const session = yield* driver.open("codex-relay-token", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("inspect");
+        const details = inspected(yield* turn(session));
+        const relay = relayed(details, "docs");
+        const { value } = relayToken(details, "docs");
+        expect(value).not.toBe("");
+        expect(value).not.toContain(token);
+        expect(yield* initialize(relay)).toBe(401);
+        expect(yield* posted(relay, { [RELAY]: "not-the-token" })).toBe(401);
+        expect(yield* posted(relay, { [RELAY]: value })).toBe(200);
+        yield* session.offer("servers");
+        expect(called(yield* turn(session))).toEqual(["mcp__docs__read_doc"]);
+      }),
+  ).finally(() => void fixture.stop());
+});
+
+test("A relay refuses a request that another origin claims", () => {
+  const token = "literal-secret";
+  const fixture = serveDocs({ tool: "read_doc", token });
+  return withServers(
+    {
+      docs: { type: "http", url: fixture.url, headers: { Authorization: `Bearer ${token}` } },
+    },
+    (driver) =>
+      Effect.gen(function* () {
+        const session = yield* driver.open("codex-relay-origin", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("inspect");
+        const details = inspected(yield* turn(session));
+        const relay = relayed(details, "docs");
+        const { value } = relayToken(details, "docs");
+        expect(yield* posted(relay, { [RELAY]: value, origin: "https://elsewhere.example" })).toBe(
+          403,
+        );
+        expect(yield* posted(relay, { [RELAY]: value, origin: new URL(fixture.url).origin })).toBe(
+          200,
+        );
+      }),
+  ).finally(() => void fixture.stop());
+});
+
+test("A relay leaves the client's own authorization alone, and passes the server's challenge back", () => {
+  const fixture = serveDocs({
+    tool: "read_doc",
+    header: "X-Api-Key",
+    token: "gate",
+    need: { header: "Authorization", value: "Bearer oauth-token" },
+  });
+  return withServers(
+    {
+      docs: {
+        type: "http",
+        url: fixture.url,
+        headers: { "X-Api-Key": "Bearer gate" },
+      },
+    },
+    (driver) =>
+      Effect.gen(function* () {
+        const session = yield* driver.open("codex-relay-oauth", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("inspect");
+        const details = inspected(yield* turn(session));
+        const relay = relayed(details, "docs");
+        const { value } = relayToken(details, "docs");
+        const challenged = yield* replied(relay, { [RELAY]: value });
+        expect(challenged.status).toBe(401);
+        expect(challenged.www).toBe("Bearer");
+        const allowed = yield* replied(relay, {
+          [RELAY]: value,
+          Authorization: "Bearer oauth-token",
+        });
+        expect(allowed.status).toBe(200);
+      }),
+  ).finally(() => void fixture.stop());
+});
+
+test("A server whose url carries a credential is left out, not shown in Codex's arguments", () =>
+  withServers({ docs: { type: "http", url: "http://someone:hunter2@127.0.0.1:1/mcp" } }, (driver) =>
+    Effect.gen(function* () {
+      const session = yield* driver.open("codex-url-credential", "default", null);
+      yield* Effect.addFinalizer(() => session.close);
+      yield* session.offer("inspect");
+      const details = inspected(yield* turn(session));
+      expect(Arr.join(details.args, " ")).not.toContain("hunter2");
+      expect(instruct(details)).toEqual(
+        expect.stringContaining(
+          "docs (its url holds a credential Codex would show in its arguments)",
+        ),
+      );
+    }),
+  ));
+
+test("A value Collie cannot stage stops the chat rather than start a server without it", () => {
+  return withServers(
+    { notes: { command: "true", env: { NOTE_TOKEN: "staged" } } },
+    (driver, context) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(`${context.dir}/codex-secrets`, "");
+        const session = yield* driver.open("codex-staging", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("hello");
+        const events = yield* turn(session);
+        expect(Arr.map(events, (event) => event.type)).toContain("RUN_ERROR");
+        const started = yield* fs
+          .exists(`${context.dir}/app-server-starts.jsonl`)
+          .pipe(
+            Effect.flatMap((there) =>
+              there
+                ? fs.readFileString(`${context.dir}/app-server-starts.jsonl`)
+                : Effect.succeed(""),
+            ),
+          );
+        expect(started).not.toContain('"chat":true');
+      }),
+  );
 });
 
 test("The shell stand-in keeps an exclusion the human's allowlist would readmit", () => {
@@ -1023,13 +1193,20 @@ test("Two servers' headers each reach their own server, and a header keeps its d
         yield* Effect.addFinalizer(() => session.close);
         yield* session.offer("inspect");
         const details = inspected(yield* turn(session));
-        expect(Arr.join(details.args, " ")).not.toContain("env_http_headers");
+        const given = Arr.join(details.args, " ");
+        expect(given).not.toContain("COLLIE_CHAT_SERVER_");
+        expect(given).not.toContain("first");
+        expect(given).not.toContain("second");
         const here = Arr.filter(Rec.keys(details.env), (key) =>
           pipe(key, Str.startsWith("COLLIE_CHAT_SERVER_")),
         );
         expect(here).toEqual([]);
-        expect(yield* initialize(relayed(details, "one"))).toBe(200);
-        expect(yield* initialize(relayed(details, "one_X"))).toBe(200);
+        expect(
+          yield* posted(relayed(details, "one"), { [RELAY]: relayToken(details, "one").value }),
+        ).toBe(200);
+        expect(
+          yield* posted(relayed(details, "one_X"), { [RELAY]: relayToken(details, "one_X").value }),
+        ).toBe(200);
         yield* session.offer("servers");
         expect(called(yield* turn(session))).toEqual([
           "mcp__one__first_read",

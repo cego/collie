@@ -2,6 +2,7 @@
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
+import { SecureRandom } from "effect/crypto";
 import { pipe as pipe_ } from "effect/Function";
 import { hostname } from "node:os";
 import {
@@ -55,6 +56,7 @@ const SIGNED_OUT =
   "Codex is not signed in on this computer: run `codex login` in a terminal, then send your message again.";
 const SIGN_IN = "run `codex login` in a terminal, then send your message again.";
 const NOT_INSTALLED = "codex is not installed or not on PATH on this computer";
+const NOT_STAGED = "Collie could not stage an imported server's value, so it did not start Codex";
 
 const encodeLine = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
 const Message = Schema.Struct({
@@ -665,7 +667,7 @@ export const codexDriver: (
 ) => {
   const mapping = `${context.dir}/codex-threads.json`;
   const secrets = `${context.dir}/codex-secrets`;
-  const keep = (files: CodexServers["files"]) =>
+  const keep: (files: CodexServers["files"]) => Effect.Effect<void, CodexError> = (files) =>
     files.length === 0
       ? Effect.void
       : Effect.promise(() =>
@@ -682,8 +684,14 @@ export const codexDriver: (
                   );
                 }),
               ),
-              Effect.orDie,
+              Effect.exit,
             ),
+          ),
+        ).pipe(
+          Effect.flatMap((ended) =>
+            Exit.isFailure(ended)
+              ? Effect.fail(new CodexError({ message: NOT_STAGED }))
+              : Effect.void,
           ),
         );
   const forget = Effect.promise(() =>
@@ -822,9 +830,25 @@ export const codexDriver: (
             secrets,
           );
           yield* keep(given.files);
-          const relays = Arr.map(given.relays, (one) => ({
+          const tokens = yield* Effect.promise(() =>
+            context.run(
+              Effect.gen(function* () {
+                const random = yield* SecureRandom.SecureRandom;
+                const made: Array<string> = [];
+                for (const _ of given.relays) {
+                  made.push(pipe_(yield* random.uuidV4(), Str.replaceAll("-", "")));
+                }
+                return made;
+              }),
+            ),
+          );
+          const relayEnv: Record<string, string> = {};
+          for (const [at, one] of given.relays.entries()) {
+            relayEnv[one.variable] = tokens[at] ?? "";
+          }
+          const relays = Arr.map(given.relays, (one, at) => ({
             name: one.name,
-            live: codexRelay(one.url, one.headers),
+            live: codexRelay(one.url, one.headers, tokens[at] ?? ""),
           }));
           yield* Effect.addFinalizer(() =>
             Effect.sync(() => {
@@ -847,7 +871,7 @@ export const codexDriver: (
               "-c",
               `mcp_servers.${SERVER}.tool_timeout_sec=${TOOL_TIMEOUT}`,
             ],
-            { ...childEnv(), [TOKEN_ENV]: token },
+            { ...childEnv(), ...relayEnv, [TOKEN_ENV]: token },
           );
           yield* Effect.forkScoped(pump(server));
           const { account, requiresOpenaiAuth } = yield* server

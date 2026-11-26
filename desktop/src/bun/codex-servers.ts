@@ -13,6 +13,7 @@ const SHELL = "/bin/sh";
 const NAME = /^[A-Za-z0-9_-]+$/;
 const SETTABLE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const REFERENCE = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+const RELAY_HEADER = "X-Collie-Relay";
 const STANDARD = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "TERM", "PWD"];
 const Strings = Schema.Record(Schema.String, Schema.String);
 const Stdio = Schema.Struct({
@@ -50,10 +51,17 @@ export interface CodexServers {
     readonly name: string;
     readonly url: string;
     readonly headers: Readonly<Record<string, string>>;
+    readonly variable: string;
   }>;
 }
 
-export const NO_SERVERS: CodexServers = { args: [], files: [], given: [], left: [], relays: [] };
+export const NO_SERVERS: CodexServers = {
+  args: [],
+  files: [],
+  given: [],
+  left: [],
+  relays: [],
+};
 
 // WARNING: Codex reads a `-c` value as TOML: a table's keys are quoted so a dot stays a header's name.
 const quoted = (value: string) => JSON.stringify(value);
@@ -99,6 +107,9 @@ const substituted: (
   };
 };
 
+// WARNING: a url's userinfo is a credential, and Codex takes no url but in its arguments.
+const credited = (url: string) => /^[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/?#]*@/.test(url);
+
 const shQuote = (word: string) => `'${pipe(word, Str.replaceAll("'", String.raw`'\''`))}'`;
 
 // WARNING: `null` means Codex's own names are unknown: passing the human's would override them.
@@ -121,7 +132,12 @@ export const codexServers: (
   const files: Array<{ path: string; text: string }> = [];
   const given: Array<{ name: string; url?: string }> = [];
   const left: Array<{ name: string; why: string }> = [];
-  const relays: Array<{ name: string; url: string; headers: Record<string, string> }> = [];
+  const relays: Array<{
+    name: string;
+    url: string;
+    headers: Record<string, string>;
+    variable: string;
+  }> = [];
   const used: Array<string> = [];
   const resolve = (value: string) => {
     const made = substituted(value, childEnv());
@@ -201,6 +217,10 @@ export const codexServers: (
       left.push({ name, why: "Codex does not speak SSE" });
       continue;
     }
+    if (credited(server.url)) {
+      left.push({ name, why: "its url holds a credential Codex would show in its arguments" });
+      continue;
+    }
     const headers: Record<string, string> = {};
     for (const [header, value] of Rec.toEntries(server.headers ?? {})) {
       headers[header] = resolve(value);
@@ -208,28 +228,32 @@ export const codexServers: (
     if (Rec.size(headers) === 0) {
       args.push(...codexServerUrlArgs(name, server.url));
     } else {
-      relays.push({ name, url: server.url, headers });
+      // WARNING: the token guards the relay, so it is Collie's own and never an imported value.
+      const variable = `${OWN}RELAY_${relays.length + 1}`;
+      args.push(...table(`mcp_servers.${name}.env_http_headers`, { [RELAY_HEADER]: variable }));
+      relays.push({ name, url: server.url, headers, variable });
     }
     given.push({ name, url: server.url });
   }
-  // WARNING: Codex rejects two filter keys that differ only in case, and a key the human includes outranks Collie's exclusion.
+  // WARNING: a native include of a variable an import's value came from would readmit that value, so the exclusion takes its key.
+  const folded = (name: string) => Str.toLowerCase(name);
   const keyed = Rec.toEntries(policy.filters);
-  const spelled = (name: string) =>
-    Arr.some(keyed, ([glob]) => Str.toLowerCase(glob) === Str.toLowerCase(name));
-  const own = Arr.filter(
-    Arr.dedupe([`${OWN}*`, ...Arr.filter(used, (name) => !Arr.contains(STANDARD, name))]),
-    (name) => !spelled(name),
-  );
+  const wants = Arr.dedupe([
+    `${OWN}*`,
+    ...Arr.filter(used, (name) => !Arr.contains(STANDARD, name)),
+  ]);
+  const foldedOnce = (so: ReadonlyArray<string>, name: string) =>
+    Arr.some(so, (held) => folded(held) === folded(name)) ? so : Arr.append(so, name);
+  const added = Arr.reduce(wants, Arr.empty<string>(), foldedOnce);
+  const dropped = Arr.map(added, (name) => folded(name));
+  const untouched = Rec.filter(policy.filters, (_rule, key) => !Arr.contains(dropped, folded(key)));
+  const merged = Arr.reduce(added, { ...untouched }, (so, name) => ({ ...so, [name]: "exclude" }));
   // WARNING: Codex drops its keyed `filters` table when a legacy exclude is set beside it.
-  if (own.length > 0) {
-    const added: Record<string, string> = {};
-    for (const name of own) {
-      added[name] = "exclude";
-    }
+  if (added.length > 0) {
     args.push(
       ...(keyed.length > 0
-        ? table("shell_environment_policy.filters", { ...policy.filters, ...added })
-        : list("shell_environment_policy.exclude", Arr.dedupe([...own, ...policy.excludes]))),
+        ? table("shell_environment_policy.filters", merged)
+        : list("shell_environment_policy.exclude", Arr.dedupe([...added, ...policy.excludes]))),
     );
   }
   return { args, files, given, left, relays };
