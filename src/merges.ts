@@ -289,7 +289,7 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
         _tag: "poll" as const,
         at: now,
         mr: id,
-        source: demanded && !settles ? ("watch" as const) : ("task" as const),
+        source: demanded && !settlesThis ? ("watch" as const) : ("task" as const),
         result: answered === null ? ("failed" as const) : ("read" as const),
         attempts: spent.attempts,
         rateLimit: spent.limited,

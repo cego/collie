@@ -38,6 +38,7 @@ import { madeRun } from "./support/records";
 import { task, taskMr } from "./support/task";
 import { memoryRecords, runEffect } from "./support/effect";
 import { epochMs } from "../src/time";
+import type { WatchEvent } from "../src/watch-journal";
 import { readLanding, writeLanding } from "../src/landing";
 import type { Landing } from "../src/landing";
 import { fakeForge, storedAnswers } from "./support/forge";
@@ -2495,6 +2496,7 @@ test("an abandoned merge request is read once per due interval for the Run still
       const id = `${GITLAB}!68`;
       const states = new Map<string, MrState>();
       const checked = new Map<string, number>();
+      const events: Array<WatchEvent> = [];
       const asked = () => Arr.filter(log, (call) => /^GET .*merge_requests\/68$/.test(call));
       const settle = (
         now: number,
@@ -2525,6 +2527,7 @@ test("an abandoned merge request is read once per due interval for the Run still
           panels: new Map(),
           making: new Set(),
           demand,
+          event: (one) => Effect.sync(() => events.push(one)),
         });
       const ten = epochMs("2026-09-17T10:00:00Z");
       const demand = new Map([[id, ["r-abandoned"]]]);
@@ -2542,5 +2545,11 @@ test("an abandoned merge request is read once per due interval for the Run still
       yield* settle(ten + 2 * MERGE_POLL_MS, demand, { state: "merged" });
       expect(states.get(id)).toBe("merged");
       expect(yield* readDispositions(runDir(stateDir, "r-abandoned"))).toEqual([]);
+      expect(
+        Arr.map(
+          Arr.filter(events, (one) => one._tag === "poll"),
+          (one) => one.source,
+        ),
+      ).toEqual(["watch", "watch", "watch"]);
     }),
   ));
