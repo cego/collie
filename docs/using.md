@@ -2378,8 +2378,10 @@ resolved from the environment Codex already runs with; Collie neither adds it no
 away, since a server of Codex's own may name the same variable, and the shell is kept from
 it as above. None of this is isolation, and Collie claims none: the value is in Desktop's own
 process, in the configuration it was imported from and, where it names one, in your
-existing environment, and a command running as you can reach all three, as it can the relay
-on loopback. Keep a credential out of a Codex chat by keeping it out of your MCP
+existing environment; a command running as you can reach all three, as it can the relay
+on loopback, and it can read a stdio server's staged file from the moment it is written
+until that server's launcher unlinks it. Keep a credential out of a Codex chat by keeping it
+out of your MCP
 configuration, or by running that chat on a Machine where it does not sit. A
 stdio server whose environment names something a shell cannot set, or a name in Collie's own
 `COLLIE_CHAT_` namespace, is left out and the chat says so. If Codex will not say which
