@@ -4,6 +4,7 @@ import { Effect, FileSystem, Option, Schema, Stream } from "effect";
 import { expect, test } from "bun:test";
 import { sectionOf } from "../src/board-model";
 import { connect } from "../src/host";
+import { parseJson, stringifyJson } from "../src/json";
 import { isSettled } from "../src/lifecycle";
 import { FakeBin } from "./support/bin";
 import { exec } from "./support/command";
@@ -13,13 +14,11 @@ import { hosted } from "./support/hosted";
 
 const root = `${import.meta.dir}/..`;
 
-const Envelope = Schema.fromJsonString(
-  Schema.Struct({
-    ok: Schema.Boolean,
-    data: Schema.optional(Schema.Unknown),
-    error: Schema.optional(Schema.Struct({ code: Schema.String, message: Schema.String })),
-  }),
-);
+const Envelope = Schema.Struct({
+  ok: Schema.Boolean,
+  data: Schema.optional(Schema.Unknown),
+  error: Schema.optional(Schema.Struct({ code: Schema.String, message: Schema.String })),
+});
 
 const Findings = Schema.Struct({
   findings: Schema.Array(
@@ -70,7 +69,7 @@ const repository = (world: {
     const api = yield* serveForges({ forge: "gitlab", face: faked.face });
     yield* fs.writeFileString(
       `${world.config}/config.json`,
-      JSON.stringify({ gitlab_host: FORGE_HOST.gitlab }),
+      stringifyJson({ gitlab_host: FORGE_HOST.gitlab }),
     );
     yield* Effect.acquireRelease(
       Effect.sync(() => {
@@ -110,7 +109,7 @@ test("the CLI takes Improve over two findings of a review, and dismissing the la
         yield* repository(world);
         yield* fs.writeFileString(
           `${world.home}/outputs.json`,
-          JSON.stringify([
+          stringifyJson([
             {
               verdict: "findings",
               summary: "It guards the input.",
@@ -138,7 +137,7 @@ test("the CLI takes Improve over two findings of a review, and dismissing the la
         const json = (args: Array<string>) =>
           Effect.gen(function* () {
             const answered = yield* run(["--json", ...args]);
-            const envelope = yield* Schema.decodeUnknownEffect(Envelope)(answered.stdout);
+            const envelope = parseJson(Envelope, answered.stdout);
             if (!envelope.ok) {
               return yield* Effect.die(
                 `collie ${Arr.join(args, " ")} refused: ${envelope.error?.message ?? ""}`,
@@ -147,9 +146,8 @@ test("the CLI takes Improve over two findings of a review, and dismissing the la
             return envelope.data;
           });
         const findings = (runId: string) =>
-          Effect.map(
-            json(["run", "findings", runId]),
-            (data) => Schema.decodeUnknownSync(Findings)(data).findings,
+          Effect.flatMap(json(["run", "findings", runId]), (data) =>
+            Effect.map(Schema.decodeUnknownEffect(Findings)(data), (decoded) => decoded.findings),
           );
         const card = (runId: string) =>
           Effect.gen(function* () {
@@ -238,7 +236,9 @@ test("the CLI takes Improve over two findings of a review, and dismissing the la
           "--request-id",
           "choose-two",
         ]);
-        const child = Schema.decodeUnknownSync(Schema.Struct({ run: Schema.String }))(chosen).run;
+        const child = yield* Schema.decodeUnknownEffect(Schema.Struct({ run: Schema.String }))(
+          chosen,
+        ).pipe(Effect.map((row) => row.run));
         expect(
           Arr.map(yield* findings(started.runId), (one) => [one.id, one.status, one.run]),
         ).toEqual([
