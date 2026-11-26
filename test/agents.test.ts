@@ -23,7 +23,6 @@ import {
   Layer,
   Path,
   Ref,
-  Schedule,
   Schema,
   flow,
   Result,
@@ -179,25 +178,31 @@ const work = enveloped({
 
 const SKIPPED = { verdict: "clean", note: "nothing to review" } as const;
 
-const reviewWork = () =>
-  agentWork({
-    operation: "review",
+const reviewGiven = () => {
+  const given = {
+    operation: "review" as const,
     role: "reviewer",
     workflow: "agent-work",
     cwd: rig.projectDir,
     instructions: "Review {{target}} as the {{role}}.",
     input: { target: "the diff" },
     output: Verdict,
-    ...(legacyOutput ? { outputSubmit: "file" as const } : {}),
     ...clearing,
-  });
+  };
+  return legacyOutput ? { ...given, outputSubmit: "file" as const } : given;
+};
+
+const reviewWork = (runId: string) =>
+  (legacyOutput ? olderDispatch(runId) : Effect.void).pipe(
+    Effect.andThen(agentWork(reviewGiven())),
+  );
 
 const body = work.toLayer((payload) =>
   Effect.gen(function* () {
     if (payload.input.skip) {
       return SKIPPED;
     }
-    return yield* reviewWork();
+    return yield* reviewWork(payload.runId);
   }).pipe(asRun(payload)),
 );
 
@@ -207,7 +212,9 @@ const stepped = enveloped({
   success: Verdict,
 });
 const reviewing = step({ id: "review", title: "Review the diff", kind: "agent" });
-const steppedBody = stepped.toLayer((payload) => reviewing(reviewWork()).pipe(asRun(payload)));
+const steppedBody = stepped.toLayer((payload) =>
+  reviewing(reviewWork(payload.runId)).pipe(asRun(payload)),
+);
 
 const CLAUDE_HELP = "  --autocompact <auto|tokens>           Auto-compact window size";
 const CODEX_HELP = "  --dangerously-bypass-hook-trust";
@@ -328,6 +335,19 @@ const session = <A, E>(
     Effect.scoped,
     Effect.orDie,
   );
+
+const olderDispatch = (runId: string) =>
+  recordLaunch({
+    agent: agentFor(runId),
+    output: outputPath(runId),
+    reused: false,
+    runId,
+    operation: "review",
+    role: "reviewer",
+    workflow: "agent-work",
+    harness: "claude",
+    outputSubmit: "file",
+  }).pipe(Effect.provide(recordsAt(dir)));
 
 const started = (runId: string, skip = false) =>
   work.execute({ runId, input: { skip } }).pipe(Effect.result);
@@ -1184,7 +1204,6 @@ const interrupted = (runId: string, reached: Reached, over?: Partial<AgentHost>)
 test("a restart while the wait is out reattaches rather than launching a second agent", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       yield* rig.queueOutputs([null]);
       yield* interrupted("r1", prompted("Your task for this step"));
       expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
@@ -1245,7 +1264,6 @@ const runningNow: RunNow = {
 test("an agent idle past its budget parks the Run and is still collected, so its late Output needs no resume", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       core.reportedOnly([agentFor("r1")]);
       yield* rig.queueOutputs([null]);
       const result = yield* session(
@@ -1267,7 +1285,6 @@ test("an agent idle past its budget parks the Run and is still collected, so its
 test("an agent that goes while it is collected past its budget is started again, and its Output read", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       core.reportedOnly([agentFor("r1")]);
       yield* rig.queueOutputs([null]);
       const herdr = new UnseenTurn(rig.pluginEnv());
@@ -1407,7 +1424,6 @@ test.each([false, true])(
   (replay) =>
     runEffect(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
         const managed = yield* managedCodex;
         yield* rig.queueOutputs([null]);
         const steerText = "Keep the recovery in this checkout.";
@@ -1477,7 +1493,6 @@ test.each([false, true])(
 test("an unreachable managed Codex server that is still alive is never given a second writer", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       const managed = yield* managedCodex;
       yield* rig.queueOutputs([null]);
       const herdr = new StaleWorkingTerminal(rig.pluginEnv());
@@ -2252,7 +2267,6 @@ test.each(["retirement", "launch"] as const)(
 test("a resume sent while the Run is collected past its budget starts no second delivery or collection", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       core.reportedOnly([agentFor("r1")]);
       yield* rig.queueOutputs([null]);
       const result = yield* session(
@@ -2308,7 +2322,6 @@ test("an agent collected past its budget stays collected while Collie looks for 
             : super.agentLaunch(...args);
         }
       }
-      const fs = yield* FileSystem.FileSystem;
       core.reportedOnly([agentFor("r1")]);
       yield* rig.queueOutputs([null]);
       const herdr = new SlowStart(rig.pluginEnv());
@@ -2349,7 +2362,6 @@ test("an agent collected past its budget stays collected while Collie looks for 
 test("an agent is still collected while its Run is parked past its budget", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       core.reportedOnly([agentFor("r1")]);
       yield* rig.queueOutputs([null]);
       let marked: boolean | undefined;
@@ -2427,7 +2439,6 @@ test("a stop while the Run is collected past its budget ends the wait", () =>
 test("a restart while the Run is collected past its budget reattaches and takes the accepted Output, prompting no one", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       yield* rig.queueOutputs([null]);
       yield* interrupted("r1", parked("r1"), { collectMs: 400 });
       expect(yield* suspended("r1").pipe(session)).toBe(false);
@@ -2757,7 +2768,6 @@ test("an agent that writes no Output after two reminders parks its step as outpu
 test("a host stopped once its first reminder went out does not send that reminder again when it starts", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       yield* rig.queueOutputs([null, null]);
       const remindedOnce: Reached = Effect.gen(function* () {
         if ((yield* reminders).length === 0) {
@@ -2800,7 +2810,6 @@ const heldReminder = (runId: string) =>
 
 const enteredBehindHeldReminder = (landed: boolean) =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
     yield* rig.queueOutputs([null, null, null]);
     yield* interrupted(
       "r1",
@@ -2865,7 +2874,6 @@ test("a reminder held behind an earlier copy that never landed parks as delivery
 test("an agent herdr reports blocked when its turn stops is not reminded", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       yield* rig.queueOutputs([null, null]);
       const result = yield* session(
         Effect.gen(function* () {
@@ -4329,7 +4337,6 @@ test("a turn its harness will not retry parks the Run within a poll, quoting the
 test("a Run parked on a harness stop goes on with the Output its agent writes after", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       yield* rig.queueOutputs([null]);
       const result = yield* session(
         Effect.gen(function* () {
@@ -5802,7 +5809,6 @@ test("a quota wait does not revive a dead managed Codex server before its usage 
 test("a quota fallback keeps valid late Output written while retiring its managed Codex server", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       const records = yield* RunRecords;
       const managed = yield* managedCodex;
       const ports: CompactionPorts = {
@@ -7681,7 +7687,6 @@ test("a held run parks before it starts an agent, and carries on once it is rele
 test("a stop while the collection is out parks the wait, and what comes back reattaches to the launch", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       yield* rig.queueOutputs([null]);
       yield* interrupted("r1", stoppedOnce("r1", "Your task for this step"));
       expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.run")).toHaveLength(1);
@@ -9269,7 +9274,6 @@ test("a resend herdr refuses parks saying the next resume tries again, and it do
 test("a vanished step pointer settled as sent is not sent again: the resume waits for its Output", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       yield* rig.queueOutputs([{ verdict: "clean", note: "never" }]);
       const herdr = promptNotTaken("text");
       yield* interrupted("r1", parked("r1"), {
@@ -9497,7 +9501,7 @@ test("an opencode launch's written MCP config is told the Run and the agent, so 
         harness: "opencode",
         model: "anthropic/claude-opus-4-1",
       });
-      const config = yield* Schema.decodeUnknownEffect(
+      const config = yield* Schema.decodeEffect(
         Schema.fromJsonString(
           Schema.Struct({
             mcpServers: Schema.Struct({
@@ -9516,13 +9520,17 @@ test("an opencode launch's written MCP config is told the Run and the agent, so 
 test("a submit that lands while an OpenCode launch is starting is accepted, not refused", () =>
   runEffect(
     Effect.gen(function* () {
-      const answers: string[] = [];
+      const answers: Array<string> = [];
       class Starting extends Herdr {
         override agentLaunch(...args: Parameters<Herdr["agentLaunch"]>) {
-          return submitOutput("r1", agentFor("r1"), { verdict: "clean", note: "during the start" })
-            .pipe(Effect.provide(recordsAt(dir)))
-            .pipe(Effect.tap((said) => Effect.sync(() => void answers.push(said))))
-            .pipe(Effect.andThen(super.agentLaunch(...args)));
+          return submitOutput("r1", agentFor("r1"), {
+            verdict: "clean",
+            note: "during the start",
+          }).pipe(
+            Effect.provide(recordsAt(dir)),
+            Effect.tap((said) => Effect.sync(() => void answers.push(said))),
+            Effect.andThen(super.agentLaunch(...args)),
+          );
         }
       }
       const result = yield* session(started("r1"), {
@@ -10558,7 +10566,6 @@ const runLogOf = (runId: string) => read(`${dir}/agents/${runId}/agents.log`);
 test("a launch waits while its Machine is short of memory, with no tab or agent made, and its budget starts once it is launched", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       yield* rig.memory(2);
       yield* rig.queueOutputs([null]);
       const result = yield* session(
@@ -10611,7 +10618,6 @@ test("a stop ends a launch's wait for memory, and nothing is launched for the Ru
 test("a verify an idle agent asked for, held for memory past its budget, keeps its Run from parking, and one with none parks", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       yield* rig.queueOutputs([null, null]);
       const herdr = new BusyUntilWritten("working");
       const result = yield* session(

@@ -1,5 +1,5 @@
 import { Herdr } from "../../src/herdr";
-import { RunRecords } from "../../src/run-records";
+import type { RunRecords } from "../../src/run-records";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { ConfigProvider, Effect, FileSystem, Layer, Result, Schedule, Schema, flow } from "effect";

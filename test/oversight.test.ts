@@ -1654,3 +1654,32 @@ test("a marked step's file is not among the facts the rules judge, unless an Out
       expect((yield* ruleFacts(watchedAt("r1"))).outputs.review).toBeUndefined();
     }),
   ));
+
+for (const mode of ["file", "tool", undefined] as const) {
+  test(`a dispatch an older build recorded ${mode ?? "with no mode"} keeps its file among the facts the rules judge`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* repository();
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.makeDirectory(`${dir}/agents/r1`, { recursive: true });
+        yield* fs.writeFileString(
+          `${dir}/agents/r1/review.json`,
+          `{"summary":"written by the agent"}`,
+        );
+        const older = {
+          agent: "r1-review-r1",
+          output: `${dir}/agents/r1/review.json`,
+          reused: false,
+          runId: "r1",
+          operation: "review",
+          role: "reviewer",
+          workflow: "implement",
+          harness: "claude",
+        };
+        yield* recordLaunch(mode === undefined ? older : { ...older, outputSubmit: mode });
+        expect((yield* ruleFacts(watchedAt("r1"))).outputs.review).toEqual({
+          summary: "written by the agent",
+        });
+      }),
+    ));
+}

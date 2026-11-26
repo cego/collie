@@ -2,7 +2,6 @@ import { setSetting } from "../../src/config";
 import { Herdr } from "../../src/herdr";
 import { isString } from "../../src/schema";
 import { hostRecords, hostRunRecords, launchesAt, overHost } from "./records";
-import { recordOutput } from "../../src/step-output";
 
 // WARNING: Every scenario runs as shipped and under unrelated ids; the same assertions must hold both times.
 import * as Arr from "effect/Array";
@@ -136,7 +135,7 @@ import { GOLDEN, matchGolden } from "../../tools/prompt-golden";
 const handsIn = (dir: string, runId: string, operation: string, text: string) =>
   Effect.gen(function* () {
     const matches = (launch: { readonly operation: string; readonly output: string }) =>
-      launch.operation === operation || launch.output.endsWith(`/${operation}.json`);
+      launch.operation === operation || Str.endsWith(`/${operation}.json`)(launch.output);
     // WARNING: the prompt is written before the launch is recorded, so the record is waited for.
     const found = yield* Effect.gen(function* () {
       for (let tries = 0; tries < 5000; tries++) {
@@ -156,7 +155,7 @@ const handsIn = (dir: string, runId: string, operation: string, text: string) =>
       RunRecords.use(() => submitOutput(runId, one.agent, json)).pipe(
         Effect.provide(recordsAt(dir)),
       );
-    const plain = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(text);
+    const plain = Schema.decodeOption(Schema.fromJsonString(Schema.Json))(text);
     const answer: Schema.Json = Option.isSome(plain) ? plain.value : text;
     for (let tries = 0; tries < 5000; tries++) {
       const said = yield* submitted(answer);

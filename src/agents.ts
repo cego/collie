@@ -215,21 +215,8 @@ import {
 import type { ClaudeOverlay, RoleProfile } from "./profile";
 import { isString } from "./schema";
 import type { JsonObject } from "./schema";
-import {
-  awaitOutput as registerOutput,
-  forgetStep,
-  submitOutput,
-  takeOutput,
-} from "./output-submit";
-import {
-  acceptOutput,
-  dispatchOf,
-  carriedFor,
-  markCollected,
-  outputOf,
-  recordCarried,
-  stepOf,
-} from "./step-output";
+import { awaitOutput as registerOutput, forgetStep, takeOutput } from "./output-submit";
+import { dispatchOf, carriedFor, outputOf, recordCarried, stepOf } from "./step-output";
 import type { Step } from "./step-output";
 import { ClaudeSubagents, readSubagents, subagentSettings, subagentVersion } from "./subagents";
 import { Collecting, collectingLayer } from "./collecting";
@@ -402,6 +389,8 @@ export interface AgentsApi {
     runId: string,
     operation: string,
   ) => Effect.Effect<{ readonly text: string; readonly at: number } | null>;
+  // WARNING: only a recorded dispatch can be collected from a file; a step this build dispatches submits.
+  readonly fromFile: (runId: string, operation: string) => Effect.Effect<boolean>;
   readonly carry: (runId: string, operation: string, text: string) => Effect.Effect<void>;
   readonly skills: (names: ReadonlyArray<string>) => Effect.Effect<ReadonlyMap<string, string>>;
   readonly attachments: (runId: string) => Effect.Effect<ReadonlyArray<Attachment>>;
@@ -687,7 +676,13 @@ export const agentWork: <
     const role = work.role ?? work.operation;
     const skills = yield* agents.skills(skillsIn(work.instructions));
     const held = work.agent === undefined ? null : yield* agents.choiceOf(runId, work.agent);
-    const outputSubmit = (work.outputSubmit ?? "tool") === "tool" ? "tool" : "file";
+    const older = work.outputSubmit === "file" && (yield* agents.fromFile(runId, work.operation));
+    if (work.outputSubmit === "file" && !older) {
+      return yield* new WorkflowError({
+        reason: `${work.operation}: a step this build dispatches submits its Output, and only a step an older build dispatched is collected from a file`,
+      });
+    }
+    const outputSubmit = older ? "file" : "tool";
     const submitOnly = outputSubmit === "tool";
     const parts: PromptParts = {
       role,
@@ -1324,7 +1319,6 @@ export const agentWork: <
       return yield* carded(read.value);
     }
 
-    let latest = first;
     const recollecting = (unusable: string, since: number) =>
       Effect.gen(function* () {
         yield* agents.awaitOutput(current, problemIn);
@@ -1396,7 +1390,6 @@ export const agentWork: <
         if (again === null) {
           return { ok: false as const, problem: `did not write ${output} again: ${problem}` };
         }
-        latest = again;
         const repaired = decodeOutput(work.output, again, plain);
         return repaired.ok
           ? repaired
@@ -1418,7 +1411,6 @@ export const agentWork: <
           return yield* Workflow.suspend(yield* WorkflowEngine.WorkflowInstance);
         }),
       });
-      latest = now;
       const reread = decodeOutput(work.output, now, plain);
       repaired = reread.ok ? reread : yield* repairing(round + 1, now, reread.problem);
     }
@@ -2846,7 +2838,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             ask.runId,
             `${agent}: launched before this build, so it was ended and started again${launchedBefore?.agentSession == null ? " with no session to resume" : " on its session"}`,
           );
-          return yield* launch(ask, true, note);
+          return yield* launch(ask, true, note, armed);
         }
         const back = live === undefined ? comingBack.get(agent) : undefined;
         if (back !== undefined) {
@@ -2882,7 +2874,17 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           return yield* launch(ask, fresh, note, armed);
         }
         const replayed = yield* wasOrdered(ask);
-        const stamped = yield* Clock.currentTimeMillis;
+        // WARNING: A dispatch's time is fixed the first time it is recorded, so a replay and a revived agent stay the same round.
+        const sameDispatch = Option.getOrUndefined(
+          Arr.findLast(
+            yield* launchesOf(ask.runId),
+            (one) =>
+              stemOf(one) === stemOf(ask) &&
+              ask.step?.key !== undefined &&
+              one.step?.key === ask.step.key,
+          ),
+        );
+        const stamped = sameDispatch?.at ?? (yield* Clock.currentTimeMillis);
         const landedOn = (incarnation: Rooted | undefined, chosen: AgentSession | null = null) => {
           const landed: Types.Mutable<Launched> = {
             agent,
@@ -4617,6 +4619,15 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
 
   return {
     outputFor,
+    fromFile: (runId, operation) =>
+      under(
+        Effect.map(
+          launchesOf(runId),
+          (known) =>
+            Option.getOrUndefined(Arr.findLast(known, (one) => one.operation === operation))
+              ?.outputSubmit === "file",
+        ),
+      ).pipe(Effect.catchCause(() => Effect.succeed(false))),
     outputOf: (runId, operation) =>
       under(
         Effect.gen(function* () {
@@ -5209,12 +5220,12 @@ const waitForOutput = <R>(
     for (;;) {
       const held = yield* read;
       if (fresh(held) && every.usable(held!.text)) {
-        return yield* takeOutput(records, step, held!.text);
+        return yield* takeOutput(step, held!.text);
       }
       if (held !== null && fresh(held) && (yield* every.settled)) {
         const after = yield* read;
         if (fresh(after)) {
-          return yield* takeOutput(records, step, after!.text);
+          return yield* takeOutput(step, after!.text);
         }
       }
       if (spent >= every.budgetMs) {

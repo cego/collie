@@ -8,7 +8,7 @@ import { Clock, Effect, Fiber, FileSystem, Layer, Option, Schema } from "effect"
 import { TestClock } from "effect/testing";
 import type * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import type { PlatformServices } from "../src/platform";
-import { RunRecords } from "../src/run-records";
+import type { RunRecords } from "../src/run-records";
 import { Agents, agentWork, agentsLayer } from "../src/agents";
 import type { AgentHost } from "../src/agents";
 import { foundationLayer } from "../src/engine";

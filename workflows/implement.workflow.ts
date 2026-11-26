@@ -54,7 +54,7 @@ import type {
   Outgoing,
   Slice,
 } from "collie";
-import { Deferred, Effect, Fiber, FileSystem, Path, Predicate, Schema } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Predicate, Schema } from "effect";
 import { WorkflowInstance } from "effect/workflow/WorkflowEngine";
 import type { WorkflowEngine } from "effect/workflow/WorkflowEngine";
 import * as Workflow from "effect/workflow/Workflow";
@@ -756,7 +756,7 @@ export default defineWorkflow({
                     held === null
                       ? Effect.succeed(null)
                       : Effect.orElseSucceed(
-                          Schema.decodeUnknownEffect(Schema.fromJsonString(Built))(held.text),
+                          Schema.decodeEffect(Schema.fromJsonString(Built))(held.text),
                           () => null,
                         ),
                   ),

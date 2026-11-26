@@ -299,7 +299,6 @@ export const ruleFacts = Effect.fn("Oversight.ruleFacts")(function* (at: Watched
     const launch = latest.get(key);
     const accepted = acceptedIn(one.data);
     const dispatch = launch === undefined ? undefined : dispatchOf(launch);
-    // WARNING: a fact that names its dispatch is that dispatch's, not whatever round is running now.
     if (
       accepted?.dispatch !== undefined &&
       dispatch !== undefined &&

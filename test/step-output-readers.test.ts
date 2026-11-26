@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import { Effect, FileSystem } from "effect";
+import { Effect, FileSystem, Option, Schema } from "effect";
 import { readEnv } from "../src/env";
 import { laneFor } from "../src/flow-read";
 import { outputsIn } from "../src/drift";
@@ -35,18 +35,21 @@ afterEach(() =>
 
 const reviewOutput = () => `${stateDir}/agents/r1/review.json`;
 
-const launched = (over: Partial<Launched> = {}): Launched => ({
-  agent: "r1-review-r1",
-  output: reviewOutput(),
-  reused: false,
-  runId: "r1",
-  operation: "review",
-  role: REVIEW_ROLE,
-  workflow: "implement",
-  harness: "claude",
-  submitOnly: true,
-  ...over,
-});
+const AcceptedAt = Schema.fromJsonString(Schema.Struct({ at: Schema.Finite }));
+
+const launched = (over: Partial<Launched> = {}) =>
+  ({
+    agent: "r1-review-r1",
+    output: reviewOutput(),
+    reused: false,
+    runId: "r1",
+    operation: "review",
+    role: REVIEW_ROLE,
+    workflow: "implement",
+    harness: "claude",
+    submitOnly: true,
+    ...over,
+  }) satisfies Launched;
 
 const launchesOn = (runId: string) =>
   Launches.use((launches) => launches.of([runId])).pipe(
@@ -103,30 +106,35 @@ test("an accepted Output is among the Outputs drift and oversight are shown, wit
     }),
   ));
 
-test("an older Run's steps still read as done from their files", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      yield* fs.makeDirectory(`${stateDir}/agents/r1`, { recursive: true });
-      yield* fs.writeFileString(reviewOutput(), `{"findings":[]}`);
-      yield* recordLaunch(
-        (({ submitOnly: _ignored, ...older }) => ({ ...older, outputSubmit: "file" }))(launched()),
-      );
-      expect(Arr.map(yield* operationsOf("r1"), (one) => one.done)).toEqual([true]);
-      const shown = yield* outputsIn(`${stateDir}/agents/r1`, "r1");
-      expect(shown.outputs[0]!.text).toContain("findings");
-      const lane = yield* laneFor(
-        readEnv({
-          COLLIE_ROOT: stateDir,
-          COLLIE_STATE_DIR: stateDir,
-          COLLIE_USER_DIR: `${stateDir}/user`,
-          COLLIE_CWD: stateDir,
-        }),
-        runFacts({ id: "r1", dir: `${stateDir}/runs/r1`, evidence: `${stateDir}/evidence/r1` }),
-      );
-      expect(Arr.map(lane.nodes, (one) => one.state)).toContain("done");
-    }),
-  ));
+const older = (mode: "file" | "tool" | undefined) => {
+  const { submitOnly: _marked, ...without } = launched();
+  return mode === undefined ? without : { ...without, outputSubmit: mode };
+};
+
+for (const mode of ["file", "tool", undefined] as const) {
+  test(`a dispatch an older build recorded ${mode ?? "with no mode"} still reads the file it wrote`, () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.makeDirectory(`${stateDir}/agents/r1`, { recursive: true });
+        yield* fs.writeFileString(reviewOutput(), `{"findings":[]}`);
+        yield* recordLaunch(older(mode));
+        expect(Arr.map(yield* operationsOf("r1"), (one) => one.done)).toEqual([true]);
+        const shown = yield* outputsIn(`${stateDir}/agents/r1`, "r1");
+        expect(shown.outputs[0]!.text).toContain("findings");
+        const lane = yield* laneFor(
+          readEnv({
+            COLLIE_ROOT: stateDir,
+            COLLIE_STATE_DIR: stateDir,
+            COLLIE_USER_DIR: `${stateDir}/user`,
+            COLLIE_CWD: stateDir,
+          }),
+          runFacts({ id: "r1", dir: `${stateDir}/runs/r1`, evidence: `${stateDir}/evidence/r1` }),
+        );
+        expect(Arr.map(lane.nodes, (one) => one.state)).toContain("done");
+      }),
+    ));
+}
 
 test("the accepted Output's name is the step's Output file", () =>
   runEffect(
@@ -230,7 +238,6 @@ test("a trial's findings are read from the fact, and from a file only where an o
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const records = yield* RunRecords;
       const text = `{"findings":[{"severity":"major","title":"from the fact","file":"a.ts","detail":"d"}]}`;
       yield* recordLaunch({
         ...launched(),
@@ -257,6 +264,20 @@ test("a trial's findings are read from the fact, and from a file only where an o
       expect(
         Arr.map((yield* trialRecordsOf(stateDir, "r1")).reviews, (one) => one[0]?.title),
       ).toEqual(["from the fact", "from the file"]);
+      const toolStep = {
+        ...older,
+        operation: "review-4",
+        output: `${stateDir}/agents/r1/review-4.json`,
+        outputSubmit: "tool" as const,
+      };
+      yield* recordLaunch(toolStep);
+      yield* fs.writeFileString(
+        toolStep.output,
+        Str.replace("from the fact", "from the tool file")(text),
+      );
+      expect(
+        Arr.map((yield* trialRecordsOf(stateDir, "r1")).reviews, (one) => one[0]?.title),
+      ).toEqual(["from the fact", "from the file", "from the tool file"]);
       yield* recordLaunch({
         ...launched(),
         operation: "review-3",
@@ -265,7 +286,7 @@ test("a trial's findings are read from the fact, and from a file only where an o
       yield* fs.writeFileString(`${stateDir}/agents/r1/review-3.json`, text);
       expect(
         Arr.map((yield* trialRecordsOf(stateDir, "r1")).reviews, (one) => one[0]?.title),
-      ).toEqual(["from the fact", "from the file"]);
+      ).toEqual(["from the fact", "from the file", "from the tool file"]);
     }),
   ));
 
@@ -288,8 +309,8 @@ test("a ticket is finished by the time its step accepted, not by any file", () =
       expect([...(yield* finishedTickets(run, [run]))]).toEqual([]);
       yield* accepted(output, `{"summary":"built"}`);
       expect([...(yield* finishedTickets(run, [run]))]).toEqual(["01-a.md"]);
-      const held = (yield* RunRecords.use((records) => records.fact("r1", "accepted/build.json")))!;
-      const at = (JSON.parse(held) as { at: number }).at;
+      const held = yield* RunRecords.use((records) => records.fact("r1", "accepted/build.json"));
+      const at = Option.getOrThrow(Schema.decodeOption(AcceptedAt)(held ?? "")).at;
       yield* fs.utimes(`${run.dir}/plan/issues/01-a.md`, at, at + 1000);
       expect([...(yield* finishedTickets(run, [run]))]).toEqual([]);
     }).pipe(Effect.provide(recordsAt(stateDir))),
@@ -340,7 +361,10 @@ test("a fact from the round before is not shown as the round that is running now
       );
       const shown = (yield* outputsIn(`${stateDir}/agents/r1`, "r1")).outputs;
       expect(
-        Arr.map(shown, (one) => [one.operation, one.text.includes("the first round")] as const),
+        Arr.map(
+          shown,
+          (one) => [one.operation, Str.includes("the first round")(one.text)] as const,
+        ),
       ).toEqual([["review", true]]);
       const second = `${stateDir}/agents/r1/review-2.json`;
       yield* recordLaunch({ ...launched(), at: 2000, output: second, agent: "r1-review-r2" });

@@ -59,37 +59,33 @@ const toolServerOf = (prompt: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const read = yield* fs
-      .readFileString(prompt.replace(/\.prompt\.md$/, ".mcp.json"), "utf8")
+      .readFileString(Str.replace(/\.prompt\.md$/, ".mcp.json")(prompt), "utf8")
       .pipe(Effect.option);
     const found = Option.flatMap(read, (text) => Schema.decodeOption(McpConfig)(text));
     return Option.map(found, (one) => one.mcpServers.collie).pipe(Option.getOrNull);
   });
 
 // WARNING: a harness whose tool server is not written beside the prompt names it on the address line.
-const toolServerIn = (
-  prompt: string,
-  path: string | undefined,
-  found: ToolServer | null,
-): ToolServer | null => {
+const toolServerIn = (prompt: string, path: string | undefined, found: ToolServer | null) => {
   const at = path === undefined ? null : /^(.*)\/agents\/[^/]+\/[^/]+$/.exec(path);
   if (at === null) {
     return found;
   }
   const address = /^You are (\S+) of (\S+) on /m.exec(prompt);
+  const knownEnv = { ...(found?.env ?? {}), COLLIE_STATE_DIR: at[1]! };
   return {
     command: found?.command ?? "",
     args: found?.args ?? [],
-    env: {
-      ...(found?.env ?? {}),
-      COLLIE_STATE_DIR: at[1]!,
-      ...(address === null ? {} : { COLLIE_RUN: address[2]!, COLLIE_AGENT: address[1]! }),
-    },
+    env:
+      address === null
+        ? knownEnv
+        : { ...knownEnv, COLLIE_RUN: address[2]!, COLLIE_AGENT: address[1]! },
   };
 };
 
 // WARNING: the prompt no longer names the Output; the step's file keeps the prompt's name.
 const outputOfPrompt = (prompt: string) =>
-  prompt.replace(/\.prompt\.md$/, ".json").replace(/\.r\d+\.json$/, ".json");
+  Str.replace(/\.r\d+\.json$/, ".json")(Str.replace(/\.prompt\.md$/, ".json")(prompt));
 
 export interface HandIn {
   readonly server: ToolServer;
@@ -171,12 +167,13 @@ const answerFrom = Effect.fn("fakeAgent.answer")(function* (
   let submit: HandIn | null = null;
   const byFile = written !== null;
   const owes: string | undefined = undefined;
+  const noSubmit: HandIn | null = null;
   const unanswered = {
     answered,
     status: "idle",
     owed: owes,
     hand: known,
-    submit: null as HandIn | null,
+    submit: noSubmit,
   };
   if (outputPath === null || queuePath === "" || !(yield* fs.exists(queuePath))) {
     return unanswered;

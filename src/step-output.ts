@@ -7,26 +7,28 @@ import { stemOf } from "./launches";
 import type { RunRecordsApi } from "./run-records";
 
 export const ACCEPTED = "accepted/";
-export const COLLECTED = "collected/";
 export const CARRIED = "carried/";
 
-export const acceptedName = (output: string) =>
-  `${ACCEPTED}${output.slice(output.lastIndexOf("/") + 1)}`;
+export const acceptedName = (output: string) => `${ACCEPTED}${baseName(output)}`;
 
-export const collectedName = (output: string) =>
-  `${COLLECTED}${output.slice(output.lastIndexOf("/") + 1)}`;
+export const carriedName = (output: string) => `${CARRIED}${baseName(output)}`;
 
-export const carriedName = (output: string) =>
-  `${CARRIED}${output.slice(output.lastIndexOf("/") + 1)}`;
+const baseName = (output: string) =>
+  Str.slice(Option.getOrElse(Str.lastIndexOf("/")(output), () => -1) + 1)(output);
+
+// WARNING: a blank string is not an Output, whether it arrives as plain text or as a file.
+export const blank = (text: string) => Str.trim(text) === "";
 
 const Accepted = Schema.Struct({
   text: Schema.String,
   at: Schema.Finite,
   dispatch: Schema.optionalKey(Schema.String),
 });
+type MutableAccepted = { text: string; at: number; dispatch?: string };
 const AcceptedJson = Schema.fromJsonString(Accepted);
 const decodeAccepted = Schema.decodeOption(AcceptedJson);
-const encodeAccepted = Schema.encodeSync(AcceptedJson);
+const encodeAccepted = (accepted: MutableAccepted) =>
+  Schema.encodeEffect(AcceptedJson)(accepted).pipe(Effect.orDie);
 
 export interface StepOutput {
   readonly text: string;
@@ -70,7 +72,7 @@ export const stepOf = (
   runId: string,
   operation: string,
   output: string,
-): Step => {
+) => {
   const dispatched = Option.getOrNull(Arr.findLast(launches, (one) => one.operation === operation));
   return dispatched === null
     ? { runId, output, submitOnly: true }
@@ -89,12 +91,7 @@ export const outputOf = Effect.fn("StepOutput.of")(function* (
       : (Option.getOrNull(Arr.findFirst(known, (one) => one.name === name))?.data ?? null);
   if (fact !== null) {
     const accepted = decodeAccepted(fact);
-    const dispatch = dispatchIn(step);
-    const ours =
-      Option.isSome(accepted) &&
-      (accepted.value.dispatch === undefined ||
-        dispatch === undefined ||
-        accepted.value.dispatch === dispatch);
+    const ours = Option.isSome(accepted) && belongsTo(accepted.value, dispatchIn(step));
     if (Option.isSome(accepted) && ours) {
       return {
         text: accepted.value.text,
@@ -113,7 +110,7 @@ export const outputOf = Effect.fn("StepOutput.of")(function* (
   }
   const text = yield* fs.readFileString(step.output).pipe(Effect.orElseSucceed(() => ""));
   // WARNING: a blank file is a write not yet happened.
-  if (text.trim() === "") {
+  if (blank(text)) {
     return null;
   }
   return {
@@ -125,6 +122,10 @@ export const outputOf = Effect.fn("StepOutput.of")(function* (
 
 export const acceptedIn = (data: string) => Option.getOrNull(decodeAccepted(data));
 
+// WARNING: a fact with no dispatch is an older build's and belongs to whichever round reads it.
+export const belongsTo = (accepted: { readonly dispatch?: string }, dispatch: string | undefined) =>
+  accepted.dispatch === undefined || dispatch === undefined || accepted.dispatch === dispatch;
+
 export const acceptedText = (data: string) => acceptedIn(data)?.text ?? data;
 
 export const recordOutput = Effect.fn("StepOutput.record")(function* (
@@ -133,12 +134,11 @@ export const recordOutput = Effect.fn("StepOutput.record")(function* (
   text: string,
 ) {
   const at = yield* Clock.currentTimeMillis;
-  const accepted = {
-    text,
-    at,
-    ...(step.dispatch === undefined ? {} : { dispatch: step.dispatch }),
-  };
-  yield* records.put(step.runId, acceptedName(step.output), encodeAccepted(accepted));
+  const accepted: MutableAccepted = { text, at };
+  if (step.dispatch !== undefined) {
+    accepted.dispatch = step.dispatch;
+  }
+  yield* records.put(step.runId, acceptedName(step.output), yield* encodeAccepted(accepted));
 });
 const retrying = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   // WARNING: another connection may hold the database for a moment, and a refusal must not lose an accepted Output.
@@ -150,17 +150,18 @@ export const submitFor = Effect.fn("StepOutput.submit")(function* (
   text: string,
 ) {
   const at = yield* Clock.currentTimeMillis;
-  const offered = encodeAccepted({
-    text,
-    at,
-    ...(dispatchIn(step) === undefined ? {} : { dispatch: dispatchIn(step) }),
-  });
+  const dispatch = dispatchIn(step);
+  const offered: MutableAccepted = { text, at };
+  if (dispatch !== undefined) {
+    offered.dispatch = dispatch;
+  }
+  const encoded = yield* encodeAccepted(offered);
   const held = yield* retrying(
     records.update(step.runId, acceptedName(step.output), (was) =>
       Effect.succeed(
         Option.match(was === null ? Option.none() : decodeAccepted(was), {
-          onNone: () => offered,
-          onSome: (prev) => (newer(dispatchIn(step), prev.dispatch) ? offered : was!),
+          onNone: () => encoded,
+          onSome: (prev) => (newer(dispatchIn(step), prev.dispatch) ? encoded : was!),
         }),
       ),
     ),
@@ -180,7 +181,9 @@ export const recordCarried = Effect.fn("StepOutput.carry")(function* (
   yield* records.put(
     step.runId,
     carriedName(step.output),
-    Schema.encodeSync(Schema.fromJsonString(Carried))({ text, at, from }),
+    yield* Schema.encodeEffect(Schema.fromJsonString(Carried))({ text, at, from }).pipe(
+      Effect.orDie,
+    ),
   );
 });
 
@@ -202,37 +205,21 @@ export const acceptedFor = Effect.fn("StepOutput.acceptedFor")(function* (
   return fact === null ? null : Option.getOrNull(decodeAccepted(fact));
 });
 
-export const collectedFor = Effect.fn("StepOutput.collectedFor")(function* (
-  records: RunRecordsApi,
-  step: Step,
-) {
-  const fact = yield* records.fact(step.runId, collectedName(step.output));
-  return fact === null ? null : Option.getOrNull(decodeAccepted(fact));
-});
-
-export const markCollected = Effect.fn("StepOutput.collected")(function* (
-  records: RunRecordsApi,
-  step: Step,
-  text: string,
-) {
-  const fact = yield* records.fact(step.runId, acceptedName(step.output));
-  if (fact !== null) {
-    yield* records.put(step.runId, collectedName(step.output), fact);
-  }
-  return text;
-});
-
 export const acceptOutput = Effect.fn("StepOutput.accept")(function* (
   records: RunRecordsApi,
   step: Step,
   text: string,
 ) {
   const at = yield* Clock.currentTimeMillis;
-  const offered = { text, at, ...(step.dispatch === undefined ? {} : { dispatch: step.dispatch }) };
+  const offered: MutableAccepted = { text, at };
+  if (step.dispatch !== undefined) {
+    offered.dispatch = step.dispatch;
+  }
   // WARNING: another connection may hold the database for a moment, and a refusal must not lose an accepted Output.
+  const encoded = yield* encodeAccepted(offered);
   const held = yield* records
     .update(step.runId, acceptedName(step.output), (was) =>
-      Effect.succeed(was !== null ? was : encodeAccepted(offered)),
+      Effect.succeed(was !== null ? was : encoded),
     )
     .pipe(Effect.retry({ times: 20, schedule: Schedule.spaced(Duration.millis(50)) }));
   const accepted = held === null ? Option.none() : decodeAccepted(held);

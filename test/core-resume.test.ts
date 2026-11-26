@@ -259,7 +259,6 @@ const after = (argv: ReadonlyArray<string>, flag: string) => argv[argv.indexOf(f
 test("a dead owned server on core resumes its conversation once despite competing recovery, and later stop reaches its replacement", () =>
   runEffect(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       yield* rig.startCore();
       yield* rig.queueOutputs([null, null, null, null, null, null]);
       let agents: typeof Agents.Service | undefined;

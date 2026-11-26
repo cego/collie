@@ -188,7 +188,7 @@ test("a Codex agent's App Server is started with the same Collie MCP server its 
       expect(mcpOverrides(own?.argv ?? [])).toEqual(tui);
       expect(tui).toContain(`mcp_servers.collie.env.COLLIE_RUN="r1"`);
       expect(tui).toContain(`mcp_servers.collie.env.COLLIE_AGENT="${agent}"`);
-      expect(tui.join("\n")).not.toContain("COLLIE_OUTPUT_SUBMIT");
+      expect(Arr.join(tui, "\n")).not.toContain("COLLIE_OUTPUT_SUBMIT");
       expect(own?.env).toEqual({ PROFILE_ONLY: "from the profile" });
       expect(yield* controlCommand()).toBe(server());
     }),

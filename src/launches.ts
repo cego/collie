@@ -5,7 +5,6 @@ import {
   DateTime,
   Duration,
   Effect,
-  FileSystem,
   Layer,
   Option,
   Result,
@@ -209,7 +208,12 @@ export const launchesLayer = Layer.effect(Launches)(
       record: (launched) =>
         sql`
           INSERT INTO collie_launches (run, stem, record) VALUES (${launched.runId}, ${stemOf(launched)}, ${encodeLaunched(launched)})
-          ON CONFLICT (run, stem) DO UPDATE SET record = excluded.record
+          ON CONFLICT (run, stem) DO UPDATE SET record =
+            CASE WHEN json_extract(collie_launches.record, '$.at') IS NOT NULL
+                AND json_extract(collie_launches.record, '$.step.key') IS NOT NULL
+                AND json_extract(collie_launches.record, '$.step.key') IS json_extract(excluded.record, '$.step.key')
+              THEN json_set(excluded.record, '$.at', json_extract(collie_launches.record, '$.at'))
+              ELSE excluded.record END
         `.pipe(
           Effect.andThen(markWorked(launched.runId)),
           sql.withTransaction,

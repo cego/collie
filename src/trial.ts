@@ -1,6 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { evidenceDir, runDir } from "./engine";
 import { readAudit } from "./audit";
 import { readFinalCard, REVIEW_ROLE } from "./cards";
@@ -30,7 +30,7 @@ export const trialRecordsOf = Effect.fn("Trial.records")(function* (
         const held = yield* outputOf(records, one);
         return held === null
           ? Option.none()
-          : Schema.decodeUnknownOption(ReviewedOutput)(held.text).pipe(
+          : Schema.decodeOption(ReviewedOutput)(held.text).pipe(
               Option.map((read) => read.findings ?? []),
             );
       }),

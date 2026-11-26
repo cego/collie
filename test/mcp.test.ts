@@ -299,7 +299,9 @@ test("collie_submit decodes an agent's Output as the file did, and records only 
           expect(held).not.toBeNull();
           const retried = encodeValue((yield* submit({ verdict: "changed" })).result);
           expect(retried).not.toEqual(
-            JSON.stringify({ content: [{ type: "text", text: "accepted" }] }),
+            yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+              content: [{ type: "text", text: "accepted" }],
+            }),
           );
           expect(retried).toContain("differs");
           expect(yield* fact(accepted)).toEqual(held);

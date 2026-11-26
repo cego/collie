@@ -102,7 +102,7 @@ test("a differing submit after the step took its Output writes nothing", () =>
         const step = { runId: "r1", output: fileAt() };
         yield* awaitOutput("r1", "a", fileAt(), () => null);
         expect(yield* submitOutput("r1", "a", { summary: "kept" })).toBe("accepted");
-        yield* takeOutput(yield* RunRecords, step, "kept");
+        yield* takeOutput(step, "kept");
         expect(yield* submitOutput("r1", "a", { summary: "later" })).toContain("No step of r1");
         expect((yield* outputOf(yield* RunRecords, step))?.text).toContain("kept");
       }),
@@ -132,7 +132,7 @@ test("a replay of the dispatch whose Output was collected cannot replace it", ()
         const step = { runId: "r1", output: fileAt(), submitOnly: true };
         yield* awaitOutput("r1", "a", fileAt(), () => null, "review@1");
         expect(yield* submitOutput("r1", "a", "first")).toBe("accepted");
-        yield* takeOutput(records, step, "first");
+        yield* takeOutput(step, "first");
         yield* awaitOutput("r1", "a", fileAt(), () => null, "review@1");
         expect(yield* submitOutput("r1", "a", "second")).toContain("differs from it");
         expect((yield* outputOf(records, step))?.text).toBe("first");
@@ -148,7 +148,7 @@ test("a step dispatched again in a new round takes its new Output", () =>
         const step = { runId: "r1", output: fileAt(), submitOnly: true };
         yield* awaitOutput("r1", "a", fileAt(), () => null, "review@1");
         yield* submitOutput("r1", "a", "first");
-        yield* takeOutput(records, step, "first");
+        yield* takeOutput(step, "first");
         yield* awaitOutput("r1", "a", fileAt(), () => null, "review@2");
         expect(yield* submitOutput("r1", "a", "second")).toBe("accepted");
         expect((yield* outputOf(records, step))?.text).toBe("second");
@@ -164,7 +164,7 @@ test("a new round refuses a differing submit once it has accepted one of its own
         const step = { runId: "r1", output: fileAt(), submitOnly: true };
         yield* awaitOutput("r1", "a", fileAt(), () => null, "review@1");
         yield* submitOutput("r1", "a", "first");
-        yield* takeOutput(records, step, "first");
+        yield* takeOutput(step, "first");
         yield* awaitOutput("r1", "a", fileAt(), () => null, "review@2");
         expect(yield* submitOutput("r1", "a", "second")).toBe("accepted");
         expect(yield* submitOutput("r1", "a", "different")).toContain("differs from it");
@@ -181,7 +181,7 @@ test("a reader at a new dispatch does not read the round before it", () =>
         const step = { runId: "r1", output: fileAt(), submitOnly: true };
         yield* awaitOutput("r1", "a", fileAt(), () => null, "review@1");
         yield* submitOutput("r1", "a", "first");
-        yield* takeOutput(records, step, "first");
+        yield* takeOutput(step, "first");
         const next = { ...step, dispatch: "review@2" };
         expect(yield* outputOf(records, next)).toBeNull();
       }),
@@ -200,6 +200,47 @@ test("a step's time is when its Output was accepted, not when a file beside it w
         expect(accepted.text).toBe("submitted");
         expect(accepted.file).toBe(false);
         expect(accepted.at).toBeGreaterThanOrEqual(file.at);
+      }),
+    ),
+  ));
+
+test("a submit from a round that is over is not accepted as this round's Output", () =>
+  runEffect(
+    withRecords(
+      Effect.gen(function* () {
+        const records = yield* RunRecords;
+        const step = { runId: "r1", output: fileAt(), submitOnly: true, dispatch: "review@2000" };
+        yield* awaitOutput("r1", "a", fileAt(), () => null, "review@2000");
+        expect(yield* submitOutput("r1", "a", "later")).toBe("accepted");
+        yield* awaitOutput("r1", "a", fileAt(), () => null, "review@1000");
+        expect(yield* submitOutput("r1", "a", "later")).toContain("over");
+        expect(yield* outputOf(records, step)).toMatchObject({ text: "later" });
+      }),
+    ),
+  ));
+
+test("a blank plain-text Output is refused, so what is accepted always completes", () =>
+  runEffect(
+    withRecords(
+      Effect.gen(function* () {
+        const records = yield* RunRecords;
+        yield* awaitOutput("r1", "a", fileAt(), () => null, "review@1000");
+        expect(yield* submitOutput("r1", "a", "  \n ")).toContain("blank");
+        expect(yield* records.fact("r1", "accepted/review.json")).toBeNull();
+      }),
+    ),
+  ));
+
+test("taking a step's Output records no second copy of it", () =>
+  runEffect(
+    withRecords(
+      Effect.gen(function* () {
+        const records = yield* RunRecords;
+        const step = { runId: "r1", output: fileAt(), submitOnly: true };
+        yield* awaitOutput("r1", "a", fileAt(), () => null, "review@1000");
+        yield* submitOutput("r1", "a", "kept");
+        expect(yield* takeOutput(step, "kept")).toBe("kept");
+        expect(yield* records.fact("r1", "collected/review.json")).toBeNull();
       }),
     ),
   ));

@@ -419,7 +419,6 @@ export const outputsIn = Effect.fn("Drift.outputsIn")(function* (agentsDir: stri
     const launch = latest.get(pipe(name, Str.slice(0, -".json".length)));
     const accepted = acceptedIn(fact.data);
     const dispatch = launch === undefined ? undefined : dispatchOf(launch);
-    // WARNING: a fact that names its dispatch is that dispatch's, not whatever round is running now.
     if (
       accepted?.dispatch !== undefined &&
       dispatch !== undefined &&

@@ -60,11 +60,13 @@ const stems = (launches: ReadonlyArray<Launched>) =>
 test("a launch this build marks submit-only decodes, and an older build's record still decodes with the mark", () =>
   runEffect(
     Effect.gen(function* () {
-      const decode = Schema.decodeUnknownOption(Schema.fromJsonString(Launched));
+      yield* Effect.void;
+      const asText = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+      const decode = Schema.decodeOption(Schema.fromJsonString(Launched));
       const marked = decode(asJson(launch({ submitOnly: true })));
       expect(Option.getOrNull(marked)).toMatchObject({ submitOnly: true });
       const older = decode(
-        JSON.stringify({ ...launch(), submitOnly: undefined, aKeyNoBuildKnows: 1 }),
+        yield* asText({ ...launch(), submitOnly: undefined, aKeyNoBuildKnows: 1 }),
       );
       expect(Option.getOrNull(older)).toMatchObject({ operation: "implement" });
       expect(Option.getOrNull(older)).not.toHaveProperty("aKeyNoBuildKnows");
@@ -116,6 +118,25 @@ test("launches are read back in the order they were launched, an unordered one f
       expect((yield* readLaunches("run-a")).at(-1)?.reused).toBe(true);
       expect(yield* readLaunches("run-b")).toEqual([]);
       expect(yield* (yield* FileSystem.FileSystem).exists(`${stateDir}/agents`)).toBe(false);
+    }).pipe(Effect.provide(recordsAt(stateDir))),
+  ));
+
+test("a launch recorded again for the same step keeps the dispatch time it already had", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const first = launch({
+        at: 1000,
+        step: { step: "build", place: null, key: "build@01-a.md" },
+      });
+      yield* recordLaunch(first);
+      yield* recordLaunch({ ...first, at: 2000, terminalId: "term-2" });
+      expect((yield* readLaunches("run-a"))[0]?.at).toBe(1000);
+      yield* recordLaunch({
+        ...first,
+        at: 3000,
+        step: { step: "build", place: null, key: "build@02-b.md" },
+      });
+      expect((yield* readLaunches("run-a"))[0]?.at).toBe(3000);
     }).pipe(Effect.provide(recordsAt(stateDir))),
   ));
 
