@@ -142,6 +142,27 @@ test("a launch that never came up is named by the exit that ended it", () =>
     }),
   ));
 
+test("a launch core has stopped listing is named by its own exit, not another launch's", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const stateDir = yield* controlled(null);
+      const asked: Array<string | null> = [];
+      const stale = port({
+        ready: () => Effect.succeed(false),
+        exitOf: (_ctx, launch) =>
+          Effect.sync(() => {
+            asked.push(launch);
+            return launch === "l-2" ? null : "No conversation found with session ID: s-1";
+          }),
+      });
+      const dropped = { ...deps(stateDir, stale), herdr: { agentList: () => Effect.succeed([]) } };
+      expect(
+        yield* awaitReady(dropped, "build-r1", 300, { mustStayListed: true, launch: "l-2" }),
+      ).toBe("claude exited before it was up");
+      expect(asked).toEqual(["l-2"]);
+    }),
+  ));
+
 test("a launch core has stopped listing is named by its exit, with no pid to read", () =>
   runEffect(
     Effect.gen(function* () {

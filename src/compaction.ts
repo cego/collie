@@ -186,7 +186,10 @@ export interface CompactionPort {
   ): Effect.Effect<Submission | null, PortError, PortServices | Records>;
   readonly ready?: (ctx: ReadyContext) => Effect.Effect<boolean, PortError, PortServices>;
   // WARNING: the harness's own words for why its last turn ended, since only they say a conversation was refused.
-  readonly exitOf?: (ctx: ReadyContext) => Effect.Effect<string | null, PortError, PortServices>;
+  readonly exitOf?: (
+    ctx: ReadyContext,
+    launch: string | null,
+  ) => Effect.Effect<string | null, PortError, PortServices>;
   readonly stop?: (
     target: StopTarget,
     note: (line: string) => Effect.Effect<void>,
@@ -770,9 +773,9 @@ export const awaitReady = Effect.fn("Compaction.awaitReady")(function* (
         Effect.orElseSucceed(() => false),
       );
   const saidOf = () =>
-    (deps.ports[record.harness]?.exitOf?.(record) ?? Effect.succeed(null)).pipe(
-      Effect.orElseSucceed(() => null),
-    );
+    (
+      deps.ports[record.harness]?.exitOf?.(record, options?.launch ?? null) ?? Effect.succeed(null)
+    ).pipe(Effect.orElseSucceed(() => null));
   const lost = (fallback: string) =>
     gone ? `${record.harness} exited before it was up` : fallback;
   // WARNING: core lists a terminal only while it runs, so one of ours that is absent has exited.

@@ -659,8 +659,8 @@ test("a stop another launch left is not this launch's refusal", () =>
         endpoint: null,
         env: [`COLLIE_LAUNCH=${launch}`],
       });
-      expect(yield* exitOf(ctx("l-2"))).toBeNull();
-      expect(yield* exitOf(ctx("l-1"))).toBe("OAuth token has expired. Please run /login.");
+      expect(yield* exitOf(ctx("l-2"), "l-2")).toBeNull();
+      expect(yield* exitOf(ctx("l-1"), "l-1")).toBe("OAuth token has expired. Please run /login.");
     }),
   ));
 
