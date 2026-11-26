@@ -772,7 +772,12 @@ Run can be Reopened only until its agents close, an hour after it finished by de
 ([Cleanup](#cleanup)). **Waiting on you** is work that ended without landing, and that nobody has
 asked you about: an implement that succeeded and whose merge request is open, a plan that
 is ready to implement, a Run that failed, was stopped or was abandoned with a branch or a
-merge request behind it and has neither been resumed nor disposed of. A Task stays here
+merge request behind it and has neither been resumed nor disposed of. A Resume after an abandonment does not
+erase that record: the Run's history keeps the line, and its merge request reads as it is
+now — waiting on the author, working, or Ready to release — for as long as the watch that
+Resume took up again is live, so a resumed Review is not shown as settled under an earlier
+abandonment. It settles again only if it is abandoned again, or stops watching.
+A Task stays here
 while it owes a merge request, whatever an earlier Run of it carries: a `superseded` line
 on a predecessor hands that Run's work to its successor, and a successor in the same Task
 still owes the same merge request, so the card names it and what it lacks rather than
@@ -837,7 +842,12 @@ request's own forge, through that forge's adapter — GitLab with `glab`, GitHub
 about each of a Task's merge requests every 5 minutes, whatever section its card is in and
 whatever its Runs' Dispositions say, so a merge while a Run is busy or parked is noticed
 too, and a closed one that is reopened is owed again; only one settled by `abandoned` is not
-asked about. A forge that cannot be read changes nothing the board says. One
+asked about — unless a Run is still watching it, because a Review Run's own watch is demand
+of its own. That watch is a durable registration, so a Review keeps polling unattended
+however its Task's board reads: with no drawer, panel or detail view open, and after a
+restart, from the head it already saw. A held Run asks for nothing until its hold is
+released, and a stopped one until it is resumed; both keep the registration, so a Resume
+picks the same watch up rather than waiting to be read into life. A forge that cannot be read changes nothing the board says. One
 that merged gets its `merged` disposition recorded as that forge's word and its card moves
 to Finished. Each branch of a Task's Runs on which none recorded a merge request takes the
 one opened from it, even where another Change run's is already recorded, whoever opened it — you on the forge, or a builder you told to in its pane — and
@@ -845,7 +855,8 @@ it is recorded as the newest Run on that branch's own, so the drawer, offers, Re
 release and Cleanup all see it. The forge is the one the branch's checkout pushes to, and
 it is asked about each branch at most once every 5 minutes. A merge request that merged or
 closed before the Task's first Run began is an older branch's and is ignored; of several,
-the newest is the Task's. A merge also settles the work on that merge request: what is
+the newest is the Task's. A Review Run waiting on that merge request's watch is not stopped by the
+merge: the wake it is owed ends its wait, and the Run carries on from there. A merge also settles the work on that merge request: what is
 still going on it — running, waiting, parked or asking — and began before the forge says it
 merged, is stopped by the host. That is the Run that opened it, any Run given it as its
 target, such as its review or Release Run, and any Follow-up Run on its branch, and a Run

@@ -59,6 +59,8 @@ export class ForgeHttp extends Context.Service<
       cwd: string,
       call: (provider: Provider, signal: AbortSignal) => Promise<A>,
     ) => Effect.Effect<Answered<A>>;
+    /** The HTTP requests this host has sent to a forge, which one logical read is counted against. */
+    readonly attempts: Effect.Effect<number>;
   }
 >()("collie/ForgeHttp") {}
 
@@ -96,6 +98,7 @@ interface Slot {
 
 const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
   Effect.sync(() => {
+    let attempts = 0;
     const slots = new Map<string, Slot>();
     const locks = new Map<string, Semaphore.Semaphore>();
     const lockOf = (host: string) => {
@@ -163,7 +166,7 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
     ): Effect.Effect<Answered<A>> =>
       Effect.gen(function* () {
         const slot = slotOf(login.key);
-        const send = (token: string) =>
+        const once = (token: string) =>
           Effect.tryPromise({
             try: (signal) => providerOf(login, slot).then((provider) => call(provider, signal)),
             catch: (error) => new Cause.UnknownError(error),
@@ -194,6 +197,10 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
               }),
             ),
           );
+        const send = (token: string) =>
+          Effect.sync(() => {
+            attempts += 1;
+          }).pipe(Effect.andThen(once(token)));
         const notReady = { ok: false, reason: login.notReady } as const;
         const first = yield* tokenOf(login, cwd, slot);
         if (first === null) return notReady;
@@ -210,7 +217,7 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
         } as const;
       });
 
-    return { ask };
+    return { ask, attempts: Effect.sync(() => attempts) };
   });
 
 /** Whether the forge takes the CLI's login, by asking who it is: only a refusal needs a human. */

@@ -144,9 +144,11 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
         record: () => Effect.void,
         // The host's stop, as the host applies it: the Run it reached is stopped.
         stop: (runId) =>
-          registry
-            .control({ runId, control: STOP, set: true })
-            .pipe(Effect.provideContext(hosted), Effect.orElseSucceed(() => undefined), Effect.asVoid),
+          registry.control({ runId, control: STOP, set: true }).pipe(
+            Effect.provideContext(hosted),
+            Effect.orElseSucceed(() => undefined),
+            Effect.asVoid,
+          ),
         watches: {
           observe: store.observe,
           unavailable: (run, why) =>

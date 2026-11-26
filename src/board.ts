@@ -1452,11 +1452,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           branches.set(key, runs);
         }
         const unnamed = Arr.map([...branches.values()], (runs) =>
-          settlementOf(
-            { id: null, runs, forge: null, read: null, revived },
-            recorded,
-            leader.id,
-          ),
+          settlementOf({ id: null, runs, forge: null, read: null, revived }, recorded, leader.id),
         );
         const settlements = [...Arr.map(fates, (one) => one.settlement), ...unnamed];
         const owing =

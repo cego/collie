@@ -16,6 +16,7 @@ import { serverSocket, type Herdr } from "./herdr";
 import { SESSIONS_EVERY, liveHerds, type LiveHerd } from "./herds";
 import { landingNow } from "./landing";
 import { settleMerges, type MrPanels } from "./merges";
+import { recordWatchEvent } from "./watch-journal";
 import { settleWatches, type Watches } from "./mr-watch";
 import { startRequested, type Requested } from "./review-requests";
 import { shell } from "./mr";
@@ -245,6 +246,7 @@ export const mergeWatch = <E, R>(opts: {
   const checked = new Map<string, number>();
   const states = new Map<string, MrState>();
   const logins = new Map<string, string>();
+  const event = recordWatchEvent(opts.env.stateDir);
   return every(
     MERGES_EVERY,
     Effect.gen(function* () {
@@ -277,12 +279,14 @@ export const mergeWatch = <E, R>(opts: {
           acc.set(row.mr, [...(acc.get(row.mr) ?? []), row.run]);
           return acc;
         }),
+        event,
       });
       yield* settleWatches({
         panels: opts.panels,
         now: yield* Clock.currentTimeMillis,
         rows,
         watches: opts.watches,
+        event,
       });
       yield* startRequested({
         env: opts.env,

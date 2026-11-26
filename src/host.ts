@@ -1441,8 +1441,9 @@ const hostBoard = (dir: string) =>
             ),
           head: model?.head,
           cards,
-          watching: Effect.map(store.outstanding, (rows) =>
-            new Set(Arr.map(rows, (row) => row.run)),
+          watching: Effect.map(
+            store.outstanding,
+            (rows) => new Set(Arr.map(rows, (row) => row.run)),
           ),
         });
       }).pipe(

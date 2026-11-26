@@ -4087,6 +4087,7 @@ export const hostLayer = (options: {
             effect.pipe(
               Effect.updateService(ForgeHttp, (http) =>
                 ForgeHttp.of({
+                  attempts: http.attempts,
                   ask: (login, cwd, call) =>
                     http
                       .ask(login, cwd, call)

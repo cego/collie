@@ -2,10 +2,12 @@
 // read, and woken by it: no read of their own.
 
 import * as Str from "effect/String";
-import { Effect } from "effect";
+import { Effect, type FileSystem, type Path } from "effect";
 import type { MrDetails } from "./board-model";
 import type { MrPanels } from "./merges";
 import { judge, type MrReading, type Observed, type Woke } from "./mr-watch-model";
+import type { WatchEvent } from "./watch-journal";
+import { nowIso } from "./time";
 import type { WatchRow } from "./store";
 
 /** What a watch round reads and writes, the host's. */
@@ -41,7 +43,13 @@ export const settleWatches = Effect.fn("MrWatch.settle")(function* (opts: {
   /** The watches still demanding their merge request, which Hold and Stop take away. */
   readonly rows: ReadonlyArray<WatchRow>;
   readonly watches: Watches;
+  /** Where each sighting, wake and ending is written down for a replay. */
+  event?: (event: WatchEvent) => Effect.Effect<void, never, FileSystem.FileSystem | Path.Path>;
 }) {
+  const event: (
+    event: WatchEvent,
+  ) => Effect.Effect<void, never, FileSystem.FileSystem | Path.Path> =
+    opts.event ?? (() => Effect.void);
   for (const row of opts.rows) {
     // Woken by an earlier round or host whose wake may not have reached the Run.
     if (row.woke !== null) {
@@ -59,9 +67,42 @@ export const settleWatches = Effect.fn("MrWatch.settle")(function* (opts: {
       reading: readingOf(read),
       now: opts.now,
     });
-    if (!sameObserved(row.observed, observed))
+    const at = yield* nowIso;
+    if (!sameObserved(row.observed, observed)) {
       yield* opts.watches.observe(row.run, row.name, observed);
-    if (verdict._tag === "Changed" || verdict._tag === "Ended")
+      yield* event({
+        _tag: "observed",
+        at,
+        mr: row.mr,
+        run: row.run,
+        name: row.name,
+        head: observed.head,
+        since: observed.since,
+      });
+    }
+    if (verdict._tag === "Changed") {
+      yield* event({
+        _tag: "woke",
+        at,
+        mr: row.mr,
+        run: row.run,
+        name: row.name,
+        head: verdict.change.head,
+        previous: verdict.change.previous,
+        newHead: verdict.change.newHead,
+      });
       yield* opts.watches.wake(row.run, row.name, verdict);
+    }
+    if (verdict._tag === "Ended") {
+      yield* event({
+        _tag: "ended",
+        at,
+        mr: row.mr,
+        run: row.run,
+        name: row.name,
+        why: verdict.state,
+      });
+      yield* opts.watches.wake(row.run, row.name, verdict);
+    }
   }
 });

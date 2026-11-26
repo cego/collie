@@ -2516,9 +2516,12 @@ test("an abandoned merge request is read once per due interval for the Run still
       const id = `${GITLAB}!68`;
       const states = new Map<string, MrState>();
       const checked = new Map<string, number>();
-      const asked = () =>
-        Arr.filter(log, (call) => /^GET .*merge_requests\/68$/.test(call));
-      const settle = (now: number, demand?: ReadonlyMap<string, ReadonlyArray<string>>, over: Partial<FakeMr> = {}) =>
+      const asked = () => Arr.filter(log, (call) => /^GET .*merge_requests\/68$/.test(call));
+      const settle = (
+        now: number,
+        demand?: ReadonlyMap<string, ReadonlyArray<string>>,
+        over: Partial<FakeMr> = {},
+      ) =>
         settleMerges({
           stateDir,
           cwd: "/project",

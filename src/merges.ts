@@ -24,6 +24,7 @@ import {
   type TaskView,
 } from "./board-model";
 import { latest, readDispositions, recordDisposition } from "./disposition";
+import { ForgeHttp } from "./forge/http";
 import { forgeOf } from "./forge/forge";
 import type { ReviewRead } from "./forge/review";
 import { readLanding, settleLeft } from "./landing";
@@ -32,6 +33,7 @@ import { runDir } from "./engine";
 import type { RunFacts } from "./runs";
 import { diffTargetOf } from "./strategies";
 import { epochMs } from "./time";
+import type { WatchEvent } from "./watch-journal";
 
 const isMrTarget = (target: string | null): target is string =>
   target !== null && parseMrTarget(target) !== null;
@@ -155,7 +157,13 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
    * demand of their own, whoever's Task they belong to and whatever its board says.
    */
   demand?: ReadonlyMap<string, ReadonlyArray<string>>;
+  /** Where each read, and what it tried, is written down for a replay. */
+  event?: (event: WatchEvent) => Effect.Effect<void, never, FileSystem.FileSystem | Path.Path>;
 }) {
+  const event: (
+    event: WatchEvent,
+  ) => Effect.Effect<void, never, FileSystem.FileSystem | Path.Path> =
+    opts.event ?? (() => Effect.void);
   const fs = yield* FileSystem.FileSystem;
   // What an earlier host learned, under this one's own answers: a fresh host's empty memory
   // must not ask production again about what an earlier one already saw land there.
@@ -220,7 +228,13 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
         });
     for (const one of adopted)
       if (one !== found)
-        watched.push({ mr: one.url, abandoned: false, runs: [one.run], owner: one.run, settles: true });
+        watched.push({
+          mr: one.url,
+          abandoned: false,
+          runs: [one.run],
+          owner: one.run,
+          settles: true,
+        });
     if (several)
       for (const entry of view.mrs!)
         if (!Arr.some(repos, (repo) => repo.run === entry.run))
@@ -277,10 +291,23 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
       // Stamped before asking: a forge that cannot be asked is not asked again every tick.
       opts.checked.set(id, opts.now);
       asked = true;
+      const http = yield* ForgeHttp;
+      const sent = yield* http.attempts;
       const answered = yield* forgeAnswer(`mr:${id}`, at, opts.run, (panel) =>
         opts.panels.set(id, { at: opts.now, panel }),
       );
       const now = DateTime.formatIso(DateTime.makeUnsafe(opts.now));
+      const read = opts.panels.get(id)?.panel;
+      yield* event({
+        _tag: "poll",
+        at: now,
+        mr: id,
+        source: demanded && !settles ? "watch" : "task",
+        result: answered === null ? "failed" : "read",
+        attempts: (yield* http.attempts) - sent,
+        head: read?._tag === "Details" ? (read.head ?? null) : null,
+        ...(answered === null && read?._tag === "Unavailable" ? { reason: read.reason } : {}),
+      });
       if (answered === null) {
         const known = forge.get(id);
         // What it last said stands, dated as it was; only the failed ask is new.

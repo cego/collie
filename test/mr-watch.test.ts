@@ -15,6 +15,7 @@ import { QUIET_MS } from "../src/mr-watch-model";
 import { readDispositions, recordDisposition } from "../src/disposition";
 import { recordAudit } from "../src/audit";
 import { Store } from "../src/store";
+import { readWatchJournal, type WatchEvent } from "../src/watch-journal";
 import { epochMs } from "../src/time";
 
 const PROJECT = "gitlab.cego.dk/mk/collie";
@@ -63,6 +64,30 @@ const OPEN: ForgeModel = {
 };
 const PUSHED: ForgeModel = { ...OPEN, mrs: [mr("7", { head: H2 }), mr("8")] };
 const PUSHED_AGAIN: ForgeModel = { ...OPEN, mrs: [mr("7", { head: H3 }), mr("8")] };
+
+/** The journal's lines of one kind, which a plain filter does not narrow. */
+const tagged = <T extends WatchEvent["_tag"]>(events: ReadonlyArray<WatchEvent>, tag: T) =>
+  Arr.filter(events, (event): event is Extract<WatchEvent, { _tag: T }> => event._tag === tag);
+
+const pollsIn = (events: ReadonlyArray<WatchEvent>) =>
+  Arr.filter(
+    events,
+    (event): event is Extract<WatchEvent, { _tag: "poll" }> =>
+      event._tag === "poll" && event.mr === mrId(WATCHED),
+  );
+
+/** Every line the Run recorded, in the order it wrote them. */
+const readLogLines = (runId: string) =>
+  Effect.map(
+    FileSystem.FileSystem.pipe(
+      Effect.flatMap((fs) =>
+        fs
+          .readFileString(`${host.dir()}/runs/${runId}/log.txt`)
+          .pipe(Effect.orElseSucceed(() => "")),
+      ),
+    ),
+    (text) => text.split("\n"),
+  );
 
 /** The heads each watch round woke on, as the Run recorded them. */
 const roundsOf = (runId: string) =>
@@ -360,10 +385,9 @@ test(
             );
             const rounds = yield* roundsOf(runId);
             // A replay records its round again; the heads it woke on are the two pushes.
-            expect([...new Set(rounds.map((line) => line.replace(/^.*?round-\d+: /, "")))]).toEqual([
-              `${H1} -> ${H2}`,
-              `${H2} -> ${H3}`,
-            ]);
+            expect([...new Set(rounds.map((line) => line.replace(/^.*?round-\d+: /, "")))]).toEqual(
+              [`${H1} -> ${H2}`, `${H2} -> ${H3}`],
+            );
             expect(yield* agentStarts).toEqual([]);
             expect(reads(forge, "7")).toBeGreaterThan(0);
           }),
@@ -663,3 +687,127 @@ for (const state of ["closed", "merged"] as const)
       ),
     240_000,
   );
+
+test(
+  "the !604 replay reads detection, eligibility, each start and a failed read back out of what the host recorded",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const forge = yield* gitlab;
+        const runId = yield* session(
+          forge,
+          Effect.gen(function* () {
+            const runId = yield* started("watches-mr", "w1", {
+              target: WATCHED,
+              head: H1,
+              cwd: rig.projectDir,
+              rounds: 3,
+              publish: 1,
+            });
+            yield* until(
+              () => watchOf(runId),
+              (row) => row !== null,
+            );
+            const { board } = yield* watchingMerges;
+
+            // Nothing has been pushed yet, so the merge watch is the only reader: what the
+            // transport saw is exactly what the polls say they sent.
+            yield* Effect.sleep("6 minutes");
+            const readOut = pollsIn(yield* readWatchJournal(host.dir()));
+            expect(readOut.length).toBeGreaterThan(0);
+            expect(readOut.reduce((total, event) => total + event.attempts, 0)).toBe(
+              Arr.filter(forge.requests(), (one) =>
+                /\/merge_requests\/7(?:[/?]|$)/.test(decodeURIComponent(one.url)),
+              ).length,
+            );
+
+            // A push the background poll finds, and a round that publishes what it found.
+            yield* forge.set(PUSHED);
+            yield* until(
+              () => watchOf(runId),
+              (row) => row?.name === "round-2",
+            );
+            // A second push: the round it starts publishes nothing, and is superseded.
+            yield* forge.set(PUSHED_AGAIN);
+            yield* until(
+              () => watchOf(runId),
+              (row) => row?.name === "round-3",
+            );
+            // A read the forge refuses is recorded as such, and the head it could not read
+            // is not one any start was made on.
+            let refused = false;
+            forge.after((url, _init, response) => {
+              if (refused || !/merge_requests\/7$/.test(decodeURIComponent(url)))
+                return Promise.resolve(response);
+              refused = true;
+              return Promise.resolve(Response.json({ message: "gone" }, { status: 404 }));
+            });
+            const H4 = "4444444444444444444444444444444444444444";
+            yield* forge.set({ ...OPEN, mrs: [mr("7", { head: H4 }), mr("8")] });
+            yield* Effect.sleep("6 minutes");
+            yield* until(
+              () => status(runId),
+              (view) => view?.status.status === "complete",
+            );
+            expect(yield* board).toBeDefined();
+            return runId;
+          }),
+        );
+
+        const journal = yield* readWatchJournal(host.dir());
+        const polls = pollsIn(journal);
+        const seen = tagged(journal, "observed");
+        const starts = tagged(journal, "woke");
+        const H4 = "4444444444444444444444444444444444444444";
+
+        // Detection: the head it first read, and since when it has stood.
+        const firstSeen = (head: string) =>
+          Math.min(
+            ...Arr.map(
+              Arr.filter(seen, (event) => event.head === head),
+              (event) => epochMs(event.at),
+            ),
+          );
+        expect(firstSeen(H2)).toBeGreaterThan(0);
+        // Eligibility and start: each start follows the quiet window from its detection.
+        for (const start of starts) {
+          const detected = Arr.findLast(
+            seen,
+            (event) => event.head === start.head && epochMs(event.at) <= epochMs(start.at),
+          );
+          expect(Option.isSome(detected)).toBe(true);
+          expect(epochMs(start.at) - Option.getOrThrow(detected).since).toBeGreaterThanOrEqual(
+            QUIET_MS,
+          );
+        }
+        expect(Arr.map(starts, (event) => event.head)).toEqual([H2, H3, H4]);
+
+        // A failed read is a failure, with the attempts it took, and it advances nothing.
+        const failed = Arr.filter(polls, (event) => event.result === "failed");
+        expect(failed).toHaveLength(1);
+        expect(failed[0]!.attempts).toBeGreaterThan(0);
+        expect(failed[0]!.head).toBeNull();
+        expect(Arr.filter(seen, (event) => event.head === H4)).toHaveLength(1);
+        // Every start is on a head a read verified.
+        for (const start of starts)
+          expect(Arr.some(seen, (event) => event.head === start.head)).toBe(true);
+
+        // The watch's reads are reconciled above; each of these lines names the requests it
+        // sent, so none of them is a request the transport cannot account for.
+        expect(polls.length).toBeGreaterThan(0);
+        for (const poll of polls) expect(poll.attempts).toBeGreaterThan(0);
+
+        // Each round is told from the times it has. The round started on H2 published; the
+        // two after it posted nothing, the first superseded by a newer head and the last
+        // with no newer head and no note at all.
+        const posted = Arr.filter(yield* readLogLines(runId), (line) => line.includes("posted:"));
+        // A replayed round records its line again; one round published, and no other did.
+        expect([...new Set(posted.map((line) => /round-(\d+)/.exec(line)?.[1]))]).toEqual(["1"]);
+        expect(firstSeen(H3)).toBeGreaterThan(epochMs(starts[0]!.at));
+        expect(firstSeen(H3)).toBeLessThanOrEqual(epochMs(starts[1]!.at));
+        expect(firstSeen(H4)).toBeGreaterThan(epochMs(starts[1]!.at));
+        expect(firstSeen(H4)).toBeLessThanOrEqual(epochMs(starts[2]!.at));
+      }),
+    ),
+  300_000,
+);
