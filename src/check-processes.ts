@@ -609,7 +609,6 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
         : endCheck(entry.record, installation, kill).pipe(
             // WARNING: where /proc cannot be read the record is the only proof, so it stays until the check is gone.
             Effect.flatMap((gone) => (gone ? forget(entry.record.id) : Effect.void)),
-            // WARNING: a removal that fails still stops this host calling the check its own.
             Effect.ensuring(untrack(entry.record.id)),
             Effect.ignore,
           ),

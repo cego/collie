@@ -1384,18 +1384,18 @@ test("a check left behind by an attempt that ended does not keep its Task workin
       yield* recordedCheck(older, "r-older@1-a");
       yield* marking(older, { name: "lint", pass: "recheck" });
 
-      const [stale] = yield* board(env, [newer, older], { running: new Set<string>() });
+      const [stale] = yield* board(env, [newer, older], { collecting: new Set<string>() });
       expect(stale?.state).not.toBe("active");
       expect(stale?.check).toBeNull();
       expect(stale!.sentence).not.toContain("Running lint");
 
-      const [live] = yield* board(env, [newer, older], { running: new Set(["r-older@1-a"]) });
+      const [live] = yield* board(env, [newer, older], { collecting: new Set(["r-older@1-a"]) });
       expect(live?.state).toBe("active");
       expect(live!.sentence).toContain("Running lint again");
 
       const ending = yield* madeRun(dir, { id: "r-ending", task: "task-2" });
       yield* recordedCheck(ending, "r-ending@1-a");
-      const [going] = yield* board(env, [ending], { running: new Set<string>() });
+      const [going] = yield* board(env, [ending], { collecting: new Set<string>() });
       expect(going?.state).toBe("active");
       expect(going!.sentence).toContain("Running lint");
     }),
@@ -1416,7 +1416,7 @@ test("a marker left behind does not borrow a check of its Run that is still coll
       yield* recordedCheck(run, "r-ended@1-b", "test");
       yield* marking(run, { name: "lint", pass: "recheck" });
 
-      const [left] = yield* board(env, [run], { running: new Set(["r-ended@1-b"]) });
+      const [left] = yield* board(env, [run], { collecting: new Set(["r-ended@1-b"]) });
       expect(left?.check).toBeNull();
       expect(left!.sentence).not.toContain("Running lint");
     }),

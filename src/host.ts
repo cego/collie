@@ -1534,7 +1534,7 @@ const hostBoard = (dir: string) =>
           env,
           runs: facts,
           alive,
-          running: new Set(yield* checks.collecting),
+          collecting: new Set(yield* checks.collecting),
           quietMs: (yield* loadDefaults(env.userDir)).boardQuietMs,
           offers: (runId) =>
             registry.offers(runId).pipe(

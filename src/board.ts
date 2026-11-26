@@ -1209,8 +1209,8 @@ interface BoardOptions {
   flows?: Map<string, Flow>;
   head?: (run: RunFacts) => Effect.Effect<string | null>;
   cards?: KeptCards;
-  // WARNING: the check ids this host is collecting; absent where nothing can prove one live.
-  running?: ReadonlySet<string>;
+  // WARNING: absent where nothing can prove a check live; an empty set is a host collecting none.
+  collecting?: ReadonlySet<string>;
 }
 
 const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: RunRecordsApi) {
@@ -1239,12 +1239,14 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
   const records = Arr.filter(
     yield* runningChecks,
     (record) =>
-      opts.running === undefined || !settledIds.has(record.run) || opts.running.has(record.id),
+      opts.collecting === undefined ||
+      !settledIds.has(record.run) ||
+      opts.collecting.has(record.id),
   );
   const running = Arr.filter(
     [...(yield* markersOf(records))],
     ([run, marker]) =>
-      opts.running === undefined ||
+      opts.collecting === undefined ||
       !settledIds.has(run) ||
       marker.pass === "ci" ||
       Arr.some(records, (record) => record.run === run && record.name === marker.name),
