@@ -978,7 +978,8 @@ const revivedOf = Effect.fn("Board.revivedOf")(function* (
 ) {
   const revived: Array<string> = [];
   for (const run of runs) {
-    if (!watching.has(run.id)) continue;
+    // A held or stopped Run asks for nothing, so an abandonment still settles its work.
+    if (!watching.has(run.id) || run.held || run.state === "stopped") continue;
     const resumed = Arr.map(
       resumesIn(yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => []))),
       (one) => epochMs(one.at),
