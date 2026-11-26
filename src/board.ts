@@ -1194,6 +1194,8 @@ interface BoardOptions {
   flows?: Map<string, Flow>;
   head?: (run: RunFacts) => Effect.Effect<string | null>;
   cards?: KeptCards;
+  // WARNING: the check ids this host is collecting; absent where nothing can prove one live.
+  running?: ReadonlySet<string>;
 }
 
 const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: RunRecordsApi) {
@@ -1218,8 +1220,21 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
   const forge = opts.forge ?? (yield* readForge(stateDir));
   const since = yield* seenSince(stateDir);
   const live = new Map(Arr.map(opts.alive ?? [], (agent) => [agent.name, agent]));
-  const records = yield* runningChecks;
-  const markers = yield* markersOf(records);
+  const settledIds = new Set(Arr.flatMap(all, (run) => (ended(run) ? [run.id] : [])));
+  const records = Arr.filter(
+    yield* runningChecks,
+    (record) =>
+      opts.running === undefined || !settledIds.has(record.run) || opts.running.has(record.id),
+  );
+  const running = Arr.filter(
+    [...(yield* markersOf(records))],
+    ([run, marker]) =>
+      opts.running === undefined ||
+      !settledIds.has(run) ||
+      marker.pass === "ci" ||
+      Arr.some(records, (record) => record.run === run),
+  );
+  const markers = new Map(running);
   const checked = new Set(Arr.map(records, (record) => record.run));
   const offersOfRun =
     opts.offers ??

@@ -1362,6 +1362,63 @@ test("a check still running for an older Run of a Task keeps the Task working, e
     }),
   ));
 
+const recordedCheck = (run: RunFacts, id: string) =>
+  Effect.gen(function* () {
+    yield* (yield* RunRecords).setControl(
+      RUNNING_CHECK,
+      "",
+      encodeCheckRecord({
+        id,
+        run: run.id,
+        name: "lint",
+        pass: "recheck",
+        by: "collie",
+        leader: { pid: 4242, started: "1", group: 4242 },
+        host: { pid: 4241, started: "1" },
+        started: "2026-09-14T10:03:00Z",
+      }),
+      id,
+    );
+  });
+
+test("a check left behind by an attempt that ended does not keep its Task working", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const newer = yield* madeRun(dir, {
+        id: "r-newer",
+        task: "task-1",
+        state: "succeeded",
+        created: "2026-09-14T09:00:00Z",
+        finished: "2026-09-14T09:30:00Z",
+      });
+      const older = yield* madeRun(dir, {
+        id: "r-older",
+        task: "task-1",
+        state: "failed",
+        created: "2026-09-14T08:00:00Z",
+        finished: "2026-09-14T08:30:00Z",
+      });
+      yield* recordedCheck(older, "r-older@1-a");
+      yield* marking(older, { name: "lint", pass: "recheck" });
+
+      const [stale] = yield* board(env, [newer, older], { running: new Set<string>() });
+      expect(stale?.state).not.toBe("active");
+      expect(stale?.check).toBeNull();
+      expect(stale!.sentence).not.toContain("Running lint");
+
+      const [live] = yield* board(env, [newer, older], { running: new Set(["r-older@1-a"]) });
+      expect(live?.state).toBe("active");
+      expect(live!.sentence).toContain("Running lint again");
+
+      const ending = yield* madeRun(dir, { id: "r-ending", task: "task-2" });
+      yield* recordedCheck(ending, "r-ending@1-a");
+      const [going] = yield* board(env, [ending], { running: new Set<string>() });
+      expect(going?.state).toBe("active");
+      expect(going!.sentence).toContain("Running lint");
+    }),
+  ));
+
 test("what the host writes about a finished Run does not move when it ended", () =>
   runEffect(
     Effect.gen(function* () {
