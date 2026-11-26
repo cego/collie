@@ -789,7 +789,6 @@ const main = Effect.gen(function* () {
 
   let shown = EMPTY_FLOCK;
   const routedAt = new Map<string, number>();
-  // WARNING: a row with no route is a Machine core could not be listed, so its actions say what core said.
   const notRouted = (profile: string, otherwise: string) =>
     new ActionFailed({ reason: shown.lost.get(profile)?.reason ?? otherwise });
   const holds = Effect.map(given.held, (texts) => ({
