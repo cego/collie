@@ -47,6 +47,7 @@ export const lastLinesOf = (log: string | null, count = LAST_LINES) =>
 // WARNING: a Run with no marker is read from its running check's record, as an agent's own verify is.
 export const markersOf = Effect.fn("Checks.markersOf")(function* (
   records: ReadonlyArray<CheckRecord> = [],
+  shown: (run: string, marker: Verifying) => boolean = () => true,
 ) {
   const found = new Map<string, Verifying>();
   for (const row of yield* RunRecords.use((all) => all.everyControl(VERIFYING))) {
@@ -55,11 +56,9 @@ export const markersOf = Effect.fn("Checks.markersOf")(function* (
       found.set(row.run, marker);
     }
   }
-  // WARNING: a marker outlives a check that ended, so only one naming a live record of its Run is shown.
+  // WARNING: a marker outlives the check it was written for, so the caller may refuse one and let a record decide.
   for (const [run, marker] of found) {
-    const live = Arr.some(records, (record) => record.run === run && record.name === marker.name);
-    const recorded = Arr.some(records, (record) => record.run === run);
-    if (marker.pass !== "ci" && recorded && !live) {
+    if (!shown(run, marker)) {
       found.delete(run);
     }
   }
@@ -83,6 +82,12 @@ export const markersOf = Effect.fn("Checks.markersOf")(function* (
 
 const readOrNone = (run: RunFacts) =>
   readVerifications(run.evidence).pipe(Effect.orElseSucceed(() => []));
+
+// WARNING: a marker is written before its check spawns, so a record that began earlier is another invocation.
+export const marksCheck = (marker: Verifying, record: CheckRecord) =>
+  record.name === marker.name &&
+  record.pass === marker.pass &&
+  epochMs(record.started) >= epochMs(marker.started);
 
 const commandOf = (executable: string) => Str.split(executable, "/").at(-1) ?? executable;
 

@@ -1423,6 +1423,59 @@ test("a marker left behind does not hide a check of its Run that is still collec
     }),
   ));
 
+test("a marker of another pass does not stand in for the check its Run collects", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, {
+        id: "r-ended",
+        task: "task-1",
+        state: "succeeded",
+        created: "2026-09-14T09:00:00Z",
+        finished: "2026-09-14T09:30:00Z",
+      });
+      yield* recordedCheck(run, "r-ended@1-a");
+      yield* marking(run, { name: "lint", pass: "gate" });
+
+      const [left] = yield* board(env, [run], { collecting: new Set(["r-ended@1-a"]) });
+      expect(left!.sentence).toContain("Running lint again on the same tree");
+      expect(left!.sentence).not.toContain("on the branch");
+      expect(left!.check?.revision).toBe("");
+    }),
+  ));
+
+test("a Run that has not ended shows its marker over a record of another check", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { id: "r-running", task: "task-1" });
+      yield* recordedCheck(run, "r-running@1-a");
+      yield* marking(run);
+
+      const [view] = yield* board(env, [run], { collecting: new Set<string>() });
+      expect(view!.sentence).toContain("Running test on the branch");
+    }),
+  ));
+
+test("a board told of no collecting set keeps a marker over a record, as before", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, {
+        id: "r-ended",
+        task: "task-1",
+        state: "succeeded",
+        created: "2026-09-14T09:00:00Z",
+        finished: "2026-09-14T09:30:00Z",
+      });
+      yield* recordedCheck(run, "r-ended@1-a");
+      yield* marking(run);
+
+      const [view] = yield* board(env, [run]);
+      expect(view!.sentence).toContain("Running test on the branch");
+    }),
+  ));
+
 test("what the host writes about a finished Run does not move when it ended", () =>
   runEffect(
     Effect.gen(function* () {

@@ -49,7 +49,7 @@ import type { CheckCommand, Verification } from "./verify";
 import { approvedFor, approvedIn } from "./verify-spec";
 import { readIntent } from "./intent";
 import { findingsIn, isBlocking, openFindingsIn } from "./output";
-import { markersOf, runningCheck } from "./checks";
+import { marksCheck, markersOf, runningCheck } from "./checks";
 import { runningChecks } from "./check-processes";
 import { waitLine } from "./memory-wait";
 import { runWaits } from "./run-waits";
@@ -1243,15 +1243,15 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
       !settledIds.has(record.run) ||
       opts.collecting.has(record.id),
   );
-  const running = Arr.filter(
-    [...(yield* markersOf(records))],
-    ([run, marker]) =>
+  // WARNING: a marker of an ended Run counts only where the host proves it collects the check the marker names.
+  const markers = yield* markersOf(
+    records,
+    (run, marker) =>
       opts.collecting === undefined ||
       !settledIds.has(run) ||
       marker.pass === "ci" ||
-      Arr.some(records, (record) => record.run === run && record.name === marker.name),
+      Arr.some(records, (record) => record.run === run && marksCheck(marker, record)),
   );
-  const markers = new Map(running);
   const checked = new Set(Arr.map(records, (record) => record.run));
   const offersOfRun =
     opts.offers ??
