@@ -10324,7 +10324,7 @@ const makeRegistry: (
             continue;
           }
         }
-        if (yield* workflowEnded(candidate.run)) {
+        if (yield* hasEnded(candidate.run)) {
           continue;
         }
         refused.set(
