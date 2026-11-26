@@ -10459,10 +10459,11 @@ const makeRegistry: (
         refused.set(offer.id, `${mr} is merged`);
       }
       const workflow = offer.workflow === SELF ? generation.id : offer.workflow;
-      // WARNING: a selecting offer taken over ids goes on beside its siblings; one taken for every finding does not.
+      // WARNING: a listing keeps a selecting offer visible so the card holds; only an invoke without ids is refused a live sibling.
       const oneAtATime =
-        offer.selects !== "many" &&
-        (offer.selects === undefined || (idsIn(given.findings) ?? []).length === 0);
+        offer.selects === undefined ||
+        ((idsIn(given.findings) ?? []).length === 0 &&
+          (offer.selects !== "many" || request !== undefined));
       for (const candidate of oneAtATime ? runs : []) {
         if (candidate.workflow !== workflow || candidate.request === request) {
           continue;
