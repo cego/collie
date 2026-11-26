@@ -262,7 +262,8 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
     const every =
       visible && (known === undefined || known === "open") ? MERGE_SYNC_MS : MERGE_POLL_MS;
     if (
-      known !== "in-prod" &&
+      // WARNING: a Run still watching it needs the read that ends its Watch, whatever production said.
+      (known !== "in-prod" || demanded) &&
       (nudged.has(mr) ||
         nudged.has(id) ||
         Math.max(

@@ -486,6 +486,57 @@ test("a wake a dead host persisted is delivered once by the next host, with no p
     }),
   ));
 
+test("a Watch of a merge request recorded in production is still read by the restarted host, and ends once", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(`${host.dir()}/board`, { recursive: true });
+      yield* fs.writeFileString(
+        `${host.dir()}/board/mr-states.json`,
+        JSON.stringify({
+          [mrId(WATCHED)!]: {
+            state: "in-prod",
+            read: "2026-01-01T00:00:00Z",
+            asked: "2026-01-01T00:00:00Z",
+          },
+        }),
+      );
+      const forge = yield* host.gitlab({
+        ...OPEN,
+        mrs: [mr("7", { state: "merged" }), mr("8")],
+      });
+      const runId = yield* session(
+        forge,
+        Effect.gen(function* () {
+          const runId = yield* started("watches-mr", "w1", {
+            target: WATCHED,
+            head: H1,
+            cwd: rig.projectDir,
+          });
+          yield* until(
+            () => watchOf(runId),
+            (row) => row !== null,
+          );
+          return runId;
+        }),
+      );
+      yield* session(
+        forge,
+        Effect.gen(function* () {
+          yield* watchingMerges;
+          const done = yield* until(
+            () => status(runId),
+            (view) => view?.status.status === "complete" || view?.status.status === "failed",
+          );
+          expect(
+            yield* decodeWoke(done?.status.status === "complete" ? done.status.value : null),
+          ).toEqual({ _tag: "Ended", state: "merged" });
+          expect(yield* watchOf(runId)).toBeNull();
+        }),
+      );
+    }),
+  ));
+
 test("a held Run's Watch asks for nothing until the hold is released, then takes the head it missed", () =>
   runEffect(
     Effect.gen(function* () {
