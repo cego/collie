@@ -129,6 +129,7 @@ import {
   linkRoute,
   pairedMachines,
   remoteRoute,
+  rosterFollowed,
   rosterOf,
   syncNow,
 } from "./machine";
@@ -398,33 +399,16 @@ const main = Effect.gen(function* () {
   );
   // WARNING: an older Desktop that was killed left its own SSH masters behind.
   yield* sweepSshControls(tmpdir(), childEnv()).pipe(Effect.ignore);
-  const listed = yield* rosterOf(collie).pipe(
-    Effect.map((said) => said.roster),
-    Effect.result,
-  );
-  const now = yield* Clock.currentTimeMillis;
-  const [enabled, unlisted] = Result.match(listed, {
-    onSuccess: (machines) => [machines, []] as const,
-    onFailure: (reason) => {
-      const returned: readonly [[], Array<FlockItem>] = [
-        [],
-        [
-          {
-            _tag: "Lost",
-            machine: { profile: "core", name: "core's machines" },
-            state: "unreachable",
-            reason,
-            at: now,
-          },
-        ],
-      ];
-      return returned;
-    },
-  });
+  const changes = yield* PubSub.unbounded<RouteChange>();
+  const news = yield* PubSub.unbounded<FlockItem>();
   const routes = new Map<string, { route: ShellRoute; scope?: Scope.Closeable }>();
   routes.set("local", { route: localRoute(collie, local, shell) });
   const open = (machine: HerdrMachine) =>
     Effect.gen(function* () {
+      const held = routes.get(machine.id);
+      if (held !== undefined) {
+        return held.route;
+      }
       const scope = yield* Scope.make();
       const peer = Option.getOrUndefined(
         Arr.findFirst(yield* pairedMachines(collie), (one) => one.name === machine.label),
@@ -446,9 +430,14 @@ const main = Effect.gen(function* () {
         peer !== undefined,
       );
       routes.set(route.machine.profile, { route, scope });
+      yield* PubSub.publish(changes, { _tag: "Add", route });
       return route;
     });
-  yield* Effect.forEach(enabled, open, { discard: true });
+  const roster = rosterOf(collie).pipe(Effect.map((said) => said.roster));
+  yield* roster.pipe(
+    Effect.flatMap((listed) => Effect.forEach(listed, open, { discard: true })),
+    Effect.ignore,
+  );
   yield* Effect.addFinalizer(() =>
     Effect.forEach(
       routes.values(),
@@ -458,8 +447,11 @@ const main = Effect.gen(function* () {
       },
     ),
   );
-  const changes = yield* PubSub.unbounded<RouteChange>();
-  const news = yield* PubSub.unbounded<FlockItem>();
+  // WARNING: core may start after Desktop, so a list it could not be read at first is read again.
+  yield* rosterFollowed(roster, Effect.sync(() => ({ profiles: [...routes.keys()] })), open).pipe(
+    Stream.runForEach((item) => PubSub.publish(news, item)),
+    Effect.forkScoped,
+  );
   const links = new Map<string, MachineLinked>();
   const asListed = flow(Schema.encodeResult(Schema.fromJsonString(PeerView)), Result.getOrThrow);
   yield* pairedMachines(collie).pipe(
@@ -1040,7 +1032,6 @@ const main = Effect.gen(function* () {
             Stream.concat(
               Stream.mergeAll(
                 [
-                  Stream.fromIterable(unlisted),
                   flockStream(
                     reachable,
                     doors,

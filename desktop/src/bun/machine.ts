@@ -849,6 +849,50 @@ const upgradeTo = (route: Route<BoardSource>, version: string) =>
     ),
   );
 
+/** What Desktop already shows, so a round of the roster's follow opens nothing twice. */
+export interface Routed {
+  /** The profiles Desktop holds a route for. */
+  readonly profiles: ReadonlyArray<string>;
+}
+
+const ROSTER_EVERY = "15 seconds";
+
+// WARNING: core may start after Desktop, and a list it could not be asked for is not a list of no Machines.
+export const rosterFollowed = <D extends BoardSource>(
+  roster: Effect.Effect<ReadonlyArray<HerdrMachine>, string>,
+  routed: Effect.Effect<Routed, never>,
+  open: (machine: HerdrMachine) => Effect.Effect<Route<D>, never>,
+) => {
+  const step = (failures: number) =>
+    Effect.gen(function* () {
+      const held = yield* routed;
+      const read = yield* roster.pipe(Effect.result);
+      if (Result.isFailure(read)) {
+        const items: ReadonlyArray<FlockItem> = [];
+        return { items, wait: Duration.millis(backoff(failures)), failures: failures + 1 };
+      }
+      const items: Array<FlockItem> = [];
+      for (const machine of Arr.filter(
+        read.success,
+        (one) => !Arr.contains(held.profiles, one.id),
+      )) {
+        const route = yield* open(machine);
+        items.push({ _tag: "Routed", machine: route.machine });
+      }
+      return { items, wait: Duration.fromInputUnsafe(ROSTER_EVERY), failures: 0 };
+    });
+  const round = (failures: number): Stream.Stream<FlockItem, never> =>
+    Stream.unwrap(
+      Effect.map(step(failures), ({ items, wait, failures: next }) =>
+        Stream.fromIterable(items).pipe(
+          Stream.concat(Stream.fromEffectDrain(Effect.sleep(wait))),
+          Stream.concat(Stream.suspend(() => round(next))),
+        ),
+      ),
+    );
+  return round(0);
+};
+
 export type RouteChange<D extends BoardSource = Doors> =
   | { readonly _tag: "Add"; readonly route: Route<D> }
   | {
