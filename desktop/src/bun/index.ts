@@ -132,6 +132,7 @@ import {
   remoteRoute,
   rosterFollowed,
   rosterOf,
+  staleRouted,
   syncNow,
 } from "./machine";
 import type { Doors, HerdrMachine, ShellRoute, RouteChange } from "./machine";
@@ -1057,7 +1058,10 @@ const main = Effect.gen(function* () {
                     Utils.showNotification,
                     readDoors,
                   ).pipe(Stream.tap(doctorOnceLive), Stream.tap(syncOnceLive)),
-                  Stream.fromSubscription(told),
+                  Stream.fromSubscription(told).pipe(
+                    // WARNING: a reply read before a removal would put that Machine's row back with no route behind it.
+                    Stream.filter((item) => !staleRouted(item, (profile) => dropped.has(profile))),
+                  ),
                 ],
                 { concurrency: "unbounded" },
               ),
@@ -1241,10 +1245,11 @@ const main = Effect.gen(function* () {
           Effect.mapError((reason) => new ActionFailed({ reason })),
         );
         const done = yield* Deferred.make<void>();
+        // WARNING: before the Remove is published, so a roster reply landing meanwhile cannot route it back.
+        dropped.add(profile);
         yield* PubSub.publish(changes, { _tag: "Remove", profile, done });
         yield* Deferred.await(done).pipe(Effect.timeoutOption("5 seconds"));
         routes.delete(profile);
-        dropped.add(profile);
         ownReadings.delete(profile);
         const running = onboarding.get(profile)?.fiber;
         if (running !== undefined) {

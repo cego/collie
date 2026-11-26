@@ -29,6 +29,14 @@ const VM: HerdrMachine = {
   enabled: true,
 };
 
+const VM2: HerdrMachine = {
+  id: "vm2",
+  label: "vm2",
+  target: "mk@vm2",
+  session: "default",
+  enabled: true,
+};
+
 const routeOf = (machine: HerdrMachine) => {
   const returned: Route = {
     machine: { profile: machine.id, name: machine.label, target: machine.target, route: "ssh" },
@@ -192,6 +200,39 @@ test("a Machine a human removed while Desktop ran is not routed from a stale lis
 
       yield* until(() => reads.length >= 4);
       expect(opened).toEqual([]);
+    }),
+  ));
+
+test("a Machine removed while another in the same reply opens is not routed", () =>
+  run(
+    Effect.gen(function* () {
+      const dropped = new Set<string>();
+      const opened: Array<string> = [];
+      const told: Array<FlockItem> = [];
+      const opening = yield* Deferred.make<void>();
+      yield* rosterFollowed(
+        Effect.succeed([VM, VM2]),
+        Effect.sync(() => ({ profiles: [...opened], dropped: [...dropped] })),
+        Effect.succeed([]),
+        (machine) =>
+          Effect.gen(function* () {
+            opened.push(machine.id);
+            if (machine.id === VM2.id) {
+              yield* Deferred.await(opening);
+            }
+            return routeOf(machine);
+          }),
+      ).pipe(
+        Stream.runForEach((item) => Effect.sync(() => void told.push(item))),
+        Effect.forkScoped,
+      );
+
+      yield* until(() => opened.length >= 1);
+      yield* Effect.sync(() => dropped.add(VM.id));
+      yield* Deferred.succeed(opening, undefined);
+      yield* until(() => Arr.some(told, (item) => nameOf(item) === "vm2 Routed"));
+
+      expect(Arr.filter(told, (item) => nameOf(item) === "vm Routed")).toEqual([]);
     }),
   ));
 

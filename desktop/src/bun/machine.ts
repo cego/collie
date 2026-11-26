@@ -898,6 +898,10 @@ const removedOf = (machine: KnownMachine) => {
   return returned;
 };
 
+// WARNING: a roster reply read before a Machine was removed arrives after it.
+export const staleRouted = (item: FlockItem, dropped: (profile: string) => boolean) =>
+  "machine" in item && "_tag" in item && item._tag === "Routed" && dropped(item.machine.profile);
+
 interface RosterRound {
   readonly failures: number;
   readonly shown: ReadonlyArray<KnownMachine>;
@@ -943,17 +947,20 @@ export const rosterFollowed = <D extends BoardSource>(
           continue;
         }
         const route = yield* open(machine);
-        if (Arr.contains((yield* routed).dropped, machine.id)) {
-          continue;
-        }
         items.push({ _tag: "Routed", machine: route.machine });
       }
+      // WARNING: a removal can land while the rest of this reply opens, so every Routed is checked once more.
+      const held = yield* routed;
+      const kept = Arr.filter(
+        items,
+        (item) => !staleRouted(item, (profile) => Arr.contains(held.dropped, profile)),
+      );
       const next: RosterRound = {
         failures: 0,
         shown: [],
         wait: Duration.fromInputUnsafe(ROSTER_EVERY),
       };
-      return { items, next };
+      return { items: kept, next };
     });
   const start: RosterRound = { failures: 0, shown: [], wait: Duration.zero };
   return Stream.paginate(start, (state) =>
