@@ -127,6 +127,7 @@ import {
   forgetMachine,
   localRoute,
   linkRoute,
+  openedOnce,
   pairedMachines,
   remoteRoute,
   rosterFollowed,
@@ -406,6 +407,7 @@ const main = Effect.gen(function* () {
   // WARNING: a Machine a human removed is not routed again from a list read before the removal.
   const dropped = new Set<string>();
   const opening = new Map<string, Deferred.Deferred<ShellRoute>>();
+  const once = openedOnce(opening);
   const openRoute = (machine: HerdrMachine) =>
     Effect.gen(function* () {
       const scope = yield* Scope.make();
@@ -437,26 +439,12 @@ const main = Effect.gen(function* () {
       yield* PubSub.publish(changes, { _tag: "Add", route });
       return route;
     });
-  const open = (machine: HerdrMachine) =>
-    Effect.gen(function* () {
-      const held = routes.get(machine.id);
-      if (held !== undefined) {
-        return held.route;
-      }
-      const starting = opening.get(machine.id);
-      if (starting !== undefined) {
-        return yield* Deferred.await(starting);
-      }
-      const mine = yield* Deferred.make<ShellRoute>();
-      opening.set(machine.id, mine);
-      return yield* openRoute(machine).pipe(
-        Effect.onExit((exit) =>
-          Effect.sync(() => opening.delete(machine.id)).pipe(
-            Effect.andThen(Deferred.done(mine, exit)),
-          ),
-        ),
-      );
-    });
+  const open = (machine: HerdrMachine) => {
+    const held = routes.get(machine.id);
+    return held !== undefined
+      ? Effect.succeed(held.route)
+      : once(machine.id, () => openRoute(machine));
+  };
   const roster = rosterOf(collie).pipe(Effect.map((said) => said.roster));
   yield* Effect.addFinalizer(() =>
     Effect.forEach(

@@ -853,6 +853,26 @@ export interface Routed {
   readonly dropped: ReadonlyArray<string>;
 }
 
+// WARNING: the lookup and the reservation are one synchronous step, or two callers both open the thing.
+export const openedOnce =
+  <A, E>(opening: Map<string, Deferred.Deferred<A, E>>) =>
+  <R>(key: string, start: () => Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+    Effect.suspend(() => {
+      const found = opening.get(key);
+      if (found !== undefined) {
+        return Deferred.await(found);
+      }
+      const mine = Deferred.makeUnsafe<A, E>();
+      opening.set(key, mine);
+      return start().pipe(
+        Effect.onExit((exit) =>
+          Effect.sync(() => void opening.delete(key)).pipe(
+            Effect.andThen(Deferred.done(mine, exit)),
+          ),
+        ),
+      );
+    });
+
 const ROSTER_EVERY = "15 seconds";
 
 const placeholderOf = (name: string) => {
