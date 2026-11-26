@@ -15,6 +15,7 @@ import {
   Struct,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as PlatformError from "effect/PlatformError";
 import { TestClock } from "effect/testing";
 import { SUPERVISE, supervise } from "../src/check-supervisor";
@@ -41,10 +42,10 @@ import {
 import { collect, finishCheck, readVerifications, startCheck } from "../src/verify";
 import type { Verification } from "../src/verify";
 import { RUNNING_CHECK, RunRecords } from "../src/run-records";
-import type { RunRecordsApi } from "../src/run-records";
 import { runEffect } from "./support/effect";
 import { exec, startDetached } from "./support/command";
 import { until } from "./support/host";
+import { recordsAt } from "./support/records";
 
 const held = new URL("./fixtures/checks/held.sh", import.meta.url).pathname;
 const leaves = new URL("./fixtures/checks/leaves.sh", import.meta.url).pathname;
@@ -127,30 +128,26 @@ test.skipIf(process.platform !== "linux")(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const real = yield* RunRecords;
-        const failing: RunRecordsApi = {
-          ...real,
-          setControl: (control, run, data, key) =>
-            data === null
-              ? Effect.die(new Error("the store could not be written"))
-              : real.setControl(control, run, data, key),
-        };
-        const { notes, checks } = yield* worldWith().pipe(
-          Effect.provideService(RunRecords, failing),
-        );
-        const running = yield* Effect.forkScoped(
-          Effect.scoped(
-            checks
-              .run(check, { executable: held, argv: [notes], cwd: notes })
-              .pipe(Effect.flatMap((one) => one.exit)),
-          ),
-        );
-        const ones = yield* startedIn(notes);
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-check-processes-store-" });
+        yield* Effect.gen(function* () {
+          const { notes, checks } = yield* worldWith();
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`CREATE TRIGGER refusal BEFORE DELETE ON collie_controls BEGIN SELECT RAISE(ABORT, 'refused'); END`;
+          const running = yield* Effect.forkScoped(
+            Effect.scoped(
+              checks
+                .run(check, { executable: held, argv: [notes], cwd: notes })
+                .pipe(Effect.flatMap((one) => one.exit)),
+            ),
+          );
+          const ones = yield* startedIn(notes);
 
-        yield* Fiber.interrupt(running);
-        expect(yield* noneRunning(ones)).toBe(true);
-        expect(yield* checks.collecting).toEqual([]);
-        expect(yield* recorded).not.toEqual([]);
+          yield* Fiber.interrupt(running);
+          expect(yield* noneRunning(ones)).toBe(true);
+          expect(yield* checks.collecting).toEqual([]);
+          expect(yield* recorded).not.toEqual([]);
+        }).pipe(Effect.provide(recordsAt(dir)));
       }),
     ),
 );
