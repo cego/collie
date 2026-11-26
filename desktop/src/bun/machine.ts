@@ -854,9 +854,11 @@ export interface Routed {
 }
 
 // WARNING: the lookup and the reservation are one synchronous step, or two callers both open the thing.
-export const openedOnce =
-  <A, E>(opening: Map<string, Deferred.Deferred<A, E>>) =>
-  <R>(key: string, start: () => Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+export const openedOnce = <A, E>(opening: Map<string, Deferred.Deferred<A, E>>) => {
+  const returned: <R>(
+    key: string,
+    start: () => Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E, R> = (key, start) =>
     Effect.suspend(() => {
       const found = opening.get(key);
       if (found !== undefined) {
@@ -872,6 +874,8 @@ export const openedOnce =
         ),
       );
     });
+  return returned;
+};
 
 const ROSTER_EVERY = "15 seconds";
 
@@ -949,7 +953,6 @@ export const rosterFollowed = <D extends BoardSource>(
         const route = yield* open(machine);
         items.push({ _tag: "Routed", machine: route.machine });
       }
-      // WARNING: a removal can land while the rest of this reply opens, so every Routed is checked once more.
       const held = yield* routed;
       const kept = Arr.filter(
         items,

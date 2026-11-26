@@ -216,31 +216,27 @@ test("a roster read that core takes but never answers is reported as unread, not
     ),
   ));
 
-test(
-  "a roster deadline that would never expire is refused rather than waited on",
-  () =>
-    runEffect(
-      twoMachines(
-        "collie-core-endless-",
-        (first, second) =>
-          Effect.gen(function* () {
-            yield* first.lists([second]);
-            const release = first.core.hold("machine.list");
-            const unread = yield* first
-              .cli(["machine", "list"], { COLLIE_ROSTER_READ_WITHIN: "Infinity" })
-              .pipe(Effect.ensuring(Effect.sync(release)));
+test("a roster deadline that would never expire is refused rather than waited on", () =>
+  runEffect(
+    twoMachines(
+      "collie-core-endless-",
+      (first, second) =>
+        Effect.gen(function* () {
+          yield* first.lists([second]);
+          const release = first.core.hold("machine.list");
+          const unread = yield* first
+            .cli(["machine", "list"], { COLLIE_ROSTER_READ_WITHIN: "Infinity" })
+            .pipe(Effect.ensuring(Effect.sync(release)));
 
-            expect(unread.envelope.ok).toBe(true);
-            expect(unread.envelope.data).toMatchObject({
-              roster: null,
-              rosterFailure: expect.stringContaining("COLLIE_ROSTER_READ_WITHIN is Infinity"),
-            });
-          }),
-        ["attended.workflow.ts"],
-      ),
+          expect(unread.envelope.ok).toBe(true);
+          expect(unread.envelope.data).toMatchObject({
+            roster: null,
+            rosterFailure: expect.stringContaining("COLLIE_ROSTER_READ_WITHIN is Infinity"),
+          });
+        }),
+      ["attended.workflow.ts"],
     ),
-  5_000,
-);
+  ));
 
 test("a paired Machine core does not have is listed as not added, keeps its pairing, and connect adds it", () =>
   runEffect(

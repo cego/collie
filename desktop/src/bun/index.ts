@@ -1058,7 +1058,6 @@ const main = Effect.gen(function* () {
                     readDoors,
                   ).pipe(Stream.tap(doctorOnceLive), Stream.tap(syncOnceLive)),
                   Stream.fromSubscription(told).pipe(
-                    // WARNING: a reply read before a removal would put that Machine's row back with no route behind it.
                     Stream.filter((item) => !staleRouted(item, (profile) => dropped.has(profile))),
                   ),
                 ],
