@@ -466,13 +466,19 @@ export const collieSaid = (collie: ReadonlyArray<string>, args: ReadonlyArray<st
 
 const Roster = Schema.Struct({
   backend: Schema.Literal("core"),
-  roster: Schema.Array(HerdrMachine),
+  roster: Schema.NullOr(Schema.Array(HerdrMachine)),
+  rosterFailure: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 
 export const rosterOf = (collie: ReadonlyArray<string>) =>
   collieSaid(collie, ["machine", "list"]).pipe(
     Effect.flatMap((data) =>
       Schema.decodeUnknownEffect(Roster)(data).pipe(Effect.mapError((e) => e.message)),
+    ),
+    Effect.flatMap(({ roster, rosterFailure }) =>
+      roster === null
+        ? Effect.fail(rosterFailure ?? "core's machine list could not be read")
+        : Effect.succeed({ backend: "core" as const, roster }),
     ),
   );
 
@@ -842,6 +848,136 @@ const upgradeTo = (route: Route<BoardSource>, version: string) =>
     ),
   );
 
+export interface Routed {
+  readonly profiles: ReadonlyArray<string>;
+  readonly dropped: ReadonlyArray<string>;
+}
+
+// WARNING: the lookup and the reservation are one synchronous step, or two callers both open the thing.
+export const openedOnce = <A, E>(opening: Map<string, Deferred.Deferred<A, E>>) => {
+  const returned: <R>(
+    key: string,
+    held: () => A | undefined,
+    start: () => Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E, R> = (key, held, start) =>
+    Effect.suspend(() => {
+      const already = held();
+      if (already !== undefined) {
+        return Effect.succeed(already);
+      }
+      const found = opening.get(key);
+      if (found !== undefined) {
+        return Deferred.await(found);
+      }
+      const mine = Deferred.makeUnsafe<A, E>();
+      opening.set(key, mine);
+      return start().pipe(
+        Effect.onExit((exit) =>
+          Effect.sync(() => void opening.delete(key)).pipe(
+            Effect.andThen(Deferred.done(mine, exit)),
+          ),
+        ),
+      );
+    });
+  return returned;
+};
+
+const ROSTER_EVERY = "15 seconds";
+
+const placeholderOf = (name: string) => {
+  const returned: KnownMachine = { profile: `paired:${name}`, name, route: "link" };
+  return returned;
+};
+
+const absent = (wanted: ReadonlyArray<KnownMachine>, before: ReadonlyArray<KnownMachine>) =>
+  Arr.filter(before, (machine) => !Arr.some(wanted, (one) => one.profile === machine.profile));
+
+const routedOf = (machine: KnownMachine) => {
+  const returned: FlockItem = { _tag: "Routed", machine };
+  return returned;
+};
+
+const lostOf = (machine: KnownMachine, reason: string, at: number) => {
+  const returned: FlockItem = { _tag: "Lost", machine, state: "unreachable", reason, at };
+  return returned;
+};
+
+const removedOf = (machine: KnownMachine) => {
+  const returned: FlockItem = { _tag: "Removed", machine };
+  return returned;
+};
+
+export const staleRouted = (item: FlockItem, dropped: (profile: string) => boolean) =>
+  "machine" in item && "_tag" in item && item._tag === "Routed" && dropped(item.machine.profile);
+
+interface RosterRound {
+  readonly failures: number;
+  readonly shown: ReadonlyArray<KnownMachine>;
+  readonly wait: Duration.Duration;
+}
+
+export const rosterFollowed = <D extends BoardSource>(
+  roster: Effect.Effect<ReadonlyArray<HerdrMachine>, string>,
+  routed: Effect.Effect<Routed, never>,
+  paired: Effect.Effect<ReadonlyArray<string>, never>,
+  open: (machine: HerdrMachine) => Effect.Effect<Route<D>, never>,
+) => {
+  const unknown = (held: Routed, id: string) =>
+    !Arr.contains(held.profiles, id) && !Arr.contains(held.dropped, id);
+  const round = ({ failures, shown }: RosterRound) =>
+    Effect.gen(function* () {
+      const read = yield* roster.pipe(Effect.result);
+      if (Result.isFailure(read)) {
+        const names = yield* paired;
+        // WARNING: read after the waits above, since a removal can land while they are out.
+        const held = yield* routed;
+        const placeholders = Arr.map(
+          Arr.filter(names, (id) => unknown(held, id)),
+          placeholderOf,
+        );
+        const at = yield* Clock.currentTimeMillis;
+        const items: ReadonlyArray<FlockItem> = [
+          ...Arr.map(placeholders, routedOf),
+          ...Arr.map(placeholders, (machine) => lostOf(machine, read.failure, at)),
+          ...Arr.map(absent(placeholders, shown), removedOf),
+        ];
+        const next: RosterRound = {
+          failures: failures + 1,
+          shown: placeholders,
+          wait: Duration.millis(backoff(failures)),
+        };
+        return { items, next };
+      }
+      const items: Array<FlockItem> = Arr.map(shown, removedOf);
+      for (const machine of read.success) {
+        const before = yield* routed;
+        if (!unknown(before, machine.id)) {
+          continue;
+        }
+        const route = yield* open(machine);
+        items.push({ _tag: "Routed", machine: route.machine });
+      }
+      const held = yield* routed;
+      const kept = Arr.filter(
+        items,
+        (item) => !staleRouted(item, (profile) => Arr.contains(held.dropped, profile)),
+      );
+      const next: RosterRound = {
+        failures: 0,
+        shown: [],
+        wait: Duration.fromInputUnsafe(ROSTER_EVERY),
+      };
+      return { items: kept, next };
+    });
+  const start: RosterRound = { failures: 0, shown: [], wait: Duration.zero };
+  return Stream.paginate(start, (state) =>
+    Effect.andThen(
+      Effect.sleep(state.wait),
+      round(state).pipe(Effect.map(({ items, next }) => [items, Option.some(next)] as const)),
+    ),
+  );
+};
+
 export type RouteChange<D extends BoardSource = Doors> =
   | { readonly _tag: "Add"; readonly route: Route<D> }
   | {
@@ -1165,12 +1301,7 @@ export const flockStream = <D extends BoardSource>(
           );
         });
       const removedAt = (place: number) => places.get(routeAt[place]!.machine.profile) !== place;
-      const changed = (change: RouteChange<D>) => {
-        if (change._tag === "Add") {
-          return places.has(change.route.machine.profile)
-            ? Stream.empty
-            : Stream.unwrap(added(change.route));
-        }
+      const moved = (change: Exclude<RouteChange<D>, { readonly _tag: "Add" }>) => {
         const at = places.get(change.profile);
         if (change._tag === "Wake") {
           return at === undefined
@@ -1244,13 +1375,21 @@ export const flockStream = <D extends BoardSource>(
         );
         return removal.pipe(Stream.concat(again));
       };
+      const changed = (change: RouteChange<D>) =>
+        change._tag === "Add"
+          ? places.has(change.route.machine.profile)
+            ? Effect.succeed(Stream.empty)
+            : added(change.route)
+          : Effect.sync(() => moved(change));
       return Stream.fromIterable(routes).pipe(
         Stream.map((route) => {
           const returned: RouteChange<D> = { _tag: "Add", route };
           return returned;
         }),
         Stream.concat(changes),
-        Stream.flatMap(changed, { concurrency: "unbounded" }),
+        // WARNING: one change at a time, so a queued Add has claimed its place before a later Remove looks for it.
+        Stream.mapEffect(changed, { concurrency: 1 }),
+        Stream.flatten({ concurrency: "unbounded" }),
       );
     }),
   );
