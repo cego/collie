@@ -29,7 +29,7 @@ import { redactedField, withNotice } from "../redact";
 import type { PlatformServices } from "../platform";
 import { Argument, Command, Flag } from "effect/cli";
 import { err } from "../operations";
-import type { Failure } from "../operations";
+import type { Failure, OpResult } from "../operations";
 import { GIVEN, INFERRED } from "../engine";
 import { textOf } from "../runs";
 import { DEFAULT_LIMIT, LIST_STATES, listAsked, outputSummary } from "../run-list";
@@ -100,8 +100,17 @@ import { latest, statusLine } from "../disposition";
 import { replyLine } from "../replies";
 import { epochMs } from "../time";
 import type { PluginEnv } from "../env";
-import { attempt, guarded, mutation, ResultBoundary, printResult, say } from "../envelope";
-import type { CollieError, Result } from "../envelope";
+import {
+  attempt,
+  guarded,
+  mutation,
+  printResult,
+  requestId as requested,
+  ResultBoundary,
+  say,
+  withRequestId,
+} from "../envelope";
+import type { Call, CollieError, Result } from "../envelope";
 import {
   PrettyUnknownJson,
   UnknownJson,
@@ -113,6 +122,7 @@ import {
   runFacts,
   runScope,
   requestIdFlag,
+  resolvedAt,
   runIdArg,
   root,
   selected,
@@ -121,6 +131,16 @@ import {
 import type { Global } from "./shared";
 import { outOfReach, readRunLines } from "../run-read";
 import { DEFAULT_LINES } from "../text-lines";
+
+const inputPairs = (pairs: ReadonlyArray<string>) =>
+  Rec.fromEntries(
+    Arr.flatMap(pairs, (pair) => {
+      const at = Option.getOrElse(pipe_(pair, Str.indexOf("=")), () => -1);
+      return at === -1
+        ? []
+        : [[pipe_(pair, Str.slice(0, at)), pipe_(pair, Str.slice(at + 1))] as const];
+    }),
+  );
 
 // WARNING: paired by position; a repeated flag arrives as its own list, so order between lists is lost.
 function namedConstraints(texts: ReadonlyArray<string>, severities: ReadonlyArray<string>) {
@@ -180,9 +200,9 @@ const attachFlag = Flag.String("attach").pipe(
   Flag.atLeast(0),
 );
 
-const absolute = (files: ReadonlyArray<string>) =>
+const absolute = (env: PluginEnv, files: ReadonlyArray<string>) =>
   Effect.map(Path.Path, (path) =>
-    files.length === 0 ? undefined : Arr.map(files, (file) => path.resolve(file)),
+    files.length === 0 ? undefined : Arr.map(files, (file) => path.resolve(env.cwd, file)),
   );
 
 const runStart = Command.make(
@@ -273,100 +293,126 @@ const runStart = Command.make(
       const global = yield* root;
       yield* attempt(
         Effect.gen(function* () {
+          const id = yield* requested(request);
+          const withId = (failure: OpResult) => withRequestId(failure, id);
           const base = yield* context(global, false);
           if (base._tag === "ContextFailure") {
-            return base.result;
+            return withId(base.result);
+          }
+          const resolved = yield* context(global, (yield* selected(global)) !== null);
+          if (resolved._tag === "ContextFailure") {
+            return withId(resolved.result);
           }
           const explicit = yield* parseInput(input, inputsJson);
           if (!explicit.ok) {
-            return explicit.error;
+            return withId(explicit.error);
           }
           const named = namedConstraints(constraint, severity);
           if (named.error !== null) {
-            return err("invalid_input", named.error);
+            return withId(err("invalid_input", named.error));
           }
           const given = givenVerifications(verify);
           if (!given.ok) {
-            return err("invalid_input", given.error);
+            return withId(err("invalid_input", given.error));
           }
-          return yield* mutation(base.env, "run-start", request, (requestId) =>
-            Effect.gen(function* () {
-              // WARNING: resolved inside the mutation so a replayed request returns its recorded result whether or not the workspace is still open.
-              const resolved = yield* context(global, (yield* selected(global)) !== null);
-              if (resolved._tag === "ContextFailure") {
-                return resolved.result;
-              }
-              // WARNING: inference is task-local, so a continuation sees its own Task's plans and a fresh start sees only the Runs recorded before Tasks.
-              const task = yield* chosenTask(resolved.env, taskId);
-              if (!task.ok) {
-                return task.error;
-              }
-              const saved =
-                resolved.env.machine === undefined
-                  ? yield* moduleFor(resolved.env, workflow)
-                  : { id: workflow };
-              if (saved !== null) {
-                const unsupported = unsupportedDecide(decide);
-                if (unsupported !== null) {
-                  return unsupported;
+          return yield* mutation(
+            base.env,
+            {
+              operation: "run-start",
+              run: null,
+              destination: "cwd",
+              at: resolvedAt(resolved),
+              files: attach,
+              args: {
+                workflow,
+                input: { json: explicit.given.json, text: explicit.given.text },
+                decide: [...decide],
+                task: Option.getOrNull(taskId),
+                title: Option.getOrNull(title),
+                goal: Option.getOrNull(goal),
+                constraints: named.constraints,
+                verify: given.specs,
+                harness: Option.getOrNull(harness),
+                model: Option.getOrNull(model),
+                effort: Option.getOrNull(effort),
+              },
+            },
+            Option.some(id),
+            (requestId) =>
+              Effect.gen(function* () {
+                // WARNING: inference is task-local, so a continuation sees its own Task's plans and a fresh start sees only the Runs recorded before Tasks.
+                const task = yield* chosenTask(resolved.env, taskId);
+                if (!task.ok) {
+                  return task.error;
                 }
-                // WARNING: the host's own options are kept apart from the author's payload, so a module's input never gets host values.
-                const launch = hostOptions(explicit.given);
-                const agent = Arr.flatMap(
-                  Rec.toEntries({ harness, model, effort }),
-                  ([name, value]) => (Option.isSome(value) ? [[name, value.value] as const] : []),
-                );
-                if ("inputs" in saved) {
-                  const needed = yield* agentStartRefusal(resolved.env, saved, launch.input, {
-                    named: yield* namedCheckout(resolved.env, launch.options.workspace ?? ""),
-                    fix: CLI_CHECKOUT_FIX,
-                  });
-                  if (needed !== null) {
-                    return needed;
+                const saved =
+                  resolved.env.machine === undefined
+                    ? yield* moduleFor(resolved.env, workflow)
+                    : { id: workflow };
+                if (saved !== null) {
+                  const unsupported = unsupportedDecide(decide);
+                  if (unsupported !== null) {
+                    return unsupported;
                   }
+                  // WARNING: the host's own options are kept apart from the author's payload, so a module's input never gets host values.
+                  const launch = hostOptions(explicit.given);
+                  const agent = Arr.flatMap(
+                    Rec.toEntries({ harness, model, effort }),
+                    ([name, value]) => (Option.isSome(value) ? [[name, value.value] as const] : []),
+                  );
+                  if ("inputs" in saved) {
+                    const needed = yield* agentStartRefusal(resolved.env, saved, launch.input, {
+                      named: yield* namedCheckout(resolved.env, launch.options.workspace ?? ""),
+                      fix: CLI_CHECKOUT_FIX,
+                    });
+                    if (needed !== null) {
+                      return needed;
+                    }
+                  }
+                  const started = yield* startRun(resolved.env, {
+                    door: yield* cliDoor(resolved.env),
+                    id: workflow,
+                    request: requestId,
+                    input: launch.input,
+                    options: { ...launch.options, ...Rec.fromEntries(agent) },
+                    task: task.choice,
+                    intent: Option.isSome(goal)
+                      ? { goal: goal.value, constraints: named.constraints }
+                      : { constraints: named.constraints },
+                    title: Option.getOrUndefined(title),
+                    verify: given.specs.length > 0 ? given.specs : undefined,
+                    attachments: yield* absolute(base.env, attach),
+                  });
+                  if (!started.ok) {
+                    return started;
+                  }
+                  const data = {
+                    runId: started.runId,
+                    workflow,
+                    registration: started.registration,
+                    fresh: started.fresh,
+                    ...redactedField(started.redacted),
+                  };
+                  return {
+                    ok: true,
+                    data:
+                      started.followed === undefined
+                        ? data
+                        : { ...data, followed: started.followed },
+                    human: withNotice(
+                      started.followed === undefined
+                        ? `Started run ${started.runId}.`
+                        : `Run ${started.runId} already follows ${started.followed}.`,
+                      started.redacted,
+                    ),
+                  };
                 }
-                const started = yield* startRun(resolved.env, {
-                  door: yield* cliDoor(resolved.env),
-                  id: workflow,
-                  request: requestId,
-                  input: launch.input,
-                  options: { ...launch.options, ...Rec.fromEntries(agent) },
-                  task: task.choice,
-                  intent: Option.isSome(goal)
-                    ? { goal: goal.value, constraints: named.constraints }
-                    : { constraints: named.constraints },
-                  title: Option.getOrUndefined(title),
-                  verify: given.specs.length > 0 ? given.specs : undefined,
-                  attachments: yield* absolute(attach),
-                });
-                if (!started.ok) {
-                  return started;
-                }
-                const data = {
-                  runId: started.runId,
-                  workflow,
-                  registration: started.registration,
-                  fresh: started.fresh,
-                  ...redactedField(started.redacted),
-                };
-                return {
-                  ok: true,
-                  data:
-                    started.followed === undefined ? data : { ...data, followed: started.followed },
-                  human: withNotice(
-                    started.followed === undefined
-                      ? `Started run ${started.runId}.`
-                      : `Run ${started.runId} already follows ${started.followed}.`,
-                    started.redacted,
-                  ),
-                };
-              }
-              return err(
-                "workflow_not_found",
-                `No workflow module is saved as "${workflow}". \`collie workflow list\` is what this installation has, and \`collie workflow create ${workflow}\` starts one.`,
-                { workflow },
-              );
-            }),
+                return err(
+                  "workflow_not_found",
+                  `No workflow module is saved as "${workflow}". \`collie workflow list\` is what this installation has, and \`collie workflow create ${workflow}\` starts one.`,
+                  { workflow },
+                );
+              }),
           );
         }),
         global.json,
@@ -1338,8 +1384,7 @@ const everyWaited = <E, R>(waits: ReadonlyArray<Effect.Effect<Result | null, E, 
   );
 
 function runMutationCommand(
-  operation: string,
-  runId: string,
+  call: Call,
   requestId: Option.Option<string>,
   hosted: (env: PluginEnv, id: string) => Effect.Effect<Result, CollieError, PlatformServices>,
 ) {
@@ -1351,9 +1396,7 @@ function runMutationCommand(
         if (resolved._tag === "ContextFailure") {
           return resolved.result;
         }
-        return yield* mutation(resolved.env, operation, requestId, (id) =>
-          hosted(resolved.env, id),
-        );
+        return yield* mutation(resolved.env, call, requestId, (id) => hosted(resolved.env, id));
       }),
       global.json,
     );
@@ -1376,16 +1419,27 @@ const runAnswer = Command.make(
     requestId: requestIdFlag,
   },
   ({ runId, answer, decision, requestId }) =>
-    runMutationCommand("run-answer", runId, requestId, (env, id) =>
-      Effect.flatMap(cliDoor(env), (door) =>
-        answerRun(env, {
-          door,
+    runMutationCommand(
+      {
+        operation: "run-answer",
+        run: runId,
+        args: {
           runId,
+          answer,
           decision: Option.getOrNull(decision),
-          value: answer,
-          request: id,
-        }),
-      ),
+        },
+      },
+      requestId,
+      (env, id) =>
+        Effect.flatMap(cliDoor(env), (door) =>
+          answerRun(env, {
+            door,
+            runId,
+            decision: Option.getOrNull(decision),
+            value: answer,
+            request: id,
+          }),
+        ),
     ),
 ).pipe(Command.withDescription("Answer the Choice or the decision a waiting Run is asking"));
 
@@ -1420,18 +1474,33 @@ const runSteer = Command.make(
             return resolved.result;
           }
           const door = yield* cliDoor(resolved.env);
-          const attachments = yield* absolute(attach);
-          return yield* mutation(resolved.env, "run-steer", requestId, (id) =>
-            steerRun(resolved.env, {
-              runId,
-              text,
-              request: id,
-              to: Option.getOrUndefined(to),
-              operation: Option.getOrNull(operation) ?? undefined,
-              step: Option.getOrUndefined(step),
-              attachments,
-              door,
-            }),
+          const attachments = yield* absolute(resolved.env, attach);
+          return yield* mutation(
+            resolved.env,
+            {
+              operation: "run-steer",
+              run: runId,
+              files: attach,
+              args: {
+                runId,
+                text,
+                to: Option.getOrNull(to),
+                operation: Option.getOrNull(operation),
+                step: Option.getOrNull(step),
+              },
+            },
+            requestId,
+            (id) =>
+              steerRun(resolved.env, {
+                runId,
+                text,
+                request: id,
+                to: Option.getOrUndefined(to),
+                operation: Option.getOrNull(operation) ?? undefined,
+                step: Option.getOrUndefined(step),
+                attachments,
+                door,
+              }),
           );
         }),
         global.json,
@@ -1460,19 +1529,33 @@ const runPublish = Command.make(
     requestId: requestIdFlag,
   },
   ({ runId, title, file, onto, pushOnly, skipCi, requestId }) =>
-    runMutationCommand("run-publish", runId, requestId, (env, request) =>
-      Effect.flatMap(cliDoor(env), (door) =>
-        publishRun(env, {
-          door,
+    runMutationCommand(
+      {
+        operation: "run-publish",
+        run: runId,
+        args: {
           runId,
           title,
           file,
-          onto: Option.getOrUndefined(onto),
+          onto: Option.getOrNull(onto),
           pushOnly,
           skipCi,
-          request,
-        }),
-      ),
+        },
+      },
+      requestId,
+      (env, request) =>
+        Effect.flatMap(cliDoor(env), (door) =>
+          publishRun(env, {
+            door,
+            runId,
+            title,
+            file,
+            onto: Option.getOrUndefined(onto),
+            pushOnly,
+            skipCi,
+            request,
+          }),
+        ),
     ),
 ).pipe(
   Command.withDescription(
@@ -1488,13 +1571,18 @@ const runWithdrawNote = Command.make(
     requestId: requestIdFlag,
   },
   ({ runId, note, requestId }) =>
-    runMutationCommand("withdraw-note", runId, requestId, (env, request) =>
-      Effect.flatMap(cliDoor(env), (door) => withdrawNoteRun(env, { runId, note, request, door })),
+    runMutationCommand(
+      { operation: "withdraw-note", run: runId, args: { runId, note } },
+      requestId,
+      (env, request) =>
+        Effect.flatMap(cliDoor(env), (door) =>
+          withdrawNoteRun(env, { runId, note, request, door }),
+        ),
     ),
 );
 
 const runStop = Command.make("stop", mutationFlags, ({ runId, requestId }) =>
-  runMutationCommand("run-stop", runId, requestId, (env, id) =>
+  runMutationCommand({ operation: "run-stop", run: runId, args: { runId } }, requestId, (env, id) =>
     Effect.flatMap(cliDoor(env), (door) =>
       controlRun(env, { door, runId, control: "stop", set: true, request: id }),
     ),
@@ -1571,8 +1659,11 @@ const runHold = Command.make(
             if (Option.isSome(before)) {
               return err("invalid_input", "--before names one Run's Step; give its Run id");
             }
-            return yield* mutation(resolved.env, "run-hold-task", requestId, (request) =>
-              holdTask(resolved.env, where, request, why),
+            return yield* mutation(
+              resolved.env,
+              { operation: "run-hold-task", run: null, args: { task: where, reason: why ?? null } },
+              requestId,
+              (request) => holdTask(resolved.env, where, request, why),
             );
           }
           if (id === null) {
@@ -1581,21 +1672,33 @@ const runHold = Command.make(
               "`run hold` takes a Run's id, or `--task <id>` for every Run of one.",
             );
           }
-          return yield* mutation(resolved.env, "run-hold", requestId, (request) =>
-            Effect.gen(function* () {
-              if (!(yield* anyRuns(resolved.env))) {
-                return err("run_not_found", `Run "${id}" was not found.`, { run: id });
-              }
-              return yield* controlRun(resolved.env, {
-                door: yield* cliDoor(resolved.env),
-                request,
+          return yield* mutation(
+            resolved.env,
+            {
+              operation: "run-hold",
+              run: id,
+              args: {
                 runId: id,
-                control: "hold",
-                set: true,
-                reason: why,
-                before: Option.getOrUndefined(before),
-              });
-            }),
+                reason: why ?? null,
+                before: Option.getOrNull(before),
+              },
+            },
+            requestId,
+            (request) =>
+              Effect.gen(function* () {
+                if (!(yield* anyRuns(resolved.env))) {
+                  return err("run_not_found", `Run "${id}" was not found.`, { run: id });
+                }
+                return yield* controlRun(resolved.env, {
+                  door: yield* cliDoor(resolved.env),
+                  request,
+                  runId: id,
+                  control: "hold",
+                  set: true,
+                  reason: why,
+                  before: Option.getOrUndefined(before),
+                });
+              }),
           );
         }),
         global.json,
@@ -1609,17 +1712,24 @@ const runRelease = Command.make(
   "release",
   { runId: runIdArg, requestId: requestIdFlag, before: Flag.String("before").pipe(Flag.optional) },
   ({ runId, requestId, before }) =>
-    runMutationCommand("run-release", runId, requestId, (env, id) =>
-      Effect.flatMap(cliDoor(env), (door) =>
-        controlRun(env, {
-          door,
-          runId,
-          control: "hold",
-          set: false,
-          request: id,
-          before: Option.getOrUndefined(before),
-        }),
-      ),
+    runMutationCommand(
+      {
+        operation: "run-release",
+        run: runId,
+        args: { runId, before: Option.getOrNull(before) },
+      },
+      requestId,
+      (env, id) =>
+        Effect.flatMap(cliDoor(env), (door) =>
+          controlRun(env, {
+            door,
+            runId,
+            control: "hold",
+            set: false,
+            request: id,
+            before: Option.getOrUndefined(before),
+          }),
+        ),
     ),
 ).pipe(Command.withDescription("Let a held Run carry on"));
 
@@ -1633,19 +1743,22 @@ const runClearOverride = Command.make(
     requestId: requestIdFlag,
   },
   ({ runId, agent, requestId }) =>
-    runMutationCommand("run-clear-override", runId, requestId, (env, id) =>
-      Effect.gen(function* () {
-        const result = yield* asksRun(
-          env,
-          runId,
-          (client) => client.clearOverride({ runId, agent, request: id }),
-          yield* cliDoor(env),
-        );
-        if (!result.ok) {
-          return result;
-        }
-        return yield* Schema.decodeUnknownEffect(ResultBoundary)(result.value).pipe(Effect.orDie);
-      }),
+    runMutationCommand(
+      { operation: "run-clear-override", run: runId, args: { runId, agent } },
+      requestId,
+      (env, id) =>
+        Effect.gen(function* () {
+          const result = yield* asksRun(
+            env,
+            runId,
+            (client) => client.clearOverride({ runId, agent, request: id }),
+            yield* cliDoor(env),
+          );
+          if (!result.ok) {
+            return result;
+          }
+          return yield* Schema.decodeUnknownEffect(ResultBoundary)(result.value).pipe(Effect.orDie);
+        }),
     ),
 ).pipe(
   Command.withDescription("Let Collie correct an agent again after someone typed into its pane"),
@@ -1697,25 +1810,33 @@ const runDisposition = Command.make(
               human: statusLine(status, latest(lines)),
             };
           }
-          return yield* mutation(resolved.env, "run-disposition", requestId, (id) =>
-            Effect.gen(function* () {
-              const done = yield* disposeRun(resolved.env, {
-                door: yield* cliDoor(resolved.env),
-                runId: facts.id,
-                kind,
-                ref,
-                note: Option.getOrNull(note),
-                request: id,
-              });
-              if (!done.ok) {
-                return done;
-              }
-              return {
-                ok: true,
-                data: { run: facts.id, status, disposition: done.value },
-                human: statusLine(status, done.value),
-              };
-            }),
+          return yield* mutation(
+            resolved.env,
+            {
+              operation: "run-disposition",
+              run: facts.id,
+              args: { runId: facts.id, as: kind, ref, note: Option.getOrNull(note) },
+            },
+            requestId,
+            (id) =>
+              Effect.gen(function* () {
+                const done = yield* disposeRun(resolved.env, {
+                  door: yield* cliDoor(resolved.env),
+                  runId: facts.id,
+                  kind,
+                  ref,
+                  note: Option.getOrNull(note),
+                  request: id,
+                });
+                if (!done.ok) {
+                  return done;
+                }
+                return {
+                  ok: true,
+                  data: { run: facts.id, status, disposition: done.value },
+                  human: statusLine(status, done.value),
+                };
+              }),
           );
         }),
         global.json,
@@ -1838,22 +1959,26 @@ const runSeen = Command.make(
             return resolved.result;
           }
           const facts = runFacts(resolved);
-          return yield* mutation(resolved.env, "run-seen", requestId, (id) =>
-            Effect.gen(function* () {
-              const done = yield* seeRun(resolved.env, {
-                door: yield* cliDoor(resolved.env),
-                runId: facts.id,
-                request: id,
-              });
-              if (!done.ok) {
-                return done;
-              }
-              return {
-                ok: true,
-                data: { run: facts.id, seen: done.value },
-                human: `${facts.id} seen by ${done.value.by} at ${done.value.at}`,
-              };
-            }),
+          return yield* mutation(
+            resolved.env,
+            { operation: "run-seen", run: facts.id, args: { runId: facts.id } },
+            requestId,
+            (id) =>
+              Effect.gen(function* () {
+                const done = yield* seeRun(resolved.env, {
+                  door: yield* cliDoor(resolved.env),
+                  runId: facts.id,
+                  request: id,
+                });
+                if (!done.ok) {
+                  return done;
+                }
+                return {
+                  ok: true,
+                  data: { run: facts.id, seen: done.value },
+                  human: `${facts.id} seen by ${done.value.by} at ${done.value.at}`,
+                };
+              }),
           );
         }),
         global.json,
@@ -1973,26 +2098,29 @@ const runAction = Command.make(
     attach: attachFlag,
     requestId: requestIdFlag,
   },
-  ({ runId, offer, input, attach, requestId }) =>
-    runMutationCommand("run-action", runId, requestId, (env, id) =>
-      Effect.flatMap(Effect.zip(cliDoor(env), absolute(attach)), ([door, attachments]) =>
-        invokeOffer(env, {
-          attachments,
-          door,
-          runId,
-          offer,
-          input: Rec.fromEntries(
-            Arr.flatMap(input, (pair) => {
-              const at = Option.getOrElse(pipe_(pair, Str.indexOf("=")), () => -1);
-              return at === -1
-                ? []
-                : [[pipe_(pair, Str.slice(0, at)), pipe_(pair, Str.slice(at + 1))] as const];
-            }),
-          ),
-          request: id,
-        }),
-      ),
-    ),
+  ({ runId, offer, input, attach, requestId }) => {
+    const inputs = inputPairs(input);
+    return runMutationCommand(
+      {
+        operation: "run-action",
+        run: runId,
+        files: attach,
+        args: { runId, offer, inputs },
+      },
+      requestId,
+      (env, id) =>
+        Effect.flatMap(Effect.zip(cliDoor(env), absolute(env, attach)), ([door, attachments]) =>
+          invokeOffer(env, {
+            attachments,
+            door,
+            runId,
+            offer,
+            input: inputs,
+            request: id,
+          }),
+        ),
+    );
+  },
 ).pipe(Command.withDescription("Do one of the things this Run offers, if it still offers it"));
 
 const RESUME_WORKSPACE =
@@ -2007,22 +2135,26 @@ const runResume = Command.make("resume", mutationFlags, ({ runId, requestId }) =
         if (resolved._tag === "ContextFailure") {
           return resolved.result;
         }
-        return yield* mutation(resolved.env, "run-resume", requestId, (request) =>
-          Effect.gen(function* () {
-            const recovered = yield* resumeRun(resolved.env, {
-              door: yield* cliDoor(resolved.env),
-              runId,
-              request,
-            });
-            if (Option.isNone(global.workspace) || !recovered.ok) {
-              return recovered;
-            }
-            return {
-              ok: true as const,
-              data: { ...recovered.data, note: RESUME_WORKSPACE },
-              human: `${recovered.human}\n${RESUME_WORKSPACE}`,
-            };
-          }),
+        return yield* mutation(
+          resolved.env,
+          { operation: "run-resume", run: runId, args: { runId } },
+          requestId,
+          (request) =>
+            Effect.gen(function* () {
+              const recovered = yield* resumeRun(resolved.env, {
+                door: yield* cliDoor(resolved.env),
+                runId,
+                request,
+              });
+              if (Option.isNone(global.workspace) || !recovered.ok) {
+                return recovered;
+              }
+              return {
+                ok: true as const,
+                data: { ...recovered.data, note: RESUME_WORKSPACE },
+                human: `${recovered.human}\n${RESUME_WORKSPACE}`,
+              };
+            }),
         );
       }),
       global.json,
@@ -2070,50 +2202,58 @@ function intentChange(
           }
           wanted = chosen;
         }
-        return yield* mutation(resolved.env, operation, requestId, (request) =>
-          Effect.gen(function* () {
-            const result = yield* asksRun(
-              resolved.env,
-              runId,
-              (client) =>
-                client.changeIntent({
-                  runId,
-                  change: wanted,
-                  propagate: options.propagate ?? false,
-                  request,
-                }),
-              yield* cliDoor(resolved.env),
-            );
-            if (!result.ok) {
-              return result;
-            }
-            const { version, propagated, approved, warning, redacted } = result.value;
-            return approved === undefined
-              ? {
-                  ok: true as const,
-                  data: { runId, version, propagated, ...redactedField(redacted) },
-                  human: withNotice(
-                    Arr.join([`${runId}: intent v${version}`, ...propagated], "\n"),
-                    redacted,
-                  ),
-                }
-              : {
-                  ok: true as const,
-                  data: { run: runId, approved, warning },
-                  human: Arr.join(
-                    [
-                      `${runId} may have Collie run:`,
-                      ...Arr.map(
-                        approved,
-                        (one) =>
-                          `  ${one.name}: ${CommandLine.display([one.executable, ...one.argv])} (in ${one.cwd})`,
-                      ),
-                      ...(warning === undefined ? [] : [warning]),
-                    ],
-                    "\n",
-                  ),
-                };
-          }),
+        return yield* mutation(
+          resolved.env,
+          {
+            operation,
+            run: runId,
+            args: { runId, change: wanted, propagate: options.propagate ?? false },
+          },
+          requestId,
+          (request) =>
+            Effect.gen(function* () {
+              const result = yield* asksRun(
+                resolved.env,
+                runId,
+                (client) =>
+                  client.changeIntent({
+                    runId,
+                    change: wanted,
+                    propagate: options.propagate ?? false,
+                    request,
+                  }),
+                yield* cliDoor(resolved.env),
+              );
+              if (!result.ok) {
+                return result;
+              }
+              const { version, propagated, approved, warning, redacted } = result.value;
+              return approved === undefined
+                ? {
+                    ok: true as const,
+                    data: { runId, version, propagated, ...redactedField(redacted) },
+                    human: withNotice(
+                      Arr.join([`${runId}: intent v${version}`, ...propagated], "\n"),
+                      redacted,
+                    ),
+                  }
+                : {
+                    ok: true as const,
+                    data: { run: runId, approved, warning },
+                    human: Arr.join(
+                      [
+                        `${runId} may have Collie run:`,
+                        ...Arr.map(
+                          approved,
+                          (one) =>
+                            `  ${one.name}: ${CommandLine.display([one.executable, ...one.argv])} (in ${one.cwd})`,
+                        ),
+                        ...(warning === undefined ? [] : [warning]),
+                      ],
+                      "\n",
+                    ),
+                  };
+            }),
         );
       }),
       global.json,
@@ -2340,18 +2480,24 @@ const intentRemember = Command.make(
           if (resolved._tag === "RunFailure") {
             return resolved.result;
           }
-          return yield* mutation(resolved.env, "run-intent-remember", requestId, (request) =>
-            Effect.gen(function* () {
-              const result = yield* asksRun(
-                resolved.env,
-                runId,
-                (client) => client.rememberVerification({ runId, replace, request }),
-                yield* cliDoor(resolved.env),
-              );
-              return result.ok
-                ? yield* Schema.decodeUnknownEffect(ResultBoundary)(result.value).pipe(Effect.orDie)
-                : result;
-            }),
+          return yield* mutation(
+            resolved.env,
+            { operation: "run-intent-remember", run: runId, args: { runId, replace } },
+            requestId,
+            (request) =>
+              Effect.gen(function* () {
+                const result = yield* asksRun(
+                  resolved.env,
+                  runId,
+                  (client) => client.rememberVerification({ runId, replace, request }),
+                  yield* cliDoor(resolved.env),
+                );
+                return result.ok
+                  ? yield* Schema.decodeUnknownEffect(ResultBoundary)(result.value).pipe(
+                      Effect.orDie,
+                    )
+                  : result;
+              }),
           );
         }),
         global.json,
@@ -2369,10 +2515,11 @@ const defaultsFile = Effect.fn("run.defaultsFile")(function* (env: PluginEnv) {
 
 function defaultsCommand(
   operation: string,
+  args: Schema.Json,
   requestId: Option.Option<string>,
   change: (defaults: Defaults) => Defaults | Failure,
 ) {
-  return mutating(operation, requestId, (env) =>
+  return mutating({ operation, run: null, destination: "cwd", args }, requestId, (env) =>
     Effect.gen(function* () {
       const file = yield* defaultsFile(env);
       const current = (yield* readDefaults(file)) ?? EMPTY_DEFAULTS;
@@ -2413,7 +2560,7 @@ const defaultsAdd = Command.make(
     requestId: requestIdFlag,
   },
   ({ text, severity, requestId }) =>
-    defaultsCommand("run-intent-defaults-add", requestId, (defaults) => {
+    defaultsCommand("run-intent-defaults-add", { text, severity }, requestId, (defaults) => {
       const level = severityOf(severity);
       if (level === null) {
         return err("invalid_input", `--severity is block or warn.`);
@@ -2442,7 +2589,7 @@ const defaultsRemove = Command.make(
     requestId: requestIdFlag,
   },
   ({ id, requestId }) =>
-    defaultsCommand("run-intent-defaults-remove", requestId, (defaults) => ({
+    defaultsCommand("run-intent-defaults-remove", { id }, requestId, (defaults) => ({
       ...defaults,
       constraints: Arr.filter(defaults.constraints, (c) => c.id !== id),
     })),
@@ -2452,13 +2599,18 @@ const defaultsAuthority = Command.make(
   "set-authority",
   { pairs: authorityArgs, requestId: requestIdFlag },
   ({ pairs, requestId }) =>
-    defaultsCommand("run-intent-defaults-authority", requestId, (defaults) => {
-      const patch = authorityPatch(pairs);
-      if ("error" in patch) {
-        return err("invalid_input", patch.error);
-      }
-      return { ...defaults, authority: { ...defaults.authority, ...patch } };
-    }),
+    defaultsCommand(
+      "run-intent-defaults-authority",
+      { patch: authorityPatch(pairs) },
+      requestId,
+      (defaults) => {
+        const patch = authorityPatch(pairs);
+        if ("error" in patch) {
+          return err("invalid_input", patch.error);
+        }
+        return { ...defaults, authority: { ...defaults.authority, ...patch } };
+      },
+    ),
 ).pipe(Command.withDescription("Set what every Run started here may do without asking"));
 
 const intentDefaults = Command.make("defaults").pipe(
@@ -2512,10 +2664,24 @@ const artefactResult = (read: {
           }
           const input = { ...read.registration, metadata: metadata.value };
           const path = input.path;
+          const uploaded = read.upload === true ? path : undefined;
           const files = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
+          const pathSvc = yield* Path.Path;
           return yield* mutation(
             resolved.env,
-            "artefact-register",
+            {
+              operation: "artefact-register",
+              run: runId,
+              files: uploaded === undefined ? [] : [uploaded],
+              args: {
+                registration:
+                  uploaded === undefined
+                    ? read.registration
+                    : { ...read.registration, path: undefined, snapshot: true },
+                metadata: metadata.value ?? null,
+                upload: uploaded !== undefined,
+              },
+            },
             read.requestId ?? Option.none(),
             (request) =>
               asksArtefactRun(
@@ -2526,9 +2692,15 @@ const artefactResult = (read: {
                     client.board(),
                     Effect.gen(function* () {
                       const sent =
-                        read.upload === true && path !== undefined
-                          ? { path: yield* uploadArtefact(client, path), snapshot: true }
-                          : {};
+                        uploaded === undefined
+                          ? {}
+                          : {
+                              path: yield* uploadArtefact(
+                                client,
+                                pathSvc.resolve(resolved.env.cwd, uploaded),
+                              ),
+                              snapshot: true,
+                            };
                       return yield* client.artefactRegister({ runId, request, ...input, ...sent });
                     }).pipe(Effect.provideContext(files)),
                   ),
@@ -2552,7 +2724,16 @@ const artefactResult = (read: {
         if (read.op === "seen" || read.op === "unseen") {
           return yield* mutation(
             resolved.env,
-            "artefact-seen",
+            {
+              operation: "artefact-seen",
+              run: runId,
+              args: {
+                runId,
+                id: read.id ?? null,
+                revision: read.op === "unseen" ? null : (read.revision ?? null),
+                op: read.op,
+              },
+            },
             read.requestId ?? Option.none(),
             (request) =>
               asksArtefactRun(

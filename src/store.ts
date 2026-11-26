@@ -29,6 +29,7 @@ import {
   importRunRecords,
 } from "./records-import";
 import { StoreWrites } from "./store-writes";
+import { asJsonText, canonical } from "./canonical";
 import { RUN_RECORDS_MIGRATION } from "./run-records";
 import { importMrStates } from "./merge-requests";
 import { RequestConflict, RunReport } from "./board-model";
@@ -1276,8 +1277,6 @@ const watchRowOf = (row: {
         ? Effect.succeed(null)
         : Schema.decodeEffect(Schema.fromJsonString(Woke))(row.woke),
   }).pipe(Effect.map((decoded) => ({ run: row.run, mr: row.mr, name: row.name, ...decoded })));
-
-const asJsonText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
 
 const answererText = flow(
   Schema.encodeResult(Schema.fromJsonString(AuditLine.fields.actor)),

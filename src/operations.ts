@@ -253,7 +253,8 @@ const workspaceForDirectory: (
   if (!isDir) {
     return null;
   }
-  return { found: { label: path.basename(dir), cwd: dir } };
+  const cwd: string = yield* fs.realPath(dir).pipe(Effect.orElseSucceed(() => dir));
+  return { found: { label: path.basename(dir), cwd } };
 });
 
 export interface NamedDirectory {
