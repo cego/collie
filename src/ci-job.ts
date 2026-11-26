@@ -243,9 +243,11 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
   let waiting = false;
   let retried: string | null = null;
   let reread = false;
-  return yield* Effect.gen(function* () {
+  let observed: string | undefined;
+  const outcome: CiJob = yield* Effect.gen(function* () {
     for (;;) {
       const read = yield* forge.job(ref, job, cwd, asked.run);
+      observed = read.ok ? read.state : "unreadable";
       if (!read.ok) {
         return unproved(`could not be read: ${read.reason}`);
       }
@@ -437,4 +439,12 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
   }).pipe(
     Effect.ensuring(Effect.suspend(() => (waiting ? asked.verifying.set(null) : Effect.void))),
   );
+  yield* rememberCiTarget(asked.runDir, {
+    head,
+    job,
+    mr: asked.mr,
+    cwd,
+    observed: observed ?? "unreadable",
+  }).pipe(Effect.orDie);
+  return outcome;
 });

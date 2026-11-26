@@ -9956,6 +9956,70 @@ scenario(
     ),
 );
 
+scenario(
+  "a Delivery run parked on a cancelled job beside an unchanged failed one reissues no recovery, and never reaches its CI fixer",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        ciBound = "20 millis";
+        ciPoll = "1 millis";
+        const { bin } = yield* deliveringOn("gitlab");
+        const head = yield* headOf();
+        yield* forgeOnPath(bin, "gitlab", {
+          installed: true,
+          loggedIn: [FORGE_HOST.gitlab],
+          login: "tester",
+          refusesRetry: true,
+          mrs: [
+            {
+              project: PROJECT.gitlab,
+              iid: "31",
+              state: "open" as const,
+              head,
+              jobs: [
+                { name: "nuxi-job", state: "failed" as const },
+                { name: "e2e-job", state: "cancelled" as const },
+              ],
+            },
+          ],
+        });
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-ci-mixed-terminal-delivery";
+        yield* leftToCi(runId, ["nuxi", "e2e"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED_CI]);
+        yield* driven(
+          {
+            entry: shipped("implement"),
+            runId,
+            input: { plan, ...FINISH },
+            options: { outcome: "feature" },
+          },
+          (run) =>
+            Effect.gen(function* () {
+              const why = yield* until(
+                () => parkedWhy(runId),
+                (text) => text !== "",
+              );
+              expect(yield* parkedCause(runId)).toBe("ci-job-absent");
+              expect(why).toContain("cancelled");
+              const host = yield* rechecking(run, runId, CI_MR, rig.projectDir);
+              yield* until(
+                () => host.resumed,
+                (count) => count >= 1,
+              );
+              yield* until(
+                () => host.rounds,
+                (count) => count >= 5,
+              );
+              expect(yield* host.resumed).toBe(1);
+              expect(yield* wasAsked(runId, "ci-fix-1")).toBe(false);
+            }),
+        );
+        yield* bin.restore();
+      }),
+    ),
+);
+
 const CI_BASE = pipe("b", Str.repeat(40));
 const CI_LOG = (id: number) => `glab ci trace ${id} --repo ${PROJECT.gitlab}`;
 
@@ -16155,6 +16219,7 @@ const rechecking = (
 ) =>
   Effect.gen(function* () {
     const rounds = yield* Ref.make(0);
+    const resumed = yield* Ref.make(0);
     const panels: MrPanels = new Map();
     const env = rig.pluginEnv({ COLLIE_ROOT: ROOT, GITLAB_HOST: FORGE_HOST.gitlab });
     const views = Effect.gen(function* () {
@@ -16206,7 +16271,11 @@ const rechecking = (
         reconnects: Effect.succeed(0),
         panels,
         views,
-        resume: () => Effect.as(run.resume, { applied: true }),
+        resume: () =>
+          Effect.as(
+            Effect.tap(run.resume, () => Ref.update(resumed, (count) => count + 1)),
+            { applied: true },
+          ),
       }).pipe(
         Effect.provide(
           forgeHttpLayer.pipe(
@@ -16223,7 +16292,7 @@ const rechecking = (
         ),
       ),
     );
-    return { rounds: Ref.get(rounds) };
+    return { rounds: Ref.get(rounds), resumed: Ref.get(resumed) };
   });
 
 const checkedOutThenAssessed = (runId: string) =>
@@ -17172,6 +17241,56 @@ for (const name of ["gitlab", "github"] as const) {
                 );
                 expect(yield* parkedCause(runId)).toBe("ci-job-absent");
                 expect(yield* parkedWhy(runId)).toContain("cancelled");
+                expect(yield* wasAsked(runId, "fix-1")).toBe(false);
+              }),
+          );
+          yield* bin.restore();
+        }),
+      ),
+  );
+
+  scenario(
+    `release on ${name}: a failed job beside an unchanged cancelled one reissues no recovery, and never reaches the fixer`,
+    () =>
+      runEffect(
+        Effect.gen(function* () {
+          ciBound = "20 millis";
+          ciPoll = "1 millis";
+          const { bin, forge, reviewed } = yield* releasable(name, {
+            jobs: [
+              { name: "lint-job", state: "failed" },
+              { name: "test-job", state: "cancelled" },
+            ],
+          });
+          const model = yield* forge.model();
+          yield* forge.set({ ...model, refusesRetry: true });
+          const runId = "r-ci-mixed-terminal";
+          yield* ownChecks(runId, [
+            { name: "check-a", ci: "lint-job" },
+            { name: "check-b", ci: "test-job" },
+          ]);
+          yield* rig.queueOutputs([PACKAGED, { verdict: "clean", fixed: [] }]);
+          yield* driven(
+            { entry: shipped("release"), runId, input: { mr: target }, host: releaseHost() },
+            (run) =>
+              Effect.gen(function* () {
+                const why = yield* until(
+                  () => parkedWhy(runId),
+                  (text) => text !== "",
+                );
+                expect(yield* parkedCause(runId)).toBe("ci-job-absent");
+                expect(why).toContain("cancelled");
+                expect(yield* wasAsked(runId, "fix-1")).toBe(false);
+                const host = yield* rechecking(run, runId, target, reviewed);
+                yield* until(
+                  () => host.resumed,
+                  (count) => count >= 1,
+                );
+                yield* until(
+                  () => host.rounds,
+                  (count) => count >= 5,
+                );
+                expect(yield* host.resumed).toBe(1);
                 expect(yield* wasAsked(runId, "fix-1")).toBe(false);
               }),
           );

@@ -754,12 +754,14 @@ recorded — each with its head, its own attempt and the forge's job id — and 
 resume is applied, so a resume held back by the recovery setting or by a machine short of
 memory records nothing and is not lost. A park is then not resumed again for those same
 reads until the forge says something new, and never for a head where every job passed: a
-fresh outage that comes back green recovers as often as it parks. A job that failed is not
-held back either, whichever read needs it, because a failure always has somewhere to go —
-the fixer — so a head where one job failed and another passed reaches it again after an
-outage. The guard is for the reads nothing can progress from, the jobs that settled
-cancelled or skipped. The record travels in the recovery claim itself, so a host that
-restarts and replays the claim keeps it.
+fresh outage that comes back green recovers as often as it parks. What decides a repeat is why the parked read
+could not progress, not whether a sibling failed: the read that parked the Run is recorded
+as it was taken, and a park made from a job that settled cancelled or skipped stays parked
+however its siblings read, while a park the forge refused to answer for is read again,
+because the refusal says nothing about the jobs at the head. So a head where one job failed
+and another was cancelled is read once more and then left alone, and a head a 503 parked
+reaches the fixer as soon as the forge answers. The record travels in the recovery claim
+itself, so a host that restarts and replays the claim keeps it.
 Terminal failed CI at the proved head goes to the same agent's fixer, even when local
 Checks pass or none are configured. The finding
 names the failed head, check or pipeline, and its forge URL when available. A failure the target branch's newest pipeline shares, test by test, is not the

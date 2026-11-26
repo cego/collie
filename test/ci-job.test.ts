@@ -310,13 +310,48 @@ test("a healthy read of a mixed head the forge could not be read for still reach
       });
       const dir = `${root}/runs/r1`;
       yield* rememberCiTarget(dir, { head: at, job: "nuxi-typecheck", mr: MR, cwd: asked.cwd });
-      yield* rememberCiTarget(dir, { head: at, job: "lint", mr: MR, cwd: asked.cwd });
+      yield* rememberCiTarget(dir, {
+        head: at,
+        job: "lint",
+        mr: MR,
+        cwd: asked.cwd,
+        observed: "unreadable",
+      });
       const view = { runId: "r1", cwd: asked.cwd, branch: "main", mr: MR };
       const first = yield* cancelledRecheck(view, root, asked.run, forge);
       expect(first).toMatchObject({ cleared: true, error: false });
       yield* rememberSettledClear(dir, first.reads ?? "");
       expect(yield* cancelledRecheck(view, root, asked.run, forge)).toMatchObject({
         cleared: true,
+        error: false,
+      });
+    }),
+  ));
+
+test("an unchanged failed job beside a cancelled one reissues no recovery for the park that read them", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, at, root, forge } = yield* waiting("cancelled", MR, undefined, {
+        jobs: [
+          { name: "nuxi-typecheck", state: "cancelled", id: 1 },
+          { name: "lint", state: "failed", id: 2 },
+        ],
+      });
+      const dir = `${root}/runs/r1`;
+      yield* rememberCiTarget(dir, {
+        head: at,
+        job: "nuxi-typecheck",
+        mr: MR,
+        cwd: asked.cwd,
+        observed: "cancelled",
+      });
+      yield* rememberCiTarget(dir, { head: at, job: "lint", mr: MR, cwd: asked.cwd });
+      const view = { runId: "r1", cwd: asked.cwd, branch: "main", mr: MR };
+      const first = yield* cancelledRecheck(view, root, asked.run, forge);
+      expect(first).toMatchObject({ cleared: true, error: false });
+      yield* rememberSettledClear(dir, first.reads ?? "");
+      expect(yield* cancelledRecheck(view, root, asked.run, forge)).toMatchObject({
+        cleared: false,
         error: false,
       });
     }),

@@ -264,6 +264,7 @@ export const ForgeModel = Schema.Struct({
     }),
   ),
   refusesNote: Schema.optionalKey(Schema.Finite),
+  refusesRetry: Schema.optionalKey(Schema.Boolean),
   refusesIssueWrite: Schema.optionalKey(Schema.Finite),
   ancestry: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(Schema.String))),
   gone: Schema.optionalKey(Schema.Array(Schema.String)),
@@ -1257,7 +1258,11 @@ function glab(model: ForgeModel, args: ReadonlyArray<string>, under: Under) {
         Number(retry[2]),
       );
       const returned: Answer =
-        found === undefined ? no() : { ...json({ id: Number(retry[2]) }), retried: found };
+        found === undefined
+          ? no()
+          : model.refusesRetry === true
+            ? refused("403 Forbidden")
+            : { ...json({ id: Number(retry[2]) }), retried: found };
       return returned;
     }
     const bySha = /\/pipelines\?sha=([^&]+)/.exec(route);
@@ -2301,6 +2306,9 @@ function ghApi(model: ForgeModel, route: string, args: ReadonlyArray<string>) {
         (one) => one.project === `github.com/${rerun[1]}` && actionsRun(one) === Number(rerun[2]),
       ),
     );
+    if (model.refusesRetry === true) {
+      return refused("403 Forbidden");
+    }
     const at = Arr.flatMap(mr?.jobs ?? [], (job, n) => (job.state === "failed" ? [n] : []));
     const returned: Answer =
       mr?.rerunRefused !== undefined

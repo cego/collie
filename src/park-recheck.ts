@@ -23,6 +23,7 @@ const CiTarget = Schema.fromJsonString(
     job: Schema.String,
     mr: Schema.NullOr(Schema.String),
     cwd: Schema.String,
+    observed: Schema.optionalKey(Schema.String),
   }),
 );
 
@@ -32,6 +33,20 @@ export const rememberCiTarget = (dir: string, target: typeof CiTarget.Type) =>
 const CiSettled = Schema.fromJsonString(Schema.Struct({ reads: Schema.String }));
 
 const settledClears = (dir: string) => runJournal(dir, "ci-settled.jsonl");
+
+const lastObserved = (stateDir: string, runId: string) =>
+  Effect.map(
+    readRunJournal(runJournal(`${stateDir}/runs/${runId}`, "ci-rechecks.jsonl"), CiTarget).pipe(
+      Effect.orElseSucceed(() => []),
+    ),
+    (entries) => {
+      let observed: string | undefined;
+      for (const one of entries) {
+        observed = one.observed ?? observed;
+      }
+      return observed;
+    },
+  );
 
 const lastSettledClear = (dir: string) =>
   Effect.map(
@@ -226,7 +241,6 @@ export const recheckPark = (
           return reply(false, "no parked CI job recorded");
         }
         const reads: Array<string> = [];
-        let failed = false;
         for (const target of latest.values()) {
           const ref = mrRefOf(target.mr);
           if (ref === null) {
@@ -249,16 +263,16 @@ export const recheckPark = (
                 : `job ${target.job} absent at ${target.head}`,
             );
           }
-          failed ||= read.state === "failed";
           if (read.state !== "passed") {
             reads.push(`${target.job}@${target.head}:${read.state}#${read.id ?? ""}`);
           }
         }
         const jobs = Arr.join([...latest.keys()], ", ");
         const evidence = Arr.join(reads, " ");
+        const observed = yield* lastObserved(stateDir, view.runId);
         if (
           evidence !== "" &&
-          !failed &&
+          observed !== "unreadable" &&
           (yield* lastSettledClear(`${stateDir}/runs/${view.runId}`)) === evidence
         ) {
           return reply(
