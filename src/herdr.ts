@@ -91,7 +91,7 @@ const ROSTER_WAIT = "5 seconds" as const;
 
 const rosterWait = Config.Duration("COLLIE_ROSTER_READ_WITHIN").pipe(
   Config.withDefault(Duration.fromInputUnsafe(ROSTER_WAIT)),
-  // WARNING: a typed failure, not a defect, so a Machine list is still read from the other side.
+  // WARNING: a typed failure, not a defect, so a malformed deadline still answers with the paired list.
   Effect.mapError(
     () =>
       new HerdrError({
