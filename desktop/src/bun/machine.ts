@@ -1301,12 +1301,7 @@ export const flockStream = <D extends BoardSource>(
           );
         });
       const removedAt = (place: number) => places.get(routeAt[place]!.machine.profile) !== place;
-      const changed = (change: RouteChange<D>) => {
-        if (change._tag === "Add") {
-          return places.has(change.route.machine.profile)
-            ? Stream.empty
-            : Stream.unwrap(added(change.route));
-        }
+      const moved = (change: Exclude<RouteChange<D>, { readonly _tag: "Add" }>) => {
         const at = places.get(change.profile);
         if (change._tag === "Wake") {
           return at === undefined
@@ -1380,13 +1375,21 @@ export const flockStream = <D extends BoardSource>(
         );
         return removal.pipe(Stream.concat(again));
       };
+      const changed = (change: RouteChange<D>) =>
+        change._tag === "Add"
+          ? places.has(change.route.machine.profile)
+            ? Effect.succeed(Stream.empty)
+            : added(change.route)
+          : Effect.sync(() => moved(change));
       return Stream.fromIterable(routes).pipe(
         Stream.map((route) => {
           const returned: RouteChange<D> = { _tag: "Add", route };
           return returned;
         }),
         Stream.concat(changes),
-        Stream.flatMap(changed, { concurrency: "unbounded" }),
+        // WARNING: one change at a time, so a queued Add has claimed its place before a later Remove looks for it.
+        Stream.mapEffect(changed, { concurrency: 1 }),
+        Stream.flatten({ concurrency: "unbounded" }),
       );
     }),
   );
