@@ -148,6 +148,26 @@ export const codexServers: (
     mine.push(...made.used);
     return made.text;
   };
+  // WARNING: a name the shell keeps whole, or one the human's allowlist admits, cannot be withheld, so an import that used it is refused.
+  const included = (name: string) =>
+    Arr.some(
+      Rec.toEntries(policy.filters),
+      ([key, rule]) => Str.toLowerCase(key) === Str.toLowerCase(name) && rule === "include",
+    );
+  const whyLeft = (variables: ReadonlyArray<string>) => {
+    const native = Arr.findFirst(variables, (variable) => Arr.contains(nativeVariables, variable));
+    if (Option.isSome(native)) {
+      return `${native.value} is a variable Codex's own servers read`;
+    }
+    const standard = Arr.findFirst(variables, (variable) => Arr.contains(STANDARD, variable));
+    if (Option.isSome(standard)) {
+      return `${standard.value} is a variable the shell cannot do without`;
+    }
+    const allowed = Arr.findFirst(variables, included);
+    return Option.isSome(allowed)
+      ? `${allowed.value} is a variable the shell's allowlist names`
+      : null;
+  };
   let carried = 0;
   for (const [name, server] of Rec.toEntries(servers)) {
     if (name === RESERVED) {
@@ -179,9 +199,9 @@ export const codexServers: (
         continue;
       }
       const resolvedValues = Arr.map(held, ([key, value]) => ({ key, text: resolve(value) }));
-      const shared = Arr.findFirst(mine, (variable) => Arr.contains(nativeVariables, variable));
-      if (Option.isSome(shared)) {
-        left.push({ name, why: `${shared.value} is a variable Codex's own servers read` });
+      const stdioWhy = whyLeft(mine);
+      if (stdioWhy !== null) {
+        left.push({ name, why: stdioWhy });
         continue;
       }
       // WARNING: a value in Codex's own environment is one its shell can read, so it waits in a file.
@@ -237,9 +257,13 @@ export const codexServers: (
     for (const [header, value] of Rec.toEntries(server.headers ?? {})) {
       headers[header] = resolve(value);
     }
-    const mineShared = Arr.findFirst(mine, (variable) => Arr.contains(nativeVariables, variable));
-    if (Option.isSome(mineShared)) {
-      left.push({ name, why: `${mineShared.value} is a variable Codex's own servers read` });
+    const httpWhy = whyLeft(mine);
+    if (httpWhy !== null) {
+      left.push({ name, why: httpWhy });
+      continue;
+    }
+    if (!URL.canParse(server.url)) {
+      left.push({ name, why: "its url is not a url" });
       continue;
     }
     if (Rec.size(headers) === 0) {
@@ -253,17 +277,11 @@ export const codexServers: (
     used.push(...mine);
     given.push({ name, url: server.url });
   }
-  const withheld = Arr.filter(
-    used,
-    (name) => !Arr.contains(STANDARD, name) && !Arr.contains(nativeVariables, name),
-  );
+  const withheld = Arr.dedupe(used);
   // WARNING: a native include of a variable an import's value came from would readmit that value, so the exclusion takes its key.
   const folded = (name: string) => Str.toLowerCase(name);
   const keyed = Rec.toEntries(policy.filters);
-  const wants = Arr.dedupe([
-    `${OWN}*`,
-    ...Arr.filter(used, (name) => !Arr.contains(STANDARD, name)),
-  ]);
+  const wants = Arr.dedupe([`${OWN}*`, ...used]);
   const foldedOnce = (so: ReadonlyArray<string>, name: string) =>
     Arr.some(so, (held) => folded(held) === folded(name)) ? so : Arr.append(so, name);
   const added = Arr.reduce(wants, Arr.empty<string>(), foldedOnce);
@@ -303,10 +321,17 @@ export const codexConnections: (
   const imported = Arr.map(servers.given, (one) => one.name);
   const own = Arr.filter(configured, (name) => !imported.includes(name));
   const names = Arr.dedupe([...imported, ...own, ...Rec.keys(reported)]);
+  const relayed = Arr.map(servers.relays, (one) => one.name);
   const signingIn = Arr.filter(names, (name) => reported[name]?.authStatus === "notLoggedIn");
+  // WARNING: the relay's own header reads as a credential to Codex, so a server behind it never asks for a sign-in of its own.
   const failed = Arr.filter(
     imported,
-    (name) => reported[name] === undefined || (reported[name]?.toolsError ?? null) !== null,
+    (name) =>
+      !Arr.contains(relayed, name) &&
+      (reported[name] === undefined || (reported[name]?.toolsError ?? null) !== null),
+  );
+  const stuck = Arr.filter(relayed, (name) =>
+    reported[name] === undefined ? true : (reported[name]?.toolsError ?? null) !== null,
   );
   const broken = Arr.filter(own, (name) => (reported[name]?.toolsError ?? null) !== null);
   const described = Arr.map(names, (name) => {
@@ -340,6 +365,9 @@ export const codexConnections: (
               Arr.map(signingIn, login),
               ", ",
             )} in a terminal, then send their message again, rather than start a Run to do what the tool would.`,
+        stuck.length === 0
+          ? ""
+          : `${Arr.join(stuck, ", ")} cannot be signed in through Collie's relay: its definition carries a header, so Collie gives Codex its own address and a sign-in Codex stored for the server itself is not used — tell the human to remove that header, or add the server to Codex itself.`,
         failed.length === 0
           ? ""
           : `Codex did not connect ${Arr.join(failed, ", ")}: the human's definition of ${

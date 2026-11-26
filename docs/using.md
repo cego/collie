@@ -2389,8 +2389,12 @@ taken out of Codex's own environment, so neither Codex nor its shell holds it. T
 exception is a variable Codex's own servers read by name (`bearer_token_env_var`,
 `env_http_headers`, `env_vars`): those stay, because taking one away would break your own
 server, and the chat says so — an import that needs one is left out rather than sharing
-it. A name a shell cannot do without — `PATH`, `HOME` and the rest of that handful — is
-never withheld, and never excluded from the shell either. None of this is isolation, and Collie claims none: the value is in Desktop's own
+it. So is an import whose value names a variable a shell cannot do without — `PATH`, `HOME`
+and the rest of that handful — or one your own keyed `filters` allowlist admits: both stay
+in the shell, so an import that would have to share them is left out instead, with the name
+it needed said in the chat. A relayed server cannot be signed in through
+`codex mcp login` either, because Codex holds that sign-in against the address it was
+given: the chat says so rather than offer a command that would sign the wrong thing. None of this is isolation, and Collie claims none: the value is in Desktop's own
 process, in the configuration it was imported from and, where it names one, in your
 existing environment; a command running as you can reach all three, as it can the relay
 on loopback, and it can read a stdio server's staged file from the moment it is written
@@ -2398,7 +2402,8 @@ until that server's launcher unlinks it. Keep a credential out of a Codex chat b
 out of your MCP
 configuration, or by running that chat on a Machine where it does not sit. A
 stdio server whose environment names something a shell cannot set, or a name in Collie's own
-`COLLIE_CHAT_` namespace, is left out and the chat says so — as is a server whose url carries
+`COLLIE_CHAT_` namespace, is left out and the chat says so — as is a server whose url does not
+parse, or one whose url carries
 a credential in it, since Codex takes a url only in its arguments, where `ps` shows them. If Codex will not say which
 servers it has, none of yours is passed at all — better a server missing from the chat than
 one overriding Codex's own — and the chat says so, until Codex starts again and it can be

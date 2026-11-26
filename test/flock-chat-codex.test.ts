@@ -824,36 +824,6 @@ test("An empty allowlist narrows nothing, as Codex reads one", () => {
   );
 });
 
-test("An import's variable leaves the shell even where the human's filters include it", () => {
-  const fixture = serveDocs({ tool: "read_doc", token: "kept" });
-  Bun.env.APP_VAR = "app-value";
-  return withServers(
-    { docs: { type: "http", url: fixture.url, headers: { Authorization: "Bearer ${APP_VAR}" } } },
-    (driver, context) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.writeFileString(
-          `${context.dir}/codex-home/config.toml`,
-          `[shell_environment_policy]\ninherit = "all"\n[shell_environment_policy.filters]\n"APP_VAR" = "include"\n"KEEP_ME" = "exclude"\n`,
-        );
-        const session = yield* driver.open("codex-include-collision", "default", null);
-        yield* Effect.addFinalizer(() => session.close);
-        yield* session.offer("inspect");
-        const given = Arr.join(inspected(yield* turn(session)).args, " ");
-        expect(given).toContain('"APP_VAR" = "exclude"');
-        expect(given).toContain('"KEEP_ME" = "exclude"');
-        expect(occurrences(Str.toLowerCase(given), "app_var")).toBe(1);
-        yield* session.offer("shell");
-        const shell = message(yield* turn(session));
-        expect(shell).not.toContain("APP_VAR=");
-        expect(shell).toContain("PATH=");
-      }),
-  ).finally(() => {
-    void fixture.stop();
-    delete Bun.env.APP_VAR;
-  });
-});
-
 test("An exclusion never doubles a filter key the human spelled in another case", () => {
   const fixture = serveDocs({ tool: "read_doc", token: "kept" });
   Bun.env.APP_VAR = "app-value";
@@ -864,7 +834,7 @@ test("An exclusion never doubles a filter key the human spelled in another case"
         const fs = yield* FileSystem.FileSystem;
         yield* fs.writeFileString(
           `${context.dir}/codex-home/config.toml`,
-          `[shell_environment_policy.filters]\n"app_var" = "include"\n`,
+          `[shell_environment_policy.filters]\n"app_var" = "exclude"\n`,
         );
         const session = yield* driver.open("codex-case-collision", "default", null);
         yield* Effect.addFinalizer(() => session.close);
@@ -995,7 +965,7 @@ test("A relay leaves the client's own authorization alone, and passes the server
   ).finally(() => void fixture.stop());
 });
 
-test("An import naming a variable a shell cannot do without is not refused, and that name stays", () => {
+test("An import naming a variable the shell cannot do without is left out rather than sharing it", () => {
   const fixture = serveDocs({ tool: "read_doc" });
   return withServers(
     { docs: { type: "http", url: fixture.url, headers: { "X-Root": "${HOME}" } } },
@@ -1005,11 +975,78 @@ test("An import naming a variable a shell cannot do without is not refused, and 
         yield* Effect.addFinalizer(() => session.close);
         yield* session.offer("inspect");
         const details = inspected(yield* turn(session));
-        expect(relayed(details, "docs")).toStartWith("http://127.0.0.1:");
-        const home: string | undefined = Bun.env.HOME;
-        expect(details.env.HOME).toBe(home);
+        expect(Arr.join(details.args, " ")).not.toContain("mcp_servers.docs.");
+        expect(instruct(details)).toEqual(
+          expect.stringContaining("docs (HOME is a variable the shell cannot do without)"),
+        );
+      }),
+  ).finally(() => void fixture.stop());
+});
+
+test("An import whose variable the shell's allowlist names is left out, and the allowlist kept", () => {
+  const fixture = serveDocs({ tool: "read_doc" });
+  Bun.env.DOC_VAR = "kept";
+  return withServers(
+    { docs: { type: "http", url: fixture.url, headers: { Authorization: "Bearer ${DOC_VAR}" } } },
+    (driver, context) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(
+          `${context.dir}/codex-home/config.toml`,
+          `[shell_environment_policy]\ninherit = "all"\n[shell_environment_policy.filters]\n"DOC_VAR" = "include"\n`,
+        );
+        const session = yield* driver.open("codex-allowlist", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("inspect");
+        const details = inspected(yield* turn(session));
+        expect(Arr.join(details.args, " ")).toContain('"DOC_VAR" = "include"');
+        expect(instruct(details)).toEqual(
+          expect.stringContaining("docs (DOC_VAR is a variable the shell's allowlist names)"),
+        );
         yield* session.offer("shell");
-        expect(message(yield* turn(session))).toContain("HOME=");
+        expect(message(yield* turn(session))).not.toContain("HOME=");
+      }),
+  ).finally(() => {
+    void fixture.stop();
+    delete Bun.env.DOC_VAR;
+  });
+});
+
+test("A malformed imported url is left out, so a valid server beside it still starts", () => {
+  const fixture = serveDocs({ tool: "read_doc" });
+  return withServers(
+    {
+      broken: { type: "http", url: "not a url", headers: { Authorization: "Bearer x" } },
+      docs: { type: "http", url: fixture.url },
+    },
+    (driver) =>
+      Effect.gen(function* () {
+        const session = yield* driver.open("codex-bad-url", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("inspect");
+        const details = inspected(yield* turn(session));
+        expect(Arr.join(details.args, " ")).toContain("mcp_servers.docs.url=");
+        expect(instruct(details)).toEqual(expect.stringContaining("broken (its url is not a url)"));
+      }),
+  ).finally(() => void fixture.stop());
+});
+
+test("A relayed server is not offered a `codex mcp login` the relay cannot make work", () => {
+  const fixture = serveDocs({ tool: "read_doc", token: "kept" });
+  return withServers(
+    { docs: { type: "http", url: fixture.url, headers: { "X-Api-Key": "gate" } } },
+    (driver) =>
+      Effect.gen(function* () {
+        const session = yield* driver.open("codex-relay-signin", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("inspect");
+        const details = inspected(yield* turn(session));
+        expect(instruct(details)).not.toContain("codex mcp login 'docs'");
+        expect(instruct(details)).toEqual(
+          expect.stringContaining(
+            "docs cannot be signed in through Collie's relay: its definition carries a header, so Collie gives Codex its own address",
+          ),
+        );
       }),
   ).finally(() => void fixture.stop());
 });
