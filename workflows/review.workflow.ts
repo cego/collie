@@ -305,6 +305,17 @@ export default defineWorkflow({
           error: WorkflowError,
           execute: host.completedRound({ runId: run.id, target: asked.target }),
         });
+      const discarded = (round: number) =>
+        Activity.make({
+          name: `follow-discarded-${round}`,
+          error: WorkflowError,
+          execute: host.discardedRound({
+            runId: run.id,
+            target: asked.target,
+            cwd: place.cwd,
+            head,
+          }),
+        });
       const roundAt = (
         round: number,
         changes: string,
@@ -607,6 +618,7 @@ export default defineWorkflow({
               yield* ended(round);
             }
             if (reviewed === null) {
+              yield* discarded(round);
               yield* fact(
                 `follow-moved-${round}`,
                 `the head of ${label} moved while reviewing ${head}; nothing posted, the findings carry to the next round`,

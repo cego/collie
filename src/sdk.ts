@@ -1218,6 +1218,16 @@ export interface HostApi {
     readonly runId: string;
     readonly target: string;
   }) => Effect.Effect<void, WorkflowError>;
+  /**
+   * Records that the round at `head` was abandoned before it reached the forge, `moved` being the
+   * head the forge shows now: a replay tells that from a review it never finished.
+   */
+  readonly discardedRound: (options: {
+    readonly runId: string;
+    readonly target: string;
+    readonly cwd: string;
+    readonly head: string;
+  }) => Effect.Effect<void, WorkflowError>;
   /** The merge request `target` as the forge reads it now: what a watch's cursor starts from. */
   readonly mrReading: (options: {
     readonly target: string;

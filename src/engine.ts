@@ -6279,6 +6279,25 @@ export const hostLayer: (options: {
             }
             yield* completedRoundAt(asked.runId, mr);
           }),
+        discardedRound: (asked) =>
+          Effect.gen(function* () {
+            const mr = mrId(asked.target);
+            const ref = mrRefOf(asked.target);
+            if (mr === null || ref === null) {
+              return yield* new WorkflowError({
+                reason: `${asked.target} names no merge request the merge watch can read`,
+              });
+            }
+            const read = yield* under(forgeOf(ref).details(ref, asked.cwd, runShell));
+            yield* journalWatch({
+              _tag: "discarded",
+              at: yield* nowIso,
+              mr,
+              run: asked.runId,
+              head: asked.head,
+              moved: read._tag === "Details" ? (read.head ?? "") : "",
+            });
+          }),
         mrReading: (asked) =>
           Effect.gen(function* () {
             const ref = mrRefOf(asked.target);

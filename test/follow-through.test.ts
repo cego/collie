@@ -1910,6 +1910,16 @@ for (const id of ["review", "second-look"]) {
             ]);
             expect(notes[1]).toContain("F3: fixed — validate the redirect");
             expect(yield* host.agentStarts).toHaveLength(3);
+            const journal = yield* readWatchJournal(host.dir());
+            expect(discardMarks(journal)).toEqual([[second, third]]);
+            expect(watchMarks(journal)).toEqual([
+              "started follow-1",
+              "completed follow-1",
+              "started follow-2",
+              "completed follow-2",
+              "started follow-3",
+              "completed follow-3",
+            ]);
             const fs = yield* FileSystem.FileSystem;
             const prompts = yield* fs.readDirectory(`${host.dir()}/agents/${runId}`);
             const thirdPrompt = Option.getOrThrow(
@@ -1926,6 +1936,11 @@ for (const id of ["review", "second-look"]) {
       }),
     ));
 }
+
+const discardMarks = (journal: ReadonlyArray<WatchEvent>) =>
+  Arr.flatMap(journal, (event) =>
+    event._tag === "discarded" ? [[event.head, event.moved] as const] : [],
+  );
 
 const roundMarks = (journal: ReadonlyArray<WatchEvent>) =>
   Arr.flatMap(journal, (event) =>
