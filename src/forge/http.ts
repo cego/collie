@@ -90,6 +90,21 @@ interface Slot {
   expires: number | null;
 }
 
+// WARNING: a secondary limit named only in the body is unread here; reading it would consume what the forge client needs.
+const refusedByLimit = (response: Response) => {
+  if (response.status === 429) {
+    return true;
+  }
+  if (response.status !== 403 && response.status !== 422) {
+    return false;
+  }
+  const budget =
+    response.headers.get("x-ratelimit-limit") ?? response.headers.get("ratelimit-limit");
+  const left =
+    response.headers.get("x-ratelimit-remaining") ?? response.headers.get("ratelimit-remaining");
+  return budget !== "0" && (left === "0" || response.headers.has("retry-after"));
+};
+
 const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
   Effect.sync(() => {
     let attempts = 0;
@@ -144,7 +159,7 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
       const transport: FetchLike = (input, init) => {
         spend.attempts += 1;
         return carried(input, init).then((response) => {
-          if (response.status === 429) {
+          if (refusedByLimit(response)) {
             spend.limited += 1;
           }
           return response;
