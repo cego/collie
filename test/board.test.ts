@@ -78,6 +78,7 @@ import { hostRecords, hostRunRecords, madeRun, recordsAt } from "./support/recor
 import { RUNNING_CHECK, RunRecords } from "../src/run-records";
 import { exec } from "./support/command";
 import { collie, proves } from "./support/world";
+import { recordedCheck } from "./board.test-utils";
 import { stopHost, until } from "./support/host";
 import type { Launched } from "../src/launches";
 import { orderLaunch, recordLaunch } from "../src/launches";
@@ -1361,25 +1362,6 @@ test("a check still running for an older Run of a Task keeps the Task working, e
       expect(card!.sentence).toContain("Running unit");
     }),
   ));
-
-const recordedCheck = (run: RunFacts, id: string) =>
-  Effect.gen(function* () {
-    yield* (yield* RunRecords).setControl(
-      RUNNING_CHECK,
-      "",
-      encodeCheckRecord({
-        id,
-        run: run.id,
-        name: "lint",
-        pass: "recheck",
-        by: "collie",
-        leader: { pid: 4242, started: "1", group: 4242 },
-        host: { pid: 4241, started: "1" },
-        started: "2026-09-14T10:03:00Z",
-      }),
-      id,
-    );
-  });
 
 test("a check left behind by an attempt that ended does not keep its Task working", () =>
   runEffect(
