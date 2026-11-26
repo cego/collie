@@ -92,6 +92,14 @@ const ROSTER_WAIT = "5 seconds" as const;
 const rosterWait = Config.Duration("COLLIE_ROSTER_READ_WITHIN").pipe(
   Config.withDefault(Duration.fromInputUnsafe(ROSTER_WAIT)),
   Effect.orDie,
+  Effect.filterOrFail(
+    (wait) => Duration.isFinite(wait) && Duration.toMillis(wait) > 0,
+    (wait) =>
+      new HerdrError({
+        message: "core machine.list has no deadline",
+        detail: `COLLIE_ROSTER_READ_WITHIN is ${Duration.format(wait)}, not a finite positive duration`,
+      }),
+  ),
 );
 
 const isAgentTerminal = (terminal: HcTerminal) =>
