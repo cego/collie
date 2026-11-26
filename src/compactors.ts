@@ -1302,24 +1302,29 @@ const claudeRecords = Effect.fn("Compactors.claudeRecords")(function* (ctx: Agen
   return sources;
 });
 
-const MARK_REQUEST = /\(collie:([A-Za-z0-9-]+)\)|\/collie-compact ([A-Za-z0-9-]+)/;
-
-const CLAUDE_COMMAND = /^\/compact(\s|$)/;
-const PI_COMMAND = /^\/collie-compact(\s|$)/;
+const COMPACT_ARGS =
+  /^Keep the work in progress, the decisions taken and what is left to do\. \(collie:([A-Za-z0-9-]+)\)$/;
+const COMMAND_NAME = /<command-name>([\s\S]*?)<\/command-name>/;
+const COMMAND_ARGS = /<command-args>([\s\S]*?)<\/command-args>/;
+const CLAUDE_COMMAND = /^\/compact\s+([\s\S]*)$/;
+const PI_COMMAND = /^\/collie-compact ([A-Za-z0-9-]+)$/;
 const asText = Schema.decodeUnknownOption(Schema.String);
 
-// WARNING: a request is named by the command that asked for it, not by a message that mentions its marker.
+const identifier = (captured: string | undefined) => captured ?? null;
+
+// WARNING: a request is named by the command that asked for it, word for word, never by a mention of its marker.
 const namedRequest = (entry: {
   readonly message?: { readonly content?: unknown };
   readonly type?: string;
 }) => {
   const said = Str.trim(Option.getOrElse(asText(entry.message?.content), () => ""));
-  const command = entry.type === "message" ? PI_COMMAND : CLAUDE_COMMAND;
-  if (!command.test(said)) {
-    return null;
+  if (entry.type === "message") {
+    return identifier(PI_COMMAND.exec(said)?.[1]);
   }
-  const found = MARK_REQUEST.exec(said);
-  return found === null ? null : (found[1] ?? found[2] ?? null);
+  const tagged = COMMAND_NAME.exec(said);
+  const args = tagged === null ? CLAUDE_COMMAND.exec(said)?.[1] : COMMAND_ARGS.exec(said)?.[1];
+  const named = tagged === null || Str.trim(tagged[1] ?? "") === "/compact";
+  return named && args !== undefined ? identifier(COMPACT_ARGS.exec(Str.trim(args))?.[1]) : null;
 };
 
 const boundary = (line: { readonly type?: string; readonly subtype?: string }) =>

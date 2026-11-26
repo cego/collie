@@ -813,6 +813,30 @@ test("a command word that merely starts like /compact settles nothing", () =>
     }),
   ));
 
+test("an argument that merely quotes the marker settles nothing", () =>
+  withLaunch(
+    Effect.gen(function* () {
+      const { due, left } = yield* lostCompletion(
+        (at) =>
+          `{"type":"user","timestamp":"${at}","sessionId":"s-1","message":{"role":"user","content":"/compact repeat what (collie:req-1) said"}}\n${boundaryAt(at)}\n`,
+      );
+      expect(due).toBeNull();
+      expect(left).not.toBeNull();
+    }),
+  ));
+
+test("a command Claude records as tags settles the request it was given", () =>
+  withLaunch(
+    Effect.gen(function* () {
+      const { due, left } = yield* lostCompletion(
+        (at) =>
+          `{"type":"user","timestamp":"${at}","sessionId":"s-1","message":{"role":"user","content":"<command-name>/compact</command-name>\\n<command-message>compact</command-message>\\n<command-args>Keep the work in progress, the decisions taken and what is left to do. (collie:req-1)</command-args>"}}\n${boundaryAt(at)}\n`,
+      );
+      expect(due).toEqual({ dispatch: true });
+      expect(left).toBeNull();
+    }),
+  ));
+
 test("a user row of parts between the ask and the boundary ends the marked turn", () =>
   withLaunch(
     Effect.gen(function* () {
@@ -838,7 +862,7 @@ test("a transcript that merely mentions the marked request settles nothing", () 
   ));
 
 const naming = (request: string, at: string) =>
-  `{"type":"user","timestamp":"${at}","sessionId":"s-1","message":{"role":"user","content":"/compact Keep the work in progress. (collie:${request})"}}`;
+  `{"type":"user","timestamp":"${at}","sessionId":"s-1","message":{"role":"user","content":"/compact Keep the work in progress, the decisions taken and what is left to do. (collie:${request})"}}`;
 
 const boundaryAt = (at: string, trigger = "manual", session = "s-1") =>
   `{"type":"system","subtype":"compact_boundary","timestamp":"${at}","sessionId":"${session}","compactMetadata":{"trigger":"${trigger}","preTokens":180000}}`;
