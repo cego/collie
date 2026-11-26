@@ -66,11 +66,12 @@ export const collie = Effect.fn("World.collie")(function* (
   args: ReadonlyArray<string>,
   extra: Readonly<Record<string, string>> = {},
   onStderr: (text: string) => Effect.Effect<void> = () => Effect.void,
+  cwd: string = world.project,
 ) {
   const command = yield* collieCommand;
   const suite = yield* suiteEnv;
   const child = Bun.spawn([...command, "--json", ...args], {
-    cwd: world.project,
+    cwd,
     env: {
       PATH: yield* Config.String("PATH").pipe(Config.withDefault("/usr/bin:/bin")),
       HOME: world.home,

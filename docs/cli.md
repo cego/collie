@@ -361,7 +361,8 @@ A path that does not exist, is not a regular file, cannot be read or is larger t
 workspace is made. The files are part of the request: at the host, the same request id with other
 attachments is `RequestConflict`, and with the same ones it is the same Run. The CLI
 answers a `--request-id` it already has a receipt for from that receipt, before the host
-is asked, so there it is the first Run whatever is attached. They are not
+is asked — but only to the same request, so a retry with other attachments is refused
+rather than answered with the first Run. They are not
 an Input, so the Workflow's own input, and with it the execution, is the same either way.
 The operation's line in the Run's audit trail, kept in `host.db`, names each file under `asked`, by the
 name the Run keeps it under and the path it came from. Chat's `start`, `followup`,
@@ -2515,11 +2516,39 @@ A receipt is reserved before the action starts. If execution is interrupted befo
 result is saved, retrying reports `outcome: unknown` instead of running the action again.
 Check the Run and its recorded effects before submitting a new request.
 
+A receipt belongs to one request: the same operation, the same Run and the same arguments,
+with the Run read from who asked rather than from what the arguments say. The arguments are
+the ones the command decoded, so an object written in another key order is the same
+request, and an upload's own flags are the ones it sends: `--upload` with no path to
+upload, or `--snapshot` on an upload, changes nothing. A file the CLI sends from this
+Machine — an `--attach`, an upload's `--path` — is the path it resolves to, so `note.md`
+and its absolute path are one request; a path the host is given as typed, such as an
+artefact's `--path` without `--upload`, is not. A directory is counted as the physical path
+it resolves to: a symlink and its target are one request, and a link pointed at another
+checkout is another. A Schedule counts the checkout its `--workspace` resolved. A start
+counts the workspace as it was named as well as the checkout it resolved, so one whose
+workspace now resolves elsewhere is refused. A fork counts the physical directory it reads —
+the `.collie` of the directory the command runs in, which `COLLIE_CWD` sets — and a user
+fork also counts the project its source is copied from. A project fork writes in that
+directory; a user fork writes under this Machine's user config directory instead. Only
+`persona fork --layer project` takes the directory from `--workspace`, and only where no cwd
+was given: `workflow fork` and a user persona fork always read the directory they run in,
+whatever `--workspace` names. A local path that has gone, or that is no longer a
+directory, is refused before its receipt is looked up, for a Schedule's `--workspace` and
+for the directory a fork runs in, so neither replays the answer it was given while the
+directory was there. A
+request that reuses an id for anything else is refused as `invalid_input`, with none of the
+stored answer, and applies nothing; check that first request's effect before retrying under
+a new id. A receipt written before Collie scoped receipts to their requests is replayed only
+to the same operation for the Run its stored answer names; every other request under that id
+is refused the same way.
+
 A failure carries the request id back in `error.details.requestId`, including when the id
 was generated for you — so a failed send always leaves you something to retry with rather
 than forcing a fresh id, which would be a second run rather than a retry. A `needs_input`
 or `invalid_input` rejection writes no receipt, so the same id is free to reuse once you
-have fixed the command.
+have fixed the command — unless the refusal was a receipt conflict, which leaves the
+first request's receipt in place for its own retry.
 
 Native chat returns `Request: <id>` with its result; pass that value as `request_id` to
 retry. A partially applied sequence keeps its receipt even if its last action asks a
