@@ -1,6 +1,6 @@
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { Effect, Option, Ref, Schedule, Stream } from "effect";
+import { Effect, Deferred, Option, Ref, Schedule, Stream } from "effect";
 import type { Scope } from "effect";
 import { rosterFollowed } from "../desktop/src/bun/machine";
 import type { Route } from "../desktop/src/bun/machine";
@@ -12,6 +12,9 @@ import { fastForward } from "./support/effect";
 
 const run = <A, E>(effect: Effect.Effect<A, E, PlatformServices | Scope.Scope>) =>
   Effect.runPromise(fastForward(effect).pipe(Effect.provide(platformLayer)));
+
+const runFar = <A, E>(effect: Effect.Effect<A, E, PlatformServices | Scope.Scope>) =>
+  Effect.runPromise(fastForward(effect, 15_000).pipe(Effect.provide(platformLayer)));
 
 const until = (what: () => boolean) =>
   Effect.suspend(() => (what() ? Effect.void : Effect.fail("not yet"))).pipe(
@@ -115,6 +118,72 @@ test("a paired Machine stays visible while core's list is unread, and its row go
     }),
   ));
 
+test("a Machine a human removed while a roster read is pending is not routed from that reply", () =>
+  run(
+    Effect.gen(function* () {
+      const replied = yield* Deferred.make<void>();
+      const dropped = new Set<string>();
+      const reads: Array<number> = [];
+      const opened: Array<string> = [];
+      const told: Array<FlockItem> = [];
+      yield* rosterFollowed(
+        Effect.gen(function* () {
+          reads.push(1);
+          yield* Deferred.await(replied);
+          return [VM];
+        }),
+        Effect.sync(() => ({ profiles: [], dropped: [...dropped] })),
+        Effect.succeed([]),
+        (machine) =>
+          Effect.sync(() => {
+            opened.push(machine.id);
+            return routeOf(machine);
+          }),
+      ).pipe(
+        Stream.runForEach((item) => Effect.sync(() => void told.push(item))),
+        Effect.forkScoped,
+      );
+
+      yield* until(() => reads.length >= 1);
+      yield* Effect.sync(() => dropped.add("vm"));
+      yield* Deferred.succeed(replied, undefined);
+      yield* until(() => reads.length >= 3);
+
+      expect(opened).toEqual([]);
+      expect(Arr.filter(told, (item) => nameOf(item) === "vm Routed")).toEqual([]);
+    }),
+  ));
+
+test("a Machine a human removed while an unread roster is retried is not shown as a placeholder", () =>
+  run(
+    Effect.gen(function* () {
+      const replied = yield* Deferred.make<void>();
+      const dropped = new Set<string>();
+      const reads: Array<number> = [];
+      const told: Array<FlockItem> = [];
+      yield* rosterFollowed(
+        Effect.gen(function* () {
+          reads.push(1);
+          yield* Deferred.await(replied);
+          return yield* Effect.fail("core is unread");
+        }),
+        Effect.sync(() => ({ profiles: [], dropped: [...dropped] })),
+        Effect.succeed(["vm"]),
+        (machine) => Effect.sync(() => routeOf(machine)),
+      ).pipe(
+        Stream.runForEach((item) => Effect.sync(() => void told.push(item))),
+        Effect.forkScoped,
+      );
+
+      yield* until(() => reads.length >= 1);
+      yield* Effect.sync(() => dropped.add("vm"));
+      yield* Deferred.succeed(replied, undefined);
+      yield* until(() => reads.length >= 3);
+
+      expect(told).toEqual([]);
+    }),
+  ));
+
 test("a Machine a human removed while Desktop ran is not routed from a stale list", () =>
   run(
     Effect.gen(function* () {
@@ -123,5 +192,22 @@ test("a Machine a human removed while Desktop ran is not routed from a stale lis
 
       yield* until(() => reads.length >= 4);
       expect(opened).toEqual([]);
+    }),
+  ));
+
+test("a finished roster round is not kept by the round after it", () =>
+  runFar(
+    Effect.gen(function* () {
+      const ready = yield* Ref.make(true);
+      const { reads } = yield* following(ready, [], [], []);
+
+      yield* until(() => reads.length >= 50);
+      Bun.gc(true);
+      const settled = process.memoryUsage().heapUsed;
+      yield* until(() => reads.length >= 250);
+      Bun.gc(true);
+      const later = process.memoryUsage().heapUsed;
+
+      expect(later - settled).toBeLessThan(512 * 1024);
     }),
   ));

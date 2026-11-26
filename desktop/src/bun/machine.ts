@@ -470,7 +470,6 @@ const Roster = Schema.Struct({
   rosterFailure: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 
-// WARNING: a list core could not be asked for is not a list of no Machines.
 export const rosterOf = (collie: ReadonlyArray<string>) =>
   collieSaid(collie, ["machine", "list"]).pipe(
     Effect.flatMap((data) =>
@@ -879,54 +878,69 @@ const removedOf = (machine: KnownMachine) => {
   return returned;
 };
 
-// WARNING: core may start after Desktop, and a list it could not be asked for is not a list of no Machines.
+interface RosterRound {
+  readonly failures: number;
+  readonly shown: ReadonlyArray<KnownMachine>;
+  readonly wait: Duration.Duration;
+}
+
 export const rosterFollowed = <D extends BoardSource>(
   roster: Effect.Effect<ReadonlyArray<HerdrMachine>, string>,
   routed: Effect.Effect<Routed, never>,
   paired: Effect.Effect<ReadonlyArray<string>, never>,
   open: (machine: HerdrMachine) => Effect.Effect<Route<D>, never>,
 ) => {
-  const step = (failures: number, shown: Ref.Ref<ReadonlyArray<KnownMachine>>) =>
+  const unknown = (held: Routed, id: string) =>
+    !Arr.contains(held.profiles, id) && !Arr.contains(held.dropped, id);
+  const round = ({ failures, shown }: RosterRound) =>
     Effect.gen(function* () {
-      const held = yield* routed;
-      const before = yield* Ref.get(shown);
       const read = yield* roster.pipe(Effect.result);
-      const unknown = (id: string) =>
-        !Arr.contains(held.profiles, id) && !Arr.contains(held.dropped, id);
       if (Result.isFailure(read)) {
         const names = yield* paired;
-        const wanted = Arr.map(Arr.filter(names, unknown), placeholderOf);
+        // WARNING: read after the waits above, since a removal can land while they are out.
+        const held = yield* routed;
+        const placeholders = Arr.map(
+          Arr.filter(names, (id) => unknown(held, id)),
+          placeholderOf,
+        );
         const at = yield* Clock.currentTimeMillis;
         const items: ReadonlyArray<FlockItem> = [
-          ...Arr.map(wanted, routedOf),
-          ...Arr.map(wanted, (machine) => lostOf(machine, read.failure, at)),
-          ...Arr.map(absent(wanted, before), removedOf),
+          ...Arr.map(placeholders, routedOf),
+          ...Arr.map(placeholders, (machine) => lostOf(machine, read.failure, at)),
+          ...Arr.map(absent(placeholders, shown), removedOf),
         ];
-        yield* Ref.set(shown, wanted);
-        return { items, wait: Duration.millis(backoff(failures)), failures: failures + 1 };
+        const next: RosterRound = {
+          failures: failures + 1,
+          shown: placeholders,
+          wait: Duration.millis(backoff(failures)),
+        };
+        return { items, next };
       }
-      const items: Array<FlockItem> = Arr.map(before, removedOf);
-      for (const machine of Arr.filter(read.success, (one) => unknown(one.id))) {
+      const items: Array<FlockItem> = Arr.map(shown, removedOf);
+      for (const machine of read.success) {
+        const before = yield* routed;
+        if (!unknown(before, machine.id)) {
+          continue;
+        }
         const route = yield* open(machine);
+        if (Arr.contains((yield* routed).dropped, machine.id)) {
+          continue;
+        }
         items.push({ _tag: "Routed", machine: route.machine });
       }
-      yield* Ref.set(shown, []);
-      return { items, wait: Duration.fromInputUnsafe(ROSTER_EVERY), failures: 0 };
+      const next: RosterRound = {
+        failures: 0,
+        shown: [],
+        wait: Duration.fromInputUnsafe(ROSTER_EVERY),
+      };
+      return { items, next };
     });
-  const round: (
-    failures: number,
-    shown: Ref.Ref<ReadonlyArray<KnownMachine>>,
-  ) => Stream.Stream<FlockItem, never> = (failures, shown) =>
-    Stream.unwrap(
-      Effect.map(step(failures, shown), ({ items, wait, failures: next }) =>
-        Stream.fromIterable(items).pipe(
-          Stream.concat(Stream.fromEffectDrain(Effect.sleep(wait))),
-          Stream.concat(Stream.suspend(() => round(next, shown))),
-        ),
-      ),
-    );
-  return Stream.unwrap(
-    Effect.map(Ref.make<ReadonlyArray<KnownMachine>>([]), (shown) => round(0, shown)),
+  const start: RosterRound = { failures: 0, shown: [], wait: Duration.zero };
+  return Stream.paginate(start, (state) =>
+    Effect.andThen(
+      Effect.sleep(state.wait),
+      round(state).pipe(Effect.map(({ items, next }) => [items, Option.some(next)] as const)),
+    ),
   );
 };
 

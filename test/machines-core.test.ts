@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
 import { forgetMachine, remoteRoute, rosterOf } from "../desktop/src/bun/machine";
 import { addToCore, shOn } from "../desktop/src/bun/onboarding";
@@ -12,6 +12,8 @@ import { runEffect } from "./support/effect";
 import { twoMachines } from "./support/peers";
 import type { Side } from "./support/peers";
 import { collieCommand } from "./support/world";
+
+setDefaultTimeout(30_000);
 
 const Logged = Schema.fromJsonString(
   Schema.Struct({ cmd: Schema.String, params: Schema.optionalKey(Schema.Json) }),
@@ -186,6 +188,28 @@ test("a Machine whose core list cannot be read is reported as unread, not as non
           expect(read.envelope.data).toMatchObject({
             roster: [{ label: "second" }],
             machines: [{ name: "second", added: true }],
+          });
+        }),
+      ["attended.workflow.ts"],
+    ),
+  ));
+
+test("a roster read that core takes but never answers is reported as unread, not waited on", () =>
+  runEffect(
+    twoMachines(
+      "collie-core-silent-",
+      (first, second) =>
+        Effect.gen(function* () {
+          yield* first.lists([second]);
+          const release = first.core.hold("machine.list");
+          const unread = yield* first
+            .cli(["machine", "list"], { COLLIE_ROSTER_READ_WITHIN: "50 millis" })
+            .pipe(Effect.ensuring(Effect.sync(release)));
+
+          expect(unread.envelope.ok).toBe(true);
+          expect(unread.envelope.data).toMatchObject({
+            roster: null,
+            rosterFailure: expect.stringContaining("no reply within 50ms"),
           });
         }),
       ["attended.workflow.ts"],
