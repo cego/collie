@@ -1444,6 +1444,27 @@ test("a marker of another pass does not stand in for the check its Run collects"
     }),
   ));
 
+test("a marker of one gate fix does not stand in for the check of the next", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, {
+        id: "r-ended",
+        task: "task-1",
+        state: "succeeded",
+        created: "2026-09-14T09:00:00Z",
+        finished: "2026-09-14T09:30:00Z",
+      });
+      yield* recordedCheck(run, "r-ended@1-a", "lint", { pass: "fix", round: 2 });
+      yield* marking(run, { name: "lint", pass: "fix", round: 1 });
+
+      const [left] = yield* board(env, [run], { collecting: new Set(["r-ended@1-a"]) });
+      expect(left!.sentence).toContain("Running lint after gate fix 2");
+      expect(left!.sentence).not.toContain("gate fix 1");
+      expect(left!.check?.revision).toBe("");
+    }),
+  ));
+
 test("a Run that has not ended shows its marker over a record of another check", () =>
   runEffect(
     Effect.gen(function* () {

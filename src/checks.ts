@@ -87,6 +87,7 @@ const readOrNone = (run: RunFacts) =>
 export const marksCheck = (marker: Verifying, record: CheckRecord) =>
   record.name === marker.name &&
   record.pass === marker.pass &&
+  (record.round ?? null) === marker.round &&
   epochMs(record.started) >= epochMs(marker.started);
 
 const commandOf = (executable: string) => Str.split(executable, "/").at(-1) ?? executable;
