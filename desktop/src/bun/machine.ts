@@ -907,7 +907,6 @@ const removedOf = (machine: KnownMachine) => {
   return returned;
 };
 
-// WARNING: a roster reply read before a Machine was removed arrives after it.
 export const staleRouted = (item: FlockItem, dropped: (profile: string) => boolean) =>
   "machine" in item && "_tag" in item && item._tag === "Routed" && dropped(item.machine.profile);
 
