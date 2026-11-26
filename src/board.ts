@@ -1049,7 +1049,7 @@ const ledgerOf = Effect.fn("Board.ledgerOf")(function* (
               run.branch !== null && run.branch === target.branch && run.project === target.project
             );
           }
-          // WARNING: a ref whose project is not synced has no id, so only `carried` tells the two apart.
+          // WARNING: `carried` is null for a branch-only Run and for one whose merge request has no id; mrOf tells them apart.
           return mrOf(run) === null;
         }),
       );
