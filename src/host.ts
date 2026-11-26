@@ -140,7 +140,7 @@ import {
 import { ChangedIntent } from "./intent-model";
 import { donePasses, markersOf, runningCheck, followLog } from "./checks";
 import { startCheckout } from "./agent-start";
-import { configuredAgents, questionOf, roomForQuestion } from "./agents";
+import { configuredAgents, parkedRoomOf } from "./agents";
 import { hasAnyRoom, hasRoomFor } from "./harness";
 import { Collecting } from "./collecting";
 import { memoryWaitOf, waitForMemory, waitLine } from "./memory-wait";
@@ -2693,9 +2693,17 @@ const frontDoorHandlers = (
       }) =>
         Effect.gen(function* () {
           const readings = yield* usage.readings;
-          const asked = questionOf(view.usage?.question);
-          if (asked !== undefined) {
-            return roomForQuestion(asked, readings, yield* Clock.currentTimeMillis);
+          const here = parkedRoomOf(
+            view.usage?.question,
+            readings,
+            yield* Clock.currentTimeMillis,
+            {
+              machine: machineName(),
+              harnesses: yield* harnesses.catalogues,
+            },
+          );
+          if (here !== null) {
+            return here;
           }
           const defaults = yield* loadDefaults(env.userDir).pipe(
             Effect.orElseSucceed(() => FALLBACK_DEFAULTS),

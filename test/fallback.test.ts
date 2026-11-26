@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Schema, flow, Result } from "effect";
 import { AgentChoiceSchema } from "../src/agents";
 import { foldCeiling, hasAnyRoom, hasRoomFor, resolveWithRoom } from "../src/harness";
-import { questionOf, roomForQuestion } from "../src/agents";
+import { parkedRoomOf, questionOf, roomForQuestion } from "../src/agents";
 import type { RoomQuestion } from "../src/board-model";
 import type { Preferences } from "../src/harness";
 import { parseSetting } from "../src/settings";
@@ -340,6 +340,38 @@ test("a usage park is asked of the Run's own choices, not of an account another 
   expect(roomForQuestion(question, [chatgptRoom], NOW)).toBe(false);
   expect(roomForQuestion(question, [], NOW)).toBe(false);
   expect(roomForQuestion(question, [], epochMs("2026-10-08T10:00:01Z"))).toBe(true);
+});
+
+test("a parked question is rechecked against the harnesses the Machine actually has", () => {
+  const question: RoomQuestion = {
+    layers: [{ harness: "codex", model: "gpt-5" }],
+    chain: [],
+    choices: [{ harness: "codex", model: "gpt-5", effort: null }],
+    spent: [],
+  };
+  const claudeOnly = {
+    machine: "vm-mk",
+    harnesses: [
+      {
+        harness: "claude",
+        table: null,
+        entries: [{ model: "opus", efforts: [], isDefault: true }],
+      },
+    ],
+  };
+  expect(parkedRoomOf(question, [], NOW, claudeOnly)).toBe(false);
+  const withCodex = {
+    machine: "vm-mk",
+    harnesses: [
+      ...claudeOnly.harnesses,
+      {
+        harness: "codex",
+        table: null,
+        entries: [{ model: "gpt-5", efforts: [], isDefault: true }],
+      },
+    ],
+  };
+  expect(parkedRoomOf(question, [], NOW, withCodex)).toBe(true);
 });
 
 test("a usage park honours the upTo ceiling its selector refuses, whatever the account's usage", () => {

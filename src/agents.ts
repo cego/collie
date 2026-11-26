@@ -1757,6 +1757,16 @@ const preferenceOf: (one: RoomQuestion["layers"][number]) => Preferences = (one)
   return read;
 };
 
+export const parkedRoomOf = (
+  persisted: Schema.Json | undefined,
+  readings: ReadonlyArray<UsageReading>,
+  now: number,
+  catalogue: MachineCatalogue,
+) => {
+  const asked = questionOf(persisted);
+  return asked === undefined ? null : roomForQuestion(asked, readings, now, catalogue);
+};
+
 // WARNING: a park on room is cleared only on an agent the Run may use, so the wake-up is given what `choose` was given.
 export const roomQuestionOf = (
   inputs: {
@@ -1895,7 +1905,8 @@ export const roomForQuestion = (
     question.models ?? {},
     catalogue,
   );
-  return !resolved.ok || resolved.chosen.from !== null || resolved.chosen.why === null;
+  // WARNING: a choice the Machine cannot run is no room either, or a park clears onto a harness that is not installed.
+  return resolved.ok && (resolved.chosen.from !== null || resolved.chosen.why === null);
 };
 
 const sameUsage = (one: AgentChoice, other: AgentChoice) => {
