@@ -1,46 +1,25 @@
-// What a module says about itself, and the file an author starts from.
-//
-// One reading answers every front door — the listing, the detail, the definitions tool
-// and the refusal that asks for an input nobody gave — so what an operator is told an id
-// takes is what a launch holds them to. Checking is that reading plus the compiler, and
-// creating or forking writes the file the reading would find.
-//
-// Nothing here runs a workflow body, takes an agent or opens a worktree. Constructing a
-// module is the author's own top level and their `make`, which is how a schema on either
-// end can be read at all; a Run is started somewhere else entirely.
-
+// WARNING: nothing here runs a workflow body, takes an agent or opens a worktree; constructing a module runs only its top level and make.
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Option from "effect/Option";
-import { Effect, FileSystem, Path, Schema, type PlatformError } from "effect";
+import type { Schema } from "effect";
+import { Effect, FileSystem, Path } from "effect";
+import type { PlatformError } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
-import {
-  ENTRY_SUFFIX,
-  declaredBy,
-  discover,
-  searchPath,
-  stem,
-  type EntryLayer,
-  type Found,
-} from "./discovery";
+import { ENTRY_SUFFIX, declaredBy, discover, searchPath, stem } from "./discovery";
+import type { EntryLayer, Found } from "./discovery";
 import { loadDefinitions, personaData } from "./definitions";
 import type { Described, HostDefinitions } from "./definitions-model";
 import { reason } from "./naming";
 import { HOST_CONNECTION_USES } from "./connection-model";
 
 export { Described, Drawn } from "./definitions-model";
-import { loadEntry, provisionToolchain, refreshToolchain, typecheckEntry } from "./engine";
-import {
-  RESERVED_INPUTS,
-  describeMetadata,
-  jsonSchemaFor,
-  type HostWorkflow,
-  type WorkflowEntry,
-} from "./sdk";
+import { loadEntry, provisionToolchain, refreshToolchain, typecheckEntries } from "./engine";
+import { RESERVED_INPUTS, describeMetadata, jsonSchemaFor } from "./sdk";
+import type { HostWorkflow, WorkflowEntry } from "./sdk";
 
-/** Where a module is, as both a reading and a writing name it. */
 export interface Where {
   readonly layer: EntryLayer;
   readonly path: string;
@@ -53,12 +32,7 @@ const HOST_OPTIONS = Arr.map(Rec.toEntries(RESERVED_INPUTS), ([name, meaning]) =
   meaning,
 }));
 
-/**
- * What a module declares, on both ends. The workflow is constructed to read its result
- * and failure schemas, which is what `make` is for — a Layer is described by it, never
- * built, and nothing of the author's body runs.
- */
-export function describeModule(entry: WorkflowEntry, where: Where): Described {
+export function describeModule(entry: WorkflowEntry, where: Where) {
   const built = construct(entry);
   return {
     id: entry.id,
@@ -75,11 +49,6 @@ export function describeModule(entry: WorkflowEntry, where: Where): Described {
   };
 }
 
-/**
- * The module an id was found at, read again for both its ends. It loaded once to be
- * found, so it loads again from the same revision; a file that has gone in between is
- * described as far as the listing knew it, and says why it can no longer be read.
- */
 export const readModule: (found: Found) => Effect.Effect<Described, never, FileSystem.FileSystem> =
   Effect.fn("Authoring.readModule")(function* (found: Found) {
     const loaded = yield* loadEntry(found.path).pipe(Effect.result);
@@ -100,7 +69,6 @@ export const readModule: (found: Found) => Effect.Effect<Described, never, FileS
         };
   });
 
-/** Read as `workflow show` and `persona show` read them, with each module's own files. */
 export const readDefinitions = Effect.fn("Authoring.readDefinitions")(function* (where: {
   readonly pluginRoot: string;
   readonly userDir: string;
@@ -140,14 +108,8 @@ export const readDefinitions = Effect.fn("Authoring.readDefinitions")(function* 
   } satisfies HostDefinitions;
 });
 
-/** What `make` gave back, or the sentence it threw instead. One of the two is always null. */
-type Constructed =
-  | { readonly workflow: HostWorkflow; readonly broken: null }
-  | { readonly workflow: null; readonly broken: string };
-
-const construct = (entry: WorkflowEntry): Constructed => {
+const construct = (entry: WorkflowEntry) => {
   try {
-    // Typed for the author, not for us: an untyped module's `make` can return anything.
     const workflow: HostWorkflow | undefined = entry.make(entry.id).workflow;
     return workflow === undefined
       ? { workflow: null, broken: `make("${entry.id}") returned no workflow` }
@@ -162,63 +124,75 @@ const drawn = (schema: Schema.Constraint) => {
   return { schema: projected.document, limits: projected.limits };
 };
 
-/** One module as `check` reports it: what stops it, what is merely undrawn, and what was read. */
 export type Checked = {
   readonly id: string;
   readonly layer: EntryLayer;
   readonly path: string;
-  /** What stops it running: it would not load, would not construct, or would not compile. */
   readonly problems: ReadonlyArray<string>;
-  /** Where a drawing constrains nothing. Not a problem: the schema itself still holds. */
   readonly limits: ReadonlyArray<string>;
-  /** Why nothing was typechecked, where nothing was. Silence would read as a pass. */
   readonly toolchain: string | null;
 };
 
-/**
- * Everything wrong with one module, without starting anything. A file that will not load
- * is known by the id its name claims, because the id inside it is what failed to be read.
- */
-export const checkModule: (
-  where: Where,
+export const checkModules: (
+  wheres: ReadonlyArray<Where>,
 ) => Effect.Effect<
-  Checked,
+  ReadonlyArray<Checked>,
   never,
   FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
-> = Effect.fn("Authoring.checkModule")(function* (where: Where) {
-  const dir = directoryOf(where.path);
-  const loaded = yield* loadEntry(where.path).pipe(Effect.result);
-  if (loaded._tag === "Failure") {
-    return {
-      id: stem(where.path),
+> = Effect.fn("Authoring.checkModules")(function* (wheres: ReadonlyArray<Where>) {
+  const loaded = yield* Effect.forEach(
+    wheres,
+    (where) => Effect.map(Effect.result(loadEntry(where.path)), (result) => ({ where, result })),
+    { concurrency: 4 },
+  );
+  const byDir = Arr.groupBy(
+    Arr.filter(loaded, (one) => one.result._tag === "Success"),
+    (one) => directoryOf(one.where.path),
+  );
+  const typed = yield* Effect.forEach(
+    Rec.toEntries(byDir),
+    ([dir, group]) =>
+      refreshToolchain(dir).pipe(
+        Effect.andThen(typecheckEntries({ dir, files: Arr.map(group, (one) => one.where.path) })),
+        Effect.result,
+        Effect.map((result) => [dir, result] as const),
+      ),
+    { concurrency: 4 },
+  );
+  const typedIn = new Map(typed);
+  return Arr.map(loaded, ({ where, result }) => {
+    if (result._tag === "Failure") {
+      const failed: Checked = {
+        id: stem(where.path),
+        layer: where.layer,
+        path: where.path,
+        problems: [result.failure.message],
+        limits: [],
+        toolchain: null,
+      };
+      return failed;
+    }
+    const described = describeModule(result.success, where);
+    const checked = typedIn.get(directoryOf(where.path))!;
+    const done: Checked = {
+      id: described.id,
       layer: where.layer,
       path: where.path,
-      problems: [loaded.failure.message],
-      limits: [],
-      toolchain: null,
+      problems: [
+        ...(described.broken === null ? [] : [described.broken]),
+        ...(checked._tag === "Success" ? (checked.success.get(where.path) ?? []) : []),
+      ],
+      limits: limitsOf(described),
+      toolchain: checked._tag === "Failure" ? checked.failure.message : null,
     };
-  }
-  const described = describeModule(loaded.success, where);
-  const typed = yield* refreshToolchain(dir).pipe(
-    Effect.andThen(typecheckEntry({ dir, file: where.path })),
-    Effect.result,
-  );
-  const unavailable = typed._tag === "Failure" ? typed.failure.message : null;
-  return {
-    id: described.id,
-    layer: where.layer,
-    path: where.path,
-    problems: [
-      ...(described.broken === null ? [] : [described.broken]),
-      ...(typed._tag === "Success" ? typed.success : []),
-    ],
-    limits: limitsOf(described),
-    toolchain: unavailable,
-  };
+    return done;
+  });
 });
 
-/** Each place a drawing of this module says less than the module does, named by where. */
-const limitsOf = (described: Described): ReadonlyArray<string> => [
+export const checkModule = (where: Where) =>
+  Effect.map(checkModules([where]), (checked) => checked[0]!);
+
+const limitsOf = (described: Described) => [
   ...Arr.flatMap(described.inputs, (input) =>
     Arr.map(input.limits, (limit) => `input "${input.name}": ${limit}`),
   ),
@@ -226,20 +200,13 @@ const limitsOf = (described: Described): ReadonlyArray<string> => [
   ...Arr.map(described.error.limits, (limit) => `error: ${limit}`),
 ];
 
-/** What writing a module came to: the file, and the sentence a human reads either way. */
 export interface Written {
   readonly ok: boolean;
   readonly path: string;
   readonly message: string;
-  /** Why an author cannot typecheck what was written yet, or null. The module still runs. */
   readonly toolchain: string | null;
 }
 
-/**
- * A module of one's own, and the setup to typecheck it beside it. The toolchain is
- * installed with the executable's embedded Bun, so neither Bun nor Node has to be on the
- * machine; a first use with no network says so and leaves a module that still runs.
- */
 export const createEntry: (options: {
   readonly dir: string;
   readonly id: string;
@@ -254,13 +221,11 @@ export const createEntry: (options: {
   return yield* write(options.dir, options.id, entryText(options.id));
 });
 
-/** The parent a fork keeps, read where it was found. */
 export interface Forking {
   readonly path: string;
   readonly entry: WorkflowEntry;
 }
 
-/** A fork as a file that re-exports its parent and hands `make` on; nothing is copied. */
 export const forkEntry: (options: {
   readonly dir: string;
   readonly id: string;
@@ -282,12 +247,7 @@ export const forkEntry: (options: {
   );
 });
 
-/**
- * How the fork names its parent. Relative where the two sit near each other, absolute
- * where they do not: a fork in a project of a module in the installation is otherwise a
- * climb to the root and back down, which resolves but tells the reader nothing.
- */
-const importOf = (path: Path.Path, dir: string, parent: string): string => {
+const importOf = (path: Path.Path, dir: string, parent: string) => {
   const relative = path.relative(dir, parent);
   const near = pipe_(relative, Str.startsWith(".")) ? relative : `./${relative}`;
   return near.length <= parent.length ? near : parent;
@@ -309,8 +269,7 @@ const write = Effect.fn("Authoring.write")(function* (dir: string, id: string, t
       toolchain: null,
     };
   }
-  // After the entry, and never fatally: what is installed here is for typechecking, and
-  // the module Collie runs resolves `collie` from the executable either way.
+  // WARNING: a failed provisioning must not fail the read; the toolchain only serves typechecking.
   const provisioned = yield* provisionToolchain(dir).pipe(Effect.result);
   return {
     ok: true,
@@ -329,7 +288,6 @@ const directoryOf = (file: string) =>
     ),
   );
 
-/** The smallest module that runs: typed input, one recorded step, a typed result. */
 const entryText = (id: string) => `import { Host, Run, defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";

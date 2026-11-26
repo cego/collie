@@ -1,5 +1,3 @@
-// A wait nobody has to repair anything for, and when it has gone on too long to stay one.
-
 import { expect, test } from "bun:test";
 import { awaitingLine, overdueLine } from "../src/awaiting";
 import { epochMs } from "../src/time";

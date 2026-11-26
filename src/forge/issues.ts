@@ -5,6 +5,7 @@ export const Issue = Schema.Struct({
   title: Schema.String,
   body: Schema.String,
   url: Schema.String,
+  closedAt: Schema.optionalKey(Schema.String),
 });
 export type Issue = typeof Issue.Type;
 export interface IssueRef {
@@ -17,3 +18,4 @@ export type IssueList =
 export type FiledIssue =
   | ({ readonly ok: true } & IssueRef)
   | { readonly ok: false; readonly reason: string };
+export type IssueQuery = ReadonlyArray<number> | { readonly closedSince: string };

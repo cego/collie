@@ -1,22 +1,18 @@
-// Helping the human write their Standing direction: when Desktop offers it, and the first
-// turn of the setup conversation they chose.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { Schema } from "effect";
-import { OwnStore, type OwnWords, withinCaps } from "../../../src/own-words-model";
+import { OwnStore, withinCaps } from "../../../src/own-words-model";
+import type { OwnWords } from "../../../src/own-words-model";
 import type { StandingDirection } from "../../../src/standing-direction";
-import type { DesktopSettings, DesktopSettingsChange } from "./flock";
+import type { DesktopSettings } from "./flock";
 
-/** "Read my messages", or "Ask me five questions instead". */
 export const SetupChoice = Schema.Literals(["read", "ask"]);
 export type SetupChoice = typeof SetupChoice.Type;
 
 export interface OfferFacts {
   readonly direction: StandingDirection | undefined;
   readonly connected: boolean;
-  /** This Desktop's version. */
   readonly version: string;
   readonly settings: Pick<DesktopSettings, "setupNotNow" | "setupNever">;
 }
@@ -27,11 +23,10 @@ export const offersSetup = ({ direction, connected, version, settings }: OfferFa
   settings.setupNever !== true &&
   settings.setupNotNow !== version;
 
-/** "Don't ask again", or "Not now", which holds until Desktop's next version. */
-export const declined = (forGood: boolean, version: string): DesktopSettingsChange =>
+// WARNING: 'Not now' holds until Desktop's next version; 'Don't ask again' holds for good.
+export const declined = (forGood: boolean, version: string) =>
   forGood ? { setupNever: true } : { setupNotNow: version };
 
-/** Where one computer keeps the human's sessions, or why it could not say. */
 export const ComputerStores = Schema.Struct({
   computer: Schema.String,
   stores: Schema.Array(OwnStore),
@@ -50,7 +45,9 @@ const indented = (text: string) =>
   );
 
 const leftOut = (read: ComputerWords) => {
-  if ("problem" in read) return [`${read.computer}: could not be read: ${read.problem}`];
+  if ("problem" in read) {
+    return [`${read.computer}: could not be read: ${read.problem}`];
+  }
   const { stores, skipped, leftOut, cut } = read.words;
   return Arr.map(
     [
@@ -69,10 +66,10 @@ const leftOut = (read: ComputerWords) => {
   );
 };
 
-/** The procedure, then what Read gave if the human chose it, marked as data. */
 export const setupTurn = (procedure: string, read: ReadonlyArray<ComputerWords> | null) => {
-  if (read === null)
+  if (read === null) {
     return `${Str.trim(procedure)}\n\nThe human chose the five questions, so no earlier messages are given.`;
+  }
   const { kept, leftOut: overAll } = withinCaps(
     Arr.flatMap(read, (one) =>
       "words" in one

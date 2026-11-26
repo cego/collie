@@ -1,15 +1,4 @@
 #!/usr/bin/env bun
-// What one harness actually does about a delivery, against a running herdr. Nothing in
-// `src/steering-caps.ts` may say `proven` without a pass recorded here: help text is a
-// claim, a version number is a claim, and neither is a result.
-//
-//   bun run tools/steering-live.ts <harness> --agent <name> [--keep]
-//
-// The agent is one you already have live in herdr, on that harness, with something slow
-// to do — start it the way you normally would. This asks the three questions the
-// capability table has rows for and prints them as markdown to paste into
-// `CAPABILITIES.md`. Attribution asks for a line typed into that pane, by a person or an
-// agent, and waits.
 
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -36,12 +25,11 @@ interface Row {
 
 const CAPABILITIES = ["now", "interrupt", "ack", "attribution"] as const;
 
-function allNotRun(note: string): Row[] {
+function allNotRun(note: string) {
   return Arr.map(CAPABILITIES, (capability) => ({ capability, result: "not-run" as const, note }));
 }
 
-/** What a delivery asks for in this experiment: the token, and the ack, and nothing else. */
-function askFor(runDir: string, id: string): string {
+function askFor(runDir: string, id: string) {
   return Arr.join(
     [
       `collie-delivery:${id}`,
@@ -61,16 +49,18 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
   const herdr = new Herdr(env);
 
   const version = yield* installedVersion(harness);
-  if (version === null)
+  if (version === null) {
     return { version: "not installed", rows: allNotRun(`${harness} is not on PATH`) };
+  }
 
   const scratch = yield* fs.makeTempDirectory({ prefix: `collie-live-${harness}-` });
-  if (!keep)
+  if (!keep) {
     yield* Effect.addFinalizer(() =>
       fs.remove(scratch, { recursive: true, force: true }).pipe(Effect.ignore),
     );
+  }
   const runDir = path.join(scratch, "run");
-  // The probe's ledger is its own, never the ledgers of the host this herdr serves.
+  // WARNING: the probe's ledger is its own, never the host's that this herdr serves.
   const records = yield* Layer.build(recordsAt(scratch));
   yield* fs.makeDirectory(path.join(runDir, "steering", "acks"), { recursive: true });
 
@@ -83,20 +73,23 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
     role: "live",
     agent,
     paneId: null,
-    workspaceId: env.workspaceId,
+    workspaceId: null,
     runId: "live",
     workflow: "live",
   });
   const entry = addressed.entry;
-  if (entry === null) return { version, rows: allNotRun(addressed.reason) };
+  if (entry === null) {
+    return { version, rows: allNotRun(addressed.reason) };
+  }
   const hookDir = yield* controlDir(env.stateDir, agent);
 
-  /** Whether the agent wrote the ack for this delivery within the budget. */
   const acked = Effect.fn("live.acked")(function* (id: string, budgetMs: number) {
     const deadline = (yield* Clock.currentTimeMillis) + budgetMs;
     while ((yield* Clock.currentTimeMillis) < deadline) {
-      if (yield* fs.exists(ackPath(runDir, id))) return true;
-      yield* Effect.sleep(2_000);
+      if (yield* fs.exists(ackPath(runDir, id))) {
+        return true;
+      }
+      yield* Effect.sleep(2000);
     }
     return false;
   });
@@ -120,29 +113,29 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
     );
   });
 
-  const rows: Row[] = [];
+  const rows: Array<Row> = [];
 
-  // (a) `now` and (b) the ack it asks for: one delivery answers both rows.
   const nowId = "live-now-1";
   const sent = yield* deliver(nowId, "now");
   const nowAcked = sent.ok ? yield* acked(nowId, 120_000) : false;
-  rows.push({
-    capability: "now",
-    result: sent.ok && nowAcked ? "pass" : "fail",
-    note: sent.ok
-      ? nowAcked
-        ? "acknowledged within 120s"
-        : "no ack within 120s"
-      : "the delivery was not sent",
-  });
-  rows.push({
-    capability: "ack",
-    result: nowAcked ? "pass" : "fail",
-    note: nowAcked ? `wrote ${ackPath(runDir, nowId)}` : "no ack file appeared",
-  });
+  rows.push(
+    {
+      capability: "now",
+      result: sent.ok && nowAcked ? "pass" : "fail",
+      note: sent.ok
+        ? nowAcked
+          ? "acknowledged within 120s"
+          : "no ack within 120s"
+        : "the delivery was not sent",
+    },
+    {
+      capability: "ack",
+      result: nowAcked ? "pass" : "fail",
+      note: nowAcked ? `wrote ${ackPath(runDir, nowId)}` : "no ack file appeared",
+    },
+  );
 
-  // (c) `interrupt`: keys first, then the message. Leaving `working` is what can be
-  // observed; it is not a claim that the harness stopped.
+  // WARNING: leaving working is what can be observed; it is not a claim that the harness stopped.
   const before = yield* herdr
     .agentStatus(agent)
     .pipe(Effect.orElseSucceed(() => "unknown" as const));
@@ -157,7 +150,7 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
     note: `was ${before}; left working within ${INTERRUPT_WAIT_MS}ms: ${moved}; acknowledged: ${interruptAcked}`,
   });
 
-  // (d) attribution: only Claude installs a hook that can see a submission at all.
+  // WARNING: only Claude installs a hook that can see a submission at all.
   if (harness !== "claude") {
     rows.push({
       capability: "attribution",
@@ -165,7 +158,7 @@ const live = Effect.fn("live.run")(function* (harness: string, agent: string, ke
       note: "no hook surface Collie can install on this harness",
     });
   } else {
-    // The hook's record, not the ledger: only a live Run's oversight writes manual_override.
+    // WARNING: only a live Run's oversight writes manual_override; read the hook's record, not the ledger.
     const deliveredAsCollie = yield* submittedDelivery(hookDir, nowId);
     const before = yield* externalSubmissions(hookDir);
     yield* Effect.log(`Type any line into ${agent}'s pane now, then Enter. Waiting 90 seconds.`);
@@ -191,7 +184,9 @@ const leftWorking = Effect.fn("live.leftWorking")(function* (
     const status = yield* herdr
       .agentStatus(agent)
       .pipe(Effect.orElseSucceed(() => "unknown" as const));
-    if (status !== "working") return true;
+    if (status !== "working") {
+      return true;
+    }
     yield* Effect.sleep(250);
   }
   return false;

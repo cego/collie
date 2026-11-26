@@ -1,6 +1,3 @@
-// What a Schedule's waking occurrence does, and which occurrence comes after it: the two
-// decisions every firing is made of, as a table against known times.
-
 import { expect, test } from "bun:test";
 import { Result } from "effect";
 import { isoOf, nextOccurrence, onWake, parseSchedule } from "../src/schedule-model";
@@ -77,7 +74,6 @@ test.each([
 });
 
 test("a resume never catches up: its first occurrence is the next cron time after now", () => {
-  // Paused since the 12th: whatever fell since, nothing earlier than now is dealt with.
   expect(nextOccurrence(daily, at("2026-10-16T08:00:00Z"), at("2026-10-16T08:00:00Z"))).toEqual(
     at("2026-10-17T07:00:00Z"),
   );
@@ -85,7 +81,6 @@ test("a resume never catches up: its first occurrence is the next cron time afte
 
 test("07:00 in a time zone stays 07:00 there across a change of daylight saving time", () => {
   const copenhagen = cron("0 7 * * *", "Europe/Copenhagen");
-  // Summer time ends on 25 October 2026: 05:00Z before it, 06:00Z after.
   const before = nextOccurrence(copenhagen, at("2026-10-24T05:00:00Z"), at("2026-10-24T05:00:00Z"));
   expect(before).toEqual(at("2026-10-25T06:00:00Z"));
   const late = onWake({

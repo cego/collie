@@ -1,22 +1,13 @@
-// The GitHub adapter: everything Collie asks GitHub, through `gh` or over HTTP with gh's
-// token. Only github.com.
-
 import { stripVTControlCharacters } from "node:util";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import { Clock, Duration, Effect, FileSystem, Option, Path, Result, Schema } from "effect";
 import { CommandLine } from "effect/process";
-import {
-  mrPath,
-  mrWords,
-  type ForgeChecks,
-  type Mergeability,
-  type MrDetails,
-  type MrPanel,
-  type MrRef,
-} from "../board-model";
-import { keepCredentialHelper, whatItSaid, type Runner } from "../mr";
+import { mrPath, mrWords } from "../board-model";
+import type { ForgeChecks, Mergeability, MrDetails, MrPanel, MrRef } from "../board-model";
+import { keepCredentialHelper, whatItSaid } from "../mr";
+import type { Runner } from "../mr";
 import { failedTestsIn } from "../own-tests";
 import { epochMs } from "../time";
 import type {
@@ -26,31 +17,21 @@ import type {
   StagingRead,
   Forge,
   ForBranch,
-  FromBranch,
   FromBranchList,
   BaseJobRead,
   TargetJobRead,
-  FailedAttempt,
   JobRead,
   JobState,
   PipelineRead,
   TagPipelineRead,
-  Readiness,
   ReviewRequest,
 } from "./forge";
-import {
-  ForgeHttp,
-  loginReadiness,
-  graphqlAs,
-  pagesAs,
-  request,
-  requestAs,
-  requestText,
-  type Answered,
-  type ForgeLogin,
-} from "./http";
+import type { ForgeHttp } from "./http";
+import { loginReadiness, graphqlAs, pagesAs, request, requestAs, requestText } from "./http";
+import type { Answered, ForgeLogin } from "./http";
 import {
   listIssues,
+  listRequests,
   createIssue,
   commentIssue,
   postReview,
@@ -62,14 +43,8 @@ import {
   viewerLogin,
   myMergeRequests,
 } from "./threads";
-import {
-  judgeComments,
-  QUEUE_MERGERS,
-  type CommentKind,
-  type ForgeComment,
-  type MergeAnswer,
-  type ReviewRead,
-} from "./review";
+import { judgeComments, QUEUE_MERGERS } from "./review";
+import type { CommentKind, ForgeComment, MergeAnswer, ReviewRead } from "./review";
 
 import type { PluginEnv } from "../env";
 import type { ConnectionReading as Probe } from "../connection-model";
@@ -89,38 +64,57 @@ export const probeGithub = Effect.fn("Connections.probeGithub")(function* <R>(
     env.cwd,
   );
   const text = whatItSaid(status);
-  if (status.code === 127 || /not logged into any|not logged in to any/i.test(text))
-    return { state: "absent", detail: "no GitHub login on this Machine", fix } satisfies Probe;
+  if (status.code === 127 || /not logged into any|not logged in to any/i.test(text)) {
+    const returned: Probe = { state: "absent", detail: "no GitHub login on this Machine", fix };
+    return returned;
+  }
   const account = /Logged in to github\.com (?:account |as )([^\s(]+)/i.exec(text)?.[1];
-  if (status.code !== 0 || account === undefined)
-    return {
+  if (status.code !== 0 || account === undefined) {
+    const returned: Probe = {
       state: "broken",
       detail: "gh could not verify its active GitHub login",
       fix,
-    } satisfies Probe;
-  return { state: "ok", account, detail: `github.com as ${account}` } satisfies Probe;
+    };
+    return returned;
+  }
+  const returned: Probe = { state: "ok", account, detail: `github.com as ${account}` };
+  return returned;
 });
 
 const optionalText = Schema.optionalKey(Schema.NullOr(Schema.String));
 const optionalFlag = Schema.optionalKey(Schema.NullOr(Schema.Boolean));
 const Login = Schema.Struct({ login: optionalText });
 
-/** GitHub's merge states it would merge in; the rest say why not, or that it is still deciding. */
 const MERGES = new Set(["CLEAN", "HAS_HOOKS", "UNSTABLE"]);
 
-/** GitHub's own answer to "can this merge now", which carries its branch protection. */
-function mergeabilityOf(
-  pull: Pick<Pull, "mergeable" | "mergeStateStatus">,
-): Mergeability | undefined {
-  if (pull.mergeable === "CONFLICTING") return { state: "blocked", said: "conflicting" };
+function mergeabilityOf(pull: Pick<Pull, "mergeable" | "mergeStateStatus">) {
+  if (pull.mergeable === "CONFLICTING") {
+    const returned: Mergeability | undefined = { state: "blocked", said: "conflicting" };
+    return returned;
+  }
   const status = pull.mergeStateStatus;
   if (status === undefined || status === null || status === "") {
-    if (pull.mergeable === "MERGEABLE") return { state: "mergeable", said: "mergeable" };
-    return pull.mergeable === "UNKNOWN" ? { state: "unknown", said: "unknown" } : undefined;
+    if (pull.mergeable === "MERGEABLE") {
+      const returned: Mergeability | undefined = { state: "mergeable", said: "mergeable" };
+      return returned;
+    }
+    const returned: Mergeability | undefined =
+      pull.mergeable === "UNKNOWN" ? { state: "unknown", said: "unknown" } : undefined;
+    return returned;
   }
-  if (status === "UNKNOWN") return { state: "unknown", said: "unknown" };
-  if (MERGES.has(status)) return { state: "mergeable", said: "mergeable" };
-  return { state: "blocked", said: pipe(Str.toLowerCase(status), Str.replaceAll("_", " ")) };
+  if (status === "UNKNOWN") {
+    const returned: Mergeability | undefined = { state: "unknown", said: "unknown" };
+    return returned;
+  }
+  if (MERGES.has(status)) {
+    const returned: Mergeability | undefined = { state: "mergeable", said: "mergeable" };
+    return returned;
+  }
+  const returned: Mergeability | undefined = {
+    state: "blocked",
+    said: pipe(Str.toLowerCase(status), Str.replaceAll("_", " ")),
+  };
+  return returned;
 }
 type Pull = PanelPull;
 
@@ -134,14 +128,15 @@ const RED = new Set([
 ]);
 const GREEN = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 
-/** A pull request's check rollup: a check run's conclusion, or a status context's state. */
-export function rollupChecks(rollup: typeof Rollup.Type | null | undefined): ForgeChecks {
+export function rollupChecks(rollup: typeof Rollup.Type | null | undefined) {
   const checks = rollup ?? [];
-  if (checks.length === 0) return { state: "none" };
+  if (checks.length === 0) {
+    const returned: ForgeChecks = { state: "none" };
+    return returned;
+  }
   const verdicts = Arr.map(checks, (one) => ({
     name: one.name ?? one.context ?? "a check",
     url: one.detailsUrl ?? one.targetUrl,
-    // A check run has a conclusion once it completes; a status context has only a state.
     said:
       one.conclusion ??
       (one.status != null && one.status !== "COMPLETED" ? "PENDING" : (one.state ?? "PENDING")),
@@ -155,7 +150,8 @@ export function rollupChecks(rollup: typeof Rollup.Type | null | undefined): For
         ? { state: "running" }
         : { state: "passed" };
   const url = (red ?? waiting ?? verdicts[0])?.url;
-  return url ? { ...result, url } : result;
+  const returned: ForgeChecks = url ? { ...result, url } : result;
+  return returned;
 }
 
 const Rollup = Schema.Array(
@@ -170,7 +166,6 @@ const Rollup = Schema.Array(
   }),
 );
 
-/** One page of a pull request's panel, as GitHub's GraphQL answers `PANEL`. */
 const PanelData = Schema.Struct({
   repository: Schema.NullOr(
     Schema.Struct({
@@ -236,7 +231,6 @@ const PanelData = Schema.Struct({
   ),
 });
 
-/** Every field `gh pr view --json` read for the panel, the head's checks a page at a time. */
 const PANEL = `query($owner: String!, $name: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
@@ -252,14 +246,12 @@ const PANEL = `query($owner: String!, $name: String!, $number: Int!, $after: Str
   }
 }`;
 
-/** GitHub's review decision, phrased as a GitLab panel phrases its approvals. */
 const APPROVALS = new Map([
   ["APPROVED", "approved"],
   ["CHANGES_REQUESTED", "changes requested"],
   ["REVIEW_REQUIRED", "review required"],
 ]);
 
-/** One page of `ref`'s panel, its checks from `after`. */
 const panelPage = (ref: MrRef, cwd: string, after: string | null) => {
   const [owner, name = ""] = Str.split(mrPath(ref), "/");
   return graphqlAs(PanelData, LOGIN, cwd, PANEL, { owner, name, number: Number(ref.iid), after });
@@ -270,104 +262,117 @@ type PanelContexts = NonNullable<
   PanelPull["commits"]["nodes"][number]["commit"]["statusCheckRollup"]
 >["contexts"];
 
-/** The pull request, with every page of its head's checks. */
-const panelOf = (
+const panelOf: (
   ref: MrRef,
   cwd: string,
-): Effect.Effect<Answered<{ pull: PanelPull; rollup: typeof Rollup.Type }>, never, ForgeHttp> =>
+) => Effect.Effect<Answered<{ pull: PanelPull; rollup: typeof Rollup.Type }>, never, ForgeHttp> = (
+  ref,
+  cwd,
+) =>
   Effect.gen(function* () {
     const rollup: Array<(typeof Rollup.Type)[number]> = [];
     let after: string | null = null;
     for (;;) {
       const page: Answered<typeof PanelData.Type> = yield* panelPage(ref, cwd, after);
-      if (!page.ok) return page;
+      if (!page.ok) {
+        return page;
+      }
       const pull: PanelPull | null | undefined = page.value.repository?.pullRequest;
-      if (pull === undefined || pull === null)
+      if (pull === undefined || pull === null) {
         return { ok: false, reason: "GitHub has no such pull request" };
+      }
       const contexts: PanelContexts | undefined =
         pull.commits.nodes[0]?.commit.statusCheckRollup?.contexts;
       rollup.push(...(contexts?.nodes ?? []));
-      if (contexts?.pageInfo.hasNextPage !== true || !contexts.pageInfo.endCursor)
+      if (contexts?.pageInfo.hasNextPage !== true || !contexts.pageInfo.endCursor) {
         return { ok: true, value: { pull, rollup } };
+      }
       after = contexts.pageInfo.endCursor;
     }
   });
 
-/** One pull request, in one GraphQL query, and one more per further page of its checks. */
-function details(ref: MrRef, cwd: string): Effect.Effect<MrPanel, never, ForgeHttp> {
-  return Effect.map(panelOf(ref, cwd), (read) => {
-    if (!read.ok)
-      return {
-        _tag: "Unavailable",
-        reason: `could not read ${mrWords(ref).label}: ${read.reason}`,
-        transient: read.transient,
-      };
-    const { pull, rollup } = read.value;
-    const checks = rollupChecks(rollup);
-    const head = pull.headRefOid ?? "";
-    const updated = pull.updatedAt ? epochMs(pull.updatedAt) : Number.NaN;
-    const mergeable = mergeabilityOf(pull);
-    const details = {
-      _tag: "Details",
-      iid: ref.iid,
-      project: ref.project,
-      title: pull.title ?? "",
-      state: pull.isDraft === true && pull.state === "OPEN" ? "draft" : Str.toLowerCase(pull.state),
-      author: pull.author?.login ?? "",
-      assignees: Arr.filter(
-        Arr.map(pull.assignees?.nodes ?? [], (one) => one.login ?? ""),
-        (login) => login !== "",
-      ),
-      sourceBranch: pull.headRefName ?? "",
-      fork: pull.isCrossRepository === true,
-      targetBranch: pull.baseRefName ?? "",
-      pipeline: checks.state === "none" ? "" : checks.state,
-      checks,
-      approvals: APPROVALS.get(pull.reviewDecision ?? "") ?? "",
-      unresolved: false,
-      notes: pull.comments?.totalCount ?? 0,
-      ...(pull.comments?.nodes !== undefined && {
-        comments: Arr.flatMap(pull.comments.nodes, (one) =>
-          one.databaseId === undefined || one.databaseId === null
-            ? []
-            : [{ id: String(one.databaseId), body: one.body ?? "" }],
+function details(ref: MrRef, cwd: string) {
+  const returned: Effect.Effect<MrPanel, never, ForgeHttp> = Effect.map(
+    panelOf(ref, cwd),
+    (read) => {
+      if (!read.ok) {
+        return {
+          _tag: "Unavailable",
+          reason: `could not read ${mrWords(ref).label}: ${read.reason}`,
+          transient: read.transient,
+        };
+      }
+      const { pull, rollup } = read.value;
+      const checks = rollupChecks(rollup);
+      const head = pull.headRefOid ?? "";
+      const updated = pull.updatedAt ? epochMs(pull.updatedAt) : Number.NaN;
+      const mergeable = mergeabilityOf(pull);
+      const details = {
+        _tag: "Details",
+        iid: ref.iid,
+        project: ref.project,
+        title: pull.title ?? "",
+        state:
+          pull.isDraft === true && pull.state === "OPEN" ? "draft" : Str.toLowerCase(pull.state),
+        author: pull.author?.login ?? "",
+        assignees: Arr.filter(
+          Arr.map(pull.assignees?.nodes ?? [], (one) => one.login ?? ""),
+          (login) => login !== "",
         ),
-      }),
-      headSha: pipe(head, Str.slice(0, 7)),
-      head,
-      mergedSha: pull.mergeCommit?.oid ?? "",
-      updatedAt: Number.isFinite(updated) ? updated : 0,
-      url: pull.url ?? mrWords(ref).url ?? "",
-      autoMerge: pull.autoMergeRequest != null,
-    } satisfies MrDetails;
-    const merged = pull.mergedAt ? { ...details, mergedAt: pull.mergedAt } : details;
-    return mergeable === undefined ? merged : { ...merged, mergeable };
-  });
+        sourceBranch: pull.headRefName ?? "",
+        fork: pull.isCrossRepository === true,
+        targetBranch: pull.baseRefName ?? "",
+        pipeline: checks.state === "none" ? "" : checks.state,
+        checks,
+        approvals: APPROVALS.get(pull.reviewDecision ?? "") ?? "",
+        unresolved: false,
+        notes: pull.comments?.totalCount ?? 0,
+        ...(pull.comments?.nodes !== undefined && {
+          comments: Arr.flatMap(pull.comments.nodes, (one) =>
+            one.databaseId === undefined || one.databaseId === null
+              ? []
+              : [{ id: String(one.databaseId), body: one.body ?? "" }],
+          ),
+        }),
+        headSha: pipe(head, Str.slice(0, 7)),
+        head,
+        mergedSha: pull.mergeCommit?.oid ?? "",
+        updatedAt: Number.isFinite(updated) ? updated : 0,
+        url: pull.url ?? mrWords(ref).url ?? "",
+        autoMerge: pull.autoMergeRequest != null,
+      } satisfies MrDetails;
+      const merged = pull.mergedAt ? { ...details, mergedAt: pull.mergedAt } : details;
+      return mergeable === undefined ? merged : { ...merged, mergeable };
+    },
+  );
+  return returned;
 }
 
 const RepoJson = Schema.fromJsonString(Schema.Struct({ nameWithOwner: Schema.String }));
 
-/** gh installed, logged in to github.com, and — where a repository is named — able to read it. */
-function ready<R>(
-  project: string | null,
-  cwd: string,
-  run: Runner<R>,
-): Effect.Effect<Readiness, never, R | ForgeHttp> {
+function ready<R>(project: string | null, cwd: string, run: Runner<R>) {
   return Effect.gen(function* () {
     const no = (reason: string) => ({ ok: false, reason });
-    if ((yield* run("gh", ["--version"], cwd)).code !== 0) return no("gh is not installed");
+    if ((yield* run("gh", ["--version"], cwd)).code !== 0) {
+      return no("gh is not installed");
+    }
     const login = yield* loginReadiness(LOGIN, cwd, run);
-    if (!login.ok) return login;
+    if (!login.ok) {
+      return login;
+    }
     const repository = project === null ? "" : mrPath({ project, iid: "" });
-    if (repository === "" || repository === project) return { ok: true, reason: "" };
+    if (repository === "" || repository === project) {
+      return { ok: true, reason: "" };
+    }
     const repo = yield* run("gh", ["repo", "view", repository, "--json", "nameWithOwner"], cwd);
     const decoded = Schema.decodeOption(RepoJson)(repo.stdout);
     if (
       repo.code !== 0 ||
       Option.isNone(decoded) ||
       Str.toLowerCase(decoded.value.nameWithOwner) !== Str.toLowerCase(repository)
-    )
+    ) {
       return no(`gh cannot read ${repository}`);
+    }
     return { ok: true, reason: "" };
   });
 }
@@ -384,7 +389,6 @@ const BranchPull = Schema.Struct({
   auto_merge: Schema.optionalKey(Schema.NullOr(Schema.Struct({}))),
 });
 
-/** The pull requests from `branch` of the repository's own, in `state`, every page of them. */
 const pullsFrom = (project: string, branch: string, state: "open" | "all", cwd: string) => {
   const repo = mrPath({ project, iid: "" });
   const head = encodeURIComponent(`${Str.split(repo, "/")[0]}:${branch}`);
@@ -411,84 +415,92 @@ const ClassicRules = Schema.Struct({
 const PAGE = 100;
 const CLASSIC_RULES = `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { branchProtectionRules(first: ${PAGE}) { nodes { pattern } } } }`;
 
-/**
- * The default branch, the rules active for the name (which GitHub answers for a branch not
- * pushed yet), and the classic protection rules' patterns; null where any is unread.
- */
-function protects(
-  project: string,
-  branch: string,
-  cwd: string,
-): Effect.Effect<boolean | null, never, ForgeHttp> {
+function protects(project: string, branch: string, cwd: string) {
   return Effect.gen(function* () {
     const repo = mrPath({ project, iid: "" });
     const about = yield* rest(DefaultBranch, cwd, `repos/${repo}`);
-    if (!about.ok) return null;
-    if (about.value.default_branch === branch) return true;
+    if (!about.ok) {
+      return null;
+    }
+    if (about.value.default_branch === branch) {
+      return true;
+    }
     const active = yield* rest(
       Schema.Array(Schema.Unknown),
       cwd,
       `repos/${repo}/rules/branches/${encodeURIComponent(branch)}`,
     );
-    if (!active.ok) return null;
-    if (active.value.length > 0) return true;
+    if (!active.ok) {
+      return null;
+    }
+    if (active.value.length > 0) {
+      return true;
+    }
     const [owner, name = ""] = Str.split(repo, "/");
     const classic = yield* graphqlAs(ClassicRules, LOGIN, cwd, CLASSIC_RULES, { owner, name });
-    if (!classic.ok) return null;
+    if (!classic.ok) {
+      return null;
+    }
     const nodes = classic.value.repository.branchProtectionRules.nodes;
-    // A full page leaves protection unknown.
-    if (nodes.length >= PAGE) return null;
+    // WARNING: a full page leaves protection unknown, never none.
+    if (nodes.length >= PAGE) {
+      return null;
+    }
     return Arr.some(nodes, (rule) => new Bun.Glob(rule.pattern).match(branch));
   });
 }
 
-/** The open pull request from `branch`; a failed read is not "none". */
-function forBranch(
-  project: string,
-  branch: string,
-  cwd: string,
-): Effect.Effect<ForBranch, never, ForgeHttp> {
-  return Effect.map(pullsFrom(project, branch, "open", cwd), (listed) => {
-    if (!listed.ok) return listed;
-    const pull =
-      Option.getOrUndefined(Arr.findFirst(listed.value, (one) => one.auto_merge != null)) ??
-      listed.value[0];
-    if (pull === undefined) return { ok: true, open: null };
-    const iid = String(pull.number);
-    return {
-      ok: true,
-      open: {
-        iid,
-        url: pull.html_url ?? `https://${project}/pull/${iid}`,
-        autoMerge: pull.auto_merge != null,
-      },
-    };
-  });
-}
-
-/** Every pull request from `branch`, whatever its state; a failed read is not "none". */
-function fromBranch(
-  project: string,
-  branch: string,
-  cwd: string,
-): Effect.Effect<FromBranchList, never, ForgeHttp> {
-  return Effect.map(pullsFrom(project, branch, "all", cwd), (listed) => {
-    if (!listed.ok) return listed;
-    return {
-      ok: true,
-      mrs: Arr.map(listed.value, (pull): FromBranch => {
-        const iid = String(pull.number);
-        return {
+// WARNING: a failed read is not "none"; it must stay unknown.
+function forBranch(project: string, branch: string, cwd: string) {
+  const returned: Effect.Effect<ForBranch, never, ForgeHttp> = Effect.map(
+    pullsFrom(project, branch, "open", cwd),
+    (listed) => {
+      if (!listed.ok) {
+        return listed;
+      }
+      const pull =
+        Option.getOrUndefined(Arr.findFirst(listed.value, (one) => one.auto_merge != null)) ??
+        listed.value[0];
+      if (pull === undefined) {
+        return { ok: true, open: null };
+      }
+      const iid = String(pull.number);
+      return {
+        ok: true,
+        open: {
           iid,
           url: pull.html_url ?? `https://${project}/pull/${iid}`,
-          state: pull.merged_at ? "merged" : pull.state === "open" ? "open" : "closed",
-          created: pull.created_at,
-          // A merged pull request is closed too; when it merged is when it ended.
-          ended: pull.merged_at ?? pull.closed_at ?? null,
-        };
-      }),
-    };
-  });
+          autoMerge: pull.auto_merge != null,
+        },
+      };
+    },
+  );
+  return returned;
+}
+
+function fromBranch(project: string, branch: string, cwd: string) {
+  const returned: Effect.Effect<FromBranchList, never, ForgeHttp> = Effect.map(
+    pullsFrom(project, branch, "all", cwd),
+    (listed) => {
+      if (!listed.ok) {
+        return listed;
+      }
+      return {
+        ok: true,
+        mrs: Arr.map(listed.value, (pull) => {
+          const iid = String(pull.number);
+          return {
+            iid,
+            url: pull.html_url ?? `https://${project}/pull/${iid}`,
+            state: pull.merged_at ? "merged" : pull.state === "open" ? "open" : "closed",
+            created: pull.created_at,
+            ended: pull.merged_at ?? pull.closed_at ?? null,
+          };
+        }),
+      };
+    },
+  );
+  return returned;
 }
 
 const CheckRuns = Schema.Struct({
@@ -521,7 +533,6 @@ const CONCLUSIONS = new Map<string, JobState>([
   ["neutral", "skipped"],
 ]);
 
-/** gh's login to github.com, which ForgeHttp asks GitHub with; its token does not expire. */
 const LOGIN: ForgeLogin = {
   forge: "github",
   host: HOST,
@@ -541,17 +552,18 @@ const LOGIN: ForgeLogin = {
 const rest = <S extends Schema.Decoder<unknown>>(schema: S, cwd: string, path: string) =>
   requestAs(schema, LOGIN, cwd, path);
 
-/** The check run of that name on the pull request's head commit; GitHub lists the newest first. */
-function job(ref: MrRef, name: string, cwd: string): Effect.Effect<JobRead, never, ForgeHttp> {
-  return Effect.gen(function* () {
+function job(ref: MrRef, name: string, cwd: string) {
+  const returned: Effect.Effect<JobRead, never, ForgeHttp> = Effect.gen(function* () {
     const where = mrWords(ref).label;
     const repo = mrPath({ project: ref.project, iid: "" });
     const pull = yield* rest(PullRefs, cwd, `repos/${repo}/pulls/${ref.iid}`);
-    if (!pull.ok) return { ok: false, reason: `could not read ${where}: ${pull.reason}` };
+    if (!pull.ok) {
+      return { ok: false, reason: `could not read ${where}: ${pull.reason}` };
+    }
     const head = pull.value.head.sha;
     const unread = (why: string) =>
       ({ ok: false, reason: `could not list the check runs on ${head}: ${why}` }) as const;
-    // `filter=all` lists the attempts a rerun left behind, newest first.
+    // WARNING: filter=all lists the attempts a rerun left behind, newest first.
     const named: Array<(typeof CheckRuns.Type)["check_runs"][number]> = [];
     for (let page = 1; ; page++) {
       const some = yield* checkRuns(
@@ -560,24 +572,35 @@ function job(ref: MrRef, name: string, cwd: string): Effect.Effect<JobRead, neve
         `check_name=${encodeURIComponent(name)}&filter=all&per_page=100&page=${page}`,
         cwd,
       );
-      if (!some.ok) return unread(some.reason);
+      if (!some.ok) {
+        return unread(some.reason);
+      }
       named.push(...some.value);
-      if (some.value.length < 100) break;
+      if (some.value.length < 100) {
+        break;
+      }
     }
     const [found, ...before] = named;
     const failed = Arr.filter(before, (one) => stateOf(one) === "failed");
     let absent: JobState = "missing";
     if (found === undefined) {
-      // GitHub creates a job behind `needs` only once its needs finish.
+      // WARNING: GitHub creates a job behind `needs` only once its needs finish.
       let listed = 0;
       for (let page = 1; absent === "missing"; page++) {
         const some = yield* checkRuns(repo, head, `per_page=100&page=${page}`, cwd);
-        if (!some.ok) return unread(some.reason);
+        if (!some.ok) {
+          return unread(some.reason);
+        }
         listed += some.value.length;
-        if (Arr.some(some.value, (one) => one.status !== "completed")) absent = "pending";
-        else if (some.value.length < 100) break;
+        if (Arr.some(some.value, (one) => one.status !== "completed")) {
+          absent = "pending";
+        } else if (some.value.length < 100) {
+          break;
+        }
       }
-      if (listed === 0) absent = "pending";
+      if (listed === 0) {
+        absent = "pending";
+      }
     }
     return {
       ok: true,
@@ -593,78 +616,81 @@ function job(ref: MrRef, name: string, cwd: string): Effect.Effect<JobRead, neve
       target: pull.value.base.ref,
     };
   });
+  return returned;
 }
 
-/** `<run>/<job>` for a check run Actions ran, else null: a gate's retry and log need its run. */
 const actionsJob = (url: string | null | undefined) => {
   const [, run, job] = /\/actions\/runs\/(\d+)\/job\/(\d+)/.exec(url ?? "") ?? [];
   return run === undefined ? null : `${run}/${job}`;
 };
 
-/** The newest check run named `name` on `ref`, undefined for none. */
 const checkRun = (repo: string, ref: string, name: string, cwd: string) =>
-  Effect.map(
-    checkRuns(repo, ref, `check_name=${encodeURIComponent(name)}`, cwd),
-    (runs): Answered<(typeof CheckRuns.Type)["check_runs"][number] | undefined> =>
-      runs.ok ? { ok: true, value: runs.value[0] } : runs,
-  );
+  Effect.map(checkRuns(repo, ref, `check_name=${encodeURIComponent(name)}`, cwd), (runs) => {
+    const returned: Answered<(typeof CheckRuns.Type)["check_runs"][number] | undefined> = runs.ok
+      ? { ok: true, value: runs.value[0] }
+      : runs;
+    return returned;
+  });
 
 const checkRuns = (repo: string, ref: string, query: string, cwd: string) =>
   Effect.map(rest(CheckRuns, cwd, `repos/${repo}/commits/${ref}/check-runs?${query}`), (listed) =>
     listed.ok ? ({ ok: true, value: listed.value.check_runs } as const) : listed,
   );
 
-const stateOf = (found: {
-  readonly status: string;
-  readonly conclusion?: string | null;
-}): JobState =>
+const stateOf = (found: { readonly status: string; readonly conclusion?: string | null }) =>
   found.status !== "completed"
     ? found.status === "in_progress"
       ? "running"
       : "pending"
     : (CONCLUSIONS.get(found.conclusion ?? "") ?? "failed");
 
-/** The check run at the pull request's merge-base, else on its base branch's tip. */
-function baseJob(
-  ref: MrRef,
-  name: string,
-  cwd: string,
-): Effect.Effect<BaseJobRead, never, ForgeHttp> {
-  return Effect.gen(function* () {
+function baseJob(ref: MrRef, name: string, cwd: string) {
+  const returned: Effect.Effect<BaseJobRead, never, ForgeHttp> = Effect.gen(function* () {
     const where = mrWords(ref).label;
     const repo = mrPath({ project: ref.project, iid: "" });
     const pull = yield* rest(PullRefs, cwd, `repos/${repo}/pulls/${ref.iid}`);
-    if (!pull.ok) return { ok: false, reason: `could not read ${where}: ${pull.reason}` };
+    if (!pull.ok) {
+      return { ok: false, reason: `could not read ${where}: ${pull.reason}` };
+    }
     const {
       base: { ref: target },
       head: { sha: head },
     } = pull.value;
     const compared = yield* rest(MergeBase, cwd, `repos/${repo}/compare/${target}...${head}`);
     const base = compared.ok ? compared.value.merge_base_commit?.sha : undefined;
-    if (base === undefined)
+    if (base === undefined) {
       return {
         ok: false,
         reason: `GitHub would not say where ${where} leaves ${target}${compared.ok ? "" : `: ${compared.reason}`}`,
       };
+    }
     const unread = (why: string) =>
       ({ ok: false, reason: `could not list the check runs at ${base}: ${why}` }) as const;
     const there = yield* checkRun(repo, base, name, cwd);
-    if (!there.ok) return unread(there.reason);
+    if (!there.ok) {
+      return unread(there.reason);
+    }
     if (there.value === undefined) {
-      // Only where CI never ran at the merge-base does the target branch's tip stand in for it.
+      // WARNING: the target tip stands in only where CI never ran at the merge-base.
       const any = yield* checkRuns(repo, base, "per_page=1", cwd);
-      if (!any.ok) return unread(any.reason);
-      if (any.value.length > 0)
+      if (!any.ok) {
+        return unread(any.reason);
+      }
+      if (any.value.length > 0) {
         return { ok: true, at: base, state: "missing", url: null, id: null };
+      }
     }
     const tip = there.value === undefined ? yield* checkRun(repo, target, name, cwd) : there;
-    if (!tip.ok) return unread(tip.reason);
+    if (!tip.ok) {
+      return unread(tip.reason);
+    }
     const found = tip.value;
-    if (found === undefined)
+    if (found === undefined) {
       return {
         ok: false,
         reason: `no check run ${name} at ${pipe(base, Str.slice(0, 12))} or on ${target}`,
       };
+    }
     return {
       ok: true,
       at: found.head_sha,
@@ -673,23 +699,21 @@ function baseJob(
       id: actionsJob(found.html_url),
     };
   });
+  return returned;
 }
 
-/** The newest check run named `name` at the head of the pull request's base branch. */
-function targetJob(
-  ref: MrRef,
-  name: string,
-  cwd: string,
-): Effect.Effect<TargetJobRead, never, ForgeHttp> {
-  return Effect.gen(function* () {
+function targetJob(ref: MrRef, name: string, cwd: string) {
+  const returned: Effect.Effect<TargetJobRead, never, ForgeHttp> = Effect.gen(function* () {
     const repo = mrPath({ project: ref.project, iid: "" });
     const pull = yield* rest(PullRefs, cwd, `repos/${repo}/pulls/${ref.iid}`);
-    if (!pull.ok)
+    if (!pull.ok) {
       return { ok: false, reason: `could not read ${mrWords(ref).label}: ${pull.reason}` };
+    }
     const branch = pull.value.base.ref;
     const there = yield* checkRun(repo, branch, name, cwd);
-    if (!there.ok)
+    if (!there.ok) {
       return { ok: false, reason: `could not list the check runs on ${branch}: ${there.reason}` };
+    }
     const found = there.value;
     return {
       ok: true,
@@ -700,6 +724,7 @@ function targetJob(
       id: actionsJob(found?.html_url),
     };
   });
+  return returned;
 }
 
 const Searched = Schema.Struct({
@@ -712,13 +737,12 @@ const Searched = Schema.Struct({
   ),
 });
 
-const reviewRequests = (login: string, cwd: string) =>
-  Effect.gen(function* (): Effect.fn.Return<
-    Answered<ReadonlyArray<ReviewRequest>>,
-    never,
-    ForgeHttp
-  > {
-    const requests: ReviewRequest[] = [];
+const reviewRequests: (
+  login: string,
+  cwd: string,
+) => Effect.Effect<Answered<ReadonlyArray<ReviewRequest>>, never, ForgeHttp> = (login, cwd) =>
+  Effect.gen(function* () {
+    const requests: Array<ReviewRequest> = [];
     for (let page = 1; ; page++) {
       const listed = yield* requestAs(
         Searched,
@@ -726,7 +750,9 @@ const reviewRequests = (login: string, cwd: string) =>
         cwd,
         `search/issues?q=${encodeURIComponent(`is:pr is:open review-requested:${login}`)}&per_page=100&page=${page}`,
       );
-      if (!listed.ok) return listed;
+      if (!listed.ok) {
+        return listed;
+      }
       requests.push(
         ...Arr.map(listed.value.items, (one) => ({
           url: one.html_url,
@@ -734,7 +760,9 @@ const reviewRequests = (login: string, cwd: string) =>
           author: one.user.login,
         })),
       );
-      if (listed.value.items.length < 100) return { ok: true, value: requests };
+      if (listed.value.items.length < 100) {
+        return { ok: true, value: requests };
+      }
     }
   });
 
@@ -810,7 +838,6 @@ const BranchRule = Schema.Struct({
   ),
 });
 
-/** The approving reviews `base` requires, or why that cannot be counted. */
 const requiredReviews = (repo: string, base: string, cwd: string) =>
   Effect.gen(function* () {
     const [owner, name = ""] = Str.split(repo, "/");
@@ -825,18 +852,20 @@ const requiredReviews = (repo: string, base: string, cwd: string) =>
       cwd,
       `repos/${repo}/rules/branches/${encodeURIComponent(base)}`,
     );
-    if (!protection.ok || !rulesets.ok)
+    if (!protection.ok || !rulesets.ok) {
       return {
         ok: false,
         reason: `GitHub would not say how many approvals ${base} requires: ${!protection.ok ? protection.reason : !rulesets.ok ? rulesets.reason : ""}`,
       } as const;
+    }
     const rule = protection.value.repository.ref?.refUpdateRule ?? null;
     const pullRules = Arr.filter(rulesets.value, (one) => one.type === "pull_request");
     if (
       rule?.requiresCodeOwnerReviews === true ||
       Arr.some(pullRules, (one) => one.parameters?.require_code_owner_review === true)
-    )
+    ) {
       return { ok: false, reason: `${base} requires code owners' review` } as const;
+    }
     return {
       ok: true,
       count: Math.max(
@@ -846,34 +875,40 @@ const requiredReviews = (repo: string, base: string, cwd: string) =>
     } as const;
   });
 
-/**
- * The pull request's view, every page of its issue comments, review comments and reviews,
- * and which review threads are resolved.
- */
-function readReview(ref: MrRef, cwd: string): Effect.Effect<ReviewRead, never, ForgeHttp> {
-  return Effect.gen(function* () {
+function readReview(ref: MrRef, cwd: string) {
+  const answer: Effect.Effect<ReviewRead, never, ForgeHttp> = Effect.gen(function* () {
     const where = mrWords(ref).label;
     const me = yield* login(cwd);
-    if (me === null) return { ok: false, reason: "gh will not say who it is logged in as" };
+    if (me === null) {
+      return { ok: false, reason: "gh will not say who it is logged in as" };
+    }
     const repo = mrPath(ref);
     const pull = yield* panelOf(ref, cwd);
-    if (!pull.ok) return { ok: false, reason: `could not read ${where}: ${pull.reason}` };
+    if (!pull.ok) {
+      return { ok: false, reason: `could not read ${where}: ${pull.reason}` };
+    }
     const issueComments = yield* pagesAs(
       IssueComment,
       LOGIN,
       cwd,
       `repos/${repo}/issues/${ref.iid}/comments`,
     );
-    if (!issueComments.ok) return issueComments;
+    if (!issueComments.ok) {
+      return issueComments;
+    }
     const reviewComments = yield* pagesAs(
       ReviewComment,
       LOGIN,
       cwd,
       `repos/${repo}/pulls/${ref.iid}/comments`,
     );
-    if (!reviewComments.ok) return reviewComments;
+    if (!reviewComments.ok) {
+      return reviewComments;
+    }
     const reviews = yield* pagesAs(Review, LOGIN, cwd, `repos/${repo}/pulls/${ref.iid}/reviews`);
-    if (!reviews.ok) return reviews;
+    if (!reviews.ok) {
+      return reviews;
+    }
     const [owner, name = ""] = Str.split(repo, "/");
     const resolved = new Set<string>();
     let endCursor: string | null = null;
@@ -890,24 +925,33 @@ function readReview(ref: MrRef, cwd: string): Effect.Effect<ReviewRead, never, F
           endCursor,
         },
       );
-      if (!page.ok) return page;
+      if (!page.ok) {
+        return page;
+      }
       const threads: typeof Threads.Type.repository.pullRequest.reviewThreads =
         page.value.repository.pullRequest.reviewThreads;
       for (const thread of threads.nodes) {
         const first = thread.comments.nodes[0]?.databaseId;
-        if (thread.isResolved && first != null) resolved.add(String(first));
+        if (thread.isResolved && first != null) {
+          resolved.add(String(first));
+        }
       }
-      if (!threads.pageInfo.hasNextPage) break;
+      if (!threads.pageInfo.hasNextPage) {
+        break;
+      }
       endCursor = threads.pageInfo.endCursor ?? null;
-      if (endCursor === null)
+      if (endCursor === null) {
         return {
           ok: false,
           reason: `GitHub did not name the next page of ${where}'s review threads`,
         };
+      }
     }
-    const kindOf = (user: typeof User.Type | null): CommentKind =>
-      user?.type === "Bot" ? "bot" : "person";
-    const comments: ForgeComment[] = [
+    const kindOf = (user: typeof User.Type | null) => {
+      const returned: CommentKind = user?.type === "Bot" ? "bot" : "person";
+      return returned;
+    };
+    const comments: Array<ForgeComment> = [
       ...Arr.map(issueComments.value, (one) => ({
         id: String(one.id),
         url: one.html_url,
@@ -948,11 +992,12 @@ function readReview(ref: MrRef, cwd: string): Effect.Effect<ReviewRead, never, F
             ],
       ),
     ];
-    // Each reviewer's latest review that is more than a comment is the one that stands.
     const standing = new Map<string, { readonly state: string; readonly bot: boolean }>();
-    for (const one of reviews.value)
-      if (one.user !== null && one.state !== "COMMENTED" && one.state !== "PENDING")
+    for (const one of reviews.value) {
+      if (one.user !== null && one.state !== "COMMENTED" && one.state !== "PENDING") {
         standing.set(one.user.login, { state: one.state, bot: one.user.type === "Bot" });
+      }
+    }
     const approvers = Arr.map(
       Arr.filter([...standing], ([, review]) => review.state === "APPROVED"),
       ([who]) => who,
@@ -965,12 +1010,22 @@ function readReview(ref: MrRef, cwd: string): Effect.Effect<ReviewRead, never, F
     const said = pull.value.pull;
     const decision = said.reviewDecision ?? "";
     const unapproved = yield* Effect.gen(function* () {
-      if (decision === "CHANGES_REQUESTED") return "changes were requested";
-      if (decision === "REVIEW_REQUIRED") return "a review is still required";
-      if (decision !== "APPROVED") return changesRequested ? "changes were requested" : "";
-      if (!approvers.includes(me)) return "";
+      if (decision === "CHANGES_REQUESTED") {
+        return "changes were requested";
+      }
+      if (decision === "REVIEW_REQUIRED") {
+        return "a review is still required";
+      }
+      if (decision !== "APPROVED") {
+        return changesRequested ? "changes were requested" : "";
+      }
+      if (!approvers.includes(me)) {
+        return "";
+      }
       const required = yield* requiredReviews(repo, said.baseRefName ?? "", cwd);
-      if (!required.ok) return `${required.reason}, and ${me}'s own approval stands`;
+      if (!required.ok) {
+        return `${required.reason}, and ${me}'s own approval stands`;
+      }
       return others.length >= required.count
         ? ""
         : `${said.baseRefName} requires ${required.count} approval(s) and has ${others.length} besides ${me}'s own`;
@@ -999,15 +1054,10 @@ function readReview(ref: MrRef, cwd: string): Effect.Effect<ReviewRead, never, F
       comments: judgeComments(comments, me, resolved),
     };
   });
+  return answer;
 }
 
-/** A reply in a review comment's thread, else a new comment on the pull request. */
-function reply(
-  ref: MrRef,
-  to: Pick<ForgeComment, "thread">,
-  body: string,
-  cwd: string,
-): Effect.Effect<Readiness, never, ForgeHttp> {
+function reply(ref: MrRef, to: Pick<ForgeComment, "thread">, body: string, cwd: string) {
   const repo = mrPath(ref);
   const route =
     to.thread === null
@@ -1066,12 +1116,24 @@ const MERGED_PULL = `query($owner: String!, $name: String!, $number: Int!) { rep
 const ENQUEUE = `mutation($id: ID!, $head: GitObjectID!) { enqueuePullRequest(input: { pullRequestId: $id, expectedHeadOid: $head }) { clientMutationId } }`;
 const DEQUEUE = `mutation($id: ID!) { dequeuePullRequest(input: { id: $id }) { clientMutationId } }`;
 const Mutated = Schema.Struct({});
-/** How often a queued pull request is read, and for how long: Collie's CI bound. */
 const QUEUE_POLL = Duration.seconds(30);
 const QUEUE_BOUND = Duration.hours(2);
 type Merged = typeof MergedPull.Type;
 
-const alreadyMerged = (pull: Merged): MergeAnswer => ({
+// WARNING: a merge at the same head may or may not clear this failure.
+const unmerged: (
+  failed: Extract<Answered<unknown>, { ok: false }>,
+  reason: string,
+) => MergeAnswer = (failed, reason) => ({
+  _tag:
+    failed.transient === true ||
+    (failed.status === 405 && Str.includes("Base branch was modified")(failed.reason))
+      ? "Transient"
+      : "Refused",
+  reason,
+});
+
+const alreadyMerged: (pull: Merged) => MergeAnswer = (pull) => ({
   _tag: "AlreadyMerged",
   merged: pull.mergeCommit?.oid ?? "",
   head: pull.headRefOid ?? "",
@@ -1079,18 +1141,18 @@ const alreadyMerged = (pull: Merged): MergeAnswer => ({
   at: pull.mergedAt ?? "",
 });
 
-/**
- * The merge through the base branch's merge queue: `head` enqueued unless its entry is
- * already there, then read every 30 s until the queue merges or removes it. One still
- * queued after two hours is dequeued, and read until it is out or merged, so nothing
- * merges while no Run waits on it. Only the queue's merge at `head` is this merge.
- */
-const mergeQueued = Effect.fnUntraced(function* (
+// WARNING: a merge still queued after two hours is dequeued, so nothing merges unwatched.
+const mergeQueued: (
   ref: MrRef,
   id: string,
   head: string,
   cwd: string,
-): Effect.fn.Return<MergeAnswer, never, ForgeHttp> {
+) => Effect.Effect<MergeAnswer, never, ForgeHttp> = Effect.fnUntraced(function* (
+  ref: MrRef,
+  id: string,
+  head: string,
+  cwd: string,
+) {
   const where = mrWords(ref).label;
   const [owner, name = ""] = Str.split(mrPath(ref), "/");
   const read = Effect.map(
@@ -1101,14 +1163,18 @@ const mergeQueued = Effect.fnUntraced(function* (
     }),
     (said) => (said.ok ? (said.value.repository?.pullRequest ?? null) : null),
   );
-  const moved = (pull: Merged): MergeAnswer | undefined =>
+  const moved: (pull: Merged) => MergeAnswer | undefined = (pull) =>
     (pull.headRefOid ?? "") === head
       ? undefined
       : { _tag: "HeadMoved", head: pull.headRefOid ?? "" };
   const before = yield* read;
-  if (before?.state === "MERGED") return alreadyMerged(before);
+  if (before?.state === "MERGED") {
+    return alreadyMerged(before);
+  }
   const movedBefore = before === null ? undefined : moved(before);
-  if (movedBefore !== undefined) return movedBefore;
+  if (movedBefore !== undefined) {
+    return movedBefore;
+  }
   if (before?.mergeQueueEntry?.headCommit?.oid !== head) {
     const enqueued = yield* graphqlAs(Mutated, LOGIN, cwd, ENQUEUE, {
       id,
@@ -1116,12 +1182,12 @@ const mergeQueued = Effect.fnUntraced(function* (
     });
     if (!enqueued.ok) {
       const after = yield* read;
-      if (after?.state === "MERGED") return alreadyMerged(after);
+      if (after?.state === "MERGED") {
+        return alreadyMerged(after);
+      }
       return (
-        (after === null ? undefined : moved(after)) ?? {
-          _tag: "Refused",
-          reason: `GitHub refused to add ${where} to its merge queue: ${enqueued.reason}`,
-        }
+        (after === null ? undefined : moved(after)) ??
+        unmerged(enqueued, `GitHub refused to add ${where} to its merge queue: ${enqueued.reason}`)
       );
     }
   }
@@ -1130,31 +1196,31 @@ const mergeQueued = Effect.fnUntraced(function* (
   while (true) {
     yield* Effect.sleep(QUEUE_POLL);
     const pull = yield* read;
-    if (pull?.state === "MERGED")
+    if (pull?.state === "MERGED") {
       return (pull.headRefOid ?? "") === head && QUEUE_MERGERS.has(pull.mergedBy?.login ?? "")
         ? { _tag: "Merged", merged: pull.mergeCommit?.oid ?? "" }
         : alreadyMerged(pull);
+    }
     const movedNow = pull === null ? undefined : moved(pull);
-    if (movedNow !== undefined) return movedNow;
-    if (pull !== null && pull.mergeQueueEntry == null)
+    if (movedNow !== undefined) {
+      return movedNow;
+    }
+    if (pull !== null && pull.mergeQueueEntry == null) {
       return {
         _tag: "Refused",
         reason: tookOut
           ? `${where} was still in the merge queue after 2 hours, so Collie took it out`
           : `GitHub's merge queue removed ${where} without merging it: ${pull.timelineItems?.nodes.at(-1)?.reason ?? "no reason given"}`,
       };
-    if ((yield* Clock.currentTimeMillis) >= deadline)
+    }
+    if ((yield* Clock.currentTimeMillis) >= deadline) {
       tookOut = (yield* graphqlAs(Mutated, LOGIN, cwd, DEQUEUE, { id })).ok || tookOut;
+    }
   }
 });
 
-/** GitHub's merge endpoint at `head`, by the repository's default merge method for the viewer. */
-function merge(
-  ref: MrRef,
-  head: string,
-  cwd: string,
-): Effect.Effect<MergeAnswer, never, ForgeHttp> {
-  return Effect.gen(function* () {
+function merge(ref: MrRef, head: string, cwd: string) {
+  const returned: Effect.Effect<MergeAnswer, never, ForgeHttp> = Effect.gen(function* () {
     const where = mrWords(ref).label;
     const repo = mrPath(ref);
     const [owner, name = ""] = Str.split(repo, "/");
@@ -1163,11 +1229,12 @@ function merge(
       name,
       number: Number(ref.iid),
     });
-    if (!method.ok || method.value.repository === null)
-      return {
-        _tag: "Refused",
-        reason: `gh would not say how ${repo} merges${!method.ok ? `: ${method.reason}` : ""}`,
-      };
+    if (!method.ok) {
+      return unmerged(method, `gh would not say how ${repo} merges: ${method.reason}`);
+    }
+    if (method.value.repository === null) {
+      return { _tag: "Refused", reason: `gh would not say how ${repo} merges` };
+    }
     const target = method.value.repository.pullRequest;
     if (target !== null) {
       const queue = yield* graphqlAs(MergeQueue, LOGIN, cwd, MERGE_QUEUE, {
@@ -1175,13 +1242,15 @@ function merge(
         name,
         branch: target.baseRefName,
       });
-      if (!queue.ok)
-        return {
-          _tag: "Refused",
-          reason: `gh would not say whether ${target.baseRefName} of ${repo} has a merge queue: ${queue.reason}`,
-        };
-      if (queue.value.repository?.mergeQueue != null)
+      if (!queue.ok) {
+        return unmerged(
+          queue,
+          `gh would not say whether ${target.baseRefName} of ${repo} has a merge queue: ${queue.reason}`,
+        );
+      }
+      if (queue.value.repository?.mergeQueue != null) {
         return yield* mergeQueued(ref, target.id, head, cwd);
+      }
     }
     const merging = yield* request(LOGIN, cwd, "PUT", `repos/${repo}/pulls/${ref.iid}/merge`, {
       sha: head,
@@ -1193,16 +1262,25 @@ function merge(
       number: Number(ref.iid),
     });
     const pull = after.ok ? (after.value.repository?.pullRequest ?? null) : null;
-    if (merging.ok) return { _tag: "Merged", merged: pull?.mergeCommit?.oid ?? "" };
-    const refusal = `GitHub refused to merge ${where}: ${merging.reason}`;
-    if (pull === null) return { _tag: "Refused", reason: refusal };
-    if (pull.state === "MERGED") return alreadyMerged(pull);
-    if ((pull.headRefOid ?? "") !== head) return { _tag: "HeadMoved", head: pull.headRefOid ?? "" };
-    return { _tag: "Refused", reason: refusal };
+    if (merging.ok) {
+      return { _tag: "Merged", merged: pull?.mergeCommit?.oid ?? "" };
+    }
+    const refusal = unmerged(merging, `GitHub refused to merge ${where}: ${merging.reason}`);
+    if (pull === null) {
+      return refusal;
+    }
+    if (pull.state === "MERGED") {
+      return alreadyMerged(pull);
+    }
+    if ((pull.headRefOid ?? "") !== head) {
+      return { _tag: "HeadMoved", head: pull.headRefOid ?? "" };
+    }
+    return refusal;
   });
+  return returned;
 }
 
-function retryJob(ref: MrRef, id: string, cwd: string): Effect.Effect<Readiness, never, ForgeHttp> {
+function retryJob(ref: MrRef, id: string, cwd: string) {
   const repo = mrPath({ project: ref.project, iid: "" });
   const run = runOf(id);
   return Effect.map(
@@ -1217,7 +1295,7 @@ function retryJob(ref: MrRef, id: string, cwd: string): Effect.Effect<Readiness,
   );
 }
 
-const runOf = (id: string) => Str.split(id, "/")[0]!;
+const runOf = (id: string) => Str.split(id, "/")[0];
 
 const AttemptJob = Schema.Struct({
   run_id: Schema.Finite,
@@ -1235,21 +1313,15 @@ const AttemptJobs = Schema.Struct({
   ),
 });
 
-/** A job log as bun printed it: GitHub's columns, timestamps, `##[…]` markers, colours and CRs gone. */
 const plainLog = (log: string) =>
   pipe(
     stripVTControlCharacters(log),
-    Str.replace(/^(?:[^\t\n]*\t[^\t\n]*\t)?\d{4}-\d\d-\d\dT[\d:.]+Z ?/gm, ""),
-    Str.replace(/##\[\w+\]/g, ""),
+    Str.replaceAll(/^(?:[^\t\n]*\t[^\t\n]*\t)?\d{4}-\d\d-\d\dT[\d:.]+Z ?/gm, ""),
+    Str.replaceAll(/##\[\w+\]/g, ""),
     Str.replaceAll("\r", ""),
   );
 
-/** Check run `id`'s failed attempt, with the failed tests its run attempt's failed jobs' logs name. */
-function failedAttempt(
-  ref: MrRef,
-  id: string,
-  cwd: string,
-): Effect.Effect<FailedAttempt, never, ForgeHttp> {
+function failedAttempt(ref: MrRef, id: string, cwd: string) {
   return Effect.gen(function* () {
     const repo = mrPath({ project: ref.project, iid: "" });
     const attempt = yield* rest(
@@ -1257,15 +1329,21 @@ function failedAttempt(
       cwd,
       `repos/${repo}/actions/jobs/${Str.split(id, "/")[1]}`,
     );
-    if (!attempt.ok) return { url: null, tests: [], jobs: null };
+    if (!attempt.ok) {
+      return { url: null, tests: [], jobs: null };
+    }
     const url = attempt.value.html_url ?? null;
     const route = `repos/${repo}/actions/runs/${attempt.value.run_id}/attempts/${attempt.value.run_attempt}/jobs`;
     const jobs: Array<(typeof AttemptJobs.Type)["jobs"][number]> = [];
     for (let page = 1; ; page++) {
       const listed = yield* rest(AttemptJobs, cwd, `${route}?per_page=100&page=${page}`);
-      if (!listed.ok) return { url, tests: [], jobs: null };
+      if (!listed.ok) {
+        return { url, tests: [], jobs: null };
+      }
       jobs.push(...listed.value.jobs);
-      if (listed.value.jobs.length < 100) break;
+      if (listed.value.jobs.length < 100) {
+        break;
+      }
     }
     const failed = Arr.filter(jobs, (one) => stateOf(one) === "failed");
     const logs = yield* Effect.forEach(failed, (one) =>
@@ -1294,7 +1372,6 @@ const jobLog = (ref: MrRef, id: string) =>
     ]),
   );
 
-/** Where GitHub looks for a pull request template, in the order it looks. */
 const TEMPLATES = [
   ".github/pull_request_template.md",
   ".github/PULL_REQUEST_TEMPLATE.md",
@@ -1308,8 +1385,11 @@ function template(cwd: string) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    for (const candidate of TEMPLATES)
-      if (yield* fs.exists(path.join(cwd, candidate))) return candidate;
+    for (const candidate of TEMPLATES) {
+      if (yield* fs.exists(path.join(cwd, candidate))) {
+        return candidate;
+      }
+    }
     return null;
   });
 }
@@ -1324,83 +1404,93 @@ const Statuses = Schema.Array(Schema.Struct({ state: Schema.String, log_url: opt
 const Compare = Schema.Struct({ status: Schema.String });
 const RunState = Schema.Struct({ status: Schema.String, conclusion: optionalText });
 
-/** Production by the flag or by name, staging by name; any other environment is neither. */
-function tierOf(environment: string, production: boolean): DeployTier | null {
+function tierOf(environment: string, production: boolean) {
   const name = Str.toLowerCase(environment);
-  if (production || name === "production" || name === "prod") return "production";
-  if (name === "staging" || name === "stage") return "staging";
+  if (production || name === "production" || name === "prod") {
+    return "production";
+  }
+  if (name === "staging" || name === "stage") {
+    return "staging";
+  }
   return null;
 }
 
-/**
- * How far a merged commit has got on GitHub (ADR-0050 D7): the newest deployment of each
- * environment whose latest status is `success` is what is live there, and it carries the
- * merge where GitHub's compare of the two says `identical` or `ahead`. No such
- * environment, or no answer, is null, and the card says "Merged." and nothing more.
- */
-function liveTier(
-  ref: MrRef,
-  mergedSha: string,
-  cwd: string,
-): Effect.Effect<DeployTier | null, never, ForgeHttp> {
+function liveTier(ref: MrRef, mergedSha: string, cwd: string) {
   return Effect.gen(function* () {
-    if (mergedSha === "" || ref.project === null) return null;
+    if (mergedSha === "" || ref.project === null) {
+      return null;
+    }
     const repo = `repos/${mrPath(ref)}`;
     const listed = yield* pagesAs(Deployment, LOGIN, cwd, `${repo}/deployments`);
-    if (!listed.ok) return null;
-    // Newest first, so the first successful one seen per environment is what is live there.
+    if (!listed.ok) {
+      return null;
+    }
     const live = new Map<string, { readonly sha: string; readonly tier: DeployTier }>();
     for (const deployment of listed.value) {
       const tier = tierOf(deployment.environment, deployment.production_environment === true);
-      if (tier === null || live.has(deployment.environment)) continue;
+      if (tier === null || live.has(deployment.environment)) {
+        continue;
+      }
       const statuses = yield* rest(
         Statuses,
         cwd,
         `${repo}/deployments/${deployment.id}/statuses?per_page=1`,
       );
-      if (statuses.ok && statuses.value[0]?.state === "success")
+      if (statuses.ok && statuses.value[0]?.state === "success") {
         live.set(deployment.environment, { sha: deployment.sha, tier });
+      }
     }
     const carries = (sha: string) =>
       Effect.gen(function* () {
-        if (sha === mergedSha) return true;
+        if (sha === mergedSha) {
+          return true;
+        }
         const compared = yield* rest(Compare, cwd, `${repo}/compare/${mergedSha}...${sha}`);
         return (
           compared.ok &&
           (compared.value.status === "identical" || compared.value.status === "ahead")
         );
       });
-    for (const tier of ["production", "staging"] as const)
-      for (const one of live.values())
-        if (one.tier === tier && (yield* carries(one.sha))) return tier;
+    for (const tier of ["production", "staging"] as const) {
+      for (const one of live.values()) {
+        if (one.tier === tier && (yield* carries(one.sha))) {
+          return tier;
+        }
+      }
+    }
     return null;
   });
 }
 
-/** The commit the newest deployment of `tier` whose latest status is `success` has. */
-function deployed(
-  ref: MrRef,
-  tier: DeployTier,
-  cwd: string,
-): Effect.Effect<DeployedRead, never, ForgeHttp> {
-  return Effect.gen(function* () {
-    if (ref.project === null) return { ok: false, reason: "no repository to read deployments of" };
+function deployed(ref: MrRef, tier: DeployTier, cwd: string) {
+  const returned: Effect.Effect<DeployedRead, never, ForgeHttp> = Effect.gen(function* () {
+    if (ref.project === null) {
+      return { ok: false, reason: "no repository to read deployments of" };
+    }
     const repo = `repos/${mrPath(ref)}`;
     const pages = yield* pagesAs(Deployment, LOGIN, cwd, `${repo}/deployments`);
-    if (!pages.ok) return pages;
+    if (!pages.ok) {
+      return pages;
+    }
     for (const deployment of pages.value) {
-      if (tierOf(deployment.environment, deployment.production_environment === true) !== tier)
+      if (tierOf(deployment.environment, deployment.production_environment === true) !== tier) {
         continue;
+      }
       const latest = yield* rest(
         Statuses,
         cwd,
         `${repo}/deployments/${deployment.id}/statuses?per_page=1`,
       );
-      if (!latest.ok) return latest;
-      if (latest.value[0]?.state === "success") return { ok: true, sha: deployment.sha };
+      if (!latest.ok) {
+        return latest;
+      }
+      if (latest.value[0]?.state === "success") {
+        return { ok: true, sha: deployment.sha };
+      }
     }
     return { ok: true, sha: null };
   });
+  return returned;
 }
 
 const EnvironmentPage = Schema.Struct({
@@ -1415,9 +1505,11 @@ function stagingEnvironments<R>(
   cwd: string,
   _run: Runner<R>,
   jobs?: ReadonlyArray<string>,
-): Effect.Effect<StagingRead, never, ForgeHttp> {
-  return Effect.gen(function* () {
-    if (ref.project === null) return { ok: false, reason: "no repository to read deployments of" };
+) {
+  const returned: Effect.Effect<StagingRead, never, ForgeHttp> = Effect.gen(function* () {
+    if (ref.project === null) {
+      return { ok: false, reason: "no repository to read deployments of" };
+    }
     const repo = `repos/${mrPath(ref)}`;
     const unread = (reason: string) => ({
       ok: false as const,
@@ -1432,24 +1524,38 @@ function stagingEnvironments<R>(
             cwd,
             `${repo}/commits/${commit}/check-runs?check_name=${encodeURIComponent(job)}&filter=all&per_page=100&page=${page}`,
           );
-          if (!checks.ok) return unread(checks.reason);
-          for (const check of checks.value.check_runs) selected.add(check.id);
-          if (checks.value.check_runs.length < 100) break;
+          if (!checks.ok) {
+            return unread(checks.reason);
+          }
+          for (const check of checks.value.check_runs) {
+            selected.add(check.id);
+          }
+          if (checks.value.check_runs.length < 100) {
+            break;
+          }
         }
       }
     }
-    const names: string[] = [];
+    const names: Array<string> = [];
     for (let page = 1; ; page++) {
       const named = yield* rest(
         EnvironmentPage,
         cwd,
         `${repo}/environments?per_page=100&page=${page}`,
       );
-      if (!named.ok) return unread(named.reason);
-      for (const { name } of named.value.environments) if (isStaging(name)) names.push(name);
-      if (named.value.environments.length < 100) break;
+      if (!named.ok) {
+        return unread(named.reason);
+      }
+      for (const { name } of named.value.environments) {
+        if (isStaging(name)) {
+          names.push(name);
+        }
+      }
+      if (named.value.environments.length < 100) {
+        break;
+      }
     }
-    const environments: StagingEnvironment[] = [];
+    const environments: Array<StagingEnvironment> = [];
     for (const name of names) {
       const all = yield* pagesAs(
         Deployment,
@@ -1457,19 +1563,27 @@ function stagingEnvironments<R>(
         cwd,
         `${repo}/deployments?environment=${encodeURIComponent(name)}`,
       );
-      if (!all.ok) return unread(all.reason);
+      if (!all.ok) {
+        return unread(all.reason);
+      }
       let live: string | null = null;
       let hasCommit = false;
       for (const deployment of all.value) {
         const candidate = deployment.sha === commit;
-        if (live !== null && (!candidate || hasCommit)) continue;
+        if (live !== null && (!candidate || hasCommit)) {
+          continue;
+        }
         const latest = yield* rest(
           Statuses,
           cwd,
           `${repo}/deployments/${deployment.id}/statuses?per_page=1`,
         );
-        if (!latest.ok) return unread(latest.reason);
-        if (live === null && latest.value[0]?.state === "success") live = deployment.sha;
+        if (!latest.ok) {
+          return unread(latest.reason);
+        }
+        if (live === null && latest.value[0]?.state === "success") {
+          live = deployment.sha;
+        }
         const link =
           /^https:\/\/github\.com\/([^/]+\/[^/]+)\/actions\/runs\/\d+\/job\/(\d+)(?:[/?#]|$)/.exec(
             latest.value[0]?.log_url ?? "",
@@ -1482,23 +1596,26 @@ function stagingEnvironments<R>(
                 Option.map(Option.fromNullishOr(link[1]), (present) => Str.toLowerCase(present)),
               ) === Str.toLowerCase(mrPath(ref)) &&
               selected.has(Number(link[2]))))
-        )
+        ) {
           hasCommit = true;
+        }
       }
       environments.push({ name, live, hasCommit });
     }
     return { ok: true, environments };
   });
+  return returned;
 }
 
-/** `https://github.com/<o>/<r>/actions/runs/<id>`'s conclusion, or its status while it runs. */
-function runStatus(url: string, cwd: string): Effect.Effect<string | null, never, ForgeHttp> {
+function runStatus(url: string, cwd: string) {
   return Effect.gen(function* () {
     const m =
       /^https?:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/(\d+)(?:[/?#]\S*)?$/.exec(
         Str.trim(url),
       );
-    if (!m) return null;
+    if (!m) {
+      return null;
+    }
     const said = yield* rest(RunState, cwd, `repos/${m[1]}/actions/runs/${m[2]}`);
     return said.ok ? (said.value.conclusion ?? said.value.status) : null;
   });
@@ -1521,41 +1638,48 @@ const WorkflowRuns = Schema.Struct({
   workflow_runs: Schema.Array(Schema.Struct({ html_url: Schema.String })),
 });
 
-/** The newest Actions run `tag` started in `ref`'s repository, a push or a release. */
-function tagPipeline(
-  ref: MrRef,
-  tag: string,
-  cwd: string,
-): Effect.Effect<TagPipelineRead, never, ForgeHttp> {
-  return Effect.gen(function* () {
-    if (ref.project === null) return { ok: false, reason: "no repository to read runs of" };
+function tagPipeline(ref: MrRef, tag: string, cwd: string) {
+  const returned: Effect.Effect<TagPipelineRead, never, ForgeHttp> = Effect.gen(function* () {
+    if (ref.project === null) {
+      return { ok: false, reason: "no repository to read runs of" };
+    }
     const runs = yield* rest(
       WorkflowRuns,
       cwd,
       `repos/${mrPath(ref)}/actions/runs?branch=${encodeURIComponent(tag)}&per_page=1`,
     );
-    if (!runs.ok) return runs;
+    if (!runs.ok) {
+      return runs;
+    }
     return { ok: true, url: runs.value.workflow_runs[0]?.html_url ?? null };
   });
+  return returned;
 }
 
-/** An Actions run and its jobs; one waiting on an environment's reviewers waits by hand. */
-function pipeline(url: string, cwd: string): Effect.Effect<PipelineRead, never, ForgeHttp> {
-  return Effect.gen(function* () {
+function pipeline(url: string, cwd: string) {
+  const returned: Effect.Effect<PipelineRead, never, ForgeHttp> = Effect.gen(function* () {
     const m =
       /^https?:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/(\d+)(?:[/?#]\S*)?$/.exec(
         Str.trim(url),
       );
-    if (!m) return { ok: false, reason: `${url} is not a GitHub Actions run` };
+    if (!m) {
+      return { ok: false, reason: `${url} is not a GitHub Actions run` };
+    }
     const route = `repos/${m[1]}/actions/runs/${m[2]}`;
     const status = yield* rest(RunIdentity, cwd, route);
-    if (!status.ok) return status;
+    if (!status.ok) {
+      return status;
+    }
     const jobs: Array<typeof RunJob.Type> = [];
     for (let page = 1; ; page++) {
       const listed = yield* rest(RunJobs, cwd, `${route}/jobs?per_page=100&page=${page}`);
-      if (!listed.ok) return listed;
+      if (!listed.ok) {
+        return listed;
+      }
       jobs.push(...listed.value.jobs);
-      if (listed.value.jobs.length < 100) break;
+      if (listed.value.jobs.length < 100) {
+        break;
+      }
     }
     return {
       ok: true,
@@ -1577,21 +1701,17 @@ function pipeline(url: string, cwd: string): Effect.Effect<PipelineRead, never, 
       })),
     };
   });
+  return returned;
 }
 
-/** `gh repo clone`, with gh's own login; one nobody logged in to says how to log in. */
-function clone<R>(
-  project: string,
-  into: string,
-  cwd: string,
-  run: Runner<R>,
-): Effect.Effect<Readiness, never, R> {
+function clone<R>(project: string, into: string, cwd: string, run: Runner<R>) {
   return Effect.gen(function* () {
-    if ((yield* run("gh", ["auth", "status", "--hostname", HOST], cwd)).code !== 0)
+    if ((yield* run("gh", ["auth", "status", "--hostname", HOST], cwd)).code !== 0) {
       return {
         ok: false,
         reason: `gh is not logged in to ${HOST}: log in with \`gh auth login --hostname ${HOST}\``,
       };
+    }
     const repo = mrPath({ project, iid: "" });
     const cloned = yield* run("gh", ["repo", "clone", repo, into, "--", "--quiet"], cwd);
     return cloned.code === 0
@@ -1606,7 +1726,8 @@ export const github: Forge = {
     ref.project === null
       ? Effect.succeed({ ok: false, reason: `${mrWords(ref).label} names no GitHub project` })
       : reviewChanges(LOGIN, ref.project, ref, previous, head, cwd),
-  issues: (project, cwd, _run, numbers) => listIssues(LOGIN, project, cwd, numbers),
+  issues: (project, cwd, _run, which) => listIssues(LOGIN, project, cwd, which),
+  requests: (project, cwd) => listRequests(LOGIN, project, cwd),
   fileIssue: (project, title, body, cwd) => createIssue(LOGIN, project, title, body, cwd),
   commentIssue: (project, number, body, cwd) => commentIssue(LOGIN, project, number, body, cwd),
   clone,

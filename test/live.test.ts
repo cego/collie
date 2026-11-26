@@ -1,15 +1,12 @@
-// What the Home board's Live region is given, and what a row's marks say. Both are reads
-// of journals other tickets write, so the discipline here is the same as the cards':
-// nothing is inferred that the files do not say, and a Run nothing has found anything
-// about is unmarked rather than reassuringly marked clean.
-
 import * as Arr from "effect/Array";
 import { Effect, FileSystem, Layer, Path, Schema, flow, Result } from "effect";
 import { DriftReportSchema } from "../src/evaluator";
 import { expect, test } from "bun:test";
-import { appendCard, type Card } from "../src/cards";
+import { appendCard } from "../src/cards";
+import type { Card } from "../src/cards";
 import { appendDrift } from "../src/drift";
-import { liveFor, pendingReportsPath, readPendingReports, type Ledgers } from "../src/live";
+import { liveFor, pendingReportsPath, readPendingReports } from "../src/live";
+import type { Ledgers } from "../src/live";
 import { DEFAULT_AUTHORITY, seedIntent, writeIntent } from "../src/intent";
 import { marksOf } from "../src/lines";
 import { read as readProposals, record as recordProposal } from "../src/proposals";
@@ -24,8 +21,8 @@ const encodeReport = flow(
 
 const REVISION = { branch: "main", head_sha: "abc1234def", fingerprint: "f1", dirty: false };
 
-function card(over: Partial<Card> = {}): Card {
-  return {
+function card(over: Partial<Card> = {}) {
+  const returned: Card = {
     id: "c1",
     run: "r1",
     kind: "slice",
@@ -50,6 +47,7 @@ function card(over: Partial<Card> = {}): Card {
     significance: "try-it",
     ...over,
   };
+  return returned;
 }
 
 const rig = Effect.fn("live.rig")(function* () {
@@ -59,7 +57,6 @@ const rig = Effect.fn("live.rig")(function* () {
   const runDir = path.join(stateDir, "runs", "r1");
   yield* fs.makeDirectory(runDir, { recursive: true });
   const records = yield* Layer.build(recordsAt(stateDir));
-  /** The ledgers as the board is given them, read from the host's own. */
   const ledgers: Ledgers = {
     overridden: overriddenRuns.pipe(Effect.provideContext(records)),
     deliveriesOf: (run) => deliveriesOf(run).pipe(Effect.provideContext(records)),
@@ -89,7 +86,7 @@ test("the Live region is the Selection's own cards, drift and deliveries", () =>
       const { live } = yield* liveFor({
         stateDir,
         ledgers,
-        socketPath: null,
+        herd: null,
         run: { id: "r1", dir: runDir },
         runs: [{ id: "r1", dir: runDir, held: false, harnesses: [] }],
         region: true,
@@ -97,7 +94,6 @@ test("the Live region is the Selection's own cards, drift and deliveries", () =>
 
       expect(Arr.map(live!.cards, (c) => c.id)).toEqual(["c1"]);
       expect(Arr.map(live!.drift, (d) => d.id)).toEqual(["d1"]);
-      // No Herd — no socket — is no proposals, not a failed read.
       expect(live!.proposals).toEqual([]);
     }),
   ));
@@ -120,12 +116,10 @@ test("one pass answers both: the region and the row's marks", () =>
         resolution: "open",
       });
 
-      // The same journals say what the region draws and what the row is marked with, so
-      // asking twice was reading each Run's cards and drift twice a tick.
       const { live, marks } = yield* liveFor({
         stateDir,
         ledgers,
-        socketPath: null,
+        herd: null,
         run: { id: "r1", dir: runDir },
         runs: [{ id: "r1", dir: runDir, held: false, harnesses: [] }],
         region: true,
@@ -182,12 +176,10 @@ test("a Run's marks come from its own journals and nowhere else", () =>
         by: "human",
       }).pipe(Effect.provideContext(records));
 
-      // The marks are read whether or not the region is on screen: they are on a
-      // History row too, and a View that draws no region still draws those.
       const { live, marks } = yield* liveFor({
         stateDir,
         ledgers,
-        socketPath: null,
+        herd: null,
         run: null,
         runs: [{ id: "r1", dir: runDir, held: true, harnesses: [] }],
         region: false,
@@ -209,10 +201,7 @@ test("correcting a Run nobody can prove they own says so on the row, permanently
   runEffect(
     Effect.gen(function* () {
       const { stateDir, runDir, ledgers } = yield* rig();
-      // SPEC §7.5: without attribution, `auto_correct` is honoured only with
-      // `exclusive_steering` **plus** a permanent row warning. The gate was there; the
-      // disclosure was not, so a human could receive automatic corrections to an agent
-      // nobody can prove they are alone at without ever being told.
+      // WARNING: SPEC 7.5: without attribution, auto_correct is honoured only with exclusive_steering plus a permanent row warning.
       const granted = seedIntent("r1", {
         defaults: {
           constraints: [],
@@ -225,22 +214,19 @@ test("correcting a Run nobody can prove they own says so on the row, permanently
       const on = yield* liveFor({
         stateDir,
         ledgers,
-        socketPath: null,
+        herd: null,
         run: null,
         runs: [marked],
         region: false,
       });
       expect(on.marks.r1?.unattributed).toBe(true);
-      // Words, not a glyph: the row has to be readable as the disclosure it is.
       expect(marksOf(on.marks.r1!)).toContain("⚠ unattributed");
 
-      // Not granted is not a warning: nothing is being corrected, so there is nothing to
-      // disclose and a mark would make every Run look like it was being argued with.
       yield* writeIntent(runDir, seedIntent("r1", {}));
       const off = yield* liveFor({
         stateDir,
         ledgers,
-        socketPath: null,
+        herd: null,
         run: null,
         runs: [marked],
         region: false,
@@ -256,7 +242,7 @@ test("a Run with nothing recorded about it has no marks at all", () =>
       const { marks } = yield* liveFor({
         stateDir,
         ledgers,
-        socketPath: null,
+        herd: null,
         run: null,
         runs: [{ id: "r1", dir: runDir, held: false, harnesses: [] }],
         region: false,
@@ -292,7 +278,6 @@ test("an undelivered report is read for its Run and never delivered by reading i
       expect(Arr.map(reports, (r) => r.constraint)).toEqual([
         "the sibling repo's API must not change",
       ]);
-      // Reading it changed nothing: the file is still there, with the entry still in it.
       expect(yield* fs.exists(file)).toBe(true);
     }),
   ));
@@ -303,8 +288,7 @@ test("a proposal about the installation is drawn whatever row is selected", () =
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const { stateDir, runDir, records, ledgers } = yield* rig();
-      // A socket path is what names a Herd, so the proposal is filed under the key this
-      // state directory resolves to rather than one the test picked.
+      // WARNING: a socket path names a Herd, so the proposal is filed under the key this state directory resolves to.
       const socketPath = path.join(stateDir, "herdr.sock");
       yield* fs.writeFileString(socketPath, "");
       const herdWide = yield* recordProposal(yield* herdOf(socketPath), {
@@ -316,13 +300,11 @@ test("a proposal about the installation is drawn whatever row is selected", () =
         by: "chat:c-1",
       }).pipe(Effect.provideContext(records));
 
-      // It names no Run, so no row would carry it — and `collie_propose` tells the model,
-      // and the prompt tells the human, that the board is where it is confirmed.
       for (const selected of [null, { id: "r1", dir: runDir }]) {
         const { live } = yield* liveFor({
           stateDir,
           ledgers,
-          socketPath,
+          herd: yield* herdOf(socketPath),
           run: selected,
           runs: [{ id: "r1", dir: runDir, held: false, harnesses: [] }],
           region: true,

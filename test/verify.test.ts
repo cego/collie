@@ -1,7 +1,3 @@
-// A verification is only worth something because of what it refuses to say. These are
-// the refusals: a tree that moved under the command, a tree too big to have been looked
-// at, a directory that is not the Run's, and a command that is not the approved one.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
@@ -22,13 +18,17 @@ import {
   resolveExecutable,
   resultOf,
   recordFor,
+  recordedFor,
   reliedFor,
   runApproved,
   sameTree,
   staleAgainst,
 } from "../src/verify";
 import type { VerifySpec } from "../src/intent";
+import { isolatedHint } from "../src/verify-model";
+import type { Verification } from "../src/verify-model";
 import { fileTime } from "../src/time";
+import { noteVerification, readMetrics } from "../src/metrics";
 import { FakeBin, loggedGit } from "./support/bin";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
@@ -36,7 +36,7 @@ import { until } from "./support/host";
 
 let repo: string;
 
-const git = (args: string[], cwd = repo) =>
+const git = (args: Array<string>, cwd = repo) =>
   exec(["git", ...args], { cwd }).pipe(Effect.map((done) => done.exitCode));
 
 const inRepository: typeof runEffect = (effect) =>
@@ -100,7 +100,6 @@ test("the fingerprint moves for anything that changes what a command would see",
       expect(clean.fingerprint).not.toBe(TOO_LARGE);
       expect((yield* fingerprint(repo)).fingerprint).toBe(clean.fingerprint);
 
-      // Unstaged.
       yield* fs.writeFileString(path.join(repo, "tracked.txt"), "two\n");
       const unstaged = yield* fingerprint(repo);
       expect(unstaged.fingerprint).not.toBe(clean.fingerprint);
@@ -108,8 +107,7 @@ test("the fingerprint moves for anything that changes what a command would see",
       yield* git(["add", "-A"]);
       expect((yield* fingerprint(repo)).fingerprint).toBe(unstaged.fingerprint);
 
-      // Untracked content counts: a test that passed because of an uncommitted file
-      // passed on a tree nobody else will get.
+      // WARNING: untracked content counts; a test that passed on an uncommitted file passed on a tree nobody else gets.
       yield* git(["checkout", "-q", "--", "."]);
       yield* git(["reset", "-q"]);
       const back = yield* fingerprint(repo);
@@ -120,7 +118,7 @@ test("the fingerprint moves for anything that changes what a command would see",
       const changed = yield* fingerprint(repo);
       expect(changed.fingerprint).not.toBe(withUntracked.fingerprint);
 
-      // Ignored files are not part of what a command sees under version control.
+      // WARNING: ignored files are not part of what a command sees under version control.
       yield* fs.makeDirectory(path.join(repo, "ignored"), { recursive: true });
       yield* fs.writeFileString(path.join(repo, "ignored", "big"), "noise\n");
       expect((yield* fingerprint(repo)).fingerprint).toBe(changed.fingerprint);
@@ -173,7 +171,6 @@ test("a command that leaves the tree alone passes; one that changes it is unstab
       });
       expect(failed.result).toBe("fail");
 
-      // Writes a file while it runs, which is exactly the case a snapshot pair catches.
       const changed = yield* collect(runDir, {
         run: "r1",
         name: "dirty",
@@ -197,7 +194,6 @@ test("a command that leaves the tree alone passes; one that changes it is unstab
 
 const GIT_REFUSED = "fatal: Unable to create index.lock: File exists.";
 
-/** A git that refuses `add` while the marker it returns exists, removing it on the first refusal where `once`. */
 const addRefusedWhileMarked = (once: boolean) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -253,7 +249,7 @@ test("the argument list is the command; nothing is handed to a shell", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
       const runDir = path.join(repo, ".run");
-      // A shell would treat this as two commands; a spawn treats it as one argument.
+      // WARNING: a shell would read this as two commands; a spawn passes it as one argument.
       const record = yield* collect(runDir, {
         run: "r1",
         name: "echo",
@@ -280,7 +276,7 @@ test("a directory outside the Run is refused, and one inside it is not", () =>
       expect(yield* insideRun(path.join(repo, "src"), run)).toBe(true);
       const elsewhere = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-other-" });
       expect(yield* insideRun(elsewhere, run)).toBe(false);
-      // A sibling whose path merely starts with the Run's is not inside it.
+      // WARNING: a sibling whose path merely starts with the Run's is not inside it.
       expect(yield* insideRun(`${repo}-next-door`, run)).toBe(false);
     }),
   ));
@@ -302,7 +298,7 @@ test("Collie runs only the command the human approved, argument for argument", (
       expect(ran.result).toBe("pass");
       expect(ran.by).toBe("collie");
 
-      // The wrapper is part of what was approved: one extra word is a different command.
+      // WARNING: the wrapper is part of what was approved; one extra word is a different command.
       const near = yield* runApproved(runDir, run, [approved], {
         ...approved,
         argv: ["--bail", "--watch"],
@@ -385,7 +381,7 @@ test("an expected failure passes when it fails, and fails when it does not", () 
       const path = yield* Path.Path;
       const runDir = path.join(repo, ".run-expect");
 
-      // A reproduction: the point of it is the non-zero exit, so that is its pass.
+      // WARNING: a reproduction passes on its non-zero exit.
       const reproduced = yield* collect(runDir, {
         run: "r1",
         name: "regression",
@@ -399,8 +395,7 @@ test("an expected failure passes when it fails, and fails when it does not", () 
       expect(reproduced.exit).toBe(1);
       expect(reproduced.expect).toBe("fail");
 
-      // The same command succeeding is the bug not reproducing, which is a failure of
-      // the reproduction — not evidence that anything was fixed.
+      // WARNING: the same command succeeding is the reproduction failing, not a fix.
       const didNot = yield* collect(runDir, {
         run: "r1",
         name: "regression",
@@ -413,8 +408,7 @@ test("an expected failure passes when it fails, and fails when it does not", () 
       expect(didNot.result).toBe("fail");
       expect(didNot.exit).toBe(0);
 
-      // Unstable beats the expectation both ways: a tree that moved says nothing about
-      // either, and an expected failure on a moving tree is not a reproduction.
+      // WARNING: unstable beats the expectation both ways; an expected failure on a moving tree is not a reproduction.
       const moved = yield* collect(runDir, {
         run: "r1",
         name: "regression",
@@ -428,6 +422,103 @@ test("an expected failure passes when it fails, and fails when it does not", () 
     }),
   ));
 
+const movedBy = (name: string, script: string) =>
+  collect(`${repo}/.git/run-moved`, {
+    run: "r1",
+    name,
+    executable: "sh",
+    argv: ["-c", script],
+    cwd: repo,
+    by: "agent",
+  });
+
+test("a file created while the command runs makes it unstable, and its record names it added and untracked", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const record = yield* movedBy("creates", "echo x > created.txt");
+      expect(record.result).toBe("unstable");
+      expect(record.moved).toEqual([{ path: "created.txt", change: "added", class: "untracked" }]);
+      const kept = yield* readVerifications(`${repo}/.git/run-moved`);
+      expect(kept.at(-1)?.moved).toEqual(record.moved);
+    }),
+  ));
+
+test("a tracked file edited while the command runs is named modified and tracked", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const record = yield* movedBy("edits", "echo two > tracked.txt");
+      expect(record.result).toBe("unstable");
+      expect(record.moved).toEqual([{ path: "tracked.txt", change: "modified", class: "tracked" }]);
+    }),
+  ));
+
+test("a dependency lockfile changed while the command runs is classed as the lockfile", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(`${repo}/web`);
+      yield* fs.writeFileString(`${repo}/web/package-lock.json`, "{}\n");
+      yield* git(["add", "-A"]);
+      yield* git(["commit", "-qm", "lock"]);
+      const record = yield* movedBy(
+        "installs",
+        "echo '{ }' > web/package-lock.json; echo y > bun.lock",
+      );
+      expect(record.result).toBe("unstable");
+      expect(record.moved).toEqual([
+        { path: "bun.lock", change: "added", class: "lockfile" },
+        { path: "web/package-lock.json", change: "modified", class: "lockfile" },
+      ]);
+    }),
+  ));
+
+test("an unstable verification's metric counts what moved by class", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const record = yield* movedBy(
+        "everything",
+        "echo two > tracked.txt; echo new > made.txt; echo y > yarn.lock",
+      );
+      yield* noteVerification(`${repo}/.git/run-moved`, record);
+      const metric = (yield* readMetrics(`${repo}/.git/run-moved`)).at(-1);
+      expect(metric).toMatchObject({
+        kind: "verification",
+        note: "unstable",
+        moved: { tracked: 1, untracked: 1, lockfile: 1 },
+      });
+    }),
+  ));
+
+test("a command that moves nothing records no moved paths", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const record = yield* movedBy("still", "true");
+      expect(record.result).toBe("pass");
+      expect(record.moved).toBeUndefined();
+    }),
+  ));
+
+test("a command killed mid-run records no pass", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const runDir = path.join(repo, ".run-killed");
+      const killed = yield* collect(runDir, {
+        run: "r1",
+        name: "killed",
+        executable: "sh",
+        argv: ["-c", "kill -KILL $$; sleep 5"],
+        cwd: repo,
+        by: "agent",
+      }).pipe(Effect.result);
+      if (killed._tag === "Success") {
+        expect(killed.success.result).not.toBe("pass");
+      }
+      const recorded = yield* readVerifications(runDir).pipe(Effect.orElseSucceed(() => []));
+      expect(Arr.some(recorded, (one) => one.result === "pass")).toBe(false);
+    }),
+  ));
+
 test("expectation is applied only after the stability rules", () => {
   const same = { head_sha: "a", fingerprint: "f" };
   const other = { head_sha: "a", fingerprint: "g" };
@@ -436,7 +527,7 @@ test("expectation is applied only after the stability rules", () => {
   expect(resultOf(same, same, 0, "pass")).toBe("pass");
   expect(resultOf(same, other, 1, "fail")).toBe("unstable");
   expect(resultOf({ head_sha: "a", fingerprint: TOO_LARGE }, same, 1, "fail")).toBe("unstable");
-  // The default is what every record written before `--expect` existed meant.
+  // WARNING: the default is what every record written before --expect meant.
   expect(resultOf(same, same, 0)).toBe("pass");
 });
 
@@ -445,8 +536,7 @@ test("a verification is stale the moment the tree it ran on moves", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      // Outside the repository, as a real run directory is: a journal written inside the
-      // tree would move the fingerprint of the very tree it is recording.
+      // WARNING: outside the repository; a journal written inside the tree would move the fingerprint of the tree it records.
       const runDir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-run-" });
       const record = yield* collect(runDir, {
         run: "r1",
@@ -462,7 +552,7 @@ test("a verification is stale the moment the tree it ran on moves", () =>
       yield* fs.writeFileString(path.join(repo, "tracked.txt"), "two\n");
       expect(staleAgainst(record, yield* fingerprint(repo))).toBe(true);
 
-      // A tree nobody could measure is never a tree a result still speaks for.
+      // WARNING: a tree nobody could measure is never one a result still speaks for.
       expect(staleAgainst(record, { head_sha: record.end.head_sha, fingerprint: TOO_LARGE })).toBe(
         true,
       );
@@ -547,7 +637,7 @@ test("a fingerprint leaves the index and the working tree as they were", () =>
       yield* fs.writeFileString(path.join(repo, "tracked.txt"), "staged then edited\n");
       yield* fs.writeFileString(path.join(repo, "second.txt"), "unstaged\n");
       yield* fs.writeFileString(path.join(repo, "untracked.txt"), "u\n");
-      const out = (args: string[]) =>
+      const out = (args: Array<string>) =>
         exec(["git", ...args], { cwd: repo }).pipe(Effect.map((done) => done.stdout));
       const state = () =>
         Effect.all([
@@ -567,7 +657,7 @@ test("a fingerprint writes nothing to the checkout's index, so it holds no lock 
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      // A file touched and not edited: a status of git's own would write its new time to the index.
+      // WARNING: a status of git's own would write the new time to the index, so this file is touched and not edited.
       const touched = fileTime("2026-01-01T00:00:00Z");
       yield* fs.utimes(path.join(repo, "tracked.txt"), touched, touched);
       const index = path.join(repo, ".git", "index");
@@ -584,8 +674,7 @@ test("an edit of the same size, in the second its file was staged, moves the tre
       const path = yield* Path.Path;
       const file = path.join(repo, "tracked.txt");
       const index = path.join(repo, ".git", "index");
-      // One second holds the staging, the index and the edit. A file's change time cannot be
-      // set, so the repository is one that does not read it.
+      // WARNING: a file's change time cannot be set, so the repository is one that does not read it.
       const second = fileTime("2026-01-01T00:00:00Z");
       yield* git(["config", "core.trustctime", "false"]);
       yield* fs.utimes(file, second, second);
@@ -708,8 +797,9 @@ test("an edit inside a submodule moves the tree, measured from any directory of 
         ["init", "-q"],
         ["config", "user.email", "t@example.com"],
         ["config", "user.name", "t"],
-      ])
+      ]) {
         yield* git(args, inner);
+      }
       yield* fs.writeFileString(path.join(inner, "lib.txt"), "one\n");
       yield* git(["add", "-A"], inner);
       yield* git(["commit", "-qm", "lib"], inner);
@@ -768,7 +858,6 @@ test("both streams go to the log as they arrive, readable while the command runs
           log,
         }),
       );
-      // Before it ends: what it has said so far, in the order it said it.
       const early = yield* until(
         () => fs.readFileString(log).pipe(Effect.orElseSucceed(() => "")),
         (text) => pipe_(text, Str.includes("three")),
@@ -810,17 +899,21 @@ test("a log past its bound is cut, and says it was", () =>
     }),
   ));
 
-/** Sets NODE_OPTIONS for this process, and returns what puts it back. */
-function nodeOptions(value: string): () => void {
+function nodeOptions(value: string) {
   const before = Bun.env.NODE_OPTIONS;
   Bun.env.NODE_OPTIONS = value;
   return () => {
-    if (before === undefined) delete Bun.env.NODE_OPTIONS;
-    else Bun.env.NODE_OPTIONS = before;
+    if (before === undefined) {
+      delete Bun.env.NODE_OPTIONS;
+    } else {
+      Bun.env.NODE_OPTIONS = before;
+    }
   };
 }
 
-/** A tool of the test's own, outside the tree, whose content is what it is. */
+const recordOf = <E, R>(found: Effect.Effect<{ readonly record: Verification | null }, E, R>) =>
+  Effect.map(found, (one) => one.record);
+
 const tool = (dir: string, body: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -861,10 +954,9 @@ test("a pass is relied on only while its tree, its command and its environment a
       const spec: VerifySpec = { name: "unit", executable, argv: [], cwd: "." };
       const run = { id: "r1", cwd: repo, worktree: null };
       const since = "2000-01-01T00:00:00.000Z";
-      const relied = () => reliedFor(runDir, run, spec, since);
+      const relied = () => recordOf(reliedFor(runDir, run, spec, since));
 
       expect(yield* relied()).toBeNull();
-      // An agent's pass of exactly the check's command, under a name of its own.
       const agents = yield* collect(runDir, {
         run: "r1",
         name: "test",
@@ -877,10 +969,10 @@ test("a pass is relied on only while its tree, its command and its environment a
       const collies = yield* runApproved(runDir, run, [spec], spec);
       expect((yield* relied())?.id).toBe(collies.id);
 
-      // Another command under the same name.
-      expect(yield* reliedFor(runDir, run, { ...spec, argv: ["--bail"] }, since)).toBeNull();
+      expect(
+        yield* recordOf(reliedFor(runDir, run, { ...spec, argv: ["--bail"] }, since)),
+      ).toBeNull();
 
-      // The tree moved.
       yield* fs.writeFileString(path.join(repo, "tracked.txt"), "two\n");
       expect(yield* relied()).toBeNull();
       yield* git(["checkout", "-q", "--", "."]);
@@ -891,7 +983,6 @@ test("a pass is relied on only while its tree, its command and its environment a
       yield* git(["commit", "-qam", "the verified bytes"]);
       expect((yield* relied())?.id).toBe(dirty.id);
 
-      // The tool changed.
       yield* tool(runDir, "exit 0 # upgraded");
       expect(yield* relied()).toBeNull();
     }),
@@ -910,7 +1001,7 @@ test("an install into an ignored node_modules makes a record stale, and a cache 
       const spec: VerifySpec = { name: "unit", executable, argv: [], cwd: "." };
       const run = { id: "r1", cwd: repo, worktree: null };
       const since = "2000-01-01T00:00:00.000Z";
-      const recorded = () => recordFor(runDir, run, spec, since);
+      const recorded = () => recordOf(recordFor(runDir, run, spec, since));
 
       const failed = yield* runApproved(runDir, run, [spec], spec);
       expect(failed.result).toBe("fail");
@@ -942,7 +1033,6 @@ test("the latest record of that command on the tree decides, whoever asked", () 
       const since = "2000-01-01T00:00:00.000Z";
       const passed = yield* runApproved(runDir, run, [spec], spec);
 
-      // An agent's later failure of the same command on this tree.
       yield* fs.writeFileString(flag, "");
       yield* collect(runDir, {
         run: "r1",
@@ -953,9 +1043,8 @@ test("the latest record of that command on the tree decides, whoever asked", () 
         by: "agent",
       });
       yield* fs.remove(flag);
-      expect(yield* reliedFor(runDir, run, spec, since)).toBeNull();
+      expect(yield* recordOf(reliedFor(runDir, run, spec, since))).toBeNull();
 
-      // Expecting a failure is never a pass of the check.
       yield* collect(runDir, {
         run: "r1",
         name: "t",
@@ -965,15 +1054,309 @@ test("the latest record of that command on the tree decides, whoever asked", () 
         by: "agent",
         expect: "fail",
       });
-      expect(yield* reliedFor(runDir, run, spec, since)).toBeNull();
+      expect(yield* recordOf(reliedFor(runDir, run, spec, since))).toBeNull();
 
       yield* appendVerification(runDir, { ...passed, id: "again" });
-      expect((yield* reliedFor(runDir, run, spec, since))?.id).toBe("again");
-      // Collected before this host started.
-      expect(yield* reliedFor(runDir, run, spec, "2999-01-01T00:00:00.000Z")).toBeNull();
+      expect((yield* recordOf(reliedFor(runDir, run, spec, since)))?.id).toBe("again");
+      // WARNING: the record was collected before this host started.
+      expect(yield* recordOf(reliedFor(runDir, run, spec, "2999-01-01T00:00:00.000Z"))).toBeNull();
 
       const { environment: _, ...older } = passed;
       yield* appendVerification(runDir, { ...older, id: "older" });
-      expect(yield* reliedFor(runDir, run, spec, since)).toBeNull();
+      expect(yield* recordOf(reliedFor(runDir, run, spec, since))).toBeNull();
+    }),
+  ));
+
+const passedOnce = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const runDir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-run-" });
+  const executable = yield* tool(runDir, "exit 0");
+  const spec: VerifySpec = { name: "unit", executable, argv: [], cwd: "." };
+  const run = { id: "r1", cwd: repo, worktree: null };
+  const since = "2000-01-01T00:00:00.000Z";
+  const lookup = (asked = spec, from = since) => recordFor(runDir, run, asked, from);
+  return { runDir, spec, run, lookup, ran: runApproved(runDir, run, [spec], spec) };
+});
+
+test("a check with no record on the Run is not reused because there is none", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const { lookup } = yield* passedOnce;
+      expect(yield* lookup()).toEqual({ record: null, miss: { reason: "none" } });
+    }),
+  ));
+
+test("a check whose command changed is not reused because the command differs, naming its last record", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const { lookup, spec, ran } = yield* passedOnce;
+      const passed = yield* ran;
+      expect(yield* lookup({ ...spec, argv: ["--bail"] })).toEqual({
+        record: null,
+        miss: { reason: "command", record: passed.id },
+      });
+    }),
+  ));
+
+test("a check whose tree moved is not reused because the tree differs, naming its last record", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { lookup, ran } = yield* passedOnce;
+      const passed = yield* ran;
+      yield* fs.writeFileString(`${repo}/tracked.txt`, "two\n");
+      expect(yield* lookup()).toEqual({
+        record: null,
+        miss: { reason: "tree", record: passed.id },
+      });
+    }),
+  ));
+
+test("a check recorded in another environment is not reused because the environment differs", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const { lookup, runDir, ran } = yield* passedOnce;
+      const passed = yield* ran;
+      yield* appendVerification(runDir, { ...passed, id: "elsewhere", environment: "other" });
+      expect(yield* lookup()).toEqual({
+        record: null,
+        miss: { reason: "environment", record: "elsewhere" },
+      });
+    }),
+  ));
+
+test("a check whose latest record on the tree is unstable is not reused because it is unstable", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const { lookup, runDir, ran } = yield* passedOnce;
+      const passed = yield* ran;
+      yield* appendVerification(runDir, { ...passed, id: "moved", result: "unstable" });
+      expect(yield* lookup()).toEqual({
+        record: null,
+        miss: { reason: "unstable", record: "moved" },
+      });
+    }),
+  ));
+
+test("a check collected before this host started is not reused, and says so", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const { lookup, spec, ran } = yield* passedOnce;
+      const passed = yield* ran;
+      expect(yield* lookup(spec, "2999-01-01T00:00:00.000Z")).toEqual({
+        record: null,
+        miss: { reason: "before-host", record: passed.id },
+      });
+    }),
+  ));
+
+test("a command whose latest record on the tree expected red is not reused because of it, naming that record", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const runDir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-run-" });
+      const executable = yield* tool(runDir, "exit 1");
+      const command = { name: "unit", executable, argv: [], cwd: repo };
+      const red = yield* collect(runDir, { ...command, run: "r1", by: "agent", expect: "fail" });
+      expect(
+        yield* recordedFor(runDir, { ...command, expect: "pass" }, "2000-01-01T00:00:00.000Z"),
+      ).toEqual({ record: null, miss: { reason: "unstable", record: red.id } });
+    }),
+  ));
+
+const isolation = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const notes = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-notes-" });
+  const checkouts = yield* fs.makeTempDirectoryScoped({ prefix: "hw-verify-checkouts-" });
+  const ran = (
+    script: string,
+    isolated: {
+      readonly prepare?: { executable: string; argv: ReadonlyArray<string> };
+    } | null = {},
+    expect: "pass" | "fail" = "pass",
+  ) =>
+    collect(`${notes}/run`, {
+      run: "r1",
+      name: "isolated",
+      executable: "sh",
+      argv: ["-c", script],
+      cwd: repo,
+      by: "agent",
+      expect,
+      ...(isolated !== null && { isolated: { checkouts, ...isolated } }),
+    });
+  return { notes, checkouts, ran };
+});
+
+test("a command held while a tracked file is edited passes isolated, bound to its start tree, and is unstable in the Worktree", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { notes, ran } = yield* isolation;
+      const editedWhileHeld = (isolated: boolean) =>
+        Effect.gen(function* () {
+          yield* fs.remove(`${notes}/started`, { force: true });
+          yield* fs.remove(`${notes}/go`, { force: true });
+          yield* fs.writeFileString(`${repo}/tracked.txt`, "one\n");
+          const start = yield* fingerprint(repo);
+          const running = yield* Effect.forkScoped(
+            ran(
+              `touch ${notes}/started; while [ ! -f ${notes}/go ]; do sleep 0.02; done`,
+              isolated ? {} : null,
+            ),
+          );
+          yield* until(() => fs.exists(`${notes}/started`), Boolean);
+          yield* fs.writeFileString(`${repo}/tracked.txt`, "edited\n");
+          yield* fs.writeFileString(`${notes}/go`, "");
+          return { start, record: yield* Fiber.join(running) };
+        });
+
+      const inWorktree = yield* editedWhileHeld(false);
+      expect(inWorktree.record.result).toBe("unstable");
+
+      const isolated = yield* editedWhileHeld(true);
+      expect(isolated.record.result).toBe("pass");
+      expect(isolated.record.start).toEqual(isolated.start);
+      expect(isolated.record.end.fingerprint).toBe(isolated.start.fingerprint);
+      expect(isolated.record.cwd).toBe(repo);
+    }),
+  ));
+
+test("an isolated checkout has the Worktree's untracked files and none of its ignored ones", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { notes, checkouts, ran } = yield* isolation;
+      yield* fs.writeFileString(`${repo}/untracked.txt`, "new\n");
+      yield* fs.makeDirectory(`${repo}/ignored`);
+      yield* fs.writeFileString(`${repo}/ignored/dep.txt`, "installed\n");
+      const record = yield* ran(
+        `pwd > ${notes}/where; test -f untracked.txt && test ! -e ignored/dep.txt`,
+      );
+      expect(record.result).toBe("pass");
+      const where = Str.trim(yield* fs.readFileString(`${notes}/where`));
+      expect(pipe_(where, Str.startsWith(`${checkouts}/`))).toBe(true);
+    }),
+  ));
+
+test("an isolated check's prepare runs first in its checkout and is recorded with it", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const { ran } = yield* isolation;
+      const prepare = { executable: "sh", argv: ["-c", "mkdir -p ignored && touch ignored/dep"] };
+      const record = yield* ran("test -f ignored/dep", { prepare });
+      expect(record.result).toBe("pass");
+      expect(record.isolated?.prepare).toMatchObject({ ...prepare, exit: 0 });
+      expect(record.stage).toBeUndefined();
+    }),
+  ));
+
+test("a failing prepare records the check failed at stage prepare, without running it, even where a failure was expected", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { notes, ran } = yield* isolation;
+      const prepare = { executable: "sh", argv: ["-c", "exit 3"] };
+      for (const expect_ of ["pass", "fail"] as const) {
+        const record = yield* ran(`touch ${notes}/ran`, { prepare }, expect_);
+        expect(record.result).toBe("fail");
+        expect(record.stage).toBe("prepare");
+        expect(record.exit).toBe(3);
+        expect(record.isolated?.prepare?.exit).toBe(3);
+      }
+      expect(yield* fs.exists(`${notes}/ran`)).toBe(false);
+    }),
+  ));
+
+for (const script of ["check.sh", "..check.sh"]) {
+  test(`an isolated checkout-local executable ${script} runs from its checkout, recorded by its Worktree path`, () =>
+    inRepository(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { notes, checkouts } = yield* isolation;
+        yield* fs.writeFileString(`${repo}/${script}`, "#!/bin/sh\nexit 7\n");
+        yield* fs.chmod(`${repo}/${script}`, 0o755);
+        // WARNING: rewrites the Worktree's script after the checkout was made from it.
+        const prepare = {
+          executable: "sh",
+          argv: ["-c", `printf '#!/bin/sh\\nexit 0\\n' > ${repo}/${script}`],
+        };
+        const record = yield* collect(`${notes}/run`, {
+          run: "r1",
+          name: "local",
+          executable: `./${script}`,
+          argv: [],
+          cwd: repo,
+          by: "agent",
+          isolated: { checkouts, prepare },
+        });
+        expect(record.exit).toBe(7);
+        expect(record.result).toBe("fail");
+        expect(record.executable).toBe(`${repo}/${script}`);
+      }),
+    ));
+}
+
+test("two different isolated commands under one name, run at once, do not share a checkout", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { notes, ran } = yield* isolation;
+      const held = yield* Effect.forkScoped(
+        ran(`touch ${notes}/started; while [ ! -f ${notes}/go ]; do sleep 0.02; done`),
+      );
+      yield* until(() => fs.exists(`${notes}/started`), Boolean);
+      expect((yield* ran("echo x > made.txt")).result).toBe("unstable");
+      yield* fs.writeFileString(`${notes}/go`, "");
+      expect((yield* Fiber.join(held)).result).toBe("pass");
+    }),
+  ));
+
+test("one isolated command run at once from the repository and a directory in it does not share a checkout", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { notes, checkouts } = yield* isolation;
+      yield* fs.makeDirectory(`${repo}/sub`);
+      yield* fs.writeFileString(`${repo}/sub/here`, "");
+      const ran = (cwd: string) =>
+        collect(`${notes}/run`, {
+          run: "r1",
+          name: "isolated",
+          executable: "sh",
+          argv: [
+            "-c",
+            `if [ -f here ]; then echo x > made.txt; else touch ${notes}/started; while [ ! -f ${notes}/go ]; do sleep 0.02; done; fi`,
+          ],
+          cwd,
+          by: "agent",
+          isolated: { checkouts },
+        });
+      const held = yield* Effect.forkScoped(ran(repo));
+      yield* until(() => fs.exists(`${notes}/started`), Boolean);
+      expect((yield* ran(`${repo}/sub`)).result).toBe("unstable");
+      yield* fs.writeFileString(`${notes}/go`, "");
+      expect((yield* Fiber.join(held)).result).toBe("pass");
+    }),
+  ));
+
+test("an isolated command that writes an untracked file into its own checkout is unstable", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const { ran } = yield* isolation;
+      const record = yield* ran("echo x > made.txt");
+      expect(record.result).toBe("unstable");
+      expect(record.moved).toEqual([{ path: "made.txt", change: "added", class: "untracked" }]);
+    }),
+  ));
+
+test("an unstable result under a source edit names --isolated in its answer, and one under a lockfile does not", () =>
+  inRepository(
+    Effect.gen(function* () {
+      const edited = yield* movedBy("edits", "echo two > tracked.txt");
+      expect(isolatedHint(edited)).toContain("--isolated");
+      const installed = yield* movedBy("installs", "echo y > bun.lock");
+      expect(installed.result).toBe("unstable");
+      expect(isolatedHint(installed)).not.toContain("--isolated");
     }),
   ));

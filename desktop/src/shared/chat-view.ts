@@ -1,6 +1,4 @@
-// What the Flock chat's window says of a tool call and of the card a message is about. No
-// Bun-only import: the view bundles this.
-
+// WARNING: no Bun-only import: the view bundles this.
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
@@ -8,7 +6,6 @@ import { Option, Schema, flow, Result } from "effect";
 import { isString } from "../../../src/schema";
 import { AttachmentPart } from "./attachments";
 
-/** The board's card a message goes with, named as the chat's tools name it. */
 export const About = Schema.Struct({
   machine: Schema.String,
   task: Schema.String,
@@ -24,30 +21,24 @@ const ABOUT =
 const AboutJson = Schema.fromJsonString(About);
 const decodeAboutJson = Schema.decodeUnknownOption(AboutJson);
 
-/** The block the model is handed after the human's words: the card, as data. */
 export const aboutNote = (about: About) =>
   `${ABOUT}\n${flow(Schema.encodeResult(AboutJson), Result.getOrThrow)(about)}`;
 
-/** The card a block of Desktop's names, or null for any other text. */
-export const fromAboutNote = (text: string): About | null => {
+export const fromAboutNote = (text: string) => {
   const [first, json, ...rest] = Str.split(text, "\n");
   return first !== ABOUT || json === undefined || rest.length > 0
     ? null
     : Option.getOrNull(decodeAboutJson(json));
 };
 
-/** How a turn Desktop starts about News begins, which is how the window tells it from the human's. */
 export const DESKTOP_SAID = "Desktop noticed, while you were not asked:";
 
-/** When a turn Desktop started of its own begins and ends. */
 export const DesktopTurn = Schema.Literals(["started", "ended"]);
 export type DesktopTurn = typeof DesktopTurn.Type;
 
-/** The human's choices, keyed by question, as AskUserQuestion takes them. */
 export const Answers = Schema.Record(Schema.String, Schema.String);
 export type Answers = typeof Answers.Type;
 
-/** A conversation as its harness lists it. */
 export const Earlier = Schema.Struct({
   session: Schema.String,
   title: Schema.String,
@@ -55,11 +46,9 @@ export const Earlier = Schema.Struct({
 });
 export type Earlier = typeof Earlier.Type;
 
-/** A conversation and the harness it is held on. */
 export const HeldConversation = Schema.Struct({ session: Schema.String, harness: Schema.String });
 export type HeldConversation = typeof HeldConversation.Type;
 
-/** Each harness the chat runs on, by the name its maker gives it. */
 const HARNESS_NAMES = new Map([
   ["codex", "Codex"],
   ["opencode", "OpenCode"],
@@ -68,21 +57,21 @@ const HARNESS_NAMES = new Map([
 ]);
 export const harnessName = (harness: string) => HARNESS_NAMES.get(harness) ?? harness;
 
-/** The current conversation and the earlier ones that can be reopened, newest first. */
 export const Conversations = Schema.Struct({
   current: Schema.String,
   earlier: Schema.Array(Schema.Struct({ ...Earlier.fields, harness: Schema.String })),
 });
 export type Conversations = typeof Conversations.Type;
 
-/** What opening a conversation held on another harness than `set` does, where one is listed. */
 export const earlierNote = (earlier: Conversations["earlier"], set: string) => {
   const others = [
     ...new Set(
       Arr.flatMap(earlier, ({ harness }) => (harness === set ? [] : [harnessName(harness)])),
     ),
   ];
-  if (others.length === 0) return null;
+  if (others.length === 0) {
+    return null;
+  }
   return others.length === 1
     ? `Opening a ${others[0]} conversation moves the chat to ${others[0]}.`
     : `Opening a ${Arr.join(others, " or ")} conversation moves the chat to its harness.`;
@@ -108,10 +97,12 @@ const split = (id: string) => {
     : { machine: pipe(id, Str.slice(0, at)), id: pipe(id, Str.slice(at + 1)) };
 };
 
-/** A tool call as one row: the tool, the Machine its ids name, and a short summary of the rest. */
 export const toolRow = (name: string, args: string) => {
   const tool = pipe(name, Str.replace(/^mcp__collie__(collie_)?/, ""));
-  const asked = Option.getOrElse(decodeAsked(args), (): typeof Asked.Type => ({}));
+  const asked = Option.getOrElse(decodeAsked(args), () => {
+    const returned: typeof Asked.Type = {};
+    return returned;
+  });
   const ids = Arr.flatMap([asked, ...(asked.actions ?? [])], ({ run, workspace }) =>
     Arr.map(Arr.filter([run, workspace], isString), split),
   );
@@ -143,7 +134,6 @@ const Part = Schema.Union([
   }),
 ]);
 
-/** A message of a conversation already had, in the parts TanStack AI's client draws. */
 export const ChatMessage = Schema.Struct({
   id: Schema.String,
   role: Schema.Literals(["user", "assistant"]),
@@ -166,6 +156,5 @@ export const Questions = Schema.Struct({
 });
 const decodeQuestions = Schema.decodeUnknownOption(Schema.fromJsonString(Questions));
 
-/** What an AskUserQuestion call asks, once its arguments have all arrived. */
 export const questionsOf = (args: string) =>
   Option.match(decodeQuestions(args), { onNone: () => [], onSome: ({ questions }) => questions });

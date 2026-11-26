@@ -1,15 +1,18 @@
-// What self-improve measures of the questions its window's Runs asked.
-
 import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
 import {
+  commentOf,
+  namedIn,
   questionMeasures,
+  releasedFix,
   repeatedAnswers,
+  sortOut,
   summaryOf,
-  type AskingRun,
 } from "../workflows/retrospective";
+import type { AskingRun, Finding } from "../workflows/retrospective";
 
-const asking = (over: Partial<AskingRun> & { runId: string }): AskingRun => ({
+const asking: (over: Partial<AskingRun> & { runId: string }) => AskingRun = (over) => ({
   workflow: "implement",
   status: "complete",
   mr: null,
@@ -126,4 +129,174 @@ test("a question still open is not an answer, so it counts toward neither thresh
   expect(
     repeatedAnswers(answers("implement", "next", [...Arr.replicate("Release", 9), null, null])),
   ).toEqual([]);
+});
+
+const found: (over: Partial<Finding> & Pick<Finding, "key">) => Finding = (over) => ({
+  category: "navigation",
+  title: `Project ${over.key}`,
+  body: `What the Runs did: ${over.key}.`,
+  severity: "high",
+  runs: ["r-a", "r-b"],
+  records: [],
+  issue: null,
+  ...over,
+});
+
+const WINDOW = new Set(["r-a", "r-b", "r-c"]);
+const TAGS = [
+  { tag: "1.0.21", at: "2026-11-17T12:00:00.000Z" },
+  { tag: "1.0.20", at: "2026-11-10T12:00:00.000Z" },
+];
+const closedIssue = (number: number, key: string, closedAt: string) => ({
+  number,
+  title: `Issue ${number}`,
+  url: `https://forge.example/issues/${number}`,
+  keys: [key],
+  closedAt,
+});
+
+test("a finding whose issue was closed after the last release tag is left out as fixed but unreleased, and nothing is filed", () => {
+  const { kept, leftOut } = sortOut([found({ key: "slow-boot" })], WINDOW, [], false, {
+    closed: [closedIssue(7, "slow-boot", "2026-11-17T15:00:00.000Z")],
+    releases: TAGS,
+    underway: [],
+  });
+  expect(kept).toEqual([]);
+  expect(leftOut).toEqual([
+    { what: "Project slow-boot", why: "fixed on master since 1.0.21, not yet released" },
+  ]);
+});
+
+test("Runs created after an unreleased fix that still show the failure leave it out the same way, with no comment on the closed issue", () => {
+  const runs = { "r-a": "2026-11-17T16:00:00.000Z", "r-b": "2026-11-17T17:00:00.000Z" };
+  const matching = {
+    closed: [closedIssue(7, "slow-boot", "2026-11-17T15:00:00.000Z")],
+    releases: TAGS,
+    underway: [],
+  };
+  const { kept, leftOut } = sortOut(
+    [found({ key: "slow-boot", issue: 7 })],
+    WINDOW,
+    [],
+    false,
+    matching,
+  );
+  expect(kept).toEqual([]);
+  expect(leftOut[0]?.why).toBe("fixed on master since 1.0.21, not yet released");
+  expect(releasedFix(found({ key: "slow-boot", issue: 7 }), matching, runs)).toBeNull();
+});
+
+test("a finding on an issue closed since the last tag is left out even where an open issue also carries its key, so nothing is commented there", () => {
+  const { kept, leftOut } = sortOut(
+    [found({ key: "slow-boot" })],
+    WINDOW,
+    [{ number: 9, title: "Issue 9", url: "https://forge.example/issues/9", keys: ["slow-boot"] }],
+    false,
+    {
+      closed: [closedIssue(5, "slow-boot", "2026-11-17T15:00:00.000Z")],
+      releases: TAGS,
+      underway: [],
+    },
+  );
+  expect(kept).toEqual([]);
+  expect(leftOut).toEqual([
+    { what: "Project slow-boot", why: "fixed on master since 1.0.21, not yet released" },
+  ]);
+});
+
+test("a finding an active Run's goal or plan names, and one an open merge request carries, are left out naming who is fixing it", () => {
+  const { kept, leftOut } = sortOut(
+    [
+      found({ key: "slow-boot" }),
+      found({ key: "lost-log", issue: 12 }),
+      found({ key: "flaky-ci" }),
+    ],
+    WINDOW,
+    [],
+    false,
+    {
+      closed: [],
+      releases: TAGS,
+      underway: [
+        { by: "run-1234", keys: ["slow-boot"], issues: [] },
+        { by: "run-5678", keys: [], issues: [12] },
+        { by: "https://forge.example/mr/3", keys: ["flaky-ci"], issues: [] },
+      ],
+    },
+  );
+  expect(kept).toEqual([]);
+  expect(leftOut).toEqual([
+    { what: "Project slow-boot", why: "being fixed by run-1234" },
+    { what: "Project lost-log", why: "being fixed by run-5678" },
+    { what: "Project flaky-ci", why: "being fixed by https://forge.example/mr/3" },
+  ]);
+});
+
+test("a goal or plan names a key as a word, or an issue by its number", () => {
+  expect(namedIn("Fix slow-boot and #12 today", ["slow-boot", "slow", "boot-x"], [12, 1])).toEqual({
+    keys: ["slow-boot"],
+    issues: [12],
+  });
+  expect(namedIn("see slow-booting and #120", ["slow-boot"], [12])).toEqual({
+    keys: [],
+    issues: [],
+  });
+});
+
+test("a fix released mid-window records its key's occurrences per Run before and after the release, in the report and the issue's comment", () => {
+  const before = Arr.map(
+    Arr.range(1, 10),
+    (n) => [`b${n}`, `2026-11-17T0${n % 10}:00:00.000Z`] as const,
+  );
+  const after = Arr.map(
+    Arr.range(1, 10),
+    (n) => [`a${n}`, `2026-11-17T${12 + (n % 10)}:30:00.000Z`] as const,
+  );
+  const created = Rec.fromEntries([...before, ...after]);
+  const finding = found({ key: "slow-boot", runs: ["b1", "b2", "b3", "b4", "a1"] });
+  const fixed = closedIssue(7, "slow-boot", "2026-11-17T10:00:00.000Z");
+  const matching = { closed: [fixed], releases: TAGS, underway: [] };
+  const window = new Set(Rec.keys(created));
+  const { kept } = sortOut([finding], window, [], false, matching);
+  expect(Arr.map(kept, ({ key }) => key)).toEqual(["slow-boot"]);
+  const fix = releasedFix(finding, matching, created);
+  expect(fix).toEqual({
+    issue: fixed,
+    effect: {
+      key: "slow-boot",
+      release: "1.0.21",
+      before: { seen: 4, of: 10 },
+      after: { seen: 1, of: 10 },
+    },
+  });
+  const line = "slow-boot: 4/10 Runs before 1.0.21, 1/10 after";
+  expect(
+    commentOf({ finding, runId: "r-day", machine: "m", effect: fix?.effect ?? null }),
+  ).toContain(line);
+  const summary = summaryOf({
+    runId: "r-day",
+    since: "2026-11-17T00:00:00.000Z",
+    questions: undefined,
+    acted: [
+      { finding, outcome: { kind: "commented", number: 7, url: "https://forge.example/issues/7" } },
+    ],
+    improvements: [],
+    leftOut: [],
+    effects: fix === null ? [] : [fix.effect],
+  });
+  expect(summary).toContain(line);
+});
+
+test("a key whose fix is not released records no figures", () => {
+  const matching = {
+    closed: [closedIssue(7, "slow-boot", "2026-11-17T15:00:00.000Z")],
+    releases: TAGS,
+    underway: [],
+  };
+  expect(
+    releasedFix(found({ key: "slow-boot" }), matching, { "r-a": "2026-11-17T16:00:00.000Z" }),
+  ).toBeNull();
+  expect(
+    commentOf({ finding: found({ key: "slow-boot" }), runId: "r-day", machine: "m", effect: null }),
+  ).not.toContain("Runs before");
 });

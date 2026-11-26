@@ -1,9 +1,6 @@
-// Why a Run parked, from one closed list, and what each cause lets the host do about it
-// (ADR-draft-a-run-recovers-where-it-parks).
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
-import { Schema } from "effect";
+import { Schema, pipe } from "effect";
 import type { Metric } from "./metrics";
 
 export const ParkCause = Schema.Literals([
@@ -14,6 +11,7 @@ export const ParkCause = Schema.Literals([
   "target-red",
   "forge-unavailable",
   "herdr-unavailable",
+  "delivery-unsettled",
   "checkout-dirty-collie",
   "checkout-dirty-human",
   "login-missing",
@@ -22,6 +20,8 @@ export const ParkCause = Schema.Literals([
   "review-blocked",
   "gate-fix-unproved",
   "step-failed",
+  "predecessor-not-quiet",
+  "hand-over-stale",
   "unknown",
 ]);
 export type ParkCause = typeof ParkCause.Type;
@@ -29,14 +29,12 @@ export type ParkCause = typeof ParkCause.Type;
 export const ParkKind = Schema.Literals(["asks-agent", "rechecks", "needs-you"]);
 export type ParkKind = typeof ParkKind.Type;
 
-/** A park as a reader shows it. */
 export const Park = Schema.Struct({
   cause: ParkCause,
   kind: ParkKind,
   id: Schema.optionalKey(Schema.String),
   since: Schema.optionalKey(Schema.String),
   history: Schema.optionalKey(Schema.Array(Schema.String)),
-  /** The Heal Run working on this park, while one is. */
   healing: Schema.optionalKey(Schema.String),
 });
 export type Park = typeof Park.Type;
@@ -59,7 +57,8 @@ export const PARK_CAUSES: Readonly<Record<ParkCause, Entry>> = {
   "ci-failed": { kind: "rechecks", neverHeals: true },
   "target-red": { kind: "rechecks" },
   "forge-unavailable": { kind: "rechecks" },
-  "herdr-unavailable": { kind: "rechecks" },
+  "herdr-unavailable": { kind: "rechecks", neverHeals: true },
+  "delivery-unsettled": { kind: "rechecks", neverHeals: true },
   "checkout-dirty-collie": { kind: "rechecks" },
   "checkout-dirty-human": {
     kind: "needs-you",
@@ -91,22 +90,68 @@ export const PARK_CAUSES: Readonly<Record<ParkCause, Entry>> = {
     kind: "needs-you",
     reason: "a Step failed on something to correct, and a resume enters it again",
   },
+  "predecessor-not-quiet": { kind: "rechecks", neverHeals: true },
+  "hand-over-stale": { kind: "rechecks", neverHeals: true },
   unknown: { kind: "needs-you", reason: "nothing names why it parked" },
 };
 
-export const parkOf = (cause: ParkCause): Park => ({ cause, kind: PARK_CAUSES[cause].kind });
+export const parkOf = (cause: ParkCause) => ({ cause, kind: PARK_CAUSES[cause].kind });
+
+export const parkText = (text: string) =>
+  pipe(
+    text,
+    Str.replaceAll(/\d{4}-\d{2}-\d{2}T[\d:.]+Z?/g, "<time>"),
+    Str.replaceAll(/\b(?=[0-9a-f-]*\d)[0-9a-f]{7,}(?:-[0-9a-f]+)*\b/gi, "<id>"),
+    Str.replaceAll(/\d+/g, "<n>"),
+  );
+
+export const parkIdentity = (run: string, cause: ParkCause, evidence: ReadonlyArray<string>) =>
+  `${cause}-${Bun.hash(Arr.join([run, cause, ...evidence], "\u0000")).toString(16)}`;
+
+const healLines = (ids: ReadonlyArray<string>, recoveries: ReadonlyArray<Metric>) =>
+  Arr.filter(
+    recoveries,
+    (line) => line.action === "healed" && line.park !== undefined && ids.includes(line.park),
+  );
+
+export const healNth = (park: string, recoveries: ReadonlyArray<Metric>) =>
+  new Set(Arr.map(healLines([park], recoveries), (line) => line.recoveryId ?? line.at)).size + 1;
+
+// WARNING: ids also carries a park's identities from before they were derived.
+export const healOwed = (ids: ReadonlyArray<string>, recoveries: ReadonlyArray<Metric>) => {
+  const lines = healLines(ids, recoveries);
+  const skipped = new Set(
+    Arr.map(
+      Arr.filter(lines, (line) => line.outcome === "skipped"),
+      (line) => line.recoveryId,
+    ),
+  );
+  const heals = Arr.filter(
+    lines,
+    (line) =>
+      line.outcome !== "skipped" &&
+      (line.recoveryId === undefined || !skipped.has(line.recoveryId)),
+  );
+  return heals.length === 0 || heals.at(-1)?.diagnosisComplete === false;
+};
 
 export const recoveryLine = (line: Metric) =>
   `${line.at}: ${line.action} ${line.outcome} — ${line.note}`;
 
-/** A Heal claimed or started and not yet judged. */
 export const healInFlight = (line: Metric) =>
   line.action === "healed" && (line.outcome === "claimed" || line.outcome === "started");
 
-export const parkWithRecovery = (park: Park, actions: ReadonlyArray<Metric>): Park => {
+export const parkWithRecovery = (park: Park, actions: ReadonlyArray<Metric>) => {
   const same = Arr.filter(actions, (line) => line.cause === park.cause);
   const tries = Arr.filter(same, (line) => line.action === "resumed" && line.outcome !== "skipped");
-  const exhausted = tries.length >= 3 && Arr.every(tries, (line) => line.park !== park.id);
+  // WARNING: tries before this park began still count when the same park is entered again.
+  const exhausted =
+    tries.length >= 3 &&
+    Arr.every(
+      tries,
+      (line) =>
+        line.park !== park.id || (park.since !== undefined && (line.since ?? line.at) < park.since),
+    );
   const heals = Arr.filter(
     actions,
     (line) => line.action === "healed" && line.park === park.id && line.outcome !== "skipped",
@@ -134,7 +179,7 @@ const KIND_SAID: Readonly<Record<ParkKind, string>> = {
   "needs-you": "needs you",
 };
 
-export const parkLine = (park: Park): string =>
+export const parkLine = (park: Park) =>
   park.healing === undefined
     ? `Parked: ${park.cause} · ${KIND_SAID[park.kind]}`
     : `Parked: ${park.cause} · being healed by ${park.healing}`;

@@ -1,29 +1,17 @@
+import { Herdr } from "../../src/herdr";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import {
-  ConfigProvider,
-  Effect,
-  FileSystem,
-  Layer,
-  Result,
-  Schedule,
-  Schema,
-  flow,
-  type Scope,
-} from "effect";
+import { ConfigProvider, Effect, FileSystem, Layer, Result, Schedule, Schema, flow } from "effect";
+import type { Scope } from "effect";
 import type { PlatformServices } from "../../src/platform";
-import { FakeHerdr, type Rig } from "./recorder";
+import type { Rig } from "./recorder";
 import { fastForward, runEffect as runLive } from "./effect";
 import { FakeBin } from "./bin";
-import { forgeOnPath, serveForges, type ForgeModel } from "./forge";
+import { forgeOnPath, serveForges } from "./forge";
+import type { ForgeModel } from "./forge";
 import { agentsLayer } from "../../src/agents";
-import {
-  Registry,
-  foundationLayer,
-  registryLayer,
-  type Generation,
-  type HostServices,
-} from "../../src/engine";
+import { Registry, foundationLayer, registryLayer } from "../../src/engine";
+import type { Generation, HostServices } from "../../src/engine";
 import { Store } from "../../src/store";
 import { STOP } from "../../src/controls";
 import { Host } from "../../src/sdk";
@@ -45,9 +33,9 @@ const asJson = flow(
 export const ROOT = new URL("../../", import.meta.url).pathname;
 
 export const watching = (rig: Rig, slack?: typeof slackApi) => {
-  const env = () => rig.pluginEnv({ HERDR_PLUGIN_ROOT: ROOT });
+  const env = () => rig.pluginEnv({ COLLIE_ROOT: ROOT });
   const dir = () => env().stateDir;
-  const toasts: string[] = [];
+  const toasts: Array<string> = [];
 
   const gitlab = (model: ForgeModel, name: "gitlab" | "github" = "gitlab") =>
     Effect.gen(function* () {
@@ -55,7 +43,8 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
         made.restore(),
       );
       const faked = yield* forgeOnPath(bin, name, model);
-      let before = (_url: string, _init?: RequestInit): Promise<void> => Promise.resolve();
+      let before: (_url: string, _init?: RequestInit) => Promise<void> = (_url, _init?) =>
+        Promise.resolve();
       let after = (_url: string, _init: RequestInit | undefined, response: Response) =>
         Promise.resolve(response);
       const face = (url: string, init?: RequestInit) =>
@@ -65,11 +54,9 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
       return {
         ...faked,
         api: yield* serveForges({ forge: faked.forge, face }),
-        /** Runs ahead of each HTTP request the forge is sent, as what changes it in between. */
         before: (hook: typeof before) => {
           before = hook;
         },
-        /** Stands between the forge's answer and its caller, as a host that dies before it hears one. */
         after: (hook: typeof after) => {
           after = hook;
         },
@@ -77,7 +64,6 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
     });
   type Forge = Effect.Success<ReturnType<typeof gitlab>>;
 
-  /** One host over the state directory, ended with its scope. */
   const session = <A, E>(
     forge: Forge,
     work: Effect.Effect<A, E, Registry | Store | HostServices | PlatformServices | Scope.Scope>,
@@ -86,13 +72,13 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
       Effect.provide(
         registryLayer(dir(), {
           userDir: rig.userDir,
-          placing: { herdr: new FakeHerdr(env()), env: env() },
+          placing: { herdr: new Herdr(env()), env: env() },
         }).pipe(
           Layer.provideMerge(
             agentsLayer({
               dir: dir(),
               env: env(),
-              herdr: new FakeHerdr(env()),
+              herdr: new Herdr(env()),
               harness: "claude",
               model: "opus",
               permissions: "auto",
@@ -106,7 +92,7 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
               dir: dir(),
               slack,
               userDir: rig.userDir,
-              placing: { herdr: new FakeHerdr(env()), env: env() },
+              placing: { herdr: new Herdr(env()), env: env() },
               toast: (title) => Effect.sync(() => toasts.push(title)),
             }),
           ),
@@ -118,7 +104,6 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
       Effect.scoped,
     );
 
-  /** The host's merge watch, over the board its Runs make. */
   const mergeWatched = Effect.gen(function* () {
     const registry = yield* Registry;
     const store = yield* Store;
@@ -142,7 +127,6 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
         board,
         panels,
         record: () => Effect.void,
-        // The host's stop, as the host applies it: the Run it reached is stopped.
         stop: (runId) =>
           registry.control({ runId, control: STOP, set: true }).pipe(
             Effect.provideContext(hosted),
@@ -176,7 +160,7 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
     input: Readonly<Record<string, Schema.Json>>,
   ) {
     const registry = yield* Registry;
-    const generation: Generation = (yield* registry.load(entry))!;
+    const generation: Generation = yield* registry.load(entry);
     return yield* registry.start({
       generation,
       request,
@@ -193,7 +177,7 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
     yield* Effect.forkScoped(
       recoverParks({
         env: env(),
-        herdr: new FakeHerdr(env()),
+        herdr: new Herdr(env()),
         views: registry.views(null),
         reconnects: Effect.succeed(0),
         panels: new Map(),
@@ -213,12 +197,19 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
 
   const agentStarts = Effect.map(
     Effect.suspend(() => rig.cmds()),
-    Arr.filter((cmd) => cmd === "agent start"),
+    Arr.filter((cmd) => cmd === "terminal.run"),
   );
 
-  // Five-minute forge polls need fewer clock steps; every intervening timer still fires.
+  // WARNING: Every intervening timer still fires, so the fast clock steps over the five-minute poll.
   const runEffect = <A, E>(effect: Effect.Effect<A, E, PlatformServices | Scope.Scope>) =>
-    runLive(fastForward(Effect.scoped(Effect.suspend(() => ((toasts.length = 0), effect))), 250));
+    runLive(
+      fastForward(
+        Effect.scoped(
+          Effect.suspend(() => ((toasts.length = 0), Effect.andThen(rig.startCore(), effect))),
+        ),
+        250,
+      ),
+    );
 
   const settingOn = (on: boolean) =>
     FileSystem.FileSystem.pipe(
@@ -249,11 +240,10 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
   };
 };
 
-/** `read` once `done` holds, looked at each second of the fast clock for up to `seconds` of it. */
 export const until = <A, E, R>(
   read: () => Effect.Effect<A, E, R>,
   done: (value: A) => boolean,
-  seconds = 3_600,
+  seconds = 3600,
 ) =>
   Effect.suspend(read).pipe(
     Effect.repeat({

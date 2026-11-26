@@ -1,3 +1,4 @@
+import type { PlatformError } from "effect/PlatformError";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { Effect, FileSystem, Option, Schema, Semaphore, Stream } from "effect";
@@ -20,7 +21,9 @@ const indexOf = Effect.fn("RunLog.index")(function* (dir: string) {
   const known = yield* fs
     .readFileString(`${dir}/${LOG_INDEX}`)
     .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Index)), Effect.option);
-  if (Option.isSome(known) && known.value.bytes === size) return known.value;
+  if (Option.isSome(known) && known.value.bytes === size) {
+    return known.value;
+  }
   const counted =
     size === 0
       ? { lines: 0, ended: true }
@@ -61,31 +64,33 @@ export const appendLogLine = Effect.fn("RunLog.append")(function* (dir: string, 
   return first;
 }, writing.withPermits(1));
 
-export const readLogTail = Effect.fn("RunLog.tail")(function* (
+export const readLogTail: (
   dir: string,
   cap: number,
-): Effect.fn.Return<
-  LogTail | null,
-  import("effect/PlatformError").PlatformError,
-  FileSystem.FileSystem
-> {
-  const fs = yield* FileSystem.FileSystem;
-  if (!(yield* fs.exists(`${dir}/log.txt`))) return null;
-  const index = yield* indexOf(dir);
-  const from = Math.max(0, index.bytes - cap);
-  const raw = yield* fs
-    .stream(`${dir}/log.txt`, { offset: from })
-    .pipe(Stream.decodeText(), Stream.mkString);
-  const text =
-    from === 0
-      ? raw
-      : pipe_(raw, Str.includes("\n"))
-        ? pipe_(raw, Str.slice(Option.getOrElse(pipe_(raw, Str.indexOf("\n")), () => -1) + 1))
-        : "";
-  const shown =
-    text === "" ? 0 : Str.split(text, "\n").length - Number(pipe_(text, Str.endsWith("\n")));
-  return {
-    panel: { _tag: "Text", text, truncated: from > 0 },
-    firstLine: index.lines + Number(!index.ended) - shown + 1,
-  };
-}, writing.withPermits(1));
+) => Effect.Effect<LogTail | null, PlatformError, FileSystem.FileSystem> = Effect.fn("RunLog.tail")(
+  function* (dir: string, cap: number) {
+    const fs = yield* FileSystem.FileSystem;
+    if (!(yield* fs.exists(`${dir}/log.txt`))) {
+      return null;
+    }
+    const index = yield* indexOf(dir);
+    const from = Math.max(0, index.bytes - cap);
+    const raw = yield* fs
+      .stream(`${dir}/log.txt`, { offset: from })
+      .pipe(Stream.decodeText(), Stream.mkString);
+    const text =
+      from === 0
+        ? raw
+        : pipe_(raw, Str.includes("\n"))
+          ? pipe_(raw, Str.slice(Option.getOrElse(pipe_(raw, Str.indexOf("\n")), () => -1) + 1))
+          : "";
+    const shown =
+      text === "" ? 0 : Str.split(text, "\n").length - Number(pipe_(text, Str.endsWith("\n")));
+    const tail: LogTail = {
+      panel: { _tag: "Text", text, truncated: from > 0 },
+      firstLine: index.lines + Number(!index.ended) - shown + 1,
+    };
+    return tail;
+  },
+  writing.withPermits(1),
+);

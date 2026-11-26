@@ -1,8 +1,3 @@
-// The local server two harness adapters each need: Codex's App Server, whose port is
-// only on its own stdout, and the OpenCode `serve` that exists just long enough to
-// create a session. Both said the same thing twice until this seam existed — and the
-// half that had no test was the half that read its log before the shell had made it.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -17,8 +12,7 @@ let fs: FileSystem.FileSystem;
 let path: Path.Path;
 let dir: string;
 
-/** Whether a pid is still there, which is what a stopped server is not. */
-function alive(pid: number): boolean {
+function alive(pid: number) {
   try {
     process.kill(pid, 0);
     return true;
@@ -27,16 +21,10 @@ function alive(pid: number): boolean {
   }
 }
 
-/**
- * A stand-in server: it says what it was told to say, after the delay it was told to
- * wait, and then stays up like a real one. A script rather than a shell one-liner
- * because `command` is one command — the seam adds the `exec` and the redirect.
- */
 const pids = () => path.join(dir, "pids");
 
 const stand = Effect.fn("test.stand")(function* (says: string, after = "0") {
   const script = path.join(dir, "stand-in.sh");
-  // Its pid recorded by itself, so one that never said it was up is still stopped.
   yield* fs.writeFileString(
     script,
     `#!/bin/sh\necho $$ >> ${pids()}\nsleep ${after}\necho '${says}'\nexec sleep 30\n`,
@@ -44,7 +32,7 @@ const stand = Effect.fn("test.stand")(function* (says: string, after = "0") {
   return `sh ${script}`;
 });
 
-const serve = (command: string, listening: RegExp, startMs = 5_000) =>
+const serve = (command: string, listening: RegExp, startMs = 5000) =>
   servedEndpoint({
     cwd: rig.projectDir,
     log: path.join(dir, "server.log"),
@@ -86,10 +74,8 @@ test("the line the server prints is what comes back, and the server outlives the
         /ws:\/\/127\.0\.0\.1:(\d+)/,
       );
 
-      // Group 1 where the pattern has one: Codex's port is read out of its own log.
       expect(served.found).toBe("34567");
-      // Detached and unreffed, or the spawner's own finalizer would take down the
-      // server it just started — and this endpoint has to outlive the Run.
+      // WARNING: Detached and unreffed, or the spawner's finalizer would kill the server it just started; it must outlive the Run.
       expect(alive(served.pid)).toBe(true);
     }),
   ));
@@ -110,8 +96,6 @@ test("a pattern with nothing to capture still says the server is up", () =>
 test("the log is there to be read before the server has written a byte of it", () =>
   runEffect(
     Effect.gen(function* () {
-      // The server takes its time; the wait still has a file to read, which is what a
-      // launch that failed on a missing log did not.
       const served = yield* serve(
         yield* stand("up on ws://127.0.0.1:22222", "0.6"),
         /ws:\/\/127\.0\.0\.1:(\d+)/,
@@ -158,7 +142,7 @@ test("the server starts with the agent's profile environment, a file-held value 
         log: path.join(dir, "server.log"),
         command: `sh ${script}`,
         listening: /up:(.*)/,
-        startMs: 5_000,
+        startMs: 5000,
         what: "the stand-in server",
         env: envLines({ MODE: "off", TOKEN: { file: "~/token" } }, dir),
       });

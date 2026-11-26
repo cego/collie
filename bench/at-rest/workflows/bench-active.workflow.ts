@@ -13,7 +13,7 @@ export default defineWorkflow({
   run: () =>
     Effect.gen(function* () {
       const run = yield* Run;
-      const state = yield* Config.String("HERDR_PLUGIN_STATE_DIR");
+      const state = yield* Config.String("COLLIE_STATE_DIR");
       const project = yield* Config.String("COLLIE_CWD");
       const fs = yield* FileSystem.FileSystem;
       for (let round = 1; round <= 29; round++) {
@@ -25,16 +25,18 @@ export default defineWorkflow({
               `bench-log:${round}:${at}\n`,
               { flag: "a" },
             );
-            if (round === 10)
+            if (round === 10) {
               yield* fs.writeFileString(
                 `${project}/sample.ts`,
                 "export const sample = 2;\nexport const changed = true;\n",
               );
-            if (round === 20)
+            }
+            if (round === 20) {
               yield* fs.writeFileString(
                 `${project}/sample.ts`,
                 "export const sample = 3;\nexport const changed = true;\nexport const final = true;\n",
               );
+            }
             yield* Effect.sleep("2 seconds");
           }),
           { round },

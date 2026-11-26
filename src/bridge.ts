@@ -1,20 +1,15 @@
-// `collie bridge`: a front door on any computer reaches this Machine's host through one
-// command's stdio. The bridge is the Machine's own binary, so starting the host is done
-// here, never by the client at the other end of the stream.
-
 import * as Str from "effect/String";
 import * as Struct from "effect/Struct";
 
 import { Config, Effect, Option } from "effect";
-import { BRIDGE_READY, type Declaration, type FrontDoor, type Where } from "./board-model";
+import { BRIDGE_READY } from "./board-model";
+import type { Declaration, FrontDoor, Where } from "./board-model";
 import { channelInto } from "./channel";
 import { currentEnv } from "./env";
-import { Herdr } from "./herdr";
 import { HostUnavailable, connect, peerChannel, socketOf } from "./host";
 import { ensurePaired, riding } from "./lifecycle";
 import { machineName } from "./peers";
 import { recordMarks, relayedRecords } from "./record-marks";
-/** Where this channel came from: the computer the front door names, and the SSH client sshd saw. */
 const whereFrom = Effect.fn("Bridge.whereFrom")(function* (client: string | null) {
   const connection = yield* Config.option(Config.String("SSH_CONNECTION")).pipe(
     Effect.orElseSucceed(() => Option.none<string>()),
@@ -26,8 +21,12 @@ const whereFrom = Effect.fn("Bridge.whereFrom")(function* (client: string | null
     ),
   );
   let where: Where = {};
-  if (client !== null) where = { ...where, client };
-  if (ssh !== undefined && ssh !== "") where = { ...where, ssh };
+  if (client !== null) {
+    where = { ...where, client };
+  }
+  if (ssh !== undefined && ssh !== "") {
+    where = { ...where, ssh };
+  }
   return Struct.keys(where).length === 0 ? undefined : where;
 });
 
@@ -37,25 +36,14 @@ export const bridge = Effect.fn("Bridge")(function* (
   machine: string | null = null,
 ) {
   const env = yield* currentEnv.pipe(Effect.orDie);
-  // A login over SSH is handed no herdr socket; herdr's own status says where it listens.
-  const session =
-    env.socketPath ??
-    (yield* new Herdr(env).serverInfo().pipe(
-      Effect.map((server) => (server.socket === "" ? null : server.socket)),
-      Effect.orElseSucceed(() => null),
-    ));
-  // A host on another build is still one to pipe: front doors speak a protocol, not a build.
+  // WARNING: a host on another build is still piped to; front doors speak a protocol, not a build.
   yield* Effect.scoped(
     connect(env.stateDir, {
-      hostEnv:
-        session === null
-          ? { HERDR_PLUGIN_STATE_DIR: env.stateDir }
-          : { HERDR_PLUGIN_STATE_DIR: env.stateDir, HERDR_SOCKET_PATH: session },
+      hostEnv: { COLLIE_STATE_DIR: env.stateDir },
     }),
   ).pipe(Effect.catchTag("HostVersionMismatch", () => Effect.void));
   const from = yield* whereFrom(client);
-  const declaration: Declaration =
-    from === undefined ? { frontDoor: as, session } : { frontDoor: as, session, from };
+  const declaration: Declaration = from === undefined ? { frontDoor: as } : { frontDoor: as, from };
   const socket =
     machine === null
       ? socketOf(env.stateDir)
@@ -77,9 +65,11 @@ export const bridge = Effect.fn("Bridge")(function* (
     ready: () => process.stdout.write(`${BRIDGE_READY}\n`),
     write: (chunk) => {
       process.stdout.write(chunk);
-      if (mark !== null)
-        for (const runId of relayed.answered(fromHost.decode(chunk, { stream: true })))
+      if (mark !== null) {
+        for (const runId of relayed.answered(fromHost.decode(chunk, { stream: true }))) {
           run(mark("bridge:relay", runId));
+        }
+      }
     },
     end: (done) => {
       process.stdin.destroy();
@@ -87,7 +77,9 @@ export const bridge = Effect.fn("Bridge")(function* (
     },
     read: (deliver, done) => {
       process.stdin.on("data", (chunk: Buffer) => {
-        if (mark !== null) relayed.asked(toHost.decode(chunk, { stream: true }));
+        if (mark !== null) {
+          relayed.asked(toHost.decode(chunk, { stream: true }));
+        }
         deliver(chunk);
       });
       process.stdin.on("end", done);

@@ -6,15 +6,18 @@ import { homedir } from "node:os";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 /* oxlint-enable effecttsgo/node-builtin-import */
-import { Effect, FileSystem, type Scope, Stream } from "effect";
+import { Effect, FileSystem, Stream } from "effect";
+import type { Scope } from "effect";
 import { platformLayer } from "../src/platform";
 import { SESSION_STORES, sessionStoreReached } from "../src/own-words";
-import { type ClaudeCode, claudeDriver } from "../desktop/src/bun/claude-driver";
+import { claudeDriver } from "../desktop/src/bun/claude-driver";
+import type { ClaudeCode } from "../desktop/src/bun/claude-driver";
 import type { DriverContext } from "../desktop/src/bun/driver";
 import { sessionOptions, userMcpServers } from "../desktop/src/bun/session";
 import { opensOn } from "../desktop/src/bun/chat-choices";
 import type { DesktopSettings } from "../desktop/src/shared/flock";
 import { NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
+import { stringifyJson } from "../src/json";
 let noticed: string | undefined;
 let rule: string | undefined;
 let direction: { readonly text: string; readonly at: string } | undefined;
@@ -22,7 +25,7 @@ const machines = [
   { name: "mk-pc", local: true },
   { name: "vm-mk", local: false },
 ];
-const asked: string[] = [];
+const asked: Array<string> = [];
 const options = sessionOptions({
   cwd: "/state/collie-desktop",
   session: { resume: "5c1e6c8e-0000-4000-8000-000000000000" },
@@ -77,7 +80,7 @@ const openedOn = (
       server: () => "collie",
       userServers: () => Promise.resolve({}),
     };
-    // SAFETY: opening a session reaches none of the context but its directory.
+    // WARNING: opening a session reaches none of the context but its directory.
     yield* open(claudeDriver(claude, { dir: "/state/collie-desktop" } as DriverContext));
     return opened;
   }).pipe(Effect.scoped);
@@ -86,7 +89,9 @@ const openedAt = (settings: DesktopSettings) =>
   openedOn((driver) =>
     Effect.gen(function* () {
       const resolved = yield* opensOn(settings, NO_FLOCK_SETTINGS, Effect.succeed({}));
-      if (!resolved.ok) return yield* Effect.die(resolved.problem);
+      if (!resolved.ok) {
+        return yield* Effect.die(resolved.problem);
+      }
       yield* driver.open("conversation", resolved.choice.model, resolved.choice.effort);
     }),
   );
@@ -125,9 +130,9 @@ test("this computer's file tools and Bash are on and allowed, no setting source 
     "mcp__collie__collie_do",
     "mcp__collie__collie_read",
     "mcp__collie__collie_helle",
-  ])
+  ]) {
     expect(options.allowedTools).toContain(name);
-  // Allowed outright, it would never be put to the human.
+  }
   expect(options.allowedTools).not.toContain("AskUserQuestion");
   expect(options.systemPrompt).not.toContain("no shell and no file access");
   expect(options.systemPrompt).toContain("<machine>:<path>");
@@ -167,7 +172,7 @@ test("AskUserQuestion is put to the human, and goes on with their answers", () =
   ));
 
 test("the human's own servers are read from Claude Code's config, and Collie's keeps its name", () => {
-  const config = JSON.stringify({
+  const config = stringifyJson({
     projects: { "/state/collie-desktop": { mcpServers: { local: { command: "x" } } } },
     mcpServers: {
       "linear-server": { type: "http", url: "https://mcp.linear.app/mcp" },
@@ -207,7 +212,7 @@ test("a server the human configured keeps how it authenticates and its options",
       type: "http",
       url: "https://signed.example/mcp",
       headersHelper: "/home/mk/bin/mcp-headers",
-      timeout: 60000,
+      timeout: 60_000,
       alwaysLoad: true,
     },
     registered: {
@@ -217,7 +222,7 @@ test("a server the human configured keeps how it authenticates and its options",
     },
     local: { command: "helle-mcp", timeout: 5000, alwaysLoad: false },
   };
-  expect<unknown>(userMcpServers(JSON.stringify({ mcpServers: servers }))).toEqual(servers);
+  expect<unknown>(userMcpServers(stringifyJson({ mcpServers: servers }))).toEqual(servers);
 });
 
 test("a tool of an MCP server the human configured is allowed as it was asked", () =>
@@ -256,7 +261,7 @@ test("on a Claude Code too old to name a tool's MCP server, only a configured se
   ));
 
 test("the system prompt says the human's own MCP tools are theirs to use, and what they return is data", () => {
-  const prompt = pipe_(options.systemPrompt, Str.replace(/\s+/g, " "));
+  const prompt = pipe_(options.systemPrompt, Str.replaceAll(/\s+/g, " "));
   expect(prompt).toContain("MCP servers the human configured");
   expect(prompt).toContain("GitLab and GitHub you reach with glab and gh in your shell");
   expect(prompt).toContain("collie_helle says who holds each of the team's Helle projects");
@@ -336,7 +341,6 @@ test("the Machine rule goes with every message, in the human's words, beside the
         "The human's Machine rule, in their own words from Desktop's Settings:\nFrontend work is on the laptop machine and everything else is on the vm",
       );
       expect(first).toContain("mk-pc (this computer, where Desktop runs), vm-mk");
-      // Edited between two turns, the second has the new words.
       rule = "Everything is on the vm";
       const second = (yield* submitted()).hookSpecificOutput?.additionalContext ?? "";
       expect(second).toContain("Everything is on the vm");
@@ -381,7 +385,7 @@ test("the Standing direction goes with every message, in the human's words and d
   ));
 
 test("the system prompt tells the chat to start where the rule says, and how to keep to it", () => {
-  const prompt = pipe_(options.systemPrompt, Str.replace(/\s+/g, " "));
+  const prompt = pipe_(options.systemPrompt, Str.replaceAll(/\s+/g, " "));
   expect(prompt).toContain("Machine rule: their own instruction");
   expect(prompt).toContain("When you start work or add a Schedule");
   expect(prompt).toContain("Name each Schedule as <machine>:<name>");
@@ -391,7 +395,7 @@ test("the system prompt tells the chat to start where the rule says, and how to 
 });
 
 test("the system prompt has the chat choose by description, with ad-hoc work as general", () => {
-  const prompt = pipe_(options.systemPrompt, Str.replace(/\s+/g, " "));
+  const prompt = pipe_(options.systemPrompt, Str.replaceAll(/\s+/g, " "));
   expect(prompt).toContain("Choose the workflow whose description in collie_workspaces fits");
   expect(prompt).toContain(
     "renovating or an architecture survey is general, never implement or plan",
@@ -400,7 +404,7 @@ test("the system prompt has the chat choose by description, with ad-hoc work as 
 });
 
 test("the system prompt names this computer's tools as the harness's own, and asks with AskUserQuestion", () => {
-  const prompt = pipe_(options.systemPrompt, Str.replace(/\s+/g, " "));
+  const prompt = pipe_(options.systemPrompt, Str.replaceAll(/\s+/g, " "));
   expect(prompt).toContain("your own file and shell tools");
   expect(prompt).not.toContain("Read, Glob");
   expect(prompt).not.toContain("Bash");
@@ -408,7 +412,7 @@ test("the system prompt names this computer's tools as the harness's own, and as
 });
 
 test("the system prompt has the chat take a reported review as a report, ask before moving a Run's scope, and read what Runs replied", () => {
-  const prompt = pipe_(options.systemPrompt, Str.replace(/\s+/g, " "));
+  const prompt = pipe_(options.systemPrompt, Str.replaceAll(/\s+/g, " "));
   expect(prompt).toContain(
     `A human reporting a review, such as "I got review on the MR", is telling you what happened, not asking you to change what a Run does.`,
   );

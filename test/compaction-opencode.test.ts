@@ -1,8 +1,3 @@
-// OpenCode's local server, as Collie's adapter reads and drives it. Two kinds of
-// check: the API, against a stand-in server this test controls, so the accounting and
-// the correlation can be put in states a real OpenCode will not produce on demand; and
-// the contract, against the installed OpenCode's own OpenAPI document and CLI.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -15,7 +10,6 @@ import { fakeChannel } from "./support/compaction";
 import { reason } from "../src/naming";
 import { COMPACTION_PORTS, VERIFIED_VERSIONS, writeEvent } from "../src/compactors";
 import { Unsubmitted } from "../src/compaction";
-import type { AgentContext } from "../src/compaction";
 
 let rig: Rig;
 let fs: FileSystem.FileSystem;
@@ -24,7 +18,6 @@ let dir: string;
 
 const opencode = COMPACTION_PORTS.opencode!;
 
-/** One message on the stand-in session, in the shape the server reports. */
 interface Line {
   id: string;
   role: "user" | "assistant";
@@ -45,12 +38,10 @@ interface Line {
 interface Fake {
   session: string;
   directory: string;
-  messages: Line[];
-  /** What summarizing appends, so a test can make one land, fail, or not happen. */
+  messages: Array<Line>;
   onSummarize: (fake: Fake) => void;
-  /** What the summarize endpoint answers with. */
   summarizeStatus: number;
-  calls: string[];
+  calls: Array<string>;
 }
 let fake: Fake;
 
@@ -60,22 +51,15 @@ interface FakeServer {
 }
 let server: FakeServer;
 
-/** What the stand-in answers with: a session, its messages, or an error envelope. */
 type Answer =
   | boolean
   | { id: string; directory: string }
-  | { info: Line }[]
+  | Array<{ info: Line }>
   | { _tag: string; message?: string };
 
-/** The stand-in answers over HTTP, so `Response.json` is the shape it speaks. */
 const json = (value: Answer, status = 200) => Response.json(value, { status });
 
-/**
- * A stand-in OpenCode server. Not a claim about OpenCode: the shapes it answers with
- * are the ones the installed release's own OpenAPI document declares, which the
- * contract checks at the bottom of this file assert separately.
- */
-function serve(): FakeServer {
+function serve() {
   const listening = Bun.serve({
     port: 0,
     fetch: (request) => {
@@ -108,7 +92,7 @@ function serve(): FakeServer {
   };
 }
 
-const ctx = (): AgentContext => ({
+const ctx = () => ({
   agent: "build-r1",
   run: "run-1",
   harness: "opencode",
@@ -118,14 +102,17 @@ const ctx = (): AgentContext => ({
   channel: fakeChannel([]),
 });
 
-/** As `install` leaves it: the session Collie created, recorded before the agent starts. */
 const bind = () => writeEvent(dir, { session: fake.session, kind: "session" });
 
-function why<A, E>(result: Result.Result<A, E>): string {
+function why<A, E>(result: Result.Result<A, E>) {
   return Result.isFailure(result) ? reason(result.failure) : "";
 }
 
-const assistant = (id: string, tokens: Line["tokens"], extra: Partial<Line> = {}): Line => ({
+const assistant: (id: string, tokens: Line["tokens"], extra?: Partial<Line>) => Line = (
+  id,
+  tokens,
+  extra = {},
+) => ({
   id,
   role: "assistant",
   mode: "build",
@@ -166,9 +153,6 @@ afterEach(() => runEffect(rig.close()));
 test("binding a session records it once, not twice", () =>
   runEffect(
     Effect.gen(function* () {
-      // The launch writes the session it created, and the writer binds whatever
-      // session an event names. Two lines saying the same thing is a file a human
-      // reads twice for nothing.
       yield* bind();
 
       const lines = Arr.filter(
@@ -228,8 +212,7 @@ test("without a total it is input, output and both cache halves — and not reas
   runEffect(
     Effect.gen(function* () {
       yield* bind();
-      // OpenCode's own overflow predicate does not add `reasoning`, and this is meant
-      // to be the same number it compares — so 900 here would be the wrong answer.
+      // WARNING: OpenCode's overflow predicate does not add reasoning; 900 here would be the wrong answer.
       fake.messages = [
         assistant("m1", {
           input: 100,
@@ -261,10 +244,7 @@ test("a turn still finishing does not hide the last turn that measured the conte
   runEffect(
     Effect.gen(function* () {
       yield* bind();
-      // A boundary lands the moment a step's output appears, which is while OpenCode is
-      // usually still closing its last message. The finished turn before it is the
-      // context as of the last model response — the number OpenCode's own overflow
-      // predicate compares — and not a stale reading of a context that has moved.
+      // WARNING: A boundary lands while OpenCode still closes its last message; the finished turn before it is the context as of the last model response.
       fake.messages = [
         assistant("m1", {
           total: 91_446,
@@ -323,8 +303,6 @@ test("after a compaction the last real message is stale, so there is no sample",
           reasoning: 0,
           cache: { read: 0, write: 0 },
         }),
-        // The compaction's own message. Its tokens are the summarizing request's, and
-        // the 400,000 above describes a context that no longer exists.
         assistant(
           "c1",
           { total: 866, input: 800, output: 66, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -352,8 +330,7 @@ test("a summarize that broke may still have been accepted, so it is not unsubmit
       const failure = yield* opencode.request(ctx(), "req-1").pipe(Effect.result);
 
       expect(why(failure)).toContain("503");
-      // The client's own timeout fires while the server's summarize loop keeps going,
-      // so the policy must not read this as a request that never left and send work.
+      // WARNING: The client's timeout fires while the server's summarize keeps going, so this is not a request that never left.
       expect(Result.isFailure(failure) && failure.failure instanceof Unsubmitted).toBe(false);
     }),
   ));
@@ -514,9 +491,7 @@ test("a request nothing recorded as submitted has no outcome", () =>
 test("two agents in one directory each read their own session", () =>
   runEffect(
     Effect.gen(function* () {
-      // The reason Collie creates the session rather than finding one: every OpenCode
-      // server answers with every session in the project, so the only thing that tells
-      // two agents in one directory apart is the id each was launched with.
+      // WARNING: Every server answers with every session in the project; only the id each agent was launched with tells them apart.
       const other = path.join(rig.root, "controls", "review-r1");
       yield* fs.makeDirectory(other, { recursive: true });
       yield* bind();
@@ -531,9 +506,7 @@ test("two agents in one directory each read their own session", () =>
           cache: { read: 0, write: 0 },
         }),
       ];
-      // This agent's session is the stand-in's, so it reads a context.
       expect(yield* opencode.usage(ctx())).toBe(400_000);
-      // The other agent's is not, so its read fails rather than borrowing this one's.
       const failure = yield* opencode
         .usage({ ...ctx(), agent: "review-r1", dir: other })
         .pipe(Effect.result);
@@ -541,9 +514,6 @@ test("two agents in one directory each read their own session", () =>
     }),
   ));
 
-// The contract, against the installed OpenCode. Its own server generates the API
-// document, so booting one and reading `/doc` is the only way to ask this release what
-// it actually has — and a mock cannot answer it.
 onMachineWith("opencode")(
   "the installed OpenCode's own API document has the endpoints and the token fields",
   () =>
@@ -552,8 +522,6 @@ onMachineWith("opencode")(
         yield* removesCache("opencode");
         const temporary = yield* fs.makeTempDirectoryScoped({ prefix: "opencode-probe-" });
         const port = 39_517;
-        // One `sh`, not Bun's shell: this needs a background job, `$!` and a poll,
-        // none of which Bun's own parser takes.
         const doc = yield* Effect.promise(() => {
           const probe = Bun.spawn(
             [
@@ -581,8 +549,6 @@ onMachineWith("opencode")(
         });
         expect(doc, "opencode serve did not answer /doc").toStartWith("{");
 
-        // What the adapter calls, read from the adapter: an endpoint it starts calling is
-        // one this checks, under the name OpenCode's document gives its parameter.
         const adapter = yield* (yield* FileSystem.FileSystem).readFileString(
           new URL("../src/opencode.ts", import.meta.url).pathname,
         );
@@ -595,10 +561,8 @@ onMachineWith("opencode")(
         for (const endpoint of endpoints) {
           expect(doc, `${endpoint} is gone from the API`).toContain(`"${endpoint}"`);
         }
-        // The accounting the native overflow predicate reads.
         expect(doc).toContain(`"reasoning"`);
         expect(doc).toContain(`"cache"`);
-        // The error state on a compaction message that is terminal.
         expect(doc).toContain(`ContextOverflowError`);
       }),
     ),
@@ -615,17 +579,10 @@ onMachineWith("opencode")(
         const version = yield* Effect.promise(() =>
           Bun.$`opencode --version 2>&1`.nothrow().text(),
         );
-        // The contract is "at least the release these controls were verified against":
-        // a newer patch (1.18.29 against the pinned 1.18.9) is the gate's business to
-        // accept, and asserting the exact string here made a patch bump a red suite.
         expect(Str.trim(version)).not.toBe("");
         expect(wanted).not.toBe("");
         yield* opencode.gate;
 
-        // The launch: the ordinary TUI hosting its own loopback server, on the session
-        // Collie made, with the model and the unattended switch it would have had
-        // anyway. `attach` takes `--session` but not these two, which is why the TUI
-        // hosts its own server rather than attaching to one of Collie's.
         const help = yield* Effect.promise(() => Bun.$`opencode --help 2>&1`.nothrow().text());
         for (const flag of ["--port", "--hostname", "--session", "--model", "--auto"]) {
           expect(help, `${flag} is gone from the opencode TUI`).toContain(flag);

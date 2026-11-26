@@ -1,44 +1,40 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import { Effect, type FileSystem, type Path } from "effect";
+import { Effect } from "effect";
 import { currentReports, openReports, readDrift } from "./drift";
 import { readCards } from "./cards";
-import type { RunRecords } from "./run-records";
-import { settled, type RunFacts } from "./runs";
+import { settled } from "./runs";
+import type { RunFacts } from "./runs";
 import type { Attention } from "./board-model";
 
-/**
- * The one classification every front door reads: chat, the board's detail and the CLI
- * render this rather than each deciding for themselves what a stopped Run means. A
- * question outranks everything, because it is the human being waited on.
- */
 export const attentionFor = Effect.fn("attention.attentionFor")(function* (run: RunFacts) {
   const asked = run.asking[0];
-  if (asked !== undefined)
+  if (asked !== undefined) {
     return {
       category: "question",
       reason: "question",
       explanation: `${run.id} is waiting on "${asked.name}": ${asked.prompt}`,
       actions: ["answer", "show"],
     } satisfies Attention;
-  // Below a question, because a question is the human being waited on and this is the
-  // human being told; above `completed`, because a Run that finished having drifted is
-  // one whose result is not what was asked for.
+  }
+  // WARNING: below a question (the human is waited on) and above completed (a drifted finish is not what was asked).
   const unresolved = yield* driftUnresolved(run.dir);
-  if (unresolved !== null)
+  if (unresolved !== null) {
     return {
       category: "drift",
       reason: "drift_unresolved",
       explanation: `${run.id} drifted from ${unresolved} and Collie could not correct it; \`run drift\` shows what it found.`,
       actions: ["drift", "steer", "show"],
     } satisfies Attention;
-  if (settled(run) && (yield* crossRunPending(run.dir)))
+  }
+  if (settled(run) && (yield* crossRunPending(run.dir))) {
     return {
       category: "drift",
       reason: "cross_run_pending",
       explanation: `${run.id} and its related runs were never checked against each other; nobody was left to do it.`,
       actions: ["drift", "steer", "show"],
     } satisfies Attention;
+  }
   const after = ["show", "actions"];
   switch (run.state) {
     case "ended":
@@ -77,13 +73,14 @@ export const attentionFor = Effect.fn("attention.attentionFor")(function* (run: 
         actions: ["show", "stop"],
       } satisfies Attention;
     case "running":
-      if (!run.held && run.awaiting !== null)
+      if (!run.held && run.awaiting !== null) {
         return {
           category: "none",
           reason: "awaiting",
           explanation: `${run.id} is waiting for ${run.awaiting.on}, which ${run.awaiting.who === null ? "comes by itself" : `${run.awaiting.who} acts on`}.`,
           actions: ["show", "stop"],
         } satisfies Attention;
+      }
       return run.held
         ? ({
             category: "none",
@@ -94,19 +91,14 @@ export const attentionFor = Effect.fn("attention.attentionFor")(function* (run: 
         : ({
             category: "none",
             reason: "working",
-            // Open drift while a Run is still going is said out loud but is not attention:
-            // it may still be corrected.
+            // WARNING: open drift on a running Run is said, but is not attention: it may still be corrected.
             explanation: `${run.id} is running.${yield* driftNote(run.dir)}`,
             actions: ["show", "stop"],
           } satisfies Attention);
   }
 });
 
-/**
- * The constraint a Run drifted from and nobody settled, or null. `escalated` is what the
- * correction loop writes when it has spent its bound.
- */
-const driftUnresolved = (dir: string): Effect.Effect<string | null, never, RunRecords> =>
+const driftUnresolved = (dir: string) =>
   readDrift(dir).pipe(
     Effect.map(
       (lines) =>
@@ -117,21 +109,19 @@ const driftUnresolved = (dir: string): Effect.Effect<string | null, never, RunRe
     Effect.orElseSucceed(() => null),
   );
 
-/** Whether this Run's newest card says the Herd still owes a cross-run evaluation. */
-const crossRunPending = (
-  dir: string,
-): Effect.Effect<boolean, never, FileSystem.FileSystem | Path.Path | RunRecords> =>
+const crossRunPending = (dir: string) =>
   readCards(dir).pipe(
     Effect.map((cards) => cards.at(-1)?.cross_run === "pending"),
     Effect.orElseSucceed(() => false),
   );
 
-/** Open drift, as an addendum rather than a category: it may still be corrected. */
-const driftNote = (dir: string): Effect.Effect<string, never, RunRecords> =>
+const driftNote = (dir: string) =>
   readDrift(dir).pipe(
     Effect.map((lines) => {
       const open = openReports(lines);
-      if (open.length === 0) return "";
+      if (open.length === 0) {
+        return "";
+      }
       const blocking = Arr.filter(open, (report) => report.severity === "block").length;
       return ` ${open.length} open drift report${open.length === 1 ? "" : "s"}${blocking > 0 ? `, ${blocking} blocking` : ""}.`;
     }),

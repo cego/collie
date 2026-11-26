@@ -1,12 +1,3 @@
-// The four harnesses' official compaction interfaces, behind the one policy in
-// `compaction.ts`. Everything here ships inside Collie: the helpers are generated per
-// agent into that agent's control directory, so an installed binary carries them and
-// no persistent user or project harness settings are rewritten.
-//
-// Every adapter reduces to the same two things — a telemetry file the harness's own
-// interface appends to, and a channel that asks it to compact — because the shared
-// policy owns the threshold, the budget and what counts as an outcome.
-
 import * as Num from "effect/Number";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
@@ -15,6 +6,7 @@ import {
   Cache,
   Cause,
   Clock,
+  Context,
   Data,
   Duration,
   Effect,
@@ -24,9 +16,11 @@ import {
   Path,
   Result,
   Schedule,
+  Order,
   Schema,
   flow,
 } from "effect";
+import type { Source } from "./usage-ledger-model";
 import { ChildProcess, ChildProcessSpawner, CommandLine } from "effect/process";
 import {
   agentThreads,
@@ -51,26 +45,18 @@ import {
   summarize,
   createSession,
 } from "./opencode";
-import {
-  current,
-  isFull,
-  resetPhrase,
-  StatusLineLimits,
-  statusLineWindows,
-  type StatusSample,
-} from "./usage-model";
-import {
-  CONTROL_DIR,
-  Unsubmitted,
-  type CompactionPort,
-  type CompactionPorts,
-  type AgentContext,
-  type LaunchContext,
-  type ReadyContext,
-  type StopTarget,
-  type SeenProcess,
-  type Stopped,
-  readControl,
+import { current, isFull, resetPhrase, StatusLineLimits, statusLineWindows } from "./usage-model";
+import type { StatusSample } from "./usage-model";
+import { CONTROL_DIR, Unsubmitted, readControl } from "./compaction";
+import type {
+  CompactionPort,
+  CompactionPorts,
+  AgentContext,
+  LaunchContext,
+  ReadyContext,
+  StopTarget,
+  SeenProcess,
+  Stopped,
 } from "./compaction";
 import {
   processOf,
@@ -79,17 +65,14 @@ import {
   sessionOf,
   stillRunning,
   terminate,
-  type ProcessInfo,
 } from "./processes";
+import type { ProcessInfo } from "./processes";
 import { holderLives, hostLockOf, lockHolder, withLock } from "./lock";
+import { tellHost } from "./tell-host";
 import { carriedDelivery } from "./dispatcher";
+import { epochMs } from "./time";
+import { stringifyJson } from "./json";
 
-/**
- * A compaction request, through the Dispatcher's channel. `Unsubmitted` is reserved for
- * the case the policy treats specially — the channel provably never sent it, so nothing
- * is in flight and the waiting work may be released. Anything else may already have
- * reached the harness, so it is an ordinary failure and the attempt's budget runs.
- */
 const submitCompaction = Effect.fn("Compactors.submitCompaction")(function* (
   ctx: AgentContext,
   requestId: string,
@@ -103,10 +86,15 @@ const submitCompaction = Effect.fn("Compactors.submitCompaction")(function* (
     attempt: 1,
     requestId,
   });
-  if (outcome.ok) return outcome.submission ?? null;
-  if (outcome.reason === "unknown") return null;
-  if (outcome.reason === "failed")
+  if (outcome.ok) {
+    return outcome.submission ?? null;
+  }
+  if (outcome.reason === "unknown") {
+    return null;
+  }
+  if (outcome.reason === "failed") {
     return yield* new Submitting({ message: outcome.detail, cause: outcome });
+  }
   return yield* new Unsubmitted({ message: outcome.detail, cause: outcome });
 });
 import { selfCommand } from "./env";
@@ -115,12 +103,7 @@ import { reason } from "./naming";
 import { isToStandard, questionRepair } from "./question-standard";
 import type { JsonObject } from "./schema";
 
-/**
- * The harness releases these adapters were verified against. The gate refuses an older
- * one: the research traced these contracts in these versions, and a launch that
- * installed controls an older release does not honour would be an unmanaged agent
- * wearing the managed agent's record.
- */
+// WARNING: the gate refuses an older release; a launch that installs controls an older release ignores would be an unmanaged agent wearing a managed record.
 export const VERIFIED_VERSIONS: ReadonlyMap<string, string> = new Map([
   ["claude", "2.1.263"],
   ["codex", "0.162.0"],
@@ -128,32 +111,14 @@ export const VERIFIED_VERSIONS: ReadonlyMap<string, string> = new Map([
   ["pi", "0.87.1"],
 ]);
 
-/** The file each agent's controls append their telemetry to, one JSON object per line. */
 const TELEMETRY = "events.jsonl";
-/** Held for the read-slice-write of that file, by whichever process is writing it. */
 const TELEMETRY_LOCK = "events.lock";
-/**
- * Events no control could record, one `{at}` per line. Appended rather than rewritten, so
- * the writer that could not have the telemetry can still say that it could not: what is
- * missing from a file is invisible, and a correlation that reads absence as evidence would
- * read it as nothing having happened.
- */
+// WARNING: appended so a writer that could not record can say so; absence in a file reads as nothing having happened.
 const LOSSES = "events.lost";
-/**
- * Claims a telemetry write makes before giving up, at the lock module's spacing: five
- * seconds, where a write holds the file for milliseconds. Longer buys nothing a hung
- * holder would give back, and a write that does give up is recorded as a loss.
- */
 const TELEMETRY_CLAIMS = 200;
 
-/**
- * What a control may report. Decoded rather than trusted: a hook, an extension and a
- * loopback server are all untrusted input, and a line Collie cannot decode is dropped
- * rather than allowed to decide whether an agent gets its next piece of work.
- */
 const EventSchema = Schema.Struct({
   at: Schema.Finite,
-  /** The harness's own session identity, so a `/new` in the pane invalidates the rest. */
   session: Schema.NullOr(Schema.String),
   kind: Schema.Literals([
     "session",
@@ -166,30 +131,16 @@ const EventSchema = Schema.Struct({
     "out",
     "stopped",
   ]),
-  /** Current-context total. `null` where the harness has not measured this context. */
   tokens: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
-  /** Collie's own request id, which is what correlates an outcome to an attempt. */
   request: Schema.optionalKey(Schema.String),
-  /** On a `submit`: the delivery whose token the prompt carried. */
   delivery: Schema.optionalKey(Schema.String),
   message: Schema.optionalKey(Schema.String),
   reason: Schema.optionalKey(Schema.String),
-  /**
-   * Which half of a compaction an uncorrelated event was: Claude's `PostCompact`
-   * payload carries no field Collie's marker survives into, so a completion is told
-   * from a start by position, and a start that is not Collie's is what makes the
-   * completion after it somebody else's.
-   */
+  // WARNING: Claude's PostCompact carries no marker, so a completion is told from its start by position.
   phase: Schema.optionalKey(Schema.Literals(["pre", "post"])),
-  /**
-   * What a harness with no request id of its own had before the request was submitted,
-   * so that what it has afterwards can be told apart. Codex's compaction endpoint
-   * takes a thread and nothing else, and this is what supplies the correlation.
-   */
+  // WARNING: Codex's compaction endpoint takes only a thread, so this before-list supplies the correlation.
   items: Schema.optionalKey(Schema.Array(Schema.String)),
-  /** On a Claude `usage`: its Subscription's windows, as the status line had them. */
   limits: Schema.optionalKey(StatusLineLimits),
-  /** On an `out` or a `usage`: where the harness keeps this conversation. */
   transcript: Schema.optionalKey(Schema.String),
 });
 interface TelemetryEvent extends Schema.Schema.Type<typeof EventSchema> {}
@@ -201,16 +152,14 @@ const LossJson = Schema.fromJsonString(Schema.Struct({ at: Schema.Finite }));
 const decodeLoss = Schema.decodeUnknownOption(LossJson);
 const encodeLoss = flow(Schema.encodeResult(LossJson), Result.getOrThrow);
 
-/**
- * Whether anything went unrecorded since `since`. A correlation that reads absence —
- * Claude's, where an unmarked start is what makes the completion after it somebody
- * else's — cannot answer from a file with a hole in it.
- */
+// WARNING: a correlation that reads absence cannot answer from a file with a hole in it.
 const lostSince = Effect.fn("Compactors.lostSince")(function* (dir: string, since: number) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const file = path.join(dir, LOSSES);
-  if (!(yield* fs.exists(file))) return false;
+  if (!(yield* fs.exists(file))) {
+    return false;
+  }
   const lines = yield* fs.readFileString(file);
   return Arr.some(Str.split(lines, "\n"), (line) => {
     const decoded = decodeLoss(line);
@@ -218,86 +167,83 @@ const lostSince = Effect.fn("Compactors.lostSince")(function* (dir: string, sinc
   });
 });
 
-/**
- * This agent's telemetry, narrowed to the session it is on now. The newest `session`
- * line is the binding: a harness that started a second session in the same pane has a
- * context Collie has measured nothing about, so the older session's samples and
- * outcomes are stale rather than merely old.
- */
+// WARNING: the newest session line binds; an older session's samples and outcomes are stale, not merely old.
 const readEvents = Effect.fn("Compactors.readEvents")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const file = path.join(dir, TELEMETRY);
-  if (!(yield* fs.exists(file))) return [];
+  if (!(yield* fs.exists(file))) {
+    return [];
+  }
   const lines = yield* fs
     .readFileString(file)
     .pipe(Effect.map((text) => Arr.filter(Str.split(text, "\n"), (line) => Str.trim(line) !== "")));
   const bound = boundSession(lines);
-  // Nothing has said which session this agent is on, so nothing here describes a
-  // context Collie can vouch for.
-  if (bound === undefined) return [];
-  const events: TelemetryEvent[] = [];
+  if (bound === undefined) {
+    return [];
+  }
+  const events: Array<TelemetryEvent> = [];
   for (const line of lines) {
     const decoded = decodeEvent(line);
-    if (decoded._tag === "Some" && decoded.value.session === bound) events.push(decoded.value);
+    if (decoded._tag === "Some" && decoded.value.session === bound) {
+      events.push(decoded.value);
+    }
   }
   return events;
 });
 
-/**
- * How many lines of telemetry one agent keeps. A status line runs on every event in a
- * harness's own UI, so an append-only file would be tens of thousands of lines by
- * lunchtime; only the newest sample and the current attempt are ever read.
- */
+// WARNING: a status line writes on every event, so an append-only file would be tens of thousands of lines by lunchtime.
 export const KEEP_LINES = 200;
 
-/**
- * How many compaction events the cap keeps whatever else it drops: one compaction's start
- * and outcome, with room for a human's or an automatic one in between.
- */
 const KEEP_LIFECYCLE = 6;
 
-/** The newest identity line, and the newest `KEEP_LIFECYCLE` compaction events. */
-function protectedLines(lines: ReadonlyArray<string>): ReadonlySet<number> {
+function protectedLines(lines: ReadonlyArray<string>) {
   const keep = new Set<number>();
   let lifecycle = 0;
   let bound = false;
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const decoded = decodeEvent(lines[i]!);
-    if (decoded._tag !== "Some") continue;
+    if (decoded._tag !== "Some") {
+      continue;
+    }
     const kind = decoded.value.kind;
     if (kind === "session") {
-      if (bound) continue;
+      if (bound) {
+        continue;
+      }
       bound = true;
     } else if (kind === "usage" || kind === "submit" || lifecycle === KEEP_LIFECYCLE) {
       continue;
-    } else lifecycle += 1;
+    } else {
+      lifecycle += 1;
+    }
     keep.add(i);
   }
-  return keep;
+  const returned: ReadonlySet<number> = keep;
+  return returned;
 }
 
-/** The newest `room` lines, giving up the oldest unprotected ones. */
-function trimmed(lines: ReadonlyArray<string>, room: number): ReadonlyArray<string> {
-  if (lines.length <= room) return lines;
+function trimmed(lines: ReadonlyArray<string>, room: number) {
+  if (lines.length <= room) {
+    const returned: ReadonlyArray<string> = lines;
+    return returned;
+  }
   let excess = lines.length - room;
   const keep = protectedLines(lines);
   const kept = Arr.filter(lines, (line, at) => {
-    if (excess === 0 || keep.has(at)) return true;
+    if (excess === 0 || keep.has(at)) {
+      return true;
+    }
     excess -= 1;
     return false;
   });
-  return kept.length > room ? kept.slice(-room) : kept;
+  const returned: ReadonlyArray<string> = kept.length > room ? kept.slice(-room) : kept;
+  return returned;
 }
 
-/**
- * Appends one event, keeping the file bounded. Read-slice-write rather than append,
- * because the cap is the point — and under this agent's own lock, because the writers are
- * independent processes: a status line, a hook and a Driver all reach the same file.
- */
+// WARNING: read-slice-write because the cap is the point; under the agent's lock because several processes write the same file.
 export const writeEvent = Effect.fn("Compactors.writeEvent")(function* (
   dir: string,
-  /** Everything but the timestamp, which is the writer's to stamp. */
   written: Omit<TelemetryEvent, "at">,
 ) {
   const event: TelemetryEvent = { ...written, at: yield* Clock.currentTimeMillis };
@@ -308,23 +254,17 @@ export const writeEvent = Effect.fn("Compactors.writeEvent")(function* (
   const line = encodeEvent(event);
   yield* withLock(
     path.join(dir, TELEMETRY_LOCK),
-    // Nothing goes in the telemetry outside the lock — the holder's snapshot would
-    // overwrite it — so what is recorded instead is that this event is missing.
+    // WARNING: nothing goes into the telemetry outside the lock; the holder's snapshot would overwrite it.
     fs.writeFileString(path.join(dir, LOSSES), `${encodeLoss({ at: event.at })}\n`, {
       flag: "a",
     }),
     Effect.gen(function* () {
       const existing = (yield* fs.exists(file)) ? yield* fs.readFileString(file) : "";
-      // Room for the event and for an identity line in front of it.
       const older = trimmed(
         Arr.filter(Str.split(existing, "\n"), (text) => Str.trim(text) !== ""),
         KEEP_LINES - 2,
       );
-      // Identity is the writer's job, once, rather than every adapter's: an event on a
-      // session nothing has bound yet binds it, and one on a session that has changed
-      // rebinds — which is what makes every earlier sample and attempt stale. Read from
-      // what survives the trim, so a file the cap took the binding out of is one this
-      // write puts it back into.
+      // WARNING: read from what survives the trim, so a binding the cap removed is put back by this write.
       const bound = boundSession(older);
       const rebinds = bound !== event.session && event.kind !== "session";
       const session = rebinds
@@ -336,45 +276,43 @@ export const writeEvent = Effect.fn("Compactors.writeEvent")(function* (
   );
 });
 
-/** The session every later line is read against: the newest one a `session` line named. */
-function boundSession(lines: ReadonlyArray<string>): string | null | undefined {
+function boundSession(lines: ReadonlyArray<string>) {
   for (const line of [...lines].reverse()) {
     const decoded = decodeEvent(line);
-    if (decoded._tag === "Some" && decoded.value.kind === "session") return decoded.value.session;
+    if (decoded._tag === "Some" && decoded.value.kind === "session") {
+      const returned: string | null | undefined = decoded.value.session;
+      return returned;
+    }
   }
-  return undefined;
+  const returned: string | null | undefined = undefined;
+  return returned;
 }
 
-/** Anything the harness's own controls wrote, which a launch's fresh directory starts without. */
 const reported = (ctx: ReadyContext) =>
   readEvents(ctx.dir).pipe(
     Effect.map((events) => events.length > 0),
     Effect.orElseSucceed(() => false),
   );
 
-/** The harness's own latest current-context total, or null where it has none. */
 const latestUsage = Effect.fn("Compactors.latestUsage")(function* (dir: string) {
   const events = yield* readEvents(dir);
   return Arr.filter(events, (event) => event.kind === "usage").at(-1)?.tokens ?? null;
 });
 
-/**
- * What this request has established. Only an outcome carrying this request id counts:
- * a native automatic compaction, another Run's request and a duplicate event all
- * appear here, and none of them may complete an attempt they do not belong to.
- */
 const outcomeOf = Effect.fn("Compactors.outcomeOf")(function* (dir: string, requestId: string) {
   const events = yield* readEvents(dir);
   const mine = Arr.filter(events, (event) => event.request === requestId);
-  if (Arr.some(mine, (event) => event.kind === "done")) return { kind: "success" } as const;
+  if (Arr.some(mine, (event) => event.kind === "done")) {
+    return { kind: "success" } as const;
+  }
   const failed = Option.getOrUndefined(Arr.findFirst(mine, (event) => event.kind === "failed"));
-  if (failed)
+  if (failed) {
     return { kind: "failure", reason: failed.message ?? "the harness reported an error" } as const;
+  }
   return null;
 });
 
-/** `a.b.c` against `x.y.z`, numerically, missing parts as zero. */
-export function atLeast(installed: string, wanted: string): boolean {
+export function atLeast(installed: string, wanted: string) {
   const parts = (text: string) =>
     Arr.map(
       Str.split(/(\d+(?:\.\d+)*)/.exec(text)?.[1] ?? "", "."),
@@ -384,7 +322,9 @@ export function atLeast(installed: string, wanted: string): boolean {
   const need = parts(wanted);
   for (let i = 0; i < Math.max(have.length, need.length); i++) {
     const [h, n] = [have[i] ?? 0, need[i] ?? 0];
-    if (h !== n) return h > n;
+    if (h !== n) {
+      return h > n;
+    }
   }
   return true;
 }
@@ -396,11 +336,6 @@ export class HarnessVersionError extends Data.TaggedError("HarnessVersionError")
   readonly message: string;
 }> {}
 
-/**
- * A harness's version, asked once per process: a gate runs before every launch, and the
- * installed binary does not change under a running Driver. A failed probe is asked again
- * after a while, so one hiccup does not refuse every launch until a restart.
- */
 const versions = Effect.runSync(
   Cache.makeWith(
     (harness: string) =>
@@ -431,11 +366,7 @@ const versions = Effect.runSync(
   ),
 );
 
-/**
- * What this machine has installed, as the harness itself reports it, or null where it
- * cannot be asked. Unknown is never treated as new enough: a gate that guessed would be
- * a gate.
- */
+// WARNING: unknown is never treated as new enough; a gate that guessed would be no gate.
 export const installedVersion = Effect.fn("Compactors.installedVersion")(function* (
   harness: string,
 ) {
@@ -446,7 +377,9 @@ export const installedVersion = Effect.fn("Compactors.installedVersion")(functio
       stderr: "",
     })),
   );
-  if (code !== 0) return null;
+  if (code !== 0) {
+    return null;
+  }
   return (
     Option.getOrUndefined(
       Option.map(Option.fromNullishOr(Str.split(Str.trim(stdout), "\n").at(-1)), (present_) =>
@@ -458,30 +391,24 @@ export const installedVersion = Effect.fn("Compactors.installedVersion")(functio
 
 const gateVersion = Effect.fn("Compactors.gateVersion")(function* (harness: string) {
   const wanted = VERIFIED_VERSIONS.get(harness);
-  if (!wanted) return;
+  if (!wanted) {
+    return;
+  }
   const installed = yield* Cache.get(versions, harness);
-  if (!atLeast(installed, wanted))
+  if (!atLeast(installed, wanted)) {
     return yield* new HarnessVersionError({
       harness,
       message: `${harness} ${installed || "(no version)"} is older than the ${wanted} its compaction controls support`,
     });
+  }
 });
 
-/**
- * The Pi extension Collie loads into one agent, generated with that agent's telemetry
- * path in it. Pi's official extension surface supplies all three parts: the current
- * context estimate its own compaction and footer use, a command that calls `compact`
- * with per-request completion callbacks, and the compaction lifecycle events that tell
- * a native automatic compaction from this one.
- *
- * `-e` rather than a discovered location: an extension written into `~/.pi` would be a
- * persistent settings change, and would load into every Pi the human ever starts.
- */
-function piExtension(file: string): string {
+// WARNING: loaded with -e, not written into ~/.pi, which would load into every Pi the human starts.
+function piExtension(file: string) {
   return `// Generated by Collie for one agent. Do not edit: it is rewritten at launch.
 import { readFileSync, writeFileSync } from "node:fs";
 
-const FILE = ${JSON.stringify(file)};
+const FILE = ${stringifyJson(file)};
 const KEEP = ${KEEP_LINES};
 const KEEP_LIFECYCLE = ${KEEP_LIFECYCLE};
 const USAGE_LIMIT = /usage limit|usage_limit|exceeded your current quota/i;
@@ -634,35 +561,26 @@ const pi: CompactionPort = {
       return { args: ["-e", extension] };
     }),
   usage: (ctx) => latestUsage(ctx.dir),
-  // The extension's `session_start` sample.
+  records: (ctx) =>
+    transcriptsIn(ctx.dir).pipe(
+      Effect.map(Arr.map((path) => ({ path, format: "pi", parent: null }) satisfies Source)),
+    ),
   ready: reported,
-  // Through the human's channel, which is what a slash command is: the extension's
-  // command carries the request id, so the outcome that comes back is this request's.
-  // The human's channel, so a refusal from herdr is a request that never left.
+  // WARNING: the human's channel, so a refusal from herdr is a request that never left.
   request: (ctx, requestId) => submitCompaction(ctx, requestId, `/collie-compact ${requestId}`),
   poll: (ctx, requestId) => outcomeOf(ctx.dir, requestId),
+  reconcile: (ctx, since) =>
+    transcriptCompacted(ctx.dir, since, (line) => line.type === "compaction"),
 };
 
-/**
- * The two sides of one line: the call that submits a compaction, and everything an
- * adapter does before it. Only the adapter knows where that line is, and the policy
- * needs to know which side a failure came from — a request that never left may release
- * the waiting work, and one that may have been accepted may not.
- */
 export class Submitting extends Data.TaggedError("Submitting")<{
   readonly message: string;
   readonly cause?: unknown;
 }> {}
 
-/** The one call that hands the request to the harness. */
 const submitting = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(Effect.mapError((cause) => new Submitting({ message: reason(cause), cause })));
 
-/**
- * Everything else in a `request`: connecting, binding, reading, recording. A
- * `Submitting` passes through as it is — keeping it says
- * in a log which side of the line the failure came from.
- */
 const beforeSubmitting = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
     Effect.mapError((cause) =>
@@ -670,28 +588,17 @@ const beforeSubmitting = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     ),
   );
 
-/**
- * Claude Code's status-line and hook payloads, as much of them as Collie reads. Every
- * field optional: the payload is a documented contract, but it arrives on a pipe from
- * a process Collie does not control, and a version that renamed one field must make
- * the sample unavailable rather than crash a human's status line.
- */
+// WARNING: every field optional, so a renamed field makes the sample unavailable rather than crashing the human's status line.
 const ClaudePayload = Schema.Struct({
   session_id: Schema.optionalKey(Schema.String),
-  /** Absent for the status line; the hook's name for a hook. */
   hook_event_name: Schema.optionalKey(Schema.String),
-  /** `StopFailure` only: why the turn stopped, `rate_limit` among them. */
   error: Schema.optionalKey(Schema.String),
-  /** `StopFailure` only: the API's own words for it, where it gave any. */
   error_details: Schema.optionalKey(Schema.String),
   transcript_path: Schema.optionalKey(Schema.String),
   trigger: Schema.optionalKey(Schema.String),
-  /** `UserPromptSubmit` only: what was submitted, which is how Collie's own is told. */
   prompt: Schema.optionalKey(Schema.String),
   custom_instructions: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  /** Decoded on its own, so a renamed field loses the limits and keeps the context line. */
   rate_limits: Schema.optionalKey(Schema.Unknown),
-  /** `PreToolUse` only: the tool called, its call's id and what it was called with. */
   tool_name: Schema.optionalKey(Schema.String),
   tool_use_id: Schema.optionalKey(Schema.String),
   tool_input: Schema.optionalKey(Schema.Unknown),
@@ -701,12 +608,7 @@ const ClaudePayload = Schema.Struct({
         total_input_tokens: Schema.optionalKey(Schema.Finite),
         total_output_tokens: Schema.optionalKey(Schema.Finite),
         used_percentage: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
-        /**
-         * Null before the first API call and again after a compaction until the next
-         * one. That is the freshness signal: the totals beside it are `0` in both
-         * cases, and a zero read as a measurement would be a sample of an empty
-         * context that is not empty.
-         */
+        // WARNING: null before the first call and after a compaction; a zero there is not a measurement.
         current_usage: Schema.optionalKey(
           Schema.NullOr(Schema.Struct({ input_tokens: Schema.optionalKey(Schema.Finite) })),
         ),
@@ -716,7 +618,6 @@ const ClaudePayload = Schema.Struct({
 });
 const decodeClaudePayload = Schema.decodeUnknownOption(Schema.fromJsonString(ClaudePayload));
 
-/** One question of an `AskUserQuestion` call, as Claude's tool takes it. */
 export const AgentQuestion = Schema.Struct({
   question: Schema.String,
   header: Schema.optionalKey(Schema.String),
@@ -730,10 +631,6 @@ export type AgentQuestion = typeof AgentQuestion.Type;
 const AskedQuestions = Schema.Struct({ questions: Schema.NonEmptyArray(AgentQuestion) });
 const decodeAsked = Schema.decodeUnknownOption(AskedQuestions);
 
-/**
- * pi's question tool, which it does not have itself: `AskUserQuestion`'s shape, handed to
- * the host by the helper Claude's hook runs, with the agent's control directory `dir`.
- */
 export const piQuestionTool = (self: ReadonlyArray<string>, dir: string) => {
   const document = Schema.toJsonSchemaDocument(AskedQuestions);
   return {
@@ -741,23 +638,17 @@ export const piQuestionTool = (self: ReadonlyArray<string>, dir: string) => {
     label: "Ask the human",
     description:
       'Ask the human one or more questions. Give each at least three options, each with a description of what it leads to, and end exactly one option\'s label with " (Recommended)". The questions go on your Run, and the answers arrive as your next message.',
-    // SAFETY: a JSON Schema document is JSON.
+    // WARNING: a JSON Schema document is JSON.
     parameters: { ...document.schema, $defs: document.definitions } as JsonObject,
     helper: [...self, "herdr", "compaction", dir],
   };
 };
 
-/** One `AskUserQuestion` call, as the hook recorded it for the agent's Run. */
 export const AskedCall = Schema.Struct({
   at: Schema.Finite,
   session: Schema.NullOr(Schema.String),
-  /** The call's `tool_use_id`, or the time where the payload had none. */
   id: Schema.String,
   questions: Schema.Array(AgentQuestion),
-  /**
-   * Where it fell short and was not posted: repaired in the tool's own reply, or to be
-   * repaired by a Delivery for a harness whose question tool has already returned.
-   */
   repair: Schema.optionalKey(Schema.Literals(["in-reply", "by-delivery"])),
 });
 export type AskedCall = typeof AskedCall.Type;
@@ -770,11 +661,11 @@ const encodeAskedCall = flow(
 );
 const decodeAskedCall = Schema.decodeUnknownOption(Schema.fromJsonString(AskedCall));
 
-/** Apart from the telemetry, whose cap trims lines: a question must not be trimmed away. */
+// WARNING: the telemetry cap trims lines, so questions live in their own file that the cap leaves alone.
 export const QUESTIONS = "questions.jsonl";
 
 const deniedWith = (reason: string) =>
-  JSON.stringify({
+  stringifyJson({
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
@@ -786,13 +677,8 @@ const DENIED_QUESTION = deniedWith(
   "Collie has put your question on your Run for a human to answer. End your turn now: the answer will be your next message.",
 );
 
-/** Marks the copy of a call whose repair could not be sent, recorded to be posted as asked. */
 export const UNREPAIRED = "#unrepaired";
 
-/**
- * Records `call` again to be posted as asked, its repair having failed. Appended, so the
- * questions already posted keep their numbers.
- */
 export const postUnrepaired = Effect.fn("Compactors.postUnrepaired")(function* (
   dir: string,
   call: AskedCall,
@@ -811,7 +697,6 @@ export const postUnrepaired = Effect.fn("Compactors.postUnrepaired")(function* (
   return asked;
 });
 
-/** The `AskUserQuestion` calls this agent made at or after `since`, oldest first. */
 export const questionsSince = Effect.fn("Compactors.questionsSince")(function* (
   dir: string,
   since: number,
@@ -826,11 +711,6 @@ export const questionsSince = Effect.fn("Compactors.questionsSince")(function* (
     (call) => call.at >= since,
   );
 });
-/**
- * Records each question the agent's harness reports through its controls that is not
- * recorded yet, for a harness with no hook to record it as it is asked. A harness that
- * cannot be read now has asked nothing yet as far as anyone can tell.
- */
 export const takeHarnessQuestions = Effect.fn("Compactors.takeHarnessQuestions")(function* (
   stateDir: string,
   ports: CompactionPorts,
@@ -838,12 +718,16 @@ export const takeHarnessQuestions = Effect.fn("Compactors.takeHarnessQuestions")
 ) {
   const record = yield* readControl(stateDir, agent);
   const read = record === null ? undefined : ports[record.harness]?.questions;
-  if (record === null || read === undefined) return;
+  if (record === null || read === undefined) {
+    return;
+  }
   const asked = yield* read(record).pipe(Effect.orElseSucceed(() => []));
   const recorded = yield* questionsSince(record.dir, 0);
   const known = new Set(Arr.map(recorded, (call) => call.id));
   const fresh = Arr.filter(asked, (call) => !known.has(call.id));
-  if (fresh.length === 0) return;
+  if (fresh.length === 0) {
+    return;
+  }
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const at = yield* Clock.currentTimeMillis;
@@ -861,66 +745,89 @@ export const takeHarnessQuestions = Effect.fn("Compactors.takeHarnessQuestions")
 });
 const decodeLimits = Schema.decodeUnknownOption(StatusLineLimits);
 
-/**
- * The newest Subscription windows any Claude agent's status line reported on this
- * Machine, with when, or null where none has.
- */
-export const newestRateLimits = Effect.fn("Compactors.newestRateLimits")(function* (
+const newestIn: (text: string) => StatusSample | null = (text) => {
+  let newest: StatusSample | null = null;
+  for (const line of Str.split(text, "\n")) {
+    const event = Option.getOrNull(decodeEvent(line));
+    if (event?.limits && (newest === null || event.at > newest.at)) {
+      newest = { at: event.at, limits: event.limits };
+    }
+  }
+  return newest;
+};
+
+// WARNING: decodes only agents whose telemetry changed by size and mtime; a status line rewrites its file on every event.
+export const rateLimitsReader = Effect.fn("Compactors.rateLimitsReader")(function* (
   stateDir: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const root = path.join(stateDir, CONTROL_DIR);
-  const agents = yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []));
-  let newest: StatusSample | null = null;
-  for (const agent of agents) {
-    const text = yield* fs
-      .readFileString(path.join(root, agent, TELEMETRY))
-      .pipe(Effect.orElseSucceed(() => ""));
-    for (const line of Str.split(text, "\n")) {
-      const event = Option.getOrNull(decodeEvent(line));
-      if (event?.limits && (newest === null || event.at > newest.at))
-        newest = { at: event.at, limits: event.limits };
+  const read = new Map<
+    string,
+    { readonly size: bigint; readonly mtime: number; readonly newest: StatusSample | null }
+  >();
+  const newestNow = Effect.gen(function* () {
+    const agents = yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []));
+    const present = new Set(agents);
+    for (const agent of read.keys()) {
+      if (!present.has(agent)) {
+        read.delete(agent);
+      }
     }
-  }
-  return newest;
+    let newest: StatusSample | null = null;
+    for (const agent of agents) {
+      const file = path.join(root, agent, TELEMETRY);
+      const info = yield* fs.stat(file).pipe(Effect.option);
+      if (Option.isNone(info)) {
+        read.delete(agent);
+        continue;
+      }
+      const size = BigInt(info.value.size);
+      const mtime = Option.match(info.value.mtime, {
+        onNone: () => -1,
+        onSome: (at) => at.getTime(),
+      });
+      let known = read.get(agent);
+      if (known === undefined || known.size !== size || known.mtime !== mtime) {
+        const text = yield* fs.readFileString(file).pipe(Effect.option);
+        if (Option.isSome(text)) {
+          known = { size, mtime, newest: newestIn(text.value) };
+          read.set(agent, known);
+        }
+      }
+      const sample = known?.newest ?? null;
+      if (sample !== null && (newest === null || sample.at > newest.at)) {
+        newest = sample;
+      }
+    }
+    return newest;
+  });
+  return { newest: newestNow };
 });
 
-/**
- * The token Collie puts in `/compact`'s own instructions and reads back out of the
- * `PreCompact` payload. Claude's compaction has no request id of its own, and its
- * manual instructions are the one field that survives from the request into a hook —
- * so this is what tells Collie's request from a human typing `/compact` in the pane.
- */
+export const newestRateLimits = (stateDir: string) =>
+  Effect.flatMap(rateLimitsReader(stateDir), (reader) => reader.newest);
+
+// WARNING: Claude's compaction has no request id; its instructions are the one field surviving into a hook, which tells Collie's request from a human's /compact.
 const CLAUDE_MARKER = /\(collie:([A-Za-z0-9-]+)\)/;
 
-/**
- * Turns Claude submits itself through `UserPromptSubmit`: a background task or monitor
- * finishing, and a message from another agent. The payload has no field saying so; the
- * opening tag is the only sign, and it is checked before the delivery token because a
- * task's output can quote one.
- */
+// WARNING: the opening tag is the only sign, and it is checked before the delivery token, since a task's output can quote one.
 const CLAUDE_INJECTED = ["<task-notification>", "<agent-message "];
 
-function claudeInstructions(requestId: string): string {
+function claudeInstructions(requestId: string) {
   return `Keep the work in progress, the decisions taken and what is left to do. (collie:${requestId})`;
 }
 
-/**
- * What Claude's own status line and compaction hooks report, decoded into one agent's
- * telemetry. Run as `collie herdr compaction <dir>` with the payload on stdin, so the
- * helper a launch installs is the binary that installed it — no `jq`, no shell JSON
- * parsing, and one place that validates an untrusted payload.
- *
- * The status-line case also prints the line Claude displays: Collie is borrowing the
- * human's status line, and giving it back a blank one would be taking something away.
- */
+// WARNING: the status-line case must print Claude's line back, or the human's own status bar goes blank.
 export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(function* (
   dir: string,
   stdin: string,
 ) {
   const decoded = decodeClaudePayload(stdin);
-  if (decoded._tag === "None") return "";
+  if (decoded._tag === "None") {
+    return "";
+  }
   const payload = decoded.value;
   const session = payload.session_id ?? null;
   const window = payload.context_window ?? null;
@@ -931,9 +838,7 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
 
   const event = payload.hook_event_name;
   if (event === "UserPromptSubmit") {
-    // Recorded whole? No: the prompt is the human's own text, and a transcript is not
-    // Collie's to keep (SPEC §2). Only who submitted it, which is the whole question
-    // attribution asks.
+    // WARNING: the prompt is not stored whole; only who submitted it is kept.
     const prompt = payload.prompt ?? "";
     const delivery = carriedDelivery(prompt);
     yield* writeEvent(
@@ -948,12 +853,15 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
   }
   if (event === "PreToolUse") {
     const asked = payload.tool_name === "AskUserQuestion" ? decodeAsked(payload.tool_input) : null;
-    if (asked === null || asked._tag === "None") return "";
+    if (asked === null || asked._tag === "None") {
+      return "";
+    }
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    // No live host to put it on the Run, so the agent asks in its pane. `dir` is `controlDir(stateDir, agent)`.
     const owner = yield* lockHolder(hostLockOf(path.dirname(path.dirname(dir))));
-    if (owner === null || !(yield* holderLives(owner))) return "";
+    if (owner === null || !(yield* holderLives(owner))) {
+      return "";
+    }
     const at = yield* Clock.currentTimeMillis;
     const { questions } = asked.value;
     const repairing = repairs((yield* questionsSince(dir, 0)).at(-1), questions);
@@ -961,33 +869,32 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
     const line = encodeAskedCall(repairing ? { ...call, repair: "in-reply" } : call);
     yield* fs.makeDirectory(dir, { recursive: true });
     yield* fs.writeFileString(path.join(dir, QUESTIONS), `${line}\n`, { flag: "a" });
+    // WARNING: nothing watches the file, so the host must be told for the question to reach the Run.
+    yield* tellHost(path.dirname(path.dirname(dir)), [path.join(dir, QUESTIONS)]);
     return repairing ? deniedWith(questionRepair(questions)) : DENIED_QUESTION;
   }
   const transcript = payload.transcript_path;
   if (event === "StopFailure") {
-    // It fires once Claude has given up on the turn. An overload stops nothing (ADR-0049 D9).
+    // WARNING: StopFailure fires once Claude has given up on the turn; an overload stops nothing.
     const error = payload.error ?? "unknown";
-    if (error === "rate_limit" || error === "billing_error")
+    if (error === "rate_limit" || error === "billing_error") {
       yield* writeEvent(dir, {
         session,
         kind: "out",
         reason: (yield* lastFullWindow(dir)) ?? error,
         ...(transcript && { transcript }),
       });
-    else if (error !== "overloaded")
+    } else if (error !== "overloaded") {
       yield* writeEvent(dir, {
         session,
         kind: "stopped",
         reason: payload.error_details ?? error,
         ...(transcript && { transcript }),
       });
+    }
     return "";
   }
   if (event === "PreCompact" || event === "PostCompact") {
-    // Only `PreCompact` is given the instructions back, so only it can carry the
-    // marker. Everything else — Claude's own automatic compaction, a human's
-    // `/compact`, and the `PostCompact` that ends any of them — is recorded with its
-    // trigger and its half, because that is what `claudeOutcome` reads.
     const request =
       event === "PreCompact" && payload.trigger === "manual"
         ? CLAUDE_MARKER.exec(payload.custom_instructions ?? "")?.[1]
@@ -1014,8 +921,6 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
     ...(limits && { limits }),
     ...(transcript && { transcript }),
   });
-  // Once a session: a status line is redrawn on every event, and its `out` must not crowd
-  // the compaction records out of the telemetry's cap.
   const now = yield* Clock.currentTimeMillis;
   const full =
     limits && Arr.some(statusLineWindows(limits), (window) => isFull(current(window, now)));
@@ -1023,39 +928,30 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
     yield* readEvents(dir).pipe(Effect.orElseSucceed(() => [])),
     (one) => one.kind === "out",
   );
-  if (full && !told)
+  if (full && !told) {
     yield* writeEvent(dir, {
       session,
       kind: "out",
       reason: (yield* lastFullWindow(dir)) ?? "a window at 100%",
       ...(transcript && { transcript }),
     });
+  }
   const percent = window?.used_percentage;
   return percent === null || percent === undefined
     ? "context: not measured yet"
     : `context: ${Math.round(percent)}%`;
 });
 
-/**
- * The run-scoped settings a launch loads with `--settings`, which is additional
- * settings rather than a rewrite: the human's own `~/.claude/settings.json` and the
- * project's are untouched, and this file dies with the agent's control directory.
- *
- * The status line is the official current-context contract, and the two compaction
- * hooks are the official lifecycle. Both are matched on `manual` and `auto`, because
- * an automatic compaction is what invalidates a sample Collie is about to read.
- */
-export function claudeSettings(dir: string, stopFailure: boolean): string {
+// WARNING: additional settings, never a rewrite; matched on manual and auto because an automatic compaction invalidates a sample.
+export function claudeSettings(dir: string, stopFailure: boolean) {
   const helper = Result.getOrThrow(
     CommandLine.join([...selfCommand(), "herdr", "compaction", dir]),
   );
   const hook = { matcher: "manual|auto", hooks: [{ type: "command", command: helper }] };
-  // `UserPromptSubmit` is the only place a submitted turn is visible to Collie, and it
-  // is what attribution rests on: a prompt with no delivery token is somebody typing in
-  // the pane. It carries no matcher — every submission counts, which is the point.
+  // WARNING: UserPromptSubmit is the only place a submitted turn is visible; with no matcher every submission counts.
   const submitted = { hooks: [{ type: "command", command: helper }] };
   const failed = { hooks: [{ type: "command", command: helper }] };
-  return `${JSON.stringify(
+  return `${stringifyJson(
     {
       statusLine: { type: "command", command: helper },
       hooks: {
@@ -1066,22 +962,11 @@ export function claudeSettings(dir: string, stopFailure: boolean): string {
         ...(stopFailure && { StopFailure: [failed] }),
       },
     },
-    null,
     2,
   )}\n`;
 }
 
-/**
- * What Claude has established about one request. Its `PostCompact` payload is
- * `{hook_event_name, trigger, compact_summary}` — nothing of the request survives into
- * it — so the completion is correlated the way Codex's and OpenCode's are: by what was
- * not there when Collie asked. The marked `PreCompact` is the start, and the first
- * manual completion after it on the same session is that compaction's.
- *
- * A start that is not Collie's in between — a human's own `/compact` — makes the
- * completion after it theirs, and leaves the attempt unresolved rather than taking it.
- * An `auto` trigger is Claude's own automatic compaction and never an answer either.
- */
+// WARNING: PostCompact carries nothing of the request, so completion is correlated by what was absent when Collie asked.
 const claudeOutcome = Effect.fn("Compactors.claudeOutcome")(function* (
   dir: string,
   requestId: string,
@@ -1091,21 +976,22 @@ const claudeOutcome = Effect.fn("Compactors.claudeOutcome")(function* (
     Arr.findFirstIndex(events, (event) => event.kind === "start" && event.request === requestId),
     () => -1,
   );
-  if (at < 0) return null;
+  if (at < 0) {
+    return null;
+  }
   for (const event of events.slice(at + 1)) {
-    if (event.kind !== "auto" || event.reason !== "manual") continue;
-    if (event.phase === "pre") return null;
-    // The start that would have made this completion somebody else's may be the event
-    // nothing could record, so a hole since the request is unresolved, not success.
+    if (event.kind !== "auto" || event.reason !== "manual") {
+      continue;
+    }
+    if (event.phase === "pre") {
+      return null;
+    }
+    // WARNING: a hole since the request leaves it unresolved, not a success.
     return (yield* lostSince(dir, events[at]!.at)) ? null : ({ kind: "success" } as const);
   }
   return null;
 });
 
-/**
- * The busiest window this agent's status line last reported, with its reset, as a run-out
- * is said: `session 100%, resets 15:45 (in 2h 3m)`. Null where it reported none.
- */
 const lastFullWindow = Effect.fn("Compactors.lastFullWindow")(function* (dir: string) {
   const sampled = Option.getOrUndefined(
     Arr.findLast(
@@ -1122,21 +1008,16 @@ const lastFullWindow = Effect.fn("Compactors.lastFullWindow")(function* (dir: st
     (value) => value,
     (a, b) => Num.sign(b.usedPercent - a.usedPercent),
   );
-  if (busiest === undefined) return null;
+  if (busiest === undefined) {
+    return null;
+  }
   const reset = busiest.resetsAt === null ? "" : `, ${resetPhrase(busiest.resetsAt, now)}`;
   return `${Str.toLowerCase(busiest.label)} ${Math.round(busiest.usedPercent)}%${reset}`;
 });
 
-/**
- * The earliest Claude Code `StopFailure` was checked in. Older ones are left to their
- * status line and the Machine's reading rather than given a hook they may refuse.
- */
+// WARNING: StopFailure exists only from this Claude Code version; older ones are left to their status line.
 const CLAUDE_STOP_FAILURE = "2.1.291";
 
-/**
- * When this agent's harness said it ran out of usage at or after `since`, why, and where
- * its conversation is; null where it has not.
- */
 export const ranOutSince = Effect.fn("Compactors.ranOutSince")(function* (
   dir: string,
   since: number,
@@ -1152,10 +1033,6 @@ export const ranOutSince = Effect.fn("Compactors.ranOutSince")(function* (
     : { why: out.reason ?? "its usage ran out", transcript: out.transcript ?? null };
 });
 
-/**
- * What this agent's harness last said when a turn died on an error it will not retry, at
- * or after `since`, and where its conversation is; null where it has not.
- */
 export const stoppedSince = Effect.fn("Compactors.stoppedSince")(function* (
   dir: string,
   since: number,
@@ -1174,7 +1051,6 @@ export const stoppedSince = Effect.fn("Compactors.stoppedSince")(function* (
       };
 });
 
-/** Where this agent's harness last said it keeps its conversation, or null where it never did. */
 export const transcriptOf = Effect.fn("Compactors.transcriptOf")(function* (
   stateDir: string,
   agent: string,
@@ -1189,6 +1065,66 @@ export const transcriptOf = Effect.fn("Compactors.transcriptOf")(function* (
   );
 });
 
+const transcriptsIn = (dir: string) =>
+  readEvents(dir).pipe(
+    Effect.map((events) =>
+      Arr.dedupe(Arr.getSomes(Arr.map(events, (event) => Option.fromNullishOr(event.transcript)))),
+    ),
+  );
+
+const claudeRecords = Effect.fn("Compactors.claudeRecords")(function* (ctx: AgentContext) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const sources: Array<Source> = [];
+  for (const transcript of yield* transcriptsIn(ctx.dir)) {
+    sources.push({ path: transcript, format: "claude", parent: null });
+    const session = path.basename(transcript, ".jsonl");
+    const subagents = path.join(path.dirname(transcript), session, "subagents");
+    const names = yield* fs.readDirectory(subagents).pipe(Effect.orElseSucceed(() => []));
+    for (const name of Arr.sort(names, Order.String)) {
+      if (Str.endsWith(".jsonl")(name)) {
+        sources.push({ path: path.join(subagents, name), format: "claude", parent: session });
+      }
+    }
+  }
+  return sources;
+});
+
+// WARNING: this is what settles a request whose completion was lost.
+const transcriptCompacted = Effect.fn("Compactors.transcriptCompacted")(function* (
+  dir: string,
+  since: number,
+  boundary: (line: { readonly type?: string; readonly subtype?: string }) => boolean,
+) {
+  const transcript = Option.getOrUndefined(
+    Arr.findLast(yield* readEvents(dir), (event) => event.transcript !== undefined),
+  )?.transcript;
+  if (transcript === undefined) {
+    return { kind: "failure", reason: "it never said where its transcript is" } as const;
+  }
+  const text = yield* (yield* FileSystem.FileSystem).readFileString(transcript);
+  for (const line of Str.split(text, "\n")) {
+    const entry = Option.getOrUndefined(decodeTranscriptLine(line));
+    if (entry !== undefined && boundary(entry) && epochMs(entry.timestamp) >= since) {
+      return { kind: "success" } as const;
+    }
+  }
+  return {
+    kind: "failure",
+    reason: "its transcript shows no compaction since it was asked for",
+  } as const;
+});
+
+const decodeTranscriptLine = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      type: Schema.optionalKey(Schema.String),
+      subtype: Schema.optionalKey(Schema.String),
+      timestamp: Schema.String,
+    }),
+  ),
+);
+
 const claude: CompactionPort = {
   gate: gateVersion("claude"),
   install: (ctx) =>
@@ -1202,53 +1138,37 @@ const claude: CompactionPort = {
       return { args: ["--settings", settings] };
     }),
   usage: (ctx) => latestUsage(ctx.dir),
-  // The status line is drawn with the REPL, so its first call is the prompt being there.
+  records: claudeRecords,
+  // WARNING: the status line is drawn with the REPL, so its first call means the prompt is there.
   ready: reported,
-  // The documented native command, through the human's channel. Its instructions are
-  // real instructions with the correlation token appended: Claude has no request id
-  // for a compaction, and this field is the only one both hooks give back.
   request: (ctx, requestId) =>
     submitCompaction(ctx, requestId, `/compact ${claudeInstructions(requestId)}`),
-  // No documented compact-failed hook exists, so `poll` can only ever return success
-  // or nothing: a missing PostCompact is an unresolved outcome, which the shared
-  // policy pauses on, and never a confirmed failure.
+  // WARNING: no documented compact-failed hook exists, so poll can only return success or nothing.
   poll: (ctx, requestId) => claudeOutcome(ctx.dir, requestId),
+  reconcile: (ctx, since) =>
+    transcriptCompacted(
+      ctx.dir,
+      since,
+      (line) => line.type === "system" && line.subtype === "compact_boundary",
+    ),
 };
 
-/**
- * A local server of this agent's own, started through a shell and waited on until it
- * says it is up. Two adapters need one — Codex's App Server, whose port is only ever on
- * its own stdout, and the `opencode serve` that exists just long enough to create a
- * session — and both had their own copy of the shell redirect, the detach, the deadline
- * loop and the failure message. The copy without a test was the one that read its log
- * before the shell had created it.
- *
- * Always detached and unreffed, and always reporting its pid: the spawner's own
- * finalizer would otherwise take down the server it just started, and who stops it is
- * the caller's decision — Codex records the pid for the agent's lifetime, OpenCode
- * stops it as soon as it has its session.
- *
- * `found` is the first capture group of `listening`, where the pattern has one. A
- * pattern that only asks whether the server is up leaves it empty.
- */
+export const ServerStartDeadline = Context.Reference<Duration.Duration | null>(
+  "collie/ServerStartDeadline",
+  { defaultValue: () => null },
+);
+
 export const servedEndpoint = Effect.fn("Compactors.servedEndpoint")(function* (opts: {
   cwd: string;
-  /** The log the server is redirected into, inside the agent's control directory. */
   log: string;
-  /** The command exactly as a shell runs it, without the redirect. */
   command: string;
-  /** The line that says the server is up. */
   listening: RegExp;
   startMs: number;
-  /** What did not come up, for the failure a human reads. */
   what: string;
-  /** Shell lines run before the server, so it has the agent's environment. */
   env?: ReadonlyArray<string>;
 }) {
   const fs = yield* FileSystem.FileSystem;
-  // Created before the server is, because the wait below reads it: the shell's redirect
-  // makes it too, but a read that gets there first is a launch that fails on a missing
-  // file instead of waiting for the line it is waiting for.
+  // WARNING: created before the server so the wait never reads a missing file.
   yield* fs.writeFileString(opts.log, "");
   const log = yield* Effect.orDie(Effect.fromResult(CommandLine.quote(opts.log)));
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -1268,14 +1188,14 @@ export const servedEndpoint = Effect.fn("Compactors.servedEndpoint")(function* (
           },
         ),
       );
-      // Unref before the scope closes, or the spawner's finalizer kills the server it
-      // just started — the same reason a detached Driver is unreffed.
+      // WARNING: unref before the scope closes, or the spawner's finalizer kills the server it just started.
       yield* Effect.asVoid(handle.unref);
       return handle.pid;
     }),
   );
 
-  const deadline = (yield* Clock.currentTimeMillis) + opts.startMs;
+  const budget = (yield* ServerStartDeadline) ?? Duration.millis(opts.startMs);
+  const deadline = (yield* Clock.currentTimeMillis) + Duration.toMillis(budget);
   const said = yield* fs.readFileString(opts.log).pipe(
     Effect.map((log) => opts.listening.exec(log)),
     Effect.repeat({
@@ -1283,26 +1203,15 @@ export const servedEndpoint = Effect.fn("Compactors.servedEndpoint")(function* (
       schedule: Schedule.spaced(200).pipe(Schedule.while(({ now }) => now < deadline)),
     }),
   );
-  if (said) return { pid, found: said[1] ?? "" };
+  if (said) {
+    return { pid, found: said[1] ?? "" };
+  }
   return yield* new Cause.TimeoutError(
     `${opts.what} did not come up within ${opts.startMs}ms — see ${opts.log}`,
   );
 });
 
-/** Stops a server this agent no longer needs. Best effort: it may already be gone. */
-
-/**
- * One App Server per agent, on a loopback port it picks itself, with the ordinary
- * interactive TUI in the pane connected to it by `--remote`. One server per agent is
- * not tidiness: it is the whole of Collie's thread identity. On a shared server
- * `thread/loaded/list` answers with every agent's thread and nothing in the protocol
- * says which is whose, so `boundThread` refuses rather than guesses.
- *
- * `--listen ws://127.0.0.1:0` rather than a port Collie picked: binding a port to read
- * its number and then handing it over is a race with everything else on the machine,
- * and the server prints the port it actually got. `unix://` is a documented form and
- * binds, but nothing sent over that socket on 0.153.4 is ever answered.
- */
+// WARNING: a loopback port 0, not a picked port (which races); unix:// binds but nothing sent over it is answered on 0.153.4.
 const CODEX_SERVER = "codex app-server";
 const CODEX_LOG = "app-server.log";
 const CODEX_LISTENING = /ws:\/\/127\.0\.0\.1:(\d+)/;
@@ -1313,7 +1222,6 @@ const codexEndpoint = Effect.fn("Compactors.codexEndpoint")(function* (
   server: string,
 ) {
   const path = yield* Path.Path;
-  // Through a shell, because the port it chose is only on its stdout.
   const served = yield* servedEndpoint({
     cwd: ctx.cwd,
     log: path.join(ctx.dir, CODEX_LOG),
@@ -1334,7 +1242,6 @@ const codexEndpoint = Effect.fn("Compactors.codexEndpoint")(function* (
   return { endpoint: `ws://127.0.0.1:${served.found}`, pid: served.pid, command: server };
 });
 
-/** The endpoint this agent's controls talk to, or a failure naming what is missing. */
 const codexAt = (ctx: ReadyContext) =>
   ctx.endpoint === null
     ? Effect.fail(
@@ -1342,13 +1249,7 @@ const codexAt = (ctx: ReadyContext) =>
       )
     : Effect.succeed(ctx.endpoint);
 
-/**
- * Stops a Codex agent where its turns run, on one connection opened before any signal:
- * prove the server is the agent's, note its turns and its session, drain it with one
- * SIGTERM — admission closes and no queued or goal continuation starts — interrupt every
- * running turn, sub-agents' included, wait for the server to exit, then give each proven
- * process left of its session one SIGTERM. Nothing gets a second, and nothing SIGKILL.
- */
+// WARNING: one SIGTERM only, never SIGKILL; running turns are interrupted first.
 const stopCodex = (
   target: StopTarget,
   note: (line: string) => Effect.Effect<void>,
@@ -1359,7 +1260,6 @@ const stopCodex = (
     const signalled = [...target.signalled];
     const before = (one: SeenProcess) =>
       Arr.some(signalled, (seen) => seen.pid === one.pid && seen.started === one.started);
-    /** One SIGTERM, never a second, even across stops. */
     const once = (one: SeenProcess) =>
       before(one)
         ? Effect.void
@@ -1369,7 +1269,7 @@ const stopCodex = (
             ),
           );
     const server = yield* processOf(target.pid);
-    const refused = (why: string): Stopped => ({
+    const refused: (why: string) => Stopped = (why) => ({
       state: "failed",
       turns: null,
       reason: why,
@@ -1377,9 +1277,10 @@ const stopCodex = (
       left: [],
       noted: target.noted,
     });
-    if (server === null && !(yield* processAbsent(target.pid)))
+    if (server === null && !(yield* processAbsent(target.pid))) {
       return refused(`pid ${target.pid} is live but its process identity could not be read`);
-    if (server === null)
+    }
+    if (server === null) {
       return yield* survivors(
         target.pid,
         target.noted,
@@ -1390,21 +1291,27 @@ const stopCodex = (
         once,
         false,
       );
-    if (!pipe(server.command, Str.includes(target.command)))
+    }
+    if (!pipe(server.command, Str.includes(target.command))) {
       return refused(`pid ${target.pid} is \`${server.command}\`, not \`${target.command}\``);
-    if (target.started !== null && server.started !== target.started)
+    }
+    if (target.started !== null && server.started !== target.started) {
       return refused(`pid ${target.pid} started at ${server.started}, not ${target.started}`);
+    }
 
     let turns: Stopped["turns"] = null;
-    let session: ProcessInfo[] = [];
+    let session: Array<ProcessInfo> = [];
     const noted = [...target.noted];
     let inspected = false;
     let submitted = 0;
     let acknowledged = 0;
-    const short = (): Stopped["state"] =>
+    const short: () => Stopped["state"] = () =>
       acknowledged > 0 ? "acknowledged" : submitted > 0 ? "submitted" : "failed";
-    const seen = (one: ProcessInfo): SeenProcess => ({ pid: one.pid, started: one.started });
-    const notQuiet = (reason: string): Stopped => ({
+    const seen: (one: ProcessInfo) => SeenProcess = (one) => ({
+      pid: one.pid,
+      started: one.started,
+    });
+    const notQuiet: (reason: string) => Stopped = (reason) => ({
       state: short(),
       turns,
       reason,
@@ -1425,16 +1332,18 @@ const stopCodex = (
         turns = running;
         session = yield* sessionOf(target.pid);
         inspected = yield* stillRunning(server);
-        for (const one of session)
-          if (!Arr.some(noted, (seen) => seen.pid === one.pid && seen.started === one.started))
+        for (const one of session) {
+          if (!Arr.some(noted, (seen) => seen.pid === one.pid && seen.started === one.started)) {
             noted.push(seen(one));
+          }
+        }
         yield* once(server);
         const interrupt = (one: (typeof running)[number]) =>
           Effect.gen(function* () {
             const about = `thread ${one.thread} turn ${one.turn}, server ${target.endpoint} pid ${target.pid}${one.transcript === null ? "" : `, transcript ${one.transcript}`}`;
             submitted++;
             yield* note(`${target.agent}: interrupt submitted — ${about}`);
-            // A refusal is read back below rather than believed: the turn may have ended.
+            // WARNING: a refusal is read back rather than believed: the turn may have ended anyway.
             const answered = yield* interruptTurn(client, one.thread, one.turn).pipe(Effect.result);
             if (answered._tag === "Success") {
               acknowledged++;
@@ -1446,13 +1355,14 @@ const stopCodex = (
             }
           });
         for (const one of running) {
-          // Its turns have all ended and it has gone: nothing is left to answer.
-          if (!(yield* stillRunning(server))) break;
+          if (!(yield* stillRunning(server))) {
+            break;
+          }
           yield* interrupt(one);
         }
         const busy = Arr.filter(threads, (thread) => thread.running.length > 0);
         for (;;) {
-          if (!(yield* stillRunning(server)))
+          if (!(yield* stillRunning(server))) {
             return yield* survivors(
               target.pid,
               noted,
@@ -1463,7 +1373,8 @@ const stopCodex = (
               once,
               inspected,
             );
-          // Read back rather than assumed: a lost connection is not a turn that ended.
+          }
+          // WARNING: read back rather than assumed: a lost connection is not a turn that ended.
           let unread: string | null = null;
           const unended: typeof running = [];
           for (const thread of busy) {
@@ -1481,7 +1392,6 @@ const stopCodex = (
                 ),
               );
               if (one === undefined) {
-                // A continuation the server started on an interrupt it read before its SIGTERM.
                 one = { thread: thread.id, turn, transcript: thread.transcript };
                 running.push(one);
                 yield* interrupt(one);
@@ -1506,11 +1416,11 @@ const stopCodex = (
         }
       }),
     ).pipe(
-      // Anything here is the connection: unanswered, refused or lost before the stop was done.
-      // Lost because the server exited is the stop going on, not failing.
       Effect.catch((cause) =>
         Effect.gen(function* () {
-          if (yield* stillRunning(server)) return notQuiet(reason(cause));
+          if (yield* stillRunning(server)) {
+            return notQuiet(reason(cause));
+          }
           return yield* survivors(
             target.pid,
             noted,
@@ -1526,15 +1436,9 @@ const stopCodex = (
     );
   });
 
-/** How long the processes left of a server get to end, however late it exited in the budget. */
-const SURVIVOR_GRACE_MS = 2_000;
+const SURVIVOR_GRACE_MS = 2000;
 
-/**
- * What is left of an exited server's session: each process noted before the drain that is
- * still the same process gets one SIGTERM and is looked at again; one nobody noted is
- * named and left alone. Without sessions, the noted descendants are all there is to look
- * at. Quiet only when none is left.
- */
+// WARNING: an unnoted process is named and left alone; only the noted processes get the SIGTERM.
 const survivors = (
   root: number,
   noted: ReadonlyArray<SeenProcess>,
@@ -1549,7 +1453,7 @@ const survivors = (
     const proven = (one: SeenProcess) =>
       Arr.some(noted, (seen) => seen.pid === one.pid && seen.started === one.started);
     const sessions = yield* readsSessions;
-    if (!sessions && !inspected)
+    if (!sessions && !inspected) {
       return {
         state: "failed",
         turns,
@@ -1559,22 +1463,28 @@ const survivors = (
         left: noted,
         noted,
       } satisfies Stopped;
+    }
     const absent = yield* processAbsent(root).pipe(
       Effect.repeat({
         until: Boolean,
         schedule: Schedule.spaced(50).pipe(Schedule.while(({ now }) => now < deadline)),
       }),
     );
-    if (!absent)
+    if (!absent) {
       return yield* new Cause.UnknownError(root, `server process ${root} is not proven absent`);
+    }
     const remaining = Effect.gen(function* () {
       return sessions
         ? yield* sessionOf(root)
         : yield* Effect.filter(noted, (one) =>
             Effect.gen(function* () {
               const now = yield* processOf(one.pid);
-              if (now !== null) return now.started === one.started;
-              if (yield* processAbsent(one.pid)) return false;
+              if (now !== null) {
+                return now.started === one.started;
+              }
+              if (yield* processAbsent(one.pid)) {
+                return false;
+              }
               return yield* new Cause.UnknownError(
                 one.pid,
                 `process ${one.pid} could not be inspected`,
@@ -1582,7 +1492,11 @@ const survivors = (
             }),
           );
     });
-    for (const one of yield* remaining) if (proven(one)) yield* once(one);
+    for (const one of yield* remaining) {
+      if (proven(one)) {
+        yield* once(one);
+      }
+    }
     const until = Math.max(deadline, (yield* Clock.currentTimeMillis) + SURVIVOR_GRACE_MS);
     const left = yield* remaining.pipe(
       Effect.repeat({
@@ -1590,7 +1504,7 @@ const survivors = (
         schedule: Schedule.spaced(50).pipe(Schedule.while(({ now }) => now < until)),
       }),
     );
-    if (left.length === 0)
+    if (left.length === 0) {
       return {
         state: "quiet",
         turns,
@@ -1599,6 +1513,7 @@ const survivors = (
         left: [],
         noted,
       } satisfies Stopped;
+    }
     const named = Arr.map(
       left,
       (one) =>
@@ -1625,8 +1540,7 @@ const survivors = (
     ),
   );
 
-/** Codex's port, over the App Server `server` starts: `codex app-server`, or a test's stand-in. */
-export const codexPort = (server: string): CompactionPort => ({
+export const codexPort: (server: string) => CompactionPort = (server) => ({
   gate: gateVersion("codex"),
   ready: (ctx) =>
     ctx.endpoint === null
@@ -1648,7 +1562,9 @@ export const codexPort = (server: string): CompactionPort => ({
       return yield* withCodex(url, (client) =>
         Effect.gen(function* () {
           const threadId = yield* boundThread(client, ctx.cwd);
-          if (threadId === null) return [];
+          if (threadId === null) {
+            return [];
+          }
           return Arr.map(yield* askedQuestions(client, threadId), (asked) => ({
             id: asked.id,
             questions: Arr.map(asked.questions, (one) => ({
@@ -1665,19 +1581,33 @@ export const codexPort = (server: string): CompactionPort => ({
       return yield* withCodex(url, (client) =>
         Effect.gen(function* () {
           const threadId = yield* boundThread(client, ctx.cwd);
-          // The TUI has not started a thread yet, so there is no context to measure.
-          if (threadId === null) return null;
+          if (threadId === null) {
+            return null;
+          }
           yield* writeEvent(ctx.dir, { session: threadId, kind: "session" });
           return yield* codexContext(client, threadId);
         }),
       );
     }),
+  records: (ctx) =>
+    Effect.gen(function* () {
+      const url = yield* codexAt(ctx);
+      const threads = yield* withCodex(url, (client) => agentThreads(client, ctx.cwd));
+      return Arr.getSomes(
+        Arr.map(threads, (thread) =>
+          thread.transcript === null || thread.ephemeral
+            ? Option.none()
+            : Option.some<Source>({
+                path: thread.transcript,
+                format: "codex",
+                parent: thread.parent,
+              }),
+        ),
+      );
+    }),
   request: (ctx, requestId) =>
     Effect.gen(function* () {
-      // Connecting, binding the thread and listing what it already has all happen
-      // before the request itself, so their failures are requests that never left.
-      // `startCompaction`'s is not: its socket can close after the server took the
-      // frame, and the thread may be compacting on the strength of it.
+      // WARNING: only startCompaction's failure may have reached the server; the steps before it are requests that never left.
       const url = yield* codexAt(ctx);
       yield* withCodex(url, (client) =>
         Effect.gen(function* () {
@@ -1687,9 +1617,7 @@ export const codexPort = (server: string): CompactionPort => ({
               message: `${ctx.agent} has no Codex thread to compact`,
             });
           }
-          // The compactions this thread already has, recorded before the request is
-          // submitted. `thread/compact/start` carries no request id, so a compaction
-          // that was not there before is the only thing that can be this request's.
+          // WARNING: thread/compact/start carries no request id, so a compaction that was not there before is the only candidate for this request.
           const before = yield* compactionItems(client, threadId);
           yield* writeEvent(ctx.dir, {
             session: threadId,
@@ -1700,7 +1628,6 @@ export const codexPort = (server: string): CompactionPort => ({
           yield* submitting(startCompaction(client, threadId));
         }),
       );
-      // Its own socket, not the human's channel: no submission for herdr to have seen.
       return null;
     }).pipe(beforeSubmitting),
   poll: (ctx, requestId) =>
@@ -1710,19 +1637,22 @@ export const codexPort = (server: string): CompactionPort => ({
       const started = Option.getOrUndefined(
         Arr.findFirst(events, (event) => event.kind === "start" && event.request === requestId),
       );
-      // Nothing was recorded as submitted, so nothing here can have completed it.
-      if (!started?.session) return null;
+      if (!started?.session) {
+        return null;
+      }
       const threadId = started.session;
       const before = new Set(started.items ?? []);
       return yield* withCodex(url, (client) =>
         Effect.gen(function* () {
           const now = yield* compactionItems(client, threadId);
           const mine = Option.getOrUndefined(Arr.findFirst(now, (item) => !before.has(item.id)));
-          if (!mine) return null;
-          // A compaction runs as a turn of its own, so the turn's own status is the
-          // protocol's terminal answer rather than an inference from idleness.
+          if (!mine) {
+            return null;
+          }
           const outcome = yield* turnOutcome(client, threadId, mine.turnId);
-          if (outcome.kind === "running") return null;
+          if (outcome.kind === "running") {
+            return null;
+          }
           return outcome.kind === "completed"
             ? ({ kind: "success" } as const)
             : ({ kind: "failure", reason: outcome.reason } as const);
@@ -1731,18 +1661,9 @@ export const codexPort = (server: string): CompactionPort => ({
     }),
 });
 
-/**
- * The ordinary OpenCode TUI, hosting its own loopback server on a port Collie picked.
- * That is the whole of the integration: no second process, and the endpoint lives
- * exactly as long as the agent does, because the agent is the process serving it.
- *
- * Collie has to pick the port. `--port 0` lets OpenCode choose, but the TUI prints it
- * nowhere Collie can read, and `opencode serve` + `attach` — which does print it —
- * refuses `--model` and `--auto`, so a Collie-launched agent would lose its model and
- * its unattended switch. A port claimed and released a moment earlier is a small race
- * that a launch fails loudly on; a launch that silently drops the model is not.
- */
+// WARNING: Collie picks the port: --port 0 prints it nowhere readable, and serve + attach refuses --model and --auto.
 const OPENCODE_LOG = "server.log";
+export const OPENCODE_USAGE = "opencode-usage.jsonl";
 const OPENCODE_LISTENING = /http:\/\/127\.0\.0\.1:\d+/;
 const OPENCODE_START_MS = 30_000;
 
@@ -1764,11 +1685,7 @@ const opencodeAt = (ctx: AgentContext) =>
       )
     : Effect.succeed(ctx.endpoint);
 
-/**
- * The session Collie created for this agent at launch, checked against its directory.
- * Read from the agent's own telemetry rather than from the server, because the server
- * cannot say which of a project's sessions is this agent's.
- */
+// WARNING: read from the agent's own telemetry, since the server cannot say which of a project's sessions is this agent's.
 const opencodeBound = Effect.fn("Compactors.opencodeBound")(function* (
   ctx: LaunchContext,
   base: string,
@@ -1783,24 +1700,11 @@ const opencodeBound = Effect.fn("Compactors.opencodeBound")(function* (
   return bound;
 });
 
-/**
- * The launch: a port, a session created on a server that lives just long enough to
- * make it, or the one an agent started again had, and the ordinary TUI told to host that
- * port and continue that session.
- *
- * The temporary server is what buys exact identity. `opencode --port N` makes the TUI
- * its own server, so there is nothing to create a session on before it starts — and
- * `serve` + `attach`, which would let Collie own the server for the agent's whole
- * life, refuses `--model` and `--auto` and would cost a Collie-launched agent its
- * model and its unattended switch.
- */
 const opencodeLaunch = Effect.fn("Compactors.opencodeLaunch")(function* (ctx: LaunchContext) {
   const path = yield* Path.Path;
   const port = yield* openPort();
   const base = `http://127.0.0.1:${port}`;
-  // This server exists only to make the session, so it is stopped the moment it has —
-  // including when creating the session fails, because the agent's own TUI is about to
-  // want this port back.
+  // WARNING: the temporary server is stopped as soon as the session exists, even when creating it fails, since the TUI wants the port back.
   const created = Effect.gen(function* () {
     const served = yield* servedEndpoint({
       cwd: ctx.cwd,
@@ -1815,8 +1719,7 @@ const opencodeLaunch = Effect.fn("Compactors.opencodeLaunch")(function* (ctx: La
   });
   const session = ctx.session ?? (yield* created);
 
-  // Recorded before the agent starts, so the very first boundary reads the session
-  // Collie made rather than guessing among the project's.
+  // WARNING: recorded before the agent starts, so the first boundary reads the session Collie made.
   yield* writeEvent(ctx.dir, { session, kind: "session" });
   return {
     args: ["--hostname", "127.0.0.1", "--port", String(port), "--session", session],
@@ -1827,7 +1730,6 @@ const opencodeLaunch = Effect.fn("Compactors.opencodeLaunch")(function* (ctx: La
 const opencode: CompactionPort = {
   gate: gateVersion("opencode"),
   install: opencodeLaunch,
-  // The TUI is the server, so its answering for Collie's session is the TUI being up.
   ready: (ctx) =>
     ctx.endpoint === null
       ? Effect.succeed(false)
@@ -1835,6 +1737,12 @@ const opencode: CompactionPort = {
           Effect.as(true),
           Effect.orElseSucceed(() => false),
         ),
+  records: (ctx) =>
+    Path.Path.use((path) =>
+      Effect.succeed([
+        { path: path.join(ctx.dir, OPENCODE_USAGE), format: "opencode" as const, parent: null },
+      ]),
+    ),
   usage: (ctx) =>
     Effect.gen(function* () {
       const base = yield* opencodeAt(ctx);
@@ -1843,33 +1751,24 @@ const opencode: CompactionPort = {
     }),
   request: (ctx, requestId) =>
     Effect.gen(function* () {
-      // Everything up to `summarize` is preparation, so its failures are requests that
-      // never left. `summarize`'s own is not: its HTTP call times out on the client
-      // while the server's summarize loop keeps running.
+      // WARNING: everything up to summarize is preparation, so its failures are requests that never left; summarize's own is not.
       const base = yield* opencodeAt(ctx);
       const session = yield* opencodeBound(ctx, base);
       const all = yield* openCodeMessages(base, session);
       const model = sessionModel(all);
       if (model === null) {
-        // Nothing has run in this session, so it has no model to summarize in — and
-        // no context worth compacting either.
         return yield* new Unsubmitted({
           message: `${ctx.agent}'s OpenCode session has not settled on a model yet`,
         });
       }
-      // Which compactions the session already had, before the request. Summarizing
-      // carries no request id, so a compaction that was not there before is the only
-      // thing that can be this one.
       yield* writeEvent(ctx.dir, {
         session,
         kind: "start",
         request: requestId,
         items: compactionIds(all),
       });
-      // A 200 here is the handler's own `true` after its loop, which says nothing
-      // about what the loop did. The outcome is read back off the session.
+      // WARNING: a 200 is the handler's own true and says nothing about the loop; the outcome is read back off the session.
       yield* submitting(summarize(base, session, model));
-      // Its own HTTP call, not the human's channel: no submission for herdr to see.
       return null;
     }).pipe(beforeSubmitting),
   poll: (ctx, requestId) =>
@@ -1881,12 +1780,16 @@ const opencode: CompactionPort = {
           (event) => event.kind === "start" && event.request === requestId,
         ),
       );
-      if (!started?.session) return null;
+      if (!started?.session) {
+        return null;
+      }
       const state = compactionAfter(
         yield* openCodeMessages(base, started.session),
         new Set(started.items ?? []),
       );
-      if (state.kind === "none") return null;
+      if (state.kind === "none") {
+        return null;
+      }
       return state.kind === "done"
         ? ({ kind: "success" } as const)
         : ({ kind: "failure", reason: state.reason } as const);
@@ -1900,19 +1803,10 @@ export const COMPACTION_PORTS: CompactionPorts = {
   pi,
 };
 
-/**
- * Submissions this agent has taken that neither Collie nor Claude itself made. Claude's
- * `UserPromptSubmit` hook is the only place a submitted turn is visible, and what is left
- * is a human typing into that pane — which is the one thing automatic correction must
- * never fight.
- *
- * Counted rather than timestamped: the caller compares this against what it saw last
- * time, so a submission it has already turned into an override is not one again.
- */
+// WARNING: counted, not timestamped, so a submission already turned into an override is not counted again.
 export const externalSubmissions = (dir: string) =>
   Effect.map(externalSubmits(dir), (ats) => ats.length);
 
-/** When each of those submissions was made, in epoch ms. */
 export const externalSubmits = Effect.fn("Compactors.externalSubmits")(function* (dir: string) {
   return Arr.map(
     Arr.filter(
@@ -1923,7 +1817,6 @@ export const externalSubmits = Effect.fn("Compactors.externalSubmits")(function*
   );
 });
 
-/** Whether the submit hook recorded this delivery's token: the harness took that prompt. */
 export const submittedDelivery = Effect.fn("Compactors.submittedDelivery")(function* (
   dir: string,
   delivery: string,

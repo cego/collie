@@ -1,6 +1,3 @@
-// A check's processes, run by the host's adapter with real processes: what is left running,
-// by pid and start token, and what is recorded.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
@@ -31,8 +28,8 @@ import {
   hostCheckProcesses,
   KILL_CEILING,
   runningChecks,
-  type RunningCheck,
 } from "../src/check-processes";
+import type { RunningCheck } from "../src/check-processes";
 import {
   bindingsOf,
   commandOf,
@@ -41,13 +38,8 @@ import {
   startedOf,
   stillRunning,
 } from "../src/processes";
-import {
-  collect,
-  finishCheck,
-  readVerifications,
-  startCheck,
-  type Verification,
-} from "../src/verify";
+import { collect, finishCheck, readVerifications, startCheck } from "../src/verify";
+import type { Verification } from "../src/verify";
 import { RUNNING_CHECK, RunRecords } from "../src/run-records";
 import { runEffect } from "./support/effect";
 import { exec, startDetached } from "./support/command";
@@ -56,10 +48,8 @@ import { until } from "./support/host";
 const held = new URL("./fixtures/checks/held.sh", import.meta.url).pathname;
 const leaves = new URL("./fixtures/checks/leaves.sh", import.meta.url).pathname;
 const refuses = new URL("./fixtures/checks/refuses.sh", import.meta.url).pathname;
-// Its own, so no other file's checks, running beside these, are taken for leftovers.
 const installation = "check-processes-test-installation";
 
-/** A state directory, a directory the check notes its pids in, and the host's adapter. */
 const worldWith = (
   options: Partial<Omit<Parameters<typeof hostCheckProcesses>[0], "dir" | "installation">> = {},
   adapters: {
@@ -90,7 +80,6 @@ const world = worldWith();
 
 const check = { run: "run-1", name: "held", by: "collie" } as const;
 
-/** The check's leader and its `setsid` child once both have started, each with its start token. */
 const startedIn = (notes: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -130,7 +119,6 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* recorded).toEqual([]);
       }),
     ),
-  30_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -159,7 +147,6 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* readVerifications(evidence).pipe(Effect.orElseSucceed(() => []))).toEqual([]);
       }),
     ),
-  30_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -199,7 +186,6 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* readVerifications(evidence).pipe(Effect.orElseSucceed(() => []))).toEqual([]);
       }),
     ),
-  30_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -231,7 +217,6 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* recorded).toEqual([]);
       }),
     ),
-  30_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -261,13 +246,11 @@ test.skipIf(process.platform !== "linux")(
         const bound = yield* bindingsOf(ones[1]!.pid, [CHECK_INSTALLATION, CHECK_ID]);
         expect(bound?.[CHECK_ID]).toStartWith("run-1@");
 
-        // The host that adopted it died: the next one on the state directory ends it.
         yield* hostCheckProcesses({ dir: state, installation, sweep: true });
         expect(yield* noneRunning(ones)).toBe(true);
         expect(yield* recorded).toEqual([]);
       }).pipe(Effect.scoped),
     ),
-  30_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -312,10 +295,8 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* theirs.isRunning).toBe(true);
       }),
     ),
-  30_000,
 );
 
-/** The held check, left running by nobody, marked as check `id` of `installation`. */
 const leftBehind = (
   notes: string,
   marker: { readonly installation: string; readonly id: string },
@@ -369,10 +350,8 @@ test.skipIf(process.platform !== "linux")(
         yield* until(() => noneRunning(another), Boolean);
       }),
     ),
-  30_000,
 );
 
-/** This machine as macOS shows it: no `/proc`, and `ps -E` for a process's environment. */
 const withoutProc = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -385,7 +364,7 @@ const withoutProc = Effect.gen(function* () {
     readFileString: (path, encoding) =>
       hidden(path) ? fs.readFileString("/nonexistent/proc") : fs.readFileString(path, encoding),
   };
-  // procps spells macOS's `-E` as `e`.
+  // WARNING: procps spells macOS's -E as e.
   const macPs = ChildProcessSpawner.make((command) =>
     command._tag === "StandardCommand" && command.command === "ps" && command.args.includes("-E")
       ? spawner.spawn(
@@ -434,7 +413,6 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* checks.left).toEqual([]);
       }),
     ),
-  30_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -478,7 +456,6 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* posing.isRunning).toBe(true);
       }),
     ),
-  30_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -519,7 +496,6 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* checks.left).toEqual([]);
       }),
     ),
-  30_000,
 );
 
 interface Gate {
@@ -543,8 +519,9 @@ const gatedSpawn = Effect.gen(function* () {
             gate.armed === null ||
             command._tag !== "StandardCommand" ||
             !command.args.includes(gate.armed)
-          )
+          ) {
             return Effect.void;
+          }
           gate.armed = null;
           return Deferred.succeed(gate.reached, undefined).pipe(
             Effect.andThen(Deferred.await(gate.release)),
@@ -585,7 +562,6 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* recorded).toEqual([]);
       }),
     ),
-  30_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -605,7 +581,6 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* fs.exists(`${notes}/starts`)).toBe(false);
       }),
     ),
-  30_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -634,7 +609,6 @@ test.skipIf(process.platform !== "linux")(
         );
       }),
     ),
-  30_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -660,7 +634,6 @@ test.skipIf(process.platform !== "linux")(
         expect(Option.isSome(gone)).toBe(true);
       }),
     ),
-  30_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -672,7 +645,6 @@ test.skipIf(process.platform !== "linux")(
         const { notes, checks } = yield* worldWith({}, { spawner: gated });
         gate.armed = notes;
         yield* runHeld(checks, notes);
-        // Before the check's own finalizer, which waits for it.
         yield* Effect.addFinalizer(() => Deferred.succeed(gate.release, undefined));
         yield* Deferred.await(gate.reached);
 
@@ -685,7 +657,6 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* checks.endAll).toEqual([]);
       }),
     ),
-  30_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -707,7 +678,6 @@ test.skipIf(process.platform !== "linux")(
         );
         gate.armed = notes;
         yield* runHeld(checks, notes);
-        // Before the check's own finalizer, which waits for it.
         yield* Effect.addFinalizer(() => Deferred.succeed(gate.release, undefined));
         yield* Deferred.await(gate.reached);
         const ones = yield* startedIn(notes);
@@ -720,7 +690,6 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* Effect.forEach(another, stillRunning)).toEqual([true, true]);
       }),
     ),
-  30_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -733,7 +702,9 @@ test.skipIf(process.platform !== "linux")(
         const slow: FileSystem.FileSystem = {
           ...fs,
           readDirectory: (path, options) => {
-            if (!listing.armed || path !== "/proc") return fs.readDirectory(path, options);
+            if (!listing.armed || path !== "/proc") {
+              return fs.readDirectory(path, options);
+            }
             listing.armed = false;
             return Deferred.await(listing.release).pipe(
               Effect.andThen(fs.readDirectory(path, options)),
@@ -746,18 +717,16 @@ test.skipIf(process.platform !== "linux")(
         const ones = yield* startedIn(notes);
 
         listing.armed = true;
-        yield* endAllWithin(checks, Duration.millis(2_000), () => Effect.void);
+        yield* endAllWithin(checks, Duration.millis(2000), () => Effect.void);
         expect(yield* noneRunning(ones)).toBe(true);
       }),
     ),
-  30_000,
 );
 
-// Each look at /proc answering before the SIGKILL starts, and after it but before the grace ends.
 for (const { delay, grace } of [
   { delay: 200, grace: 500 },
-  { delay: 1_700, grace: 2_000 },
-])
+  { delay: 1700, grace: 2000 },
+]) {
   test.skipIf(process.platform !== "linux")(
     `a check's child that refuses SIGTERM is killed within a ${grace} ms grace, with each look at /proc ${delay} ms slow`,
     () =>
@@ -790,8 +759,8 @@ for (const { delay, grace } of [
           expect(yield* noneRunning(ones)).toBe(true);
         }),
       ),
-    30_000,
   );
+}
 
 test.skipIf(process.platform !== "linux")(
   "slow reads of unrelated processes do not leave a check's child alive after its host stops",
@@ -825,7 +794,6 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* noneRunning(ones)).toBe(true);
       }),
     ),
-  30_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -836,16 +804,19 @@ test.skipIf(process.platform !== "linux")(
         const fs = yield* FileSystem.FileSystem;
         let armed = false;
         let looks = 0;
-        // The first look starts the child after its snapshot; the SIGKILL's look outlasts the first.
         const slow: FileSystem.FileSystem = {
           ...fs,
           readDirectory: (path, options) => {
-            if (!armed || path !== "/proc") return fs.readDirectory(path, options);
+            if (!armed || path !== "/proc") {
+              return fs.readDirectory(path, options);
+            }
             const index = ++looks;
             return Effect.gen(function* () {
               const names = yield* fs.readDirectory(path, options);
-              if (index === 1) yield* fs.writeFileString(`${notes}/spawn`, "");
-              yield* Effect.sleep(Duration.millis(index === 1 ? 4_400 : index === 2 ? 700 : 1_300));
+              if (index === 1) {
+                yield* fs.writeFileString(`${notes}/spawn`, "");
+              }
+              yield* Effect.sleep(Duration.millis(index === 1 ? 4400 : index === 2 ? 700 : 1300));
               return names;
             });
           },
@@ -879,13 +850,11 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* noneRunning(yield* startedIn(notes))).toBe(true);
       }),
     ),
-  30_000,
 );
 
 const refusal = () => Object.assign(new Error("kill EPERM"), { code: "EPERM" });
 
-/** `/proc` as it shows one marked process `pid`, through `fs`, with its stat and environment as given. */
-const fakeProc = (
+const fakeProc: (
   fs: FileSystem.FileSystem,
   pid: number,
   show: {
@@ -893,7 +862,7 @@ const fakeProc = (
     readonly environ: () => string;
     readonly list?: Effect.Effect<void>;
   },
-): FileSystem.FileSystem => ({
+) => FileSystem.FileSystem = (fs, pid, show) => ({
   ...fs,
   exists: (path) => (path === "/proc/self/stat" ? Effect.succeed(true) : fs.exists(path)),
   readDirectory: (path, options) =>
@@ -929,7 +898,6 @@ test("a marked process whose pid is taken by another while it is looked at is ne
       const pid = 987_654;
       let replaced = false;
       const sent: Array<boolean> = [];
-      // Reading its start is where the marked process exits and an unmarked one takes its pid.
       const proc = fakeProc(fs, pid, {
         stat: () => {
           const line = statLine(pid, replaced ? "new-start" : "old-start");
@@ -948,40 +916,36 @@ test("a marked process whose pid is taken by another while it is looked at is ne
     }),
   ));
 
-test(
-  "ending a marked check waits two seconds for its SIGTERM by the clock, however slow each look",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const pid = 987_654;
-        let alive = true;
-        const sent: Array<NodeJS.Signals> = [];
-        const proc = fakeProc(fs, pid, {
-          stat: () => statLine(pid, "start"),
-          environ: () => (alive ? markers("run-1@1-check") : ""),
-          list: Effect.sleep("200 millis"),
-        });
+test("ending a marked check waits two seconds for its SIGTERM by the clock, however slow each look", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const pid = 987_654;
+      let alive = true;
+      const sent: Array<NodeJS.Signals> = [];
+      const proc = fakeProc(fs, pid, {
+        stat: () => statLine(pid, "start"),
+        environ: () => (alive ? markers("run-1@1-check") : ""),
+        list: Effect.sleep("200 millis"),
+      });
 
-        const began = yield* Clock.currentTimeMillis;
-        const gone = yield* endCheck(
-          { id: "run-1@1-check", leader: { pid, started: "", group: pid } },
-          installation,
-          (_target, name) => {
-            sent.push(name);
-            if (name === "SIGKILL") alive = false;
-          },
-        ).pipe(Effect.provideService(FileSystem.FileSystem, proc));
-        expect(gone).toBe(true);
-        expect(sent).toEqual(["SIGTERM", "SIGKILL"]);
-        // Two seconds after the SIGTERM, with a look before it and one after the SIGKILL.
-        expect((yield* Clock.currentTimeMillis) - began).toBeLessThan(3_200);
-      }),
-    ),
-  10_000,
-);
+      const began = yield* Clock.currentTimeMillis;
+      const gone = yield* endCheck(
+        { id: "run-1@1-check", leader: { pid, started: "", group: pid } },
+        installation,
+        (_target, name) => {
+          sent.push(name);
+          if (name === "SIGKILL") {
+            alive = false;
+          }
+        },
+      ).pipe(Effect.provideService(FileSystem.FileSystem, proc));
+      expect(gone).toBe(true);
+      expect(sent).toEqual(["SIGTERM", "SIGKILL"]);
+      expect((yield* Clock.currentTimeMillis) - began).toBeLessThan(3200);
+    }),
+  ));
 
-/** `endCheck` on a TestClock its sleeps advance: each look at `/proc` and signal, by when. */
 const endedOnClock = (look: (at: number, alive: { now: boolean }) => Effect.Effect<void>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -990,7 +954,7 @@ const endedOnClock = (look: (at: number, alive: { now: boolean }) => Effect.Effe
     const start = clock.currentTimeMillisUnsafe();
     const pid = 987_654;
     const alive = { now: true };
-    const said: string[] = [];
+    const said: Array<string> = [];
     const at = () => clock.currentTimeMillisUnsafe() - start;
     const proc = fakeProc(fs, pid, {
       stat: () => statLine(pid, "start"),
@@ -1043,90 +1007,80 @@ test("a look at a check still running when its SIGTERM's two seconds are up is w
     }),
   ));
 
-test(
-  "a check whose end is refused keeps its record, so it is still found as left",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const stored = new Map<string, string>();
-        const pid = 987_654;
-        const started = "Mon Oct 19 00:00:00 2026";
-        let refused = 0;
-        const noProc: FileSystem.FileSystem = {
-          ...fs,
-          exists: (path) =>
-            Effect.succeed(!pipe_(path, Str.startsWith("/proc")) && stored.has(path)),
-          readDirectory: (path) =>
-            Effect.succeed(
-              Arr.map(
-                Arr.filter([...stored.keys()], (one) => pipe_(one, Str.startsWith(`${path}/`))),
-                (one) => pipe_(one, Str.slice(path.length + 1)),
-              ),
+test("a check whose end is refused keeps its record, so it is still found as left", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stored = new Map<string, string>();
+      const pid = 987_654;
+      const started = "Mon Oct 19 00:00:00 2026";
+      let refused = 0;
+      const noProc: FileSystem.FileSystem = {
+        ...fs,
+        exists: (path) => Effect.succeed(!pipe_(path, Str.startsWith("/proc")) && stored.has(path)),
+        readDirectory: (path) =>
+          Effect.succeed(
+            Arr.map(
+              Arr.filter([...stored.keys()], (one) => pipe_(one, Str.startsWith(`${path}/`))),
+              (one) => pipe_(one, Str.slice(path.length + 1)),
             ),
-          makeDirectory: () => Effect.void,
-          writeFileString: (path, text) => Effect.sync(() => void stored.set(path, text)),
-          rename: (from, to) =>
-            Effect.sync(() => {
-              stored.set(to, stored.get(from) ?? "");
-              stored.delete(from);
-            }),
-          remove: (path) => Effect.sync(() => void stored.delete(path)),
-          readFileString: (path, encoding) =>
-            stored.has(path)
-              ? Effect.succeed(stored.get(path) ?? "")
-              : fs.readFileString(path, encoding),
-        };
-        // `ps` answers for one check that runs on, whatever it is sent.
-        const spawner = ChildProcessSpawner.make((command) => {
-          const ps = command._tag === "StandardCommand" && command.command === "ps";
-          const args = command._tag === "StandardCommand" ? command.args : [];
-          const text = args.includes("pgid=")
-            ? String(pid)
-            : args.includes("lstart=")
-              ? started
-              : `${pid} 1 S ${started} check`;
-          return Effect.succeed(
-            ChildProcessSpawner.makeHandle({
-              pid: ChildProcessSpawner.ProcessId(pid),
-              stdout: ps ? Stream.make(new TextEncoder().encode(text)) : Stream.empty,
-              stderr: Stream.empty,
-              all: Stream.empty,
-              exitCode: ps ? Effect.succeed(ChildProcessSpawner.ExitCode(0)) : Effect.never,
-              isRunning: Effect.succeed(true),
-              kill: () => Effect.void,
-              stdin: Sink.drain,
-              getInputFd: () => Sink.drain,
-              getOutputFd: () => Stream.empty,
-              unref: Effect.never,
-            }),
-          );
-        });
-        const checks = yield* hostCheckProcesses({
-          dir: "/state",
-          installation,
-          sweep: true,
-          kill: () => {
-            refused++;
-            throw refusal();
-          },
-        }).pipe(
-          Effect.provideService(FileSystem.FileSystem, noProc),
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          ),
+        makeDirectory: () => Effect.void,
+        writeFileString: (path, text) => Effect.sync(() => void stored.set(path, text)),
+        rename: (from, to) =>
+          Effect.sync(() => {
+            stored.set(to, stored.get(from) ?? "");
+            stored.delete(from);
+          }),
+        remove: (path) => Effect.sync(() => void stored.delete(path)),
+        readFileString: (path, encoding) =>
+          stored.has(path)
+            ? Effect.succeed(stored.get(path) ?? "")
+            : fs.readFileString(path, encoding),
+      };
+      const spawner = ChildProcessSpawner.make((command) => {
+        const ps = command._tag === "StandardCommand" && command.command === "ps";
+        const args = command._tag === "StandardCommand" ? command.args : [];
+        const text = args.includes("pgid=")
+          ? String(pid)
+          : args.includes("lstart=")
+            ? started
+            : `${pid} 1 S ${started} check`;
+        return Effect.succeed(
+          ChildProcessSpawner.makeHandle({
+            pid: ChildProcessSpawner.ProcessId(pid),
+            stdout: ps ? Stream.make(new TextEncoder().encode(text)) : Stream.empty,
+            stderr: Stream.empty,
+            all: Stream.empty,
+            exitCode: ps ? Effect.succeed(ChildProcessSpawner.ExitCode(0)) : Effect.never,
+            isRunning: Effect.succeed(true),
+            kill: () => Effect.void,
+            stdin: Sink.drain,
+            getInputFd: () => Sink.drain,
+            getOutputFd: () => Stream.empty,
+            unref: Effect.never,
+          }),
         );
+      });
+      const checks = yield* hostCheckProcesses({
+        dir: "/state",
+        installation,
+        sweep: true,
+        kill: () => {
+          refused++;
+          throw refusal();
+        },
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, noProc),
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
 
-        yield* Effect.scoped(checks.run(check, { executable: "check", argv: [], cwd: "/" }));
-        expect(refused).toBeGreaterThan(0);
-        expect(Arr.map(yield* checks.left, (one) => one.run)).toEqual([check.run]);
-      }),
-    ),
-  10_000,
-);
+      yield* Effect.scoped(checks.run(check, { executable: "check", argv: [], cwd: "/" }));
+      expect(refused).toBeGreaterThan(0);
+      expect(Arr.map(yield* checks.left, (one) => one.run)).toEqual([check.run]);
+    }),
+  ));
 
-/**
- * Check `held` of pass `gate` of run-1, left running and recorded by host 4242, for a kill
- * that signals nothing; let go and waited for once the test is done. Gives back its leader.
- */
 const survivingLeftover = (notes: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -1166,7 +1120,7 @@ test.skipIf(process.platform !== "linux")(
     runEffect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const events: string[] = [];
+        const events: Array<string> = [];
         const { notes, checks } = yield* worldWith({
           kill: (_target, name) => void events.push(`kill ${name}`),
         });
@@ -1195,7 +1149,6 @@ test.skipIf(process.platform !== "linux")(
         );
       }),
     ),
-  30_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -1205,7 +1158,7 @@ test.skipIf(process.platform !== "linux")(
       Effect.gen(function* () {
         const { root, notes, checks } = yield* worldWith({ kill: () => {} });
         const leader = yield* survivingLeftover(notes);
-        const said: string[] = [];
+        const said: Array<string> = [];
 
         const refused = yield* collect(
           `${root}/evidence`,
@@ -1228,7 +1181,6 @@ test.skipIf(process.platform !== "linux")(
         expect(said[0]).toContain(`(pid ${leader.pid})`);
       }),
     ),
-  30_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -1240,7 +1192,9 @@ test.skipIf(process.platform !== "linux")(
         let refusing = false;
         const { root, checks } = yield* worldWith({
           kill: (target, name) => {
-            if (refusing) throw refusal();
+            if (refusing) {
+              throw refusal();
+            }
             process.kill(target, name);
           },
         });
@@ -1250,7 +1204,6 @@ test.skipIf(process.platform !== "linux")(
           yield* runHeld(checks, dir);
           yield* startedIn(dir);
         }
-        // Before the checks' own finalizers, which would be refused too.
         yield* Effect.addFinalizer(() =>
           Effect.sync(() => (refusing = false)).pipe(
             Effect.andThen(Effect.forEach(dirs, (dir) => fs.writeFileString(`${dir}/release`, ""))),
@@ -1260,42 +1213,37 @@ test.skipIf(process.platform !== "linux")(
 
         refusing = true;
         expect(yield* checks.endAll).toHaveLength(3);
-        // Time passes only by its sleeps, so a slow look at /proc under load counts for nothing.
+        // WARNING: Time passes only by its sleeps, so a slow /proc look under load counts for nothing.
         const clock = yield* TestClock.make();
         const slept: Clock.Clock = { ...clock, sleep: (duration) => clock.adjust(duration) };
         const began = clock.currentTimeMillisUnsafe();
         yield* checks.killEnded.pipe(Effect.provideService(Clock.Clock, slept));
-        expect(clock.currentTimeMillisUnsafe() - began).toBeLessThan(2_000);
+        expect(clock.currentTimeMillisUnsafe() - began).toBeLessThan(2000);
       }),
     ),
-  30_000,
 );
 
-test(
-  "ending a host's checks is done by its kill ceiling past its grace, however long their kill takes",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const killing = yield* Deferred.make<void>();
-        const checks = {
-          ...(yield* CheckProcesses),
-          endAll: Effect.succeed([check]),
-          killEnded: Deferred.succeed(killing, undefined).pipe(Effect.andThen(Effect.never)),
-        };
+test("ending a host's checks is done by its kill ceiling past its grace, however long their kill takes", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const killing = yield* Deferred.make<void>();
+      const checks = {
+        ...(yield* CheckProcesses),
+        endAll: Effect.succeed([check]),
+        killEnded: Deferred.succeed(killing, undefined).pipe(Effect.andThen(Effect.never)),
+      };
 
-        const began = yield* Clock.currentTimeMillis;
-        const done = yield* endAllWithin(checks, Duration.millis(500), () => Effect.void).pipe(
-          Effect.timeoutOption("6 seconds"),
-        );
-        expect(Option.isSome(done)).toBe(true);
-        expect((yield* Clock.currentTimeMillis) - began).toBeLessThan(
-          500 + Duration.toMillis(KILL_CEILING) + 400,
-        );
-        expect(yield* Deferred.isDone(killing)).toBe(true);
-      }),
-    ),
-  10_000,
-);
+      const began = yield* Clock.currentTimeMillis;
+      const done = yield* endAllWithin(checks, Duration.millis(500), () => Effect.void).pipe(
+        Effect.timeoutOption("6 seconds"),
+      );
+      expect(Option.isSome(done)).toBe(true);
+      expect((yield* Clock.currentTimeMillis) - began).toBeLessThan(
+        500 + Duration.toMillis(KILL_CEILING) + 400,
+      );
+      expect(yield* Deferred.isDone(killing)).toBe(true);
+    }),
+  ));
 
 test("ending a host's checks waits past its grace for a kill still under way", () =>
   runEffect(
@@ -1312,7 +1260,7 @@ test("ending a host's checks waits past its grace for a kill still under way", (
       const began = yield* Clock.currentTimeMillis;
       yield* endAllWithin(checks, Duration.millis(500), () => Effect.void);
       expect(killed).toBe(true);
-      expect((yield* Clock.currentTimeMillis) - began).toBeLessThan(1_400 + 400);
+      expect((yield* Clock.currentTimeMillis) - began).toBeLessThan(1400 + 400);
     }),
   ));
 
@@ -1359,7 +1307,6 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* recorded).toEqual([]);
       }),
     ),
-  30_000,
 );
 
 const collected = (
@@ -1463,7 +1410,6 @@ setsid sh -c 'sleep 0.5; echo late' &`;
         expect(underSupervisor).toEqual(own);
       }),
     ),
-  30_000,
 );
 
 test("a background child that sent both its streams elsewhere holds back no check", () =>
@@ -1475,7 +1421,7 @@ test("a background child that sent both its streams elsewhere holds back no chec
         cwd: one.notes,
       });
       expect(kept.tail.stdout).toBe("done\n");
-      expect((yield* Clock.currentTimeMillis) - began).toBeLessThan(2_000);
+      expect((yield* Clock.currentTimeMillis) - began).toBeLessThan(2000);
     }),
   ));
 
@@ -1491,7 +1437,6 @@ test.skipIf(process.platform !== "linux")(
         expect(kept.tail.stdout).toBe("early\nlate\n");
       }),
     ),
-  30_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -1517,7 +1462,6 @@ while [ ! -f "$0" ]; do sleep 0.05; done`,
         expect(kept.result).toBe("unstable");
       }),
     ),
-  30_000,
 );
 
 test("what finishing a check needs is written before it is spawned", () =>
@@ -1532,16 +1476,16 @@ test("what finishing a check needs is written before it is spawned", () =>
     }),
   ));
 
-/** A check of a host whose output files are slow to write stdout, or cannot be written at all. */
 const storedOutput = (mode: "slow" | "unwritable", baseline = false) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const root = yield* fs.makeTempDirectoryScoped({ prefix: "collie-check-output-" });
-    if (baseline)
+    if (baseline) {
       yield* fs.writeFileString(
         `${root}/named.test.ts`,
         'import { test, expect } from "bun:test"; test("named", () => expect(1).toBe(2));',
       );
+    }
     const output = (path: string) =>
       pipe_(path, Str.endsWith(".stdout")) || pipe_(path, Str.endsWith(".stderr"));
     const refused = Effect.fail(
@@ -1640,20 +1584,20 @@ test("a supervisor whose exit status meets a full disk leaves no .new file, writ
             ? fs.writeFileString(path, "0").pipe(Effect.andThen(Effect.fail(fullDisk)))
             : fs.writeFile(path, data, options),
       };
-      const said: string[] = [];
-      const stderr = spyOn(process.stderr, "write").mockImplementation((chunk) => {
-        said.push(Buffer.from(chunk).toString());
-        return true;
-      });
+      const stderr = spyOn(process.stderr, "write");
       yield* supervise([outputs, "full", "", "sh", "-c", "echo out; echo err >&2"]).pipe(
         Effect.provideService(FileSystem.FileSystem, full),
-        Effect.ensuring(Effect.sync(() => stderr.mockRestore())),
       );
+      const said = Arr.join(
+        Arr.map(stderr.mock.calls, ([chunk]) => Buffer.from(chunk).toString()),
+        "",
+      );
+      stderr.mockRestore();
 
       expect(Arr.filter(yield* fs.readDirectory(outputs), Str.endsWith(".new"))).toEqual([]);
       expect(yield* fs.readFileString(`${outputs}/full.stdout`)).toBe("out\n");
       expect(yield* fs.readFileString(`${outputs}/full.stderr`)).toBe("err\n");
-      expect(Arr.join(said, "")).toContain(`collie: could not write ${outputs}/full.exit:`);
+      expect(said).toContain(`collie: could not write ${outputs}/full.exit:`);
     }),
   ));
 
@@ -1678,10 +1622,9 @@ test.skipIf(process.platform !== "linux")(
         expect(yield* evidenceOf(one.root)).toEqual([]);
       }),
     ),
-  30_000,
 );
 
-for (const stream of ["stdout", "stderr"] as const)
+for (const stream of ["stdout", "stderr"] as const) {
   test.skipIf(process.platform !== "linux")(
     `a supervised check whose ${stream} tail cannot be written gives no verdict, and nothing is recorded`,
     () =>
@@ -1701,8 +1644,8 @@ for (const stream of ["stdout", "stderr"] as const)
           expect(yield* evidenceOf(one.root)).toEqual([]);
         }),
       ),
-    30_000,
   );
+}
 
 test("a check whose Verification cannot be appended gives no verdict", () =>
   runEffect(
@@ -1722,5 +1665,105 @@ test("a check whose Verification cannot be appended gives no verdict", () =>
       expect(refused.why).toContain('"streams" gave no verdict');
       expect(refused.why).toContain("record");
       expect(refused.why).toContain("disk full");
+    }),
+  ));
+
+const heldTwice = (one: Effect.Success<typeof world>) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const repo = `${one.root}/repo`;
+    yield* fs.makeDirectory(repo);
+    for (const args of [
+      ["init", "-q"],
+      [
+        "-c",
+        "user.email=t@example.com",
+        "-c",
+        "user.name=t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "first",
+      ],
+    ]) {
+      yield* exec(["git", ...args], { cwd: repo });
+    }
+    const starts = `${one.notes}/starts`;
+    const go = `${one.notes}/go`;
+    const ask = (said: (line: string) => Effect.Effect<void> = () => Effect.void) =>
+      collect(
+        `${one.root}/evidence`,
+        {
+          ...check,
+          executable: "sh",
+          argv: ["-c", `echo started >> ${starts}; while [ ! -f ${go} ]; do sleep 0.02; done`],
+          cwd: repo,
+        },
+        { stdout: () => Effect.void, stderr: () => Effect.void, said },
+      ).pipe(Effect.provideService(CheckProcesses, one.checks));
+    const started = (count: number) =>
+      until(
+        () => fs.readFileString(starts).pipe(Effect.orElseSucceed(() => "")),
+        (text) => Arr.filter(Str.split(Str.trim(text), "\n"), Str.isNonEmpty).length >= count,
+      );
+    const lines = fs
+      .readFileString(starts)
+      .pipe(Effect.map((text) => Str.split(Str.trim(text), "\n").length));
+    return { ask, started, release: fs.writeFileString(go, ""), lines };
+  });
+
+test("two identical requests for a check while it runs start one process, and both get its record", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const held = yield* heldTwice(yield* world);
+      const first = yield* Effect.forkScoped(held.ask());
+      yield* held.started(1);
+      const waiting: Array<string> = [];
+      const second = yield* Effect.forkScoped(
+        held.ask((line) =>
+          Effect.sync(() => {
+            if (pipe_(line, Str.includes("already running"))) {
+              waiting.push(line);
+            }
+          }),
+        ),
+      );
+      yield* until(
+        () => Effect.map(held.lines, (lines) => lines + waiting.length),
+        (n) => n >= 2,
+      );
+      yield* held.release;
+      const [one, other] = [yield* Fiber.join(first), yield* Fiber.join(second)];
+      expect(yield* held.lines).toBe(1);
+      expect(other.id).toBe(one.id);
+      expect(one.answered).toEqual([{ by: "collie" }, { by: "collie" }]);
+    }),
+  ));
+
+test("two requests for a check that differ only in environment start two processes", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const held = yield* heldTwice(yield* world);
+      const first = yield* Effect.forkScoped(held.ask());
+      yield* held.started(1);
+      const before = Bun.env.NODE_OPTIONS;
+      Bun.env.NODE_OPTIONS = "--max-old-space-size=64";
+      const second = yield* Effect.forkScoped(held.ask());
+      yield* held.started(2).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (before === undefined) {
+              delete Bun.env.NODE_OPTIONS;
+            } else {
+              Bun.env.NODE_OPTIONS = before;
+            }
+          }),
+        ),
+      );
+      yield* held.release;
+      const [one, other] = [yield* Fiber.join(first), yield* Fiber.join(second)];
+      expect(yield* held.lines).toBe(2);
+      expect(other.environment).not.toBe(one.environment);
     }),
   ));

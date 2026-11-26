@@ -1,6 +1,3 @@
-// A record builds its Task's Flow on every change while it is open, so the Flow reads
-// only what its Task needs: a Run's deliveries only where it may be Reopened.
-
 import { expect, test } from "bun:test";
 import * as Arr from "effect/Array";
 import { Effect, FileSystem, Schema, Tracer } from "effect";
@@ -20,7 +17,7 @@ const spansOfFlow = (over: Partial<RunFacts>) =>
       const dir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({
         prefix: "collie-record-flow-",
       });
-      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" });
+      const env = readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" });
       const run = yield* madeRun(dir, { id: "r-build", task: "task-1", ...over });
       const names = new Set<string>();
       const tracer = Tracer.make({
@@ -53,7 +50,7 @@ test("a lane reads stop attribution only while its Run is stopped", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-flow-audit-" });
-      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" });
+      const env = readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" });
       const run = yield* madeRun(dir);
       yield* appendStepLine(run.dir, {
         kind: "enter",
@@ -83,7 +80,9 @@ test("a lane reads stop attribution only while its Run is stopped", () =>
           Effect.provideService(RunRecords, {
             ...records,
             lastOf: (some, journal, kinds) => {
-              if (some.includes(run.id) && journal === AUDIT_FILE) reads++;
+              if (some.includes(run.id) && journal === AUDIT_FILE) {
+                reads++;
+              }
               return records.lastOf(some, journal, kinds);
             },
           }),
@@ -101,12 +100,12 @@ test("two Tasks share one reading of the installation and step duration index", 
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-flow-inputs-" });
-      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" });
+      const env = readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" });
       const runs = [
         yield* madeRun(dir, { id: "first", task: "task-a", state: "running" }),
         yield* madeRun(dir, { id: "second", task: "task-b", state: "running" }),
       ];
-      const reads: string[] = [];
+      const reads: Array<string> = [];
       const records = yield* RunRecords;
       let sampled = 0;
       const views = yield* buildBoard({

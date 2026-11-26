@@ -39,6 +39,10 @@ are one implementer's work in order rather than one agent each. That is what the
 does and why the hand-off exists: the point is a fresh prompt per item on an agent that has
 the context, not parallelism.
 
+_Amended 2026-11-20:_ under `agent_sessions: ticket` or `round` a list is no longer one
+agent's: each later ticket runs on an agent of its own, handed the host's record of the work
+so far (ADR-draft-a-ticket-is-built-by-an-agent-of-its-own). `run`, the default, keeps D5.
+
 **D6. Skipping is the author's `continue`.** A skip records its reason through the host's
 own journal, opens no tab, starts no agent and writes no Output. Eligibility is decided
 before anything expensive, which is the only place where deciding it is free.

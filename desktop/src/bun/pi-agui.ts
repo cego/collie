@@ -5,6 +5,7 @@ import { Schema } from "effect";
 import { isString } from "../../../src/schema";
 import type { AguiEvent } from "../shared/agui";
 import type { TurnCost } from "./driver";
+import { stringifyJson } from "../../../src/json";
 
 const Text = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
 const Content = Schema.Array(Schema.Union([Text, Schema.Struct({ type: Schema.String })]));
@@ -106,7 +107,7 @@ export const piEvents = (thread: string) => {
   let message = 0;
   let error: string | undefined;
   let command = false;
-  let reported: string[] = [];
+  let reported: Array<string> = [];
   const tools = new Set<string>();
   let usage: TurnCost["usage"] = {
     input_tokens: 0,
@@ -116,8 +117,8 @@ export const piEvents = (thread: string) => {
   };
   const runId = () => `${thread}:${turn}`;
   const messageId = (index: number) => `${thread}:${message}:${index}`;
-  const tool = (id: string, name: string, args?: Schema.Json): AguiEvent[] => {
-    const events: AguiEvent[] = [];
+  const tool = (id: string, name: string, args?: Schema.Json) => {
+    const events: Array<AguiEvent> = [];
     if (!tools.has(id)) {
       tools.add(id);
       events.push({
@@ -127,20 +128,23 @@ export const piEvents = (thread: string) => {
         parentMessageId: `${thread}:${message}`,
       });
     }
-    if (args !== undefined)
+    if (args !== undefined) {
       events.push(
-        { type: "TOOL_CALL_ARGS", toolCallId: id, delta: JSON.stringify(args) },
+        { type: "TOOL_CALL_ARGS", toolCallId: id, delta: stringifyJson(args) },
         { type: "TOOL_CALL_END", toolCallId: id },
       );
+    }
     return events;
   };
-  const step = (record: PiRecord): ReadonlyArray<AguiEvent> => {
+  const step: (record: PiRecord) => ReadonlyArray<AguiEvent> = (record) => {
     switch (record.type) {
       case "agent_start":
-        // Pi may start another low-level run while recovering; it is still this message.
+        // WARNING: Pi may start another low-level run while recovering; it is still this message.
         return [];
       case "message_start":
-        if (record.message.role === "assistant") message++;
+        if (record.message.role === "assistant") {
+          message++;
+        }
         return [];
       case "message_update": {
         const event = record.assistantMessageEvent;
@@ -169,6 +173,7 @@ export const piEvents = (thread: string) => {
           case "toolcall_end":
             return tool(event.toolCall.id, event.toolCall.name, event.toolCall.arguments);
         }
+        return [];
       }
       case "tool_execution_start":
         return tools.has(record.toolCallId)
@@ -185,7 +190,9 @@ export const piEvents = (thread: string) => {
           },
         ];
       case "message_end": {
-        if (record.message.role !== "assistant") return [];
+        if (record.message.role !== "assistant") {
+          return [];
+        }
         const counts = record.message.usage;
         usage = {
           input_tokens: usage.input_tokens + (counts?.input ?? 0),
@@ -210,12 +217,18 @@ export const piEvents = (thread: string) => {
         ];
       }
       case "auto_retry_end":
-        if (!record.success) error = record.finalError;
+        if (!record.success) {
+          error = record.finalError;
+        }
         return [];
       case "response":
-        if (record.command !== "prompt") return [];
-        if (!record.success || record.data?.disposition === "handled") command = false;
-        if (!record.success)
+        if (record.command !== "prompt") {
+          return [];
+        }
+        if (!record.success || record.data?.disposition === "handled") {
+          command = false;
+        }
+        if (!record.success) {
           return [
             {
               type: "RUN_ERROR",
@@ -223,6 +236,7 @@ export const piEvents = (thread: string) => {
               message: record.error ?? "Pi refused the prompt.",
             },
           ];
+        }
         return record.data?.disposition === "handled"
           ? [{ type: "RUN_FINISHED", threadId: thread, runId: runId() }]
           : [];
@@ -234,8 +248,7 @@ export const piEvents = (thread: string) => {
     }
   };
   return {
-    /** A turn of one of Pi's own commands has Pi's notices as its reply. */
-    begin: (isCommand = false): AguiEvent => {
+    begin: (isCommand = false) => {
       turn++;
       command = isCommand;
       error = undefined;
@@ -246,11 +259,11 @@ export const piEvents = (thread: string) => {
         cache_read_input_tokens: 0,
         cache_creation_input_tokens: 0,
       };
-      return { type: "RUN_STARTED", threadId: thread, runId: runId() };
+      const returned: AguiEvent = { type: "RUN_STARTED", threadId: thread, runId: runId() };
+      return returned;
     },
     step,
     usage: () => ({ ...usage }),
-    /** What Pi noticed outside its commands since last asked, once. */
     reported: () => {
       const said = reported;
       reported = [];

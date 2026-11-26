@@ -1,7 +1,4 @@
-// What Collie may know about a process before it signals one: its command line, when it
-// started and which session it is in. A pid alone is not an identity — numbers come round
-// again — so nothing is signalled that these do not prove.
-
+// WARNING: a pid alone is not identity: numbers are reused, so only command, start and session together prove a process.
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Option from "effect/Option";
@@ -13,16 +10,14 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 export interface ProcessInfo {
   readonly pid: number;
   readonly command: string;
-  /** When it started, in a form only ever compared with itself on the same machine. */
   readonly started: string;
-  /** Its session id, where the platform says; null on one without `/proc`. */
   readonly session: number | null;
   readonly parent: number;
 }
 
 const PROC = "/proc";
 
-/** `/proc/<pid>/stat`'s fields after the command, which may itself hold spaces and parens. */
+// WARNING: the command may hold spaces and parens, so fields are read after its last paren.
 const statFields = (pid: number) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(`${PROC}/${pid}/stat`)),
@@ -40,7 +35,6 @@ const procStarted = (pid: number) =>
     Effect.orElseSucceed(() => null),
   );
 
-/** NUL-separated argv, which is not a string until the separators are. */
 const procCommand = (pid: number, proc: string) =>
   FileSystem.FileSystem.pipe(
     Effect.flatMap((fs) => fs.readFileString(`${proc}/${pid}/cmdline`)),
@@ -50,11 +44,13 @@ const procCommand = (pid: number, proc: string) =>
 const fromProc = (pid: number) =>
   Effect.gen(function* () {
     const fields = yield* statFields(pid);
-    // A zombie has exited: nothing of it can run or be stopped.
-    if (fields[0] === "Z") return null;
+    if (fields[0] === "Z") {
+      return null;
+    }
     const command = yield* procCommand(pid, PROC);
-    // Exiting: its memory, and with it its command line, is already gone.
-    if (command === "") return null;
+    if (command === "") {
+      return null;
+    }
     return {
       pid,
       command,
@@ -72,13 +68,14 @@ const readPs = (args: ReadonlyArray<string>) =>
     );
     const text = yield* Stream.mkString(Stream.decodeText(handle.stdout));
     const code = yield* handle.exitCode;
-    if (code !== 0)
+    if (code !== 0) {
       return yield* PlatformError.systemError({
         _tag: "Unknown",
         module: "ChildProcess",
         method: "ps",
         description: `ps exited ${code}; its process listing is unproved`,
       });
+    }
     return text;
   }).pipe(Effect.scoped);
 
@@ -86,8 +83,7 @@ const ps = (args: ReadonlyArray<string>) => readPs(args).pipe(Effect.orElseSucce
 
 const PS_COLUMNS = "pid=,ppid=,stat=,lstart=,command=";
 
-/** `pid ppid stat lstart…` rows, where `lstart` is five words; a zombie has exited, as in `proc`. */
-const psRows = (text: string): ProcessInfo[] =>
+const psRows = (text: string) =>
   Arr.map(
     Arr.filter(
       Arr.map(Str.split(text, "\n"), (line) => Str.split(Str.trim(line), /\s+/)),
@@ -102,55 +98,55 @@ const psRows = (text: string): ProcessInfo[] =>
     }),
   );
 
-/** Whether this platform says which session a process is in, so it can be read after its leader exits. */
 export const readsSessions = FileSystem.FileSystem.pipe(
   Effect.flatMap((fs) => fs.exists(`${PROC}/self/stat`)),
   Effect.orElseSucceed(() => false),
 );
 
-/** This process as it is now, or null where no such process is running. */
 export const processOf = Effect.fn("Processes.processOf")(function* (pid: number) {
-  if (yield* readsSessions) return yield* fromProc(pid).pipe(Effect.orElseSucceed(() => null));
+  if (yield* readsSessions) {
+    return yield* fromProc(pid).pipe(Effect.orElseSucceed(() => null));
+  }
   const [row] = psRows(yield* ps(["-ww", "-o", PS_COLUMNS, "-p", String(pid)]));
   return row ?? null;
 });
 
-/** Its command line, from `proc` or else `ps`; "" where neither can say. */
 export const commandOf = (pid: number, proc = PROC) =>
   procCommand(pid, proc).pipe(Effect.catch(() => ps(["-ww", "-o", "command=", "-p", String(pid)])));
 
-/** When it started, as a token only compared with itself; null where that cannot be read. */
 export const startedOf = Effect.fn("Processes.startedOf")(function* (pid: number) {
-  if (yield* readsSessions) return yield* procStarted(pid);
+  if (yield* readsSessions) {
+    return yield* procStarted(pid);
+  }
   return Str.trim(yield* ps(["-o", "lstart=", "-p", String(pid)])) || null;
 });
 
-/**
- * Every other process of `root`'s session, which is how a detached server's tool processes
- * are found after it has exited. Where the platform cannot read a session, `root`'s
- * descendants now, which have to be taken before it exits.
- */
+// WARNING: where the platform cannot read a session, descendants must be taken before the root exits.
 export const sessionOf = Effect.fn("Processes.sessionOf")(function* (root: number) {
   if (yield* readsSessions) {
     const fs = yield* FileSystem.FileSystem;
-    const found: ProcessInfo[] = [];
+    const found: Array<ProcessInfo> = [];
     for (const name of yield* fs.readDirectory(PROC)) {
       const pid = Number(name);
-      if (!Number.isInteger(pid) || pid === root) continue;
+      if (!Number.isInteger(pid) || pid === root) {
+        continue;
+      }
       const one = yield* Effect.gen(function* () {
         const fields = yield* statFields(pid);
-        // Do not read unrelated users' command lines: only this session can contain its tools.
-        if (fields[0] === "Z" || Number(fields[3]) !== root) return null;
+        if (fields[0] === "Z" || Number(fields[3]) !== root) {
+          return null;
+        }
         return yield* fromProc(pid);
       }).pipe(
         Effect.catchTag("PlatformError", (cause) =>
           processAbsent(pid).pipe(
-            // ESRCH independently proves a raced read was of an exiting process.
             Effect.flatMap((absent) => (absent ? Effect.succeed(null) : Effect.fail(cause))),
           ),
         ),
       );
-      if (one !== null && one.session === root) found.push(one);
+      if (one !== null && one.session === root) {
+        found.push(one);
+      }
     }
     return found;
   }
@@ -158,16 +154,16 @@ export const sessionOf = Effect.fn("Processes.sessionOf")(function* (root: numbe
   const tree = new Set([root]);
   for (let grew = true; grew;) {
     grew = false;
-    for (const one of all)
+    for (const one of all) {
       if (!tree.has(one.pid) && tree.has(one.parent)) {
         tree.add(one.pid);
         grew = true;
       }
+    }
   }
   return Arr.filter(all, (one) => one.pid !== root && tree.has(one.pid));
 });
 
-/** Its process group, from `proc` or else `ps`; null where it is not running. */
 export const groupOf = Effect.fn("Processes.groupOf")(function* (pid: number) {
   const group = (yield* readsSessions)
     ? yield* statFields(pid).pipe(
@@ -178,63 +174,64 @@ export const groupOf = Effect.fn("Processes.groupOf")(function* (pid: number) {
   return group === "" ? null : Number(group);
 });
 
-// The scan is traced once, avoiding a captured stack for every process it reads.
 const readBindings = Effect.fnUntraced(function* (pid: number, names: ReadonlyArray<string>) {
   const fs = yield* FileSystem.FileSystem;
   const environ = yield* fs
     .readFileString(`${PROC}/${pid}/environ`)
     .pipe(Effect.orElseSucceed(() => null));
-  // Empty while it is mid-exec or exiting, so it says nothing of what it binds.
-  if (environ === null || environ === "") return null;
+  if (environ === null || environ === "") {
+    return null;
+  }
   const found: Record<string, string> = {};
   for (const entry of Str.split(environ, "\0")) {
     const at = Option.getOrElse(pipe_(entry, Str.indexOf("=")), () => -1);
     const name = pipe_(entry, Str.slice(0, at));
-    if (at > 0 && names.includes(name)) found[name] = pipe_(entry, Str.slice(at + 1));
+    if (at > 0 && names.includes(name)) {
+      found[name] = pipe_(entry, Str.slice(at + 1));
+    }
   }
   return found;
 });
 
-/**
- * Which of `names` its environment binds, and to what; null where that cannot be read,
- * which proves nothing. Without `/proc` it is never read: `ps -E` runs the environment into
- * the arguments.
- */
+// WARNING: never read without /proc: ps -E puts the environment into the arguments.
 export const bindingsOf = Effect.fn("Processes.bindingsOf")(readBindings);
 
-/**
- * Every running process whose environment binds one of `names`, with what it binds and its
- * start, read before the bindings used as proof so a reused pid never passes for the bound one.
- */
+// WARNING: the start is read before the bindings, so a reused pid never passes as the bound one.
 export const boundProcesses = Effect.fn("Processes.boundProcesses")(function* (
   names: ReadonlyArray<string>,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  if (!(yield* readsSessions)) return [];
+  if (!(yield* readsSessions)) {
+    return [];
+  }
   const looked = yield* Effect.forEach(
     yield* fs.readDirectory(PROC).pipe(Effect.orElseSucceed(() => [])),
     (name) =>
       Effect.gen(function* () {
         const pid = Number(name);
-        if (!Number.isInteger(pid)) return null;
+        if (!Number.isInteger(pid)) {
+          return null;
+        }
         const candidate = yield* readBindings(pid, names);
-        if (candidate === null || Rec.keys(candidate).length === 0) return null;
+        if (candidate === null || Rec.keys(candidate).length === 0) {
+          return null;
+        }
         const started = yield* procStarted(pid);
-        if (started === null) return null;
+        if (started === null) {
+          return null;
+        }
         const bound = yield* readBindings(pid, names);
         return bound !== null && Rec.keys(bound).length > 0 ? { pid, started, bound } : null;
       }),
-    // One at a time, a busy machine's thousands of processes take seconds to read.
     { concurrency: 32 },
   );
   return Arr.filter(looked, (one) => one !== null);
 });
 
-/** Whether this process is still the one that was looked at. */
 export const stillRunning = (one: Pick<ProcessInfo, "pid" | "started">) =>
   processOf(one.pid).pipe(Effect.map((now) => now !== null && now.started === one.started));
 
-/** Only ESRCH proves absence; a failed process inspection or permission check does not. */
+// WARNING: only ESRCH proves absence; a failed inspection or permission check does not.
 export const processAbsent = (pid: number) =>
   Effect.sync(() => {
     try {
@@ -245,6 +242,6 @@ export const processAbsent = (pid: number) =>
     }
   });
 
-/** One SIGTERM. Never repeated and never SIGKILL: a forced end is not a stop anyone can vouch for. */
+// WARNING: one SIGTERM, never repeated or SIGKILL: a forced end cannot be vouched for.
 export const terminate = (pid: number) =>
   Effect.ignore(Effect.try(() => process.kill(pid, "SIGTERM")));

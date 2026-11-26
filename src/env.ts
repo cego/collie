@@ -3,125 +3,93 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
+import * as Path from "effect/Path";
 import type { Asker } from "./proposals";
-import { Config, Effect, Option, Schema } from "effect";
-
-// Plugin environment as herdr hands it to an action or pane entrypoint.
-// Names come from the herdr plugin runtime.
-
+import { Config, Effect, Option } from "effect";
 export const PLUGIN_ID = "cego.collie";
 
-export interface PluginContext {
-  workspace_id?: string;
-  workspace_cwd?: string;
-  workspace_label?: string;
-  tab_id?: string;
-  tab_label?: string;
-  focused_pane_id?: string;
-  focused_pane_cwd?: string;
-  invocation_source?: string;
-}
+const paths = Effect.runSync(Effect.provide(Path.Path, Path.layer));
 
 export interface PluginEnv {
   pluginRoot: string;
-  /** The human's home, where a harness keeps what it remembers between sessions. */
   home: string;
-  /** `COLLIE_DIR`, else `~/.collie`: `release/`, `user/` and `kept/`. */
   collieDir: string;
-  /**
-   * This person's own layer, which no upgrade writes: their `config.json`, `verify.json`,
-   * personas and workflows, in the same shape a project's `.collie/` has.
-   */
   userDir: string;
-  /** Where Claude Code's managed settings live: an organisation's, beyond any flag. */
   claudeManagedDir: string;
   stateDir: string;
-  binPath: string;
-  socketPath: string | null;
-  workspaceId: string | null;
-  tabId: string | null;
-  paneId: string | null;
-  actionId: string | null;
-  entrypointId: string | null;
-  /** The GitLab login a generated branch is namespaced under; null leaves it to glab. */
   gitlabLogin: string | null;
-  /** `GITHUB_ACTOR`: who a generated branch is namespaced under on GitHub. */
   githubLogin: string | null;
-  /** Directory the run should treat as the project. */
   cwd: string;
-  /** True when COLLIE_CWD named it: an explicit directory beats every inference. */
   cwdExplicit: boolean;
-  context: PluginContext;
   raw: Record<string, string>;
-  /** The paired Machine a command was pointed at with `--machine`, for one that names no Run. */
   machine?: string;
+  caller?: string | null;
+  asked?: string | null;
   hostStamp?: string;
   asker?: Asker;
-  /** A front door that can show an SSH login, which pairing on first reach needs. */
   pairs?: boolean;
 }
 
-function first(env: Record<string, string | undefined>, ...keys: string[]): string | null {
+function first(env: Record<string, string | undefined>, ...keys: Array<string>) {
   for (const k of keys) {
     const v = env[k];
-    if (v !== undefined && v !== "") return v;
+    if (v !== undefined && v !== "") {
+      return v;
+    }
   }
   return null;
 }
 
-/**
- * The installation the compiled runner was started from, so a `bin/collie` run from any
- * directory still finds its baseline and its own driver. Bun's single-file build runs its
- * sources from a virtual `/$bunfs/` path, and only then is `execPath` the runner itself
- * rather than `bun`, whose location says nothing about where the plugin is.
- */
+// WARNING: execPath is the runner itself only under Bun's /$bunfs/ single-file build; otherwise it is bun.
 export function ownRoot(
   modulePath: string = import.meta.path,
   execPath: string = process.execPath,
-): string | null {
-  if (!pipe(modulePath, Str.startsWith("/$bunfs/"))) return null;
+  collieDir: string | null = null,
+) {
+  if (!pipe(modulePath, Str.startsWith("/$bunfs/"))) {
+    return null;
+  }
   const at = Option.getOrElse(pipe(execPath, Str.lastIndexOf("/bin/")), () => -1);
-  return at > 0 ? pipe(execPath, Str.slice(0, at)) : null;
+  // WARNING: a downloaded runner upgrades the installation, never the caller's stale PWD.
+  return at > 0
+    ? pipe(execPath, Str.slice(0, at))
+    : collieDir === null
+      ? null
+      : `${collieDir}/release`;
 }
 
-/**
- * How this runner re-invokes itself, as argv. Same discriminator as `ownRoot`: only a
- * `/$bunfs/` module path means the single-file build is running, and `execPath` is then
- * the runner itself rather than the `bun` that is executing its sources.
- *
- * This is what a harness's own hook or status-line command is pointed at, so the
- * helpers a launch installs are the ones compiled into the binary that installed them.
- */
 export function selfCommand(
   modulePath: string = import.meta.path,
   execPath: string = process.execPath,
   script: string = Bun.argv[1] ?? "",
-): string[] {
+) {
   return pipe(modulePath, Str.startsWith("/$bunfs/")) ? [execPath] : [execPath, script];
 }
 
 export function readEnv(
   env: Readonly<Record<string, string | undefined>>,
-  installRoot: string | null = ownRoot(),
-): PluginEnv {
-  const context: PluginContext = Option.getOrElse(
-    Schema.decodeUnknownOption(PluginContextJson)(env.HERDR_PLUGIN_CONTEXT_JSON),
-    (): PluginContext => ({}),
-  );
-
+  installRoot: string | null = null,
+) {
   const home = env.HOME ?? "/tmp";
-  const pluginRoot = first(env, "HERDR_PLUGIN_ROOT") ?? installRoot ?? env.PWD ?? ".";
   const collieDir = first(env, "COLLIE_DIR") ?? `${home}/.collie`;
-  // `PWD` goes stale whenever something chdir'd; the real directory never does.
+  const pluginRoot =
+    first(env, "COLLIE_ROOT") ??
+    installRoot ??
+    ownRoot(import.meta.path, process.execPath, collieDir) ??
+    env.PWD ??
+    ".";
+  // WARNING: PWD goes stale after any chdir; the real directory never does.
   const explicitCwd = first(env, "COLLIE_CWD");
-  const cwd = explicitCwd ?? context.workspace_cwd ?? process.cwd();
+  const cwd = paths.resolve(explicitCwd ?? process.cwd());
 
   const raw: Record<string, string> = {};
   for (const [key, value] of Rec.toEntries(env)) {
-    if (value !== undefined) raw[key] = value;
+    if (value !== undefined) {
+      raw[key] = value;
+    }
   }
 
-  return {
+  const returned: PluginEnv = {
     pluginRoot,
     home,
     collieDir,
@@ -131,89 +99,46 @@ export function readEnv(
       (process.platform === "darwin"
         ? "/Library/Application Support/ClaudeCode"
         : "/etc/claude-code"),
-    stateDir:
-      first(env, "HERDR_PLUGIN_STATE_DIR") ?? `${home}/.local/state/herdr/plugins/${PLUGIN_ID}`,
-    binPath: first(env, "HERDR_BIN_PATH") ?? "herdr",
-    socketPath: first(env, "HERDR_SOCKET_PATH"),
-    workspaceId:
-      first(env, "HERDR_WORKSPACE_ID", "HERDR_ACTIVE_WORKSPACE_ID") ?? context.workspace_id ?? null,
-    tabId: first(env, "HERDR_TAB_ID", "HERDR_ACTIVE_TAB_ID") ?? context.tab_id ?? null,
-    paneId: first(env, "HERDR_PANE_ID", "HERDR_ACTIVE_PANE_ID") ?? context.focused_pane_id ?? null,
-    actionId: first(env, "HERDR_PLUGIN_ACTION_ID"),
-    entrypointId: first(env, "HERDR_PLUGIN_ENTRYPOINT_ID"),
+    stateDir: first(env, "COLLIE_STATE_DIR") ?? `${home}/.local/state/herdr/plugins/${PLUGIN_ID}`,
     gitlabLogin: first(env, "GITLAB_USER_LOGIN"),
     githubLogin: first(env, "GITHUB_ACTOR"),
     cwd,
     cwdExplicit: explicitCwd !== null,
-    context,
     raw,
   };
+  return returned;
 }
-
-const PluginContextJson = Schema.fromJsonString(
-  Schema.Struct({
-    workspace_id: Schema.optional(Schema.String),
-    workspace_cwd: Schema.optional(Schema.String),
-    workspace_label: Schema.optional(Schema.String),
-    tab_id: Schema.optional(Schema.String),
-    tab_label: Schema.optional(Schema.String),
-    focused_pane_id: Schema.optional(Schema.String),
-    focused_pane_cwd: Schema.optional(Schema.String),
-    invocation_source: Schema.optional(Schema.String),
-  }),
-);
 
 const environmentKeys = [
   "HOME",
   "PWD",
-  // Not herdr's, but the machine's: `doctor` answers "is it installed" by walking
-  // PATH, and "where would the shim be" from the directory the installer writes to.
   "PATH",
   "COLLIE_BIN_DIR",
   "COLLIE_CWD",
   "COLLIE_RUN",
   "COLLIE_AGENT",
+  "COLLIE_TOOLS_ROLE",
+  "COLLIE_OUTPUT_SUBMIT",
   "OPENCODE_CONFIG_CONTENT",
-  // Which environment file Helle's credentials are read from, for a machine that keeps
-  // them somewhere other than the MCP wrapper's default.
   "HELLE_ENV_FILE",
-  // Where Claude Code keeps its login and settings, where it is not `~/.claude`.
   "CLAUDE_CONFIG_DIR",
-  // A fake Helle, for tests only.
   "COLLIE_HELLE_URL",
-  // A fake proc directory to read memory from, for tests only.
   "COLLIE_PROC",
-  "HERDR_BIN_PATH",
-  "HERDR_SOCKET_PATH",
-  "HERDR_PLUGIN_ROOT",
+  "COLLIE_ROOT",
   "COLLIE_DIR",
-  // Where releases are published, for a mirror or a test's fake.
   "COLLIE_RELEASES",
   "COLLIE_USER_DIR",
   "COLLIE_CLAUDE_MANAGED_DIR",
-  "HERDR_PLUGIN_STATE_DIR",
-  "HERDR_PLUGIN_ACTION_ID",
-  "HERDR_PLUGIN_ENTRYPOINT_ID",
-  "HERDR_PLUGIN_CONTEXT_JSON",
-  "HERDR_WORKSPACE_ID",
-  "HERDR_ACTIVE_WORKSPACE_ID",
-  "HERDR_TAB_ID",
-  "HERDR_ACTIVE_TAB_ID",
-  "HERDR_PANE_ID",
-  "HERDR_ACTIVE_PANE_ID",
+  "COLLIE_STATE_DIR",
   "GITLAB_USER_LOGIN",
   "GITHUB_ACTOR",
-  // gitte's folder, which is the Projects root where `projects.root` names none.
   "GITTE_CWD",
-  // Where Desktop keeps its own on this computer, which cleanup reads.
   "XDG_DATA_HOME",
   "XDG_STATE_HOME",
-  // Which core this Machine's agents run on, as `hc` itself finds it.
   "HC_SOCKET",
   "HC_SESSION",
   "XDG_RUNTIME_DIR",
   "XDG_CONFIG_HOME",
-  // Where upstream's installer put hc.
   "HC_INSTALL_DIR",
 ] as const;
 
@@ -221,17 +146,16 @@ export const currentEnv = Effect.gen(function* () {
   const env: Record<string, string | undefined> = {};
   for (const key of environmentKeys) {
     const value = yield* Config.option(Config.String(key));
-    if (Option.isSome(value)) env[key] = value.value;
+    if (Option.isSome(value)) {
+      env[key] = value.value;
+    }
   }
   return readEnv(env);
 });
 
 const LAUNCHER_PRELOADS = new Set(["./libcef.so", "./libvk_swiftshader.so"]);
 
-/**
- * Removes Electrobun's launcher variables, preserving the user's surviving entries. Its
- * library paths are known only by Desktop's `bin`; without one they are kept.
- */
+// WARNING: library paths are known only from Desktop's bin; without one they are kept.
 export const withoutLauncher = (
   env: Readonly<Record<string, string | undefined>>,
   bin?: string,
@@ -252,18 +176,28 @@ export const withoutLauncher = (
     );
   const preload = without(LD_PRELOAD, (entry) => LAUNCHER_PRELOADS.has(entry));
   const libraries = without(LD_LIBRARY_PATH, (entry) => entry === bin);
-  if (preload !== "") kept.LD_PRELOAD = preload;
-  if (libraries !== "") kept.LD_LIBRARY_PATH = libraries;
-  if (ICU_DATA !== undefined && ICU_DATA !== "" && ICU_DATA !== bin) kept.ICU_DATA = ICU_DATA;
+  if (preload !== "") {
+    kept.LD_PRELOAD = preload;
+  }
+  if (libraries !== "") {
+    kept.LD_LIBRARY_PATH = libraries;
+  }
+  if (ICU_DATA !== undefined && ICU_DATA !== "" && ICU_DATA !== bin) {
+    kept.ICU_DATA = ICU_DATA;
+  }
   return kept;
 };
 
-/** Removes the launcher's variables from this process, so nothing it starts later is given them. */
+export const withoutHerdrOne = (env: Readonly<Record<string, string | undefined>>) =>
+  Rec.filter(env, (_, name) => !pipe(name, Str.startsWith("HERDR_")));
+
 export const leaveLauncher = () => {
-  // Children are given the process environment, not an Effect Config.
-  // oxlint-disable-next-line effecttsgo/process-env
   const env = process.env;
   const kept = withoutLauncher(env);
-  for (const name of Struct.keys(env)) if (!(name in kept)) delete env[name];
+  for (const name of Struct.keys(env)) {
+    if (!(name in kept)) {
+      delete env[name];
+    }
+  }
   Object.assign(env, kept);
 };

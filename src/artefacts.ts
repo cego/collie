@@ -1,5 +1,5 @@
+import type { Cause } from "effect";
 import {
-  Cause,
   Clock,
   Context,
   Data,
@@ -12,21 +12,16 @@ import {
   Semaphore,
   Schedule,
   Struct,
-  type Types,
 } from "effect";
+import type { Types } from "effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as SecureRandom from "effect/crypto/SecureRandom";
-import {
-  Artefact,
-  type ArtefactCollection,
-  type ArtefactMatches,
-  type ArtefactSearch,
-  RegisterArtefact,
-} from "./artefact-model";
+import { Artefact, RegisterArtefact } from "./artefact-model";
+import type { ArtefactCollection, ArtefactMatches, ArtefactSearch } from "./artefact-model";
 import { ATTACHMENT_BYTES, mediaTypeOf, sha256Hex } from "./attachments";
-import { HostRefused, PART_BYTES, RequestConflict, type RunFile } from "./board-model";
+import { HostRefused, PART_BYTES, RequestConflict } from "./board-model";
 import { AuditLine } from "./audit";
 import type { RunFacts } from "./runs";
 import { epochMs, isoAt, nowIso } from "./time";
@@ -54,7 +49,6 @@ const ASKED = Schema.fromJsonString(RegisterArtefact);
 const JSON_TEXT = Schema.fromJsonString(Schema.Json);
 const blob = (run: RunFacts, digest: string) => `${run.dir}/.artefacts/${digest}`;
 
-/** A verified provider read refused; each state stays distinct from the others and from "untracked". */
 export class ObservationFailed extends Data.TaggedError("ObservationFailed")<{
   readonly state: "unsupported" | "auth-expired" | "denied" | "missing";
   readonly reason: string;
@@ -70,7 +64,6 @@ export type ProviderReader = (resource: {
   readonly resource: string | null;
   readonly url: string | null;
 }) => Effect.Effect<ProviderRead, ObservationFailed>;
-/** Verified readers by provider name. None ships: without one a provider's updates are untracked. */
 export class ProviderReaders extends Context.Service<
   ProviderReaders,
   ReadonlyMap<string, ProviderReader>
@@ -80,48 +73,60 @@ const OBSERVATION_TIMEOUT = "4 seconds";
 const KIND = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
 const METADATA_BYTES = 16 * 1024;
+const hasControl = (text: string) => Arr.some(Str.split(text, ""), (char) => char < " ");
 const safeUrl = (url: string) =>
   url.length <= 8192 &&
-  !/[\s\x00-\x1f]/.test(url) &&
+  !/\s/.test(url) &&
+  !hasControl(url) &&
   URL.canParse(url) &&
   /^https?:$/.test(new URL(url).protocol) &&
   new URL(url).hostname !== "";
 const sourceDate = (at: string | undefined) =>
   at === undefined || !ISO.test(at) || Number.isNaN(epochMs(at)) ? undefined : isoAt(epochMs(at));
-/** Why `input` cannot be registered, checked before anything is read or written. */
-const invalid = (input: RegisterArtefact): string | undefined => {
+const invalid = (input: RegisterArtefact) => {
   const provider = input.provider;
   if (
     input.path === undefined &&
     input.url === undefined &&
     provider?.resource === undefined &&
     input.id === undefined
-  )
+  ) {
     return "Registration needs a path, a URL or a provider resource";
-  if (input.url !== undefined && !safeUrl(input.url))
+  }
+  if (input.url !== undefined && !safeUrl(input.url)) {
     return "A registered URL must be an http or https address without spaces or control characters";
-  if (input.kind !== undefined && !KIND.test(input.kind))
+  }
+  if (input.kind !== undefined && !KIND.test(input.kind)) {
     return "A kind is up to 128 letters, digits and . _ : / -";
-  if (provider !== undefined && !KIND.test(provider.name))
+  }
+  if (provider !== undefined && !KIND.test(provider.name)) {
     return "A provider name is up to 128 letters, digits and . _ : / -";
+  }
   if (
     Arr.some(
       [provider?.namespace, provider?.resource, provider?.version],
-      (one) => one !== undefined && (one.length > 512 || /[\x00-\x1f]/.test(one)),
+      (one) => one !== undefined && (one.length > 512 || hasControl(one)),
     )
-  )
+  ) {
     return "A provider namespace, resource or version is up to 512 printable characters";
-  if ((input.title?.length ?? 0) > 512 || (input.role?.length ?? 0) > 128)
+  }
+  if ((input.title?.length ?? 0) > 512 || (input.role?.length ?? 0) > 128) {
     return "The title or role is too long";
-  if ((input.description?.length ?? 0) > 4096) return "The description exceeds 4 KiB";
+  }
+  if ((input.description?.length ?? 0) > 4096) {
+    return "The description exceeds 4 KiB";
+  }
   if (
     input.metadata !== undefined &&
     new TextEncoder().encode(jsonText(input.metadata)).length > METADATA_BYTES
-  )
+  ) {
     return "Extension metadata exceeds 16 KiB";
-  for (const at of [input.created, input.updated])
-    if (at !== undefined && sourceDate(at) === undefined)
+  }
+  for (const at of [input.created, input.updated]) {
+    if (at !== undefined && sourceDate(at) === undefined) {
       return `"${at}" is not an ISO timestamp with a time zone`;
+    }
+  }
   return undefined;
 };
 const reported = (at: string | undefined) => {
@@ -129,7 +134,7 @@ const reported = (at: string | undefined) => {
   return iso === undefined ? undefined : { at: iso, provenance: "caller-reported" };
 };
 type SourceDate = Artefact["created"];
-/** A verified date stays; a report never stands in for one. */
+// WARNING: a verified date stays; a report never stands in for one.
 const dated = (prior: SourceDate, next: SourceDate) =>
   prior?.provenance === "provider-verified" ? prior : (next ?? prior ?? null);
 const isExternal = (item: Artefact) => item.url !== undefined || item.provider !== undefined;
@@ -156,13 +161,17 @@ const retain = Effect.fn("Artefacts.retain")(function* (
   const [base, real] = yield* Effect.all([fs.realPath(root), fs.realPath(source)]);
   const state = yield* fs.realPath(path.resolve(run.dir, "../.."));
   const uploaded = Str.startsWith(`${path.join(state, "uploads")}${path.sep}`)(real);
-  if (!Str.startsWith(`${base}${path.sep}`)(real))
+  if (!Str.startsWith(`${base}${path.sep}`)(real)) {
     return yield* refused("The source leaves its source directory");
+  }
   yield* fs.access(real, { readable: true });
   const before = yield* fs.stat(real);
-  if (before.type !== "File") return yield* refused("The source is not a regular file");
-  if (Number(before.size) > ATTACHMENT_BYTES)
+  if (before.type !== "File") {
+    return yield* refused("The source is not a regular file");
+  }
+  if (Number(before.size) > ATTACHMENT_BYTES) {
     return yield* refused("The source exceeds the 100 MiB file limit");
+  }
   const bytes = yield* fs.readFile(real);
   const other = yield* fs.readFile(real);
   const after = yield* fs.stat(real);
@@ -176,8 +185,9 @@ const retain = Effect.fn("Artefacts.retain")(function* (
     before.dev !== after.dev ||
     Option.getOrUndefined(before.ino) !== Option.getOrUndefined(after.ino) ||
     sha256Hex(bytes) !== sha256Hex(other)
-  )
+  ) {
     return yield* refused("The source changed while copying; refresh to retry");
+  }
   const digest = sha256Hex(bytes);
   const target = blob(run, digest);
   if (!(yield* fs.exists(target))) {
@@ -200,7 +210,6 @@ const retain = Effect.fn("Artefacts.retain")(function* (
   };
 });
 
-/** A stable copy of `source`, retried while it changes under the copy, within a bound. */
 const copied = Effect.fn("Artefacts.copied")(function* (run: RunFacts, source: string) {
   const path = yield* Path.Path;
   return yield* retain(run, source, path.dirname(source)).pipe(
@@ -237,12 +246,13 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const data = yield* encode(item);
           yield* sql`INSERT INTO collie_artefacts (run, id, origin, data) VALUES (${item.run}, ${item.id}, ${item.ref}, ${data}) ON CONFLICT(run, id) DO UPDATE SET origin = excluded.origin, data = excluded.data`;
-          if (item.digest !== "")
+          if (item.digest !== "") {
             yield* sql`INSERT OR IGNORE INTO collie_artefact_revisions (run, id, revision, digest, size) VALUES (${item.run}, ${item.id}, ${item.revision}, ${item.digest}, ${item.size})`;
+          }
         }),
       )
       .pipe(Effect.orDie);
-  /** An external entry's export failing leaves its hosted source's state alone. */
+  // WARNING: an external entry whose export fails leaves its hosted source's state alone.
   const failed = (prior: Artefact, error: CopyFailure) =>
     Effect.gen(function* () {
       const reason = reasonOf(error);
@@ -255,17 +265,22 @@ const make = Effect.gen(function* () {
       if (
         (prior.export?.availability ?? prior.sourceAvailability) !== availability ||
         prior.reason !== reason
-      )
+      ) {
         yield* notify(prior.run);
+      }
       return item;
     });
   const refreshCopy = Effect.fn("Artefacts.refreshCopy")(function* (
     run: RunFacts,
     prior: Artefact,
   ) {
-    if (prior.tracking !== "local") return prior;
+    if (prior.tracking !== "local") {
+      return prior;
+    }
     const result = yield* copied(run, prior.export?.source ?? prior.source).pipe(Effect.result);
-    if (result._tag === "Failure") return yield* failed(prior, result.failure);
+    if (result._tag === "Failure") {
+      return yield* failed(prior, result.failure);
+    }
     const at = yield* nowIso;
     const changed = result.success.digest !== prior.digest;
     const retained = Struct.omit(result.success, ["created", "updated"]);
@@ -285,18 +300,20 @@ const make = Effect.gen(function* () {
       detectedAt: changed ? at : prior.detectedAt,
     };
     yield* save(next);
-    if (changed || (prior.export?.availability ?? prior.sourceAvailability) !== "available")
+    if (changed || (prior.export?.availability ?? prior.sourceAvailability) !== "available") {
       yield* notify(run.id);
+    }
     return next;
   });
-  /** What a verified reader says of a provider resource; without a reader nothing is claimed. */
   const observe = Effect.fn("Artefacts.observe")(function* (prior: Artefact) {
     const provider = prior.provider;
     const reader =
       provider === undefined
         ? undefined
         : Option.getOrUndefined(yield* Effect.serviceOption(ProviderReaders))?.get(provider.name);
-    if (provider === undefined || reader === undefined) return prior;
+    if (provider === undefined || reader === undefined) {
+      return prior;
+    }
     const answer = yield* reader({
       namespace: provider.namespace,
       resource: provider.resource,
@@ -316,7 +333,9 @@ const make = Effect.gen(function* () {
             }),
       };
       yield* put(item).pipe(Effect.orDie);
-      if (item.sourceAvailability !== prior.sourceAvailability) yield* notify(prior.run);
+      if (item.sourceAvailability !== prior.sourceAvailability) {
+        yield* notify(prior.run);
+      }
       return item;
     }
     const read = answer.success;
@@ -344,7 +363,9 @@ const make = Effect.gen(function* () {
       detectedAt: changed ? at : prior.detectedAt,
     };
     yield* save(item);
-    if (changed || prior.sourceAvailability !== "available") yield* notify(prior.run);
+    if (changed || prior.sourceAvailability !== "available") {
+      yield* notify(prior.run);
+    }
     return item;
   });
   const refreshRegistered = (run: RunFacts, prior: Artefact) =>
@@ -358,17 +379,20 @@ const make = Effect.gen(function* () {
   ) {
     const path = yield* Path.Path;
     const wrong = invalid(input);
-    if (wrong !== undefined) return yield* refused(wrong);
+    if (wrong !== undefined) {
+      return yield* refused(wrong);
+    }
     if (
       input.path !== undefined &&
       (!path.isAbsolute(input.path) ||
         input.path.length > 8192 ||
         Arr.contains(Str.split(input.path, /[\\/]/), "..") ||
-        /[\x00-\x1f]/.test(input.path))
-    )
+        hasControl(input.path))
+    ) {
       return yield* refused(
         "Registration needs an absolute file path without traversal or control characters",
       );
+    }
     const asked = yield* Schema.encodeEffect(ASKED)(input).pipe(Effect.orDie);
     const receipt = (yield* sql<{
       asked: string;
@@ -377,17 +401,19 @@ const make = Effect.gen(function* () {
       Effect.orDie,
     ))[0];
     if (receipt !== undefined) {
-      if (receipt.asked !== asked)
+      if (receipt.asked !== asked) {
         return yield* new RequestConflict({
           request,
           reason: "This request registered different material",
         });
+      }
       return { item: yield* decode(receipt.data), fresh: false };
     }
     const items = yield* list(run.id);
     const named = Option.getOrUndefined(Arr.findFirst(items, (one) => one.id === input.id));
-    if (input.id !== undefined && named === undefined) return yield* refused("No such artefact");
-    // An update by id keeps each locator it does not replace.
+    if (input.id !== undefined && named === undefined) {
+      return yield* refused("No such artefact");
+    }
     const given = input.path ?? named?.export?.source;
     const file = given ?? (named === undefined || isExternal(named) ? undefined : named.source);
     const source = file === undefined ? undefined : path.normalize(file);
@@ -423,8 +449,9 @@ const make = Effect.gen(function* () {
             ? `url:${url}`
             : `registered:${source}`;
     const prior = named ?? Option.getOrUndefined(Arr.findFirst(items, (one) => one.ref === ref));
-    if (Arr.some(items, (one) => one.ref === ref && prior !== undefined && one.id !== prior.id))
+    if (Arr.some(items, (one) => one.ref === ref && prior !== undefined && one.id !== prior.id)) {
       return yield* refused("This source already belongs to another artefact");
+    }
     const observed =
       source === undefined
         ? undefined
@@ -473,11 +500,19 @@ const make = Effect.gen(function* () {
       registeredBy: prior?.registeredBy ?? actor,
     };
     const described: Fields<"description" | "metadata"> = {};
-    if (description !== undefined) described.description = description;
-    if (metadata !== undefined) described.metadata = metadata;
+    if (description !== undefined) {
+      described.description = description;
+    }
+    if (metadata !== undefined) {
+      described.metadata = metadata;
+    }
     const hosted: Fields<"url" | "provider" | "export" | "tracking"> = {};
-    if (url !== undefined) hosted.url = url;
-    if (provider !== undefined) hosted.provider = provider;
+    if (url !== undefined) {
+      hosted.url = url;
+    }
+    if (provider !== undefined) {
+      hosted.provider = provider;
+    }
     if (source !== undefined) {
       hosted.export =
         input.path === undefined && prior?.export !== undefined
@@ -586,15 +621,16 @@ const make = Effect.gen(function* () {
       }>`SELECT cursor FROM collie_artefact_index WHERE run = ${run.id}`.pipe(Effect.orDie))[0]
         ?.cursor ?? "";
     for (const [prefix, root, role] of [
-      // Sorted by prefix: the cursor compares whole refs.
+      // WARNING: sorted by prefix, since the cursor compares whole refs.
       ["attachment", `${run.dir}/attachments`, "input"],
       ["evidence", run.evidence, "evidence"],
       ["handoff", `${run.dir}/handoffs`, "handoff"],
       ["plan", `${run.dir}/plan`, "plan"],
     ] as const) {
       const listing = yield* fs.readDirectory(root, { recursive: true }).pipe(Effect.result);
-      if (listing._tag === "Failure" && listing.failure.reason._tag !== "NotFound")
+      if (listing._tag === "Failure" && listing.failure.reason._tag !== "NotFound") {
         return { items: yield* list(run.id) } satisfies ArtefactCollection;
+      }
       const names = listing._tag === "Success" ? listing.success : [];
       const known = Arr.map(
         Arr.filter(existing, (item) => Str.startsWith(`${prefix}:`)(item.ref)),
@@ -602,13 +638,17 @@ const make = Effect.gen(function* () {
       );
       for (const name of [...new Set([...names, ...known])].sort()) {
         const ref = `${prefix}:${name}`;
-        if (ref <= cursor) continue;
+        if (ref <= cursor) {
+          continue;
+        }
         if (remaining <= 0) {
           return { items: yield* list(run.id) } satisfies ArtefactCollection;
         }
         yield* Effect.gen(function* () {
           const prior = origins.get(ref);
-          if (prior?.tracking === "snapshot") return;
+          if (prior?.tracking === "snapshot") {
+            return;
+          }
           if (
             Arr.some(
               Str.split(name, /[\\/]/),
@@ -616,23 +656,29 @@ const make = Effect.gen(function* () {
                 Str.startsWith(".")(part) ||
                 /^(?:credentials?|secrets?|settings)(?:\.|$)/i.test(part),
             )
-          )
+          ) {
             return;
+          }
           if (
             prefix === "evidence" &&
             /(?:^|\/)(?:approved\.json|(?:verifications|metrics|measurements)\.jsonl)$/.test(name)
-          )
+          ) {
             return;
+          }
           const source = path.join(root, name);
           const observed = yield* Effect.gen(function* () {
             const [base, real] = yield* Effect.all([fs.realPath(root), fs.realPath(source)]);
-            if (!Str.startsWith(`${base}${path.sep}`)(real))
+            if (!Str.startsWith(`${base}${path.sep}`)(real)) {
               return yield* refused("The source leaves its Run collection");
+            }
             const before = yield* fs.stat(real);
-            if (before.type !== "File") return null;
+            if (before.type !== "File") {
+              return null;
+            }
             remaining -= 1;
-            if (Number(before.size) > ATTACHMENT_BYTES)
+            if (Number(before.size) > ATTACHMENT_BYTES) {
               return yield* refused("The source exceeds the 100 MiB file limit");
+            }
             const bytes = yield* fs.readFile(real);
             const after = yield* fs.stat(real);
             if (
@@ -640,11 +686,13 @@ const make = Effect.gen(function* () {
               before.size !== after.size ||
               Option.getOrUndefined(before.mtime)?.getTime() !==
                 Option.getOrUndefined(after.mtime)?.getTime()
-            )
+            ) {
               return yield* refused("The source changed while reading; refresh to retry");
+            }
             const digest = sha256Hex(bytes);
-            if (digest !== sha256Hex(yield* fs.readFile(real)))
+            if (digest !== sha256Hex(yield* fs.readFile(real))) {
               return yield* refused("The source changed while copying; refresh to retry");
+            }
             const target = blob(run, digest);
             if (!(yield* fs.exists(target))) {
               yield* fs.makeDirectory(`${run.dir}/.artefacts`, { recursive: true });
@@ -679,8 +727,9 @@ const make = Effect.gen(function* () {
               if (
                 prior.sourceAvailability !== item.sourceAvailability ||
                 prior.reason !== item.reason
-              )
+              ) {
                 yield* notify(run.id);
+              }
             }
             return;
           }
@@ -692,7 +741,9 @@ const make = Effect.gen(function* () {
                 sourceAvailability: "unsupported",
                 reason: "The source is no longer a regular file",
               }).pipe(Effect.orDie);
-              if (prior.sourceAvailability !== "unsupported") yield* notify(run.id);
+              if (prior.sourceAvailability !== "unsupported") {
+                yield* notify(run.id);
+              }
             }
             return;
           }
@@ -736,8 +787,9 @@ const make = Effect.gen(function* () {
             prior === undefined ||
             prior.digest !== digest ||
             prior.sourceAvailability !== "available"
-          )
+          ) {
             yield* notify(run.id);
+          }
         });
         yield* sql`INSERT INTO collie_artefact_index (run, cursor, done) VALUES (${run.id}, ${ref}, 0) ON CONFLICT(run) DO UPDATE SET cursor = excluded.cursor`.pipe(
           Effect.orDie,
@@ -757,7 +809,9 @@ const make = Effect.gen(function* () {
         const current = Option.getOrUndefined(
           Arr.findFirst(yield* list(run.id), (one) => one.id === item.id),
         );
-        if (current === undefined) return true;
+        if (current === undefined) {
+          return true;
+        }
         const next = yield* refreshRegistered(run, current);
         return (next.export?.availability ?? next.sourceAvailability) === "available";
       }),
@@ -781,15 +835,17 @@ const make = Effect.gen(function* () {
           observed: 0,
           check: reconciling.withPermit(reconcile(run, true)).pipe(Effect.as(true)),
         });
-        for (const item of yield* list(run.id))
-          if (item.tracking === "local" || item.provider !== undefined) jobs.push(job(run, item));
+        for (const item of yield* list(run.id)) {
+          if (item.tracking === "local" || item.provider !== undefined) {
+            jobs.push(job(run, item));
+          }
+        }
       }
       return jobs;
     });
   const pass = (runs: ReadonlyArray<RunFacts>) =>
     jobsFor(runs).pipe(Effect.flatMap(refreshing.pass));
   const schedule = (run: RunFacts) => jobsFor([run]).pipe(Effect.flatMap(refreshing.schedule));
-  /** A page of this host's catalogue, from its metadata alone; no file is read. */
   const search = Effect.fn("Artefacts.search")(function* (
     asked: ArtefactSearch,
     eligible: ReadonlyArray<string>,
@@ -862,15 +918,16 @@ const make = Effect.gen(function* () {
     id: string,
     revision: number,
     offset: number,
-  ): Effect.fn.Return<RunFile, HostRefused, FileSystem.FileSystem> {
+  ) {
     const fs = yield* FileSystem.FileSystem;
     if (
       !Number.isSafeInteger(revision) ||
       revision < 1 ||
       !Number.isSafeInteger(offset) ||
       offset < 0
-    )
+    ) {
       return yield* refused("Invalid artefact revision or offset");
+    }
     const rows = yield* sql<{
       digest: string;
       size: number;
@@ -878,7 +935,9 @@ const make = Effect.gen(function* () {
       Effect.orDie,
     );
     const row = rows[0];
-    if (row === undefined) return yield* refused("No retained artefact at that revision");
+    if (row === undefined) {
+      return yield* refused("No retained artefact at that revision");
+    }
     return yield* Effect.scoped(
       Effect.gen(function* () {
         const file = yield* fs.open(blob(run, row.digest), { flag: "r" });
@@ -912,22 +971,26 @@ const make = Effect.gen(function* () {
           }>`SELECT asked, data FROM collie_artefact_receipts WHERE run = ${run} AND request = ${request}`;
           const receipt = receipts[0];
           if (receipt !== undefined) {
-            if (receipt.asked !== asked)
+            if (receipt.asked !== asked) {
               return yield* new RequestConflict({
                 request,
                 reason: "This request already acknowledged a different artefact or revision",
               });
+            }
             return { item: yield* decode(receipt.data), fresh: false };
           }
           const item = Option.getOrUndefined(
             Arr.findFirst(yield* list(run), (one) => one.id === id),
           );
-          if (item === undefined) return yield* refused("No such artefact");
+          if (item === undefined) {
+            return yield* refused("No such artefact");
+          }
           if (
             revision !== null &&
             (!Number.isSafeInteger(revision) || revision < 1 || revision > item.revision)
-          )
+          ) {
             return yield* refused("No such artefact revision");
+          }
           const at = yield* nowIso;
           const next = {
             ...item,
@@ -948,15 +1011,18 @@ const make = Effect.gen(function* () {
         }),
       )
       .pipe(Effect.catchTag("SqlError", Effect.die));
-    if (answer.fresh) yield* notify(run);
+    if (answer.fresh) {
+      yield* notify(run);
+    }
     return answer;
   });
   let indexing = false;
   let indexedThrough = "";
-  /** Reaches a few Runs the catalogue has not yet, at most one round at a time. */
   const index = (runs: ReadonlyArray<RunFacts>) =>
     Effect.suspend(() => {
-      if (indexing) return Effect.void;
+      if (indexing) {
+        return Effect.void;
+      }
       indexing = true;
       return indexRound(runs).pipe(Effect.ensuring(Effect.sync(() => (indexing = false))));
     });

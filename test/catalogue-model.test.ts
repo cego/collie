@@ -1,5 +1,3 @@
-// Each harness's catalogue decoded from what it answered on vm-mk on 29 Oct 2026.
-
 import * as Arr from "effect/Array";
 import { describe, expect, test } from "bun:test";
 import { Option, Schema, flow, Result } from "effect";

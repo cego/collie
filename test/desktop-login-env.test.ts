@@ -1,10 +1,7 @@
-// What Desktop takes of the login shell's environment, and that every child it starts is given it.
-
 import * as Rec from "effect/Record";
 import { expect, test } from "bun:test";
 import { ConfigProvider, Effect, FileSystem } from "effect";
 import {
-  type AgentState,
   agentState,
   childEnv,
   localShell,
@@ -14,6 +11,7 @@ import {
   takesLoginAgent,
   which,
 } from "../desktop/src/bun/login-env";
+import type { AgentState } from "../desktop/src/bun/login-env";
 import { localRoute } from "../desktop/src/bun/machine";
 import { runEffect } from "./support/effect";
 
@@ -39,7 +37,6 @@ test("no markers, or an unclosed one, takes nothing", () => {
   expect(parseLoginEnv(`${BEGIN}A=1\0`).size).toBe(0);
 });
 
-/** Sets `name` in the environment until the scope closes. */
 const setFor = (name: string, value: string) =>
   Effect.acquireRelease(
     Effect.sync(() => {
@@ -49,8 +46,11 @@ const setFor = (name: string, value: string) =>
     }),
     (was) =>
       Effect.sync(() => {
-        if (was === undefined) delete Bun.env[name];
-        else Bun.env[name] = was;
+        if (was === undefined) {
+          delete Bun.env[name];
+        } else {
+          Bun.env[name] = was;
+        }
       }),
   );
 
@@ -81,6 +81,14 @@ test("a child has no launcher LD_PRELOAD or ld.so errors", () =>
       expect(out).toBe("unset");
       expect(err).toBe("");
       expect(yield* Effect.promise(() => child.exited)).toBe(0);
+    }),
+  ));
+
+test("a child inherits nothing of the retired Herdr runtime", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* setFor("HERDR_SOCKET_PATH", "/old/herdr.sock");
+      expect(childEnv().HERDR_SOCKET_PATH).toBeUndefined();
     }),
   ));
 
@@ -181,10 +189,8 @@ test("Desktop adopts the interactive PATH and preserves it in local scripts", ()
     }),
   ));
 
-const states =
-  (known: Record<string, AgentState>) =>
-  (socket: string): Effect.Effect<AgentState> =>
-    Effect.succeed(known[socket] ?? "gone");
+const states = (known: Record<string, AgentState>) => (socket: string) =>
+  Effect.succeed(known[socket] ?? "gone");
 
 test("the login shell's SSH agent is taken where it holds keys, or Desktop's holds none", () =>
   runEffect(
@@ -205,7 +211,6 @@ test("Desktop keeps its own SSH agent where the login shell's holds no keys and 
     Effect.gen(function* () {
       const takes = (login: AgentState, session: AgentState) =>
         takesLoginAgent("/session", "/login", states({ "/login": login, "/session": session }));
-      // keychain's agent before a terminal has asked for the passphrase, beside the desktop's.
       expect(yield* takes("empty", "holds")).toBe(false);
       expect(yield* takes("gone", "holds")).toBe(false);
       expect(yield* takes("gone", "empty")).toBe(false);
@@ -242,7 +247,6 @@ test("Desktop keeps its SSH agent over a login shell's that holds no keys", () =
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-agent-" });
-      // An ssh-add on PATH that finds keys only in the session's agent.
       yield* fs.writeFileString(
         `${dir}/ssh-add`,
         `#!/bin/sh\n[ "$SSH_AUTH_SOCK" = /session/agent ] && exit 0; exit 1\n`,

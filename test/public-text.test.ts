@@ -79,7 +79,9 @@ test.each([
 test("each leak is given once, with why it leaks", () => {
   const leaks = leaksIn("Ask this Run, then this Run again.");
   expect(Arr.map(leaks, (leak) => leak.phrase)).toEqual(["this Run"]);
-  for (const leak of leaks) expect(leak.reason).not.toBe("");
+  for (const leak of leaks) {
+    expect(leak.reason).not.toBe("");
+  }
 });
 
 test.each([
@@ -89,7 +91,7 @@ test.each([
   ["release's answers on GitHub", releaseOnGithub],
   ["tune-up's Linear issue", tuneUp],
 ])("%s states the Public text contract for what Collie does not carry", (_, prompt) => {
-  expect(pipe(prompt, Str.replace(/\s+/g, " "))).toContain(
+  expect(pipe(prompt, Str.replaceAll(/\s+/g, " "))).toContain(
     "Public text is what goes outside Collie in the human's name: a merge request note or reply, an issue or comment in another repository, a Slack message, a Linear issue. Write it as the human would for that repository's readers. It never names Collie, a Run, a step, an agent, a card or a `collie` command, and never holds anyone to a rule only Collie's process has.",
   );
 });

@@ -62,54 +62,50 @@ const opening = (mode: string, events: string) =>
     as,
   ]);
 
-test(
-  "startup identity: a malformed identity fails as one unreachable route and closes its bridges",
-  () =>
-    Effect.runPromise(
-      Effect.scoped(
+test("startup identity: a malformed identity fails as one unreachable route and closes its bridges", () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "collie-startup-identity-" });
+        const events = `${home}/events.jsonl`;
+        const result = yield* opening("malformed", events).pipe(Effect.exit);
+        expect(Exit.isFailure(result)).toBe(true);
+        if (Exit.isSuccess(result)) {
+          return;
+        }
+        expect(Option.getOrUndefined(Cause.findErrorOption(result.cause))).toMatchObject({
+          state: "unreachable",
+        });
+        yield* fixturesExited(events);
+      }),
+    ).pipe(Effect.provide(platformLayer)),
+  ));
+
+test("startup identity: a ready bridge whose host stays silent is bounded at five seconds and closed", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const liveClock = yield* Clock.Clock;
+      yield* Effect.scoped(
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const home = yield* fs.makeTempDirectoryScoped({ prefix: "collie-startup-identity-" });
           const events = `${home}/events.jsonl`;
-          const result = yield* opening("malformed", events).pipe(Effect.exit);
+          const pending = yield* opening("silent", events).pipe(Effect.exit, Effect.forkChild);
+          yield* identityWasAsked(events).pipe(Effect.provideService(Clock.Clock, liveClock));
+          expect(pending.pollUnsafe()).toBeUndefined();
+          yield* TestClock.adjust("5 seconds");
+          const result = yield* Fiber.join(pending);
           expect(Exit.isFailure(result)).toBe(true);
-          if (Exit.isSuccess(result)) return;
+          if (Exit.isSuccess(result)) {
+            return;
+          }
           expect(Option.getOrUndefined(Cause.findErrorOption(result.cause))).toMatchObject({
             state: "unreachable",
+            reason: "the host did not identify itself within 5 seconds",
           });
-          yield* fixturesExited(events);
+          yield* fixturesExited(events).pipe(Effect.provideService(Clock.Clock, liveClock));
         }),
-      ).pipe(Effect.provide(platformLayer)),
-    ),
-  10_000,
-);
-
-test(
-  "startup identity: a ready bridge whose host stays silent is bounded at five seconds and closed",
-  () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const liveClock = yield* Clock.Clock;
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const fs = yield* FileSystem.FileSystem;
-            const home = yield* fs.makeTempDirectoryScoped({ prefix: "collie-startup-identity-" });
-            const events = `${home}/events.jsonl`;
-            const pending = yield* opening("silent", events).pipe(Effect.exit, Effect.forkChild);
-            yield* identityWasAsked(events).pipe(Effect.provideService(Clock.Clock, liveClock));
-            expect(pending.pollUnsafe()).toBeUndefined();
-            yield* TestClock.adjust("5 seconds");
-            const result = yield* Fiber.join(pending);
-            expect(Exit.isFailure(result)).toBe(true);
-            if (Exit.isSuccess(result)) return;
-            expect(Option.getOrUndefined(Cause.findErrorOption(result.cause))).toMatchObject({
-              state: "unreachable",
-              reason: "the host did not identify itself within 5 seconds",
-            });
-            yield* fixturesExited(events).pipe(Effect.provideService(Clock.Clock, liveClock));
-          }),
-        ).pipe(Effect.provide(TestClock.layer()));
-      }).pipe(Effect.provide(platformLayer)),
-    ),
-  10_000,
-);
+      ).pipe(Effect.provide(TestClock.layer()));
+    }).pipe(Effect.provide(platformLayer)),
+  ));

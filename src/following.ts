@@ -1,14 +1,6 @@
-// What `collie run wait` stops at, and what `--follow` says changed, read from the Run's
-// view and its progress. Pure, so the wait and its tests decide the same way.
-
 import * as Arr from "effect/Array";
-import {
-  mrReadiness,
-  type ForgeChecks,
-  type ReadyToRelease,
-  type RunProgress,
-  type TaskMr,
-} from "./board-model";
+import { mrReadiness } from "./board-model";
+import type { ForgeChecks, ReadyToRelease, RunProgress, TaskMr } from "./board-model";
 import type { RunView } from "./engine";
 import { HOLD, STOP } from "./controls";
 import { isSetAside, isUnanswered } from "./store";
@@ -16,11 +8,8 @@ import { isSetAside, isUnanswered } from "./store";
 export const UNTILS = ["terminal", "attention", "ready", "needs-human"] as const;
 export type Until = (typeof UNTILS)[number];
 
-/**
- * Waiting on someone: a question, a hold or a stop, or a park its status may not show. A
- * superseded question keeps the workflow suspended while the agent works on the message.
- */
-export const atAttention = (view: RunView): boolean =>
+// WARNING: a superseded question keeps the workflow suspended while its agent works on the message.
+export const atAttention: (view: RunView) => boolean = (view) =>
   view.parked !== null ||
   (view.status.status === "suspended" &&
     (!Arr.some(view.waiting, (one) => isSetAside(view.waiting, one)) ||
@@ -28,7 +17,6 @@ export const atAttention = (view: RunView): boolean =>
       view.controls.includes(HOLD) ||
       view.controls.includes(STOP)));
 
-/** Whether the wait is over, or can only be over once a human acts (`stuck`). */
 export type Reached = "waiting" | "reached" | "stuck";
 
 export function reached(
@@ -36,15 +24,28 @@ export function reached(
   view: RunView,
   progress: RunProgress | null,
   settled: boolean,
-): Reached {
-  if (until === "terminal") return settled ? "reached" : "waiting";
-  if (until === "attention") return settled || atAttention(view) ? "reached" : "waiting";
-  if (progress === null) return "waiting";
+) {
+  if (until === "terminal") {
+    const returned: Reached = settled ? "reached" : "waiting";
+    return returned;
+  }
+  if (until === "attention") {
+    const returned: Reached = settled || atAttention(view) ? "reached" : "waiting";
+    return returned;
+  }
+  if (progress === null) {
+    const returned: Reached = "waiting";
+    return returned;
+  }
   const ready = progress.ready.ready;
   const human =
     atAttention(view) || (settled && Arr.every(progress.ready.missing, (one) => !one.settling));
-  if (until === "ready") return ready ? "reached" : human ? "stuck" : "waiting";
-  return ready || human ? "reached" : "waiting";
+  if (until === "ready") {
+    const returned: Reached = ready ? "reached" : human ? "stuck" : "waiting";
+    return returned;
+  }
+  const returned: Reached = ready || human ? "reached" : "waiting";
+  return returned;
 }
 
 export type FollowEvent =
@@ -57,7 +58,6 @@ export type FollowEvent =
     }
   | { readonly type: "parked"; readonly reason: string }
   | { readonly type: "awaiting"; readonly on: string; readonly who: string | null }
-  /** A merge request that opened, or with `state`, one that merged or closed. */
   | { readonly type: "mr"; readonly mr: string; readonly state?: "merged" | "closed" }
   | { readonly type: "ci"; readonly ci: ForgeChecks };
 
@@ -68,9 +68,8 @@ export interface Followed {
 
 const ciSaid = (ci: ForgeChecks) => (ci.state === "failed" ? `failed: ${ci.name}` : ci.state);
 
-/** What happened between two looks at a Run, oldest first. */
-export function followEvents(before: Followed, after: Followed): ReadonlyArray<FollowEvent> {
-  const events: FollowEvent[] = [];
+export function followEvents(before: Followed, after: Followed) {
+  const events: Array<FollowEvent> = [];
   if (after.progress !== null) {
     const was = new Map(Arr.map(before.progress?.steps ?? [], (step) => [step.operation, step]));
     const agents = new Set(Arr.map(before.progress?.steps ?? [], (step) => step.agent));
@@ -80,39 +79,48 @@ export function followEvents(before: Followed, after: Followed): ReadonlyArray<F
         agents.add(step.agent);
         events.push({ type: "agent", agent: step.agent, operation: step.operation });
       }
-      if (prior === undefined)
+      if (prior === undefined) {
         events.push({
           type: "operation",
           operation: step.operation,
           agent: step.agent,
           state: "started",
         });
-      if (step.done && prior?.done !== true)
+      }
+      if (step.done && prior?.done !== true) {
         events.push({
           type: "operation",
           operation: step.operation,
           agent: step.agent,
           state: "finished",
         });
+      }
     }
     const ci = after.progress.ci;
     const prior = before.progress?.ci ?? null;
-    if (ci !== null && (prior === null ? ci.state !== "none" : ciSaid(prior) !== ciSaid(ci)))
+    if (ci !== null && (prior === null ? ci.state !== "none" : ciSaid(prior) !== ciSaid(ci))) {
       events.push({ type: "ci", ci });
+    }
   }
   const parked = after.view?.parked ?? null;
-  if (parked !== null && parked !== (before.view?.parked ?? null))
+  if (parked !== null && parked !== (before.view?.parked ?? null)) {
     events.push({ type: "parked", reason: parked });
-  const awaiting = after.view?.awaiting ?? null;
-  if (awaiting !== null && awaiting.on !== before.view?.awaiting?.on)
-    events.push({ type: "awaiting", on: awaiting.on, who: awaiting.who });
-  const mrs = after.progress?.mrs;
-  if (mrs !== undefined) events.push(...mrEvents(before.progress?.mrs ?? [], mrs));
-  else {
-    const mr = after.view?.mr ?? null;
-    if (mr !== null && mr !== (before.view?.mr ?? null)) events.push({ type: "mr", mr });
   }
-  return events;
+  const awaiting = after.view?.awaiting ?? null;
+  if (awaiting !== null && awaiting.on !== before.view?.awaiting?.on) {
+    events.push({ type: "awaiting", on: awaiting.on, who: awaiting.who });
+  }
+  const mrs = after.progress?.mrs;
+  if (mrs !== undefined) {
+    events.push(...mrEvents(before.progress?.mrs ?? [], mrs));
+  } else {
+    const mr = after.view?.mr ?? null;
+    if (mr !== null && mr !== (before.view?.mr ?? null)) {
+      events.push({ type: "mr", mr });
+    }
+  }
+  const returned: ReadonlyArray<FollowEvent> = events;
+  return returned;
 }
 
 const MERGED: ReadonlySet<string> = new Set(["merged", "on-stage", "in-prod"]);
@@ -120,42 +128,48 @@ const MERGED: ReadonlySet<string> = new Set(["merged", "on-stage", "in-prod"]);
 const endOf = (state: TaskMr["state"]) =>
   state === null ? null : MERGED.has(state) ? "merged" : state === "closed" ? "closed" : null;
 
-/** Each merge request of a Task that appeared, merged or closed between two looks. */
-const mrEvents = (
+const mrEvents: (
   before: ReadonlyArray<TaskMr>,
   after: ReadonlyArray<TaskMr>,
-): ReadonlyArray<FollowEvent> => {
+) => ReadonlyArray<FollowEvent> = (before, after) => {
   const was = new Map(Arr.map(before, (one) => [one.id, one]));
-  return Arr.flatMap(after, (one): ReadonlyArray<FollowEvent> => {
+  return Arr.flatMap(after, (one) => {
     const prior = was.get(one.id);
-    if (prior === undefined) return [{ type: "mr", mr: one.mr }];
+    if (prior === undefined) {
+      const returned: ReadonlyArray<FollowEvent> = [{ type: "mr", mr: one.mr }];
+      return returned;
+    }
     const end = endOf(one.state);
-    return end !== null && end !== endOf(prior.state)
-      ? [{ type: "mr", mr: one.mr, state: end }]
-      : [];
+    const returned: ReadonlyArray<FollowEvent> =
+      end !== null && end !== endOf(prior.state) ? [{ type: "mr", mr: one.mr, state: end }] : [];
+    return returned;
   });
 };
 
-/** One event as `--follow` prints it without `--json`. */
-export function followLine(runId: string, event: FollowEvent): string {
+export function followLine(runId: string, event: FollowEvent) {
   switch (event.type) {
-    case "agent":
+    case "agent": {
       return `${runId}: agent ${event.agent} launched for ${event.operation}`;
-    case "operation":
+    }
+    case "operation": {
       return `${runId}: operation ${event.operation} ${event.state}`;
-    case "parked":
+    }
+    case "parked": {
       return `${runId}: parked: ${event.reason}`;
-    case "awaiting":
+    }
+    case "awaiting": {
       return `${runId}: Waiting for ${event.on}.`;
-    case "mr":
+    }
+    case "mr": {
       return `${runId}: merge request ${event.mr} ${event.state ?? "opened"}`;
-    case "ci":
+    }
+    case "ci": {
       return `${runId}: CI ${ciSaid(event.ci)}`;
+    }
   }
 }
 
-/** Ready to release as a human reads it: yes, or each missing fact and whether it may still come. */
-export const readyLines = (ready: ReadyToRelease): ReadonlyArray<string> =>
+export const readyLines: (ready: ReadyToRelease) => ReadonlyArray<string> = (ready) =>
   ready.ready
     ? ["Ready to release."]
     : [
@@ -166,8 +180,7 @@ export const readyLines = (ready: ReadyToRelease): ReadonlyArray<string> =>
         ),
       ];
 
-/** Ready to release for each of a Task's several merge requests; the Task's own where it has one. */
-export const progressReadyLines = (progress: RunProgress): ReadonlyArray<string> =>
+export const progressReadyLines: (progress: RunProgress) => ReadonlyArray<string> = (progress) =>
   progress.mrs !== undefined && progress.mrs.length > 1
     ? Arr.map(progress.mrs, (one) => `- ${one.short}: ${mrReadiness(one, progress.mrs!)}`)
     : readyLines(progress.ready);

@@ -1,5 +1,3 @@
-// What holds one Run up, read for that Run alone.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, Schema } from "effect";
@@ -15,7 +13,11 @@ import { runFacts } from "./support/records";
 
 const now = epochMs("2026-09-14T10:30:00Z");
 
-const proposal = (id: string, run: string, expires_at = "2026-09-14T11:00:00Z"): ProposalLine => ({
+const proposal: (id: string, run: string, expires_at?: string) => ProposalLine = (
+  id: string,
+  run: string,
+  expires_at = "2026-09-14T11:00:00Z",
+) => ({
   kind: "proposal",
   id,
   created_at: "2026-09-14T10:00:00Z",
@@ -67,7 +69,7 @@ test("a memory wait belongs only to the Run it is recorded over", () =>
 test("each Run's blocked agent is its own, never another Run's", () =>
   runEffect(
     Effect.gen(function* () {
-      const agents: BoardAgent[] = [
+      const agents: Array<BoardAgent> = [
         { name: "a-build", status: "working", now: null, run: "a" },
         { name: "b-review", status: "blocked", now: null, run: "b" },
         { name: "a-fix", status: "blocked", now: null, run: "a" },
@@ -170,7 +172,7 @@ test("a Run waiting with no question and no reason recorded is still parked", ()
 test("only a proposal on this Run that is unanswered and unexpired is pending on it", () =>
   runEffect(
     Effect.gen(function* () {
-      const lines: ProposalLine[] = [
+      const lines: Array<ProposalLine> = [
         proposal("p-mine", "r1"),
         proposal("p-other", "r2"),
         proposal("p-answered", "r1"),

@@ -1,8 +1,3 @@
-// The evaluator's value is entirely in what it refuses: no tools, no inherited settings,
-// a cost ceiling, a clock, and a closed schema at both ends. Those are the assertions
-// here — the argv exactly as it goes out, and what happens when the model answers with
-// something that is not the shape it was given.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -19,14 +14,14 @@ import {
   jsonSchemaFor,
   structuredFrom,
   validate,
-  type Proposal,
-  type Route,
-  type ValidationContext,
 } from "../src/evaluator";
+import type { Proposal, Route, ValidationContext } from "../src/evaluator";
 import { ActionSchema } from "../src/actions";
-import { DEFAULT_AUTHORITY, type Authority } from "../src/intent";
+import { DEFAULT_AUTHORITY } from "../src/intent";
+import type { Authority } from "../src/intent";
 import { runEffect } from "./support/effect";
 import { leaks } from "../tools/evaluator-probe";
+import { stringifyJson, parseJson } from "../src/json";
 
 const limits = {
   maxSeconds: 120,
@@ -40,12 +35,10 @@ test("the argv is the isolation, so it is asserted exactly", () => {
     "-p",
     "--output-format",
     "json",
-    // The schema text itself: the CLI parses this word as JSON, not as a path.
+    // WARNING: The CLI parses this word as JSON, not as a path.
     "--json-schema",
     '{"type":"object"}',
-    // Every one of these is load-bearing. Without `--tools ""` the model has tools;
-    // without the settings and MCP flags it inherits the human's hooks and servers. No
-    // spending flag: what a call costs is recorded, never capped.
+    // WARNING: Load-bearing flags: --tools "" removes the model's tools; the settings and MCP flags drop inherited hooks and servers. No spend cap, by design.
     "--tools",
     "",
     "--restricted",
@@ -72,7 +65,6 @@ test("a CLI missing any of those flags is not one Collie will call", () =>
       };
       expect(yield* flagsPresent(deps)).toEqual([]);
 
-      // claude 2.1.268 folds the file spelling into one row, and takes both.
       const folded = {
         ...deps,
         help: Effect.succeed(
@@ -99,7 +91,6 @@ test("a CLI missing any of those flags is not one Collie will call", () =>
 test("a CLI whose --help fails is unavailable in its own words, not missing every flag", () =>
   runEffect(
     Effect.gen(function* () {
-      // What claude says when the directory it was started in has been deleted.
       const deleted = yield* helpOf([
         "/bin/sh",
         "-c",
@@ -123,24 +114,21 @@ test("a CLI whose --help fails is unavailable in its own words, not missing ever
 
 test("the payload is found by what fits the schema, not by a field name", () => {
   const judgement = { reports: [] };
-  // Whatever the CLI calls its result field, and however deep it nests it.
-  expect(structuredFrom(JSON.stringify({ result: judgement }), JudgementSchema)).toEqual(judgement);
-  expect(structuredFrom(JSON.stringify({ data: { output: judgement } }), JudgementSchema)).toEqual(
+  expect(structuredFrom(stringifyJson({ result: judgement }), JudgementSchema)).toEqual(judgement);
+  expect(structuredFrom(stringifyJson({ data: { output: judgement } }), JudgementSchema)).toEqual(
     judgement,
   );
-  // Including when it hands the structured output back as a JSON string.
   expect(
-    structuredFrom(JSON.stringify({ content: JSON.stringify(judgement) }), JudgementSchema),
+    structuredFrom(stringifyJson({ content: stringifyJson(judgement) }), JudgementSchema),
   ).toEqual(judgement);
 
   expect(structuredFrom("not json at all", JudgementSchema)).toEqual({
     error: "the CLI did not print JSON",
   });
-  expect(structuredFrom(JSON.stringify({ result: "just prose" }), JudgementSchema)).toEqual({
+  expect(structuredFrom(stringifyJson({ result: "just prose" }), JudgementSchema)).toEqual({
     error: "nothing in the CLI's envelope matched the schema it was given",
   });
-  // An answer of the wrong kind is not this kind's answer.
-  expect(structuredFrom(JSON.stringify({ result: judgement }), ProposalSchema)).toMatchObject({
+  expect(structuredFrom(stringifyJson({ result: judgement }), ProposalSchema)).toMatchObject({
     error: expect.any(String),
   });
 });
@@ -168,10 +156,10 @@ test("every action the model may propose decodes, and nothing else does", () => 
     { kind: "ask_human", question: "which branch did you mean?" },
     { kind: "none", why: "nothing needs doing" },
   ];
-  for (const action of valid)
+  for (const action of valid) {
     expect([action.kind, decode(action)._tag]).toEqual([action.kind, "Some"]);
+  }
 
-  // There is no action that is "run this string", and a kind nobody defined is not one.
   expect(decode({ kind: "shell", command: "rm -rf /" })._tag).toBe("None");
   expect(decode({ kind: "deliver", run: "r1", agent: "a", text: "t", mode: "whenever" })._tag).toBe(
     "None",
@@ -181,14 +169,14 @@ test("every action the model may propose decodes, and nothing else does", () => 
 
 test("the schema handed to the model is real JSON Schema for each kind", () => {
   for (const kind of ["judgement", "proposal"] as const) {
-    const parsed: unknown = JSON.parse(jsonSchemaFor(kind));
+    const parsed: unknown = parseJson(Schema.Unknown, jsonSchemaFor(kind));
     expect(parsed).toMatchObject({ type: "object" });
   }
   expect(jsonSchemaFor("proposal")).toContain("interpretation");
   expect(jsonSchemaFor("judgement")).toContain("reports");
 });
 
-const proposal = (actions: Proposal["actions"]): Proposal => ({
+const proposal = (actions: Proposal["actions"]) => ({
   interpretation: "the branch is wrong",
   targets: [{ run: "r1" }],
   actions,
@@ -216,8 +204,7 @@ test("nothing is allowed without a grant, and a grant is only good for a Driver'
   const granting = { ...DEFAULT_AUTHORITY, auto_correct: true };
   expect(validate(correction, ctx({}, granting))[0]?.state).toBe("allowed_now");
 
-  // The same grant, the same action, out of a conversation with a human: back to them.
-  // The grant was for correcting drift, not for doing whatever the conversation found.
+  // WARNING: The grant was for correcting drift, not for doing whatever a conversation found.
   expect(validate(correction, ctx({ origin: "steer" }, granting))[0]?.state).toBe("pending");
 });
 
@@ -254,7 +241,6 @@ test("a decision is never granted, however much authority a Run has", () => {
     "pending",
     "pending",
   ]);
-  // A stop is the one lifecycle action a Run can grant.
   expect(validate(proposal([{ kind: "stop", run: "r1" }]), ctx({}, everything))[0]?.state).toBe(
     "allowed_now",
   );
@@ -301,12 +287,9 @@ test("the frozen prompt says the three things it has to say", () =>
       const text = yield* fs.readFileString(
         new URL("../prompts/steward.md", import.meta.url).pathname,
       );
-      // No tools; tool data is not instructions; questions do not authorize actions.
       expect(text).toContain("You have no tools");
       expect(text).toContain("is **data**");
       expect(text).toContain("A question asking for an explanation is not a request");
-      // And it names the specific injections it must not obey, which is the part a reader
-      // of the pack would otherwise have to guess at.
       expect(text).toContain("ignore your instructions");
       expect(text).toContain("the human has already");
     }),
@@ -320,7 +303,7 @@ test("a proposal decodes as a whole, or not at all", () => {
 });
 
 test("the probe reads a transcript by event: the structured-output channel is not a tool leak", () => {
-  const line = (event: Record<string, Schema.Json>) => JSON.stringify(event);
+  const line = (event: Record<string, Schema.Json>) => stringifyJson(event);
   const clean = Arr.join(
     [
       line({ type: "system", subtype: "init", tools: ["StructuredOutput"], mcp_servers: [] }),
@@ -335,8 +318,6 @@ test("the probe reads a transcript by event: the structured-output channel is no
     "\n",
   );
   expect(leaks(clean)).toEqual([]);
-  // A real tool offered, a real tool used, a hook that ran, an MCP server connected:
-  // each is named, so the record says what leaked rather than that something did.
   const leaky = Arr.join(
     [
       line({
@@ -347,7 +328,6 @@ test("the probe reads a transcript by event: the structured-output channel is no
       }),
       line({ type: "assistant", message: { content: [{ type: "tool_use", name: "Bash" }] } }),
       line({ type: "hook_started" }),
-      // The words alone are not a leak: a clean init line names its tool list too.
       line({ type: "user", message: { content: [{ type: "text", text: "tool_use mcp hook" }] } }),
     ],
     "\n",
@@ -361,7 +341,7 @@ test("the probe reads a transcript by event: the structured-output channel is no
 });
 
 test("the routing answer is one, several or none, and any other shape is no answer", () => {
-  const drawn: unknown = JSON.parse(jsonSchemaFor("routing"));
+  const drawn: unknown = parseJson(Schema.Unknown, jsonSchemaFor("routing"));
   expect(drawn).toMatchObject({ type: "object" });
   expect(jsonSchemaFor("routing")).toContain("several");
 
@@ -373,8 +353,9 @@ test("the routing answer is one, several or none, and any other shape is no answ
     { answer: "one", checkouts: ["/p/app"] },
     { answer: "several", checkouts: ["/p/app", "/p/api"] },
     { answer: "none", checkouts: [] },
-  ] satisfies ReadonlyArray<Route>)
+  ] satisfies ReadonlyArray<Route>) {
     expect(structuredFrom(envelope({ structured_output: answer }), RouteSchema)).toEqual(answer);
+  }
   expect(
     structuredFrom(
       envelope({ structured_output: { answer: "probably", checkouts: ["/p/app"] } }),

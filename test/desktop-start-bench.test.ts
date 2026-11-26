@@ -16,10 +16,7 @@ describe("the Desktop start harness", () => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const ps = yield* fs.readFileString(`${repo}test/fixtures/desktop-start/ps.txt`);
-        // Recorded on vm-mk under Xvfb: launcher 2032 + main 492772 + zygotes 71072 + 71076
-        // + GPU 120268 + network 105860 + storage 47120 + renderers 122384 + 153832 + 282296
-        // + 71896 KiB; three bridges and a doctor are Collie's.
-        expect(treeRssMib(ps, 2910617)).toBe(1504.5);
+        expect(treeRssMib(ps, 2_910_617)).toBe(1504.5);
       }),
     ));
 
@@ -29,7 +26,6 @@ describe("the Desktop start harness", () => {
         const fs = yield* FileSystem.FileSystem;
         const dir = yield* fs.makeTempDirectoryScoped();
         const app = `${dir}/app.ts`;
-        // Like Desktop: a child of its own, and its board drawn where Record timing is on.
         yield* fs.writeFileString(
           app,
           `import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
@@ -93,7 +89,6 @@ await child.exited;
             return false;
           }
         };
-        // A killed process takes a moment to be gone.
         const gone = yield* Effect.sync(alive).pipe(
           Effect.repeat({ until: (running) => !running, schedule: Schedule.spaced("50 millis") }),
           Effect.timeoutOption("2 seconds"),
@@ -161,7 +156,7 @@ process.exit(1);
       Effect.gen(function* () {
         const ran = yield* exec([process.execPath, `${repo}bench/desktop-start/run.ts`], {
           cwd: repo,
-          env: { ...Bun.env, HERDR_PLUGIN_STATE_DIR: world.state },
+          env: { ...Bun.env, COLLIE_STATE_DIR: world.state },
         });
         expect(ran.exitCode).toBe(2);
         expect(ran.stderr).toContain("is the user's own state directory");

@@ -1,8 +1,3 @@
-// The hc a placed release carries, put where upstream's installer puts it
-// (https://releases.herdr.dev/core/install.sh): `herdr-core` in `~/.local/bin`, with `hc`
-// beside it only where no `hc` exists. One already there older than the carried hc is swapped
-// with `hc update --from`, so its running terminals survive; one at or past it is left alone.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Effect, FileSystem, Option, Path } from "effect";
@@ -11,34 +6,29 @@ import { answered, onPath } from "./doctor-check";
 import type { Runner } from "./mr";
 
 const IDENTIFIER = String.raw`(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)`;
-/** semver.org's grammar, whole: major, minor, patch, optional prerelease and build. */
 const SEMVER = new RegExp(
   String.raw`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-${IDENTIFIER}(?:\.${IDENTIFIER})*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`,
 );
 
-/** The valid semantic version hc's `--version` output names as its first numeric word, or null. */
-export const hcVersion = (said: string): string | null => {
+export const hcVersion = (said: string) => {
   const word = Arr.findFirst(Str.split(said, /\s+/), (one) => /^\d/.test(one));
-  if (Option.isNone(word)) return null;
+  if (Option.isNone(word)) {
+    return null;
+  }
   const parts = SEMVER.exec(word.value);
   return parts !== null && Arr.every(parts.slice(1, 4), (n) => Number.isSafeInteger(Number(n)))
     ? word.value
     : null;
 };
 
-/**
- * Whether hc's `--version` output names a version at or above `min` by semver precedence,
- * so a prerelease is older than its release. Output naming none does not.
- */
-export const hcMeets = (said: string, min: string): boolean => {
+// WARNING: A prerelease is older than its release; output naming no version does not meet min.
+export const hcMeets = (said: string, min: string) => {
   const version = hcVersion(said);
   return version !== null && Bun.semver.order(version, min) >= 0;
 };
 
-/** Where a release keeps its hc archive, relative to the release. */
 export const BUNDLED_HC = "hc/herdr-core.tar.gz";
 
-/** Upstream's `HC_INSTALL_DIR`, else `~/.local/bin`. */
 export const hcInstallDir = (raw: Readonly<Record<string, string | undefined>>, home: string) =>
   raw.HC_INSTALL_DIR || `${home}/.local/bin`;
 
@@ -48,14 +38,9 @@ export interface HcStep {
   readonly detail: string;
 }
 
-/** The sha256 of the hc archive last installed or updated without a failure. */
 const PLACED_HC = "hc-placed.sha256";
 
-/**
- * Installs the hc that the release at `root` carries (`is`, its archive's sha256, `min` its
- * version), or swaps it in where the last one placed was another archive or failed to go in
- * and the installed hc is older than `min`. Null where the release carries no hc.
- */
+// WARNING: Swapped with `hc update --from`, not overwritten, so its running terminals survive.
 export const placeHc = Effect.fn("HcInstall.place")(function* (
   env: {
     readonly raw: Readonly<Record<string, string | undefined>>;
@@ -70,37 +55,43 @@ export const placeHc = Effect.fn("HcInstall.place")(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const archive = path.join(root, BUNDLED_HC);
-  if (is === null || !(yield* fs.exists(archive))) return null;
+  if (is === null || !(yield* fs.exists(archive))) {
+    return null;
+  }
   const bin = hcInstallDir(env.raw, env.home);
   const installed = path.join(bin, "herdr-core");
   const present = yield* fs.exists(installed);
   const record = path.join(env.collieDir, PLACED_HC);
   const placed = yield* fs.readFileString(record).pipe(Effect.orElseSucceed(() => ""));
-  if (present && Str.trim(placed) === is)
+  if (present && Str.trim(placed) === is) {
     return { step: "hc", state: "already in place", detail: installed } satisfies HcStep;
+  }
   if (present) {
     const said = (yield* answered(run(installed, ["--version"], root))).stdout;
-    if (hcMeets(said, min))
+    if (hcMeets(said, min)) {
       return {
         step: "hc",
         state: "already in place",
         detail: `${installed}, hc ${hcVersion(said)}, not older than the ${min} this release carries`,
       } satisfies HcStep;
+    }
   }
 
-  const failed = (detail: string): HcStep => ({ step: "hc", state: "failed", detail });
+  const failed = (detail: string) => ({ step: "hc", state: "failed", detail });
   const unpacked = yield* fs.makeTempDirectoryScoped({ prefix: "collie-hc-" });
   const untar = yield* run("tar", ["-xzf", archive, "-C", unpacked, "herdr-core"], root);
-  if (untar.code !== 0)
+  if (untar.code !== 0) {
     return failed(`could not unpack ${archive}: ${Str.trim(untar.stderr ?? "")}`);
+  }
   const carried = path.join(unpacked, "herdr-core");
 
   if (present) {
     const updated = yield* run(installed, ["update", "--from", carried], root);
-    if (updated.code !== 0)
+    if (updated.code !== 0) {
       return failed(
         `${installed} update --from the carried hc: ${Str.trim(updated.stderr ?? "") || Str.trim(updated.stdout) || `exit ${updated.code}`}`,
       );
+    }
     yield* fs.writeFileString(record, `${is}\n`);
     return { step: "hc", state: "done", detail: `updated ${installed}` } satisfies HcStep;
   }
@@ -115,7 +106,9 @@ export const placeHc = Effect.fn("HcInstall.place")(function* (
       Effect.as(true),
       Effect.catch(() => fs.exists(hc)),
     ));
-  if (!taken) yield* fs.symlink("herdr-core", hc);
+  if (!taken) {
+    yield* fs.symlink("herdr-core", hc);
+  }
   yield* fs.writeFileString(record, `${is}\n`);
   return { step: "hc", state: "done", detail: `installed ${installed}` } satisfies HcStep;
 }, Effect.scoped);

@@ -1,21 +1,4 @@
-// OpenCode's local server, as a client. The agent's own ordinary TUI hosts that server
-// on a loopback port Collie picked, so the endpoint lives exactly as long as the agent
-// does — the agent is the process serving it.
-//
-// Checked against the installed 1.18.9, and three of the checks decided the design:
-//
-//   - Its servers isolate nothing. Every one answers `GET /session` with every session
-//     in the project, and `/session/status` and `/api/session/active` are empty unless
-//     a session is mid-turn, so nothing here can say which of a project's sessions is
-//     this agent's. Collie creates the session itself and hands it over with
-//     `--session`; see `createSession`.
-//   - `serve` + `attach` would let Collie own the server for the agent's whole life,
-//     but `attach` takes neither `--model` nor `--auto`, and a Collie-launched agent
-//     may not lose its model or its unattended switch to buy a tidier topology.
-//   - The v2 `POST /api/session/{id}/compact` answers 503 "Session compact is not
-//     available yet" on this release. `POST /session/{id}/summarize` is the endpoint
-//     that works, and it needs the model to summarize with.
-
+// WARNING: OpenCode's servers isolate nothing, so Collie creates the session and hands it over with --session.
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -31,7 +14,6 @@ export class OpenCodeError extends Data.TaggedError("OpenCodeError")<{
 
 const failed = (message: string) => new OpenCodeError({ message });
 
-/** How long one request may take. Summarizing is a model call, so it is not short. */
 const READ_MS = 15_000;
 const SUMMARIZE_MS = 5 * 60 * 1000;
 
@@ -40,11 +22,6 @@ const Session = Schema.Struct({
   directory: Schema.optionalKey(Schema.String),
 });
 
-/**
- * One message as the server reports it. `tokens` carries the accounting OpenCode's own
- * overflow predicate reads, and `mode` is what tells a compaction's own message from
- * the agent's — the one thing that makes a pre-compaction sample recognisably stale.
- */
 const Message = Schema.Struct({
   info: Schema.Struct({
     id: Schema.String,
@@ -70,13 +47,8 @@ const Message = Schema.Struct({
 const Messages = Schema.Array(Message);
 export interface OpenCodeMessage extends Schema.Schema.Type<typeof Message> {}
 
-/** The mode of the assistant message a compaction writes for itself. */
 export const COMPACTION_MODE = "compaction";
 
-/**
- * One response body against its schema. `send` has already parsed the transport into
- * JSON; this is where that JSON becomes the domain values the rest of the file reads.
- */
 const decode = <S extends Schema.Top>(
   what: string,
   schema: S,
@@ -86,11 +58,7 @@ const decode = <S extends Schema.Top>(
     Effect.mapError((cause) => failed(`${what}: ${String(cause)}`)),
   );
 
-/**
- * One request, through Effect's own client. Non-2xx is a failure with the body in it:
- * a summarize that answered 503 is a request that did not happen, and a boundary has
- * to be able to say which of those it met.
- */
+// WARNING: non-2xx fails with the body: a summarize that answered 503 is a request that did not happen.
 const send = Effect.fn("OpenCode.send")(function* (
   what: string,
   request: HttpClientRequest.HttpClientRequest,
@@ -108,21 +76,13 @@ const send = Effect.fn("OpenCode.send")(function* (
     const body = yield* response.text.pipe(Effect.orElseSucceed(() => ""));
     return yield* failed(`${what} answered ${response.status}: ${pipe_(body, Str.slice(0, 200))}`);
   }
-  if (response.status === 204) return null;
+  if (response.status === 204) {
+    return null;
+  }
   return yield* response.json.pipe(Effect.mapError((cause) => failed(`${what}: ${reason(cause)}`)));
 }, Effect.provide(FetchHttpClient.layer));
 
-/**
- * Creates the session this agent will work in, and returns its id.
- *
- * Collie creates it rather than finding it, because on 1.18.9 there is nothing to find
- * it by. Every server answers `GET /session` with every session in the project — two
- * servers on two ports in one directory list the same set, and `/session/status` and
- * `/api/session/active` are empty unless a session is mid-turn. So a port isolates
- * nothing, and two agents in one directory could not be told apart from the API. A
- * session Collie made and recorded is unambiguous, and `--session` is what hands it to
- * the agent's own TUI.
- */
+// WARNING: created, not found: no server tells sessions apart by directory or port.
 export const createSession = Effect.fn("OpenCode.createSession")(function* (base: string) {
   const created = yield* decode(
     "POST /session",
@@ -135,10 +95,6 @@ export const createSession = Effect.fn("OpenCode.createSession")(function* (base
   return created.id;
 });
 
-/**
- * Checks that the recorded session is still there and still this agent's directory.
- * Cheap, and the difference between a stale record and a context Collie can vouch for.
- */
 export const sessionIsHere = Effect.fn("OpenCode.sessionIsHere")(function* (
   base: string,
   session: string,
@@ -155,7 +111,6 @@ export const sessionIsHere = Effect.fn("OpenCode.sessionIsHere")(function* (
   }
 });
 
-/** Every message on the bound session, oldest first, as the server orders them. */
 export const messages = Effect.fn("OpenCode.messages")(function* (base: string, session: string) {
   const what = `GET /session/${session}/message`;
   return yield* decode(
@@ -165,56 +120,43 @@ export const messages = Effect.fn("OpenCode.messages")(function* (base: string, 
   );
 });
 
-/**
- * The current context, by the accounting OpenCode's own overflow predicate uses:
- * `tokens.total` where the provider reported one, and otherwise input plus output plus
- * both cache components. `reasoning` is deliberately not added — the native predicate
- * does not add it, and this is meant to be the same number it compares.
- */
-export function contextTokens(message: OpenCodeMessage): number | null {
+// WARNING: reasoning tokens are left out on purpose, as OpenCode's own overflow predicate leaves them out.
+export function contextTokens(message: OpenCodeMessage) {
   const tokens = message.info.tokens;
-  if (!tokens) return null;
+  if (!tokens) {
+    return null;
+  }
   return tokens.total ?? tokens.input + tokens.output + tokens.cache.read + tokens.cache.write;
 }
 
-/**
- * The sample to threshold, or null where there is none to be had. Null after a
- * compaction on purpose: the newest assistant message is then the compaction's own,
- * whose tokens are the summarizing request's rather than the rebuilt context's, and
- * the agent's last real message describes a context that no longer exists. Rechecked
- * at the next boundary, once a real turn has measured the new one.
- *
- * A message still being written is skipped rather than treated as the answer: it has
- * measured nothing yet, and OpenCode's own overflow predicate runs on a turn that has
- * finished. A boundary lands the moment a step's output file appears, which is while
- * OpenCode is usually still closing its last message, so reading the newest message
- * alone made every OpenCode boundary an unavailable sample.
- */
-export function currentContext(all: ReadonlyArray<OpenCodeMessage>): number | null {
+// WARNING: null after a compaction, and unfinished messages are skipped: the newest then measures nothing of the rebuilt context.
+export function currentContext(all: ReadonlyArray<OpenCodeMessage>) {
   for (const message of [...all].reverse()) {
-    if (message.info.role !== "assistant") continue;
-    if (message.info.mode === COMPACTION_MODE) return null;
-    if (!message.info.finish) continue;
+    if (message.info.role !== "assistant") {
+      continue;
+    }
+    if (message.info.mode === COMPACTION_MODE) {
+      return null;
+    }
+    if (!message.info.finish) {
+      continue;
+    }
     return contextTokens(message);
   }
   return null;
 }
 
-/** The model the session is working with, which is what summarizing has to be asked in. */
-export function sessionModel(
-  all: ReadonlyArray<OpenCodeMessage>,
-): { providerID: string; modelID: string } | null {
+export function sessionModel(all: ReadonlyArray<OpenCodeMessage>) {
   for (const message of [...all].reverse()) {
     const { providerID, modelID } = message.info;
-    if (providerID && modelID) return { providerID, modelID };
+    if (providerID && modelID) {
+      return { providerID, modelID };
+    }
   }
   return null;
 }
 
-/**
- * Prompts the session through the server rather than the TUI: an agent started again
- * on its session serves before its TUI takes keys, and keys typed before then are lost.
- */
+// WARNING: prompts go through the server: keys typed before the agent's TUI serves are lost.
 export const promptAsync = Effect.fn("OpenCode.promptAsync")(function* (
   base: string,
   session: string,
@@ -229,11 +171,7 @@ export const promptAsync = Effect.fn("OpenCode.promptAsync")(function* (
   );
 });
 
-/**
- * Asks the session to summarize itself. A 200 is not proof of compaction: the handler
- * returns a bare `true` after its own loop, and says nothing about what the loop did.
- * What became of it is read back off the session's messages.
- */
+// WARNING: a 200 is not proof of compaction: the handler returns a bare true, so the outcome is read back off the messages.
 export const summarize = Effect.fn("OpenCode.summarize")(function* (
   base: string,
   session: string,
@@ -257,46 +195,51 @@ export type CompactionState =
   | { readonly kind: "done"; readonly id: string }
   | { readonly kind: "failed"; readonly id: string; readonly reason: string };
 
-/**
- * What a compaction that was not there before has become. Its own message is the
- * evidence — a bare 200 and an idle session are not — and the documented error state
- * on that message is the terminal failure, including a context too large to compact.
- */
-export function compactionAfter(
-  all: ReadonlyArray<OpenCodeMessage>,
-  before: ReadonlySet<string>,
-): CompactionState {
+export function compactionAfter(all: ReadonlyArray<OpenCodeMessage>, before: ReadonlySet<string>) {
   const mine = Arr.filter(
     all,
     (message) => message.info.mode === COMPACTION_MODE && !before.has(message.info.id),
   ).at(-1);
-  if (!mine) return { kind: "none" };
+  if (!mine) {
+    const returned: CompactionState = { kind: "none" };
+    return returned;
+  }
   const { id, error, finish } = mine.info;
   if (error !== undefined && error !== null) {
-    return { kind: "failed", id, reason: describe(error) };
+    const returned: CompactionState = { kind: "failed", id, reason: describe(error) };
+    return returned;
   }
-  if (finish === "error") return { kind: "failed", id, reason: "the compaction finished in error" };
-  // Still being written: it has neither finished nor failed, so nothing is established.
-  if (!finish) return { kind: "none" };
-  return { kind: "done", id };
+  if (finish === "error") {
+    const returned: CompactionState = {
+      kind: "failed",
+      id,
+      reason: "the compaction finished in error",
+    };
+    return returned;
+  }
+  if (!finish) {
+    const returned: CompactionState = { kind: "none" };
+    return returned;
+  }
+  const returned: CompactionState = { kind: "done", id };
+  return returned;
 }
 
-/** What every one of the documented message errors carries: a name and a message. */
 const MessageError = Schema.Struct({
   name: Schema.optionalKey(Schema.String),
   data: Schema.optionalKey(Schema.Struct({ message: Schema.optionalKey(Schema.String) })),
 });
 const decodeMessageError = Schema.decodeUnknownOption(MessageError);
 
-/** What a message's error says, as a line a human can read off the Run. */
-function describe(error: OpenCodeMessage["info"]["error"]): string {
+function describe(error: OpenCodeMessage["info"]["error"]) {
   const named = decodeMessageError(error);
-  if (named._tag === "None") return "the compaction reported an error";
+  if (named._tag === "None") {
+    return "the compaction reported an error";
+  }
   return named.value.data?.message ?? named.value.name ?? "the compaction reported an error";
 }
 
-/** Every compaction this session already has, by message id. */
-export function compactionIds(all: ReadonlyArray<OpenCodeMessage>): string[] {
+export function compactionIds(all: ReadonlyArray<OpenCodeMessage>) {
   return Arr.map(
     Arr.filter(all, (message) => message.info.mode === COMPACTION_MODE),
     (message) => message.info.id,

@@ -1,6 +1,3 @@
-// A host served in this process, through a FileSystem whose /proc is the test's to hold:
-// what it answers before its start-up sweep of the checks an earlier host left.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
@@ -15,11 +12,9 @@ import { startDetached } from "./support/command";
 import { runEffect, suiteEnv } from "./support/effect";
 import { until } from "./support/host";
 import { hostRunRecords } from "./support/records";
-import { writeFakeHerdrShim } from "./support/fake-herdr-core";
 
 const held = new URL("./fixtures/checks/held.sh", import.meta.url).pathname;
 
-/** A state directory, and serving it here through `fileSystem` until the test's scope closes. */
 const hostThrough = (
   fileSystem: (fs: FileSystem.FileSystem) => FileSystem.FileSystem,
   installation?: string,
@@ -29,22 +24,19 @@ const hostThrough = (
     const root = yield* fs.makeTempDirectoryScoped({ prefix: "collie-host-start-" });
     const state = `${root}/state`;
     yield* fs.makeDirectory(state);
-    if (installation !== undefined)
+    if (installation !== undefined) {
       yield* fs.writeFileString(`${state}/installation`, `${installation}\n`);
-    yield* writeFakeHerdrShim(`${root}/herdr`);
+    }
     const { COLLIE_PROC } = yield* suiteEnv;
     const env = {
       HOME: root,
       PATH: yield* Config.String("PATH"),
-      HERDR_BIN_PATH: `${root}/herdr`,
-      HERDR_SOCKET_PATH: `${root}/herdr.sock`,
-      HERDR_PLUGIN_STATE_DIR: state,
+      COLLIE_STATE_DIR: state,
       HC_SOCKET: "/nonexistent/collie-test/hc.sock",
       COLLIE_USER_DIR: `${root}/user`,
       COLLIE_RELEASES: "http://127.0.0.1:9",
       COLLIE_PROC,
     };
-    // A host moves into its state directory.
     const cwd = process.cwd();
     yield* Effect.addFinalizer(() => Effect.sync(() => process.chdir(cwd)));
     const serving = Effect.forkScoped(
@@ -57,7 +49,6 @@ const hostThrough = (
     return { root, state, serving };
   });
 
-/** Its front door's answer to a declaration, once one comes. */
 const answered = (state: string) =>
   Effect.scoped(
     frontDoor(socketOf(state)).pipe(Effect.flatMap((door) => door.declare({ frontDoor: "cli" }))),
@@ -67,19 +58,21 @@ const answered = (state: string) =>
     Effect.map(Option.isSome),
   );
 
-/** A filesystem whose listing of /proc waits for `open`, and tells `listed` it was asked. */
 const holdingProc =
   (open: Deferred.Deferred<void>, listed: Deferred.Deferred<void>) =>
-  (fs: FileSystem.FileSystem): FileSystem.FileSystem => ({
-    ...fs,
-    readDirectory: (path, options) =>
-      path === "/proc"
-        ? Deferred.succeed(listed, undefined).pipe(
-            Effect.andThen(Deferred.await(open)),
-            Effect.andThen(fs.readDirectory(path, options)),
-          )
-        : fs.readDirectory(path, options),
-  });
+  (fs: FileSystem.FileSystem) => {
+    const returned: FileSystem.FileSystem = {
+      ...fs,
+      readDirectory: (path, options) =>
+        path === "/proc"
+          ? Deferred.succeed(listed, undefined).pipe(
+              Effect.andThen(Deferred.await(open)),
+              Effect.andThen(fs.readDirectory(path, options)),
+            )
+          : fs.readDirectory(path, options),
+    };
+    return returned;
+  };
 
 test.skipIf(process.platform !== "linux")(
   "a host answers while its sweep of an earlier host's check waits on /proc, then ends that check on its Run",
@@ -96,7 +89,6 @@ test.skipIf(process.platform !== "linux")(
         );
         const notes = `${root}/notes`;
         yield* fs.makeDirectory(notes);
-        // Before the directory goes, so the check's child sees it and exits.
         yield* Effect.addFinalizer(() =>
           fs.writeFileString(`${notes}/release`, "").pipe(
             Effect.andThen(
@@ -168,7 +160,6 @@ test.skipIf(process.platform !== "linux")(
         ).toContain("run-four");
       }),
     ),
-  60_000,
 );
 
 test.skipIf(process.platform !== "linux")(
@@ -184,11 +175,9 @@ test.skipIf(process.platform !== "linux")(
         yield* serving;
         expect(yield* answered(state)).toBe(true);
         expect(Str.trim(yield* fs.readFileString(`${state}/installation`))).not.toBe("");
-        // A sweep starts as the host answers, and lists /proc within a few reads.
         expect(
           Option.isNone(yield* Deferred.await(listed).pipe(Effect.timeoutOption("1 second"))),
         ).toBe(true);
       }),
     ),
-  60_000,
 );

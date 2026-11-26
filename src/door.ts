@@ -1,7 +1,3 @@
-// The host's door (ADR-draft-the-host-reads-records-on-a-thread-of-its-own): a Worker that
-// owns the host's socket, answers the host's identity and a Run's record itself, and passes
-// every other frame to the engine on the main thread, which feeds it what a record reads.
-
 import * as Arr from "effect/Array";
 import { isMainThread } from "node:worker_threads";
 import {
@@ -14,6 +10,7 @@ import {
   Layer,
   PubSub,
   Queue,
+  Schema,
   Scope,
   Stream,
 } from "effect";
@@ -23,23 +20,28 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import * as SocketServer from "effect/socket/SocketServer";
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
-import { IdentityRpc, RunDetailRpc, type MrPanel, type OfferView } from "./board-model";
+import { BoardMessage, IdentityRpc, RunDetailRpc, sortBoard } from "./board-model";
+import type { MrPanel, OfferView } from "./board-model";
+import { CardRows, cardRowsLayer } from "./card-rows";
 import { mrOf } from "./merges";
 import type { PluginEnv } from "./env";
 import { foregroundLayer } from "./foreground";
 import type { AgentInfo } from "./herdr";
-import { platformLayer, type PlatformServices } from "./platform";
-import { drawerWrites, recordFrames, type RecordSources } from "./record";
-import { recordsReadLayer } from "./records";
+import { platformLayer } from "./platform";
+import type { PlatformServices } from "./platform";
+import { recordFrames } from "./record";
+import type { RecordSources } from "./record";
+import { hostDatabase, recordsReadLayer } from "./records";
+import { Branches } from "./branches";
+import type { BranchRun } from "./branches";
 import { firstValueTimed } from "./first-value";
 import { markFirst } from "./record-marks";
-import { RunModel, runModelLayer, type ModelLink } from "./run-model";
+import { RunModel, runModelLayer } from "./run-model";
+import type { ModelLink } from "./run-model";
 import type { RunFacts } from "./runs";
 
-/** What the engine tells the door of a Run: its facts and the revision they were read at. */
 export interface Listed {
   readonly fact: RunFacts;
-  /** What the Run's facts were read at (`factsAt`); null for a view the engine reads every time. */
   readonly seq: number | null;
 }
 
@@ -47,7 +49,6 @@ export interface Opened {
   readonly socket: string;
   readonly env: PluginEnv;
   readonly identity: typeof IdentityRpc.successSchema.Type;
-  /** The Run model the door keeps beside the engine's, undefined where the model is off. */
   readonly model:
     | {
         readonly counter: SharedArrayBuffer;
@@ -81,14 +82,12 @@ export type ToDoor =
       readonly _tag: "Listed";
       readonly runs: ReadonlyArray<Listed>;
       readonly gone: ReadonlyArray<string>;
-      /** Every Run's id in the engine's order, where that order moved. */
       readonly order: ReadonlyArray<string> | null;
-      /** Only a new agent reading replaces it; a completed board may have an older one. */
       readonly alive?: ReadonlyArray<AgentInfo>;
-      /** What the engine's board read of a Run's offers since the last listing. */
       readonly offers: ReadonlyArray<readonly [string, ReadonlyArray<OfferView>]>;
     }
   | { readonly _tag: "Wrote" }
+  | { readonly _tag: "Serving" }
   | { readonly _tag: "Answer"; readonly ask: number; readonly value: unknown };
 
 export type FromDoor =
@@ -108,33 +107,23 @@ export type FromDoor =
   | { readonly _tag: "Finished"; readonly run: string; readonly step: string; readonly seq: number }
   | { readonly _tag: "Unfinished"; readonly run: string; readonly step: string }
   | { readonly _tag: "Ask"; readonly ask: number; readonly asked: Asked }
+  | { readonly _tag: "Want"; readonly run: BranchRun }
   | { readonly _tag: "Warmed"; readonly runs: number; readonly ms: number }
   | { readonly _tag: "Slow"; readonly rpc: string; readonly ms: number };
 
-/** What the door answers itself; every other request is the engine's. */
 const DoorRpcs = RpcGroup.make(IdentityRpc, RunDetailRpc);
 const MODELLED = new Set(["identity", "runDetail"]);
 const UNMODELLED = new Set(["identity"]);
-/**
- * How many frames a client may have waiting to be written before it is ended: one that
- * stopped reading a stream would otherwise hold the host's memory for as long as it lives.
- */
+// WARNING: a client that stops reading is ended at this limit, or it holds the host's memory for as long as it lives.
 const OUTBOX_LIMIT = 4096;
-/** How many of the first Runs listed the door reads a record of at start, for its JIT. */
 const WARMING = 10;
 
-/** Where a Worker or a test's channel carries messages, one way and the other. */
 export interface Port<Out, In> {
   readonly post: (message: Out) => void;
   readonly listen: (receive: (message: In) => void) => void;
 }
 
-/**
- * Hands every client's frames, one at a time and in the order they came, to an RPC server
- * shared by all of them. The server ends the effect of a frame it refuses for its client
- * alone — one that came after that client half-closed — with an interruption; that frame's
- * outcome is its own, so the loop goes on for every other client.
- */
+// WARNING: a frame the server refuses is interrupted for its client alone; the loop must go on for every other client.
 export const passFrames = <Frame>(
   frames: Queue.Queue<{ readonly conn: number; readonly frame: Frame }>,
   writeRequest: (conn: number, frame: Frame) => Effect.Effect<void>,
@@ -153,17 +142,12 @@ export const passFrames = <Frame>(
     Effect.forever,
   );
 
-// ---------------------------------------------------------------------------------------
-// The engine's end.
-
-/** What the engine does with what the door tells it of the Run model. */
 export interface EngineModel {
   readonly heard: (run: string, seq: number, facts: boolean) => void;
   readonly finishedAt: (run: string, step: string, seq: number) => number;
   readonly unfinished: (run: string, step: string) => void;
 }
 
-/** The engine's end of the door: its RPC protocol, the model link and the door's asks. */
 export const engineEnd = (port: Port<ToDoor, FromDoor>) =>
   Effect.gen(function* () {
     const requests = yield* Queue.unbounded<{
@@ -172,6 +156,7 @@ export const engineEnd = (port: Port<ToDoor, FromDoor>) =>
     }>();
     const disconnects = yield* Queue.unbounded<number>();
     const asks = yield* Queue.unbounded<{ readonly ask: number; readonly asked: Asked }>();
+    const wants = yield* Queue.unbounded<BranchRun>();
     const listening = yield* Deferred.make<void>();
     const warmed = yield* Deferred.make<{ readonly runs: number; readonly ms: number }>();
     const slow = yield* Queue.unbounded<{ readonly rpc: string; readonly ms: number }>();
@@ -187,7 +172,6 @@ export const engineEnd = (port: Port<ToDoor, FromDoor>) =>
         case "Gone":
           clients.delete(message.conn);
           return Queue.offerUnsafe(disconnects, message.conn);
-        // Applied as it arrives: an act the door passes on after it is checked against it.
         case "Touched":
           return model?.heard(message.run, message.seq, message.facts);
         case "Finished":
@@ -196,6 +180,8 @@ export const engineEnd = (port: Port<ToDoor, FromDoor>) =>
           return model?.unfinished(message.run, message.step);
         case "Ask":
           return Queue.offerUnsafe(asks, message);
+        case "Want":
+          return Queue.offerUnsafe(wants, message.run);
         case "Warmed":
           return Deferred.doneUnsafe(warmed, Effect.succeed(message));
         case "Slow":
@@ -221,7 +207,7 @@ export const engineEnd = (port: Port<ToDoor, FromDoor>) =>
         };
       }),
     );
-    const link = (counter: SharedArrayBuffer, epoch: string): ModelLink => ({
+    const link: (counter: SharedArrayBuffer, epoch: string) => ModelLink = (counter, epoch) => ({
       counter: new Int32Array(counter),
       epoch,
       touched: (run, seq, facts) => port.post({ _tag: "Touched", run, seq, facts }),
@@ -236,6 +222,7 @@ export const engineEnd = (port: Port<ToDoor, FromDoor>) =>
         model = engine;
       },
       asks,
+      wants,
       warmed: Deferred.await(warmed),
       slow,
       post: port.post,
@@ -244,7 +231,6 @@ export const engineEnd = (port: Port<ToDoor, FromDoor>) =>
 
 export type EngineEnd = Effect.Success<ReturnType<typeof engineEnd>>;
 
-/** The door on a thread of its own; the host stops once it has gone. */
 export const doorThread = Effect.gen(function* () {
   const worker = yield* Effect.acquireRelease(
     Effect.sync(() => new Worker(new URL("./door.ts", import.meta.url).href)),
@@ -260,24 +246,21 @@ export const doorThread = Effect.gen(function* () {
   return { port, gone: Deferred.await(gone) };
 });
 
-// ---------------------------------------------------------------------------------------
-// The door's end.
-
-/** The Runs a Run's record reads, as the engine's `related` chooses them, from what it was told. */
 export const relatedOf = (
   facts: ReadonlyMap<string, RunFacts>,
   order: ReadonlyArray<string>,
   runId: string,
   also: ReadonlyArray<string>,
-): ReadonlyArray<RunFacts> | null => {
+) => {
   const self = facts.get(runId);
   const known = Arr.flatMap(order, (id) => {
     const fact = facts.get(id);
     return fact === undefined ? [] : [fact];
   });
   const listed = new Set(Arr.map(known, (one) => one.id));
-  if (self === undefined || !listed.has(runId) || Arr.some(also, (id) => !listed.has(id)))
+  if (self === undefined || !listed.has(runId) || Arr.some(also, (id) => !listed.has(id))) {
     return null;
+  }
   const own = new Set(
     Arr.map(
       Arr.filter(known, (one) => (self.task === null ? one.id === runId : one.task === self.task)),
@@ -303,12 +286,11 @@ export const relatedOf = (
   );
 };
 
-/** The door: everything it serves, over a socket server, with the engine at `port`. */
 export const door = (port: Port<FromDoor, ToDoor>) =>
   Effect.gen(function* () {
     const inbox = yield* Queue.unbounded<ToDoor>();
     port.listen((message) => Queue.offerUnsafe(inbox, message));
-    // What the engine's model moved before it opened the door is applied once the door's model is made.
+    // WARNING: moves made before the door opens are applied once its model is made, not dropped.
     const early: Array<ToDoor> = [];
     let first = yield* Queue.take(inbox);
     while (first._tag !== "Open") {
@@ -339,7 +321,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
     let alive: ReadonlyArray<AgentInfo> = [];
     const writes = yield* PubSub.unbounded<void>();
     const firstListed = yield* Deferred.make<ReadonlyArray<string>>();
-    /** The engine lists its Runs once it has migrated `host.db`. */
+    // WARNING: the engine lists its Runs only once host.db is migrated.
     const migrated = yield* Deferred.make<void>();
     let asked = 0;
     const answers = new Map<number, Deferred.Deferred<unknown>>();
@@ -378,8 +360,14 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
       readonly frame: RpcMessage.FromServerEncoded;
     }>();
 
-    const told = (message: ToDoor): Effect.Effect<unknown> => {
+    // WARNING: until the engine serves, the door answers a board with the projection first.
+    let engineServing = false;
+    const told = (message: ToDoor) => {
       switch (message._tag) {
+        case "Serving":
+          return Effect.sync(() => {
+            engineServing = true;
+          });
         case "Response":
           return Queue.offer(engineFrames, message);
         case "Touched":
@@ -396,12 +384,20 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
               read.delete(run);
               offers.delete(run);
             }
-            for (const [run, offered] of message.offers) offers.set(run, offered);
+            for (const [run, offered] of message.offers) {
+              offers.set(run, offered);
+            }
             model?.gone(message.gone);
-            if (message.order !== null) order = message.order;
-            if (order.length > 0) Deferred.doneUnsafe(firstListed, Effect.succeed(order));
+            if (message.order !== null) {
+              order = message.order;
+            }
+            if (order.length > 0) {
+              Deferred.doneUnsafe(firstListed, Effect.succeed(order));
+            }
             Deferred.doneUnsafe(migrated, Effect.void);
-            if (message.alive !== undefined) alive = message.alive;
+            if (message.alive !== undefined) {
+              alive = message.alive;
+            }
             return PubSub.publish(writes, undefined);
           });
         case "Wrote":
@@ -417,6 +413,21 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
     yield* Effect.forEach(early, told, { discard: true });
     yield* Queue.take(inbox).pipe(Effect.flatMap(told), Effect.forever, Effect.forkScoped);
     yield* Queue.take(engineFrames).pipe(
+      Effect.tap(({ conn, frame }) =>
+        Effect.sync(() => {
+          if (!("requestId" in frame)) {
+            return;
+          }
+          const waiting = boardsFirst.get(boardKey(conn, frame.requestId));
+          if (waiting === undefined) {
+            return;
+          }
+          waiting.answered = true;
+          if (frame._tag === "Exit" || waiting.swallow === 0) {
+            boardsFirst.delete(boardKey(conn, frame.requestId));
+          }
+        }),
+      ),
       Effect.flatMap(({ conn, frame }) => conns.get(conn)?.write(frame) ?? Effect.void),
       Effect.forever,
       Effect.forkScoped,
@@ -430,7 +441,6 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
             env,
             model: {
               ...model,
-              // What the engine read it already noted; what the door holds it has indexed.
               note: () => Effect.void,
               finishedAt: (run, step, seq) => {
                 port.post({ _tag: "Finished", run, step, seq });
@@ -448,7 +458,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
               return held !== undefined
                 ? Effect.succeed(held)
                 : ask({ _tag: "Offers", runId }).pipe(
-                    // SAFETY: the engine answers an `Offers` ask with the Run's offers.
+                    // WARNING: the engine answers an `Offers` ask with the Run's offers.
                     Effect.map((asked) => asked as ReadonlyArray<OfferView>),
                   );
             },
@@ -458,8 +468,10 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
                 const current =
                   held !== null &&
                   Arr.every(held, (one) => read.get(one.id) === model.factsAt(one.id));
-                if (current) return held;
-                // SAFETY: the engine answers a `Related` ask with the Runs it read, as `Listed`.
+                if (current) {
+                  return held;
+                }
+                // WARNING: the engine answers a `Related` ask with the Runs it read, as `Listed`.
                 const runs = (yield* ask({
                   _tag: "Related",
                   runId,
@@ -472,18 +484,93 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
               mrOf(run) === null
                 ? Effect.succeed(null)
                 : ask({ _tag: "Mr", run, fresh }).pipe(
-                    // SAFETY: the engine answers an `Mr` ask with the merge watch's panel.
+                    // WARNING: the engine answers an `Mr` ask with the merge watch's panel.
                     Effect.map((panel) => panel as MrPanel | null),
                   ),
           };
     const changes = Stream.fromPubSub(writes);
     const bun = yield* Effect.context<PlatformServices>();
-    /** The door's own read-only connection to `host.db`. */
     const withRecords = yield* Effect.cached(
       Deferred.await(migrated).pipe(
         Effect.andThen(Layer.buildWithScope(recordsReadLayer(env.stateDir), scope)),
-        Effect.map((records) => Context.merge(bun, records)),
+        Effect.map((records) =>
+          Context.add(Context.merge(bun, records), Branches, {
+            ...Context.get(records, Branches),
+            // WARNING: only the engine's Git sync reads what is wanted, so the door posts it there.
+            want: ({ cwd, dir, branch, state }) =>
+              Effect.sync(() => port.post({ _tag: "Want", run: { cwd, dir, branch, state } })),
+          }),
+        ),
       ),
+    );
+    // WARNING: the engine answers a board only once started, which can take seconds; null where none can be read.
+    const projection = yield* Effect.cached(
+      Effect.gen(function* () {
+        const context = yield* Layer.buildWithScope(
+          cardRowsLayer.pipe(
+            Layer.provide(Layer.orDie(hostDatabase(env.stateDir, { readonly: true }))),
+          ),
+          scope,
+        );
+        const rows = yield* Context.get(context, CardRows).all;
+        const tasks = sortBoard(
+          Arr.flatMap(rows, (row) =>
+            row.view === null ? [] : [{ ...row.view, confirmed: false, asOf: row.at }],
+          ),
+        );
+        if (tasks.length === 0) {
+          return null;
+        }
+        const head = {
+          _tag: "Snapshot" as const,
+          installation: identity.installation ?? "",
+          build: identity.build,
+          protocol: identity.protocol ?? 0,
+          files: true,
+          artefacts: true,
+          herds: [],
+          tasks,
+          seq: 0,
+        };
+        return yield* Schema.encodeEffect(BoardMessage)(
+          identity.development === undefined
+            ? head
+            : { ...head, development: identity.development },
+        );
+      }).pipe(
+        Effect.provideContext(bun),
+        Effect.catchCause(() => Effect.succeed(null)),
+      ),
+    );
+    const boardsFirst = new Map<string, { swallow: number; answered: boolean }>();
+    const boardKey = (conn: number, id: string | number) => `${conn}:${id}`;
+    const boardAsked = yield* Queue.unbounded<{
+      readonly conn: number;
+      readonly id: string | number;
+    }>();
+    yield* Queue.take(boardAsked).pipe(
+      Effect.flatMap(({ conn, id }) =>
+        Effect.flatMap(projection, (snapshot) =>
+          Effect.suspend(() => {
+            const key = boardKey(conn, id);
+            const waiting = boardsFirst.get(key);
+            const to = conns.get(conn);
+            if (
+              snapshot === null ||
+              waiting === undefined ||
+              waiting.answered ||
+              to === undefined
+            ) {
+              boardsFirst.delete(key);
+              return Effect.void;
+            }
+            waiting.swallow++;
+            return to.write({ _tag: "Chunk", requestId: id, values: [snapshot] });
+          }),
+        ),
+      ),
+      Effect.forever,
+      Effect.forkScoped,
     );
     const handlers = DoorRpcs.toLayer({
       identity: () => Effect.succeed(identity),
@@ -492,14 +579,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
           ? Stream.die("the door reads no record without the Run model")
           : Stream.unwrap(
               Effect.map(withRecords, (context) =>
-                recordFrames(
-                  sources,
-                  key,
-                  Stream.merge(
-                    changes,
-                    drawerWrites(env.stateDir, key.runId).pipe(Stream.provideContext(bun)),
-                  ),
-                ).pipe(
+                recordFrames(sources, key, changes).pipe(
                   markFirst("host:emit", key.runId),
                   (frames) =>
                     firstValueTimed(frames, (ms) =>
@@ -510,7 +590,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
               ),
             ).pipe(Stream.orDie),
     });
-    // A new heap runs the record's code slowly until its JIT has compiled it.
+    // WARNING: a new heap runs the record's code slowly until its JIT compiles it, hence the warming.
     if (sources !== undefined) {
       const unheard: RecordSources = {
         ...sources,
@@ -524,12 +604,13 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
           const runs = Arr.take(yield* Deferred.await(firstListed), WARMING);
           const context = yield* withRecords;
           const began = yield* Clock.currentTimeMillis;
-          for (const runId of runs)
+          for (const runId of runs) {
             yield* recordFrames(
               unheard,
               { runId, tail: true, pages: 1, refreshMr: false, parts: true },
               Stream.never,
             ).pipe(Stream.runHead, Effect.provideContext(context), Effect.ignore);
+          }
           const ms = (yield* Clock.currentTimeMillis) - began;
           port.post({ _tag: "Warmed", runs: runs.length, ms });
         }),
@@ -542,8 +623,12 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
           disconnects: localGone,
           send: (conn: number, frame: RpcMessage.FromServerEncoded) => {
             const to = conns.get(conn);
-            if (to === undefined) return Effect.void;
-            if (frame._tag === "Exit") to.local.delete(frame.requestId);
+            if (to === undefined) {
+              return Effect.void;
+            }
+            if (frame._tag === "Exit") {
+              to.local.delete(frame.requestId);
+            }
             return to.write(frame);
           },
           end: () => Effect.void,
@@ -580,9 +665,31 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
           : frame._tag === "Ack" || frame._tag === "Interrupt"
             ? held.has(frame.requestId)
             : false;
-      if (frame._tag === "Request" && mine) held.add(frame.id);
-      if (mine || frame._tag === "Eof") Queue.offerUnsafe(local, { conn, frame });
-      if (!mine) port.post({ _tag: "Request", conn, frame });
+      if (frame._tag === "Request" && mine) {
+        held.add(frame.id);
+      }
+      if (mine || frame._tag === "Eof") {
+        Queue.offerUnsafe(local, { conn, frame });
+      }
+      if (frame._tag === "Request" && frame.tag === "board" && !engineServing) {
+        boardsFirst.set(boardKey(conn, frame.id), { swallow: 0, answered: false });
+        Queue.offerUnsafe(boardAsked, { conn, id: frame.id });
+      }
+      // WARNING: the client's Ack of the door's own chunk is not the engine's to hear.
+      if (frame._tag === "Ack") {
+        const key = boardKey(conn, frame.requestId);
+        const first = boardsFirst.get(key);
+        if (first !== undefined && first.swallow > 0) {
+          first.swallow--;
+          if (first.answered && first.swallow === 0) {
+            boardsFirst.delete(key);
+          }
+          return;
+        }
+      }
+      if (!mine) {
+        port.post({ _tag: "Request", conn, frame });
+      }
     };
     yield* Effect.forkScoped(
       server.run((client) =>
@@ -591,10 +698,7 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
           const parser = RpcSerialization.ndjson.makeUnsafe();
           const writer = yield* client.writer;
           const held = new Set<string | number>();
-          // What this client is sent waits in its own outbox, written by a fiber of its own:
-          // a client that stops reading holds up only itself, and one whose socket has gone
-          // ends only itself. Written on a loop every client shares, the first held every
-          // other client's answers behind its full socket, and the second ended that loop.
+          // WARNING: each client's outbox has its own writer fiber, so a stalled or gone client ends only itself.
           const outbox = yield* Queue.unbounded<RpcMessage.FromServerEncoded>();
           const ended = yield* Deferred.make<void>();
           yield* Queue.take(outbox).pipe(
@@ -610,8 +714,11 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
             local: held,
             write: (frame) =>
               Effect.sync(() => {
-                if (Queue.sizeUnsafe(outbox) >= OUTBOX_LIMIT) Deferred.doneUnsafe(ended, Exit.void);
-                else Queue.offerUnsafe(outbox, frame);
+                if (Queue.sizeUnsafe(outbox) >= OUTBOX_LIMIT) {
+                  Deferred.doneUnsafe(ended, Exit.void);
+                } else {
+                  Queue.offerUnsafe(outbox, frame);
+                }
               }),
           });
           yield* Effect.addFinalizer(() =>
@@ -625,15 +732,16 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
             const { pull } = yield* client.reader;
             for (;;) {
               const chunks = yield* pull;
-              for (const chunk of chunks)
-                // SAFETY: what a client sends the host is its RPC client's encoded frames.
+              for (const chunk of chunks) {
+                // WARNING: what a client sends the host is its RPC client's encoded frames.
                 for (const frame of parser.decode(
                   chunk,
-                ) as ReadonlyArray<RpcMessage.FromClientEncoded>)
+                ) as ReadonlyArray<RpcMessage.FromClientEncoded>) {
                   route(conn, held, frame);
+                }
+              }
             }
           });
-          // A client whose socket could not be written, or that fell too far behind, is ended.
           yield* Effect.raceFirst(reading, Deferred.await(ended));
         }).pipe(
           Effect.catchReason("SocketError", "SocketCloseError", () => Effect.void),
@@ -646,7 +754,6 @@ export const door = (port: Port<FromDoor, ToDoor>) =>
     return yield* Effect.never;
   }).pipe(Effect.provide(foregroundLayer), Effect.scoped);
 
-/** On the door's thread, its Worker's own scope. */
 declare const self: Worker;
 
 if (!isMainThread) {
@@ -658,7 +765,7 @@ if (!isMainThread) {
     }).pipe(
       Effect.provide(platformLayer),
       Effect.catchCause((cause) => Effect.logError("the door has stopped", cause)),
-      // Ends this thread alone; the engine stops the host once it has gone.
+      // WARNING: exits this thread only; the engine stops the host once it has gone.
       Effect.ensuring(Effect.sync(() => process.exit(1))),
     ),
   );

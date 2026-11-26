@@ -1,8 +1,3 @@
-// The Dispatcher's whole reason to exist is what happens when a send goes wrong, so
-// that is what is tested: the record written before herdr is called, a herdr that
-// refuses versus one that never answers, and an agent that is no longer the one the
-// message was addressed to.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -12,7 +7,8 @@ import type { PlatformServices } from "../src/platform";
 import { Clock, DateTime, Deferred, Effect, Fiber, FileSystem } from "effect";
 import { TestClock } from "effect/testing";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { HerdrError, type AgentInfo } from "../src/herdr";
+import { HerdrError } from "../src/herdr";
+import type { AgentInfo } from "../src/herdr";
 import {
   dispatchOrder,
   interrupt,
@@ -26,7 +22,8 @@ import {
   fitDelivery,
   DELIVERY_TOKEN,
 } from "../src/dispatcher";
-import { appendLine, causalKey, readLedger, type Delivery } from "../src/steering";
+import { appendLine, causalKey, readLedger } from "../src/steering";
+import type { Delivery } from "../src/steering";
 import type { Records } from "../src/records";
 import { reason } from "../src/naming";
 import type { AgentEntry } from "../src/registry";
@@ -87,8 +84,9 @@ test("each door's Delivery names its sender on its first line, and Collie's own 
   expect(firstLine({ origin: "cli-tty" })).toMatch(
     new RegExp(`^From the human, in a terminal, ${MINUTE}\\.$`),
   );
-  for (const door of ["cli", "driver", "evaluator", "schedule"] as const)
+  for (const door of ["cli", "driver", "evaluator", "schedule"] as const) {
     expect(firstLine({ origin: door })).toMatch(new RegExp(`^From ${door}, ${MINUTE}\\.$`));
+  }
   expect(firstLine({ origin: "chat" })).toMatch(new RegExp(`^From chat, ${MINUTE}\\.$`));
   const chatting = firstLine({
     origin: "chat",
@@ -168,17 +166,16 @@ const entry: AgentEntry = {
   runId: "r1",
   workflow: "implement",
   at: "2026-09-09T09:00:00Z",
-  incarnation: { terminalId: "term-1", agentSession: null },
+  incarnation: { terminalId: "term-1", agentSession: null, backend: "core" },
 };
 
 const alive: AgentInfo = {
   name: "impl-1",
   paneId: "1-9",
-  workspaceId: "w1",
   status: "idle",
-  title: null,
   terminalId: "term-1",
-  agentSession: null,
+  cwd: "/project",
+  foregroundCwd: null,
 };
 
 const draft = {
@@ -190,26 +187,21 @@ const draft = {
   requestId: "req-1",
 };
 
-/** A herdr that records what it was asked, in order, beside the ledger writes. */
 function fake(
   options: {
-    agents?: AgentInfo[];
+    agents?: Array<AgentInfo>;
     fail?: HerdrError;
-    /** Only the first this many prompts fail; every one after is taken. */
     failing?: number;
-    /** What herdr saw of the submission; `observed` unless a test says otherwise. */
     saw?: "observed" | "unobserved";
-    /** Run inside `agentPrompt`, to observe what the ledger says at that instant. */
     onPrompt?: Effect.Effect<void, never, PlatformServices>;
   } = {},
 ) {
-  const calls: string[] = [];
+  const calls: Array<string> = [];
   return {
     calls,
     deps: {
       stateDir,
       herdr: {
-        restoreAgentName: () => Effect.succeed(false),
         agentList: () =>
           Effect.sync(() => {
             calls.push("agentList");
@@ -222,12 +214,15 @@ function fake(
         agentPrompt: (target: string, text: string) =>
           Effect.gen(function* () {
             calls.push(`agentPrompt ${target} ${text}`);
-            if (options.onPrompt) yield* options.onPrompt;
+            if (options.onPrompt) {
+              yield* options.onPrompt;
+            }
             const prompted = Arr.filter(calls, (call) =>
               pipe_(call, Str.startsWith("agentPrompt")),
             ).length;
-            if (options.fail && prompted <= (options.failing ?? Infinity))
+            if (options.fail && prompted <= (options.failing ?? Infinity)) {
               return yield* options.fail;
+            }
             return options.saw ?? ("observed" as const);
           }),
       },
@@ -239,7 +234,6 @@ function fake(
   };
 }
 
-/** The ledger as a list of `<id> <state>`, which is what every assertion here is about. */
 const states = Effect.fn("test.states")(function* () {
   return Arr.map(
     Arr.filter(yield* readLedger("term-1"), (line): line is Delivery => "state" in line),
@@ -247,42 +241,25 @@ const states = Effect.fn("test.states")(function* () {
   );
 });
 
-test("a continuation recovers a lost name using its recorded incarnation", () =>
+test("a continuation refuses an agent core no longer lists", () =>
   runEffect(
     Effect.gen(function* () {
-      const h = fake();
-      let restored = false;
-      const deps = {
-        ...h.deps,
-        herdr: {
-          ...h.deps.herdr,
-          agentList: () => Effect.succeed(restored ? [alive] : []),
-          restoreAgentName: (target: AgentEntry) =>
-            Effect.sync(() => {
-              expect(target).toEqual(entry);
-              restored = true;
-              return true;
-            }),
-        },
-      };
-      const outcome = yield* transaction(deps, entry, (channel) =>
+      const h = fake({ agents: [] });
+      const outcome = yield* transaction(h.deps, entry, (channel) =>
         channel.submit("continue with the spec", draft),
-      );
-      expect(outcome.ok).toBe(true);
-      expect(h.calls).toContain(
-        "agentPrompt impl-1 collie-delivery:req-1-1\ncontinue with the spec",
-      );
+      ).pipe(Effect.flip);
+      expect(outcome).toMatchObject({ _tag: "NotDeliverable", reason: "agent_gone" });
+      expect(h.calls).toEqual(["agentList"]);
+      expect(yield* states()).toEqual([]);
     }),
   ));
 
-test("the record is written before herdr is called, and settled after", () =>
+test("the record is written before core is called, and settled after", () =>
   runEffect(
     Effect.gen(function* () {
       const records = yield* Effect.context<Records>();
-      // Read from inside the fake send: the only moment that can tell "reserved before
-      // the call" from "both written afterwards". Synchronously, because the observation
-      // has to happen during the call and not on a later turn of the loop.
-      let atSendTime: string[] = [];
+      // WARNING: Read inside the fake send: the only moment that tells "reserved before the call" from "both written after". It must be synchronous.
+      let atSendTime: Array<string> = [];
       const h = fake({
         onPrompt: Effect.gen(function* () {
           atSendTime = Arr.map(
@@ -301,7 +278,6 @@ test("the record is written before herdr is called, and settled after", () =>
 
       expect(outcome).toEqual({ ok: true, id: "req-1-1", submission: "observed" });
       expect(atSendTime).toEqual(["reserved"]);
-      // Sent, then taken: herdr saw a turn start from it.
       expect(yield* states()).toEqual([
         "req-1-1 reserved",
         "req-1-1 submitted",
@@ -310,15 +286,14 @@ test("the record is written before herdr is called, and settled after", () =>
     }),
   ));
 
-test("a submission herdr saw no turn come of is submitted, with that as its note", () =>
+test("a submission core saw no turn come of is submitted, with that as its note", () =>
   runEffect(
     Effect.gen(function* () {
       const h = fake({ saw: "unobserved" });
       const outcome = yield* transaction(h.deps, entry, (channel) =>
         channel.submit("read the prompt file", draft),
       );
-      // Written, so `submitted` — never rounded up to a turn nobody saw start. The note is
-      // what a later reader has to tell a lost prompt from an ignored one.
+      // WARNING: Written as submitted, never rounded up to a turn nobody saw start; the note tells a lost prompt from an ignored one.
       expect(outcome).toEqual({ ok: true, id: "req-1-1", submission: "unobserved" });
       const settled = Arr.filter(
         yield* readLedger("term-1"),
@@ -336,7 +311,6 @@ test("a steer to a busy agent is taken once a turn starts after it settles, and 
         channel.submit("keep going", steer),
       );
       expect(sent).toMatchObject({ ok: true, submission: "unobserved" });
-      // Busy with its own turn, then between turns, then on a turn this message started.
       const statuses = ["working", "idle", "working"] as const;
       let looked = 0;
       const how = yield* confirmSubmitted(
@@ -344,8 +318,6 @@ test("a steer to a busy agent is taken once a turn starts after it settles, and 
           stateDir,
           herdr: {
             agentStatus: () => Effect.succeed(statuses[Math.min(looked++, 2)]!),
-            promptBox: () => Effect.succeed(""),
-            agentPressEnter: () => Effect.void,
           },
           log: () => Effect.void,
           taken: () => Effect.succeed(null),
@@ -361,7 +333,7 @@ test("a steer to a busy agent is taken once a turn starts after it settles, and 
     }),
   ));
 
-test("a herdr that refuses is a failure; one that never answers is unknown", () =>
+test("a core that refuses is a failure; one that never answers is unknown", () =>
   runEffect(
     Effect.gen(function* () {
       const refused = fake({
@@ -387,9 +359,8 @@ test("a herdr that refuses is a failure; one that never answers is unknown", () 
     }),
   ));
 
-/** herdr's answer for a pane showing a dialog: a fact about the pane, not about the prompt. */
 const paneBusy = new HerdrError({
-  message: "herdr agent prompt failed (exit 1)",
+  message: "core terminal.send refused",
   detail: '{"error":{"code":"agent_blocked","message":"agent impl-1 is blocked"}}',
   code: "agent_blocked",
   answered: true,
@@ -411,10 +382,8 @@ test("a pane that refuses while it is busy is retried until it takes the prompt,
       const outcome = yield* submitPatiently(h.deps, entry, "read the prompt file", draft, quick);
 
       expect(outcome).toEqual({ ok: true, id: "req-1-1", submission: "observed" });
-      // Four tries and one of them taken: one turn for one prompt.
       expect(prompted(h.calls)).toBe(4);
       const lines = yield* ledgerLines();
-      // Every try is on the ledger, under the one identity the first reservation had.
       expect(new Set(Arr.map(lines, (line) => line.id))).toEqual(new Set(["req-1-1"]));
       expect(Arr.map(lines, (line) => line.state)).toEqual([
         "reserved",
@@ -436,7 +405,7 @@ test("a pane that refuses while it is busy is retried until it takes the prompt,
     }),
   ));
 
-test("a refusal herdr does not call momentary is not retried, and neither is a send nobody answered", () =>
+test("a refusal core does not call momentary is not retried, and neither is a send nobody answered", () =>
   runEffect(
     Effect.gen(function* () {
       const refused = fake({
@@ -486,10 +455,8 @@ test("a pane that stays busy past the deadline is given up on, and says what hel
       const detail = outcome.ok ? "" : outcome.detail;
       expect(detail).toMatch(/^agent_blocked held for \d+s over \d+ attempts$/);
       expect(prompted(h.calls)).toBeGreaterThan(1);
-      // Settled, so the same work is free to go out again once somebody resumes it.
       const last = (yield* ledgerLines()).at(-1);
       expect(last).toMatchObject({ state: "failed", code: "agent_blocked", note: detail });
-      // Told apart in the Run's log from a refusal that was never retried.
       expect(
         Arr.filter(
           h.calls,
@@ -502,7 +469,6 @@ test("a pane that stays busy past the deadline is given up on, and says what hel
 test("a delivery left waiting on a busy pane is picked up under its own id, and no other copy goes out", () =>
   runEffect(
     Effect.gen(function* () {
-      // One try and then nobody came back for it: the process went during the wait.
       const busy = fake({ fail: paneBusy });
       yield* transaction(busy.deps, entry, (channel) =>
         channel.submit("hello", { ...draft, patienceMs: 60_000 }),
@@ -532,8 +498,7 @@ test("the same work is not sent twice while the first attempt is unsettled", () 
 
       const h = fake();
       const again = yield* transaction(h.deps, entry, (channel) =>
-        // A different request id, the same work: this is the case a request-id check
-        // would miss and a causal key catches.
+        // WARNING: A different request id for the same work: a request-id check would miss it and a causal key catches it.
         channel.submit("hello again", { ...draft, requestId: "req-9" }),
       );
 
@@ -596,6 +561,24 @@ test.each([
   ),
 );
 
+test("a Herdr 1 incarnation cannot address a core terminal with the same name and id", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const legacy: AgentEntry = {
+        ...entry,
+        incarnation: { terminalId: "term-1", agentSession: null },
+      };
+      const h = fake();
+      const outcome = yield* transaction(h.deps, legacy, (channel) =>
+        channel.submit("hello", draft),
+      ).pipe(Effect.flip);
+
+      expect(outcome).toMatchObject({ _tag: "NotDeliverable", reason: "agent_gone" });
+      expect(h.calls).toEqual(["agentList"]);
+      expect(yield* states()).toEqual([]);
+    }),
+  ));
+
 test("an entry with no incarnation is refused before anything is read", () =>
   runEffect(
     Effect.gen(function* () {
@@ -641,7 +624,7 @@ const holdingTheLedger = {
     transaction(fake().deps, entry, () => until),
 };
 
-for (const [holder, hold] of Rec.toEntries(holdingTheLedger))
+for (const [holder, hold] of Rec.toEntries(holdingTheLedger)) {
   test(`a patient submission waits out ${holder} on the agent's ledger, then delivers once`, () =>
     runEffect(
       fastForward(
@@ -659,8 +642,9 @@ for (const [holder, hold] of Rec.toEntries(holdingTheLedger))
           const submitting = yield* Effect.forkScoped(
             submitPatiently(h.deps, entry, "read the prompt file", draft),
           );
-          while ((yield* Clock.currentTimeMillis) - from < 20_000)
+          while ((yield* Clock.currentTimeMillis) - from < 20_000) {
             yield* TestClock.withLive(Effect.sleep("5 millis"));
+          }
 
           expect(submitting.pollUnsafe()).toBeUndefined();
           expect(prompted(h.calls)).toBe(0);
@@ -678,13 +662,11 @@ for (const [holder, hold] of Rec.toEntries(holdingTheLedger))
         }),
       ),
     ));
+}
 
 test("an interrupt presses nothing in a pane whose harness has not been shown to take one", () =>
   runEffect(
     Effect.gen(function* () {
-      // A capability is `unproven` until a live test records a pass; codex has none
-      // recorded. The keys are the point: a refusal that arrives after Escape has already
-      // been sent is not a refusal.
       const h = fake();
       const outcome = yield* transaction(h.deps, entry, (channel) =>
         interrupt(
@@ -700,7 +682,6 @@ test("an interrupt presses nothing in a pane whose harness has not been shown to
       expect(outcome).toMatchObject({ ok: false, detail: expect.stringContaining("codex") });
       expect(Arr.some(h.calls, (call) => pipe_(call, Str.startsWith("agentSendKeys")))).toBe(false);
       expect(Arr.some(h.calls, (call) => pipe_(call, Str.startsWith("agentPrompt")))).toBe(false);
-      // Nothing was reserved either: the gate is before the ledger, not after it.
       expect(yield* states()).toEqual([]);
     }),
   ));
@@ -723,9 +704,7 @@ test("what goes out first is the human interrupting, and last is a compaction", 
 });
 
 test("the order survives the inbox, whose decode types mode and cause as plain strings", () => {
-  // What `takeBoundaryFor` hands this: the inbox payload, not a typed Cause. An unknown
-  // kind used to make the comparison NaN, which left the whole batch in arrival order —
-  // so a correction and a steer that came due together went out however they landed.
+  // WARNING: An unknown kind used to make the comparison NaN, leaving the batch in arrival order.
   const queued = [
     { mode: "boundary", cause: { kind: "handoff", ref: "h" } },
     { mode: "boundary", cause: { kind: "from-a-newer-collie", ref: "?" } },
@@ -745,6 +724,5 @@ test("a prompt's delivery token is near its top, and a slash command keeps its f
   expect(marked("/implement do the thing\nmore", "d1")).toBe(
     "/implement do the thing\ncollie-delivery:d1\nmore",
   );
-  // What the submit hook reads back is that same delivery, not a steering item's inside it.
   expect(carriedDelivery(marked("item\ncollie-delivery:item-1", "d1"))).toBe("d1");
 });

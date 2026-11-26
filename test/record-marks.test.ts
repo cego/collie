@@ -44,8 +44,9 @@ test("the bridge names a record whose request and answer arrive in fragments", (
       payload: { runId: "run-a", tail: true, pages: 1, refreshMr: false, parts: true },
       headers: [],
     }),
-  ))
+  )) {
     relay.asked(piece);
+  }
   const named = Arr.flatMap(
     pieces(line({ _tag: "Chunk", requestId: "7", values: [{ id: "run-a" }] })),
     (piece) => relay.answered(piece),

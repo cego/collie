@@ -1,8 +1,6 @@
-// One day of Runs, read for what is wrong with the project it runs in (ADR-0053): filed on
-// that project's forge, and up to `improvements` of it planned and built, with nobody asked.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
+import * as Rec from "effect/Record";
 import { pipe as pipe_ } from "effect/Function";
 import {
   Children,
@@ -19,8 +17,6 @@ import { DateTime, Duration, Effect, FileSystem, Option, Result, Schema, flow } 
 import * as Activity from "effect/workflow/Activity";
 import markdown from "./self-improve.md" with { type: "text" };
 import {
-  type Outcome,
-  type Starting,
   Ended,
   FAILED_TO_START,
   Finding,
@@ -28,9 +24,12 @@ import {
   QuestionMeasures,
   Triage,
   chosen,
+  commentOf,
   goalOf,
   keysIn,
   markerOf,
+  namedIn,
+  releasedFix,
   questionLines,
   questionMeasures,
   repeatedAnswers,
@@ -39,6 +38,7 @@ import {
   summaryOf,
   targetOf,
 } from "./retrospective";
+import type { FixEffect, Outcome } from "./retrospective";
 
 const content = contentOf(markdown);
 const triage = content.template("triage", {
@@ -73,9 +73,10 @@ const Window = Schema.Struct({
   machine: Schema.String,
   runs: Schema.Array(Schema.String),
   report: Schema.Unknown,
-  // A completed window predating these measures stays frozen when its Run resumes.
+  // WARNING: a completed window predating these measures stays frozen when its Run resumes.
   questions: Schema.optionalKey(QuestionMeasures),
   repeated: Schema.optionalKey(Schema.Array(Finding)),
+  created: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
 });
 
 const Scope = Schema.Literals(["checkout", "machine"]).annotate({
@@ -91,6 +92,29 @@ const Opened = Schema.Array(
     url: Schema.String,
     keys: Schema.Array(Schema.String),
   }),
+);
+
+const MatchingSchema = Schema.Struct({
+  closed: Schema.Array(
+    Schema.Struct({
+      number: Schema.Int,
+      title: Schema.String,
+      url: Schema.String,
+      keys: Schema.Array(Schema.String),
+      closedAt: Schema.String,
+    }),
+  ),
+  releases: Schema.Array(Schema.Struct({ tag: Schema.String, at: Schema.String })),
+  underway: Schema.Array(
+    Schema.Struct({
+      by: Schema.String,
+      keys: Schema.Array(Schema.String),
+      issues: Schema.Array(Schema.Int),
+    }),
+  ),
+});
+const IntentGoal = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ goal: Schema.optionalKey(Schema.String) })),
 );
 
 const OutcomeSchema = Schema.Union([
@@ -155,7 +179,6 @@ export default defineWorkflow({
     ),
   }),
   hints: { improvements: "goal" },
-  // The checkout it was started in is shared and may be dirty or behind its remote.
   checkout: "roaming",
   output: Schema.String,
   agents: { harness: "claude", model: "opus", effort: "high" },
@@ -179,10 +202,11 @@ export default defineWorkflow({
             const own = Option.getOrUndefined(
               Arr.findFirst(report.runs, ({ runId }) => runId === run.id),
             );
-            if (own === undefined)
+            if (own === undefined) {
               return yield* new WorkflowError({
                 reason: `${run.id} is not in its Machine's report`,
               });
+            }
             const kept = Arr.filter(
               report.runs,
               ({ runId, parent, project }) =>
@@ -197,9 +221,11 @@ export default defineWorkflow({
               since,
               machine: hostname(),
               runs: [...ids],
+              created: Rec.fromEntries(
+                Arr.map(kept, ({ runId, created }) => [runId, created] as const),
+              ),
               questions: questionMeasures(kept),
               repeated: repeatedAnswers(kept),
-              // Another project's tallies and measures are not this one's to read.
               report:
                 input.runs === "machine"
                   ? report
@@ -215,7 +241,9 @@ export default defineWorkflow({
         }),
       );
       const quiet = window.runs.length === 0;
-      if (quiet && bound === 0) return `No Runs since ${window.since}`;
+      if (quiet && bound === 0) {
+        return `No Runs since ${window.since}`;
+      }
 
       const kept =
         bound === 0
@@ -245,7 +273,6 @@ export default defineWorkflow({
                       Effect.map((text) =>
                         decodeKept(text).pipe(Option.map((ended) => ({ created, ended }))),
                       ),
-                      // A Run still going, or one from before Improvements were kept, has none.
                       Effect.orElseSucceed(() => Option.none()),
                     ),
                 );
@@ -258,7 +285,9 @@ export default defineWorkflow({
       const failedToStart = Arr.some(kept.earlier, ({ ended }) =>
         Arr.some(ended, (one) => pipe_(one.ended, Str.startsWith(FAILED_TO_START))),
       );
-      if (quiet && !failedToStart) return `No Runs since ${window.since}`;
+      if (quiet && !failedToStart) {
+        return `No Runs since ${window.since}`;
+      }
 
       const retro = retroStep(
         Activity.make({
@@ -277,7 +306,9 @@ export default defineWorkflow({
           ),
         }),
       );
-      if (!quiet) yield* retro;
+      if (!quiet) {
+        yield* retro;
+      }
 
       const issues = yield* Activity.make({
         name: "issues",
@@ -349,17 +380,104 @@ export default defineWorkflow({
         return `Retrospective kept in ${file}; no issues filed: ${issues.refused}`;
       }
 
+      const findings = [...(window.repeated ?? []), ...triaged.findings];
+      const matching =
+        findings.length === 0
+          ? { closed: [], releases: [], underway: [] }
+          : yield* Activity.make({
+              name: "matching",
+              success: MatchingSchema,
+              error: WorkflowError,
+              execute: Effect.gen(function* () {
+                const fs = yield* FileSystem.FileSystem;
+                const releases = yield* host.releases(run.id).pipe(Effect.orElseSucceed(() => []));
+                const base = Arr.findFirst(releases, ({ at }) => at < window.since).pipe(
+                  Option.orElse(() => Arr.last(releases)),
+                  Option.getOrUndefined,
+                );
+                const closed =
+                  base === undefined
+                    ? []
+                    : yield* host.issues(run.id, { closedSince: base.at }).pipe(
+                        Effect.map(
+                          Arr.flatMap(({ number, title, url, body, closedAt }) =>
+                            closedAt === undefined
+                              ? []
+                              : [{ number, title, url, keys: keysIn(body), closedAt }],
+                          ),
+                        ),
+                        Effect.orElseSucceed(() => []),
+                      );
+                const keys = Arr.map(findings, ({ key }) => key);
+                const numbers = Arr.flatMap(findings, (finding) =>
+                  Arr.filter(
+                    [finding.issue, targetOf(finding, open)?.number ?? null],
+                    (one): one is number => one !== null,
+                  ),
+                );
+                const since = DateTime.formatIso(
+                  DateTime.subtractDuration(yield* DateTime.now, LOOKBACK),
+                );
+                const active = Arr.filter(
+                  (yield* host.report(since).pipe(Effect.orElseSucceed(() => ({ runs: [] })))).runs,
+                  ({ runId, parent, status }) =>
+                    runId !== run.id &&
+                    parent !== run.id &&
+                    (status === "pending" || status === "suspended"),
+                );
+                const runs = yield* Effect.forEach(active, ({ runId }) =>
+                  Effect.gen(function* () {
+                    const { dir } = yield* host.place(runId);
+                    const goal = yield* fs.readFileString(`${dir}/intent.json`).pipe(
+                      Effect.map((text) => Option.getOrUndefined(IntentGoal(text))?.goal ?? ""),
+                      Effect.orElseSucceed(() => ""),
+                    );
+                    const plan = yield* fs.readDirectory(`${dir}/plan`, { recursive: true }).pipe(
+                      Effect.flatMap((names) =>
+                        Effect.forEach(Arr.filter(names, Str.endsWith(".md")), (name) =>
+                          fs.readFileString(`${dir}/plan/${name}`),
+                        ),
+                      ),
+                      Effect.orElseSucceed(() => []),
+                    );
+                    return {
+                      by: runId,
+                      ...namedIn(Arr.join([goal, ...plan], "\n"), keys, numbers),
+                    };
+                  }),
+                );
+                const requests = yield* host.requests(run.id).pipe(Effect.orElseSucceed(() => []));
+                return {
+                  closed,
+                  releases,
+                  underway: Arr.filter(
+                    [
+                      ...runs,
+                      ...Arr.map(requests, ({ url, body }) => ({
+                        by: url,
+                        keys: keysIn(body),
+                        issues: [],
+                      })),
+                    ],
+                    (one) => one.keys.length > 0 || one.issues.length > 0,
+                  ),
+                };
+              }),
+            });
       const sorted = sortOut(
-        [...(window.repeated ?? []), ...triaged.findings],
+        findings,
         new Set(window.runs),
         open,
         input.runs === "machine",
+        matching,
       );
       const acted: Array<{ finding: Finding; outcome: Outcome }> = [];
+      const effects: Array<FixEffect> = [];
       yield* filing(
         Effect.gen(function* () {
           for (const finding of sorted.kept.slice(0, MAX_FINDINGS)) {
-            const target = targetOf(finding, open);
+            const fix = releasedFix(finding, matching, window.created ?? {});
+            const target = targetOf(finding, open) ?? fix?.issue ?? null;
             const outcome = yield* Activity.make({
               name: `finding.${finding.key}`,
               success: OutcomeSchema,
@@ -377,12 +495,22 @@ export default defineWorkflow({
                         "\n\n",
                       ),
                     })
-                    .pipe(Effect.map((filed): Outcome => ({ kind: "filed", ...filed })))
+                    .pipe(
+                      Effect.map((filed) => {
+                        const returned: Outcome = { kind: "filed", ...filed };
+                        return returned;
+                      }),
+                    )
                 : host
                     .commentIssue({
                       runId: run.id,
                       number: target.number,
-                      body: `Seen again in ${Arr.join(finding.runs, ", ")} on ${window.machine}, by self-improve Run ${run.id}.\n\n${markerOf(finding.key)}`,
+                      body: commentOf({
+                        finding,
+                        runId: run.id,
+                        machine: window.machine,
+                        effect: fix?.effect ?? null,
+                      }),
                     })
                     .pipe(
                       Effect.as<Outcome>({
@@ -398,27 +526,31 @@ export default defineWorkflow({
               ),
             });
             acted.push({ finding, outcome });
+            if (fix !== null) {
+              effects.push(fix.effect);
+            }
           }
         }),
       );
 
       const restarts = restartsOf(kept.earlier, kept.since, open);
-      if (quiet && restarts.length === 0) return `No Runs since ${window.since}`;
+      if (quiet && restarts.length === 0) {
+        return `No Runs since ${window.since}`;
+      }
       const outcomes = new Map(Arr.map(acted, ({ finding, outcome }) => [finding.key, outcome]));
       const filedNumber = (key: string) => {
         const outcome = outcomes.get(key);
         return outcome?.kind === "filed" ? [outcome.number] : [];
       };
-      const fresh = Arr.map(
-        chosen(triaged.improvements, outcomes, bound),
-        ({ name, keys }): Starting => ({ name, issues: Arr.flatMap(keys, filedNumber) }),
-      );
+      const fresh = Arr.map(chosen(triaged.improvements, outcomes, bound), ({ name, keys }) => ({
+        name,
+        issues: Arr.flatMap(keys, filedNumber),
+      }));
       const starting = [
         ...Arr.filter(restarts, ({ name }) => !Arr.some(fresh, (one) => one.name === name)),
         ...fresh,
       ].slice(0, bound);
-      // The issues as the forge holds them, so a goal carries only what the host let out. Read
-      // by number: the forge's open listing can lag the issues this Run just filed.
+      // WARNING: read by number, since the forge's open listing can lag the issues this Run just filed.
       const published =
         starting.length === 0
           ? Result.succeed([])
@@ -438,14 +570,17 @@ export default defineWorkflow({
         Arr.map(starting, (improvement) =>
           improvementsStep(
             Effect.gen(function* () {
-              if (Result.isFailure(published)) return yield* published.failure;
+              if (Result.isFailure(published)) {
+                return yield* published.failure;
+              }
               const issues = Arr.flatMap(improvement.issues, (number) =>
                 Arr.filter(published.success, (one) => one.number === number),
               );
-              if (issues.length < improvement.issues.length)
+              if (issues.length < improvement.issues.length) {
                 return yield* new WorkflowError({
                   reason: "an issue it fixes could not be read back from the forge",
                 });
+              }
               const child = yield* children.start({
                 invocation: `improvement-${improvement.name}`,
                 workflow: "plan",
@@ -505,6 +640,7 @@ export default defineWorkflow({
                   acted,
                   improvements,
                   leftOut: [...triaged.left_out, ...sorted.leftOut],
+                  effects,
                 }),
               ),
             ),

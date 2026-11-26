@@ -1,6 +1,4 @@
-// The one way Collie gives a login a pseudo-terminal: util-linux `script` on Linux and BSD
-// `script` on macOS, which takes neither `-e`, `-f` nor `-c`.
-
+// WARNING: util-linux script on Linux and BSD script on macOS, which takes neither -e, -f nor -c.
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
@@ -10,7 +8,7 @@ import { runEffect } from "./support/effect";
 
 const LOGIN = `BROWSER='/tmp/a b/shim' claude mcp login "linear server"`;
 
-test.each<[NodeJS.Platform, [string, ...string[]]]>([
+test.each<[NodeJS.Platform, [string, ...Array<string>]]>([
   ["linux", ["script", "-qefc", LOGIN, "/dev/null"]],
   ["darwin", ["script", "-q", "/dev/null", "/bin/sh", "-c", LOGIN]],
 ])("on %s a login runs under that platform's script, as one argument", (platform, argv) =>

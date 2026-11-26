@@ -1,4 +1,4 @@
-// Slack's documented Web API envelopes; requests are recorded without their authorization header.
+// WARNING: Requests are recorded without their authorization header, so no token reaches a log.
 import { pipe } from "effect/Function";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
@@ -11,12 +11,13 @@ import type { SlackOAuthAnswer } from "../../src/slack";
 import { slackUserEnvPath } from "../../src/slack-credentials";
 import type { PluginEnv } from "../../src/env";
 
-/** The Machine's sign-in as the fake's user U456 in T123, expecting `user`; null removes it. */
 export const signedInToSlack = (env: Pick<PluginEnv, "home" | "raw">, user: string | null) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const file = slackUserEnvPath(env);
-    if (user === null) return yield* fs.remove(file, { force: true });
+    if (user === null) {
+      return yield* fs.remove(file, { force: true });
+    }
     yield* fs.makeDirectory((yield* Path.Path).dirname(file), { recursive: true });
     yield* fs.writeFileString(
       file,
@@ -25,18 +26,19 @@ export const signedInToSlack = (env: Pick<PluginEnv, "home" | "raw">, user: stri
     );
   }).pipe(Effect.orDie);
 
-/** The `slack.env` an older Collie wrote for its bot, or none for false. */
 export const botLeftOver = (env: Pick<PluginEnv, "home" | "raw">, left: boolean) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const file = `${(yield* Path.Path).dirname(slackUserEnvPath(env))}/slack.env`;
-    if (!left) return yield* fs.remove(file, { force: true });
+    if (!left) {
+      return yield* fs.remove(file, { force: true });
+    }
     yield* fs.makeDirectory((yield* Path.Path).dirname(file), { recursive: true });
     yield* fs.writeFileString(file, "SLACK_BOT_TOKEN=xoxb-fixture\n", { mode: 0o600 });
   }).pipe(Effect.orDie);
 
 export const fakeSlack = () => {
-  let after = (_method: string): Effect.Effect<void> => Effect.void;
+  let after = (_method: string) => Effect.void;
   let messages: Array<{ channel: string; ts: string; text: string; thread_ts?: string }> = [];
   const reacted = new Map<string, Set<string>>();
   const calls: Array<{ method: string; parameters: Record<string, string> }> = [];
@@ -53,13 +55,14 @@ export const fakeSlack = () => {
     calls.push({ method, parameters });
     authorized.push({ method, by });
     if (method === "oauth.v2.access") {
-      if (refused !== null && (refusedMethod === undefined || refusedMethod === method))
+      if (refused !== null && (refusedMethod === undefined || refusedMethod === method)) {
         return Response.json({ ok: false, error: refused });
+      }
       issued += 1;
       const tokens = {
         access_token: `xoxe.xoxp-1-access-${issued}`,
         refresh_token: `xoxe-1-refresh-${issued}`,
-        expires_in: 43200,
+        expires_in: 43_200,
         token_type: "user",
         scope:
           "chat:write,channels:read,groups:read,reactions:write,reactions:read,channels:history,groups:history,search:read",
@@ -76,10 +79,13 @@ export const fakeSlack = () => {
             },
       );
     }
-    if (by === null) return Response.json({ ok: false, error: "invalid_auth" });
-    if (refused !== null && (refusedMethod === undefined || refusedMethod === method))
+    if (by === null) {
+      return Response.json({ ok: false, error: "invalid_auth" });
+    }
+    if (refused !== null && (refusedMethod === undefined || refusedMethod === method)) {
       return Response.json({ ok: false, error: refused });
-    if (method === "auth.test" && by === "user")
+    }
+    if (method === "auth.test" && by === "user") {
       return Response.json({
         ok: true,
         url: "https://example.slack.com/",
@@ -88,7 +94,8 @@ export const fakeSlack = () => {
         team_id: "T123",
         user_id: "U456",
       });
-    if (method === "auth.test")
+    }
+    if (method === "auth.test") {
       return Response.json({
         ok: true,
         url: "https://example.slack.com/",
@@ -98,7 +105,8 @@ export const fakeSlack = () => {
         user_id: "U234",
         bot_id: "B345",
       });
-    if (method === "search.messages")
+    }
+    if (method === "search.messages") {
       return Response.json({
         ok: true,
         messages: {
@@ -106,7 +114,8 @@ export const fakeSlack = () => {
           matches: Arr.map(messages, (one) => ({ ...one, channel: { id: one.channel } })),
         },
       });
-    if (method === "conversations.history")
+    }
+    if (method === "conversations.history") {
       return Response.json({
         ok: true,
         messages: Arr.filter(
@@ -114,6 +123,7 @@ export const fakeSlack = () => {
           (one) => one.channel === parameters.channel && one.ts === parameters.latest,
         ),
       });
+    }
     if (method === "reactions.get") {
       const message = Option.getOrUndefined(
         Arr.findFirst(
@@ -137,12 +147,14 @@ export const fakeSlack = () => {
     if (method === "reactions.add") {
       const key = `${parameters.channel}:${parameters.timestamp}`;
       const set = reacted.get(key) ?? new Set<string>();
-      if (set.has(parameters.name!)) return Response.json({ ok: false, error: "already_reacted" });
+      if (set.has(parameters.name!)) {
+        return Response.json({ ok: false, error: "already_reacted" });
+      }
       set.add(parameters.name!);
       reacted.set(key, set);
       return Response.json({ ok: true });
     }
-    if (method === "conversations.list" && by === "user")
+    if (method === "conversations.list" && by === "user") {
       return Response.json({
         ok: true,
         channels:
@@ -154,19 +166,22 @@ export const fakeSlack = () => {
               ],
         response_metadata: { next_cursor: parameters.cursor ? "" : "channels-next" },
       });
-    if (method === "chat.postMessage")
+    }
+    if (method === "chat.postMessage") {
       return Response.json({
         ok: true,
         channel: "D123",
         ts: "1503435956.000247",
         message: { text: parameters.text, type: "message" },
       });
-    if (method === "chat.getPermalink")
+    }
+    if (method === "chat.getPermalink") {
       return Response.json({
         ok: true,
         channel: "D123",
         permalink: "https://example.slack.com/archives/D123/p1503435956000247",
       });
+    }
     return Response.json({ ok: false, error: "unknown_method" });
   };
   const client = HttpClient.make((request) => {
@@ -180,10 +195,11 @@ export const fakeSlack = () => {
     ].includes(method)
       ? "GET"
       : "POST";
-    if (request.method !== verb)
+    if (request.method !== verb) {
       return Effect.succeed(
         HttpClientResponse.fromWeb(request, Response.json({ ok: false, error: "unknown_method" })),
       );
+    }
     const body =
       request.body._tag === "Uint8Array"
         ? (request.body.text ?? new TextDecoder().decode(request.body.body))
@@ -216,9 +232,7 @@ export const fakeSlack = () => {
     after: (hook: typeof after) => {
       after = hook;
     },
-    /** Which kind of token authorized each call, in step with `calls`. */
     authorized,
-    /** Fields laid over each code exchange's answer, until replaced. */
     exchange: (fields: Partial<typeof SlackOAuthAnswer.Encoded>) => {
       exchanged = fields;
     },

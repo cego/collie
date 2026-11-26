@@ -1,7 +1,6 @@
-// A benchmark plan decoded as the host measures by it, or refused in `collie measure`'s words.
-
 import { expect, test } from "bun:test";
-import { Effect, Schema } from "effect";
+import type { Schema } from "effect";
+import { Effect } from "effect";
 import { decodeBenchmarkPlan } from "../src/measurement-model";
 
 const metric = (name: string, role: "primary" | "guardrail") => ({

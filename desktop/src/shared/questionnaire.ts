@@ -1,14 +1,11 @@
-// One question as a questionnaire: what is checked, what Submit and the steering entry
-// send, and the status line. The dialog and the Flow decision only draw it; no Bun-only
-// import, as the view bundles this.
-
+// WARNING: no Bun-only import: the view bundles this module.
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import type { Question } from "../../../src/board-model";
 import type { DesktopAction } from "./flock";
 
-/** The row id of Hold the Run, which no host option can take. */
+// WARNING: no host option can take this id.
 export const HOLD = "\u0000hold";
 
 type Status =
@@ -23,16 +20,13 @@ export interface Questionnaire {
   readonly question: Question;
   readonly checked: string | null;
   readonly focus: number;
-  /** A value input's words. */
   readonly typed: string;
   readonly draft: string;
-  /** What is in flight, or was and may be tried again: one request until the host settles it. */
   readonly pending: {
     readonly request: string;
     readonly sends: string;
     readonly answer: string | null;
   } | null;
-  /** What this questionnaire's own sends came to; the board leaving it changes none of it. */
   readonly status: Status;
   readonly onBoard: boolean;
 }
@@ -43,7 +37,6 @@ export type Event =
   | {
       readonly kind: "key";
       readonly key: string;
-      /** Ctrl, or Cmd on a Mac. */
       readonly mod: boolean;
       readonly where: "group" | "steer" | "answer";
     }
@@ -51,7 +44,6 @@ export type Event =
   | { readonly kind: "draft"; readonly text: string }
   | { readonly kind: "submit"; readonly request: string }
   | { readonly kind: "steer"; readonly request: string }
-  /** A try of `request` starting, as Try again starts one. */
   | { readonly kind: "trying"; readonly request: string }
   | {
       readonly kind: "replied";
@@ -63,27 +55,24 @@ export type Event =
       readonly kind: "replied";
       readonly request: string;
       readonly ok: false;
-      /** The host said no, so the same request would be refused again. */
+      // WARNING: a refused request would be refused again, so it is not retried.
       readonly refused: boolean;
       readonly reason: string;
     };
 
 export type Effect =
   | { readonly kind: "send"; readonly request: string; readonly action: DesktopAction }
-  /** A key asking for Submit or Send, which then takes a request. */
   | { readonly kind: "submit" }
   | { readonly kind: "steer" }
   | { readonly kind: "close" }
-  /** A key that must do nothing, not even its default. */
   | { readonly kind: "swallow" };
 
-/** A questionnaire after one event, and what that event asks Desktop to do. */
 export interface Stepped {
   readonly state: Questionnaire;
   readonly does: Effect | null;
 }
 
-export const questionnaire = (question: Question): Questionnaire => ({
+export const questionnaire: (question: Question) => Questionnaire = (question) => ({
   question,
   checked: null,
   focus: 0,
@@ -103,7 +92,7 @@ interface Row {
   readonly why: string | null;
 }
 
-const rowsOf = (question: Question): ReadonlyArray<Row> => [
+const rowsOf = (question: Question) => [
   ...Arr.map(question.options, (option) => ({
     id: option.id,
     title: option.title,
@@ -130,7 +119,9 @@ const inFlight = (state: Questionnaire) => state.status.kind === "sending";
 const settled = (state: Questionnaire) => !state.onBoard || state.status.kind === "answered";
 
 const submission = (state: Questionnaire) => {
-  if (inFlight(state) || settled(state)) return null;
+  if (inFlight(state) || settled(state)) {
+    return null;
+  }
   if (state.question.options.length === 0) {
     const words = Str.trim(state.typed);
     return words === "" ? null : words;
@@ -158,7 +149,7 @@ const sent = (state: Questionnaire, sends: string, answer: string | null, reques
   } as const;
 };
 
-const actionFor = (state: Questionnaire, value: string): DesktopAction =>
+const actionFor: (state: Questionnaire, value: string) => DesktopAction = (state, value) =>
   value === HOLD
     ? {
         _tag: "Control",
@@ -179,7 +170,9 @@ const moved = (state: Questionnaire, to: (rows: ReadonlyArray<Row>, from: number
     Arr.map(rows, (row, at) => ({ row, at })),
     ({ row }) => !row.disabled,
   );
-  if (enabled.length === 0) return state;
+  if (enabled.length === 0) {
+    return state;
+  }
   const from = Option.getOrElse(
     Arr.findFirstIndex(rows, (row) => row.id === state.checked),
     () => state.focus,
@@ -190,8 +183,9 @@ const moved = (state: Questionnaire, to: (rows: ReadonlyArray<Row>, from: number
 
 const stepThrough = (by: number) => (rows: ReadonlyArray<Row>, from: number) => {
   let at = from;
-  do at = (at + by + rows.length) % rows.length;
-  while (rows[at]!.disabled);
+  do {
+    at = (at + by + rows.length) % rows.length;
+  } while (rows[at]!.disabled);
   return at;
 };
 const firstEnabled = (rows: ReadonlyArray<Row>) =>
@@ -205,13 +199,19 @@ const lastEnabled = (rows: ReadonlyArray<Row>) =>
     () => 0,
   );
 
-const keyed = (state: Questionnaire, event: Extract<Event, { kind: "key" }>): Stepped => {
-  if (event.key === "Escape") return { state, does: { kind: "close" } };
-  if (event.where === "steer")
+const keyed: (state: Questionnaire, event: Extract<Event, { kind: "key" }>) => Stepped = (
+  state,
+  event,
+) => {
+  if (event.key === "Escape") {
+    return { state, does: { kind: "close" } };
+  }
+  if (event.where === "steer") {
     return event.key === "Enter"
       ? { state, does: event.mod && steerable(state) ? { kind: "steer" } : { kind: "swallow" } }
       : { state, does: null };
-  if (event.key === "Enter")
+  }
+  if (event.key === "Enter") {
     return {
       state,
       does:
@@ -219,7 +219,10 @@ const keyed = (state: Questionnaire, event: Extract<Event, { kind: "key" }>): St
           ? { kind: "submit" }
           : null,
     };
-  if (event.where === "answer" || inFlight(state) || settled(state)) return { state, does: null };
+  }
+  if (event.where === "answer" || inFlight(state) || settled(state)) {
+    return { state, does: null };
+  }
   switch (event.key) {
     case "ArrowDown":
     case "ArrowRight":
@@ -245,20 +248,24 @@ const keyed = (state: Questionnaire, event: Extract<Event, { kind: "key" }>): St
 
 const replied = (state: Questionnaire, event: Extract<Event, { kind: "replied" }>) => {
   const pending = state.pending;
-  if (pending?.request !== event.request) return state;
-  if (!event.ok)
+  if (pending?.request !== event.request) {
+    return state;
+  }
+  if (!event.ok) {
     return {
       ...state,
       pending: event.refused ? null : pending,
       status: { kind: "failed", reason: event.reason } as const,
     };
-  if (pending.answer === null)
+  }
+  if (pending.answer === null) {
     return {
       ...state,
       pending: null,
       draft: "",
       status: { kind: "steered" } as const,
     };
+  }
   return {
     ...state,
     pending: null,
@@ -269,10 +276,13 @@ const replied = (state: Questionnaire, event: Extract<Event, { kind: "replied" }
   };
 };
 
-const seen = (state: Questionnaire, question: Question | null): Questionnaire => {
-  if (question === null) return { ...state, onBoard: false };
-  if (question.run !== state.question.run || question.id !== state.question.id)
+const seen = (state: Questionnaire, question: Question | null) => {
+  if (question === null) {
+    return { ...state, onBoard: false };
+  }
+  if (question.run !== state.question.run || question.id !== state.question.id) {
     return questionnaire(question);
+  }
   const rows = rowsOf(question);
   const kept = Arr.some(rows, (row) => row.id === state.checked && !row.disabled);
   return {
@@ -284,7 +294,7 @@ const seen = (state: Questionnaire, question: Question | null): Questionnaire =>
   };
 };
 
-export const stepped = (state: Questionnaire, event: Event): Stepped => {
+export const stepped: (state: Questionnaire, event: Event) => Stepped = (state, event) => {
   switch (event.kind) {
     case "seen":
       return { state: seen(state, event.question), does: null };
@@ -307,7 +317,9 @@ export const stepped = (state: Questionnaire, event: Event): Stepped => {
       return { state: { ...state, draft: event.text }, does: null };
     case "submit": {
       const value = submission(state);
-      if (value === null) return { state, does: null };
+      if (value === null) {
+        return { state, does: null };
+      }
       const go = sent(state, `answer:${value}`, value, event.request);
       return {
         state: go.state,
@@ -315,7 +327,9 @@ export const stepped = (state: Questionnaire, event: Event): Stepped => {
       };
     }
     case "steer": {
-      if (!steerable(state)) return { state, does: null };
+      if (!steerable(state)) {
+        return { state, does: null };
+      }
       const text = Str.trim(state.draft);
       const go = sent(state, `steer:${text}`, null, event.request);
       const agent = target(state).agent;
@@ -367,7 +381,6 @@ export const questionnaireView = (state: Questionnaire) => {
   return {
     text: state.question.text,
     shortfall: state.question.shortfall ?? null,
-    /** A value input: a text answer instead of rows. */
     words: state.question.options.length === 0,
     rows: Arr.map(rowsOf(state.question), (row) => ({ ...row, checked: row.id === state.checked })),
     focus: state.focus,
@@ -382,7 +395,6 @@ export const questionnaireView = (state: Questionnaire) => {
     },
     status: statusSaid(state),
     sending: inFlight(state),
-    /** Answered, or gone from the board: nothing more to send. */
     settled: settled(state) && !inFlight(state),
   };
 };

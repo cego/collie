@@ -225,3 +225,11 @@ resume found the compaction completed and sent the work at once.
 This replaces, for a Run's own boundaries, "After five minutes the step stops blocked" and
 the paragraph on the pause being the blocked-step path. The Control Plane's hand-off, which
 does not wait, is unchanged.
+
+## Amended 2026-11-20: a ticket boundary may start a fresh agent instead
+
+Under `agent_sessions: ticket` or `round`, an implement Run ends the outgoing agent at a
+ticket boundary and starts a fresh one, so there is no reused agent there to compact
+(ADR-draft-a-ticket-is-built-by-an-agent-of-its-own). Compaction still applies wherever an
+agent is reused: every boundary under `run`, the default, and a ticket's own fix rounds
+under `ticket`.

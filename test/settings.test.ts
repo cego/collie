@@ -21,10 +21,12 @@ const keys = Arr.map(SETTINGS, (setting) => setting.key);
 describe("Collie's settings", () => {
   test("numeric setting values reject non-finite numbers", () => {
     const decode = Schema.decodeUnknownResult(SettingValue);
-    for (const value of [Infinity, -Infinity, Number.NaN])
+    for (const value of [Infinity, -Infinity, Number.NaN]) {
       expect(Result.isFailure(decode(value))).toBe(true);
-    for (const value of [0, -1, 0.5, Number.MAX_VALUE])
+    }
+    for (const value of [0, -1, 0.5, Number.MAX_VALUE]) {
       expect(Result.getOrThrow(decode(value))).toBe(value);
+    }
   });
 
   test("are every default a Run reads, the per-harness models and every notification", () => {
@@ -62,8 +64,9 @@ describe("Collie's settings", () => {
     expect(harness.kind).toBe("choice");
     expect([...harness.choices].sort()).toEqual(harnessNames());
     expect(harness.fallback).toBe("claude");
-    for (const setting of Arr.filter(SETTINGS, (one) => one.kind === "choice"))
+    for (const setting of Arr.filter(SETTINGS, (one) => one.kind === "choice")) {
       expect(setting.choices).toContain(setting.fallback);
+    }
   });
 
   test("parse what was typed into the value written", () => {
@@ -78,7 +81,6 @@ describe("Collie's settings", () => {
     expect(
       parseSetting("claude_subagents", '{"model":"sonnet","forceModel":false,"cacheTtl":"1h"}'),
     ).toEqual({ value: '{"model":"sonnet","forceModel":false,"cacheTtl":"1h"}' });
-    // Empty is unset, never a configured empty string.
     expect(parseSetting("harness", "  ")).toEqual({ value: null });
   });
 
@@ -88,6 +90,33 @@ describe("Collie's settings", () => {
       fallback: "false",
     });
     expect(parseSetting("review.follow_through", "true")).toEqual({ value: true });
+  });
+
+  test("plan a source that is not a plan before building it only once turned on", () => {
+    expect(settingOf("inline_plan")).toMatchObject({
+      kind: "choice",
+      choices: ["off", "on"],
+      fallback: "off",
+    });
+    expect(parseSetting("inline_plan", "on")).toEqual({ value: "on" });
+    expect(parseSetting("inline_plan", "off")).toEqual({ value: "off" });
+    expect(parseSetting("inline_plan", "true")).toEqual({
+      refused: 'inline_plan has to be one of off, on, not "true"',
+    });
+  });
+
+  test("each Run's agents are one for the Run until another policy is chosen", () => {
+    expect(settingOf("agent_sessions")).toMatchObject({
+      kind: "choice",
+      choices: ["run", "ticket", "round"],
+      fallback: "run",
+    });
+    for (const value of ["run", "ticket", "round"]) {
+      expect(parseSetting("agent_sessions", value)).toEqual({ value });
+    }
+    expect(parseSetting("agent_sessions", "slice")).toEqual({
+      refused: 'agent_sessions has to be one of run, ticket, round, not "slice"',
+    });
   });
 
   test("share a release for approval only once turned on, and in the channel named", () => {
@@ -168,18 +197,19 @@ describe("Claude Code's auto-compact window", () => {
   });
 
   test("takes a whole number in the range as a number, and auto as itself", () => {
-    expect(parseSetting("claude_auto_compact_window", "100000")).toEqual({ value: 100000 });
-    expect(parseSetting("claude_auto_compact_window", "1000000")).toEqual({ value: 1000000 });
-    expect(parseSetting("claude_auto_compact_window", " 400000 ")).toEqual({ value: 400000 });
+    expect(parseSetting("claude_auto_compact_window", "100000")).toEqual({ value: 100_000 });
+    expect(parseSetting("claude_auto_compact_window", "1000000")).toEqual({ value: 1_000_000 });
+    expect(parseSetting("claude_auto_compact_window", " 400000 ")).toEqual({ value: 400_000 });
     expect(parseSetting("claude_auto_compact_window", "auto")).toEqual({ value: "auto" });
     expect(parseSetting("claude_auto_compact_window", "")).toEqual({ value: null });
   });
 
   test("refuses anything else, Claude Code's shorthands included, naming the range", () => {
-    for (const typed of ["99999", "1000001", "500k", "1M", "-5", "400000.5", "big"])
+    for (const typed of ["99999", "1000001", "500k", "1M", "-5", "400000.5", "big"]) {
       expect(parseSetting("claude_auto_compact_window", typed)).toEqual({
         refused: `${RANGE}, not "${typed}"`,
       });
+    }
   });
 });
 
@@ -192,6 +222,8 @@ describe("Each setting explains itself", () => {
       ...Arr.map(harnessNames(), (harness) => `models.${harness}`),
       "fallbacks",
       "permissions",
+      "role_tools",
+      "output_submit",
       "trust",
       "compact_at_tokens",
       "claude_auto_compact_window",
@@ -199,7 +231,6 @@ describe("Each setting explains itself", () => {
       "idle_close_ms",
       "agent_profile",
       "claude_subagents",
-      "terminal_backend",
     ],
     Runs: [
       "worktrees_directory",
@@ -211,6 +242,8 @@ describe("Each setting explains itself", () => {
       "release.share_for_approval",
       "release.approval_channel",
       "review.follow_through",
+      "inline_plan",
+      "agent_sessions",
     ],
     Board: ["scope", "density", "board_quiet_ms", "run_model"],
     Chat: ["flock_chat.proactive", "machine_rule", "standing_direction", "proactive"],
@@ -224,13 +257,14 @@ describe("Each setting explains itself", () => {
 
   test("under a group, with a plain name and a sentence on what it changes", () => {
     expect<ReadonlyArray<string>>(SETTING_GROUPS).toEqual(Rec.keys(PLACED));
-    for (const [group, placed] of Rec.toEntries(PLACED))
+    for (const [group, placed] of Rec.toEntries(PLACED)) {
       expect(
         Arr.map(
           Arr.filter(SETTINGS, (setting) => setting.group === group),
           ({ key }) => key,
         ).sort(),
       ).toEqual([...placed].sort());
+    }
     for (const setting of SETTINGS) {
       expect(setting.label).not.toBe("");
       expect(setting.description).not.toBe("");
@@ -247,7 +281,9 @@ describe("Each setting explains itself", () => {
     expect(said("compact_at_tokens")).toContain("0 turns compaction off");
     expect(said("idle_close_ms")).toContain("0 never closes one");
     expect(said("effort")).toContain("Unset");
-    for (const key of ["scope", "density", "questions"]) expect(said(key)).toContain("TUI");
+    for (const key of ["scope", "density", "questions"]) {
+      expect(said(key)).toContain("TUI");
+    }
     expect(said("proactive")).toContain("Native chat");
     expect(said("proactive")).toContain("Flock chat");
   });
@@ -261,11 +297,12 @@ describe("Each setting explains itself", () => {
     expect(settingStored("handoff_timeout_ms", "1.5")).toEqual({ stored: "90000" });
     expect(settingStored("quiet_ms", "")).toEqual({ stored: "" });
     expect(settingStored("quiet_ms", ".5")).toEqual({ stored: "30000" });
-    expect(parseSetting("quiet_ms", "900000")).toEqual({ value: 900000 });
-    for (const typed of ["-1", "ten"])
+    expect(parseSetting("quiet_ms", "900000")).toEqual({ value: 900_000 });
+    for (const typed of ["-1", "ten"]) {
       expect(settingStored("board_quiet_ms", typed)).toEqual({
         refused: `board_quiet_ms has to be a number of minutes, not "${typed}"`,
       });
+    }
   });
 
   test("an idle agent closes after an hour by default, and 0 is never", () => {

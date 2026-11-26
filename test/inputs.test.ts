@@ -28,10 +28,9 @@ import { FakeBin } from "./support/bin";
 
 let rig: Rig;
 let bin: FakeBin;
-/** The Runs this test has made, which is what inference is given to look back at. */
-let planned: RunFacts[];
+let planned: Array<RunFacts>;
 
-const join = (...parts: string[]) => pipe(Arr.join(parts, "/"), Str.replace(/\/+/g, "/"));
+const join = (...parts: Array<string>) => pipe(Arr.join(parts, "/"), Str.replaceAll(/\/+/g, "/"));
 const mkdir = (path: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.makeDirectory(path, { recursive: true }));
 const writeFile = (path: string, text: string) =>
@@ -58,7 +57,6 @@ afterEach(() =>
 
 const ctx = () => ({ cwd: rig.projectDir });
 
-/** A glab logged in, answering this branch's open merge requests, and mine as assignee and author. */
 const glabListing = (lists: {
   branch?: ReadonlyArray<number>;
   assignee?: string;
@@ -123,7 +121,7 @@ test("diff-target falls back to the branch diff when there is no open merge requ
 test("diff-target skips a merge request that is no longer open", () =>
   runOnPath(
     Effect.gen(function* () {
-      // glab lists only open merge requests, so a merged one is not there.
+      // WARNING: glab lists only open merge requests, so a merged one is not there.
       yield* bin.add("glab", glabListing({}));
       yield* bin.add(
         "git",
@@ -188,8 +186,6 @@ test("diff-target finds the base by name when origin/HEAD is missing", () =>
 test("no glab and no git leaves nothing to infer, so the human types it", () =>
   runOnPath(
     Effect.gen(function* () {
-      // Also the non-repo case: a directory that is not a checkout has no branch and
-      // no working tree to review, so the menu is one entry — Type it….
       expect(yield* inferInput("target", "diff-target", { cwd: rig.projectDir })).toMatchObject({
         value: "",
         source: "ask",
@@ -225,8 +221,6 @@ test("the confirm line shows every input with where it came from", () =>
       expect(confirmLine("review", resolutions)).toBe(
         "review: target=worktree [working tree]  post=false [default]",
       );
-      // A mutating run's branch is decided the same way its Inputs are, and is the
-      // one thing the line did not say.
       expect(
         confirmLine("implement", resolutions, { name: "wide-scope", source: "from target" }),
       ).toContain("branch=wide-scope [from target]");
@@ -326,7 +320,6 @@ test("a work-source with several candidates offers all of them, newest plans fir
       const resolved = yield* inferInput("plan", "work-source", withState());
 
       expect(resolved.needsAsking).toBe(true);
-      // Three newest plans at most, so an old run cannot bury the branch's ticket.
       expect(
         Option.getOrUndefined(
           Option.map(Option.fromNullishOr(resolved.candidates), (present) =>
@@ -377,7 +370,6 @@ test("what the human types is classified as a plan dir, a Linear issue or free t
           label: "make-the-picker-remember",
         },
       );
-      // A path without a SPEC is not a plan dir, so it stays what it looks like: prose.
       expect(yield* classifyWorkSource(join(rig.projectDir, "nope"))).toMatchObject({
         kind: "text",
       });
@@ -391,7 +383,7 @@ test("the menu resolves a work-source to a candidate", () =>
       const plan = yield* makePlanRun("newest-goal", rig.projectDir, "2026-08-27T09:00:00.000Z");
       const resolved = yield* inferInput("plan", "work-source", withState());
 
-      const asked: string[] = [];
+      const asked: Array<string> = [];
       const ok = yield* resolveCandidates(resolved, {
         menu: (items, opts) => {
           asked.push(opts.header);
@@ -417,7 +409,7 @@ test("the menu always offers Type it…, and classifies what comes back", () =>
       yield* bin.add("git", `echo add-picker`);
       const resolved = yield* inferInput("plan", "work-source", withState());
 
-      const titles: string[] = [];
+      const titles: Array<string> = [];
       const ok = yield* resolveCandidates(resolved, {
         menu: (items) => {
           titles.push(...Arr.map(items, (i) => i.title));
@@ -499,7 +491,6 @@ function withState() {
   return { cwd: rig.projectDir, runs: planned };
 }
 
-/** A finished `plan` Run, with its directory on disk and a SPEC in it unless told otherwise. */
 function makePlanRun(
   slug: string,
   cwd: string,
@@ -526,15 +517,11 @@ function makePlanRun(
       yield* mkdir(join(dir, "plan"));
       yield* writeFile(join(dir, "plan", "SPEC.md"), "# spec\n");
     }
-    // Newest first, as the host lists them.
     planned = [...planned, run].sort((a, b) => pipe(b.created, Str.localeCompare(a.created)));
     return run;
   });
 }
 
-// --- 10: the human chooses the review target ------------------------------
-
-/** git that answers the three questions diff-target asks, with a dirty tree. */
 function gitOn(branch: string, base = "origin/main", porcelain = " M src/x.ts") {
   return `case "$1 $2" in
       "rev-parse --git-dir") echo .git ;;
@@ -554,7 +541,6 @@ test("diff-target offers the MR, the branch and the working tree, inference firs
 
       const resolved = yield* inferInput("target", "diff-target", ctx());
 
-      // The head of the list is what inference alone would have picked, so Enter keeps it.
       expect(resolved.value).toBe("mr:gitlab.example.com/g/p!42");
       expect(resolved.kind).toBe("mr");
       expect(
@@ -585,7 +571,6 @@ test("with no MR for this branch, my own open MRs are offered instead", () =>
 
       const resolved = yield* inferInput("target", "diff-target", ctx());
 
-      // Deduplicated across assignee and author, and never ahead of the branch itself.
       expect(
         Option.getOrUndefined(
           Option.map(Option.fromNullishOr(resolved.candidates), (present__) =>
@@ -598,8 +583,6 @@ test("with no MR for this branch, my own open MRs are offered instead", () =>
         ["branch", "branch:main...add-picker"],
         ["worktree", "worktree"],
       ]);
-      // Offered, but never inferred: an unrelated merge request of mine is not what
-      // this branch is about, so inference takes the branch.
       expect(resolved.value).toBe("branch:main...add-picker");
     }),
   ));
@@ -607,17 +590,12 @@ test("with no MR for this branch, my own open MRs are offered instead", () =>
 test("my own open MRs are never what inference lands on by itself", () =>
   runOnPath(
     Effect.gen(function* () {
-      // The shape that reviewed the wrong merge request: standing on the default
-      // branch with a clean tree, so the only candidates are my open MRs, and the
-      // lowest iid is an unrelated one from months ago.
       const old = '[{"iid": 41, "title": "something old"}, {"iid": 314, "title": "this work"}]';
       yield* bin.add("glab", glabListing({ assignee: old, author: old }));
       yield* bin.add("git", gitOn("main", "origin/main", ""));
 
       const resolved = yield* inferInput("target", "diff-target", ctx());
 
-      // Both are on the menu, in iid order, and the working tree is there to be
-      // inferred rather than !41.
       expect(
         Option.getOrUndefined(
           Option.map(Option.fromNullishOr(resolved.candidates), (present___) =>
@@ -650,15 +628,12 @@ test("a clean tree on the default branch still offers the working tree", () =>
   ));
 
 test("what the human types is classified as an MR, a range or a branch", () => {
-  // A bare iid means one in the project the directory belongs to, and carries it.
   expect(classifyTarget("42", "main", "gitlab.example.com/g/p")).toMatchObject({
     kind: "mr",
     value: "mr:gitlab.example.com/g/p!42",
     label: "!42",
   });
-  // With no project to resolve against it stays the shape it always was.
   expect(classifyTarget("!42", "main")).toMatchObject({ kind: "mr", value: "mr:42", label: "!42" });
-  // A URL names its own project, whatever directory it was pasted in.
   expect(
     classifyTarget(
       "https://gitlab.cego.dk/cego/herdr-plugin/-/merge_requests/128",
@@ -666,7 +641,6 @@ test("what the human types is classified as an MR, a range or a branch", () => {
       "other/g/p",
     ),
   ).toMatchObject({ kind: "mr", value: "mr:gitlab.cego.dk/cego/herdr-plugin!128", label: "!128" });
-  // Subgroups are part of the path.
   expect(
     classifyTarget("https://gitlab.cego.dk/cego/sub/deep/-/merge_requests/9", "main"),
   ).toMatchObject({ value: "mr:gitlab.cego.dk/cego/sub/deep!9", label: "!9" });
@@ -675,7 +649,6 @@ test("what the human types is classified as an MR, a range or a branch", () => {
     value: "branch:main...add-picker",
   });
   expect(classifyTarget("worktree", "main")).toMatchObject({ kind: "worktree", value: "worktree" });
-  // A bare ref means that ref against the default base, which is what a branch target is.
   expect(classifyTarget("add-picker", "main")).toMatchObject({
     kind: "branch",
     value: "branch:main...add-picker",
@@ -704,8 +677,9 @@ test.each([
   ["a GitHub checkout", "github.com/cego/collie", "mr:github.com/cego/collie#30", "#30"],
   ["a GitLab checkout", "gitlab.cego.dk/cego/app", "mr:gitlab.cego.dk/cego/app!30", "!30"],
 ])("#30, !30 and 30 typed in %s are its forge's own merge request", (_, project, value, label) => {
-  for (const typed of ["#30", "!30", "30"])
+  for (const typed of ["#30", "!30", "30"]) {
     expect(classifyTarget(typed, "main", project)).toMatchObject({ kind: "mr", value, label });
+  }
 });
 
 test("a diff-target given on the command line is normalised, not just shaped", () =>
@@ -713,7 +687,6 @@ test("a diff-target given on the command line is normalised, not just shaped", (
     Effect.gen(function* () {
       yield* bin.add("git", gitOn("add-picker"));
 
-      // A URL used to fall through to `worktree`, which left `{{target_repo}}` empty.
       const url = yield* classifyGivenTarget(
         "https://gitlab.cego.dk/cego/collie/-/merge_requests/2",
         ctx(),
@@ -721,7 +694,6 @@ test("a diff-target given on the command line is normalised, not just shaped", (
       expect(url).toMatchObject({ kind: "mr", value: "mr:gitlab.cego.dk/cego/collie!2" });
 
       expect(yield* classifyGivenTarget("worktree", ctx())).toMatchObject({ kind: "worktree" });
-      // An already-normalised target passes through rather than being nested.
       expect(yield* classifyGivenTarget("branch:main...x", ctx())).toMatchObject({
         kind: "branch",
         value: "branch:main...x",
@@ -730,12 +702,11 @@ test("a diff-target given on the command line is normalised, not just shaped", (
         kind: "mr",
         value: "mr:12",
       });
-      // Free-form still gets the menu's classification.
       expect(yield* classifyGivenTarget("add-picker", ctx())).toMatchObject({
         kind: "branch",
         value: "branch:main...add-picker",
       });
-      // A shape nothing recognises is refused by whoever admits it, never read as `worktree`.
+      // WARNING: a shape nothing recognises is refused by whoever admits it, never read as worktree.
       expect(targetKind("https://gitlab.cego.dk/cego/collie/-/merge_requests/2")).toBe("");
       expect(targetKind("mr:group/app")).toBe("");
     }),
@@ -755,7 +726,6 @@ test("a diff-target naming several merge requests is each normalised, or refused
           "mr:gitlab.cego.dk/cego/collie!2 mr:gitlab.example.com/g/p!7 mr:github.com/cego/collie#9",
       });
       expect(yield* classifyGivenSet("!7 add-picker", ctx())).toEqual({ unresolved: "add-picker" });
-      // One reference, or words none of which is a merge request, are what they were.
       expect(yield* classifyGivenSet("!7", ctx())).toBeNull();
       expect(yield* classifyGivenSet("main...add-picker other", ctx())).toBeNull();
     }),
@@ -768,7 +738,7 @@ test("the target menu always shows, and Type it… classifies what comes back", 
       yield* bin.add("git", gitOn("add-picker"));
       const resolved = yield* inferInput("target", "diff-target", ctx());
 
-      const titles: string[] = [];
+      const titles: Array<string> = [];
       const ok = yield* resolveCandidates(resolved, {
         menu: (items, opts) => {
           titles.push(...Arr.map(items, (i) => i.title));
@@ -831,7 +801,6 @@ test("targetCandidates offers nothing outside a checkout, and does not throw", (
       yield* bin.add("glab", `exit 1`);
       yield* bin.add("git", `exit 1`);
 
-      // No checkout means no branch and no working tree; the menu is Type it… alone.
       expect(yield* targetCandidates(ctx())).toEqual([]);
     }),
   ));
@@ -856,7 +825,6 @@ test("an MR candidate carries the project its checkout pushes to", () =>
         value: "mr:gitlab.cego.dk/cego/herdr-plugin!42",
         label: "!42",
       });
-      // And the label a tab would show is still just the iid.
       expect(mr!.label).toBe("!42");
     }),
   ));
@@ -874,7 +842,6 @@ test("the targets this repo has already reviewed are offered without pasting the
         });
       yield* reviewed("old", "mr:gitlab/x!7", "2026-08-01T10:00:00Z");
       yield* reviewed("new", "branch:main...feature", "2026-08-30T10:00:00Z");
-      // Same target twice keeps the newest, and another repo's runs never appear.
       yield* reviewed("again", "mr:gitlab/x!7", "2026-08-31T10:00:00Z");
       yield* reviewed("elsewhere", "mr:other!1", "2026-08-31T11:00:00Z", "/somewhere/else");
 
@@ -886,13 +853,11 @@ test("the targets this repo has already reviewed are offered without pasting the
       ]);
       expect(remembered[0]!.source).toContain("reviewed");
 
-      // And they come after what inference offers, never in front of it.
       yield* bin.add("glab", `exit 1`);
       yield* bin.add("git", gitOn("add-picker"));
       const candidates = yield* targetCandidates({ cwd: rig.projectDir, runs: planned });
       const values = Arr.map(candidates, (c) => c.value);
       expect(values.indexOf("mr:gitlab/x!7")).toBeGreaterThan(values.indexOf("worktree"));
-      // Already offered by inference, so not offered twice.
       expect(Arr.filter(values, (v) => v === "branch:main...feature")).toHaveLength(1);
     }),
   ));

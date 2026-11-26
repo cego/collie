@@ -1,7 +1,4 @@
-// An agent's start, from `collie run start` or chat: nothing is inferred or routed, so it
-// names its checkout and every Input, and a gap is refused with what would fill it
-// (ADR-0033). The Launch flow is the human's front door and does not come through here.
-
+// WARNING: nothing is inferred or routed; a gap is refused with what would fill it.
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -13,18 +10,15 @@ import type { Given } from "./engine";
 import type { PluginEnv } from "./env";
 import { forgeHttpLayer } from "./forge/http";
 import { inferInput, shell } from "./inputs";
-import { err, type Failure } from "./operations";
+import { err } from "./operations";
+import type { Failure } from "./operations";
 import { checkoutsUnder, PROJECTS_ROOT_OPTION, projectsRoot, repositoryCheckout } from "./projects";
 import { listRuns } from "./runs";
 import { RESERVED_INPUTS } from "./sdk";
 import { strategyMeaning } from "./strategies";
 import { repositoryName } from "./worktree";
 
-/**
- * What the host supplies at launch, split from what the author declared. A module may not
- * declare one of these names — `checkEntry` refuses that at load — so a value under one is
- * the host's option and never an input, and nothing of the host's reaches the payload.
- */
+// WARNING: a module may not declare these names (checkEntry refuses them), so a host option is never an input.
 export function hostOptions(given: Given) {
   return {
     input: {
@@ -43,41 +37,30 @@ export function hostOptions(given: Given) {
 
 const isOption = (name: string) => name in RESERVED_INPUTS;
 
-/** A host option is text; one that arrived as typed JSON is written back down as it came. */
+// WARNING: a host option that arrived as typed JSON is written back as it came.
 export const asOptionText = (value: Schema.Json) => (isText(value) ? value : asJsonText(value));
 const isText = Schema.is(Schema.String);
 const asJsonText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
 
-/** How many plan directories a refusal offers for a work source. */
 const PLANS_OFFERED = 5;
 
 const CHECKOUT_MEANING = `Which checkout the Run starts in: its absolute path, or \`${PROJECTS_ROOT_OPTION}\` for the Projects root`;
 
-/** How a CLI start names its checkout. */
 export const CLI_CHECKOUT_FIX = `Name the checkout with --input workspace=<absolute path> or workspace=${PROJECTS_ROOT_OPTION}.`;
 
-/** How a chat start names its checkout. */
 export const CHAT_CHECKOUT_FIX = `Name the checkout in the action's workspace: a workspace id, its label, an absolute path, a repository's name under the Projects root, or ${PROJECTS_ROOT_OPTION}.`;
 
-/** Whether a start from `cwd` has named its checkout by being in one. */
 export const insideCheckout = (cwd: string) =>
   repositoryName(shell, cwd).pipe(
     Effect.map((name) => name !== null),
     Effect.orElseSucceed(() => false),
   );
 
-/**
- * The refusal for an agent's start that leaves anything unsaid, or null where it names
- * everything. The checkout is the front door's to say — a CLI start in a checkout has
- * named it, a chat start names one only through its `workspace` — and so is the sentence
- * that tells its caller how to name one.
- */
 export const agentStartRefusal = Effect.fn("AgentStart.refusal")(function* (
   env: PluginEnv,
   entry: Found,
   given: Given,
   checkout: {
-    /** The directory the start names, or null where it names none. */
     readonly named: string | null;
     readonly fix: string;
   },
@@ -85,7 +68,7 @@ export const agentStartRefusal = Effect.fn("AgentStart.refusal")(function* (
   const checkoutNamed = checkout.named !== null;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const missing: Array<{ name: string; meaning: string; facts: string[] }> = [];
+  const missing: Array<{ name: string; meaning: string; facts: Array<string> }> = [];
   if (!checkoutNamed) {
     const root = yield* projectsRoot(env).pipe(Effect.orElseSucceed(() => null));
     const checkouts = root === null ? [] : yield* checkoutsUnder(root.path);
@@ -96,9 +79,13 @@ export const agentStartRefusal = Effect.fn("AgentStart.refusal")(function* (
     });
   }
   for (const field of entry.inputs) {
-    if (field.strategy === "internal") continue;
-    if (given.text[field.name] !== undefined || given.json[field.name] !== undefined) continue;
-    const facts: string[] = [];
+    if (field.strategy === "internal") {
+      continue;
+    }
+    if (given.text[field.name] !== undefined || given.json[field.name] !== undefined) {
+      continue;
+    }
+    const facts: Array<string> = [];
     if (checkoutNamed && field.strategy === "diff-target") {
       const inferred = yield* inferInput(field.name, "diff-target", {
         cwd: checkout.named ?? env.cwd,
@@ -107,22 +94,30 @@ export const agentStartRefusal = Effect.fn("AgentStart.refusal")(function* (
         Effect.provide(forgeHttpLayer),
         Effect.orElseSucceed(() => null),
       );
-      if (inferred !== null && !inferred.needsAsking && inferred.value !== "")
+      if (inferred !== null && !inferred.needsAsking && inferred.value !== "") {
         facts.push(`${inferred.value} (${inferred.source})`);
+      }
     }
     if (field.strategy === "work-source" || field.strategy === "plan-dir") {
       const runs = yield* listRuns(env).pipe(Effect.orElseSucceed(() => []));
       for (const run of runs) {
-        if (facts.length >= PLANS_OFFERED) break;
-        if (run.state !== "succeeded") continue;
+        if (facts.length >= PLANS_OFFERED) {
+          break;
+        }
+        if (run.state !== "succeeded") {
+          continue;
+        }
         const plan = path.join(run.dir, "plan");
-        if (yield* fs.exists(path.join(plan, "SPEC.md")).pipe(Effect.orElseSucceed(() => false)))
+        if (yield* fs.exists(path.join(plan, "SPEC.md")).pipe(Effect.orElseSucceed(() => false))) {
           facts.push(plan);
+        }
       }
     }
     missing.push({ name: field.name, meaning: meaningOf(field), facts });
   }
-  if (missing.length === 0) return null;
+  if (missing.length === 0) {
+    return null;
+  }
   const names = Arr.join(
     Arr.map(missing, (one) => `"${one.name}"`),
     ", ",
@@ -161,10 +156,11 @@ export const agentStartRefusal = Effect.fn("AgentStart.refusal")(function* (
   ) satisfies Failure;
 });
 
-/** What a field is for: the schema's own description, else what its strategy means. */
-function meaningOf(field: Found["inputs"][number]): string {
+function meaningOf(field: Found["inputs"][number]) {
   const described = Option.getOrUndefined(describedIn(field.schema))?.description ?? "";
-  if (described !== "") return described;
+  if (described !== "") {
+    return described;
+  }
   return field.strategy === null ? "" : strategyMeaning(field.strategy);
 }
 
@@ -178,7 +174,9 @@ export const startCheckout = Effect.fn("AgentStart.checkout")(function* (
 ) {
   const named = options?.workspace ?? project;
   const repository = yield* repositoryCheckout(env, named);
-  if (repository !== null && "error" in repository) return repository;
+  if (repository !== null && "error" in repository) {
+    return repository;
+  }
   let cwd = repository?.path ?? project;
   if (
     repository === null &&
@@ -193,8 +191,9 @@ export const startCheckout = Effect.fn("AgentStart.checkout")(function* (
       : options.workspace;
     const at = path.resolve(env.cwd, namedPath);
     const found = yield* fs.stat(at).pipe(Effect.option);
-    if (Option.isNone(found) || found.value.type !== "Directory")
+    if (Option.isNone(found) || found.value.type !== "Directory") {
       return { error: `workspace: ${at} is not a directory` };
+    }
     cwd = at;
   }
   const launch = { ...options };
@@ -205,12 +204,15 @@ export const startCheckout = Effect.fn("AgentStart.checkout")(function* (
       options?.workspace !== undefined &&
       options.workspace !== "new" &&
       options.workspace !== PROJECTS_ROOT_OPTION)
-  )
+  ) {
     delete launch.workspace;
+  }
   let branchBase: string | undefined;
   if (remote && launch.branch) {
     const valid = yield* shell("git", ["check-ref-format", "--branch", launch.branch], cwd);
-    if (valid.code !== 0) return { error: `"${launch.branch}" is not a branch name.` };
+    if (valid.code !== 0) {
+      return { error: `"${launch.branch}" is not a branch name.` };
+    }
     const from = repository?.remote ?? "origin";
     const ref = `refs/remotes/${from}/${launch.branch}`;
     const fetched = yield* shell(
@@ -218,12 +220,15 @@ export const startCheckout = Effect.fn("AgentStart.checkout")(function* (
       ["fetch", from, `+refs/heads/${launch.branch}:${ref}`],
       cwd,
     );
-    if (fetched.code !== 0)
+    if (fetched.code !== 0) {
       return {
         error: `Could not fetch branch "${launch.branch}" from ${from} in ${cwd}: ${Str.trim(fetched.stderr ?? "")}`,
       };
+    }
     const head = yield* shell("git", ["rev-parse", "--verify", `${ref}^{commit}`], cwd);
-    if (head.code !== 0) return { error: `Could not read the fetched branch in ${cwd}.` };
+    if (head.code !== 0) {
+      return { error: `Could not read the fetched branch in ${cwd}.` };
+    }
     branchBase = Str.trim(head.stdout);
   }
   const root =

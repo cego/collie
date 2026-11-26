@@ -1,6 +1,3 @@
-// What Desktop draws of each Machine's Usage readings: the header's entry per Subscription
-// and account, and the Usage page.
-
 import * as Arr from "effect/Array";
 import { describe, expect, test } from "bun:test";
 import { Config, Effect, Option, Schema, flow, Result } from "effect";
@@ -12,9 +9,10 @@ import * as RpcServer from "effect/rpc/RpcServer";
 import { bridgeCommand, openBridge, usageOn } from "../desktop/src/bun/machine";
 import { FrontDoorRpcs } from "../src/board-model";
 import { epochMs } from "../src/time";
+import { codexUsage } from "../src/usage-model";
 import type { UsageReading, UsageWindow } from "../src/usage-model";
+import codexRateLimits from "./fixtures/usage/codex-account-ratelimits-read.json";
 import {
-  type MachineUsage,
   UPGRADE_SAID,
   usageDue,
   usageAccounts,
@@ -27,7 +25,7 @@ import { proves } from "./support/world";
 
 const NOW = epochMs("2026-10-08T08:00:00Z");
 
-const window = (over: Partial<UsageWindow>): UsageWindow => ({
+const window: (over: Partial<UsageWindow>) => UsageWindow = (over) => ({
   kind: "session",
   label: "Session",
   model: null,
@@ -37,7 +35,7 @@ const window = (over: Partial<UsageWindow>): UsageWindow => ({
   ...over,
 });
 
-const reading = (over: Partial<UsageReading>): UsageReading => ({
+const reading: (over: Partial<UsageReading>) => UsageReading = (over) => ({
   subscription: "claude",
   account: "org:acct",
   accountLabel: "me@example.com",
@@ -49,7 +47,7 @@ const reading = (over: Partial<UsageReading>): UsageReading => ({
   ...over,
 });
 
-const machine = (name: string, readings: ReadonlyArray<UsageReading>): MachineUsage => ({
+const machine = (name: string, readings: ReadonlyArray<UsageReading>) => ({
   profile: `p-${name}`,
   name,
   readings,
@@ -58,6 +56,18 @@ const machine = (name: string, readings: ReadonlyArray<UsageReading>): MachineUs
 
 const chatgpt = (over: Partial<UsageReading>) =>
   reading({ subscription: "chatgpt", account: "workspace", source: "codex-app-server", ...over });
+const spentCreditCap = {
+  ...codexRateLimits.result,
+  ordinaryUsageAllowed: true,
+  rateLimits: {
+    ...codexRateLimits.result.rateLimits,
+    primary: { usedPercent: 2, windowDurationMins: 10_080, resetsAt: 1_791_973_608 },
+    secondary: null,
+    individualLimit: { limit: "5000", used: "5000.0", remainingPercent: 0 },
+    spendControlReached: true,
+    rateLimitReachedType: null,
+  },
+};
 
 const LIVE = ["p-mk-pc", "p-vm-mk"];
 
@@ -440,6 +450,23 @@ describe("the Usage page", () => {
   });
 });
 
+test("a spent credit cap shows ChatGPT's real weekly percent, in the header and on the page", () => {
+  const seat = chatgpt({ windows: codexUsage(spentCreditCap).windows });
+  expect(
+    Arr.map(usageEntries([machine("mk-pc", [seat])], LIVE, NOW), ({ text, level }) => [
+      text,
+      level,
+    ]),
+  ).toEqual([["ChatGPT 2%", "ok"]]);
+  const page = usagePage([machine("mk-pc", [seat])], LIVE, NOW);
+  expect(
+    Option.getOrUndefined(
+      Option.map(Option.fromNullishOr(page.sections[0]), (present) =>
+        Arr.map(present.windows, ({ label, percent, level }) => [label, percent, level]),
+      ),
+    ),
+  ).toEqual([["Weekly", 2, "ok"]]);
+});
 test("Desktop asks first at once, then each minute while it is shown", () => {
   expect(usageDue(null, NOW, true)).toBe(true);
   expect(usageDue(NOW - 59_000, NOW, true)).toBe(false);
@@ -455,58 +482,52 @@ const mkPc = { profile: "local", name: "mk-pc" };
 type Rpcs = RpcGroup.Rpcs<typeof FrontDoorRpcs>;
 
 describe("the main process asks each Machine's host", () => {
-  test(
-    "a host that answers gives its readings, each saying why it has no numbers",
-    () =>
-      proves(
-        "collie-desktop-usage-",
-        (world) =>
-          Effect.gen(function* () {
-            const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
-            const collie = Option.isSome(binary)
-              ? [binary.value]
-              : [process.execPath, `${root}src/main.ts`];
-            // No Claude login under this HOME and no Codex on this PATH: nothing reaches an endpoint.
-            const door = yield* openBridge(bridgeCommand(collie, "mk-pc"), {
-              PATH: "/usr/bin:/bin",
-              HOME: world.home,
-              HERDR_PLUGIN_ROOT: world.install,
-              HERDR_PLUGIN_STATE_DIR: world.state,
-              COLLIE_USER_DIR: world.config,
-              COLLIE_HOST: asCommand(collie),
-              ...(yield* suiteEnv),
-              HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH ?? "",
-              FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG ?? "",
-            });
-            const read = yield* usageOn(mkPc, door);
-            expect(read).toMatchObject({ profile: "local", name: "mk-pc", problem: null });
-            expect(Arr.map(read.readings, ({ subscription }) => subscription)).toEqual([
-              "claude",
-              "chatgpt",
-            ]);
-            expect(Arr.every(read.readings, ({ problem }) => problem !== null)).toBe(true);
-            yield* stopHost(world.state);
-          }).pipe(Effect.orDie),
-        [],
-      ),
-    120_000,
-  );
+  test("a host that answers gives its readings, each saying why it has no numbers", () =>
+    proves(
+      "collie-desktop-usage-",
+      (world) =>
+        Effect.gen(function* () {
+          const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
+          const collie = Option.isSome(binary)
+            ? [binary.value]
+            : [process.execPath, `${root}src/main.ts`];
+          // WARNING: No Claude login under this HOME and no Codex on this PATH: nothing reaches an endpoint.
+          const door = yield* openBridge(bridgeCommand(collie, "mk-pc"), {
+            PATH: "/usr/bin:/bin",
+            HOME: world.home,
+            COLLIE_ROOT: world.install,
+            COLLIE_STATE_DIR: world.state,
+            COLLIE_USER_DIR: world.config,
+            COLLIE_HOST: asCommand(collie),
+            ...(yield* suiteEnv),
+            HC_SOCKET: Bun.env.HC_SOCKET ?? "",
+          });
+          const read = yield* usageOn(mkPc, door);
+          expect(read).toMatchObject({ profile: "local", name: "mk-pc", problem: null });
+          expect(Arr.map(read.readings, ({ subscription }) => subscription)).toEqual([
+            "claude",
+            "chatgpt",
+          ]);
+          expect(Arr.every(read.readings, ({ problem }) => problem !== null)).toBe(true);
+          yield* stopHost(world.state);
+        }).pipe(Effect.orDie),
+      [],
+    ));
 
   test("a host without the call asks for an upgrade rather than showing nothing", () =>
     Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          // An older host: it serves operations, but not `usage`.
           const Older = RpcGroup.make(Rpc.make("ping"));
           let toClient: (response: RpcMessage.FromServer<Rpcs>) => Effect.Effect<void> = () =>
             Effect.void;
           const server = yield* RpcServer.makeNoSerialization(Older, {
-            // SAFETY: what a host answers is the same envelope whichever group it serves.
+            // WARNING: what a host answers is the same envelope whichever group it serves.
             onFromServer: (response) => toClient(response as RpcMessage.FromServer<Rpcs>),
           }).pipe(Effect.provide(Older.toLayer({ ping: () => Effect.void })));
           const client = yield* RpcClient.makeNoSerialization(FrontDoorRpcs, {
             supportsAck: true,
-            // SAFETY: the older host is handed a request it has no schema for, as over the wire.
+            // WARNING: the older host is handed a request it has no schema for, as over the wire.
             onFromClient: ({ message }) =>
               server.write(0, message as RpcMessage.FromClient<RpcGroup.Rpcs<typeof Older>>),
           });

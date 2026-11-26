@@ -1,12 +1,11 @@
-// The doctor's GitHub checks: gh and its login to github.com, asked only of a Machine where
-// some checkout under the Projects root is on GitHub (ADR-0050 D8).
-
 import { Effect } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { gitlabHostOf } from "../config";
-import { FETCH_LIMIT, answered, failed, onPath, passed, type Check } from "../doctor-check";
+import { FETCH_LIMIT, answered, failed, onPath, passed } from "../doctor-check";
+import type { Check } from "../doctor-check";
 import type { PluginEnv } from "../env";
-import { forgeHere, type Runner } from "../mr";
+import { forgeHere } from "../mr";
+import type { Runner } from "../mr";
 import { checkoutsUnder, projectsRoot } from "../projects";
 
 const HOST = "github.com";
@@ -18,14 +17,17 @@ export const githubChecks = Effect.fn("Doctor.githubChecks")(function* (
 ) {
   const gitlabHost = yield* gitlabHostOf(env);
   let used = 0;
-  // ponytail: two git calls per checkout; a Projects root of thousands would want .git/config read directly.
   for (const checkout of yield* checkoutsUnder((yield* projectsRoot(env)).path)) {
     const here = yield* forgeHere(checkout, run, gitlabHost);
-    if (here.ok && here.forge.name === "github") used += 1;
+    if (here.ok && here.forge.name === "github") {
+      used += 1;
+    }
   }
-  if (used === 0) return [];
+  if (used === 0) {
+    return [];
+  }
   const by = `used by ${used} checkout${used === 1 ? "" : "s"}`;
-  if ((yield* onPath(search, "gh")) === null)
+  if ((yield* onPath(search, "gh")) === null) {
     return [
       {
         name: "gh",
@@ -34,7 +36,8 @@ export const githubChecks = Effect.fn("Doctor.githubChecks")(function* (
           "install gh — https://cli.github.com",
         ),
       },
-    ] satisfies Check[];
+    ] satisfies Array<Check>;
+  }
   const auth = yield* answered(run("gh", ["auth", "status", "--hostname", HOST], env.pluginRoot));
   return [
     {
@@ -51,5 +54,5 @@ export const githubChecks = Effect.fn("Doctor.githubChecks")(function* (
               `gh auth login --hostname ${HOST}`,
             )),
     },
-  ] satisfies Check[];
+  ] satisfies Array<Check>;
 });

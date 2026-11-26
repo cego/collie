@@ -14,8 +14,8 @@ try {
     writeFileSync(path, "bench-log:28:58000\nbench-log:29:61000\n"),
   );
   deepStrictEqual(await Effect.runPromise(writerMarkers(completed, path)), [
-    { sequence: 28, at: 58000 },
-    { sequence: 29, at: 61000 },
+    { sequence: 28, at: 58_000 },
+    { sequence: 29, at: 61_000 },
   ]);
   const db = new Database(":memory:");
   try {

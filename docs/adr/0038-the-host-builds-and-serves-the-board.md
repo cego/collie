@@ -4,6 +4,9 @@
 follows it; the text view, chat's `collie_herd` and `collie --json board` read its
 snapshot. Nothing else builds a board.
 
+**Amended** by [ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs](draft-the-board-is-a-projection-of-facts-the-host-syncs.md):
+D3's rebuild on any write under the state directory is gone; nothing is watched.
+
 **Reverses:** where [ADR-0013](0013-the-board-is-cards-of-tasks.md) D1 has the board built.
 The card is still a Task, built by one function; that function now runs in the host and
 nowhere else.

@@ -45,10 +45,15 @@ export const outputsOf = Effect.fn("RunRecord.outputs")(function* (state: string
   const path = yield* Path.Path;
   const dir = runDir(state, run);
   const root = yield* fs.realPath(dir).pipe(Effect.orElseSucceed(() => dir));
-  const files: string[] = [];
-  const walk = (at: string, depth: number): Effect.Effect<void, never, FileSystem.FileSystem> =>
+  const files: Array<string> = [];
+  const walk: (at: string, depth: number) => Effect.Effect<void, never, FileSystem.FileSystem> = (
+    at,
+    depth,
+  ) =>
     Effect.gen(function* () {
-      if (depth > 4) return;
+      if (depth > 4) {
+        return;
+      }
       for (const name of yield* fs.readDirectory(at).pipe(Effect.orElseSucceed(() => []))) {
         const file = path.join(at, name);
         const real = yield* fs.realPath(file).pipe(Effect.orElseSucceed(() => ""));
@@ -58,11 +63,15 @@ export const outputsOf = Effect.fn("RunRecord.outputs")(function* (state: string
           relative === ".." ||
           pipe_(relative, Str.startsWith(`..${path.sep}`)) ||
           path.isAbsolute(relative)
-        )
+        ) {
           continue;
+        }
         const info = yield* fs.stat(file).pipe(Effect.orElseSucceed(() => null));
-        if (info?.type === "Directory") yield* walk(file, depth + 1);
-        else if (info !== null && pipe_(name, Str.endsWith(".json"))) files.push(file);
+        if (info?.type === "Directory") {
+          yield* walk(file, depth + 1);
+        } else if (info !== null && pipe_(name, Str.endsWith(".json"))) {
+          files.push(file);
+        }
       }
     });
   yield* walk(dir, 0);

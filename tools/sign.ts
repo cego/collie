@@ -1,9 +1,4 @@
-// `bun run tools/sign.ts <file>...`: writes `<file>.sig` (Ed25519, with COLLIE_SIGNING_KEY)
-// and `<file>.p256.sig` (P-256, with COLLIE_SIGNING_KEY_P256) beside each release asset. It
-// refuses a key that is not the one Collie checks with, so a release signed by any other key
-// fails here rather than at every install. Desktop's update archive is also signed as the tar
-// it is applied as, which is what Desktop verifies.
-
+// WARNING: refuses a key Collie does not check with, so a release fails here rather than at every install.
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -37,8 +32,10 @@ const KEYS = [
   },
 ] as const;
 
-const refusalOf = (variable: string, privateKey: string, publicKey: string): string | null => {
-  if (privateKey === "") return `${variable} is not set; a release is never published unsigned`;
+const refusalOf = (variable: string, privateKey: string, publicKey: string) => {
+  if (privateKey === "") {
+    return `${variable} is not set; a release is never published unsigned`;
+  }
   try {
     return Str.trim(publicKeyOf(privateKey)) === Str.trim(publicKey)
       ? null
@@ -55,10 +52,15 @@ const program = Effect.gen(function* () {
   for (const key of KEYS) {
     const privateKey = yield* Config.String(key.variable).pipe(Config.withDefault(""));
     const refusal = refusalOf(key.variable, privateKey, key.publicKey);
-    if (refusal === null) keys.push({ ...key, privateKey });
-    else refusals.push(refusal);
+    if (refusal === null) {
+      keys.push({ ...key, privateKey });
+    } else {
+      refusals.push(refusal);
+    }
   }
-  if (refusals.length > 0) return yield* new SigningRefused({ message: Arr.join(refusals, "; ") });
+  if (refusals.length > 0) {
+    return yield* new SigningRefused({ message: Arr.join(refusals, "; ") });
+  }
   const ed25519 = Option.getOrUndefined(
     Arr.findFirst(keys, (key) => key.variable === "COLLIE_SIGNING_KEY"),
   )!;

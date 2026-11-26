@@ -44,8 +44,11 @@ printf '{"ok":true,"data":{"root":"%s","pid":"%s","grace":"%s","forge":"%s"}}\\n
           ),
         );
       } finally {
-        if (before === undefined) delete Bun.env.COLLIE_TEST_BINARY;
-        else Bun.env.COLLIE_TEST_BINARY = before;
+        if (before === undefined) {
+          delete Bun.env.COLLIE_TEST_BINARY;
+        } else {
+          Bun.env.COLLIE_TEST_BINARY = before;
+        }
       }
     }).pipe(Effect.scoped),
   ));
@@ -87,7 +90,7 @@ test("world cleanup waits for a host to exit after it gives back its lock", () =
     }).pipe(Effect.scoped),
   ));
 
-// The preload's process markers use Linux /proc; the rest of the world proofs are portable.
+// WARNING: the process markers read Linux /proc; the other world proofs are portable.
 test.skipIf(process.platform !== "linux")(
   "world cleanup waits for its surviving command before removing the directory",
   () => {
@@ -110,7 +113,7 @@ test.skipIf(process.platform !== "linux")(
                     `${world.state}/last-write`,
                   ],
                   {
-                    env: { ...process.env, HERDR_PLUGIN_STATE_DIR: undefined },
+                    env: { ...process.env, COLLIE_STATE_DIR: undefined },
                     stdin: "ignore",
                     stdout: "ignore",
                     stderr: "ignore",
@@ -119,7 +122,7 @@ test.skipIf(process.platform !== "linux")(
                 other = Bun.spawn([process.execPath, "-e", "await Bun.sleep(60_000);"], {
                   env: {
                     ...process.env,
-                    FAKE_HERDR_LOG: `${path.dirname(world.state)}/herdr-calls.jsonl-other`,
+                    HC_SOCKET: `${path.dirname(world.state)}/other-core.sock`,
                   },
                   stdin: "ignore",
                   stdout: "ignore",
@@ -148,7 +151,9 @@ test.skipIf(process.platform !== "linux")(
         Effect.ensuring(
           Effect.gen(function* () {
             for (const pending of [child, other]) {
-              if (pending === undefined) continue;
+              if (pending === undefined) {
+                continue;
+              }
               yield* Effect.try(() => pending.kill()).pipe(Effect.ignore);
               yield* Effect.promise(() => pending.exited);
             }

@@ -1,12 +1,9 @@
-// The application menu a Mac needs: macOS sends Cmd+C, Cmd+V, Cmd+Q and the rest through it.
-
 import type { ApplicationMenuItemConfig } from "../../core/platform";
 
-const role = (name: string): ApplicationMenuItemConfig => ({ role: name });
+const role = (name: string) => ({ role: name });
 const separator: ApplicationMenuItemConfig = { type: "separator" };
 
-/** The menus Desktop sets on `platform`; none anywhere but macOS, where Linux has no menu bar. */
-export const applicationMenu = (platform: string): ApplicationMenuItemConfig[] =>
+export const applicationMenu = (platform: string) =>
   platform !== "darwin"
     ? []
     : [

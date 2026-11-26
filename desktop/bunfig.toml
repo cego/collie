@@ -4,4 +4,5 @@ peer = false
 
 [test]
 # Only the core's tests, not the Rust crates or vendor/.
-root = "test"
+root = "."
+pathIgnorePatterns = ["board/**", "vendor/**", "node_modules/**"]

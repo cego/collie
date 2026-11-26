@@ -1,7 +1,3 @@
-// The human's own words: what the reader takes from each harness's sessions and Collie's
-// records, what it drops, and what it says it left out. Fixtures copy each store's shape,
-// with invented text.
-
 import { recordLaunch } from "../src/launches";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -33,19 +29,18 @@ const json = (lines: ReadonlyArray<JsonFields>) =>
 const RUNS_TABLE =
   "CREATE TABLE IF NOT EXISTS collie_runs (run TEXT PRIMARY KEY, request TEXT, placing TEXT)";
 
-/** A Run's operations trail as the host keeps it: a row per line, in order. */
 const hostTrail = (file: string, run: string, text: string) => {
   const db = new Database(file, { create: true });
   db.run(RUNS_TABLE);
   db.run(
     "CREATE TABLE IF NOT EXISTS collie_run_lines (run TEXT, journal TEXT, seq INTEGER, line TEXT, PRIMARY KEY (run, journal, seq))",
   );
-  for (const [seq, line] of Arr.dropRight(Str.split(text, "\n"), 1).entries())
+  for (const [seq, line] of Arr.dropRight(Str.split(text, "\n"), 1).entries()) {
     db.run("INSERT INTO collie_run_lines VALUES (?, 'operations.jsonl', ?, ?)", [run, seq, line]);
+  }
   db.close();
 };
 
-/** A home and a state directory, each file written relative to its root. */
 const places = (files: Readonly<Record<string, string>>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -352,7 +347,6 @@ test("from Pi, only what the human typed, with its date and directory", () =>
     }).pipe(Effect.scoped),
   ));
 
-/** OpenCode's store as its tables are, with only the columns read here among the rest. */
 const openCode = (file: string) => {
   const db = new Database(file, { create: true });
   db.run(
@@ -429,12 +423,12 @@ const audit = (
   asked,
   result: {},
 });
-/** The host's store as it keeps who started each Run, with only the columns read here. */
 const hostStore = (file: string, placings: Readonly<Record<string, Json>>) => {
   const db = new Database(file, { create: true });
   db.run(RUNS_TABLE);
-  for (const [run, placing] of Rec.toEntries(placings))
+  for (const [run, placing] of Rec.toEntries(placings)) {
     db.run("INSERT INTO collie_runs VALUES (?, ?, ?)", [run, `r-${run}`, encode(placing)]);
+  }
   db.close();
 };
 
@@ -603,8 +597,9 @@ test("the inventory counts where the human's words are, and holds none of them",
         "Prefer Effect",
         "Ask before deleting",
         "staging database",
-      ])
+      ]) {
         expect(said).not.toContain(typed);
+      }
     }).pipe(Effect.scoped),
   ));
 

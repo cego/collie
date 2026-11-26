@@ -1,34 +1,25 @@
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import { runEffect } from "./support/effect";
-import { leaveLauncher, ownRoot, readEnv } from "../src/env";
+import { leaveLauncher, ownRoot, readEnv, withoutHerdrOne } from "../src/env";
 
-test("plugin env is read from the herdr-provided variables", () => {
+test("Collie reads its own installation, state and working directory", () => {
   const env = readEnv({
     HOME: "/home/x",
-    HERDR_BIN_PATH: "/usr/bin/herdr",
-    HERDR_SOCKET_PATH: "/run/herdr.sock",
-    HERDR_PLUGIN_ROOT: "/plugins/cego.collie",
+    COLLIE_ROOT: "/opt/collie",
     COLLIE_USER_DIR: "/cfg",
-    HERDR_PLUGIN_STATE_DIR: "/state",
-    HERDR_PLUGIN_ACTION_ID: "pick",
-    HERDR_WORKSPACE_ID: "2",
-    HERDR_ACTIVE_PANE_CWD: "/repo",
-    HERDR_PLUGIN_CONTEXT_JSON: JSON.stringify({ workspace_cwd: "/workspace" }),
+    COLLIE_STATE_DIR: "/state",
+    COLLIE_CWD: "/repo",
   });
 
-  expect(env.binPath).toBe("/usr/bin/herdr");
-  expect(env.pluginRoot).toBe("/plugins/cego.collie");
+  expect(env.pluginRoot).toBe("/opt/collie");
   expect(env.stateDir).toBe("/state");
-  expect(env.actionId).toBe("pick");
-  expect(env.workspaceId).toBe("2");
-  expect(env.cwd).toBe("/workspace");
+  expect(env.userDir).toBe("/cfg");
+  expect(env.cwd).toBe("/repo");
 });
 
-test("without HERDR_PLUGIN_ROOT the compiled runner is its own plugin root", () => {
-  // Compiled: the sources live in bun's virtual filesystem and execPath is the binary.
+test("without COLLIE_ROOT the compiled runner is its own installation root", () => {
   expect(ownRoot("/$bunfs/root/main", "/opt/collie/bin/collie")).toBe("/opt/collie");
-  // Development: `bun src/main.ts` runs from disk, and execPath is bun itself.
   expect(ownRoot("/home/x/collie/src/env.ts", "/home/x/.bun/bin/bun")).toBeNull();
   expect(ownRoot("/$bunfs/root/main", "/collie")).toBeNull();
 
@@ -36,33 +27,57 @@ test("without HERDR_PLUGIN_ROOT the compiled runner is its own plugin root", () 
     "/opt/collie",
   );
   expect(readEnv({ HOME: "/home/x", PWD: "/elsewhere" }, null).pluginRoot).toBe("/elsewhere");
-  expect(readEnv({ HOME: "/home/x", HERDR_PLUGIN_ROOT: "/pinned" }, "/opt/collie").pluginRoot).toBe(
+  expect(readEnv({ HOME: "/home/x", COLLIE_ROOT: "/pinned" }, "/opt/collie").pluginRoot).toBe(
     "/pinned",
   );
 });
 
-test("cwd and ids fall back to the invocation context", () => {
-  const env = readEnv({
-    HOME: "/home/x",
-    HERDR_PLUGIN_CONTEXT_JSON: JSON.stringify({
-      workspace_id: "3",
-      workspace_cwd: "/ws",
-      focused_pane_id: "3-1",
-    }),
-  });
+test("retired Herdr variables cannot redirect Collie's root, state or invocation", () => {
+  const env = readEnv(
+    {
+      HOME: "/home/x",
+      HERDR_PLUGIN_ROOT: "/old/root",
+      HERDR_PLUGIN_STATE_DIR: "/old/state",
+      HERDR_WORKSPACE_ID: "2",
+      HERDR_TAB_ID: "tab",
+      HERDR_PANE_ID: "pane",
+      HERDR_PLUGIN_ACTION_ID: "action",
+      HERDR_PLUGIN_ENTRYPOINT_ID: "entry",
+      HERDR_PLUGIN_CONTEXT_JSON:
+        '{"workspace_id":"3","workspace_cwd":"/ws","focused_pane_id":"3-1"}',
+    },
+    "/opt/collie",
+  );
 
-  expect(env.workspaceId).toBe("3");
-  expect(env.paneId).toBe("3-1");
-  expect(env.cwd).toBe("/ws");
-  expect(env.binPath).toBe("herdr");
+  expect(env.pluginRoot).toBe("/opt/collie");
+  expect(env.stateDir).toBe("/home/x/.local/state/herdr/plugins/cego.collie");
+  expect(env.cwd).toBe(process.cwd());
   expect(env.collieDir).toBe("/home/x/.collie");
   expect(env.userDir).toBe("/home/x/.collie/user");
+});
+
+test("a downloaded compiled runner upgrades the Collie installation, not the caller's checkout", () => {
+  const cached = "/state/runners/1.0.18/collie-linux-x64";
+  const root = ownRoot("/$bunfs/root/main", cached, "/srv/collie");
+  expect(root).toBe("/srv/collie/release");
+  expect(
+    readEnv(
+      {
+        HOME: "/home/x",
+        COLLIE_DIR: "/srv/collie",
+        HERDR_PLUGIN_ROOT: "/obsolete",
+        PWD: "/unrelated/checkout",
+      },
+      root,
+    ).pluginRoot,
+  ).toBe("/srv/collie/release");
+  expect(ownRoot("/src/env.ts", "/bin/bun", "/srv/collie")).toBeNull();
 });
 
 test("the user directory is the Collie directory's, wherever the plugin root is", () => {
   const env = readEnv({
     HOME: "/home/x",
-    HERDR_PLUGIN_ROOT: "/home/x/.collie/release",
+    COLLIE_ROOT: "/home/x/.collie/release",
     COLLIE_DIR: "/srv/collie",
   });
 
@@ -71,9 +86,24 @@ test("the user directory is the Collie directory's, wherever the plugin root is"
   expect(readEnv({ HOME: "/home/x", COLLIE_USER_DIR: "/mine" }).userDir).toBe("/mine");
 });
 
-test("a malformed context json does not throw", () => {
-  const env = readEnv({ HOME: "/home/x", HERDR_PLUGIN_CONTEXT_JSON: "{oops" });
-  expect(env.context).toEqual({});
+test("a host drops every retired Herdr variable before spawning a process", () => {
+  expect(
+    withoutHerdrOne({
+      HERDR_PLUGIN_ROOT: "/old/root",
+      HERDR_PLUGIN_STATE_DIR: "/old/state",
+      HERDR_SOCKET_PATH: "/old/socket",
+      HERDR_ACTIVE_PANE_CWD: "/old/cwd",
+      COLLIE_ROOT: "/opt/collie",
+      COLLIE_STATE_DIR: "/state",
+      HC_SOCKET: "/core/socket",
+      PATH: "/bin",
+    }),
+  ).toEqual({
+    COLLIE_ROOT: "/opt/collie",
+    COLLIE_STATE_DIR: "/state",
+    HC_SOCKET: "/core/socket",
+    PATH: "/bin",
+  });
 });
 
 test("COLLIE_CWD is remembered as explicit; an inferred cwd is not", () => {
@@ -83,9 +113,9 @@ test("COLLIE_CWD is remembered as explicit; an inferred cwd is not", () => {
 
   const inferred = readEnv({
     HOME: "/home/x",
-    HERDR_PLUGIN_CONTEXT_JSON: JSON.stringify({ workspace_cwd: "/workspace" }),
+    PWD: "/stale/workspace",
   });
-  expect(inferred.cwd).toBe("/workspace");
+  expect(inferred.cwd).toBe(process.cwd());
   expect(inferred.cwdExplicit).toBe(false);
 });
 
@@ -104,8 +134,11 @@ test("a process that leaves the launcher starts children without its preload, ke
           }),
           (was) =>
             Effect.sync(() => {
-              if (was === undefined) delete Bun.env[name];
-              else Bun.env[name] = was;
+              if (was === undefined) {
+                delete Bun.env[name];
+              } else {
+                Bun.env[name] = was;
+              }
             }),
         );
       }

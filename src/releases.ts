@@ -1,5 +1,3 @@
-// Collie's published releases: the newest, and a release's runner verified against the release key.
-
 import * as Str from "effect/String";
 import { Data, Duration, Effect, FileSystem, Option } from "effect";
 import * as Digest from "effect/crypto/Digest";
@@ -8,20 +6,14 @@ import * as HttpClient from "effect/http/HttpClient";
 import { RELEASE_TAG } from "./release";
 import { RELEASE_PUBLIC_KEY, SIGNATURE_SUFFIX, verifyRelease } from "./signing";
 
-/** Where releases are published; `COLLIE_RELEASES` names another, as a test's fake does. */
 export const RELEASES = "https://github.com/cego/collie/releases";
 
 export const releasesOf = (raw: Readonly<Record<string, string>>) =>
   raw.COLLIE_RELEASES ?? RELEASES;
 
-/** The release asset's platform for this process, as `install.sh` names it. */
 export const ownPlatform = () =>
   `${process.platform}-${process.arch === "arm64" ? "arm64" : "x64"}`;
 
-/**
- * The newest release's version, from where `<source>/latest` redirects, or null where that
- * cannot be read. Never waits longer than a few seconds.
- */
 export const newestRelease = (source: string) =>
   HttpClient.get(`${source}/latest`).pipe(
     Effect.map((response) => {
@@ -38,10 +30,7 @@ export const newestRelease = (source: string) =>
 const READ_EVERY_MS = 5 * 60_000;
 const newest = new Map<string, { readAt: number; version: string | null }>();
 
-/**
- * A release newer than `version`, or null. Reads what was last learned and starts a read
- * behind it at most every few minutes, so a caller that redraws never waits on the network.
- */
+// WARNING: answers from the last read and refreshes at most every few minutes, so a redraw never waits on the network.
 export const newerRelease = Effect.fn("Releases.newerRelease")(function* (
   source: string,
   version: string,
@@ -62,7 +51,6 @@ export const newerRelease = Effect.fn("Releases.newerRelease")(function* (
 export const isNewer = (candidate: string | null, version: string): candidate is string =>
   candidate !== null && Bun.semver.order(candidate, version) > 0;
 
-/** A runner that was not used, and whether the release simply has none. */
 export class RunnerRefused extends Data.TaggedError("RunnerRefused")<{
   readonly reason: string;
   readonly missing: boolean;
@@ -85,10 +73,7 @@ const fetched = (url: string) =>
     Effect.provide(FetchHttpClient.layer),
   );
 
-/**
- * The runner of `version` for `platform`, downloaded into `dir` once and verified against
- * the release key every time it is used, so a kept copy changed since is refused too.
- */
+// WARNING: verified on every use, so a kept copy changed since is refused.
 export const verifiedRunner = Effect.fn("Releases.verifiedRunner")(function* (
   releases: string,
   version: string,
@@ -105,8 +90,9 @@ export const verifiedRunner = Effect.fn("Releases.verifiedRunner")(function* (
   ]).pipe(Effect.option);
   let bytes: Uint8Array;
   let signature: string | null;
-  if (Option.isSome(kept)) [bytes, signature] = kept.value;
-  else {
+  if (Option.isSome(kept)) {
+    [bytes, signature] = kept.value;
+  } else {
     const url = `${releases}/${version}/${asset}`;
     const got = yield* fetched(url);
     if (got === null) {
@@ -121,7 +107,9 @@ export const verifiedRunner = Effect.fn("Releases.verifiedRunner")(function* (
   }
   const verified = verifyRelease(bytes, signature, key);
   if (!verified.ok) {
-    if (Option.isSome(kept)) yield* fs.remove(file, { force: true }).pipe(Effect.ignore);
+    if (Option.isSome(kept)) {
+      yield* fs.remove(file, { force: true }).pipe(Effect.ignore);
+    }
     return yield* new RunnerRefused({
       reason: `${asset} ${version}: ${verified.reason}`,
       missing: false,

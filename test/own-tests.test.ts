@@ -1,6 +1,3 @@
-// A failed test is the branch's own when the branch adds or changes its file, or adds a
-// string its name holds.
-
 import { expect, test } from "bun:test";
 import { ownTests } from "../src/own-tests";
 

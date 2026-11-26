@@ -1,58 +1,33 @@
-// Every toast Collie raises, and the only place one is formatted. A decided Run
-// finishes with nobody watching, so a notification is the whole channel from the Run
-// to the person who started it — and the corollary is that anything not worth
-// interrupting for must not be sent, or the ones that matter get muted.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
-import { Context, type Effect } from "effect";
+import { Context } from "effect";
+import type { Effect } from "effect";
 import { mrWords, parseMrUrl } from "./board-model";
 
-/** What an opened merge request's notification names it by: `!42`, or `#30` for a pull request. */
-export function openedSubject(url: string): string | undefined {
+export function openedSubject(url: string) {
   const mr = parseMrUrl(url);
   return mr === null ? undefined : `${mrWords(mr).sign}${mr.iid}`;
 }
 
-/**
- * The taxonomy is the contract: a new notification means a new entry here with a
- * defended answer to "is this worth interrupting a human for?". What is worth
- * *showing* belongs on the board instead.
- */
+// WARNING: a new kind needs a defended answer to whether it is worth interrupting a human for.
 export const NOTIFICATION_KINDS = [
   "needs-you",
   "run-done",
   "run-failed",
-  /** The one time a person hears of a park a Heal cleared. */
   "run-healed",
   "mr-opened",
-  /**
-   * Drift that Collie could not settle: the correction bound was spent, or nobody was
-   * live to evaluate it. `request`, because it is the case where nothing else is going
-   * to happen without the human.
-   */
   "drift-unresolved",
-  /**
-   * Collie sent a correction to an agent by itself. `request` on purpose: `auto_correct`
-   * being on is not the same as the human wanting it done behind their back.
-   */
+  // WARNING: request, not done: auto-correct being on is not the human wanting it done behind their back.
   "correction-sent",
-  /** Something is waiting for a yes or a no, and nothing else will happen until it gets one. */
   "proposal-pending",
-  /**
-   * A slice of work a human could actually try. `done`, because it is good news — and
-   * only for a slice there is something to look at: an agent's claim on its own never
-   * toasts, because a claim is not a thing you can go and try.
-   */
+  // WARNING: an agent's claim never toasts: a claim is not something you can go and try.
   "slice-ready",
-  /** The Intent moved. Silent: it matters when the board is closed, and not before then. */
   "intent-changed",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
 export type Sound = "none" | "done" | "request";
 
-/** `request` means a human must act; `done` means it finished well. Nothing else. */
 export const SOUND = {
   "needs-you": "request",
   "run-done": "done",
@@ -66,11 +41,6 @@ export const SOUND = {
   "intent-changed": "none",
 } satisfies Record<NotificationKind, Sound>;
 
-/**
- * What the title says happened. Some kinds name the thing they are about — which merge
- * request was opened, what drifted — because a toast that arrives while nobody is
- * watching has to identify itself without the board open beside it.
- */
 const HEADLINE = {
   "needs-you": () => "needs you",
   "run-done": () => "finished",
@@ -86,8 +56,7 @@ const HEADLINE = {
   "intent-changed": () => "was given a new Intent",
 } satisfies Record<NotificationKind, (subject?: string) => string>;
 
-/** One herdr session runs several checkouts, so the repo is part of every title. */
-function repoOf(cwd: string): string {
+function repoOf(cwd: string) {
   return Str.split(pipe(cwd, Str.replace(/\/+$/, "")), "/").pop() ?? cwd;
 }
 
@@ -95,24 +64,19 @@ export function notificationTitle(
   kind: NotificationKind,
   cwd: string,
   slug: string,
-  /** What this one is about, where the kind names it: a step id, an MR's `!<iid>`. */
   subject?: string,
-): string {
+) {
   return `${repoOf(cwd)} · ${slug} ${HEADLINE[kind](subject)}`;
 }
 
-/** Which kinds are wanted; a kind absent from the map is on. */
+// WARNING: a kind absent from the map is on.
 export type NotificationSettings = Readonly<Record<string, boolean>>;
 
-export function wanted(settings: NotificationSettings, kind: NotificationKind): boolean {
+export function wanted(settings: NotificationSettings, kind: NotificationKind) {
   return settings[kind] !== false;
 }
 
-/**
- * Raises one toast about a Run, at most once per kind and `key`: a Run that asks the same
- * question on every replay says so once, and one that asks another says so again. A toast
- * that cannot be raised never fails the Run.
- */
+// WARNING: a toast that cannot be raised never fails the Run.
 export class Notifier extends Context.Service<
   Notifier,
   {

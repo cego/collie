@@ -1,8 +1,7 @@
-// The Rune spike's updates: Desktop's own `updates.ts` checks, downloads and verifies a release
-// as today, through the stdio stand-in's Updater, which stages the verified tar and its
-// signature where the Rune shell installs them at its next launch (desktop/update).
-
-import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
+import type * as Platform from "../desktop/core/platform";
+import { afterAll, beforeAll, expect, test } from "bun:test";
+import { http, HttpResponse } from "msw";
+import { setupServer } from "msw/node";
 import * as Str from "effect/String";
 import { Effect, FileSystem, Schema } from "effect";
 import { electrobunUpdater } from "../desktop/src/bun/electrobun-updater";
@@ -22,7 +21,7 @@ let published = "0.131.0";
 let signatureStatus = 200;
 const responseOf = (url: URL) => {
   const path = Str.replace(/^\/cego\/collie\/releases/, "")(url.pathname);
-  if (path === `/latest/download/stable-${PLATFORM}-update.json`)
+  if (path === `/latest/download/stable-${PLATFORM}-update.json`) {
     return Response.json({
       schemaVersion: 1,
       identifier: "dk.cego.collie.desktop",
@@ -33,25 +32,27 @@ const responseOf = (url: URL) => {
       hash,
       artifact: { file: ARCHIVE },
     });
-  if (path === `/latest/download/${ARCHIVE}`) return new Response(Bun.zstdCompressSync(TAR));
-  if (path === `/download/0.131.0/stable-${PLATFORM}-collie-desktop.tar.sig`)
+  }
+  if (path === `/latest/download/${ARCHIVE}`) {
+    return new Response(Bun.zstdCompressSync(TAR));
+  }
+  if (path === `/download/0.131.0/stable-${PLATFORM}-collie-desktop.tar.sig`) {
     return new Response(signature, { status: signatureStatus });
+  }
   return new Response("not found", { status: 404 });
 };
 
-// The production policy sees real release URLs; only the network edge is replaced.
-const network = spyOn(globalThis, "fetch").mockImplementation(
-  Object.assign(
-    (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
-      const url = new URL(input instanceof Request ? input.url : input.toString());
-      expect(init?.redirect).toBe("manual");
-      if (url.origin !== "https://github.com")
-        return Promise.reject(new Error("unexpected test request"));
-      return Promise.resolve(responseOf(url));
-    },
-    { preconnect: () => {} },
-  ),
+const network = setupServer(
+  http.all("*", ({ request }) => {
+    const url = new URL(request.url);
+    expect(request.redirect).toBe("manual");
+    if (url.origin !== "https://github.com") {
+      return HttpResponse.error();
+    }
+    return responseOf(url);
+  }),
 );
+network.listen({ onUnhandledRequest: "error" });
 
 const VersionJson = Schema.fromJsonString(
   Schema.Struct({
@@ -64,7 +65,7 @@ const VersionJson = Schema.fromJsonString(
 );
 
 let install = "";
-let standIn: typeof import("../desktop/core/platform");
+let standIn: typeof Platform;
 beforeAll(() =>
   runEffect(
     Effect.gen(function* () {
@@ -91,7 +92,7 @@ beforeAll(() =>
 afterAll(() =>
   runEffect(
     Effect.gen(function* () {
-      network.mockRestore();
+      network.close();
       yield* (yield* FileSystem.FileSystem).remove(install, { recursive: true, force: true });
     }),
   ),

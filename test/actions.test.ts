@@ -1,11 +1,3 @@
-// What a finished Run offers to do next, and what it takes to carry one out.
-//
-// The offers are the module's own declarations and the eligibility is the module's own
-// code, so this exercises the whole path a card takes: what is listed, what starts when
-// one is invoked, and every way an invocation is refused — an offer that has been edited
-// away, one whose facts no longer hold, and arguments the child will not take. None of
-// those may leave a Run behind.
-
 import { recordsAt } from "./support/records";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -15,14 +7,17 @@ import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { recordDisposition } from "../src/disposition";
 import { currentEnv } from "../src/env";
-import { makeOffer, type FlowPrompts } from "../src/flows";
+import { makeOffer } from "../src/flows";
+import type { FlowPrompts } from "../src/flows";
 import { carryOutAsked, followUpField } from "../src/run-actions";
-import { connect, type HostClient } from "../src/host";
+import { connect } from "../src/host";
+import type { HostClient } from "../src/host";
 import { factsOfView } from "../src/runs";
 import { stopHost, until } from "./support/host";
-import { collie, proves, save, type World } from "./support/world";
+import { collie, proves, save } from "./support/world";
+import type { World } from "./support/world";
+import { tellHost } from "../src/tell-host";
 
-/** The envelope's payload as text, for asking whether an offer is in it at all. */
 const asText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
 const MODULES = [
@@ -40,7 +35,6 @@ const projectOf = Effect.fn("ActionsTest.project")(function* (world: World) {
   return project;
 });
 
-/** A Run of the offering module, finished, which is when its offers are on the table. */
 const finished = Effect.fn("ActionsTest.finished")(function* (client: HostClient, project: string) {
   const started = yield* client.start({
     project,
@@ -55,216 +49,190 @@ const finished = Effect.fn("ActionsTest.finished")(function* (client: HostClient
   return started.runId;
 });
 
-test(
-  "a finished Run lists what its module offers, and invoking one starts it",
-  () =>
-    proves(
-      "collie-actions-offer-",
-      (world) =>
-        Effect.gen(function* () {
-          const project = yield* projectOf(world);
-          const client = yield* connect(world.state).pipe(Effect.orDie);
-          const runId = yield* finished(client, project).pipe(Effect.orDie);
+test("a finished Run lists what its module offers, and invoking one starts it", () =>
+  proves(
+    "collie-actions-offer-",
+    (world) =>
+      Effect.gen(function* () {
+        const project = yield* projectOf(world);
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const runId = yield* finished(client, project).pipe(Effect.orDie);
 
-          const offers = yield* client.offers({ runId }).pipe(Effect.orDie);
-          expect(Arr.map(offers, (one) => [one.id, one.primary, one.unavailable])).toEqual([
-            ["grade-it", true, null],
-            ["look-again", false, null],
-          ]);
-          // The arguments travel as a drawing, so a front door can ask for them.
-          expect(offers[0]?.arguments).toMatchObject({ type: "object" });
-          // A follow-up takes what its workflow needs and the offer does not fill.
-          expect(offers[1]?.arguments).toMatchObject({ required: ["note"] });
+        const offers = yield* client.offers({ runId }).pipe(Effect.orDie);
+        expect(Arr.map(offers, (one) => [one.id, one.primary, one.unavailable])).toEqual([
+          ["grade-it", true, null],
+          ["look-again", false, null],
+        ]);
+        expect(offers[0]?.arguments).toMatchObject({ type: "object" });
+        expect(offers[1]?.arguments).toMatchObject({ required: ["note"] });
 
-          const started = yield* client
-            .invoke({
-              runId,
-              offer: "grade-it",
-              input: { note: "the diff", grade: "pass" },
-              request: "act-1",
-            })
-            .pipe(Effect.orDie);
-          const done = yield* until(
-            () => client.run({ runId: started.runId }).pipe(Effect.orDie),
-            (view) => view?.status.status === "complete",
-          );
-          // Its own Run, of the workflow the offer named, belonging to the one that offered it.
-          expect(done?.workflow).toBe("graded");
-          expect(done?.parent).toBe(runId);
-          expect(done?.status).toEqual({ status: "complete", value: "strict:the diff/pass" });
-          yield* stopHost(world.state);
-        }),
-      [],
-    ),
-  300_000,
-);
+        const started = yield* client
+          .invoke({
+            runId,
+            offer: "grade-it",
+            input: { note: "the diff", grade: "pass" },
+            request: "act-1",
+          })
+          .pipe(Effect.orDie);
+        const done = yield* until(
+          () => client.run({ runId: started.runId }).pipe(Effect.orDie),
+          (view) => view?.status.status === "complete",
+        );
+        expect(done?.workflow).toBe("graded");
+        expect(done?.parent).toBe(runId);
+        expect(done?.status).toEqual({ status: "complete", value: "strict:the diff/pass" });
+        yield* stopHost(world.state);
+      }),
+    [],
+  ));
 
-test(
-  "an offer carries its Run id as the next Run's previous review",
-  () =>
-    proves(
-      "collie-actions-previous-",
-      (world) =>
-        Effect.gen(function* () {
-          const project = yield* projectOf(world);
-          const fs = yield* FileSystem.FileSystem;
-          const entry = `${project}/.collie/workflows/offered.workflow.ts`;
-          const source = yield* fs.readFileString(entry);
-          yield* fs.writeFileString(
-            entry,
-            pipe_(
-              source,
-              Str.replace("arguments: {", 'inputs: { previous: "run-id" }, arguments: {'),
-            ),
-          );
-          const client = yield* connect(world.state).pipe(Effect.orDie);
-          const runId = yield* finished(client, project).pipe(Effect.orDie);
-          const next = yield* client
-            .invoke({
-              runId,
-              offer: "grade-it",
-              input: { note: "again", grade: "pass" },
-              request: "review-again",
-            })
-            .pipe(Effect.orDie);
-          const view = yield* client.run({ runId: next.runId }).pipe(Effect.orDie);
-          expect(view?.options.previous).toBe(runId);
-          yield* stopHost(world.state);
-        }),
-      [],
-    ),
-  300_000,
-);
+test("an offer carries its Run id as the next Run's previous review", () =>
+  proves(
+    "collie-actions-previous-",
+    (world) =>
+      Effect.gen(function* () {
+        const project = yield* projectOf(world);
+        const fs = yield* FileSystem.FileSystem;
+        const entry = `${project}/.collie/workflows/offered.workflow.ts`;
+        const source = yield* fs.readFileString(entry);
+        yield* fs.writeFileString(
+          entry,
+          pipe_(
+            source,
+            Str.replace("arguments: {", 'inputs: { previous: "run-id" }, arguments: {'),
+          ),
+        );
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const runId = yield* finished(client, project).pipe(Effect.orDie);
+        const next = yield* client
+          .invoke({
+            runId,
+            offer: "grade-it",
+            input: { note: "again", grade: "pass" },
+            request: "review-again",
+          })
+          .pipe(Effect.orDie);
+        const view = yield* client.run({ runId: next.runId }).pipe(Effect.orDie);
+        expect(view?.options.previous).toBe(runId);
+        yield* stopHost(world.state);
+      }),
+    [],
+  ));
 
-test(
-  "the card's primary button asks for what its offer takes, as the offer menu does",
-  () =>
-    proves(
-      "collie-actions-primary-",
-      (world) =>
-        Effect.gen(function* () {
-          const project = yield* projectOf(world);
-          const client = yield* connect(world.state).pipe(Effect.orDie);
-          const runId = yield* finished(client, project).pipe(Effect.orDie);
-          const asked: string[] = [];
-          const choices: string[][] = [];
-          const answers = ["the diff"];
-          const prompts: FlowPrompts = {
-            menu: (items) => {
-              choices.push(Arr.map(items, (one) => one.title));
-              return Effect.succeed(
-                Option.getOrNull(Arr.findFirst(items, (one) => one.title === "pass")),
-              );
-            },
-            ask: (question) => {
-              asked.push(question);
-              return Effect.succeed(answers.shift() ?? null);
-            },
-          };
+test("the card's primary button asks for what its offer takes, as the offer menu does", () =>
+  proves(
+    "collie-actions-primary-",
+    (world) =>
+      Effect.gen(function* () {
+        const project = yield* projectOf(world);
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const runId = yield* finished(client, project).pipe(Effect.orDie);
+        const asked: Array<string> = [];
+        const choices: Array<Array<string>> = [];
+        const answers = ["the diff"];
+        const prompts: FlowPrompts = {
+          menu: (items) => {
+            choices.push(Arr.map(items, (one) => one.title));
+            return Effect.succeed(
+              Option.getOrNull(Arr.findFirst(items, (one) => one.title === "pass")),
+            );
+          },
+          ask: (question) => {
+            asked.push(question);
+            return Effect.succeed(answers.shift() ?? null);
+          },
+        };
 
-          const note = yield* makeOffer(yield* currentEnv, prompts, runId, "grade-it");
-          expect(asked).toEqual(["note?"]);
-          expect(choices).toEqual([["pass", "fail"]]);
-          expect(note).toStartWith("Started run ");
+        const note = yield* makeOffer(yield* currentEnv, prompts, runId, "grade-it");
+        expect(asked).toEqual(["note?"]);
+        expect(choices).toEqual([["pass", "fail"]]);
+        expect(note).toStartWith("Started run ");
 
-          asked.length = 0;
-          answers.push("again");
-          const again = yield* makeOffer(yield* currentEnv, prompts, runId, "look-again");
-          expect(asked).toEqual(["note?"]);
-          expect(again).toStartWith("Started run ");
-          yield* stopHost(world.state);
-        }),
-      [],
-    ),
-  300_000,
-);
+        asked.length = 0;
+        answers.push("again");
+        const again = yield* makeOffer(yield* currentEnv, prompts, runId, "look-again");
+        expect(asked).toEqual(["note?"]);
+        expect(again).toStartWith("Started run ");
+        yield* stopHost(world.state);
+      }),
+    [],
+  ));
 
-test(
-  "the board's follow-up words reach the follow-up's own input, whatever it is called",
-  () =>
-    proves(
-      "collie-actions-followup-",
-      (world) =>
-        Effect.gen(function* () {
-          const project = yield* projectOf(world);
-          const client = yield* connect(world.state).pipe(Effect.orDie);
-          const runId = yield* finished(client, project).pipe(Effect.orDie);
+test("the board's follow-up words reach the follow-up's own input, whatever it is called", () =>
+  proves(
+    "collie-actions-followup-",
+    (world) =>
+      Effect.gen(function* () {
+        const project = yield* projectOf(world);
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const runId = yield* finished(client, project).pipe(Effect.orDie);
 
-          const [done] = yield* carryOutAsked(
-            yield* currentEnv,
-            [{ kind: "followup", run: runId, text: "the other half" }],
-            { origin: "board", requestId: "board-1" },
-          );
-          expect(done).toMatchObject({ state: "applied" });
-          const child = yield* until(
-            () => client.runs({ task: null }).pipe(Effect.orDie),
-            (rows) => Arr.some(rows, (row) => row.parent === runId),
-          );
-          expect(
-            Option.getOrUndefined(Arr.findFirst(child, (row) => row.parent === runId))?.workflow,
-          ).toBe("offered");
-          expect(
-            Option.getOrUndefined(Arr.findFirst(child, (row) => row.parent === runId))?.input,
-          ).toEqual({
-            note: "the other half",
-          });
-          yield* stopHost(world.state);
-        }).pipe(Effect.provide(recordsAt(world.state))),
-      [],
-    ),
-  300_000,
-);
+        const [done] = yield* carryOutAsked(
+          yield* currentEnv,
+          [{ kind: "followup", run: runId, text: "the other half" }],
+          { origin: "board", requestId: "board-1" },
+        );
+        expect(done).toMatchObject({ state: "applied" });
+        const child = yield* until(
+          () => client.runs({ task: null }).pipe(Effect.orDie),
+          (rows) => Arr.some(rows, (row) => row.parent === runId),
+        );
+        expect(
+          Option.getOrUndefined(Arr.findFirst(child, (row) => row.parent === runId))?.workflow,
+        ).toBe("offered");
+        expect(
+          Option.getOrUndefined(Arr.findFirst(child, (row) => row.parent === runId))?.input,
+        ).toEqual({
+          note: "the other half",
+        });
+        yield* stopHost(world.state);
+      }).pipe(Effect.provide(recordsAt(world.state))),
+    [],
+  ));
 
-test(
-  "a Run that failed holding the shared claim says so, where it failed, and offers to recover",
-  () =>
-    proves(
-      "collie-actions-retained-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const project = yield* projectOf(world);
-          const client = yield* connect(world.state).pipe(Effect.orDie);
-          const { runId } = yield* client
-            .start({ project, id: "retains", request: "req-1", input: { note: "half-merged" } })
-            .pipe(Effect.orDie);
-          yield* until(
-            () => client.run({ runId }),
-            (view) => view?.status.status === "failed",
-          ).pipe(Effect.orDie);
-          const unclaimed = yield* client.run({ runId }).pipe(Effect.orDie);
-          expect(unclaimed?.diagnostic).toBeNull();
-          expect(
-            (yield* client.offers({ runId }).pipe(Effect.orDie))[0]?.unavailable,
-          ).not.toBeNull();
+test("a Run that failed holding the shared claim says so, where it failed, and offers to recover", () =>
+  proves(
+    "collie-actions-retained-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const project = yield* projectOf(world);
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const { runId } = yield* client
+          .start({ project, id: "retains", request: "req-1", input: { note: "half-merged" } })
+          .pipe(Effect.orDie);
+        yield* until(
+          () => client.run({ runId }),
+          (view) => view?.status.status === "failed",
+        ).pipe(Effect.orDie);
+        const unclaimed = yield* client.run({ runId }).pipe(Effect.orDie);
+        expect(unclaimed?.diagnostic).toBeNull();
+        expect((yield* client.offers({ runId }).pipe(Effect.orDie))[0]?.unavailable).not.toBeNull();
 
-          // What the claim gate records once a Run holds the claim.
-          yield* fs.makeDirectory(`${world.state}/runs/${runId}`, { recursive: true });
-          yield* fs.writeFileString(
-            `${world.state}/runs/${runId}/helle.json`,
-            '{"slug":"project","claim":"mine"}',
-          );
-          const view = yield* client.run({ runId }).pipe(Effect.orDie);
-          expect(view?.diagnostic).toContain("claim on project retained; recovery required");
-          const note = factsOfView(world.state, view!).note;
-          expect(note).toContain("merge: half-merged");
-          expect(note).toContain("recovery required");
+        yield* fs.makeDirectory(`${world.state}/runs/${runId}`, { recursive: true });
+        yield* fs.writeFileString(
+          `${world.state}/runs/${runId}/helle.json`,
+          '{"slug":"project","claim":"mine"}',
+        );
+        const view = yield* client.run({ runId }).pipe(Effect.orDie);
+        expect(view?.diagnostic).toContain("claim on project retained; recovery required");
+        const note = factsOfView(world.state, view!).note;
+        expect(note).toContain("merge: half-merged");
+        expect(note).toContain("recovery required");
 
-          const offers = yield* client.offers({ runId }).pipe(Effect.orDie);
-          expect(Arr.map(offers, (one) => [one.id, one.unavailable, one.arguments])).toEqual([
-            ["recover", null, null],
-          ]);
-          const recovering = yield* client
-            .invoke({ runId, offer: "recover", input: {}, request: "act-1" })
-            .pipe(Effect.orDie);
-          const again = yield* client.run({ runId: recovering.runId }).pipe(Effect.orDie);
-          expect(again?.input).toEqual({ note: "half-merged" });
-          yield* stopHost(world.state);
-        }),
-      [],
-    ),
-  300_000,
-);
+        const offers = yield* client.offers({ runId }).pipe(Effect.orDie);
+        expect(Arr.map(offers, (one) => [one.id, one.unavailable, one.arguments])).toEqual([
+          ["recover", null, null],
+        ]);
+        const recovering = yield* client
+          .invoke({ runId, offer: "recover", input: {}, request: "act-1" })
+          .pipe(Effect.orDie);
+        const again = yield* client.run({ runId: recovering.runId }).pipe(Effect.orDie);
+        expect(again?.input).toEqual({ note: "half-merged" });
+        yield* stopHost(world.state);
+      }),
+    [],
+  ));
 
 test("the board's follow-up words go to the one input a follow-up still needs", () => {
   const text = { type: "string" };
@@ -278,204 +246,208 @@ test("the board's follow-up words go to the one input a follow-up still needs", 
   expect(followUpField(null)).toEqual({ refused: "takes nothing rather than one piece of text" });
 });
 
-test(
-  "a follow-up of a Run still going is not offered and starts nothing, and a stop ends the Run for it",
-  () =>
-    proves(
-      "collie-actions-going-",
-      (world) =>
-        Effect.gen(function* () {
-          const project = yield* projectOf(world);
-          const client = yield* connect(world.state).pipe(Effect.orDie);
-          const { runId } = yield* client
-            .start({ project, id: "lingers", request: "req-1", input: { note: "wait" } })
-            .pipe(Effect.orDie);
-          yield* until(
-            () => client.run({ runId }),
-            (view) => view?.status.status === "suspended",
-          ).pipe(Effect.orDie);
+test("a follow-up of a Run still going is not offered and starts nothing, and a stop ends the Run for it", () =>
+  proves(
+    "collie-actions-going-",
+    (world) =>
+      Effect.gen(function* () {
+        const project = yield* projectOf(world);
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const { runId } = yield* client
+          .start({ project, id: "lingers", request: "req-1", input: { note: "wait" } })
+          .pipe(Effect.orDie);
+        yield* until(
+          () => client.run({ runId }),
+          (view) => view?.status.status === "suspended",
+        ).pipe(Effect.orDie);
 
-          const listed = yield* client.offers({ runId }).pipe(Effect.orDie);
-          expect(listed[0]?.unavailable).toContain("is still going");
+        const listed = yield* client.offers({ runId }).pipe(Effect.orDie);
+        expect(listed[0]?.unavailable).toContain("is still going");
+        const refused = yield* client
+          .invoke({ runId, offer: "carry-on", input: {}, request: "act-1" })
+          .pipe(Effect.flip, Effect.orDie);
+        expect(refused.reason).toContain("is still going");
+        const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
+        expect(Arr.map(runs, (row) => row.runId)).toEqual([runId]);
+
+        yield* client
+          .control({ runId, control: "stop", set: true, request: "stop-1" })
+          .pipe(Effect.orDie);
+        expect((yield* client.offers({ runId }).pipe(Effect.orDie))[0]?.unavailable).toBeNull();
+        const carried = yield* client
+          .invoke({ runId, offer: "carry-on", input: {}, request: "act-2" })
+          .pipe(Effect.orDie);
+        const child = yield* client.run({ runId: carried.runId }).pipe(Effect.orDie);
+        expect(child?.parent).toBe(runId);
+        yield* stopHost(world.state);
+      }),
+    [],
+  ));
+
+test("a self follow-up of a Run started without the input it carries starts", () =>
+  proves(
+    "collie-actions-absent-",
+    (world) =>
+      Effect.gen(function* () {
+        const project = yield* projectOf(world);
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const { runId } = yield* client
+          .start({ project, id: "lingers", request: "req-1", input: {} })
+          .pipe(Effect.orDie);
+        yield* until(
+          () => client.run({ runId }),
+          (view) => view?.status.status === "suspended",
+        ).pipe(Effect.orDie);
+        yield* client
+          .control({ runId, control: "stop", set: true, request: "stop-1" })
+          .pipe(Effect.orDie);
+        const carried = yield* client
+          .invoke({ runId, offer: "carry-on", input: {}, request: "act-1" })
+          .pipe(Effect.orDie);
+        expect((yield* client.run({ runId: carried.runId }).pipe(Effect.orDie))?.parent).toBe(
+          runId,
+        );
+        yield* stopHost(world.state);
+      }),
+    [],
+  ));
+
+test("an offer the module no longer makes starts nothing, however recently it was listed", () =>
+  proves(
+    "collie-actions-stale-",
+    (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const project = yield* projectOf(world);
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const runId = yield* finished(client, project).pipe(Effect.orDie);
+        expect(
+          Arr.map(yield* client.offers({ runId }).pipe(Effect.orDie), (one) => one.id),
+        ).toEqual(["grade-it", "look-again"]);
+
+        const entry = `${project}/.collie/workflows/offered.workflow.ts`;
+        const source = yield* fs.readFileString(entry);
+        yield* fs.writeFileString(
+          entry,
+          pipe_(source, Str.replace(/actions: \[[\s\S]*?\],\n/, "actions: [],\n")),
+        );
+        // WARNING: a listing reads the module's kept revision until the host is told, as `collie workflow check` tells it.
+        yield* tellHost(world.state, [entry]);
+
+        expect(
+          Arr.map(yield* client.offers({ runId }).pipe(Effect.orDie), (one) => one.id),
+        ).toEqual(["look-again"]);
+        const refused = yield* client
+          .invoke({ runId, offer: "grade-it", input: {}, request: "act-1" })
+          .pipe(Effect.result);
+        expect(refused._tag).toBe("Failure");
+        expect((yield* client.runs({ task: null }).pipe(Effect.orDie)).length).toBe(1);
+        yield* stopHost(world.state);
+      }),
+    [],
+  ));
+
+test("a Run someone has settled offers nothing more, and a follow-up asked for anyway starts nothing", () =>
+  proves(
+    "collie-actions-disposed-",
+    (world) =>
+      Effect.gen(function* () {
+        const project = yield* projectOf(world);
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const runId = yield* finished(client, project).pipe(Effect.orDie);
+        yield* recordDisposition(`${world.state}/runs/${runId}`, {
+          kind: "superseded",
+          ref: "",
+          at: "2026-09-23T12:00:00Z",
+          by: "human",
+          note: null,
+        }).pipe(Effect.provide(recordsAt(world.state)), Effect.orDie);
+
+        const offers = yield* client.offers({ runId }).pipe(Effect.orDie);
+        expect(Arr.map(offers, (one) => [one.id, one.unavailable !== null])).toEqual([
+          ["grade-it", true],
+        ]);
+        for (const [offer, request] of [
+          ["look-again", "act-1"],
+          ["grade-it", "act-2"],
+        ] as const) {
           const refused = yield* client
-            .invoke({ runId, offer: "carry-on", input: {}, request: "act-1" })
-            .pipe(Effect.flip, Effect.orDie);
-          expect(refused.reason).toContain("is still going");
-          const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
-          expect(Arr.map(runs, (row) => row.runId)).toEqual([runId]);
-
-          yield* client
-            .control({ runId, control: "stop", set: true, request: "stop-1" })
-            .pipe(Effect.orDie);
-          expect((yield* client.offers({ runId }).pipe(Effect.orDie))[0]?.unavailable).toBeNull();
-          const carried = yield* client
-            .invoke({ runId, offer: "carry-on", input: {}, request: "act-2" })
-            .pipe(Effect.orDie);
-          const child = yield* client.run({ runId: carried.runId }).pipe(Effect.orDie);
-          expect(child?.parent).toBe(runId);
-          yield* stopHost(world.state);
-        }),
-      [],
-    ),
-  300_000,
-);
-
-test(
-  "an offer the module no longer makes starts nothing, however recently it was listed",
-  () =>
-    proves(
-      "collie-actions-stale-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const project = yield* projectOf(world);
-          const client = yield* connect(world.state).pipe(Effect.orDie);
-          const runId = yield* finished(client, project).pipe(Effect.orDie);
-          expect(
-            Arr.map(yield* client.offers({ runId }).pipe(Effect.orDie), (one) => one.id),
-          ).toEqual(["grade-it", "look-again"]);
-
-          // The author edits the module: the action is gone, and the card a moment ago
-          // is not authority for anything.
-          const entry = `${project}/.collie/workflows/offered.workflow.ts`;
-          const source = yield* fs.readFileString(entry);
-          yield* fs.writeFileString(
-            entry,
-            pipe_(source, Str.replace(/actions: \[[\s\S]*?\],\n/, "actions: [],\n")),
-          );
-
-          expect(
-            Arr.map(yield* client.offers({ runId }).pipe(Effect.orDie), (one) => one.id),
-          ).toEqual(["look-again"]);
-          const refused = yield* client
-            .invoke({ runId, offer: "grade-it", input: {}, request: "act-1" })
+            .invoke({ runId, offer, input: { note: "x", grade: "pass" }, request })
             .pipe(Effect.result);
           expect(refused._tag).toBe("Failure");
-          // Nothing was started: the Run that offered it is still the only one here.
-          expect((yield* client.runs({ task: null }).pipe(Effect.orDie)).length).toBe(1);
-          yield* stopHost(world.state);
-        }),
-      [],
-    ),
-  300_000,
-);
+        }
+        expect((yield* client.runs({ task: null }).pipe(Effect.orDie)).length).toBe(1);
+        yield* stopHost(world.state);
+      }),
+    [],
+  ));
 
-test(
-  "a Run someone has settled offers nothing more, and a follow-up asked for anyway starts nothing",
-  () =>
-    proves(
-      "collie-actions-disposed-",
-      (world) =>
-        Effect.gen(function* () {
-          const project = yield* projectOf(world);
-          const client = yield* connect(world.state).pipe(Effect.orDie);
-          const runId = yield* finished(client, project).pipe(Effect.orDie);
-          yield* recordDisposition(`${world.state}/runs/${runId}`, {
-            kind: "superseded",
-            ref: "",
-            at: "2026-09-23T12:00:00Z",
-            by: "human",
-            note: null,
-          }).pipe(Effect.provide(recordsAt(world.state)), Effect.orDie);
+test("arguments the child will not take are refused, and nothing is created", () =>
+  proves(
+    "collie-actions-invalid-",
+    (world) =>
+      Effect.gen(function* () {
+        const project = yield* projectOf(world);
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const runId = yield* finished(client, project).pipe(Effect.orDie);
 
-          // The follow-up is gone, and the action is shown as the reason it cannot be taken.
-          const offers = yield* client.offers({ runId }).pipe(Effect.orDie);
-          expect(Arr.map(offers, (one) => [one.id, one.unavailable !== null])).toEqual([
-            ["grade-it", true],
-          ]);
-          for (const [offer, request] of [
-            ["look-again", "act-1"],
-            ["grade-it", "act-2"],
-          ] as const) {
-            const refused = yield* client
-              .invoke({ runId, offer, input: { note: "x", grade: "pass" }, request })
-              .pipe(Effect.result);
-            expect(refused._tag).toBe("Failure");
-          }
-          expect((yield* client.runs({ task: null }).pipe(Effect.orDie)).length).toBe(1);
-          yield* stopHost(world.state);
-        }),
-      [],
-    ),
-  300_000,
-);
-
-test(
-  "arguments the child will not take are refused, and nothing is created",
-  () =>
-    proves(
-      "collie-actions-invalid-",
-      (world) =>
-        Effect.gen(function* () {
-          const project = yield* projectOf(world);
-          const client = yield* connect(world.state).pipe(Effect.orDie);
-          const runId = yield* finished(client, project).pipe(Effect.orDie);
-
-          const refused = yield* client
-            .invoke({
-              runId,
-              offer: "grade-it",
-              input: { note: "the diff", grade: "maybe" },
-              request: "act-1",
-            })
-            .pipe(Effect.result);
-          expect(refused._tag).toBe("Failure");
-          expect((yield* client.runs({ task: null }).pipe(Effect.orDie)).length).toBe(1);
-
-          // And an offer nobody declared is refused the same way.
-          const unknown = yield* client
-            .invoke({ runId, offer: "make-coffee", input: {}, request: "act-2" })
-            .pipe(Effect.result);
-          expect(unknown._tag).toBe("Failure");
-          expect((yield* client.runs({ task: null }).pipe(Effect.orDie)).length).toBe(1);
-          yield* stopHost(world.state);
-        }),
-      [],
-    ),
-  300_000,
-);
-
-test(
-  "the command line lists and invokes the same offers the host makes",
-  () =>
-    proves(
-      "collie-actions-cli-",
-      (world) =>
-        Effect.gen(function* () {
-          const project = yield* projectOf(world);
-          const client = yield* connect(world.state).pipe(Effect.orDie);
-          const runId = yield* finished(client, project).pipe(Effect.orDie);
-
-          const listed = yield* collie({ ...world, project }, ["run", "actions", runId]);
-          expect(listed.envelope.ok).toBe(true);
-          expect(asText(listed.envelope.data ?? [])).toContain("grade-it");
-
-          const done = yield* collie({ ...world, project }, [
-            "run",
-            "action",
+        const refused = yield* client
+          .invoke({
             runId,
-            "grade-it",
-            "--input",
-            "note=the diff",
-            "--input",
-            "grade=pass",
-          ]);
-          expect(done.envelope.ok).toBe(true);
-          const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
-          expect(Arr.map(runs, (one) => one.workflow).sort()).toEqual(["graded", "offered"]);
+            offer: "grade-it",
+            input: { note: "the diff", grade: "maybe" },
+            request: "act-1",
+          })
+          .pipe(Effect.result);
+        expect(refused._tag).toBe("Failure");
+        expect((yield* client.runs({ task: null }).pipe(Effect.orDie)).length).toBe(1);
 
-          // And the same refusal from this door: an offer nobody declares starts nothing.
-          const refused = yield* collie({ ...world, project }, [
-            "run",
-            "action",
-            runId,
-            "make-coffee",
-          ]);
-          expect(refused.envelope.ok).toBe(false);
-          expect((yield* client.runs({ task: null }).pipe(Effect.orDie)).length).toBe(2);
-          yield* stopHost(world.state);
-        }),
-      [],
-    ),
-  300_000,
-);
+        const unknown = yield* client
+          .invoke({ runId, offer: "make-coffee", input: {}, request: "act-2" })
+          .pipe(Effect.result);
+        expect(unknown._tag).toBe("Failure");
+        expect((yield* client.runs({ task: null }).pipe(Effect.orDie)).length).toBe(1);
+        yield* stopHost(world.state);
+      }),
+    [],
+  ));
+
+test("the command line lists and invokes the same offers the host makes", () =>
+  proves(
+    "collie-actions-cli-",
+    (world) =>
+      Effect.gen(function* () {
+        const project = yield* projectOf(world);
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const runId = yield* finished(client, project).pipe(Effect.orDie);
+
+        const listed = yield* collie({ ...world, project }, ["run", "actions", runId]);
+        expect(listed.envelope.ok).toBe(true);
+        expect(asText(listed.envelope.data ?? [])).toContain("grade-it");
+
+        const done = yield* collie({ ...world, project }, [
+          "run",
+          "action",
+          runId,
+          "grade-it",
+          "--input",
+          "note=the diff",
+          "--input",
+          "grade=pass",
+        ]);
+        expect(done.envelope.ok).toBe(true);
+        const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
+        expect(Arr.map(runs, (one) => one.workflow).sort()).toEqual(["graded", "offered"]);
+
+        const refused = yield* collie({ ...world, project }, [
+          "run",
+          "action",
+          runId,
+          "make-coffee",
+        ]);
+        expect(refused.envelope.ok).toBe(false);
+        expect((yield* client.runs({ task: null }).pipe(Effect.orDie)).length).toBe(2);
+        yield* stopHost(world.state);
+      }),
+    [],
+  ));

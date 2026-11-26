@@ -1,19 +1,17 @@
-// The Settings commands: what a value the human typed does to config.json, which is what
-// every later Run reads its defaults from.
-
 import * as Rec from "effect/Record";
-import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import * as Option from "effect/Option";
 import type { PlatformServices } from "../../src/platform";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, PlatformError, type Scope } from "effect";
-import { Rig, type RigError } from "../support/recorder";
+import type { PlatformError } from "effect";
+import { Effect } from "effect";
+import type { Scope } from "effect";
+import { Rig } from "../support/recorder";
+import type { RigError } from "../support/recorder";
 import { installBaseline } from "../support/engine";
 import { installFakeSkills } from "../support/defs";
 import { FakeBin, gitWorktreeCases } from "../support/bin";
 import { runEffect } from "../support/effect";
-import { runCommand, type ControlSession } from "../../src/flows";
+import { runCommand } from "../../src/flows";
 import type { Jump } from "../../src/ui/state";
 import { Herdr } from "../../src/herdr";
 import { registerAgent, scopeFor } from "../../src/registry";
@@ -22,11 +20,11 @@ import type { RunFacts } from "../../src/runs";
 import { openHost } from "../support/host";
 import { madeRun, recordsAt } from "../support/records";
 import { Path, FileSystem } from "effect";
+import { stringifyJson } from "../../src/json";
 
 let rig: Rig;
 let bin: FakeBin;
-/** The Runs the host would list. */
-let runs: RunFacts[] = [];
+let runs: Array<RunFacts> = [];
 
 function effectTest(
   name: string,
@@ -45,15 +43,9 @@ beforeEach(() =>
       rig = yield* Rig.make();
       runs = [];
       yield* installBaseline(rig);
-      // A skill nobody installed is a validation error, not a missing input, and every
-      // workflow in these tests would fail on that before it could ask anything.
       yield* installFakeSkills(rig.root);
-      // A Driver that exits at once: these tests are about what a command asks and what
-      // it records, and a run that cannot start one bails with a notice that drowns both.
       bin = yield* FakeBin.make(`${rig.root}/bin`);
       yield* bin.add("stub-driver", "exit 0");
-      // A mutating run resolves a branch before it starts, and the rig's project is not
-      // a real checkout: this is the branch it is on and the default it cuts from.
       yield* bin.add(
         "git",
         `case "$*" in
@@ -76,20 +68,18 @@ afterEach(() =>
   ),
 );
 
-function session(): ControlSession {
+function session() {
   const env = rig.pluginEnv();
   return {
     herdr: new Herdr(env),
-    ...scopeFor(env, env.cwd),
+    ...scopeFor(env.cwd),
     stateDir: env.stateDir,
     userDir: env.userDir,
-    paneId: env.paneId,
     pluginRoot: env.pluginRoot,
     runsOf: () => Effect.succeed(runs),
   };
 }
 
-/** Nothing here asks the human anything; a prompt reached would be the bug. */
 const prompts = {
   menu: () => Effect.succeed(null),
   ask: () => Effect.succeed(null),
@@ -103,8 +93,7 @@ effectTest("clearing a default unsets it rather than configuring an empty one", 
 
   const note = yield* set("harness", "");
 
-  // An empty harness is not a harness: every workflow validation would then fail on an
-  // unknown one, while Settings showed the key as unset.
+  // WARNING: an empty harness is not a harness: validation would fail on it while Settings shows the key as unset.
   expect(note).toContain("unset");
   expect(yield* readConfig(rig.pluginEnv().userDir)).not.toHaveProperty("harness");
   expect((yield* loadDefaults(rig.pluginEnv().userDir)).harness).toBe("claude");
@@ -126,8 +115,7 @@ effectTest(
 effectTest(
   "permissions is refused unless it is a mode a Run can start an agent with",
   function* () {
-    // Written, it would fail every later `loadDefaults` — including the Settings view
-    // that would be used to put it right.
+    // WARNING: written, it would fail every later loadDefaults, including the Settings view meant to repair it.
     const note = yield* set("permissions", "yolo");
 
     expect(note).toContain("auto, bypass, harness");
@@ -138,8 +126,6 @@ effectTest(
 );
 
 effectTest("scope is refused unless it is a board the tab can open on", function* () {
-  // The board has to open on one of the two, and a tab that opened on nothing would
-  // be the first thing a human tried to fix in this very view.
   const note = yield* set("scope", "everything");
 
   expect(note).toContain("local, all");
@@ -152,7 +138,7 @@ effectTest(
   "Claude Code's auto-compact window is 400000 until set, and is stored as written",
   function* () {
     const userDir = rig.pluginEnv().userDir;
-    expect((yield* loadDefaults(userDir)).claudeAutoCompactWindow).toBe(400000);
+    expect((yield* loadDefaults(userDir)).claudeAutoCompactWindow).toBe(400_000);
 
     expect(yield* set("claude_auto_compact_window", "2000000")).toContain(
       "from 100000 to 1000000, or auto",
@@ -160,20 +146,18 @@ effectTest(
     expect(yield* readConfig(userDir)).not.toHaveProperty("claude_auto_compact_window");
 
     yield* set("claude_auto_compact_window", "500000");
-    expect((yield* readConfig(userDir)).claude_auto_compact_window).toBe(500000);
+    expect((yield* readConfig(userDir)).claude_auto_compact_window).toBe(500_000);
     yield* set("claude_auto_compact_window", "auto");
     expect((yield* loadDefaults(userDir)).claudeAutoCompactWindow).toBe("auto");
 
-    // Hand-edited past what Claude Code takes: kept, so the launch can refuse it.
     const fs = yield* FileSystem.FileSystem;
     yield* fs.writeFileString(`${userDir}/config.json`, `{ "claude_auto_compact_window": 50000 }`);
-    expect((yield* loadDefaults(userDir)).claudeAutoCompactWindow).toBe(50000);
+    expect((yield* loadDefaults(userDir)).claudeAutoCompactWindow).toBe(50_000);
   },
 );
 
 effectTest("a default is written without the whitespace around it", function* () {
-  // `codex ` is displayed as `codex` and then fails harness validation, because the
-  // trim was only ever used for the checks and the original string was written.
+  // WARNING: the trim is used only for the checks, so the untrimmed string is written and then fails validation.
   const note = yield* set("harness", "  codex  ");
 
   expect(note).toBe("harness is now codex");
@@ -186,19 +170,17 @@ effectTest("a setting records when it was set, and proactive is one", function* 
   expect(yield* set("proactive", "false")).toBe("proactive is now false");
 
   expect((yield* loadDefaults(userDir)).proactive).toBe(false);
-  // When, because the latest edit of a key is what a Flock shares.
+  // WARNING: the latest edit of a key is what a Flock shares.
   expect(Rec.keys((yield* readSettingsSet(userDir)).set)).toEqual(["proactive"]);
   expect(yield* set("models.claude", "claude-x, claude-y")).toContain("claude-x, claude-y");
   expect((yield* loadDefaults(userDir)).models).toEqual({ claude: ["claude-x", "claude-y"] });
-  // A remembered answer is a Run's own note, never a setting.
+  // WARNING: a remembered answer is a Run's own note, never a setting.
   expect(yield* set("linear.team", "CEG")).toContain("not one of Collie's settings");
 });
 
-/** One run of another workspace, with an agent, a tab and whatever else a test needs. */
 const elsewhere = Effect.fn("commands.elsewhere")(function* (opts: {
   workspaceId: string;
   status?: "running" | "done";
-  /** What it was pointed at, and the checkout it was working in. */
   target?: string;
   cwd?: string;
 }) {
@@ -211,8 +193,7 @@ const elsewhere = Effect.fn("commands.elsewhere")(function* (opts: {
     settled: { inputs: opts.target ? { target: opts.target } : {}, strategies: {} },
   });
   runs = [run, ...runs];
-  // Its agent, registered in the pane herdr opened for it.
-  yield* registerAgent(scopeFor(env, run.cwd), {
+  yield* registerAgent(scopeFor(run.cwd), {
     role: "implementer",
     agent: "impl-9",
     paneId: "w9:p1",
@@ -227,36 +208,27 @@ const elsewhere = Effect.fn("commands.elsewhere")(function* (opts: {
 const jump = (jump: Jump) =>
   runCommand(session(), rig.pluginEnv(), { _tag: "Jump", jump }, prompts);
 
-effectTest("Enter goes where the row points, in one call, and says where it went", function* () {
-  yield* rig.startSocket();
-  const run = yield* elsewhere({ workspaceId: "w9" });
-  // The register is read through the host.
-  yield* openHost(rig.stateDir);
+effectTest(
+  "Enter says how to attach to the agent a row points to, and asks core nothing",
+  function* () {
+    const run = yield* elsewhere({ workspaceId: "w9" });
+    yield* openHost(rig.stateDir);
 
-  // A workspace row: whatever tab that workspace was last on, and nothing else.
-  expect(yield* jump({ kind: "workspace", workspaceId: "w9", label: "Implement · glass" })).toBe(
-    "went to Implement · glass",
-  );
-  expect(yield* rig.cmds()).toEqual(["workspace.focus"]);
+    expect(yield* jump({ kind: "workspace", workspaceId: "w9", label: "Implement · glass" })).toBe(
+      "Implement · glass — nothing to jump to",
+    );
+    // WARNING: a run row resolves its agent from the register now, not from an id the board cached when it drew the row.
+    expect(yield* jump({ kind: "run", runId: run.id, label: "Implement · glass" })).toBe(
+      "attach to impl-9 with: hc attach impl-9",
+    );
+    expect(yield* jump({ kind: "agent", agent: "impl-9", label: "Implementer" })).toBe(
+      "attach to impl-9 with: hc attach impl-9",
+    );
+    expect(yield* rig.cmds()).toEqual([]);
+  },
+);
 
-  // A run row: its newest agent, resolved from the register now rather than from an id
-  // the board cached when it drew the row.
-  expect(yield* jump({ kind: "run", runId: run.id, label: "Implement · glass" })).toBe(
-    "went to Implement · glass",
-  );
-  const focused = Arr.filter(yield* rig.calls(), (c) => c.cmd === "agent focus");
-  expect(Arr.map(focused, (c) => c.argv!.at(-1))).toEqual(["impl-9"]);
-
-  // An agent row: by name, which selects the workspace, the tab and the pane at once.
-  expect(yield* jump({ kind: "agent", agent: "impl-9", label: "Implementer" })).toBe(
-    "went to Implementer",
-  );
-  expect(Arr.filter(yield* rig.calls(), (c) => c.cmd === "agent focus")).toHaveLength(2);
-});
-
-effectTest("Enter on an Elsewhere row says so and asks herdr nothing", function* () {
-  yield* rig.startSocket();
-
+effectTest("Enter on an Elsewhere row says so and asks core nothing", function* () {
   const note = yield* jump({ kind: "none", label: "Elsewhere · collie-mr-roles-wt" });
 
   expect(note).toContain("nothing to jump to");
@@ -266,14 +238,12 @@ effectTest("Enter on an Elsewhere row says so and asks herdr nothing", function*
 effectTest("w on another workspace's run opens its merge request, not this repo's", function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  // An unqualified target, which is what every run recorded before merge requests
-  // carried their project: `glab` resolves the project from the directory it is run
-  // in, so the run's own checkout is the only cwd that names the right one.
+  // WARNING: glab resolves the project from its cwd, so the run's own checkout is the only cwd that names it.
   const checkout = path.join(rig.root, "another-checkout");
   yield* fs.makeDirectory(checkout, { recursive: true });
   const run = yield* elsewhere({ workspaceId: "w9", target: "mr:42", cwd: checkout });
   const marker = path.join(rig.root, "glab-cwd.txt");
-  yield* bin.add("glab", `pwd > ${JSON.stringify(marker)}`);
+  yield* bin.add("glab", `pwd > ${stringifyJson(marker)}`);
 
   const note = yield* runCommand(
     session(),
@@ -296,7 +266,7 @@ effectTest("questions is refused unless it is a way of presenting one", function
 });
 
 effectTest(
-  "Open check output opens a pane in the Run's workspace following its check",
+  "Open check output says how to follow the Run's check, and asks core nothing",
   function* () {
     const run = yield* madeRun(rig.pluginEnv().stateDir, {
       id: "r-check",
@@ -312,15 +282,7 @@ effectTest(
       prompts,
     );
 
-    expect(note).toBe("following r-check's check");
-    const calls = yield* rig.calls();
-    const tab =
-      Option.getOrUndefined(Arr.findFirst(calls, (call) => call.cmd === "tab create"))?.argv ?? [];
-    expect(tab[tab.indexOf("--workspace") + 1]).toBe("w7");
-    const ran = Option.getOrUndefined(Arr.findFirst(calls, (call) => call.cmd === "pane run"));
-    expect(Arr.join(ran?.argv ?? [], " ")).toContain("run checks r-check --follow");
-    expect(Arr.join(ran?.argv ?? [], " ")).toContain(
-      `HERDR_PLUGIN_STATE_DIR=${rig.pluginEnv().stateDir}`,
-    );
+    expect(note).toBe("follow its check with: collie run checks r-check --follow");
+    expect(yield* rig.cmds()).toEqual([]);
   },
 );

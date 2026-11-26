@@ -1,5 +1,3 @@
-// What a Run asks of its reader: a wait that ends by itself asks nothing.
-
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import { attentionFor } from "../src/attention";

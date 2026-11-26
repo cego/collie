@@ -1,5 +1,6 @@
 {
   "name": "collie",
+  "version": "1.0.31",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,11 +14,11 @@
     "test": "bun run tools/test.ts",
     "scenario": "bun run tools/scenario.ts",
     "test:live": "COLLIE_LIVE_HARNESSES=1 bun test test/agents.test.ts test/compaction-claude.test.ts test/compaction-codex.test.ts test/compaction-opencode.test.ts test/compaction-pi.test.ts",
-    "contract:check": "bun run tools/herdr-schema.ts pinned --check",
-    "contract:regen": "bun run tools/herdr-schema.ts pinned --write",
     "probe:hc": "bun run tools/hc-probe.ts",
     "typecheck": "tsrs --noEmit --fast",
     "rune-types:check": "bun run tools/rune-types.ts --check",
+    "prompt-golden:write": "bun run tools/prompt-golden.ts --write",
+    "prompt-golden:check": "bun run tools/prompt-golden.ts --check",
     "check:static": "bun run --parallel --no-exit-on-error format:check lint typecheck rune-types:check",
     "check": "bun run check:static && bun run test",
     "build": "bun run tools/build.ts",
@@ -25,30 +26,30 @@
   },
   "dependencies": {
     "@comark/ansi": "0.9.2",
-    "@effect/platform-bun": "4.1.4",
-    "@effect/sql-sqlite-bun": "4.1.4",
+    "@effect/platform-bun": "4.1.5",
+    "@effect/sql-sqlite-bun": "4.1.5",
     "@opentui/core": "^0.8.4",
     "@opentui/solid": "^0.8.4",
     "comark": "0.9.2",
-    "effect": "4.1.4",
+    "effect": "4.1.5",
     "forges": "0.3.2",
     "solid-js": "^1.9.19"
   },
   "devDependencies": {
-    "@effect/tsgo": "0.69.0",
+    "@cloudflare/oxlint-config": "0.1.0",
+    "@effect/tsgo": "0.73.4",
+    "@interfere/landmines": "0.1.0",
     "@modelcontextprotocol/sdk": "1.32.2",
-    "@oxlint/plugins": "1.93.0",
+    "@oxlint/plugins": "1.94.0",
     "@types/bun": "1.4.4",
+    "msw": "2.15.0",
     "oxfmt": "0.78.0",
-    "oxlint": "1.93.0",
-    "oxlint-tsgolint": "7.0.2007",
+    "oxlint": "1.94.0",
+    "oxlint-tsgolint": "7.0.2008",
     "tsrs": "0.25.0-ts7.1.0-beta",
     "typescript": "7.0.2"
   },
   "engines": {
     "bun": ">=1.4.0"
-  },
-  "patchedDependencies": {
-    "effect@4.1.4": "patches/effect@4.1.4.patch"
   }
 }

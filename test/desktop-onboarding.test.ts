@@ -1,13 +1,10 @@
-// Desktop onboards a Machine: herdr's questions while it saves one, a runner of Desktop's
-// own version that is used only once its signature verifies, `collie onboard`'s steps as
-// they come, and routes that come and go while Desktop runs.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { platformLayer, type PlatformServices } from "../src/platform";
+import { platformLayer } from "../src/platform";
+import type { PlatformServices } from "../src/platform";
 import {
   Clock,
   Deferred,
@@ -15,15 +12,15 @@ import {
   FileSystem,
   Option,
   Schedule,
-  type Scope,
   Stream,
   SubscriptionRef,
 } from "effect";
+import type { Scope } from "effect";
 import type { BoardMessage, BoardSnapshot } from "../src/board-model";
 import { signRelease } from "../src/signing";
-import { flockStream, localRoute, type Route, type ShellRoute } from "../desktop/src/bun/machine";
+import { flockStream, localRoute } from "../desktop/src/bun/machine";
+import type { ShellRoute } from "../desktop/src/bun/machine";
 import {
-  addToHerdr,
   doctorOn,
   onboardThrough,
   platformOf,
@@ -31,14 +28,9 @@ import {
   verifiedRunner,
 } from "../desktop/src/bun/onboarding";
 import { setupOffer } from "../desktop/src/bun/standing-setup";
-import {
-  applyItem,
-  EMPTY_FLOCK,
-  type FlockItem,
-  machineRows,
-  type OnboardRun,
-  type OnboardStep,
-} from "../desktop/src/shared/flock";
+import { applyItem, EMPTY_FLOCK, machineRows } from "../desktop/src/shared/flock";
+import type { FlockItem, OnboardRun, OnboardStep } from "../desktop/src/shared/flock";
+import { stringifyJson } from "../src/json";
 
 const pair = () => {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
@@ -55,11 +47,10 @@ const scratch = Effect.flatMap(FileSystem.FileSystem, (fs) =>
   fs.makeTempDirectoryScoped({ prefix: "collie-onboarding-" }),
 );
 
-/** A release server with `files` under `/<version>/`, which logs every path asked for. */
 const releases = (files: Record<string, Uint8Array | string>) =>
   Effect.acquireRelease(
     Effect.sync(() => {
-      const asked: string[] = [];
+      const asked: Array<string> = [];
       const server = Bun.serve({
         port: 0,
         fetch: (request) => {
@@ -96,7 +87,6 @@ test("a runner is used only once its signature verifies, from the download or fr
       expect(runner.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
       expect(new TextDecoder().decode(runner.bytes)).toBe("#!/bin/sh\necho runner\n");
 
-      // The copy kept is checked again, so one changed since is refused rather than run.
       served.asked.length = 0;
       yield* verifiedRunner(served.base, "0.40.0", "linux-x64", dir, key.publicKey);
       expect(served.asked).toEqual([]);
@@ -138,85 +128,6 @@ test("an unsigned runner, or one signed by another key, is refused and never kep
     }),
   ));
 
-/** A `herdr` that asks what `machine add` asks, then logs its arguments and the answer. */
-const fakeHerdr = (dir: string, exit = 0) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const herdr = `${dir}/herdr`;
-    yield* fs.writeFileString(
-      herdr,
-      `#!/bin/sh
-echo "Connecting to $7..."
-printf 'Remote herdr is missing. Install it? [Y/n] '
-read install
-echo "This stops active remote pane processes."
-printf 'The remote server is incompatible. Stop and replace the running server now? [y/N] '
-read replace
-echo "$* install=$install replace=$replace" > '${dir}/herdr.log'
-exit ${exit}
-`,
-    );
-    yield* fs.chmod(herdr, 0o755);
-    return herdr;
-  });
-
-test("herdr's questions while it saves a Machine are asked of the human, each with herdr's own default", () =>
-  run(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const dir = yield* scratch;
-      const herdr = yield* fakeHerdr(dir);
-      const asked: Array<[string, boolean]> = [];
-      yield* addToHerdr(herdr, "mk@vm", "vm", "default", (text, yes) =>
-        Effect.sync(() => {
-          asked.push([text, yes]);
-          // Yes to installing herdr; replacing a server is left at herdr's No.
-          return yes;
-        }),
-      );
-      expect(asked).toEqual([
-        ["Connecting to mk@vm...\nRemote herdr is missing. Install it?", true],
-        [
-          "This stops active remote pane processes.\nThe remote server is incompatible. Stop and replace the running server now?",
-          false,
-        ],
-      ]);
-      expect(Str.trim(yield* fs.readFileString(`${dir}/herdr.log`))).toBe(
-        "machine add --label vm --remote-session default mk@vm install=y replace=n",
-      );
-    }),
-  ));
-
-test("a long stretch of herdr's output with no question in it is read in no time", () =>
-  run(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const dir = yield* scratch;
-      const herdr = `${dir}/herdr`;
-      yield* fs.writeFileString(
-        herdr,
-        `#!/bin/sh
-for i in $(seq 40); do echo "Installing herdr, step $i of 40"; done
-`,
-      );
-      yield* fs.chmod(herdr, 0o755);
-      yield* addToHerdr(herdr, "mk@vm", "vm", "default", () => Effect.succeed(false));
-    }),
-  ));
-
-test("herdr refusing to save a Machine is said in its own words", () =>
-  run(
-    Effect.gen(function* () {
-      const dir = yield* scratch;
-      const herdr = yield* fakeHerdr(dir, 1);
-      const failed = yield* addToHerdr(herdr, "mk@vm", "vm", "default", () =>
-        Effect.succeed(false),
-      ).pipe(Effect.flip);
-      expect(failed).toContain("replace the running server now?");
-    }),
-  ));
-
-/** A runner that streams `collie --json onboard` as one whose system step needs root. */
 const ONBOARD = `#!/bin/sh
 [ "$*" = "--json onboard --to 0.40.0" ] || { echo "asked $*" >&2; exit 2; }
 echo '{"event":"start","step":"system","title":"Checking for git, curl and openssl"}'
@@ -241,7 +152,7 @@ test("onboarding puts the verified runner on the Machine and streams its steps, 
         [`/0.40.0/collie-${platform}.sig`]: signRelease(bytes, key.privateKey),
       });
       const route = { ...localRoute([], "pc"), sh: localSh(home) };
-      const runs: OnboardRun[] = [];
+      const runs: Array<OnboardRun> = [];
       const last = yield* onboardThrough(
         route,
         { version: "0.40.0", releases: served.base, runners: `${dir}/runners`, key: key.publicKey },
@@ -263,7 +174,6 @@ test("onboarding puts the verified runner on the Machine and streams its steps, 
           command: "sudo apt-get install -y git",
         },
       ]);
-      // Every change was told as it came, the first while the runner was still on its way.
       expect(runs[0]!.steps).toEqual([
         { step: "runner", title: "Collie 0.40.0's runner, signed", status: "running" },
       ]);
@@ -271,7 +181,6 @@ test("onboarding puts the verified runner on the Machine and streams its steps, 
     }),
   ));
 
-/** A runner whose `collie --json onboard` finishes with the Machine ready. */
 const ONBOARDED = `#!/bin/sh
 echo '{"event":"start","step":"system","title":"Checking for git, curl and openssl"}'
 echo '{"event":"result","step":"system","status":"done"}'
@@ -344,7 +253,6 @@ test("a runner that does not verify is never put on the Machine, and onboarding 
     }),
   ));
 
-/** A runner whose bytes are not UTF-8, as a compiled one's are. */
 const BINARY = new Uint8Array([
   ...new TextEncoder().encode(`${ONBOARDED}# `),
   0xff,
@@ -355,22 +263,20 @@ const BINARY = new Uint8Array([
   0x0a,
 ]);
 
-/**
- * A paired Machine at `home`: its link carries stdin as text, as a bridge's shell request
- * does, and says what it was given; `sh` is its SSH command.
- */
-const paired = (
+const paired: (
   home: string,
-  sh: ShellRoute["sh"] = localSh(home),
-): ShellRoute & { readonly carried: Uint8Array[] } => {
-  const carried: Uint8Array[] = [];
+  sh?: ShellRoute["sh"],
+) => ShellRoute & { readonly carried: Array<Uint8Array> } = (home, sh = localSh(home)) => {
+  const carried: Array<Uint8Array> = [];
   return {
     ...localRoute([], "vm-mk"),
     sh,
     carried,
     execute: (script, stdin) =>
       Effect.flatMap(localSh(home)(script), (command) => {
-        if (stdin !== undefined) carried.push(stdin);
+        if (stdin !== undefined) {
+          carried.push(stdin);
+        }
         return ranWith(command, stdin && new TextEncoder().encode(new TextDecoder().decode(stdin)));
       }),
   };
@@ -471,11 +377,10 @@ test("an SSH connection that fails while the runner is on its way is said in its
     }),
   ));
 
-/** Local's shell, in a home of the test's own. */
 const localSh = (home: string) => (script: string) =>
   Effect.succeed(["/usr/bin/env", `HOME=${home}`, "/bin/sh", "-c", script]);
 
-const snapshot = (installation: string): BoardSnapshot => ({
+const snapshot: (installation: string) => BoardSnapshot = (installation) => ({
   _tag: "Snapshot",
   installation,
   build: "0.31.0",
@@ -495,10 +400,10 @@ const until = (what: () => boolean) =>
 test("a route added while Desktop runs shows its Machine, one removed stops, and a woken one tries again at once", () =>
   run(
     Effect.gen(function* () {
-      const told: string[] = [];
-      const closed: string[] = [];
+      const told: Array<string> = [];
+      const closed: Array<string> = [];
       let installed = false;
-      const route = (name: string): Route<Fake> => ({
+      const route = (name: string) => ({
         machine: { profile: `p-${name}`, name, target: `mk@${name}` },
         open: () =>
           installed || name !== "bare"
@@ -549,13 +454,11 @@ test("a route added while Desktop runs shows its Machine, one removed stops, and
       yield* Deferred.succeed(changes, undefined);
       yield* Deferred.await(removed);
       yield* until(() => told.includes("vm Snapshot"));
-      // Said once its route has ended, so nothing it said comes after.
       expect(Arr.filter(told, (one) => pipe_(one, Str.startsWith("pc ")))).toEqual([
         "pc Snapshot",
         "pc Removed",
       ]);
       expect(closed).toEqual(["pc"]);
-      // Installed now, and found at once rather than after the 2 s its second failure waits.
       yield* until(() => Arr.filter(told, (one) => one === "bare Lost").length === 2);
       installed = true;
       const woken = yield* Clock.currentTimeMillis;
@@ -574,8 +477,8 @@ test.each([
   (_, slower) =>
     run(
       Effect.gen(function* () {
-        const told: string[] = [];
-        const route = (name: string): Route<Fake> => ({
+        const told: Array<string> = [];
+        const route = (name: string) => ({
           machine: { profile: `p-${name}`, name, target: `mk@${name}` },
           open: () =>
             Effect.succeed<Fake>({
@@ -628,12 +531,12 @@ test("a removed Machine leaves the board, its routes and what onboarding left of
   const machine = { profile: "p-vm", name: "vm", target: "mk@vm" };
   const run: OnboardRun = {
     steps: [{ step: "system", title: "System", status: "needs_root", command: "sudo x" }],
-    asked: null,
+
     ready: false,
     reason: null,
     at: 1,
   };
-  const items: FlockItem[] = [
+  const items: Array<FlockItem> = [
     { _tag: "Routed", machine: { profile: "local", name: "pc" } },
     { _tag: "Routed", machine },
     { machine: { ...machine, installation: "vm-1" }, message: snapshot("vm-1") },
@@ -705,7 +608,7 @@ test("a Machine's row says what doctor finds of it, over what its last onboardin
       const route = {
         collie: (args: ReadonlyArray<string>) =>
           Arr.join(args, " ") === "--json doctor"
-            ? Effect.succeed({ out: `${JSON.stringify(envelope)}\n`, err: "", code: 1 })
+            ? Effect.succeed({ out: `${stringifyJson(envelope)}\n`, err: "", code: 1 })
             : Effect.die(`asked ${Arr.join(args, " ")}`),
       };
       const doctored = Option.getOrThrow(yield* doctorOn(route));
@@ -719,8 +622,8 @@ test("a Machine's row says what doctor finds of it, over what its last onboardin
           command: "claude auth login",
         },
       ]);
-      const onboarded: OnboardRun = { steps: [], asked: null, ready: true, reason: null, at: 1 };
-      const items: FlockItem[] = [
+      const onboarded: OnboardRun = { steps: [], ready: true, reason: null, at: 1 };
+      const items: Array<FlockItem> = [
         { _tag: "Routed", machine },
         { _tag: "Onboarding", job: "j-1", machine, run: onboarded },
         { _tag: "Doctored", machine, run: doctored },
@@ -740,7 +643,7 @@ test("Helle and the Linear MCP count toward onboarded though doctor passes them,
       const said = (checks: ReadonlyArray<object>) => ({
         collie: () =>
           Effect.succeed({
-            out: JSON.stringify({ ok: true, data: { ready: true, checks } }),
+            out: stringifyJson({ ok: true, data: { ready: true, checks } }),
             err: "",
             code: 0,
           }),
@@ -754,15 +657,15 @@ test("Helle and the Linear MCP count toward onboarded though doctor passes them,
       expect(Arr.map(doctored.steps, ({ step, status }) => [step, status])).toEqual([
         ["helle", "needs_human"],
       ]);
-      const onboarding = (status: OnboardStep["status"]): OnboardRun => ({
+      const onboarding = (status: OnboardStep["status"]) => ({
         steps: [{ step: "helle", title: "Helle's credentials", status }],
-        asked: null,
+
         ready: status === "skipped",
         reason: null,
         at: 0,
       });
       const row = (run: OnboardRun) => {
-        const items: FlockItem[] = [
+        const items: Array<FlockItem> = [
           { _tag: "Routed", machine },
           { _tag: "Onboarding", job: "j-1", machine, run },
           { _tag: "Doctored", machine, run: doctored },
@@ -790,7 +693,7 @@ test("a Linear login onboarding left unfinished keeps the row short, though doct
         yield* doctorOn({
           collie: () =>
             Effect.succeed({
-              out: JSON.stringify({ ok: true, data: { checks } }),
+              out: stringifyJson({ ok: true, data: { checks } }),
               err: "",
               code: 0,
             }),
@@ -799,12 +702,12 @@ test("a Linear login onboarding left unfinished keeps the row short, though doct
       const row = (status: OnboardStep["status"]) => {
         const run: OnboardRun = {
           steps: [{ step: "linear", title: "The Linear MCP", status }],
-          asked: null,
+
           ready: status === "skipped",
           reason: null,
           at: 0,
         };
-        const items: FlockItem[] = [
+        const items: Array<FlockItem> = [
           { _tag: "Routed", machine },
           { _tag: "Onboarding", job: "j-1", machine, run },
           { _tag: "Doctored", machine, run: doctored },
@@ -843,7 +746,7 @@ test("a failing gh check is a failed step with its fix, as a failing glab check 
         error: { code: "operation_failed", message: "", details: { checks } },
       };
       const route = {
-        collie: () => Effect.succeed({ out: JSON.stringify(envelope), err: "", code: 1 }),
+        collie: () => Effect.succeed({ out: stringifyJson(envelope), err: "", code: 1 }),
       };
       expect(Option.getOrThrow(yield* doctorOn(route)).steps).toEqual(
         Arr.map(checks, ({ name, detail, fix }) => ({

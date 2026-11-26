@@ -1,7 +1,3 @@
-// The card board, driven the way a human drives it: a pane of a given width, a click on
-// a card, text in the search field. Every assertion is about what the pane says and
-// which command went out — never about a component's own state.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -10,19 +6,15 @@ import { expect, test } from "bun:test";
 import { Effect, Schedule } from "effect";
 import { createSignal } from "solid-js";
 import { testRender } from "@opentui/solid";
-import { TextAttributes, TextRenderable, type BaseRenderable } from "@opentui/core";
+import { TextAttributes, TextRenderable } from "@opentui/core";
+import type { BaseRenderable } from "@opentui/core";
 import { runEffect } from "../support/effect";
 import { task } from "../support/task";
 import { App } from "../../src/ui/App";
 import type { AppState, Command } from "../../src/ui/state";
 import type { Ask, Pending } from "../../src/ui/prompts";
-import {
-  mrTarget,
-  SECTIONS,
-  type RunDetail,
-  type TaskMr,
-  type TaskView,
-} from "../../src/board-model";
+import { mrTarget, SECTIONS } from "../../src/board-model";
+import type { RunDetail, TaskMr, TaskView } from "../../src/board-model";
 import { NO_RUN_OUTCOME } from "../../src/views";
 import type { Live } from "../../src/live";
 import type { Card } from "../../src/cards";
@@ -35,14 +27,15 @@ import { followBoard } from "../../src/lifecycle";
 import { scopeFor } from "../../src/registry";
 import { recordsReadLayer } from "../../src/records";
 import { focus } from "../support/focus";
-import { collie, proves } from "../support/world";
+import { blockedAtItsPrompt, collie, proves } from "../support/world";
 import { epochMs } from "../../src/time";
 import type { UsageReading } from "../../src/usage-model";
+import { stringifyJson } from "../../src/json";
 
 const NOW = epochMs("2026-09-16T12:00:00.000Z");
 
-function appState(over: Partial<AppState> = {}): AppState {
-  return {
+function appState(over: Partial<AppState> = {}) {
+  const returned: AppState = {
     view: "runs",
     filter: { kind: "all" },
     tasks: [],
@@ -58,17 +51,17 @@ function appState(over: Partial<AppState> = {}): AppState {
     stopping: [],
     ...over,
   };
+  return returned;
 }
 
 const mount = Effect.fn("board.mount")(function* (
   initial: AppState,
   width = 120,
   height = 40,
-  /** A launch flow asking inline, which is the one thing drawn over the whole board. */
   asking: Ask | null = null,
 ) {
   const [state, setState] = createSignal<AppState>(initial);
-  const commands: Command[] = [];
+  const commands: Array<Command> = [];
   const answers: Array<string | null> = [];
   const [pending] = createSignal<Pending | null>(
     asking === null ? null : { ask: asking, answer: (value) => answers.push(value) },
@@ -83,27 +76,31 @@ const mount = Effect.fn("board.mount")(function* (
   yield* flush;
   return {
     commands,
-    /** The card containing this unique name, for checking renderer ownership. */
     cardNode(name: string) {
-      const find = (node: BaseRenderable): BaseRenderable | undefined => {
-        if (node instanceof TextRenderable && node.plainText === name) return node;
+      const find: (node: BaseRenderable) => BaseRenderable | undefined = (node) => {
+        if (node instanceof TextRenderable && node.plainText === name) {
+          return node;
+        }
         for (const child of node.getChildren()) {
           const found = find(child);
-          if (found) return found;
+          if (found) {
+            return found;
+          }
         }
         return undefined;
       };
       const text = find(t.renderer.root);
       const card = text?.parent?.parent?.parent;
-      if (!card) throw new Error(`no card containing ${JSON.stringify(name)}`);
+      if (!card) {
+        throw new Error(`no card containing ${stringifyJson(name)}`);
+      }
       return card;
     },
     acted: () => Arr.filter(commands, (c) => c._tag !== "Select"),
     flush,
     frame: () => t.captureCharFrame(),
-    /** The frame as one run of words, so a test is not a test of where a wrap fell. */
     said: () =>
-      pipe_(t.captureCharFrame(), Str.replace(/[│┌┐└┘─]/g, " "), Str.replace(/\s+/g, " ")),
+      pipe_(t.captureCharFrame(), Str.replaceAll(/[│┌┐└┘─]/g, " "), Str.replaceAll(/\s+/g, " ")),
     mockInput: t.mockInput,
     escape: Effect.gen(function* () {
       t.mockInput.pressEscape();
@@ -115,7 +112,6 @@ const mount = Effect.fn("board.mount")(function* (
         Effect.promise(() => t.mockMouse.click(x, y)),
         flush,
       ),
-    /** A click aimed at a word: how a human presses a button they can read. */
     clickOn(text: string) {
       const { x, y } = spotOf(t.captureCharFrame(), text);
       return Effect.andThen(
@@ -123,7 +119,6 @@ const mount = Effect.fn("board.mount")(function* (
         flush,
       );
     },
-    /** Shift and the left button, which is how several cards are picked at once. */
     shiftClickOn(text: string) {
       const { x, y } = spotOf(t.captureCharFrame(), text);
       return Effect.andThen(
@@ -131,7 +126,6 @@ const mount = Effect.fn("board.mount")(function* (
         flush,
       );
     },
-    /** The right button, which opens the same menu the ⋯ does. */
     rightClickOn(text: string) {
       const { x, y } = spotOf(t.captureCharFrame(), text);
       return Effect.andThen(
@@ -139,15 +133,14 @@ const mount = Effect.fn("board.mount")(function* (
         flush,
       );
     },
-    /** The wheel, over whatever is under the pointer. */
     scrollAt(x: number, y: number, times = 1) {
       return Effect.gen(function* () {
-        for (let n = 0; n < times; n++)
+        for (let n = 0; n < times; n++) {
           yield* Effect.promise(() => t.mockMouse.scroll(x, y, "down"));
+        }
         yield* flush;
       });
     },
-    /** Pointing at something, which is what reveals what a card can do. */
     pointAt(text: string) {
       const { x, y } = spotOf(t.captureCharFrame(), text);
       return Effect.andThen(
@@ -155,32 +148,37 @@ const mount = Effect.fn("board.mount")(function* (
         flush,
       );
     },
-    /** What a word is drawn on, which is what tells a filled button from a plain one. */
     bgOf(text: string) {
       for (const line of t.captureSpans().lines) {
         for (const span of line.spans) {
-          if (pipe_(span.text, Str.includes(text))) return `${span.bg.r} ${span.bg.g} ${span.bg.b}`;
+          if (pipe_(span.text, Str.includes(text))) {
+            return `${span.bg.r} ${span.bg.g} ${span.bg.b}`;
+          }
         }
       }
-      throw new Error(`nothing drawn containing ${JSON.stringify(text)}`);
+      throw new Error(`nothing drawn containing ${stringifyJson(text)}`);
     },
-    /** What colour a word is drawn in. */
     fgOf(text: string) {
       for (const line of t.captureSpans().lines) {
         for (const span of line.spans) {
-          if (pipe_(span.text, Str.includes(text))) return `${span.fg.r} ${span.fg.g} ${span.fg.b}`;
+          if (pipe_(span.text, Str.includes(text))) {
+            return `${span.fg.r} ${span.fg.g} ${span.fg.b}`;
+          }
         }
       }
-      throw new Error(`nothing drawn containing ${JSON.stringify(text)}`);
+      throw new Error(`nothing drawn containing ${stringifyJson(text)}`);
     },
     attributesOf(text: string) {
       for (const line of t.captureSpans().lines) {
-        for (const span of line.spans)
-          if (pipe_(span.text, Str.includes(text))) return span.attributes;
+        for (const span of line.spans) {
+          if (pipe_(span.text, Str.includes(text))) {
+            return span.attributes;
+          }
+        }
       }
-      throw new Error(`nothing drawn containing ${JSON.stringify(text)}`);
+      throw new Error(`nothing drawn containing ${stringifyJson(text)}`);
     },
-    /** Flushes until the frame says `text`: Comark renders a document asynchronously. */
+    // WARNING: Comark renders asynchronously, so flush until the text appears.
     until: (text: string) =>
       flush.pipe(
         Effect.repeat({
@@ -194,11 +192,9 @@ const mount = Effect.fn("board.mount")(function* (
         Effect.sync(() => setState(next)),
         flush,
       ),
-    /** One screen line as drawn, for aiming at a cell by what is next to it. */
     frameLine(y: number) {
       return Str.split(t.captureCharFrame(), "\n")[y] ?? "";
     },
-    /** Where a line is on screen, which is what a click has to be aimed at. */
     lineOf(text: string) {
       const y = Option.getOrElse(
         Arr.findFirstIndex(Str.split(t.captureCharFrame(), "\n"), (l) =>
@@ -206,21 +202,23 @@ const mount = Effect.fn("board.mount")(function* (
         ),
         () => -1,
       );
-      if (y < 0) throw new Error(`no line containing ${JSON.stringify(text)}`);
+      if (y < 0) {
+        throw new Error(`no line containing ${stringifyJson(text)}`);
+      }
       return y;
     },
   };
 });
 
-/** Where a word is on screen, which is what a click has to be aimed at. */
 function spotOf(frame: string, text: string) {
   const lines = Str.split(frame, "\n");
   const y = Option.getOrElse(
     Arr.findFirstIndex(lines, (line) => pipe_(line, Str.includes(text))),
     () => -1,
   );
-  if (y < 0) throw new Error(`no line containing ${JSON.stringify(text)}`);
-  // The middle of the word: its own cell, whatever sits either side of it.
+  if (y < 0) {
+    throw new Error(`no line containing ${stringifyJson(text)}`);
+  }
   return {
     x:
       Option.getOrElse(pipe_(lines[y]!, Str.indexOf(text)), () => -1) + Math.floor(text.length / 2),
@@ -241,7 +239,6 @@ const QUESTION: TaskView["decision"] = {
   ],
 };
 
-/** A question typed into rather than picked from: the Driver's `ask`, which has no items. */
 const TYPED: TaskView["decision"] = {
   kind: "question",
   run: "r8",
@@ -345,7 +342,6 @@ test("the board opens on three sections under one sentence about the herd", () =
       expect(said).toContain("One task is waiting on you. 2 working, 1 gone quiet.");
       expect(said).toContain("Needs you");
       expect(said).toContain("Working · 2");
-      // Finished is one line until someone asks for it.
       expect(said).toContain("1 finished today");
       expect(said).not.toContain("Typecheck to zero");
     }),
@@ -482,15 +478,12 @@ test("Acknowledge on an Unseen card acknowledges its Run once, without opening i
 test("earlier work is reachable on a day nothing finished", () =>
   runEffect(
     Effect.gen(function* () {
-      // Working cards and nothing finished today. History is the only place this
-      // checkout's earlier runs are, and the line into it is the same one.
       const app = yield* mount(appState({ tasks: [task()] }));
       expect(app.said()).toContain("Earlier work");
 
       yield* app.clickOn("Earlier work");
       expect(app.said()).toContain("Older…");
 
-      // And with nothing on the board at all, the way in is still there.
       const bare = yield* mount(appState({ tasks: [] }));
       expect(bare.said()).toContain("Earlier work");
     }),
@@ -508,7 +501,6 @@ test("the search narrows the sections and offers a way back", () =>
 
       expect(app.said()).toContain("Docs run");
       expect(app.said()).not.toContain("Strapi prod seeder");
-      // The header counts the whole herd: a decision the search hides still waits.
       expect(app.said()).toContain("One task is waiting on you.");
 
       void app.mockInput.typeText("zzzz");
@@ -520,7 +512,10 @@ test("the search narrows the sections and offers a way back", () =>
     }),
   ));
 
-const reading = (subscription: "claude" | "chatgpt", usedPercent: number): UsageReading => ({
+const reading: (subscription: "claude" | "chatgpt", usedPercent: number) => UsageReading = (
+  subscription,
+  usedPercent,
+) => ({
   subscription,
   account: null,
   accountLabel: null,
@@ -596,7 +591,6 @@ test("clicking a card opens its record over the board, and Esc closes it", () =>
       expect(open).toContain("BRANCH");
       expect(open).toContain("mk/strapi-seed");
       expect(open).toContain("Close");
-      // Over the board, never instead of it: the other sections are still there.
       expect(open).toContain("Needs you");
 
       yield* app.escape;
@@ -612,8 +606,6 @@ test("a question's options are buttons, the first one filled", () =>
 
       expect(said).toContain("Split per chunk");
       expect(said).toContain("Keep one file");
-      // Primary is the filled one, and a plain option is still drawn as a button rather
-      // than as another line of the card.
       expect(app.bgOf(" Split per chunk ")).not.toBe(app.bgOf(" Keep one file "));
       expect(app.bgOf(" Keep one file ")).not.toBe(app.bgOf("Waiting on your answer"));
     }),
@@ -626,7 +618,6 @@ test("clicking an option answers that question, and the board recounts", () =>
 
       yield* app.clickOn("Keep one file");
       expect(app.acted()).toEqual([{ _tag: "Answer", runId: "r9", choiceId: "c1", value: "one" }]);
-      // A button is a button: pressing it must not also open the record behind it.
       expect(app.said()).not.toContain("Summary");
 
       yield* app.setState(
@@ -663,12 +654,10 @@ test("a question with no options is typed into on the card, and Enter sends it",
       expect(app.said()).toContain("What should the seeder be called?");
       yield* app.clickOn("type your answer");
 
-      // Including the keys the board itself uses: while a card is being typed into,
-      // `q` is a letter of the answer and `/` is not the search.
+      // WARNING: While a card is typed into, the board's own keys are letters: q and / are not keys.
       void app.mockInput.typeText("queue it under /tmp");
       yield* app.flush;
       expect(app.said()).toContain("queue it under /tmp");
-      // Nothing leaves the tab until it is sent: half an answer is not an answer.
       expect(app.acted()).toEqual([]);
 
       app.mockInput.pressEnter();
@@ -691,8 +680,6 @@ test("clicking the search takes the keyboard off whatever had it", () =>
       yield* app.clickOn("type your answer");
       yield* app.clickOn("⌕");
 
-      // The field they clicked is the field they are typing into: an answer that
-      // swallowed this would send the search to a Run.
       void app.mockInput.typeText("Alpha");
       yield* app.flush;
       app.mockInput.pressEnter();
@@ -725,12 +712,10 @@ test("a half-typed answer is kept per question while the tab is open", () =>
       void app.mockInput.typeText("half of it");
       yield* app.flush;
 
-      // Away from the field and back: what was typed is still there, and never left.
       yield* app.escape;
       expect(app.said()).toContain("half of it");
       expect(app.acted()).toEqual([]);
 
-      // The other question is its own draft, not this one.
       yield* app.clickOn("type your answer");
       void app.mockInput.typeText("eu-west");
       yield* app.flush;
@@ -761,7 +746,6 @@ test("a proposal card says what a yes is consent to, and only its buttons act on
       expect(said).toContain("? steer r1 · needs your yes");
       expect(said).toContain("p1 · deadbeef");
 
-      // The card is still a card: clicking it opens the record and consents to nothing.
       yield* app.clickOn("Slow down");
       expect(app.acted()).toEqual([]);
 
@@ -798,8 +782,6 @@ test("a card's actions are always on it, and pointing at it moves nothing", () =
       expect(app.said()).toContain("⋯");
 
       yield* app.pointAt("Strapi prod seeder");
-      // A card that changed under the pointer would move the board under the pointer,
-      // and a button that appears only once found is not offered.
       expect(app.lineOf("Working · 2")).toBe(before);
     }),
   ));
@@ -816,9 +798,7 @@ test("⋯ and the right button open the same menu, and a click outside closes it
       expect(open).toContain("Go to its tab");
       expect(open).toContain("Steer…");
       expect(open).toContain("Stop run");
-      // Over the board, not instead of it.
       expect(open).toContain("Strapi prod seeder");
-      // Nothing has been asked for yet.
       expect(app.acted()).toEqual([]);
 
       yield* app.click(2, 0);
@@ -864,7 +844,6 @@ test("a menu item acts, says so, and the menu goes", () =>
       expect(app.acted()).toEqual([{ _tag: "StopRun", runId: "r1" }]);
       expect(app.said()).not.toContain("Open record");
 
-      // What it did, in the board's own words, for as long as it is worth saying.
       yield* app.setState(appState({ tasks: [task()], note: "stopping r1" }));
       expect(app.said()).toContain("stopping r1");
     }),
@@ -896,7 +875,7 @@ test("the keyboard selects each named Offer on its owning Change", () =>
           ],
         }),
       );
-      const expected: Extract<Command, { _tag: "InvokeOffer" }>[] = [];
+      const expected: Array<Extract<Command, { _tag: "InvokeOffer" }>> = [];
       for (const [label, runId, offer, direction, enabled] of [
         ["Stage app!12", "r-app", "stage", "down", true],
         ["Release api!7", "r-api", "release", "up", true],
@@ -919,7 +898,9 @@ test("the keyboard selects each named Offer on its owning Change", () =>
         expect(app.said()).toContain(`› ${label}`);
         app.mockInput.pressEnter();
         yield* app.flush;
-        if (enabled) expected.push({ _tag: "InvokeOffer", runId, offer });
+        if (enabled) {
+          expected.push({ _tag: "InvokeOffer", runId, offer });
+        }
         expect(app.acted()).toEqual(expected);
         expect(pipe_(app.said(), Str.includes("Open record"))).toBe(!enabled);
       }
@@ -929,7 +910,6 @@ test("the keyboard selects each named Offer on its owning Change", () =>
     }),
   ));
 
-/** One message to this Run's agents, and what it actually reached. */
 const DELIVERED = {
   id: "d1",
   at: "2026-09-16T10:05:00.000Z",
@@ -949,8 +929,6 @@ const DELIVERED = {
 test("a long record does not take the drawer's spacing back from its header", () =>
   runEffect(
     Effect.gen(function* () {
-      // Sixty steps: taller than the pane, so the scroll area is the one thing that has
-      // to give. The column used to shrink the header's blank rows instead.
       const steps = Array.from({ length: 60 }, (_, i) => ({
         name: `step-${i}`,
         state: "done" as const,
@@ -968,10 +946,11 @@ test("a long record does not take the drawer's spacing back from its header", ()
         );
       expect(at("Finished; nothing merged yet.")).toBe(at("content · 58m") + 2);
       expect(at("Go to its tab")).toBe(at("Finished; nothing merged yet.") + 2);
-      // The buttons may wrap; the tabs still sit a blank row under the last of them.
       const left =
         Option.getOrElse(pipe_(lines[at("Summary")]!, Str.indexOf("Summary")), () => -1) - 3;
-      expect(pipe_(lines[at("Summary") - 1]!, Str.slice(left), Str.replace(/[│ ]/g, ""))).toBe("");
+      expect(pipe_(lines[at("Summary") - 1]!, Str.slice(left), Str.replaceAll(/[│ ]/g, ""))).toBe(
+        "",
+      );
     }),
   ));
 
@@ -992,7 +971,6 @@ test("the drawer offers the same as buttons, and records what became of the work
       expect(said).toContain("Follow-up run");
       expect(said).toContain("Mark merged");
       expect(said).toContain("Mark abandoned");
-      // Already in the record: the drawer does not offer to open what is open.
       expect(said).not.toContain("Open record");
 
       yield* app.clickOn("Mark merged");
@@ -1020,8 +998,6 @@ test("Steer… opens the record with the keyboard in the steer field, and Enter 
       yield* app.flush;
       expect(app.acted()).toEqual([{ _tag: "Steer", runId: "r1", text: "wait for the review" }]);
 
-      // What the send actually reached, rather than that it was typed: the note confirms
-      // it, and Cards carries the receipt the ledger wrote.
       yield* app.setState(
         appState({
           tasks: [task()],
@@ -1094,11 +1070,9 @@ test("the Finished section ends with older…, which reads and pages what came b
       yield* app.clickOn("1 finished today");
       expect(app.said()).toContain("Older…");
 
-      // Asking is what reads it: nothing older is read until the link is pressed.
       yield* app.clickOn("Older…");
       expect(app.acted()).toEqual([{ _tag: "ShowOlder" }]);
 
-      // What it read arrives, and the page that was asked for is drawn.
       yield* app.setState(appState({ tasks: HERD, history: HISTORY_ROWS }));
       const said = app.said();
       expect(said).toContain("Implement · pin the CI image");
@@ -1110,7 +1084,6 @@ test("the Finished section ends with older…, which reads and pages what came b
 test("the last page of earlier work stays on screen once it is read", () =>
   runEffect(
     Effect.gen(function* () {
-      // Nothing finished today, so these rows are the whole of what is behind the line.
       const app = yield* mount(appState({ tasks: [task()] }));
       yield* app.clickOn("Earlier work");
       yield* app.clickOn("Older…");
@@ -1120,7 +1093,6 @@ test("the last page of earlier work stays on screen once it is read", () =>
 
       expect(said).toContain("Implement · pin the CI image");
       expect(said).toContain("Review · the seeder");
-      // Nothing more to page in, nothing already read taken away.
       expect(said).not.toContain("Older…");
     }),
   ));
@@ -1145,14 +1117,12 @@ test("Workflows and Settings open from the header and Esc comes back to the boar
       );
       const workflows = app.said();
       expect(workflows).toContain("Implement");
-      // It fills the pane: the board is not behind it.
       expect(workflows).not.toContain("Strapi prod seeder");
 
       yield* app.escape;
       expect(app.acted().at(-1)).toEqual({ _tag: "ShowView", view: "runs" });
       yield* app.setState(appState({ tasks: HERD }));
 
-      // A record open, and Settings over it: what was open is open when it closes.
       yield* app.clickOn("Strapi prod seeder");
       expect(app.said()).toContain("merge request");
       app.mockInput.pressTab();
@@ -1178,14 +1148,12 @@ test("density is a setting, and the board is drawn at the one that is set", () =
       yield* app.clickOn("density");
       void app.mockInput.typeText("compact");
       yield* app.flush;
-      // The field is on the row it is about, beside the value it would replace.
       expect(app.said()).toContain("comfortable → compact");
 
       app.mockInput.pressEnter();
       yield* app.flush;
       expect(app.acted()).toEqual([{ _tag: "SetDefault", key: "density", value: "compact" }]);
 
-      // What the file says is what the board draws: three across rather than two.
       const three = [
         task({ id: "a", name: "Aaa" }),
         task({ id: "b", name: "Bbb" }),
@@ -1225,7 +1193,6 @@ test("Tab moves between the board, an open record and the menu", () =>
 
       app.mockInput.pressTab();
       yield* app.flush;
-      // In the record: what is typed goes to its field rather than to the board.
       void app.mockInput.typeText("slow down");
       yield* app.flush;
       expect(app.said()).toContain("slow down");
@@ -1272,8 +1239,8 @@ const MR_PANEL = {
   url: "https://gitlab.cego.dk/mk/collie/-/merge_requests/151",
 };
 
-function record(over: Partial<RunDetail> = {}): RunDetail {
-  return {
+function record(over: Partial<RunDetail> = {}) {
+  const returned: RunDetail = {
     id: "r1",
     dir: "/state/runs/r1",
     title: "Implement · Strapi prod seeder",
@@ -1307,6 +1274,7 @@ function record(over: Partial<RunDetail> = {}): RunDetail {
     diff: null,
     ...over,
   };
+  return returned;
 }
 
 const CARD: Card = {
@@ -1334,7 +1302,7 @@ const CARD: Card = {
   significance: "try-it",
 };
 
-function liveOf(over: Partial<Live> = {}): Live {
+function liveOf(over: Partial<Live> = {}) {
   return {
     run: "r1",
     cards: [],
@@ -1347,7 +1315,6 @@ function liveOf(over: Partial<Live> = {}): Live {
   };
 }
 
-/** The record open on a Task, which is where every tab below is reached from. */
 const opened = Effect.fn("board.opened")(function* (state: AppState) {
   const app = yield* mount(state);
   yield* app.clickOn("Strapi prod seeder");
@@ -1367,14 +1334,12 @@ test("the record opens on Summary, with the merge request's own state in it", ()
       expect(said).toContain("Plan");
       expect(said).toContain("Cards");
       expect(said).toContain("Log");
-      // Summary's own content, and the merge request behind it.
       expect(said).toContain("seed the brands");
       expect(said).toContain("no production writes");
       expect(said).toContain("opened");
       expect(said).toContain("pipeline success");
       expect(said).toContain("1 of 2 approvals");
       expect(said).toContain("unresolved");
-      // The other tabs' content is behind them.
       expect(said).not.toContain("the brand loop reads the whole file per brand");
     }),
   ));
@@ -1389,7 +1354,11 @@ test("a record of several merge requests has a section for each, and Open opens 
         title,
         url: `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`,
       });
-      const entry = (repo: string, iid: number, over: Partial<TaskMr>): TaskMr => ({
+      const entry: (repo: string, iid: number, over: Partial<TaskMr>) => TaskMr = (
+        repo,
+        iid,
+        over,
+      ) => ({
         id: `gitlab.cego.dk/cego/${repo}!${iid}`,
         mr: `https://gitlab.cego.dk/cego/${repo}/-/merge_requests/${iid}`,
         label: `cego/${repo}!${iid}`,
@@ -1522,7 +1491,6 @@ test("Review shows the verdict and findings, and says when it was cut short", ()
       expect(said).toContain("clean, with one thing worth saying");
       expect(said).toContain("the brand loop reads the whole file per brand");
       expect(said).toContain("m reads more");
-      // One tab at a time: Summary's sections are not under it.
       expect(said).not.toContain("no production writes");
     }),
   ));
@@ -1659,7 +1627,6 @@ test("Cards shows the run's evidence, keeping claims apart from what was run", (
       expect(said).toContain("seeder-tests pass");
       expect(said).toContain("claimed: every brand is seeded");
       expect(said).toContain("missing: nobody ran it against staging");
-      // The receipt for what was said to this run's agents.
       expect(said).toContain("implementer acknowledged");
     }),
   ));
@@ -1672,7 +1639,7 @@ test("Log tails the run's log, and only that tab asks for it", () =>
 
       yield* app.clickOn("Log");
 
-      // The log is read only while it is being looked at.
+      // WARNING: The log is read only while it is being looked at.
       expect(app.acted()).toEqual([{ _tag: "ToggleTail" }]);
       yield* app.setState(
         appState({
@@ -1732,8 +1699,6 @@ test("the wheel scrolls the record under the pointer", () =>
       expect(app.said()).toContain("finding 2 ");
       expect(app.said()).not.toContain("finding 80");
 
-      // Over the drawer, which is the right-hand 60% of the pane: nothing the board puts
-      // over it — a scrim, a card's own hover — may swallow the wheel.
       yield* app.scrollAt(100, 20, 60);
 
       expect(app.said()).toContain("finding 80");
@@ -1762,8 +1727,6 @@ test("a new record opens at the top of what it is showing", () =>
       yield* app.escape;
       yield* app.clickOn("Kibana upload cap");
 
-      // How far the last record had been scrolled says nothing about this one, and it
-      // opens on Summary rather than on whichever tab the last one was left on.
       const said = app.said();
       expect(said).toContain("no production writes");
       expect(said).not.toContain("finding 80");
@@ -1806,14 +1769,12 @@ test("shift-click picks cards, and the bar stops the lot of them", () =>
     Effect.gen(function* () {
       const app = yield* mount(appState({ tasks: THREE }));
 
-      // One picked is not a batch: the bar is for what a human could not do card by card.
       yield* app.shiftClickOn("Aaa seeder");
       expect(app.said()).not.toContain("selected");
 
       yield* app.shiftClickOn("Bbb uploader");
       yield* app.shiftClickOn("Ccc importer");
       expect(app.said()).toContain("3 selected");
-      // Picking is not opening: nothing has been asked for yet.
       expect(app.acted()).toEqual([]);
 
       yield* app.clickOn("Stop all");
@@ -1822,7 +1783,6 @@ test("shift-click picks cards, and the bar stops the lot of them", () =>
         { _tag: "StopRun", runId: "rb" },
         { _tag: "StopRun", runId: "rc" },
       ]);
-      // The bar goes with the selection it was about.
       expect(app.said()).not.toContain("3 selected");
     }),
   ));
@@ -1838,7 +1798,6 @@ test("a selection with nothing to stop is not offered a stop", () =>
           ],
         }),
       );
-      // Finished work is folded away until it is asked for.
       yield* app.clickOn("2 finished today");
       yield* app.shiftClickOn("Ddd merged");
       yield* app.shiftClickOn("Eee merged");
@@ -1865,7 +1824,6 @@ test("clear drops the selection, and so does an ordinary click", () =>
       yield* app.shiftClickOn("Bbb uploader");
       expect(app.said()).toContain("2 selected");
 
-      // A plain click is about that one card, so it is the end of the selection.
       yield* app.clickOn("Ccc importer");
       expect(app.said()).not.toContain("selected");
     }),
@@ -1874,8 +1832,7 @@ test("clear drops the selection, and so does an ordinary click", () =>
 test("the launch flow owns the keyboard while it is asking", () =>
   runEffect(
     Effect.gen(function* () {
-      // A goal with a `q` and an `r` in it: the board's own keys are not keys while
-      // something is being typed at an inline question.
+      // WARNING: Board keys are not keys while an inline question is being typed at, even q and r in the goal.
       const app = yield* mount(appState({ tasks: THREE }), 120, 40, {
         _tag: "Question",
         header: "What is the goal?",
@@ -1899,7 +1856,6 @@ test("? lists every key the board takes, and any key closes it", () =>
       void app.mockInput.typeText("?");
       yield* app.flush;
       const said = app.said();
-      // The board's own keys, and the card menu's, which is the whole of what a key does.
       expect(said).toContain("Close the tab");
       expect(said).toContain("Stop run");
       expect(app.acted()).toEqual([]);
@@ -1954,11 +1910,8 @@ test("a menu item pressed where it is drawn acts, and does not open the card ben
       yield* app.clickOn("⋯");
       expect(app.said()).toContain("Go to its tab");
 
-      // Pressed by position, inside the menu, on a line that is also a card's: the menu
-      // is over the card, so the card must not hear it.
+      // WARNING: Pressed by position, the menu is over the card, so the card must not hear it.
       const before = app.commands.length;
-      // On the item's key, at the menu's right edge, rather than on its label: the whole
-      // row is the item, and every cell of it is over the card.
       const y = app.lineOf("Go to its tab");
       const row = app.frameLine(y);
       yield* app.click(
@@ -1982,7 +1935,6 @@ test("a long name is cut to its card, and the project and age keep their place",
       );
       const y = app.lineOf("Renovate");
       const line = app.frameLine(y);
-      // One line, with an ellipsis, and the age still at the right of the same line.
       expect(line).toContain("…");
       expect(line).toContain("17h");
       expect(app.said()).not.toContain("everything after it");
@@ -2025,62 +1977,53 @@ test("the Home board draws its sections in the board's one order", () =>
     }),
   ));
 
-test(
-  "the Home draws a card the host serves, with no board built here",
-  () =>
-    proves(
-      "collie-home-drawn-",
-      (world) =>
-        Effect.gen(function* () {
-          const started = yield* collie(
-            world,
-            [
-              "run",
-              "start",
-              "agent",
-              "--input",
-              "target=worktree",
-              "--input",
-              `cwd=${world.project}`,
-              "--input",
-              "skip=false",
-            ],
-            { FAKE_HERDR_AGENT_STATUS: "blocked" },
-          );
-          expect(started.envelope.ok).toBe(true);
-          const env = yield* currentEnv.pipe(Effect.orDie);
-          const home = homeState(
-            {
-              herdr: new Herdr(env),
-              ...scopeFor(env, env.cwd),
-              stateDir: env.stateDir,
-              userDir: env.userDir,
-              paneId: env.paneId,
-              pluginRoot: env.pluginRoot,
-              tasksOf: yield* followBoard(env),
-            },
-            env,
-          );
-          const state = yield* home.load(focus()).pipe(
-            Effect.repeat({
-              until: (loaded) => loaded.tasks[0]?.state === "blocked",
-              schedule: Schedule.spaced("250 millis"),
-              times: 40,
-            }),
-            Effect.provide(recordsReadLayer(env.stateDir)),
-          );
-          // The host is left for `proves` to stop once this scope has closed: stopped here,
-          // the board followed above reconnects and starts another that outlives the test.
-          const app = yield* mount(state);
-          const said = app.said();
-          expect(said).toContain("One task is waiting on you.");
-          expect(said).toContain("Needs you");
-          expect(said).toContain("Waiting for you in");
-        }),
-      ["agent.workflow.ts", "notes.md"],
-    ),
-  120_000,
-);
+test("the Home draws a card the host serves, with no board built here", () =>
+  proves(
+    "collie-home-drawn-",
+    (world, core) =>
+      Effect.gen(function* () {
+        const started = yield* collie(world, [
+          "run",
+          "start",
+          "agent",
+          "--input",
+          "target=worktree",
+          "--input",
+          `cwd=${world.project}`,
+          "--input",
+          "skip=false",
+        ]);
+        expect(started.envelope.ok).toBe(true);
+        yield* blockedAtItsPrompt(core);
+        const env = yield* currentEnv.pipe(Effect.orDie);
+        const home = homeState(
+          {
+            herdr: new Herdr(env),
+            ...scopeFor(env.cwd),
+            stateDir: env.stateDir,
+            userDir: env.userDir,
+            pluginRoot: env.pluginRoot,
+            tasksOf: yield* followBoard(env),
+          },
+          env,
+        );
+        const state = yield* home.load(focus()).pipe(
+          Effect.repeat({
+            until: (loaded) => loaded.tasks[0]?.state === "blocked",
+            schedule: Schedule.spaced("250 millis"),
+            times: 40,
+          }),
+          Effect.provide(recordsReadLayer(env.stateDir)),
+        );
+        // WARNING: The host is stopped by proves once this scope closes; stopped here, the board reconnects and starts one that outlives the test.
+        const app = yield* mount(state);
+        const said = app.said();
+        expect(said).toContain("One task is waiting on you.");
+        expect(said).toContain("Needs you");
+        expect(said).toContain("Waiting for you in");
+      }),
+    ["agent.workflow.ts", "notes.md"],
+  ));
 
 test("a newer release is said in the board's header, with the command", () =>
   runEffect(

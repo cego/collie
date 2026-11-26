@@ -1,6 +1,3 @@
-// Desktop reaches Local's host the way it reaches any Machine's: through a bridge it starts
-// as `desktop`, never through Collie's own host client.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -20,14 +17,8 @@ import {
   flow,
   Result,
 } from "effect";
-import {
-  type BoardMessage,
-  type BoardSnapshot,
-  BRIDGE_READY,
-  PROTOCOL,
-  recordIn,
-  type Toasted,
-} from "../src/board-model";
+import { BRIDGE_READY, PROTOCOL, recordIn } from "../src/board-model";
+import type { BoardMessage, BoardSnapshot, Toasted } from "../src/board-model";
 import { readAudit } from "../src/audit";
 import { hostRecords } from "./support/records";
 import { runDir } from "../src/engine";
@@ -38,140 +29,130 @@ import {
   machineBoard,
   buildVerdict,
   openBridge,
-  type Route,
-  type RouteChange,
   syncNow,
 } from "../desktop/src/bun/machine";
+import type { Route, RouteChange } from "../desktop/src/bun/machine";
 import type { FlockItem } from "../desktop/src/shared/flock";
 import { TestClock } from "effect/testing";
 import { fastForward, runEffect, suiteEnv } from "./support/effect";
 import { root, stopHost } from "./support/host";
 import { proves } from "./support/world";
+import { stringifyJson } from "../src/json";
 
 const asCommand = flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Array(Schema.String))),
   Result.getOrThrow,
 );
 
-test(
-  "Desktop sees Local's board through a bridge it started, a Run appears on it live, and what Desktop does there is recorded as Desktop's",
-  () =>
-    proves(
-      "collie-desktop-local-",
-      (world) =>
-        Effect.gen(function* () {
-          const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
-          const collie = Option.isSome(binary)
-            ? [binary.value]
-            : [process.execPath, `${root}src/main.ts`];
-          const door = yield* openBridge(bridgeCommand(collie, "mk-pc"), {
-            PATH: "/usr/bin:/bin",
-            HOME: world.home,
-            HERDR_PLUGIN_ROOT: world.install,
-            HERDR_PLUGIN_STATE_DIR: world.state,
-            COLLIE_USER_DIR: world.config,
-            COLLIE_HOST: asCommand(collie),
-            ...(yield* suiteEnv),
-            HERDR_BIN_PATH: Bun.env.HERDR_BIN_PATH ?? "",
-            FAKE_HERDR_LOG: Bun.env.FAKE_HERDR_LOG ?? "",
-          });
-          const reached = { machine: { profile: "local", name: "mk-pc" }, desktop: door };
-          const board = yield* machineBoard(
-            { profile: "local", name: "mk-pc" },
-            { board: door.board() },
-          ).pipe(Stream.toPull);
+test("Desktop sees Local's board through a bridge it started, a Run appears on it live, and what Desktop does there is recorded as Desktop's", () =>
+  proves(
+    "collie-desktop-local-",
+    (world) =>
+      Effect.gen(function* () {
+        const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
+        const collie = Option.isSome(binary)
+          ? [binary.value]
+          : [process.execPath, `${root}src/main.ts`];
+        const door = yield* openBridge(bridgeCommand(collie, "mk-pc"), {
+          PATH: "/usr/bin:/bin",
+          HOME: world.home,
+          COLLIE_ROOT: world.install,
+          COLLIE_STATE_DIR: world.state,
+          COLLIE_USER_DIR: world.config,
+          COLLIE_HOST: asCommand(collie),
+          ...(yield* suiteEnv),
+          HC_SOCKET: Bun.env.HC_SOCKET ?? "",
+        });
+        const reached = { machine: { profile: "local", name: "mk-pc" }, desktop: door };
+        const board = yield* machineBoard(
+          { profile: "local", name: "mk-pc" },
+          { board: door.board() },
+        ).pipe(Stream.toPull);
 
-          const first = yield* board;
-          const snapshot = first[0].message;
-          expect(snapshot._tag).toBe("Snapshot");
-          // The Machine is its installation, which every later message carries too.
-          const installation = snapshot._tag === "Snapshot" ? snapshot.installation : "";
-          expect(installation).not.toBe("");
-          expect(first[0].machine).toEqual({ installation, profile: "local", name: "mk-pc" });
+        const first = yield* board;
+        const snapshot = first[0].message;
+        expect(snapshot._tag).toBe("Snapshot");
+        const installation = snapshot._tag === "Snapshot" ? snapshot.installation : "";
+        expect(installation).not.toBe("");
+        expect(first[0].machine).toEqual({ installation, profile: "local", name: "mk-pc" });
 
-          const { runId } = yield* door.start({
-            project: world.project,
-            id: "proof",
-            request: "start-1",
-            input: { note: "from Desktop" },
-          });
-          let seen = false;
-          while (!seen) {
-            const next = yield* board;
-            seen = Arr.some(
-              next,
-              (item) => item.message._tag === "Upsert" && item.message.task.runs.includes(runId),
-            );
-          }
+        const { runId } = yield* door.start({
+          project: world.project,
+          id: "proof",
+          request: "start-1",
+          input: { note: "from Desktop" },
+        });
+        let seen = false;
+        while (!seen) {
+          const next = yield* board;
+          seen = Arr.some(
+            next,
+            (item) => item.message._tag === "Upsert" && item.message.task.runs.includes(runId),
+          );
+        }
 
-          expect(
-            yield* act(reached, "hold-1", {
-              _tag: "Control",
-              runId,
-              control: "hold",
-              set: true,
-            }),
-          ).not.toBe("");
-          // Tried again under the same request, it is the one hold.
+        expect(
           yield* act(reached, "hold-1", {
             _tag: "Control",
             runId,
             control: "hold",
             set: true,
-          });
-          const refused = yield* act(reached, "resume-x", {
-            _tag: "Resume",
-            runId: "r-nobody",
-          }).pipe(Effect.flip);
-          expect(refused.reason).toBe("no Run r-nobody");
+          }),
+        ).not.toBe("");
+        yield* act(reached, "hold-1", {
+          _tag: "Control",
+          runId,
+          control: "hold",
+          set: true,
+        });
+        const refused = yield* act(reached, "resume-x", {
+          _tag: "Resume",
+          runId: "r-nobody",
+        }).pipe(Effect.flip);
+        expect(refused.reason).toBe("no Run r-nobody");
 
-          const ended = yield* door.start({
-            project: world.project,
-            id: "plain",
-            request: "start-finished",
-            input: { note: "done" },
-          });
-          yield* door
-            .runDetail({ runId: ended.runId, tail: false, pages: 0, refreshMr: false })
-            .pipe(
-              Stream.map(recordIn),
-              Stream.filter((one) => one?.status === "succeeded"),
-              Stream.runHead,
-              Effect.orDie,
-            );
-          const noWork = yield* act(reached, "resume-finished", {
-            _tag: "Resume",
-            runId: ended.runId,
-          }).pipe(Effect.flip);
-          expect(noWork.reason).toContain("finished");
-          expect(noWork.reason).not.toContain("Resumed");
+        const ended = yield* door.start({
+          project: world.project,
+          id: "plain",
+          request: "start-finished",
+          input: { note: "done" },
+        });
+        yield* door.runDetail({ runId: ended.runId, tail: false, pages: 0, refreshMr: false }).pipe(
+          Stream.map(recordIn),
+          Stream.filter((one) => one?.status === "succeeded"),
+          Stream.runHead,
+          Effect.orDie,
+        );
+        const noWork = yield* act(reached, "resume-finished", {
+          _tag: "Resume",
+          runId: ended.runId,
+        }).pipe(Effect.flip);
+        expect(noWork.reason).toContain("finished");
+        expect(noWork.reason).not.toContain("Resumed");
 
-          const trail = yield* hostRecords(
-            world.state,
-            readAudit(runDir(world.state, runId)).pipe(
-              Effect.provideService(FileSystem.FileSystem, yield* FileSystem.FileSystem),
-            ),
-          );
-          expect(Arr.map(trail, (line) => line.actor)).toEqual([
-            { origin: "desktop", requestId: "start-1", from: { client: "mk-pc" } },
-            { origin: "desktop", requestId: "hold-1", from: { client: "mk-pc" } },
-          ]);
-          yield* stopHost(world.state);
-        }).pipe(Effect.orDie),
-      ["proof.workflow.ts", "helper.ts", "notes.md", "plain.workflow.ts"],
-    ),
-  120_000,
-);
+        const trail = yield* hostRecords(
+          world.state,
+          readAudit(runDir(world.state, runId)).pipe(
+            Effect.provideService(FileSystem.FileSystem, yield* FileSystem.FileSystem),
+          ),
+        );
+        expect(Arr.map(trail, (line) => line.actor)).toEqual([
+          { origin: "desktop", requestId: "start-1", from: { client: "mk-pc" } },
+          { origin: "desktop", requestId: "hold-1", from: { client: "mk-pc" } },
+        ]);
+        yield* stopHost(world.state);
+      }).pipe(Effect.orDie),
+    ["proof.workflow.ts", "helper.ts", "notes.md", "plain.workflow.ts"],
+  ));
 
 test("Desktop's main process never reaches Collie's own host client", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const reached: string[] = [];
+      const reached: Array<string> = [];
       const built = yield* Effect.promise(() =>
         Bun.build({
           entrypoints: [`${root}desktop/src/bun/index.ts`],
           target: "bun",
-          // Desktop's own dependencies, which the root suite does not install.
           external: [
             "electrobun",
             "electrobun/*",
@@ -196,7 +177,7 @@ test("Desktop's main process never reaches Collie's own host client", () =>
     }),
   ));
 
-const snapshot = (installation: string): BoardSnapshot => ({
+const snapshot: (installation: string) => BoardSnapshot = (installation) => ({
   _tag: "Snapshot",
   installation,
   build: "0.31.0",
@@ -210,11 +191,11 @@ interface Fake {
   readonly board: Stream.Stream<BoardMessage, { readonly message: string }>;
   readonly toasts?: Stream.Stream<Toasted, unknown>;
 }
-const fakeRoute = (
+const fakeRoute: (
   name: string,
   board: Stream.Stream<BoardMessage>,
-  closed: string[] = [],
-): Route<Fake> => ({
+  closed?: Array<string>,
+) => Route<Fake> = (name, board, closed = []) => ({
   machine: { profile: `p-${name}`, name, target: `mk@${name}` },
   open: () =>
     Effect.acquireRelease(Effect.succeed<Fake>({ name, board: Stream.suspend(() => board) }), () =>
@@ -230,8 +211,8 @@ const toldOf = (item: FlockItem) =>
 test("a later paired link takes an installation already shown through SSH", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const closed: string[] = [];
-      const told: string[] = [];
+      const closed: Array<string> = [];
+      const told: Array<string> = [];
       const doors = new Map<string, Fake>();
       const later = yield* Deferred.make<void>();
       const ssh = fakeRoute(
@@ -268,8 +249,8 @@ test("a later paired link takes an installation already shown through SSH", () =
 test("a working link displaces a configured link that fell back to SSH", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const closed: string[] = [];
-      const told: string[] = [];
+      const closed: Array<string> = [];
+      const told: Array<string> = [];
       const doors = new Map<string, Fake>();
       const later = yield* Deferred.make<void>();
       const first = fakeRoute(
@@ -321,7 +302,7 @@ test("a link owner that reconnects through SSH yields to another working link", 
       Effect.gen(function* () {
         const dropped = yield* Deferred.make<void>();
         const arrived = yield* Deferred.make<void>();
-        const told: string[] = [];
+        const told: Array<string> = [];
         const doors = new Map<string, Fake>();
         let opens = 0;
         const primary: Route<Fake> = {
@@ -379,11 +360,11 @@ const until = (what: () => boolean) =>
 test("a Machine reached by two routes is shown through the first, and the other's bridge closes at once", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const closed: string[] = [];
+      const closed: Array<string> = [];
       const preferredAnswers = yield* Deferred.make<void>();
       const after = (go: Deferred.Deferred<void>, message: BoardMessage) =>
         Stream.fromEffect(Deferred.await(go).pipe(Effect.as(message)));
-      const told: string[] = [];
+      const told: Array<string> = [];
       const doors = new Map<string, Fake>();
       yield* flockStream(
         [
@@ -413,7 +394,6 @@ test("a Machine reached by two routes is shown through the first, and the other'
       yield* until(() => told.length === 2 && closed.includes("other"));
       expect(told).toEqual(["other Snapshot", "preferred Snapshot"]);
       expect(closed).toEqual(["other"]);
-      // Actions on the Machine go through the route it is shown through.
       expect(doors.get("vm")?.name).toBe("preferred");
     }).pipe(Effect.scoped),
   ));
@@ -421,8 +401,8 @@ test("a Machine reached by two routes is shown through the first, and the other'
 test("a route that comes up to a Machine already shown merges into it and closes", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const closed: string[] = [];
-      const told: string[] = [];
+      const closed: Array<string> = [];
+      const told: Array<string> = [];
       const doors = new Map<string, Fake>();
       const shown = yield* Deferred.make<void>();
       const later = Stream.fromEffect(Deferred.await(shown).pipe(Effect.as(snapshot("vm"))));
@@ -449,7 +429,7 @@ test("a route that cannot be opened says why and tries again by itself", () =>
   Effect.runPromise(
     Effect.gen(function* () {
       let tries = 0;
-      const told: FlockItem[] = [];
+      const told: Array<FlockItem> = [];
       const flaky: Route<Fake> = {
         machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
         collie: () => Effect.die("not asked"),
@@ -506,7 +486,6 @@ test("a bridge waiting on an SSO login is not held to the readiness deadline, an
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const go = `${yield* fs.makeTempDirectoryScoped({ prefix: "collie-sso-" })}/go`;
-      // The deadline starts at a moment the test cannot see, so the clock passes it again and again.
       const pastDeadline = TestClock.adjust("121 seconds").pipe(
         Effect.andThen(TestClock.withLive(Effect.sleep("25 millis"))),
       );
@@ -564,8 +543,8 @@ test("an older release is upgraded once through its route while its board stays 
   Effect.runPromise(
     Effect.gen(function* () {
       let build = "0.30.2";
-      const asked: string[][] = [];
-      const told: string[] = [];
+      const asked: Array<Array<string>> = [];
+      const told: Array<string> = [];
       const upgradeMayFinish = yield* Deferred.make<void>();
       const old: Route<Fake> = {
         machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
@@ -601,7 +580,6 @@ test("an older release is upgraded once through its route while its board stays 
         Stream.runForEach((item) => Effect.sync(() => told.push(toldWithNotices(item)))),
         Effect.forkScoped,
       );
-      // A change on the board reaches it while the upgrade is still running.
       yield* until(() => told.length === 2);
       yield* Deferred.succeed(upgradeMayFinish, undefined);
       yield* until(() => told.length >= 5);
@@ -620,7 +598,7 @@ test("a board a newer collie serves that this Desktop cannot read asks for a new
   Effect.runPromise(
     Effect.gen(function* () {
       let opened = 0;
-      const told: FlockItem[] = [];
+      const told: Array<FlockItem> = [];
       const newer: Route<Fake> = {
         machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
         open: () =>
@@ -655,7 +633,7 @@ test("a board a newer collie serves that this Desktop cannot read asks for a new
 test("a Machine that cannot be upgraded says why in its own words, and is shown as it is", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const told: string[] = [];
+      const told: Array<string> = [];
       const stuck: Route<Fake> = {
         machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
         open: () =>
@@ -670,7 +648,7 @@ test("a Machine that cannot be upgraded says why in its own words, and is shown 
           }),
         collie: () =>
           Effect.succeed({
-            out: JSON.stringify({ ok: false, error: { message: "There is no release 0.31.0." } }),
+            out: stringifyJson({ ok: false, error: { message: "There is no release 0.31.0." } }),
             err: "",
             code: 1,
           }),
@@ -692,8 +670,8 @@ test("a Machine out of reach when Desktop starts is upgraded once it connects", 
     Effect.gen(function* () {
       let reachable = false;
       let build = "0.30.2";
-      const asked: string[][] = [];
-      const told: string[] = [];
+      const asked: Array<Array<string>> = [];
+      const told: Array<string> = [];
       const late: Route<Fake> = {
         machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
         open: () =>
@@ -736,14 +714,14 @@ test("a Machine out of reach when Desktop starts is upgraded once it connects", 
 test("a failed upgrade is tried again when the Machine next connects, and only once per connection", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const told: string[] = [];
+      const told: Array<string> = [];
       let connections = 0;
       let asked = 0;
       const drops: Array<Deferred.Deferred<void>> = [];
       const flaky: Route<Fake> = {
         machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
         open: () =>
-          Effect.sync((): Fake => {
+          Effect.sync(() => {
             connections++;
             const drop = Deferred.makeUnsafe<void>();
             drops.push(drop);
@@ -801,7 +779,7 @@ test("an upgrade cut off by its connection dropping is tried again when the Mach
       const dropping: Route<Fake> = {
         machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
         open: () =>
-          Effect.sync((): Fake => {
+          Effect.sync(() => {
             const drop = Deferred.makeUnsafe<void>();
             drops.push(drop);
             return {
@@ -824,7 +802,6 @@ test("an upgrade cut off by its connection dropping is tried again when the Mach
               ),
             };
           }),
-        // Never answers: the connection drops first.
         collie: () => Effect.sync(() => void asked++).pipe(Effect.andThen(Effect.never)),
       };
       yield* flockStream([dropping], new Map(), "0.31.0").pipe(Stream.runDrain, Effect.forkScoped);
@@ -839,11 +816,11 @@ test("Sync now on a Machine behind on its version reopens its route, which asks 
     Effect.gen(function* () {
       let connections = 0;
       let asked = 0;
-      const told: string[] = [];
+      const told: Array<string> = [];
       const behind: Route<Fake> = {
         machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
         open: () =>
-          Effect.sync((): Fake => {
+          Effect.sync(() => {
             connections++;
             return {
               name: "vm",
@@ -880,7 +857,6 @@ test("Sync now on a Machine behind on its version reopens its route, which asks 
         failed: false,
       });
       yield* until(() => connections === 2 && asked === 2);
-      // Reopened, not lost: what it showed is dated until it connects again.
       expect(Arr.filter(told, (one) => pipe_(one, Str.endsWith("Lost")))).toEqual([]);
       yield* until(() => Arr.filter(told, (one) => one === "Snapshot 0.30.2").length === 2);
       const reconnecting = told.indexOf("vm Reconnecting");
@@ -896,12 +872,12 @@ test("Sync now while a Machine's upgrade runs leaves the upgrade to finish", () 
     Effect.gen(function* () {
       let connections = 0;
       let asked = 0;
-      const told: string[] = [];
+      const told: Array<string> = [];
       const upgraded = yield* Deferred.make<void>();
       const behind: Route<Fake> = {
         machine: { profile: "p-vm", name: "vm", target: "mk@vm" },
         open: () =>
-          Effect.sync((): Fake => {
+          Effect.sync(() => {
             connections++;
             return {
               name: "vm",
@@ -926,7 +902,6 @@ test("Sync now while a Machine's upgrade runs leaves the upgrade to finish", () 
       );
       yield* until(() => asked === 1);
       yield* Queue.offer(changes, { _tag: "Reopen", profile: "p-vm" });
-      // Long enough for a reopen that was not refused to reconnect.
       yield* Effect.sleep("100 millis");
       expect([connections, asked]).toEqual([1, 1]);
       yield* Deferred.succeed(upgraded, undefined);
@@ -938,7 +913,7 @@ test("Sync now while a Machine's upgrade runs leaves the upgrade to finish", () 
 test("Sync now on a Machine behind on settings, definitions or credentials syncs and gives, and says what came of each", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const did: string[] = [];
+      const did: Array<string> = [];
       const steps = (failed: string | null, definitions: string | null = null) => ({
         reopen: Effect.sync(() => void did.push("reopen")),
         sync: Effect.sync(() => void did.push("sync")).pipe(Effect.as(failed)),
@@ -998,7 +973,7 @@ test("Sync now on a Machine behind on settings, definitions or credentials syncs
 test("a toast a Machine's host sends is shown once as an OS notification that names its Run", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const shown: unknown[] = [];
+      const shown: Array<unknown> = [];
       const drained = yield* Deferred.make<void>();
       const toast: Toasted = {
         runId: "run-7",

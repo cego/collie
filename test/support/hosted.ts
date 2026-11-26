@@ -1,20 +1,21 @@
-// A Herd with a host in it: the installation, the state directory the host owns, and the
-// Runs chat reads and acts on, which are the host's.
-
 import type { PlatformServices } from "../../src/platform";
-import { Effect, FileSystem, type Scope } from "effect";
+import { Effect, FileSystem } from "effect";
+import type { Scope } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
-import { readEnv, type PluginEnv } from "../../src/env";
+import { readEnv } from "../../src/env";
+import type { PluginEnv } from "../../src/env";
 import { resetExecutors } from "../../src/executors";
 import { connect } from "../../src/host";
-import { seedIntent, writeIntent, type Authority } from "../../src/intent";
+import { seedIntent, writeIntent } from "../../src/intent";
+import type { Authority } from "../../src/intent";
 import { runDir } from "../../src/engine";
 import { isSettled } from "../../src/lifecycle";
 import { stopHost, until } from "./host";
 import { overHost } from "./records";
-import { proves, type World } from "./world";
+import { proves } from "./world";
+import type { World } from "./world";
+import type { FakeHc } from "./fake-hc";
 
-/** A Run that waits to be answered, and ones that end as soon as they start. */
 export const MODULES = [
   "proof.workflow.ts",
   "helper.ts",
@@ -23,35 +24,33 @@ export const MODULES = [
   "retains.workflow.ts",
 ];
 
-/** One test, in an installation of its own whose host is stopped when it ends. */
 export const hosted = <A, E>(
   prefix: string,
   body: (herd: {
     world: World;
     env: PluginEnv;
+    core: FakeHc;
   }) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
   modules: ReadonlyArray<string> = MODULES,
 ) =>
   proves(
     prefix,
-    (world) =>
+    (world, core) =>
       Effect.gen(function* () {
         resetExecutors();
         const env = readEnv({
-          HERDR_PLUGIN_ROOT: world.install,
-          HERDR_PLUGIN_STATE_DIR: world.state,
+          COLLIE_ROOT: world.install,
+          COLLIE_STATE_DIR: world.state,
           COLLIE_USER_DIR: world.config,
-          HERDR_SOCKET_PATH: `${world.state}/herd.sock`,
-          HC_SOCKET: `${world.state}/hc.sock`,
+          HC_SOCKET: core.socketPath,
           HOME: world.home,
           COLLIE_CWD: world.project,
         });
-        return yield* body({ world, env }).pipe(Effect.ensuring(stopHost(world.state)));
+        return yield* body({ world, env, core }).pipe(Effect.ensuring(stopHost(world.state)));
       }),
     modules,
   );
 
-/** A Run the host is holding, waiting on its decision, with an Intent to read and amend. */
 export const hostedRun = Effect.fn("test.hostedRun")(function* (
   world: World,
   goal: string,
@@ -62,7 +61,6 @@ export const hostedRun = Effect.fn("test.hostedRun")(function* (
   const started = yield* client
     .start({ project: world.project, id: "proof", request, input: { note: goal } })
     .pipe(Effect.orDie);
-  // Where it waits: every test starts from a Run that is asking.
   yield* until(
     () => client.run({ runId: started.runId }).pipe(Effect.orDie),
     (view) => (view?.waiting.length ?? 0) > 0,
@@ -76,7 +74,6 @@ export const hostedRun = Effect.fn("test.hostedRun")(function* (
   return { id: started.runId, dir };
 });
 
-/** A Run the host no longer holds: `hello` succeeds and `retains` fails, as soon as they start. */
 export const settledRun = Effect.fn("test.settledRun")(function* (
   world: World,
   workflow: "hello" | "retains",

@@ -1,5 +1,3 @@
-// Electrobun's updater, as `updates.ts` asks it: the one place Desktop's own updates touch it.
-
 import { Effect, FileSystem, Option, Schema } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import { PreparedRecord, preparedRecordOf, releaseOf } from "../../../src/desktop";
@@ -7,7 +5,7 @@ import type { UpdaterPort } from "./updates";
 import { downloadRelease, UNPUBLISHED } from "./release-download";
 
 const promised = <A>(evaluate: () => Promise<A>) =>
-  Effect.tryPromise({ try: evaluate, catch: (cause) => String(cause) });
+  Effect.tryPromise({ try: evaluate, catch: String });
 
 const LocalInfo = Schema.Struct({
   channel: Schema.String,
@@ -23,14 +21,13 @@ const Checked = Schema.Struct({
 type Checked = typeof Checked.Type;
 const Downloaded = Schema.Struct({ error: Schema.String });
 type Downloaded = typeof Downloaded.Type;
-/** `restarting` says the restart is under way, so the apply that returned succeeded. */
+// WARNING: restarting says the restart is under way, so the apply that returned succeeded.
 const Status = Schema.Struct({
   message: Schema.String,
   restarting: Schema.optional(Schema.Boolean),
 });
 type Status = typeof Status.Type;
 
-/** The upstream operations used here; their JavaScript results are checked before use. */
 export interface ElectrobunUpdaterApi {
   readonly getLocalInfo: () => Promise<LocalInfo>;
   readonly appDataFolder: () => Promise<string>;
@@ -87,8 +84,9 @@ export const electrobunUpdater = (updater: ElectrobunUpdaterApi) =>
       ),
       discard: Effect.gen(function* () {
         const record = yield* readPrepared;
-        if (Option.isSome(record))
+        if (Option.isSome(record)) {
           yield* fs.remove(record.value.retained_tar_path, { force: true });
+        }
         yield* fs.remove(preparedRecordOf(folder), { force: true });
       }).pipe(Effect.ignore),
       signatureOf: (name, version) =>

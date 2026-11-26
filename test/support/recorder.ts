@@ -1,42 +1,15 @@
-// Test rig: a temp plugin sandbox, a fake `herdr` on HERDR_BIN_PATH, a fake
-// socket on HERDR_SOCKET_PATH and, once started, a fake core, all recording into one
-// ordered log.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import {
-  Config,
-  DateTime,
-  Effect,
-  Exit,
-  Fiber,
-  FileSystem,
-  Option,
-  Path,
-  PlatformError,
-  Queue,
-  Schema,
-  Scope,
-  flow,
-  Result,
-} from "effect";
-import { readEnv, type PluginEnv } from "../../src/env";
-import { Herdr } from "../../src/herdr";
-import { editState, fakeHerdr, writeFakeHerdrShim } from "./fake-herdr-core";
-import { serveFakeHc } from "./fake-hc";
+import type { PlatformError } from "effect";
+import { Config, Effect, Exit, FileSystem, Path, Schema, Scope, flow, Result } from "effect";
+import { readEnv } from "../../src/env";
+import { connect } from "../../src/hc";
+import { SETUP, serveFakeHc } from "./fake-hc";
+import type { FakeHc } from "./fake-hc";
+import { armTripwire, untripped } from "./herdr-tripwire";
+import type { Tripwire } from "./herdr-tripwire";
 
-const JsonString = Schema.fromJsonString(Schema.Json);
-const JsonObjectString = Schema.fromJsonString(Schema.JsonObject);
-const encodeJson = flow(Schema.encodeResult(JsonString), Result.getOrThrow);
-
-const FailuresSchema = Schema.Record(Schema.String, Schema.String);
-
-const RpcRequest = Schema.Struct({
-  id: Schema.String,
-  method: Schema.String,
-  params: Schema.optionalKey(Schema.JsonObject),
-});
-const RpcRequestString = Schema.fromJsonString(RpcRequest);
+const encodeJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
 
 const CallSchema = Schema.Struct({
   transport: Schema.Literals(["cli", "rpc", "core"]),
@@ -47,220 +20,85 @@ const CallSchema = Schema.Struct({
 });
 const CallString = Schema.fromJsonString(CallSchema);
 
-const StateTab = Schema.Struct({ tab_id: Schema.String, label: Schema.String });
-type StateTabValue = Schema.Schema.Type<typeof StateTab>;
-const StatePane = Schema.Struct({
-  pane_id: Schema.String,
-  tab_id: Schema.String,
-  label: Schema.NullOr(Schema.String),
-});
-type StatePaneValue = Schema.Schema.Type<typeof StatePane>;
-
-type RigServices = FileSystem.FileSystem | Path.Path;
 export type RigError =
   | PlatformError.PlatformError
   | PlatformError.BadArgument
   | Config.ConfigError
   | Schema.SchemaError;
 
-interface RigEnv {
-  [key: string]: string;
-  HOME: string;
-  PATH: string;
-  HERDR_ENV: string;
-  HERDR_BIN_PATH: string;
-  HERDR_SOCKET_PATH: string;
-  HERDR_PLUGIN_ROOT: string;
-  COLLIE_USER_DIR: string;
-  COLLIE_CLAUDE_MANAGED_DIR: string;
-  HERDR_PLUGIN_STATE_DIR: string;
-  HERDR_WORKSPACE_ID: string;
-  HERDR_TAB_ID: string;
-  HERDR_PANE_ID: string;
-  COLLIE_CWD: string;
-  FAKE_HERDR_LOG: string;
-  FAKE_HERDR_OUTPUTS: string;
-}
-
 export const UNREACHABLE_RELEASES = "http://127.0.0.1:9";
 
 export interface Call extends Schema.Schema.Type<typeof CallSchema> {}
 
-/**
- * The fake herdr answering in-process: the same core, the same call log and
- * state file, without a `bun` startup per CLI call — an engine run makes
- * hundreds of them, and the subprocesses were most of the suite's runtime.
- * Processes a test spawns still exec the CLI wrapper on HERDR_BIN_PATH.
- */
-export class FakeHerdr extends Herdr {
-  constructor(private readonly config: PluginEnv) {
-    super(config);
-  }
-
-  protected override exec(args: string[]) {
-    return fakeHerdr(args, this.config.raw);
-  }
-}
-
-/**
- * What a `*.report_metadata` call leaves behind. herdr keeps plugin metadata, and the
- * Home's ownership proof is read back off `workspace list` and `pane list` — so a fake
- * that only logged these calls made every second ensure an `ownership_unknown`.
- *
- * Its own file, beside the fake's state rather than in it: the CLI writes that state from
- * a subprocess and this runs in a socket callback here, and two writers of one file
- * interleaved into something neither could read.
- *
- * Synchronous, deliberately: the callback has no Effect runtime around it, and the next
- * `workspace list` may be the very next line on the wire.
- */
-export const tokensPath = (logPath: string) => `${logPath}.tokens.json`;
-
-/** Tokens by workspace id and by pane id, which is the whole of what that file holds. */
-const TokenStoreJson = Schema.fromJsonString(
-  Schema.Record(
-    Schema.Literals(["workspaces", "panes"]),
-    Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.String)),
-  ),
-);
-const encodeTokens = flow(Schema.encodeResult(TokenStoreJson), Result.getOrThrow);
-const decodeTokens = Schema.decodeUnknownOption(TokenStoreJson);
-
-const MetadataParams = Schema.Struct({
-  workspace_id: Schema.optionalKey(Schema.String),
-  pane_id: Schema.optionalKey(Schema.String),
-  tokens: Schema.Record(Schema.String, Schema.String),
-});
-const asMetadataParams = Schema.decodeUnknownOption(MetadataParams);
-
-/** One `*.report_metadata` call, as much of it as the store keeps. */
-interface MetadataCall {
-  readonly on: "workspaces" | "panes";
-  readonly id: string;
-  readonly tokens: Readonly<Record<string, string>>;
-}
-
-/** That call, or null for anything else on the wire. */
-function metadataCall(method: string, params: Schema.JsonObject): MetadataCall | null {
-  if (method !== "workspace.report_metadata" && method !== "pane.report_metadata") return null;
-  const decoded = asMetadataParams(params);
-  if (decoded._tag === "None") return null;
-  const on = method === "workspace.report_metadata" ? "workspaces" : "panes";
-  const id = (on === "workspaces" ? decoded.value.workspace_id : decoded.value.pane_id) ?? "";
-  return id === "" ? null : { on, id, tokens: decoded.value.tokens };
-}
-
-/**
- * What a `*.report_metadata` call leaves behind. herdr keeps plugin metadata, and the
- * Home's ownership proof is read back off `workspace list` and `pane list` — so a fake
- * that only logged these calls made every second ensure an `ownership_unknown`.
- *
- * Its own file beside the log, not the fake's state: the CLI writes that state from a
- * subprocess and this writes here, and two writers of one file interleaved into
- * something neither could read. On the log's own queue, so it has landed before the
- * reply goes back — the very next line on the wire may be the `workspace list` that
- * reads it.
- */
-const rememberTokens = Effect.fn("Rig.rememberTokens")(function* (
-  logPath: string,
-  call: MetadataCall,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const file = tokensPath(logPath);
-  const raw = yield* fs.readFileString(file, "utf8").pipe(Effect.orElseSucceed(() => ""));
-  const held = decodeTokens(raw);
-  const store = held._tag === "Some" ? held.value : { workspaces: {}, panes: {} };
-  const kind = store[call.on] ?? {};
-  yield* fs.writeFileString(
-    file,
-    `${encodeTokens({
-      ...store,
-      [call.on]: { ...kind, [call.id]: { ...kind[call.id], ...call.tokens } },
-    })}\n`,
-  );
-});
-
-/**
- * The GitLab login every rig runs as. In its environment rather than the process's, so
- * no test reaches out to a real glab to find out who is running it — and none of them
- * has to put a process-wide variable back afterwards.
- */
+// WARNING: In the rig's environment rather than the process's, so no test reaches a real glab to learn who is running it.
 export const TEST_LOGIN = "tester";
 
 export class Rig {
   readonly logPath: string;
-  readonly socketPath: string;
-  readonly binPath: string;
   readonly stateDir: string;
   readonly userDir: string;
   readonly baselineDir: string;
   readonly projectDir: string;
-  private listener: { stop(closeActiveConnections?: boolean): void } | null = null;
-  private socketFiber: Fiber.Fiber<void> | null = null;
+  readonly coreSocket: string;
   private coreScope: Scope.Closeable | null = null;
-  private readonly gone: string[] = [];
+  private served: FakeHc | null = null;
 
   private constructor(
     readonly root: string,
     private readonly path: Path.Path,
     private readonly pathValue: string,
+    private readonly tripwire: Tripwire,
   ) {
     this.logPath = path.join(root, "calls.jsonl");
-    this.socketPath = path.join(root, "herdr.sock");
-    this.binPath = path.join(root, "herdr");
     this.stateDir = path.join(root, "state");
     this.userDir = path.join(root, "config");
     this.baselineDir = path.join(root, "baseline");
     this.projectDir = path.join(root, "project");
+    this.coreSocket = path.join(root, "hc.sock");
   }
 
-  static make(): Effect.Effect<Rig, RigError, RigServices> {
+  static make() {
     return Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const root = yield* fs.makeTempDirectory({ prefix: "hw-test-" });
       const pathValue = yield* Config.String("PATH").pipe(Config.withDefault(""));
-      const rig = new Rig(root, path, pathValue);
+      const rig = new Rig(root, path, pathValue, yield* armTripwire(root));
       yield* rig.setup();
       return rig;
     });
   }
 
-  /** A Rig closed when its scope is, whatever the test did. */
-  static scoped(): Effect.Effect<Rig, RigError, RigServices | Scope.Scope> {
+  static scoped() {
     return Effect.acquireRelease(Rig.make(), (rig) => Effect.ignore(rig.close()));
   }
 
-  private setup(): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {
+  private setup() {
     const dirs = [this.stateDir, this.userDir, this.baselineDir, this.projectDir];
-    const binPath = this.binPath;
     const memory = this.memory(50);
+    const disk = this.disk(50);
     return Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       for (const dir of dirs) {
         yield* fs.makeDirectory(dir, { recursive: true });
       }
-      yield* writeFakeHerdrShim(binPath);
       yield* memory;
+      yield* disk;
     });
   }
 
-  get procDir(): string {
+  get procDir() {
     return this.path.join(this.root, "proc");
   }
 
-  /** This Machine's memory from now on: `availableGiB` of 100 GiB, under `pressure`. */
-  memory(
-    availableGiB: number,
-    pressure = 0,
-  ): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {
+  memory(availableGiB: number, pressure = 0) {
     const proc = this.procDir;
     return Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       yield* fs.makeDirectory(`${proc}/pressure`, { recursive: true });
       yield* fs.writeFileString(
         `${proc}/meminfo`,
-        `MemTotal:       ${100 * 1048576} kB\nMemAvailable:   ${Math.round(availableGiB * 1048576)} kB\n`,
+        `MemTotal:       ${100 * 1_048_576} kB\nMemAvailable:   ${Math.round(availableGiB * 1_048_576)} kB\n`,
       );
       yield* fs.writeFileString(
         `${proc}/pressure/memory`,
@@ -269,496 +107,104 @@ export class Rig {
     });
   }
 
-  private readJsonObject(
-    path: string,
-  ): Effect.Effect<Schema.JsonObject, RigError, FileSystem.FileSystem> {
-    return Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const exists = yield* fs.exists(path);
-      if (!exists) return {};
-      const text = yield* fs.readFileString(path);
-      return yield* Schema.decodeEffect(JsonObjectString)(text);
-    });
+  get dfPath() {
+    return this.path.join(this.root, "df");
   }
 
-  /**
-   * A tab herdr already has, with one pane in it: what a session that opened this
-   * plugin's tab under an earlier name looks like to the next run.
-   */
-  addTab(
-    label: string,
-    paneLabel: string,
-  ): Effect.Effect<{ tabId: string; paneId: string }, RigError, FileSystem.FileSystem> {
-    const statePath = `${this.logPath}.state.json`;
-    const readJsonObject = this.readJsonObject.bind(this);
-    return Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const state = yield* readJsonObject(statePath);
-      const tabs = Option.getOrElse(Schema.decodeUnknownOption(Schema.Finite)(state.tabs), () => 0);
-      const panes = Option.getOrElse(
-        Schema.decodeUnknownOption(Schema.Finite)(state.panes),
-        () => 0,
-      );
-      const tabList = Option.getOrElse(
-        Schema.decodeUnknownOption(Schema.Array(StateTab))(state.tabList),
-        (): ReadonlyArray<StateTabValue> => [],
-      );
-      const paneList = Option.getOrElse(
-        Schema.decodeUnknownOption(Schema.Array(StatePane))(state.paneList),
-        (): ReadonlyArray<StatePaneValue> => [],
-      );
-      const tabId = `1:${tabs + 1}`;
-      const paneId = `1-${panes + 1}`;
-      yield* fs.writeFileString(
-        statePath,
-        encodeJson(
-          Object.assign({}, state, {
-            tabs: tabs + 1,
-            panes: panes + 1,
-            tabList: [...tabList, { tab_id: tabId, label }],
-            paneList: [...paneList, { pane_id: paneId, tab_id: tabId, label: paneLabel }],
-          }),
-        ),
-      );
-      return { tabId, paneId };
-    });
-  }
-
-  /**
-   * Appends one entry to a list in the fake herdr's state — the agents it has, the
-   * panes, the worktrees. The fake validates the whole state when it reads it, so
-   * this only has to keep what is already there.
-   */
-  private appendState(
-    key: string,
-    entry: Schema.JsonObject,
-  ): Effect.Effect<void, RigError, FileSystem.FileSystem> {
-    const statePath = `${this.logPath}.state.json`;
-    const readJsonObject = this.readJsonObject.bind(this);
-    return Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const state = yield* readJsonObject(statePath);
-      const listed = Option.getOrElse(
-        Schema.decodeUnknownOption(Schema.Array(Schema.JsonObject))(state[key]),
-        (): ReadonlyArray<Schema.JsonObject> => [],
-      );
-      yield* fs.writeFileString(
-        statePath,
-        encodeJson(Object.assign({}, state, { [key]: [...listed, entry] })),
-      );
-    });
-  }
-
-  /**
-   * A workspace herdr has. None by default: `workspace list` answers with an empty
-   * session, so only a test about several workspaces has to say what is in one.
-   */
-  addWorkspace(
-    workspaceId: string,
-    label: string,
-    cwd?: string,
-    focused = false,
-    session?: string,
-  ) {
-    return this.appendState("workspaces", {
-      workspace_id: workspaceId,
-      label,
-      cwd: cwd ?? null,
-      focused,
-      session: session ?? null,
-    });
-  }
-
-  /** An agent herdr already has, matching one an earlier run started. */
-  addAgent(name: string, paneId: string, terminalId?: string) {
-    return this.appendState(
-      "agents",
-      terminalId === undefined
-        ? { name, pane_id: paneId }
-        : { name, pane_id: paneId, terminal_id: terminalId },
+  disk(percentFree: number) {
+    const file = this.dfPath;
+    return Effect.flatMap(FileSystem.FileSystem, (fs) =>
+      fs.writeFileString(
+        file,
+        `Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 104857600 ${(100 - percentFree) * 1_048_576} ${percentFree * 1_048_576} ${100 - percentFree}% /\n`,
+      ),
     );
   }
 
-  /**
-   * A pane herdr restored after a restart: a new terminal resuming `session`, under
-   * `agent`'s name where it kept one.
-   */
-  addRestored(opts: {
-    paneId: string;
-    workspaceId: string;
-    terminalId: string;
-    session: { kind: string; value: string } | null;
-    agent?: string;
-    status?: string;
-  }) {
-    const agentSession =
-      opts.session === null ? null : { source: "herdr", agent: opts.session.kind, ...opts.session };
-    const pane = this.appendState("paneList", {
-      pane_id: opts.paneId,
-      tab_id: `${opts.workspaceId}-t9`,
-      label: null,
-      cwd: "/project",
-      agent: opts.agent ?? null,
-      agent_status: opts.status ?? "idle",
-      workspace_id: opts.workspaceId,
-      foreground_cwd: null,
-      terminal_id: opts.terminalId,
-      agent_session: agentSession,
-    });
-    if (opts.agent === undefined) return pane;
-    const agent = this.appendState("agents", {
-      name: opts.agent,
-      pane_id: opts.paneId,
-      workspace_id: opts.workspaceId,
-      terminal_id: opts.terminalId,
-      agent_session: agentSession,
-    });
-    return Effect.andThen(pane, agent);
-  }
-
-  /** Another process under this agent's name, in the same pane. */
-  reincarnate(name: string): Effect.Effect<void, RigError, RigServices> {
-    return editState(this.logPath, (text) =>
-      Effect.gen(function* () {
-        const state = yield* Schema.decodeEffect(JsonObjectString)(text);
-        const agents = Option.getOrElse(
-          Schema.decodeUnknownOption(Schema.Array(Schema.JsonObject))(state.agents),
-          (): ReadonlyArray<Schema.JsonObject> => [],
-        );
-        const renewed = Arr.map(agents, (agent) =>
-          agent.name === name
-            ? Object.assign({}, agent, {
-                terminal_id: `${isText(agent.terminal_id) ? agent.terminal_id : ""}+next`,
-              })
-            : agent,
-        );
-        return encodeJson(Object.assign({}, state, { agents: renewed }));
-      }),
-    );
-  }
-
-  /** A pane herdr already has, with the directory, agent and workspace it is in. */
-  addPane(
-    paneId: string,
-    tabId: string,
-    cwd: string,
-    agent: string | null = null,
-    workspaceId: string | null = null,
-    foregroundCwd: string | null = null,
-    agentStatus: string | null = null,
-    /** The socket of the only session that lists it. */
-    session?: string,
-  ) {
-    const pane: Schema.JsonObject = {
-      pane_id: paneId,
-      tab_id: tabId,
-      label: null,
-      cwd,
-      agent,
-      agent_status: agentStatus,
-      workspace_id: workspaceId,
-      foreground_cwd: foregroundCwd,
-    };
-    if (session !== undefined) Object.assign(pane, { session });
-    return this.appendState("paneList", pane);
-  }
-
-  /**
-   * A worktree herdr already lists, as an earlier run would have left it. A null
-   * workspace is a checkout herdr has no workspace open on — one Collie made with git.
-   */
-  addWorktree(branch: string, worktreePath: string, workspaceId: string | null) {
-    const append = this.appendState("worktrees", {
-      branch,
-      path: worktreePath,
-      open_workspace_id: workspaceId,
-    });
-    return Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      // A real directory, because whatever runs there has to cd into it, with the
-      // `.git` file git writes at `worktree add` — which is what says this checkout is
-      // the one a run recorded rather than another one later made at the same path.
-      yield* fs.makeDirectory(worktreePath, { recursive: true });
-      yield* fs.writeFileString(`${worktreePath}/.git`, `gitdir: ${worktreePath}/.gitdir\n`);
-      yield* append;
-    });
-  }
-
-  /** Exactly the worktrees herdr has, replacing whatever it had before. */
-  setWorktrees(
-    worktrees: ReadonlyArray<{ branch: string; path: string; open_workspace_id: string | null }>,
-  ): Effect.Effect<void, RigError, FileSystem.FileSystem> {
-    const statePath = `${this.logPath}.state.json`;
-    const readJsonObject = this.readJsonObject.bind(this);
-    return Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const state = yield* readJsonObject(statePath);
-      for (const worktree of worktrees) {
-        const marker = `${worktree.path}/.git`;
-        const replaced = yield* fs
-          .stat(marker)
-          .pipe(Effect.option, Effect.map(Option.flatMap((info) => info.mtime)));
-        yield* fs.makeDirectory(worktree.path, { recursive: true });
-        yield* fs.writeFileString(marker, `gitdir: ${worktree.path}/.gitdir\n`);
-        // A checkout made where another was is written after it, even within the same millisecond.
-        if (Option.isSome(replaced)) {
-          const later = DateTime.toDateUtc(DateTime.makeUnsafe(replaced.value.getTime() + 1000));
-          yield* fs.utimes(marker, later, later);
-        }
-      }
-      yield* fs.writeFileString(
-        statePath,
-        encodeJson(Object.assign({}, state, { worktrees: Arr.map(worktrees, (w) => ({ ...w })) })),
-      );
-    });
-  }
-
-  /**
-   * herdr dropping a workspace, as it does once its last pane closes: the agents in it go
-   * with it, and a tab asked for there is refused as `workspace_not_found`.
-   */
-  closeWorkspace(
-    workspaceId: string,
-    agents: ReadonlyArray<string>,
-  ): Effect.Effect<void, RigError, FileSystem.FileSystem> {
-    const statePath = `${this.logPath}.state.json`;
-    const readJsonObject = this.readJsonObject.bind(this);
-    return Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const state = yield* readJsonObject(statePath);
-      const list = (key: string) =>
-        Option.getOrElse(
-          Schema.decodeUnknownOption(Schema.Array(Schema.JsonObject))(state[key]),
-          (): ReadonlyArray<Schema.JsonObject> => [],
-        );
-      const closed = Option.getOrElse(
-        Schema.decodeUnknownOption(Schema.Array(Schema.String))(state.closedWorkspaces),
-        (): ReadonlyArray<string> => [],
-      );
-      yield* fs.writeFileString(
-        statePath,
-        encodeJson(
-          Object.assign({}, state, {
-            workspaces: Arr.filter(list("workspaces"), (w) => w.workspace_id !== workspaceId),
-            agents: Arr.filter(list("agents"), (a) => !(isText(a.name) && agents.includes(a.name))),
-            closedWorkspaces: [...closed, workspaceId],
-          }),
-        ),
-      );
-    });
-  }
-
-  /** An agent herdr has forgotten: its pane closed and it went with it. */
-  dropAgent(name: string): void {
-    const gone = Arr.filter(
-      Str.split(Bun.env.FAKE_HERDR_AGENTS_GONE ?? "", ","),
-      (item) => item !== "",
-    );
-    Bun.env.FAKE_HERDR_AGENTS_GONE = Arr.join([...gone, name], ",");
-    this.gone.push(name);
-  }
-
-  /** Stands in for the agents: each queue entry is written for the next prompt. */
-  queueOutputs(
-    items: ReadonlyArray<Schema.Json>,
-  ): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {
+  queueOutputs(items: ReadonlyArray<Schema.Json>) {
     const outputsPath = this.path.join(this.root, "outputs.json");
     return Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      yield* fs.writeFileString(outputsPath, encodeJson(items));
+      yield* fs.writeFileString(outputsPath, encodeJson([...items]));
     });
   }
 
-  startSocket(): Effect.Effect<void, never, FileSystem.FileSystem> {
-    const logPath = this.logPath;
-    const socketPath = this.socketPath;
-    const requestsFrom = this.requestsFrom.bind(this);
-    // herdr pushes when something changes, and nothing changes again here: a push on
-    // every subscription is a stream of changes faster than the host's debounce lets out.
-    let pushed = false;
-    const setFiber = (fiber: Fiber.Fiber<void>) => {
-      this.socketFiber = fiber;
-    };
-    const setListener = (listener: { stop(closeActiveConnections?: boolean): void }) => {
-      this.listener = listener;
-    };
-    return Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const writes = yield* Queue.unbounded<{
-        readonly entry: string;
-        /** Metadata this call attached, written before its reply goes back. */
-        readonly tokens: MetadataCall | null;
-        readonly succeed: () => void;
-        readonly fail: () => void;
-      }>();
-      setFiber(
-        yield* Queue.take(writes).pipe(
-          Effect.flatMap(({ entry, tokens, succeed, fail }) =>
-            fs
-              .writeFileString(logPath, entry, { flag: "a" })
-              .pipe(
-                Effect.andThen(tokens === null ? Effect.void : rememberTokens(logPath, tokens)),
-                Effect.match({ onFailure: fail, onSuccess: succeed }),
-              ),
-          ),
-          Effect.forever,
-          Effect.forkDetach,
-        ),
-      );
-      setListener(
-        Bun.listen({
-          unix: socketPath,
-          socket: {
-            data: (socket, chunk) => {
-              for (const req of requestsFrom(String(chunk))) {
-                const params = req.params ?? {};
-                const entry = `${encodeJson({ transport: "rpc", cmd: req.method, method: req.method, params })}\n`;
-                // The two calls that change what a later `workspace list` or `pane list`
-                // answers: herdr keeps plugin metadata, and the Home's ownership proof is
-                // read back off these lists. A fake that only logged them made every
-                // second ensure an `ownership_unknown`.
-                const tokens = metadataCall(req.method, params);
-                // The same FAKE_HERDR_FAIL map the CLI side reads, so an rpc-only
-                // call like `tab.move` can be made to fail in a test.
-                const failure = Option.getOrElse(
-                  Schema.decodeOption(Schema.fromJsonString(FailuresSchema))(
-                    Bun.env.FAKE_HERDR_FAIL ?? "{}",
-                  ),
-                  (): Record<string, string> => ({}),
-                )[req.method];
-                Queue.offerUnsafe(writes, {
-                  entry,
-                  tokens,
-                  succeed: () => {
-                    socket.write(
-                      `${encodeJson(
-                        failure
-                          ? { id: req.id, error: { message: failure } }
-                          : { id: req.id, result: { type: "ok" } },
-                      )}\n`,
-                    );
-                    // A subscription herdr has something to say on at once.
-                    if (
-                      req.method === "events.subscribe" &&
-                      Bun.env.FAKE_HERDR_PUSH_EVENT === "1" &&
-                      !pushed
-                    ) {
-                      pushed = true;
-                      socket.write(
-                        `${encodeJson({
-                          event: "pane.agent_status_changed",
-                          data: { pane_id: "1-1", workspace_id: "w1", agent_status: "blocked" },
-                        })}\n`,
-                      );
-                    }
-                  },
-                  fail: () =>
-                    socket.write(
-                      `${encodeJson({ id: req.id, error: { message: "log write failed" } })}\n`,
-                    ),
-                });
-              }
-            },
-          },
-        }),
-      );
-    });
-  }
-
-  /** A fake core on a socket of its own, serving until the rig closes. */
   startCore() {
-    const socketPath = this.path.join(this.root, "hc.sock");
+    if (this.served !== null) {
+      return Effect.succeed(this.served);
+    }
+    const socketPath = this.coreSocket;
     const logPath = this.logPath;
     const queuePath = this.path.join(this.root, "outputs.json");
-    const setScope = (scope: Scope.Closeable) => {
+    const keep = (scope: Scope.Closeable, served: FakeHc) => {
       this.coreScope = scope;
+      this.served = served;
     };
     return Effect.gen(function* () {
       const scope = yield* Scope.make();
-      setScope(scope);
-      return yield* serveFakeHc(socketPath, logPath, scope, queuePath);
+      const served = yield* serveFakeHc(socketPath, logPath, scope, queuePath);
+      keep(scope, served);
+      return served;
     });
   }
 
-  private requestsFrom(chunk: string): ReadonlyArray<Schema.Schema.Type<typeof RpcRequest>> {
-    return Arr.flatMap(
-      Arr.filter(Str.split(chunk, "\n"), (line) => Str.trim(line) !== ""),
-      (line) => Option.toArray(Schema.decodeUnknownOption(RpcRequestString)(line)),
+  addAgent(name: string, cwd = this.projectDir, labels: Record<string, string> = { run: "r0" }) {
+    return Effect.flatMap(this.startCore(), (core) =>
+      Effect.scoped(
+        Effect.flatMap(connect(core.socketPath), (hc) =>
+          hc.call("terminal.run", { name, argv: ["claude"], cwd, labels, [SETUP]: true }),
+        ),
+      ).pipe(Effect.map((made) => made.address)),
     );
   }
 
-  env(overrides: RigEnvInput = {}): RigEnv {
-    const environment: RigEnv = {
+  dropAgent(name: string) {
+    return Effect.flatMap(this.startCore(), (core) =>
+      Effect.scoped(
+        Effect.flatMap(connect(core.socketPath), (hc) =>
+          hc.call("terminal.kill", { terminal: name, [SETUP]: true }),
+        ),
+      ),
+    ).pipe(Effect.asVoid);
+  }
+
+  env(overrides: RigEnvInput = {}) {
+    return {
       HOME: this.root,
-      PATH: this.pathValue,
-      HERDR_ENV: "1",
-      HERDR_BIN_PATH: this.binPath,
-      HERDR_SOCKET_PATH: this.socketPath,
-      HERDR_PLUGIN_ROOT: this.baselineDir,
+      PATH: `${this.tripwire.binDir}:${this.pathValue}`,
+      HERDR_BIN_PATH: this.tripwire.bin,
+      HERDR_SOCKET_PATH: this.tripwire.socketPath,
+      COLLIE_ROOT: this.baselineDir,
       COLLIE_USER_DIR: this.userDir,
       COLLIE_CLAUDE_MANAGED_DIR: `${this.root}/claude-managed`,
-      HERDR_PLUGIN_STATE_DIR: this.stateDir,
-      HERDR_WORKSPACE_ID: "1",
-      HERDR_TAB_ID: "1:1",
-      HERDR_PANE_ID: "1-1",
+      COLLIE_STATE_DIR: this.stateDir,
       COLLIE_CWD: this.projectDir,
       GITLAB_USER_LOGIN: TEST_LOGIN,
       GITHUB_ACTOR: TEST_LOGIN,
-      FAKE_HERDR_LOG: this.logPath,
-      FAKE_HERDR_OUTPUTS: this.path.join(this.root, "outputs.json"),
-      // What `herdr status --json` answers with regardless of HERDR_SOCKET_PATH: the
-      // rig's one real socket, so a test that unsets the explicit path still reaches
-      // it through discovery rather than through the env var it is testing the absence of.
-      FAKE_HERDR_STATUS_SOCKET: this.socketPath,
-      // Refused at once: a test that wants releases serves its own.
       COLLIE_RELEASES: UNREACHABLE_RELEASES,
-      // This Machine's memory as Collie reads it: never the real Machine's.
+      // WARNING: Never the real Machine's memory, as Collie reads it.
       COLLIE_PROC: this.procDir,
-      // The fake core's socket once `startCore` serves it; never the human's core.
-      HC_SOCKET: this.path.join(this.root, "hc.sock"),
+      // WARNING: Never the real Machine's free disk, as Collie reads it.
+      COLLIE_DF: this.dfPath,
+      // WARNING: Never the human's core: the fake core's socket, once startCore serves it.
+      HC_SOCKET: this.coreSocket,
       ...overrides,
     };
-    if (this.gone.length > 0) environment.FAKE_HERDR_AGENTS_GONE = Arr.join(this.gone, ",");
-    return environment;
   }
 
-  pluginEnv(overrides: RigEnvInput = {}): PluginEnv {
-    const env = this.env(overrides);
-    // The fake CLI reads its own config from the ambient environment; clear the
-    // keys this rig does not set so one test cannot leak into the next.
-    for (const key of [
-      "FAKE_HERDR_LOG",
-      "FAKE_HERDR_OUTPUTS",
-      "FAKE_HERDR_FAIL",
-      "FAKE_HERDR_AGENT_STATUS",
-      "FAKE_HERDR_PROMPT_ERROR",
-      "FAKE_HERDR_PROMPT_ERROR_TIMES",
-      "FAKE_HERDR_PROMPT_ERROR_MESSAGE",
-      "FAKE_HERDR_NAME_TAKEN",
-      "FAKE_HERDR_BLOCK_START",
-      "FAKE_HERDR_VERSION",
-      "FAKE_HERDR_PLUGINS",
-      "FAKE_HERDR_STATUS",
-      "FAKE_HERDR_STATUS_SOCKET",
-      "FAKE_HERDR_SERVER_VERSION",
-      "FAKE_HERDR_RUNTIME_MISSING",
-    ]) {
-      const value = env[key];
-      if (value) Bun.env[key] = value;
-      else delete Bun.env[key];
-    }
-    if (this.gone.length > 0) Bun.env.FAKE_HERDR_AGENTS_GONE = Arr.join(this.gone, ",");
-    return readEnv(env);
+  pluginEnv(overrides: RigEnvInput = {}) {
+    return readEnv(this.env(overrides));
   }
 
-  calls(): Effect.Effect<Call[], RigError, FileSystem.FileSystem> {
+  calls() {
     const logPath = this.logPath;
     return Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const exists = yield* fs.exists(logPath);
-      if (!exists) return [];
+      if (!(yield* fs.exists(logPath))) {
+        return [];
+      }
       const text = yield* fs.readFileString(logPath);
-      // The fake's CLI appends from another process: a line with no newline yet is still being written.
+      // WARNING: A line with no newline yet is still being written.
       const whole = Str.split(text, "\n").slice(0, -1);
       return yield* Effect.forEach(
         Arr.filter(whole, (line) => Str.trim(line) !== ""),
@@ -767,21 +213,25 @@ export class Rig {
     });
   }
 
-  cmds(): Effect.Effect<string[], RigError, FileSystem.FileSystem> {
+  cmds() {
     return this.calls().pipe(Effect.map((calls) => Arr.map(calls, (call) => call.cmd)));
   }
 
-  close(): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {
-    const listener = this.listener;
-    const socketFiber = this.socketFiber;
+  close() {
     const coreScope = this.coreScope;
     const root = this.root;
+    const tripwire = this.tripwire;
     return Effect.gen(function* () {
-      listener?.stop(true);
-      if (socketFiber) yield* Fiber.interrupt(socketFiber);
-      if (coreScope) yield* Scope.close(coreScope, Exit.void);
+      yield* tripwire.stop;
+      if (coreScope) {
+        yield* Scope.close(coreScope, Exit.void);
+      }
+      const tripped = yield* Effect.exit(untripped(tripwire));
       const fs = yield* FileSystem.FileSystem;
       yield* fs.remove(root, { recursive: true, force: true });
+      if (Exit.isFailure(tripped)) {
+        return yield* Effect.failCause(tripped.cause);
+      }
     });
   }
 }
@@ -789,5 +239,3 @@ export class Rig {
 interface RigEnvInput {
   [key: string]: string;
 }
-
-const isText = Schema.is(Schema.String);

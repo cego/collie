@@ -5,16 +5,13 @@ import * as Str from "effect/String";
 import type { Flow } from "../src/board-model";
 import { processStartTime } from "../src/lock";
 import { filledSinceStart, measuring, refusal } from "../bench/record-open/guards";
-import {
-  differences,
-  type Painted,
-  type PaintedNode,
-  paintedOf,
-} from "../bench/record-open/compare";
+import { differences, paintedOf } from "../bench/record-open/compare";
+import type { Painted, PaintedNode } from "../bench/record-open/compare";
 import { barFailures, summaryOf } from "../bench/record-open/stats";
 import { desktopSummary, nativeSummary } from "../bench/record-open/summarize";
 import { runEffect } from "./support/effect";
 import { flowNode } from "./support/flow";
+import { stringifyJson } from "../src/json";
 
 const encodeClaim = flow(
   Schema.encodeResult(
@@ -26,7 +23,6 @@ const encodeClaim = flow(
 );
 
 describe("the record-open benchmark's statistics", () => {
-  // 37 is coprime with 200, so this is 1..200 in a scrambled order.
   const scrambled = Array.from({ length: 200 }, (_, i) => ((i * 37) % 200) + 1);
 
   test("reads p50, p95 and max of 200 samples by nearest rank", () => {
@@ -90,8 +86,7 @@ describe("the record-open benchmark's Flow comparison", () => {
     current: { run: "build-run", node: "build" },
     release: null,
   };
-  /** What the record paints of `host`, as its accessible names read. */
-  const painted = (): Painted => [
+  const painted = () => [
     {
       name: "Implement, build-run, on laptop, running",
       nodes: [
@@ -101,8 +96,7 @@ describe("the record-open benchmark's Flow comparison", () => {
     },
   ];
   const differ = (shown: Painted) => differences(shown, paintedOf(host, "laptop"));
-  /** The painted Flow with node `at` changed. */
-  const changed = (at: number, over: Partial<PaintedNode>): Painted =>
+  const changed = (at: number, over: Partial<PaintedNode>) =>
     Arr.map(painted(), (row) => ({
       ...row,
       nodes: Arr.map(row.nodes, (node, i) => (i === at ? { ...node, ...over } : node)),
@@ -154,7 +148,7 @@ describe("the record-open benchmark's guards", () => {
         expect(
           yield* refusal(
             { state: "/srv/collie/", socket: "/tmp/b/host.sock" },
-            { home, env: { HERDR_PLUGIN_STATE_DIR: "/srv/collie" } },
+            { home, env: { COLLIE_STATE_DIR: "/srv/collie" } },
           ),
         ).toMatch(/state directory/);
         expect(
@@ -175,7 +169,7 @@ describe("the record-open benchmark's guards", () => {
           lock,
           encodeClaim({ pid: holder.pid, start: yield* processStartTime(holder.pid) }),
         );
-        const said: string[] = [];
+        const said: Array<string> = [];
         let sampled = false;
         const sampling = yield* Effect.forkScoped(
           measuring(
@@ -210,12 +204,11 @@ test("inside a Measurement, on a Machine without /proc, the host's lock is the b
       };
       const dir = yield* fs.makeTempDirectoryScoped();
       const lock = `${dir}/machine.lock`;
-      // The process that started this test stands in for the Measurement's host.
       yield* fs.writeFileString(
         lock,
         encodeClaim({ pid: process.ppid, start: yield* processStartTime(process.ppid) }),
       );
-      const said: string[] = [];
+      const said: Array<string> = [];
       let sampled = false;
       const sampling = yield* Effect.forkScoped(
         measuring(
@@ -243,7 +236,7 @@ test("the benchmark waits for the fill of the host it times, not of one it stopp
 test("a native timing log is summarised click to usable, and a usable with no click is reported apart", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const mark = (name: string, at: number, card: string) => JSON.stringify({ name, at, card });
+      const mark = (name: string, at: number, card: string) => stringifyJson({ name, at, card });
       const log = Arr.join(
         [
           mark("record:usable", 900, "before-the-log"),

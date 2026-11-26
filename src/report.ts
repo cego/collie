@@ -1,23 +1,22 @@
-// Where Runs end, across all of them: the numbers a change to Collie is judged by.
-// Data only: nothing here is a threshold, and nothing refuses anything.
-
+// WARNING: data only: nothing here is a threshold or refuses anything.
 import * as Num from "effect/Number";
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { Schema, flow, Result } from "effect";
-import { STOP, type RunView } from "./engine";
+import { STOP } from "./engine";
+import type { RunView } from "./engine";
 import { isSuperseded, isUnanswered } from "./store";
 import type { Metrics } from "./board-model";
 import { epochMs, took } from "./time";
-import { measuresOf, type Measures, type OutcomeRecords } from "./outcomes";
+import { measuresOf } from "./outcomes";
+import type { Measures, OutcomeRecords } from "./outcomes";
 import type { Metric, RecoveryAction } from "./metrics";
 
 const asJsonText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
 const isText = Schema.is(Schema.String);
-export const resultText = (value: Schema.Json): string =>
-  isText(value) ? value : asJsonText(value);
+export const resultText = (value: Schema.Json) => (isText(value) ? value : asJsonText(value));
 
 export interface WorkflowTally {
   readonly workflow: string;
@@ -27,9 +26,7 @@ export interface WorkflowTally {
   readonly failed: number;
   readonly suspended: number;
   readonly pending: number;
-  /** Carries a `stop` control: a human stopped it. */
   readonly stopped: number;
-  /** Recorded a merge request (`RunView.mr`). */
   readonly withMr: number;
   readonly answered: number;
   readonly open: number;
@@ -51,12 +48,9 @@ export interface Report {
     readonly project: string;
     readonly created: string;
     readonly status: RunView["status"]["status"];
-    /** The issues its input says `Closes #n` for. */
     readonly closes: ReadonlyArray<number>;
     readonly mr: string | null;
-    /** Its merge request's disposition was recorded as merged. */
     readonly merged: boolean;
-    /** The questions it asked that were not set aside, with what answered each. */
     readonly questions: ReadonlyArray<{ readonly name: string; readonly answer: string | null }>;
   }>;
   readonly workflows: ReadonlyArray<WorkflowTally>;
@@ -71,7 +65,7 @@ export interface Report {
   readonly measures: Measures;
 }
 
-/** What one Run recorded, for the measures; null records where its host could not read them. */
+// WARNING: null means the host could not read the record, not that it is empty.
 export interface Recorded {
   readonly records: OutcomeRecords | null;
   readonly metrics: ReadonlyArray<Metric>;
@@ -93,7 +87,7 @@ export function reportOf(
   metrics: ReadonlyMap<string, Metrics>,
   since: string | null,
   recorded: ReadonlyMap<string, Recorded> = new Map(),
-): Report {
+) {
   const from = since === null ? -Infinity : epochMs(since);
   const recent = Arr.filter(views, (view) => epochMs(view.created) >= from);
   const kept = Arr.sortWith(
@@ -128,19 +122,24 @@ export function reportOf(
     }
     tally.total++;
     tally[status.status]++;
-    if (status.status === "failed") failed.push({ runId, workflow, reason: status.reason });
-    if (status.status === "complete")
+    if (status.status === "failed") {
+      failed.push({ runId, workflow, reason: status.reason });
+    }
+    if (status.status === "complete") {
       completed.push({
         runId,
         workflow,
         value: resultText(status.value),
         mr: view.mr,
       });
+    }
     if (view.controls.includes(STOP)) {
       tally.stopped++;
       stopped.push({ runId, workflow });
     }
-    if (view.mr !== null) tally.withMr++;
+    if (view.mr !== null) {
+      tally.withMr++;
+    }
     tally.open += Arr.filter(view.waiting, isUnanswered).length;
     tally.answered += Arr.filter(
       view.waiting,
@@ -184,12 +183,11 @@ export function reportOf(
   return { since, total: kept.length, runs, workflows, failed, completed, stopped, measures };
 }
 
-const capped = (lines: ReadonlyArray<string>, cap = 20): string[] =>
+const capped = (lines: ReadonlyArray<string>, cap = 20) =>
   lines.length > cap ? [...lines.slice(0, cap), `  …and ${lines.length - cap} more`] : [...lines];
 
 const percent = (share: number | null) => (share === null ? "" : ` (${Math.round(share * 100)}%)`);
 
-/** What a recovery's time to recover is measured over. */
 const RECOVERED_FROM: Readonly<Record<RecoveryAction, string>> = {
   reminded: "turn end to Output",
   rechecked: "park to next step",
@@ -197,14 +195,12 @@ const RECOVERED_FROM: Readonly<Record<RecoveryAction, string>> = {
   healed: "Heal start to its judgement",
 };
 
-/** The Runs a measure counts, as far as the text has room for. */
 const citing = (runs: ReadonlyArray<string>, cap = 10) =>
   runs.length === 0
     ? ""
     : `: ${Arr.join(runs.slice(0, cap), ", ")}${runs.length > cap ? ` …and ${runs.length - cap} more` : ""}`;
 
-/** The measures, as `run report` prints them under the tallies. */
-const measureLines = (measures: Measures): string[] => {
+const measureLines = (measures: Measures) => {
   const { rounds, dispositions, steering, verifications, parks, recoveries, peakContext } =
     measures;
   const recorded = Arr.filter(peakContext, (one) => one.tokens !== null);
@@ -268,10 +264,11 @@ const measureLines = (measures: Measures): string[] => {
   ];
 };
 
-/** `run report` in words, which chat reads too. */
-export const reportLines = (report: Report, unreadable: string | null): string => {
+export const reportLines = (report: Report, unreadable: string | null) => {
   const unread = unreadable === null ? [] : [`runs: ${unreadable}`];
-  if (report.total === 0) return Arr.join([...unread, "No runs found."], "\n");
+  if (report.total === 0) {
+    return Arr.join([...unread, "No runs found."], "\n");
+  }
   return Arr.join(
     [
       `${report.total} Runs`,

@@ -1,19 +1,8 @@
-// One complete review of a target, reconciled into the one review a human reads.
-//
-// A reviewer per seat of the reviewer panel the definition declares — one by default, and a
-// second is a seat in a fork rather than a new step — then the synthesis that reconciles
-// them, written into the Run's own directory as prose for the human and findings for the
-// card.
-//
-// Shared, because the workflow that reviews and the workflow that builds want the same
-// pass: an ordinary function over the same content and the same schemas, not a step one
-// of them copied from the other. The Markdown beside this file is the content.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
+import type { FixOutputSchema } from "collie";
 import {
   Agents,
-  FixOutputSchema,
   Host,
   ReviewOutputSchema,
   ReviewScope,
@@ -22,6 +11,7 @@ import {
   WorkflowError,
   agentWork,
   contentOf,
+  conflictingDispositions,
   findingKey,
   findingsIn,
   panelOf,
@@ -40,20 +30,17 @@ import {
   splitDisputed,
   step,
   targetKind,
-  type Finding,
-  type Integration,
-  type SynthesisReport,
 } from "collie";
-import { Effect, FileSystem, Option, Schema } from "effect";
+import type { Finding, Integration, SynthesisReport } from "collie";
+import { Effect, FileSystem, Option, Result, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
-import { type WorkflowEngine, type WorkflowInstance } from "effect/workflow/WorkflowEngine";
+import type { WorkflowEngine, WorkflowInstance } from "effect/workflow/WorkflowEngine";
 import markdown from "./review.md" with { type: "text" };
 import type { Reviewed } from "./delivering.ts";
 
 const content = contentOf(markdown);
 const text = Schema.String;
 
-/** What every review prompt is told: the change, what it is held to, and where it lives. */
 const change = {
   inputs: Schema.Struct({ target: text, target_kind: text, plan: text, outcome: text }),
   target_repo: text,
@@ -61,17 +48,13 @@ const change = {
   base: text,
 };
 
-/** How a review whose merge request's head moved under it fails, so a caller can carry on. */
 export const HEAD_MOVED = "reviewed head changed while reviewing";
 export const MR_ENDED = "reviewed merge request ended: ";
 
-/** What a prompt is told of a target that is not a merge request. */
 export const NO_MR = { forge: "", noun: "", diff: "", view: "", checkout: "" };
 
-/** What a worktree's change is measured against where nothing integrated the default branch. */
 export const DEFAULT_BASE = "<default-branch>";
 
-/** A reviewer's round: the one before it, what was disputed, and where this Run keeps its work. */
 export const REVIEW = content.template("review", {
   ...change,
   run: Schema.Struct({ dir: text, id: text }),
@@ -87,7 +70,6 @@ export const REVIEW = content.template("review", {
   criteria: text,
 });
 
-/** The reviews to reconcile, and the one before them. */
 const SYNTHESIZE = content.template("synthesize", {
   ...change,
   run: Schema.Struct({ dir: text, id: text }),
@@ -99,7 +81,6 @@ const SYNTHESIZE = content.template("synthesize", {
   obstacle: text,
 });
 
-/** An implementer fixing what a review found. */
 export const FIX_PROMPT = content.template("fix", {
   ...change,
   run: Schema.Struct({ dir: text, id: text }),
@@ -110,18 +91,11 @@ export const FIX_PROMPT = content.template("fix", {
   disputed: text,
 });
 
-/**
- * The reviewer panel's one seat, as a definition declares it for the role rather than as
- * the work pins it, so a fork's `agents.roles.reviewer` reaches every reviewer and the
- * synthesis. A second reviewer is what a specialist axis or a fork is for, not what every
- * change gets.
- */
+// WARNING: the role in the definition sets the reviewer, not the work's pin, so a fork's role reaches every reviewer.
 export const REVIEWER = { harness: "claude", model: "opus", effort: "high" };
 
-/** The implementer's seat: implement's builder, and whoever fixes what a review found. */
 export const IMPLEMENTER = { harness: "claude", model: "opus", effort: "high" };
 
-/** A round of review and the fix after it, which every Workflow that reviews makes the same way. */
 export const reviewRound = step({
   id: "review",
   title: "Review",
@@ -140,38 +114,32 @@ export const synthesisStep = step({
   produces: "review",
 });
 
-/** What one pass is about, and where in a rally it stands. */
 export interface ReviewAsk {
   readonly target: string;
-  /** The spec the change is held to, where whoever asked for this has one. */
   readonly plan: string;
-  /** What the change under review has to prove, which decides one judgement field. */
   readonly proves: string;
-  /** The review before this one, for the reviewers to read rather than repeat. */
   readonly previous: string;
   readonly ledger?: ReadonlyArray<Finding>;
+  // WARNING: a new finding never takes an id this Run already gave outside `ledger`.
+  readonly taken?: ReadonlyArray<string>;
   readonly head?: string;
+  readonly stamped?: string;
   readonly changes?: string;
-  /** Where the implementer's account of that review is; empty where nobody fixed one. */
+  readonly delta?: string;
   readonly answered: string;
-  /** The extra axes a human asked for, where they asked for any. */
   readonly risks: string;
-  /** Which round this is, and how many there may be. It also names the round's work. */
   readonly at: number;
   readonly of: number;
-  /** What the implementer has already stood on, so a reviewer answers it or drops it. */
   readonly disputed: ReadonlyArray<Finding>;
   readonly prefix?: string;
   readonly reviewers?: string;
   readonly obstacle?: string;
-  /** The commit a worktree's change is diffed against: the default branch as last integrated. */
   readonly base?: string;
-  /** What the builder says of each criterion, and its assumptions, for the reviewer to check. */
   readonly criteria?: string;
   readonly source?: string | null;
 }
 
-/** The disagreement is evidence for the review, alongside the finding that prompted it. */
+const LedgerJson = Schema.fromJsonString(Schema.Unknown, { space: 2 });
 const formatDisputes = (disputed: ReadonlyArray<Finding>) =>
   formatFindings(
     Arr.map(disputed, (finding) => {
@@ -182,13 +150,11 @@ const formatDisputes = (disputed: ReadonlyArray<Finding>) =>
     }),
   );
 
-/** What the reviewers and the synthesis are both told, beside the section they are given. */
 export const told = (ask: ReviewAsk, run: { readonly dir: string; readonly id: string }) => ({
   inputs: {
     target: ask.target,
     target_kind: targetKind(ask.target),
     plan: ask.plan,
-    // What the change has to prove, under the name the prose asks for it by.
     outcome: ask.proves,
   },
   run,
@@ -196,8 +162,8 @@ export const told = (ask: ReviewAsk, run: { readonly dir: string; readonly id: s
   ledger:
     ask.ledger === undefined
       ? ""
-      : `Earlier findings ledger:\n${JSON.stringify(ask.ledger, null, 2)}`,
-  changes: `${ask.head ? `Review head: ${ask.head}\n\n` : ""}${ask.changes ?? ""}`,
+      : `Earlier findings ledger:\n${Result.getOrThrow(Schema.encodeResult(LedgerJson)(ask.ledger))}`,
+  changes: `${ask.head ? `Review head: ${ask.head}\n\n` : ""}${ask.changes ?? ""}${ask.delta ?? ""}`,
   iteration: String(ask.at),
   max_iterations: String(ask.of),
   disputed: formatDisputes(ask.disputed),
@@ -210,10 +176,6 @@ export const told = (ask: ReviewAsk, run: { readonly dir: string; readonly id: s
   obstacle: ask.obstacle ?? "",
 });
 
-/**
- * Every reviewer, then the one review that comes out of them — left behind as the prose a
- * human reads and the findings whatever comes next counts.
- */
 export const reviewPass = (ask: ReviewAsk) =>
   Effect.gen(function* () {
     const agents = yield* Agents;
@@ -221,22 +183,25 @@ export const reviewPass = (ask: ReviewAsk) =>
     const host = yield* Host;
     const { dir, cwd } = yield* host.place(id);
     const confirmHead = Effect.gen(function* () {
-      if (ask.head)
+      if (ask.head) {
         yield* Activity.make({
           name: `${ask.prefix ?? ""}review-head-confirmed-${ask.at}`,
           success: Schema.String,
           error: WorkflowError,
           execute: Effect.gen(function* () {
             const reading = yield* host.mrReading({ target: ask.target, cwd });
-            if (reading.state !== "open")
+            if (reading.state !== "open") {
               return yield* new WorkflowError({ reason: `${MR_ENDED}${reading.state}` });
-            if (reading.head !== ask.head)
+            }
+            if (reading.head !== ask.head) {
               return yield* new WorkflowError({
                 reason: `${HEAD_MOVED} ${ask.head}; review again before posting`,
               });
+            }
             return reading.head;
           }),
         });
+      }
     });
     const record = (report: SynthesisReport) =>
       Effect.gen(function* () {
@@ -247,9 +212,12 @@ export const reviewPass = (ask: ReviewAsk) =>
           return report;
         }
         const before = ask.ledger;
-        const findings: Finding[] = [];
+        const findings: Array<Finding> = [];
         const ids = new Set<string>();
-        const reserved = new Set(Arr.map([...before, ...report.findings], (one) => one.id));
+        const reserved = new Set([
+          ...Arr.map([...before, ...report.findings], (one) => one.id),
+          ...(ask.taken ?? []),
+        ]);
         let next = 1;
         for (const finding of report.findings) {
           const earlier = Option.getOrUndefined(
@@ -261,11 +229,14 @@ export const reviewPass = (ask: ReviewAsk) =>
           );
           let identity = finding.id ?? earlier?.id;
           if (identity === undefined) {
-            while (reserved.has(`${id}-F${next}`)) next += 1;
+            while (reserved.has(`${id}-F${next}`)) {
+              next += 1;
+            }
             identity = `${id}-F${next}`;
           }
-          if (ids.has(identity))
+          if (ids.has(identity)) {
             return yield* new WorkflowError({ reason: `duplicate finding id ${identity}` });
+          }
           ids.add(identity);
           reserved.add(identity);
           const status = finding.status ?? "open";
@@ -273,18 +244,26 @@ export const reviewPass = (ask: ReviewAsk) =>
             ...finding,
             id: identity,
             status,
-            head: ask.head ?? "",
+            head: ask.head ?? ask.stamped ?? "",
             note: status === earlier?.status ? (earlier.note ?? "") : "",
           });
         }
         for (const earlier of before) {
-          if (Arr.some(findings, (one) => one.id === earlier.id)) continue;
-          if (Arr.some(report.fixed, (one) => findingKey(one) === findingKey(earlier)))
-            findings.push({ ...earlier, status: "fixed", head: ask.head ?? "", note: "" });
-          else
+          if (Arr.some(findings, (one) => one.id === earlier.id)) {
+            continue;
+          }
+          if (Arr.some(report.fixed, (one) => findingKey(one) === findingKey(earlier))) {
+            findings.push({
+              ...earlier,
+              status: "fixed",
+              head: ask.head ?? ask.stamped ?? "",
+              note: "",
+            });
+          } else {
             return yield* new WorkflowError({
               reason: `review omitted earlier finding ${earlier.id ?? earlier.title}; return its status`,
             });
+          }
         }
         const recorded: SynthesisReport = {
           ...report,
@@ -301,7 +280,7 @@ export const reviewPass = (ask: ReviewAsk) =>
         yield* recordReview(recorded);
         return recorded;
       });
-    // A check left to CI is read from the forge where the Run has a merge request, never run.
+    // WARNING: a check left to CI is read from the forge where the Run has a merge request, never run.
     const leftToCi = yield* Effect.forEach(
       Arr.filter(yield* host.approved(id), (spec) => spec.ci !== undefined),
       (spec) =>
@@ -312,8 +291,6 @@ export const reviewPass = (ask: ReviewAsk) =>
         })),
     );
     const checks = renderRecordedChecks(yield* host.evidence(id, cwd), leftToCi);
-    // The round comes first, and the first round keeps the plain names: a Run with one
-    // review reads as one, and a rally's rounds sort in the order they happened.
     const prefix = ask.prefix ?? "";
     const reviewOp = (seat: string) =>
       `${prefix}${ask.at === 1 ? `review-${seat}` : `review-${ask.at}-${seat}`}`;
@@ -331,13 +308,17 @@ export const reviewPass = (ask: ReviewAsk) =>
       name: `${synthesis}.scope`,
       success: Schema.NullOr(ReviewScope),
       execute: Effect.gen(function* () {
-        if (ask.source === null || (ask.target !== "" && ask.target !== "worktree")) return null;
+        if (ask.source === null || (ask.target !== "" && ask.target !== "worktree")) {
+          return null;
+        }
         const fs = yield* FileSystem.FileSystem;
         const collected = yield* Effect.forEach(seats, ({ operation }) =>
           fs.exists(agents.outputFor(id, operation)),
         );
-        // Earlier passes without a journaled scope cannot acquire one on replay.
-        if (Arr.some(collected, Boolean)) return null;
+        // WARNING: earlier passes without a journaled scope cannot acquire one on replay.
+        if (Arr.some(collected, Boolean)) {
+          return null;
+        }
         return yield* host.reviewScope(id, ask.source ?? ask.plan, ask.proves, ask.risks);
       }).pipe(Effect.orDie),
     });
@@ -348,15 +329,14 @@ export const reviewPass = (ask: ReviewAsk) =>
         success: Schema.Void,
         execute: host.recordReview(id, scope, scope?.target ?? ask.base ?? "", review),
       });
-    // One seat is one review, already the one the human reads: its prompt asks a lone
-    // reviewer for the synthesis's own fields, so a second agent would only copy it.
+    // WARNING: a lone reviewer is asked for the synthesis's own fields; a second agent would only copy it.
     if (seats.length === 1) {
       const [only] = seats;
       const alone: SynthesisReport = yield* agentWork({
-        operation: only!.operation,
-        agent: only!.agent,
+        operation: only.operation,
+        agent: only.agent,
         role: "reviewer",
-        seat: only!.seat,
+        seat: only.seat,
         instructions: REVIEW,
         input: { ...input, checks, criteria: ask.criteria ?? "" },
         output: SynthesisSchema,
@@ -394,88 +374,191 @@ export const reviewPass = (ask: ReviewAsk) =>
         output: SynthesisSchema,
       }),
     );
-    // The prose a human reads and the findings a card counts, where both are looked for.
     return yield* record(reconciled);
   });
 
-/** At most four rounds per rally; it leaves at the first review with nothing blocking. */
+export const followUp = (ask: {
+  readonly name: string;
+  readonly target: string;
+  readonly cwd: Effect.Effect<string>;
+  readonly head: string;
+  readonly now: string;
+  readonly base?: string;
+  readonly open: ReadonlyArray<Finding>;
+}) =>
+  Effect.gen(function* () {
+    const host = yield* Host;
+    const changes =
+      ask.head === ask.now
+        ? "The head has not moved since that round: the fix committed nothing."
+        : yield* Activity.make({
+            name: ask.name,
+            success: Schema.String,
+            execute: Effect.flatMap(ask.cwd, (cwd) =>
+              host.reviewChanges({
+                target: ask.target,
+                cwd,
+                previous: ask.head,
+                head: ask.now,
+                base: ask.base,
+              }),
+            ).pipe(
+              Effect.orElseSucceed(
+                () =>
+                  `The changes since it could not be listed: read \`git diff ${ask.head} ${ask.now}\`.`,
+              ),
+            ),
+          });
+    return Arr.join(
+      [
+        `Previous round's head: ${ask.head}. Review head: ${ask.now}.`,
+        changes,
+        `Still open after the previous fix, beside those disputed below:\n${formatFindings(ask.open)}`,
+        "Check each open and disputed finding against the change, and read the changed files in full. Look beyond them only where the change reaches into code it did not touch or this round's criteria require it.",
+      ],
+      "\n\n",
+    );
+  });
+
+const isResolved = (finding: Finding) =>
+  finding.status === "fixed" || finding.status === "obsolete";
+
 export const ROUNDS = 4;
 
 type Needs = Run | Agents | Host | WorkflowEngine | WorkflowInstance | FileSystem.FileSystem;
 
-/** Each blocking dispute left standing, as the merge request lists it for the human. */
-const disputesOf = (findings: ReadonlyArray<Finding>): string[] =>
+type CheckedBeforeReview = (ask: {
+  readonly name: string;
+  readonly cwd: string;
+  readonly fix: (
+    operation: string,
+    findings: string,
+    open: ReadonlyArray<Finding>,
+  ) => Effect.Effect<unknown, WorkflowError, Needs>;
+}) => Effect.Effect<
+  { readonly halted: string; readonly failed: ReadonlyArray<Finding> } | null,
+  WorkflowError,
+  Needs
+>;
+
+// WARNING: a Run whose features do not say `before_review` started on an earlier release, and runs none.
+export const checkedBeforeReview: CheckedBeforeReview = (ask) =>
+  Effect.gen(function* () {
+    const host = yield* Host;
+    const runId = (yield* Run).id;
+    if ((yield* host.place(runId)).features?.before_review !== true) {
+      return null;
+    }
+    for (let attempt = 1; ; attempt++) {
+      const failed: ReadonlyArray<Finding> = yield* Activity.make({
+        name: `${ask.name}.${attempt}`,
+        success: Schema.Array(Schema.Struct({ severity: text, title: text, detail: text })),
+        execute: Effect.gen(function* () {
+          const marked = Arr.filter(
+            yield* host.approved(runId),
+            (spec) => spec.before_review === true,
+          );
+          const ran = yield* Effect.forEach(marked, (spec) =>
+            host.verify({ runId, name: spec.name, cwd: ask.cwd }),
+          );
+          return Arr.map(
+            Arr.filter(ran, (one) => one.result !== "pass"),
+            (one) => ({
+              severity: "blocker",
+              title: `check "${one.name}" failed before review`,
+              detail: `It was ${one.result} (exit ${one.exit}); read its output with \`collie run read ${runId} verification:${one.id}\`.`,
+            }),
+          );
+        }).pipe(Effect.orDie),
+      });
+      if (failed.length === 0) {
+        return null;
+      }
+      if (attempt > ROUNDS) {
+        return {
+          halted: `before_review_failed: ${Arr.join(
+            Arr.map(failed, (one) => one.title),
+            "; ",
+          )}, after ${ROUNDS} fixes`,
+          failed,
+        };
+      }
+      yield* ask.fix(`${ask.name}-fix-${attempt}`, formatFindings(failed), failed);
+    }
+  });
+
+const disputesOf = (findings: ReadonlyArray<Finding>) =>
   Arr.map(
     Arr.filter(findings, isBlocking),
     (one) =>
       `disputed blocking finding: [${one.severity}] ${one.title}${one.file ? ` (${one.file})` : ""}${one.reason ? `: ${one.reason}` : ""}`,
   );
 
-/** Where a rally stood when it stopped: what halted it, and what the last fix left. */
 export interface Rallied extends Reviewed {
-  /** Why the loop stopped short, or null where it converged. */
   readonly halted: string | null;
 }
 
-/**
- * Review, fix, review again. The loop leaves at the first review with nothing blocking;
- * a dispute is carried rather than re-argued, and the last round has no review after it,
- * so that fix's own account is judged against the journal rather than taken on its word.
- */
+// WARNING: the last fix has no review after it, so its account is judged against the journal, not taken on its word.
 export const rally = (ask: {
-  /** Review rounds the Run has had, so each round of every rally is a run of its own. */
   readonly rounds: { n: number };
   readonly cwd: string;
   readonly plan: string;
-  /** The outcome kind each round is held to, read as the round starts. */
   readonly proves: Effect.Effect<string, never, WorkflowEngine | WorkflowInstance>;
   readonly risks: string;
-  /** What the change is held to beside the spec, for the reviewer. */
   readonly criteria: string;
   readonly source?: string | null;
-  /** Before every operation's name, telling this rally's rounds from another's. */
   readonly prefix: string;
-  /** What every round's reviewers are told beside the change; empty for nothing. */
   readonly obstacle: string;
   readonly resume?: { readonly previous: Rallied; readonly reviewers: string };
-  /** Integrates the default branch, answering with what a review is diffed against. */
+  readonly ledger?: ReadonlyArray<Finding>;
+  readonly taken?: ReadonlyArray<string>;
   readonly integrate: (
     operation: string,
   ) => Effect.Effect<Integration & { readonly base: string }, WorkflowError, Needs>;
-  /** What blocked a round, fixed under `operation` by whoever fixes this change. */
   readonly fix: (round: {
     readonly operation: string;
     readonly at: number;
     readonly proves: string;
     readonly findings: string;
+    readonly open: ReadonlyArray<Finding>;
+    // WARNING: "" or absent where the round did not read its head.
+    readonly head?: string;
   }) => Effect.Effect<typeof FixOutputSchema.Type, WorkflowError, Needs>;
-}): Effect.Effect<Rallied, WorkflowError, Needs> =>
+}) =>
   Effect.gen(function* () {
     const host = yield* Host;
     const agents = yield* Agents;
     const runId = (yield* Run).id;
     const { prefix } = ask;
-    let disputed: Finding[] = [];
+    let disputed: Array<Finding> = [];
     let seen: { readonly at: number; readonly keys: ReadonlyArray<string> } | null = null;
+    const delta =
+      ask.resume === undefined && (yield* host.place(runId)).features?.review_delta === true;
+    let prior: { readonly head: string; readonly open: ReadonlyArray<Finding> } | null = null;
+    let ledger = ask.ledger;
 
     const repair = Effect.gen(function* () {
       const resumed = ask.resume;
-      if (resumed === undefined) return;
+      if (resumed === undefined) {
+        return;
+      }
+      const open = [
+        ...Arr.filter(
+          resumed.previous.reviewed.findings,
+          (one) =>
+            !Arr.some(
+              resumed.previous.disputes,
+              (dispute) => findingKey(dispute) === findingKey(one),
+            ),
+        ),
+        ...resumed.previous.disputes,
+      ];
       const fixed = yield* ask.fix({
         operation: `${prefix}fix`,
         at: 1,
         proves: yield* ask.proves,
-        findings: formatFindings([
-          ...Arr.filter(
-            resumed.previous.reviewed.findings,
-            (one) =>
-              !Arr.some(
-                resumed.previous.disputes,
-                (dispute) => findingKey(dispute) === findingKey(one),
-              ),
-          ),
-          ...resumed.previous.disputes,
-        ]),
+        findings: formatFindings(open),
+        open,
       });
       const settled = new Set(Arr.map([...fixed.fixed, ...fixed.disputed], findingKey));
       disputed = [
@@ -491,15 +574,54 @@ export const rally = (ask: {
           yield* repair;
           const merged = yield* ask.integrate(`${prefix}merge-${at}`);
           const proves = yield* ask.proves;
+          const unopened = yield* checkedBeforeReview({
+            name: `${prefix}before-review-${at}`,
+            cwd: ask.cwd,
+            fix: (operation, findings, open) => ask.fix({ operation, at, proves, findings, open }),
+          });
+          if (unopened !== null) {
+            return {
+              halted: unopened.halted,
+              unreviewed: "",
+              unsettled: disputesOf(disputed),
+              disputes: Arr.filter(disputed, isBlocking),
+              reviewed: {
+                verdict: "findings" as const,
+                summary: unopened.halted,
+                findings: unopened.failed,
+                disputed: [],
+                dropped: [],
+                fixed: [],
+              },
+            };
+          }
+          const head =
+            delta || ledger !== undefined
+              ? yield* Activity.make({
+                  name: `${prefix}review-head-${at}`,
+                  success: Schema.String,
+                  execute: host.reviewedHead({ target: "", cwd: ask.cwd }),
+                })
+              : "";
+          const given =
+            !delta || prior === null || head === ""
+              ? ""
+              : yield* followUp({
+                  name: `${prefix}review-changes-${at}`,
+                  target: "",
+                  cwd: Effect.succeed(ask.cwd),
+                  head: prior.head,
+                  now: head,
+                  base: merged.base,
+                  open: prior.open,
+                });
           const synthesis = yield* reviewPass({
-            // The change is the work in this checkout: a Run that built it reviews what it
-            // built, rather than a merge request somebody else has to be pointed at.
             target: "",
             plan: ask.plan,
             source: ask.source,
             proves,
             previous: "",
-            // The last round's fix, which a follow-up review checks each of its findings against.
+            delta: given,
             answered:
               ask.resume !== undefined
                 ? agents.outputFor(runId, `${prefix}fix`)
@@ -507,6 +629,9 @@ export const rally = (ask: {
                   ? ""
                   : agents.outputFor(runId, `${prefix}fix-${at - 1}`),
             prefix,
+            ledger,
+            stamped: head,
+            taken: ask.taken,
             reviewers: ask.resume?.reviewers,
             obstacle: ask.obstacle,
             risks: ask.risks,
@@ -516,6 +641,13 @@ export const rally = (ask: {
             of: ask.resume === undefined ? ROUNDS : 1,
             disputed,
           });
+          if (ledger !== undefined) {
+            ledger = synthesis.findings;
+          }
+          const unresolved = Arr.filter(synthesis.findings, (one) => !isResolved(one));
+          for (const conflict of conflictingDispositions(synthesis)) {
+            yield* host.record(runId, `review ${at}: ${conflict}`);
+          }
           disputed = remainingDisputes(disputed, synthesis);
           const split = splitDisputed(synthesis.findings, disputed);
           const round = settleRound({
@@ -543,13 +675,12 @@ export const rally = (ask: {
             };
           }
           if (round.go === "clean") {
-            // Nothing blocking is not nothing found: what is left is carried to the merge
-            // request unfixed, and the record says so rather than the loop going quiet.
-            if (synthesis.findings.length > 0) {
+            // WARNING: nothing blocking is not nothing found; what is left goes to the merge request unfixed.
+            if (unresolved.length > 0) {
               yield* host.record(
                 runId,
-                `carried ${synthesis.findings.length} non-blocking finding(s) unfixed: ${Arr.join(
-                  Arr.map(synthesis.findings, (one) => one.title),
+                `carried ${unresolved.length} non-blocking finding(s) unfixed: ${Arr.join(
+                  Arr.map(unresolved, (one) => one.title),
                   "; ",
                 )}`,
               );
@@ -562,7 +693,7 @@ export const rally = (ask: {
               reviewed: synthesis,
             };
           }
-          if (ask.resume !== undefined)
+          if (ask.resume !== undefined) {
             return {
               halted: `round_unresolved: ${formatFindings(round.live)}`,
               unreviewed: "",
@@ -570,6 +701,7 @@ export const rally = (ask: {
               disputes: Arr.filter(disputed, isBlocking),
               reviewed: synthesis,
             };
+          }
           seen = { at, keys: round.keys };
 
           const fixed = yield* ask.fix({
@@ -577,20 +709,25 @@ export const rally = (ask: {
             at,
             proves,
             findings: formatFindings(round.live),
+            open: round.live,
+            head,
           });
-          // A dispute is carried, not re-argued: the next review either answers it with a
-          // rebuttal or it stops driving the loop. One renewed after a rebuttal carries its new
-          // reason, and one fixed since is gone.
           const settledNow = new Set(Arr.map([...fixed.fixed, ...fixed.disputed], findingKey));
           disputed = [
             ...Arr.filter(disputed, (one) => !settledNow.has(findingKey(one))),
             ...fixed.disputed,
           ];
+          const answered = new Set(Arr.map([...fixed.fixed, ...disputed], findingKey));
+          if (head !== "") {
+            prior = {
+              head,
+              open: Arr.filter(unresolved, (one) => !answered.has(findingKey(one))),
+            };
+          }
 
           if (at === ROUNDS) {
             const settled = settleFinalFix(round.live, fixed, yield* host.evidence(runId, ask.cwd));
-            // Every round's disputes, not only this fix's: earlier ones were split out of what
-            // this fix was shown, and are still the human's to settle.
+            // WARNING: every round's disputes count, not only this fix's; earlier ones are still the human's to settle.
             if (settled.ok || settled.halt === "dispute_unresolved") {
               yield* leaveOutstanding((yield* host.place(runId)).dir, settled.outstanding);
               return {

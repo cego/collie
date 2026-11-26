@@ -1,14 +1,8 @@
-// One budget of test processes per user per Machine
-// (ADR-draft-test-processes-share-one-budget-per-machine). A whole suite and a small run each
-// take workers from their kind's share of it, so the Machine is never oversubscribed and a
-// small run never waits behind a whole suite. A request is admitted as soon as its share has
-// the workers free, whatever waits before it; arrival order decides only between those that
-// do not fit, so a large one can wait behind a stream of smaller ones.
-
+// WARNING: admitted once its share has free workers, whatever waits before it, so a large request can wait behind smaller ones.
 import * as Arr from "effect/Array";
 import * as Num from "effect/Number";
-// FileSystem cannot write to or close a pipe it did not open.
-// oxlint-disable-next-line effecttsgo/node-builtin-import
+// WARNING: FileSystem cannot write to or close a pipe it did not open.
+// oxlint-disable-next-line effecttsgo/node-builtin-import -- FileSystem cannot write to or close a pipe it did not open.
 import { closeSync, writeSync } from "node:fs";
 import { getPriority, setPriority, tmpdir } from "node:os";
 import { Clock, Duration, Effect, FileSystem, Option, Schema, flow, Result } from "effect";
@@ -22,7 +16,6 @@ export interface Budget {
 
 export type Kind = "whole" | "small";
 
-/** A ticket while it waits, and a hold once admitted. */
 export interface Entry {
   readonly id: string;
   readonly kind: Kind;
@@ -36,24 +29,24 @@ export type Admission =
   | { readonly _tag: "admit"; readonly workers: number; readonly fewer: string | null }
   | { readonly _tag: "wait"; readonly behind: ReadonlyArray<Entry> };
 
-export const budgetOf = (cores: number, override?: string): Budget => {
+export const budgetOf = (cores: number, override?: string) => {
   const given = Number(override);
   const total =
     Number.isInteger(given) && given > 0 ? given : Math.max(2, Math.floor((2 * cores) / 3));
   return { total, reserve: Math.max(2, Math.floor(total / 4)) };
 };
 
-/** Under two slots for whole suites, both kinds take from all of the budget. */
+// WARNING: under two slots for whole suites, both kinds take from all of the budget.
 const pooled = (budget: Budget) => budget.total - budget.reserve < 2;
 
 export const shareOf = (budget: Budget, kind: Kind) =>
   pooled(budget) ? budget.total : kind === "whole" ? budget.total - budget.reserve : budget.reserve;
 
-export const admission = (
+export const admission: (
   budget: Budget,
   entries: ReadonlyArray<Entry>,
   request: Entry,
-): Admission => {
+) => Admission = (budget, entries, request) => {
   const share = shareOf(budget, request.kind);
   const classOf = Arr.filter(
     entries,
@@ -61,20 +54,24 @@ export const admission = (
   );
   const holds = Arr.filter(classOf, (one) => one.state === "held");
   let free = share - Arr.reduce(holds, 0, (sum, one) => sum + one.workers);
-  // An earlier waiter that fits now is admitted on its own look, so its workers are not free.
-  const ahead: Entry[] = [];
+  // WARNING: an earlier waiter that fits now is admitted on its own look, so its workers are not free.
+  const ahead: Array<Entry> = [];
   for (const one of Arr.sortWith(
     Arr.filter(classOf, (it) => it.state === "waiting" && it.seq < request.seq),
     (entry: Entry) => entry.seq,
     Num.Order,
   )) {
     const wants = Math.min(one.asked, share);
-    if (wants > free) continue;
+    if (wants > free) {
+      continue;
+    }
     free -= wants;
     ahead.push(one);
   }
   const workers = Math.min(request.asked, share);
-  if (workers > free) return { _tag: "wait", behind: [...ahead, ...holds] };
+  if (workers > free) {
+    return { _tag: "wait", behind: [...ahead, ...holds] };
+  }
   const of = pooled(budget)
     ? `runs share all ${share}`
     : request.kind === "whole"
@@ -109,10 +106,9 @@ export type Process = typeof ProcessSchema.Type;
 export type Stored = typeof StoredSchema.Type;
 type State = typeof StateSchema.Type;
 
-/** The environment variable that tells a `bun test` it runs on a hold, and which. */
 export const HOLD_ENV = "COLLIE_TEST_HOLD";
 
-/** Per user, so one user's runs never wait on a store they cannot clean. */
+// WARNING: per user, so one user's runs never wait on a store they cannot clean.
 export const STORE = `${tmpdir()}/collie-test-budget-${process.getuid?.() ?? "user"}`;
 
 const POLL = "250 millis";
@@ -123,12 +119,11 @@ export const ownProcess = Effect.gen(function* () {
 });
 
 export const processOf = (pid: number) =>
-  Effect.map(processStartTime(pid), (start): Process => ({ pid, start }));
+  Effect.map(processStartTime(pid), (start) => ({ pid, start }));
 
 const alive = (one: Stored) =>
   Effect.map(Effect.forEach(one.processes, holderLives), (each) => each.includes(true));
 
-/** Reads the store, drops what no live process holds, and writes back what `change` makes of it. */
 const modify = <A>(dir: string, change: (state: State) => readonly [State, A]) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -139,7 +134,7 @@ const modify = <A>(dir: string, change: (state: State) => readonly [State, A]) =
       Effect.die(new Error(`${dir}/budget.lock could not be taken`)),
       Effect.gen(function* () {
         const raw = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
-        const read = Option.getOrElse(decodeState(raw), (): State => ({ next: 0, entries: [] }));
+        const read = Option.getOrElse(decodeState(raw), () => ({ next: 0, entries: [] }));
         const entries = yield* Effect.filter(read.entries, alive);
         const [next, result] = change({ ...read, entries });
         const tmp = `${file}.${process.pid}.tmp`;
@@ -151,7 +146,6 @@ const modify = <A>(dir: string, change: (state: State) => readonly [State, A]) =
     );
   }).pipe(Effect.orDie);
 
-/** What the store holds now, after dropping what no live process holds. */
 export const entriesOf = (dir: string) => modify(dir, (state) => [state, state.entries] as const);
 
 export const enqueue = (
@@ -177,22 +171,25 @@ type Looked =
   | Extract<Admission, { _tag: "admit" }>
   | { readonly _tag: "wait"; readonly behind: ReadonlyArray<Stored> };
 
-/** One look: admits the ticket when it may go, and otherwise says whom it waits behind. */
 export const look = (dir: string, budget: Budget, id: string) =>
-  modify(dir, (state): readonly [State, Looked] => {
+  modify(dir, (state) => {
     const mine = Option.getOrUndefined(Arr.findFirst(state.entries, (one) => one.id === id));
-    if (mine === undefined) throw new Error(`ticket ${id} is not in the budget's store`);
+    if (mine === undefined) {
+      throw new Error(`ticket ${id} is not in the budget's store`);
+    }
     const decided = admission(budget, state.entries, mine);
     if (decided._tag === "wait") {
       const behind = Arr.map(decided.behind, (one) =>
         Option.getOrUndefined(Arr.findFirst(state.entries, (it) => it.id === one.id))!,
       );
-      return [state, { _tag: "wait", behind }];
+      const returned: readonly [State, Looked] = [state, { _tag: "wait", behind }];
+      return returned;
     }
     const entries = Arr.map(state.entries, (one) =>
       one.id === id ? { ...one, state: "held" as const, workers: decided.workers } : one,
     );
-    return [{ ...state, entries }, decided];
+    const returned: readonly [State, Looked] = [{ ...state, entries }, decided];
+    return returned;
   });
 
 export const leave = (dir: string, id: string) =>
@@ -205,7 +202,6 @@ export const leave = (dir: string, id: string) =>
       ] as const,
   );
 
-/** Names another process that runs on the hold, such as the `bun test` its runner starts. */
 export const join = (dir: string, id: string, joined: Process) =>
   modify(
     dir,
@@ -232,10 +228,6 @@ const behindLine = (one: Stored) =>
       : `test: waiting behind the ${what} in ${who}, which queued first`;
   });
 
-/**
- * Holds `asked` workers of `kind` from the budget for as long as the scope lasts, waiting in
- * turn for them. A wait says whom it is behind once, then every `every` how long it has been.
- */
 export const admitted = (
   dir: string,
   budget: Budget,
@@ -253,16 +245,18 @@ export const admitted = (
     let told = began;
     for (let first = true; ; first = false) {
       const decided = yield* look(dir, budget, ticket.id);
-      if (decided._tag === "admit")
+      if (decided._tag === "admit") {
         return {
           id: ticket.id,
           workers: decided.workers,
           fewer: decided.fewer,
           waited: (yield* Clock.currentTimeMillis) - began,
         };
+      }
       const now = yield* Clock.currentTimeMillis;
-      if (first) yield* say(yield* behindLine(decided.behind[0]!));
-      else if (now - told >= Duration.toMillis(Duration.fromInputUnsafe(every))) {
+      if (first) {
+        yield* say(yield* behindLine(decided.behind[0]!));
+      } else if (now - told >= Duration.toMillis(Duration.fromInputUnsafe(every))) {
         told = now;
         yield* say(`test: still waiting, ${elapsed(now - began)} so far`);
       }
@@ -270,11 +264,6 @@ export const admitted = (
     }
   });
 
-/**
- * Starts `cmd` on the hold, named in it so it counts as long as it runs, and stops it if the
- * scope ends first. `cmd` runs only once it is named: a runner that dies first closes the
- * gate it waits on, and it exits instead.
- */
 export const startOnHold = (
   dir: string,
   id: string,
@@ -309,11 +298,11 @@ export const startOnHold = (
     );
     const gate = child.stdio[3]!;
     yield* Effect.flatMap(processOf(child.pid), (named) => join(dir, id, named)).pipe(
-      // Set before opening the gate so workers and their descendants inherit it.
       Effect.andThen(
         Effect.sync(() => {
-          if (options.kind === "whole")
+          if (options.kind === "whole") {
             setPriority(child.pid, Math.max(10, getPriority(child.pid)));
+          }
         }),
       ),
       Effect.andThen(Effect.sync(() => writeSync(gate, "go\n"))),

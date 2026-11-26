@@ -1,13 +1,12 @@
-// ADR-draft-a-blocked-link-rides-the-machines-ssh-connection: a TLS WebSocket server stands
-// in for the peer, a resetter for a network refusing its port.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { createServer, type Server } from "node:net";
-import { Effect, FileSystem, Option, type Scope } from "effect";
-import { openPeer, type Way } from "../src/peer-transport";
+import { createServer } from "node:net";
+import type { Server } from "node:net";
+import { Effect, FileSystem, Option } from "effect";
+import { openPeer } from "../src/peer-transport";
+import type { Way } from "../src/peer-transport";
 import { certificateFor, keyOf } from "../src/peers";
 import type { Peer } from "../src/peers-model";
 import { openConnection, sshConnection } from "../src/ssh-connection";
@@ -17,7 +16,6 @@ import { freePort, portOf, resetter, writeFakeSsh, socketDir } from "./support/f
 const vm = { label: "vm-mk", target: "mk@vm-mk" };
 const SECRET = "the-secret";
 
-/** A server on 127.0.0.1 that accepts each connection and never answers. */
 const silent = Effect.acquireRelease(
   Effect.callback<Server>((resume) => {
     const server = createServer((conn) => conn.on("error", () => {}));
@@ -26,7 +24,6 @@ const silent = Effect.acquireRelease(
   (server) => Effect.sync(() => server.close()),
 );
 
-/** A port nothing listens on, held by a resetter for the test. */
 const resetting = Effect.gen(function* () {
   const free = yield* freePort;
   const server = yield* resetter(free);
@@ -35,7 +32,6 @@ const resetting = Effect.gen(function* () {
   return { port: free, accepted: () => accepted };
 });
 
-/** A pinned TLS WebSocket server that echoes, letting in only the secret. */
 const listener = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -70,27 +66,21 @@ const rig = Effect.gen(function* () {
   const far = yield* listener(peerDir);
   const handle = yield* sshConnection(state, vm, ssh);
   const connect = openConnection(state, vm, { ssh, said: () => Effect.void });
-  const peerAt = (port: number, certificate = far.certificate): Peer => ({
-    installation: "vm-install",
-    name: vm.label,
-    dials: "out",
-    url: `wss://127.0.0.1:${port}`,
-    certificate,
-    secret: SECRET,
-  });
+  const peerAt = (port: number, certificate = far.certificate) => {
+    const returned: Peer = {
+      installation: "vm-install",
+      name: vm.label,
+      dials: "out",
+      url: `wss://127.0.0.1:${port}`,
+      certificate,
+      secret: SECRET,
+    };
+    return returned;
+  };
   return { dir, fake, far, handle, connect, peerAt };
 });
 
-/** Opens `/control` on the peer and answers the way it went and the first thing it heard. */
-const reached = (
-  peer: Peer,
-  connection: Effect.Success<typeof rig>["handle"] | null,
-  way?: Way,
-): Effect.Effect<
-  { way: Way; direct: string | null; heard: string },
-  Effect.Error<ReturnType<typeof openPeer>>,
-  Scope.Scope
-> =>
+const reached = (peer: Peer, connection: Effect.Success<typeof rig>["handle"] | null, way?: Way) =>
   Effect.gen(function* () {
     const opened = yield* openPeer(peer, () => "/control", Effect.succeed(connection), way);
     const heard = yield* Effect.callback<string>((resume) =>
@@ -136,22 +126,18 @@ test("a reset port is tried, then the tunnel through an open connection, which e
     }),
   ));
 
-test(
-  "a port that never answers fails direct at its bound, and the tunnel is tried",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { far, fake, handle, connect, peerAt } = yield* rig;
-        const quiet = portOf(yield* silent);
-        yield* connect;
-        yield* fake.maps({ [quiet]: far.port });
-        const opened = yield* Effect.scoped(reached(peerAt(quiet), handle));
-        expect(opened.way).toBe("ssh");
-        expect(opened.direct).toBe(`no answer from wss://127.0.0.1:${quiet} within 5 seconds`);
-      }),
-    ),
-  15_000,
-);
+test("a port that never answers fails direct at its bound, and the tunnel is tried", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { far, fake, handle, connect, peerAt } = yield* rig;
+      const quiet = portOf(yield* silent);
+      yield* connect;
+      yield* fake.maps({ [quiet]: far.port });
+      const opened = yield* Effect.scoped(reached(peerAt(quiet), handle));
+      expect(opened.way).toBe("ssh");
+      expect(opened.direct).toBe(`no answer from wss://127.0.0.1:${quiet} within 5 seconds`);
+    }),
+  ));
 
 test("a blocked port with no connection open waits on one, having only checked for it", () =>
   runEffect(
@@ -168,50 +154,46 @@ test("a blocked port with no connection open waits on one, having only checked f
       expect(yield* fake.calls).toEqual(["mux check mk@vm-mk"]);
 
       const unlisted = yield* Effect.scoped(reached(peerAt(blocked.port), null)).pipe(Effect.flip);
-      expect(unlisted.ssh).toBe("herdr lists no machine vm-mk");
+      expect(unlisted.ssh).toBe("core lists no machine vm-mk");
       expect(unlisted.waits).toBeUndefined();
     }),
   ));
 
-test(
-  "a forward ssh refuses, a tunnel that does not answer, and a tunnel to another certificate are each the SSH way's failure",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const { dir, far, fake, handle, connect, peerAt } = yield* rig;
-        const blocked = yield* resetting;
-        yield* connect;
+test("a forward ssh refuses, a tunnel that does not answer, and a tunnel to another certificate are each the SSH way's failure", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, far, fake, handle, connect, peerAt } = yield* rig;
+      const blocked = yield* resetting;
+      yield* connect;
 
-        const taken = yield* silent;
-        const refusing = { ...handle, forward: () => handle.forward(portOf(taken), far.port) };
-        const refused = yield* Effect.scoped(reached(peerAt(blocked.port), refusing)).pipe(
-          Effect.flip,
-        );
-        expect(refused.ssh).toContain("did not forward");
+      const taken = yield* silent;
+      const refusing = { ...handle, forward: () => handle.forward(portOf(taken), far.port) };
+      const refused = yield* Effect.scoped(reached(peerAt(blocked.port), refusing)).pipe(
+        Effect.flip,
+      );
+      expect(refused.ssh).toContain("did not forward");
 
-        const quiet = portOf(yield* silent);
-        yield* fake.maps({ [blocked.port]: quiet });
-        const unanswered = yield* Effect.scoped(reached(peerAt(blocked.port), handle)).pipe(
-          Effect.flip,
-        );
-        expect(unanswered.ssh).toBe("no answer through the SSH connection within 5 seconds");
+      const quiet = portOf(yield* silent);
+      yield* fake.maps({ [blocked.port]: quiet });
+      const unanswered = yield* Effect.scoped(reached(peerAt(blocked.port), handle)).pipe(
+        Effect.flip,
+      );
+      expect(unanswered.ssh).toBe("no answer through the SSH connection within 5 seconds");
 
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.makeDirectory(`${dir}/other`);
-        const other = yield* listener(`${dir}/other`);
-        yield* fake.maps({ [blocked.port]: far.port });
-        const pinned = yield* Effect.scoped(
-          reached(peerAt(blocked.port, other.certificate), handle),
-        ).pipe(Effect.flip);
-        expect(pinned.ssh).toBe("the SSH connection's tunnel refused the connection");
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(`${dir}/other`);
+      const other = yield* listener(`${dir}/other`);
+      yield* fake.maps({ [blocked.port]: far.port });
+      const pinned = yield* Effect.scoped(
+        reached(peerAt(blocked.port, other.certificate), handle),
+      ).pipe(Effect.flip);
+      expect(pinned.ssh).toBe("the SSH connection's tunnel refused the connection");
 
-        const calls = yield* fake.calls;
-        expect(mux(calls, "forward").length).toBeGreaterThanOrEqual(2);
-        expect(mux(calls, "cancel")).toHaveLength(mux(calls, "forward").length - 1);
-      }),
-    ),
-  15_000,
-);
+      const calls = yield* fake.calls;
+      expect(mux(calls, "forward").length).toBeGreaterThanOrEqual(2);
+      expect(mux(calls, "cancel")).toHaveLength(mux(calls, "forward").length - 1);
+    }),
+  ));
 
 test("a way given is the only way tried", () =>
   runEffect(

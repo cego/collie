@@ -5,6 +5,7 @@ import { Schema } from "effect";
 
 const Mended = Schema.Struct({
   diagnosis: Schema.String,
+  diagnosis_complete: Schema.optionalKey(Schema.Boolean),
   actions: Schema.Array(Schema.String),
   result: Schema.Literals(["resumed", "escalate"]),
   needs_person: Schema.optionalKey(Schema.String),

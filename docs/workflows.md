@@ -110,6 +110,31 @@ work. What was resolved is recorded with its kind, and the build prompt reads bo
 `linear` and `text` the implementer writes the spec and a task list into the run's `plan/`
 before it builds, so every run leaves the same audit trail.
 
+Under the shared setting `inline_plan: on` (default `off`), a Run whose source is anything
+but a plan directory starts with a **Plan** step of its own. The implementer, on the `build`
+agent, writes `SPEC.md` and one ticket per piece into the Run's `plan/`, following a
+planning version of its source's section, and builds nothing. The plan is then read like a plan Run's:
+
+- A plan the plan reading refuses goes back to that step once with the reason, and the Run
+  halts if it is refused again. So does a plan with no ticket, one whose tickets name another
+  repository, or one with a criterion in `SPEC.md`, or a checkbox in a text source, that no
+  ticket carries word for word. The same goes for a review source's finding that is still
+  open and named in no ticket.
+- Each ticket's `**Checks:**` line names the Run's checks, or the names its builder records
+  through `collie verify --name`, or `None`: the gate looks for a pass under each name.
+- One ticket is built in one pass on the same agent.
+- Several tickets are built one at a time, in their `Blocked by` order, as a plan's are, and
+  the merge request names each.
+
+The value is fixed on the Run when it starts. A Run started with it `off`, or before the
+setting existed, builds in one pass as before. A restarted Run builds from the plan it
+recorded and does not plan again.
+
+Under the shared setting `agent_sessions: ticket` (default `run`), each ticket after the
+first is built by an agent of its own, and the merge request by `deliver`; `round` also
+gives each review-fix round a fresh fixer. See
+[Which agent does a Run's work](using.md#which-agent-does-a-runs-work).
+
 `repo` is one repository's share of a plan that spans several, as the tickets' `Repo:`
 line names it, and `change` is one Change of that share, as their `Change:` line names it:
 given them, the build step builds only those tickets and leaves the rest to their own run.
@@ -831,8 +856,15 @@ back to waiting. A merge the forge refuses is read once more at that head: where
 longer ready, as when another merge left it in conflict with its target branch, the claim is
 given back, the Run says why on its log and goes back to waiting. A confirmed target
 conflict returns to repair and proof, then asks a fresh go naming the repaired head.
-The earlier go authorizes neither merging nor tagging that head. Only a refusal while the
-forge still says it is ready fails the Run. The agent then tags by the repository's own conventions, and Collie reads
+The earlier go authorizes neither merging nor tagging that head. A merge the forge answers
+with an error a retry can clear — a server error, a network failure or timeout, a rate
+limit, GitHub's "Base branch was modified", or GitLab's "Branch cannot be merged" — is tried
+again at the same head within the same go, 10 seconds apart, while the merge request still
+reads ready, up to three attempts in all. Where it still cannot merge, or the merge request
+cannot be read, the Run keeps its claim and parks `forge-unavailable`, naming the head and the
+forge's last reason; once the forge answers again it resumes and merges that head, with no new
+go and no new Run. Only a refusal while the forge still says it is ready fails the Run. The
+agent then tags by the repository's own conventions, and Collie reads
 the tag back on origin, carrying the merged commit, with its pipeline finished and
 succeeded by the forge's word: the pipeline the agent named, or the newest the forge shows
 the tag started, and only one the forge shows ran for that tag and its commit in this
@@ -1478,9 +1510,11 @@ panes and transcripts, its checks and pipeline), tells the agent that missed som
 it missed, and resumes the Run. It never does the Run's work. The host refuses everything
 else from it: answering a Decision, lifting a Hold, undoing a Stop, taking an offer, and
 anything on another Run. Its resume applies only while the Run is still at the park the
-Heal was started for and neither it nor a Run under it has a Stop, checked as one change with any Stop. It returns `{ diagnosis, actions, result, needs_person, finding }`,
-where `result` is `resumed` or `escalate`, `needs_person` says why only a person can move
-the Run and is required with `escalate`, and `finding` is required: `collie_defect`, `key`,
+Heal was started for and neither it nor a Run under it has a Stop, checked as one change with any Stop. It returns `{ diagnosis, diagnosis_complete, actions, result, needs_person, finding }`,
+where `result` is `resumed` or `escalate`, `diagnosis_complete` is `false` only where the
+evidence did not establish the cause (the same park then gets another Heal), `needs_person`
+says why only a person can move the Run and is required with `escalate`, and `finding` is
+required: `collie_defect`, `key`,
 `root_cause`, `fix`, `regression`, `title`, `observed`, `expected` and `issue`, stated for
 everyone who runs Collie. Before it starts, its healer is given Collie's open issues on
 github.com/cego/collie, and `issue` names the one, open or closed, about the same cause

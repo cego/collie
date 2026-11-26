@@ -848,6 +848,16 @@ fn card(
                 .max_lines(3)
                 .w_full(),
         );
+    if let Some(line) = super::model::fallback_line(task) {
+        card = card.child(
+            text(line)
+                .key("fallback")
+                .font(k.ty.ui)
+                .color(c.text_faint)
+                .max_lines(1)
+                .w_full(),
+        );
+    }
 
     // Its merge requests, where it has several or another Machine holds one too: each one's
     // line, then its actions on a row of their own that wraps on a narrow card.
@@ -1106,7 +1116,12 @@ fn card(
     }
 
     // Where it is, how old, as of when, its agents; and the one action that ends its wait.
-    let agents = match task.agents.len() {
+    let working = task
+        .agents
+        .iter()
+        .filter(|one| one.status != crate::record::agents::ENDED)
+        .count();
+    let agents = match working {
         0 => None,
         1 => Some("1 agent".to_string()),
         n => Some(format!("{n} agents")),
@@ -1114,7 +1129,10 @@ fn card(
     let foot: Vec<String> = [
         (!p.place.is_empty()).then(|| p.place.clone()),
         Some(task.age.clone()),
-        p.as_of.map(|at| as_of_said(at, app.offset())),
+        // A card the host served from its last projection says when it was derived.
+        p.as_of
+            .or(task.as_of.filter(|_| task.confirmed == Some(false)))
+            .map(|at| as_of_said(at, app.offset())),
         agents,
     ]
     .into_iter()

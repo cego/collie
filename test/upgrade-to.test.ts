@@ -1,6 +1,3 @@
-// Checkouts of Collie. A development checkout is pulled with its work riding through and never
-// moved to a release. Real git, because what counts is git's answer.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -16,7 +13,7 @@ let rig: Rig;
 let origin: string;
 let clone: string;
 
-const git = (cwd: string, ...args: string[]) =>
+const git = (cwd: string, ...args: Array<string>) =>
   exec(["git", ...args], {
     cwd,
     env: {
@@ -77,14 +74,14 @@ test("a clone at the Collie directory is the installation, whatever its state", 
     }),
   ));
 
-// What Collie Desktop's launcher made every child of it write to stderr.
+// WARNING: Collie Desktop's launcher makes every child write these LD_ lines to stderr.
 const LD_SO_NOISE = Arr.map(
   ["./libcef.so", "./libvk_swiftshader.so"],
   (lib) =>
     `ERROR: ld.so: object '${lib}' from LD_PRELOAD cannot be preloaded (cannot open shared object file): ignored.`,
 );
 
-const noisy = (cmd: string, args: string[], cwd: string) =>
+const noisy = (cmd: string, args: Array<string>, cwd: string) =>
   shell(
     "sh",
     ["-c", `printf '%s\\n' "$0" "$1" >&2; shift; exec "$@"`, ...LD_SO_NOISE, cmd, ...args],
@@ -107,7 +104,6 @@ test("a noisy development build is named by its version and commit alone", () =>
 test("a development checkout pulls, and its uncommitted work rides through", () =>
   runEffect(
     Effect.gen(function* () {
-      // A file of the clone's own that the next release does not touch, edited and uncommitted.
       yield* exec(["sh", "-c", "echo shipped > notes.md"], { cwd: origin });
       yield* git(origin, "add", "notes.md");
       yield* git(origin, "commit", "--quiet", "-m", "notes");
@@ -115,7 +111,6 @@ test("a development checkout pulls, and its uncommitted work rides through", () 
       yield* git(clone, "fetch", "--quiet");
       yield* git(clone, "reset", "--quiet", "--hard", "origin/master~1");
       yield* Effect.promise(() => Bun.write(`${clone}/notes.md`, "work in progress\n"));
-      // As many developers pull: a rebase refuses a dirty tree unless the work is stashed.
       yield* git(clone, "config", "pull.rebase", "true");
 
       const pulled = yield* upgrade(development());

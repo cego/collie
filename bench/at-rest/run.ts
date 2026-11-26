@@ -1,21 +1,23 @@
-/* oxlint-disable effecttsgo/async-function, effecttsgo/global-console, effecttsgo/global-console-in-effect, effecttsgo/global-date, effecttsgo/global-date-in-effect, effecttsgo/node-builtin-import, effecttsgo/prefer-effect-array, effecttsgo/prefer-effect-record, effecttsgo/prefer-effect-string, effecttsgo/prefer-schema-over-json, no-restricted-globals, no-restricted-properties -- the benchmark's drivers speak to processes, files and /proc on their own terms, as record-open's do. */
-// Linux /proc counts the host's work separately from this driver and its fake herdr.
+/* oxlint-disable effecttsgo/global-console, effecttsgo/global-console-in-effect, effecttsgo/global-date-in-effect, effecttsgo/node-builtin-import, effecttsgo/prefer-effect-array, effecttsgo/prefer-effect-record, effecttsgo/prefer-effect-string, no-restricted-globals -- the benchmark's drivers speak to processes, files and /proc on their own terms, as record-open's do. */
 
 import { Database } from "bun:sqlite";
 import { cpSync, existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { Deferred, Effect, Fiber, Schedule, Stream } from "effect";
+import { Deferred, Effect, Fiber, Schedule, Stream, Schema } from "effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import type { RunView } from "../../src/engine";
-import { connect, frontDoor, type HostClient, socketOf } from "../../src/host";
+import { connect, frontDoor, socketOf } from "../../src/host";
+import type { HostClient } from "../../src/host";
 import { runEffect } from "../../test/support/effect";
 import { stopHost } from "../../test/support/host";
 import { filledSinceStart, measuring, refusal, userStateDir } from "../record-open/guards";
-import type { Manifest } from "./fixture";
+import type { Manifest } from "./at-rest.fixture";
 import { enterWorld, keptFixture, live, manifestPath, root, socket, userEnv, world } from "./world";
-import { logArrivals, viewMismatches, type ViewCheck } from "./checks";
+import { logArrivals, viewMismatches } from "./checks";
+import type { ViewCheck } from "./checks";
 import { wakeDeadline, writerMarkers } from "./observations";
 import { shiftDates, shiftHistory } from "./history-time";
+import { stringifyJson, parseJson } from "../../src/json";
 
 const WARM = "10 seconds";
 const WINDOW = "60 seconds";
@@ -24,31 +26,37 @@ const WAKE_SECONDS = 4;
 const LATE = {
   listing_ms: 10_000,
   report_ms: 10_000,
-  wake_ms: 3_000,
-  record_ms: 5_000,
+  wake_ms: 3000,
+  record_ms: 5000,
   door_ms: 500,
 };
 const heapFile = `${live}/host-heap.json`;
 const ticksPerSecond = Number(Bun.spawnSync(["getconf", "CLK_TCK"]).stdout.toString());
-if (!Number.isFinite(ticksPerSecond) || ticksPerSecond <= 0) throw new Error("cannot read CLK_TCK");
+if (!Number.isFinite(ticksPerSecond) || ticksPerSecond <= 0) {
+  throw new Error("cannot read CLK_TCK");
+}
 const tickMs = 1000 / ticksPerSecond;
 
 const say = (line: string) => Effect.sync(() => console.error(line));
 
 const threadsCpu = (pid: number) => {
   const cpu = { main: 0, worker: 0, other: 0 };
-  for (const tid of readdirSync(`/proc/${pid}/task`))
+  for (const tid of readdirSync(`/proc/${pid}/task`)) {
     try {
       const stat = readFileSync(`/proc/${pid}/task/${tid}/stat`, "utf8");
       const f = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
       const ms = (Number(f[11]) + Number(f[12])) * tickMs;
       const comm = readFileSync(`/proc/${pid}/task/${tid}/comm`, "utf8").trim();
-      if (tid === String(pid)) cpu.main += ms;
-      else if (comm === "Worker") cpu.worker += ms;
-      else cpu.other += ms;
-    } catch {
-      // A thread that ended takes its share with it; the process total below keeps it.
-    }
+      if (tid === String(pid)) {
+        cpu.main += ms;
+      } else if (comm === "Worker") {
+        cpu.worker += ms;
+      } else {
+        cpu.other += ms;
+      }
+    } catch {}
+  }
+  // WARNING: a thread that ended takes its share with it; the process total below keeps it.
   return cpu;
 };
 const usage = (pid: number) => {
@@ -65,9 +73,8 @@ const usage = (pid: number) => {
   );
   const threads = threadsCpu(pid);
   return {
-    // utime and stime are fields 14-15, cutime and cstime 16-17, minflt and cminflt 10-11.
+    // WARNING: /proc stat fields: utime and stime are 14-15, cutime and cstime 16-17, minflt and cminflt 10-11.
     cpu_ms: (Number(f[11]) + Number(f[12])) * tickMs,
-    // Mostly the fake herdr and git it spawns: a Bun script here, a native binary in use.
     children_cpu_ms: (Number(f[13]) + Number(f[14])) * tickMs,
     main_cpu_ms: threads.main,
     worker_cpu_ms: threads.worker,
@@ -90,10 +97,15 @@ const hostHeap = (pid: number) =>
     rmSync(heapFile, { force: true });
     process.kill(pid, "SIGUSR2");
     for (let waited = 0; !existsSync(heapFile); waited += 100) {
-      if (waited > 30_000) return yield* Effect.die(new Error("the host wrote no heap reading"));
+      if (waited > 30_000) {
+        return yield* Effect.die(new Error("the host wrote no heap reading"));
+      }
       yield* Effect.sleep("100 millis");
     }
-    const read: { heap_kb: number; objects: number } = JSON.parse(readFileSync(heapFile, "utf8"));
+    const read: { heap_kb: number; objects: number } = parseJson(
+      Schema.Unknown,
+      readFileSync(heapFile, "utf8"),
+    );
     return { host_heap_kb: read.heap_kb, host_heap_objects: read.objects };
   });
 
@@ -103,20 +115,14 @@ const nearest = (samples: ReadonlyArray<number>, q: number) =>
 const hostPid = () => {
   const log = readFileSync(`${world.state}/host.log`, "utf8");
   const found = [...log.matchAll(/host started, pid (\d+)/g)].at(-1);
-  if (found === undefined) throw new Error("the host logged no pid");
+  if (found === undefined) {
+    throw new Error("the host logged no pid");
+  }
   return Number(found[1]);
 };
 
-const herdrCalls = () => {
-  try {
-    return readFileSync(Bun.env.FAKE_HERDR_LOG!, "utf8").split("\n").length - 1;
-  } catch {
-    return 0;
-  }
-};
-
 const mismatchesOf = (views: ReadonlyArray<RunView>, manifest: Manifest) => {
-  const expected: ViewCheck[] = [
+  const expected: Array<ViewCheck> = [
     ...manifest.settled.map((runId) => ({
       runId,
       status: "complete",
@@ -155,7 +161,7 @@ const mismatchesOf = (views: ReadonlyArray<RunView>, manifest: Manifest) => {
   );
 };
 
-const doorProbe = (into: number[], errors: string[]) =>
+const doorProbe = (into: Array<number>, errors: Array<string>) =>
   Effect.scoped(
     Effect.gen(function* () {
       const client = yield* connect(world.state);
@@ -173,7 +179,7 @@ interface RecordFrame {
   text: string;
   added: number | null;
 }
-const holdRecord = (runId: string, into: RecordFrame[], errors: string[]) =>
+const holdRecord = (runId: string, into: Array<RecordFrame>, errors: Array<string>) =>
   Effect.gen(function* () {
     const door = yield* frontDoor(socketOf(world.state));
     const ready = yield* Deferred.make<void>();
@@ -183,13 +189,17 @@ const holdRecord = (runId: string, into: RecordFrame[], errors: string[]) =>
         door.runDetail({ runId, tail: true, pages: 1, refreshMr: false, parts: true }),
         (frame) =>
           Effect.gen(function* () {
-            if (frame === null || "_tag" in frame) return;
+            if (frame === null || "_tag" in frame) {
+              return;
+            }
             into.push({
               at: Date.now(),
               text: frame.tail?._tag === "Text" ? frame.tail.text : "",
               added: frame.diff?.files.find((file) => file.path === "sample.ts")?.added ?? null,
             });
-            if (frame.pending?.length === 0) yield* Deferred.succeed(ready, undefined);
+            if (frame.pending?.length === 0) {
+              yield* Deferred.succeed(ready, undefined);
+            }
           }),
       ).pipe(Effect.catchCause((cause) => Effect.sync(() => void errors.push(String(cause))))),
     );
@@ -200,7 +210,7 @@ const holdRecord = (runId: string, into: RecordFrame[], errors: string[]) =>
 const sample = (manifest: Manifest) =>
   Effect.gen(function* () {
     const numbers: Record<string, number> = {};
-    const errors: string[] = [];
+    const errors: Array<string> = [];
     const before = performance.now();
     const client = yield* connect(world.state);
     yield* Effect.sync(() => {
@@ -219,8 +229,9 @@ const sample = (manifest: Manifest) =>
         /the Run model holds \d+ Runs, filled in (\d+) ms/g,
       ),
     ].at(-1);
-    if (built === undefined)
+    if (built === undefined) {
       return yield* Effect.die(new Error("the first board build has no timing"));
+    }
     numbers.board_build_ms = Number(built[1]);
     const host = hostPid();
 
@@ -232,13 +243,15 @@ const sample = (manifest: Manifest) =>
       Stream.runForEach(door.board(), (frame) =>
         Effect.gen(function* () {
           boardFrames++;
-          if (frame._tag === "Snapshot") yield* Deferred.succeed(boardReady, undefined);
+          if (frame._tag === "Snapshot") {
+            yield* Deferred.succeed(boardReady, undefined);
+          }
         }),
       ).pipe(Effect.catchCause((cause) => Effect.sync(() => void errors.push(String(cause))))),
     );
     yield* Deferred.await(boardReady).pipe(Effect.timeout("3 minutes"));
     numbers.board_ready_ms = Math.round(performance.now() - boardBegan);
-    const settledFrames: RecordFrame[] = [];
+    const settledFrames: Array<RecordFrame> = [];
     numbers.record_open_ms = yield* holdRecord(manifest.settled[0]!, settledFrames, errors);
     yield* Effect.forkScoped(
       Stream.runDrain(client.watch({ runId: manifest.asking[0]! })).pipe(
@@ -252,21 +265,21 @@ const sample = (manifest: Manifest) =>
     const idle = {
       board: boardFrames,
       record: settledFrames.length,
-      herdr: herdrCalls(),
       at: usage(host),
     };
     yield* Effect.sleep(WINDOW);
     const idleUsed = delta(usage(host), idle.at);
     numbers.idle_elapsed_ms = Math.round(performance.now() - idleBegan);
-    for (const [key, value] of Object.entries(idleUsed)) numbers[`host_idle_${key}`] = value;
+    for (const [key, value] of Object.entries(idleUsed)) {
+      numbers[`host_idle_${key}`] = value;
+    }
     numbers.host_idle_board_frames = boardFrames - idle.board;
     numbers.host_idle_record_frames = settledFrames.length - idle.record;
-    numbers.host_idle_herdr_calls = herdrCalls() - idle.herdr;
     numbers.machine_idle_load1 = load1();
     numbers.host_rss_kb = statusKb(host, "VmRSS");
     Object.assign(numbers, yield* hostHeap(host));
 
-    const listed: number[] = [];
+    const listed: Array<number> = [];
     let views: ReadonlyArray<RunView> = [];
     for (let at = 0; at < LISTINGS; at++) {
       const began = performance.now();
@@ -279,14 +292,17 @@ const sample = (manifest: Manifest) =>
     numbers.listings_slow = listed.filter((ms) => ms > LATE.listing_ms).length;
     const wrong = mismatchesOf(views, manifest);
     numbers.mismatches = wrong.length;
-    for (const one of wrong.slice(0, 5)) yield* say(`mismatch: ${one}`);
+    for (const one of wrong.slice(0, 5)) {
+      yield* say(`mismatch: ${one}`);
+    }
 
-    const readTimes: number[] = [];
+    const readTimes: Array<number> = [];
     for (let at = 0; at < 10; at++) {
       const began = performance.now();
       const read = yield* client.read({ tool: "collie_run", input: { run: manifest.settled[0]! } });
-      if (!JSON.stringify(read).includes(manifest.settled[0]!))
+      if (!stringifyJson(read).includes(manifest.settled[0]!)) {
         errors.push("agent read lost the requested Run");
+      }
       readTimes.push(performance.now() - began);
     }
     numbers.agent_read_p95_ms = Math.round(nearest(readTimes, 0.95));
@@ -301,8 +317,11 @@ const sample = (manifest: Manifest) =>
       })
       .pipe(Stream.runCollect);
     numbers.verify_ms = Math.round(performance.now() - verifyBegan);
-    if (!verified.some((event) => event._tag === "Result" && event.verification.result === "pass"))
+    if (
+      !verified.some((event) => event._tag === "Result" && event.verification.result === "pass")
+    ) {
       errors.push("verification did not pass");
+    }
     const answerBegan = performance.now();
     yield* client.answer({
       runId: manifest.asking[1]!,
@@ -321,17 +340,23 @@ const sample = (manifest: Manifest) =>
 
     yield* say(`active for ${WINDOW}: a Run writing with its record open, a report owed, wakes`);
     const active = yield* activeWindow(client, host, errors);
-    for (const [key, value] of Object.entries(active)) numbers[key] = value;
+    for (const [key, value] of Object.entries(active)) {
+      numbers[key] = value;
+    }
     numbers.host_cpu_ms = numbers.host_idle_cpu_ms! + numbers.host_active_cpu_ms!;
     numbers.host_read_syscalls =
       numbers.host_idle_read_syscalls! + numbers.host_active_read_syscalls!;
     numbers.host_hwm_kb = statusKb(host, "VmHWM");
     numbers.stream_errors = errors.length;
-    for (const error of errors) yield* say(error);
-    yield* say(`sample diagnostics: ${JSON.stringify(numbers)}`);
-    for (const [name, value] of Object.entries(numbers))
-      if (!Number.isFinite(value) || value < 0)
+    for (const error of errors) {
+      yield* say(error);
+    }
+    yield* say(`sample diagnostics: ${stringifyJson(numbers)}`);
+    for (const [name, value] of Object.entries(numbers)) {
+      if (!Number.isFinite(value) || value < 0) {
         return yield* Effect.die(new Error(`invalid metric ${name}`));
+      }
+    }
     for (const name of [
       "mismatches",
       "stream_errors",
@@ -339,12 +364,15 @@ const sample = (manifest: Manifest) =>
       "active_diff_missing",
       "record_missing",
       "wakes_missing",
-    ])
-      if (numbers[name] !== 0) return yield* Effect.die(new Error(`${name}: ${numbers[name]}`));
+    ]) {
+      if (numbers[name] !== 0) {
+        return yield* Effect.die(new Error(`${name}: ${numbers[name]}`));
+      }
+    }
     return numbers;
   });
 
-const activeWindow = (client: HostClient, host: number, errors: string[]) =>
+const activeWindow = (client: HostClient, host: number, errors: Array<string>) =>
   Effect.gen(function* () {
     const random = yield* SecureRandom.SecureRandom;
     const start = (
@@ -355,13 +383,13 @@ const activeWindow = (client: HostClient, host: number, errors: string[]) =>
       Effect.flatMap(random.uuidV4(), (request) =>
         client.start({ project: world.project, id, request, input, options }),
       ).pipe(Effect.map(({ runId }) => runId));
-    const doorLag: number[] = [];
+    const doorLag: Array<number> = [];
     const probe = yield* Effect.forkScoped(doorProbe(doorLag, errors));
     const from = usage(host);
     const began = performance.now();
 
     const writing = yield* start("bench-active", {}, { workspace: world.project, branch: "bench" });
-    const frames: RecordFrame[] = [];
+    const frames: Array<RecordFrame> = [];
     const activeOpen = yield* holdRecord(writing, frames, errors);
 
     const reportStarted = performance.now();
@@ -373,8 +401,9 @@ const activeWindow = (client: HostClient, host: number, errors: string[]) =>
           schedule: Schedule.spaced("250 millis"),
         }),
         Effect.map((view) => {
-          if (view?.status.status !== "complete" || view.report?.state !== "undelivered")
+          if (view?.status.status !== "complete" || view.report?.state !== "undelivered") {
             errors.push("report changed the outcome or delivery state");
+          }
           return performance.now() - reportStarted;
         }),
         Effect.timeout("60 seconds"),
@@ -389,7 +418,9 @@ const activeWindow = (client: HostClient, host: number, errors: string[]) =>
         yield* Effect.forkScoped(
           Stream.runForEachWhile(client.watch({ runId: run }), (view) =>
             Effect.sync(() => {
-              if (view?.status.status !== "complete") return true;
+              if (view?.status.status !== "complete") {
+                return true;
+              }
               woke.set(run, Date.now());
               return false;
             }),
@@ -415,7 +446,7 @@ const activeWindow = (client: HostClient, host: number, errors: string[]) =>
     const reportMs = yield* Fiber.join(reportFiber);
     yield* Effect.sleep(LATE.record_ms);
     const db = new Database(`${world.state}/host.db`, { readonly: true });
-    let wakeLag: number[];
+    let wakeLag: Array<number>;
     try {
       wakeLag = wakers.map((run) => {
         const seen = woke.get(run);
@@ -466,7 +497,7 @@ if (!existsSync(manifestPath)) {
   console.error(`no fixture at ${keptFixture}: run bench/at-rest/prepare.ts first`);
   process.exit(2);
 }
-const manifest: Manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+const manifest: Manifest = parseJson(Schema.Unknown, readFileSync(manifestPath, "utf8"));
 const numbers = await runEffect(
   measuring(
     `${userStateDir(homedir(), userEnv)}/measurements/machine.lock`,
@@ -474,18 +505,22 @@ const numbers = await runEffect(
     Effect.gen(function* () {
       rmSync(live, { recursive: true, force: true });
       cpSync(keptFixture, live, { recursive: true });
-      const source: { created: string } = JSON.parse(
+      const source: { created: string } = parseJson(
+        Schema.Unknown,
         readFileSync(`${root}bench/at-rest/history.json`, "utf8"),
       );
       const shift = Date.now() - 12 * 60 * 60 * 1000 - Date.parse(source.created);
       shiftHistory(live, shift);
-      const history: Manifest = JSON.parse(shiftDates(JSON.stringify(manifest), shift));
+      const history: Manifest = parseJson(
+        Schema.Unknown,
+        shiftDates(stringifyJson(manifest), shift),
+      );
       cpSync(
         `${root}bench/at-rest/workflows/bench-active.workflow.ts`,
         `${world.user}/bench-active.workflow.ts`,
       );
       yield* enterWorld;
-      Bun.env.COLLIE_HOST = JSON.stringify([
+      Bun.env.COLLIE_HOST = stringifyJson([
         process.execPath,
         "--preload",
         `${root}bench/at-rest/heap-preload.ts`,
@@ -501,5 +536,5 @@ const numbers = await runEffect(
     }).pipe(Effect.timeout("10 minutes"), Effect.scoped, Effect.orDie),
   ),
 );
-console.error(JSON.stringify(numbers, null, 2));
-console.log(JSON.stringify(numbers));
+console.error(stringifyJson(numbers, 2));
+console.log(stringifyJson(numbers));

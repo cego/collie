@@ -228,3 +228,23 @@ commented, because only Improvements of newly filed findings start.
   starts its restarts, without triage.
 - **Not restarted:** an Improvement that started and then failed. It is its own card,
   waiting on a person, as before.
+
+## Amended 2026-11-18: work already fixed or under way is not filed again, and a fix's effect is counted
+
+Matching only open issues refiled a finding whose fix had merged but not yet been released,
+and one a Run or merge request was already fixing.
+
+- **Fixed, not released:** the forge's issue listing reads the issues closed since the
+  checkout's newest tag, by creator date. A finding whose key marker is on one is left out,
+  "fixed on master since <tag>, not yet released", and nothing is commented. Runs record no
+  build, and the window's Runs ran a release that cannot hold the fix, so their showing it
+  again is no evidence the fix failed.
+- **Under way:** a finding is left out, "being fixed by <run or url>", where an active Run of
+  the last seven days names its key as a word or its issue as `#n` in its goal or plan, or an
+  open merge request's description carries its key marker.
+- **A released fix's effect:** where a finding's key is on an issue closed before a release
+  made inside the window, the Run comments on that closed issue, and lists in `summary.md`,
+  the finding's Runs out of the window's Runs before that release and after it. That is
+  whether the fix reduced the failure.
+- **Cost:** `collie run metrics` adds every child Run's tokens, Improvements and the Runs they
+  started, to the Run's own, and lists each.

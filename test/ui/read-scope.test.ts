@@ -1,15 +1,15 @@
-// A Task board reads the host's Task board. The older workspace lists are not another
-// source of truth to rebuild whenever a Task changes.
-
+// WARNING: the Task board is the host's; the older workspace lists are not a second source of truth.
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import * as Arr from "effect/Array";
 import { Effect } from "effect";
-import { appState, type ControlSession } from "../../src/flows";
+import { appState } from "../../src/flows";
+import type { ControlSession } from "../../src/flows";
 import { Herdr } from "../../src/herdr";
 import { scopeFor } from "../../src/registry";
 import type { RunFacts } from "../../src/runs";
 import type { RunDetail } from "../../src/board-model";
-import { appendCard, type Card } from "../../src/cards";
+import { appendCard } from "../../src/cards";
+import type { Card } from "../../src/cards";
 import type { ProposalLine, ProposalRecord } from "../../src/proposals";
 import type { DetailKey } from "../../src/lifecycle";
 import { Rig } from "../support/recorder";
@@ -34,7 +34,7 @@ afterEach(() => runEffect(rig.close()));
 
 function readers(runs: ReadonlyArray<RunFacts> = [], lines: ReadonlyArray<ProposalLine> = []) {
   const env = rig.pluginEnv();
-  const reads = { runs: 0, records: 0, agents: 0, workspaces: 0, tasks: 0, usage: 0 };
+  const reads = { runs: 0, records: 0, agents: 0, tasks: 0, usage: 0 };
   const details: Array<DetailKey | null> = [];
   let tasks = [task()];
   let detail: RunDetail | null = null;
@@ -44,14 +44,9 @@ function readers(runs: ReadonlyArray<RunFacts> = [], lines: ReadonlyArray<Propos
       reads.agents++;
       return [];
     });
-  herdr.workspaceList = () =>
-    Effect.sync(() => {
-      reads.workspaces++;
-      return [];
-    });
   const session: ControlSession = {
     herdr,
-    ...scopeFor(env, env.cwd),
+    ...scopeFor(env.cwd),
     stateDir: env.stateDir,
     userDir: env.userDir,
     pluginRoot: env.pluginRoot,
@@ -110,15 +105,19 @@ test("Task, Settings and Workflows refreshes do not rebuild the workspace lists"
         r.setTasks([task({ name: "The host's latest name" })]);
         const next = yield* r.app.load({ ...at, nonce: 1 });
         expect(next.tasks[0]?.name).toBe("The host's latest name");
-        if (view === "runs")
+        if (view === "runs") {
           expect(Arr.map(next.live?.proposals ?? [], (one) => one.id)).toEqual(["herd"]);
-        if (view === "settings") expect(next.settings).not.toBeNull();
-        if (view === "workflows") expect(next.definitions).not.toBeNull();
+        }
+        if (view === "settings") {
+          expect(next.settings).not.toBeNull();
+        }
+        if (view === "workflows") {
+          expect(next.definitions).not.toBeNull();
+        }
         expect(r.reads).toEqual({
           runs: 0,
           records: 0,
           agents: 0,
-          workspaces: 0,
           tasks: 2,
           usage: 2,
         });
@@ -157,11 +156,14 @@ test("History alone reads the full Run list, and later reads include newly finis
       const refreshed = yield* r.app.load({ ...at, nonce: 1 });
       expect(Arr.map(refreshed.history ?? [], (row) => row.id)).toEqual(["new", "old"]);
       expect(r.reads.runs).toBe(2);
-      expect([r.reads.records, r.reads.agents, r.reads.workspaces]).toEqual([0, 0, 0]);
+      expect([r.reads.records, r.reads.agents]).toEqual([0, 0]);
     }),
   ));
 
-const proposal = (id: string, targets: ProposalRecord["targets"]): ProposalRecord => ({
+const proposal: (id: string, targets: ProposalRecord["targets"]) => ProposalRecord = (
+  id,
+  targets,
+) => ({
   kind: "proposal",
   id,
   content_hash: id,
@@ -215,8 +217,6 @@ test("opening one Run reads its own live evidence and keeps Herd proposals witho
       expect(state.live?.run).toBe(run.id);
       expect(Arr.map(state.live?.cards ?? [], (one) => one.id)).toEqual([card.id]);
       expect(Arr.map(state.live?.proposals ?? [], (one) => one.id)).toEqual(["own", "herd"]);
-      expect([r.reads.runs, r.reads.records, r.reads.agents, r.reads.workspaces]).toEqual([
-        0, 0, 0, 0,
-      ]);
+      expect([r.reads.runs, r.reads.records, r.reads.agents]).toEqual([0, 0, 0]);
     }),
   ));

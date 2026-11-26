@@ -14,8 +14,7 @@ import type {
 } from "../../../src/board-model";
 import type { DesktopAction } from "./flock";
 
-/** A hold or a note with the record revision it was pressed at, which the host checks it against. */
-export const shownAt = (action: DesktopAction, revision: RunRevision | undefined): DesktopAction =>
+export const shownAt = (action: DesktopAction, revision: RunRevision | undefined) =>
   revision !== undefined && (action._tag === "Control" || action._tag === "Deliver")
     ? { ...action, shown: revision }
     : action;
@@ -61,14 +60,16 @@ const shown = (
   effect: FlowEffect,
   color: FlowActionView["color"] = "neutral",
   caption?: string,
-): FlowActionView => ({ label, icon, effect, color, caption });
+) => ({ label, icon, effect, color, caption });
 
-export const retryCaption = (lane: FlowLane, node: FlowRun): string => {
+export const retryCaption = (lane: FlowLane, node: FlowRun) => {
   const kept = Arr.map(
     Arr.filter(lane.nodes, (one) => one.state === "done" && one.id !== node.id),
     (one) => one.title,
   );
-  if (kept.length === 0) return `Runs ${node.title} again.`;
+  if (kept.length === 0) {
+    return `Runs ${node.title} again.`;
+  }
   const names =
     kept.length > 3 ? `${kept[0]} and ${kept.length - 1} more` : Arr.join(kept, " and ");
   return `Keeps ${names} and runs ${node.title} again.`;
@@ -80,8 +81,10 @@ export const desktopFlowAction = (
   lane: FlowLane,
   installation: string,
   live: boolean,
-): FlowActionView | null => {
-  if (!live || (node.primary !== kind && !node.actions?.includes(kind))) return null;
+) => {
+  if (!live || (node.primary !== kind && !node.actions?.includes(kind))) {
+    return null;
+  }
   const runId = lane.run;
   const stepId =
     Option.getOrUndefined(
@@ -176,7 +179,9 @@ export const desktopFlowAction = (
           (one) => one.id !== undefined && (one.open ?? one.answered === null),
         ),
       );
-      if (asked?.id === undefined) return null;
+      if (asked?.id === undefined) {
+        return null;
+      }
       const question: Question = {
         kind: "question",
         run: runId,
@@ -216,12 +221,13 @@ export const desktopFlowAction = (
           );
     }
     case "open": {
-      if (node.link?.run != null)
+      if (node.link?.run != null) {
         return shown(`Open ${node.title}`, "i-lucide-arrow-up-right", {
           kind: "run",
           run: node.link.run,
           machine: node.link.machine,
         });
+      }
       return node.url === undefined
         ? null
         : shown(node.id === "ci" ? "Open pipeline" : "Open MR", "i-lucide-external-link", {
@@ -243,8 +249,10 @@ export const desktopLaneAction = (
   lane: FlowLane,
   installation: string,
   live: boolean,
-): FlowActionView | null => {
-  if (!live || !lane.actions?.includes(kind)) return null;
+) => {
+  if (!live || !lane.actions?.includes(kind)) {
+    return null;
+  }
   const runId = lane.run;
   switch (kind) {
     case "hold":
@@ -281,7 +289,9 @@ export const desktopLaneAction = (
 };
 
 export const nextMove = (flow: Flow) => {
-  if (flow.current === null) return null;
+  if (flow.current === null) {
+    return null;
+  }
   const lane = Option.getOrUndefined(
     Arr.findFirst(flow.lanes, (one) => one.run === flow.current!.run),
   );

@@ -1,6 +1,3 @@
-// pi's question tool, which Collie's per-launch extension registers: loaded as pi loads it,
-// called as pi calls it, and handing its questions to the real `collie` helper.
-
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
@@ -37,7 +34,6 @@ const TWO = [
   },
 ];
 
-/** A Run agent's extension, written into `state`, with its question tool handing to `agent`'s control directory. */
 const agentTools = Effect.fn("test.agentTools")(function* (state: string, agent: string) {
   const fs = yield* FileSystem.FileSystem;
   const control = yield* controlDir(state, agent);
@@ -49,45 +45,37 @@ const agentTools = Effect.fn("test.agentTools")(function* (state: string, agent:
   return { control, tools: yield* piTools(file) };
 });
 
-test(
-  "pi's question tool hands both questions to the live host and tells the agent to end its turn",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const state = yield* fs.makeTempDirectoryScoped({ prefix: "collie-pi-question-" });
-        yield* fs.writeFileString(hostLockOf(state), `{"pid":${process.pid},"start":null}`);
-        const { control, tools } = yield* agentTools(state, "builder");
-        const told = yield* askWith(tools, "call_1", TWO, "pi-session-1");
+test("pi's question tool hands both questions to the live host and tells the agent to end its turn", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const state = yield* fs.makeTempDirectoryScoped({ prefix: "collie-pi-question-" });
+      yield* fs.writeFileString(hostLockOf(state), `{"pid":${process.pid},"start":null}`);
+      const { control, tools } = yield* agentTools(state, "builder");
+      const told = yield* askWith(tools, "call_1", TWO, "pi-session-1");
 
-        expect(yield* questionsSince(control, 0)).toEqual([
-          { at: expect.any(Number), session: "pi-session-1", id: "call_1", questions: TWO },
-        ]);
-        expect(told).toContain("on your Run");
-        expect(told).toContain("End your turn now");
-        expect(told).toContain("your next message");
-      }),
-    ),
-  30_000,
-);
+      expect(yield* questionsSince(control, 0)).toEqual([
+        { at: expect.any(Number), session: "pi-session-1", id: "call_1", questions: TWO },
+      ]);
+      expect(told).toContain("on your Run");
+      expect(told).toContain("End your turn now");
+      expect(told).toContain("your next message");
+    }),
+  ));
 
-test(
-  "with no live host, pi's question tool puts nothing on a Run and tells the agent to ask in its pane",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const state = yield* fs.makeTempDirectoryScoped({ prefix: "collie-pi-question-" });
-        const { control, tools } = yield* agentTools(state, "builder");
-        const told = yield* askWith(tools, "call_1", TWO, "pi-session-1");
+test("with no live host, pi's question tool puts nothing on a Run and tells the agent to ask in its pane", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const state = yield* fs.makeTempDirectoryScoped({ prefix: "collie-pi-question-" });
+      const { control, tools } = yield* agentTools(state, "builder");
+      const told = yield* askWith(tools, "call_1", TWO, "pi-session-1");
 
-        expect(yield* questionsSince(control, 0)).toEqual([]);
-        expect(told).not.toContain("End your turn");
-        expect(told).toContain("in your pane");
-      }),
-    ),
-  30_000,
-);
+      expect(yield* questionsSince(control, 0)).toEqual([]);
+      expect(told).not.toContain("End your turn");
+      expect(told).toContain("in your pane");
+    }),
+  ));
 
 test("chat's pi is given Collie's tools but no question tool: the human is already in its pane", () =>
   runEffect(
@@ -100,7 +88,7 @@ test("chat's pi is given Collie's tools but no question tool: the human is alrea
         userDir: dir,
         home: dir,
         self: SELF,
-        serverEnv: { HERDR_PLUGIN_STATE_DIR: dir },
+        serverEnv: { COLLIE_STATE_DIR: dir },
         news: `${dir}/news.jsonl`,
         tools: Arr.map(TOOLS, (tool) => ({
           name: tool.name,

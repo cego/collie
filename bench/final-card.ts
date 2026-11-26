@@ -1,4 +1,3 @@
-// A multi-megabyte card journal whose last final card supplies one timestamp.
 import { strict as assert } from "node:assert";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";

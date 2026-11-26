@@ -1,26 +1,25 @@
 import * as Cause from "effect/Cause";
-// Two Machines on one computer, as a pairing test needs them: two installations, each with
-// its state directory, its own fake herdr and its own `collie`, and the fake `ssh` on the
-// first's PATH, whose sessions run as a login on the second would and whose forwards reach
-// the second's loopback. Nothing above the
-// sockets is faked: both hosts are the shipped `collie host`, started by the CLI as an
-// installation's are, and the link between them is the real listener on 127.0.0.1.
 
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import solidPlugin from "@opentui/solid/bun-plugin";
+import manifest from "../../package.json";
 import type { PlatformServices } from "../../src/platform";
-import { Config, Effect, FileSystem, Schema, type Scope, flow, Result } from "effect";
+import { Config, Effect, FileSystem, Schema, flow, Result } from "effect";
+import type { Scope } from "effect";
 import { exec } from "./command";
 import { suiteEnv } from "./effect";
-import { writeFakeHerdrShim } from "./fake-herdr-core";
-import { type FakeHc, serveFakeHc } from "./fake-hc";
-import { type FakeSsh, writeFakeSsh, socketDir } from "./fake-ssh";
+import { armTripwire, untripped } from "./herdr-tripwire";
+import { serveFakeHc } from "./fake-hc";
+import type { FakeHc } from "./fake-hc";
+import { writeFakeSsh, socketDir } from "./fake-ssh";
+import type { FakeSsh } from "./fake-ssh";
 import { fixtures, root, stopHost } from "./host";
 import { peersOf } from "../../src/peers";
-import { collie, collieCommand, type World } from "./world";
+import { collie, collieCommand } from "./world";
+import type { World } from "./world";
 
 const asCommand = flow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Array(Schema.String))),
@@ -28,66 +27,42 @@ const asCommand = flow(
 );
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 
-/** One Machine of the pair. */
 export interface Side {
   readonly name: string;
   readonly world: World;
-  /** Everything a process of this Machine is started with. */
   readonly env: Readonly<Record<string, string>>;
-  /** Every call its fake herdr answered. */
-  readonly herdrLog: string;
-  /** Every command its fake `ssh` was asked to run. */
   readonly sshLog: string;
-  /** The first's fake `ssh`, which reaches the second Machine. */
   readonly ssh: FakeSsh;
-  /** `collie --json …` on this Machine, as an operator types it there. */
   readonly cli: (
     args: ReadonlyArray<string>,
     extra?: Readonly<Record<string, string>>,
   ) => ReturnType<typeof collie>;
-  /** Says which of herdr's machines this Machine's herdr lists. */
   readonly lists: (machines: ReadonlyArray<Side>) => Effect.Effect<void>;
-  /** The first's core, where the test set it to `core`; its calls are logged to `coreLog`. */
-  readonly core: FakeHc | undefined;
+  readonly core: FakeHc;
   readonly coreLog: string;
 }
 
-/** The port `listener`'s host answered `dialler`'s invitation with. */
 export const listenerPort = (dialler: Side, listener: Side) =>
   Effect.gen(function* () {
     const paired = Option.getOrUndefined(
       Arr.findFirst(yield* peersOf(dialler.world.state), (peer) => peer.name === listener.name),
     );
-    if (paired?.url === undefined)
+    if (paired?.url === undefined) {
       return yield* Effect.die(new Error(`${dialler.name} has no url for ${listener.name}`));
+    }
     return new URL(paired.url).port;
   });
 
-const machineOf = (side: Side) => ({
-  id: side.name,
-  label: side.name,
-  target: `mk@${side.name}`,
-  session: "default",
-  enabled: true,
-});
-
-/**
- * Two Machines named `first` and `second`, with `modules` saved in each. The first's
- * `ssh` reaches the second; neither lists the other in herdr until a test says so.
- */
 export const twoMachines = <A, E>(
   prefix: string,
   body: (first: Side, second: Side) => Effect.Effect<A, E, PlatformServices | Scope.Scope>,
   modules: ReadonlyArray<string>,
   options: {
-    /** Each Machine's `COLLIE_PEER_PORT`, by name; 0, where its listener binds what is free. */
     readonly ports?: Readonly<Record<string, number>>;
-    /** Runs before any host starts, with the `COLLIE_PEER_PORT` each Machine was given. */
+    readonly env?: Readonly<Record<string, string>>;
     readonly before?: (
       ports: Readonly<Record<string, string>>,
     ) => Effect.Effect<void, never, PlatformServices | Scope.Scope>;
-    /** Sets the first Machine's terminal backend to `core`, served by a fake core. */
-    readonly core?: boolean;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -106,30 +81,32 @@ export const twoMachines = <A, E>(
           project: `${dir}/project`,
         };
         yield* Effect.addFinalizer(() => Effect.ignore(stopHost(world.state)));
-        for (const made of [world.user, `${world.install}/workflows`, world.state, world.home])
+        for (const made of [world.user, `${world.install}/workflows`, world.state, world.home]) {
           yield* fs.makeDirectory(made, { recursive: true });
+        }
         yield* fs.makeDirectory(world.project, { recursive: true });
         yield* exec(["git", "init", "-q"], { cwd: world.project });
-        for (const module of modules)
+        for (const module of modules) {
           yield* fs.copyFile(`${fixtures}/${module}`, `${world.user}/${module}`);
+        }
         const bin = `${dir}/bin`;
         yield* fs.makeDirectory(bin);
         const shell = `${bin}/login-shell`;
-        // A fake Machine has its own login environment, without this computer's profiles.
         yield* fs.writeFileString(
           shell,
           '#!/bin/sh\ncase "$1" in -lc|-ilc|-c) shift;; *) exit 64;; esac\nexec /bin/sh -c "$@"\n',
           { mode: 0o755 },
         );
-        const herdr = `${bin}/herdr`;
-        yield* writeFakeHerdrShim(herdr);
+        const tripwire = yield* armTripwire(dir);
+        yield* Effect.addFinalizer(() => untripped(tripwire).pipe(Effect.ensuring(tripwire.stop)));
         yield* fs.writeFileString(
           `${bin}/claude`,
           `#!/bin/sh\n[ "$1" = --help ] && echo "  --autocompact <auto|tokens>" && exit 0\nexit 1\n`,
           { mode: 0o755 },
         );
-        for (const harness of ["codex", "pi", "opencode"])
+        for (const harness of ["codex", "pi", "opencode"]) {
           yield* fs.writeFileString(`${bin}/${harness}`, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+        }
         yield* fs.writeFileString(
           `${bin}/collie`,
           `#!/bin/sh\nexec ${Arr.join(
@@ -138,52 +115,48 @@ export const twoMachines = <A, E>(
           )} "$@"\n`,
           { mode: 0o755 },
         );
-        const herdrLog = `${dir}/herdr-calls.jsonl`;
         const coreLog = `${dir}/core-calls.jsonl`;
-        const onCore = options.core === true && name === "first";
-        if (onCore)
-          yield* fs.writeFileString(
-            `${world.config}/config.json`,
-            `{ "terminal_backend": "core" }`,
-          );
         const env = {
-          PATH: `${bin}:/usr/bin:/bin`,
+          PATH: `${bin}:${tripwire.binDir}:/usr/bin:/bin`,
           SHELL: shell,
           HOME: world.home,
-          HERDR_PLUGIN_ROOT: world.install,
-          HERDR_PLUGIN_STATE_DIR: world.state,
+          COLLIE_ROOT: world.install,
+          COLLIE_STATE_DIR: world.state,
           COLLIE_USER_DIR: world.config,
           COLLIE_CWD: world.project,
           COLLIE_HOST: asCommand(command),
           COLLIE_PEER_PORT: String(options.ports?.[name] ?? 0),
-          HERDR_BIN_PATH: herdr,
-          FAKE_HERDR_LOG: herdrLog,
           ...suite,
-          // Served only where `core` is set; elsewhere nothing listens there.
+          ...options.env,
           HC_SOCKET: `${dir}/hc.sock`,
         };
         yield* fs.writeFileString(coreLog, "");
-        const core = onCore
-          ? yield* serveFakeHc(`${dir}/hc.sock`, coreLog, yield* Effect.scope, "", {
-              PATH: env.PATH,
-            })
-          : undefined;
+        const core = yield* serveFakeHc(
+          `${dir}/hc.sock`,
+          coreLog,
+          yield* Effect.scope,
+          `${world.home}/outputs.json`,
+          {
+            PATH: env.PATH,
+          },
+        );
         const sshDir = `${dir}/ssh`;
         yield* fs.makeDirectory(sshDir);
-        const side = (ssh: FakeSsh): Side => ({
+        const side: (ssh: FakeSsh) => Side = (ssh) => ({
           name,
           world,
           env,
-          herdrLog,
           coreLog,
           core,
           sshLog: ssh.log,
           ssh,
           cli: (args, extra = {}) => collie(world, args, { ...env, ...extra }),
           lists: (machines) =>
-            fs
-              .writeFileString(`${herdrLog}.machines.json`, encode(Arr.map(machines, machineOf)))
-              .pipe(Effect.orDie),
+            Effect.sync(() =>
+              core.roster(
+                Arr.map(machines, (one) => ({ name: one.name, target: `mk@${one.name}` })),
+              ),
+            ),
         });
         return { side, bin, sshDir, env };
       });
@@ -194,7 +167,6 @@ export const twoMachines = <A, E>(
       second: second.env.COLLIE_PEER_PORT,
     });
     const toSecond = yield* writeFakeSsh(`${first.bin}/ssh`, first.sshDir, second.env);
-    // Off the second's PATH: only the first reaches the other over SSH.
     const unused = yield* writeFakeSsh(`${second.sshDir}/ssh`, second.sshDir);
     return yield* body(first.side(toSecond), second.side(unused));
   }).pipe(Effect.orDie);
@@ -203,33 +175,33 @@ export const releaseBinary = Effect.fn("PeerTest.releaseBinary")(function* (
   file: string,
   version: string,
 ) {
-  const manifest = yield* (yield* FileSystem.FileSystem).readFileString(`${root}herdr-plugin.toml`);
   const musl = (yield* Config.String("OPENTUI_LIBC").pipe(Config.withDefault(""))) === "musl";
   const built = yield* Effect.promise(() =>
     Bun.build({
-      // A release carries the host door's Worker entry, as tools/build.ts builds it.
+      // WARNING: A release carries the host door's Worker entry, as tools/build.ts builds it.
       entrypoints: [`${root}src/main.ts`, `${root}src/door.ts`],
       target: "bun",
-      // As tools/build.ts pins it, so only this libc's renderer package must be installed.
+      // WARNING: As tools/build.ts pins it: only this libc's renderer package must be installed.
       define: { "process.env.OPENTUI_LIBC": musl ? '"musl"' : '"glibc"' },
-      bytecode: true,
       format: "esm",
       plugins: [
         solidPlugin,
         {
           name: "peer-release",
           setup(builder) {
-            builder.onLoad({ filter: /herdr-plugin\.toml$/ }, () => ({
-              loader: "toml",
-              contents: pipe(manifest, Str.replace(/^version = ".*"/m, `version = "${version}"`)),
-            }));
+            builder.onLoad({ filter: /\/package\.json$/ }, (args) => {
+              if (args.path !== `${root}package.json`) {
+                return undefined;
+              }
+              return { loader: "json", contents: encode({ ...manifest, version }) };
+            });
           },
         },
       ],
       compile: { outfile: file },
     }),
   );
-  if (!built.success)
+  if (!built.success) {
     return yield* new Cause.UnknownError(
       built.logs,
       `could not build ${version}: ${Arr.join(
@@ -239,4 +211,5 @@ export const releaseBinary = Effect.fn("PeerTest.releaseBinary")(function* (
         "\n",
       )}`,
     );
+  }
 });

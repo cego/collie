@@ -7,7 +7,7 @@ use collie_desktop_board::board::answers::{
 };
 use collie_desktop_board::board::cards::{CardAction, CardMr, card_actions, card_flow, card_mrs};
 use collie_desktop_board::board::model::{
-    Flock, Shown, apply_item, placed, reaching, reaching_said,
+    Flock, Shown, apply_item, fallback_line, placed, reaching, reaching_said,
 };
 use collie_desktop_board::board::questionnaire::{Does, Event, HOLD, Questionnaire, Where};
 use collie_desktop_board::board::{backoff, renewal_due};
@@ -693,5 +693,38 @@ fn a_failure_the_host_marks_refused_is_told_from_one_worth_trying_again() {
             said: "Collie on mk-pc is busy".into(),
             refused: false
         }
+    );
+}
+
+#[test]
+fn a_card_names_where_a_fallback_would_move_its_runs_work() {
+    let agent = |name: &str, run: &str, fallback: Option<&str>| {
+        let mut one = json!({"name": name, "status": "working", "now": null, "run": run});
+        if let Some(fallback) = fallback {
+            one["fallback"] = json!(fallback);
+        }
+        one
+    };
+    let of = |agents: Value| -> Task {
+        serde_json::from_value(task("t", "active", json!({"agents": agents}))).unwrap()
+    };
+    assert_eq!(
+        fallback_line(&of(json!([
+            agent("child-build", "r-2", Some("pi/default")),
+            agent("build", "r-1", Some("codex/gpt-5.5 high")),
+        ]))),
+        Some("Falls back to codex/gpt-5.5 high".to_string())
+    );
+    assert_eq!(
+        fallback_line(&of(json!([agent(
+            "child-build",
+            "r-2",
+            Some("pi/default")
+        )]))),
+        Some("Falls back to pi/default".to_string())
+    );
+    assert_eq!(
+        fallback_line(&of(json!([agent("build", "r-1", None)]))),
+        None
     );
 }

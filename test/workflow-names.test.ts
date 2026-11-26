@@ -1,9 +1,3 @@
-// No shipped workflow is privileged: the generic runtime and the board never decide what
-// to do by a workflow's name. A module composes by id — plan starts `implement`, a review
-// offers it — and that is ordinary; `src/` choosing a checkout, a card or a tab because a
-// Run is called `plan` or `renovate` is what this refuses. The renamed baselines prove the
-// behaviour; this reads the source, so a reintroduction fails before anything runs it.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -14,49 +8,60 @@ import { runEffect } from "./support/effect";
 const srcDir = new URL("../src/", import.meta.url).pathname;
 
 const SHIPPED = "plan|implement|review|architecture|renovate|release|general";
-/** `plan` and `review` are also outcome kinds and board tabs; these are only ids. */
 const ONLY_IDS = new Set(["implement", "architecture", "renovate", "release", "general"]);
-/** An expression that names a workflow rather than an outcome, a tab or a need. */
 const IDENTITY = /(workflow|definition|entry|module)\w*|\.(id|name)\b/i;
 
 const withoutComments = (text: string) =>
   pipe(text, Str.replaceAll(/\/\*[\s\S]*?\*\//g, ""), Str.replaceAll(/(^|[^:])\/\/.*$/gm, "$1"));
 
-/** Every place in one source file that decides by a shipped workflow's name. */
-function nameDispatch(source: string): string[] {
+function nameDispatch(source: string) {
   const text = withoutComments(source);
-  const found: string[] = [];
+  const found: Array<string> = [];
   const compared = new RegExp(
     String.raw`([\w.?()\[\]]+)\s*[!=]==?\s*"(${SHIPPED})"|"(${SHIPPED})"\s*[!=]==?\s*([\w.?()\[\]]+)`,
     "g",
   );
   for (const match of pipe(text, Str.matchAll(compared))) {
-    if (IDENTITY.test(match[1] ?? match[4] ?? "")) found.push(match[0]);
+    if (IDENTITY.test(match[1] ?? match[4] ?? "")) {
+      found.push(match[0]);
+    }
   }
   for (const match of pipe(
     text,
     Str.matchAll(new RegExp(String.raw`\.(startsWith|endsWith)\("(${SHIPPED})`, "g")),
-  ))
+  )) {
     found.push(match[0]);
+  }
   const listed = new RegExp(
     String.raw`\[\s*"(?:${SHIPPED})"(?:\s*,\s*"(?:${SHIPPED})")*\s*,?\s*\]`,
     "g",
   );
   for (const match of pipe(text, Str.matchAll(listed))) {
-    if (Arr.some([...pipe(match[0], Str.matchAll(/"(\w+)"/g))], (name) => ONLY_IDS.has(name[1]!)))
+    if (Arr.some([...pipe(match[0], Str.matchAll(/"(\w+)"/g))], (name) => ONLY_IDS.has(name[1]!))) {
       found.push(match[0]);
+    }
   }
   for (const match of pipe(text, Str.matchAll(/switch\s*\(([^)]*)\)\s*\{/g))) {
-    if (!IDENTITY.test(match[1]!)) continue;
+    if (!IDENTITY.test(match[1]!)) {
+      continue;
+    }
     let depth = 0;
     let end = (match.index ?? 0) + match[0].length - 1;
     for (; end < text.length; end++) {
-      if (text[end] === "{") depth += 1;
-      if (text[end] === "}" && --depth === 0) break;
+      if (text[end] === "{") {
+        depth += 1;
+      }
+      if (text[end] === "}" && --depth === 0) {
+        break;
+      }
     }
     const body = pipe(text, Str.slice(match.index, end));
-    for (const one of pipe(body, Str.matchAll(new RegExp(String.raw`case\s+"(${SHIPPED})"`, "g"))))
+    for (const one of pipe(
+      body,
+      Str.matchAll(new RegExp(String.raw`case\s+"(${SHIPPED})"`, "g")),
+    )) {
       found.push(`switch (${match[1]}) ${one[0]}`);
+    }
   }
   return found;
 }
@@ -74,7 +79,9 @@ const sources = Effect.fn("test.sources")(function* () {
         stack.push(full);
         continue;
       }
-      if (!pipe(name, Str.endsWith(".ts")) && !pipe(name, Str.endsWith(".tsx"))) continue;
+      if (!/\.tsx?$/.test(name) || /\.test\.tsx?$/.test(name)) {
+        continue;
+      }
       found.push({ name: path.relative(srcDir, full), text: yield* fs.readFileString(full) });
     }
   }
@@ -102,7 +109,6 @@ test("the guard catches the name-based plan and renovate classification Collie u
       expect(nameDispatch(board)).toEqual([]);
       expect(nameDispatch(worktree)).toEqual([]);
 
-      // Each of these once decided a card or a checkout, planted back into the file it lived in.
       const planted = [
         [board, `const planReady = status === "succeeded" && record.workflow === "plan";`],
         [board, `const PRODUCES_WORK: ReadonlySet<string> = new Set(["implement", "plan"]);`],

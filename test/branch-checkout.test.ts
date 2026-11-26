@@ -1,6 +1,4 @@
-// A branch checkout whose path is already held: two clones of one remote with the same
-// name want the same directory, and neither may be handed or harmed by the other's (#220).
-
+import { Herdr } from "../src/herdr";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -10,9 +8,10 @@ import { Effect, Fiber, FileSystem, Schedule } from "effect";
 import { runOnPath } from "./support/forge";
 import { exec } from "./support/command";
 import { FakeBin } from "./support/bin";
-import { Rig, FakeHerdr } from "./support/recorder";
-import { checkoutFor, checkoutRefusal, type RecordedBy } from "../src/worktree";
-import type { PaneInfo } from "../src/herdr";
+import { Rig } from "./support/recorder";
+import { checkoutFor, checkoutRefusal } from "../src/worktree";
+import type { RecordedBy } from "../src/worktree";
+import type { AgentInfo, AgentStatus } from "../src/herdr";
 
 const BRANCH = "mk/run-x";
 
@@ -22,17 +21,19 @@ let cloneA: string;
 let cloneB: string;
 let first: string;
 
-const git = (cwd: string, ...args: string[]) =>
+const git = (cwd: string, ...args: Array<string>) =>
   exec(["git", "-c", "user.name=Test", "-c", "user.email=test@example.test", ...args], {
     cwd,
   }).pipe(
     Effect.map((ran) => {
-      if (ran.exitCode !== 0) throw new Error(`git ${Arr.join(args, " ")}: ${ran.stderr}`);
+      if (ran.exitCode !== 0) {
+        throw new Error(`git ${Arr.join(args, " ")}: ${ran.stderr}`);
+      }
       return Str.trim(ran.stdout);
     }),
   );
 
-const gitCode = (cwd: string, ...args: string[]) =>
+const gitCode = (cwd: string, ...args: Array<string>) =>
   exec(["git", ...args], { cwd }).pipe(Effect.map((ran) => ran.exitCode));
 
 beforeEach(() =>
@@ -51,7 +52,9 @@ beforeEach(() =>
       yield* git(seed, "commit", "-qm", "the work", "--allow-empty");
       yield* git(seed, "remote", "add", "origin", origin);
       yield* git(seed, "push", "-q", "origin", "master", BRANCH);
-      for (const clone of [cloneA, cloneB]) yield* git(rig.root, "clone", "-q", origin, clone);
+      for (const clone of [cloneA, cloneB]) {
+        yield* git(rig.root, "clone", "-q", origin, clone);
+      }
     }),
   ),
 );
@@ -59,7 +62,7 @@ beforeEach(() =>
 afterEach(() => runOnPath(rig.close()));
 
 const ask = (recordedBy: RecordedBy = () => Effect.succeed(null)) =>
-  checkoutFor(new FakeHerdr(rig.pluginEnv()), {
+  checkoutFor(new Herdr(rig.pluginEnv()), {
     cwd: cloneA,
     stateDir: rig.stateDir,
     name: "run-x",
@@ -76,9 +79,13 @@ const filesUnder = Effect.fn("branchCheckoutTest.filesUnder")(function* (dir: st
   const fs = yield* FileSystem.FileSystem;
   const files: Record<string, string> = {};
   for (const name of (yield* fs.readDirectory(dir, { recursive: true })).sort()) {
-    if (pipe_(name, Str.startsWith(".git/"))) continue;
+    if (pipe_(name, Str.startsWith(".git/"))) {
+      continue;
+    }
     const at = `${dir}/${name}`;
-    if ((yield* fs.stat(at)).type === "File") files[name] = yield* fs.readFileString(at);
+    if ((yield* fs.stat(at)).type === "File") {
+      files[name] = yield* fs.readFileString(at);
+    }
   }
   return files;
 });
@@ -110,198 +117,164 @@ const hasLocal = (repo: string, branch: string) =>
     Effect.map((code) => code === 0),
   );
 
-test(
-  "another clone's checkout at the branch's path is passed over, and left as it was",
-  () =>
-    runOnPath(
-      Effect.gen(function* () {
-        yield* cloneBHoldsFirst();
-        const before = yield* looksOf(first);
-        const recordedBy: RecordedBy = (at) =>
-          Effect.succeed(
-            at === first
-              ? {
-                  run: "run-b",
-                  worktree: null,
-                  live: Effect.succeed("run-b is running"),
-                  release: Effect.succeed("not taken"),
-                }
-              : null,
-          );
-
-        const checkout = yield* ask(recordedBy);
-
-        expect(checkout.refused).toBeNull();
-        expect(checkout.cwd).toBe(`${first}-2`);
-        expect(yield* git(checkout.cwd, "branch", "--show-current")).toBe(BRANCH);
-        expect(yield* git(checkout.cwd, "rev-parse", "HEAD")).toBe(
-          yield* git(origin, "rev-parse", BRANCH),
+test("another clone's checkout at the branch's path is passed over, and left as it was", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* cloneBHoldsFirst();
+      const before = yield* looksOf(first);
+      const recordedBy: RecordedBy = (at) =>
+        Effect.succeed(
+          at === first
+            ? {
+                run: "run-b",
+                worktree: null,
+                live: Effect.succeed("run-b is running"),
+                release: Effect.succeed("not taken"),
+              }
+            : null,
         );
-        expect(yield* git(checkout.cwd, "rev-parse", "--abbrev-ref", "@{u}")).toBe(
-          `origin/${BRANCH}`,
-        );
-        expect(yield* looksOf(first)).toEqual(before);
-        expect(checkout.note).toContain(
-          `${first} is a checkout of ${cloneB}, recorded by Run run-b`,
-        );
-      }),
-    ),
-  60_000,
-);
 
-test(
-  "a plain directory at the branch's path is passed over, and its files are left alone",
-  () =>
-    runOnPath(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.makeDirectory(first, { recursive: true });
-        yield* fs.writeFileString(`${first}/notes.txt`, "mine\n");
+      const checkout = yield* ask(recordedBy);
 
-        const checkout = yield* ask();
+      expect(checkout.refused).toBeNull();
+      expect(checkout.cwd).toBe(`${first}-2`);
+      expect(yield* git(checkout.cwd, "branch", "--show-current")).toBe(BRANCH);
+      expect(yield* git(checkout.cwd, "rev-parse", "HEAD")).toBe(
+        yield* git(origin, "rev-parse", BRANCH),
+      );
+      expect(yield* git(checkout.cwd, "rev-parse", "--abbrev-ref", "@{u}")).toBe(
+        `origin/${BRANCH}`,
+      );
+      expect(yield* looksOf(first)).toEqual(before);
+      expect(checkout.note).toContain(`${first} is a checkout of ${cloneB}, recorded by Run run-b`);
+    }),
+  ));
 
-        expect(checkout.refused).toBeNull();
-        expect(checkout.cwd).toBe(`${first}-2`);
-        expect(yield* filesUnder(first)).toEqual({ "notes.txt": "mine\n" });
-      }),
-    ),
-  60_000,
-);
+test("a plain directory at the branch's path is passed over, and its files are left alone", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(first, { recursive: true });
+      yield* fs.writeFileString(`${first}/notes.txt`, "mine\n");
 
-test(
-  "a symlink to nothing at the branch's path is passed over, and left pointing where it did",
-  () =>
-    runOnPath(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        yield* fs.makeDirectory(
-          pipe_(
-            first,
-            Str.slice(
-              0,
-              Option.getOrElse(pipe_(first, Str.lastIndexOf("/")), () => -1),
-            ),
+      const checkout = yield* ask();
+
+      expect(checkout.refused).toBeNull();
+      expect(checkout.cwd).toBe(`${first}-2`);
+      expect(yield* filesUnder(first)).toEqual({ "notes.txt": "mine\n" });
+    }),
+  ));
+
+test("a symlink to nothing at the branch's path is passed over, and left pointing where it did", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(
+        pipe_(
+          first,
+          Str.slice(
+            0,
+            Option.getOrElse(pipe_(first, Str.lastIndexOf("/")), () => -1),
           ),
-          { recursive: true },
+        ),
+        { recursive: true },
+      );
+      yield* fs.symlink(`${rig.root}/gone`, first);
+
+      const checkout = yield* ask();
+
+      expect(checkout.refused).toBeNull();
+      expect(checkout.cwd).toBe(`${first}-2`);
+      expect(yield* fs.readLink(first)).toBe(`${rig.root}/gone`);
+    }),
+  ));
+
+test("this repository's checkout of another branch at the path is passed over, still on its branch", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* git(cloneA, "worktree", "add", "-q", "-b", "other", first, "origin/master");
+      const before = yield* looksOf(first);
+
+      const checkout = yield* ask();
+
+      expect(checkout.cwd).toBe(`${first}-2`);
+      expect(yield* looksOf(first)).toMatchObject({
+        files: before.files,
+        head: before.head,
+        on: "other",
+      });
+    }),
+  ));
+
+test("the checkout this repository already lists on the branch is the one given", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* git(cloneA, "worktree", "add", "-q", first, BRANCH);
+
+      const checkout = yield* ask();
+
+      expect(checkout.cwd).toBe(first);
+      expect(yield* checkoutsOf(cloneA, BRANCH)).toEqual([first]);
+    }),
+  ));
+
+test("asking again after another clone's checkout was passed over reuses the same slot", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* cloneBHoldsFirst();
+
+      const once = yield* ask();
+      const twice = yield* ask();
+
+      expect([once.cwd, twice.cwd]).toEqual([`${first}-2`, `${first}-2`]);
+      expect(yield* checkoutsOf(cloneA, BRANCH)).toEqual([`${first}-2`]);
+    }),
+  ));
+
+test("two attempts at once end with one checkout, which both are given", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* cloneBHoldsFirst();
+
+      const both = yield* Effect.all([ask(), ask()], { concurrency: 2 });
+
+      expect(Arr.map(both, (one) => one.refused)).toEqual([null, null]);
+      expect(Arr.map(both, (one) => one.cwd)).toEqual([`${first}-2`, `${first}-2`]);
+      expect(yield* checkoutsOf(cloneA, BRANCH)).toEqual([`${first}-2`]);
+    }),
+  ));
+
+test("with all three slots held the start is refused, naming each, and nothing is left behind", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* cloneBHoldsFirst();
+      yield* fs.makeDirectory(`${first}-2`, { recursive: true });
+      yield* fs.writeFileString(`${first}-2/notes.txt`, "mine\n");
+      yield* git(cloneA, "worktree", "add", "-q", "-b", "other", `${first}-3`, "origin/master");
+      const before = {
+        first: yield* looksOf(first),
+        second: yield* filesUnder(`${first}-2`),
+        third: yield* looksOf(`${first}-3`),
+      };
+
+      for (const _ of [1, 2]) {
+        const checkout = yield* ask();
+
+        expect(checkout.refused).toBe(
+          `no worktree for ${BRANCH}: ${first} is a checkout of ${cloneB}; ` +
+            `${first}-2 is a checkout that does not say which repository it belongs to; ` +
+            `${first}-3 is a checkout of ${cloneA}; free one of them and retry`,
         );
-        yield* fs.symlink(`${rig.root}/gone`, first);
-
-        const checkout = yield* ask();
-
-        expect(checkout.refused).toBeNull();
-        expect(checkout.cwd).toBe(`${first}-2`);
-        expect(yield* fs.readLink(first)).toBe(`${rig.root}/gone`);
-      }),
-    ),
-  60_000,
-);
-
-test(
-  "this repository's checkout of another branch at the path is passed over, still on its branch",
-  () =>
-    runOnPath(
-      Effect.gen(function* () {
-        yield* git(cloneA, "worktree", "add", "-q", "-b", "other", first, "origin/master");
-        const before = yield* looksOf(first);
-
-        const checkout = yield* ask();
-
-        expect(checkout.cwd).toBe(`${first}-2`);
-        expect(yield* looksOf(first)).toMatchObject({
-          files: before.files,
-          head: before.head,
-          on: "other",
-        });
-      }),
-    ),
-  60_000,
-);
-
-test(
-  "the checkout this repository already lists on the branch is the one given",
-  () =>
-    runOnPath(
-      Effect.gen(function* () {
-        yield* git(cloneA, "worktree", "add", "-q", first, BRANCH);
-
-        const checkout = yield* ask();
-
-        expect(checkout.cwd).toBe(first);
-        expect(yield* checkoutsOf(cloneA, BRANCH)).toEqual([first]);
-      }),
-    ),
-  60_000,
-);
-
-test(
-  "asking again after another clone's checkout was passed over reuses the same slot",
-  () =>
-    runOnPath(
-      Effect.gen(function* () {
-        yield* cloneBHoldsFirst();
-
-        const once = yield* ask();
-        const twice = yield* ask();
-
-        expect([once.cwd, twice.cwd]).toEqual([`${first}-2`, `${first}-2`]);
-        expect(yield* checkoutsOf(cloneA, BRANCH)).toEqual([`${first}-2`]);
-      }),
-    ),
-  60_000,
-);
-
-test(
-  "two attempts at once end with one checkout, which both are given",
-  () =>
-    runOnPath(
-      Effect.gen(function* () {
-        yield* cloneBHoldsFirst();
-
-        const both = yield* Effect.all([ask(), ask()], { concurrency: 2 });
-
-        expect(Arr.map(both, (one) => one.refused)).toEqual([null, null]);
-        expect(Arr.map(both, (one) => one.cwd)).toEqual([`${first}-2`, `${first}-2`]);
-        expect(yield* checkoutsOf(cloneA, BRANCH)).toEqual([`${first}-2`]);
-      }),
-    ),
-  60_000,
-);
-
-test(
-  "with all three slots held the start is refused, naming each, and nothing is left behind",
-  () =>
-    runOnPath(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        yield* cloneBHoldsFirst();
-        yield* fs.makeDirectory(`${first}-2`, { recursive: true });
-        yield* fs.writeFileString(`${first}-2/notes.txt`, "mine\n");
-        yield* git(cloneA, "worktree", "add", "-q", "-b", "other", `${first}-3`, "origin/master");
-        const before = {
+        expect(yield* hasLocal(cloneA, BRANCH)).toBe(false);
+        expect({
           first: yield* looksOf(first),
           second: yield* filesUnder(`${first}-2`),
           third: yield* looksOf(`${first}-3`),
-        };
-
-        for (const _ of [1, 2]) {
-          const checkout = yield* ask();
-
-          expect(checkout.refused).toBe(
-            `no worktree for ${BRANCH}: ${first} is a checkout of ${cloneB}; ` +
-              `${first}-2 is a checkout that does not say which repository it belongs to; ` +
-              `${first}-3 is a checkout of ${cloneA}; free one of them and retry`,
-          );
-          expect(yield* hasLocal(cloneA, BRANCH)).toBe(false);
-          expect({
-            first: yield* looksOf(first),
-            second: yield* filesUnder(`${first}-2`),
-            third: yield* looksOf(`${first}-3`),
-          }).toEqual(before);
-        }
-      }),
-    ),
-  60_000,
-);
+        }).toEqual(before);
+      }
+    }),
+  ));
 
 const gitThat = Effect.fn("branchCheckoutTest.gitThat")(function* (
   before: (real: string) => string,
@@ -314,141 +287,119 @@ const gitThat = Effect.fn("branchCheckoutTest.gitThat")(function* (
 const takesTheSlot = `if [ "$1" = worktree ] && [ "$2" = add ]; then mkdir -p "$3" && echo theirs > "$3/file"; fi`;
 const somebodyTakesTheSlot = () => gitThat(() => takesTheSlot);
 
-test(
-  "a cut that fails after the look leaves no branch it made",
-  () =>
-    runOnPath(
-      Effect.gen(function* () {
-        yield* somebodyTakesTheSlot();
+test("a cut that fails after the look leaves no branch it made", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* somebodyTakesTheSlot();
 
-        const checkout = yield* ask();
+      const checkout = yield* ask();
 
-        expect(checkout.refused).toContain(`no worktree for ${BRANCH}`);
-        expect(yield* hasLocal(cloneA, BRANCH)).toBe(false);
-      }),
-    ),
-  60_000,
-);
+      expect(checkout.refused).toContain(`no worktree for ${BRANCH}`);
+      expect(yield* hasLocal(cloneA, BRANCH)).toBe(false);
+    }),
+  ));
 
-test(
-  "a cut that fails after the look leaves a branch that was already there where it was",
-  () =>
-    runOnPath(
-      Effect.gen(function* () {
-        yield* git(cloneA, "branch", BRANCH, "origin/master");
-        const before = yield* git(cloneA, "rev-parse", BRANCH);
-        yield* somebodyTakesTheSlot();
+test("a cut that fails after the look leaves a branch that was already there where it was", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* git(cloneA, "branch", BRANCH, "origin/master");
+      const before = yield* git(cloneA, "rev-parse", BRANCH);
+      yield* somebodyTakesTheSlot();
 
-        const checkout = yield* ask();
+      const checkout = yield* ask();
 
-        expect(checkout.refused).toContain(`no worktree for ${BRANCH}`);
-        expect(yield* git(cloneA, "rev-parse", BRANCH)).toBe(before);
-      }),
-    ),
-  60_000,
-);
+      expect(checkout.refused).toContain(`no worktree for ${BRANCH}`);
+      expect(yield* git(cloneA, "rev-parse", BRANCH)).toBe(before);
+    }),
+  ));
 
-test(
-  "a branch somebody else makes between the look and the cut is left where they made it",
-  () =>
-    runOnPath(
-      Effect.gen(function* () {
-        yield* gitThat(
-          (real) =>
-            `case "$1 $4" in "rev-parse "*'^{commit}') "${real}" -C "${cloneA}" branch -q ${BRANCH} origin/${BRANCH} ;; esac`,
-        );
+test("a branch somebody else makes between the look and the cut is left where they made it", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* gitThat(
+        (real) =>
+          `case "$1 $4" in "rev-parse "*'^{commit}') "${real}" -C "${cloneA}" branch -q ${BRANCH} origin/${BRANCH} ;; esac`,
+      );
 
-        const checkout = yield* ask();
+      const checkout = yield* ask();
 
-        expect(checkout.refused).toContain(`no worktree for ${BRANCH}`);
-        expect(yield* git(cloneA, "rev-parse", BRANCH)).toBe(
-          yield* git(cloneA, "rev-parse", `origin/${BRANCH}`),
-        );
-      }),
-    ),
-  60_000,
-);
+      expect(checkout.refused).toContain(`no worktree for ${BRANCH}`);
+      expect(yield* git(cloneA, "rev-parse", BRANCH)).toBe(
+        yield* git(cloneA, "rev-parse", `origin/${BRANCH}`),
+      );
+    }),
+  ));
 
-test(
-  "a cut that fails after its base moved leaves no branch it made",
-  () =>
-    runOnPath(
-      Effect.gen(function* () {
-        yield* gitThat(
-          (real) => `case "$1 $4" in "rev-parse "*'^{commit}')
+test("a cut that fails after its base moved leaves no branch it made", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      yield* gitThat(
+        (real) => `case "$1 $4" in "rev-parse "*'^{commit}')
   "${real}" "$@"; code=$?
   "${real}" -C "${cloneA}" update-ref refs/remotes/origin/${BRANCH} origin/master
   exit $code ;;
 esac
 ${takesTheSlot}`,
-        );
+      );
 
-        const checkout = yield* ask();
+      const checkout = yield* ask();
 
-        expect(checkout.refused).toContain(`no worktree for ${BRANCH}`);
-        expect(yield* hasLocal(cloneA, BRANCH)).toBe(false);
-      }),
-    ),
-  60_000,
-);
+      expect(checkout.refused).toContain(`no worktree for ${BRANCH}`);
+      expect(yield* hasLocal(cloneA, BRANCH)).toBe(false);
+    }),
+  ));
 
-test(
-  "a checkout git lists while another attempt is still filling it is given only once filled",
-  () =>
-    runOnPath(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const seed = `${rig.root}/seed`;
-        yield* fs.writeFileString(`${seed}/.gitattributes`, "payload filter=slow\n");
-        yield* fs.writeFileString(`${seed}/payload`, "the work\n");
-        yield* git(seed, "add", ".");
-        yield* git(seed, "commit", "-qm", "payload");
-        yield* git(seed, "push", "-q", "origin", BRANCH);
-        yield* git(cloneA, "fetch", "-q", "origin");
-        // The smudge filter holds the first checkout half-written until `go` is written.
-        const smudging = `${rig.root}/smudging`;
-        const go = `${rig.root}/go`;
-        yield* exec(["mkfifo", go]);
-        const filter = `${rig.root}/smudge`;
-        yield* fs.writeFileString(
-          filter,
-          `#!/bin/sh\ntouch "${smudging}"\nread line < "${go}"\ncat\n`,
-        );
-        yield* fs.chmod(filter, 0o755);
-        yield* git(cloneA, "config", "filter.slow.smudge", filter);
+test("a checkout git lists while another attempt is still filling it is given only once filled", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const seed = `${rig.root}/seed`;
+      yield* fs.writeFileString(`${seed}/.gitattributes`, "payload filter=slow\n");
+      yield* fs.writeFileString(`${seed}/payload`, "the work\n");
+      yield* git(seed, "add", ".");
+      yield* git(seed, "commit", "-qm", "payload");
+      yield* git(seed, "push", "-q", "origin", BRANCH);
+      yield* git(cloneA, "fetch", "-q", "origin");
+      const smudging = `${rig.root}/smudging`;
+      const go = `${rig.root}/go`;
+      yield* exec(["mkfifo", go]);
+      const filter = `${rig.root}/smudge`;
+      yield* fs.writeFileString(
+        filter,
+        `#!/bin/sh\ntouch "${smudging}"\nread line < "${go}"\ncat\n`,
+      );
+      yield* fs.chmod(filter, 0o755);
+      yield* git(cloneA, "config", "filter.slow.smudge", filter);
 
-        const filling = yield* Effect.forkChild(ask());
-        yield* fs.exists(smudging).pipe(
-          Effect.flatMap((there) => (there ? Effect.void : Effect.fail("not yet"))),
-          Effect.retry({ schedule: Schedule.spaced("20 millis"), times: 1_000 }),
-        );
-        const waiting = yield* Effect.forkChild(
-          ask().pipe(
-            Effect.flatMap((checkout) =>
-              fs
-                .exists(`${checkout.cwd}/payload`)
-                .pipe(Effect.map((filled) => ({ cwd: checkout.cwd, filled }))),
-            ),
+      const filling = yield* Effect.forkChild(ask());
+      yield* fs.exists(smudging).pipe(
+        Effect.flatMap((there) => (there ? Effect.void : Effect.fail("not yet"))),
+        Effect.retry({ schedule: Schedule.spaced("20 millis"), times: 1000 }),
+      );
+      const waiting = yield* Effect.forkChild(
+        ask().pipe(
+          Effect.flatMap((checkout) =>
+            fs
+              .exists(`${checkout.cwd}/payload`)
+              .pipe(Effect.map((filled) => ({ cwd: checkout.cwd, filled }))),
           ),
-        );
-        yield* Effect.sleep("1 second");
-        yield* fs.writeFileString(go, "go\n");
+        ),
+      );
+      yield* Effect.sleep("1 second");
+      yield* fs.writeFileString(go, "go\n");
 
-        const filled = yield* Fiber.join(filling);
-        expect(yield* Fiber.join(waiting)).toEqual({ cwd: filled.cwd, filled: true });
-      }),
-    ),
-  60_000,
-);
+      const filled = yield* Fiber.join(filling);
+      expect(yield* Fiber.join(waiting)).toEqual({ cwd: filled.cwd, filled: true });
+    }),
+  ));
 
-const herdrWith = (panes: ReadonlyArray<PaneInfo>) =>
-  new (class extends FakeHerdr {
-    override paneList() {
-      return Effect.succeed([...panes]);
+const herdrWith = (agents: ReadonlyArray<AgentInfo>) =>
+  new (class extends Herdr {
+    override agentList() {
+      return Effect.succeed([...agents]);
     }
   })(rig.pluginEnv());
 
-/** The starting Run's checkout: clone A's, on a branch of its own name, at `at`. */
 const startedAt = (at: string) =>
   Effect.gen(function* () {
     const checkout = `${rig.root}/.collie/worktrees/monorepo/implement`;
@@ -457,8 +408,8 @@ const startedAt = (at: string) =>
     return checkout;
   });
 
-const askStarted = (checkout: string, panes: ReadonlyArray<PaneInfo> = []) =>
-  checkoutFor(herdrWith(panes), {
+const askStarted = (checkout: string, agents: ReadonlyArray<AgentInfo> = []) =>
+  checkoutFor(herdrWith(agents), {
     cwd: cloneA,
     stateDir: rig.stateDir,
     name: "run-x",
@@ -472,18 +423,13 @@ const askStarted = (checkout: string, panes: ReadonlyArray<PaneInfo> = []) =>
 const cutsOf = (repo: string) =>
   Effect.all([git(repo, "worktree", "list", "--porcelain"), git(repo, "branch", "--list")]);
 
-const agentIn = (cwd: string, agentStatus: string): PaneInfo => ({
-  paneId: "1-1",
-  tabId: "1:1",
-  label: null,
-  agent: "claude",
-  agentStatus,
-  workspaceId: null,
+const agentIn = (cwd: string, status: AgentStatus, foregroundCwd: string | null = null) => ({
+  name: "claude",
+  paneId: "t1",
+  status,
+  terminalId: "t1",
   cwd,
-  foregroundCwd: null,
-  tokens: {},
-  terminalId: null,
-  agentSession: null,
+  foregroundCwd,
 });
 
 test("a Stage started by a Run whose checkout is clean, at the merge request's head and idle works in it, and cuts nothing", () =>
@@ -507,28 +453,30 @@ test.each([
     held: "uncommitted changes",
     at: `origin/${BRANCH}`,
     dirty: true,
-    status: "idle",
+    status: "idle" as const,
     why: "it has uncommitted changes",
   },
   {
     held: "another commit",
     at: "origin/master",
     dirty: false,
-    status: "idle",
+    status: "idle" as const,
     why: `it is not at ${BRANCH}'s head on origin`,
   },
   {
     held: "a live agent",
     at: `origin/${BRANCH}`,
     dirty: false,
-    status: "working",
-    why: "agent claude in pane 1-1 is working in it",
+    status: "working" as const,
+    why: "agent claude is working in it",
   },
 ])("a Stage started by a Run whose checkout has $held cuts its own", ({ at, dirty, status, why }) =>
   runOnPath(
     Effect.gen(function* () {
       const started = yield* startedAt(at);
-      if (dirty) yield* (yield* FileSystem.FileSystem).writeFileString(`${started}/wip`, "half\n");
+      if (dirty) {
+        yield* (yield* FileSystem.FileSystem).writeFileString(`${started}/wip`, "half\n");
+      }
 
       const checkout = yield* askStarted(started, [agentIn(started, status)]);
 
@@ -542,7 +490,20 @@ test.each([
   ),
 );
 
-/** The merge request's branch moves on the remote, from a checkout the starting Run's never fetched. */
+test("a Stage started by a Run whose checkout a working agent changed directory into cuts its own", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const started = yield* startedAt(`origin/${BRANCH}`);
+
+      const checkout = yield* askStarted(started, [agentIn(rig.root, "working", started)]);
+
+      expect(checkout.cwd).toBe(first);
+      expect(checkout.note).toContain(
+        `not working in ${started}, Run run-implement's checkout: agent claude is working in it`,
+      );
+    }),
+  ));
+
 const advancedElsewhere = () =>
   Effect.gen(function* () {
     yield* git(cloneB, "switch", "-q", BRANCH);
@@ -591,7 +552,6 @@ test("whether a Stage's checkout would be refused asks the remote's head before 
     }),
   ));
 
-/** Clone A knows the branch only as a local branch, and fetches nothing but master. */
 const localOnly = () =>
   Effect.gen(function* () {
     yield* git(cloneA, "branch", "-q", BRANCH, `origin/${BRANCH}`);

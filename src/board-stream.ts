@@ -1,52 +1,45 @@
-// The board as the host tells it to its clients: one board built per change and shared,
-// then told to each client as every Task once and each Task that changed, numbered so a
-// client can tell it missed nothing.
-
 import * as Arr from "effect/Array";
-import { Cause, Clock, Effect, Option, type Scope, Stream, SubscriptionRef } from "effect";
+import { Cause, Clock, Effect, Option, Stream, SubscriptionRef } from "effect";
 import type { BoardMessage, BoardSnapshot, TaskView } from "./board-model";
 import { recordMarks } from "./record-marks";
 import { Foreground } from "./foreground";
+import { stringifyJson } from "./json";
 
-/** How long a build may take before the host log says so. */
-const SLOW_BUILD_MS = 2_000;
+const SLOW_BUILD_MS = 2000;
 
-/**
- * One board for everything that reads it: built at once and again whenever `changed` says
- * something may have moved, one build at a time, with the changes that arrive during a
- * build folded into the next. It keeps building for as long as `Scope` lasts. Its `boards`
- * are the latest board that covers every change seen before it was read, then each one
- * built after it, so a reader reads its own writes. `latest` is the last board built, or
- * the first once it is, never waiting for a newer one.
- */
+const MAX_REST_MS = 5000;
+
+// WARNING: a reader reads its own writes: its board covers every change seen before it was read.
 export const shareBoard = <A, E, R, R2>(options: {
   readonly build: Effect.Effect<A, E, R>;
   readonly changed: Stream.Stream<unknown, never, R2>;
   readonly refresh?: Stream.Stream<unknown, never, R2>;
-}): Effect.Effect<
-  { readonly boards: Stream.Stream<A>; readonly latest: Effect.Effect<A> },
-  never,
-  Scope.Scope | R | R2
-> =>
+}) =>
   Effect.gen(function* () {
     const mark = yield* recordMarks;
     let seen = 0;
     const latest = yield* SubscriptionRef.make(
       Option.none<{ readonly covers: number; readonly board: A }>(),
     );
+    let rest = 0;
     const timed = Effect.gen(function* () {
       const started = yield* Clock.currentTimeMillis;
       const built = yield* options.build;
       const took = (yield* Clock.currentTimeMillis) - started;
-      if (mark !== null) yield* mark("board:built", String(took));
-      if (took > SLOW_BUILD_MS) yield* Effect.logWarning(`the board took ${took} ms to build`);
+      if (mark !== null) {
+        yield* mark("board:built", String(took));
+      }
+      if (took > SLOW_BUILD_MS) {
+        yield* Effect.logWarning(`the board took ${took} ms to build`);
+      }
+      rest = Math.min(took, MAX_REST_MS);
       return built;
     });
     const changes = options.changed.pipe(Stream.map(() => ++seen));
     const refreshes = (options.refresh ?? Stream.never).pipe(Stream.map(() => seen));
     yield* Stream.concat(Stream.make(0), Stream.merge(changes, refreshes)).pipe(
       Stream.buffer({ capacity: 1, strategy: "sliding" }),
-      // A build that fails is skipped: the last board stands until a change builds again.
+      // WARNING: a failed build is skipped: the last board stands until a change builds again.
       Stream.mapEffect((covers) =>
         timed.pipe(
           Effect.map((board) => Option.some({ covers, board })),
@@ -60,7 +53,9 @@ export const shareBoard = <A, E, R, R2>(options: {
         ),
       ),
       Stream.runForEach((built) =>
-        Option.isSome(built) ? SubscriptionRef.set(latest, built) : Effect.void,
+        (Option.isSome(built) ? SubscriptionRef.set(latest, built) : Effect.void).pipe(
+          Effect.andThen(Effect.suspend(() => (rest > 0 ? Effect.sleep(rest) : Effect.void))),
+        ),
       ),
       Effect.forkScoped,
     );
@@ -69,7 +64,7 @@ export const shareBoard = <A, E, R, R2>(options: {
         Effect.sync(() => {
           const since = seen;
           return SubscriptionRef.changes(latest).pipe(
-            // A reader that reads slowly skips to the latest board; a client is told by diff.
+            // WARNING: a slow reader skips to the latest board; a client is told by diff.
             Stream.buffer({ capacity: 1, strategy: "sliding" }),
             Stream.filter(Option.isSome),
             Stream.map((built) => built.value),
@@ -92,43 +87,43 @@ export const shareBoard = <A, E, R, R2>(options: {
     return { boards, latest: latestBoard };
   });
 
-/**
- * What one client is told: a snapshot of the first board, then each later board as the
- * Tasks that differ from what this client was told. Its own copy of what it was told makes
- * a reconnect a fresh snapshot by construction.
- */
 export const boardMessages = <R>(options: {
   readonly head: Omit<BoardSnapshot, "_tag" | "tasks" | "seq">;
   readonly boards: Stream.Stream<ReadonlyArray<TaskView>, never, R>;
-}): Stream.Stream<BoardMessage, never, R> =>
+}) =>
   Stream.unwrap(
     Effect.sync(() => {
       let seq = 0;
       let told: Map<string, { readonly view: TaskView; readonly text: string }> | null = null;
-      const changesTo = (views: ReadonlyArray<TaskView>): BoardMessage[] => {
+      const changesTo = (views: ReadonlyArray<TaskView>) => {
         const now = new Map(
           Arr.map(views, (view) => {
             const was = told?.get(view.id);
             return [
               view.id,
-              was?.view === view ? was : { view, text: JSON.stringify(view) },
+              was?.view === view ? was : { view, text: stringifyJson(view) },
             ] as const;
           }),
         );
-        const out: BoardMessage[] = [];
+        const out: Array<BoardMessage> = [];
         for (const view of views) {
-          if (told?.get(view.id)?.text !== now.get(view.id)!.text)
+          if (told?.get(view.id)?.text !== now.get(view.id)!.text) {
             out.push({ _tag: "Upsert", seq: ++seq, task: view });
+          }
         }
         for (const id of told?.keys() ?? []) {
-          if (!now.has(id)) out.push({ _tag: "Remove", seq: ++seq, id });
+          if (!now.has(id)) {
+            out.push({ _tag: "Remove", seq: ++seq, id });
+          }
         }
         told = now;
         return out;
       };
       return options.boards.pipe(
-        Stream.flatMap((views): Stream.Stream<BoardMessage> => {
-          if (told !== null) return Stream.fromIterable(changesTo(views));
+        Stream.flatMap((views) => {
+          if (told !== null) {
+            return Stream.fromIterable(changesTo(views));
+          }
           changesTo(views);
           return Stream.make({ _tag: "Snapshot", ...options.head, tasks: views, seq });
         }),

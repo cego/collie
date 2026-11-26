@@ -1,16 +1,11 @@
-// The board as the host serves it on `FrontDoorRpcs`: what a client on another computer
-// reads, over the same socket every client uses.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import {
   Clock,
   ConfigProvider,
   DateTime,
   Deferred,
-  type Duration,
   Effect,
   Fiber,
   FileSystem,
@@ -18,35 +13,22 @@ import {
   Option,
   Path,
   Queue,
-  Schedule,
   Schema,
   Stream,
   flow as Schemaflow,
   Result,
 } from "effect";
-import {
-  BoardMessage,
-  type Flow,
-  PaneAt,
-  PROTOCOL,
-  TaskView,
-  type BoardSnapshot,
-  recordIn,
-  sectionOf,
-} from "../src/board-model";
+import type { Duration } from "effect";
+import { BoardMessage, PaneAt, PROTOCOL, TaskView, recordIn, sectionOf } from "../src/board-model";
+import type { Flow, BoardSnapshot } from "../src/board-model";
 import { buildBoard } from "../src/board";
 import { boardMessages, shareBoard } from "../src/board-stream";
 import { recordDisposition } from "../src/disposition";
-import { currentEnv, readEnv } from "../src/env";
+import { readEnv } from "../src/env";
 import { readLogTail } from "../src/run-log";
-import { Herdr } from "../src/herdr";
-import { BUILD, boardWrites, connect, frontDoor, socketOf, timingFirstValues } from "../src/host";
+import { BUILD, connect, frontDoor, socketOf, timingFirstValues } from "../src/host";
 import { Foreground, makeForeground, servedNow } from "../src/foreground";
-import { drawerWrites } from "../src/record";
 import { makeRunModel } from "../src/run-model";
-import { handoffsIn } from "../src/handoffs";
-import { editState } from "./support/fake-herdr-core";
-import { followDetail } from "../src/run-detail";
 import { foundationLayer } from "../src/engine";
 import { Store } from "../src/store";
 import { writeTask } from "../src/task";
@@ -55,16 +37,8 @@ import { fastForward, runEffect } from "./support/effect";
 import { stopHost, until } from "./support/host";
 import { task } from "./support/task";
 import { madeRun, recordsAt } from "./support/records";
-import { collie, proves, type World } from "./support/world";
-
-const asSessions = Schemaflow(
-  Schema.encodeResult(
-    Schema.fromJsonString(
-      Schema.Array(Schema.Struct({ name: Schema.String, socket_path: Schema.String })),
-    ),
-  ),
-  Result.getOrThrow,
-);
+import { collie, proves } from "./support/world";
+import type { World } from "./support/world";
 
 const firstSnapshot = (state: string) =>
   Effect.scoped(
@@ -75,151 +49,131 @@ const firstSnapshot = (state: string) =>
     }),
   ).pipe(Effect.orDie);
 
-/** What became of a Run's work, recorded through the host as a human records it. */
 const recordDisposed = (world: World, runId: string, kind: "merged" | "abandoned" | "superseded") =>
   collie(world, ["run", "disposition", runId, "--as", kind]).pipe(
     Effect.tap((said) => Effect.sync(() => expect(said.envelope.ok).toBe(true))),
   );
 
-test(
-  "a client reads a snapshot, then keyed changes as a Run is recorded, then a fresh snapshot",
-  () =>
-    proves(
-      "collie-board-stream-",
-      (world) =>
-        Effect.gen(function* () {
-          // A specific title keeps startup's generic-task renamer out of this fixture.
-          yield* writeTask({
-            id: "task-1",
-            workspace: "w1",
-            label: "project | Stream changes",
-            cwd: world.project,
-            created_at: "2026-10-01T09:00:00Z",
-          }).pipe(Effect.provide(recordsAt(world.state)), Effect.orDie);
-          const started = yield* collie(world, [
-            "run",
-            "start",
-            "plain",
-            "--task",
-            "task-1",
-            "--input",
-            "note=hi",
-          ]);
-          expect(started.envelope.ok).toBe(true);
+test("a client reads a snapshot, then keyed changes as a Run is recorded, then a fresh snapshot", () =>
+  proves(
+    "collie-board-stream-",
+    (world) =>
+      Effect.gen(function* () {
+        yield* writeTask({
+          id: "task-1",
+          workspace: "w1",
+          label: "project | Stream changes",
+          cwd: world.project,
+          created_at: "2026-10-01T09:00:00Z",
+        }).pipe(Effect.provide(recordsAt(world.state)), Effect.orDie);
+        const started = yield* collie(world, [
+          "run",
+          "start",
+          "plain",
+          "--task",
+          "task-1",
+          "--input",
+          "note=hi",
+        ]);
+        expect(started.envelope.ok).toBe(true);
 
-          const disposed = (kind: string) => (message: BoardMessage) =>
-            message._tag === "Upsert" && message.task.disposition === kind;
-          const merged = disposed("merged");
-          const door = yield* frontDoor(socketOf(world.state)).pipe(Effect.orDie);
-          const opened = yield* Deferred.make<BoardSnapshot>();
-          const reading = yield* door.board().pipe(
+        const disposed = (kind: string) => (message: BoardMessage) =>
+          message._tag === "Upsert" && message.task.disposition === kind;
+        const merged = disposed("merged");
+        const door = yield* frontDoor(socketOf(world.state)).pipe(Effect.orDie);
+        const opened = yield* Deferred.make<BoardSnapshot>();
+        const reading = yield* door.board().pipe(
+          Stream.tap((message) =>
+            message._tag === "Snapshot" ? Deferred.succeed(opened, message) : Effect.void,
+          ),
+          Stream.takeUntil(merged),
+          Stream.runCollect,
+          Effect.forkScoped,
+        );
+        const alongside = yield* (yield* frontDoor(socketOf(world.state)).pipe(Effect.orDie))
+          .board()
+          .pipe(Stream.filter(merged), Stream.runHead, Effect.forkScoped);
+        const snapshot = yield* Deferred.await(opened);
+        expect(snapshot.protocol).toBe(PROTOCOL);
+        expect(snapshot.build).toBe(BUILD);
+        expect(snapshot.installation).not.toBe("");
+        expect(Arr.map(snapshot.tasks, (task) => task.name)).toEqual(["Stream changes"]);
+        const runId = snapshot.tasks[0]!.run;
+
+        yield* recordDisposed(world, runId, "merged");
+
+        const messages = yield* Fiber.join(reading).pipe(Effect.timeout("20 seconds"));
+        expect((yield* Fiber.join(alongside).pipe(Effect.timeout("20 seconds")))._tag).toBe("Some");
+        const changes = Arr.filter(messages.slice(1), (message) => message._tag !== "Unknown");
+        expect(Arr.every(changes, (message) => message._tag !== "Snapshot")).toBe(true);
+        const seqs = [snapshot.seq, ...Arr.map(changes, (message) => message.seq)];
+        expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
+        expect(new Set(seqs).size).toBe(seqs.length);
+        const last = changes.at(-1)!;
+        expect(last._tag === "Upsert" && last.task.id).toBe(snapshot.tasks[0]!.id);
+
+        const again = yield* firstSnapshot(world.state);
+        expect(again?._tag).toBe("Snapshot");
+        expect(again?.tasks[0]?.disposition).toBe("merged");
+
+        const printed = yield* collie(world, ["board"]);
+        const cards = (yield* Schema.decodeUnknownEffect(
+          Schema.Struct({ tasks: Schema.Array(TaskView) }),
+        )(printed.envelope.data).pipe(Effect.orDie)).tasks;
+        expect(Arr.map(cards, ({ id, name, sentence }) => ({ id, name, sentence }))).toEqual(
+          Arr.map(again!.tasks, ({ id, name, sentence }) => ({ id, name, sentence })),
+        );
+
+        const abandoned = disposed("abandoned");
+        const back = yield* (yield* frontDoor(socketOf(world.state)).pipe(Effect.orDie))
+          .board()
+          .pipe(
             Stream.tap((message) =>
-              message._tag === "Snapshot" ? Deferred.succeed(opened, message) : Effect.void,
+              message._tag === "Snapshot" ? recordDisposed(world, runId, "abandoned") : Effect.void,
             ),
-            Stream.takeUntil(merged),
-            Stream.runCollect,
+            Stream.filter(abandoned),
+            Stream.runHead,
             Effect.forkScoped,
           );
-          // A second subscriber rides the same change stream and is told too.
-          const alongside = yield* (yield* frontDoor(socketOf(world.state)).pipe(Effect.orDie))
-            .board()
-            .pipe(Stream.filter(merged), Stream.runHead, Effect.forkScoped);
-          const snapshot = yield* Deferred.await(opened);
-          expect(snapshot.protocol).toBe(PROTOCOL);
-          expect(snapshot.build).toBe(BUILD);
-          expect(snapshot.installation).not.toBe("");
-          expect(Arr.map(snapshot.tasks, (task) => task.name)).toEqual(["Stream changes"]);
-          const runId = snapshot.tasks[0]!.run;
+        expect((yield* Fiber.join(back).pipe(Effect.timeout("20 seconds")))._tag).toBe("Some");
+        yield* stopHost(world.state);
+      }),
+    ["plain.workflow.ts"],
+  ));
 
-          yield* recordDisposed(world, runId, "merged");
-
-          const messages = yield* Fiber.join(reading).pipe(Effect.timeout("20 seconds"));
-          expect((yield* Fiber.join(alongside).pipe(Effect.timeout("20 seconds")))._tag).toBe(
-            "Some",
-          );
-          const changes = Arr.filter(messages.slice(1), (message) => message._tag !== "Unknown");
-          expect(Arr.every(changes, (message) => message._tag !== "Snapshot")).toBe(true);
-          const seqs = [snapshot.seq, ...Arr.map(changes, (message) => message.seq)];
-          expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
-          expect(new Set(seqs).size).toBe(seqs.length);
-          const last = changes.at(-1)!;
-          expect(last._tag === "Upsert" && last.task.id).toBe(snapshot.tasks[0]!.id);
-
-          // A client that comes back is told where the board is now, not what it missed.
-          const again = yield* firstSnapshot(world.state);
-          expect(again?._tag).toBe("Snapshot");
-          expect(again?.tasks[0]?.disposition).toBe("merged");
-
-          // The CLI prints that same snapshot.
-          const printed = yield* collie(world, ["board"]);
-          const cards = (yield* Schema.decodeUnknownEffect(
-            Schema.Struct({ tasks: Schema.Array(TaskView) }),
-          )(printed.envelope.data).pipe(Effect.orDie)).tasks;
-          expect(Arr.map(cards, ({ id, name, sentence }) => ({ id, name, sentence }))).toEqual(
-            Arr.map(again!.tasks, ({ id, name, sentence }) => ({ id, name, sentence })),
-          );
-
-          // Every subscriber has left; one that reconnects is still told what changes.
-          const abandoned = disposed("abandoned");
-          const back = yield* (yield* frontDoor(socketOf(world.state)).pipe(Effect.orDie))
-            .board()
-            .pipe(
-              Stream.tap((message) =>
-                message._tag === "Snapshot"
-                  ? recordDisposed(world, runId, "abandoned")
-                  : Effect.void,
-              ),
-              Stream.filter(abandoned),
-              Stream.runHead,
-              Effect.forkScoped,
-            );
-          expect((yield* Fiber.join(back).pipe(Effect.timeout("20 seconds")))._tag).toBe("Some");
-          yield* stopHost(world.state);
-        }),
-      ["plain.workflow.ts"],
-    ),
-  120_000,
-);
-
-test(
-  "two clients of one host read the same board",
-  () =>
-    proves(
-      "collie-board-shared-",
-      (world) =>
-        Effect.gen(function* () {
-          const started = yield* collie(world, ["run", "start", "plain", "--input", "note=hi"]);
-          expect(started.envelope.ok).toBe(true);
-          const { runId } = yield* Schema.decodeUnknownEffect(
-            Schema.Struct({ runId: Schema.String }),
-          )(started.envelope.data).pipe(Effect.orDie);
-          expect((yield* collie(world, ["run", "wait", runId])).envelope.ok).toBe(true);
-          // The host sees the finish a moment after the wait returns.
-          yield* until(
-            () => firstSnapshot(world.state),
-            (snapshot) => snapshot?.tasks[0]?.state === "done",
-          );
-          const [first, second] = yield* Effect.all(
-            [firstSnapshot(world.state), firstSnapshot(world.state)],
-            { concurrency: "unbounded" },
-          );
-          yield* stopHost(world.state);
-          expect(
-            Option.getOrUndefined(
-              Option.map(Option.fromNullishOr(first), (present) =>
-                Arr.map(present.tasks, (one) => one.name),
-              ),
+test("two clients of one host read the same board", () =>
+  proves(
+    "collie-board-shared-",
+    (world) =>
+      Effect.gen(function* () {
+        const started = yield* collie(world, ["run", "start", "plain", "--input", "note=hi"]);
+        expect(started.envelope.ok).toBe(true);
+        const { runId } = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({ runId: Schema.String }),
+        )(started.envelope.data).pipe(Effect.orDie);
+        expect((yield* collie(world, ["run", "wait", runId])).envelope.ok).toBe(true);
+        yield* until(
+          () => firstSnapshot(world.state),
+          (snapshot) => snapshot?.tasks[0]?.state === "done",
+        );
+        const [first, second] = yield* Effect.all(
+          [firstSnapshot(world.state), firstSnapshot(world.state)],
+          { concurrency: "unbounded" },
+        );
+        yield* stopHost(world.state);
+        expect(
+          Option.getOrUndefined(
+            Option.map(Option.fromNullishOr(first), (present) =>
+              Arr.map(present.tasks, (one) => one.name),
             ),
-          ).toEqual(["Plain"]);
-          // `age` is reckoned when a board is built, and a tick may build one between the two.
-          const ageless = (tasks: ReadonlyArray<TaskView> = []) =>
-            Arr.map(tasks, (task) => ({ ...task, age: null }));
-          expect(ageless(second?.tasks)).toEqual(ageless(first?.tasks));
-        }),
-      ["plain.workflow.ts"],
-    ),
-  120_000,
-);
+          ),
+        ).toEqual(["Hi"]);
+        const ageless = (tasks: ReadonlyArray<TaskView> = []) =>
+          Arr.map(tasks, (task) => ({ ...task, age: null }));
+        expect(ageless(second?.tasks)).toEqual(ageless(first?.tasks));
+      }),
+    ["plain.workflow.ts"],
+  ));
 
 const readsOnlyOnTicks = (drawer: boolean) =>
   proves(
@@ -262,14 +216,14 @@ const readsOnlyOnTicks = (drawer: boolean) =>
           );
           yield* Deferred.await(opened);
         }
-        const log = `${(yield* Path.Path).dirname(world.state)}/herdr-calls.jsonl`;
+        const log = `${(yield* Path.Path).dirname(world.state)}/core-calls.jsonl`;
         const lists = Effect.map(
           Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(log)),
           (text) =>
-            Arr.filter(Str.split(text, "\n"), (line) => /"cmd":"(agent|pane) list"/.test(line))
-              .length,
+            Arr.filter(Str.split(text, "\n"), (line) => /"cmd":"terminal\.list"/.test(line)).length,
         ).pipe(Effect.orDie);
         const before = yield* lists;
+        expect(before).toBeGreaterThan(0);
         const since = yield* Clock.currentTimeMillis;
         for (const kind of [
           "merged",
@@ -298,36 +252,16 @@ const readsOnlyOnTicks = (drawer: boolean) =>
     ["plain.workflow.ts"],
   );
 
-test(
-  "a write under the state directory rebuilds the board on herdr's last reading of its agents",
-  () => readsOnlyOnTicks(false),
-  120_000,
-);
+test("a write under the state directory rebuilds the board on core's last reading of its agents", () =>
+  readsOnlyOnTicks(false));
 
-test(
-  "a Run's open drawer follows the board's reading of herdr, and reads none of its own",
-  () => readsOnlyOnTicks(true),
-  120_000,
-);
+test("a Run's open drawer follows the board's reading of core, and reads none of its own", () =>
+  readsOnlyOnTicks(true));
 
 const asJson = Schemaflow(
   Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
   Result.getOrThrow,
 );
-const Herd = Schema.fromJsonString(
-  Schema.StructWithRest(
-    Schema.Struct({
-      agents: Schema.Array(
-        Schema.StructWithRest(Schema.Struct({ name: Schema.String }), [
-          Schema.Record(Schema.String, Schema.Json),
-        ]),
-      ),
-    }),
-    [Schema.Record(Schema.String, Schema.Json)],
-  ),
-);
-
-/** The actions a Run's Flow offers on the node of the agent named `agent`. */
 const actionsOf = (flow: Flow | null | undefined, agent: string) =>
   Option.getOrUndefined(
     Option.flatMap(Option.fromNullishOr(flow), (present_) =>
@@ -347,72 +281,61 @@ const actionsOf = (flow: Flow | null | undefined, agent: string) =>
     ),
   );
 
-test(
-  "run show says whether a Run's agent is alive as herdr lists it now, and a drawer opened after it draws the same",
-  () =>
-    proves(
-      "collie-show-alive-",
-      (world) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const outputs = `${world.home}/outputs.json`;
-          yield* fs.writeFileString(outputs, asJson([{ verdict: "done" }]));
-          const started = yield* collie(
-            world,
-            ["run", "start", "attended", "--input", "work=the link"],
-            { FAKE_HERDR_OUTPUTS: outputs },
+test("run show says whether a Run's agent is alive as core lists it now, and a drawer opened after it draws the same", () =>
+  proves(
+    "collie-show-alive-",
+    (world, core) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(`${world.home}/outputs.json`, asJson([{ verdict: "done" }]));
+        const started = yield* collie(world, [
+          "run",
+          "start",
+          "attended",
+          "--input",
+          "work=the link",
+        ]);
+        const { runId } = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({ runId: Schema.String }),
+        )(started.envelope.data).pipe(Effect.orDie);
+        const agent = `${runId}-build-r1`;
+        const client = yield* connect(world.state);
+        const shown = () =>
+          Effect.map(client.shown({ runId }), (one) => actionsOf(one?.flow, agent));
+        const door = yield* frontDoor(socketOf(world.state));
+        const drawn = () =>
+          door.runDetail({ runId, tail: false, pages: 1, refreshMr: false }).pipe(
+            Stream.map(recordIn),
+            Stream.runHead,
+            Effect.map((one) => actionsOf(Option.getOrNull(one)?.flow, agent)),
           );
-          const { runId } = yield* Schema.decodeUnknownEffect(
-            Schema.Struct({ runId: Schema.String }),
-          )(started.envelope.data).pipe(Effect.orDie);
-          const agent = `${runId}-build-r1`;
-          const client = yield* connect(world.state);
-          const shown = () =>
-            Effect.map(client.shown({ runId }), (one) => actionsOf(one?.flow, agent));
-          const door = yield* frontDoor(socketOf(world.state));
-          const drawn = () =>
-            door.runDetail({ runId, tail: false, pages: 1, refreshMr: false }).pipe(
-              Stream.map(recordIn),
-              Stream.runHead,
-              Effect.map((one) => actionsOf(Option.getOrNull(one)?.flow, agent)),
-            );
-          yield* until(shown, (actions) => actions?.includes("tell") === true);
-          yield* until(drawn, (actions) => actions?.includes("tell") === true);
+        yield* until(shown, (actions) => actions?.includes("tell") === true);
+        yield* until(drawn, (actions) => actions?.includes("tell") === true);
 
-          yield* editState(`${(yield* Path.Path).dirname(world.state)}/herdr-calls.jsonl`, (text) =>
-            Effect.map(Schema.decodeEffect(Herd)(text).pipe(Effect.orDie), (herd) =>
-              asJson({ ...herd, agents: Arr.filter(herd.agents, (one) => one.name !== agent) }),
-            ),
-          );
+        yield* core.exit(agent, 0);
 
-          expect(yield* shown()).not.toContain("tell");
-          expect(yield* drawn()).not.toContain("tell");
-          yield* stopHost(world.state);
-        }).pipe(Effect.orDie),
-      ["attended.workflow.ts"],
-    ),
-  120_000,
-);
+        expect(yield* shown()).not.toContain("tell");
+        expect(yield* drawn()).not.toContain("tell");
+        yield* stopHost(world.state);
+      }).pipe(Effect.orDie),
+    ["attended.workflow.ts"],
+  ));
 
-test(
-  "the installation id is the state directory's, through a host restart",
-  () =>
-    proves(
-      "collie-board-installation-",
-      (world) =>
-        Effect.gen(function* () {
-          expect((yield* collie(world, ["board"])).envelope.ok).toBe(true);
-          const before = yield* firstSnapshot(world.state);
-          yield* stopHost(world.state);
-          expect((yield* collie(world, ["board"])).envelope.ok).toBe(true);
-          const after = yield* firstSnapshot(world.state);
-          yield* stopHost(world.state);
-          expect(after?.installation).toBe(before!.installation);
-        }),
-      [],
-    ),
-  120_000,
-);
+test("the installation id is the state directory's, through a host restart", () =>
+  proves(
+    "collie-board-installation-",
+    (world) =>
+      Effect.gen(function* () {
+        expect((yield* collie(world, ["board"])).envelope.ok).toBe(true);
+        const before = yield* firstSnapshot(world.state);
+        yield* stopHost(world.state);
+        expect((yield* collie(world, ["board"])).envelope.ok).toBe(true);
+        const after = yield* firstSnapshot(world.state);
+        yield* stopHost(world.state);
+        expect(after?.installation).toBe(before!.installation);
+      }),
+    [],
+  ));
 
 test("a kind of message this client does not know is read, and a broken known one refused", () => {
   const decode = Schemaflow(Schema.decodeUnknownResult(BoardMessage), Result.getOrThrow);
@@ -436,7 +359,6 @@ test("an older host's focus, which names no pane, still decodes", () => {
 
 const HEAD = { installation: "i", build: "b", protocol: PROTOCOL, herds: [] };
 
-/** A board built from what the test hands it, one build at a time, counting each. */
 const handBuilt = Effect.gen(function* () {
   const builds = yield* Queue.unbounded<ReadonlyArray<TaskView> | "fails">();
   const changed = yield* Queue.unbounded<void>();
@@ -457,12 +379,13 @@ const handBuilt = Effect.gen(function* () {
       Stream.runCollect,
       Effect.forkScoped,
     );
-  /** Hands over a board and waits until a build has taken it, so the next change is its own. */
   const built = (next: ReadonlyArray<TaskView> | "fails") =>
     Queue.offer(builds, next).pipe(
       Effect.andThen(
         Effect.gen(function* () {
-          while ((yield* Queue.size(builds)) > 0) yield* Effect.yieldNow;
+          while ((yield* Queue.size(builds)) > 0) {
+            yield* Effect.yieldNow;
+          }
         }),
       ),
     );
@@ -532,8 +455,9 @@ test("changes that arrive during a build are folded into one more build", () =>
       Effect.gen(function* () {
         const hand = yield* handBuilt;
         const following = yield* hand.follow(1);
-        // The first build is under way, so the changes arrive during it.
-        while (hand.calls() === 0) yield* Effect.yieldNow;
+        while (hand.calls() === 0) {
+          yield* Effect.yieldNow;
+        }
         yield* Queue.offerAll(hand.changed, [undefined, undefined, undefined]);
         yield* hand.built([one]);
         yield* hand.built([one, two]);
@@ -574,9 +498,10 @@ test("the board is built with nobody subscribed, and every reader of one interva
         yield* hand.built([one]);
         expect(hand.calls()).toBe(1);
         const clients = [yield* hand.follow(1), yield* hand.follow(1)];
-        // News and the merge watch each read the latest board.
         const latest = [yield* Stream.runHead(hand.boards), yield* Stream.runHead(hand.boards)];
-        for (const client of clients) expect(tags(yield* Fiber.join(client))).toEqual(["Snapshot"]);
+        for (const client of clients) {
+          expect(tags(yield* Fiber.join(client))).toEqual(["Snapshot"]);
+        }
         expect(Arr.map(latest, (read) => read._tag === "Some" && read.value)).toEqual([
           [one],
           [one],
@@ -605,11 +530,15 @@ test("the latest board is read at once while a newer one builds, and the first i
         expect(Arr.map(yield* Fiber.join(first), (view) => view.id)).toEqual(["built-1"]);
 
         yield* Queue.offer(changed, undefined);
-        while (builds < 2) yield* Effect.yieldNow;
+        yield* TestClock.adjust("5 seconds");
+        while (builds < 2) {
+          yield* Effect.yieldNow;
+        }
         const asked = yield* Clock.currentTimeMillis;
         const read = yield* Effect.forkChild(latest);
-        for (let turn = 0; turn < 100 && read.pollUnsafe() === undefined; turn++)
+        for (let turn = 0; turn < 100 && read.pollUnsafe() === undefined; turn++) {
           yield* Effect.yieldNow;
+        }
         expect(read.pollUnsafe()).toBeDefined();
         expect(Arr.map(yield* Fiber.join(read), (view) => view.id)).toEqual(["built-1"]);
         expect(yield* Clock.currentTimeMillis).toBe(asked);
@@ -618,11 +547,55 @@ test("the latest board is read at once while a newer one builds, and the first i
     ).pipe(Effect.provide(TestClock.layer())),
   ));
 
+test("a build waits as long as the last one took, and at most 5 s, before it starts", () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const changed = yield* Queue.unbounded<void>();
+        const took = ["2 seconds", "8 seconds", "1 second"] as const;
+        const starts: Array<number> = [];
+        const build = Effect.gen(function* () {
+          starts.push(yield* Clock.currentTimeMillis);
+          yield* Effect.sleep(took[starts.length - 1] ?? "0 millis");
+          return [one];
+        });
+        yield* shareBoard({ build, changed: Stream.fromQueue(changed) });
+        const settle = Effect.gen(function* () {
+          for (let turn = 0; turn < 100; turn++) {
+            yield* Effect.yieldNow;
+          }
+        });
+        yield* settle;
+        expect(starts).toEqual([0]);
+        yield* Queue.offer(changed, undefined);
+        yield* TestClock.adjust("2 seconds");
+        yield* settle;
+        yield* TestClock.adjust("1999 millis");
+        yield* settle;
+        expect(starts).toEqual([0]);
+        yield* TestClock.adjust("1 millis");
+        yield* settle;
+        expect(starts).toEqual([0, 4000]);
+        yield* Queue.offer(changed, undefined);
+        yield* TestClock.adjust("8 seconds");
+        yield* settle;
+        yield* TestClock.adjust("4999 millis");
+        yield* settle;
+        expect(starts).toEqual([0, 4000]);
+        yield* TestClock.adjust("1 millis");
+        yield* settle;
+        expect(starts).toEqual([0, 4000, 17_000]);
+      }),
+    ).pipe(Effect.provide(TestClock.layer())),
+  ));
+
 const warnedDuring = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
-    const warned: string[] = [];
+    const warned: Array<string> = [];
     const logger = Logger.make(({ logLevel, message }) => {
-      if (logLevel === "Warn") warned.push(String(message));
+      if (logLevel === "Warn") {
+        warned.push(String(message));
+      }
     });
     yield* effect.pipe(Effect.provide(Logger.layer([logger])));
     return warned;
@@ -700,7 +673,9 @@ test("a read after verify waits for fresh board facts without holding the build'
         let boundaries = 0;
         const { boards } = yield* shareBoard({
           build: Effect.gen(function* () {
-            if (++builds === 1) return [task({ id: "fresh", ready: false, mr: null })];
+            if (++builds === 1) {
+              return [task({ id: "fresh", ready: false, mr: null })];
+            }
             yield* Deferred.succeed(rebuilding, undefined);
             yield* Deferred.await(buildAllowed);
             for (let at = 0; at < 3; at++) {
@@ -740,8 +715,9 @@ test("a read after verify waits for fresh board facts without holding the build'
         yield* Deferred.succeed(otherAllowed, undefined);
         yield* Fiber.join(other);
         yield* clock.adjust("1 millis");
-        for (let turn = 0; turn < 100 && read.pollUnsafe() === undefined; turn++)
+        for (let turn = 0; turn < 100 && read.pollUnsafe() === undefined; turn++) {
           yield* Effect.yieldNow;
+        }
         expect(read.pollUnsafe()).toBeDefined();
         expect(yield* Fiber.join(read)).toEqual(
           Option.some({
@@ -787,94 +763,12 @@ test("a Run recorded in the store is on the board at once, with no tick and no f
         const seen = yield* boards.pipe(
           Stream.filter((views) => Arr.some(views, (view) => view.id === "run-new")),
           Stream.runHead,
-          // Well inside the 5 s tick, which this board does not have.
           Effect.timeout("3 seconds"),
         );
         expect(seen._tag).toBe("Some");
       }).pipe(Effect.provide(foundationLayer({ dir })), Effect.scoped, Effect.orDie);
     }),
   ));
-
-test(
-  "an agent in a second herdr session reaches the board and makes its card Stalled",
-  () =>
-    proves(
-      "collie-board-sessions-",
-      (world) =>
-        Effect.gen(function* () {
-          const first = `${world.home}/first.sock`;
-          const second = `${world.home}/second.sock`;
-          // Two sessions, and the Run's agent is only in the second, at its own prompt.
-          // Started from a workspace in the second, so its Task is that session's.
-          const env = yield* currentEnv.pipe(Effect.orDie);
-          const workspace = yield* new Herdr(env)
-            .workspaceCreate({ cwd: world.project, label: "builds" })
-            .pipe(Effect.orDie);
-          const herdr = {
-            HERDR_SOCKET_PATH: second,
-            HERDR_WORKSPACE_ID: workspace.workspaceId,
-            FAKE_HERDR_SESSIONS: asSessions([
-              { name: "desk", socket_path: first },
-              { name: "builds", socket_path: second },
-            ]),
-            FAKE_HERDR_AGENTS_IN: second,
-            FAKE_HERDR_AGENT_STATUS: "blocked",
-          };
-          const started = yield* collie(
-            world,
-            [
-              "run",
-              "start",
-              "agent",
-              "--here",
-              "--input",
-              "target=worktree",
-              "--input",
-              `cwd=${world.project}`,
-              "--input",
-              "skip=false",
-            ],
-            herdr,
-          );
-          expect(started.envelope.ok).toBe(true);
-          const snapshot = yield* firstSnapshot(world.state).pipe(
-            Effect.repeat({
-              until: (read) => read?.tasks[0]?.state === "blocked",
-              schedule: Schedule.spaced("250 millis"),
-              times: 60,
-            }),
-          );
-          yield* stopHost(world.state);
-          // A host spawned from the first session reads the second, which it did not inherit.
-          const desk = yield* collie(world, ["board"], {
-            ...herdr,
-            HERDR_SOCKET_PATH: first,
-          });
-          expect(desk.envelope).toMatchObject({ ok: true });
-          const fromDesk = yield* firstSnapshot(world.state);
-          yield* stopHost(world.state);
-          expect(fromDesk?.tasks[0]?.state).toBe("blocked");
-          expect(
-            Option.getOrUndefined(
-              Option.map(Option.fromNullishOr(snapshot), (present___) =>
-                Arr.map(present___.herds, (herd) => herd.name),
-              ),
-            ),
-          ).toEqual(["desk", "builds"]);
-          const builds = Option.getOrUndefined(
-            Option.map(Option.fromNullishOr(snapshot), (present____) =>
-              Option.getOrUndefined(
-                Arr.findFirst(present____.herds, (herd) => herd.name === "builds"),
-              ),
-            ),
-          );
-          expect(snapshot?.tasks[0]?.herd).toBe(builds!.id);
-          expect(snapshot?.tasks[0]?.sentence).toMatch(/^Waiting for you in \S+'s pane\.$/);
-        }),
-      ["agent.workflow.ts", "notes.md"],
-    ),
-  120_000,
-);
 
 test("a reader that arrives after a change reads a board built after it, not the one before", () =>
   runEffect(
@@ -895,197 +789,12 @@ test("a reader that arrives after a change reads a board built after it, not the
     ).pipe(fastForward),
   ));
 
-/** A state directory with a Run's files, and the paths its board's watch lets through. */
-const watchedState = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const dir = yield* fs.makeTempDirectoryScoped({
-    prefix: "collie-board-writes-",
-  });
-  const write = (file: string, text = "x\n") =>
-    fs
-      .makeDirectory(path.dirname(`${dir}/${file}`), { recursive: true })
-      .pipe(Effect.andThen(fs.writeFileString(`${dir}/${file}`, text)), Effect.orDie);
-  const append = (file: string) =>
-    fs.writeFileString(`${dir}/${file}`, "more\n", { flag: "a" }).pipe(Effect.orDie);
-  for (const file of [
-    "runs/run-a/handoffs/test.log",
-    "evidence/run-a/verify/v.log",
-    "evidence/run-a/checks/c.log",
-    "compaction/agent-a/questions.jsonl",
-    "compaction/agent-a/events.jsonl",
-    "agents/run-a/step.json",
-    "tasks/task-a.json",
-    "ssh/.made",
-  ])
-    yield* write(file);
-  yield* write("runs/run-a/handoffs/ready", "");
-  const seen = yield* Queue.unbounded<string>();
-  yield* Effect.forkScoped(Stream.runForEach(boardWrites(dir), (path) => Queue.offer(seen, path)));
-  yield* until(() => write("ready").pipe(Effect.andThen(Queue.poll(seen))), Option.isSome);
-  const told = new Set<string>();
-  /** Each path through not told before, readiness left out, once every one of `wanted` is. */
-  const through = (wanted: ReadonlyArray<string>) =>
-    Effect.gen(function* () {
-      const paths = new Set<string>();
-      while (!Arr.every(wanted, (one) => paths.has(one))) {
-        const written = yield* Queue.take(seen);
-        if (!pipe_(written, Str.endsWith("ready")) && !told.has(written)) paths.add(written);
-      }
-      for (const one of paths) told.add(one);
-      return [...paths].sort();
-    }).pipe(Effect.timeoutOption("2 seconds"));
-  return { dir, write, append, through };
-});
-
-test("no write to the host's own bookkeeping reaches the board", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const { write, through } = yield* watchedState;
-      for (const file of [
-        "host.lock",
-        "tasks/task-a.json.lock",
-        "tasks/task-a.json.123.1.tmp",
-        "host.log",
-        "host.log.1",
-        "host.out",
-        "host.out.1",
-        "host.db-wal",
-        "host.db-journal",
-        "ssh/98276eb421de291c",
-        "compaction/agent-a/events.jsonl",
-        "compaction/agent-a/events.lock",
-        "compaction/agent-a/control.json",
-      ])
-        yield* write(file);
-      yield* write("tasks/marker.json");
-      expect(yield* through(["tasks/marker.json"])).toEqual(Option.some(["tasks/marker.json"]));
-    }),
-  ));
-
-test("a log growing in a Run's handoffs or verify logs reaches no board, and a file created there does", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const { write, append, through } = yield* watchedState;
-      yield* append("runs/run-a/handoffs/test.log");
-      yield* append("evidence/run-a/verify/v.log");
-      yield* write("tasks/marker.json");
-      expect(yield* through(["tasks/marker.json"])).toEqual(Option.some(["tasks/marker.json"]));
-      const created = ["evidence/run-a/verify/w.log", "runs/run-a/handoffs/new.log"];
-      for (const file of created) yield* write(file);
-      expect(yield* through(created)).toEqual(Option.some(created));
-    }),
-  ));
-
-test("a write outside every Run's directories reaches the board only where a read of the Run model read it", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-board-reads-" });
-      const write = (file: string) =>
-        fs
-          .makeDirectory(`${dir}/${pipe_(file, Str.split("/"), Arr.dropRight(1), Arr.join("/"))}`, {
-            recursive: true,
-          })
-          .pipe(Effect.andThen(fs.writeFileString(`${dir}/${file}`, "x\n")), Effect.orDie);
-      yield* write("merges/states.json");
-      yield* write("herd/h1/news/old.json");
-      yield* write("agents/run-a/old.json");
-      yield* write("usage/old.jsonl");
-      const model = yield* makeRunModel(dir, "installation");
-      yield* model.reading.readFileString(`${dir}/merges/states.json`).pipe(Effect.orDie);
-      yield* model.reading.readDirectory(`${dir}/herd/h1/news`).pipe(Effect.orDie);
-      const seen = yield* Queue.unbounded<string>();
-      yield* Effect.forkScoped(
-        Stream.runForEach(boardWrites(dir, model), (path) => Queue.offer(seen, path)),
-      );
-      yield* until(
-        () => write("runs/run-a/ready").pipe(Effect.andThen(Queue.poll(seen))),
-        Option.isSome,
-      );
-      yield* write("usage/operations.jsonl");
-      yield* write("herd/h1/budget.jsonl");
-      const wanted = [
-        "agents/run-a/build.prompt.md",
-        "herd/h1/news/new.json",
-        "merges/states.json",
-      ];
-      for (const file of wanted) yield* write(file);
-      const paths = new Set<string>();
-      const all = Effect.gen(function* () {
-        while (!Arr.every(wanted, (one) => paths.has(one))) {
-          const path = yield* Queue.take(seen);
-          if (!pipe_(path, Str.endsWith("ready"))) paths.add(path);
-        }
-      });
-      expect(Option.isSome(yield* Effect.timeoutOption(all, "2 seconds"))).toBe(true);
-      expect([...paths].sort()).toEqual(wanted);
-    }),
-  ));
-
-test("a running check's log, an agent's question and its Output reach the board as they are written", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const { dir, write, append, through } = yield* watchedState;
-      yield* append("evidence/run-a/checks/c.log");
-      yield* append("compaction/agent-a/questions.jsonl");
-      yield* write("agents/run-a/step.json.123.tmp", "{}");
-      yield* fs.rename(`${dir}/agents/run-a/step.json.123.tmp`, `${dir}/agents/run-a/step.json`);
-      const read = [
-        "agents/run-a/step.json",
-        "compaction/agent-a/questions.jsonl",
-        "evidence/run-a/checks/c.log",
-      ];
-      expect(yield* through(read)).toEqual(Option.some(read));
-    }),
-  ));
-
-test("a Run's open drawer lists a handoff's new size while the board's watch lets the write by", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const { dir, write, append, through } = yield* watchedState;
-      let listed: ReadonlyArray<{
-        readonly name: string;
-        readonly bytes: number;
-      }> = [];
-      let drawerSaw = false;
-      const changed = boardWrites(dir).pipe(Stream.debounce("200 millis"));
-      const own = drawerWrites(dir, "run-a").pipe(
-        Stream.tap(() => Effect.sync(() => (drawerSaw = true))),
-      );
-      yield* Effect.forkScoped(
-        Stream.runForEach(
-          followDetail(handoffsIn(`${dir}/runs/run-a`), Stream.merge(changed, own)),
-          (files) => Effect.sync(() => (listed = files)),
-        ),
-      );
-      const bytesOf = (name: string) => () =>
-        Effect.sync(
-          () =>
-            Option.getOrUndefined(Arr.findFirst(listed, (file) => file.name === name))?.bytes ?? 0,
-        );
-      // Further apart than the drawer's debounce, which each write would put off again.
-      const followed = append("runs/run-a/handoffs/ready").pipe(
-        Effect.map(() => drawerSaw),
-        Effect.repeat({ until: (saw) => saw, schedule: Schedule.spaced("300 millis") }),
-        Effect.timeoutOption("2 seconds"),
-      );
-      expect(yield* followed).toEqual(Option.some(true));
-      yield* append("runs/run-a/handoffs/test.log");
-      const grown = until(bytesOf("test.log"), (bytes) => bytes === 7);
-      expect(yield* grown.pipe(Effect.timeoutOption("2 seconds"))).toEqual(Option.some(7));
-      yield* write("tasks/marker.json");
-      expect(yield* through(["tasks/marker.json"])).toEqual(Option.some(["tasks/marker.json"]));
-    }),
-  ));
-
 test("a client subscribed before a month-old card is read and pruned is told it is Removed", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-board-pruned-" });
-      const env = readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" });
+      const env = readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" });
       const now = yield* Clock.currentTimeMillis;
       const monthAgo = DateTime.makeUnsafe(now - 30 * 86_400_000);
       const run = yield* madeRun(dir, {
@@ -1115,7 +824,7 @@ test("a client subscribed before a month-old card is read and pruned is told it 
           cards,
         }).pipe(Effect.provideService(FileSystem.FileSystem, model.reading));
       });
-      const { boards } = yield* shareBoard({ build, changed: boardWrites(dir, model) });
+      const { boards } = yield* shareBoard({ build, changed: model.changed });
       const told = yield* Queue.unbounded<BoardMessage>();
       yield* boardMessages({
         head: { installation: "installation", build: BUILD, protocol: PROTOCOL, herds: [] },
@@ -1136,6 +845,7 @@ test("a client subscribed before a month-old card is read and pruned is told it 
         by: "human",
         note: null,
       });
+      model.wrote([run.id]);
 
       const next = yield* Queue.take(told).pipe(Effect.timeout("10 seconds"));
       expect(next).toMatchObject({ _tag: "Remove", id: card!.id });

@@ -28,8 +28,7 @@ test("a process's command and start time read alone are what reading it whole sa
 test.skipIf(process.platform !== "linux")(
   "a zombie is not running, whether proc or ps is read",
   () => {
-    // The child waits on stdin, which is closed only once the shell has become a sleep that
-    // never reaps it, so the child is certain to stay a zombie.
+    // WARNING: the child waits on stdin, which closes only once the shell becomes a sleep that never reaps it, so it stays a zombie.
     const parent = Bun.spawn(
       ["sh", "-c", "cat >/dev/null <&0 & echo $!; exec sleep 30 >/dev/null"],
       { stdin: "pipe", stdout: "pipe" },
@@ -129,7 +128,7 @@ test.skipIf(process.platform !== "linux").each([
           pathOrDescriptor: cmdline,
           description: "cmdline read failed",
         });
-        const absentAtRead: boolean[] = [];
+        const absentAtRead: Array<boolean> = [];
         const raced: FileSystem.FileSystem = {
           ...fs,
           readDirectory: (path, options) =>
@@ -148,7 +147,9 @@ test.skipIf(process.platform !== "linux").each([
                   if (exited) {
                     yield* child.kill();
                     yield* child.exitCode.pipe(Effect.result);
-                  } else yield* fs.readFileString(path, encoding);
+                  } else {
+                    yield* fs.readFileString(path, encoding);
+                  }
                   absentAtRead.push(yield* processAbsent(child.pid));
                   return yield* unknown;
                 })
@@ -184,10 +185,12 @@ test.skipIf(process.platform !== "linux")(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const spawned: string[] = [];
+        const spawned: Array<string> = [];
         const spawner = ChildProcessSpawner.make((command) =>
           Effect.sync(() => {
-            if (command._tag === "StandardCommand") spawned.push(command.command);
+            if (command._tag === "StandardCommand") {
+              spawned.push(command.command);
+            }
           }).pipe(Effect.andThen(Effect.die("nothing may be spawned"))),
         );
         const started = yield* startedOf(2 ** 22 + 1).pipe(
@@ -212,10 +215,10 @@ test("a running process's group and bindings are read, and a gone one has neithe
           stderr: "ignore",
         }),
       );
-      // Until it has exec'd, /proc shows its parent's environment, or none.
+      // WARNING: until it has exec'd, /proc shows its parent's environment, or none.
       yield* Stream.runDrain(Stream.take(Stream.decodeText(leader.stdout), 1));
       expect(yield* groupOf(leader.pid)).toBe(leader.pid);
-      // Without a readable /proc, a binding proves nothing.
+      // WARNING: without a readable /proc a binding proves nothing.
       expect(yield* bindingsOf(leader.pid, ["COLLIE_PROBE", "COLLIE_ABSENT"])).toEqual(
         process.platform === "linux" ? { COLLIE_PROBE: "carried" } : null,
       );
@@ -248,7 +251,9 @@ test("unrelated process metadata cannot delay finding a bound process, whose bin
         readDirectory: () => Effect.succeed(["7", "8"]),
         readFileString: (path) =>
           Effect.suspend(() => {
-            if (path === "/proc/8/stat") return Effect.never;
+            if (path === "/proc/8/stat") {
+              return Effect.never;
+            }
             if (path === "/proc/7/stat") {
               binding = "after-start";
               return Effect.succeed(
@@ -295,7 +300,6 @@ test("a look for bound processes on a busy machine takes about one process's rea
         Effect.provideService(FileSystem.FileSystem, slowProc),
       );
       expect(found).toEqual([{ pid: 7, started: "start-7", bound: { COLLIE_PROBE: "carried" } }]);
-      // Read one after another, 100 processes' two reads take 4 seconds.
-      expect((yield* Clock.currentTimeMillis) - began).toBeLessThan(1_000);
+      expect((yield* Clock.currentTimeMillis) - began).toBeLessThan(1000);
     }),
   ));

@@ -7,7 +7,6 @@ export interface RefreshJob<R> {
   readonly check: Effect.Effect<boolean, never, R>;
 }
 
-/** Coalesced, bounded refreshes due every 30 seconds, backing off a failing source. */
 export const refreshJobs = () => {
   const permits = Semaphore.makeUnsafe(2);
   const pending = new Map<string, Deferred.Deferred<boolean>>();
@@ -19,10 +18,12 @@ export const refreshJobs = () => {
   });
   const due = <R>(job: RefreshJob<R>, now: number) =>
     now >= (checked.get(job.key)?.due ?? job.observed + 30_000);
-  const refresh = <R>(job: RefreshJob<R>): Effect.Effect<boolean, never, R> =>
+  const refresh = <R>(job: RefreshJob<R>) =>
     Effect.gen(function* () {
       const running = pending.get(job.key);
-      if (running !== undefined) return yield* Deferred.await(running);
+      if (running !== undefined) {
+        return yield* Deferred.await(running);
+      }
       const done = yield* Deferred.make<boolean>();
       pending.set(job.key, done);
       return yield* permits
@@ -60,7 +61,7 @@ export const refreshJobs = () => {
         (job: RefreshJob<R>) => job.key,
         Order.String,
       );
-      // On from the last one checked, so a failing source cannot hold the front.
+      // WARNING: starts from the last source checked, so a failing one cannot hold the front.
       const rotated = Arr.take(
         [
           ...Arr.filter(ready, (job) => job.key > cursor),
@@ -74,8 +75,11 @@ export const refreshJobs = () => {
   const pass = <R>(jobs: ReadonlyArray<RefreshJob<R>>) =>
     Effect.gen(function* () {
       const keys = new Set(Arr.map(jobs, (job) => job.key));
-      for (const key of checked.keys())
-        if (!keys.has(key) && !pending.has(key)) checked.delete(key);
+      for (const key of checked.keys()) {
+        if (!keys.has(key) && !pending.has(key)) {
+          checked.delete(key);
+        }
+      }
       yield* schedule(jobs);
     });
   return { refresh, pass, schedule, status, due };

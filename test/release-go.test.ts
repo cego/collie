@@ -1,5 +1,3 @@
-// The go a human's Release gives a Release Run, and when it still holds.
-
 import { expect, test } from "bun:test";
 import { givenAt, holdsFor } from "../workflows/release-go";
 

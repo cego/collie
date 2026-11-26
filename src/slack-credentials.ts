@@ -8,7 +8,6 @@ import { isString } from "./schema";
 
 const collieConfig = (env: Pick<PluginEnv, "home" | "raw">) =>
   `${env.raw.XDG_CONFIG_HOME || `${env.home}/.config`}/collie`;
-/** An older Collie's bot token, which is never read: only its presence is. */
 const slackBotEnvPath = (env: Pick<PluginEnv, "home" | "raw">) => `${collieConfig(env)}/slack.env`;
 export const slackUserEnvPath = (env: Pick<PluginEnv, "home" | "raw">) =>
   `${collieConfig(env)}/slack-user.env`;
@@ -42,42 +41,46 @@ const signedInAs = (env: Pick<PluginEnv, "home" | "raw">, api: typeof slackApi) 
       field("SLACK_USER_ID"),
       field("SLACK_TEAM_ID"),
     ];
-    if (!token || !user || !team) return yield* broken(`${file} lacks the token, user or team`);
+    if (!token || !user || !team) {
+      return yield* broken(`${file} lacks the token, user or team`);
+    }
     const owner = yield* api(token).tokenOwner();
-    if (owner.bot_id !== undefined) return yield* broken("token is a bot's");
-    if (owner.user_id !== user)
+    if (owner.bot_id !== undefined) {
+      return yield* broken("token is a bot's");
+    }
+    if (owner.user_id !== user) {
       return yield* broken(`token belongs to ${owner.user_id}, not ${user}`);
-    if (owner.team_id !== team)
+    }
+    if (owner.team_id !== team) {
       return yield* broken(`token is for team ${owner.team_id}, not ${team}`);
+    }
     return { token, owner, scopes: field("SLACK_USER_SCOPES") };
   }).pipe(
-    Effect.mapError((reason): ConnectionReading =>
-      isString(reason) ? { state: "broken", detail: reason, fix: SLACK_FIX } : reason,
-    ),
+    Effect.mapError((reason) => {
+      const returned: ConnectionReading = isString(reason)
+        ? { state: "broken", detail: reason, fix: SLACK_FIX }
+        : reason;
+      return returned;
+    }),
   );
 
-export const probeSlack = (
-  env: Pick<PluginEnv, "home" | "raw">,
-  api = slackApi,
-): Effect.Effect<ConnectionReading, never, FileSystem.FileSystem> =>
+export const probeSlack = (env: Pick<PluginEnv, "home" | "raw">, api = slackApi) =>
   signedInAs(env, api).pipe(
-    Effect.map(({ owner, scopes }): ConnectionReading =>
-      missingSlackScopes(scopes).length > 0
-        ? {
-            state: "broken",
-            detail: `Slack needs ${Arr.join(missingSlackScopes(scopes), ", ")}`,
-            fix: "Sign in again to Slack in Desktop Settings › Connections",
-          }
-        : { state: "ok", account: owner.team, detail: `Posts as ${owner.user} in ${owner.team}` },
-    ),
+    Effect.map(({ owner, scopes }) => {
+      const returned: ConnectionReading =
+        missingSlackScopes(scopes).length > 0
+          ? {
+              state: "broken",
+              detail: `Slack needs ${Arr.join(missingSlackScopes(scopes), ", ")}`,
+              fix: "Sign in again to Slack in Desktop Settings › Connections",
+            }
+          : { state: "ok", account: owner.team, detail: `Posts as ${owner.user} in ${owner.team}` };
+      return returned;
+    }),
     Effect.catch(Effect.succeed),
   );
 
-/** The human's user token, only once Slack says it is theirs; otherwise why not. */
-export const slackUserToken = (
-  env: Pick<PluginEnv, "home" | "raw">,
-  api = slackApi,
-): Effect.Effect<string, string, FileSystem.FileSystem> =>
+export const slackUserToken = (env: Pick<PluginEnv, "home" | "raw">, api = slackApi) =>
   signedInAs(env, api).pipe(
     Effect.map(({ token }) => token),
     Effect.mapError((reading) => reading.detail),

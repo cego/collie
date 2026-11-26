@@ -1,20 +1,19 @@
-// What only the human can give, asked once by Desktop: the GitLab token and Helle's
-// token kept in an owner-only file and handed to every Machine on stdin, and the logins
-// finished in this computer's browser through a forwarded callback port.
-
 import { pipe as pipe_ } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
-import { platformLayer, type PlatformServices } from "../src/platform";
-import { Effect, FileSystem, Queue, type Scope } from "effect";
+import { platformLayer } from "../src/platform";
+import type { PlatformServices } from "../src/platform";
+import { Effect, FileSystem, Queue } from "effect";
+import type { Scope } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 import { signRelease } from "../src/signing";
 import { epochMs } from "../src/time";
-import { localRoute, type ShellRoute } from "../desktop/src/bun/machine";
+import { localRoute } from "../desktop/src/bun/machine";
+import type { ShellRoute } from "../desktop/src/bun/machine";
 import { onboardThrough, platformOf } from "../desktop/src/bun/onboarding";
 import {
   claudeLoginThrough,
@@ -23,12 +22,11 @@ import {
   gitlabToken,
   helleOwner,
   credentialsFile,
-  type Keyring,
-  type KeyringEntry,
   secretsFor,
 } from "../desktop/src/bun/credentials";
+import type { Keyring, KeyringEntry } from "../desktop/src/bun/credentials";
 import { fingerprint, givenCredentials } from "../desktop/src/bun/given";
-import { type Credential, type MachineGiven, type OnboardRun } from "../desktop/src/shared/flock";
+import type { Credential, MachineGiven, OnboardRun } from "../desktop/src/shared/flock";
 import { renewalDue } from "../src/gitlab-token";
 import { HELLE_URL } from "../src/helle-url";
 
@@ -46,8 +44,11 @@ const executable = (path: string, text: string) =>
     yield* fs.chmod(path, 0o755);
   });
 
-/** A Machine reached as Local is, in a home of the test's own with `bin` first on PATH. */
-const machineIn = (home: string, bin: string, forwarded: number[] = []): ShellRoute => ({
+const machineIn: (home: string, bin: string, forwarded?: Array<number>) => ShellRoute = (
+  home,
+  bin,
+  forwarded = [],
+) => ({
   ...localRoute([], "pc"),
   sh: (script) =>
     Effect.succeed([
@@ -61,7 +62,6 @@ const machineIn = (home: string, bin: string, forwarded: number[] = []): ShellRo
   forward: (port) => Effect.sync(() => void forwarded.push(port)),
 });
 
-/** `secret-tool`, as an earlier Desktop kept its secrets: each in a file named for its attributes. */
 const fakeSecretTool = (dir: string) =>
   executable(
     `${dir}/secret-tool`,
@@ -77,7 +77,6 @@ test("a secret is kept in an owner-only file and read back, with no secret-tool 
       const dir = `${yield* scratch}/collie-desktop`;
       const keyring = credentialsFile(dir, `${dir}/no-such-tool`);
       expect(yield* keyring.lookup("gitlab-token")).toBeNull();
-      // Nothing to copy is not written down, so a keyring that did not answer is asked again.
       expect(yield* fs.exists(`${dir}/credentials`)).toBe(false);
       yield* keyring.store("gitlab-token", "Collie's GitLab token", "glpat-123");
       yield* keyring.store("helle-token", "Collie's Helle token", "h-1");
@@ -105,7 +104,6 @@ test("what an earlier Desktop kept through secret-tool is moved into the file, o
       const keyring = credentialsFile(`${dir}/collie-desktop`, `${dir}/secret-tool`);
       expect(yield* keyring.lookup("gitlab-token")).toBe("glpat-old");
       expect(yield* keyring.lookup("helle-token")).toBeNull();
-      // The file is what is read from now on, with or without secret-tool.
       yield* fs.writeFileString(`${dir}/secret-service_collie-desktop_key_helle-token`, "h-late");
       const later = credentialsFile(`${dir}/collie-desktop`, `${dir}/no-such-tool`);
       expect(yield* later.lookup("gitlab-token")).toBe("glpat-old");
@@ -113,7 +111,6 @@ test("what an earlier Desktop kept through secret-tool is moved into the file, o
     }),
   ));
 
-/** GitLab, answering `personal_access_tokens/self` for `glpat-good` and refusing the rest. */
 const gitlab = (scopes: ReadonlyArray<string>) =>
   Effect.acquireRelease(
     Effect.sync(() =>
@@ -143,7 +140,6 @@ test("a GitLab token is taken only once GitLab accepts it with the scopes Collie
     }),
   ));
 
-/** Helle, answering `/me` for `h-1` and refusing the rest. */
 const helle = Effect.acquireRelease(
   Effect.sync(() =>
     Bun.serve({
@@ -197,7 +193,6 @@ test("the secrets Desktop holds are handed to collie onboard as stdin lines", ()
     }),
   ));
 
-/** A runner of 0.40.0 that logs its arguments and stdin, then asks for Linear's login. */
 const RUNNER = (dir: string) => `#!/bin/sh
 echo "$*" > '${dir}/args'
 cat > '${dir}/stdin'
@@ -223,22 +218,25 @@ test("onboarding gives the runner Desktop's secrets on stdin, and forwards and o
             port: 0,
             fetch: (request) => {
               const path = new URL(request.url).pathname;
-              if (path === `/0.40.0/collie-${platform}`) return new Response(bytes);
-              if (path === `/0.40.0/collie-${platform}.sig`)
+              if (path === `/0.40.0/collie-${platform}`) {
+                return new Response(bytes);
+              }
+              if (path === `/0.40.0/collie-${platform}.sig`) {
                 return new Response(
                   signRelease(
                     bytes,
                     key.privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
                   ),
                 );
+              }
               return new Response("no", { status: 404 });
             },
           }),
         ),
         (one) => Effect.promise(() => one.stop(true)),
       );
-      const forwarded: number[] = [];
-      const opened: string[] = [];
+      const forwarded: Array<number> = [];
+      const opened: Array<string> = [];
       const last = yield* onboardThrough(
         machineIn(home, dir, forwarded),
         {
@@ -256,19 +254,14 @@ test("onboarding gives the runner Desktop's secrets on stdin, and forwards and o
         "--json onboard --to 0.40.0 --secrets-stdin",
       );
       expect(yield* fs.readFileString(`${dir}/stdin`)).toBe("GITLAB_TOKEN=glpat-good\n");
-      expect(forwarded).toEqual([62074]);
+      expect(forwarded).toEqual([62_074]);
       expect(opened).toEqual([
         "https://mcp.linear.app/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A62074%2Fcallback",
       ]);
     }),
   ));
 
-/**
- * `claude auth login` as Claude Code 2.1 does it: the URL with its callback port goes to
- * `$BROWSER`, only the paste-code URL is printed, and the login ends at a callback with a
- * code or at a pasted code. How it ended is written to `<dir>/login`, and whether it had a
- * terminal to `<dir>/tty`.
- */
+// WARNING: claude auth login as Claude Code 2.1 runs it: the URL with its callback port goes to $BROWSER; only the paste-code URL is printed.
 const fakeClaude = (dir: string) =>
   executable(
     `${dir}/claude`,
@@ -290,7 +283,7 @@ for await (const line of console) done("code " + line.trim());
 `,
   );
 
-const loginRun: OnboardRun = { steps: [], asked: null, ready: null, reason: null, at: 0 };
+const loginRun: OnboardRun = { steps: [], ready: null, reason: null, at: 0 };
 
 test("the Claude login finishes by approving in this computer's browser through its forwarded callback port", () =>
   run(
@@ -300,10 +293,9 @@ test("the Claude login finishes by approving in this computer's browser through 
       const home = `${dir}/home`;
       yield* fs.makeDirectory(home);
       yield* fakeClaude(dir);
-      const forwarded: number[] = [];
-      const runs: OnboardRun[] = [];
+      const forwarded: Array<number> = [];
+      const runs: Array<OnboardRun> = [];
       const codes = yield* Queue.unbounded<string>();
-      // This computer's browser, approving the login at the callback it was sent to.
       const browser = (url: string) => {
         const callback = new URL(new URL(url).searchParams.get("redirect_uri")!);
         callback.searchParams.set("code", "c-1");
@@ -322,7 +314,6 @@ test("the Claude login finishes by approving in this computer's browser through 
       expect(ended.ended).toBe(true);
       expect(yield* fs.readFileString(`${dir}/login`)).toBe("browser c-1");
       expect(forwarded).toHaveLength(1);
-      // The paste-code URL is offered while the login waits, as the fallback.
       expect(
         Arr.some(runs, ({ steps }) =>
           Boolean(
@@ -358,7 +349,6 @@ test("the Claude login takes a pasted code where the browser cannot reach its ca
       );
       expect(ended.ended).toBe(true);
       expect(yield* fs.readFileString(`${dir}/login`)).toBe("code pasted-1");
-      // In a terminal of its own: on macOS too, where `script` takes other flags.
       expect(yield* fs.readFileString(`${dir}/tty`)).toBe("true");
     }),
   ));
@@ -408,15 +398,13 @@ test("Helle's credentials are written on every Machine, readable by its owner al
     }),
   ));
 
-/** A keyring in memory, holding what `held` says. */
-const keyringOf = (held: Partial<Record<KeyringEntry, string>>): Keyring => ({
+const keyringOf: (held: Partial<Record<KeyringEntry, string>>) => Keyring = (held) => ({
   lookup: (key) => Effect.sync(() => held[key] ?? null),
   store: (key, _label, value) => Effect.sync(() => void (held[key] = value)),
   clear: (key) => Effect.sync(() => void delete held[key]),
 });
 const vmRoute: ShellRoute = { ...localRoute([], "vm"), machine: { profile: "p-vm", name: "vm" } };
 
-/** Desktop's record of what it gave, over fake givers that log each give and fail where told. */
 const givenIn = (
   dir: string,
   keyring: Keyring,
@@ -424,8 +412,8 @@ const givenIn = (
   skipped: ReadonlyArray<string> = [],
 ) =>
   Effect.gen(function* () {
-    const gave: string[] = [];
-    const told: MachineGiven[] = [];
+    const gave: Array<string> = [];
+    const told: Array<MachineGiven> = [];
     const giver = (credential: Credential) => (route: ShellRoute, text: string) =>
       Effect.sync(() => {
         gave.push(`${route.machine.name} ${credential} ${text}`);
@@ -494,7 +482,6 @@ test("a Machine that connects is given each credential it lacks or has an older 
       expect(yield* given.giveLacking(vmRoute)).toEqual([{ credential: "gitlab", failed: null }]);
       expect(gave).toEqual(["vm gitlab glpat-1"]);
       expect(yield* given.giveLacking(vmRoute)).toEqual([]);
-      // Renewed while it was away.
       held["gitlab-token"] = "glpat-2";
       expect(yield* given.giveLacking(vmRoute)).toEqual([{ credential: "gitlab", failed: null }]);
       expect(gave).toEqual(["vm gitlab glpat-1", "vm gitlab glpat-2"]);
@@ -521,7 +508,6 @@ test("a give that failed keeps why, and the Machine still lacks it", () =>
       };
       expect(told).toEqual([lacking]);
       expect(yield* given.states([vmRoute.machine])).toEqual([lacking]);
-      // A renewed token's state is not the older one's failure.
       held["gitlab-token"] = "glpat-2";
       expect(yield* given.states([vmRoute.machine])).toEqual([{ ...lacking, failed: null }]);
     }),

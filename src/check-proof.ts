@@ -1,23 +1,13 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
-import {
-  passed,
-  ranCommand,
-  ranOneTest,
-  sameCommand,
-  staleAgainst,
-  type CheckCommand,
-  type Snapshot,
-  type Verification,
-} from "./verify";
+import { movedLine, passed, ranCommand, ranOneTest, sameCommand, staleAgainst } from "./verify";
+import type { CheckCommand, Snapshot, Verification } from "./verify";
 
 export interface Journal {
   readonly verifications: ReadonlyArray<Verification>;
   readonly final: Snapshot;
-  /** The Run's Checks' commands as they resolve here; a record of exactly one counts for it, whoever asked. */
   readonly commands?: ReadonlyArray<CheckCommand>;
-  /** The Run's Checks, which say which are left to CI where `commands` is not given. */
   readonly approved?: ReadonlyArray<LeftToCi>;
 }
 
@@ -28,25 +18,14 @@ type LeftToCi = {
 };
 
 export interface CheckProof {
-  /** A check left to CI is only ever `waiting` on its job or `proved` by it. */
   readonly state: "passed" | "failed" | "unstable" | "earlier" | "never" | "waiting" | "proved";
-  /** Every run of the Check's own command, oldest first. */
   readonly runs: ReadonlyArray<Verification>;
-  /** The latest of them on this tree. */
   readonly last: Verification | undefined;
 }
 
-/**
- * Whose records count, by name, for a Check whose command is not given: anyone's, or only
- * the runs Collie made itself.
- */
 export type Unmatched = "anyone" | "collie";
 
-export function checkProof(
-  got: Journal,
-  name: string,
-  unmatched: Unmatched = "anyone",
-): CheckProof {
+export function checkProof(got: Journal, name: string, unmatched: Unmatched = "anyone") {
   const command = Option.getOrUndefined(
     Option.map(Option.fromNullishOr(got.commands), (present) =>
       Option.getOrUndefined(Arr.findFirst(present, (one) => one.name === name)),
@@ -71,14 +50,19 @@ export function checkProof(
           ? check.argv === undefined || sameCommand(v, { ...v, argv: check.argv })
           : sameCommand(v, { ...command, executable: command.executable ?? v.executable })),
     );
-    // A pipeline job ran on its commit, so its pass is bound to that head, not only to the bytes.
+    // WARNING: a pipeline pass is bound to its commit, not only to the tree's bytes.
     const proof = Option.getOrUndefined(
       Arr.findLast(
         jobs,
         (v) => v.end.head_sha === got.final.head_sha && !staleAgainst(v, got.final) && passed(v),
       ),
     );
-    return { state: proof === undefined ? "waiting" : "proved", runs: jobs, last: proof };
+    const returned: CheckProof = {
+      state: proof === undefined ? "waiting" : "proved",
+      runs: jobs,
+      last: proof,
+    };
+    return returned;
   }
   const runs = Arr.filter(
     got.verifications,
@@ -89,32 +73,43 @@ export function checkProof(
         : ranCommand(v, command)),
   );
   const last = Option.getOrUndefined(Arr.findLast(runs, (v) => !staleAgainst(v, got.final)));
-  return { state: stateOf(runs, last), runs, last };
+  const returned: CheckProof = { state: stateOf(runs, last), runs, last };
+  return returned;
 }
 
 function stateOf(runs: ReadonlyArray<Verification>, last: Verification | undefined) {
-  if (last !== undefined && passed(last)) return "passed";
+  if (last !== undefined && passed(last)) {
+    return "passed";
+  }
   const latest = last ?? runs.at(-1);
-  if (latest === undefined) return "never";
-  if (latest.result === "fail" || latest.expect === "fail") return "failed";
-  if (latest.result === "unstable") return "unstable";
+  if (latest === undefined) {
+    return "never";
+  }
+  // WARNING: an earlier-tree record is no failure here, so the check still owes a pass.
+  if (last === undefined && latest.expect === "fail") {
+    return "earlier";
+  }
+  if (latest.result === "fail" || latest.expect === "fail") {
+    return "failed";
+  }
+  if (latest.result === "unstable") {
+    return "unstable";
+  }
   return "earlier";
 }
 
-/** Whether a proof leaves a local run nothing to close: a pass here, or a check left to CI. */
 export const owesNothingHere = (proof: CheckProof) =>
   proof.state === "passed" || proof.state === "waiting" || proof.state === "proved";
 
-/** The Checks a Run runs itself: all but those left to CI. */
-export const owedLocally = <C extends LeftToCi>(checks: ReadonlyArray<C>): ReadonlyArray<C> =>
+export const owedLocally = <C extends LeftToCi>(checks: ReadonlyArray<C>) =>
   Arr.filter(checks, (check) => check.ci === undefined);
 
-/** Why a check is unstable: git's first line where its latest unstable record kept why it could not measure the tree. */
-export function unstableWhy(runs: ReadonlyArray<Verification>): string {
+export function unstableWhy(runs: ReadonlyArray<Verification>) {
   const latest = Option.getOrUndefined(Arr.findLast(runs, (v) => v.result === "unstable"));
   const reason = latest?.end.unmeasured ?? latest?.start.unmeasured ?? "";
+  const moved = latest === undefined ? "" : movedLine(latest);
   return Option.match(Arr.findFirst(Arr.map(Str.split(reason, "\n"), Str.trim), Str.isNonEmpty), {
-    onNone: () => "ran on a tree that moved under it",
+    onNone: () => `ran on a tree that moved under it${moved === "" ? "" : `: ${moved}`}`,
     onSome: (line) => `ran on a tree git could not measure: ${line}`,
   });
 }

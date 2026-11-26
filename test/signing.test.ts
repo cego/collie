@@ -1,5 +1,3 @@
-// Release signatures, and the tool CI signs with.
-
 import { expect, test } from "bun:test";
 import { createPublicKey, generateKeyPairSync } from "node:crypto";
 import { Effect, FileSystem } from "effect";

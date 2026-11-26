@@ -1,6 +1,4 @@
 import * as Cause from "effect/Cause";
-// The lock every writer of a Run's directory takes: a crashed holder's claim is broken
-// at once, a live one is respected, and a claim that moved is never the one removed.
 
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -52,7 +50,7 @@ test("a crashed holder's run lock is broken at once; the save neither waits nor 
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const lock = path.join(dir, "run.json.lock");
-      yield* fs.writeFileString(lock, `${encodeJson({ pid: 999999, start: "1" })}\n`);
+      yield* fs.writeFileString(lock, `${encodeJson({ pid: 999_999, start: "1" })}\n`);
 
       const started = yield* Clock.currentTimeMillis;
       const file = path.join(dir, "intent.json");
@@ -100,7 +98,7 @@ test("lock staleness follows the holder: dead breaks now, live and mid-claim are
       expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(500);
       expect(yield* fs.exists(lock)).toBe(false);
 
-      yield* fs.writeFileString(lock, `${encodeJson({ pid: 999999, start: "1" })}\n`);
+      yield* fs.writeFileString(lock, `${encodeJson({ pid: 999_999, start: "1" })}\n`);
       expect(yield* breakStaleLock(lock)).toBe(true);
       expect(yield* fs.exists(lock)).toBe(false);
     }),
@@ -123,8 +121,7 @@ test("a run lock held past its budget is refused as busy, and nothing is written
         Duration.millis(100),
       ).pipe(Effect.flip);
 
-      // Well short of the default budget: the shortened one is what was waited for.
-      expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(1_000);
+      expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(1000);
       expect(refused.message).toContain("could not be acquired");
       expect(yield* fs.exists(file)).toBe(false);
       expect(yield* fs.readFileString(lock)).toBe(held);
@@ -146,7 +143,7 @@ test("a break already in progress leaves the stale lock for its breaker", () =>
       const path = yield* Path.Path;
       const lock = path.join(dir, "guarded.lock");
 
-      yield* fs.writeFileString(lock, `${encodeJson({ pid: 999999, start: "1" })}\n`);
+      yield* fs.writeFileString(lock, `${encodeJson({ pid: 999_999, start: "1" })}\n`);
       yield* fs.writeFileString(`${lock}.break`, "");
 
       expect(yield* breakStaleLock(lock)).toBe(false);
@@ -162,7 +159,7 @@ test("a break guard left by a crashed breaker is recovered", () =>
       const lock = path.join(dir, "crashed.lock");
       const guard = `${lock}.break`;
 
-      yield* fs.writeFileString(lock, `${encodeJson({ pid: 999999, start: "1" })}\n`);
+      yield* fs.writeFileString(lock, `${encodeJson({ pid: 999_999, start: "1" })}\n`);
       yield* fs.writeFileString(guard, "");
       const old = DateTime.toDateUtc(
         DateTime.makeUnsafe((yield* Clock.currentTimeMillis) - 60_000),
@@ -171,6 +168,7 @@ test("a break guard left by a crashed breaker is recovered", () =>
 
       expect(yield* breakStaleLock(lock)).toBe(true);
       expect(yield* fs.exists(lock)).toBe(false);
+      // WARNING: released only because the claim in it was this process's own, never removed blind.
       expect(yield* fs.exists(guard)).toBe(false);
     }),
   ));
@@ -183,19 +181,17 @@ test("taking over a crashed breaker's guard leaves this process's own claim", ()
       const lock = path.join(dir, "takeover.lock");
       const guard = `${lock}.break`;
 
-      // A live holder, so the break stops after the guard and the guard stays claimed.
       yield* fs.writeFileString(
         lock,
         `${encodeJson({ pid: globalThis.process.pid, start: yield* processStartTime(globalThis.process.pid) })}\n`,
       );
-      yield* fs.writeFileString(guard, `${encodeJson({ pid: 999999, start: "1" })}\n`);
+      yield* fs.writeFileString(guard, `${encodeJson({ pid: 999_999, start: "1" })}\n`);
       const old = DateTime.toDateUtc(
         DateTime.makeUnsafe((yield* Clock.currentTimeMillis) - 60_000),
       );
       yield* fs.utimes(guard, old, old);
 
       expect(yield* breakStaleLock(lock)).toBe(false);
-      // Released because the claim in it was this process's own, never removed blind.
       expect(yield* fs.exists(guard)).toBe(false);
       expect(Arr.some(yield* fs.readDirectory(dir), (e) => pipe_(e, Str.endsWith(".tmp")))).toBe(
         false,
@@ -203,14 +199,10 @@ test("taking over a crashed breaker's guard leaves this process's own claim", ()
     }),
   ));
 
-/**
- * A fifo at the lock path makes each read block until this test writes it, which puts the
- * inspection and the check before the removal under the test's control.
- */
 const breakInChild = (lock: string, marker: string) => {
   const lockModule = pipe_(
     new URL("../src/lock.ts", import.meta.url).pathname,
-    Str.replaceAll("'", "\\'"),
+    Str.replaceAll("'", String.raw`\'`),
   );
   return Bun.spawn(
     [
@@ -224,7 +216,6 @@ const breakInChild = (lock: string, marker: string) => {
   );
 };
 
-/** Opening a fifo for writing fails until its reader is there, so keep offering. */
 const feed = Effect.fn("test.feed")(function* (fifo: string, text: string) {
   const deadline = (yield* Clock.currentTimeMillis) + 30_000;
   for (;;) {
@@ -234,7 +225,9 @@ const feed = Effect.fn("test.feed")(function* (fifo: string, text: string) {
         () => false,
       ),
     );
-    if (written) return;
+    if (written) {
+      return;
+    }
     expect(yield* Clock.currentTimeMillis).toBeLessThan(deadline);
     yield* Effect.sleep("10 millis");
   }
@@ -254,15 +247,13 @@ test("a claim that changed since it was inspected is never the one removed", () 
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const stale = `${encodeJson({ pid: 999999, start: "1" })}\n`;
+      const stale = `${encodeJson({ pid: 999_999, start: "1" })}\n`;
       const live = `${encodeJson({ pid: globalThis.process.pid, start: null })}\n`;
 
       const changed = path.join(dir, "changed.lock");
       yield* exec(["mkfifo", changed]);
       const child = breakInChild(changed, path.join(dir, "changed.ready"));
       yield* awaitMarker(path.join(dir, "changed.ready"));
-      // The inspection sees a dead holder; the check before the removal sees a live claim
-      // that arrived since, so the lock is left to its new owner.
       yield* feed(changed, stale);
       yield* feed(changed, live);
 
@@ -271,11 +262,7 @@ test("a claim that changed since it was inspected is never the one removed", () 
       );
       expect(yield* fs.exists(changed)).toBe(true);
 
-      // An ordinary file for this half, not a fifo: what is being tested is that a claim
-      // which has *not* changed between the two reads is broken, and a file gives both
-      // reads the same bytes by construction. Feeding a fifo twice does not — the two
-      // writes can be taken as one read, leaving the second read with nothing and the
-      // test failing for a reason that has nothing to do with the lock.
+      // WARNING: a fifo cannot feed two reads, since two writes can be taken as one; a file gives both reads the same bytes.
       const unchanged = path.join(dir, "unchanged.lock");
       yield* fs.writeFileString(unchanged, stale);
       const second = breakInChild(unchanged, path.join(dir, "unchanged.ready"));
@@ -305,11 +292,12 @@ test("fibers of one process contending for one lock each get it in turn, and non
         }),
         2000,
       );
-      for (let round = 0; round < 5; round++)
+      for (let round = 0; round < 5; round++) {
         yield* Effect.all(
           Array.from({ length: 20 }, () => turn),
           { concurrency: "unbounded" },
         );
+      }
       expect(most).toBe(1);
     }),
   ));

@@ -5,9 +5,10 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { runEffect } from "./support/effect";
 import { claudeTrust } from "../src/trust";
-import { isYamlMap, YamlMapSchema, type YamlMap } from "../src/yaml";
+import { isYamlMap, YamlMapSchema } from "../src/yaml";
+import type { YamlMap } from "../src/yaml";
 
-const join = (...parts: string[]) => pipe_(Arr.join(parts, "/"), Str.replace(/\/+/g, "/"));
+const join = (...parts: Array<string>) => pipe_(Arr.join(parts, "/"), Str.replaceAll(/\/+/g, "/"));
 
 interface TrustRig {
   root: string;
@@ -41,7 +42,7 @@ afterEach(() =>
   ),
 );
 
-/** A ~/.claude.json with the shape claude actually writes. */
+// WARNING: Shaped as claude actually writes ~/.claude.json.
 const claudeConfig = Effect.fn("test.claudeConfig")(function* (projects: ClaudeProjects) {
   const fs = yield* FileSystem.FileSystem;
   const path = join(rig.root, ".claude.json");
@@ -61,7 +62,7 @@ const readConfig = Effect.fn("test.readConfig")(function* (path: string) {
   return yield* Schema.decodeEffect(ClaudeConfigJson)(yield* fs.readFileString(path));
 });
 
-function project(config: YamlMap, path: string): YamlMap {
+function project(config: YamlMap, path: string) {
   expect(isYamlMap(config.projects)).toBe(true);
   const projects = isYamlMap(config.projects) ? config.projects : {};
   expect(isYamlMap(projects[path])).toBe(true);
@@ -225,8 +226,7 @@ test("a config claude keeps rewriting is left alone rather than overwritten", ()
       const fs = yield* FileSystem.FileSystem;
       const path = yield* claudeConfig({});
       const before = yield* fs.readFileString(path);
-      // Every read of the config different bytes, which is what a claude writing between
-      // this grant's read and its rename looks like from in here.
+      // WARNING: Each read returns different bytes, as a claude writing between this grant's read and rename looks.
       let n = 0;
       const rewriting = FileSystem.FileSystem.of({
         ...fs,

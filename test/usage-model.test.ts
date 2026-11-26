@@ -1,5 +1,3 @@
-// A Usage reading from each source's recorded answer, and what is judged from it.
-
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import { describe, expect, test } from "bun:test";
@@ -10,13 +8,13 @@ import {
   claudeWindows,
   codexLogin,
   codexUsage,
+  roomFor,
   statusLineWindows,
   subscriptionOf,
   usagePhrase,
   usedFor,
-  type UsageReading,
-  type UsageWindow,
 } from "../src/usage-model";
+import type { UsageReading, UsageWindow } from "../src/usage-model";
 import claudeUsage from "./fixtures/usage/claude-oauth-usage.json";
 import statusLine from "./fixtures/usage/claude-status-line-rate-limits.json";
 import codexRateLimits from "./fixtures/usage/codex-account-ratelimits-read.json";
@@ -26,7 +24,7 @@ const NOW = epochMs("2026-10-08T08:00:00Z");
 const AFTER_RESET = epochMs("2026-10-08T11:00:00Z");
 const isoOfSeconds = (seconds: number) => DateTime.formatIso(DateTime.makeUnsafe(seconds * 1000));
 
-const window = (over: Partial<UsageWindow>): UsageWindow => ({
+const window: (over: Partial<UsageWindow>) => UsageWindow = (over) => ({
   kind: "session",
   label: "Session",
   model: null,
@@ -36,7 +34,7 @@ const window = (over: Partial<UsageWindow>): UsageWindow => ({
   ...over,
 });
 
-const reading = (over: Partial<UsageReading>): UsageReading => ({
+const reading: (over: Partial<UsageReading>) => UsageReading = (over) => ({
   subscription: "claude",
   account: "org:acct",
   accountLabel: "me@example.com",
@@ -95,7 +93,7 @@ describe("parsing", () => {
           kind: "weekly",
           label: "Weekly",
           usedPercent: 2,
-          resetsAt: isoOfSeconds(1791973608),
+          resetsAt: isoOfSeconds(1_791_973_608),
         }),
       ],
       plan: "self_serve_business_prolite",
@@ -108,8 +106,8 @@ describe("parsing", () => {
       rateLimits: {
         ...codexRateLimits.result.rateLimits,
         rateLimitReachedType: "rate_limit_reached",
-        primary: { usedPercent: primary, windowDurationMins: 300, resetsAt: 1791457799 },
-        secondary: { usedPercent: 40, windowDurationMins: 10080, resetsAt: 1791973608 },
+        primary: { usedPercent: primary, windowDurationMins: 300, resetsAt: 1_791_457_799 },
+        secondary: { usedPercent: 40, windowDurationMins: 10_080, resetsAt: 1_791_973_608 },
       },
     });
     expect(
@@ -138,7 +136,7 @@ describe("parsing", () => {
     const spark = {
       ...codexRateLimits.result.rateLimits,
       limitName: "GPT-5.3-Codex-Spark",
-      primary: { usedPercent: 100, windowDurationMins: 10080, resetsAt: 1791973608 },
+      primary: { usedPercent: 100, windowDurationMins: 10_080, resetsAt: 1_791_973_608 },
       rateLimitReachedType: "rate_limit_reached",
     };
     const usage = codexUsage({
@@ -158,17 +156,79 @@ describe("parsing", () => {
 
   test("a Claude status line's rate_limits are its session and weekly windows", () => {
     expect(statusLineWindows(statusLine.rate_limits)).toEqual([
-      window({ usedPercent: 31, resetsAt: isoOfSeconds(1791457799) }),
+      window({ usedPercent: 31, resetsAt: isoOfSeconds(1_791_457_799) }),
       window({
         kind: "weekly",
         label: "Weekly",
         usedPercent: 88,
-        resetsAt: isoOfSeconds(1791544799),
+        resetsAt: isoOfSeconds(1_791_544_799),
       }),
     ]);
   });
 });
 
+describe("a spent credit cap", () => {
+  const spentCreditCap = (
+    over: {
+      ordinaryUsageAllowed?: boolean;
+      rateLimitReachedType?: string | null;
+      weeklyPercent?: number;
+    } = {},
+  ) => ({
+    ...codexRateLimits.result,
+    ordinaryUsageAllowed: over.ordinaryUsageAllowed ?? true,
+    rateLimits: {
+      ...codexRateLimits.result.rateLimits,
+      primary: {
+        usedPercent: over.weeklyPercent ?? 2,
+        windowDurationMins: 10_080,
+        resetsAt: 1_791_973_608,
+      },
+      secondary: null,
+      individualLimit: { limit: "5000", used: "5000.0", remainingPercent: 0 },
+      spendControlReached: true,
+      rateLimitReachedType: over.rateLimitReachedType ?? null,
+    },
+  });
+  test("leaves the weekly window at its real percent, saying chatgpt 2% and keeping room", () => {
+    const usage = codexUsage(spentCreditCap());
+    expect(usage.windows).toEqual([
+      window({
+        kind: "weekly",
+        label: "Weekly",
+        usedPercent: 2,
+        resetsAt: isoOfSeconds(1_791_973_608),
+      }),
+    ]);
+    const readings = [reading({ subscription: "chatgpt", windows: usage.windows })];
+    expect(usagePhrase(readings, NOW)).toEqual({ text: "chatgpt 2%", warn: false });
+    expect(roomFor(readings, NOW)({ harness: "codex", model: "gpt-6.1-sol" }, undefined)).toEqual({
+      room: true,
+    });
+  });
+  test("does not mark a model's own limit reached", () => {
+    const sample = spentCreditCap();
+    const spark = { ...sample.rateLimits, limitName: "GPT-5.3-Codex-Spark" };
+    const usage = codexUsage({
+      ...sample,
+      rateLimitsByLimitId: { ...sample.rateLimitsByLimitId, spark },
+    });
+    expect(Arr.map(usage.windows, (w) => [w.label, w.reached])).toEqual([
+      ["Weekly", false],
+      ["Weekly GPT-5.3-Codex-Spark", false],
+    ]);
+  });
+  test("Codex's own block signals still say out", () => {
+    for (const variant of [
+      spentCreditCap({ ordinaryUsageAllowed: false }),
+      spentCreditCap({ rateLimitReachedType: "workspace_member_credits_depleted" }),
+      spentCreditCap({ weeklyPercent: 100 }),
+    ]) {
+      const readings = [reading({ subscription: "chatgpt", windows: codexUsage(variant).windows })];
+      expect(usagePhrase(readings, NOW)).toEqual({ text: "chatgpt out", warn: true });
+    }
+  });
+});
 describe("accounts", () => {
   const claudeJson = (organizationUuid: string) => ({
     oauthAccount: {
@@ -233,7 +293,7 @@ describe("usedFor and Exhausted", () => {
     expect(usedFor(readings, { harness: "claude", model: "claude-opus-4-1" }, NOW)?.exhausted).toBe(
       true,
     );
-    // `default` is resolved by the caller; unresolved, it names no model.
+    // WARNING: default is resolved by the caller; unresolved, it names no model.
     expect(usedFor(readings, { harness: "claude", model: "default" }, NOW)?.exhausted).toBe(false);
     const sonnet45 = window({
       kind: "weekly-model",

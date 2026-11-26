@@ -1,32 +1,32 @@
-// The Flock chat's turns, driven against a scripted Claude Code: one turn at a time, a turn
-// of Desktop's own only about News that matters, and every turn ending however it ends.
-
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import { pipe as pipe_ } from "effect/Function";
 import { expect, test } from "bun:test";
 import { platformLayer } from "../src/platform";
+import type { Path } from "effect";
 import {
   Deferred,
   Effect,
   Fiber,
   FileSystem,
   Option,
-  Path,
   Schema,
-  type Scope,
   Stream,
   Queue,
   flow,
   Result,
 } from "effect";
-import * as SecureRandom from "effect/crypto/SecureRandom";
+import type { Scope } from "effect";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import { TestClock } from "effect/testing";
-import { type Declaration, NewsBatch, PROTOCOL, type Significance } from "../src/board-model";
+import type { NewsBatch } from "../src/board-model";
+import { PROTOCOL } from "../src/board-model";
+import type { Declaration, Significance } from "../src/board-model";
 import { stageAttachment } from "../desktop/src/bun/attachments";
 import { openFlockChat } from "../desktop/src/bun/chat";
-import { type ClaudeCode, claudeDriver } from "../desktop/src/bun/claude-driver";
+import { claudeDriver } from "../desktop/src/bun/claude-driver";
+import type { ClaudeCode } from "../desktop/src/bun/claude-driver";
 import type { AguiEvent } from "../desktop/src/shared/agui";
 import type { TurnCost } from "../desktop/src/bun/driver";
 import type { ChatDriver, DriverContext } from "../desktop/src/bun/driver";
@@ -38,19 +38,16 @@ import { DesktopSettings } from "../desktop/src/shared/flock";
 import type { ChatChoices } from "../desktop/src/shared/chat-choices";
 import { NO_FLOCK_SETTINGS } from "../desktop/src/shared/flock-settings";
 import type { SdkMessage } from "../desktop/src/bun/agui";
-import {
-  callFlockTool,
-  type ChatDoor,
-  type ChatMachine,
-  type FlockChat,
-} from "../desktop/src/bun/flock-tools";
+import { callFlockTool } from "../desktop/src/bun/flock-tools";
+import type { ChatDoor, ChatMachine, FlockChat } from "../desktop/src/bun/flock-tools";
 import { listing } from "../desktop/src/shared/attachments";
-import { aboutNote, type ChatMessage, DESKTOP_SAID } from "../desktop/src/shared/chat-view";
+import { aboutNote, DESKTOP_SAID } from "../desktop/src/shared/chat-view";
+import type { ChatMessage } from "../desktop/src/shared/chat-view";
 import { isString } from "../src/schema";
 
 type Item = (typeof NewsBatch.Type)["items"][number];
 
-const item = (key: string, significance: Significance): Item => ({
+const item: (key: string, significance: Significance) => Item = (key, significance) => ({
   key,
   run: Str.split(key, ":")[0] ?? key,
   text: `${key} happened.`,
@@ -58,24 +55,25 @@ const item = (key: string, significance: Significance): Item => ({
   significance,
 });
 
-/** A Machine whose one Herd has this News until it is settled read. */
-const machine = (
+const machine: (
   items: ReadonlyArray<Item>,
-  read: string[],
-  declared: Declaration[] = [],
-): ChatMachine => {
+  read: Array<string>,
+  declared?: Array<Declaration>,
+) => ChatMachine = (items, read, declared = []) => {
   const door: Partial<ChatDoor> = {
     declare: (payload) => Effect.sync(() => void declared.push(payload)),
     news: ({ as, keys }) =>
       Effect.sync(() => {
-        if (as === "read") read.push(...(keys ?? []));
+        if (as === "read") {
+          read.push(...(keys ?? []));
+        }
         return {
           items: Arr.filter(items, ({ key }) => !read.includes(key)),
           omitted: 0,
         };
       }),
   };
-  // SAFETY: the chat's turns reach a Machine only through declare and news.
+  // WARNING: the chat's turns reach a Machine only through declare and news.
   return {
     name: "vm-mk",
     door: door as ChatDoor,
@@ -89,38 +87,29 @@ interface ScriptedDrivers {
 
 interface Seen {
   flock?: FlockChat;
-  readonly transcripts: Map<string, unknown[]>;
-  readonly prompts: string[];
-  /** Each message as the SDK was handed it. */
-  readonly contents: unknown[];
-  /** What each turn's message went with, as the UserPromptSubmit hook adds it. */
-  readonly context: string[];
-  readonly refusals: string[];
-  /** Each time the session was interrupted. */
-  readonly interrupts: string[];
-  /** Each session started: its model, and the conversation it resumed or started. */
+  readonly transcripts: Map<string, Array<unknown>>;
+  readonly prompts: Array<string>;
+  readonly contents: Array<unknown>;
+  readonly context: Array<string>;
+  readonly refusals: Array<string>;
+  readonly interrupts: Array<string>;
   readonly sessions: Array<{
     readonly model: string;
     readonly resume?: string;
     readonly sessionId?: string;
   }>;
-  /** Each session's MCP servers, by name. */
-  readonly servers: string[][];
-  readonly efforts: string[];
+  readonly servers: Array<Array<string>>;
+  readonly efforts: Array<string>;
 }
 
 const SAID = { type: "stream_event", parent_tool_use_id: null };
 
-/**
- * Claude Code answering each message with `reply`'s messages; one `holds` names answers only
- * once it is interrupted.
- */
-const scripted = (
+const scripted: (
   seen: Seen,
   reply: (text: string) => ReadonlyArray<SdkMessage>,
-  holds: (text: string) => boolean = () => false,
+  holds?: (text: string) => boolean,
   gate?: Deferred.Deferred<void>,
-): ClaudeCode<string> => ({
+) => ClaudeCode<string> = (seen, reply, holds = () => false, gate?) => ({
   query: ({ prompt, options }) => {
     const id = "resume" in options ? options.resume : options.sessionId;
     seen.servers.push(Rec.keys(options.mcpServers));
@@ -141,14 +130,13 @@ const scripted = (
           const transcript = seen.transcripts.get(id) ?? [];
           transcript.push({ ...message, uuid: `u-${transcript.length}` });
           seen.transcripts.set(id, transcript);
-          // SAFETY: sessionOptions sets one UserPromptSubmit hook.
+          // WARNING: sessionOptions sets one UserPromptSubmit hook.
           const added = yield* Effect.promise(() => options.hooks.UserPromptSubmit[0]!.hooks[0]!());
           seen.context.push(
             "hookSpecificOutput" in added
               ? (added.hookSpecificOutput?.additionalContext ?? "")
               : "",
           );
-          // A human's turn would wait for their click; only Desktop's own is asked here.
           if (pipe_(text, Str.startsWith(DESKTOP_SAID))) {
             const asked = yield* Effect.promise(() =>
               options.canUseTool(
@@ -157,13 +145,17 @@ const scripted = (
                 { signal: new AbortController().signal, toolUseID: `toolu_${seen.prompts.length}` },
               ),
             );
-            if (asked.behavior === "deny") seen.refusals.push(text);
+            if (asked.behavior === "deny") {
+              seen.refusals.push(text);
+            }
           }
           if (holds(text)) {
             yield* Deferred.await(interrupted);
             interrupted = Deferred.makeUnsafe<void>();
           }
-          if (text === "slow" && gate !== undefined) yield* Deferred.await(gate);
+          if (text === "slow" && gate !== undefined) {
+            yield* Deferred.await(gate);
+          }
           return reply(text);
         }),
       ),
@@ -218,16 +210,18 @@ const answered = (text: string) => [
   },
 ];
 
-/** Waits, in real time, for what a session's own promises settle. */
 const eventually = (check: () => boolean) =>
   Effect.gen(function* () {
-    for (let tries = 0; tries < 200 && !check(); tries++)
+    for (let tries = 0; tries < 200 && !check(); tries++) {
       yield* TestClock.withLive(Effect.sleep("10 millis"));
+    }
     expect(check()).toBe(true);
   });
 
-/** Claude Code whose first `failed` sessions fail as they start, as one not logged in does. */
-const failingFirst = (claude: ClaudeCode<string>, failed: number): ClaudeCode<string> => {
+const failingFirst: (claude: ClaudeCode<string>, failed: number) => ClaudeCode<string> = (
+  claude,
+  failed,
+) => {
   let started = 0;
   return {
     ...claude,
@@ -241,12 +235,11 @@ const failingFirst = (claude: ClaudeCode<string>, failed: number): ClaudeCode<st
   };
 };
 
-/** A harness that finishes each turn at once, with its own history, and the conversations it opened. */
 const fakeDriver = (
   listed: ReadonlyArray<{ readonly session: string; readonly title: string; readonly at: number }>,
   transcripts: Readonly<Record<string, ReadonlyArray<ChatMessage>>> = {},
 ) => {
-  const opened: string[] = [];
+  const opened: Array<string> = [];
   const driver: ChatDriver = {
     installed: true,
     open: (id) =>
@@ -273,7 +266,7 @@ const fakeDriver = (
   return { driver, opened };
 };
 
-const said = (id: string, text: string): ChatMessage => ({
+const said: (id: string, text: string) => ChatMessage = (id, text) => ({
   id,
   role: "user",
   parts: [{ type: "text", content: text }],
@@ -289,18 +282,14 @@ const withChat = <A, E>(
     readonly proactive: boolean;
     readonly holds?: (text: string) => boolean;
     readonly rule?: string;
-    readonly declared?: Declaration[];
+    readonly declared?: Array<Declaration>;
     readonly failedStarts?: number;
-    /** What Desktop's Settings have, which a test may change between turns. */
     readonly settings?: { current: DesktopSettings };
     readonly pi?: (context: DriverContext) => ChatDriver;
-    /** Drivers in place of, or beside, the scripted Claude Code. */
     readonly drivers?: ScriptedDrivers;
     readonly gate?: Deferred.Deferred<void>;
-    /** The current conversation's file, as an earlier Desktop left it. */
     readonly savedFile?: string;
-    readonly transcripts?: ReadonlyArray<readonly [string, unknown[]]>;
-    /** Ticks as Desktop's saved settings or the Flock's models would. */
+    readonly transcripts?: ReadonlyArray<readonly [string, Array<unknown>]>;
     readonly retold?: Stream.Stream<unknown>;
     readonly readers?: Readonly<Record<string, Effect.Effect<ReadonlyArray<ListedModel>, string>>>;
   },
@@ -308,7 +297,7 @@ const withChat = <A, E>(
   body: (chat: {
     readonly conversation: Effect.Success<ReturnType<typeof openFlockChat>>;
     readonly seen: Seen;
-    readonly read: string[];
+    readonly read: Array<string>;
     readonly dir: string;
   }) => Effect.Effect<
     A,
@@ -333,9 +322,10 @@ const withChat = <A, E>(
         efforts: [],
         transcripts: new Map(opts.transcripts),
       };
-      const read: string[] = [];
-      if (opts.savedFile !== undefined)
+      const read: Array<string> = [];
+      if (opts.savedFile !== undefined) {
         yield* fs.writeFileString(`${dir}/flock-chat.json`, opts.savedFile);
+      }
       const settings = opts.settings ?? { current: { proactive: opts.proactive } };
       const lists = opts.readers === undefined ? undefined : yield* harnessLists(opts.readers);
       const conversation = yield* openFlockChat({
@@ -346,7 +336,9 @@ const withChat = <A, E>(
               context,
             ),
           };
-          if (opts.pi !== undefined) drivers.pi = opts.pi(context);
+          if (opts.pi !== undefined) {
+            drivers.pi = opts.pi(context);
+          }
           return { ...drivers, ...opts.drivers };
         },
         dir,
@@ -369,7 +361,6 @@ const withChat = <A, E>(
           model: settings.current.chatModel,
           effort: settings.current.chatEffort,
         }),
-        // As Desktop saves it: through the settings check.
         setChatHarness: ({ harness, model, effort }) =>
           Effect.sync(() => {
             const changed = changeSettings(settings.current, NO_FLOCK_SETTINGS, {
@@ -377,7 +368,9 @@ const withChat = <A, E>(
               ...(model !== undefined && { chatModel: model }),
               ...(effort !== undefined && { chatEffort: effort }),
             });
-            if ("refused" in changed) return changed.refused;
+            if ("refused" in changed) {
+              return changed.refused;
+            }
             settings.current = changed;
             return null;
           }),
@@ -400,15 +393,18 @@ test("Desktop speaks first only about what matters, and the rest goes with the h
         expect(seen.prompts[0]).toStartWith(DESKTOP_SAID);
         expect(seen.prompts[0]).toContain("r1:asking happened.");
         expect(seen.prompts[0]).not.toContain("r2:ended");
-        // Desktop's own turn knows where work goes, as the human's would.
         expect(seen.context[0]).toContain("Everything is on the vm");
         expect(read).toEqual(["r1:asking"]);
-        // Nobody is there to click an answer, so the question is refused rather than waited on.
+        // WARNING: Nobody is there to click an answer, so the question is refused rather than waited on.
         expect(seen.refusals).toEqual(seen.prompts.slice(0, 1));
         const fs = yield* FileSystem.FileSystem;
-        // Recorded once the turn has drained, after its News was marked read.
-        for (let tries = 0; tries < 200 && !(yield* fs.exists(`${dir}/flock-usage.jsonl`)); tries++)
+        for (
+          let tries = 0;
+          tries < 200 && !(yield* fs.exists(`${dir}/flock-usage.jsonl`));
+          tries++
+        ) {
           yield* TestClock.withLive(Effect.sleep("10 millis"));
+        }
         const usage = yield* fs.readFileString(`${dir}/flock-usage.jsonl`);
         expect(Str.split(Str.trim(usage), "\n")).toHaveLength(1);
         expect(
@@ -541,7 +537,6 @@ test("News a failed turn of Desktop's carried waits for the next look, and wakes
         yield* eventually(() => seen.prompts.length === 1);
         yield* TestClock.withLive(Effect.sleep("50 millis"));
         expect(read).toEqual([]);
-        // Not again at the next nudge, which would retry a rate-limited seat every few seconds.
         yield* TestClock.adjust("3 seconds");
         yield* TestClock.withLive(Effect.sleep("50 millis"));
         expect(seen.prompts).toHaveLength(1);
@@ -553,7 +548,6 @@ test("News a failed turn of Desktop's carried waits for the next look, and wakes
   );
 });
 
-/** Staged as the view stages it: in parts, the last of which answers the descriptor. */
 const staged = (
   dir: string,
   name: string,
@@ -587,7 +581,7 @@ const staged = (
   });
 
 test("a message with an image hands the SDK the words, Desktop's listing and the scaled image, and says only the words", () => {
-  const declared: Declaration[] = [];
+  const declared: Array<Declaration> = [];
   return withChat(
     { items: [item("r1:ended", "routine")], proactive: false, declared },
     answered,
@@ -598,7 +592,7 @@ test("a message with an image hands the SDK the words, Desktop's listing and the
         expect(shot).toMatchObject({ name: "shot.png", size: 16, mediaType: "image/png" });
         expect(shot.path).toStartWith(`${dir}/attachments/`);
         expect(yield* (yield* FileSystem.FileSystem).readFile(shot.path)).toEqual(original);
-        // A PNG's header is all Desktop reads to know an image is within 2000 px.
+        // WARNING: A PNG's header is all Desktop reads to know an image is within 2000 px.
         const smaller = new Uint8Array(24);
         smaller.set([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
         new DataView(smaller.buffer).setUint32(16, 2000);
@@ -618,11 +612,9 @@ test("a message with an image hands the SDK the words, Desktop's listing and the
             },
           },
         ]);
-        // The News the turn carried is settled in the turn's voice: the words, and no file.
         yield* eventually(() => read.includes("r1:ended"));
         expect(declared.at(-1)?.said).toBe("what is this?");
 
-        // Words are not needed, and a copy that is gone is said to be.
         yield* Stream.runDrain(conversation.send("", null, false, [shot.id]));
         expect(seen.contents[1]).toEqual([
           { type: "text", text: listing([shot]) },
@@ -640,10 +632,11 @@ test("a message's files are inlined only while their base64 fits the request, an
   withChat({ items: [], proactive: false }, answered, ({ conversation, seen, dir }) =>
     Effect.gen(function* () {
       const pdfs = [];
-      for (let n = 0; n < 5; n++)
+      for (let n = 0; n < 5; n++) {
         pdfs.push(
           yield* staged(dir, `part${n}.pdf`, "application/pdf", new Uint8Array(4 * 1024 * 1024)),
         );
+      }
       yield* Stream.runDrain(
         conversation.send(
           "read these",
@@ -652,7 +645,6 @@ test("a message's files are inlined only while their base64 fits the request, an
           Arr.map(pdfs, ({ id }) => id),
         ),
       );
-      // Four 4 MB PDFs fit the 24 MB of base64; the fifth would not.
       expect(seen.contents[0]).toEqual([
         { type: "text", text: "read these" },
         { type: "text", text: listing(pdfs) },
@@ -1229,8 +1221,13 @@ test("Desktop's own turn on Pi records its harness, model and token counts", () 
         yield* TestClock.adjust("3 seconds");
         yield* Fiber.join(ended);
         const fs = yield* FileSystem.FileSystem;
-        for (let tries = 0; tries < 200 && !(yield* fs.exists(`${dir}/flock-usage.jsonl`)); tries++)
+        for (
+          let tries = 0;
+          tries < 200 && !(yield* fs.exists(`${dir}/flock-usage.jsonl`));
+          tries++
+        ) {
           yield* TestClock.withLive(Effect.sleep("10 millis"));
+        }
         const usage = yield* fs.readFileString(`${dir}/flock-usage.jsonl`);
         expect(
           yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(usage).pipe(Effect.orDie),
@@ -1263,11 +1260,13 @@ test("the account says a turn is under way only while one is, Desktop's own or t
     answered,
     ({ conversation, seen }) =>
       Effect.gen(function* () {
-        const told: boolean[] = [];
+        const told: Array<boolean> = [];
         yield* conversation.choices.pipe(
           Stream.runForEach(({ turning }) =>
             Effect.sync(() => {
-              if (told.at(-1) !== turning) told.push(turning);
+              if (told.at(-1) !== turning) {
+                told.push(turning);
+              }
             }),
           ),
           Effect.forkChild,
@@ -1357,7 +1356,7 @@ test("the account is told again when Desktop retells it, with each harness's lis
     answered,
     ({ conversation }) =>
       Effect.gen(function* () {
-        const told: ChatChoices[] = [];
+        const told: Array<ChatChoices> = [];
         yield* conversation.choices.pipe(
           Stream.runForEach((choices) => Effect.sync(() => void told.push(choices))),
           Effect.forkChild,
@@ -1414,7 +1413,7 @@ test("windows start the set harness's read, choosing another starts its read, an
     ({ conversation, seen }) =>
       Effect.gen(function* () {
         expect(reads).toEqual({ claude: 0, pi: 0 });
-        const told: ChatChoices[] = [];
+        const told: Array<ChatChoices> = [];
         yield* conversation.choices.pipe(
           Stream.runForEach((choices) =>
             Effect.sync(() => {

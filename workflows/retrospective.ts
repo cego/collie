@@ -1,10 +1,9 @@
-// What `self-improve` decides, as pure functions its module and its tests share.
-
 import * as Num from "effect/Number";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
 import { DateTime, Schema } from "effect";
 
 export const CATEGORIES = [
@@ -71,37 +70,160 @@ const MARKER = /<!-- collie-finding: ([a-z0-9-]+) -->/g;
 
 export const markerOf = (key: string) => `<!-- collie-finding: ${key} -->`;
 
-export const keysIn = (body: string): ReadonlyArray<string> =>
+export const keysIn = (body: string) =>
   Arr.map([...pipe(body, Str.matchAll(MARKER))], (match) => match[1] ?? "");
 
-/** The open issue a finding is about: the one it names, else the one carrying its key. */
-export const targetOf = (finding: Finding, open: ReadonlyArray<OpenIssue>): OpenIssue | null =>
+export const targetOf = (finding: Finding, open: ReadonlyArray<OpenIssue>) =>
   Option.getOrUndefined(Arr.findFirst(open, (one) => one.number === finding.issue)) ??
   Option.getOrUndefined(Arr.findFirst(open, (one) => one.keys.includes(finding.key))) ??
   null;
 
-/**
- * The findings worth acting on. Recurring means two of the window's Runs, or an issue
- * already open; a `defect` needs only one Run, and is filed only where `defects` allows.
- */
+export interface ClosedIssue extends OpenIssue {
+  readonly closedAt: string;
+}
+
+export interface Release {
+  readonly tag: string;
+  readonly at: string;
+}
+
+export interface Underway {
+  readonly by: string;
+  readonly keys: ReadonlyArray<string>;
+  readonly issues: ReadonlyArray<number>;
+}
+
+export interface Matching {
+  readonly closed: ReadonlyArray<ClosedIssue>;
+  // WARNING: newest first; releaseAfter finds the first release after a close by it.
+  readonly releases: ReadonlyArray<Release>;
+  readonly underway: ReadonlyArray<Underway>;
+}
+
+const NOTHING_MATCHED: Matching = { closed: [], releases: [], underway: [] };
+
+const msOf = (iso: string) => DateTime.toEpochMillis(DateTime.makeUnsafe(iso));
+
+export const namedIn = (
+  text: string,
+  keys: ReadonlyArray<string>,
+  issues: ReadonlyArray<number>,
+) => ({
+  keys: Arr.filter(keys, (key) => new RegExp(`(^|[^a-z0-9-])${key}($|[^a-z0-9-])`).test(text)),
+  issues: Arr.filter(issues, (number) => new RegExp(`#${number}(?!\\d)`).test(text)),
+});
+
+const closedFor = (finding: Finding, closed: ReadonlyArray<ClosedIssue>) =>
+  Option.getOrUndefined(Arr.findFirst(closed, (one) => one.number === finding.issue)) ??
+  Option.getOrUndefined(Arr.findFirst(closed, (one) => one.keys.includes(finding.key)));
+
+const releaseAfter = (releases: ReadonlyArray<Release>, at: string) =>
+  Option.getOrNull(Arr.findLast(releases, (one) => msOf(one.at) >= msOf(at)));
+
+const underwayFor = (finding: Finding, open: ReadonlyArray<OpenIssue>, matching: Matching) => {
+  const numbers = new Set(
+    Arr.filter(
+      [finding.issue, targetOf(finding, open)?.number ?? null],
+      (one): one is number => one !== null,
+    ),
+  );
+  return Arr.findFirst(
+    matching.underway,
+    (one) => one.keys.includes(finding.key) || Arr.some(one.issues, (n) => numbers.has(n)),
+  ).pipe(Option.getOrNull);
+};
+
+export interface FixEffect {
+  readonly key: string;
+  readonly release: string;
+  readonly before: { readonly seen: number; readonly of: number };
+  readonly after: { readonly seen: number; readonly of: number };
+}
+
+export const releasedFix = (
+  finding: Finding,
+  matching: Matching,
+  created: Readonly<Record<string, string>>,
+) => {
+  const issue = closedFor(finding, matching.closed);
+  if (issue === undefined) {
+    return null;
+  }
+  const release = releaseAfter(matching.releases, issue.closedAt);
+  if (release === null) {
+    return null;
+  }
+  const runs = Rec.toEntries(created);
+  const part = (after: boolean) => {
+    const ids = new Set(
+      Arr.map(
+        Arr.filter(runs, ([, at]) => msOf(at) >= msOf(release.at) === after),
+        ([id]) => id,
+      ),
+    );
+    return { seen: Arr.filter(finding.runs, (run) => ids.has(run)).length, of: ids.size };
+  };
+  return {
+    issue,
+    effect: { key: finding.key, release: release.tag, before: part(false), after: part(true) },
+  };
+};
+
+export const effectLine = ({ key, release, before, after }: FixEffect) =>
+  `${key}: ${before.seen}/${before.of} Runs before ${release}, ${after.seen}/${after.of} after`;
+
+export const commentOf = (options: {
+  readonly finding: Finding;
+  readonly runId: string;
+  readonly machine: string;
+  readonly effect: FixEffect | null;
+}) =>
+  Arr.join(
+    [
+      `Seen again in ${Arr.join(options.finding.runs, ", ")} on ${options.machine}, by self-improve Run ${options.runId}.`,
+      ...(options.effect === null ? [] : [effectLine(options.effect)]),
+      markerOf(options.finding.key),
+    ],
+    "\n\n",
+  );
+
+// WARNING: a finding whose fix was released is kept after one Run, so its issue hears it came back.
 export const sortOut = (
   findings: ReadonlyArray<Finding>,
   window: ReadonlySet<string>,
   open: ReadonlyArray<OpenIssue>,
   defects: boolean,
+  matching: Matching = NOTHING_MATCHED,
 ) => {
-  const kept: Finding[] = [];
-  const leftOut: LeftOut[] = [];
+  const kept: Array<Finding> = [];
+  const leftOut: Array<LeftOut> = [];
+  const last = matching.releases[0]?.tag ?? "";
   for (const finding of findings) {
     const runs = new Set(Arr.filter(finding.runs, (run) => window.has(run)));
-    if (Arr.some(kept, (one) => one.key === finding.key))
+    const underway = underwayFor(finding, open, matching);
+    const closed = closedFor(finding, matching.closed);
+    const released =
+      closed !== undefined && releaseAfter(matching.releases, closed.closedAt) !== null;
+    if (Arr.some(kept, (one) => one.key === finding.key)) {
       leftOut.push({ what: finding.title, why: `the same key as another finding, ${finding.key}` });
-    else if (runs.size === 0) leftOut.push({ what: finding.title, why: "no Run of the window" });
-    else if (finding.category === "defect" && !defects)
+    } else if (runs.size === 0) {
+      leftOut.push({ what: finding.title, why: "no Run of the window" });
+    } else if (finding.category === "defect" && !defects) {
       leftOut.push({ what: finding.title, why: "about Collie" });
-    else if (finding.category !== "defect" && runs.size < 2 && targetOf(finding, open) === null)
+    } else if (underway !== null) {
+      leftOut.push({ what: finding.title, why: `being fixed by ${underway.by}` });
+    } else if (closed !== undefined && !released) {
+      leftOut.push({ what: finding.title, why: `fixed on master since ${last}, not yet released` });
+    } else if (
+      finding.category !== "defect" &&
+      runs.size < 2 &&
+      targetOf(finding, open) === null &&
+      !released
+    ) {
       leftOut.push({ what: finding.title, why: "seen once" });
-    else kept.push({ ...finding, runs: [...runs] });
+    } else {
+      kept.push({ ...finding, runs: [...runs] });
+    }
   }
   return { kept, leftOut };
 };
@@ -111,12 +233,11 @@ export type Outcome =
   | { readonly kind: "commented"; readonly number: number; readonly url: string }
   | { readonly kind: "refused"; readonly reason: string };
 
-/** The Improvements to start: only those whose findings were all filed new, up to `bound`. */
 export const chosen = (
   improvements: ReadonlyArray<Improvement>,
   outcomes: ReadonlyMap<string, Outcome>,
   bound: number,
-): ReadonlyArray<Improvement> =>
+) =>
   Arr.filter(
     improvements,
     ({ keys }) => keys.length > 0 && Arr.every(keys, (key) => outcomes.get(key)?.kind === "filed"),
@@ -156,29 +277,24 @@ export type Ended = typeof Ended.Type;
 
 export const FAILED_TO_START = "failed to start";
 
-/** An Improvement to start, by the issues it fixes. */
 export interface Starting {
   readonly name: string;
   readonly issues: ReadonlyArray<number>;
 }
 
-/**
- * The Improvements earlier Runs failed to start, each once, whose issues are all still open
- * and which no Run started since the first of those Runs closes; one per name, the earliest.
- */
 export const restartsOf = (
   earlier: ReadonlyArray<{ readonly created: string; readonly ended: ReadonlyArray<Ended> }>,
   since: ReadonlyArray<{ readonly created: string; readonly closes: ReadonlyArray<number> }>,
   open: ReadonlyArray<{ readonly number: number }>,
-): ReadonlyArray<Starting> => {
+) => {
   const at = (iso: string) => DateTime.toEpochMillis(DateTime.makeUnsafe(iso));
   const seen = new Set<string>();
-  const restarts: Starting[] = [];
+  const restarts: Array<Starting> = [];
   for (const { created, ended } of Arr.sortWith(
     earlier,
     (value) => value,
     (a, b) => Num.sign(at(a.created) - at(b.created)),
-  ))
+  )) {
     for (const { name, issues, ended: how } of ended) {
       const same = `${name} ${Arr.join(
         Arr.map(
@@ -191,7 +307,9 @@ export const restartsOf = (
         ),
         ",",
       )}`;
-      if (!pipe(how, Str.startsWith(FAILED_TO_START)) || seen.has(same)) continue;
+      if (!pipe(how, Str.startsWith(FAILED_TO_START)) || seen.has(same)) {
+        continue;
+      }
       seen.add(same);
       const taken = Arr.some(
         since,
@@ -203,13 +321,14 @@ export const restartsOf = (
         !taken &&
         Arr.every(issues, (number) => Arr.some(open, (one) => one.number === number)) &&
         !Arr.some(restarts, (one) => one.name === name)
-      )
+      ) {
         restarts.push({ name, issues });
+      }
     }
+  }
   return restarts;
 };
 
-/** One of the window's Runs, as the report lists what it asked and where it ended. */
 export interface AskingRun {
   readonly runId: string;
   readonly workflow: string;
@@ -227,11 +346,7 @@ export const QuestionMeasures = Schema.Struct({
 });
 export type QuestionMeasures = typeof QuestionMeasures.Type;
 
-/**
- * Questions per merge request that landed, and how many implement Runs reached theirs
- * without failing, of those that reached one or ended.
- */
-export const questionMeasures = (runs: ReadonlyArray<AskingRun>): QuestionMeasures => {
+export const questionMeasures = (runs: ReadonlyArray<AskingRun>) => {
   const asked = Arr.reduce(runs, 0, (sum, run) => sum + run.questions.length);
   const landed = new Set(Arr.flatMap(runs, ({ mr, merged }) => (merged && mr !== null ? [mr] : [])))
     .size;
@@ -252,8 +367,9 @@ export const questionMeasures = (runs: ReadonlyArray<AskingRun>): QuestionMeasur
 };
 
 export const questionLines = (measures: QuestionMeasures | undefined) => {
-  if (measures === undefined)
+  if (measures === undefined) {
     return ["Question measures were not recorded for this retrospective window."];
+  }
   const { asked, landed, perLanded, implement } = measures;
   return [
     perLanded === null
@@ -268,7 +384,6 @@ export const questionLines = (measures: QuestionMeasures | undefined) => {
 const REPEATED_ASKINGS = 10;
 const REPEATED_SHARE = 0.9;
 
-/** One question however often a Run asks it: `slice-02.go-3` and `go-1` are both `go`. */
 const classOf = (name: string) =>
   pipe(
     Arr.last(pipe(name, Str.split("."))),
@@ -277,20 +392,18 @@ const classOf = (name: string) =>
   );
 
 const slug = (text: string) =>
-  pipe(Str.toLowerCase(text), Str.replace(/[^a-z0-9]+/g, "-"), Str.replace(/^-|-$/g, ""));
+  pipe(Str.toLowerCase(text), Str.replaceAll(/[^a-z0-9]+/g, "-"), Str.replaceAll(/^-|-$/g, ""));
 
-/**
- * Each class of question answered the same at least nine times in ten over at least ten
- * answers: an answer Collie already knows, so asking it is Collie's defect.
- */
-export const repeatedAnswers = (runs: ReadonlyArray<AskingRun>): ReadonlyArray<Finding> => {
+export const repeatedAnswers = (runs: ReadonlyArray<AskingRun>) => {
   const classes = new Map<
     string,
-    { workflow: string; name: string; answers: string[]; runs: string[] }
+    { workflow: string; name: string; answers: Array<string>; runs: Array<string> }
   >();
-  for (const run of runs)
+  for (const run of runs) {
     for (const { name, answer } of run.questions) {
-      if (answer === null) continue;
+      if (answer === null) {
+        continue;
+      }
       const id = `${run.workflow} ${classOf(name)}`;
       const one = classes.get(id) ?? {
         workflow: run.workflow,
@@ -300,17 +413,26 @@ export const repeatedAnswers = (runs: ReadonlyArray<AskingRun>): ReadonlyArray<F
       };
       classes.set(id, one);
       one.answers.push(answer);
-      if (!one.runs.includes(run.runId)) one.runs.push(run.runId);
+      if (!one.runs.includes(run.runId)) {
+        one.runs.push(run.runId);
+      }
     }
+  }
   return Arr.flatMap([...classes.values()], ({ workflow, name, answers, runs: asking }) => {
-    if (answers.length < REPEATED_ASKINGS) return [];
+    if (answers.length < REPEATED_ASKINGS) {
+      return [];
+    }
     const counts = new Map<string, number>();
-    for (const answer of answers) counts.set(answer, (counts.get(answer) ?? 0) + 1);
+    for (const answer of answers) {
+      counts.set(answer, (counts.get(answer) ?? 0) + 1);
+    }
     const none: readonly [string, number] = ["", 0];
     const [answer, count] = Arr.reduce([...counts], none, (top, entry) =>
       entry[1] > top[1] ? entry : top,
     );
-    if (count / answers.length < REPEATED_SHARE) return [];
+    if (count / answers.length < REPEATED_SHARE) {
+      return [];
+    }
     const said = pipe(answer, Str.slice(0, 80));
     return [
       {
@@ -334,6 +456,7 @@ export const summaryOf = (options: {
   readonly acted: ReadonlyArray<{ readonly finding: Finding; readonly outcome: Outcome }>;
   readonly improvements: ReadonlyArray<Ended>;
   readonly leftOut: ReadonlyArray<LeftOut>;
+  readonly effects?: ReadonlyArray<FixEffect>;
 }) => {
   const categories = [...new Set(Arr.map(options.acted, ({ finding }) => finding.category))];
   const line = ({ finding, outcome }: (typeof options.acted)[number]) =>
@@ -369,6 +492,15 @@ export const summaryOf = (options: {
             ),
             "\n",
           ),
+      ...(options.effects === undefined || options.effects.length === 0
+        ? []
+        : [
+            "## Released fixes",
+            Arr.join(
+              Arr.map(options.effects, (effect) => `- ${effectLine(effect)}`),
+              "\n",
+            ),
+          ]),
       "## Left out",
       options.leftOut.length === 0
         ? "None."

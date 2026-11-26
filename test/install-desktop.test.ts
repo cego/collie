@@ -1,6 +1,3 @@
-// `install-desktop.sh`, the one line that installs Collie: it runs Electrobun's
-// installer only once the download verifies against Collie's release key.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -25,7 +22,6 @@ test("the install script checks with the key release-p256.pub holds", () =>
     }),
   ));
 
-/** A release with an installer that records it ran, signed by `sign` or not at all. */
 const release = (dir: string, sign: (bytes: Uint8Array) => string | null) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -37,7 +33,9 @@ const release = (dir: string, sign: (bytes: Uint8Array) => string | null) =>
     const asset = `${dir}/release/linux-x64-collie-desktop-Setup.tar.gz`;
     yield* exec(["tar", "-czf", asset, "-C", setup, "./installer"]);
     const signature = sign(yield* fs.readFile(asset));
-    if (signature !== null) yield* fs.writeFileString(`${asset}.p256.sig`, `${signature}\n`);
+    if (signature !== null) {
+      yield* fs.writeFileString(`${asset}.p256.sig`, `${signature}\n`);
+    }
     return asset;
   });
 
@@ -48,7 +46,6 @@ interface System {
 const LINUX: System = { os: "Linux", arch: "x86_64" };
 const APPLE_SILICON: System = { os: "Darwin", arch: "arm64" };
 
-/** The script run on its own, against `dir`'s release, checking with `publicKey`. */
 const install = (dir: string, publicKey: string, system: System = LINUX) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -58,13 +55,11 @@ const install = (dir: string, publicKey: string, system: System = LINUX) =>
     );
     const home = `${dir}/home`;
     yield* fs.makeDirectory(home, { recursive: true });
-    // The system the script is told it runs on, whatever runs the test.
     yield* fs.writeFileString(
       `${dir}/uname`,
       `#!/bin/sh\ncase "$1" in -s) echo ${system.os} ;; -m) echo ${system.arch} ;; esac\n`,
       { mode: 0o755 },
     );
-    // Away from the checkout, as `curl … | sh` runs it: nothing beside it to lean on.
     yield* fs.writeFileString(`${dir}/install-desktop.sh`, script);
     const done = yield* exec(["sh", `${dir}/install-desktop.sh`], {
       cwd: home,
@@ -123,11 +118,6 @@ test("a tampered or unsigned installer is refused and never run", () =>
     }).pipe(Effect.scoped),
   ));
 
-/**
- * A macOS release: a DMG holding Collie's app, signed by `sign` or not at all. The DMG
- * is a tar the fake `hdiutil` beside the script unpacks at the mount point it is given, noting
- * each attach and detach in `hdiutil.log`.
- */
 const macRelease = (dir: string, sign: (bytes: Uint8Array) => string | null) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -138,7 +128,9 @@ const macRelease = (dir: string, sign: (bytes: Uint8Array) => string | null) =>
     const asset = `${dir}/release/macos-arm64-collie-desktop.dmg`;
     yield* exec(["tar", "-cf", asset, "-C", volume, "."]);
     const signature = sign(yield* fs.readFile(asset));
-    if (signature !== null) yield* fs.writeFileString(`${asset}.p256.sig`, `${signature}\n`);
+    if (signature !== null) {
+      yield* fs.writeFileString(`${asset}.p256.sig`, `${signature}\n`);
+    }
     yield* fs.writeFileString(
       `${dir}/hdiutil`,
       `#!/bin/sh
@@ -163,7 +155,7 @@ const hdiutilLog = (dir: string) =>
     Effect.map((text) =>
       Arr.map(Str.split(Str.trim(text), "\n"), (line) => Str.split(line, " ")[0]),
     ),
-    Effect.orElseSucceed((): string[] => []),
+    Effect.orElseSucceed(() => []),
   );
 
 test("on Apple silicon a signed DMG's app is copied into ~/Applications, replacing an older one", () =>
@@ -236,7 +228,6 @@ test("a copy that fails keeps the installed app, leaves nothing half-copied and 
       const apps = `${dir}/home/Applications`;
       yield* fs.makeDirectory(`${apps}/collie-desktop.app/Contents`, { recursive: true });
       yield* fs.writeFileString(`${apps}/collie-desktop.app/Contents/version`, "old\n");
-      // A disk that fills up part way through the copy.
       yield* fs.writeFileString(
         `${dir}/cp`,
         '#!/bin/sh\nfor to; do :; done\nmkdir -p "$to"\nexit 1\n',

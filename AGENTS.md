@@ -1,8 +1,8 @@
 # Collie
 
-Collie codifies agent workflows for herdr — `plan`, `implement`, `review`, `architecture`,
-`renovate`, `release`, `general`, `investigate`, `self-improve` — as TypeScript modules run by one Effect v4 program with two front doors:
-herdr actions, and the `collie` CLI.
+Collie codifies agent workflows — `plan`, `implement`, `review`, `architecture`,
+`renovate`, `release`, `general`, `investigate`, `self-improve` — as TypeScript modules run by one Effect v4 program.
+The CLI, Desktop and Collie tools reach the same services; agents run in herdr-core (`hc`).
 
 ## Where to look
 
@@ -15,22 +15,20 @@ here are in [`src/README.md`](src/README.md).
 - **Workflow authoring commands** (`list`, `show`, check, `needs_input`) → [`docs/authoring.md`](docs/authoring.md),
   [`docs/sdk.md`](docs/sdk.md), `src/authoring.ts`, `src/commands/workflow.ts`.
 - **Go to pane** → [ADR-0044](docs/adr/0044-go-to-pane-opens-the-pane-in-desktop.md),
-  `desktop/src/bun/terminal.ts`, `test/desktop-terminal.test.ts`, `desktop/test/terminal-input.test.ts`.
+  `desktop/src/bun/terminal.ts`, `test/desktop-terminal.test.ts`, `desktop/src/shared/test/terminal-input.test.ts`.
 - **Placement** of a start → [ADR-0033](docs/adr/0033-a-run-started-from-the-home-is-placed-not-asked.md),
   joining a Task: [ADR-draft-a-tasks-work-is-what-its-runs-worked-on](docs/adr/draft-a-tasks-work-is-what-its-runs-worked-on.md),
   `taskWorking` in `src/engine.ts`, `test/placement.test.ts`, `src/flows.ts`, `src/route.ts`, `src/projects.ts`, `src/agent-start.ts`.
 - **CLI surface, error codes, `--json`** → [`docs/cli.md`](docs/cli.md), `src/envelope.ts`, `src/operations.ts`.
-- **herdr calls, red `contract`** → [`docs/internals.md`](docs/internals.md#checking-the-boundary-against-herdr),
-  `herdr-pin.json`, `test/herdr-contract.test.ts`.
 - **herdr-core (`hc`) client, red `probe:hc`** → [`docs/internals.md`](docs/internals.md#checking-core-against-its-schema-and-live),
   [ADR-draft-collie-runs-its-agents-in-herdr-core](docs/adr/draft-collie-runs-its-agents-in-herdr-core.md),
   `src/hc.ts`, `hc-pin.json`, `test/hc-contract.test.ts`, `tools/hc-probe.ts`, `test/support/fake-hc.ts`;
-  a Run's agents on core ([`docs/internals.md`](docs/internals.md#agents-on-core)): `terminal_backend`,
+  a Run's agents on core ([`docs/internals.md`](docs/internals.md#agents-on-core)):
   `src/herdr.ts`, `machineHerd` in `src/steering.ts`, `test/core-agents.test.ts`, `test/core-cli.test.ts`;
   OpenCode's reporter: `opencodeReporter` in `src/harness.ts`, `test/opencode-reporter.test.ts`;
   pi's question tool: `piQuestionTool` in `src/compactors.ts`, `piExtension` in `src/chat.ts`,
   `test/pi-question.test.ts`; the `hc` a release carries: `tools/hc-release.ts`,
-  `src/hc-install.ts`, the `hc`, `core` and `herdr 1` checks in `src/doctor.ts`,
+  `src/hc-install.ts`, the `hc` and `core` checks in `src/doctor.ts`,
   `test/hc-release.test.ts`, `test/upgrade-release.test.ts`, `test/doctor.test.ts`.
 - **Compaction** → [`docs/using.md`](docs/using.md#compaction-between-pieces-of-work),
   [`docs/internals.md`](docs/internals.md#compaction-at-a-work-boundary),
@@ -61,7 +59,7 @@ here are in [`src/README.md`](src/README.md).
   [`desktop/README.md`](desktop/README.md), [`docs/using.md`](docs/using.md#collie-desktop),
   `test/desktop-*.test.ts`, `test/flock-*.test.ts`, [cutover ADR](docs/adr/0067-collie-replaces-the-webview-desktop-in-place.md),
   `desktop/scripts/bundle.ts`, `desktop/update/`, `tools/rune-types.ts`,
-  `tools/rune-fixtures.ts`, `test/rune-types.test.ts`, `test/rune-contract.test.ts`.
+  `tools/rune.fixture.ts`, `test/rune-types.test.ts`, `test/rune-contract.test.ts`.
 - **Agent launch profile** → [ADR-0060](docs/adr/0060-a-managed-agent-runs-with-the-operators-profile.md),
   [`docs/using.md`](docs/using.md#what-collies-agents-get), `src/profile.ts`, `src/agents.ts`,
   `test/profile.test.ts`, `test/agents.test.ts`.
@@ -74,6 +72,10 @@ here are in [`src/README.md`](src/README.md).
   [`docs/using.md`](docs/using.md#usage), `src/usage-model.ts`, `src/usage.ts`, `src/commands/usage.ts`,
   `resolveWithRoom` in `src/harness.ts`, `choose` in `src/agents.ts`, `test/usage-model.test.ts`,
   `test/usage.test.ts`, `test/fallback.test.ts`.
+- **A Run's token ledger, trials** → [`docs/cli.md`](docs/cli.md#metrics),
+  `src/usage-ledger-model.ts`, `src/usage-ledger.ts`, `usageFor` in `src/lifecycle.ts`,
+  `src/trial-model.ts`, `src/trial.ts`, `src/trial-compare.ts`, `test/usage-ledger.test.ts`,
+  `test/metrics.test.ts`.
 - **Harness catalogue**, `collie models` →
   [ADR-draft-settings-read-what-harnesses-report](docs/adr/draft-settings-read-what-harnesses-report.md),
   [`docs/cli.md`](docs/cli.md#models), `src/catalogue-model.ts`, `src/catalogue.ts`,
@@ -219,9 +221,20 @@ While you iterate, run what covers what you touched, each through `collie verify
   Checks, `collie verify` runs nothing: it answers with that Check's latest record on the
   tree, or refuses with `invalid_state` and names the gate.
 
-Tests are unit tests only: they call the code through its own interface, with fakes at
-its edges. No Playwright and no test that drives a built app or a browser — a behaviour
-of the view is covered by testing the logic it renders.
+Tests are unit tests only: they call the code through its own interface, with stand-in
+processes and servers at its edges and MSW for HTTP, never a mock, a stubbed global or a
+spy that changes behaviour. No Playwright and no test that drives a built app or a browser — a
+behaviour of the view is covered by testing the logic it renders.
+
+`bun run lint` runs `oxlint.config.ts`, the `@cloudflare/oxlint-config` preset with Effect's
+rules, and holds the code to [landmines](https://github.com/interfere-inc/landmines):
+no prose comments (only directives, a one-line `// WARNING:` for a recurring footgun, which
+is also how a type assertion states its invariant, and TSDoc on the SDK in `src/sdk.ts`);
+no explicit return types: where a contract matters, a typed variable holds the function
+(`const f: (a: A) => R = ...`) or a typed local holds the value it returns
+(`const returned: R = ...; return returned;`), since `satisfies` checks a type without
+widening to it; a test beside the module it owns or in that directory's `test/`; and `.fixture.ts` or
+`.test-utils.ts` for test data and helpers. Rationale goes in the ADRs and docs.
 
 For native UI inspection, operate Rune headlessly with its built-in CLI: `--snap out.png`
 captures a screen, `--tree out.json` includes the accessibility tree, and `--script input.json`
@@ -239,15 +252,11 @@ These tools inspect the native app without installing it or restarting the human
    human-only step that protects nothing — and ceremony is a defect: it taxes the user and
    defeats what Collie is for ([`PRODUCT.md`](PRODUCT.md): the human should not have to
    manage each agent). `test/chat-parity.test.ts` holds this for chat.
-2. Every capability ships in both front doors: the CLI and the herdr actions are thin
-   adapters over the same Effect services ([ADR-0003](docs/adr/0003-collie-is-one-effect-program.md)).
-3. All herdr communication goes through `src/herdr.ts`. The exceptions never talk to a
-   session for Collie: `tools/herdr-schema.ts`, which runs a downloaded release offline to
-   print its schema; Desktop's `herdr machine list`, `add` and `remove`, and the
-   `herdr --version` that says why a list failed; and, for the human, herdr's terminal
-   controller whose pane Go to pane shows in Desktop, and the herdr
-   client it opens in a terminal where there is no pane to show — see
-   [`docs/internals.md`](docs/internals.md#the-herdr-boundary).
+2. The CLI, Desktop and Collie tools are thin adapters over the same Effect services
+   ([ADR-0003](docs/adr/0003-collie-is-one-effect-program.md)).
+3. Core's protocol lives in `src/hc.ts`; `src/herdr.ts` adapts it for Collie's agents.
+   Desktop attaches terminals through core and reads its Machine roster — see
+   [`docs/internals.md`](docs/internals.md#the-core-boundary).
 4. One host owns a state directory and everything it is running
    ([ADR-0015](docs/adr/0015-one-local-host-owns-a-state-directory.md)). Mutate a Run
    through it, under a request id, and never by writing its files.

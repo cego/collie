@@ -50,12 +50,14 @@ const change = <A>(
           const before = yield* decode(raw);
           const next = yield* edit(before);
           value = next.value;
-          if (sameState(before, next.state)) return raw;
+          if (sameState(before, next.state)) {
+            return raw;
+          }
           return yield* Schema.encodeEffect(json)(next.state).pipe(Effect.orDie);
         }),
       ),
     );
-    // SAFETY: `update` ran `edit`, which set it.
+    // WARNING: `update` ran `edit`, which set it.
     return value as A;
   });
 
@@ -70,7 +72,9 @@ export const stepTarget = Effect.fn("StepSteering.target")(function* (dir: strin
       ? Option.getOrUndefined(Arr.findFirst(latest.steps, (one) => one.id === id))
       : undefined;
   const step = meta ?? (entered?.kind === "enter" ? entered.step : undefined);
-  if (step === undefined) return { refused: `No Step ${id} is declared by this Run` } as const;
+  if (step === undefined) {
+    return { refused: `No Step ${id} is declared by this Run` } as const;
+  }
   if (
     entered?.kind === "enter" &&
     Arr.some(lines, (one) => one.kind === "leave" && one.key === entered.key)
@@ -81,8 +85,9 @@ export const stepTarget = Effect.fn("StepSteering.target")(function* (dir: strin
       ("item" in place
         ? place.items.indexOf(place.item) < place.items.length - 1
         : place.of === null || place.round < place.of);
-    if (!repeats)
+    if (!repeats) {
       return { refused: `Step ${id} has already been left and will not run again` } as const;
+    }
   }
   return { step } as const;
 });
@@ -127,7 +132,9 @@ export const leaveStepNote = (
 ) =>
   change(dir, (state) =>
     Effect.gen(function* () {
-      if (Arr.some(state.notes, (one) => one.id === note.id)) return { state, value: undefined };
+      if (Arr.some(state.notes, (one) => one.id === note.id)) {
+        return { state, value: undefined };
+      }
       return {
         state: { ...state, notes: [...state.notes, { ...note, at: yield* nowIso, read: null }] },
         value: undefined,

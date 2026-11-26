@@ -1,16 +1,15 @@
-// A check's failed tests, read from its own output, and each run again alone (ADR-0034,
-// amended 2026-10-15). Driven through the shipped host, as the gate asks for them.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Path } from "effect";
+import type { Path } from "effect";
+import { Effect, FileSystem } from "effect";
 import type { PlatformError } from "effect/PlatformError";
-import { Host, type WorkflowError } from "../src/sdk";
+import { Host } from "../src/sdk";
+import type { WorkflowError } from "../src/sdk";
 import { evidenceDir, foundationLayer } from "../src/engine";
 import { Store } from "../src/store";
 import { updateApproved } from "../src/verify-spec";
-import { RunRecords } from "../src/run-records";
+import type { RunRecords } from "../src/run-records";
 import { FakeBin } from "./support/bin";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
@@ -32,8 +31,9 @@ beforeEach(() =>
         ["init", "-q"],
         ["config", "user.email", "t@example.com"],
         ["config", "user.name", "t"],
-      ])
+      ]) {
         yield* exec(["git", ...args], { cwd: rig.projectDir });
+      }
       yield* fs.writeFileString(`${rig.projectDir}/thing.ts`, "export const one = 1;\n");
       yield* exec(["git", "add", "-A"], { cwd: rig.projectDir });
       yield* exec(["git", "commit", "-qm", "first"], { cwd: rig.projectDir });
@@ -43,7 +43,6 @@ beforeEach(() =>
 
 afterEach(() => runEffect(rig.close()));
 
-/** bun's output for a run with two files, a nested describe, and `fail` failing tests. */
 const bunPrinted = (options: { fail?: number; error?: boolean; extra?: number } = {}) =>
   Arr.join(
     [
@@ -74,7 +73,6 @@ const bunPrinted = (options: { fail?: number; error?: boolean; extra?: number } 
     "\n",
   );
 
-/** Approves `unit`, a check that prints whatever `printed` holds and exits 1. */
 const approveUnit = FileSystem.FileSystem.pipe(
   Effect.flatMap((fs) => fs.makeDirectory(evidenceDir(dir, runId), { recursive: true })),
   Effect.orDie,
@@ -92,7 +90,6 @@ const approveUnit = FileSystem.FileSystem.pipe(
   ),
 );
 
-/** The gate's check of `unit` while it prints `printed`. */
 const gateOn = (host: Host["Service"], printed: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -162,7 +159,6 @@ test("output whose fail count does not match, that reports an error, or has over
     ),
   ));
 
-/** bun's output where a file's hook failed after `named` of its tests did; bun calls the hook `(unnamed)`. */
 const hookFailed = (named: ReadonlyArray<string>) =>
   Arr.join(
     [
@@ -203,7 +199,6 @@ test("a check where a hook failed names no tests, even beside a named failure in
     ),
   ));
 
-/** A `bun` on PATH that records its arguments and directory, prints `printed` and exits `exit`. */
 const fakeBun = (printed: string, exit: number) =>
   Effect.gen(function* () {
     const bin = yield* FakeBin.make(`${rig.root}/bin`);
@@ -272,7 +267,7 @@ test("a rerun records its test as the branch's own where the branch adds its fil
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const git = (...args: string[]) => exec(["git", ...args], { cwd: rig.projectDir });
+      const git = (...args: Array<string>) => exec(["git", ...args], { cwd: rig.projectDir });
       yield* fs.makeDirectory(`${rig.projectDir}/test`, { recursive: true });
       yield* fs.writeFileString(`${rig.projectDir}/${NESTED.file}`, "// on the default branch\n");
       yield* git("add", "-A");
@@ -377,9 +372,7 @@ test("a test run at the base fails there only where bun reported that test faili
       });
       expect(failed.start.head_sha).toBe(head);
       expect(again.id).toBe(failed.id);
-      // A test the base does not have is this Run's own.
       expect(missing).toMatchObject({ pass: "baseline", test: QUICK, result: "pass" });
-      // Another test's failure is not this one's.
       expect(another.result).toBe("pass");
       expect(
         Str.split(Str.trim(yield* fs.readFileString(`${rig.root}/bun-runs`)), "\n"),

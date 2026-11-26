@@ -1,6 +1,3 @@
-// Each Herd's proposals journal, kept in the host's database
-// (ADR-draft-collies-own-records-live-in-the-hosts-database).
-
 import * as Arr from "effect/Array";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Deferred, Effect, Fiber, FileSystem, Stream } from "effect";
@@ -17,8 +14,8 @@ import {
   read,
   record,
   stepStarted,
-  type Actor,
 } from "../src/proposals";
+import type { Actor } from "../src/proposals";
 import { StoreWrites } from "../src/store-writes";
 import { runEffect } from "./support/effect";
 import { stopHost } from "./support/host";
@@ -46,7 +43,7 @@ afterEach(() =>
 );
 
 const human: Actor = { origin: "cli-tty", requestId: "req-1" };
-const actions: Action[] = [{ kind: "hold", run: "r1" }];
+const actions: Array<Action> = [{ kind: "hold", run: "r1" }];
 const proposed = {
   interpretation: "hold it",
   targets: [{ run: "r1" }],
@@ -108,7 +105,7 @@ test("two confirmations of one proposal at once: one is the answer, the other is
 test("a proposal and its confirmation tell the Run model which Runs they moved", () =>
   runEffect(
     Effect.gen(function* () {
-      const moved: string[] = [];
+      const moved: Array<string> = [];
       yield* Effect.gen(function* () {
         const mine = yield* record("herd-1", {
           ...proposed,

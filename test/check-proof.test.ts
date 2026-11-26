@@ -2,10 +2,12 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
-import { checkProof, owedLocally } from "../src/check-proof";
-import { evidenceGaps, type Collected } from "../src/outcome";
+import { checkProof, owedLocally, owesNothingHere } from "../src/check-proof";
+import { evidenceGaps } from "../src/outcome";
+import type { Collected } from "../src/outcome";
 import { settleFinalFix } from "../src/output";
-import { TOO_LARGE, UNMEASURED, type CheckCommand, type Verification } from "../src/verify";
+import { TOO_LARGE, UNMEASURED } from "../src/verify";
+import type { CheckCommand, Verification } from "../src/verify";
 import type { VerifySpec } from "../src/verify-spec";
 import type { YamlValue } from "../src/yaml";
 
@@ -13,8 +15,8 @@ const FINAL = { head_sha: "abc123", fingerprint: "tree-1" };
 const TESTS: VerifySpec = { name: "tests", executable: "bun", argv: ["test"], cwd: "/repo" };
 const COMMAND: CheckCommand = { ...TESTS, executable: "/usr/bin/bun" };
 
-function record(over: Partial<Verification> = {}): Verification {
-  return {
+function record(over: Partial<Verification> = {}) {
+  const returned: Verification = {
     id: "tests-1",
     run: "r1",
     name: "tests",
@@ -32,6 +34,7 @@ function record(over: Partial<Verification> = {}): Verification {
     by: "collie",
     ...over,
   };
+  return returned;
 }
 
 const proofOf = (
@@ -51,6 +54,37 @@ test("a fail on this tree is not, even after an earlier pass", () => {
 
 test("a reproduced failure, expected to fail, is no pass", () => {
   expect(proofOf([record({ expect: "fail" })]).state).toBe("failed");
+});
+
+test("a stale pass reads earlier, a current fail reads failed, and a current expected-red record is no proof", () => {
+  const EARLIER = { head_sha: "abc000", fingerprint: "tree-0" };
+  expect(proofOf([record({ start: EARLIER, end: EARLIER })]).state).toBe("earlier");
+  expect(proofOf([record({ result: "fail", exit: 1 })]).state).toBe("failed");
+  const red = proofOf([record({ expect: "fail" })]);
+  expect(owesNothingHere(red)).toBe(false);
+  const settled = settleFinalFix(
+    [],
+    { verdict: "clean", findings: [], fixed: [], disputed: [], checks: [{ name: "tests" }] },
+    { verifications: red.runs, final: FINAL },
+  );
+  expect(settled.ok ? "(ok)" : settled.reasons).toEqual(["check failed: tests"]);
+});
+
+test("a stale expected-red record is history: the Check owes a pass, which the last fix leaves to the gate", () => {
+  const EARLIER = { head_sha: "abc000", fingerprint: "tree-0" };
+  const red = record({ expect: "fail", start: EARLIER, end: EARLIER });
+  expect(proofOf([red])).toEqual({ state: "earlier", runs: [red], last: undefined });
+  const settled = settleFinalFix(
+    [],
+    { verdict: "clean", findings: [], fixed: [], disputed: [], checks: [{ name: "tests" }] },
+    { verifications: [red], final: FINAL },
+  );
+  expect(settled.ok ? settled.attestation : settled.reasons).toContain(
+    "0 check(s) verified on this tree, 1 left to the gate on the final tree (tests)",
+  );
+  expect(
+    evidenceGaps("feature", collected([red], { tickets: [{ file: "01.md", checks: ["tests"] }] })),
+  ).toContain('01.md promised check "tests", which has no passing verification on this tree');
 });
 
 test("a run on a tree that moved under it is unstable", () => {
@@ -79,6 +113,29 @@ test("on a tree too large to fingerprint, every record is unstable, and its sent
     "tests ran on a tree that moved under it",
   ]);
   expect(fixReasons([run], large)).toEqual(['check "tests" ran on a tree that moved under it']);
+});
+
+test("an unstable check's gap names what moved, capped with a count and the record that lists them all", () => {
+  const moved = { head_sha: "abc123", fingerprint: "tree-2" };
+  const paths = Arr.map(Arr.range(1, 7), (n) => ({
+    path: `out/${n}.txt`,
+    change: "added" as const,
+    class: "untracked" as const,
+  }));
+  const run = record({
+    result: "unstable",
+    start: moved,
+    moved: [{ path: "bun.lock", change: "modified", class: "lockfile" }, ...paths],
+  });
+  const said = [...evidenceGaps("unspecified", collected([run])), ...fixReasons([run], FINAL)];
+  expect(said).toHaveLength(2);
+  for (const sentence of said) {
+    expect(sentence).toContain(
+      "ran on a tree that moved under it: modified lockfile bun.lock, added untracked out/1.txt",
+    );
+    expect(sentence).toContain("out/4.txt and 3 more (all 8 in verification tests-1)");
+    expect(sentence).not.toContain("out/5.txt");
+  }
 });
 
 test("a check on a tree git could not measure says git's reason, not that the tree moved", () => {
@@ -157,11 +214,10 @@ test("a check left to CI waits on its job until its pass on this commit is recor
   const nuxi = (verifications: ReadonlyArray<Verification>, final = FINAL) =>
     checkProof({ verifications, final, approved: [NUXI] }, "nuxi");
   expect(nuxi([]).state).toBe("waiting");
-  // A local run of its command is no proof of it.
+  // WARNING: A local run of the command is no proof; only the job's own commit counts.
   expect(nuxi([jobPass({ pass: "gate", job: undefined })]).state).toBe("waiting");
   const earlier = { head_sha: "abc000", fingerprint: "tree-0" };
   expect(nuxi([jobPass({ start: earlier, end: earlier })]).state).toBe("waiting");
-  // A job ran on its commit, so another commit of the same bytes still waits on its own.
   const sameBytes = { head_sha: "abc000", fingerprint: FINAL.fingerprint };
   const onAnotherCommit = jobPass({ start: sameBytes, end: sameBytes });
   expect(nuxi([onAnotherCommit]).state).toBe("waiting");
@@ -222,14 +278,10 @@ test("no gap decider counts a check left to CI's missing local pass", () => {
     { verifications: [], final: FINAL, commands: [NUXI_COMMAND] },
   );
   expect(settled.ok).toBe(true);
-  // A Run whose only Check is left to CI still names one.
   expect(evidenceGaps("unspecified", collected([], { approved: [NUXI] }))).toEqual([]);
 });
 
-function collected(
-  verifications: ReadonlyArray<Verification>,
-  over: Partial<Collected> = {},
-): Collected {
+function collected(verifications: ReadonlyArray<Verification>, over: Partial<Collected> = {}) {
   return {
     verifications,
     final: FINAL,

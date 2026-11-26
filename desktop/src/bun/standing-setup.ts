@@ -1,37 +1,25 @@
-// Desktop's side of helping the human write their Standing direction: the offer, the
-// dialog's Inventory, and the setup conversation the human chose there.
-
 import { BunServices } from "@effect/platform-bun";
 import { Clock, Effect, Stream, SubscriptionRef } from "effect";
 import { PLUGIN_ID } from "../../../src/env";
 import { ownInventory, readOwnWords } from "../../../src/own-words";
 import type { OwnInventory, OwnWords } from "../../../src/own-words-model";
 import procedure from "../../../prompts/standing-direction-setup.md" with { type: "text" };
-import type { AguiEvent } from "../shared/agui";
 import type { ActionFailed, DesktopSettingsChange, OnboardRun } from "../shared/flock";
-import {
-  type ComputerStores,
-  type ComputerWords,
-  declined,
-  type OfferFacts,
-  offersSetup,
-  type SetupChoice,
-  setupTurn,
-} from "../shared/standing-setup";
-import { type FlockConversation, refusal } from "./chat";
+import { declined, offersSetup, setupTurn } from "../shared/standing-setup";
+import type { OfferFacts, SetupChoice } from "../shared/standing-setup";
+import { refusal } from "./chat";
+import type { FlockConversation } from "./chat";
 
-/** A computer the human may have sessions on, with its host's two answers on Desktop's door. */
 export interface Place {
   readonly computer: string;
   readonly inventory: Effect.Effect<OwnInventory, string>;
   readonly read: Effect.Effect<OwnWords, string>;
 }
 
-/** What the dialog shows before any choice: no message text, and nothing started. */
 export const setupInventory = (places: ReadonlyArray<Place>) =>
   Effect.forEach(
     places,
-    ({ computer, inventory }): Effect.Effect<ComputerStores> =>
+    ({ computer, inventory }) =>
       inventory.pipe(
         Effect.map(({ stores }) => ({ computer, stores })),
         Effect.catch((problem) => Effect.succeed({ computer, stores: [], problem })),
@@ -39,12 +27,11 @@ export const setupInventory = (places: ReadonlyArray<Place>) =>
     { concurrency: "unbounded" },
   );
 
-/** The only caller of Read: the human's choice in the dialog. */
 export const setUp = (
   choice: SetupChoice,
   places: ReadonlyArray<Place>,
   chat: Pick<FlockConversation, "reopen" | "send">,
-): Stream.Stream<AguiEvent> =>
+) =>
   Stream.unwrap(
     Effect.gen(function* () {
       const read =
@@ -52,7 +39,7 @@ export const setUp = (
           ? null
           : yield* Effect.forEach(
               places,
-              ({ computer, read }): Effect.Effect<ComputerWords> =>
+              ({ computer, read }) =>
                 read.pipe(
                   Effect.map((words) => ({ computer, words })),
                   Effect.catch((problem) => Effect.succeed({ computer, problem })),
@@ -66,7 +53,6 @@ export const setUp = (
     }),
   );
 
-/** Whether Desktop offers the setup, asked at launch and when a Machine's onboarding finishes. */
 export const setupOffer = Effect.fn("StandingSetup.offer")(function* (opts: {
   readonly facts: () => Omit<OfferFacts, "connected">;
   readonly save: (change: DesktopSettingsChange) => Effect.Effect<unknown, ActionFailed>;
@@ -77,21 +63,15 @@ export const setupOffer = Effect.fn("StandingSetup.offer")(function* (opts: {
     Effect.suspend(() => SubscriptionRef.set(offered, offersSetup({ ...opts.facts(), connected })));
   return {
     offered,
-    /** The human's choice in the dialog, held for the Flock chat in whichever window it is. */
     chosen,
     choose: (choice: SetupChoice) =>
       SubscriptionRef.set(offered, false).pipe(Effect.andThen(SubscriptionRef.set(chosen, choice))),
-    /** The choice, to one taker only. */
     take: SubscriptionRef.getAndSet(chosen, null),
-    /** The Standing direction changed: a written one ends the offer. */
     directionChanged: Effect.suspend(() =>
       opts.facts().direction === undefined ? Effect.void : SubscriptionRef.set(offered, false),
     ),
-    /** Desktop launched, and a Machine is connected. */
     launched: ask(true),
-    /** A finished onboarding has its Machine within reach. */
     onboarded: (run: OnboardRun) => (run.ready === true ? ask(true) : Effect.void),
-    /** The offer was taken up. */
     taken: SubscriptionRef.set(offered, false),
     decline: (forGood: boolean) =>
       opts
@@ -100,8 +80,7 @@ export const setupOffer = Effect.fn("StandingSetup.offer")(function* (opts: {
   };
 });
 
-/** Desktop's own computer, read in-process, where it is no Machine of the Flock. */
-export const thisComputer = (home: string): Place => {
+export const thisComputer = (home: string) => {
   const places = { home, stateDir: `${home}/.local/state/herdr/plugins/${PLUGIN_ID}` };
   return {
     computer: "this computer",

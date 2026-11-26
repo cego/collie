@@ -1,7 +1,3 @@
-// A check's processes, from spawn to gone (ADR-draft-a-check-ends-with-the-host-that-runs-it).
-// Nothing is signalled that is not proved the check's: its recorded leader by pid and start
-// token, or a process carrying both of its bindings.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -29,16 +25,16 @@ import type { Scope } from "effect";
 import { KEPT_BYTES, SUPERVISE, checkFiles } from "./check-supervisor";
 import { boundProcesses, groupOf, startedOf, stillRunning } from "./processes";
 import { StepPlace } from "./steps";
-import { RUNNING_CHECK, RunRecords, type RunRecordsApi } from "./run-records";
+import { RUNNING_CHECK, RunRecords } from "./run-records";
+import type { RunRecordsApi } from "./run-records";
 import { epochMs, nowIso } from "./time";
-import { FailedTestSchema, VerificationSchema } from "./verify-model";
+import { FailedTestSchema, IsolatedSchema, VerificationSchema } from "./verify-model";
 
 export const CHECK_INSTALLATION = "COLLIE_CHECK_INSTALLATION";
 export const CHECK_ID = "COLLIE_CHECK_ID";
 const KILL_AFTER = "2 seconds";
-const KILL_WAIT = 1_000;
+const KILL_WAIT = 1000;
 
-/** Which check of which Run, as its record and the host's log name it. */
 export interface CheckOf {
   readonly run: string;
   readonly name: string;
@@ -46,9 +42,7 @@ export interface CheckOf {
   readonly by: "agent" | "collie";
 }
 
-/** What finishing a check's Verification takes beside its command, record and output, known before it is spawned. */
 const SpecSchema = Schema.Struct({
-  /** The run directory its Verification is appended to. */
   evidence: Schema.String,
   asked: Schema.String,
   start: VerificationSchema.fields.start,
@@ -59,10 +53,16 @@ const SpecSchema = Schema.Struct({
   test: Schema.optionalKey(FailedTestSchema),
   own: VerificationSchema.fields.own,
   environment: Schema.optionalKey(Schema.String),
+  isolated: Schema.optionalKey(
+    Schema.Struct({
+      ...IsolatedSchema.fields,
+      cwd: Schema.String,
+      executable: Schema.optionalKey(Schema.String),
+    }),
+  ),
 });
 type CheckSpec = typeof SpecSchema.Type;
 
-/** A check's facts and command, written before it is spawned. */
 const FinishingSchema = Schema.Struct({
   check: Schema.Struct({
     run: Schema.String,
@@ -94,56 +94,42 @@ export interface CheckCommand {
 
 type Finishing = Schema.Schema.Type<typeof FinishingSchema>;
 
-/** What a check that exited is finished from: its facts, and the end of each of its streams. */
 export interface FinishedCheck extends Finishing {
   readonly output: { readonly stdout: string; readonly stderr: string };
 }
 
 export interface RunningCheck {
-  /** Null where this host would not start it. */
   readonly id: string | null;
-  /** Its command's, where it was spawned. */
   readonly pid: Effect.Effect<number | null>;
   readonly stdout: Stream.Stream<Uint8Array, PlatformError>;
   readonly stderr: Stream.Stream<Uint8Array, PlatformError>;
   readonly exit: Effect.Effect<number, PlatformError>;
-  /** Whether its supervisor writes its log, so its collector does not. */
   readonly logged: boolean;
-  /** What `collecting` gathers of it, never completing for a check this host ended (D4). */
+  // WARNING: never completes for a check this host ended (D4).
   readonly collected: <A, E, R>(collecting: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
 }
 
-/** A process the caller spawned, recorded as a check's. */
 export interface AdoptedCheck<H> {
   readonly handle: H;
   readonly collected: RunningCheck["collected"];
 }
 
-/** A check a host recorded or marked in this state directory that no host is collecting. */
 export interface Leftover {
   readonly id: string;
   readonly run: string;
-  /** Null where only its marked processes are left, which carry neither. */
   readonly name: string | null;
   readonly pass: string | null;
   readonly leader: { readonly pid: number; readonly started: string; readonly group: number };
-  /** Whether a record names its leader, which is what proves its group. */
   readonly recorded: boolean;
   readonly host: { readonly pid: number; readonly started: string } | null;
-  /** When it started, in epoch ms. */
   readonly started: number;
 }
 
 export type LeftoverEnd = "ended" | "already gone" | "still running";
 
-/** A new check of a Run not started, because a leftover of that Run survived its end (D6). */
 export class CheckRefused extends Data.TaggedError("CheckRefused")<{ readonly why: string }> {}
 
 export interface CheckProcessesApi {
-  /**
-   * Starts the check in the caller's Scope, whose close ends its processes for good. `say`
-   * hears of each leftover of its Run before that is ended.
-   */
   readonly run: (
     check: CheckOf,
     command: CheckCommand,
@@ -153,38 +139,22 @@ export interface CheckProcessesApi {
     PlatformError | CheckRefused,
     Scope.Scope | ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
   >;
-  /**
-   * A check still recorded with what its Verification needs; null where it is not. Fails
-   * where it is recorded and its stored output cannot be read.
-   */
   readonly finished: (id: string) => Effect.Effect<FinishedCheck | null, PlatformError>;
-  /**
-   * As `run`, for a process the caller spawns itself, with `markers` in its environment, and
-   * ends in the caller's Scope. Null where this host has begun to end, and nothing spawned.
-   */
   readonly adopt: <H extends { readonly pid: number }>(
     check: CheckOf,
     spawn: (markers: Readonly<Record<string, string>>) => Effect.Effect<H>,
     say?: (line: string) => Effect.Effect<void>,
   ) => Effect.Effect<AdoptedCheck<H> | null, CheckRefused, Scope.Scope>;
-  /**
-   * Leaves each supervised check this host is collecting to the host replacing it: this one
-   * neither ends it nor collects it from now on. Gives back their ids.
-   */
+  // WARNING: a handed-over check is neither ended nor collected by this host from now on.
   readonly handOver: Effect.Effect<ReadonlyArray<string>>;
-  /** The checks it took over that a step has not claimed again, by `run`, which no step will for an agent's. */
   readonly takenOver: Effect.Effect<ReadonlyArray<CheckRecord>>;
-  /** A check it took over, now collected as `run` would have started it; null where it was claimed already. */
   readonly claim: (id: string) => Effect.Effect<RunningCheck | null, never, Scope.Scope>;
-  /** Marks every check this host is collecting ended, then sends each, and each still being spawned, SIGTERM. */
   readonly endAll: Effect.Effect<ReadonlyArray<CheckOf>>;
-  /** SIGKILL to whatever of every check is left, and to one still being spawned; its record goes once it is gone. */
+  // WARNING: includes a check still being spawned; its record goes only once it is gone.
   readonly killEnded: Effect.Effect<void>;
-  /** The ids of the checks this host is collecting. */
   readonly collecting: Effect.Effect<ReadonlyArray<string>>;
   readonly left: Effect.Effect<ReadonlyArray<Leftover>>;
   readonly stillRuns: (leftover: Leftover) => Effect.Effect<boolean>;
-  /** Ends it for good, removes its record, and says so in `host.log` and on its Run. */
   readonly endLeftover: (leftover: Leftover) => Effect.Effect<LeftoverEnd>;
 }
 
@@ -228,7 +198,6 @@ const removeRecord = (
   );
 };
 
-/** `text` at `path` whole or not at all, and no `.new` left where it could not be. */
 const writeWhole = (fs: FileSystem.FileSystem, path: string, text: string) =>
   fs.writeFileString(`${path}.new`, text).pipe(
     Effect.andThen(fs.rename(`${path}.new`, path)),
@@ -247,7 +216,6 @@ const readFinishing = (fs: FileSystem.FileSystem, stateDir: string, id: string) 
     .readFileString(finishingPath(stateDir, id))
     .pipe(Effect.map((text) => Option.getOrNull(decodeFinishing(text))));
 
-/** The records of the checks running in this state directory, as their hosts wrote them. */
 export const runningChecks = RunRecords.use((records) => records.everyControl(RUNNING_CHECK)).pipe(
   Effect.map((rows) => Arr.getSomes(Arr.map(rows, (row) => decodeRecord(row.data)))),
 );
@@ -266,7 +234,6 @@ const spawnCheck = (command: CheckCommand, env?: Readonly<Record<string, string>
     ),
   );
 
-/** The check under its supervisor, which leads its process group and alone is this host's child. */
 const spawnSupervised = (
   supervisor: ReadonlyArray<string>,
   stateDir: string,
@@ -298,14 +265,13 @@ const spawnSupervised = (
           },
         ),
       )
-      // Unreferenced, so a Scope closed by a host handing it over leaves it running.
+      // WARNING: unref'd so a host handing over leaves the supervisor running.
       .pipe(Effect.tap((handle) => handle.unref)),
   );
 
 const pidIn = (fs: FileSystem.FileSystem, stateDir: string, id: string) =>
   fs.readFileString(outputsOf(stateDir, id).pid).pipe(Effect.map((text) => Number(Str.trim(text))));
 
-/** The pid a check's supervisor runs its command as, once it says; null where it never ran it. */
 const commandPid = (
   fs: FileSystem.FileSystem,
   stateDir: string,
@@ -317,13 +283,12 @@ const commandPid = (
     supervisor.exitCode.pipe(Effect.ignore, Effect.andThen(pidIn(fs, stateDir, id))),
   ).pipe(Effect.orElseSucceed(() => null));
 
-/** The exit status a check's supervisor wrote. */
 const exitIn = (fs: FileSystem.FileSystem, stateDir: string, id: string) =>
   fs
     .readFileString(outputsOf(stateDir, id).exit)
     .pipe(Effect.map((text) => Number(Str.trim(text))));
 
-const checkOfRecord = (record: CheckRecord): CheckOf => ({
+const checkOfRecord: (record: CheckRecord) => CheckOf = (record) => ({
   run: record.run,
   name: record.name,
   ...(record.pass !== undefined && {
@@ -335,7 +300,6 @@ const checkOfRecord = (record: CheckRecord): CheckOf => ({
   by: record.by === "agent" ? "agent" : "collie",
 });
 
-/** Whether a check taken over is the one a replayed step asks for, by what it is and what it runs. */
 const sameCheck = (taken: Finishing | null, check: CheckOf, command: CheckCommand) =>
   taken !== null &&
   taken.check.run === check.run &&
@@ -347,18 +311,16 @@ const sameCheck = (taken: Finishing | null, check: CheckOf, command: CheckComman
   taken.command.cwd === command.cwd &&
   Arr.makeEquivalence<string>((one, other) => one === other)(taken.command.argv, command.argv);
 
-/** The last `KEPT_BYTES` of each of a check's streams, as read so far. */
 interface Kept {
   stdout: Uint8Array;
   stderr: Uint8Array;
 }
-const nothingKept = (): Kept => ({ stdout: new Uint8Array(), stderr: new Uint8Array() });
+const nothingKept = () => ({ stdout: new Uint8Array(), stderr: new Uint8Array() });
 const textOf = (kept: Kept) => ({
   stdout: new TextDecoder().decode(kept.stdout),
   stderr: new TextDecoder().decode(kept.stderr),
 });
 
-/** Kept in memory as it is read, so neither the log nor the tail waits on `store`, which gets it once it ends. */
 const keptOf = (
   stream: Stream.Stream<Uint8Array, PlatformError>,
   kept: Kept,
@@ -380,7 +342,7 @@ const runningOf = (
   kept: Kept,
   store: (name: keyof Kept, bytes: Uint8Array) => Effect.Effect<void>,
   collected: RunningCheck["collected"],
-): RunningCheck => ({
+) => ({
   id,
   pid: Effect.succeed(handle.pid),
   stdout: keptOf(handle.stdout, kept, "stdout", store),
@@ -396,10 +358,9 @@ const newId = (run: string, began: string) =>
     (salt) => `${run}@${epochMs(began)}-${pipe_(salt.toString(16), Str.slice(2))}`,
   );
 
-// ponytail: in memory, as nothing outside this process could finish one.
+// WARNING: in memory only; nothing outside this process could finish an unrecorded check.
 const unrecordedChecks = new Map<string, { readonly finishing: Finishing; readonly kept: Kept }>();
 
-/** Outside a host: its own group, and nothing of it kept past its Scope. */
 const unrecorded: CheckProcessesApi = {
   run: (check, command) =>
     Effect.gen(function* () {
@@ -439,7 +400,6 @@ const unrecorded: CheckProcessesApi = {
   endLeftover: () => Effect.succeed("already gone"),
 };
 
-/** A check this host ended, or would not start once it began to end. */
 const endedCheck: RunningCheck = {
   id: null,
   pid: Effect.succeed(null),
@@ -454,27 +414,26 @@ export const CheckProcesses = Context.Reference<CheckProcessesApi>("collie/Check
   defaultValue: () => unrecorded,
 });
 
-/** A process seen carrying a check's markers, by pid and start token. */
 interface Marked {
   readonly pid: number;
   readonly started: string;
 }
 
-/** Every running process carrying this installation's binding, by the check id it carries. */
 const markedBy = (installation: string) =>
   Effect.gen(function* () {
-    const found = new Map<string, Marked[]>();
+    const found = new Map<string, Array<Marked>>();
     for (const { pid, started, bound } of yield* boundProcesses([CHECK_INSTALLATION, CHECK_ID])) {
       const id = bound[CHECK_ID];
-      if (pid === process.pid || bound[CHECK_INSTALLATION] !== installation || id === undefined)
+      if (pid === process.pid || bound[CHECK_INSTALLATION] !== installation || id === undefined) {
         continue;
-      if ((yield* groupOf(pid)) !== null)
+      }
+      if ((yield* groupOf(pid)) !== null) {
         found.set(id, [...(found.get(id) ?? []), { pid, started }]);
+      }
     }
     return found;
   });
 
-/** What of a check is proved still running: its group, while its leader is the recorded one, and each marked process. */
 const provedIn = (
   record: Pick<CheckRecord, "id" | "leader">,
   marked: ReadonlyMap<string, ReadonlyArray<Marked>>,
@@ -496,11 +455,10 @@ const provedOf = (record: Pick<CheckRecord, "id" | "leader">, installation: stri
 
 const isGone = (proved: Proved) => proved.group === null && proved.marked.length === 0;
 
-/** Sends a signal, throwing where it cannot, as `process.kill` does. */
 export type Kill = (target: number, name: NodeJS.Signals) => void;
 const processKill: Kill = (target, name) => process.kill(target, name);
 
-/** A marked process only while it is still the one seen marked. */
+// WARNING: signals nothing not proved to be the check's: its pid and start token must still match.
 const signal = (
   proved: { readonly group: number | null; readonly marked: ReadonlyArray<Marked> },
   name: NodeJS.Signals,
@@ -510,15 +468,18 @@ const signal = (
     const send = (target: number) => {
       try {
         kill(target, name);
-      } catch {
-        // Gone already.
-      }
+      } catch {}
     };
-    if (proved.group !== null) send(-proved.group);
-    for (const one of proved.marked) if (yield* stillRunning(one)) send(one.pid);
+    if (proved.group !== null) {
+      send(-proved.group);
+    }
+    for (const one of proved.marked) {
+      if (yield* stillRunning(one)) {
+        send(one.pid);
+      }
+    }
   });
 
-/** Polls until nothing of it is proved running, or `within` is up; true where it is gone. */
 const goneWithin = (
   record: Pick<CheckRecord, "id" | "leader">,
   installation: string,
@@ -535,24 +496,25 @@ const goneWithin = (
     );
   });
 
-/**
- * Ends one check for good: SIGTERM, up to two seconds, SIGKILL, and a last look, where a
- * zombie counts as gone. True where nothing of it is left.
- */
+// WARNING: a zombie counts as gone.
 export const endCheck = Effect.fn("CheckProcesses.endCheck")(function* (
   record: Pick<CheckRecord, "id" | "leader">,
   installation: string,
   kill: Kill = processKill,
 ) {
   const proved = yield* provedOf(record, installation);
-  if (isGone(proved)) return true;
+  if (isGone(proved)) {
+    return true;
+  }
   yield* signal(proved, "SIGTERM", kill);
-  if (yield* goneWithin(record, installation, 2_000)) return true;
+  if (yield* goneWithin(record, installation, 2000)) {
+    return true;
+  }
   yield* signal(yield* provedOf(record, installation), "SIGKILL", kill);
-  return yield* goneWithin(record, installation, 1_000);
+  return yield* goneWithin(record, installation, 1000);
 });
 
-/** A check id is `<run>@<epoch ms>-<random hex>`. */
+// WARNING: ids are <run>@<epoch ms>-<hex>; runOfId parses that shape.
 const runOfId = (id: string) =>
   pipe_(
     id,
@@ -585,29 +547,21 @@ const withPid = (leftover: Leftover) =>
 interface Ending {
   readonly check: CheckOf;
   ended: boolean;
-  /** Collected in full before its host began to end, so not among those it ended. */
   settled: boolean;
 }
 
 interface Collecting extends Ending {
   readonly record: CheckRecord;
-  /** Run under a supervisor, so it can be handed over. */
   readonly supervised: boolean;
-  /** Left to the host replacing this one, which alone collects it. */
   handed: boolean;
 }
 
-/** The checks a replaced host handed over, as it named itself and them. */
 export interface HandedOver {
   readonly host: CheckRecord["host"];
   readonly checks: ReadonlyArray<string>;
 }
 
-/**
- * The host's adapter for the state directory `dir`, whose installation id is `installation`.
- * Building it ends every check a previous host left where `sweep` is true; where false, the
- * caller does. `onRun` is what ending one does on its Run, given the line `host.log` gets.
- */
+// WARNING: building it ends the checks a previous host left, where sweep is true.
 export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (options: {
   readonly dir: string;
   readonly installation: string;
@@ -618,15 +572,13 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
   ) => Effect.Effect<void, never, FileSystem.FileSystem | RunRecords>;
   readonly kill?: Kill;
   readonly sweep: boolean;
-  /** How to start `collie`, to run each check under its supervisor; absent, a check is this host's child. */
   readonly supervisor?: ReadonlyArray<string>;
-  /** What the host this one replaced handed over to it, for it to collect. */
   readonly handedOver?: HandedOver;
 }) {
   const { dir, installation, kill = processKill, supervisor } = options;
   const fs = yield* FileSystem.FileSystem;
   const records = yield* RunRecords;
-  // Only these, so a check's spawn and finalizer stay in its caller's Scope.
+  // WARNING: only these services, so a check's spawn and finalizer stay in its caller's Scope.
   const services = Context.make(FileSystem.FileSystem, fs).pipe(
     Context.add(
       ChildProcessSpawner.ChildProcessSpawner,
@@ -635,42 +587,43 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
   );
   const collecting = new Map<string, Collecting>();
   const kept = new Map<string, Kept>();
-  // Taken over from the host this one replaced, until a step or the host claims each.
   const unclaimed = new Map<
     string,
     { readonly entry: Collecting; readonly finishing: Finishing | null }
   >();
   let stopping = false;
   let killing = false;
-  // Their processes carry their markers before their record is read.
+  // WARNING: a spawning check's processes carry their markers before its record is read.
   const spawning = new Map<string, Ending>();
-  // From before its spawn, so no check of this host is ever taken for a leftover.
+  // WARNING: added before the spawn, so no check of this host is ever taken for a leftover.
   const ours = new Set<string>();
   const host = { pid: process.pid, started: (yield* startedOf(process.pid)) ?? "" };
 
   const untrack = (id: string) => Effect.sync(() => collecting.delete(id));
   const forget = (id: string) =>
     removeRecord(fs, records, dir, id).pipe(Effect.andThen(untrack(id)));
-  /** As a check's Scope closes: ended for good, unless it was handed over. */
   const endOwn = (entry: Collecting) =>
     Effect.suspend(() =>
       entry.handed
         ? Effect.void
         : endCheck(entry.record, installation, kill).pipe(
-            // Its record is its only proof where /proc cannot be read, so it stays until it is gone.
+            // WARNING: where /proc cannot be read the record is the only proof, so it stays until the check is gone.
             Effect.flatMap((gone) => (gone ? forget(entry.record.id) : untrack(entry.record.id))),
             Effect.ignore,
           ),
     ).pipe(Effect.provideContext(services));
 
-  /** A taken-over check's exit status, once its supervisor has written it. */
-  const exitOf = (record: CheckRecord): Effect.Effect<number, PlatformError> =>
+  const exitOf = (record: CheckRecord) =>
     Effect.gen(function* () {
       for (;;) {
         const running = yield* stillRunning(record.leader);
         const exit = yield* exitIn(fs, dir, record.id).pipe(Effect.option);
-        if (Option.isSome(exit)) return exit.value;
-        if (!running) return yield* exitIn(fs, dir, record.id);
+        if (Option.isSome(exit)) {
+          return exit.value;
+        }
+        if (!running) {
+          return yield* exitIn(fs, dir, record.id);
+        }
         yield* Effect.sleep("250 millis");
       }
     }).pipe(Effect.provideContext(services));
@@ -678,7 +631,9 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
   const left = Effect.gen(function* () {
     const found = new Map<string, Leftover>();
     for (const record of yield* runningChecks.pipe(Effect.provideService(RunRecords, records))) {
-      if (ours.has(record.id)) continue;
+      if (ours.has(record.id)) {
+        continue;
+      }
       found.set(record.id, {
         id: record.id,
         run: record.run,
@@ -691,7 +646,9 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
       });
     }
     for (const [id, ones] of yield* markedBy(installation)) {
-      if (found.has(id) || ours.has(id)) continue;
+      if (found.has(id) || ours.has(id)) {
+        continue;
+      }
       const first = Arr.reduce(Arr.drop(ones, 1), Option.getOrThrow(Arr.head(ones)), (least, one) =>
         one.pid < least.pid ? one : least,
       );
@@ -732,20 +689,21 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
         : (yield* endCheck(proof, installation, kill))
           ? "ended"
           : "still running";
-      if (outcome !== "still running") yield* removeRecord(fs, records, dir, leftover.id);
+      if (outcome !== "still running") {
+        yield* removeRecord(fs, records, dir, leftover.id);
+      }
       const line = saidOf(leftover, outcome);
       yield* Effect.logInfo(line);
-      if (options.onRun !== undefined)
+      if (options.onRun !== undefined) {
         yield* options
           .onRun(leftover, outcome, line)
           .pipe(Effect.provideService(RunRecords, records));
+      }
       return outcome;
     }).pipe(Effect.provideContext(services));
 
-  // What the last look at /proc found of each check, so the next signal needs no look first.
   const found = new Map<string, ReadonlyArray<Marked>>();
   type Look = Effect.Success<ReturnType<typeof markedBy>>;
-  // The look at /proc under way, whose answer a later signal takes too, without waiting on it alone.
   let looking: Deferred.Deferred<Look> | undefined;
   const freshLook = Effect.suspend(() => {
     const deferred = Deferred.makeUnsafe<Look>();
@@ -753,7 +711,9 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     return markedBy(installation).pipe(
       Effect.onExit((exit) =>
         Effect.sync(() => {
-          if (looking === deferred) looking = undefined;
+          if (looking === deferred) {
+            looking = undefined;
+          }
           Deferred.doneUnsafe(deferred, Exit.isSuccess(exit) ? exit : Exit.succeed(new Map()));
         }),
       ),
@@ -765,23 +725,24 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
         const ones = look.get(id) ?? [];
         yield* signal({ group: null, marked: ones }, name, kill);
         const known = new Map(Arr.map(found.get(id) ?? [], (one) => [one.pid, one]));
-        for (const one of ones) known.set(one.pid, one);
+        for (const one of ones) {
+          known.set(one.pid, one);
+        }
         found.set(id, [...known.values()]);
       }),
     );
-  /**
-   * Each group, then each process found before, before the look at /proc, so a slow look holds
-   * back none of them. A look already under way is signalled from as it answers, beside a fresh
-   * one, which alone sees a process born since.
-   */
+  // WARNING: a look already under way is not enough: a fresh one alone sees a process born since.
   const signalAll = (ids: ReadonlyArray<string>, name: NodeJS.Signals) =>
     Effect.gen(function* () {
       for (const id of ids) {
         const entry = collecting.get(id);
-        if (entry !== undefined)
+        if (entry !== undefined) {
           yield* signal(yield* provedIn(entry.record, new Map()), name, kill);
+        }
       }
-      for (const id of ids) yield* signal({ group: null, marked: found.get(id) ?? [] }, name, kill);
+      for (const id of ids) {
+        yield* signal({ group: null, marked: found.get(id) ?? [] }, name, kill);
+      }
       const earlier = looking;
       yield* Effect.all(
         [
@@ -796,29 +757,31 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
   const own = () => Arr.filter([...collecting.values()], (entry) => !entry.handed);
   const unended = () => [...Arr.map(own(), (entry) => entry.record.id), ...spawning.keys()];
 
-  /** Ends each of the Run's leftovers once, announced first, and refuses where one survives (D6). */
   const clearOf = (run: string, say: (line: string) => Effect.Effect<void>) =>
     Effect.gen(function* () {
-      if (stopping) return;
+      if (stopping) {
+        return;
+      }
       const leftovers = Arr.filter(yield* left, (leftover) => leftover.run === run);
       const surviving = yield* Effect.forEach(
         leftovers,
         (leftover) =>
           Effect.gen(function* () {
-            if (yield* stillRuns(leftover))
+            if (yield* stillRuns(leftover)) {
               yield* say(`${withPid(leftover)}: ending it before this check starts`);
+            }
             return (yield* endLeftover(leftover)) === "still running" ? [leftover] : [];
           }),
         { concurrency: "unbounded" },
       ).pipe(Effect.map((ones) => ones.flat()));
       const [first] = surviving;
-      if (first !== undefined && !stopping)
+      if (first !== undefined && !stopping) {
         return yield* new CheckRefused({
           why: `${withPid(first)}, survived SIGTERM and SIGKILL, so this check did not start`,
         });
+      }
     });
 
-  /** Spawns it marked, records its leader, and ends it with the caller's Scope; null where this host is ending. */
   const begin = <H extends { readonly pid: number }, E>(
     check: CheckOf,
     spawn: (
@@ -829,16 +792,20 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     supervised = false,
   ) =>
     Effect.gen(function* () {
-      if (stopping) return null;
+      if (stopping) {
+        return null;
+      }
       const began = yield* nowIso;
       const id = yield* newId(check.run, began);
       ours.add(id);
       yield* Effect.addFinalizer(() => Effect.sync(() => ours.delete(id)));
       yield* clearOf(check.run, say);
-      // From the spawn to its finalizer, so no interruption leaves it unended.
+      // WARNING: uninterruptible from spawn to finalizer, so no interruption leaves a check unended.
       return yield* Effect.uninterruptible(
         Effect.gen(function* () {
-          if (stopping) return null;
+          if (stopping) {
+            return null;
+          }
           spawning.set(id, { check, ended: false, settled: false });
           const { handle, record, entry } = yield* Effect.gen(function* () {
             const handle = yield* spawn(
@@ -878,24 +845,26 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
             Effect.ensuring(Effect.sync(() => spawning.delete(id))),
           );
           yield* Effect.addFinalizer(() => endOwn(entry));
-          if (entry.ended) yield* signalAll([id], killing ? "SIGKILL" : "SIGTERM");
+          if (entry.ended) {
+            yield* signalAll([id], killing ? "SIGKILL" : "SIGTERM");
+          }
           yield* records.setControl(RUNNING_CHECK, "", encodeCheckRecord(record), id);
           return { handle, entry };
         }),
       );
     }).pipe(Effect.provideContext(services));
 
-  const collectedOf =
-    (entry: Collecting): RunningCheck["collected"] =>
-    (collecting) =>
-      collecting.pipe(
-        Effect.exit,
-        Effect.flatMap((exit) => {
-          if (entry.ended || entry.handed) return Effect.never;
-          entry.settled = true;
-          return exit;
-        }),
-      );
+  const collectedOf: (entry: Collecting) => RunningCheck["collected"] = (entry) => (collecting) =>
+    collecting.pipe(
+      Effect.exit,
+      Effect.flatMap((exit) => {
+        if (entry.ended || entry.handed) {
+          return Effect.never;
+        }
+        entry.settled = true;
+        return exit;
+      }),
+    );
 
   const run: CheckProcessesApi["run"] = (check, command, say = () => Effect.void) =>
     Effect.gen(function* () {
@@ -904,7 +873,9 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
       );
       if (Option.isSome(taken)) {
         const running = yield* claim(taken.value.entry.record.id);
-        if (running !== null) return running;
+        if (running !== null) {
+          return running;
+        }
       }
       return yield* runAnew(check, command, say);
     });
@@ -934,13 +905,15 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
       supervisor !== undefined,
     ).pipe(
       Effect.flatMap((begun) => {
-        if (begun === null) return Effect.succeed(endedCheck);
+        if (begun === null) {
+          return Effect.succeed(endedCheck);
+        }
         const { handle, entry } = begun;
         const { id } = entry.record;
         const ends = nothingKept();
         const store = (name: keyof Kept, bytes: Uint8Array) => {
           const path = outputsOf(dir, id)[name];
-          // A file that may be cut short is worse than none: without it, only this host finishes it.
+          // WARNING: a file cut short is worse than none; without it only this host finishes the check.
           return fs.writeFile(path, bytes).pipe(
             Effect.catch(() => fs.remove(path, { force: true })),
             Effect.ignore,
@@ -953,14 +926,15 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
           entry.supervised ? () => Effect.void : store,
           collectedOf(entry),
         );
-        // A supervised check is finished from its supervisor's files, which may not have been written.
-        if (entry.supervised)
+        // WARNING: a supervised check is finished from its supervisor's files, which may not exist yet.
+        if (entry.supervised) {
           return Effect.succeed({
             ...running,
             pid: commandPid(fs, dir, id, handle),
             exit: handle.exitCode.pipe(Effect.andThen(exitIn(fs, dir, id))),
             logged: true,
           });
+        }
         return Effect.acquireRelease(
           Effect.sync(() => kept.set(id, ends)),
           () => Effect.sync(() => kept.delete(id)),
@@ -971,7 +945,9 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
   const claim: CheckProcessesApi["claim"] = (id) =>
     Effect.gen(function* () {
       const entry = unclaimed.get(id)?.entry;
-      if (entry === undefined) return null;
+      if (entry === undefined) {
+        return null;
+      }
       unclaimed.delete(id);
       yield* Effect.addFinalizer(() => endOwn(entry));
       return {
@@ -985,13 +961,16 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
       } satisfies RunningCheck;
     });
 
-  /** From what this host kept of a check it runs, or else from the files its host stored. */
   const finished: CheckProcessesApi["finished"] = (id) =>
     Effect.gen(function* () {
       const finishing = yield* readFinishing(fs, dir, id).pipe(Effect.orElseSucceed(() => null));
-      if (finishing === null) return null;
+      if (finishing === null) {
+        return null;
+      }
       const own = kept.get(id);
-      if (own !== undefined) return { ...finishing, output: textOf(own) };
+      if (own !== undefined) {
+        return { ...finishing, output: textOf(own) };
+      }
       const outputs = outputsOf(dir, id);
       const [stdout, stderr] = yield* Effect.all([
         fs.readFile(outputs.stdout),
@@ -1008,9 +987,11 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     );
 
   const handOver = Effect.sync(() => {
-    const handed: string[] = [];
+    const handed: Array<string> = [];
     for (const entry of collecting.values()) {
-      if (!entry.supervised || entry.ended || entry.settled) continue;
+      if (!entry.supervised || entry.ended || entry.settled) {
+        continue;
+      }
       entry.handed = true;
       handed.push(entry.record.id);
     }
@@ -1019,9 +1000,11 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
 
   const endAll = Effect.gen(function* () {
     stopping = true;
-    const ended: CheckOf[] = [];
+    const ended: Array<CheckOf> = [];
     for (const entry of [...own(), ...spawning.values()]) {
-      if (entry.ended || entry.settled) continue;
+      if (entry.ended || entry.settled) {
+        continue;
+      }
       entry.ended = true;
       ended.push(entry.check);
     }
@@ -1032,25 +1015,34 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
   const killEnded = Effect.gen(function* () {
     stopping = true;
     killing = true;
-    for (const entry of own()) entry.ended = true;
+    for (const entry of own()) {
+      entry.ended = true;
+    }
     yield* signalAll(unended(), "SIGKILL");
     const until = (yield* Clock.currentTimeMillis) + KILL_WAIT;
     for (;;) {
       const marked = yield* markedBy(installation);
       for (const entry of own()) {
         const proved = yield* provedIn(entry.record, marked);
-        if (isGone(proved)) yield* forget(entry.record.id);
-        else yield* signal(proved, "SIGKILL", kill);
+        if (isGone(proved)) {
+          yield* forget(entry.record.id);
+        } else {
+          yield* signal(proved, "SIGKILL", kill);
+        }
       }
-      for (const id of spawning.keys())
+      for (const id of spawning.keys()) {
         yield* signal({ group: null, marked: marked.get(id) ?? [] }, "SIGKILL", kill);
-      if (own().length === 0 && spawning.size === 0) return;
-      if ((yield* Clock.currentTimeMillis) >= until) return;
+      }
+      if (own().length === 0 && spawning.size === 0) {
+        return;
+      }
+      if ((yield* Clock.currentTimeMillis) >= until) {
+        return;
+      }
       yield* Effect.sleep("100 millis");
     }
   }).pipe(Effect.provideContext(services));
 
-  /** Collects each check handed over that is proved its supervisor's, by pid and start token (D2), as this host's. */
   const takeOver = (handed: HandedOver) =>
     Effect.gen(function* () {
       for (const record of yield* runningChecks.pipe(Effect.provideService(RunRecords, records))) {
@@ -1058,13 +1050,16 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
           !handed.checks.includes(record.id) ||
           record.host.pid !== handed.host.pid ||
           record.host.started !== handed.host.started
-        )
+        ) {
           continue;
+        }
         const proved =
           (yield* stillRunning(record.leader)) &&
           (yield* groupOf(record.leader.pid)) === record.leader.group;
         const exited = yield* fs.exists(outputsOf(dir, record.id).exit);
-        if (!proved && !exited) continue;
+        if (!proved && !exited) {
+          continue;
+        }
         const taken: CheckRecord = { ...record, host };
         yield* records.setControl(RUNNING_CHECK, "", encodeCheckRecord(taken), record.id);
         const entry: Collecting = {
@@ -1089,11 +1084,13 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
       }
     }).pipe(Effect.ignore({ log: "Warn" }));
 
-  if (options.handedOver !== undefined)
+  if (options.handedOver !== undefined) {
     yield* takeOver(options.handedOver).pipe(Effect.provideContext(services));
-  if (options.sweep)
+  }
+  if (options.sweep) {
     yield* Effect.forEach(yield* left, endLeftover, { concurrency: "unbounded", discard: true });
-  return {
+  }
+  const returned: CheckProcessesApi = {
     run,
     finished,
     adopt,
@@ -1106,16 +1103,13 @@ export const hostCheckProcesses = Effect.fn("CheckProcesses.host")(function* (op
     left,
     stillRuns,
     endLeftover,
-  } satisfies CheckProcessesApi;
+  };
+  return returned;
 });
 
-/** How long past its grace a stop waits for its SIGKILL and the last look after it: under the host's stop slack. */
+// WARNING: must stay under the host's stop slack.
 export const KILL_CEILING = Duration.seconds(3);
 
-/**
- * SIGTERM to what `checks` is collecting at once, SIGKILL in the grace's last fifth, and done
- * when the grace is, or once that SIGKILL is done, up to `KILL_CEILING` later.
- */
 export const endAllWithin = (
   checks: CheckProcessesApi,
   grace: Duration.Duration,

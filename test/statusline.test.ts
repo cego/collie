@@ -1,7 +1,4 @@
-// The line under the chat prompt, and how it gets there. Two things matter: a human's own
-// Claude Code settings survive being configured, and a status line somebody else put there
-// is reported rather than replaced — it is their editor, and Collie is a guest in it.
-
+// WARNING: A status line someone else set is reported, never replaced: Collie is a guest in their settings.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
@@ -9,7 +6,8 @@ import * as Option from "effect/Option";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
-import { readEnv, type PluginEnv } from "../src/env";
+import { readEnv } from "../src/env";
+import type { PluginEnv } from "../src/env";
 import {
   claudeSettingsPath,
   installStatusLine,
@@ -19,7 +17,7 @@ import {
   statusLineFor,
 } from "../src/statusline";
 import { selectionPath, writeSelection } from "../src/selection";
-import { herdOf } from "../src/steering";
+import { machineHerd } from "../src/steering";
 
 let home: string;
 let env: PluginEnv;
@@ -91,24 +89,23 @@ test("with no settings file at all, one is written that says only what Collie ne
       yield* installStatusLine(env);
 
       expect(yield* read(file)).toContain(Arr.join(STATUS_LINE_ARGS, " "));
-      // Run again: the same machine, and nothing said twice.
       expect(yield* installStatusLine(env)).toContain("already");
     }),
   ));
 
-test("the line says what the board has selected, and says nothing outside a Herd", () =>
+test("the line says what the board has selected", () =>
   runEffect(
     Effect.gen(function* () {
       const herded = readEnv({
         ...process.env,
         HOME: home,
-        HERDR_PLUGIN_STATE_DIR: `${home}/state`,
-        HERDR_SOCKET_PATH: `${home}/herd.sock`,
+        COLLIE_STATE_DIR: `${home}/state`,
+        HC_SOCKET: `${home}/herd.sock`,
       });
 
       expect(yield* statusLineFor(herded)).toBe("board selection: none · whole herd");
 
-      const key = yield* herdOf(herded.socketPath);
+      const key = yield* machineHerd(herded);
       yield* writeSelection(yield* selectionPath(herded.stateDir, key), {
         task: "t1",
         run: "r1",
@@ -116,11 +113,6 @@ test("the line says what the board has selected, and says nothing outside a Herd
       });
 
       expect(yield* statusLineFor(herded)).toBe("board selection: Strapi prod seeder");
-
-      // No herdr, no board: a Claude Code the human opened somewhere else must not have
-      // Collie's words about a board it is nowhere near printed under its prompt.
-      const alone = readEnv({ ...process.env, HOME: home, HERDR_SOCKET_PATH: "" });
-      expect(yield* statusLineFor(alone)).toBe("");
     }),
   ));
 
@@ -130,8 +122,7 @@ test("settings Collie cannot read are refused rather than replaced", () =>
       const fs = yield* FileSystem.FileSystem;
       const file = yield* claudeSettingsPath(env);
       yield* fs.makeDirectory(`${home}/.claude`, { recursive: true });
-      // Half-edited by hand, which is a file with everything in it rather than an empty
-      // one: writing over it would take the human's own Claude Code settings with it.
+      // WARNING: A half-edited file is kept whole: writing over it would drop the human's own settings.
       const broken = `{"theirs": "kept",\n`;
       yield* fs.writeFileString(file, broken);
 
@@ -148,7 +139,6 @@ test("the status line 0.104.0 wrote is Collie's, and is replaced rather than joi
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const file = yield* claudeSettingsPath(env);
-      // statusLineCommand(["/home/u/.collie/release/bin/collie"]) on 0.104.0.
       const written = "'/home/u/.collie/release/bin/collie' chat status-line";
       yield* fs.makeDirectory(`${home}/.claude`, { recursive: true });
       yield* fs.writeFileString(

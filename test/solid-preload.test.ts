@@ -4,7 +4,6 @@ import { HOLD_ENV } from "../tools/budget";
 import { exec } from "./support/command";
 import { runEffect } from "./support/effect";
 
-/** One fixture file under the suite's own preloads, in a `bun test` of its own, on this test's hold. */
 const fixture = (name: string) =>
   Effect.gen(function* () {
     const hold = yield* Config.String(HOLD_ENV).pipe(Config.withDefault("nested"));

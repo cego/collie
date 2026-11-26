@@ -1,18 +1,16 @@
-// `collie usage`: how much of each Subscription this Machine's logins have used, per
-// window, as its host last read it (ADR-0049).
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { Clock, Effect } from "effect";
 import { Command } from "effect/cli";
-import { usageReadings } from "../lifecycle";
+import type { AgentFallback } from "../board-model";
+import { usageFallbacks, usageReadings } from "../lifecycle";
 import { agoMs, epochMs } from "../time";
-import { current, resetPhrase, type UsageReading } from "../usage-model";
+import { current, resetPhrase } from "../usage-model";
+import type { UsageReading } from "../usage-model";
 import { answering, cliDoor } from "./shared";
 
-/** One line per window, then the reading's age and source, or its problem. */
-export function usageLines(readings: ReadonlyArray<UsageReading>, now: number): string {
+export function usageLines(readings: ReadonlyArray<UsageReading>, now: number) {
   return Arr.join(
     Arr.flatMap(readings, (reading) => {
       const who = Arr.join(
@@ -40,16 +38,29 @@ export function usageLines(readings: ReadonlyArray<UsageReading>, now: number): 
   );
 }
 
+export const fallbackLines = (fallbacks: ReadonlyArray<AgentFallback>) =>
+  Arr.map(
+    fallbacks,
+    (one) => `fallback ${one.agent} of ${one.run} is on ${one.on}, falls back to ${one.next}`,
+  );
+
 export const usage = Command.make("usage", {}, () =>
   answering((env) =>
     Effect.gen(function* () {
-      const read = yield* usageReadings(env, yield* cliDoor(env));
-      if (!read.ok) return read;
+      const door = yield* cliDoor(env);
+      const read = yield* usageReadings(env, door);
+      if (!read.ok) {
+        return read;
+      }
+      const fallbacks = yield* usageFallbacks(env, door);
+      if (!fallbacks.ok) {
+        return fallbacks;
+      }
       const now = yield* Clock.currentTimeMillis;
       return {
         ok: true as const,
-        data: { readings: read.value },
-        human: usageLines(read.value, now),
+        data: { readings: read.value, fallbacks: fallbacks.value },
+        human: Arr.join([usageLines(read.value, now), ...fallbackLines(fallbacks.value)], "\n"),
       };
     }),
   ),

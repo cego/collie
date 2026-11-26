@@ -1,12 +1,3 @@
-// Codex's App Server, as Collie's adapter drives it. Two kinds of check:
-//
-//   - the protocol, against a stand-in server this test controls, so the adapter's
-//     identity binding, accounting and correlation can be put in states a real Codex
-//     will not produce on demand;
-//   - the contract, against the installed Codex itself. Its own `generate-json-schema`
-//     is the authority on what this release's protocol has, so the check is that every
-//     method and field the adapter uses is in it — not that a mock answered.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -19,7 +10,8 @@ import { fakeChannel } from "./support/compaction";
 import { reason } from "../src/naming";
 import { atLeast, COMPACTION_PORTS, VERIFIED_VERSIONS } from "../src/compactors";
 import { boundThread, withCodex } from "../src/codex";
-import { Unsubmitted, type AgentContext } from "../src/compaction";
+import { Unsubmitted } from "../src/compaction";
+import { stringifyJson } from "../src/json";
 
 let rig: Rig;
 let fs: FileSystem.FileSystem;
@@ -28,21 +20,16 @@ let dir: string;
 
 const codex = COMPACTION_PORTS.codex!;
 
-/** What the stand-in server answers with, per test. */
 interface Fake {
-  threads: string[];
-  /** Threads the TUI keeps for itself, as `thread/read` reports them. */
-  ephemeral: string[];
-  /** Sub-agent threads the agent spawned, by the thread that spawned them. */
+  threads: Array<string>;
+  ephemeral: Array<string>;
   parents: Record<string, string>;
   cwd: string;
-  /** Token usage replayed on a rejoin; null sends none, as a fresh thread does. */
   usage: number | null;
-  compactions: { id: string; turnId: string }[];
-  turns: { id: string; status: string; error?: { message: string } }[];
-  /** What a compact request appends, so a test can make one land or not. */
+  compactions: Array<{ id: string; turnId: string }>;
+  turns: Array<{ id: string; status: string; error?: { message: string } }>;
   onCompact: (fake: Fake) => void;
-  calls: string[];
+  calls: Array<string>;
 }
 let fake: Fake;
 interface FakeServer {
@@ -60,15 +47,9 @@ const Request = Schema.fromJsonString(
 );
 const decodeRequest = Schema.decodeUnknownOption(Request);
 
-/** What the stand-in answers with: the JSON the protocol's own responses hold. */
 type Answer = Schema.Schema.Type<typeof Schema.Json>;
 
-/**
- * A stand-in App Server. Not a claim about Codex: it answers the shape the installed
- * release's own schema declares, which the contract checks at the bottom of this file
- * assert separately.
- */
-function serve(): FakeServer {
+function serve() {
   const listening = Bun.serve({
     port: 0,
     fetch: (request, self) =>
@@ -76,14 +57,15 @@ function serve(): FakeServer {
     websocket: {
       message(ws, raw) {
         const decoded = decodeRequest(raw);
-        if (decoded._tag === "None") return;
+        if (decoded._tag === "None") {
+          return;
+        }
         const { id, method, params } = decoded.value;
         fake.calls.push(method);
         const reply = (result: Answer) => {
-          ws.send(JSON.stringify({ id, result }));
+          ws.send(stringifyJson({ id, result }));
         };
-        // SAFETY: every method this stand-in answers takes `threadId` and nothing
-        // else, and the schema above has already parsed the frame into an object.
+        // WARNING: every method this stand-in answers takes `threadId` and nothing else, and the schema above has already parsed the frame into an object.
         const threadId = (params as { threadId?: string } | undefined)?.threadId ?? "";
         switch (method) {
           case "initialize":
@@ -101,17 +83,16 @@ function serve(): FakeServer {
             });
           case "thread/resume": {
             reply({ thread: { id: threadId } });
-            // A rejoin replays the current usage, which is the only way this adapter
-            // can read a Codex agent's context at all.
+            // WARNING: A rejoin replays the current usage, the only way this adapter reads a Codex agent's context.
             if (fake.usage !== null) {
               ws.send(
-                JSON.stringify({
+                stringifyJson({
                   method: "thread/tokenUsage/updated",
                   params: {
                     threadId,
                     turnId: "t-1",
                     tokenUsage: {
-                      // Accumulated session usage, which must never be thresholded.
+                      // WARNING: Accumulated session usage, which must never be thresholded.
                       total: {
                         totalTokens: 999_999,
                         inputTokens: 0,
@@ -121,7 +102,7 @@ function serve(): FakeServer {
                       },
                       last: {
                         totalTokens: fake.usage,
-                        // The overlapping parts of that total, not addends.
+                        // WARNING: The overlapping parts of total are not addends.
                         inputTokens: fake.usage - 20,
                         cachedInputTokens: fake.usage - 100,
                         cacheWriteInputTokens: 0,
@@ -160,12 +141,11 @@ function serve(): FakeServer {
   return { port: listening.port ?? 0, stop: () => listening.stop(true) };
 }
 
-/** Why a read failed, as a human would read it off the Run. */
-function why<A, E>(result: Result.Result<A, E>): string {
+function why<A, E>(result: Result.Result<A, E>) {
   return Result.isFailure(result) ? reason(result.failure) : "";
 }
 
-const ctx = (): AgentContext => ({
+const ctx = () => ({
   agent: "build-r1",
   run: "run-1",
   harness: "codex",
@@ -208,7 +188,7 @@ afterEach(() => runEffect(rig.close()));
 test("the one thread on a one-agent endpoint is this agent's, checked against its cwd", () =>
   runEffect(
     Effect.gen(function* () {
-      const bound = yield* withCodex(ctx().endpoint!, (client) => boundThread(client, fake.cwd));
+      const bound = yield* withCodex(ctx().endpoint, (client) => boundThread(client, fake.cwd));
       expect(bound).toBe("thread-1");
     }),
   ));
@@ -233,13 +213,11 @@ test("a reachable App Server is ready before the first prompt creates its thread
 test("the TUI's own ephemeral thread is not a second agent to choose between", () =>
   runEffect(
     Effect.gen(function* () {
-      // A Codex TUI loads a cheap ephemeral thread of its own beside the one it is
-      // working in, so an agent's own endpoint has two loaded threads and only one of
-      // them is the agent.
+      // WARNING: A Codex TUI loads an ephemeral thread beside the agent's; only one of the two loaded threads is the agent.
       fake.threads = ["thread-1", "thread-helper"];
       fake.ephemeral = ["thread-helper"];
 
-      const bound = yield* withCodex(ctx().endpoint!, (client) => boundThread(client, fake.cwd));
+      const bound = yield* withCodex(ctx().endpoint, (client) => boundThread(client, fake.cwd));
       expect(bound).toBe("thread-1");
       expect(yield* codex.usage(ctx())).toBe(400_000);
     }),
@@ -251,7 +229,7 @@ test("the sub-agents an agent spawned are its own, not rival threads", () =>
       fake.threads = ["thread-1", "thread-review", "thread-spec"];
       fake.parents = { "thread-review": "thread-1", "thread-spec": "thread-1" };
 
-      const bound = yield* withCodex(ctx().endpoint!, (client) => boundThread(client, fake.cwd));
+      const bound = yield* withCodex(ctx().endpoint, (client) => boundThread(client, fake.cwd));
       expect(bound).toBe("thread-1");
       expect(yield* codex.ready!(ctx())).toBe(true);
     }),
@@ -280,9 +258,6 @@ test("a thread working somewhere else is not this agent's", () =>
 test("the sample is the latest request's context, once, and never the session total", () =>
   runEffect(
     Effect.gen(function* () {
-      // `last.totalTokens` as it stands. Its input, cached-input, output and reasoning
-      // fields are its parts; adding them would double-count, and `total` beside it is
-      // accumulated session usage — 999,999 in the stand-in, to make either mistake loud.
       expect(yield* codex.usage(ctx())).toBe(400_000);
     }),
   ));
@@ -300,7 +275,6 @@ test("a submitted request is not a completed one", () =>
     Effect.gen(function* () {
       yield* codex.request(ctx(), "req-1");
       expect(fake.calls).toContain("thread/compact/start");
-      // The empty reply acknowledges submission. Nothing has compacted.
       expect(yield* codex.poll(ctx(), "req-1")).toBeNull();
     }),
   ));
@@ -376,8 +350,6 @@ test("a request nothing recorded as submitted has no outcome", () =>
 test("a thread that cannot be bound is a request that never left", () =>
   runEffect(
     Effect.gen(function* () {
-      // Nothing has been asked of the thread yet, so the waiting work may go out with
-      // a warning rather than waiting out a compaction nobody started.
       fake.threads = [];
       const failure = yield* codex.request(ctx(), "req-1").pipe(Effect.result);
 
@@ -404,8 +376,6 @@ test("an agent with no endpoint recorded is a failure, not a context of zero", (
     }),
   ));
 
-// The contract, against the installed Codex. Its own schema generator is the authority
-// on what this release has; a mock cannot answer that question.
 onMachineWith("codex")(
   "the installed Codex's own protocol schema has every method and field the adapter uses",
   () =>
@@ -419,8 +389,6 @@ onMachineWith("codex")(
 
         const requests = yield* read("ClientRequest.json");
         const notifications = yield* read("ServerNotification.json");
-        // Every method and notification the adapter names, read from the adapter: a name
-        // it starts using is a name this checks, and none is checked that it has dropped.
         const adapter = yield* fs.readFileString(
           new URL("../src/codex.ts", import.meta.url).pathname,
         );
@@ -436,25 +404,24 @@ onMachineWith("codex")(
             `"${name}"`,
           );
         }
-        // The accounting: `last` beside `total`, and the total that is used as it stands.
         expect(notifications).toContain(`"last"`);
         expect(notifications).toContain(`"totalTokens"`);
-        // What tells a sub-agent's thread from the agent's own.
         expect(yield* read("v2/ThreadReadResponse.json")).toContain(`"parentThreadId"`);
-        // What a stop reads: the transcript's path, the thread's runtime status, and the
-        // full ids an interrupt is sent with.
         const thread = yield* read("v2/ThreadReadResponse.json");
         expect(thread).toContain(`"path"`);
-        for (const status of ["active", "idle", "notLoaded", "systemError"])
+        for (const status of ["active", "idle", "notLoaded", "systemError"]) {
           expect(thread).toContain(`"${status}"`);
+        }
         const interrupt = yield* read("v2/TurnInterruptParams.json");
-        for (const field of ["threadId", "turnId"]) expect(interrupt).toContain(`"${field}"`);
+        for (const field of ["threadId", "turnId"]) {
+          expect(interrupt).toContain(`"${field}"`);
+        }
         expect(yield* read("v2/ThreadTurnsListResponse.json")).toContain(`"status"`);
         const turnsList = yield* read("v2/ThreadTurnsListParams.json");
-        for (const field of ["sortDirection", "limit"]) expect(turnsList).toContain(`"${field}"`);
-        // The item type the compaction lifecycle is read from.
+        for (const field of ["sortDirection", "limit"]) {
+          expect(turnsList).toContain(`"${field}"`);
+        }
         expect(notifications).toContain(`"contextCompaction"`);
-        // The terminal turn statuses the failure mapping relies on.
         for (const status of ["completed", "interrupted", "failed", "inProgress"]) {
           expect(notifications).toContain(`"${status}"`);
         }
@@ -474,7 +441,6 @@ onMachineWith("codex")(
         expect(atLeast(version, wanted)).toBe(true);
         yield* codex.gate;
 
-        // The launch topology: a server on a loopback port, and a TUI pointed at it.
         const help = yield* Effect.promise(() => Bun.$`codex --help`.text());
         expect(help).toContain("--remote");
         expect(help).toContain("ws://host:port");

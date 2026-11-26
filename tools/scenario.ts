@@ -1,6 +1,3 @@
-// `bun run scenario "<pattern>"`: runs the baseline scenarios whose names match the pattern, as
-// `-t` matches it, through `bun run test` with only the shard files that hold them.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -36,7 +33,7 @@ export const scenarioArgs = (pattern: string, files: ReadonlyArray<string>) => [
   ...files,
 ];
 
-if (import.meta.main)
+if (import.meta.main) {
   BunRuntime.runMain(
     Effect.gen(function* () {
       const pattern = Bun.argv[2];
@@ -56,3 +53,4 @@ if (import.meta.main)
       return yield* Effect.promise(() => child.exited);
     }).pipe(Effect.flatMap((code) => Effect.sync(() => process.exit(code)))),
   );
+}

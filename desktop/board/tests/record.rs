@@ -1,6 +1,6 @@
 //! A record's logic, case for case from `test/desktop-record.test.ts`, `desktop-diff-view`,
 //! `desktop-flow-actions`, `desktop-step-inspector`, `desktop-step-timing`, `desktop-when`,
-//! `desktop-evidence`, `desktop-plan-view` and `desktop/test/record-terminal.test.ts`.
+//! `desktop-evidence`, `desktop-plan-view` and `desktop/src/shared/test/record-terminal.test.ts`.
 
 use collie_desktop_board::flow::actions::{self, Effect, next_move, retry_caption, shown_at};
 use collie_desktop_board::flow::inspector::{self, Part};

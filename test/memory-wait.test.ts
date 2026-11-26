@@ -1,6 +1,3 @@
-// A start that waits while its Machine is Short of memory, read again every 15 seconds
-// (ADR-draft-new-work-waits-while-its-machine-is-short-of-memory, D2–D5).
-
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, Exit, FileSystem, Fiber, Schema } from "effect";
 import { TestClock } from "effect/testing";
@@ -8,7 +5,13 @@ import { hostname } from "node:os";
 import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
 import { writeConfigValue } from "../src/config";
-import { holdsBudgetOf, MEMORY_WAIT, memoryWaitOf, waitForMemory } from "../src/memory-wait";
+import {
+  holdsBudgetOf,
+  MEMORY_WAIT,
+  memoryWaitOf,
+  waitForMemory,
+  waitLine,
+} from "../src/memory-wait";
 import { RunRecords } from "../src/run-records";
 
 let rig: Rig;
@@ -39,9 +42,10 @@ const waiting = (asker: string | null = null) =>
     asker,
   });
 
-/** Lets the waiting fiber do its file IO, which the test clock does not drive. */
 const settle = Effect.gen(function* () {
-  for (let tries = 0; tries < 50; tries++) yield* TestClock.withLive(Effect.sleep("2 millis"));
+  for (let tries = 0; tries < 50; tries++) {
+    yield* TestClock.withLive(Effect.sleep("2 millis"));
+  }
 });
 
 const onTestClock = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -146,7 +150,7 @@ test("a stop that lands as memory frees still stops the start", () =>
             stateDir: rig.stateDir,
             runId: "r1",
             what: "build's agent",
-            // The stop lands while it is read, so memory is seen free before the stop is.
+            // WARNING: the stop lands while memory is read, so memory is seen free before the stop is.
             stopped: Effect.suspend(() =>
               stop
                 ? TestClock.withLive(Effect.sleep("100 millis")).pipe(Effect.as(true))
@@ -204,6 +208,28 @@ test("a live wait reads again within its period, so it stays shown however long 
         }
         expect(yield* memoryWaitOf("r1")).not.toBeNull();
         yield* Fiber.interrupt(fiber);
+      }),
+    ),
+  ));
+
+test("a Machine short of disk holds the start, saying so on the card, until space frees", () =>
+  runEffect(
+    onTestClock(
+      Effect.gen(function* () {
+        yield* rig.disk(2);
+        const fiber = yield* Effect.forkChild(waiting());
+        yield* settle;
+        const wait = yield* memoryWaitOf("r1");
+        expect(wait === null ? null : waitLine(wait)).toBe(
+          `Short of disk on ${hostname()}, waiting for space: / has 2.0 GiB free (2%).`,
+        );
+
+        yield* rig.disk(40);
+        yield* TestClock.adjust("15 seconds");
+        yield* settle;
+        expect(yield* Fiber.join(fiber)).toBe("waited");
+        expect(yield* memoryWaitOf("r1")).toBeNull();
+        expect(yield* log).toContain("build's agent: waited 15s for disk");
       }),
     ),
   ));

@@ -1,7 +1,3 @@
-// One open merge request's head put on stage for testing, unmerged, until the human is done
-// with it. Nothing here waits on its review: staging ships nothing, and its rollback takes it
-// back (ADR-draft-an-open-merge-request-is-staged-by-a-run-of-its-own).
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import {
@@ -21,8 +17,8 @@ import {
   mrUrlOf,
   readMrRef,
   step,
-  type Holders,
 } from "collie";
+import type { Holders } from "collie";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import * as Workflow from "effect/workflow/Workflow";
@@ -42,23 +38,19 @@ import {
   short,
   staging,
   startedWithOne,
-  type SetMember,
 } from "./staging.ts";
+import type { SetMember } from "./staging.ts";
 import onGitlab from "./stage.gitlab.md" with { type: "text" };
 import onGithub from "./stage.github.md" with { type: "text" };
 
 const text = Schema.String;
 
-/** What every step of a Stage Run is told, under the names its content asks for them by. */
 export const StageInput = Schema.Struct({
   inputs: Schema.Struct({ mr: text }),
   run: Schema.Struct({ dir: text, id: text }),
   repository: text,
-  /** The merge request's head a step puts on stage or takes off it. */
   head: text,
-  /** The stage deploy jobs of the merge request's pipeline, as the assessment named them. */
   stage_jobs: text,
-  /** Why stage comes off. */
   failure: text,
 });
 
@@ -71,11 +63,11 @@ const stepsOf = (markdown: string) => {
   };
 };
 
-/** The shipped content per forge: the procedure differs, not only the commands (ADR-0050 D1). */
 export const STAGE_ON = { gitlab: stepsOf(onGitlab), github: stepsOf(onGithub) };
 
 const naming =
-  (clears: (url: string, jobs: string) => string[]) => (url: string, jobs: ReadonlyArray<string>) =>
+  (clears: (url: string, jobs: string) => Array<string>) =>
+  (url: string, jobs: ReadonlyArray<string>) =>
     fitting(clears(url, quoted(jobs)), clears(url, `the ${jobs.length} stage jobs its task names`));
 
 export const STAGE_CLEARS = {
@@ -89,11 +81,9 @@ export const STAGE_CLEARS = {
   ]),
 };
 
-/** One agent for the whole Run, which each step continues. */
 export const STAGER = "stage";
 
 const STAGED = { done: "Done", again: "Stage again", leave: "Leave it on stage" } as const;
-/** Finish, answered while refreshing the claims for Stage again. */
 const FINISHED = "finished";
 const CLAIMS = { wait: "Wait for all", free: "Stage what is free", finish: "Finish" } as const;
 
@@ -111,7 +101,6 @@ const holding = (read: Read, held: ReadonlySet<string>) =>
     (one) => one.name,
   );
 
-/** Jobs without an application require every application. */
 const jobsOf = (read: Read, jobs: ReadonlyArray<string>, applications: ReadonlyArray<string>) =>
   Arr.filter(jobs, (job) => {
     const named =
@@ -217,7 +206,9 @@ const stageEach = (members: ReadonlyArray<SetMember>) =>
       Arr.map(ended, (one) => one.line),
       "; ",
     )}`;
-    if (failed > 0) return yield* new WorkflowError({ reason: said });
+    if (failed > 0) {
+      return yield* new WorkflowError({ reason: said });
+    }
     return said;
   });
 
@@ -266,16 +257,20 @@ export default defineWorkflow({
         });
 
       const set = mrSet(asked.mr);
-      if (set !== null && "unresolved" in set)
+      if (set !== null && "unresolved" in set) {
         return yield* fail(
           `${set.unresolved} is not a merge request this Run can find, so nothing was staged`,
         );
-      if (set !== null && set.mrs.length > 1) return yield* stageEach(set.mrs);
+      }
+      if (set !== null && set.mrs.length > 1) {
+        return yield* stageEach(set.mrs);
+      }
       const said = set === null ? asked.mr : set.mrs[0]!.target;
       const ref = readMrRef(said);
       const mr = ref === null ? null : mrUrlOf(ref);
-      if (ref === null || mr === null)
+      if (ref === null || mr === null) {
         return yield* fail(`${said || "an empty mr"} is not a merge request this Run can find`);
+      }
       yield* host.mergeRequest(runId, mr);
       const { cwd } = yield* checkingOut(
         Effect.gen(function* () {
@@ -285,11 +280,12 @@ export default defineWorkflow({
               Schema.Struct({ cwd: Schema.String, branch: Schema.String }),
               Schema.Struct({ refused: Schema.String }),
             ]),
-            // Stage commits and pushes nothing, so the checkout of the Run waiting on it will do.
+            // WARNING: stage commits and pushes nothing, so the waiting Run's checkout will do.
             execute: host.checkoutReviewed(runId, { inStarter: true }),
           });
-          if ("refused" in checkout)
+          if ("refused" in checkout) {
             return yield* fail(`${mr} has no checkout to stage from: ${checkout.refused}`);
+          }
           return checkout;
         }),
       );
@@ -311,18 +307,21 @@ export default defineWorkflow({
         input,
       });
 
-      // Judged against no proved head, so an open merge request answers with its head.
       const start = yield* Activity.make({
         name: "start",
         success: ReviewStandingSchema,
         error: WorkflowError,
         execute: host.review({ runId, cwd, proved: "", seen: [] }),
       });
-      if (start._tag === "Unreadable")
+      if (start._tag === "Unreadable") {
         return yield* fail(`${mr} could not be read: ${start.reason}`);
-      if (start._tag === "Merged")
+      }
+      if (start._tag === "Merged") {
         return yield* fail(`${mr} is merged, so its stage is its release's: nothing was staged`);
-      if (start._tag === "Closed") return yield* fail(`${mr} is closed, so nothing was staged`);
+      }
+      if (start._tag === "Closed") {
+        return yield* fail(`${mr} is closed, so nothing was staged`);
+      }
 
       const assessed = yield* assess(
         agentWork({
@@ -332,13 +331,15 @@ export default defineWorkflow({
         }),
       );
       const evidence = assessed.kind_evidence ? `: ${assessed.kind_evidence}` : "";
-      if (assessed.is_package)
+      if (assessed.is_package) {
         return yield* fail(`${mr} is a package, so there is nothing to stage${evidence}`);
+      }
       const jobs = assessed.stage_jobs?.merge_request ?? [];
-      if (jobs.length === 0)
+      if (jobs.length === 0) {
         return yield* fail(
           `${mr} is an application with no stage deploy job on its merge request's pipeline, so nothing was staged${evidence}`,
         );
+      }
 
       const moveTo = (name: string, head: string) =>
         Activity.make({
@@ -346,7 +347,9 @@ export default defineWorkflow({
           success: Schema.String,
           execute: Effect.gen(function* () {
             const moved = yield* host.fastForward({ runId, cwd, head });
-            if (moved._tag === "Refused") return yield* park(moved.why);
+            if (moved._tag === "Refused") {
+              return yield* park(moved.why);
+            }
             return moved.head;
           }),
         });
@@ -372,7 +375,6 @@ export default defineWorkflow({
         },
       });
 
-      // Read first so waiting on another holder needs the human's say.
       const holders = yield* Activity.make({
         name: "holders",
         success: HoldersSchema,
@@ -399,7 +401,9 @@ export default defineWorkflow({
                 ? [CLAIMS.wait, { id: CLAIMS.free, recommended: true }, CLAIMS.finish]
                 : [{ id: CLAIMS.wait, recommended: true }, CLAIMS.finish],
             });
-            if (answer === CLAIMS.finish) return null;
+            if (answer === CLAIMS.finish) {
+              return null;
+            }
             free = answer === CLAIMS.free;
           }
           return yield* claimed(
@@ -408,13 +412,20 @@ export default defineWorkflow({
           );
         }),
       );
-      if (first === null) return `${mr} was not staged`;
-      // An explicit waiver permits staging every application.
-      if (first.left === undefined) free = false;
+      if (first === null) {
+        return `${mr} was not staged`;
+      }
+      if (first.left === undefined) {
+        free = false;
+      }
       const held = new Set(first.slugs);
       const take = (claim: { readonly left?: ReadonlyArray<{ slug: string; holder: string }> }) => {
-        for (const one of claim.left ?? []) others.set(one.slug, one.holder);
-        for (const slug of held) others.delete(slug);
+        for (const one of claim.left ?? []) {
+          others.set(one.slug, one.holder);
+        }
+        for (const slug of held) {
+          others.delete(slug);
+        }
       };
       take(first);
       const staged = () => (free && read !== null ? holding(read, held) : deploys.applications);
@@ -463,7 +474,7 @@ export default defineWorkflow({
       for (let n = 1; ; n++) {
         const { head, read: onStage } = yield* putOnStage(
           Effect.gen(function* () {
-            // Hours may have passed since the head was read, waiting on the claims or the human.
+            // WARNING: hours may pass since the head was read, waiting on claims or the human; read it again.
             const now = yield* Activity.make({
               name: `head.${n}`,
               success: ReviewHeadSchema,
@@ -513,9 +524,13 @@ export default defineWorkflow({
                 free: true,
                 retaining: true,
               });
-              if (more === null) return FINISHED;
+              if (more === null) {
+                return FINISHED;
+              }
               if (more.left !== undefined) {
-                for (const slug of more.slugs) held.add(slug);
+                for (const slug of more.slugs) {
+                  held.add(slug);
+                }
                 take(more);
               }
             }
@@ -523,7 +538,9 @@ export default defineWorkflow({
           }),
           { round: asks },
         );
-        if (answer === STAGED.again) continue;
+        if (answer === STAGED.again) {
+          continue;
+        }
         if (answer === STAGED.leave) {
           yield* giveBack;
           return `stage carries ${mr} at ${short(head)}, unmerged`;

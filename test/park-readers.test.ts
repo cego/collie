@@ -7,7 +7,7 @@ import { madeRun } from "./support/records";
 import { parkLine, parkOf } from "../src/park-cause";
 import { runEffect } from "./support/effect";
 
-for (const surface of ["chat", "Desktop record"] as const)
+for (const surface of ["chat", "Desktop record"] as const) {
   test(`${surface} retains park status and recovery actions`, () =>
     runEffect(
       Effect.gen(function* () {
@@ -20,7 +20,7 @@ for (const surface of ["chat", "Desktop record"] as const)
           parked: "herdr is down",
           recovery: ["rechecked uncleared — herdr did not answer"],
         });
-        const env = readEnv({ HERDR_PLUGIN_STATE_DIR: root, COLLIE_CWD: root });
+        const env = readEnv({ COLLIE_STATE_DIR: root, COLLIE_CWD: root });
         if (surface === "chat") {
           const text = yield* runFacts(env, run, [run], Effect.succeed([]));
           expect(text).toContain("Parked: herdr-unavailable · Collie rechecks");
@@ -48,6 +48,7 @@ for (const surface of ["chat", "Desktop record"] as const)
         }
       }),
     ));
+}
 
 test("a park on a failure its target branch shares reads as Collie's to recheck", () => {
   expect(parkLine(parkOf("target-red"))).toBe("Parked: target-red · Collie rechecks");

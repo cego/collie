@@ -1,27 +1,25 @@
 import * as Arr from "effect/Array";
-import { expect, spyOn, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { Clock, Deferred, Effect, Fiber, Queue, Result, Scheduler, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { Foreground, makeForeground, servedNow } from "../src/foreground";
 import { timingFirstValues } from "../src/host";
 import { TurnScheduler } from "../src/turns";
 
-/** Runs 300 steps, each `step` around a counter, and says when the turn's time made the fiber yield. */
 const timeYields = (step: (count: Effect.Effect<void>) => Effect.Effect<unknown>) => {
   const opsBeforeYield = 2048;
   let time = 0;
   let steps = 0;
   const yielded: Array<{ steps: number; operations: number }> = [];
-  // oxlint-disable-next-line no-restricted-globals -- The scheduler reads the platform clock outside fibers.
-  const clock = spyOn(performance, "now").mockImplementation(() => time);
-  const turns = new TurnScheduler();
+  const turns = new TurnScheduler(undefined, () => time);
   const dispatcher = turns.makeDispatcher();
   const scheduler: Scheduler.Scheduler = {
     executionMode: "async",
     shouldYield(fiber) {
       const over = turns.shouldYield(fiber);
-      if (over && steps < 300 && fiber.currentOpCount < opsBeforeYield)
+      if (over && steps < 300 && fiber.currentOpCount < opsBeforeYield) {
         yielded.push({ steps, operations: fiber.currentOpCount });
+      }
       return over;
     },
     makeDispatcher() {
@@ -38,19 +36,19 @@ const timeYields = (step: (count: Effect.Effect<void>) => Effect.Effect<unknown>
   };
   const count = Effect.sync(() => {
     steps++;
-    if (steps === 40) time += 20;
+    if (steps === 40) {
+      time += 20;
+    }
   });
   return Effect.runPromise(
     Effect.forEach(Arr.range(1, 300), () => step(count), { discard: true }).pipe(
       Effect.provideService(Scheduler.MaxOpsBeforeYield, opsBeforeYield),
     ),
     { scheduler },
-  )
-    .then(() => {
-      expect(steps).toBe(300);
-      return yielded;
-    })
-    .finally(() => clock.mockRestore());
+  ).then(() => {
+    expect(steps).toBe(300);
+    return yielded;
+  });
 };
 
 test("an automatically resumed fiber receives a fresh turn budget", () =>
@@ -59,7 +57,7 @@ test("an automatically resumed fiber receives a fresh turn budget", () =>
 test("a fiber resumed into a chain of inline continuations receives a fresh turn budget", () => {
   const mapped = (count: Effect.Effect<unknown>) =>
     Arr.reduce(Arr.range(1, 20), count, (effect) => Effect.map(effect, (value) => value));
-  // Effect's operation-budget yields resume into the chain.
+  // WARNING: Effect's operation-budget yields resume into the chain, so the count includes them.
   return timeYields(mapped).then((yielded) => expect(yielded).toHaveLength(1));
 });
 
@@ -148,7 +146,6 @@ test("verify and read answers hold background slices only until their first valu
           yield* Queue.take(passed);
           expect(boundaries).toBe(2);
           expect(verify.pollUnsafe()).toBeUndefined();
-          // The pass works a slice since it was last held, so a hold is owed again.
           yield* clock.adjust("20 millis");
 
           const read = yield* handlers.read().pipe(Effect.forkScoped);
@@ -200,7 +197,7 @@ test.each(["toasts", "measure"] as const)(
               }),
             );
             const handlers = timingFirstValues({ toasts: () => source, measure: () => source });
-            const seen: string[] = [];
+            const seen: Array<string> = [];
             const following = yield* handlers[name]().pipe(
               Stream.tap((value) => Effect.sync(() => seen.push(value))),
               Stream.runDrain,
@@ -341,8 +338,9 @@ test.each(["failure", "cancel"] as const)(
             const before = yield* foreground.boundary.pipe(Effect.forkScoped);
             yield* clock.adjust("1 millis");
             expect(before.pollUnsafe()).toBeDefined();
-            if (outcome === "cancel") yield* Fiber.interrupt(reading);
-            else {
+            if (outcome === "cancel") {
+              yield* Fiber.interrupt(reading);
+            } else {
               yield* Deferred.succeed(release, undefined);
               expect(yield* Fiber.join(reading)).toEqual(Result.fail("dependency failed"));
             }

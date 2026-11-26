@@ -42,15 +42,20 @@ test("discovered snapshots remain frozen when their sources change or disappear"
           .register(run, "inst", { id: item.id, snapshot: true }, item.id, actor)
           .pipe(Effect.map((result) => result.item)),
       );
-      for (const root of roots) yield* fs.writeFileString(`${root}/note.md`, "# Changed source\n");
+      for (const root of roots) {
+        yield* fs.writeFileString(`${root}/note.md`, "# Changed source\n");
+      }
       const changed = yield* catalogue.reconcile(run);
       expect(changed.items).toEqual(frozen);
-      for (const root of roots) yield* fs.remove(`${root}/note.md`);
+      for (const root of roots) {
+        yield* fs.remove(`${root}/note.md`);
+      }
       expect((yield* catalogue.reconcile(run)).items).toEqual(frozen);
-      for (const item of frozen)
+      for (const item of frozen) {
         expect(
           Buffer.from((yield* catalogue.read(run, item.id, 1, 0)).content, "base64").toString(),
         ).toBe("# Frozen material\n");
+      }
     }),
   ));
 
@@ -208,7 +213,8 @@ test("renaming discovered material preserves its identity, revision and discover
       expect(Arr.map(after.items, (item) => item.id).sort()).toEqual(
         Arr.map(first.items, (item) => item.id).sort(),
       );
-      for (const item of after.items)
+      for (const item of after.items) {
         expect(item).toMatchObject({ title: "Readable title", revision: 1 });
+      }
     }),
   ));

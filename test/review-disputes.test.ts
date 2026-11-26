@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
 import {
+  conflictingDispositions,
   remainingDisputes,
   settleRound,
   splitDisputed,
-  type Finding,
-  type Fixed,
 } from "../src/output";
+import type { Finding, Fixed } from "../src/output";
 
 const dispute: Finding = {
   file: "src/worker.ts",
@@ -21,10 +21,10 @@ const accepted: Finding = {
 
 const review = (
   over: Partial<{
-    findings: Finding[];
-    disputed: Finding[];
-    dropped: Finding[];
-    fixed: Fixed[];
+    findings: Array<Finding>;
+    disputed: Array<Finding>;
+    dropped: Array<Finding>;
+    fixed: Array<Fixed>;
   }> = {},
 ) => ({ findings: [], disputed: [], dropped: [], fixed: [], ...over });
 
@@ -92,4 +92,47 @@ test("accepting one dispute preserves the other and changes neither review nor c
   expect(remainingDisputes(carried, synthesis)).toEqual([other]);
   expect(carried).toEqual([dispute, other]);
   expect(synthesis.dropped).toEqual([accepted]);
+});
+
+test("a dispute withdrawn with a reason is resolved though the same review echoes it as obsolete", () => {
+  const synthesis = review({ findings: [{ ...dispute, status: "obsolete" }], dropped: [accepted] });
+  expect(remainingDisputes([dispute], synthesis)).toEqual([]);
+});
+
+test("a dispute confirmed fixed is resolved though the same review echoes it as fixed", () => {
+  const synthesis = review({
+    findings: [{ ...dispute, status: "fixed" }],
+    fixed: [{ file: dispute.file, title: dispute.title }],
+  });
+  expect(remainingDisputes([dispute], synthesis)).toEqual([]);
+});
+
+test("a withdrawn dispute raised again open with a changed detail is a renewed finding for the implementer", () => {
+  const before = { ...dispute, detail: "The scope check runs after the write." };
+  const renewed = { ...before, reason: undefined, detail: "The write at line 40 skips it too." };
+  const synthesis = review({
+    findings: [renewed],
+    dropped: [{ ...accepted, detail: before.detail }],
+  });
+  const disputed = remainingDisputes([before], synthesis);
+  expect(disputed).toEqual([]);
+  const split = splitDisputed(synthesis.findings, disputed);
+  expect(settleRound({ live: split.live, disputed, at: 2 })).toMatchObject({
+    go: "fix",
+    blocking: [renewed],
+  });
+});
+
+test("a finding withdrawn and raised open with the same evidence in one review is a conflict, and its dispute stays", () => {
+  const synthesis = review({ findings: [{ ...dispute, reason: undefined }], dropped: [accepted] });
+  const disputed = remainingDisputes([dispute], synthesis);
+  expect(disputed).toEqual([dispute]);
+  expect(conflictingDispositions(synthesis)).toEqual([
+    "conflicting dispositions of [blocker] Restore the requested scope (src/worker.ts): open and withdrawn",
+  ]);
+  const split = splitDisputed(synthesis.findings, disputed);
+  expect(settleRound({ live: split.live, disputed, at: 2 })).toMatchObject({
+    go: "halt",
+    halt: "dispute_unresolved",
+  });
 });

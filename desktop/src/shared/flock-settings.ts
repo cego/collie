@@ -1,27 +1,20 @@
-// The Flock's settings, as Desktop keeps them: each key is decided by its latest edit,
-// made in Desktop or on any Machine, and every Machine is given what it lacks.
-
 import { pipe } from "effect/Function";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import { Option, Schema } from "effect";
 import {
   parseSetting,
-  type Setting,
   SETTING_GROUPS,
-  type SettingGroup,
   SETTINGS,
-  type SettingKind,
   settingShown,
-  type SettingUnit,
   SettingValue,
   settingText,
 } from "../../../src/settings";
+import type { Setting, SettingGroup, SettingKind, SettingUnit } from "../../../src/settings";
 import type { DesktopSettings, DesktopSettingsChange, MachineRow } from "./flock";
 import { whenOf } from "./flow";
 import { percent } from "./scale";
 
-/** Where an edit made in Desktop's own Settings is said to come from. */
 export const DESKTOP = "Desktop";
 
 export {
@@ -31,30 +24,24 @@ export {
   takeFrom,
 } from "../../../src/flock-settings";
 import type { FlockSettings } from "../../../src/flock-settings";
-import type { StandingDirection } from "../../../src/standing-direction";
 import { isString } from "../../../src/schema";
 
 const valueOf = (value: Schema.Json | null) =>
   Option.getOrNull(Schema.decodeUnknownOption(SettingValue)(value));
 const GIVEN_ONLY = "gitlab_host";
 
-/** The Flock's Standing direction and its last edit, or undefined while it is empty. */
-export const standingDirectionOf = (flock: FlockSettings): StandingDirection | undefined => {
+export const standingDirectionOf = (flock: FlockSettings) => {
   const held = flock.settings.standing_direction;
   return held !== undefined && isString(held.value) && held.value !== ""
     ? { text: held.value, at: held.at }
     : undefined;
 };
 
-/** An edit made in Desktop's Settings, checked as the TUI checks one, at `now`. */
-export const editSetting = (
-  flock: FlockSettings,
-  key: string,
-  typed: string,
-  now: string,
-): FlockSettings | { readonly refused: string } => {
+export const editSetting = (flock: FlockSettings, key: string, typed: string, now: string) => {
   const parsed = parseSetting(key, typed);
-  if ("refused" in parsed) return parsed;
+  if ("refused" in parsed) {
+    return parsed;
+  }
   return {
     ...flock,
     settings: {
@@ -68,25 +55,24 @@ export const editSettings = (
   flock: FlockSettings,
   changes: ReadonlyArray<{ readonly key: string; readonly value: string }>,
   now: string,
-): FlockSettings | { readonly refused: string } => {
+) => {
   let edited = flock;
   for (const { key, value } of changes) {
     const next = editSetting(edited, key, value, now);
-    if ("refused" in next) return next;
+    if ("refused" in next) {
+      return next;
+    }
     edited = next;
   }
   return edited;
 };
 
-/** Desktop's own settings, which no Machine has. */
 interface DesktopSetting extends Setting {
   readonly read: (desktop: DesktopSettings) => string;
-  /** What setting it to `typed` changes; `typed` is never empty. */
   readonly change: (typed: string) => DesktopSettingsChange;
 }
 
-/** The harnesses the Flock chat has a driver for. */
-export const CHAT_HARNESSES = ["claude", "pi"];
+export const CHAT_HARNESSES = ["claude", "codex", "pi"];
 export const DEFAULT_CHAT_HARNESS = "claude";
 
 const DESKTOP_SETTINGS: ReadonlyArray<DesktopSetting> = [
@@ -116,7 +102,6 @@ const DESKTOP_SETTINGS: ReadonlyArray<DesktopSetting> = [
   },
 ];
 
-/** What Settings says of a setting while it is unset, where its default says nothing. */
 const UNSET_SAID = new Map([
   ["zoom", "Default: 100%, the size of your other apps"],
   ["machine_rule", "Unset: no rule"],
@@ -125,10 +110,12 @@ const UNSET_SAID = new Map([
   ["slack.notification_channel", "Unset: toasts only"],
 ]);
 
-/** The canvas's sub-groups within a group, by key; any other key has none. */
 const SUBS: ReadonlyArray<readonly [string, (key: string) => boolean]> = [
   ["Who does the work", (key) => ["harness", "model", "effort", "fallbacks"].includes(key)],
-  ["What agents may do", (key) => ["permissions", "trust"].includes(key)],
+  [
+    "What agents may do",
+    (key) => ["permissions", "trust", "role_tools", "output_submit"].includes(key),
+  ],
   [
     "Context and patience",
     (key) =>
@@ -146,43 +133,33 @@ const SUBS: ReadonlyArray<readonly [string, (key: string) => boolean]> = [
 ];
 const subOf = (key: string) =>
   Option.getOrUndefined(Arr.findFirst(SUBS, ([, has]) => has(key)))?.[0] ?? "";
-/** Where a sub-group falls within its group: none first, then the canvas's order. */
 const subRank = (sub: string) =>
   Option.getOrElse(
     Arr.findFirstIndex(SUBS, ([title]) => title === sub),
     () => -1,
   );
 
-/** What setting Desktop's own `key` to `typed` changes; empty sets it back to its default. */
-export const desktopChange = (key: string, typed: string): DesktopSettingsChange => {
+export const desktopChange = (key: string, typed: string) => {
   const setting = Option.getOrUndefined(Arr.findFirst(DESKTOP_SETTINGS, (one) => one.key === key))!;
   return setting.change(typed || setting.fallback);
 };
 
-/** One setting as Settings shows it, its value and default in its unit. */
 export interface SettingRow {
   readonly key: string;
   readonly group: SettingGroup;
-  /** The sub-group it is shown under within its group, empty for none. */
   readonly sub: string;
   readonly label: string;
   readonly description: string;
   readonly kind: SettingKind;
   readonly choices: ReadonlyArray<string>;
-  /** What it is set to, empty where it is unset. */
   readonly value: string;
-  /** What a Run uses while it is unset. */
   readonly fallback: string;
   readonly unit: SettingUnit | undefined;
-  /** The default as Settings says it, in the row's unit. */
   readonly defaultSaid: string;
   readonly set: boolean;
-  /** Whose edit it is and when, or the Machine it was taken from over a different value. */
   readonly edit: string | null;
-  /** Every Machine's, or this computer's alone. */
   readonly shared: boolean;
   readonly multiline: boolean;
-  /** What its value brings about, stated rather than confirmed. */
   readonly hint: string | null;
 }
 
@@ -191,13 +168,16 @@ export interface SettingSection {
   readonly rows: ReadonlyArray<SettingRow>;
 }
 
-const consequenceOf = (key: string, value: string): string | null => {
-  if (key === "permissions" && value === "bypass")
+const consequenceOf = (key: string, value: string) => {
+  if (key === "permissions" && value === "bypass") {
     return "No one reviews an agent's tool calls: every Machine's agents run what they choose.";
-  if (key === "compact_at_tokens" && value === "0")
+  }
+  if (key === "compact_at_tokens" && value === "0") {
     return "Compaction between pieces of work is off.";
-  if (key === "quiet_ms" && value === "0")
+  }
+  if (key === "quiet_ms" && value === "0") {
     return "A quiet agent is never nudged; it waits as long as it takes.";
+  }
   const bare =
     key === "models.pi"
       ? Option.getOrUndefined(
@@ -217,7 +197,7 @@ const flockRow = (
   setting: Setting,
   now: number,
   timeZone: string | undefined,
-): SettingRow => {
+) => {
   const held = flock.settings[setting.key];
   const value = held === undefined ? "" : settingText(valueOf(held.value));
   const edit =
@@ -242,10 +222,18 @@ const flockRow = (
 
 const defaultSaid = ({ key, kind, unit }: Setting, fallback: string) => {
   const unset = UNSET_SAID.get(key);
-  if (unset !== undefined) return unset;
-  if (kind === "list" || kind === "json") return "Default: none";
-  if (fallback === "") return "Unset: the harness decides";
-  if (kind === "boolean") return `Default: ${fallback === "true" ? "on" : "off"}`;
+  if (unset !== undefined) {
+    return unset;
+  }
+  if (kind === "list" || kind === "json") {
+    return "Default: none";
+  }
+  if (fallback === "") {
+    return "Unset: the harness decides";
+  }
+  if (kind === "boolean") {
+    return `Default: ${fallback === "true" ? "on" : "off"}`;
+  }
   return `Default: ${fallback}${unit === undefined ? "" : ` ${unit}`}`;
 };
 
@@ -260,19 +248,14 @@ const rowOf = ({ key, group, label, description, kind, choices, unit }: Setting)
   unit,
 });
 
-/**
- * Every setting of Collie's and Desktop's own, under its group in order, but the GitLab
- * host, which Settings keeps beside its tokens. An edit is said at `now`, on the clock of
- * `timeZone`.
- */
 export const settingSections = (
   flock: FlockSettings,
   desktop: DesktopSettings,
   now: number,
   timeZone?: string,
-): ReadonlyArray<SettingSection> => {
+) => {
   const rows = [
-    ...Arr.map(DESKTOP_SETTINGS, (setting): SettingRow => {
+    ...Arr.map(DESKTOP_SETTINGS, (setting) => {
       const value = setting.read(desktop);
       const set = value !== setting.fallback;
       return {
@@ -324,17 +307,15 @@ const reachedOf = (machines: ReadonlyArray<Reached>) => {
   };
 };
 
-/**
- * How far an edit of the Flock's settings reached, from each Machine's latest sync, or why
- * it is not sent: one made while the Flock's settings cannot be read would be made blind.
- */
-export const flockReach = (
-  readable: boolean,
-  machines: ReadonlyArray<Reached>,
-): Said | { readonly refused: string } => {
-  if (!readable) return { refused: "Not set: the Flock's settings could not be read" };
+// WARNING: one made while the Flock's settings cannot be read would be made blind.
+export const flockReach = (readable: boolean, machines: ReadonlyArray<Reached>) => {
+  if (!readable) {
+    return { refused: "Not set: the Flock's settings could not be read" };
+  }
   const { behind, all, of } = reachedOf(machines);
-  if (all) return { said: `Given to all ${machines.length} Machines`, tone: "ok" };
+  if (all) {
+    return { said: `Given to all ${machines.length} Machines`, tone: "ok" };
+  }
   const names = Arr.map(behind, ({ name }) => name);
   return {
     said: `Given to ${of} · ${listed(names)} ${names.length === 1 ? "gets it when it connects" : "get it when they connect"}`,
@@ -342,10 +323,14 @@ export const flockReach = (
   };
 };
 
-export const syncPill = (readable: boolean, machines: ReadonlyArray<Reached>): Said => {
-  if (!readable) return { said: "Showing the Flock's settings as last read", tone: "warn" };
+export const syncPill = (readable: boolean, machines: ReadonlyArray<Reached>) => {
+  if (!readable) {
+    return { said: "Showing the Flock's settings as last read", tone: "warn" };
+  }
   const { behind, all, of } = reachedOf(machines);
-  if (all) return { said: `In sync with all ${machines.length} Machines`, tone: "ok" };
+  if (all) {
+    return { said: `In sync with all ${machines.length} Machines`, tone: "ok" };
+  }
   const lagging = Arr.map(
     behind,
     ({ name, state }) => `${name} ${state === "live" ? "behind" : "out of reach"}`,

@@ -3,7 +3,8 @@ import { expect, test } from "bun:test";
 import { DateTime, Effect, FileSystem, Option, Queue, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { ChildProcessSpawner } from "effect/process";
-import { buildBoard, type KeptCards } from "../src/board";
+import { buildBoard } from "../src/board";
+import type { KeptCards } from "../src/board";
 import { shareBoard } from "../src/board-stream";
 import { readEnv } from "../src/env";
 import { makeRunModel } from "../src/run-model";
@@ -12,7 +13,8 @@ import { epochMs } from "../src/time";
 import { runEffect } from "./support/effect";
 import { madeRun } from "./support/records";
 import { encodeVerifying, VERIFYING } from "../src/verify";
-import { RunRecords, type RunRecordsApi } from "../src/run-records";
+import { RunRecords } from "../src/run-records";
+import type { RunRecordsApi } from "../src/run-records";
 import { appendCard, buildCard } from "../src/cards";
 import { recordDisposition } from "../src/disposition";
 
@@ -72,7 +74,7 @@ test.each(["merged", "abandoned"] as const)(
           }),
         );
         yield* recordDisposition(run.dir, { at, by: "human", kind, ref: mr, note: null });
-        const commands: string[] = [];
+        const commands: Array<string> = [];
         const spawner = ChildProcessSpawner.make((command) => {
           commands.push(command._tag === "StandardCommand" ? command.command : "pipeline");
           return Effect.die(new Error("drawing settled work must not start a command"));
@@ -91,13 +93,12 @@ test.each(["merged", "abandoned"] as const)(
     ),
 );
 
-/** Planners that ran for an hour to `finished`, their plans ready: each card asks for its offer. */
 const planners = (count: number, finished = "2026-10-27T10:00:00Z") =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-board-cards-" });
     const created = DateTime.formatIso(DateTime.makeUnsafe(epochMs(finished) - 60 * 60_000));
-    const env = readEnv({ HERDR_PLUGIN_STATE_DIR: dir, COLLIE_CWD: "/project" });
+    const env = readEnv({ COLLIE_STATE_DIR: dir, COLLIE_CWD: "/project" });
     const runs = yield* Effect.forEach(Arr.range(1, count), (n) =>
       Effect.gen(function* () {
         const task = `task-${n}`;
@@ -126,55 +127,49 @@ const planners = (count: number, finished = "2026-10-27T10:00:00Z") =>
     return { dir, env, runs };
   });
 
-test(
-  "a change to one Run derives its Task's card alone, and a minute of ticks derives none",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        yield* TestClock.setTime(NOW);
-        const { dir, env, runs } = yield* planners(RUNS);
-        const model = yield* makeRunModel(dir, "installation");
-        const derived: Array<string> = [];
-        const built = yield* Queue.unbounded<number>();
-        const kept = new Map();
-        const build = buildBoard({
-          env,
-          runs,
-          registered: [],
-          offers: (run) => Effect.sync(() => (derived.push(run), [])),
-          cards: { revision: model.inputsAt, kept },
-        }).pipe(
-          Effect.provideService(FileSystem.FileSystem, model.reading),
-          Effect.tap(() => Queue.offer(built, derived.length)),
-        );
-        const poked = yield* Queue.unbounded<void>();
-        yield* shareBoard({
-          build,
-          changed: Stream.fromQueue(poked),
-          refresh: Stream.tick("5 seconds"),
-        });
-        // The first build, then the tick's own first beat.
-        yield* Effect.replicateEffect(Queue.take(built), 2);
-        expect(derived.length).toBe(RUNS);
+test("a change to one Run derives its Task's card alone, and a minute of ticks derives none", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      const { dir, env, runs } = yield* planners(RUNS);
+      const model = yield* makeRunModel(dir, "installation");
+      const derived: Array<string> = [];
+      const built = yield* Queue.unbounded<number>();
+      const kept = new Map();
+      const build = buildBoard({
+        env,
+        runs,
+        registered: [],
+        offers: (run) => Effect.sync(() => (derived.push(run), [])),
+        cards: { revision: model.inputsAt, kept },
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, model.reading),
+        Effect.tap(() => Queue.offer(built, derived.length)),
+      );
+      const poked = yield* Queue.unbounded<void>();
+      yield* shareBoard({
+        build,
+        changed: Stream.fromQueue(poked),
+        refresh: Stream.tick("5 seconds"),
+      });
+      yield* Effect.replicateEffect(Queue.take(built), 2);
+      expect(derived.length).toBe(RUNS);
 
-        const before = derived.length;
-        for (const _ of Arr.range(1, 12)) {
-          // Lets the last build end, so the next tick is waiting on the clock.
-          yield* TestClock.withLive(Effect.sleep("20 millis"));
-          yield* TestClock.adjust("5 seconds");
-          yield* Queue.take(built);
-        }
-        expect(derived.slice(before)).toEqual([]);
-
-        const changed = runs[41]!;
-        yield* model.writing.writeFileString(`${changed.dir}/handoff.md`, "next\n");
-        yield* Queue.offer(poked, undefined);
+      const before = derived.length;
+      for (const _ of Arr.range(1, 12)) {
+        yield* TestClock.withLive(Effect.sleep("20 millis"));
+        yield* TestClock.adjust("5 seconds");
         yield* Queue.take(built);
-        expect(derived.slice(before)).toEqual([changed.id]);
-      }).pipe(Effect.provide(TestClock.layer())),
-    ),
-  60_000,
-);
+      }
+      expect(derived.slice(before)).toEqual([]);
+
+      const changed = runs[41]!;
+      yield* model.writing.writeFileString(`${changed.dir}/handoff.md`, "next\n");
+      yield* Queue.offer(poked, undefined);
+      yield* Queue.take(built);
+      expect(derived.slice(before)).toEqual([changed.id]);
+    }).pipe(Effect.provide(TestClock.layer())),
+  ));
 
 test("stamping a card's age or record keeps its derivation until source facts change", () =>
   runEffect(
@@ -183,7 +178,7 @@ test("stamping a card's age or record keeps its derivation until source facts ch
       const { dir, env, runs: initial } = yield* planners(3, "2026-10-30T09:30:00Z");
       let runs = initial;
       const model = yield* makeRunModel(dir, "installation");
-      const derived: string[] = [];
+      const derived: Array<string> = [];
       const cards: KeptCards = { revision: model.inputsAt, kept: new Map() };
       const build = (kept?: KeptCards) =>
         buildBoard({
@@ -202,13 +197,13 @@ test("stamping a card's age or record keeps its derivation until source facts ch
       const later = model.stamp(yield* build(cards));
       expect(later[0]!.age).not.toBe(first[0]!.age);
       expect(later[0]!.revision!.seq).toBeGreaterThan(first[0]!.revision!.seq);
-      const id = runs[0]!.id;
+      const id = runs[0].id;
       model.stampRecord("record", id, [id], "first");
       model.stampRecord("record", id, [id], "second");
       yield* build(cards);
       expect(derived).toEqual([]);
 
-      runs = [{ ...runs[0]!, summary: "New engine facts" }, ...runs.slice(1)];
+      runs = [{ ...runs[0], summary: "New engine facts" }, ...runs.slice(1)];
       yield* model.observe(runs);
       yield* build(cards);
       expect(derived).toEqual([id]);
@@ -221,11 +216,63 @@ test("stamping a card's age or record keeps its derivation until source facts ch
     }).pipe(Effect.provide(TestClock.layer())),
   ));
 
+test("a card another host derived is confirmed by content, without deriving it, until its facts move", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      const { dir, env, runs: initial } = yield* planners(5, "2026-10-30T07:30:00Z");
+      let runs = initial;
+      const derived: Array<string> = [];
+      const build = (cards: KeptCards, model: Effect.Success<ReturnType<typeof makeRunModel>>) =>
+        model.observe(runs).pipe(
+          Effect.andThen(
+            buildBoard({
+              env,
+              runs,
+              registered: [],
+              offers: (run) => Effect.sync(() => (derived.push(run), [])),
+              cards,
+            }),
+          ),
+          Effect.provideService(FileSystem.FileSystem, model.reading),
+        );
+      const before = yield* makeRunModel(dir, "installation");
+      const left: KeptCards = {
+        revision: before.inputsAt,
+        content: before.content,
+        kept: new Map(),
+      };
+      const shown = yield* build(left, before);
+      expect(derived.length).toBe(5);
+      derived.length = 0;
+
+      const after = yield* makeRunModel(dir, "installation");
+      const kept = new Map(
+        Arr.map([...left.kept], ([task, card]) => [
+          task,
+          {
+            key: "",
+            digest: card.digest,
+            due: card.due,
+            view: card.view,
+            unconfirmed: true as const,
+          },
+        ]),
+      );
+      const cards: KeptCards = { revision: after.inputsAt, content: after.content, kept };
+      expect(yield* build(cards, after)).toEqual(shown);
+      expect(derived).toEqual([]);
+
+      runs = [{ ...runs[0], summary: "New engine facts" }, ...runs.slice(1)];
+      yield* build(cards, after);
+      expect(derived).toEqual([runs[0].id]);
+    }).pipe(Effect.provide(TestClock.layer())),
+  ));
+
 test("a kept card says the time as one derived now does, hours on", () =>
   runEffect(
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW);
-      // Finished half an hour ago: shown as quiet, then gone a day after.
       const { dir, env, runs } = yield* planners(20, "2026-10-30T09:30:00Z");
       const model = yield* makeRunModel(dir, "installation");
       const cards: KeptCards = { revision: model.inputsAt, kept: new Map() };
@@ -256,11 +303,15 @@ test("a build reads every Run's check marker in one read, not one per Run", () =
       const counting: RunRecordsApi = {
         ...records,
         control: (control, run, key) => {
-          if (control === VERIFYING) read.push(run);
+          if (control === VERIFYING) {
+            read.push(run);
+          }
           return records.control(control, run, key);
         },
         everyControl: (control) => {
-          if (control === VERIFYING) read.push("every");
+          if (control === VERIFYING) {
+            read.push("every");
+          }
           return records.everyControl(control);
         },
       };
@@ -321,7 +372,6 @@ test("once the model is disabled, a kept card is derived again from the disk", (
       );
       yield* kept;
       yield* model.disable;
-      // Written past the model, as a write it can no longer watch.
       yield* fs.makeDirectory(`${run.dir}/plan/issues`, { recursive: true });
       yield* fs.writeFileString(`${run.dir}/plan/issues/01-first.md`, "# First\n");
       expect(yield* kept).toEqual(yield* buildBoard(opts));

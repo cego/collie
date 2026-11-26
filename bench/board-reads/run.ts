@@ -1,16 +1,16 @@
-/* oxlint-disable effecttsgo/node-builtin-import, effecttsgo/global-console, no-restricted-globals, effecttsgo/prefer-effect-array, effecttsgo/prefer-schema-over-json -- an offline benchmark's driver, on its own copy of a state directory. */
-// One board build as a host draws it, without its caches, on this tree's copy of the
-// snapshot at a fixed time, from the Run views a host listed when it was taken; `--open`
-// only opens the copy's records.
+/* oxlint-disable effecttsgo/global-console, no-restricted-globals, effecttsgo/prefer-effect-array -- an offline benchmark's driver, on its own copy of a state directory. */
 import { Effect, ManagedRuntime } from "effect";
 import { buildBoard } from "../../src/board";
 import { readEnv } from "../../src/env";
 import { platformLayer } from "../../src/platform";
 import { recordsAt } from "../../src/records";
 import { factsOfView } from "../../src/runs";
+import { stringifyJson } from "../../src/json";
 
-// A Collie entry asked to start a host would start this file again; it never may.
-if (Bun.argv.slice(2).some((arg) => arg !== "--open")) process.exit(2);
+// WARNING: a Collie entry asked to start a host would start this file again, so it must never start one.
+if (Bun.argv.slice(2).some((arg) => arg !== "--open")) {
+  process.exit(2);
+}
 Bun.env.COLLIE_HOST = "/bin/false";
 
 const NOW = Date.parse("2026-11-16T16:00:00Z");
@@ -26,7 +26,9 @@ const result = await runtime.runPromise(
   Effect.scoped(
     Effect.gen(function* () {
       const open_ms = performance.now() - opened;
-      if (Bun.argv.includes("--open")) return { open_ms };
+      if (Bun.argv.includes("--open")) {
+        return { open_ms };
+      }
       const env = readEnv({
         HERDR_PLUGIN_STATE_DIR: state,
         COLLIE_CWD: root,
@@ -47,11 +49,10 @@ const result = await runtime.runPromise(
         update_ms,
         runs: runs.length,
         tasks: views.length,
-        // What both trees must agree on, not text a change may word differently.
         digest: Number(
           BigInt(
             Bun.hash(
-              JSON.stringify(
+              stringifyJson(
                 views.map((view) => [
                   view.id,
                   view.name,
@@ -72,4 +73,4 @@ const result = await runtime.runPromise(
   ),
 );
 await runtime.dispose();
-console.log(JSON.stringify(result));
+console.log(stringifyJson(result));

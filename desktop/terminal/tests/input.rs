@@ -1,33 +1,9 @@
-//! `desktop/test/terminal-input.test.ts`, case for case, against the Rust mapping.
+//! `desktop/src/shared/test/terminal-input.test.ts`, case for case, against the Rust mapping.
 
-use collie_desktop_protocol::generated::{At, Command, TerminalMouseAction};
+use collie_desktop_protocol::generated::At;
 use collie_desktop_terminal::input::{
-    Held, Key, KeyAction, Link, Pointer, Screen, is_mouse_report, key_action, links_in, mouse_of,
-    pane_line, pane_where, scroll_of,
+    Key, KeyAction, Link, is_mouse_report, key_action, links_in, pane_line, pane_where,
 };
-use serde_json::{Value, json};
-
-/// 100 columns by 20 rows, each cell 8 by 16 pixels, drawn at (10, 50).
-const SCREEN: Screen = Screen {
-    left: 10.0,
-    top: 50.0,
-    width: 800.0,
-    height: 320.0,
-    cols: 100,
-    rows: 20,
-};
-
-fn at(x: f64, y: f64) -> Pointer {
-    Pointer {
-        x,
-        y,
-        held: Held::default(),
-    }
-}
-
-fn holding(x: f64, y: f64, held: Held) -> Pointer {
-    Pointer { x, y, held }
-}
 
 fn key(pressed: &str, ctrl: bool, meta: bool, shift: bool) -> Key {
     Key {
@@ -36,73 +12,6 @@ fn key(pressed: &str, ctrl: bool, meta: bool, shift: bool) -> Key {
         meta,
         shift,
     }
-}
-
-fn wire(command: Option<Command>) -> Value {
-    serde_json::to_value(command).unwrap()
-}
-
-#[test]
-fn the_wheel_scrolls_the_panes_own_history_at_the_cell_under_the_pointer() {
-    assert_eq!(
-        wire(scroll_of(
-            -120.0,
-            &at(10.0 + 8.0 * 4.0 + 1.0, 50.0 + 16.0 * 2.0 + 1.0),
-            &SCREEN
-        )),
-        json!({"type": "terminal.scroll", "direction": "up", "lines": 3, "column": 4, "row": 2, "modifiers": 0})
-    );
-    let shift = Held {
-        shift: true,
-        ..Held::default()
-    };
-    assert_eq!(
-        wire(scroll_of(5.0, &holding(0.0, 0.0, shift), &SCREEN)),
-        json!({"type": "terminal.scroll", "direction": "down", "lines": 1, "column": 0, "row": 0, "modifiers": 1})
-    );
-    assert_eq!(scroll_of(0.0, &at(20.0, 60.0), &SCREEN), None);
-}
-
-#[test]
-fn a_click_reaches_the_pane_at_its_cell_with_herdrs_modifier_bits_and_off_the_edge_is_the_edge() {
-    let ctrl_alt = Held {
-        ctrl: true,
-        alt: true,
-        ..Held::default()
-    };
-    assert_eq!(
-        wire(mouse_of(
-            TerminalMouseAction::Down,
-            0,
-            &holding(10.0 + 8.0 * 99.0 + 7.0, 50.0 + 16.0 * 19.0, ctrl_alt),
-            &SCREEN
-        )),
-        json!({"type": "terminal.mouse", "action": "down", "button": "left", "column": 99, "row": 19, "modifiers": 6})
-    );
-    let up = wire(mouse_of(
-        TerminalMouseAction::Up,
-        2,
-        &at(2000.0, 2000.0),
-        &SCREEN,
-    ));
-    assert_eq!(
-        (&up["button"], &up["column"], &up["row"]),
-        (&json!("right"), &json!(99), &json!(19))
-    );
-    let drag = wire(mouse_of(
-        TerminalMouseAction::Drag,
-        1,
-        &at(-5.0, -5.0),
-        &SCREEN,
-    ));
-    assert_eq!(
-        (&drag["button"], &drag["column"], &drag["row"]),
-        (&json!("middle"), &json!(0), &json!(0))
-    );
-    assert_eq!(
-        mouse_of(TerminalMouseAction::Down, 3, &at(20.0, 60.0), &SCREEN),
-        None
-    );
 }
 
 #[test]

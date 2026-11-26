@@ -230,6 +230,26 @@ pub fn settings() -> Vec<Setting> {
             ),
         ),
         choice(
+            "role_tools",
+            &["all", "role"],
+            "all",
+            words(
+                "Agents",
+                "Collie tools per role",
+                "Whether every agent is offered all of Collie's tools (all), or only those its role uses (role). The chat always has every tool, and the command line reaches the rest.",
+            ),
+        ),
+        choice(
+            "output_submit",
+            &["file", "tool"],
+            "file",
+            words(
+                "Agents",
+                "How agents hand in their Output",
+                "Whether an agent writes its Output to a file (file), or may also submit it with the collie_submit tool, which names every problem at once (tool).",
+            ),
+        ),
+        choice(
             "trust",
             &["auto", "never"],
             "auto",
@@ -261,17 +281,6 @@ pub fn settings() -> Vec<Setting> {
             )
             .unit("tokens"),
         ),
-        choice(
-            "terminal_backend",
-            &["herdr", "core"],
-            "herdr",
-            words(
-                "Agents",
-                "Terminal backend",
-                "Where this Machine starts its next agents: herdr, or herdr-core. Agents already running finish where they started. This Machine only.",
-            )
-            .machine(),
-        ),
         of(
             "quiet_ms",
             Number,
@@ -290,7 +299,7 @@ pub fn settings() -> Vec<Setting> {
             words(
                 "Agents",
                 "Close an idle agent after",
-                "An agent of a finished Run that has been idle this long since the Run finished is closed, unless something still needs it. 0 never closes one.",
+                "How long an agent of a finished Run is idle before cleanup judges it. It is closed only where core proves nobody is viewing or typing into it, which core cannot yet, so it is kept. 0 never closes one.",
             )
             .unit("minutes"),
         ),
@@ -405,6 +414,26 @@ pub fn settings() -> Vec<Setting> {
                 "Runs",
                 "Follow a reviewed merge request to approval",
                 "Whether a review of a merge request posts its findings, waits for the author's changes with no agent, reviews each new head, and asks you only whether to approve. Read at each round: off, a running one asks what to do next as before.",
+            ),
+        ),
+        choice(
+            "inline_plan",
+            &["off", "on"],
+            "off",
+            words(
+                "Runs",
+                "Plan before building",
+                "Whether an implement Run given anything but a plan first writes one into its own directory and builds its tickets one at a time (on), or builds it in one pass (off). Fixed on a Run when it starts.",
+            ),
+        ),
+        choice(
+            "agent_sessions",
+            &["run", "ticket", "round"],
+            "run",
+            words(
+                "Runs",
+                "Agents per implement Run",
+                "Whether an implement Run builds every ticket on one agent (run), gives each ticket an agent of its own and delivery another (ticket), or also gives each review-fix round a fresh fixer (round). Fixed on a Run when it starts.",
             ),
         ),
         of(

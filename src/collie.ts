@@ -1,8 +1,7 @@
 import * as Arr from "effect/Array";
 import { Console, Effect, Layer, Schema } from "effect";
-// The manifest is the version: herdr reads it, `install.sh` builds the release URL
-// from it, and a `--version` that disagreed with either would be worse than none.
-import manifest from "../herdr-plugin.toml";
+// WARNING: install.sh and herdr read the release version from this manifest; a --version disagreeing with it is worse than none.
+import manifest from "../package.json";
 import { CliConfig, CliError, Command, GlobalFlag } from "effect/cli";
 import { persona } from "./commands/persona";
 import { artefacts, run } from "./commands/run";
@@ -62,58 +61,39 @@ export const app = root.pipe(
   ]),
 );
 
-/**
- * Read from `Bun.argv` rather than Stdio's `args` because both decide how the program
- * is *assembled* — which formatter and Console it is given — before any Effect of its
- * own runs. Everything downstream of `Command.run` takes its arguments from Stdio.
- */
+// WARNING: read from Bun.argv because the formatter and Console are chosen before any Effect runs.
 const jsonAsked = Bun.argv.includes("--json");
-/** Help was asked for, as opposed to offered because the command line was wrong. */
 const helpAsked = Bun.argv.includes("--help") || Bun.argv.includes("-h");
 
-/**
- * `Console.log` is the only stdout Effect's CLI writes to — the help document it
- * renders for any parse failure, and the version. Under `--json` that moves to
- * stderr, where the spec puts diagnostics, leaving stdout to the envelope a command
- * writes through its Stdio service. Effect's own logger already uses
- * `console.error`, so nothing else moves.
- */
+// WARNING: under --json Effect's own output goes to stderr, so stdout stays the envelope.
 const consoleToStderr = Console.Console.of({
   ...globalThis.console,
   log: (...args: ReadonlyArray<unknown>) => {
-    process.stderr.write(
-      `${Arr.join(
-        Arr.map(args, (arg) => String(arg)),
-        " ",
-      )}\n`,
-    );
+    process.stderr.write(`${Arr.join(Arr.map(args, String), " ")}\n`);
   },
 });
 
 const isShowHelp = Schema.is(CliError.ShowHelp);
 
-/**
- * Everything a command handler did not catch, which is a parse failure or a defect.
- *
- * A ShowHelp is Effect's CLI asking for the help document to be shown, and it raises
- * one both for `--help` and for a command line it could not use — including a command
- * group named with no subcommand, which carries no parse errors at all. Only the first
- * is nobody's failure, so argv is the discriminator: anything else is invalid input,
- * exit 2, and under `--json` one envelope. In human mode Effect's CLI has already
- * printed the help and the reason, so this only sets the status.
- */
+// WARNING: ShowHelp also fires for an unusable command line, so argv, not the error, says --help was asked.
 export const program = app.pipe(
   Command.run({ version: manifest.version }),
   Effect.catch((cause) =>
     Effect.gen(function* () {
       const parse = isShowHelp(cause) ? cause : null;
-      if (parse && helpAsked) return;
+      if (parse && helpAsked) {
+        return;
+      }
       const failure = parse
         ? err("invalid_input", parseMessage(parse))
         : err("operation_failed", String(cause));
-      if (jsonAsked) return yield* printResult(failure, true);
+      if (jsonAsked) {
+        return yield* printResult(failure, true);
+      }
       process.exitCode = parse ? 2 : 1;
-      if (!parse) yield* Console.error(failure.error.message);
+      if (!parse) {
+        yield* Console.error(failure.error.message);
+      }
     }),
   ),
   Effect.provide(
@@ -126,12 +106,12 @@ export const program = app.pipe(
   ),
 );
 
-/** What was wrong with the command line, or that it stopped short of a command. */
-function parseMessage(parse: CliError.ShowHelp): string {
-  if (parse.errors.length > 0)
+function parseMessage(parse: CliError.ShowHelp) {
+  if (parse.errors.length > 0) {
     return Arr.join(
       Arr.map(parse.errors, (error) => error.message),
       "; ",
     );
+  }
   return `${Arr.join(["collie", ...parse.commandPath.slice(1)], " ")} needs a subcommand.`;
 }

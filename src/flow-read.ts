@@ -1,27 +1,14 @@
-// A Task's Flow as the host builds it: each Run's records read from its directory, its
-// launches and the engine's facts, with the waits and the merge request its card reads,
-// handed to `flow.ts`'s rules.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { Clock, Effect, FileSystem } from "effect";
-import type { ChildProcessSpawner } from "effect/process";
 import type { Flow, FlowLane, FlowNode, FlowRun, MrState } from "./board-model";
 import { mrRefOf, mrUrlOf } from "./board-model";
 import { lastAudit, whoActed } from "./audit";
 import type { PluginEnv } from "./env";
-import {
-  currentOf,
-  laneOf,
-  linkSaid,
-  linkState,
-  releaseRow,
-  type ChildFact,
-  type Execution,
-  type LaneWait,
-} from "./flow";
+import { currentOf, laneOf, linkSaid, linkState, releaseRow } from "./flow";
+import type { ChildFact, LaneWait } from "./flow";
 import { readLaunches } from "./launches";
 import { runTitle } from "./naming";
 import { machineName } from "./peers";
@@ -35,7 +22,7 @@ import { epochMs } from "./time";
 import { readProofsOf } from "./verify";
 import { changeKey } from "./plan";
 
-const executionOfState = (state: RunState): Execution => {
+const executionOfState = (state: RunState) => {
   switch (state) {
     case "running":
       return "running";
@@ -51,7 +38,6 @@ const executionOfState = (state: RunState): Execution => {
   }
 };
 
-/** What a lane is given beside its own records: what the Task around it knows. */
 export interface LaneContext {
   readonly children: ReadonlyArray<ChildFact>;
   readonly toCome: ReadonlyArray<{ readonly repo: string; readonly wave: number }>;
@@ -64,7 +50,7 @@ const ALONE: LaneContext = { children: [], toCome: [], wait: null, offer: null, 
 
 const machineOf = (env: PluginEnv) => env.machine ?? machineName();
 
-const requestedLink = (notice: {
+const requestedLink: (notice: {
   readonly run: string;
   readonly workflow: string;
   readonly machine: { readonly name: string; readonly installation: string };
@@ -72,7 +58,7 @@ const requestedLink = (notice: {
   readonly said: string | null;
   readonly at: string | null;
   readonly canResume?: boolean;
-}): FlowRun => ({
+}) => FlowRun = (notice) => ({
   id: `run:${notice.machine.installation}:${notice.run}`,
   title: `${Option.getOrUndefined(Option.map(Option.fromNullishOr(notice.workflow[0]), (present) => Str.toUpperCase(present))) ?? ""}${pipe_(notice.workflow, Str.slice(1))} on ${notice.machine.name}`,
   kind: "link",
@@ -100,7 +86,6 @@ const requestedLink = (notice: {
   },
 });
 
-/** One Run's row, from what it recorded and what its Task says around it. */
 export const laneFor = Effect.fn("Flow.lane")(function* (
   env: PluginEnv,
   run: RunFacts,
@@ -144,25 +129,26 @@ export const laneFor = Effect.fn("Flow.lane")(function* (
   });
 });
 
-/** The Step of a Run that started a child, from the Run's own records. */
 const startedIn = Effect.fn("Flow.startedIn")(function* (parent: RunFacts, child: string) {
   const lines = yield* readStepLines(parent.dir);
   const started = Option.getOrUndefined(
     Arr.findLast(lines, (line) => line.kind === "child" && line.run === child),
   );
-  if (started?.kind !== "child") return null;
+  if (started?.kind !== "child") {
+    return null;
+  }
   const key = started.key;
-  for (const line of lines) if (line.kind === "enter" && line.key === key) return line.step.id;
+  for (const line of lines) {
+    if (line.kind === "enter" && line.key === key) {
+      return line.step.id;
+    }
+  }
   return null;
 });
 
-/** What a Task knows that its Flow is drawn from, beside each Run's own records. */
 export interface TaskFacts {
-  /** The Runs that are its rows: every Run of the Task but its Repo runs. */
   readonly rows: ReadonlyArray<RunFacts>;
-  /** Every Run the host knows, for the children a row started outside it. */
   readonly all: ReadonlyArray<RunFacts>;
-  /** A fan-out's Repo runs by their parent, and each repository's Wave. */
   readonly repoRunsOf: ReadonlyMap<string, ReadonlyArray<RunFacts>>;
   readonly waves: ReadonlyArray<{
     readonly parent: string;
@@ -171,19 +157,15 @@ export interface TaskFacts {
     readonly run: string | null;
   }>;
   readonly leader: RunFacts;
-  /** Whether the Task's work has settled, so nothing is current. */
   readonly settled: boolean;
-  /** Only the leader's lane, which is all a card's strip draws. */
   readonly leaderOnly?: boolean;
   readonly waitOf: (run: RunFacts) => LaneWait | null;
   readonly offer: { readonly id: string; readonly title: string; readonly run?: string } | null;
   readonly mr: string | null;
-  /** The Run whose merge request the Task's is. */
   readonly merging: string;
   readonly mrState: MrState | null;
   readonly mrStates: ReadonlyMap<string, MrState>;
   readonly ci: Parameters<typeof releaseRow>[0]["ci"];
-  /** Each of the Task's merge requests where it has several, by wave. */
   readonly releases?:
     | ReadonlyArray<{
         readonly id: string;
@@ -193,13 +175,9 @@ export interface TaskFacts {
         readonly url: string | null;
       }>
     | undefined;
-  /** Ready to release's first missing fact, or its word that it is ready, while the MR is open. */
   readonly readiness: string | null;
   readonly mrOf: (run: RunFacts) => string | null;
-  /** The MR id of the merge request `run` opened or was pointed at, keying `mrStates`. */
-  readonly mrIdOf: (
-    run: RunFacts,
-  ) => Effect.Effect<string | null, never, ChildProcessSpawner.ChildProcessSpawner>;
+  readonly mrIdOf: (run: RunFacts) => Effect.Effect<string | null>;
 }
 
 export const flowInputsFor = Effect.fn("Flow.inputs")(function* (
@@ -210,8 +188,8 @@ export const flowInputsFor = Effect.fn("Flow.inputs")(function* (
   const installation = Str.trim(
     yield* fs.readFileString(`${env.stateDir}/installation`).pipe(Effect.orElseSucceed(() => "")),
   );
-  const children = new Map<string, RunFacts[]>();
-  const requested = new Map<string, RunFacts[]>();
+  const children = new Map<string, Array<RunFacts>>();
+  const requested = new Map<string, Array<RunFacts>>();
   for (const run of all) {
     if (run.parent !== null) {
       const rows = children.get(run.parent) ?? [];
@@ -227,7 +205,6 @@ export const flowInputsFor = Effect.fn("Flow.inputs")(function* (
   return { installation, children, requested, usual: yield* stepTimesByWorkflow };
 });
 
-/** A Task drawn as the work it took (ADR-draft-a-step-is-declared-where-its-work-is-written D3, D5). */
 export const taskFlowFor = Effect.fn("Flow.task")(function* (
   env: PluginEnv,
   task: TaskFacts,
@@ -239,8 +216,9 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
   const offerOwner = Option.getOrUndefined(
     Arr.findFirst(task.all, (run) => run.id === task.offer?.run),
   );
-  if (offerOwner !== undefined && !Arr.some(rows, (run) => run.id === offerOwner.id))
+  if (offerOwner !== undefined && !Arr.some(rows, (run) => run.id === offerOwner.id)) {
     rows.push(offerOwner);
+  }
   rows.sort((one, other) => pipe_(one.created, Str.localeCompare(other.created)));
   const byId = new Map(Arr.map(rows, (run) => [run.id, run]));
   const inTask = new Set(Arr.map(rows, (run) => run.id));
@@ -277,15 +255,15 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
     };
   });
 
-  const lanes: FlowLane[] = [];
+  const lanes: Array<FlowLane> = [];
   for (const run of task.leaderOnly === true ? [task.leader] : rows) {
     const repos = task.repoRunsOf.get(run.id) ?? [];
     const own = Arr.filter(
       inputs.children.get(run.id) ?? [],
       (one) => !inTask.has(one.id) && !repos.includes(one),
     );
-    const children: ChildFact[] = [];
-    for (const child of own)
+    const children: Array<ChildFact> = [];
+    for (const child of own) {
       children.push({
         id: child.id,
         title: pipe_(child.id, Str.startsWith(`${run.id}.`))
@@ -295,6 +273,7 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
         link: yield* linkOf(child),
         wave: null,
       });
+    }
     const waves = Arr.filter(task.waves, (one) => one.parent === run.id);
     const planned = (repo: RunFacts) => {
       const at = Option.getOrElse(
@@ -303,7 +282,7 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
       );
       return at === -1 ? waves.length : at;
     };
-    for (const repo of [...repos].sort((one, other) => planned(one) - planned(other)))
+    for (const repo of [...repos].sort((one, other) => planned(one) - planned(other))) {
       children.push({
         id: repo.id,
         title:
@@ -314,6 +293,7 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
         link: yield* linkOf(repo),
         wave: Option.getOrUndefined(Arr.findFirst(waves, (one) => one.run === repo.id))?.wave ?? 1,
       });
+    }
     const ownLane = yield* lane(run, {
       children,
       toCome: Arr.filter(waves, (one) => one.run === null),
@@ -352,7 +332,7 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
         });
       }
     }
-    const nodes: FlowNode[] = Arr.map(ownLane.nodes, (node) => {
+    const nodes: Array<FlowNode> = Arr.map(ownLane.nodes, (node) => {
       const own = Arr.filter(links, (one) => one.step === node.id);
       const mr = mrRefOf(task.mrOf(run) ?? task.mr);
       return {
@@ -362,8 +342,12 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
           node.produces === "merge-request" && mr !== null ? (mrUrlOf(mr) ?? undefined) : node.url,
       };
     });
-    for (const link of Arr.filter(links, (one) => !Arr.some(nodes, (node) => node.id === one.step)))
+    for (const link of Arr.filter(
+      links,
+      (one) => !Arr.some(nodes, (node) => node.id === one.step),
+    )) {
       nodes.push({ ...link.node, offPath: true, runs: [] });
+    }
     const linked = { ...ownLane, nodes };
     const parent = run.parent === null ? undefined : byId.get(run.parent);
     lanes.push(
@@ -388,7 +372,9 @@ export const taskFlowFor = Effect.fn("Flow.task")(function* (
           }),
   } satisfies Flow;
   const now = yield* Clock.currentTimeMillis;
-  if (task.releases === undefined) return settleFlow(flow, now);
+  if (task.releases === undefined) {
+    return settleFlow(flow, now);
+  }
   const releases = Arr.map(task.releases, (one) => ({
     mr: one.id,
     short: one.short,

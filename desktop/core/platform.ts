@@ -1,7 +1,3 @@
-// Native shell port for the desktop core. Effect RPC frames travel as NDJSON on stdio;
-// platform actions are handled by the Rune shell. The window-shaped core interfaces
-// remain private adapters and do not create a webview.
-
 import { Effect, Schema } from "effect";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
@@ -10,6 +6,7 @@ import type { FrameSchema } from "../../desktop/src/shared/channel";
 import { downloadRelease } from "../../desktop/src/bun/release-download";
 import { PreparedRecord, preparedRecordOf, releaseOf } from "../../src/desktop";
 import { appliedSignatureOf } from "../../src/signing";
+import { stringifyJson } from "../../src/json";
 
 type Frame = FrameSchema["messages"]["frame"];
 interface Rpc {
@@ -17,32 +14,32 @@ interface Rpc {
   send: { frame: (frame: Frame) => void };
 }
 
-// stdout carries frames alone, so whatever Desktop logs goes to stderr.
+// WARNING: stdout carries Effect RPC frames alone, so logs go to stderr.
 console.log = console.error;
 console.info = console.error;
 console.debug = console.error;
 
 const ndjson = RpcSerialization.ndjson.makeUnsafe();
 const userData = Bun.env.COLLIE_RUNE_USER_DATA ?? "";
-// Do not retry an archive the shell already refused at this launch.
-if (Bun.env.COLLIE_RUNE_UPDATE_REFUSED === "1")
+if (Bun.env.COLLIE_RUNE_UPDATE_REFUSED === "1") {
   await rm(preparedRecordOf(userData), { force: true });
+}
 let shell: Rpc | undefined;
 
 const listen = async () => {
-  for await (const bytes of Bun.stdin.stream())
-    for (const frame of ndjson.decode(bytes))
-      // SAFETY: the shell writes only Effect RPC frames, one a line.
+  for await (const bytes of Bun.stdin.stream()) {
+    for (const frame of ndjson.decode(bytes)) {
+      // WARNING: the shell writes only Effect RPC frames, one a line.
       shell?.handlers.messages.frame(frame as Frame);
-  // The shell has gone: nothing is left to serve.
+    }
+  }
   process.exit(0);
 };
 
 const on = (_event: string, _listener: () => void) => {};
 
-/** Asks the shell to post it: a line of its own beside Effect's frames. */
 const showNotification = ({ title, body = "", silent = false }: Notification) =>
-  void process.stdout.write(`${JSON.stringify({ _tag: "Notify", title, body, silent })}\n`);
+  void process.stdout.write(`${stringifyJson({ _tag: "Notify", title, body, silent })}\n`);
 interface Notification {
   readonly title: string;
   readonly body?: string;
@@ -52,8 +49,8 @@ interface Notification {
 export const BrowserView = {
   defineRPC: (rpc: {
     readonly maxRequestTime: number;
-    readonly handlers: Rpc["handlers"] & { readonly requests: {} };
-  }): Rpc => ({ ...rpc, send: { frame: (_frame: Frame) => {} } }),
+    readonly handlers: Rpc["handlers"] & { readonly requests: Record<never, never> };
+  }) => ({ ...rpc, send: { frame: (_frame: Frame) => {} } }),
 };
 
 export class BrowserWindow {
@@ -68,7 +65,7 @@ export class BrowserWindow {
     renderer?: string;
     frame?: BrowserWindow["frame"];
   }) {
-    // The board's window is the first; any other, the popped-out chat, has no shell yet.
+    // WARNING: only the board's window has a shell; a popped-out chat has none yet.
     if (shell === undefined) {
       shell = rpc;
       rpc.send = { frame: (frame) => void process.stdout.write(ndjson.encode(frame) ?? "") };
@@ -92,14 +89,14 @@ export const Utils = {
   showNotification,
   clipboardReadText: () => "",
   clipboardWriteText: (_text: string) => {},
-  clipboardAvailableFormats: (): string[] => [],
-  openFileDialog: (_options: {
-    canChooseDirectory: boolean;
-    allowsMultipleSelection: boolean;
-  }): Promise<string[]> => Promise.resolve([]),
+  clipboardAvailableFormats: () => {
+    const returned: Array<string> = [];
+    return returned;
+  },
+  openFileDialog: (_options: { canChooseDirectory: boolean; allowsMultipleSelection: boolean }) =>
+    Promise.resolve([]),
 };
 
-/** A bundle's own version.json, as `desktop/scripts/bundle.ts` writes it. */
 const Local = Schema.fromJsonString(
   Schema.Struct({
     version: Schema.String,
@@ -116,7 +113,7 @@ const UpdateManifest = Schema.fromJsonString(
     platform: Schema.Literal(process.platform === "darwin" ? "macos" : "linux"),
     arch: Schema.Literal(process.arch),
     version: Schema.String,
-    // Both name files on disk, so neither may name a path.
+    // WARNING: both name files on disk, so neither may name a path.
     hash: Schema.String.check(Schema.isPattern(/^[a-z0-9]{1,13}$/)),
     artifact: Schema.Struct({
       file: Schema.String.check(Schema.isPattern(/^stable-[\w.-]+\.tar\.zst$/)),
@@ -124,7 +121,6 @@ const UpdateManifest = Schema.fromJsonString(
   }),
 );
 
-/** Run from a checkout, the core never updates itself. */
 const local = async () =>
   Bun.env.COLLIE_RUNE_VERSION === undefined
     ? { version: "0.0.0", channel: "dev", hash: "rune-spike", baseUrl: "" }
@@ -134,7 +130,6 @@ const local = async () =>
 
 const PLATFORM = `${process.platform === "darwin" ? "macos" : "linux"}-${process.arch}`;
 
-/** A release asset, given up, and its request ended, after `within`. */
 const fetched = (url: string, within: `${number} minute${"" | "s"}` = "1 minute") =>
   Effect.runPromise(
     downloadRelease(url).pipe(
@@ -159,11 +154,6 @@ const latest = async () =>
 let downloadFailed = "";
 let status: ReadonlyArray<{ message: string; restarting?: boolean }> = [];
 
-/**
- * Electrobun's Updater as Desktop's `electrobun-updater.ts` asks it. Checking, downloading and
- * verifying stay Desktop's; installing is the Rune shell's, at its next launch, from the tar
- * and signature staged at `COLLIE_RUNE_STAGED`.
- */
 export const Updater = {
   getLocalInfo: local,
   appDataFolder: () => Promise.resolve(userData),
@@ -206,7 +196,6 @@ export const Updater = {
     }
   },
   updateInfo: () => ({ error: downloadFailed }),
-  // Desktop verified the tar before it asked; the shell verifies it again before installing.
   applyUpdate: async () => {
     const staged = Bun.env.COLLIE_RUNE_STAGED;
     if (staged === undefined) {
@@ -221,10 +210,10 @@ export const Updater = {
       await fetched(`${releaseOf((await local()).baseUrl, prepared.version)}/${named}`),
     );
     await Bun.write(`${staged}.sig`, signature);
-    await Bun.write(`${staged}.json`, JSON.stringify(prepared));
+    await Bun.write(`${staged}.json`, stringifyJson(prepared));
     await Bun.write(`${staged}.partial`, Bun.file(prepared.retained_tar_path));
     await rename(`${staged}.partial`, staged);
-    process.stdout.write(`${JSON.stringify({ _tag: "Restart" })}\n`);
+    process.stdout.write(`${stringifyJson({ _tag: "Restart" })}\n`);
     status = [
       { message: `Collie ${prepared.version} is installed as Collie restarts`, restarting: true },
     ];

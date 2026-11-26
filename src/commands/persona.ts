@@ -1,15 +1,23 @@
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import { Argument, Command } from "effect/cli";
 import { forkResolvedDefinition } from "../fork";
 import { err } from "../operations";
-import { attempt, mutation } from "../envelope";
-import { context, definitions, discoveryContext, forkFlags, layerDir, root } from "./shared";
+import type { OpResult } from "../operations";
+import { attempt, mutation, requestId as requested, withRequestId } from "../envelope";
+import {
+  context,
+  definitions,
+  discoveryContext,
+  forkFlags,
+  layerDir,
+  physicalDir,
+  root,
+} from "./shared";
 import { personaData } from "../definitions";
 
-/** The Persona a `persona` subcommand acts on. */
 const personaArg = Argument.String("persona").pipe(
   Argument.withDescription("Which Persona, as `persona list` names it"),
 );
@@ -20,7 +28,9 @@ const personaList = Command.make("list", {}, () =>
     yield* attempt(
       Effect.gen(function* () {
         const resolved = yield* discoveryContext(global);
-        if (resolved._tag === "ContextFailure") return resolved.result;
+        if (resolved._tag === "ContextFailure") {
+          return resolved.result;
+        }
         const defs = yield* definitions(resolved.env);
         const personas = Arr.map(
           [...defs.personas.values()].sort((a, b) => pipe_(a.name, Str.localeCompare(b.name))),
@@ -52,7 +62,9 @@ const personaShow = Command.make(
       yield* attempt(
         Effect.gen(function* () {
           const resolved = yield* discoveryContext(global);
-          if (resolved._tag === "ContextFailure") return resolved.result;
+          if (resolved._tag === "ContextFailure") {
+            return resolved.result;
+          }
           const found = (yield* definitions(resolved.env)).personas.get(persona);
           return found
             ? {
@@ -76,33 +88,55 @@ const personaFork = Command.make(
   ({ persona, layer, name, requestId: request }) =>
     Effect.gen(function* () {
       const global = yield* root;
+      const id = yield* requested(request);
+      const withId = (failure: OpResult) => withRequestId(failure, id);
       yield* attempt(
         Effect.gen(function* () {
-          const base = yield* context(global, false);
-          if (base._tag === "ContextFailure") return base.result;
-          return yield* mutation(base.env, "persona-fork", request, (_id) =>
-            Effect.gen(function* () {
-              // Resolved inside the mutation, so a replayed request id returns its
-              // recorded result whether or not that workspace is still open.
-              const resolved = yield* context(global, layer === "project", layer === "project");
-              if (resolved._tag === "ContextFailure") return resolved.result;
-              const found = (yield* definitions(resolved.env)).personas.get(persona);
-              if (!found) return err("persona_not_found", `Persona "${persona}" was not found.`);
-              const result = yield* forkResolvedDefinition(
-                { path: found.path, kind: "personas", steps: [], body: found.body },
-                yield* layerDir(resolved.env, layer),
-                {
-                  name,
-                  full: true,
-                },
-              );
-              if (!result.ok) return err(result.code, result.message, { path: result.path });
-              return {
-                ok: true,
-                data: { path: result.path, name, layer },
-                human: `Forked ${persona} to ${result.path}.`,
-              };
-            }),
+          const resolved = yield* context(global, layer === "project", layer === "project");
+          if (resolved._tag === "ContextFailure") {
+            return withId(resolved.result);
+          }
+          const writes = yield* physicalDir(resolved.env.cwd);
+          if (writes === null) {
+            return withId(
+              err("invalid_input", `This Machine has no directory "${resolved.env.cwd}".`, {
+                cwd: resolved.env.cwd,
+              }),
+            );
+          }
+          return yield* mutation(
+            resolved.env,
+            {
+              operation: "persona-fork",
+              run: null,
+              destination: layer === "project" ? undefined : "cwd",
+              at: layer === "project" ? writes : undefined,
+              args: { persona, layer, name },
+            },
+            Option.some(id),
+            (_id) =>
+              Effect.gen(function* () {
+                const found = (yield* definitions(resolved.env)).personas.get(persona);
+                if (!found) {
+                  return err("persona_not_found", `Persona "${persona}" was not found.`);
+                }
+                const result = yield* forkResolvedDefinition(
+                  { path: found.path, kind: "personas", steps: [], body: found.body },
+                  yield* layerDir(resolved.env, layer),
+                  {
+                    name,
+                    full: true,
+                  },
+                );
+                if (!result.ok) {
+                  return err(result.code, result.message, { path: result.path });
+                }
+                return {
+                  ok: true,
+                  data: { path: result.path, name, layer },
+                  human: `Forked ${persona} to ${result.path}.`,
+                };
+              }),
           );
         }),
         global.json,

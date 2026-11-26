@@ -106,7 +106,7 @@ test("a user token reads its workspace and user; invalid_auth refuses without lo
     Effect.gen(function* () {
       const fake = fakeSlack();
       const token = "xoxp-fixture-secret";
-      const logs: unknown[] = [];
+      const logs: Array<unknown> = [];
       const api = slackApi(token, fake.client);
       const logger = Logger.make(({ message }) => {
         logs.push(message);

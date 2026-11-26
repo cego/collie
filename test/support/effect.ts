@@ -1,34 +1,31 @@
-import { platformLayer, type PlatformServices } from "../../src/platform";
-import { recordsLayer, type Records } from "../../src/records";
+import { platformLayer } from "../../src/platform";
+import type { PlatformServices } from "../../src/platform";
+import { recordsLayer } from "../../src/records";
+import type { Records } from "../../src/records";
 import { storeLayer } from "../../src/store";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import * as Reactivity from "effect/reactivity/Reactivity";
-import { Clock, Config, Duration, Effect, Layer, ManagedRuntime, Scope } from "effect";
+import type { Scope } from "effect";
+import { Clock, Config, Duration, Effect, Layer, ManagedRuntime } from "effect";
 import { ConnectionDeadline } from "../../src/connections";
+import { ServerStartDeadline } from "../../src/compactors";
 import { TestClock } from "effect/testing";
 import { GIT_QUIET } from "./git-quiet";
 
 const runtime = ManagedRuntime.make(platformLayer);
 
-/** Records no host shares: a test whose host reads them uses `recordsAt` its state directory. */
 export const memoryRecords = recordsLayer.pipe(
   Layer.provideMerge(storeLayer()),
   Layer.provide(Layer.orDie(SqliteClient.layer({ filename: ":memory:" }))),
   Layer.provide(Reactivity.layer),
 );
 
-/** Runs `effect` in a scope of its own, closed when it ends. */
 export function runEffect<A, E>(
   effect: Effect.Effect<A, E, PlatformServices | Records | Scope.Scope>,
-): Promise<A> {
+) {
   return runtime.runPromise(Effect.scoped(Effect.provide(effect, memoryRecords)));
 }
 
-/**
- * The process a host a test starts may live no longer than, and the marker proving a process
- * is the test's, as the test preload set them: handed to every program a test runs with an
- * environment of its own.
- */
 export const suiteEnv = Config.all({
   COLLIE_HOST_WATCH_PID: Config.String("COLLIE_HOST_WATCH_PID").pipe(Config.withDefault("")),
   COLLIE_TEST_ROOT: Config.String("COLLIE_TEST_ROOT").pipe(Config.withDefault("")),
@@ -41,18 +38,13 @@ export const suiteEnv = Config.all({
   COLLIE_TEST_FILE: Config.String("COLLIE_TEST_FILE").pipe(Config.withDefault("")),
   COLLIE_PROC: Config.String("COLLIE_PROC").pipe(Config.withDefault("")),
   COLLIE_MEMORY_EVERY: Config.String("COLLIE_MEMORY_EVERY").pipe(Config.withDefault("")),
-  // Never the human's core: a test that wants one starts the rig's and names its socket.
+  // WARNING: a host holds no file watch; one that comes back fails the test that started it.
+  COLLIE_HOST_REFUSES: Config.succeed("true"),
+  // WARNING: never the human's core; a test that wants one starts the rig's and names its socket.
   HC_SOCKET: Config.succeed("/nonexistent/collie-test/hc.sock"),
 }).pipe(Config.map((env) => ({ ...env, ...GIT_QUIET })));
 
-/**
- * Runs `effect` on a test clock that a fiber advances by `tick` between real one-millisecond
- * sleeps, from the wall clock's now: a session on it reads what
- * sessions on the real clock wrote, so a lock or a timestamp of theirs is not in its
- * future. Its timers fire in order and many times faster, finalizers' included, and the
- * file and database IO between them still takes the real time it takes, so a Connection
- * read has no deadline on it.
- */
+// WARNING: File and database IO still take real time under the fast clock, so a Connection read or server start has no deadline.
 export const fastForward = <A, E, R>(effect: Effect.Effect<A, E, R>, tick = 25) =>
   Effect.gen(function* () {
     const clock = yield* TestClock.make();
@@ -63,5 +55,6 @@ export const fastForward = <A, E, R>(effect: Effect.Effect<A, E, R>, tick = 25) 
     return yield* effect.pipe(
       Effect.provideService(Clock.Clock, clock),
       Effect.provideService(ConnectionDeadline, Duration.infinity),
+      Effect.provideService(ServerStartDeadline, Duration.infinity),
     );
   }).pipe(Effect.scoped);

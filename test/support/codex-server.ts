@@ -1,9 +1,5 @@
-// A stand-in `codex app-server`, run as a real process in its place: `bun codex-server.ts
-// <config.json> --listen ws://127.0.0.1:0`. It answers the protocol shapes the installed
-// release's schema declares (checked in `test/compaction-codex.test.ts`), drains on its
-// first SIGTERM the way 0.162.0 does on a websocket, and records its own argv, every request
-// and every signal it receives as a JSON line in `config.events`.
-
+// WARNING: Drains on its first SIGTERM as codex 0.162.0 does on a websocket.
+import type { ServerWebSocket } from "bun";
 import * as BunChildProcessSpawner from "@effect/platform-bun/BunChildProcessSpawner";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import * as BunPath from "@effect/platform-bun/BunPath";
@@ -28,43 +24,30 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 export interface StandIn {
-  /** Where every request and signal is recorded, one JSON object per line. */
   events: string;
   threads: ReadonlyArray<{
     id: string;
     cwd: string;
     parent?: string;
     path?: string;
-    /** A turn in progress from the start, appending to `writes` until it ends. */
     turn?: { id: string; writes?: string };
-    /** Loaded with no user message yet, which `thread/turns/list` refuses as 0.162.1 does. */
+    // WARNING: thread/turns/list refuses a thread with no user message, as codex 0.162.1 does.
     unmaterialized?: boolean;
-    /** Loaded idle and paginated with no user message, whose turns 0.162.1 refused to list on vm-mk. */
     unlistable?: boolean;
-    /** What `thread/read` reports in place of the mode's own. */
     historyMode?: "legacy" | "paginated";
     preview?: string;
     readTurns?: ReadonlyArray<unknown>;
-    /** The status `thread/read` reports in place of the one its turns give it. */
     status?: "idle" | "active";
-    /** A refusal `thread/turns/list` answers with in place of its turns. */
     turnsRefusal?: { code: number; message: string };
-    /** What `thread/items/list` answers with, newest first. */
     items?: ReadonlyArray<unknown>;
   }>;
-  /** Answer `turn/interrupt` and keep the turn running. */
   ignoreInterrupt?: boolean;
-  /** Stay up after a drain with nothing running. */
   neverExit?: boolean;
-  /** Close the connection instead of answering this method. */
   dropOn?: string;
-  /** Start a queued turn on a thread whose turn was interrupted, unless draining. */
   continuation?: boolean;
-  /** Take a SIGTERM only once this many `turn/interrupt`s are answered, as a server that read them first does. */
+  // WARNING: Takes SIGTERM only after this many turn/interrupts are answered, as a server that reads them first does.
   lateDrain?: number;
-  /** A process of this server's session: one that ends on SIGTERM, or one that ignores it. */
   child?: "ends" | "ignores";
-  /** Environment variables whose values it records when it starts. */
   env?: ReadonlyArray<string>;
 }
 
@@ -152,7 +135,7 @@ const main = Effect.gen(function* () {
     ),
   );
   yield* record({ pid: process.pid, argv: Arr.drop(process.argv, 2), env: Rec.fromEntries(env) });
-  const turns = new Map<string, Turn[]>();
+  const turns = new Map<string, Array<Turn>>();
   const running = () =>
     Arr.filter(Arr.flatten([...turns.values()]), (turn) => turn.status === "inProgress");
   let draining = false;
@@ -179,7 +162,9 @@ const main = Effect.gen(function* () {
     });
   for (const thread of config.threads) {
     turns.set(thread.id, []);
-    if (thread.turn) yield* begin(thread.id, thread.turn.id, thread.turn.writes);
+    if (thread.turn) {
+      yield* begin(thread.id, thread.turn.id, thread.turn.writes);
+    }
   }
   const exitWhenIdle = Effect.suspend(() =>
     draining && running().length === 0 && !config.neverExit
@@ -194,14 +179,17 @@ const main = Effect.gen(function* () {
     draining = true;
   }).pipe(Effect.andThen(exitWhenIdle));
   const release = Effect.gen(function* () {
-    if (!(yield* fs.exists(`${config.events}.release`))) return;
+    if (!(yield* fs.exists(`${config.events}.release`))) {
+      return;
+    }
     for (const turn of running()) {
-      if (turn.timer) yield* Fiber.interrupt(turn.timer);
+      if (turn.timer) {
+        yield* Fiber.interrupt(turn.timer);
+      }
       turn.status = "completed";
     }
     yield* exitWhenIdle;
   });
-  // A test lets every running turn end by creating `<events>.release`.
   yield* serial
     .withPermits(1)(release)
     .pipe(Effect.repeat(Schedule.spaced(50)), Effect.delay(50), Effect.forkIn(scope));
@@ -209,8 +197,11 @@ const main = Effect.gen(function* () {
     dispatch(
       Effect.gen(function* () {
         yield* record({ signal: "SIGTERM" });
-        if (interrupted < (config.lateDrain ?? 0)) drainPending = true;
-        else yield* drain;
+        if (interrupted < (config.lateDrain ?? 0)) {
+          drainPending = true;
+        } else {
+          yield* drain;
+        }
       }),
     ),
   );
@@ -227,25 +218,29 @@ const main = Effect.gen(function* () {
     );
     yield* record({ child: child.pid });
   }
-  const statusOf = (thread: StandIn["threads"][number]): Schema.Json => {
+  const statusOf = (thread: StandIn["threads"][number]) => {
     const active = Arr.some(running(), (turn) => Arr.contains(turns.get(thread.id) ?? [], turn));
-    return (thread.status ?? (active ? "active" : "idle")) === "idle"
-      ? { type: "idle" }
-      : { type: "active", activeFlags: [] };
+    const idle = (thread.status ?? (active ? "active" : "idle")) === "idle";
+    const status: Schema.Json = idle ? { type: "idle" } : { type: "active", activeFlags: [] };
+    return status;
   };
-  const answer = (ws: import("bun").ServerWebSocket<undefined>, raw: string | Buffer) =>
+  const answer = (ws: ServerWebSocket<undefined>, raw: string | Buffer) =>
     Effect.gen(function* () {
       const { id, method, params = {} } = yield* Schema.decodeEffect(Request)(String(raw));
       yield* record({ method, params });
-      if (method === config.dropOn) return ws.close();
+      if (method === config.dropOn) {
+        return ws.close();
+      }
       const send = (key: "result" | "error", value: Schema.Json) => {
         const message: Record<string, Schema.Json> = {};
-        if (id !== undefined) message.id = id;
+        if (id !== undefined) {
+          message.id = id;
+        }
         message[key] = value;
         return ws.send(encode(message));
       };
       const reply = (result: Schema.Json) => send("result", result);
-      const refuse = (message: string, code = -32600) => send("error", { code, message });
+      const refuse = (message: string, code = -32_600) => send("error", { code, message });
       const threadId = Predicate.isString(params.threadId) ? params.threadId : undefined;
       const turnId = Predicate.isString(params.turnId) ? params.turnId : undefined;
       const thread = Option.getOrUndefined(
@@ -277,13 +272,15 @@ const main = Effect.gen(function* () {
             thread?.turnsRefusal ??
             (thread?.unmaterialized
               ? {
-                  code: -32600,
+                  code: -32_600,
                   message: `thread ${thread.id} is not materialized yet; thread/turns/list is unavailable before first user message`,
                 }
               : thread?.unlistable
-                ? { code: -32601, message: "list_turns is not supported yet" }
+                ? { code: -32_601, message: "list_turns is not supported yet" }
                 : undefined);
-          if (refusal) return refuse(refusal.message, refusal.code);
+          if (refusal) {
+            return refuse(refusal.message, refusal.code);
+          }
           const held = threadId === undefined ? [] : (turns.get(threadId) ?? []);
           return reply({
             data: Arr.map(Arr.reverse(held), (turn) => ({ id: turn.id, status: turn.status })),
@@ -297,14 +294,20 @@ const main = Effect.gen(function* () {
           const turn = Option.getOrUndefined(
             Arr.findFirst(running(), (one) => Arr.contains(held, one) && one.id === turnId),
           );
-          if (threadId === undefined || turn === undefined)
+          if (threadId === undefined || turn === undefined) {
             return refuse("no active turn to interrupt");
+          }
           reply({});
-          if (config.ignoreInterrupt) return;
-          if (turn.timer) yield* Fiber.interrupt(turn.timer);
+          if (config.ignoreInterrupt) {
+            return;
+          }
+          if (turn.timer) {
+            yield* Fiber.interrupt(turn.timer);
+          }
           turn.status = "interrupted";
-          if (config.continuation && !draining)
+          if (config.continuation && !draining) {
             yield* begin(threadId, `${turn.id}-continued`, thread?.turn?.writes);
+          }
           interrupted += 1;
           if (drainPending && interrupted >= (config.lateDrain ?? 0)) {
             drainPending = false;

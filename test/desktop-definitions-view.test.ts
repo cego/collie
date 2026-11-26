@@ -1,5 +1,3 @@
-// How Desktop's Workflows page draws what a host read: a module's offers and its files.
-
 import { expect, test } from "bun:test";
 import { offersOf, shownAs } from "../desktop/src/shared/definitions-view";
 

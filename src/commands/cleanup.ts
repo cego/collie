@@ -1,6 +1,3 @@
-// `collie cleanup`: what the host's sweep would remove now, and `--apply` to sweep now
-// (ADR-0045). No confirmation: the host does the same on its own every ten minutes.
-
 import { Effect } from "effect";
 import { Command, Flag } from "effect/cli";
 import { cleanupLines } from "../cleanup";
@@ -23,19 +20,31 @@ export const cleanup = Command.make(
         const door = yield* cliDoor(env);
         if (!apply) {
           const listed = yield* cleanupListing(env, door);
-          if (!listed.ok) return listed;
+          if (!listed.ok) {
+            return listed;
+          }
           return {
             ok: true as const,
             data: listed.value,
             human: cleanupLines(listed.value, false),
           };
         }
-        return yield* mutation(env, "cleanup", requestId, (request) =>
-          Effect.gen(function* () {
-            const swept = yield* sweepNow(env, { door, request });
-            if (!swept.ok) return swept;
-            return { ok: true as const, data: swept.value, human: cleanupLines(swept.value, true) };
-          }),
+        return yield* mutation(
+          env,
+          { operation: "cleanup", run: null, args: {} },
+          requestId,
+          (request) =>
+            Effect.gen(function* () {
+              const swept = yield* sweepNow(env, { door, request });
+              if (!swept.ok) {
+                return swept;
+              }
+              return {
+                ok: true as const,
+                data: swept.value,
+                human: cleanupLines(swept.value, true),
+              };
+            }),
         );
       }),
     ),

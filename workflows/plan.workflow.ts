@@ -1,16 +1,3 @@
-// A goal, interviewed into a spec and tickets, and then the menu that decides what
-// becomes of them.
-//
-// Three pieces of work on one planner, so its model is the workflow's own default and the
-// interview it held is still in the agent that writes the spec. Then a question, and another after
-// whatever the answer started — a plan is refined, second-guessed and offloaded as often
-// as the human wants, and only "Implement now", "Architecture first" and "Finish
-// planning" end it. Started with `then=implement`, nobody is asked anything: the plan is
-// built as soon as it is written.
-//
-// The Markdown beside this file is the content: the interview, the two skills the spec
-// and the tickets are written with, and what each of the menu's rounds asks for.
-
 import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -33,8 +20,8 @@ import {
   planReposOf,
   renderApproved,
   step,
-  type VerifySpec,
 } from "collie";
+import type { VerifySpec } from "collie";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import markdown from "./plan.md" with { type: "text" };
@@ -43,7 +30,6 @@ import { connection } from "./connections.ts";
 const content = contentOf(markdown);
 const text = Schema.String;
 
-/** What every planning prompt is told: what to plan, and where this Run keeps its work. */
 const planning = {
   inputs: Schema.Struct({ goal: text }),
   run: Schema.Struct({ dir: text, id: text }),
@@ -72,7 +58,6 @@ const Decided = Schema.optionalKey(Schema.Array(Schema.String)).annotate({
   description: "what we settled, one line each",
 });
 
-/** What the interview settles: the name of the work, and what kind of result it is. */
 const Grilled = Schema.Struct({
   verdict: Schema.Literals(["clean", "findings"]),
   findings: Schema.optionalKey(Schema.Array(FindingSchema)),
@@ -84,7 +69,6 @@ const Grilled = Schema.Struct({
   decided: Decided,
 });
 
-/** What the spec step leaves behind. The tickets step writes the plan's own Output. */
 const Spec = Schema.Struct({
   verdict: Schema.Literals(["clean", "findings"]),
   findings: Schema.optionalKey(Schema.Array(FindingSchema)),
@@ -92,7 +76,6 @@ const Spec = Schema.Struct({
   decided: Decided,
 });
 
-/** What a round that rewrote the plan says to whoever is already building from it. */
 const Revised = Schema.Struct({
   verdict: Schema.Literals(["clean", "findings"]),
   findings: Schema.optionalKey(Schema.Array(FindingSchema)),
@@ -111,12 +94,10 @@ const Offloaded = Schema.Struct({
   url: Schema.String,
 });
 
-/** The host's own options for a child, with the ones nobody settled left out: absent
- *  rather than empty, exactly as a front door passes them. */
-const launch = (options: Record<string, string>): Record<string, string> =>
+// WARNING: absent rather than empty, exactly as a front door passes them.
+const launch = (options: Record<string, string>) =>
   Rec.fromEntries(Arr.filter(Rec.toEntries(options), ([, value]) => value !== ""));
 
-/** What a planner rooted at the Projects root is told about it, and nothing elsewhere. */
 const rootingOf = (options: Readonly<Record<string, string>>) =>
   options.workspace === "projects-root" ? (content.sections.get("projects-root") ?? "") : "";
 
@@ -128,17 +109,11 @@ const REFINE = "Refine";
 const FINISH = "Finish planning";
 const CHOICES = [IMPLEMENT, ARCHITECTURE, OPINION, OFFLOAD, REFINE, FINISH];
 
-/**
- * How often the menu may come back. Everything that is not terminal returns to it, so the
- * bound is what stops a plan nobody is finishing from asking for ever; a run that reaches
- * it says so rather than asking a seventh time.
- */
+// WARNING: the menu's bound is what stops a plan nobody is finishing from asking forever.
 const ROUNDS = 6;
 
-/** A second opinion is worth having twice at most; after that it is the same plan again. */
 const OPINIONS = 2;
 
-/** The planner is one agent for the whole run. */
 const PLANNER = "grill";
 
 const grill = step({
@@ -238,8 +213,6 @@ export default defineWorkflow({
     ),
   }),
   output: Schema.String,
-  // The planner's own, which a Run's --model or a scope around it can still change, and a
-  // second opinion's: a fresh agent with its own context.
   agents: {
     harness: "claude",
     model: "opus",
@@ -249,9 +222,7 @@ export default defineWorkflow({
   // oxlint-disable-next-line unicorn/no-thenable -- the Input is named `then`
   hints: { goal: "goal", then: "reach" },
   path: [grill, spec, tickets, menu],
-  // A plan proves it wrote tickets; nobody chooses that, so it is fixed rather than asked.
   outcome: { fixed: "plan" },
-  // What a finished plan offers: the tickets it wrote, built by the workflow that builds.
   followUps: [
     {
       id: "implement-now",
@@ -268,19 +239,19 @@ export default defineWorkflow({
       const run = yield* Run;
       const place = yield* host.place(run.id);
       const nobodyAsked = asked.then === "implement";
-      if (nobodyAsked) yield* forecast([grill, spec, tickets]);
+      if (nobodyAsked) {
+        yield* forecast([grill, spec, tickets]);
+      }
       const input = {
         inputs: { goal: asked.goal },
         run: { dir: place.dir, id: run.id },
         rooting: rootingOf(place.options),
-        // A section's text is sent as it is, so the one name it carries is filled here.
         attendance: pipe_(
           content.sections.get(nobodyAsked ? "unattended" : "attended") ?? "",
           Str.replaceAll("{{run.id}}", run.id),
         ),
       };
       const planDir = `${place.dir}/plan`;
-      // Why the plan's tickets cannot be built, recorded so a replay is handed the same answer.
       const refusalOf = (at: string) =>
         Activity.make({
           name: `repos.${at}`,
@@ -328,14 +299,14 @@ export default defineWorkflow({
             success: Schema.NullOr(Schema.String),
             execute: benchmarkRefusalOf(planDir),
           });
-          if (refused !== null)
+          if (refused !== null) {
             return yield* new WorkflowError({
               reason: `a ticket's benchmark plan is not one collie measure takes: ${refused}`,
             });
+          }
           return done;
         }),
       );
-      // A plan whose tickets nobody can build is not a finished plan: its planner is told once.
       const refusal = yield* refusalOf("tickets");
       if (refusal !== null) {
         yield* unbuildable(
@@ -348,7 +319,9 @@ export default defineWorkflow({
           }),
         );
         const still = yield* refusalOf("unbuildable");
-        if (still !== null) return yield* new WorkflowError({ reason: still });
+        if (still !== null) {
+          return yield* new WorkflowError({ reason: still });
+        }
       }
 
       let opinions = 0;
@@ -356,7 +329,6 @@ export default defineWorkflow({
       const choices =
         linear.state === "ok" ? CHOICES : Arr.filter(CHOICES, (one) => one !== OFFLOAD);
       for (let round = 1; round <= ROUNDS; round++) {
-        // What is left to offer: an opinion already had twice is not offered a third time.
         const chosen = nobodyAsked
           ? IMPLEMENT
           : yield* menu(
@@ -370,13 +342,16 @@ export default defineWorkflow({
               }),
               { round },
             );
-        if (chosen === FINISH) return `${written.issues_dir}: finished planning`;
+        if (chosen === FINISH) {
+          return `${written.issues_dir}: finished planning`;
+        }
 
         if (chosen === IMPLEMENT) {
-          // A plan the fan-out cannot run starts nothing, and the menu comes back if anyone is there.
           const unrunnable = yield* refusalOf(`implement-${round}`);
           if (unrunnable !== null) {
-            if (nobodyAsked) return yield* new WorkflowError({ reason: unrunnable });
+            if (nobodyAsked) {
+              return yield* new WorkflowError({ reason: unrunnable });
+            }
             yield* host.record(run.id, `${IMPLEMENT} cannot run here: ${unrunnable}`);
             yield* host.parked(run.id, `${IMPLEMENT} cannot run here: ${unrunnable}`);
             continue;
@@ -395,8 +370,6 @@ export default defineWorkflow({
                 ? // oxlint-disable-next-line unicorn/no-thenable -- implement's Input is named `then`
                   { plan: planDir, then: "finish" }
                 : { plan: planDir },
-            // What kind of result this is, and what it is called: settled during the
-            // interview rather than asked for again at the start of the build.
             options: launch({
               task: building ? grilled.slug : "",
               outcome: building ? grilled.outcome : "",
@@ -409,8 +382,6 @@ export default defineWorkflow({
 
         if (chosen === OPINION) {
           opinions += 1;
-          // A reviewer of its own, on its own agent: the planner that wrote the plan is
-          // the last one who can tell you what is wrong with it.
           const said = yield* opinion(
             agentWork({
               operation: `second-opinion-${opinions}`,
@@ -421,8 +392,9 @@ export default defineWorkflow({
             }),
             { round: opinions, of: OPINIONS },
           );
-          // A second opinion with nothing to say is not a round of revision.
-          if (said.findings.length === 0) continue;
+          if (said.findings.length === 0) {
+            continue;
+          }
           yield* revise(
             agentWork({
               ...planner,

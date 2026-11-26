@@ -80,8 +80,9 @@ test("legacy command skills use file-based names and preserve required skills, o
         "user-choice",
         "project-choice",
         "local-choice",
-      ])
+      ]) {
         yield* command(project, name);
+      }
       yield* settings(`${where.claudeDir}/settings.json`, { "user-choice": "off" });
       yield* settings(`${where.cwd}/.claude/settings.json`, { "project-choice": "on" });
       yield* settings(`${where.cwd}/.claude/settings.local.json`, {
@@ -111,8 +112,9 @@ test("a skill the operator's own user, project or local Claude settings decide i
   runEffect(
     Effect.gen(function* () {
       const where = yield* machine;
-      for (const name of ["off-for-me", "on-in-project", "local-only", "noise"])
+      for (const name of ["off-for-me", "on-in-project", "local-only", "noise"]) {
         yield* skill(`${where.claudeDir}/skills`, name);
+      }
       yield* settings(`${where.claudeDir}/settings.json`, { "off-for-me": "off" });
       yield* settings(`${where.cwd}/.claude/settings.json`, { "on-in-project": "on" });
       yield* settings(`${where.cwd}/.claude/settings.local.json`, { "local-only": "on" });

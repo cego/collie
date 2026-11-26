@@ -1,4 +1,3 @@
-import * as Arr from "effect/Array";
 import * as ParseResult from "effect/Result";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -7,31 +6,32 @@ import { Effect, FileSystem, Option, Schema, Stdio, Stream } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { Argument, Command, Flag } from "effect/cli";
 import { layers, loadDefinitions } from "../definitions";
-import { currentEnv, type PluginEnv } from "../env";
-import { Herdr, type WorkspaceInfo } from "../herdr";
+import { currentEnv } from "../env";
+import type { PluginEnv } from "../env";
 import { unsafePathComponent } from "../naming";
-import { err, resolveWorkspace, type Failure } from "../operations";
-import { evidenceDir, runDir, type Given, type RunView } from "../engine";
-import { asks, asksRun, hostTaskOf, hostTasks } from "../lifecycle";
-import { readAudit, type AuditLine } from "../audit";
-import { recordsReadLayer } from "../records";
-import { readIntent } from "../intent";
+import { err, workspaceNamed } from "../operations";
+import type { Failure, NamedDirectory } from "../operations";
+import { evidenceDir, runDir } from "../engine";
+import type { Given, RunView } from "../engine";
+import { asksRun, hostTaskOf } from "../lifecycle";
+import { outOfReach } from "../run-read";
+import type { RunScope } from "../run-read";
 import { FrontDoor } from "../board-model";
 import { connect } from "../host";
 import { actorName } from "../proposals";
-import { attempt, mutation, type CollieError, type Result } from "../envelope";
+import { attempt, mutation } from "../envelope";
+import type { Call, CollieError, Result } from "../envelope";
 import type { YamlMap } from "../yaml";
 import { isHostName } from "../gitlab-token";
 
 const InputsJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json));
 
-/** Everything on stdin, for `--inputs-json -`, through the Stdio service. */
 export const stdinText = Effect.gen(function* () {
   const stdio = yield* Stdio.Stdio;
   return yield* stdio.stdin.pipe(
     Stream.decodeText(),
     Stream.runFold(
-      (): string => "",
+      () => "",
       (all, chunk) => all + chunk,
     ),
   );
@@ -44,128 +44,59 @@ export type Global = {
   readonly machine: Option.Option<string>;
   readonly json: boolean;
 };
-export const selected = Effect.fn("collie.selected")(function* (global: Global) {
-  if (Option.isSome(global.workspace)) return global.workspace.value;
-  return (yield* currentEnv).workspaceId;
-});
+export const selected = (global: Global) => Effect.succeed(Option.getOrNull(global.workspace));
 
-/**
- * What a Run lookup is scoped to. Runs belong to Tasks, not to whichever workspace a
- * command was typed in, so the scope is the Task whose workspace is selected — and
- * nothing at all where that workspace is not a Task's. A human who starts a Run from
- * their project workspace can still wait on it from there.
- */
 export const selectedTask = Effect.fn("collie.selectedTask")(function* (global: Global) {
   const env = yield* currentEnv;
   return (yield* hostTaskOf(env, yield* selected(global)))?.id ?? null;
 });
 
-/** Whom a Run lookup is for, built once from the command line: the Task, and the calling agent's Run. */
-export type RunScope = { readonly task: string | null; readonly caller: string | null };
-
 export const runScope = Effect.fn("collie.runScope")(function* (global: Global) {
   const env = yield* currentEnv;
   const door = yield* cliDoor(env);
-  return {
+  const returned: RunScope = {
     task: yield* selectedTask(global),
     caller: Schema.is(FrontDoor)(door) ? env.raw["COLLIE_RUN"] || null : door.from.run,
-  } satisfies RunScope;
+  };
+  return returned;
 });
-
-const steered = (line: AuditLine, id: string) =>
-  (line.operation === "deliver" || line.operation === "steer") &&
-  pipe_(textOf(line.asked), Str.includes(id));
-
-const textOf = (asked: Schema.Json | undefined) =>
-  Option.match(Schema.decodeUnknownOption(Schema.Struct({ text: Schema.String }))(asked), {
-    onNone: () => "",
-    onSome: (said) => said.text,
-  });
-
-/** Whether `caller`'s Run started `view`, or its goal, inputs or a steer it received name it. */
-const callerReaches = Effect.fn("collie.callerReaches")(function* (
-  env: PluginEnv,
-  view: RunView,
-  caller: string | null,
-) {
-  if (caller === null) return false;
-  if (view.parent === caller || view.requestedBy?.run === caller) return true;
-  const trail = yield* readAudit(runDir(env.stateDir, caller)).pipe(
-    Effect.provide(recordsReadLayer(env.stateDir)),
-    Effect.orElseSucceed(() => []),
-  );
-  if (Arr.some(trail, (line) => steered(line, view.runId))) return true;
-  const intent = yield* readIntent(runDir(env.stateDir, caller)).pipe(
-    Effect.provide(recordsReadLayer(env.stateDir)),
-    Effect.orElseSucceed(() => null),
-  );
-  if (pipe_(intent?.goal ?? "", Str.includes(view.runId))) return true;
-  const own = yield* asks(env, (client) => client.run({ runId: caller }));
-  if (!own.ok || own.value === null) return false;
-  const inputs = yield* Schema.encodeEffect(UnknownJson)(own.value.input).pipe(
-    Effect.orElseSucceed(() => ""),
-  );
-  return pipe_(inputs, Str.includes(view.runId));
-});
-
-/** Why `view`, on `machine` (null for this one), is out of `scope`'s reach; null where it is not. */
-export const outOfReach = Effect.fn("collie.outOfReach")(
-  function* (env: PluginEnv, view: RunView, machine: string | null, scope: RunScope) {
-    // A Task is this Machine's, so a Run on another is never outside it.
-    if (machine !== null || scope.task === null || view.task === scope.task) return null;
-    if (yield* callerReaches(env, view, scope.caller)) return null;
-    const workspace =
-      view.task === null
-        ? null
-        : (Option.getOrUndefined(
-            Arr.findFirst(yield* hostTasks(env), (task) => task.id === view.task),
-          )?.workspace ?? null);
-    const where = view.task === null ? "in no task" : `in task "${view.task}"`;
-    const reach =
-      workspace === null ? "no workspace reaches it." : `\`--workspace ${workspace}\` reaches it.`;
-    return err(
-      "run_outside_task",
-      `Run "${view.runId}" is ${where}, not task "${scope.task}": ${reach}`,
-      { run: view.runId, task: view.task, workspace },
-    );
-  },
-  Effect.catchTag("HostUnread", (unread) =>
-    Effect.succeed<Failure>({ ok: false, error: unread.error }),
-  ),
-);
 
 export type ContextResolution =
   | {
       readonly _tag: "ResolvedContext";
       readonly env: PluginEnv;
-      readonly workspace: WorkspaceInfo | null;
+      readonly workspace: NamedDirectory | null;
     }
   | { readonly _tag: "ContextFailure"; readonly result: Failure };
 
-const resolvedContext = (env: PluginEnv, workspace: WorkspaceInfo | null): ContextResolution => ({
-  _tag: "ResolvedContext",
-  env,
-  workspace,
+// WARNING: a link is resolved to its target, so one directory has one path for a receipt and its work.
+export const physicalDir = Effect.fn("collie.physicalDir")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const info = yield* fs.stat(dir).pipe(Effect.orElseSucceed(() => null));
+  if (info === null || info.type !== "Directory") {
+    return null;
+  }
+  const returned: string | null = yield* fs.realPath(dir).pipe(Effect.orElseSucceed(() => null));
+  return returned;
 });
 
-const contextFailure = (result: Failure): ContextResolution => ({
+const resolvedContext = Effect.fn("collie.resolvedContext")(function* (
+  env: PluginEnv,
+  workspace: NamedDirectory | null,
+) {
+  const physical = yield* physicalDir(env.cwd);
+  const found: Extract<ContextResolution, { _tag: "ResolvedContext" }> = {
+    _tag: "ResolvedContext",
+    env: physical === null ? env : { ...env, cwd: physical },
+    workspace,
+  };
+  return found;
+});
+
+const contextFailure: (result: Failure) => ContextResolution = (result) => ({
   _tag: "ContextFailure",
   result,
 });
-
-/**
- * Where a command scoped to a workspace works. An explicitly named directory wins. A
- * workspace named with `--workspace` roots it at that workspace's directory; one only
- * inherited from the pane the command was typed in does not, because the directory the
- * caller is standing in says more — the Home's pane rooted every command typed there in
- * its state directory.
- */
-export const contextCwd = (at: {
-  readonly explicit: string;
-  readonly named: boolean;
-  readonly workspace: string;
-  readonly caller: string;
-}) => at.explicit || (at.named ? at.workspace || at.caller : at.caller || at.workspace);
 
 export const context = Effect.fn("collie.context")(function* (
   global: Global,
@@ -174,58 +105,58 @@ export const context = Effect.fn("collie.context")(function* (
 ) {
   const id = yield* selected(global);
   const baseEnv = yield* currentEnv;
-  // A terminal's command can show the SSH login that pairs a Machine on first reach.
   const reach = Option.isSome(global.machine)
     ? { pairs: true, machine: global.machine.value }
     : { pairs: true };
-  const base = { ...baseEnv, workspaceId: id, ...reach };
-  if (!id)
+  const base = {
+    ...baseEnv,
+    ...reach,
+    caller: yield* callerIn(baseEnv),
+    asked: id === null ? null : Str.trim(id),
+  };
+  if (!id) {
     return requireScope
       ? contextFailure(err("workspace_required", "This operation requires a workspace."))
-      : resolvedContext(base, null);
-  if (!resolveLive) return resolvedContext(base, null);
+      : yield* resolvedContext(base, null);
+  }
+  if (!resolveLive) {
+    return yield* resolvedContext(base, null);
+  }
 
-  const lookup = yield* resolveWorkspace(new Herdr(base), base).pipe(
-    Effect.map((workspace) => ({ workspace, cause: "" })),
-    Effect.catch((cause) => Effect.succeed({ workspace: null, cause: String(cause) })),
-  );
+  const named = yield* workspaceNamed(base, id);
+  const lookup =
+    named === null
+      ? { workspace: null, cause: "" }
+      : "error" in named
+        ? { workspace: null, cause: named.error }
+        : { workspace: named.found, cause: "" };
   if (!lookup.workspace) {
     const details: YamlMap = { workspace: id };
-    if (lookup.cause) details["cause"] = lookup.cause;
+    if (lookup.cause) {
+      details["cause"] = lookup.cause;
+    }
     return contextFailure(err("workspace_not_found", `Workspace "${id}" was not found.`, details));
   }
-  return resolvedContext(
-    {
-      ...base,
-      workspaceId: id,
-      cwd: contextCwd({
-        explicit: base.cwdExplicit ? base.cwd : "",
-        named: Option.isSome(global.workspace),
-        workspace: lookup.workspace.cwd || base.context.workspace_cwd || "",
-        caller: base.cwd,
-      }),
-    },
+  return yield* resolvedContext(
+    { ...base, cwd: base.cwdExplicit ? base.cwd : lookup.workspace.cwd || base.cwd },
     lookup.workspace,
   );
 });
 
-/**
- * Where a discovery command looks. The spec makes Workflow and Persona discovery
- * global and reserves `workspace_not_found` for a workspace the caller named, so an id
- * inherited from a pane whose workspace has since closed falls back to no scope rather
- * than failing a listing that needs no workspace at all. Project-layer resolution then
- * uses the process's own directory, which is the best answer available.
- */
+export const resolvedAt = (resolved: Extract<ContextResolution, { _tag: "ResolvedContext" }>) =>
+  resolved.workspace?.cwd ?? resolved.env.cwd;
+
 export const discoveryContext = Effect.fn("collie.discoveryContext")(function* (global: Global) {
-  // Named on the command line: the strict path, so an unresolvable workspace is the
-  // caller's error, as the spec requires.
-  if (Option.isSome(global.workspace)) return yield* context(global, true);
-  // Inherited from the environment: used where it helps, never a reason to fail. It
-  // may name a workspace that has closed, and there may be no herdr to ask at all.
+  if (Option.isSome(global.workspace)) {
+    return yield* context(global, true);
+  }
+  // WARNING: an inherited workspace may have closed and there may be no herdr to ask; this is never a reason to fail.
   const tried = yield* context(global, (yield* selected(global)) !== null).pipe(
     Effect.orElseSucceed(() => null),
   );
-  if (tried?._tag === "ResolvedContext") return tried;
+  if (tried?._tag === "ResolvedContext") {
+    return tried;
+  }
   return yield* context({ ...global, workspace: Option.none() }, false);
 });
 
@@ -233,10 +164,6 @@ export const definitions = Effect.fn("collie.definitions")(function* (env: Plugi
   return yield* loadDefinitions(yield* layers(env));
 });
 
-/**
- * A Run named on the command line, with the work it produced and the evidence filed about
- * it, or the reason the caller cannot have it.
- */
 export type Located =
   | {
       readonly _tag: "Hosted";
@@ -246,32 +173,43 @@ export type Located =
     }
   | { readonly _tag: "RunFailure"; readonly result: Failure };
 
-/** Which of those this id is. */
-export const locateRun = Effect.fn("collie.locateRun")(function* (
+export const locateRun: (
   env: PluginEnv,
   id: string,
   scope: RunScope,
-): Effect.fn.Return<
+) => Effect.Effect<
   Located,
   never,
   FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner | PlatformServices
-> {
+> = Effect.fn("collie.locateRun")(function* (env: PluginEnv, id: string, scope: RunScope) {
   const missing: Located = {
     _tag: "RunFailure",
     result: err("run_not_found", `Run "${id}" was not found.`, { run: id }),
   };
-  if (unsafePathComponent(id)) return missing;
+  if (unsafePathComponent(id)) {
+    return missing;
+  }
   const dir = runDir(env.stateDir, id);
   const found = yield* asksRun(env, id, (client) => client.run({ runId: id }));
-  if (!found.ok) return { _tag: "RunFailure" as const, result: found };
+  if (!found.ok) {
+    return { _tag: "RunFailure" as const, result: found };
+  }
   const view = found.value;
-  if (view === null) return missing;
+  if (view === null) {
+    return missing;
+  }
   const refused = yield* outOfReach(env, view, found.machine, scope);
-  if (refused !== null) return { _tag: "RunFailure", result: refused };
-  return { _tag: "Hosted", view, dir, evidence: evidenceDir(env.stateDir, id) };
+  if (refused !== null) {
+    return { _tag: "RunFailure", result: refused };
+  }
+  return {
+    _tag: "Hosted",
+    view,
+    dir,
+    evidence: evidenceDir(env.stateDir, id),
+  };
 });
 
-/** What a located Run is called and what it was for. */
 export function runFacts(located: Extract<Located, { _tag: "Hosted" }>) {
   return {
     id: located.view.runId,
@@ -293,36 +231,44 @@ export const layerDir = Effect.fn("collie.layerDir")(function* (
 
 type ParsedInputs = { ok: true; given: Given } | { ok: false; error: Result };
 
-export const parseInput = Effect.fn("collie.parseInput")(function* (
+export const parseInput: (
   values: ReadonlyArray<string>,
   json: Option.Option<string>,
-): Effect.fn.Return<ParsedInputs, never, Stdio.Stdio> {
+) => Effect.Effect<ParsedInputs, never, Stdio.Stdio> = Effect.fn("collie.parseInput")(function* (
+  values: ReadonlyArray<string>,
+  json: Option.Option<string>,
+) {
   let typed: Record<string, Schema.Json> = {};
   if (Option.isSome(json)) {
     const raw = json.value === "-" ? yield* stdinText : json.value;
     const parsed = Schema.decodeResult(InputsJson)(raw);
     if (ParseResult.isFailure(parsed)) {
-      return { ok: false, error: err("invalid_input", "--inputs-json must be a JSON object.") };
+      return {
+        ok: false,
+        error: err("invalid_input", "--inputs-json must be a JSON object."),
+      };
     }
     typed = parsed.success;
   }
   const text: Record<string, string> = {};
   for (const entry of values) {
     const at = Option.getOrElse(pipe_(entry, Str.indexOf("=")), () => -1);
-    if (at <= 0)
-      return { ok: false, error: err("invalid_input", `Input "${entry}" must be key=value.`) };
+    if (at <= 0) {
+      return {
+        ok: false,
+        error: err("invalid_input", `Input "${entry}" must be key=value.`),
+      };
+    }
     text[pipe_(entry, Str.slice(0, at))] = pipe_(entry, Str.slice(at + 1));
   }
   return { ok: true, given: { json: typed, text } };
 });
 
-/** Every mutation takes one, and it means the same thing on all of them. */
 export const requestIdFlag = Flag.String("request-id").pipe(
   Flag.withDescription("Idempotency key; retrying it returns the first result"),
   Flag.optional,
 );
 
-/** The Run a `run` subcommand acts on. */
 export const runIdArg = Argument.String("run-id").pipe(
   Argument.withDescription("The Run's id, as `run list` prints it"),
 );
@@ -341,13 +287,13 @@ export const root = Command.make("collie").pipe(
   Command.withSharedFlags({
     workspace: Flag.String("workspace").pipe(
       Flag.withDescription(
-        "Scope to this herdr workspace id, and root the run at that workspace's directory",
+        "Root the command at this directory or checkout under the Projects root",
       ),
       Flag.optional,
     ),
     machine: Flag.String("machine").pipe(
       Flag.withDescription(
-        "Reach this paired Machine, by herdr's name for it, for a command that names no Run",
+        "Reach this paired Machine, by core's name for it, for a command that names no Run",
       ),
       Flag.optional,
     ),
@@ -359,11 +305,6 @@ export const root = Command.make("collie").pipe(
   Command.withDescription("Discover and run Collie workflows"),
 );
 
-/**
- * A command that answers a question: the global flags, the resolved context, and one
- * envelope. A workspace the caller named that cannot be resolved is refused here rather
- * than in each command.
- */
 export function answering<E, R>(
   apply: (env: PluginEnv) => Effect.Effect<Result, E, R>,
   resolveLive = false,
@@ -373,7 +314,9 @@ export function answering<E, R>(
     yield* attempt(
       Effect.gen(function* () {
         const resolved = yield* context(global, resolveLive);
-        if (resolved._tag === "ContextFailure") return resolved.result;
+        if (resolved._tag === "ContextFailure") {
+          return resolved.result;
+        }
         return yield* apply(resolved.env);
       }),
       global.json,
@@ -381,70 +324,39 @@ export function answering<E, R>(
   });
 }
 
-/**
- * The same for a command that changes something, with the request id around it: a retry
- * of the same id returns the first result rather than acting twice.
- */
 export function mutating(
-  operation: string,
+  call: Call,
   requestId: Option.Option<string>,
   apply: (env: PluginEnv, id: string) => Effect.Effect<Result, CollieError, PlatformServices>,
 ) {
-  return answering((env) => mutation(env, operation, requestId, (id) => apply(env, id)));
+  return answering((env) => mutation(env, call, requestId, (id) => apply(env, id)));
 }
 
-/**
- * A human's only at a terminal in a pane herdr does not report as an agent's: an agent's
- * harness has a terminal too. `agentPanes` is null where herdr could not say.
- */
-export function cliOrigin(at: {
-  readonly terminal: boolean;
-  readonly pane: string | null;
-  readonly agentPanes: ReadonlyArray<string> | null;
-}): "cli" | "cli-tty" {
-  if (!at.terminal) return "cli";
-  if (at.pane === null) return "cli-tty";
-  return at.agentPanes !== null && !at.agentPanes.includes(at.pane) ? "cli-tty" : "cli";
+export function cliOrigin(at: { readonly terminal: boolean; readonly agent: boolean }) {
+  return at.terminal && !at.agent ? "cli-tty" : "cli";
 }
 
-/**
- * Which front door this command is. A piped command is still a CLI request, not a Driver.
- *
- * All three streams, not stdout alone: `collie --json confirm … > out.json` is a person
- * at a terminal, and a Driver has a pipe on every one of them.
- */
+// WARNING: all three streams, not stdout alone: a redirected command is still a person at a terminal.
 export const cliDoor = Effect.fn("Shared.cliDoor")(function* (env: PluginEnv) {
   const terminal = Boolean(process.stdin.isTTY || process.stdout.isTTY || process.stderr.isTTY);
-  const agents =
-    env.paneId === null
-      ? []
-      : yield* new Herdr(env).agentList().pipe(Effect.orElseSucceed(() => null));
-  // A core terminal has no herdr pane: its agent is the one Collie launched it as.
-  const named =
-    Option.getOrUndefined(
-      Option.map(Option.fromNullishOr(agents), (present) =>
-        Option.getOrUndefined(Arr.findFirst(present, (one) => one.paneId === env.paneId)),
-      ),
-    )?.name ?? env.raw.COLLIE_AGENT;
-  if (named !== undefined && named !== "") {
+  // WARNING: who it is comes from its launch: core names no agent of a process.
+  const named = env.raw.COLLIE_AGENT ?? "";
+  if (named !== "") {
     const run = yield* Effect.scoped(
       connect(env.stateDir).pipe(Effect.flatMap((client) => client.agentRun({ agent: named }))),
     ).pipe(Effect.orElseSucceed(() => null));
-    if (run !== null) return { origin: "agent" as const, from: { run, agent: named } };
+    if (run !== null) {
+      return { origin: "agent" as const, from: { run, agent: named } };
+    }
   }
-  return cliOrigin({
-    terminal,
-    pane: env.paneId,
-    agentPanes:
-      Option.getOrUndefined(
-        Option.map(Option.fromNullishOr(agents), (present_) =>
-          Arr.map(present_, (one) => one.paneId),
-        ),
-      ) ?? null,
-  });
+  return cliOrigin({ terminal, agent: named !== "" });
 });
 
-/** Who is asking, for an operation of this command's own. */
+export const callerIn = Effect.fn("Shared.callerIn")(function* (env: PluginEnv) {
+  const door = yield* cliDoor(env);
+  return Schema.is(FrontDoor)(door) ? null : door.from.run;
+});
+
 export const actorNow = Effect.fn("Shared.actorNow")(function* (env: PluginEnv, requestId: string) {
   const door = yield* cliDoor(env);
   return Schema.is(FrontDoor)(door) ? { origin: door, requestId } : { ...door, requestId };
@@ -452,15 +364,15 @@ export const actorNow = Effect.fn("Shared.actorNow")(function* (env: PluginEnv, 
 
 export { actorName };
 
-/** `--gitlab-host`, which names the GitLab for this run ahead of `GITLAB_HOST` and the setting. */
 export const gitlabHostFlag = Flag.String("gitlab-host").pipe(
   Flag.withDescription("The GitLab to work against, over GITLAB_HOST and gitlab_host"),
   Flag.optional,
 );
 
-/** `env` with `--gitlab-host` as its `GITLAB_HOST`, or the refusal of one that is not a host. */
 export const withGitlabHost = (env: PluginEnv, given: Option.Option<string>) => {
-  if (Option.isNone(given)) return env;
+  if (Option.isNone(given)) {
+    return env;
+  }
   if (!isHostName(given.value)) {
     return err("invalid_input", `--gitlab-host has to be a host name, not "${given.value}".`);
   }

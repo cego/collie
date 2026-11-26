@@ -1,6 +1,3 @@
-// Which commands Collie may run itself is a permission, so where it comes from and what
-// happens to a Run when that file changes are the whole of what matters here.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -12,13 +9,15 @@ import {
   approvedFrom,
   approvedIn,
   checkNameOf,
+  givenVerifications,
   rememberedFile,
   renderApproved,
   updateApproved,
   PROJECT_FILE,
 } from "../src/verify-spec";
 import { DEFAULT_AUTHORITY, readIntent, seedIntent, writeIntent } from "../src/intent";
-import { VerifySpecSchema, type VerifySpec } from "../src/verify-spec";
+import { VerifySpecSchema } from "../src/verify-spec";
+import type { VerifySpec } from "../src/verify-spec";
 import { Schema } from "effect";
 
 const encodeSpecs = flow(
@@ -85,8 +84,7 @@ test("the project's file wins whole, and the user's is not merged into it", () =
       const path = yield* Path.Path;
       yield* write(path.join(userDir, "verify.json"), [LINT]);
       yield* write(path.join(cwd, PROJECT_FILE), [TESTS]);
-      // Not [TESTS, LINT]: the project said what this repository's verifications are,
-      // and adding the user's global ones would run a command neither file names here.
+      // WARNING: not [TESTS, LINT]: the user's global verifications would run a command neither file names.
       expect(yield* approvedFrom({ cwd, userDir })).toEqual([TESTS]);
     }),
   ));
@@ -99,7 +97,9 @@ test("a file that does not decode names itself, and never reads as approving not
       yield* writeText(file, `[{"name":"tests","executable":"bun"}]`);
       const result = yield* approvedFrom({ cwd, userDir }).pipe(Effect.result);
       expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") expect(String(result.failure)).toContain(file);
+      if (result._tag === "Failure") {
+        expect(String(result.failure)).toContain(file);
+      }
     }),
   ));
 
@@ -149,7 +149,9 @@ test("a remembered file that does not decode names itself", () =>
       yield* writeText(file, `[{"name":"tests"}]`);
       const result = yield* approvedFrom({ cwd, userDir, project: REPO }).pipe(Effect.result);
       expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") expect(String(result.failure)).toContain(file);
+      if (result._tag === "Failure") {
+        expect(String(result.failure)).toContain(file);
+      }
     }),
   ));
 
@@ -161,15 +163,13 @@ test("a remote whose path would leave verify/ has no remembered file", () => {
 });
 
 test("an Intent's authority is the set; the seed is only for a Run with no Intent", () => {
-  const intent = (specs: VerifySpec[]) => ({
+  const intent = (specs: Array<VerifySpec>) => ({
     authority: { ...DEFAULT_AUTHORITY, run_verification: specs },
   });
   expect(approvedFor([TESTS], null)).toEqual([TESTS]);
   expect(approvedFor([TESTS], intent([LINT]))).toEqual([LINT]);
-  // An Intent that grants nothing is a Run that may run nothing: the last entry was
-  // removed by a human, and the seed does not put it back behind their back.
+  // WARNING: an Intent that grants nothing is a Run that may run nothing; the seed does not put a human-removed entry back.
   expect(approvedFor([TESTS], intent([]))).toEqual([]);
-  // Which is why the seed goes into the Intent at version 1, and is the set from there.
   const seeded = seedIntent("r1", { runVerification: [TESTS] });
   expect(seeded.authority.run_verification).toEqual([TESTS]);
   expect(approvedFor([LINT], seeded)).toEqual([TESTS]);
@@ -226,14 +226,12 @@ test("a Run keeps the set it started with, whatever the file says later", () =>
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "hw-approved-run-" });
       yield* write(path.join(cwd, PROJECT_FILE), [TESTS]);
 
-      // Read at start, and written into the Run's Intent: from there, the Intent is the set.
       yield* writeIntent(
         dir,
         seedIntent("r1", { runVerification: yield* approvedFrom({ cwd, userDir }) }),
       );
 
-      // Someone edits the project's file after the Run is going. A permission that moved
-      // under a Run is not a permission, so the Run is unchanged.
+      // WARNING: a permission that moved under a Run is not a permission, so the Run is unchanged.
       yield* write(path.join(cwd, PROJECT_FILE), [LINT]);
       const now = yield* approvedFrom({ cwd, userDir });
       expect(now).toEqual([LINT]);
@@ -264,7 +262,7 @@ test("an approved check renders as a line a shell runs with the same words", () 
       const spec: VerifySpec = {
         name: "echoes",
         executable: "printf",
-        argv: ["%s\\0", "two words", "$HOME costs"],
+        argv: [String.raw`%s\0`, "two words", "$HOME costs"],
         cwd: "/",
       };
       const line = pipe_(renderApproved([spec]), Str.slice("- echoes: ".length, -" (in /)".length));
@@ -272,3 +270,15 @@ test("an approved check renders as a line a shell runs with the same words", () 
       expect(Str.split(ran.stdout, "\0").slice(0, -1)).toEqual(spec.argv.slice(1));
     }),
   ));
+
+test("a check marked to run before review decodes, an unmarked one decodes as before, and one left to CI cannot be marked", () => {
+  const given = (spec: VerifySpec) => givenVerifications([JSON.stringify(spec)]);
+  expect(given({ ...TESTS, before_review: true })).toEqual({
+    ok: true,
+    specs: [{ ...TESTS, before_review: true }],
+  });
+  expect(given(TESTS)).toEqual({ ok: true, specs: [TESTS] });
+  const both = given({ ...TESTS, ci: "test", before_review: true });
+  expect(both.ok).toBe(false);
+  expect(!both.ok && both.error).toContain("a check left to CI cannot run before review");
+});

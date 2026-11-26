@@ -1,5 +1,3 @@
-// What a shipped workflow's `import … from "collie"` is at runtime (`sdkModules` in
-// `engine.ts`), as one module the project's own typecheck can resolve.
 export * from "./sdk";
 export * from "./agents";
 

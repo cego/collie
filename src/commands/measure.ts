@@ -3,14 +3,10 @@ import { Command, Flag } from "effect/cli";
 import { err } from "../operations";
 import { measureRun, refusal } from "../lifecycle";
 import { FrontDoor, HostRefused } from "../board-model";
-import { MeasurementJson, summaryOf, type Measurement } from "../measurement-model";
+import { MeasurementJson, summaryOf } from "../measurement-model";
+import type { Measurement } from "../measurement-model";
 import { answering, cliDoor } from "./shared";
 
-/**
- * A Measurement of a Run's checkout against a base, which the host takes on the Run's own
- * Machine, or the one it already recorded for the same trees and plan. Not a mutation: the
- * host answers a repeat with the record, whatever request id it came with.
- */
 export const measure = Command.make(
   "measure",
   {
@@ -48,16 +44,20 @@ export const measure = Command.make(
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const text = yield* fs.readFileString(plan).pipe(Effect.option);
-          if (Option.isNone(text)) return err("invalid_input", `No plan to read at "${plan}".`);
+          if (Option.isNone(text)) {
+            return err("invalid_input", `No plan to read at "${plan}".`);
+          }
           const decoded = Schema.decodeOption(Schema.fromJsonString(Schema.Json))(text.value);
-          if (Option.isNone(decoded))
+          if (Option.isNone(decoded)) {
             return err("invalid_input", `The plan at "${plan}" is not JSON.`);
+          }
           const door = yield* cliDoor(env);
           const run = Option.getOrElse(runId, () =>
             Schema.is(FrontDoor)(door) ? null : door.from.run,
           );
-          if (run === null)
+          if (run === null) {
             return err("invalid_input", "measure needs --run outside a Run's agent pane.");
+          }
           const request = {
             runId: run,
             base,
@@ -71,20 +71,20 @@ export const measure = Command.make(
             where === undefined ? request : { ...request, cwd: where },
             door,
           );
-          if (!opened.ok) return opened;
+          if (!opened.ok) {
+            return opened;
+          }
           const stdio = yield* Stdio.Stdio;
           type Answered = { measurement: Measurement; ran: boolean };
-          const answered = yield* Stream.runFoldEffect(
-            opened.events,
-            (): Answered | null => null,
-            (last, event) =>
-              event._tag === "Said"
-                ? Stream.make(`${event.text}\n`).pipe(
-                    Stream.run(stdio.stderr({ endOnDone: false })),
-                    Effect.ignore,
-                    Effect.as(last),
-                  )
-                : Effect.succeed({ measurement: event.measurement, ran: event.ran }),
+          const nothingYet: () => Answered | null = () => null;
+          const answered = yield* Stream.runFoldEffect(opened.events, nothingYet, (last, event) =>
+            event._tag === "Said"
+              ? Stream.make(`${event.text}\n`).pipe(
+                  Stream.run(stdio.stderr({ endOnDone: false })),
+                  Effect.ignore,
+                  Effect.as(last),
+                )
+              : Effect.succeed({ measurement: event.measurement, ran: event.ran }),
           ).pipe(
             Effect.catch((cause) =>
               Effect.succeed(
@@ -94,9 +94,12 @@ export const measure = Command.make(
               ),
             ),
           );
-          if (answered === null)
+          if (answered === null) {
             return err("operation_failed", "The Measurement ended without a record.");
-          if ("ok" in answered) return answered;
+          }
+          if ("ok" in answered) {
+            return answered;
+          }
           const { measurement, ran } = answered;
           return {
             ok: true as const,

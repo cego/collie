@@ -1,18 +1,14 @@
-// Everything that is not the board: Workflows and Settings, each filling the pane it
-// opened over. One list of the same `Row`s the table drew, because what a workflow or a
-// setting is has not changed — only where it is reached from.
-
 import { For, Show } from "solid-js";
-import { TextAttributes, type MouseEvent } from "@opentui/core";
-import { statusColour, type Row } from "./state";
+import { TextAttributes } from "@opentui/core";
+import type { MouseEvent } from "@opentui/core";
+import { statusColour } from "./state";
+import type { Row } from "./state";
 import { C } from "./sections";
 
 export interface PaneProps {
   title: string;
   rows: ReadonlyArray<Row>;
-  /** What to say when there is nothing in it, so an empty pane is not a dead end. */
   empty: string;
-  /** The setting being typed into, what has been typed at it, and whether Alt+Enter is a new line. */
   editing: { key: string; typed: string; multiline: boolean } | null;
   onPress: (row: Row) => void;
   onClose: () => void;

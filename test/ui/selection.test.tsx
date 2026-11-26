@@ -1,7 +1,3 @@
-// What the board has selected, told to the other half of the Home. Driven the way a human
-// drives it — a click on a card, Esc to close it — with the real bridge behind the real
-// board, because the promise is that chat can read what is on screen and nothing less.
-
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -19,6 +15,7 @@ import type { Command } from "../../src/ui/state";
 import type { AppState } from "../../src/ui/state";
 import { readSelection, selectionPath, writeSelection } from "../../src/selection";
 import { epochMs } from "../../src/time";
+import { stringifyJson } from "../../src/json";
 
 const KEY = "herd-key";
 
@@ -34,8 +31,8 @@ beforeEach(() =>
 
 afterEach(() => runEffect(rig.close()));
 
-function appState(over: Partial<AppState> = {}): AppState {
-  return {
+function appState(over: Partial<AppState> = {}) {
+  const returned: AppState = {
     view: "runs",
     filter: { kind: "all" },
     tasks: [],
@@ -51,9 +48,9 @@ function appState(over: Partial<AppState> = {}): AppState {
     stopping: [],
     ...over,
   };
+  return returned;
 }
 
-/** The tab, wired to a bridge that writes the selection where chat reads it. */
 const mount = Effect.fn("selection.mount")(function* (state: AppState) {
   const file = yield* selectionPath(rig.stateDir, KEY);
   const driven = yield* driveBridge({
@@ -84,7 +81,7 @@ const mount = Effect.fn("selection.mount")(function* (state: AppState) {
         settle,
       ),
     selected: () => readSelection(file),
-    /** The record once `wanted` holds of it: it is written after a frame, not with it. */
+    // WARNING: the record is written a frame after the change, not with it, so wait until wanted holds.
     selectedWhen: (wanted: (record: Effect.Success<ReturnType<typeof readSelection>>) => boolean) =>
       until(() => readSelection(file), wanted),
     lineOf(text: string) {
@@ -94,7 +91,9 @@ const mount = Effect.fn("selection.mount")(function* (state: AppState) {
         ),
         () => -1,
       );
-      if (y < 0) throw new Error(`no line containing ${JSON.stringify(text)}`);
+      if (y < 0) {
+        throw new Error(`no line containing ${stringifyJson(text)}`);
+      }
       return y;
     },
     click: (x: number, y: number) =>
@@ -115,8 +114,7 @@ test("selecting a card writes what chat needs about it, and closing it clears th
       Effect.gen(function* () {
         const app = yield* mount(appState({ tasks: [task()] }));
 
-        // Nothing is selected until something is: a board that has just opened must not
-        // leave chat answering about whatever was open the last time it ran.
+        // WARNING: nothing is selected until something is, so chat never answers about a card left from an earlier board.
         expect(yield* app.selected()).toBe(null);
 
         yield* app.click(6, app.lineOf("Strapi prod seeder"));
@@ -142,8 +140,7 @@ test("closing the board leaves nothing selected behind it", () =>
         yield* app.click(6, app.lineOf("Strapi prod seeder"));
         expect(yield* app.selectedWhen((record) => record !== null)).not.toBe(null);
 
-        // A board nobody has open selects nothing, and chat must not answer about a card
-        // that was on screen when the tab was closed.
+        // WARNING: a board nobody has open selects nothing, so chat cannot answer about a card that was on screen.
         yield* app.dispatch({ _tag: "Quit" });
 
         expect(yield* app.selectedWhen((record) => record === null)).toBe(null);

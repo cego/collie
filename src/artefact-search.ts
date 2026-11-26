@@ -1,11 +1,9 @@
-// The Flock's search over its Machines' catalogues: each host searches its own, and this
-// merges their pages by installation, so two routes to one Machine are searched once and a
-// Machine that could not be searched is named rather than read as having nothing.
-
+// WARNING: a Machine that could not be searched is named, never read as having nothing; two routes to one Machine are searched once.
 import { Cause, Data, Effect, Option, Schema } from "effect";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import { Artefact, ArtefactKey, type ArtefactMatches, type ArtefactSearch } from "./artefact-model";
+import { Artefact, ArtefactKey } from "./artefact-model";
+import type { ArtefactMatches, ArtefactSearch } from "./artefact-model";
 import { HostRefused } from "./board-model";
 
 export class Away extends Data.TaggedError("Away")<{
@@ -25,14 +23,12 @@ export class AmbiguousRun extends Data.TaggedError("AmbiguousRun")<{
   }
 }
 
-/** A Machine's host as the search reaches it. */
 export interface SearchDoor {
   readonly installation: string;
   readonly search: (asked: ArtefactSearch) => Effect.Effect<ArtefactMatches, Away>;
   readonly has: (run: string) => Effect.Effect<boolean, Away>;
 }
 
-/** A route to a Machine, by the label it is known by here. */
 export interface SearchSource<R> {
   readonly machine: string;
   readonly reach: Effect.Effect<SearchDoor, Away, R>;
@@ -40,7 +36,6 @@ export interface SearchSource<R> {
 
 export const FlockSearch = Schema.Struct({
   query: Schema.optional(Schema.String),
-  /** A Run id, alone or as `<installation>:<run>` or `<machine>:<run>`. */
   run: Schema.optional(Schema.String),
   kind: Schema.optional(Schema.String),
   role: Schema.optional(Schema.String),
@@ -60,7 +55,6 @@ export const MachineSearched = Schema.Struct({
 }).annotate({ identifier: "MachineSearched" });
 export type MachineSearched = typeof MachineSearched.Type;
 
-/** An artefact as the Flock found it: on which installation, under the label it has here. */
 export const FoundArtefact = Schema.Struct({
   installation: Schema.String,
   machine: Schema.String,
@@ -69,17 +63,15 @@ export const FoundArtefact = Schema.Struct({
 
 export const FlockArtefacts = Schema.Struct({
   items: Schema.Array(FoundArtefact),
-  /** The next page's cursor; null once every searched Machine is read to its end. */
   next: Schema.NullOr(Schema.String),
   machines: Schema.Array(MachineSearched),
-  /** Every Machine was searched and has reached all of its retained Runs. */
   complete: Schema.Boolean,
 });
 export type FlockArtefacts = typeof FlockArtefacts.Type;
 
 export const artefactOwner = (page: FlockArtefacts, named: string) => {
   const owner = Arr.findFirst(page.machines, (one) => one.state === "searched" && one.runs > 0);
-  if (Option.isNone(owner))
+  if (Option.isNone(owner)) {
     return Effect.fail(
       new HostRefused({
         reason: `Run ${named} was not found; ${Arr.join(
@@ -90,23 +82,24 @@ export const artefactOwner = (page: FlockArtefacts, named: string) => {
         )}`,
       }),
     );
+  }
   if (
     !Str.includes(":")(named) &&
     !page.complete &&
     Arr.some(page.machines, (one) => one.state !== "searched")
-  )
+  ) {
     return Effect.fail(
       new HostRefused({
         reason: `Other Machines could not be checked; name the Run as ${owner.value.installation}:${named}`,
       }),
     );
+  }
   return Effect.succeed({
     machine: owner.value.machine,
     run: Str.slice(Option.getOrElse(Str.indexOf(":")(named), () => -1) + 1)(named),
   });
 };
 
-/** Each installation's place: where its last page ended, or that it has no more. */
 const Cursor = Schema.Record(Schema.String, Schema.Union([ArtefactKey, Schema.Literal("done")]));
 const CursorText = Schema.fromJsonString(Cursor);
 const readCursor = (cursor: string | undefined) =>
@@ -116,7 +109,7 @@ const readCursor = (cursor: string | undefined) =>
     Effect.mapError(() => new HostRefused({ reason: "That search cursor is not one Collie gave" })),
   );
 
-/** Pages compare newest detected first, then by installation, Run and id. */
+// WARNING: pages compare newest detected first, then by installation, Run and id, which the cursor relies on.
 const before = (
   a: { readonly installation: string; readonly item: Artefact },
   b: { readonly installation: string; readonly item: Artefact },
@@ -165,7 +158,9 @@ export const searchFlock = Effect.fn("ArtefactSearch.flock")(function* <R>(
       });
       continue;
     }
-    if (Arr.some(doors, (one) => one.door.installation === result.success.installation)) continue;
+    if (Arr.some(doors, (one) => one.door.installation === result.success.installation)) {
+      continue;
+    }
     doors.push({ machine, door: result.success });
   }
   const separator =
@@ -173,12 +168,12 @@ export const searchFlock = Effect.fn("ArtefactSearch.flock")(function* <R>(
   const qualifier = separator < 0 ? undefined : Str.slice(0, separator)(asked.run!);
   const run = separator < 0 ? asked.run : Str.slice(separator + 1)(asked.run!);
   let searched = doors;
-  if (qualifier !== undefined)
+  if (qualifier !== undefined) {
     searched = Arr.filter(
       doors,
       (one) => one.door.installation === qualifier || one.machine === qualifier,
     );
-  else if (run !== undefined) {
+  } else if (run !== undefined) {
     const located = yield* Effect.forEach(
       doors,
       (one) =>
@@ -188,8 +183,8 @@ export const searchFlock = Effect.fn("ArtefactSearch.flock")(function* <R>(
         ),
       { concurrency: 4 },
     );
-    for (const one of located)
-      if (one.result._tag === "Failure")
+    for (const one of located) {
+      if (one.result._tag === "Failure") {
         machines.push({
           installation: one.door.installation,
           machine: one.machine,
@@ -198,11 +193,13 @@ export const searchFlock = Effect.fn("ArtefactSearch.flock")(function* <R>(
           runs: 0,
           indexed: 0,
         });
+      }
+    }
     const holding = Arr.filter(
       located,
       (one) => one.result._tag === "Success" && one.result.success,
     );
-    if (holding.length > 1)
+    if (holding.length > 1) {
       return yield* new AmbiguousRun({
         run,
         candidates: Arr.map(holding, (one) => ({
@@ -210,6 +207,7 @@ export const searchFlock = Effect.fn("ArtefactSearch.flock")(function* <R>(
           machine: one.machine,
         })),
       });
+    }
     searched = holding;
   }
   const query = Str.trim(asked.query ?? "");
@@ -256,7 +254,7 @@ export const searchFlock = Effect.fn("ArtefactSearch.flock")(function* <R>(
       reason: null,
       ...page.result.success.coverage,
     });
-    if (cursor[installation] !== "done")
+    if (cursor[installation] !== "done") {
       merged.push(
         ...Arr.map(page.result.success.items, (item) => ({
           installation,
@@ -264,21 +262,25 @@ export const searchFlock = Effect.fn("ArtefactSearch.flock")(function* <R>(
           item,
         })),
       );
+    }
   }
   const taken = Arr.take(merged.sort(before), limit);
   for (const page of pages) {
-    if (page.result._tag === "Failure" || cursor[page.door.installation] === "done") continue;
+    if (page.result._tag === "Failure" || cursor[page.door.installation] === "done") {
+      continue;
+    }
     const { installation } = page.door;
     const mine = Arr.filter(taken, (one) => one.installation === installation);
     const last = Option.getOrUndefined(Arr.last(mine));
-    if (!page.result.success.more && mine.length === page.result.success.items.length)
+    if (!page.result.success.more && mine.length === page.result.success.items.length) {
       cursor[installation] = "done";
-    else if (last !== undefined)
+    } else if (last !== undefined) {
       cursor[installation] = {
         detectedAt: last.item.detectedAt,
         run: last.item.run,
         id: last.item.id,
       };
+    }
   }
   const order = new Map(Arr.map(sources, (source, index) => [source.machine, index]));
   machines.sort((a, b) => (order.get(a.machine) ?? 0) - (order.get(b.machine) ?? 0));
@@ -297,26 +299,26 @@ export const searchFlock = Effect.fn("ArtefactSearch.flock")(function* <R>(
 
 const UPGRADE = "Upgrade this Machine's Collie host to search Artefacts";
 
-/** Why a Machine's host could not be searched: too old for the call, or not answering. */
 export const awayFrom = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
     Effect.catchCause((cause) => {
-      if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt;
+      if (Cause.hasInterruptsOnly(cause)) {
+        return Effect.interrupt;
+      }
       const said = Cause.pretty(cause);
       return Effect.fail(
         Str.includes("Unknown request tag")(said)
           ? new Away({ state: "unsupported", reason: UPGRADE })
-          : new Away({ state: "unreachable", reason: Str.split(Str.trim(said), "\n")[0]! }),
+          : new Away({ state: "unreachable", reason: Str.split(Str.trim(said), "\n")[0] }),
       );
     }),
   );
 
-/** The calls the search makes of one host, as any front door's client offers them. */
 export const searchDoorOf = <E1, E2, E3>(client: {
   readonly identity: () => Effect.Effect<{ readonly installation?: string }, E1>;
   readonly artefactSearch: (asked: ArtefactSearch) => Effect.Effect<ArtefactMatches, E2>;
   readonly run: (asked: { readonly runId: string }) => Effect.Effect<unknown, E3>;
-}): Effect.Effect<SearchDoor, Away> =>
+}) =>
   awayFrom(client.identity()).pipe(
     Effect.flatMap(({ installation }) =>
       installation === undefined

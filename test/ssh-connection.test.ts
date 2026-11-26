@@ -1,19 +1,13 @@
-// ADR-draft-a-blocked-link-rides-the-machines-ssh-connection, against the fake ssh.
-
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
-import { createConnection, createServer, type Server } from "node:net";
-import { Clock, Deferred, type Duration, Effect, FileSystem } from "effect";
+import { createConnection, createServer } from "node:net";
+import type { Server } from "node:net";
+import { Clock, Deferred, Effect, FileSystem } from "effect";
+import type { Duration } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import {
-  closeConnections,
-  controlPath,
-  controlPathOf,
-  openConnection,
-  sshConnection,
-} from "../src/ssh-connection";
+import { controlPath, controlPathOf, openConnection, sshConnection } from "../src/ssh-connection";
 import { remoteCollie, riderArgv } from "../src/ssh-argv";
 import { withLock } from "../src/lock";
 import { runEffect } from "./support/effect";
@@ -22,7 +16,6 @@ import { root } from "./support/host";
 
 const vm = { label: "vm-mk", target: "mk@vm-mk" };
 
-/** A fake ssh in a directory of its own, and a state directory beside it. */
 const rig = Effect.gen(function* () {
   const dir = yield* socketDir("ssh-");
   const ssh = `${dir}/ssh`;
@@ -41,7 +34,6 @@ const opens = (state: string, ssh: string, bound: Duration.Input = "2 minutes") 
     return { ...opened, stderr: Arr.join(stderr, "") };
   });
 
-/** Runs an argv to its end, answering its exit code. */
 const run = (argv: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -98,18 +90,16 @@ test("the opener starts one master, says what it said, and answers the path once
     }),
   ));
 
-test(
-  "openers in separate processes that come together start one master between them",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const { dir, state, ssh, fake } = yield* rig;
-        const opener = `${dir}/opener.ts`;
-        // Outside the repository, a bare import would be auto-installed at another version.
-        yield* fs.writeFileString(
-          opener,
-          `import * as BunServices from "${Bun.resolveSync("@effect/platform-bun/BunServices", root)}";
+test("openers in separate processes that come together start one master between them", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { dir, state, ssh, fake } = yield* rig;
+      const opener = `${dir}/opener.ts`;
+      // WARNING: Outside the repository a bare import would be auto-installed at another version.
+      yield* fs.writeFileString(
+        opener,
+        `import * as BunServices from "${Bun.resolveSync("@effect/platform-bun/BunServices", root)}";
 import { Effect } from "${Bun.resolveSync("effect", root)}";
 import { openConnection } from "${root}src/ssh-connection.ts";
 const [state, ssh, out] = process.argv.slice(2);
@@ -121,41 +111,39 @@ const { opened } = await Effect.runPromise(
 );
 await Bun.write(out!, String(opened));
 `,
-        );
-        // Its answer goes to a file: the master it starts keeps a stdout pipe open.
-        const codes = yield* Effect.all(
-          Arr.map([0, 1], (one) =>
-            Effect.promise(
-              () =>
-                Bun.spawn(
-                  [process.execPath, "--no-install", opener, state, ssh, `${dir}/opened-${one}`],
-                  {
-                    stdio: ["ignore", "ignore", "inherit"],
-                    env: { ...process.env, TMPDIR: dir },
-                  },
-                ).exited,
-            ),
+      );
+      // WARNING: The master it starts keeps a stdout pipe open, so its answer goes to a file.
+      const codes = yield* Effect.all(
+        Arr.map([0, 1], (one) =>
+          Effect.promise(
+            () =>
+              Bun.spawn(
+                [process.execPath, "--no-install", opener, state, ssh, `${dir}/opened-${one}`],
+                {
+                  stdio: ["ignore", "ignore", "inherit"],
+                  env: { ...process.env, TMPDIR: dir },
+                },
+              ).exited,
           ),
-          { concurrency: "unbounded" },
-        );
-        expect(codes).toEqual([0, 0]);
-        const opened = yield* Effect.forEach([0, 1], (one) =>
-          fs.readFileString(`${dir}/opened-${one}`),
-        );
-        expect(
-          Arr.sortWith(
-            opened,
-            (value) => value,
-            (a, b) => pipe(a, Str.localeCompare(b)),
-          ),
-        ).toEqual(["false", "true"]);
-        expect(
-          Arr.filter(yield* fake.calls, (line) => pipe(line, Str.startsWith("master"))),
-        ).toEqual(["master mk@vm-mk"]);
-      }),
-    ),
-  30_000,
-);
+        ),
+        { concurrency: "unbounded" },
+      );
+      expect(codes).toEqual([0, 0]);
+      const opened = yield* Effect.forEach([0, 1], (one) =>
+        fs.readFileString(`${dir}/opened-${one}`),
+      );
+      expect(
+        Arr.sortWith(
+          opened,
+          (value) => value,
+          (a, b) => pipe(a, Str.localeCompare(b)),
+        ),
+      ).toEqual(["false", "true"]);
+      expect(Arr.filter(yield* fake.calls, (line) => pipe(line, Str.startsWith("master")))).toEqual(
+        ["master mk@vm-mk"],
+      );
+    }),
+  ));
 
 test("a master that never answers within the opener's bound fails with what ssh said", () =>
   runEffect(
@@ -225,7 +213,7 @@ test("an opener whose master never answers its check fails within its bound", ()
       const started = yield* Clock.currentTimeMillis;
       const failed = yield* opens(state, ssh, "300 millis").pipe(Effect.flip);
       expect(failed._tag).toBe("MachineUnreachable");
-      expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(1_000);
+      expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(1000);
     }),
   ));
 
@@ -243,7 +231,7 @@ test("the host's handle gives up on a master that never answers", () =>
       expect(refused._tag).toBe("HostRefused");
       yield* handle.exit;
       expect(yield* fs.exists(path)).toBe(false);
-      expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(2_000);
+      expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(2000);
     }),
   ));
 
@@ -314,33 +302,6 @@ test("`exit` ends an open master and its path, and only removes a path left behi
       expect(Arr.some(yield* fake.calls, (line) => pipe(line, Str.startsWith("login")))).toBe(
         false,
       );
-    }),
-  ));
-
-test("the host closes every connection under its state but those of the machines it keeps", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const { state, ssh, fake } = yield* rig;
-      const other = { label: "other", target: "mk@other" };
-      const kept = (yield* opens(state, ssh)).path;
-      const gone = yield* openConnection(state, other, {
-        ssh,
-        said: () => Effect.void,
-      });
-      yield* fs.writeFileString(`${state}/ssh/${pipe("0", Str.repeat(16))}.binding`, "");
-      const closed = yield* closeConnections(state, [vm], ssh);
-      expect(closed).toEqual([gone.path]);
-      expect(yield* fs.exists(gone.path)).toBe(false);
-      expect(yield* fs.exists(kept)).toBe(true);
-      expect(yield* fs.exists(`${state}/ssh/${pipe("0", Str.repeat(16))}.binding`)).toBe(true);
-      expect(
-        Arr.filter(
-          yield* fake.calls,
-          (line) =>
-            !pipe(line, Str.startsWith("master")) && !pipe(line, Str.startsWith("mux check")),
-        ),
-      ).toEqual(["mux exit collie"]);
     }),
   ));
 

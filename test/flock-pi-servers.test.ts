@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
 import { piConnections, piServers } from "../desktop/src/bun/pi-servers";
 import { userMcpServers } from "../desktop/src/bun/session";
+import { stringifyJson } from "../src/json";
 
-const claudeJson = JSON.stringify({
+const claudeJson = stringifyJson({
   mcpServers: {
     "linear-server": { type: "http", url: "https://mcp.linear.app/mcp" },
     docs: {

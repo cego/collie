@@ -1,6 +1,3 @@
-// Desktop's view hears the Flock from its main process over Effect RPC on a channel that
-// carries JSON values, as Electrobun's does, and decodes it with the board's own Schemas.
-
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
@@ -8,38 +5,25 @@ import { Effect, Fiber, Layer, Schema, Stream, flow, Result } from "effect";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcServer from "effect/rpc/RpcServer";
 import { foldFinished, headerSentence, primaryAction, sectionsOf } from "../src/board-model";
-import {
-  afterGesture,
-  type BoardState,
-  seenBy,
-  seenOnOpening,
-} from "../desktop/src/shared/board-clicks";
-import {
-  type Channel,
-  clientProtocol,
-  heldUntilListened,
-  serverProtocol,
-  type ToMain,
-  type ToView,
-} from "../desktop/src/shared/channel";
+import { afterGesture, seenBy, seenOnOpening } from "../desktop/src/shared/board-clicks";
+import type { BoardState } from "../desktop/src/shared/board-clicks";
+import { clientProtocol, heldUntilListened, serverProtocol } from "../desktop/src/shared/channel";
+import type { Channel, ToMain, ToView } from "../desktop/src/shared/channel";
 import {
   applyItem,
   chatBoards,
   DesktopRpcs,
   EMPTY_FLOCK,
-  type FlockItem,
   flockCards,
   flockOf,
-  type Machine,
   machineRows,
-  type MachineRow,
   nameAsShown,
   routeSaid,
   notLiveOf,
-  type MachineMessage,
   machineToAdd,
   unreadBecause,
 } from "../desktop/src/shared/flock";
+import type { FlockItem, Machine, MachineRow, MachineMessage } from "../desktop/src/shared/flock";
 import {
   buildOf,
   flockInSync,
@@ -48,7 +32,8 @@ import {
   syncable,
 } from "../desktop/src/shared/in-sync";
 import { agentRows } from "../desktop/src/shared/run-agents";
-import { type Column, columnOf } from "../desktop/src/shared/columns";
+import { columnOf } from "../desktop/src/shared/columns";
+import type { Column } from "../desktop/src/shared/columns";
 import { PeerView } from "../src/peers-model";
 import { epochMs } from "../src/time";
 import { task, taskMr } from "./support/task";
@@ -60,10 +45,9 @@ const fromJson = flow(
   Result.getOrThrow,
 );
 
-// SAFETY: what went in is what comes out; the JSON round trip only proves it survives one.
+// WARNING: what went in is what comes out; the JSON round trip only proves it survives one.
 const copy = <A>(frame: A) => fromJson(asJson(frame)) as A;
 
-/** Both ends of a channel that copies every frame through JSON, as Electrobun's does. */
 const channels = () => {
   let toView: (frame: ToView) => void = () => {};
   let toMain: (frame: ToMain) => void = () => {};
@@ -119,7 +103,6 @@ const served = (main: Channel<ToView, ToMain>) =>
         checkForUpdates: () => Effect.die("not asked"),
         onboard: () => Effect.die("not asked"),
         addMachine: () => Effect.die("not asked"),
-        answerHerdr: () => Effect.die("not asked"),
         removeMachine: () => Effect.die("not asked"),
         syncNow: () => Effect.die("not asked"),
         credentials: () => Stream.die("not asked"),
@@ -241,7 +224,6 @@ test("a view that asks before its main process serves is answered once it does",
           Effect.provide(Layer.effect(RpcClient.Protocol, clientProtocol(view))),
         ),
       );
-      // The view's Hello and its ask are sent while the main process is still starting.
       yield* Effect.sleep("20 millis");
       yield* Layer.build(served(main));
       const answered = yield* Fiber.join(heard).pipe(Effect.timeout("2 seconds"));
@@ -257,11 +239,11 @@ test("a Flock that has heard nothing draws no board, not an empty one", () =>
     }),
   ));
 
-const snapshot = (
+const snapshot: (
   machine: Machine,
   tasks: ReadonlyArray<typeof asking>,
-  herds: ReadonlyArray<{ id: string; name?: string }> = [{ id: "default" }],
-): MachineMessage => ({
+  herds?: ReadonlyArray<{ id: string; name?: string }>,
+) => MachineMessage = (machine, tasks, herds = [{ id: "default" }]) => ({
   machine,
   message: {
     _tag: "Snapshot",
@@ -396,7 +378,10 @@ test("an Unseen Finished Task is drawn outside the collapsed list, a seen one on
   expect(finished).toHaveLength(2);
 });
 
-const lostVm = (state: "unreachable" | "sso" | "no-collie", at = 1_000): FlockItem => ({
+const lostVm: (state: "unreachable" | "sso" | "no-collie", at?: number) => FlockItem = (
+  state: "unreachable" | "sso" | "no-collie",
+  at = 1000,
+) => ({
   _tag: "Lost",
   machine: { profile: vm.profile, name: vm.name, target: vm.target },
   state,
@@ -438,7 +423,6 @@ test("a Machine that drops keeps its cards as of when, off the machines a run ca
     ["t-work", 5],
   ]);
   expect(Arr.map(flockCards(dropped).machines, (one) => one.name)).toEqual(["mk-pc"]);
-  // Still out of reach later, it is as of when it dropped.
   expect(asOf(applyItem(dropped, lostVm("sso", 9)))).toEqual([
     ["t-ask", null],
     ["t-work", 5],
@@ -470,7 +454,6 @@ test("a Machine without Collie is known by its herdr profile until its host name
   const installed = applyItem(bare, snapshot(vm, [working]));
   expect([...installed.lost]).toEqual([]);
   expect([...installed.machines.keys()]).toEqual(["inst-pc", "inst-vm"]);
-  // One that reaches a Machine already shown merges into it.
   const merged = applyItem(bare, {
     _tag: "Merged",
     machine: { profile: "p-vm", name: "vm-mk" },
@@ -479,7 +462,11 @@ test("a Machine without Collie is known by its herdr profile until its host name
   expect([...merged.machines.keys()]).toEqual(["inst-pc"]);
 });
 
-const built = (machine: Machine, build: string, development: string): MachineMessage => ({
+const built: (machine: Machine, build: string, development: string) => MachineMessage = (
+  machine,
+  build,
+  development,
+) => ({
   machine,
   message: {
     _tag: "Snapshot",
@@ -492,13 +479,12 @@ const built = (machine: Machine, build: string, development: string): MachineMes
     seq: 0,
   },
 });
-const routed = (machine: Machine): FlockItem => ({
+const routed: (machine: Machine) => FlockItem = (machine) => ({
   _tag: "Routed",
   machine: { profile: machine.profile, name: machine.name, target: machine.target },
 });
 
-/** `vm`'s paired link, as `collie machine list` says it, with only the fields given. */
-const linked = (fields: Partial<typeof PeerView.Encoded>): FlockItem => ({
+const linked: (fields: Partial<typeof PeerView.Encoded>) => FlockItem = (fields) => ({
   _tag: "Linked",
   machine: { profile: vm.profile, name: vm.name, target: vm.target },
   link: flow(
@@ -562,14 +548,12 @@ test("the chat reads each Machine the window shows: a live one's board and proto
     ],
     ["vm-mk", { _tag: "Lost", state: "unreachable", reason: "ssh: connection refused" }],
   ]);
-  expect(boards([routed(vm)], new Map([["p-vm", 1_000]]))).toEqual([
-    ["vm-mk", { _tag: "Connecting", since: 1_000 }],
+  expect(boards([routed(vm)], new Map([["p-vm", 1000]]))).toEqual([
+    ["vm-mk", { _tag: "Connecting", since: 1000 }],
   ]);
-  // A saved board standing in while its route connects is still connecting.
-  expect(boards([routed(vm), savedOld], new Map([["p-vm", 1_000]]))).toEqual([
-    ["vm-mk", { _tag: "Connecting", since: 1_000 }],
+  expect(boards([routed(vm), savedOld], new Map([["p-vm", 1000]]))).toEqual([
+    ["vm-mk", { _tag: "Connecting", since: 1000 }],
   ]);
-  // Its route now reaches another installation, so nothing will make that board live again.
   expect(Arr.map(boards([routed(vm), snapshot(vm, []), savedOld]), ([, board]) => board)).toEqual([
     { _tag: "Live", herds: [{ id: "default" }], tasks: [], protocol: 1, files: false },
     { _tag: "Saved", at: 7 },
@@ -601,7 +585,7 @@ test("a saved board and the live Machine its route now reaches are named apart, 
 });
 
 test("a Machine with no live board is said with why, in its route's words where it was lost", () => {
-  expect(unreadBecause("vm-mk", { _tag: "Connecting", since: 1_000 }, 91_000)).toBe(
+  expect(unreadBecause("vm-mk", { _tag: "Connecting", since: 1000 }, 91_000)).toBe(
     "vm-mk is still connecting; Desktop has waited 1 min 30 s for its first board",
   );
   expect(unreadBecause("vm-mk", { _tag: "Connecting", since: null }, 91_000)).toBe(
@@ -648,7 +632,7 @@ test("a Machine's build is kept from its Snapshot, and a saved board's stands in
   });
 });
 
-const row = (over: Partial<MachineRow> = {}): MachineRow => ({
+const row: (over?: Partial<MachineRow>) => MachineRow = (over = {}) => ({
   profile: "p-vm",
   name: "vm-mk",
   target: "mk@vm-mk",
@@ -711,8 +695,9 @@ test("a Machine doctor doesn't find onboarded is behind on onboarding, with its 
 });
 
 test("a Machine not live is its state, and one connecting has no verdict", () => {
-  for (const state of ["unreachable", "sso", "no-collie", "update-desktop"] as const)
+  for (const state of ["unreachable", "sso", "no-collie", "update-desktop"] as const) {
     expect(inSync(row({ state, build: "0.30.0" }), DESKTOP)).toEqual({ state, behind: [] });
+  }
   expect(inSync(row({ state: "connecting" }), DESKTOP)).toEqual({
     state: "connecting",
     behind: [],
@@ -825,12 +810,10 @@ test("a Machine lacking a credential Desktop holds is behind on it, naming it an
       { part: "credentials", said: "Lacks Helle's token", steps: [] },
     ],
   });
-  // A credential Desktop doesn't hold is never a Machine's to lack.
   expect(inSync(lacking, { ...DESKTOP, credentials: [] }).state).toBe("in-sync");
   expect(inSync(row({ credentials: { gitlab: { given: true, failed: null } } }), holds).state).toBe(
     "in-sync",
   );
-  // Not told yet is not behind.
   expect(inSync(row({ credentials: {} }), holds).state).toBe("in-sync");
 });
 
@@ -847,7 +830,7 @@ test("the summary says which credentials Desktop has none of to give, and blames
 });
 
 test("a Machine's settings sync and its credentials are kept on its row, and dropped with it", () => {
-  const items: FlockItem[] = [
+  const items: Array<FlockItem> = [
     routed(vm),
     { _tag: "Synced", part: "settings", machine: vm, failed: "host refused" },
     { _tag: "Synced", part: "definitions", machine: vm, failed: "no such operation" },
@@ -882,16 +865,14 @@ test("a Flock held across a new subscription drops each Machine its routes no lo
   expect([...again.machines.keys()]).toEqual([pc.installation]);
 });
 
-test("Add Machine takes a Machine only once its SSH target, label and session are filled", () => {
-  expect(machineToAdd({ target: " mk@vm ", label: "vm ", session: " default" })).toEqual({
+test("Add Machine takes a Machine only once its SSH target and label are filled", () => {
+  expect(machineToAdd({ target: " mk@vm ", label: "vm " })).toEqual({
     target: "mk@vm",
     label: "vm",
-    session: "default",
   });
-  for (const blank of ["target", "label", "session"] as const)
-    expect(
-      machineToAdd({ target: "mk@vm", label: "vm", session: "default", [blank]: "  " }),
-    ).toBeNull();
+  for (const blank of ["target", "label"] as const) {
+    expect(machineToAdd({ target: "mk@vm", label: "vm", [blank]: "  " })).toBeNull();
+  }
 });
 
 const none: BoardState = { selected: null, page: null };
@@ -949,7 +930,6 @@ test("opening an Unseen Run's record sends its Machine one seen, and opening any
   expect(opening("inst-vm:t-unseen", "name")).toEqual(seen);
   expect(opening("inst-pc:t-seen", "double-click")).toEqual([]);
   expect(opening("inst-pc:t-seen", "name")).toEqual([]);
-  // A click selects without opening, and a record already open is not opened again.
   const selected = afterGesture(none, { kind: "click", landed: card("inst-vm:t-unseen") });
   expect(seenOnOpening(none, selected, cardOf)).toEqual([]);
   const open = { selected: "inst-vm:t-unseen", page: "inst-vm:t-unseen" };

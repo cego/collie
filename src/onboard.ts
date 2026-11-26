@@ -1,8 +1,4 @@
-// `collie onboard`: takes a Machine from bare to a working Collie host, one step at a
-// time, each streamed as it starts and as it ends. Every step looks before it acts, so
-// running it again is how a half-onboarded Machine is repaired. Nothing here runs sudo:
-// a step that needs root stops with the command to run.
-
+// WARNING: nothing here runs sudo: a step that needs root stops with the command to run.
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
@@ -18,28 +14,27 @@ import { glabHosts, pushCheck } from "./forge/gitlab-checks";
 import { gitlabHostOf } from "./config";
 import { tokenPage } from "./gitlab-token";
 import type { PluginEnv } from "./env";
-import { err, prepareSteps, upgrade, type OpResult } from "./operations";
+import { err, prepareSteps, upgrade } from "./operations";
+import type { OpResult } from "./operations";
 import { whatItSaid } from "./mr";
 import { HELLE_TOKEN_STEPS, helleUrlOf } from "./helle-url";
 import { helleEnvPath, LINEAR_MCP_ADD, LINEAR_MCP_FIX } from "./connection-probes";
 import { connectionOnMachine } from "./connections";
-import { installation, manifestField, RELEASE_TAG, type Carried } from "./release";
-import manifest from "../herdr-plugin.toml";
+import { installation, releaseVersion, RELEASE_TAG } from "./release";
+import type { Carried } from "./release";
+import manifest from "../package.json";
 
 export type StepStatus = "done" | "in_place" | "skipped" | "needs_root" | "needs_human" | "failed";
 
 export interface Outcome {
   readonly status: StepStatus;
   readonly detail: string;
-  /** What to run by hand: the root command, or the one that retries this step. */
   readonly command?: string;
-  /** Where the human has to go for this step. */
   readonly url?: string;
 }
 
 export type OnboardEvent =
   | { readonly event: "start"; readonly step: string; readonly title: string }
-  /** Mid-step: where the human has to go, and the local port its redirect comes back to. */
   | {
       readonly event: "human";
       readonly step: string;
@@ -49,37 +44,32 @@ export type OnboardEvent =
     }
   | ({ readonly event: "result"; readonly step: string } & Outcome);
 
-/** The steps a Machine may go without and still be onboarded. */
 export type Skippable = "helle" | "linear";
 
 export interface OnboardOptions {
   readonly to: string;
-  /** The release this runner carries; the compiled runner's own unless a test says. */
   readonly carried?: Carried | null;
   readonly skip?: ReadonlyArray<Skippable>;
-  /** Credentials from stdin, never an argument. */
+  // WARNING: credentials go on stdin, never as an argument, where the process list would show them.
   readonly secrets?: Readonly<Record<string, string>>;
-  /** stdin is a terminal the human can paste into. */
   readonly terminal?: boolean;
-  /** Someone sees the stream, so a login that needs the human may be started. Default true. */
+  // WARNING: a login that needs the human starts only when someone sees the stream.
   readonly attended?: boolean;
 }
 
-const HERDR_INSTALL = "curl -fsSL https://herdr.dev/install.sh | sh";
 const CLAUDE_INSTALL = "curl -fsSL https://claude.ai/install.sh | bash";
 const PROFILE_MARKER = "# added by collie onboard";
 const LINEAR_LOGIN = "claude mcp login linear-server";
 const CLAUDE_LOGIN = "claude auth login";
 const LOGIN_LIMIT = "10 minutes";
-/** Long enough for an installer or a download; a network that never answers still ends. */
 const COMMAND_LIMIT = "15 minutes";
-const SETTLED: ReadonlyArray<StepStatus> = ["done", "in_place", "skipped"];
-/** A URL's own characters (RFC 3986), so the terminal escapes around it are not part of it. */
+const SETTLED: ReadonlySet<StepStatus> = new Set(["done", "in_place", "skipped"]);
+// WARNING: RFC 3986 characters only, so terminal escapes after a URL are not read as part of it.
 const URL_IN = /https:\/\/[\w\-.~:/?#[\]@!$&'()*+,;=%]+/;
 
-const done = (detail: string): Outcome => ({ status: "done", detail });
-const inPlace = (detail: string): Outcome => ({ status: "in_place", detail });
-const failed = (detail: string, command?: string): Outcome => ({
+const done: (detail: string) => Outcome = (detail) => ({ status: "done", detail });
+const inPlace: (detail: string) => Outcome = (detail) => ({ status: "in_place", detail });
+const failed: (detail: string, command?: string) => Outcome = (detail, command?) => ({
   status: "failed",
   detail,
   ...(command && { command }),
@@ -94,13 +84,14 @@ const PACKAGE_MANAGERS: ReadonlyArray<readonly [string, string]> = [
   ["brew", "brew install"],
 ];
 
-/** The one command that installs `packages` with this Machine's package manager. */
 const rootCommand = Effect.fn("Onboard.rootCommand")(function* (
   search: string,
   packages: ReadonlyArray<string>,
 ) {
   for (const [manager, install] of PACKAGE_MANAGERS) {
-    if ((yield* onPath(search, manager)) !== null) return `${install} ${Arr.join(packages, " ")}`;
+    if ((yield* onPath(search, manager)) !== null) {
+      return `${install} ${Arr.join(packages, " ")}`;
+    }
   }
   return `install ${Arr.join(packages, " ")} with your package manager`;
 });
@@ -110,17 +101,22 @@ const needsRoot = Effect.fn("Onboard.needsRoot")(function* (
   tools: ReadonlyArray<string>,
   packages: ReadonlyArray<string> = tools,
 ) {
-  return {
+  const returned: Outcome = {
     status: "needs_root",
     detail: `${Arr.join(tools, " and ")} must be installed as root; run the command, then onboard again`,
     command: yield* rootCommand(search, packages),
-  } satisfies Outcome;
+  };
+  return returned;
 });
 
 const profileOf = (env: PluginEnv) => {
   const shell = env.raw["SHELL"] ?? "";
-  if (pipe_(shell, Str.endsWith("/zsh"))) return `${env.home}/.zshrc`;
-  if (pipe_(shell, Str.endsWith("/bash"))) return `${env.home}/.bashrc`;
+  if (pipe_(shell, Str.endsWith("/zsh"))) {
+    return `${env.home}/.zshrc`;
+  }
+  if (pipe_(shell, Str.endsWith("/bash"))) {
+    return `${env.home}/.bashrc`;
+  }
   return `${env.home}/.profile`;
 };
 
@@ -147,11 +143,9 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
   const localBin = `${env.home}/.local/bin`;
   const binDir = env.raw["COLLIE_BIN_DIR"] ?? localBin;
   const inherited = Arr.filter(Str.split(env.raw["PATH"] ?? "", ":"), (dir) => dir !== "");
-  // Where the installers put herdr, Claude Code and `collie`, ahead of the PATH this
-  // process was started with, which a fresh SSH session's may not include yet.
+  // WARNING: installers' bin dirs go first, since a fresh SSH session's PATH may not include them yet.
   const search = Arr.join([...new Set([binDir, localBin, ...inherited])], ":");
   const release = `${env.collieDir}/release`;
-  // Where the plugin is prepared and doctor looks: a development checkout's own root.
   let root = release;
 
   const childEnv = { ...env.raw, PATH: search };
@@ -167,8 +161,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         ChildProcess.make(cmd, [...args], {
           cwd,
           env: { ...childEnv, ...extra },
-          // extendEnv, so a tool still has what `env.raw` leaves out: USER, which Claude
-          // Code's Keychain lookup on macOS needs to say it is logged in.
+          // WARNING: USER must survive: Claude Code's macOS Keychain lookup needs it to say it is logged in.
           extendEnv: true,
           stdin: input === null ? "ignore" : Stream.make(new TextEncoder().encode(input)),
           stdout: "pipe",
@@ -217,7 +210,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
   });
 
   const finish = (development: boolean) => {
-    const ready = Arr.every(outcomes, (outcome) => SETTLED.includes(outcome.status));
+    const ready = Arr.every(outcomes, (outcome) => SETTLED.has(outcome.status));
     const data = {
       root,
       version: to,
@@ -228,7 +221,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
     if (ready) {
       return { ok: true as const, data, human: "Onboarded: collie doctor is ready." };
     }
-    const left = Arr.filter(outcomes, (o) => !SETTLED.includes(o.status));
+    const left = Arr.filter(outcomes, (o) => !SETTLED.has(o.status));
     return err(
       "operation_failed",
       Arr.join(
@@ -250,16 +243,24 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
     "Checking for git, curl and openssl",
     Effect.gen(function* () {
       const named = env.raw["COLLIE_OPENSSL"];
-      const missing: string[] = [];
+      const missing: Array<string> = [];
       for (const tool of named ? ["git", "curl"] : ["git", "curl", "openssl"]) {
-        if ((yield* onPath(search, tool)) === null) missing.push(tool);
+        if ((yield* onPath(search, tool)) === null) {
+          missing.push(tool);
+        }
       }
-      if (named && (yield* exec(named, ["version"], env.home)).code !== 0) missing.push("openssl");
-      if (missing.length > 0) return yield* needsRoot(search, missing);
+      if (named && (yield* exec(named, ["version"], env.home)).code !== 0) {
+        missing.push("openssl");
+      }
+      if (missing.length > 0) {
+        return yield* needsRoot(search, missing);
+      }
       return inPlace("git, curl and openssl are installed");
     }),
   );
-  if (system.status !== "in_place") return finish(false);
+  if (system.status !== "in_place") {
+    return finish(false);
+  }
 
   let development = false;
   const collie = yield* step(
@@ -276,7 +277,9 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         } satisfies Outcome;
       }
       const clone = yield* fs.exists(`${env.collieDir}/.git`);
-      if (!clone && (yield* manifestField(release, "version")) === to) return inPlace(`at ${to}`);
+      if (!clone && (yield* releaseVersion(release)) === to) {
+        return inPlace(`at ${to}`);
+      }
       const placed = yield* upgrade(
         { ...env, pluginRoot: clone ? env.collieDir : release, raw: childEnv },
         { to, ...(options.carried !== undefined && { carried: options.carried }) },
@@ -287,7 +290,9 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         : failed(placed.error.message);
     }),
   );
-  if (collie.status === "failed") return finish(false);
+  if (collie.status === "failed") {
+    return finish(false);
+  }
 
   if (!development) {
     const installer = (name: string, title: string, command: string, shell: string) =>
@@ -296,7 +301,9 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         title,
         Effect.gen(function* () {
           const at = yield* onPath(search, name);
-          if (at !== null) return inPlace(`${at}/${name}`);
+          if (at !== null) {
+            return inPlace(`${at}/${name}`);
+          }
           const ran = yield* exec(shell, ["-c", command], env.home);
           const now = yield* onPath(search, name);
           return ran.code === 0 && now !== null
@@ -307,7 +314,6 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
               );
         }),
       );
-    yield* installer("herdr", "herdr", HERDR_INSTALL, "sh");
     yield* installer("claude", "Claude Code", CLAUDE_INSTALL, "bash");
 
     yield* step(
@@ -318,11 +324,14 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
           [...new Set([binDir, localBin])],
           (dir) => !inherited.includes(dir),
         );
-        if (absent.length === 0) return inPlace(`${binDir} is on PATH`);
+        if (absent.length === 0) {
+          return inPlace(`${binDir} is on PATH`);
+        }
         const profile = profileOf(env);
         const text = yield* fs.readFileString(profile).pipe(Effect.orElseSucceed(() => ""));
-        if (pipe_(text, Str.includes(PROFILE_MARKER)))
+        if (pipe_(text, Str.includes(PROFILE_MARKER))) {
           return inPlace(`${profile} adds it; a new shell has it`);
+        }
         const lines = Arr.join(
           Arr.map(absent, (dir) => `export PATH="${dir}:$PATH"`),
           "\n",
@@ -333,8 +342,8 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
     );
 
     yield* step(
-      "plugin",
-      "The plugin, the runner and the skills",
+      "prepare",
+      "The runner and the skills",
       Effect.gen(function* () {
         const prepared = yield* exec("sh", ["prepare.sh"], root);
         const steps = prepareSteps(prepared.stdout);
@@ -357,7 +366,6 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
   }
 
   const host = yield* gitlabHostOf({ raw: childEnv, userDir: env.userDir });
-  // Named to doctor, so it checks the host this run logged in to.
   const here: PluginEnv = {
     ...env,
     pluginRoot: root,
@@ -376,7 +384,9 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
       const loggedIn = exec("claude", ["auth", "status", "--json"], env.home).pipe(
         Effect.map((answer) => /"loggedIn":\s*true/.test(answer.stdout)),
       );
-      if (yield* loggedIn) return inPlace("logged in");
+      if (yield* loggedIn) {
+        return inPlace("logged in");
+      }
       if (!(attended && options.terminal)) {
         return {
           status: "needs_human",
@@ -409,17 +419,19 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
     "gitlab",
     `Logged in to ${host}`,
     Effect.gen(function* () {
-      if ((yield* onPath(search, "glab")) === null) return yield* needsRoot(search, ["glab"]);
+      if ((yield* onPath(search, "glab")) === null) {
+        return yield* needsRoot(search, ["glab"]);
+      }
       const status = yield* exec("glab", ["auth", "status", "--hostname", host], root);
       const token = secrets["GITLAB_TOKEN"];
       if (status.code === 0) {
-        // A token given is the Flock's, so one glab holds from before is replaced by it.
         const held =
           token === undefined
             ? null
             : yield* exec("glab", ["config", "get", "token", "--host", host], root);
-        if (held === null || Str.trim(held.stdout) === token)
+        if (held === null || Str.trim(held.stdout) === token) {
           return inPlace(`glab is logged in to ${host}`);
+        }
       }
       if (token === undefined) {
         return {
@@ -454,7 +466,6 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         https: false,
       };
       if (ssh && !known.https) {
-        // Trusts GitLab's host key on first use, as doctor's own fix does; a changed key is still refused.
         yield* exec(
           "ssh",
           [
@@ -468,7 +479,9 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         );
       }
       const before = yield* pushCheck(known, here, ssh, exec);
-      if (before.ok) return inPlace(before.detail);
+      if (before.ok) {
+        return inPlace(before.detail);
+      }
       if (status.code !== 0) {
         return failed(`${before.detail}, and glab is not logged in to register a key`);
       }
@@ -484,7 +497,9 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
           ["-q", "-t", "ed25519", "-N", "", "-C", `collie@${name}`, "-f", key],
           env.home,
         );
-        if (made.code !== 0) return failed(`could not make ${key}: ${lastWords(whatItSaid(made))}`);
+        if (made.code !== 0) {
+          return failed(`could not make ${key}: ${lastWords(whatItSaid(made))}`);
+        }
       }
       const added = yield* piped(
         "glab",
@@ -514,7 +529,9 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
     "Helle's credentials",
     Effect.gen(function* () {
       const skip = skipped("helle");
-      if (skip) return skip;
+      if (skip) {
+        return skip;
+      }
       const file = helleEnvPath(here);
       const token = secrets["HELLE_API_TOKEN"];
       const there = yield* fs.exists(file);
@@ -527,7 +544,6 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
               command: "collie onboard --secrets-stdin",
             } satisfies Outcome);
       }
-      // Other Helle clients read the URL from this file.
       const text = `HELLE_API_URL=${helleUrlOf(here.raw)}\nHELLE_API_TOKEN=${token}\n`;
       const current = there ? yield* fs.readFileString(file) : "";
       yield* fs.makeDirectory(
@@ -540,14 +556,18 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         ),
         { recursive: true },
       );
-      // Before the write: a file from before may be readable by others, and `mode` only applies to a new one.
-      if (there) yield* fs.chmod(file, 0o600);
-      if (current !== text) yield* fs.writeFileString(file, text, { mode: 0o600 });
+      // WARNING: mode applies only to a new file, so an older one is chmodded before the write.
+      if (there) {
+        yield* fs.chmod(file, 0o600);
+      }
+      if (current !== text) {
+        yield* fs.writeFileString(file, text, { mode: 0o600 });
+      }
       return current === text ? inPlace(`credentials at ${file}`) : done(`wrote ${file}`);
     }),
   );
 
-  if (secrets.SLACK_BOT_TOKEN !== undefined)
+  if (secrets.SLACK_BOT_TOKEN !== undefined) {
     yield* step(
       "slack",
       "Slack's credentials",
@@ -557,15 +577,16 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
           "Collie no longer uses a Slack bot token: sign in to Slack in Desktop Settings › Connections",
       }),
     );
+  }
 
-  /** `claude mcp login` under a terminal of its own, streaming its URL as it is printed. */
   const linearLogin = (claude: string) =>
     Effect.gen(function* () {
-      // A URL is told once it is printed, and again when one with a callback port comes.
       let told: string | null = null;
       const tell = (url: string) => {
         const port = /localhost:(\d+)/.exec(decodeURIComponent(url))?.[1];
-        if (url === told || (told !== null && port === undefined)) return Effect.void;
+        if (url === told || (told !== null && port === undefined)) {
+          return Effect.void;
+        }
         told = url;
         return emit({
           event: "human",
@@ -575,8 +596,7 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
           ...(port && { port: Number(port) }),
         });
       };
-      // Claude Code may print only a paste-code URL and hand the one with its callback port
-      // to $BROWSER, which this shim writes down instead.
+      // WARNING: Claude Code may print only the paste-code URL and send the callback one to $BROWSER.
       const shims = yield* fs.makeTempDirectoryScoped({ prefix: "collie-login-" });
       const handed = `${shims}/url`;
       yield* fs.writeFileString(`${shims}/browser`, `#!/bin/sh\necho "$1" > '${handed}'\n`);
@@ -585,7 +605,6 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
         cwd: env.home,
         env: { ...Bun.env, ...childEnv, BROWSER: `${shims}/browser` },
       });
-      // It waits for a pasted redirect, which only a human at a terminal can type.
       const pasted = options.terminal
         ? Stream.fromReadableStream({ evaluate: () => Bun.stdin.stream(), onError: String }).pipe(
             Stream.decodeText(),
@@ -617,7 +636,9 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
     "The Linear MCP in Claude Code",
     Effect.gen(function* () {
       const skip = skipped("linear");
-      if (skip) return skip;
+      if (skip) {
+        return skip;
+      }
       const claudeDir = yield* onPath(search, "claude");
       if (claudeDir === null) {
         return failed("Claude Code is not installed, so it has no MCP servers", CLAUDE_INSTALL);
@@ -658,7 +679,9 @@ export const onboard = Effect.fn("Onboard.onboard")(function* (
     "collie doctor",
     Effect.gen(function* () {
       const report = yield* check(here);
-      if (report.ok) return done("ready");
+      if (report.ok) {
+        return done("ready");
+      }
       const failing = Option.match(decodeChecks(report.error.details), {
         onNone: () => [],
         onSome: ({ checks }) =>

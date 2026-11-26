@@ -1,31 +1,15 @@
-// The rows Collie owns, beside the executions Effect owns.
-//
-// Effect's engine is the authority on what a workflow has done — its journal, its
-// activities, its deferreds — and none of that is copied here. What is here is the other
-// half: which request claimed which run, which generation it was admitted on, and which
-// execution it became. That is what makes a retry that arrives twice, or a host that dies
-// between accepting work and saying so, end as one Run rather than two.
-//
-// Same SQLite file as the engine's own tables, in the state directory the host owns, so
-// there is one connection and one thing to back up.
-// `docs/adr/0017-one-request-is-one-run.md` is why each of these is the way it is.
-
 import * as Struct from "effect/Struct";
 import * as Arr from "effect/Array";
-import * as Rec from "effect/Record";
+import type { FileSystem, Path, Stream } from "effect";
 import {
   Context,
   Effect,
-  FileSystem,
   Layer,
-  Path,
   Option,
   Order,
   Schedule,
-  type Scope,
   Schema,
   Semaphore,
-  Stream,
   flow,
   Result,
 } from "effect";
@@ -45,46 +29,40 @@ import {
   importRunRecords,
 } from "./records-import";
 import { StoreWrites } from "./store-writes";
+import { asJsonText, canonical } from "./canonical";
 import { RUN_RECORDS_MIGRATION } from "./run-records";
-import { RequestConflict, RunReport, type Solution } from "./board-model";
+import { importMrStates } from "./merge-requests";
+import { RequestConflict, RunReport } from "./board-model";
+import type { Solution } from "./board-model";
 import { nowIso } from "./time";
 import { Observed, WatchCursor, Woke } from "./mr-watch-model";
 import { ShippingGo } from "./shipping";
 import { PROOF_SQL } from "./verify-model";
 
-/** A run as it was admitted: the claim, the arguments and the execution it became. */
 const Run = Schema.Struct({
   run: Schema.String,
   request: Schema.String,
   workflow: Schema.String,
   project: Schema.String,
-  /** The arguments as they were claimed, canonical, which is what a retry is compared to. */
   input: Schema.String,
   generation: Schema.String,
   execution: Schema.String,
-  /** The Task this work belongs to, and the run it came out of; null where it is neither. */
   task: Schema.NullOr(Schema.String),
   parent: Schema.NullOr(Schema.String),
-  /** Where each settled value came from, and what the host itself was given beside them. */
   provenance: Schema.NullOr(Schema.String),
   options: Schema.NullOr(Schema.String),
-  /** Where it works, as the host placed it; null while that is still to do, or from before. */
   checkout: Schema.NullOr(Schema.String),
-  /** The host options, Task and parent as asked, canonical, which a retry is compared to. */
   asked: Schema.NullOr(Schema.String),
-  /** What placing it starts from, so a placement a crash cut short is made again. */
+  // WARNING: so a placement a crash cut short is made again.
   placing: Schema.NullOr(Schema.String),
   report: Schema.NullOr(Schema.String),
-  /** When this work was claimed, which is when the Run began. */
   admitted: Schema.String,
-  /** When the engine took this work, or null while it is still a host's to hand over. */
   accepted: Schema.NullOr(Schema.String),
 });
 export type RunRow = typeof Run.Type;
 
 const RUN_FIELDS = Struct.keys(Run.fields);
 
-/** The Run's Task's rows, their parents and children, and every Run another asked for. */
 const nearOf = (rows: ReadonlyArray<RunRow>, run: string) => {
   const self = Option.getOrUndefined(Arr.findFirst(rows, (row) => row.run === run));
   const own = Arr.filter(rows, (row) =>
@@ -102,50 +80,33 @@ const nearOf = (rows: ReadonlyArray<RunRow>, run: string) => {
   );
 };
 
-/** As every Run is read: by admission, then id. */
 const byAdmission = Order.mapInput(
   Order.Tuple([Order.String, Order.String]),
   (row: RunRow) => [row.admitted, row.run] as const,
 );
 
-/** Whether two reads of a Run's row read the same. */
 export const sameRow = (one: RunRow, other: RunRow) =>
   one === other || Arr.every(RUN_FIELDS, (field) => one[field] === other[field]);
 
-/**
- * A question one run is waiting on: what was asked, what may answer it, and the answer it
- * has if it has one. One row per run and decision, which is what makes a second answer a
- * thing the database refuses rather than a thing a reader has to notice.
- */
 const Decision = Schema.Struct({
   run: Schema.String,
   decision: Schema.String,
   prompt: Schema.String,
-  /** The answers this question takes, as JSON; empty is a question answered in words. */
   options: Schema.String,
   answer: Schema.NullOr(Schema.String),
-  /** The claim the answer arrived under, so the same request twice is one answer. */
   request: Schema.NullOr(Schema.String),
-  /** The operation whose agent asked it on its Run; null for the workflow's own question. */
   asker: Schema.NullOr(Schema.String),
-  /** Who answered it, settled with the answer so no reader sees one without the other. */
   answerer: Schema.NullOr(Schema.fromJsonString(AuditLine.fields.actor)),
   asked: Schema.String,
   answered: Schema.NullOr(Schema.String),
-  /** When a human's message set it aside, unanswered (ADR-draft-a-humans-message-supersedes-a-runs-open-question). */
   superseded: Schema.NullOr(Schema.String),
-  /** The Delivery or submit that superseded it. */
   cause: Schema.NullOr(Schema.String),
   superseder: Schema.NullOr(Schema.fromJsonString(AuditLine.fields.actor)),
-  /** Every agent a human messaged since, and when; any of them may still answer it (D8). */
   messaged: Schema.NullOr(
     Schema.fromJsonString(Schema.Array(Schema.Struct({ agent: Schema.String, at: Schema.String }))),
   ),
-  /** The question this one asks again, or null for an original. */
   revises: Schema.NullOr(Schema.String),
-  /** When its Workflow last reached it, which every replay renews; null for an agent's. */
   reached: Schema.NullOr(Schema.String),
-  /** What keeps it short of standard; null for one that is not, or an older host's. */
   shortfall: Schema.NullOr(Schema.String),
   shipping: Schema.NullOr(Schema.fromJsonString(ShippingGo)),
 });
@@ -154,15 +115,13 @@ export type DecisionRow = typeof Decision.Type;
 export const isUnanswered = (one: {
   readonly answer: string | null;
   readonly superseded?: string | null | undefined;
-}): boolean => one.answer === null && (one.superseded ?? null) === null;
+}) => one.answer === null && (one.superseded ?? null) === null;
 
-/** Set aside by a human's message, and not answered since. */
 export const isSuperseded = (one: {
   readonly answer: string | null;
   readonly superseded?: string | null | undefined;
-}): boolean => one.answer === null && (one.superseded ?? null) !== null;
+}) => one.answer === null && (one.superseded ?? null) !== null;
 
-/** A Workflow's question set aside and not yet asked again: no Decision while its work runs. */
 export const isSetAside = <
   A extends {
     readonly name: string;
@@ -174,7 +133,7 @@ export const isSetAside = <
 >(
   all: ReadonlyArray<A>,
   one: A,
-): boolean =>
+) =>
   isSuperseded(one) &&
   (one.asker ?? null) === null &&
   !Arr.some(all, (r) => r.revises === one.name);
@@ -183,20 +142,17 @@ export const supersededReason = (one: {
   readonly name: string;
   readonly superseded?: string | null | undefined;
   readonly cause?: string | null | undefined;
-}): string => `"${one.name}" was superseded at ${one.superseded} by ${one.cause}`;
+}) => `"${one.name}" was superseded at ${one.superseded} by ${one.cause}`;
 
 export type Superseded =
   | { readonly _tag: "accepted"; readonly row: DecisionRow }
   | { readonly _tag: "refused"; readonly reason: string };
 
-/** What became of an answer. Only `accepted` completes anything. */
 export type Answered =
   | { readonly _tag: "accepted"; readonly row: DecisionRow }
-  /** The same claim again: the answer already landed, and this is not a second one. */
   | { readonly _tag: "repeat"; readonly row: DecisionRow }
   | { readonly _tag: "refused"; readonly reason: string };
 
-/** A generation a host registered, so the next host can rebuild it from current files. */
 const Generation = Schema.Struct({
   name: Schema.String,
   workflow: Schema.String,
@@ -204,28 +160,22 @@ const Generation = Schema.Struct({
 });
 export type GenerationRow = typeof Generation.Type;
 
-/** What a start asks to have recorded before anything is executed. */
 export interface Admission {
   readonly request: string;
   readonly run: string;
   readonly workflow: string;
   readonly project: string;
-  /** The values as the author's own schema encodes them, never the text they came as. */
   readonly input: Readonly<Record<string, Schema.Json>>;
-  /** Where each of those came from, and what the host was given that is not the author's. */
   readonly provenance: Readonly<Record<string, string>>;
   readonly options: Readonly<Record<string, string>>;
   readonly generation: string;
   readonly execution: string;
   readonly task: string | null;
   readonly parent: string | null;
-  /** What the host places it from, as JSON; absent for work that is placed already. */
   readonly placing?: string;
-  /** Paths on this Machine copied into the Run before it is handed over. */
   readonly attachments?: ReadonlyArray<string>;
 }
 
-/** What a retry of a claim has to ask again; attachments only where there were some. */
 type AskedFor = {
   readonly options: Readonly<Record<string, string>>;
   readonly task: string | null;
@@ -233,25 +183,18 @@ type AskedFor = {
   attachments?: ReadonlyArray<string>;
 };
 
-/** A Run waiting on its merge request: what it last saw, what the watch read since, and its wake. */
 export interface WatchRow {
   readonly run: string;
-  /** The merge request's id, which the merge watch reads it by. */
   readonly mr: string;
-  /** The durable wake's name. */
   readonly name: string;
   readonly cursor: WatchCursor;
   readonly observed: Observed | null;
-  /** What it was woken with, kept until the wake is done so a new host completes it again. */
   readonly woke: Woke | null;
 }
 
 export interface StoreApi {
   readonly remember: (generation: GenerationRow) => Effect.Effect<void>;
-  /**
-   * Records that this run is waiting on this question. Replaying the wait says it again
-   * and changes nothing: the row that is already there carries the answer.
-   */
+  // WARNING: replaying the wait says it again and changes nothing.
   readonly asking: (question: {
     readonly run: string;
     readonly decision: string;
@@ -262,17 +205,10 @@ export interface StoreApi {
     readonly shortfall?: string;
     readonly shipping?: ShippingGo;
   }) => Effect.Effect<void>;
-  /** Every question this run has been asked, answered or not, in the order they were. */
   readonly asked: (run: string) => Effect.Effect<ReadonlyArray<DecisionRow>>;
-  /** `asked` for each of these Runs that was asked anything, in one read. */
   readonly askedOf: (
     runs: ReadonlyArray<string>,
   ) => Effect.Effect<ReadonlyMap<string, ReadonlyArray<DecisionRow>>>;
-  /**
-   * Settles one open question, or says why this answer is not the one that settles it.
-   * The write is the decision: one UPDATE over the unanswered row, so two answers racing
-   * are separated by the database rather than by whoever reads first.
-   */
   readonly settle: (answer: {
     readonly run: string;
     readonly decision: string;
@@ -280,10 +216,6 @@ export interface StoreApi {
     readonly request: string;
     readonly answerer?: AuditLine["actor"] | undefined;
   }) => Effect.Effect<Answered>;
-  /**
-   * Sets one open question aside for a human's message, under the same guard as `settle`,
-   * so whichever of the two reaches the database first stands.
-   */
   readonly supersede: (superseding: {
     readonly run: string;
     readonly decision: string;
@@ -291,84 +223,50 @@ export interface StoreApi {
     readonly actor: AuditLine["actor"];
     readonly agent: string;
   }) => Effect.Effect<Superseded>;
-  /**
-   * Asks a superseded workflow question again as `name`, only while it is unanswered,
-   * unrevised and still waits on exactly the `messaged` its caller found finished, so the
-   * database orders it against the messaged agent's answer and a newer message. True where
-   * this call opened it.
-   */
+  // WARNING: the guard is the database's: ordered against the messaged agent's answer and any newer message.
   readonly revise: (revising: {
     readonly run: string;
     readonly decision: string;
     readonly name: string;
     readonly messaged: NonNullable<DecisionRow["messaged"]>;
   }) => Effect.Effect<boolean>;
-  /** Every workflow question set aside by a human's message and not yet asked again. */
   readonly setAside: Effect.Effect<ReadonlyArray<DecisionRow>>;
-  /** Every question a human's message can still set aside, or still extend the wait of. */
   readonly supersedable: Effect.Effect<ReadonlyArray<DecisionRow>>;
-  /**
-   * Adds `agent` to the agents a set-aside workflow question waits for, or restarts its
-   * wait where it is already one, while no revision has opened. The question as written
-   * where it did.
-   */
   readonly alsoMessaged: (messaging: {
     readonly run: string;
     readonly decision: string;
     readonly agent: string;
   }) => Effect.Effect<DecisionRow | undefined>;
   readonly generations: Effect.Effect<ReadonlyArray<GenerationRow>>;
-  /**
-   * Claims a request id for a run, or hands back the run that already has it. `fresh` is
-   * false for a retry, which is what tells a caller not to execute again.
-   */
   readonly admit: (
     admission: Admission,
   ) => Effect.Effect<{ readonly row: RunRow; readonly fresh: boolean }, RequestConflict>;
-  /** Where the claimant placed it, and the Task that placement opened, if it opened one. */
   readonly place: (
     run: string,
     placed: { readonly checkout: string; readonly task: string | null },
   ) => Effect.Effect<RunRow>;
-  /** What a placement has done outside so far, written before and after each change it makes. */
   readonly recordPlacing: (run: string, placing: string) => Effect.Effect<void>;
-  /** A claim whose placement was refused, withdrawn so the request can be made again. */
   readonly forget: (run: string) => Effect.Effect<void>;
-  /**
-   * Forgets these Runs' rows in one transaction: `clear` first, for what the engine keeps
-   * of each, then its decisions and its row. A row the engine never accepted is left, for
-   * recovery to hand over (ADR-0017 D4). Answers with the Runs it forgot.
-   */
+  // WARNING: a row the engine never accepted is left, for recovery to hand over.
   readonly retire: <E>(
     runs: ReadonlyArray<string>,
     clear: (row: RunRow) => Effect.Effect<void, E>,
   ) => Effect.Effect<ReadonlyArray<string>, E>;
-  /** The engine has this work: the receipt a crash before it is what recovery looks for. */
+  // WARNING: the engine has this work; a crash before this receipt is what recovery looks for.
   readonly accepted: (run: string) => Effect.Effect<void>;
   readonly pending: Effect.Effect<ReadonlyArray<RunRow>>;
   readonly reportsPending: Effect.Effect<ReadonlyArray<RunRow>>;
   readonly reported: (run: string, report: RunReport) => Effect.Effect<void>;
   readonly run: (run: string) => Effect.Effect<RunRow | null>;
-  /** The run a request id was already admitted as, or null. */
   readonly requested: (request: string) => Effect.Effect<RunRow | null>;
   readonly releaseClaim: (row: RunRow) => Effect.Effect<void>;
-  /** The run a request ending in `suffix` was admitted as, or null. */
   readonly requestedEnding: (suffix: string) => Effect.Effect<RunRow | null>;
   readonly runs: Effect.Effect<ReadonlyArray<RunRow>>;
-  /**
-   * The rows a Run's record may read, a superset its reader narrows: the Run's Task's, or the
-   * Run's alone outside one, their parents and children, and every Run another asked for.
-   */
   readonly near: (run: string) => Effect.Effect<ReadonlyArray<RunRow>>;
-  /** Whatever this reads, again, whenever a run changes. */
   readonly watching: <A, E>(read: Effect.Effect<A, E>) => Stream.Stream<A, E>;
-  /** Every run, again, whenever one is committed. */
   readonly changes: Stream.Stream<ReadonlyArray<RunRow>>;
-  /** A run changed where the change was not one of these writes, so readers reread. */
   readonly announce: Effect.Effect<void>;
-  /** Moves whenever the Run's decisions may have changed, which no Run's row shows. Read when called. */
   readonly decided: Effect.Effect<(run: string) => number>;
-  /** Watches `mr` for the Run's wake `name`; a replay of the same watch changes nothing. */
   readonly watch: (row: {
     readonly run: string;
     readonly mr: string;
@@ -376,32 +274,19 @@ export interface StoreApi {
     readonly cursor: WatchCursor;
   }) => Effect.Effect<void>;
   readonly watches: (mrs: ReadonlyArray<string>) => Effect.Effect<ReadonlyArray<WatchRow>>;
-  /** Every watch any Run is still waiting on, whatever its merge request's Task says. */
   readonly outstanding: Effect.Effect<ReadonlyArray<WatchRow>>;
-  /** Whether the Run still waits on a watch under this name. */
   readonly waitingOn: (run: string, name: string) => Effect.Effect<boolean>;
   readonly observe: (run: string, name: string, observed: Observed) => Effect.Effect<void>;
-  /** Keeps what a watch is woken with; false where it was already woken. */
   readonly wake: (run: string, name: string, woke: Woke) => Effect.Effect<boolean>;
-  /** Forgets the Run's watch; false where it had none. */
   readonly unwatch: (run: string, name?: string) => Effect.Effect<boolean>;
 }
 
 export class Store extends Context.Service<Store, StoreApi>()("collie/Store") {}
 
-/** Over `host.db`; given the state directory, the files its first migration imports too. */
-export const storeLayer = (
-  stateDir?: string,
-): Layer.Layer<
-  Store,
-  never,
-  SqlClient.SqlClient | Reactivity.Reactivity | FileSystem.FileSystem | Path.Path
-> => Layer.effect(Store)(makeStore(stateDir));
+export const storeLayer = (stateDir?: string) => Layer.effect(Store)(makeStore(stateDir));
 
-/** What a committed write invalidates, and what a subscriber is listening for. */
 const RUNS = ["collie/runs"];
 
-/** A field of a record kept as JSON, null where the line is not JSON. */
 const field = (name: string) =>
   `CASE WHEN json_valid(line) THEN json_extract(line, '$.${name}') END`;
 
@@ -414,6 +299,7 @@ type ImportError = Effect.Error<
     | typeof importLaunches
     | typeof importReports
     | typeof importRunRecords
+    | typeof importMrStates
   >
 >;
 
@@ -425,6 +311,7 @@ const migrations = (imports: {
   readonly launches: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
   readonly reports: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
   readonly runRecords: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
+  readonly mrStates: Effect.Effect<void, ImportError, SqlClient.SqlClient>;
 }) => ({
   "1_runs": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -565,7 +452,6 @@ const migrations = (imports: {
     `;
     yield* sql`CREATE INDEX collie_proposals_journal ON collie_proposals (journal)`;
     yield* sql`CREATE INDEX collie_proposals_proposal ON collie_proposals (proposal)`;
-    // A proposal names its Runs in a JSON array, which no index reaches.
     yield* sql`
       CREATE TABLE collie_proposal_runs (
         run TEXT NOT NULL,
@@ -652,6 +538,44 @@ const migrations = (imports: {
     `;
     yield* sql`CREATE INDEX collie_watches_mr ON collie_watches (mr)`;
   }),
+  "30_connections": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      CREATE TABLE collie_connections (
+        id TEXT NOT NULL,
+        cwd TEXT NOT NULL,
+        reading TEXT,
+        read INTEGER NOT NULL,
+        PRIMARY KEY (id, cwd)
+      ) WITHOUT ROWID
+    `;
+  }),
+  "29_branches": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TABLE collie_branches (key TEXT PRIMARY KEY, row TEXT NOT NULL) WITHOUT ROWID`;
+  }),
+  "28_module_revisions": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TABLE collie_module_revisions (dir TEXT PRIMARY KEY, revision TEXT NOT NULL) WITHOUT ROWID`;
+  }),
+  "27_merge_requests": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TABLE collie_merge_requests (id TEXT PRIMARY KEY, entry TEXT NOT NULL) WITHOUT ROWID`;
+    yield* sql`CREATE TABLE collie_forge_logins (host TEXT PRIMARY KEY, login TEXT, read INTEGER NOT NULL) WITHOUT ROWID`;
+    yield* imports.mrStates;
+  }),
+  "26_cards": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      CREATE TABLE collie_cards (
+        task TEXT PRIMARY KEY,
+        view TEXT,
+        digest TEXT NOT NULL,
+        due REAL,
+        at INTEGER NOT NULL
+      ) WITHOUT ROWID
+    `;
+  }),
   [RUN_RECORDS_MIGRATION]: Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* sql.unsafe(`
@@ -701,16 +625,9 @@ const migrations = (imports: {
   }),
 });
 
-/** How often a commit by another connection, another process's, is looked for. */
 const ELSEWHERE_EVERY = "250 millis";
 
-function makeStore(
-  stateDir: string | undefined,
-): Effect.Effect<
-  StoreApi,
-  never,
-  SqlClient.SqlClient | Reactivity.Reactivity | Scope.Scope | FileSystem.FileSystem | Path.Path
-> {
+function makeStore(stateDir: string | undefined) {
   return Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const reactivity = yield* Reactivity.Reactivity;
@@ -724,8 +641,7 @@ function makeStore(
         SqlClient.SqlClient | FileSystem.FileSystem | Path.Path
       >,
     ) => (stateDir === undefined ? Effect.void : Effect.provideContext(read(stateDir), files));
-    // Before anything reads a table: a database that will not migrate is a broken host,
-    // not a request that failed.
+    // WARNING: a database that will not migrate is a broken host, not a request that failed.
     yield* SqliteMigrator.run({
       loader: Migrator.fromRecord(
         migrations({
@@ -736,28 +652,34 @@ function makeStore(
           launches: imported(importLaunches),
           reports: imported(importReports),
           runRecords: imported(importRunRecords),
+          mrStates: imported(importMrStates),
         }),
       ),
       table: "collie_migrations",
     }).pipe(Effect.orDie);
-    // SQLite moves `data_version` only for another connection's commits.
+    // WARNING: SQLite moves data_version only for another connection's commits.
     const dataVersion = sql<{ readonly data_version: number }>`PRAGMA data_version`.pipe(
       Effect.map((rows) => rows[0]?.data_version ?? 0),
       Effect.orElseSucceed(() => 0),
     );
     let seen = yield* dataVersion;
-    /** Moves with every write to the Runs, so a read of them stands until the next. */
     let written = 0;
-    /** The Runs written since the last read, or every Run where that is not known. */
     let dirty: Set<string> | "all" = "all";
     const told = Option.getOrUndefined(yield* Effect.serviceOption(StoreWrites));
     const wrote = (runs?: ReadonlyArray<string>) =>
       Effect.sync(() => {
         written++;
-        // Another connection's commit names no Run, and only the host writes a Run's row (ADR-0040).
-        if (runs !== undefined) told?.(runs);
-        if (runs === undefined) dirty = "all";
-        else if (dirty !== "all") for (const run of runs) dirty.add(run);
+        // WARNING: another connection's commit names no Run, and only the host writes a Run's row.
+        if (runs !== undefined) {
+          told?.(runs);
+        }
+        if (runs === undefined) {
+          dirty = "all";
+        } else if (dirty !== "all") {
+          for (const run of runs) {
+            dirty.add(run);
+          }
+        }
       });
     const invalidate = Effect.andThen(wrote(), reactivity.invalidate(RUNS));
     const mutation = <A, E, R>(runs: ReadonlyArray<string>, effect: Effect.Effect<A, E, R>) =>
@@ -772,7 +694,9 @@ function makeStore(
     yield* Effect.forkScoped(
       Effect.gen(function* () {
         const now = yield* dataVersion;
-        if (now === seen) return;
+        if (now === seen) {
+          return;
+        }
         seen = now;
         elsewhere++;
         yield* invalidate;
@@ -874,10 +798,10 @@ function makeStore(
           ORDER BY run, asked`,
     });
 
-    /** Why `row` takes no answer now, naming the question asked in its place. */
     const whyClosed = Effect.fn("Store.whyClosed")(function* (row: DecisionRow) {
-      if (row.answer !== null)
+      if (row.answer !== null) {
         return `"${row.decision}" was already answered "${row.answer}"${row.answerer === null ? "" : ` by ${whoActed(row.answerer)}`}`;
+      }
       const rows = yield* decisionsOf(row.run).pipe(Effect.orDie);
       let newest: DecisionRow | undefined;
       let next = Arr.findFirst(rows, (one) => one.revises === row.decision);
@@ -897,10 +821,11 @@ function makeStore(
     });
 
     let read: { readonly at: number; readonly rows: ReadonlyArray<RunRow> } | null = null;
-    /** Every Run, read again only after a write, each unchanged row the one read before. */
     const refreshing = Semaphore.makeUnsafe(1);
     const refresh = Effect.suspend(() => {
-      if (read?.at === written) return Effect.succeed(read.rows);
+      if (read?.at === written) {
+        return Effect.succeed(read.rows);
+      }
       const at = written;
       const which = dirty;
       dirty = new Set();
@@ -927,14 +852,18 @@ function makeStore(
             const was = before.get(row.run);
             return was !== undefined && sameRow(was, row) ? was : row;
           });
-          // Writes made since `at` are in `dirty`, so these rows stand for every one before.
           read = { at, rows };
           return rows;
         }),
         Effect.onError(() =>
           Effect.sync(() => {
-            if (which === "all") dirty = "all";
-            else if (dirty !== "all") for (const run of which) dirty.add(run);
+            if (which === "all") {
+              dirty = "all";
+            } else if (dirty !== "all") {
+              for (const run of which) {
+                dirty.add(run);
+              }
+            }
           }),
         ),
       );
@@ -943,7 +872,7 @@ function makeStore(
       read?.at === written ? Effect.succeed(read.rows) : refreshing.withPermit(refresh),
     );
 
-    return {
+    const returned: StoreApi = {
       remember: (generation: GenerationRow) =>
         Effect.gen(function* () {
           const at = yield* nowIso;
@@ -981,8 +910,10 @@ function makeStore(
           ? Effect.succeed(new Map())
           : decisionsOfRuns(runs).pipe(
               Effect.map((rows) => {
-                const byRun = new Map<string, DecisionRow[]>();
-                for (const row of rows) byRun.set(row.run, [...(byRun.get(row.run) ?? []), row]);
+                const byRun = new Map<string, Array<DecisionRow>>();
+                for (const row of rows) {
+                  byRun.set(row.run, [...(byRun.get(row.run) ?? []), row]);
+                }
                 return byRun;
               }),
               Effect.orDie,
@@ -995,9 +926,7 @@ function makeStore(
             ? (answer.answerer.from.agent ?? null)
             : null;
         yield* decide(answer.run);
-        // One write over the row while it is still open. Whoever it returns a row to is the
-        // answer; everybody else reads what landed and is told so. A superseded workflow
-        // question with no revision still takes the messaged agent's answer (D8).
+        // WARNING: a superseded workflow question with no revision still takes the messaged agent's answer.
         const settled = yield* mutation(
           [answer.run],
           sql`
@@ -1027,7 +956,9 @@ function makeStore(
             reason: `run "${answer.run}" is not waiting on a decision called "${answer.decision}"`,
           };
         }
-        if (settled.length > 0) return { _tag: "accepted" as const, row };
+        if (settled.length > 0) {
+          return { _tag: "accepted" as const, row };
+        }
         if (row.request === answer.request && row.answer === answer.value) {
           return { _tag: "repeat" as const, row };
         }
@@ -1053,11 +984,12 @@ function makeStore(
           run: superseding.run,
           decision: superseding.decision,
         }).pipe(Effect.orDie);
-        if (row === undefined)
+        if (row === undefined) {
           return {
             _tag: "refused" as const,
             reason: `run "${superseding.run}" is not waiting on a decision called "${superseding.decision}"`,
           };
+        }
         return written.length > 0
           ? { _tag: "accepted" as const, row }
           : { _tag: "refused" as const, reason: yield* whyClosed(row) };
@@ -1121,12 +1053,12 @@ function makeStore(
           task: admission.task,
           parent: admission.parent,
         };
-        if (admission.attachments?.length) askedFor.attachments = [...admission.attachments];
+        if (admission.attachments?.length) {
+          askedFor.attachments = [...admission.attachments];
+        }
         const asked = canonical(askedFor);
         const at = yield* nowIso;
-        // The claim is the insert, and what it returns is whether this caller made it:
-        // one request id, one row, decided by the database rather than by a read another
-        // caller could be between.
+        // WARNING: the claim is the insert: the database, not a read, decides which caller made it.
         const claimed = yield* mutation(
           [admission.run],
           sql`
@@ -1149,7 +1081,9 @@ function makeStore(
         if (row === undefined) {
           return yield* Effect.die(new Error(`request "${admission.request}" claimed nothing`));
         }
-        if (claimed.length > 0) return { row, fresh: true };
+        if (claimed.length > 0) {
+          return { row, fresh: true };
+        }
         if (
           row.workflow !== admission.workflow ||
           row.project !== admission.project ||
@@ -1180,7 +1114,9 @@ function makeStore(
             `,
         ).pipe(Effect.orDie);
         const [row] = yield* byRun(run).pipe(Effect.orDie);
-        if (row === undefined) return yield* Effect.die(new Error(`run "${run}" is not admitted`));
+        if (row === undefined) {
+          return yield* Effect.die(new Error(`run "${run}" is not admitted`));
+        }
         return row;
       }),
 
@@ -1200,10 +1136,12 @@ function makeStore(
           runs,
           sql.withTransaction(
             Effect.gen(function* () {
-              const gone: string[] = [];
+              const gone: Array<string> = [];
               for (const run of runs) {
                 const row = (yield* byRun(run).pipe(Effect.orDie))[0];
-                if (row === undefined || row.accepted === null) continue;
+                if (row === undefined || row.accepted === null) {
+                  continue;
+                }
                 yield* clear(row);
                 yield* decide(run);
                 yield* sql`DELETE FROM collie_decisions WHERE run = ${run}`.pipe(Effect.orDie);
@@ -1264,7 +1202,6 @@ function makeStore(
         ),
       watching: (read) => reactivity.stream(RUNS, read),
       changes: sql.reactive(RUNS, all),
-      // Only this store writes the Runs, so an announce moves none of their rows.
       announce: reactivity.invalidate(RUNS),
       decided: Effect.succeed((run: string) => elsewhere + (decisions.get(run) ?? 0)),
       watch: (row) =>
@@ -1332,7 +1269,8 @@ function makeStore(
           Effect.map((rows) => rows.length > 0),
           Effect.orDie,
         ),
-    } satisfies StoreApi;
+    };
+    return returned;
   });
 }
 
@@ -1357,28 +1295,9 @@ const watchRowOf = (row: {
       row.woke === null
         ? Effect.succeed(null)
         : Schema.decodeEffect(Schema.fromJsonString(Woke))(row.woke),
-  }).pipe(
-    Effect.map((decoded): WatchRow => ({ run: row.run, mr: row.mr, name: row.name, ...decoded })),
-  );
-
-const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Json));
-const asJsonText = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
+  }).pipe(Effect.map((decoded) => ({ run: row.run, mr: row.mr, name: row.name, ...decoded })));
 
 const answererText = flow(
   Schema.encodeResult(Schema.fromJsonString(AuditLine.fields.actor)),
   Result.getOrThrow,
 );
-
-/**
- * The same arguments written the same way, so a retry is compared rather than guessed at:
- * two objects that differ only in the order their keys arrived are one request.
- */
-const canonical = (value: Schema.Json): string => asJsonText(ordered(value));
-
-const ordered = (value: Schema.Json): Schema.Json => {
-  if (Arr.isArray<typeof value>(value)) return Arr.map(value, ordered);
-  if (!isRecord(value)) return value;
-  return Rec.fromEntries(
-    Arr.map(Struct.keys(value).sort(), (key) => [key, ordered(value[key] ?? null)] as const),
-  );
-};

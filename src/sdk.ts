@@ -1,33 +1,16 @@
-// What an author imports when they write a workflow: `collie`.
-//
-// A workflow module is ordinary TypeScript, and this is what Collie adds to it: the
-// payload envelope, the error contract, the metadata a card and a launch read, and the
-// schemas the shipped steps already write. `agents.ts` is served under the same specifier
-// and adds the one thing a module cannot write safely for itself — having an agent do the
-// work. Everything else an author reaches for is Effect's: `Activity`, `DurableDeferred`,
-// a Layer of their own, any operator at all.
-//
-// Two rules this file exists to keep. **Metadata is data, not control flow**: a hint, an
-// outcome and an action say what a workflow is, and nothing here decides what it does.
-// And **a conflict is refused before anything starts**: `checkEntry` runs at load, so a
-// module that contradicts itself never reaches a Run, a worktree or an agent.
-//
-// `docs/sdk.md` is the guidance; `docs/adr/0014-native-workflows-run-on-effects-own-engine.md`
-// is why the engine underneath is Effect's.
-
+// WARNING: metadata is data, never control flow; a conflict is refused at load, before any Run starts.
+import type { ClaudeSubagents } from "./subagents";
 import * as Struct from "effect/Struct";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import { pipe } from "effect/Function";
 import * as Option from "effect/Option";
+import type { FileSystem, Layer, Path } from "effect";
 import {
   Cause,
   Context,
   Effect,
-  FileSystem,
-  Layer,
-  Path,
   Predicate,
   Result,
   Schema,
@@ -37,8 +20,9 @@ import {
 } from "effect";
 import type { CheckEvidence, SynthesisSchema } from "./output";
 import type { FailedTest, Snapshot, Verification } from "./verify";
-import type { Issue, IssueRef } from "./forge/issues";
-export type { Issue, IssueRef } from "./forge/issues";
+import type { Issue, IssueQuery, IssueRef } from "./forge/issues";
+import { stringifyJson } from "./json";
+export type { Issue, IssueQuery, IssueRef } from "./forge/issues";
 import type { Report } from "./report";
 export type { Report } from "./report";
 export type { Produces, StepKind, StepMeta } from "./steps";
@@ -47,13 +31,15 @@ import type { CiJob, TakeTarget, TargetFailure } from "./ci-job";
 import type { ParkCause } from "./park-cause";
 import type { PipelineStart } from "./forge/forge";
 import type { ChildProcessSpawner } from "effect/process";
-import { WorkflowInstance, type WorkflowEngine } from "effect/workflow/WorkflowEngine";
+import { WorkflowInstance } from "effect/workflow/WorkflowEngine";
+import type { WorkflowEngine } from "effect/workflow/WorkflowEngine";
 import * as Activity from "effect/workflow/Activity";
 import * as DurableDeferred from "effect/workflow/DurableDeferred";
 import * as Workflow from "effect/workflow/Workflow";
 import type { Agents } from "./agents";
 import type { RunAuthority } from "./automode";
-import { bodySections, INPUT_STRATEGIES, type InputStrategy } from "./definitions";
+import { bodySections, INPUT_STRATEGIES } from "./definitions";
+import type { InputStrategy } from "./definitions";
 import { exclusiveClashes, launchInputProblem } from "./strategies";
 import { expressionsIn, malformedIn } from "./template";
 import {
@@ -65,29 +51,23 @@ import {
   reviewGaps,
   isOutcome,
   refInside,
-  type Outcome,
 } from "./outcome";
+import type { Outcome } from "./outcome";
 import type { Source } from "./offers";
 import { ShippingGo } from "./shipping";
 export type { ShippingGo } from "./shipping";
-import {
-  CurrentStep,
-  runKey,
-  type Produces,
-  type StepKind,
-  type StepMeta,
-  type StepNote,
-  type StepPlace,
-} from "./steps";
+import { CurrentStep, runKey } from "./steps";
+import type { Produces, StepKind, StepMeta, StepNote } from "./steps";
 import type { Asker } from "./proposals";
 import type { UsageReading } from "./usage-model";
-import { Recovery, ReviewScope } from "./recovery";
+import type { Recovery, ReviewScope } from "./recovery";
 export { Recovery, ReviewScope } from "./recovery";
 import type { Integration } from "./integrate";
 import type { BenchmarkPlan, Measurement } from "./measurement-model";
 import type { MergeOutcome, Takeover } from "./landing";
 import type { ReviewHead, ReviewStanding } from "./review-wait";
-import { Woke, type WatchCursor } from "./mr-watch-model";
+import { Woke } from "./mr-watch-model";
+import type { WatchCursor } from "./mr-watch-model";
 import type { PrerequisiteStanding } from "./prerequisites";
 import type {
   FastForward,
@@ -98,7 +78,9 @@ import type {
   TagRead,
 } from "./releasing";
 import type { Holders } from "./helle";
-import { ConnectionId, type ConnectionReading } from "./connection-model";
+import type { RunFeatures } from "./run-features";
+import { ConnectionId } from "./connection-model";
+import type { ConnectionReading } from "./connection-model";
 export { ConnectionId, ConnectionReading } from "./connection-model";
 
 export { EXCLUSIVE_STRATEGIES } from "./strategies";
@@ -126,7 +108,8 @@ export {
   type MrRef,
 } from "./board-model";
 export type { WatchChange, WatchCursor, Woke } from "./mr-watch-model";
-import { AuthoredSolution, type Solution } from "./board-model";
+import { AuthoredSolution } from "./board-model";
+import type { Solution } from "./board-model";
 /** What merging the default branch into a Run's branch did (`HostApi.integrate`). */
 export { IntegrationSchema, type Integration } from "./integrate";
 /** A Measurement as the host recorded it (`HostApi.measure`), an infinite ratio kept as JSON. */
@@ -183,6 +166,7 @@ export {
 } from "./releasing";
 /** Who holds the shared claims a Run needs (`HostApi.holders`). */
 export { HoldersSchema, type Holders } from "./helle";
+export { OutgoingFields, type HandOverGiven, type Outgoing } from "./hand-over";
 
 export {
   CheckSchema,
@@ -206,6 +190,7 @@ export {
   afterMergeAnswers,
   answerFor,
   blockingKeys,
+  conflictingDispositions,
   findingKey,
   sameFinding,
   formatFindings,
@@ -335,22 +320,23 @@ export class Template<Input> {
   constructor(readonly text: string) {}
 }
 
-/** What every agent's instructions may name without declaring it: `agentWork` gives it. */
 const GIVEN: ReadonlySet<string> = new Set(["role", "cwd", "output_path"]);
 
 const isStruct = (schema: unknown): schema is { readonly fields: Schema.Struct.Fields } =>
   Predicate.hasProperty(schema, "fields") && Predicate.isObject(schema.fields);
 
-/** Whether `path` names a declared field, or one a field that is a map may hold. */
-const declares = (
-  fields: Schema.Struct.Fields,
-  [head = "", ...rest]: ReadonlyArray<string>,
-): boolean => {
+const declares = (fields: Schema.Struct.Fields, [head = "", ...rest]: ReadonlyArray<string>) => {
   const field = fields[head];
-  if (field === undefined) return false;
-  if (rest.length === 0) return true;
-  if (isStruct(field)) return declares(field.fields, rest);
-  // A record's keys are its values', and nothing here can know them ahead.
+  if (field === undefined) {
+    return false;
+  }
+  if (rest.length === 0) {
+    return true;
+  }
+  if (isStruct(field)) {
+    return declares(field.fields, rest);
+  }
+  // WARNING: a record's keys are its values', and nothing here can know them ahead.
   return Predicate.hasProperty(field, "key") && Predicate.hasProperty(field, "value");
 };
 
@@ -359,10 +345,7 @@ const declares = (
  * declare is refused here, so a template made where a module loads is checked by every
  * load of it — `collie doctor` and `collie workflow check` among them.
  */
-export function template<const Fields extends Schema.Struct.Fields>(
-  text: string,
-  fields: Fields,
-): Template<Schema.Struct<Fields>["Type"]> {
+export function template<const Fields extends Schema.Struct.Fields>(text: string, fields: Fields) {
   const undeclared = Arr.filter(
     expressionsIn(text),
     (name) => !(GIVEN.has(name) || declares(fields, Str.split(name, "."))),
@@ -373,7 +356,8 @@ export function template<const Fields extends Schema.Struct.Fields>(
       `this template names ${Arr.join(wrong, ", ")}, which nothing fills: declare ${wrong.length === 1 ? "it" : "them"} among what it takes, or remove ${wrong.length === 1 ? "it" : "them"}`,
     );
   }
-  return new Template(text);
+  const returned: Template<Schema.Struct<Fields>["Type"]> = new Template(text);
+  return returned;
 }
 
 /** What agents are told, read from Markdown: see `contentOf`. */
@@ -394,7 +378,7 @@ export interface Content {
  * entry per `## name` section below it. Front matter is refused: what a workflow takes
  * and does is its definition's, where it is checked, and a second copy here would drift.
  */
-export function contentOf(markdown: string): Content {
+export function contentOf(markdown: string) {
   if (FRONT_MATTER.test(markdown)) {
     throw new Error(
       "this Markdown has front matter, and a workflow's inputs, steps and questions belong in its definition: keep only what agents are told here",
@@ -413,7 +397,7 @@ export function contentOf(markdown: string): Content {
       "\n\n",
     );
   };
-  return {
+  const returned: Content = {
     preamble,
     sections,
     prompt,
@@ -424,10 +408,12 @@ export function contentOf(markdown: string): Content {
       } catch (cause) {
         throw new Error(
           `"## ${section}": ${cause instanceof Error ? cause.message : String(cause)}`,
+          { cause },
         );
       }
     },
   };
+  return returned;
 }
 
 const FRONT_MATTER = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
@@ -440,7 +426,7 @@ const FRONT_MATTER = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
  * an Output is only ever a claim — what decides a check is the journal, bound to the
  * tree in front of it.
  */
-export function evidenceGapsOf(options: EvidenceAsk): ReadonlyArray<string> {
+export function evidenceGapsOf(options: EvidenceAsk) {
   return evidenceGaps(options.kind, collectedOf(options));
 }
 
@@ -448,12 +434,12 @@ export function evidenceGapsOf(options: EvidenceAsk): ReadonlyArray<string> {
  * The gaps among those a verification on this tree could close: what a fix may be
  * handed. A reviewer's judgement and an Output's claim are not moved by running anything.
  */
-export function checkGapsOf(options: EvidenceAsk): ReadonlyArray<string> {
+export function checkGapsOf(options: EvidenceAsk) {
   return checkGaps(options.kind, collectedOf(options));
 }
 
 /** The gaps among those a fresh review could close: what is worth paying a reviewer for. */
-export function reviewGapsOf(options: EvidenceAsk): ReadonlyArray<string> {
+export function reviewGapsOf(options: EvidenceAsk) {
   return reviewGaps(options.kind, collectedOf(options));
 }
 
@@ -461,7 +447,7 @@ export function reviewGapsOf(options: EvidenceAsk): ReadonlyArray<string> {
  * Whether the Run is done with no patch to deliver, which is an outcome and not a failure:
  * an investigation that says so, or a performance Run whose tree is its latest base tree again.
  */
-export function endsWithoutPatchOf(options: EvidenceAsk): boolean {
+export function endsWithoutPatchOf(options: EvidenceAsk) {
   return endsWithoutPatch(options.kind, collectedOf(options));
 }
 
@@ -531,7 +517,7 @@ export interface AgentPreferences {
   readonly harness?: string;
   readonly model?: string;
   readonly effort?: string;
-  readonly claudeSubagents?: import("./subagents").ClaudeSubagents;
+  readonly claudeSubagents?: ClaudeSubagents;
   /** Past this share of its busiest window, 1–100, this agent is not chosen for new work. */
   readonly upTo?: number;
   /**
@@ -584,7 +570,7 @@ const isPanel = (seats: Seat | ReadonlyArray<Seat>): seats is ReadonlyArray<Seat
  * The panel this workflow's definition seats for a role: every seat it names, or one that
  * prefers nothing of its own where it names none. Work given a seat sits at it.
  */
-export const panelOf = (role: string): Effect.Effect<readonly [Seat, ...Seat[]]> =>
+export const panelOf: (role: string) => Effect.Effect<readonly [Seat, ...Array<Seat>]> = (role) =>
   Effect.gen(function* () {
     const given = (yield* WorkflowAgents)?.roles?.[role];
     const [first = {}, ...rest] = given === undefined ? [] : isPanel(given) ? given : [given];
@@ -597,7 +583,7 @@ export const panelOf = (role: string): Effect.Effect<readonly [Seat, ...Seat[]]>
  */
 export const withAgents =
   (preferences: AgentPreferences) =>
-  <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Effect.gen(function* () {
       const scopes = yield* AgentScopes;
       return yield* Effect.provideService(effect, AgentScopes, [...scopes, preferences]);
@@ -700,16 +686,16 @@ export interface Definition<
  * id, the description is empty, it takes nothing and it gives nothing back.
  */
 export const defineWorkflow = <
-  const Fields extends Schema.Struct.Fields = {},
+  const Fields extends Schema.Struct.Fields = Record<never, never>,
   Output extends Schema.Top = typeof Schema.Void,
   Err extends Schema.Top = typeof Schema.Never,
   Provided = never,
 >(
   definition: Definition<Fields, Output, Err, Provided>,
-): Definition<Fields, Output, Err, Provided> => definition;
+) => definition;
 
 /** A definition with its defaults filled in. */
-export const definitionOf = (written: WrittenDefinition): WorkflowDefinition => ({
+export const definitionOf = (written: WrittenDefinition) => ({
   ...written,
   title: written.title ?? written.id,
   description: written.description ?? "",
@@ -717,13 +703,6 @@ export const definitionOf = (written: WrittenDefinition): WorkflowDefinition => 
   output: written.output ?? Schema.Void,
 });
 
-/**
- * What the host lends a workflow module; ticket 01's proof host provides it.
- *
- * `held` and `stopRequested` are plain Effects rather than Activities on purpose: an
- * operator sets a control between attempts, and an Activity would hand back the answer
- * from the attempt that first ran.
- */
 /**
  * What `claim` holds; `none`, why the repository has no Helle project to claim; or
  * `unresolved`, why the claims a Run needs could not be settled.
@@ -748,10 +727,7 @@ const Holding = Schema.Union([
   Schema.Struct({ unresolved: Schema.String }),
 ]);
 
-/**
- * What a claim journaled before a Run could hold several: one project, or null where it
- * went on holding none, which is read as unsettled so a replay asks rather than goes on.
- */
+// WARNING: null is read as unsettled, so a replay asks rather than goes on.
 const SingleClaim = Schema.NullOr(Schema.Struct({ slug: Schema.String })).pipe(
   Schema.decodeTo(Holding, {
     decode: SchemaGetter.transform((one) =>
@@ -799,14 +775,21 @@ export interface HostApi {
   /** This Machine's Run report, for admissions at or after the ISO moment. */
   readonly report: (since: string) => Effect.Effect<Report, WorkflowError>;
   /**
-   * Open issues on the forge of this Run's checkout, or with `numbers` those issues read one
-   * by one. `on: "collie"` asks Collie's own repository instead, as do filing and commenting.
+   * Open issues on the forge of this Run's checkout; with numbers, those issues read one by
+   * one; with `closedSince`, those closed since then. `on: "collie"` asks Collie's own
+   * repository instead, as do filing and commenting.
    */
   readonly issues: (
     runId: string,
-    numbers?: ReadonlyArray<number>,
+    which?: IssueQuery,
     on?: "collie",
   ) => Effect.Effect<ReadonlyArray<Issue>, WorkflowError>;
+  /** Open merge requests on the forge of this Run's checkout, their descriptions as `body`. */
+  readonly requests: (runId: string) => Effect.Effect<ReadonlyArray<Issue>, WorkflowError>;
+  /** The tags of this Run's checkout, newest first by creator date, with when each was made. */
+  readonly releases: (
+    runId: string,
+  ) => Effect.Effect<ReadonlyArray<{ readonly tag: string; readonly at: string }>, WorkflowError>;
   /** Files redacted text on this Run's forge; another checkout's identity is refused. */
   readonly fileIssue: (options: {
     readonly runId: string;
@@ -869,6 +852,7 @@ export interface HostApi {
     failed: string,
     target: string,
   ) => Effect.Effect<string | null>;
+  // WARNING: held and stopRequested are plain Effects, not Activities: an Activity would replay the first attempt answer.
   readonly held: (runId: string) => Effect.Effect<boolean>;
   readonly stopRequested: (runId: string) => Effect.Effect<boolean>;
   readonly record: (runId: string, event: string) => Effect.Effect<void>;
@@ -1144,7 +1128,8 @@ export interface HostApi {
    * the forge is asked and says after what came of it; the merge watch reads it to leave this
    * Run, and the Runs it was started from, running when the merge lands. Answers `Merged`
    * with the merged commit, `HeadMoved` where the merge request's head is no longer `head`,
-   * `MergedOutside` where someone else merged it first, or `Refused` with the forge's why.
+   * `MergedOutside` where someone else merged it first, `Refused` with the forge's why, or
+   * `Transient` with why, unmerged on a failure a merge at the same head may clear.
    * Fails for a Run that recorded no merge request. Take it inside an Activity: a replay
    * settles an attempt an earlier host left on the forge's word rather than merging again.
    */
@@ -1434,16 +1419,22 @@ export interface HostApi {
     readonly permalink?: string;
     readonly wanted: ReadonlyArray<string>;
   }) => Effect.Effect<string>;
-  /** Reads the target's head before review. Take it inside an Activity. */
+  /** Reads the target's head before review, else the checkout's HEAD. Take it inside an Activity. */
   readonly reviewedHead: (options: {
     readonly target: string;
     readonly cwd: string;
   }) => Effect.Effect<string>;
+  /**
+   * What changed from `previous` to `head`: a merge request's interdiff, else the checkout's
+   * commits and files since `previous`, with the command that shows their diff. A
+   * local `base`, the default branch merged in since, is left out of them.
+   */
   readonly reviewChanges: (options: {
     readonly target: string;
     readonly cwd: string;
     readonly previous: string;
     readonly head: string;
+    readonly base?: string;
   }) => Effect.Effect<string, WorkflowError>;
   /** Approves once per Run and attempt; an interrupted attempt returns an uncertain outcome. */
   readonly approveReview: (options: {
@@ -1472,6 +1463,8 @@ export interface Place {
   readonly workspace: string | null;
   /** This Run, then the Runs it was started from or builds a plan of, and so on: whose agents it may ask. */
   readonly lineage: ReadonlyArray<string>;
+  /** What its workflow does, fixed when it started; absent from an older host. */
+  readonly features?: RunFeatures;
   /** What a Claude agent's auto mode is told this Run authorises: the branch it made, and who started it. */
   readonly authority: RunAuthority;
 }
@@ -1581,9 +1574,11 @@ export interface DecisionSpec {
 /** One answer an `ask` takes: a bare string is its id and title. */
 export type AskOption = typeof AuthoredSolution.Encoded;
 
-const recommendationShortfall = (solutions: ReadonlyArray<Solution>): string | null => {
+const recommendationShortfall = (solutions: ReadonlyArray<Solution>) => {
   const recommended = Arr.filter(solutions, (one) => one.recommended === true).length;
-  if (solutions.length === 0 || recommended === 1) return null;
+  if (solutions.length === 0 || recommended === 1) {
+    return null;
+  }
   return recommended === 0
     ? "this workflow recommended none"
     : "this workflow recommended more than one";
@@ -1598,7 +1593,7 @@ const recommendationShortfall = (solutions: ReadonlyArray<Solution>): string | n
  * cannot show the question, cannot refuse an answer to one nobody asked, and cannot tell
  * a second answer from the first.
  */
-export const ask = (question: Question): Effect.Effect<string, never, Asking> =>
+export const ask = (question: Question) =>
   opened(question).pipe(
     Effect.andThen(
       DurableDeferred.await(DurableDeferred.make(question.name, { success: Schema.String })),
@@ -1617,10 +1612,7 @@ interface Question {
   readonly options?: ReadonlyArray<AskOption>;
 }
 
-type Asking = Run | Host | WorkflowEngine | WorkflowInstance;
-
-/** Tells the host the question is open, without waiting for its answer. */
-const opened = (question: Question): Effect.Effect<void, never, Asking> =>
+const opened = (question: Question) =>
   Effect.gen(function* () {
     const shipping =
       question.shipping === undefined
@@ -1629,20 +1621,22 @@ const opened = (question: Question): Effect.Effect<void, never, Asking> =>
     const host = yield* Host;
     const runId = (yield* Run).id;
     const at = yield* CurrentStep;
-    if (at !== null)
+    if (at !== null) {
       yield* Activity.make({
         name: `ask.${question.name}.step`,
         execute: host.step(runId, { kind: "question", key: at.key, name: question.name }),
       });
+    }
     const solutions = yield* Schema.decodeEffect(Schema.Array(AuthoredSolution))(
       question.options ?? [],
     ).pipe(Effect.orDie);
     const shortfall = recommendationShortfall(solutions);
-    if (shortfall !== null)
+    if (shortfall !== null) {
       yield* Activity.make({
         name: `ask.${question.name}.shortfall`,
         execute: host.record(runId, `"${question.name}": ${shortfall}`),
       });
+    }
     yield* host.asking(runId, {
       name: question.name,
       prompt: question.prompt ?? question.name,
@@ -1658,7 +1652,7 @@ const opened = (question: Question): Effect.Effect<void, never, Asking> =>
  * and no forge read beyond the merge watch's own. `name` is its identity, as an `ask`'s is.
  * A new head is then read once for whether it descends from the cursor's.
  */
-export const watch = (options: Watching): Effect.Effect<Woke, WorkflowError, Asking> =>
+export const watch = (options: Watching) =>
   Effect.gen(function* () {
     yield* watched(options, false);
     const woke = yield* DurableDeferred.await(
@@ -1672,10 +1666,7 @@ export const watch = (options: Watching): Effect.Effect<Woke, WorkflowError, Ask
  * first, its answer or a change that matters, is what this returns, and the other is gone. A
  * change closes the question unanswered.
  */
-export const askWhileWatching = (
-  question: Omit<Question, "name">,
-  options: Watching,
-): Effect.Effect<Woke | Answered, WorkflowError, Asking> =>
+export const askWhileWatching = (question: Omit<Question, "name">, options: Watching) =>
   Effect.gen(function* () {
     yield* watched(options, true);
     yield* opened({ ...question, name: options.name });
@@ -1725,10 +1716,11 @@ const watched = (options: Watching, asking: boolean) =>
     });
   });
 
-/** A new head, read once for whether it descends from the cursor's. */
 const withAncestry = (options: Watching, woke: Woke) =>
   Effect.gen(function* () {
-    if (woke._tag === "Ended" || !woke.change.newHead) return woke;
+    if (woke._tag === "Ended" || !woke.change.newHead) {
+      return woke;
+    }
     const host = yield* Host;
     const descends = yield* Activity.make({
       name: `watch.${options.name}.descends`,
@@ -1793,7 +1785,7 @@ export class Children extends Context.Service<Children, ChildrenApi>()("collie/C
  * One child workflow, started and waited on. Anything else is Effect's own operators. It
  * prefers the agents its parent prefers where it is started, unless its options say else.
  */
-export const child = (ask: ChildAsk): Effect.Effect<unknown, WorkflowError, Children> =>
+export const child = (ask: ChildAsk) =>
   Effect.gen(function* () {
     const children = yield* Children;
     return yield* children.result(yield* children.start(ask));
@@ -1825,10 +1817,9 @@ export interface Step extends StepMeta {
   readonly meta: StepMeta;
 }
 
-/** Calls of each Step made without a place, per execution, so each is a run of its own. */
 const unplaced = new WeakMap<object, Map<string, number>>();
 
-const placeOf = (place: StepCall | undefined): StepPlace | null =>
+const placeOf = (place: StepCall | undefined) =>
   place === undefined
     ? null
     : "item" in place
@@ -1839,7 +1830,7 @@ const placeOf = (place: StepCall | undefined): StepPlace | null =>
  * A Step, made where its work is written (ADR-draft-a-step-is-declared-where-its-work-is-written).
  * Its records are Activities, so a replay records nothing twice.
  */
-export const step = (declared: StepDeclaration): Step => {
+export const step: (declared: StepDeclaration) => Step = (declared) => {
   const meta: StepMeta = {
     id: declared.id,
     title: declared.title,
@@ -1857,14 +1848,17 @@ export const step = (declared: StepDeclaration): Step => {
       const calls = unplaced.get(instance) ?? new Map<string, number>();
       unplaced.set(instance, calls);
       const n = place === null ? (calls.get(meta.id) ?? 0) + 1 : 0;
-      if (place === null) calls.set(meta.id, n);
+      if (place === null) {
+        calls.set(meta.id, n);
+      }
       const key = runKey(meta.id, place, n);
       yield* Activity.make({
         name: `step.${key}.enter`,
         execute: host.step(runId, { kind: "enter", key, step: meta, place }),
       });
-      if ((yield* host.held(runId)) || (yield* host.stopRequested(runId)))
+      if ((yield* host.held(runId)) || (yield* host.stopRequested(runId))) {
         return yield* Workflow.suspend(yield* WorkflowInstance);
+      }
       const done = yield* Effect.provideService(work, CurrentStep, {
         step: meta.id,
         place,
@@ -1890,11 +1884,12 @@ const Said = Schema.Union([
   Schema.Struct({ message: Schema.String }),
 ]);
 
-/** Why a Step's work failed: a `WorkflowError`'s reason, an error's message, or what it is. */
-const failureOf = (cause: Cause.Cause<unknown>): string => {
+const failureOf = (cause: Cause.Cause<unknown>) => {
   const error = Cause.squash(cause);
   const said = Schema.decodeUnknownOption(Said)(error);
-  if (said._tag === "None") return String(error);
+  if (said._tag === "None") {
+    return String(error);
+  }
   return "reason" in said.value ? said.value.reason : said.value.message;
 };
 
@@ -1902,21 +1897,22 @@ const failureOf = (cause: Cause.Cause<unknown>): string => {
  * Records that the Step the work is in failed, where the Run parks to be resumed rather than
  * ending: the Step is drawn failed, saying why, until a resume enters it again.
  */
-export const stepFailed = (why: string): Effect.Effect<void, never, Run | Host> =>
+export const stepFailed = (why: string) =>
   Effect.gen(function* () {
     const at = yield* CurrentStep;
-    if (at === null) return;
+    if (at === null) {
+      return;
+    }
     yield* (yield* Host).step((yield* Run).id, { kind: "fail", key: at.key, why });
   });
 
-/** Calls of `forecast`, per execution, so each forecast is an Activity of its own. */
 const forecasts = new WeakMap<object, number>();
 
 /**
  * The path from here, once the Run knows which branch it takes. The Flow forecasts from
  * the latest one; it is never a precondition.
  */
-export const forecast = (path: ReadonlyArray<Step>): Effect.Effect<void, never, Recording> =>
+export const forecast = (path: ReadonlyArray<Step>) =>
   Effect.gen(function* () {
     const host = yield* Host;
     const runId = (yield* Run).id;
@@ -1930,9 +1926,7 @@ export const forecast = (path: ReadonlyArray<Step>): Effect.Effect<void, never, 
   });
 
 /** The ids a path lists more than once: a Step is known by its id, so each is one Step. */
-export const repeatedIds = (
-  path: ReadonlyArray<{ readonly id: string }>,
-): ReadonlyArray<string> => {
+export const repeatedIds = (path: ReadonlyArray<{ readonly id: string }>) => {
   const ids = Arr.map(path, (one) => one.id);
   return Arr.dedupe(
     Arr.filter(ids, (id, at) => Arr.some(Arr.take(ids, at), (before) => before === id)),
@@ -1993,7 +1987,6 @@ export interface WorkflowEntry {
   readonly make: (registrationName: string) => Registration;
 }
 
-/** What a workflow may declare it needs of the repository. */
 const DeclaredCheckout = Schema.Literals(["branch", "roaming"]);
 const isDeclaredCheckout = Schema.is(DeclaredCheckout);
 
@@ -2123,7 +2116,7 @@ export const RESERVED_INPUTS = {
 const IDENTITY = /^[a-z][a-z0-9-]*$/;
 
 /** What a public id may be, so a command that writes one can refuse before the file exists. */
-export const isWorkflowId = (id: string): boolean => IDENTITY.test(id);
+export const isWorkflowId = (id: string) => IDENTITY.test(id);
 
 const isReserved = (name: string): name is keyof typeof RESERVED_INPUTS => name in RESERVED_INPUTS;
 const reservedMeaning = (name: string) => (isReserved(name) ? RESERVED_INPUTS[name] : "");
@@ -2141,7 +2134,6 @@ const OfferFields = {
   confirm: Schema.optionalKey(Schema.NonEmptyString),
 };
 
-/** What metadata has to be before any of it can be read: a module is JavaScript by now. */
 const DeclaredMetadata = Schema.Struct({
   connections: Schema.optionalKey(
     Schema.Struct({
@@ -2192,15 +2184,19 @@ const readMetadata = Schema.decodeUnknownResult(DeclaredMetadata, { errors: "all
  * Empty means it may be registered. The host calls this at load, before anything of the
  * author's runs and long before a Run, a worktree or an agent exists.
  */
-export function checkEntry(entry: WorkflowEntry): ReadonlyArray<string> {
-  const problems: string[] = [];
+export function checkEntry(entry: WorkflowEntry) {
+  const problems: Array<string> = [];
   if (!IDENTITY.test(entry.id)) {
     problems.push(`workflow id "${entry.id}" is not an identity: lower case, digits and dashes`);
   }
-  if (Str.trim(entry.title) === "") problems.push("title is required");
+  if (Str.trim(entry.title) === "") {
+    problems.push("title is required");
+  }
   const fields = new Set(Struct.keys(entry.input));
   for (const [name, field] of Rec.toEntries(entry.input)) {
-    if (!Schema.isSchema(field)) problems.push(`input "${name}" is not a schema`);
+    if (!Schema.isSchema(field)) {
+      problems.push(`input "${name}" is not a schema`);
+    }
   }
   for (const name of fields) {
     if (isReserved(name)) {
@@ -2218,48 +2214,60 @@ export function checkEntry(entry: WorkflowEntry): ReadonlyArray<string> {
     const connections = entry.metadata?.connections?.[kind] ?? {};
     for (const id of Struct.keys(connections)) {
       const text = connections[id];
-      if (text === undefined) continue;
-      if (!Schema.is(ConnectionId)(id))
+      if (text === undefined) {
+        continue;
+      }
+      if (!Schema.is(ConnectionId)(id)) {
         problems.push(`${entry.id}: unknown Connection "${String(id)}"`);
-      for (const [column, value] of Rec.toEntries(text))
-        if (Str.trim(value) === "")
+      }
+      for (const [column, value] of Rec.toEntries(text)) {
+        if (Str.trim(value) === "") {
           problems.push(`${entry.id}: ${kind}.${id}.${column} must have text`);
-      if (kind === "uses" && id in (entry.metadata?.connections?.needs ?? {}))
+        }
+      }
+      if (kind === "uses" && id in (entry.metadata?.connections?.needs ?? {})) {
         problems.push(`${entry.id}: Connection "${id}" is both needed and used`);
+      }
     }
   }
-  problems.push(...hintProblems(entry.metadata?.hints ?? {}, fields));
-  problems.push(...outcomeProblems(entry.metadata?.outcome));
+  problems.push(
+    ...hintProblems(entry.metadata?.hints ?? {}, fields),
+    ...outcomeProblems(entry.metadata?.outcome),
+  );
   const checkout: unknown = entry.metadata?.checkout;
   if (checkout !== undefined && !isDeclaredCheckout(checkout)) {
-    problems.push(`checkout ${JSON.stringify(checkout)} is not branch or roaming`);
+    problems.push(`checkout ${stringifyJson(checkout)} is not branch or roaming`);
   }
   problems.push(...offerProblems(entry.metadata, entry.id));
-  for (const id of repeatedIds(entry.metadata?.path ?? []))
+  for (const id of repeatedIds(entry.metadata?.path ?? [])) {
     problems.push(`path lists the Step "${id}" more than once`);
+  }
   return problems;
 }
 
-function hintProblems(
-  hints: Readonly<Record<string, InputStrategy>>,
-  fields: ReadonlySet<string>,
-): ReadonlyArray<string> {
-  const problems: string[] = [];
+function hintProblems(hints: Readonly<Record<string, InputStrategy>>, fields: ReadonlySet<string>) {
+  const problems: Array<string> = [];
   for (const [field, strategy] of Rec.toEntries(hints)) {
-    if (!fields.has(field)) problems.push(`hint for "${field}", which is not an input`);
+    if (!fields.has(field)) {
+      problems.push(`hint for "${field}", which is not an input`);
+    }
     if (!KNOWN_STRATEGIES.has(strategy)) {
       problems.push(`input "${field}" has no strategy called "${strategy}"`);
     }
   }
   problems.push(...exclusiveClashes(hints));
   const launch = launchInputProblem([...fields], hints);
-  if (launch !== null) problems.push(launch);
+  if (launch !== null) {
+    problems.push(launch);
+  }
   return problems;
 }
 
-function outcomeProblems(outcome: OutcomeContract | undefined): ReadonlyArray<string> {
-  if (!outcome) return [];
-  const problems: string[] = [];
+function outcomeProblems(outcome: OutcomeContract | undefined) {
+  if (!outcome) {
+    return [];
+  }
+  const problems: Array<string> = [];
   if (outcome.fixed !== undefined && outcome.selectable !== undefined) {
     problems.push("an outcome is either fixed or selectable, not both");
   }
@@ -2267,41 +2275,50 @@ function outcomeProblems(outcome: OutcomeContract | undefined): ReadonlyArray<st
     problems.push(`no outcome called "${String(outcome.fixed)}" (${Arr.join(KINDS, ", ")})`);
   }
   if (outcome.selectable !== undefined) {
-    if (outcome.selectable.length === 0) problems.push("a selectable outcome offers nothing");
+    if (outcome.selectable.length === 0) {
+      problems.push("a selectable outcome offers nothing");
+    }
     for (const kind of outcome.selectable) {
-      if (!REQUESTABLE.includes(kind))
+      if (!REQUESTABLE.includes(kind)) {
         problems.push(`"${kind}" is not an outcome a human may ask for`);
+      }
     }
   }
   return problems;
 }
 
-function offerProblems(
-  metadata: WorkflowMetadata | undefined,
-  workflow: string,
-): ReadonlyArray<string> {
-  const problems: string[] = [];
+function offerProblems(metadata: WorkflowMetadata | undefined, workflow: string) {
+  const problems: Array<string> = [];
   const seen = new Set<string>();
   for (const offer of [...(metadata?.actions ?? []), ...(metadata?.followUps ?? [])]) {
     for (const id of offer.connections ?? []) {
       if (
         !(id in (metadata?.connections?.uses ?? {})) &&
         !(id in (metadata?.connections?.needs ?? {}))
-      )
+      ) {
         problems.push(
           `${workflow}: offer "${offer.id}" lists Connection "${id}", which its workflow does not declare`,
         );
+      }
     }
-    if (!IDENTITY.test(offer.id)) problems.push(`"${offer.id}" is not an identity for an offer`);
-    if (seen.has(offer.id)) problems.push(`two offers are called "${offer.id}"`);
+    if (!IDENTITY.test(offer.id)) {
+      problems.push(`"${offer.id}" is not an identity for an offer`);
+    }
+    if (seen.has(offer.id)) {
+      problems.push(`two offers are called "${offer.id}"`);
+    }
     seen.add(offer.id);
-    if (Str.trim(offer.title) === "") problems.push(`offer "${offer.id}" has no title`);
+    if (Str.trim(offer.title) === "") {
+      problems.push(`offer "${offer.id}" has no title`);
+    }
     if (!IDENTITY.test(offer.workflow)) {
       problems.push(`offer "${offer.id}" starts "${offer.workflow}", which is not a workflow id`);
     }
-    for (const name of Rec.keys(offer.given ?? {}))
-      if (name in (offer.inputs ?? {}))
+    for (const name of Rec.keys(offer.given ?? {})) {
+      if (name in (offer.inputs ?? {})) {
         problems.push(`offer "${offer.id}" both fills "${name}" from the Run and gives it`);
+      }
+    }
   }
   return problems;
 }
@@ -2311,7 +2328,7 @@ function offerProblems(
  * projection of each action's argument schema. The eligibility closures and the schema
  * values themselves stay here — presentation travels, behaviour does not.
  */
-export function describeMetadata(metadata: WorkflowMetadata | undefined): Schema.Json {
+export function describeMetadata(metadata: WorkflowMetadata | undefined) {
   const described = {
     hints: { ...metadata?.hints },
     outcome: metadata?.outcome?.fixed ?? null,
@@ -2334,12 +2351,13 @@ export function describeMetadata(metadata: WorkflowMetadata | undefined): Schema
         workflow: action.workflow,
         connections: [...(action.connections ?? [])],
         arguments: projected.document,
-        // What the drawing does not say. The action is offered either way.
         limits: [...projected.limits],
       };
     }),
   };
-  if (metadata?.connections === undefined) return described;
+  if (metadata?.connections === undefined) {
+    return described;
+  }
   return {
     ...described,
     connections: {
@@ -2366,30 +2384,30 @@ export interface Projection {
   readonly limits: ReadonlyArray<string>;
 }
 
-export function jsonSchemaFor(schema: Schema.Constraint): Projection {
+export function jsonSchemaFor(schema: Schema.Constraint) {
   try {
     const drawn = SchemaRepresentation.toJsonSchemaDocument(
       withPatterns(SchemaRepresentation.toRepresentation(Schema.toCodecJson(schema).ast)),
     );
     const document = asJson({ ...drawn.schema, $defs: drawn.definitions });
-    // Scanned without `$defs`, which is a container of schemas rather than one: empty
-    // there means the document needed no definitions, not that it says nothing.
+    // WARNING: scanned without $defs, a container of schemas: empty there means no definitions were needed.
     return { document, limits: unconstrained(asJson({ ...drawn.schema }), "") };
   } catch (cause) {
     return { document: null, limits: [String(cause)] };
   }
 }
 
-/**
- * Effect draws a pattern only for a RegExp with the `u` flag, which a JSON Schema pattern
- * implies; any other whose source is known to match the same strings under it is drawn too.
- */
-function withPatterns<T>(node: T): T {
+// WARNING: Effect draws a pattern only for a RegExp with the u flag, which a JSON Schema pattern implies.
+function withPatterns<T>(node: T) {
   if (isList(node)) {
-    // SAFETY: the same list, each element copied with its own type.
-    return Arr.map(node, withPatterns) as T;
+    // WARNING: the same list, each element copied with its own type.
+    const returned: T = Arr.map(node, withPatterns) as T;
+    return returned;
   }
-  if (!isNode(node)) return node;
+  if (!isNode(node)) {
+    const returned: T = node;
+    return returned;
+  }
   const copied = Rec.fromEntries(
     Arr.map(
       Rec.toEntries(node),
@@ -2397,8 +2415,9 @@ function withPatterns<T>(node: T): T {
     ),
   );
   const annotations = isPatternCheck(node) ? drawn(node) : null;
-  // SAFETY: the same node, with at most a pattern check's annotations replaced.
-  return (annotations === null ? copied : { ...copied, annotations }) as T;
+  // WARNING: the same node, with at most a pattern check's annotations replaced.
+  const returned: T = (annotations === null ? copied : { ...copied, annotations }) as T;
+  return returned;
 }
 
 const isList = Schema.is(Schema.Array(Schema.Unknown));
@@ -2415,16 +2434,16 @@ const isPatternCheck = Schema.is(PatternCheck);
 
 function drawn(check: typeof PatternCheck.Type) {
   const { source, flags } = check.representation.payload;
-  if (!/^[dg]*$/.test(flags) || !sameUnderUnicode(source)) return null;
+  if (!/^[dg]*$/.test(flags) || !sameUnderUnicode(source)) {
+    return null;
+  }
   return { ...check.annotations, toJsonSchema: () => ({ pattern: source }) };
 }
 
-/**
- * True for printable ASCII that compiles under `u` and has no atom matching a code unit
- * without it and a code point with it, or an escape `u` gives another meaning.
- */
 function sameUnderUnicode(source: string) {
-  if (!/^[ -~]*$/.test(source)) return false;
+  if (!/^[ -~]*$/.test(source)) {
+    return false;
+  }
   try {
     new RegExp(source, "u");
   } catch {
@@ -2434,16 +2453,27 @@ function sameUnderUnicode(source: string) {
   return Arr.every(atoms, (atom) => !/^(?:\.|\[\^|\\[DPSWpu])$/.test(atom));
 }
 
-/** Where the drawn document says nothing at all, which the schema itself still does. */
-function unconstrained(node: Schema.Json, at: string): ReadonlyArray<string> {
+function unconstrained(node: Schema.Json, at: string) {
   if (Arr.isArray<typeof node>(node)) {
-    return Arr.flatMap(node, (item, index) => unconstrained(item, `${at}[${index}]`));
+    const returned: ReadonlyArray<string> = Arr.flatMap(node, (item, index) =>
+      unconstrained(item, `${at}[${index}]`),
+    );
+    return returned;
   }
   const object = asObject(node);
-  if (Result.isFailure(object)) return [];
+  if (Result.isFailure(object)) {
+    const returned: ReadonlyArray<string> = [];
+    return returned;
+  }
   const entries = Rec.toEntries(object.success);
-  if (entries.length === 0) return [`${at || "the schema"} projects to nothing`];
-  return Arr.flatMap(entries, ([key, value]) => unconstrained(value, at ? `${at}.${key}` : key));
+  if (entries.length === 0) {
+    const returned: ReadonlyArray<string> = [`${at || "the schema"} projects to nothing`];
+    return returned;
+  }
+  const returned: ReadonlyArray<string> = Arr.flatMap(entries, ([key, value]) =>
+    unconstrained(value, at ? `${at}.${key}` : key),
+  );
+  return returned;
 }
 
 const asObject = Schema.decodeUnknownResult(Schema.Record(Schema.String, Schema.Json));

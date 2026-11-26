@@ -1,6 +1,3 @@
-// The Flock chat's width beside the board: chosen by dragging its edge or by keys, and drawn
-// within what the window leaves both.
-
 import { describe, expect, test } from "bun:test";
 import {
   CHAT_WIDTH,
@@ -41,7 +38,6 @@ describe("the chat's drawn width", () => {
   });
 
   test("is clamped again at a larger Zoom, which makes the same window fewer CSS pixels wide", () => {
-    // A 1600-device-pixel window at 200% is 800 CSS pixels.
     expect(chatWidth(700, 1600 / 2)).toBe(320);
   });
 });
@@ -85,8 +81,8 @@ describe("nudging the chat's edge with the keys", () => {
 describe("keeping the chat's width", () => {
   const control = (saved?: number) => {
     const view = { chosen: { value: saved }, dragging: { value: null } };
-    const saves: (number | undefined)[] = [];
-    const pending: (() => void)[] = [];
+    const saves: Array<number | undefined> = [];
+    const pending: Array<() => void> = [];
     const kept = chatWidthControl(view, (width) => {
       saves.push(width);
       const { promise, resolve } = Promise.withResolvers<void>();
@@ -94,7 +90,9 @@ describe("keeping the chat's width", () => {
       return promise;
     });
     const finishSaves = () => {
-      for (const done of pending.splice(0)) done();
+      for (const done of pending.splice(0)) {
+        done();
+      }
     };
     return { view, saves, kept, finishSaves };
   };
@@ -122,7 +120,9 @@ describe("keeping the chat's width", () => {
 
   test("saves a held arrow key once, when the nudging stops", () => {
     const { view, saves, kept } = control(500);
-    for (let repeat = 0; repeat < 5; repeat += 1) kept.nudge("ArrowLeft", 1400);
+    for (let repeat = 0; repeat < 5; repeat += 1) {
+      kept.nudge("ArrowLeft", 1400);
+    }
     expect(view.chosen.value).toBe(580);
     expect(saves).toEqual([]);
     void kept.settle();

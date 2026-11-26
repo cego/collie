@@ -1,6 +1,3 @@
-// Desktop's main process sweeps a chosen Machine: sent again only over a renewed connection,
-// waited on for up to 10 minutes in all, and logged in `actions.log` (ADR-0045).
-
 import { describe, expect, test } from "bun:test";
 import { Effect, Exit, Fiber, Scope } from "effect";
 import * as RpcClient from "effect/rpc/RpcClient";
@@ -9,26 +6,26 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 import type * as RpcMessage from "effect/rpc/RpcMessage";
 import * as RpcServer from "effect/rpc/RpcServer";
 import { TestClock } from "effect/testing";
-import { type Door, DoorMap, type Reached, sweepOn } from "../desktop/src/bun/machine";
+import { DoorMap, sweepOn } from "../desktop/src/bun/machine";
+import type { Door, Reached } from "../desktop/src/bun/machine";
 import type { Attempted } from "../desktop/src/bun/sent";
 import { ActionFailed } from "../desktop/src/shared/flock";
-import { type CleanupReport, FrontDoorRpcs, HostRefused } from "../src/board-model";
+import { FrontDoorRpcs, HostRefused } from "../src/board-model";
+import type { CleanupReport } from "../src/board-model";
 
 type Rpcs = RpcGroup.Rpcs<typeof FrontDoorRpcs>;
 
-const report = (bytes: number): CleanupReport => ({
+const report = (bytes: number) => ({
   remove: [{ kind: "worktree", target: "/w/run-1", bytes, reason: "its Run ended" }],
   keep: [{ kind: "worktree", target: "/w/run-2", reason: "its Run is live" }],
   bytes,
 });
 
-/** The `sweep` call alone, as a host serves it. */
 const Sweep = RpcGroup.make(
-  // SAFETY: the group's own `sweep`, which its map types as any of its Rpcs.
+  // WARNING: the group's own `sweep`, which its map types as any of its Rpcs.
   FrontDoorRpcs.requests.get("sweep") as Extract<Rpcs, { readonly _tag: "sweep" }>,
 );
 
-/** A host answering each `sweep` with `answer`; the request of every sweep it is sent is kept. */
 const fakeHost = (name: string, answer: Effect.Effect<CleanupReport, HostRefused>) =>
   Effect.gen(function* () {
     const swept: Array<string> = [];
@@ -48,22 +45,17 @@ const fakeHost = (name: string, answer: Effect.Effect<CleanupReport, HostRefused
       onFromClient: ({ message }) => server.write(0, message),
     });
     toClient = client.write;
-    // SAFETY: a sweep calls only `sweep` over its door.
+    // WARNING: a sweep calls only `sweep` over its door.
     const reached = { machine: { profile: `p-${name}`, name }, desktop: client.client } as Reached;
     return { reached, swept };
   });
 
 const logged = () => {
-  const lines: Attempted[] = [];
+  const lines: Array<Attempted> = [];
   return { lines, log: (line: Attempted) => Effect.sync(() => void lines.push(line)) };
 };
 
-const line = (
-  request: string,
-  ended: Attempted["ended"],
-  reason?: string,
-  attempt = 1,
-): Attempted => {
+const line = (request: string, ended: Attempted["ended"], reason?: string, attempt = 1) => {
   const sent: Attempted = {
     door: "board",
     machine: "vm-mk",
@@ -87,7 +79,7 @@ const broken = new RpcClientError({
 });
 const brokenDoor: Reached = {
   machine: { profile: "p-vm-mk", name: "vm-mk" },
-  // SAFETY: a sweep calls only `sweep` over its door, answered as the client answers it.
+  // WARNING: a sweep calls only `sweep` over its door, answered as the client answers it.
   desktop: { sweep: (() => Effect.fail(broken)) as Door["sweep"] } as Door,
 };
 

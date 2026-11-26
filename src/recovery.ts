@@ -5,7 +5,8 @@ import { Effect, FileSystem, Schema, flow, Result } from "effect";
 import { defaultBase, classifyWorkSource } from "./inputs";
 import { readIntent } from "./intent";
 import { isBlocking, SynthesisSchema, FindingSchema } from "./output";
-import { readVerifications, sameAsked, sameTree, treeOf, type Verification } from "./verify";
+import { readVerifications, sameAsked, sameTree, treeOf } from "./verify";
+import type { Verification } from "./verify";
 import { appendRunJournal, readRunJournalWhole, runJournal } from "./journal";
 import { readCards, readFinalCard } from "./cards";
 import { shell } from "./mr";
@@ -34,7 +35,6 @@ export const Recovery = Schema.Struct({
   previous: Schema.String,
   commits: Schema.String,
   review: Schema.NullOr(SynthesisSchema),
-  /** The recovered Run and the Runs it recovered in turn, nearest first. */
   lineage: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 export type Recovery = typeof Recovery.Type;
@@ -81,9 +81,13 @@ export const reviewScope = Effect.fn("Recovery.reviewScope")(
         ? null
         : yield* shell("git", ["ls-remote", "--exit-code", "origin", `refs/heads/${branch}`], cwd);
     const tree = yield* treeOf(cwd);
-    if (tree.dirty || target === null || target.code !== 0) return null;
+    if (tree.dirty || target === null || target.code !== 0) {
+      return null;
+    }
     const targetHead = Str.split(Str.trim(target.stdout), /\s/)[0] ?? "";
-    if ((yield* shell("git", ["fetch", "-q", "origin", targetHead], cwd)).code !== 0) return null;
+    if ((yield* shell("git", ["fetch", "-q", "origin", targetHead], cwd)).code !== 0) {
+      return null;
+    }
     return {
       source,
       requirements,
@@ -104,7 +108,9 @@ export const recordReview = Effect.fn("Recovery.recordReview")(function* (
   base: string,
   review: typeof SynthesisSchema.Type,
 ) {
-  if (scope === null) return;
+  if (scope === null) {
+    return;
+  }
   const now = yield* reviewScope(cwd, dir, scope.source, scope.outcome, scope.risks);
   if (
     now === null ||
@@ -112,8 +118,9 @@ export const recordReview = Effect.fn("Recovery.recordReview")(function* (
     now.target !== scope.target ||
     now.head !== scope.head ||
     !sameTree(now, scope)
-  )
+  ) {
     return;
+  }
   yield* appendRunJournal(runJournal(dir, "reviews.jsonl"), ReviewedJson, {
     ...scope,
     base,
@@ -124,17 +131,24 @@ export const recordReview = Effect.fn("Recovery.recordReview")(function* (
 
 export const takePushed = Effect.fn("Recovery.takePushed")(function* (cwd: string) {
   const tree = yield* treeOf(cwd);
-  if (tree.dirty || tree.branch === null || tree.branch === "HEAD")
+  if (tree.dirty || tree.branch === null || tree.branch === "HEAD") {
     return "Recovery needs a clean checkout on its branch.";
-  const git = (...args: string[]) => shell("git", args, cwd);
+  }
+  const git = (...args: Array<string>) => shell("git", args, cwd);
   const read = yield* git("ls-remote", "--exit-code", "origin", `refs/heads/${tree.branch}`);
-  if (read.code !== 0) return "The pushed branch cannot be read.";
+  if (read.code !== 0) {
+    return "The pushed branch cannot be read.";
+  }
   const head = Str.split(Str.trim(read.stdout), /\s/)[0] ?? "";
-  if (head === tree.head_sha) return null;
-  if ((yield* git("fetch", "-q", "origin", head)).code !== 0)
+  if (head === tree.head_sha) {
+    return null;
+  }
+  if ((yield* git("fetch", "-q", "origin", head)).code !== 0) {
     return "The pushed branch could not be fetched.";
-  if ((yield* git("merge-base", "--is-ancestor", tree.head_sha, head)).code !== 0)
+  }
+  if ((yield* git("merge-base", "--is-ancestor", tree.head_sha, head)).code !== 0) {
     return "The checkout and pushed branch diverged, or the checkout has unpublished commits; recovery cannot take the pushed head safely.";
+  }
   const moved = yield* git("merge", "--ff-only", head);
   return moved.code === 0 ? null : "The checkout could not fast-forward to the pushed head.";
 });
@@ -163,8 +177,10 @@ export const recoveryFrom = Effect.fn("Recovery.from")(
       options.outcome,
       options.risks,
     );
-    if (current === null) return build;
-    const git = (...args: string[]) => shell("git", args, options.cwd);
+    if (current === null) {
+      return build;
+    }
+    const git = (...args: Array<string>) => shell("git", args, options.cwd);
     const pushed = yield* git(
       "ls-remote",
       "--exit-code",
@@ -172,18 +188,23 @@ export const recoveryFrom = Effect.fn("Recovery.from")(
       `refs/heads/${Str.trim((yield* git("branch", "--show-current")).stdout)}`,
     );
     const remote = Str.split(Str.trim(pushed.stdout), /\s/)[0] ?? "";
-    if (pushed.code !== 0) return { ...build, reason: "The pushed branch cannot be read." };
+    if (pushed.code !== 0) {
+      return { ...build, reason: "The pushed branch cannot be read." };
+    }
     if (remote !== current.head) {
       if (
         (yield* git("fetch", "-q", "origin", remote)).code !== 0 ||
         (yield* git("merge-base", "--is-ancestor", current.head, remote)).code !== 0
-      )
+      ) {
         return {
           ...build,
           reason: "The checkout and pushed branch diverged or contain unpublished work.",
         };
+      }
       const tree = yield* git("rev-parse", `${remote}^{tree}`);
-      if (tree.code !== 0) return build;
+      if (tree.code !== 0) {
+        return build;
+      }
       current = { ...current, head: remote, fingerprint: Str.trim(tree.stdout) };
     }
     const readings = yield* Effect.forEach(options.candidates, (dir) =>
@@ -193,7 +214,7 @@ export const recoveryFrom = Effect.fn("Recovery.from")(
       Arr.flatMap(readings, (one) => one.lines),
       Order.mapInput(Str.Order, (one: typeof ReviewedWork.Type) => one.at),
     );
-    // For the recovering agent, who cannot read the host's database.
+    // WARNING: the recovering agent cannot read the host's database, so its input is a file.
     yield* (yield* FileSystem.FileSystem).writeFileString(
       `${options.dir}/recovery-reviews.jsonl`,
       Arr.join(
@@ -213,18 +234,22 @@ export const recoveryFrom = Effect.fn("Recovery.from")(
       final._tag === "Some" &&
       (yield* git("merge-base", "--is-ancestor", final.value.revision.head_sha, current.head))
         .code !== 0
-    )
+    ) {
       return { ...build, reason: "The finished branch history diverged or was force-pushed." };
+    }
     if (
       previous !== "" &&
       (yield* git("merge-base", "--is-ancestor", previous, current.head)).code !== 0
-    )
+    ) {
       return {
         ...build,
         reason: "The branch diverged or was force-pushed; forward progress is unproved.",
       };
+    }
     const diff = yield* git("rev-list", "--count", `${current.target}..${current.head}`);
-    if (diff.code !== 0 || Number(Str.trim(diff.stdout)) < 1) return build;
+    if (diff.code !== 0 || Number(Str.trim(diff.stdout)) < 1) {
+      return build;
+    }
     const commits =
       previous === ""
         ? ""
@@ -252,7 +277,7 @@ export const recoveryFrom = Effect.fn("Recovery.from")(
           isBlocking,
         )
       : false;
-    // shortcut: external issue bodies need review until the host can snapshot them.
+    // WARNING: shortcut: external issue bodies need review until the host can snapshot them.
     const external = (yield* classifyWorkSource(options.source)).kind === "linear";
     const judgement = (review: typeof SynthesisSchema.Type) => {
       switch (current.outcome) {
@@ -281,7 +306,7 @@ export const recoveryFrom = Effect.fn("Recovery.from")(
         [...clean.value.review.findings, ...(clean.value.review.disputed ?? [])],
         isBlocking,
       )
-    )
+    ) {
       return {
         implementation: true,
         reason: "A completed clean review settles these requirements at the pushed head.",
@@ -289,6 +314,7 @@ export const recoveryFrom = Effect.fn("Recovery.from")(
         commits,
         review: clean.value.review,
       } satisfies Recovery;
+    }
     return {
       implementation: true,
       reason: "Implementation is pushed; its current requirements and diff need review.",
@@ -297,7 +323,7 @@ export const recoveryFrom = Effect.fn("Recovery.from")(
       review: null,
     } satisfies Recovery;
   },
-  Effect.orElseSucceed((): Recovery => ({
+  Effect.orElseSucceed(() => ({
     implementation: false,
     reason: "Branch or review records are unreadable.",
     previous: "",
@@ -312,32 +338,42 @@ export const branchMovement = Effect.fn("Recovery.branchMovement")(function* (ru
   readonly branch: string | null;
   readonly state: string;
 }) {
-  if (run.branch === null || !["succeeded", "failed"].includes(run.state)) return null;
+  if (run.branch === null || !["succeeded", "failed"].includes(run.state)) {
+    return null;
+  }
   const final = yield* readFinalCard(run.dir);
-  if (final._tag === "None" || final.value.revision.head_sha === "") return null;
+  if (final._tag === "None" || final.value.revision.head_sha === "") {
+    return null;
+  }
   const finished = final.value.revision.head_sha;
   const read = yield* shell(
     "git",
     ["ls-remote", "--exit-code", "origin", `refs/heads/${run.branch}`],
     run.cwd,
   );
-  if (read.code !== 0) return "Pushed branch head unavailable; the finished record is unchanged.";
+  if (read.code !== 0) {
+    return "Pushed branch head unavailable; the finished record is unchanged.";
+  }
   const head = Str.split(Str.trim(read.stdout), /\s/)[0] ?? "";
-  if (head === finished) return null;
+  if (head === finished) {
+    return null;
+  }
   const fetched = yield* shell("git", ["fetch", "-q", "origin", head], run.cwd);
   const ancestry =
     fetched.code === 0
       ? yield* shell("git", ["merge-base", "--is-ancestor", finished, head], run.cwd)
       : fetched;
-  if (ancestry.code !== 0)
+  if (ancestry.code !== 0) {
     return `Pushed branch diverged or was force-pushed: ${finished} → ${head}; forward progress is unproved.`;
+  }
   const count = yield* shell("git", ["rev-list", "--count", `${finished}..${head}`], run.cwd);
-  if (count.code !== 0) return `Pushed branch history unavailable at ${head}.`;
+  if (count.code !== 0) {
+    return `Pushed branch history unavailable at ${head}.`;
+  }
   const n = Str.trim(count.stdout);
   return `Pushed branch: ${n} commit${n === "1" ? "" : "s"} past ${finished}, now ${head}.${run.state === "failed" ? " The failed record is stale." : " The succeeded record describes the earlier head."}`;
 });
 
-/** The card a follow-up continues from, bound when it is admitted. */
 export const ConsumedCard = Schema.Struct({
   run: Schema.String,
   card: Schema.String,
@@ -346,7 +382,6 @@ export const ConsumedCard = Schema.Struct({
 });
 export type ConsumedCard = typeof ConsumedCard.Type;
 
-/** The last final card `run` wrote, as a follow-up admitted now consumes it. */
 export const consumedCard = Effect.fn("Recovery.consumedCard")(function* (
   run: string,
   runDir: string,
@@ -365,11 +400,7 @@ export const consumedCard = Effect.fn("Recovery.consumedCard")(function* (
       };
 });
 
-/**
- * The verifications the consumed card listed, unchanged, where that card is unaltered and
- * the follow-up's checkout still carries its work on its branch. A failure needs the
- * same work's first verified fix, so later replays cannot stand in for its regression.
- */
+// WARNING: a failure's regression needs the same work's first verified fix, so later replays cannot stand in for it.
 export const sourceEvidence = Effect.fn("Recovery.sourceEvidence")(function* (options: {
   readonly cwd: string;
   readonly consumed: ConsumedCard;
@@ -385,8 +416,9 @@ export const sourceEvidence = Effect.fn("Recovery.sourceEvidence")(function* (op
     card.value.run !== options.consumed.run ||
     card.value.revision.head_sha !== options.consumed.head_sha ||
     card.value.revision.fingerprint !== options.consumed.fingerprint
-  )
+  ) {
     return null;
+  }
   const head = card.value.revision.head_sha;
   const contains = (ancestor: string, of: string) =>
     Effect.map(
@@ -394,8 +426,9 @@ export const sourceEvidence = Effect.fn("Recovery.sourceEvidence")(function* (op
       (ran) => ran.code === 0,
     );
   const tree = yield* treeOf(options.cwd);
-  if (tree.branch !== card.value.revision.branch || !(yield* contains(head, tree.head_sha)))
+  if (tree.branch !== card.value.revision.branch || !(yield* contains(head, tree.head_sha))) {
     return null;
+  }
   const listed = new Map(Arr.map(card.value.verifications, (one) => [one.id, one.name]));
   const recorded = yield* readVerifications(options.sourceEvidence).pipe(
     Effect.orElseSucceed(() => []),
@@ -409,8 +442,8 @@ export const sourceEvidence = Effect.fn("Recovery.sourceEvidence")(function* (op
         sameAsked(one, red) &&
         sameTree(one.start, red.start),
     );
-  const pending: Verification[] = [];
-  const fixed: Verification[] = [];
+  const pending: Array<Verification> = [];
+  const fixed: Array<Verification> = [];
   const beforeFix = new Set<string>();
   for (const one of recorded) {
     if (
@@ -418,24 +451,30 @@ export const sourceEvidence = Effect.fn("Recovery.sourceEvidence")(function* (op
       one.result !== "pass" ||
       !sameTree(one.start, one.end) ||
       !(yield* contains(one.start.head_sha, head))
-    )
+    ) {
       continue;
+    }
     if (one.expect === "fail") {
       if (
         one.start.head_sha !== head &&
         !passedOn(one) &&
         !Arr.some(fixed, (green) => sameAsked(green, one))
-      )
+      ) {
         pending.push(one);
+      }
     } else {
       const reds = yield* Effect.filter(pending, (red) =>
         sameAsked(red, one) && !sameTree(red.start, one.start)
           ? contains(red.start.head_sha, one.start.head_sha)
           : Effect.succeed(false),
       );
-      if (reds.length === 0) continue;
+      if (reds.length === 0) {
+        continue;
+      }
       fixed.push(one);
-      for (const red of reds) beforeFix.add(red.id);
+      for (const red of reds) {
+        beforeFix.add(red.id);
+      }
     }
   }
   return Arr.filter(

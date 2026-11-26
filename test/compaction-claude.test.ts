@@ -1,13 +1,11 @@
-// Claude Code's official compaction interface, as Collie's adapter installs and reads
-// it: the status-line accounting, the manual-versus-automatic hook lifecycle, and what
-// may not complete an attempt. The payloads are the documented ones; the version and
-// launch-flag checks run against the installed harness.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Path, Schema, flow, Result } from "effect";
+import { Clock, Effect, FileSystem, Path, Schema, flow, Result } from "effect";
+import { parseJson } from "../src/json";
+import { isoAt } from "../src/time";
 import { TestClock } from "effect/testing";
+import * as PlatformError from "effect/PlatformError";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
 import { onMachineWith } from "./support/live";
@@ -19,13 +17,15 @@ import {
   externalSubmissions,
   newestRateLimits,
   questionsSince,
+  rateLimitsReader,
   ranOutSince,
   recordClaudeEvent,
   stoppedSince,
   submittedDelivery,
   VERIFIED_VERSIONS,
 } from "../src/compactors";
-import type { AgentContext } from "../src/compaction";
+import { pollCompaction, readControl } from "../src/compaction";
+import type { CompactionDeps } from "../src/compaction";
 
 let rig: Rig;
 let fs: FileSystem.FileSystem;
@@ -33,9 +33,9 @@ let path: Path.Path;
 let dir: string;
 
 const claude = COMPACTION_PORTS.claude!;
-const prompted: string[] = [];
+const prompted: Array<string> = [];
 
-const ctx = (): AgentContext => ({
+const ctx = () => ({
   agent: "build-r1",
   run: "run-1",
   harness: "claude",
@@ -45,11 +45,6 @@ const ctx = (): AgentContext => ({
   channel: fakeChannel(prompted),
 });
 
-/**
- * A status-line payload, as `docs/en/statusline` documents it. `current_usage` present
- * means the window has been measured; the combined totals already fold the cache
- * components into `total_input_tokens`.
- */
 const StatusLine = Schema.Struct({
   session_id: Schema.String,
   context_window: Schema.NullOr(
@@ -74,13 +69,7 @@ const encodeStatusLine = flow(
   Result.getOrThrow,
 );
 
-/**
- * The two hook payloads as the installed release builds them:
- * `hook_event_name:"PreCompact",trigger,custom_instructions` and
- * `hook_event_name:"PostCompact",trigger,compact_summary`. The instructions reach
- * `PreCompact` only — a `PostCompact` has no field carrying Collie's marker, which is
- * why a completion is correlated by position rather than by token.
- */
+// WARNING: PreCompact alone carries the instructions; PostCompact has no field with Collie's marker, so completion is correlated by position.
 const Pre = Schema.Struct({
   session_id: Schema.String,
   hook_event_name: Schema.tag("PreCompact"),
@@ -96,7 +85,6 @@ const Post = Schema.Struct({
 const encodePre = flow(Schema.encodeResult(Schema.fromJsonString(Pre)), Result.getOrThrow);
 const encodePost = flow(Schema.encodeResult(Schema.fromJsonString(Post)), Result.getOrThrow);
 
-/** One compaction's pair of hooks, as Claude fires them. */
 const pre = (session: string, trigger: string, instructions: string | null) =>
   encodePre({
     session_id: session,
@@ -112,7 +100,6 @@ const post = (session: string, trigger: string) =>
     compact_summary: "what the agent was doing, condensed",
   });
 
-/** A submitted turn, as the installed release builds it; the prompt is all Collie reads. */
 const Submit = Schema.Struct({
   session_id: Schema.String,
   hook_event_name: Schema.tag("UserPromptSubmit"),
@@ -130,18 +117,16 @@ const measured = (session: string, input: number, output: number, percent: numbe
       total_output_tokens: output,
       used_percentage: percent,
       current_usage: {
-        input_tokens: input - 7_000,
+        input_tokens: input - 7000,
         output_tokens: output,
-        cache_creation_input_tokens: 5_000,
-        cache_read_input_tokens: 2_000,
+        cache_creation_input_tokens: 5000,
+        cache_read_input_tokens: 2000,
       },
     },
-    // A cumulative billing total sits in the same payload. Reading it would be the
-    // mistake this accounting exists to avoid.
+    // WARNING: The cumulative cost total is billing, not context; reading it is the mistake this accounting avoids.
     cost: { total_cost_usd: 12.5 },
   });
 
-/** Before the first API call, and again after a compaction: nothing is measured. */
 const unmeasured = (session: string) =>
   encodeStatusLine({
     session_id: session,
@@ -171,11 +156,10 @@ afterEach(() => runEffect(rig.close()));
 test("the sample is input plus output, with the cache folded in exactly once", () =>
   runEffect(
     Effect.gen(function* () {
-      // 15,500 already contains the 5,000 written to cache and the 2,000 read from it.
-      const line = yield* recordClaudeEvent(dir, measured("s-1", 15_500, 1_200, 8));
+      // WARNING: 15,500 already contains the cache writes and reads; do not add them again.
+      const line = yield* recordClaudeEvent(dir, measured("s-1", 15_500, 1200, 8));
 
       expect(yield* claude.usage(ctx())).toBe(16_700);
-      // The status line Collie borrowed still says something to the human.
       expect(line).toBe("context: 8%");
     }),
   ));
@@ -193,7 +177,7 @@ test("no measurement yet is unavailable, not a context of zero tokens", () =>
 test("a compaction invalidates the sample before it, until the next API call", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* recordClaudeEvent(dir, measured("s-1", 400_000, 1_000, 99));
+      yield* recordClaudeEvent(dir, measured("s-1", 400_000, 1000, 99));
       yield* recordClaudeEvent(dir, post("s-1", "manual"));
       yield* recordClaudeEvent(dir, unmeasured("s-1"));
 
@@ -204,15 +188,13 @@ test("a compaction invalidates the sample before it, until the next API call", (
 test("the marked PreCompact is the start, and the PostCompact after it the success", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* recordClaudeEvent(dir, measured("s-1", 400_000, 1_000, 99));
+      yield* recordClaudeEvent(dir, measured("s-1", 400_000, 1000, 99));
       yield* claude.request(ctx(), "req-1");
       const instructions = pipe_(prompted[0]!, Str.replace(/^\/compact /, ""));
       expect(prompted[0]).toStartWith("/compact ");
       expect(instructions).toContain("(collie:req-1)");
 
-      // `PreCompact` gives the instructions back, which is what says this compaction
-      // is Collie's. Its `PostCompact` carries no such field, so what completes the
-      // attempt is the next manual completion on this session.
+      // WARNING: PostCompact carries no marker, so the next manual completion on the session is what finishes the attempt.
       yield* recordClaudeEvent(dir, pre("s-1", "manual", instructions));
       expect(yield* claude.poll(ctx(), "req-1")).toBeNull();
       yield* recordClaudeEvent(dir, post("s-1", "manual"));
@@ -223,8 +205,6 @@ test("the marked PreCompact is the start, and the PostCompact after it the succe
 test("a completion before Collie asked is not the answer to what it asked", () =>
   runEffect(
     Effect.gen(function* () {
-      // A compaction that finished before the request was submitted — a human's, or
-      // one from an earlier attempt — is already in the file when Collie asks.
       yield* recordClaudeEvent(dir, post("s-1", "manual"));
       yield* claude.request(ctx(), "req-1");
       yield* recordClaudeEvent(dir, pre("s-1", "manual", `x (collie:req-1)`));
@@ -250,8 +230,6 @@ test("a human typing /compact in the pane cannot complete it either", () =>
     Effect.gen(function* () {
       yield* claude.request(ctx(), "req-1");
       yield* recordClaudeEvent(dir, pre("s-1", "manual", `x (collie:req-1)`));
-      // Their own `/compact`, with instructions of their own: the completion that
-      // follows is theirs, and Collie's attempt stays unresolved rather than taking it.
       yield* recordClaudeEvent(dir, pre("s-1", "manual", "just tidy it up please"));
       yield* recordClaudeEvent(dir, post("s-1", "manual"));
 
@@ -262,13 +240,11 @@ test("a human typing /compact in the pane cannot complete it either", () =>
 test("another session's hooks cannot complete it, and rebind what is current", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* recordClaudeEvent(dir, measured("s-1", 400_000, 1_000, 99));
+      yield* recordClaudeEvent(dir, measured("s-1", 400_000, 1000, 99));
       yield* claude.request(ctx(), "req-1");
       yield* recordClaudeEvent(dir, pre("s-1", "manual", `x (collie:req-1)`));
       yield* recordClaudeEvent(dir, post("s-2", "manual"));
 
-      // The newest identity is s-2, so s-1's 400k no longer describes this agent — and
-      // s-2's completion is not the attempt Collie made on s-1.
       expect(yield* claude.usage(ctx())).toBeNull();
       expect(yield* claude.poll(ctx(), "req-1")).toBeNull();
     }),
@@ -300,7 +276,6 @@ test("a background task finishing is Claude's own turn, not a person typing", ()
         submit('<agent-message from="reviewer">\nthe review is done\n</agent-message>'),
       );
 
-      // A task's output can quote a delivery token; that does not make the turn Collie's.
       yield* recordClaudeEvent(
         dir,
         submit("<task-notification>\n<summary>grep collie-delivery:run-1-steer-1</summary>"),
@@ -341,7 +316,6 @@ const decodeJsonText = flow(
   Result.getOrThrow,
 );
 
-/** An `AskUserQuestion` call as `PreToolUse` hands it to the hook. */
 const asking = (tool: string, questions: Schema.Json) =>
   encodeJsonText({
     session_id: "s-1",
@@ -374,7 +348,6 @@ const TWO = [
   },
 ];
 
-/** This process as the live host of the state directory `dir` is the control directory of. */
 const hostLive = Effect.suspend(() =>
   fs.writeFileString(
     path.join(rig.root, "host.lock"),
@@ -431,8 +404,6 @@ test("the helpers record identity, usage and outcome — never conversation cont
     Effect.gen(function* () {
       yield* recordClaudeEvent(
         dir,
-        // A real payload carries a transcript path and, on PostCompact, the summary
-        // the compaction produced.
         `{"session_id":"s-1","transcript_path":"/home/mk/.claude/x.jsonl","hook_event_name":"PostCompact","trigger":"manual","compact_summary":"The user asked about their salary."}`,
       );
 
@@ -456,22 +427,16 @@ test("install writes run-scoped settings and passes them with Claude's own flag"
       const settings = path.join(dir, "settings.json");
       expect(args.args).toEqual(["--settings", settings]);
       const written = yield* fs.readFileString(settings);
-      // The status line is the official current-context contract; the two hooks are
-      // the official lifecycle, matched on both triggers so an automatic compaction
-      // is seen too. Everything points at the runner that installed them.
       expect(written).toContain(`"statusLine"`);
       expect(written).toContain(`"PreCompact"`);
       expect(written).toContain(`"PostCompact"`);
       expect(written).toContain(`"manual|auto"`);
       expect(written).toContain(`herdr compaction ${dir}`);
-      // An agent's question goes to its Run, through the same helper.
       expect(written).toContain(`"PreToolUse"`);
       expect(written).toContain(`"AskUserQuestion"`);
     }),
   ));
 
-// Not mocks: whether the interface Collie installs is the one this machine's Claude has
-// is exactly the question a mock cannot answer.
 onMachineWith("claude")(
   "the installed Claude is at least the release these controls were verified against",
   () =>
@@ -479,10 +444,7 @@ onMachineWith("claude")(
       Effect.gen(function* () {
         const wanted = VERIFIED_VERSIONS.get("claude") ?? "";
         const installed = yield* Effect.promise(() => Bun.$`claude --version`.text());
-        // A floor, as the name says, not an equality: the pin records the release the
-        // controls were traced in, and every release after it is covered by the gate.
-        // Asserting the exact version made this test fail on the day Claude updated,
-        // which says nothing about whether the interface still holds.
+        // WARNING: A floor, not an equality: an exact version failed the day Claude updated, which says nothing about the interface.
         expect([Str.trim(installed), atLeast(installed, wanted)]).toEqual([
           Str.trim(installed),
           true,
@@ -498,7 +460,6 @@ onMachineWith("claude")(
   () =>
     runEffect(
       Effect.gen(function* () {
-        // The flag the adapter launches with, from the adapter, so the two cannot drift.
         const [flag = ""] = (yield* claude.install({
           agent: "r1",
           harness: "claude",
@@ -512,7 +473,6 @@ onMachineWith("claude")(
   { timeout: 30_000 },
 );
 
-/** A measured status line that also carries `rate_limits`, as it may be malformed. */
 const encodeLimited = flow(
   Schema.encodeResult(
     Schema.fromJsonString(Schema.Struct({ ...StatusLine.fields, rate_limits: Schema.Json })),
@@ -524,20 +484,20 @@ const limited = (rateLimits: Schema.Json) =>
     session_id: "s-1",
     context_window: {
       total_input_tokens: 15_500,
-      total_output_tokens: 1_200,
+      total_output_tokens: 1200,
       used_percentage: 8,
       current_usage: {
-        input_tokens: 8_500,
-        output_tokens: 1_200,
-        cache_creation_input_tokens: 5_000,
-        cache_read_input_tokens: 2_000,
+        input_tokens: 8500,
+        output_tokens: 1200,
+        cache_creation_input_tokens: 5000,
+        cache_read_input_tokens: 2000,
       },
     },
     rate_limits: rateLimits,
   });
 const fiveHour = (percent: number) => ({
-  five_hour: { used_percentage: percent, resets_at: 1791457799 },
-  seven_day: { used_percentage: 88, resets_at: 1791544799 },
+  five_hour: { used_percentage: percent, resets_at: 1_791_457_799 },
+  seven_day: { used_percentage: 88, resets_at: 1_791_544_799 },
 });
 
 test("a status line's rate_limits are the Machine's newest Claude sample, and its line still prints", () =>
@@ -555,6 +515,83 @@ test("a status line's rate_limits are the Machine's newest Claude sample, and it
       );
 
       expect((yield* newestRateLimits(stateDir))?.limits).toEqual(fiveHour(40));
+    }).pipe(Effect.provide(TestClock.layer())),
+  ));
+
+test("the status-line reader decodes again only the agents whose telemetry changed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const stateDir = path.join(rig.root, "state");
+      const build = path.join(stateDir, "compaction", "build-r1");
+      const review = path.join(stateDir, "compaction", "review-r1");
+      yield* recordClaudeEvent(build, limited(fiveHour(31)));
+      yield* TestClock.adjust("1 second");
+      yield* recordClaudeEvent(review, limited(fiveHour(40)));
+
+      const fs = yield* FileSystem.FileSystem;
+      const decoded: Array<string> = [];
+      const counting: FileSystem.FileSystem = {
+        ...fs,
+        readFileString: (file, encoding) => {
+          decoded.push(path.basename(path.dirname(file)));
+          return fs.readFileString(file, encoding);
+        },
+      };
+      const { newest: read } = yield* rateLimitsReader(stateDir).pipe(
+        Effect.provideService(FileSystem.FileSystem, counting),
+      );
+      expect((yield* read)?.limits).toEqual(fiveHour(40));
+      expect(decoded.sort()).toEqual(["build-r1", "review-r1"]);
+
+      decoded.length = 0;
+      expect((yield* read)?.limits).toEqual(fiveHour(40));
+      expect(decoded).toEqual([]);
+
+      yield* TestClock.adjust("1 second");
+      yield* recordClaudeEvent(build, limited(fiveHour(55)));
+      expect((yield* read)?.limits).toEqual(fiveHour(55));
+      expect(decoded).toEqual(["build-r1"]);
+    }).pipe(Effect.provide(TestClock.layer())),
+  ));
+
+test("a status line the reader could not read is read again, and its last sample stands meanwhile", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const stateDir = path.join(rig.root, "state");
+      const build = path.join(stateDir, "compaction", "build-r1");
+      const review = path.join(stateDir, "compaction", "review-r1");
+      yield* recordClaudeEvent(build, limited(fiveHour(31)));
+      yield* TestClock.adjust("1 second");
+      yield* recordClaudeEvent(review, limited(fiveHour(40)));
+
+      const fs = yield* FileSystem.FileSystem;
+      let failReview = true;
+      const flaky: FileSystem.FileSystem = {
+        ...fs,
+        readFileString: (file, encoding) =>
+          failReview && path.basename(path.dirname(file)) === "review-r1"
+            ? Effect.fail(
+                PlatformError.systemError({
+                  _tag: "Busy",
+                  module: "FileSystem",
+                  method: "readFileString",
+                }),
+              )
+            : fs.readFileString(file, encoding),
+      };
+      const { newest: read } = yield* rateLimitsReader(stateDir).pipe(
+        Effect.provideService(FileSystem.FileSystem, flaky),
+      );
+      expect((yield* read)?.limits).toEqual(fiveHour(31));
+      failReview = false;
+      expect((yield* read)?.limits).toEqual(fiveHour(40));
+
+      yield* TestClock.adjust("1 second");
+      yield* recordClaudeEvent(review, limited(fiveHour(60)));
+      failReview = true;
+      expect((yield* read)?.limits).toEqual(fiveHour(40));
+      failReview = false;
+      expect((yield* read)?.limits).toEqual(fiveHour(60));
     }).pipe(Effect.provide(TestClock.layer())),
   ));
 
@@ -628,15 +665,84 @@ test("a status line with a window at 100% is the agent running out, saying the w
 test("a status line's full window whose reset has passed is not the agent running out", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* TestClock.setTime(1791457799 * 1000 + 60_000);
+      yield* TestClock.setTime(1_791_457_799 * 1000 + 60_000);
       yield* recordClaudeEvent(dir, limited(fiveHour(100)));
       expect(yield* ranOutSince(dir, 0)).toBeNull();
     }).pipe(Effect.provide(TestClock.layer())),
   ));
 
 test("the StopFailure hook is installed only on a Claude known to have it, for every error", () => {
-  const [hook] = JSON.parse(claudeSettings(dir, true)).hooks.StopFailure;
+  const [hook] = parseJson(Schema.Any, claudeSettings(dir, true)).hooks.StopFailure;
   expect(hook.matcher).toBeUndefined();
   expect(hook.hooks[0].command).toContain(`herdr compaction ${dir}`);
   expect(claudeSettings(dir, false)).not.toContain("StopFailure");
 });
+
+const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
+
+const lostCompletion = (transcript: (askedIso: string) => string) =>
+  Effect.gen(function* () {
+    const control = `${rig.stateDir}/compaction/build-r1`;
+    const asked = (yield* Clock.currentTimeMillis) - 11 * 60_000;
+    const file = path.join(rig.root, "s-1.jsonl");
+    yield* fs.writeFileString(file, transcript(isoAt(asked + 60_000)));
+    yield* fs.makeDirectory(control, { recursive: true });
+    yield* fs.writeFileString(
+      `${control}/control.json`,
+      asJson({
+        agent: "build-r1",
+        harness: "claude",
+        cwd: rig.projectDir,
+        dir: control,
+        attempt: { id: "req-1", run: "run-1", step: "02-ui", deadline: asked + 5 * 60_000, asked },
+      }),
+    );
+    yield* recordClaudeEvent(control, asJson({ session_id: "s-1", transcript_path: file }));
+    yield* recordClaudeEvent(
+      control,
+      pre("s-1", "manual", "Keep the work in progress. (collie:req-1)"),
+    );
+    const said: Array<string> = [];
+    const deps: CompactionDeps = {
+      ports: COMPACTION_PORTS,
+      stateDir: rig.stateDir,
+      configured: 1000,
+      herdr: { agentList: () => Effect.succeed([]) },
+      log: (line) => Effect.sync(() => void said.push(line)),
+      warn: (line) => Effect.sync(() => void said.push(line)),
+      waitMs: 5 * 60_000,
+      pollMs: 1000,
+    };
+    const due = yield* pollCompaction(deps, "build-r1");
+    const left = (yield* readControl(rig.stateDir, "build-r1"))?.attempt;
+    return { due, said, left };
+  });
+
+test("a lost completion is reconciled as done after the bound, where the transcript shows the compaction", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { due, said, left } = yield* lostCompletion(
+        (at) =>
+          `{"type":"user","timestamp":"${at}","message":{"role":"user","content":"/compact"}}\n` +
+          `{"type":"system","subtype":"compact_boundary","timestamp":"${at}","compactMetadata":{"trigger":"manual","preTokens":180000}}\n`,
+      );
+      expect(due).toEqual({ dispatch: true });
+      expect(left).toBeNull();
+      expect(said).toContain("build-r1: native compaction req-1 completed");
+    }),
+  ));
+
+test("a lost completion is reconciled as failed after the bound, where the transcript shows none", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { due, said, left } = yield* lostCompletion(
+        (at) =>
+          `{"type":"user","timestamp":"${at}","message":{"role":"user","content":"/compact"}}\n`,
+      );
+      expect(due).toEqual({ dispatch: true });
+      expect(left).toBeNull();
+      expect(said).toEqual([
+        "  ⚠ build-r1: native compaction failed (its transcript shows no compaction since it was asked for) — sending the work anyway",
+      ]);
+    }),
+  ));

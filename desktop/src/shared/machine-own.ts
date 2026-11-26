@@ -13,7 +13,7 @@ export const OwnReading = Schema.Struct({
 });
 export type OwnReading = typeof OwnReading.Type;
 
-export const keepOwn = (reading: OwnReading, before?: OwnReading): OwnReading =>
+export const keepOwn = (reading: OwnReading, before?: OwnReading) =>
   reading.values === null && !reading.unsupported && before?.values != null
     ? { ...reading, values: before.values, at: before.at }
     : reading;

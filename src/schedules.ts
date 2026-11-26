@@ -1,7 +1,3 @@
-// A Machine's Schedules, as its host keeps and fires them (ADR-0052): the record of each
-// under `schedules/`, the one write and the read every door uses, and the `Schedule`
-// workflow on the host's engine, one execution per occurrence.
-
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import * as Arr from "effect/Array";
@@ -28,17 +24,14 @@ import * as Workflow from "effect/workflow/Workflow";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import type { PlatformServices } from "./platform";
 import { agentStartRefusal, hostOptions } from "./agent-start";
-import { once, readAudit, recordAudit, type ScheduledBy } from "./audit";
-import { HostRefused, RequestConflict, Started, type FrontDoor, type Where } from "./board-model";
+import { once, readAudit, recordAudit } from "./audit";
+import type { ScheduledBy } from "./audit";
+import type { RequestConflict } from "./board-model";
+import { HostRefused, Started } from "./board-model";
+import type { FrontDoor, Where } from "./board-model";
 import { savedModules } from "./discovery";
-import {
-  forgetExecution,
-  NEEDS_INPUT,
-  REFUSED_INPUT,
-  Registry,
-  runDir,
-  type HostServices,
-} from "./engine";
+import { forgetExecution, NEEDS_INPUT, REFUSED_INPUT, Registry, runDir } from "./engine";
+import type { HostServices } from "./engine";
 import type { PluginEnv } from "./env";
 import { Herdr } from "./herdr";
 import { reason } from "./naming";
@@ -56,31 +49,29 @@ import {
   nextOccurrence,
   onWake,
   parseSchedule,
-  type LastOutcome,
-  type SavedStart,
-  type ScheduleChange,
-  type ScheduleEntry,
-  type ScheduleListing,
-  type ScheduleMachine,
+} from "./schedule-model";
+import type {
+  LastOutcome,
+  SavedStart,
+  ScheduleChange,
+  ScheduleEntry,
+  ScheduleListing,
+  ScheduleMachine,
 } from "./schedule-model";
 
 export const schedulesDir = (dir: string) => `${dir}/schedules`;
-/** A Schedule's own directory: its record, and the trail of each change and occurrence. */
 const trailOf = (dir: string, name: string) => `${schedulesDir(dir)}/${name}`;
 const recordOf = (dir: string, name: string) => `${trailOf(dir, name)}/schedule.json`;
-/** The request that last removed it, kept so a retry interrupted before its receipt finds it done. */
+// WARNING: the last removal's request is kept, so a retry interrupted before its receipt finds it done.
 const removedOf = (dir: string, name: string) => `${trailOf(dir, name)}/removed`;
 
-/** How long an occurrence waits between asking a herdr that does not answer. */
 const HERDR_WAIT = "1 minute";
 
-/** One occurrence of one Schedule's chain; the next is started by this one. */
 export const ScheduleWorkflow = Workflow.make("Schedule", {
   payload: {
     name: Schema.String,
     epoch: Schema.String,
     occurrence: Schema.String,
-    /** The occurrence of the execution that started this one, whose engine state it clears. */
     after: Schema.NullOr(Schema.String),
   },
   idempotencyKey: ({ name, epoch, occurrence }) => `${name}/${epoch}/${occurrence}`,
@@ -96,7 +87,6 @@ const decodeRecord = Schema.decodeUnknownEffect(RecordJson);
 const encodeRecord = flow(Schema.encodeResult(RecordJson), Result.getOrThrow);
 const asJson = flow(Schema.decodeUnknownResult(Schema.Json), Result.getOrThrow);
 
-/** Who asks for a change, as the channel declared it. */
 export type ScheduleAsker = Voice & {
   readonly origin: FrontDoor;
   readonly from?: Where | undefined;
@@ -116,20 +106,14 @@ export class Schedules extends Context.Service<
 
 const refusedInput = (why: string) => new HostRefused({ reason: `${REFUSED_INPUT}: ${why}` });
 
-/** The occurrence the chain waits for next, and null while it waits for a Run instead. */
 const upcoming = (record: ScheduleRecord) =>
   record.pending !== null &&
   (record.last === null || epochMs(record.pending) > epochMs(record.last.occurrence))
     ? record.pending
     : null;
 
-/** The host's own time zone, which a Schedule added without one is read in. */
 const hostZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-/**
- * The host's Schedules, and the `Schedule` workflow registered on its engine. `seconds`
- * is the test-only allowance for a sixth cron field.
- */
 export const schedulesLayer = (options: {
   readonly dir: string;
   readonly env: PluginEnv;
@@ -144,13 +128,13 @@ export const schedulesLayer = (options: {
       const hosted = yield* Effect.context<HostServices | PlatformServices>();
       const scope = yield* Effect.scope;
       const machine: ScheduleMachine = { installation: options.installation, hostname: hostname() };
-      // One writer of the records at a time: a change and an occurrence both read and write one.
+      // WARNING: one writer of the records at a time: a change and an occurrence both read and write them.
       const writing = yield* Semaphore.make(1);
 
       const read = (name: string) =>
         fs.readFileString(recordOf(dir, name)).pipe(
           Effect.flatMap(decodeRecord),
-          Effect.orElseSucceed((): ScheduleRecord | null => null),
+          Effect.orElseSucceed(() => null),
         );
       const write = (record: ScheduleRecord) =>
         Effect.gen(function* () {
@@ -171,7 +155,6 @@ export const schedulesLayer = (options: {
         Result.getOrUndefined(parseSchedule(record.cron, record.tz, { seconds: options.seconds }));
       const now = Clock.currentTimeMillis;
 
-      /** The chain's next execution, started apart from this one so neither waits on the other. */
       const startExecution = (payload: typeof ScheduleWorkflow.payloadSchema.Type) =>
         ScheduleWorkflow.execute(payload, { discard: true }).pipe(
           Effect.updateContext((context: Context.Context<WorkflowEngine.WorkflowEngine>) =>
@@ -199,7 +182,9 @@ export const schedulesLayer = (options: {
               run: outcome.run,
               status,
             };
-          } else said = outcome;
+          } else {
+            said = outcome;
+          }
           last = { occurrence: record.last.occurrence, outcome: said };
         }
         return {
@@ -219,16 +204,17 @@ export const schedulesLayer = (options: {
       const list = Effect.gen(function* () {
         const names = yield* fs
           .readDirectory(schedulesDir(dir))
-          .pipe(Effect.orElseSucceed((): Array<string> => []));
+          .pipe(Effect.orElseSucceed(() => Arr.empty<string>()));
         const entries: Array<ScheduleEntry> = [];
         for (const name of names.sort()) {
           const record = yield* read(name);
-          if (record !== null) entries.push(yield* entryOf(record));
+          if (record !== null) {
+            entries.push(yield* entryOf(record));
+          }
         }
         return { machine, schedules: entries };
       });
 
-      /** Where a saved start runs, and what the host is given to start it there. */
       const placed = Effect.fn("Schedules.placed")(function* (start: SavedStart) {
         const atRoot = start.workspace === SCHEDULE_PROJECTS_ROOT;
         const root = atRoot
@@ -246,47 +232,53 @@ export const schedulesLayer = (options: {
         };
       });
 
-      /** The start checked as an agent's start is, before the Schedule is written. */
       const checkStart = Effect.fn("Schedules.checkStart")(function* (
         start: SavedStart,
         request: string,
       ) {
-        if (Str.trim(start.workspace) === "")
+        if (Str.trim(start.workspace) === "") {
           return yield* new HostRefused({
             reason: `${NEEDS_INPUT}: a Schedule names its checkout: an absolute path, or ${SCHEDULE_PROJECTS_ROOT}`,
           });
+        }
         if (
           start.workspace !== SCHEDULE_PROJECTS_ROOT &&
           !pipe_(start.workspace, Str.startsWith("/"))
-        )
+        ) {
           return yield* refusedInput(
             `workspace: "${start.workspace}" is neither an absolute path nor ${SCHEDULE_PROJECTS_ROOT}`,
           );
-        if ("workspace" in start.inputs)
+        }
+        if ("workspace" in start.inputs) {
           return yield* refusedInput(
             "the checkout is the start's workspace, not one of its Inputs",
           );
+        }
         const where = yield* placed(start);
         const saved = yield* savedModules({ ...env, cwd: where.project });
         const fault = Option.getOrUndefined(
           Arr.findFirst(saved.problems, (one) => one.id === start.workflow),
         );
-        if (fault !== undefined) return yield* refusedInput(`${fault.path}: ${fault.message}`);
+        if (fault !== undefined) {
+          return yield* refusedInput(`${fault.path}: ${fault.message}`);
+        }
         const entry = Option.getOrUndefined(
           Arr.findFirst(saved.entries, (one) => one.id === start.workflow),
         );
-        if (entry === undefined)
+        if (entry === undefined) {
           return yield* refusedInput(
             `no workflow "${start.workflow}" is saved for ${where.project}`,
           );
+        }
         const missing = yield* agentStartRefusal(
           { ...env, cwd: where.project },
           entry,
           { json: {}, text: where.text },
           { named: where.project, fix: "" },
         );
-        if (missing !== null)
+        if (missing !== null) {
           return yield* new HostRefused({ reason: `${NEEDS_INPUT}: ${missing.error.message}` });
+        }
         const generation = yield* registry.resolve({ project: where.project, id: start.workflow });
         yield* registry.check({
           generation,
@@ -300,7 +292,6 @@ export const schedulesLayer = (options: {
         });
       }, Effect.provideContext(hosted));
 
-      /** One occurrence's Run, admitted for the Schedule to execute itself. */
       const startSaved = Effect.fn("Schedules.startSaved")(function* (
         start: SavedStart,
         by: ScheduledBy,
@@ -321,7 +312,7 @@ export const schedulesLayer = (options: {
             {
               workflow: start.workflow,
               inputs: where.text,
-              goal: pipe_(by.name, Str.replace(/[-_]+/g, " ")),
+              goal: pipe_(by.name, Str.replaceAll(/[-_]+/g, " ")),
             },
           ),
           verify: start.verify,
@@ -332,7 +323,7 @@ export const schedulesLayer = (options: {
           yield* readAudit(trail).pipe(Effect.orElseSucceed(() => [])),
           (line) => line.request === request,
         );
-        if (!recorded)
+        if (!recorded) {
           yield* recordAudit(trail, {
             operation: "start",
             request,
@@ -341,12 +332,12 @@ export const schedulesLayer = (options: {
             result: Started,
             value: admitted,
           }).pipe(Effect.orDie);
+        }
         return admitted.runId;
       }, Effect.provideContext(hosted));
 
-      /** herdr answering, waited for each minute: a scheduled Run always gets its own Task. */
       const herdrAnswers = (name: string, occurrence: string) =>
-        new Herdr(env).workspaceList().pipe(
+        new Herdr(env).agentList().pipe(
           Effect.tapError(() =>
             update(name, (record) => ({
               ...record,
@@ -362,16 +353,19 @@ export const schedulesLayer = (options: {
         name: string,
         epoch: string,
         occurrence: string,
-      ): Effect.fn.Return<OccurrenceOutcome> {
+      ) {
         yield* herdrAnswers(name, occurrence);
         const refused = (why: string) => ({ kind: "refused" as const, reason: why });
-        // Under the write lock from the read to the recorded Run, so a pause, resume or
-        // removal lands wholly before the start or after its Run is the Schedule's.
+        // WARNING: held from the read to the recorded Run, so a pause, resume or removal lands wholly before or after it.
         return yield* writing.withPermits(1)(
-          Effect.gen(function* (): Effect.fn.Return<OccurrenceOutcome> {
+          Effect.gen(function* () {
             const record = yield* read(name);
-            if (record === null) return refused("the Schedule was removed");
-            if (record.epoch !== epoch) return refused("the Schedule was resumed");
+            if (record === null) {
+              return refused("the Schedule was removed");
+            }
+            if (record.epoch !== epoch) {
+              return refused("the Schedule was resumed");
+            }
             if (record.paused) {
               const outcome = refused("the Schedule was paused");
               yield* write({ ...record, last: { occurrence, outcome } });
@@ -398,11 +392,7 @@ export const schedulesLayer = (options: {
         );
       });
 
-      /**
-       * What became of an occurrence, written down, and which execution the chain goes on
-       * with. A chain a resume left waiting for its Run hands the Schedule's new epoch its
-       * first occurrence, with no catch-up.
-       */
+      // WARNING: a chain a resume left waiting hands the new epoch its first occurrence, with no catch-up.
       const recordOccurrence = Effect.fn("Schedules.recordOccurrence")(function* (
         payload: typeof ScheduleWorkflow.payloadSchema.Type,
         occurrence: string,
@@ -425,7 +415,9 @@ export const schedulesLayer = (options: {
         return yield* writing.withPermits(1)(
           Effect.gen(function* () {
             const record = yield* read(payload.name);
-            if (record === null) return null;
+            if (record === null) {
+              return null;
+            }
             const own = record.epoch === payload.epoch;
             const handedOver = !own && run !== null && record.running === run;
             const cron = cronOf(record);
@@ -443,11 +435,12 @@ export const schedulesLayer = (options: {
         );
       });
 
-      /** What the engine kept of an execution that has finished, gone. */
       const forgetFinished = (payload: typeof ScheduleWorkflow.payloadSchema.Type) =>
         Effect.gen(function* () {
           const execution = yield* ScheduleWorkflow.executionId(payload);
-          if (Option.isNone(yield* ScheduleWorkflow.poll(execution))) return;
+          if (Option.isNone(yield* ScheduleWorkflow.poll(execution))) {
+            return;
+          }
           yield* forgetExecution(ScheduleWorkflow._tag, execution);
         }).pipe(Effect.provideContext(hosted), Effect.ignore);
 
@@ -458,7 +451,7 @@ export const schedulesLayer = (options: {
             yield* DurableClock.sleep({
               name: "occurrence",
               duration: Duration.millis(Math.max(0, due - (yield* Clock.currentTimeMillis))),
-              // Every wake-up is the persisted clock, however near the occurrence.
+              // WARNING: every wake-up is the persisted clock, however near the occurrence.
               inMemoryThreshold: Duration.zero,
             });
             const woke = yield* Activity.make({
@@ -482,20 +475,22 @@ export const schedulesLayer = (options: {
                   : { kind: "start" as const, occurrence: isoOf(decided.occurrence) };
               }),
             });
-            if (woke.kind === "end") return;
+            if (woke.kind === "end") {
+              return;
+            }
             const outcome = yield* Activity.make({
               name: "start",
               success: OccurrenceOutcome,
               execute: startOccurrence(payload.name, payload.epoch, woke.occurrence),
             });
-            // On this execution's own fiber, so the Run's end is what wakes it. A suspension
-            // is the engine's and passes through; how the Run ended is its own record's.
-            if (outcome.kind === "started")
+            // WARNING: on this execution's own fiber, so the Run's end wakes it; a suspension passes through.
+            if (outcome.kind === "started") {
               yield* registry.result(outcome.run).pipe(
                 Effect.catch(() => Effect.void),
                 Effect.catchDefect(() => Effect.void),
               );
-            // Decided once, so a replay starts the same execution rather than a later one.
+            }
+            // WARNING: decided once, so a replay starts the same execution rather than a later one.
             const next = yield* Activity.make({
               name: "record",
               success: Schema.NullOr(
@@ -503,15 +498,16 @@ export const schedulesLayer = (options: {
               ),
               execute: recordOccurrence(payload, woke.occurrence, outcome),
             });
-            if (next !== null)
+            if (next !== null) {
               yield* startExecution({
                 name: payload.name,
                 ...next,
                 after: next.epoch === payload.epoch ? payload.occurrence : null,
               });
-            // ponytail: an execution that ends unstarted (paused, removed, superseded) has no follower to forget it; one row each.
-            if (payload.after !== null)
+            }
+            if (payload.after !== null) {
               yield* forgetFinished({ ...payload, occurrence: payload.after });
+            }
           }),
         ),
         scope,
@@ -519,10 +515,11 @@ export const schedulesLayer = (options: {
 
       const change = (change: ScheduleChange, request: string, by: ScheduleAsker) =>
         Effect.gen(function* () {
-          if (!SCHEDULE_NAME.test(change.name))
+          if (!SCHEDULE_NAME.test(change.name)) {
             return yield* refusedInput(
               `"${change.name}" is not a Schedule's name: lowercase letters, digits and hyphens, at most 40`,
             );
+          }
           return yield* once(
             trailOf(dir, change.name),
             {
@@ -544,7 +541,7 @@ export const schedulesLayer = (options: {
         const done = (schedule: ScheduleRecord | null) =>
           Effect.map(
             schedule === null ? Effect.succeed<ScheduleEntry | null>(null) : entryOf(schedule),
-            (entry): ScheduleChanged => ({
+            (entry) => ({
               machine,
               change: change.change,
               name: change.name,
@@ -555,7 +552,6 @@ export const schedulesLayer = (options: {
           const removals = yield* fs
             .readFileString(removedOf(dir, change.name))
             .pipe(Effect.orElseSucceed(() => ""));
-          // Each line is a removal's request and the `added` of the record it removed.
           const removed = Option.getOrUndefined(
             Option.map(
               Option.fromNullishOr(
@@ -568,19 +564,25 @@ export const schedulesLayer = (options: {
               (present) => pipe_(present, Str.slice(request.length + 1)),
             ),
           );
-          if (removed !== undefined && removed !== record?.added) return yield* done(null);
+          if (removed !== undefined && removed !== record?.added) {
+            return yield* done(null);
+          }
         }
-        // This request's own write, from an attempt that stopped before its receipt.
-        if (record !== null && record.epoch === request && change.change !== "pause")
+        // WARNING: this request's own write, from an attempt that stopped before its receipt.
+        if (record !== null && record.epoch === request && change.change !== "pause") {
           return yield* done(record);
+        }
         if (change.change === "add") {
-          if (record !== null)
+          if (record !== null) {
             return yield* refusedInput(
               `a Schedule called "${change.name}" is already on this Machine; remove it first`,
             );
+          }
           const tz = change.tz ?? hostZone();
           const cron = parseSchedule(change.cron, tz, { seconds: options.seconds });
-          if (Result.isFailure(cron)) return yield* refusedInput(cron.failure);
+          if (Result.isFailure(cron)) {
+            return yield* refusedInput(cron.failure);
+          }
           yield* checkStart(change.start, request);
           const at = yield* now;
           const added: ScheduleRecord = {
@@ -597,17 +599,19 @@ export const schedulesLayer = (options: {
             running: null,
           };
           yield* write(added);
-          if (added.pending !== null)
+          if (added.pending !== null) {
             yield* startExecution({
               name: added.name,
               epoch: added.epoch,
               occurrence: added.pending,
               after: null,
             });
+          }
           return yield* done(added);
         }
-        if (record === null)
+        if (record === null) {
           return yield* refusedInput(`no Schedule called "${change.name}" is on this Machine`);
+        }
         if (change.change === "remove") {
           yield* fs
             .writeFileString(removedOf(dir, change.name), `${request} ${record.added}\n`, {
@@ -622,56 +626,61 @@ export const schedulesLayer = (options: {
           yield* write(paused);
           return yield* done(paused);
         }
-        if (!record.paused)
+        if (!record.paused) {
           return yield* new HostRefused({
             reason: `invalid_state: "${change.name}" is not paused`,
           });
+        }
         const cron = cronOf(record);
-        if (cron === undefined)
+        if (cron === undefined) {
           return yield* refusedInput(`"${record.cron}" no longer reads as a cron expression here`);
+        }
         const at = yield* now;
-        // A chain still waiting for its Run hands the new epoch its first occurrence.
         const pending = record.running === null ? isoOf(nextOccurrence(cron, at, at)) : null;
         const resumed = { ...record, paused: false, epoch: request, pending };
         yield* write(resumed);
-        if (pending !== null)
+        if (pending !== null) {
           yield* startExecution({
             name: record.name,
             epoch: request,
             occurrence: pending,
             after: null,
           });
+        }
         return yield* done(resumed);
       });
 
-      /**
-       * The first occurrence of a Schedule resumed while its Run went, where that Run has
-       * ended and no chain was left to hand it over; null while one still may.
-       */
       const handedOverAndLost = (record: ScheduleRecord) =>
         Effect.gen(function* () {
           const cron = cronOf(record);
-          if (record.running === null || cron === undefined) return null;
+          if (record.running === null || cron === undefined) {
+            return null;
+          }
           const status = yield* statusOf(record.running);
-          if (status !== "complete" && status !== "failed") return null;
+          if (status !== "complete" && status !== "failed") {
+            return null;
+          }
           const at = yield* now;
           const pending = isoOf(nextOccurrence(cron, at, at));
           yield* update(record.name, (now) => ({ ...now, pending, running: null }));
           return pending;
         });
 
-      // Each active Schedule's waiting execution, again: its key makes this a no-op unless
-      // the engine lost it.
+      // WARNING: keyed, so running it again is a no-op unless the engine lost the execution.
       yield* Effect.forkScoped(
         Effect.gen(function* () {
           const names = yield* fs
             .readDirectory(schedulesDir(dir))
-            .pipe(Effect.orElseSucceed((): Array<string> => []));
+            .pipe(Effect.orElseSucceed(() => []));
           for (const name of names) {
             const record = yield* read(name);
-            if (record === null || record.paused) continue;
+            if (record === null || record.paused) {
+              continue;
+            }
             const pending = record.pending ?? (yield* handedOverAndLost(record));
-            if (pending === null) continue;
+            if (pending === null) {
+              continue;
+            }
             yield* startExecution({
               name,
               epoch: record.epoch,
