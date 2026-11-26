@@ -35,6 +35,14 @@ export type Answered<A> =
       readonly transient?: boolean;
     };
 
+/** What one read of the forge cost, counted per fiber so a concurrent read is never charged to it. */
+export interface Asked {
+  attempts: number;
+  limited: number;
+}
+
+export class Asking extends Context.Service<Asking, Asked>()("collie/ForgeHttp/Asking") {}
+
 export class ForgeHttp extends Context.Service<
   ForgeHttp,
   {
@@ -202,9 +210,22 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
             ),
           );
         const send = (token: string) =>
-          Effect.sync(() => {
+          Effect.gen(function* () {
             attempts += 1;
-          }).pipe(Effect.andThen(once(token)));
+            const asked = yield* Effect.serviceOption(Asking);
+            if (Option.isSome(asked)) {
+              asked.value.attempts += 1;
+            }
+            const sent = yield* once(token);
+            if (
+              Option.isSome(asked) &&
+              !sent.sent.ok &&
+              Str.includes("rate limited")(sent.sent.reason)
+            ) {
+              asked.value.limited += 1;
+            }
+            return sent;
+          });
         const notReady = { ok: false, reason: login.notReady } as const;
         const first = yield* tokenOf(login, cwd, slot);
         if (first === null) {

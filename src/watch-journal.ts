@@ -11,6 +11,8 @@ export const WatchEvent = Schema.Union([
     source: WatchSource,
     result: Schema.Literals(["read", "failed"]),
     attempts: Schema.Finite,
+    rateLimit: Schema.Finite,
+    forge: Schema.String,
     head: Schema.NullOr(Schema.String),
     reason: Schema.optionalKey(Schema.String),
   }),

@@ -11,6 +11,7 @@ import type { FakeMr, ForgeModel } from "./support/forge";
 import { fixtures } from "./support/host";
 import { decodeWoke, until, watching } from "./support/watching";
 import { HOLD, Registry, runDir, STOP } from "../src/engine";
+import type { HostServices } from "../src/engine";
 import { mrId, sectionOf } from "../src/board-model";
 import type { MrPanel } from "../src/board-model";
 import { settleWatches } from "../src/mr-watch";
@@ -20,6 +21,8 @@ import { Store } from "../src/store";
 import { readWatchJournal, recordWatchEvent } from "../src/watch-journal";
 import type { WatchEvent } from "../src/watch-journal";
 import { epochMs } from "../src/time";
+import { forgeOf } from "../src/forge/forge";
+import { shell } from "../src/mr";
 import { QUIET_MS } from "../src/mr-watch-model";
 
 const PROJECT = "gitlab.cego.dk/mk/collie";
@@ -596,6 +599,70 @@ for (const [control, said] of [
     ));
 }
 
+test("a poll's attempts count only the reads it made, not a concurrent one", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const forge = yield* gitlab;
+      const runId = yield* session(
+        forge,
+        Effect.gen(function* () {
+          const runId = yield* started("watches-mr", "w1", {
+            target: WATCHED,
+            head: H1,
+            cwd: rig.projectDir,
+          });
+          yield* until(
+            () => watchOf(runId),
+            (row) => row !== null,
+          );
+          return runId;
+        }),
+      );
+      yield* session(
+        forge,
+        Effect.gen(function* () {
+          yield* watchingMerges;
+          yield* Effect.sleep("6 minutes");
+          const gate = yield* Deferred.make<void>();
+          const reached = yield* Deferred.make<void>();
+          const read = yield* Deferred.make<void>();
+          let blocked = false;
+          forge.before((url) => {
+            if (blocked || !/merge_requests\/7$/.test(decodeURIComponent(url))) {
+              return Promise.resolve();
+            }
+            blocked = true;
+            Effect.runSync(Deferred.succeed(reached, undefined));
+            return Effect.runPromise(Deferred.await(gate));
+          });
+          yield* Effect.forkScoped(
+            Effect.gen(function* () {
+              yield* Deferred.await(reached);
+              const other = { project: PROJECT, iid: "8" };
+              yield* forgeOf(other).details(other, rig.projectDir, shell);
+              yield* Deferred.succeed(read, undefined);
+            }),
+          );
+          yield* forge.set(PUSHED);
+          yield* Deferred.await(reached);
+          yield* Deferred.await(read);
+          yield* Deferred.succeed(gate, undefined);
+          yield* Effect.sleep("2 minutes");
+          const polls = pollsIn(yield* readWatchJournal(host.dir()));
+          expect(polls.length).toBeGreaterThan(0);
+          expect(Arr.reduce(polls, 0, (total, one) => total + one.attempts)).toBe(
+            reads(forge, "7"),
+          );
+          for (const poll of polls) {
+            expect(poll.forge).toBe("gitlab.cego.dk");
+            expect(poll.rateLimit).toBe(0);
+          }
+          expect(runId).toStartWith("run-");
+        }),
+      );
+    }),
+  ));
+
 test("a held Run's Watch asks for nothing until the hold is released, then takes the head it missed", () =>
   runEffect(
     Effect.gen(function* () {
@@ -656,6 +723,7 @@ test("a wake the Run's control refuses is not recorded as a review start", () =>
         Effect.gen(function* () {
           const registry = yield* Registry;
           const store = yield* Store;
+          const hosted = yield* Effect.context<HostServices>();
           const runId = yield* started("watches-mr", "w1", {
             target: WATCHED,
             head: H1,
@@ -701,7 +769,8 @@ test("a wake the Run's control refuses is not recorded as a review start", () =>
               outstanding: store.outstanding,
               observe: store.observe,
               unavailable: () => Effect.void,
-              wake: (run, name, woke) => registry.wake(run, name, woke),
+              wake: (run, name, woke) =>
+                registry.wake(run, name, woke).pipe(Effect.provideContext(hosted)),
             },
             event: recordWatchEvent(host.dir()),
           });

@@ -10,7 +10,8 @@ import { readEnv } from "./env";
 import { mrId, mrIdProject, mrLabel, mrRefOf, parseMrTarget, readMrRef } from "./board-model";
 import type { MrPanel, MrState, TaskView } from "./board-model";
 import { latest, readDispositions, recordDisposition } from "./disposition";
-import { ForgeHttp } from "./forge/http";
+import { Asking } from "./forge/http";
+import type { Asked } from "./forge/http";
 import { forgeOf } from "./forge/forge";
 import type { ReviewRead } from "./forge/review";
 import { readLanding, settleLeft } from "./landing";
@@ -276,11 +277,11 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
       // WARNING: Stamped before asking, so a forge that cannot be asked is not asked every tick.
       opts.checked.set(id, opts.now);
       asked = true;
-      const http = yield* ForgeHttp;
-      const sent = yield* http.attempts;
+      // WARNING: counted here, not from the host's total, so a concurrent read is not this poll's.
+      const spent: Asked = { attempts: 0, limited: 0 };
       const answered = yield* forgeAnswer(`mr:${id}`, at, opts.run, (panel) =>
         opts.panels.set(id, { at: opts.now, panel }),
-      );
+      ).pipe(Effect.provideService(Asking, spent));
       const now = DateTime.formatIso(DateTime.makeUnsafe(opts.now));
       const read = opts.panels.get(id)?.panel;
       const refused = answered === null && read?._tag === "Unavailable" ? read.reason : null;
@@ -290,7 +291,9 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
         mr: id,
         source: demanded && !settles ? ("watch" as const) : ("task" as const),
         result: answered === null ? ("failed" as const) : ("read" as const),
-        attempts: (yield* http.attempts) - sent,
+        attempts: spent.attempts,
+        rateLimit: spent.limited,
+        forge: Str.split(mrRefOf(`mr:${id}`)?.project ?? "", "/")[0] ?? "",
         head: read?._tag === "Details" ? (read.head ?? null) : null,
       };
       yield* event(refused === null ? poll : { ...poll, reason: refused });
