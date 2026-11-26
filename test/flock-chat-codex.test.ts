@@ -881,6 +881,34 @@ test("An exclusion never doubles a filter key the human spelled in another case"
   });
 });
 
+test("Two imports naming one variable in two cases leave one exclusion, so Codex reads the config", () => {
+  const first = serveDocs({ tool: "read_doc", token: "kept" });
+  const second = serveDocs({ tool: "read_doc", token: "kept" });
+  Bun.env.DOC_VAR = "one";
+  Bun.env.doc_var = "two";
+  return withServers(
+    {
+      one: { type: "http", url: first.url, headers: { Authorization: "Bearer ${DOC_VAR}" } },
+      two: { type: "http", url: second.url, headers: { Authorization: "Bearer ${doc_var}" } },
+    },
+    (driver) =>
+      Effect.gen(function* () {
+        const session = yield* driver.open("codex-case-folded", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("inspect");
+        const given = Arr.join(inspected(yield* turn(session)).args, " ");
+        expect(given).toContain("mcp_servers.one.");
+        expect(given).toContain("mcp_servers.two.");
+        expect(occurrences(Str.toLowerCase(given), "doc_var")).toBe(1);
+      }),
+  ).finally(() => {
+    void first.stop();
+    void second.stop();
+    delete Bun.env.DOC_VAR;
+    delete Bun.env.doc_var;
+  });
+});
+
 test("A relay answers only a request carrying the token Codex was given", () => {
   const token = "literal-secret";
   const fixture = serveDocs({ tool: "read_doc", token });
