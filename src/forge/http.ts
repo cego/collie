@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Cause from "effect/Cause";
 import { pipe as pipe_ } from "effect/Function";
@@ -97,8 +98,9 @@ const PLAIN_LIMIT_RE = /^[^{<]{0,80}\brate limit exceeded\b/i;
 const budgetOf = (response: Response) => {
   const number = (...names: ReadonlyArray<string>) => {
     for (const name of names) {
-      const value = response.headers.get(name)?.split(/[,;]/, 1)[0]?.trim();
-      if (value && Number.isFinite(Number(value))) {
+      const header = response.headers.get(name);
+      const value = header === null ? undefined : Str.trim(Str.split(header, /[,;]/)[0]);
+      if (value !== undefined && value !== "" && Number.isFinite(Number(value))) {
         return Number(value);
       }
     }
@@ -118,45 +120,54 @@ const budgetOf = (response: Response) => {
   return { limit, remaining };
 };
 
+const ErrorBody = Schema.Struct({
+  message: Schema.optionalKey(Schema.String),
+  errors: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ message: Schema.optionalKey(Schema.String) })),
+  ),
+});
+const decodeErrorBody = Schema.decodeUnknownOption(Schema.fromJsonString(ErrorBody));
+
 const namesSecondaryLimit = (body: string) => {
-  try {
-    const parsed: unknown = JSON.parse(body);
-    const { message, errors } = (parsed ?? {}) as { message?: unknown; errors?: unknown };
-    return [message, ...(Array.isArray(errors) ? errors.map((one) => one?.message) : [])].some(
-      (text) => typeof text === "string" && SECONDARY_LIMIT_RE.test(text),
-    );
-  } catch {
+  const parsed = Option.getOrNull(decodeErrorBody(body));
+  if (parsed === null) {
     return false;
   }
+  return Arr.some(
+    [parsed.message, ...Arr.map(parsed.errors ?? [], (one) => one.message)],
+    (text) => text !== undefined && SECONDARY_LIMIT_RE.test(text),
+  );
 };
 
-const refusedByLimit = async (response: Response) => {
+const refusedByLimit: (response: Response) => Promise<boolean> = (response) => {
   if (response.status === 429) {
-    return true;
+    return Promise.resolve(true);
   }
   if (response.status !== 403 && response.status !== 422) {
-    return false;
+    return Promise.resolve(false);
   }
   // WARNING: read from a clone: the forge client still needs the body to classify the refusal itself.
-  const body = await response
+  return response
     .clone()
     .text()
-    .catch(() => "");
-  if (namesSecondaryLimit(body)) {
-    return true;
-  }
-  if (response.status !== 403) {
-    return false;
-  }
-  const budget = budgetOf(response);
-  if (budget?.limit === 0) {
-    return false;
-  }
-  return (
-    response.headers.has("retry-after") ||
-    budget?.remaining === 0 ||
-    (budget === null && PLAIN_LIMIT_RE.test(body.trim()))
-  );
+    .catch(() => "")
+    .then((body) => {
+      if (namesSecondaryLimit(body)) {
+        return true;
+      }
+      if (response.status !== 403) {
+        return false;
+      }
+      const budget = budgetOf(response);
+      if (budget?.limit === 0) {
+        return false;
+      }
+      return (
+        response.headers.has("retry-after") ||
+        budget?.remaining === 0 ||
+        (budget === null && PLAIN_LIMIT_RE.test(Str.trim(body)))
+      );
+    });
 };
 
 const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
@@ -212,12 +223,14 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
       const carried: FetchLike = (input, init) => (fetch ?? globalThis.fetch)(input, init);
       const transport: FetchLike = (input, init) => {
         spend.attempts += 1;
-        return carried(input, init).then(async (response) => {
-          if (await refusedByLimit(response)) {
-            spend.limited += 1;
-          }
-          return response;
-        });
+        return carried(input, init).then((response) =>
+          refusedByLimit(response).then((refused) => {
+            if (refused) {
+              spend.limited += 1;
+            }
+            return response;
+          }),
+        );
       };
       return transport;
     };
