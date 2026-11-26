@@ -14863,7 +14863,9 @@ const workingIn = (
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const paneId = yield* rig.addAgent("helper", owned, { run: runId });
+    const paneId = yield* rig
+      .addAgent("helper", owned, { run: runId })
+      .pipe(Effect.provide(recordsAt(dir)), Effect.orDie);
     yield* registerAgent(scopeFor(owned), {
       role: "implementer",
       agent: "helper",
