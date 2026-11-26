@@ -470,8 +470,9 @@ export default defineWorkflow({
             forcePush || reviewedAt === "" ? Effect.succeed("") : changesAt(at, reviewedAt);
           if (round > 1 && !(yield* following(round))) {
             yield* fact(`follow-off-${round}`, `${FOLLOW} is off: back to asking what next`);
+            const changesNow = yield* changes(round);
             yield* began(round);
-            const review = yield* roundAt(round, yield* changes(round), false);
+            const review = yield* roundAt(round, changesNow, false);
             yield* ended(round);
             return { menu: review ?? last, at: round };
           }
@@ -577,6 +578,10 @@ export default defineWorkflow({
             }
             const reused = commentsOnly && affected.length === 0;
             const ran = !("moved" in pinned) && !reused;
+            const changesNow =
+              "moved" in pinned || commentsOnly
+                ? ""
+                : `${yield* changes(round)}${attached.length === 0 ? "" : `\n\n${formatReplies(attached)}`}`;
             if (ran) {
               yield* began(round);
             }
@@ -587,9 +592,7 @@ export default defineWorkflow({
                   ? last
                   : yield* roundAt(
                       round,
-                      commentsOnly
-                        ? ""
-                        : `${yield* changes(round)}${attached.length === 0 ? "" : `\n\n${formatReplies(attached)}`}`,
+                      changesNow,
                       true,
                       commentsOnly ? { findings: affected, replies: attached } : undefined,
                     );
@@ -600,6 +603,9 @@ export default defineWorkflow({
                 Effect.asVoid,
               ),
             });
+            if (ran) {
+              yield* ended(round);
+            }
             if (reviewed === null) {
               yield* fact(
                 `follow-moved-${round}`,
@@ -609,9 +615,6 @@ export default defineWorkflow({
               last = yield* postedAt(reviewed, round);
               ledger = last.findings;
               reviewedAt = head;
-            }
-            if (ran) {
-              yield* ended(round);
             }
             if (reviewed === null || !cleanAt(reviewed)) {
               woke = yield* watch(watching);

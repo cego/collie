@@ -1927,6 +1927,77 @@ for (const id of ["review", "second-look"]) {
     ));
 }
 
+const roundMarks = (journal: ReadonlyArray<WatchEvent>) =>
+  Arr.flatMap(journal, (event) =>
+    event._tag === "started" || event._tag === "completed"
+      ? [`${event._tag} ${event.name}`]
+      : event._tag === "published"
+        ? [`published ${event.round}`]
+        : event._tag === "discarded"
+          ? ["discarded"]
+          : [],
+  );
+
+test("a round starts after its changes read and ends before it posts, so a forge outage names what is missing", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      const { first, forge, entry } = yield* begun("review", [
+        review([F1]),
+        review([{ ...F1, status: "fixed" }]),
+      ]);
+      const marks = () => Effect.map(readWatchJournal(host.dir()), roundMarks);
+      let unavailable = false;
+      forge.after((url, _init, response) =>
+        Promise.resolve(
+          unavailable && Str.includes("/compare")(decodeURIComponent(url))
+            ? new Response('{"message":"temporarily unavailable"}', { status: 503 })
+            : response,
+        ),
+      );
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          yield* host.recovering;
+          const runId = yield* startedWaiting(entry);
+          yield* until(() => notesOf(forge), (notes) => notes.length === 1);
+          expect(yield* marks()).toEqual([
+            "started follow-1",
+            "completed follow-1",
+            "published 1",
+          ]);
+          unavailable = true;
+          yield* pushedOn(forge, first);
+          const parked = yield* until(
+            () => host.status(runId),
+            (view) =>
+              view?.status.status === "failed" ||
+              (view?.status.status === "suspended" && view.park != null),
+          ).pipe(Effect.timeout("10 minutes"));
+          expect(parked?.park).toMatchObject({ cause: "forge-unavailable" });
+          expect(yield* marks()).toEqual([
+            "started follow-1",
+            "completed follow-1",
+            "published 1",
+          ]);
+          unavailable = false;
+          yield* until(
+            () => asked(runId),
+            (rows) => Arr.some(rows, (row) => row.decision === "approve-2"),
+            2 * 3600,
+          );
+          expect(yield* marks()).toEqual([
+            "started follow-1",
+            "completed follow-1",
+            "published 1",
+            "started follow-2",
+            "completed follow-2",
+            "published 2",
+          ]);
+        }),
+      );
+    }),
+  ));
+
 const begun = (id: string, outputs: ReadonlyArray<Schema.Json>) =>
   Effect.gen(function* () {
     yield* repository;
