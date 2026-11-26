@@ -67,6 +67,11 @@ export interface Owed {
   readonly forge: "open" | "merged" | "closed" | null;
   /** When its forge said so, in epoch ms; null where that is not known. */
   readonly read: number | null;
+  /**
+   * The Runs an audited Resume took back after their own abandonment while their Watch is
+   * live: what they abandoned stands in their history, not in what their work still owes.
+   */
+  readonly revived?: ReadonlyArray<string>;
 }
 
 /** A Disposition line of one of the Task's Runs, as settlement reads it. */
@@ -114,7 +119,11 @@ export function settlementOf(
       .sort((a, b) => epochMs(a.at) - epochMs(b.at))
       .at(-1) ?? null;
   if (item.forge === "merged") return { by: "merged", line: latest("merged") };
-  const abandoned = latest("abandoned", (one) => carries(one.run) || one.run === leader);
+  const revived = new Set(item.revived ?? []);
+  const abandoned = latest(
+    "abandoned",
+    (one) => (carries(one.run) || one.run === leader) && !revived.has(one.run),
+  );
   if (abandoned !== null) return { by: "abandoned", line: abandoned };
   const merged = latest("merged");
   const reopened =

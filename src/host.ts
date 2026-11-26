@@ -1441,6 +1441,9 @@ const hostBoard = (dir: string) =>
             ),
           head: model?.head,
           cards,
+          watching: Effect.map(store.outstanding, (rows) =>
+            new Set(Arr.map(rows, (row) => row.run)),
+          ),
         });
       }).pipe(
         (built) =>
@@ -1608,7 +1611,6 @@ const hostBoard = (dir: string) =>
       record: registry.mergeRequest,
       stop,
       watches: {
-        list: store.watches,
         observe: store.observe,
         unavailable: (run: string, why: string) =>
           Effect.flatMap(Host, (host) => host.parked(run, why, "forge-unavailable")).pipe(
@@ -1616,6 +1618,7 @@ const hostBoard = (dir: string) =>
           ),
         wake: (run: string, name: string, woke: Woke) =>
           registry.wake(run, name, woke).pipe(Effect.provideContext(hosted)),
+        outstanding: store.outstanding,
       },
       requested: requestedOver(
         (suffix) => Effect.map(store.requestedEnding(suffix), (row) => row !== null),

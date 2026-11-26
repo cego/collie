@@ -1,7 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Clock, Effect, FileSystem } from "effect";
+import { Clock, Effect, FileSystem, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { Rig } from "./support/recorder";
 import { runEffect as runLive } from "./support/effect";
@@ -9,9 +9,12 @@ import { installFakeSkills } from "./support/defs";
 import { type FakeMr, type ForgeModel } from "./support/forge";
 import { fixtures } from "./support/host";
 import { decodeWoke, until, watching } from "./support/watching";
-import { Registry, STOP } from "../src/engine";
-import { sectionOf } from "../src/board-model";
+import { Registry, runDir, STOP } from "../src/engine";
+import { sectionOf, mrId } from "../src/board-model";
 import { QUIET_MS } from "../src/mr-watch-model";
+import { readDispositions, recordDisposition } from "../src/disposition";
+import { recordAudit } from "../src/audit";
+import { epochMs } from "../src/time";
 
 const PROJECT = "gitlab.cego.dk/mk/collie";
 const mrUrl = (iid: string) => `https://${PROJECT}/-/merge_requests/${iid}`;
@@ -19,6 +22,8 @@ const WATCHED = mrUrl("7");
 const UNWATCHED = mrUrl("8");
 const H1 = "1111111111111111111111111111111111111111";
 const H2 = "2222222222222222222222222222222222222222";
+const H3 = "3333333333333333333333333333333333333333";
+const KEY = `${PROJECT}!7`;
 
 let rig: Rig;
 let host: ReturnType<typeof watching>;
@@ -53,9 +58,23 @@ const OPEN: ForgeModel = {
   loggedIn: ["gitlab.cego.dk"],
   login: "mk",
   mrs: [mr("7"), mr("8")],
-  ancestry: { [H2]: [H1] },
+  ancestry: { [H2]: [H1], [H3]: [H2] },
 };
 const PUSHED: ForgeModel = { ...OPEN, mrs: [mr("7", { head: H2 }), mr("8")] };
+const PUSHED_AGAIN: ForgeModel = { ...OPEN, mrs: [mr("7", { head: H3 }), mr("8")] };
+
+/** The heads each watch round woke on, as the Run recorded them. */
+const roundsOf = (runId: string) =>
+  Effect.map(
+    FileSystem.FileSystem.pipe(
+      Effect.flatMap((fs) =>
+        fs
+          .readFileString(`${host.dir()}/runs/${runId}/log.txt`)
+          .pipe(Effect.orElseSucceed(() => "")),
+      ),
+    ),
+    (text) => Arr.filter(text.split("\n"), (line) => line.includes("round-")),
+  );
 
 const gitlab = Effect.suspend(() => host.gitlab(OPEN));
 type Forge = Effect.Success<typeof gitlab>;
@@ -191,7 +210,7 @@ test(
 );
 
 test(
-  "a Run waiting on its author for two days reads so on its card, is never overdue or Needs you, and its stop forgets the watch",
+  "a Run waiting on its author for two days reads so on its card, is never overdue or Needs you, and its stop ends its demand",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -230,7 +249,122 @@ test(
             expect(Arr.filter(host.toasts, (title) => /needs you|opened/.test(title))).toEqual([]);
             const registry = yield* Registry;
             yield* registry.control({ runId, control: STOP, set: true });
-            expect(yield* watchOf(runId)).toBeNull();
+            // The registration stays for a Resume to take up; a stopped Run asks for nothing.
+            const stopped = yield* watchOf(runId);
+            expect(stopped).not.toBeNull();
+            yield* forge.set(PUSHED);
+            yield* Effect.sleep("10 minutes");
+            const after = yield* watchOf(runId);
+            expect(after?.observed ?? null).toEqual(stopped?.observed ?? null);
+            expect(after?.woke ?? null).toBeNull();
+          }),
+        );
+      }),
+    ),
+  240_000,
+);
+
+test(
+  "a Review stopped, abandoned and resumed keeps its Watch, waking once on each of two pushes by the background poll alone",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const forge = yield* gitlab;
+        const runId = yield* session(
+          forge,
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const runId = yield* started("watches-mr", "w1", {
+              target: WATCHED,
+              head: H1,
+              cwd: rig.projectDir,
+              rounds: 2,
+            });
+            yield* until(
+              () => watchOf(runId),
+              (row) => row !== null,
+            );
+            yield* registry.control({ runId, control: STOP, set: true });
+            yield* recordDisposition(runDir(host.dir(), runId), {
+              at: "2026-11-26T10:22:28Z",
+              by: "cli:recovery",
+              kind: "abandoned",
+              ref: "",
+              note: null,
+            });
+            yield* registry.resume(runId);
+            yield* recordAudit(runDir(host.dir(), runId), {
+              operation: "resume",
+              request: "resume-1",
+              origin: "cli",
+              result: Schema.Struct({}),
+              value: {},
+            });
+            yield* until(
+              () => watchOf(runId),
+              (row) => row !== null,
+            );
+            return runId;
+          }),
+        );
+        yield* session(
+          forge,
+          Effect.gen(function* () {
+            const { board } = yield* watchingMerges;
+            yield* forge.set(PUSHED);
+            const seen = yield* until(
+              () => watchOf(runId),
+              (row) => row?.observed?.head === H2,
+            );
+            const again = yield* until(
+              () => watchOf(runId),
+              (row) => row?.name === "round-2",
+            );
+            const wokeAt = yield* Clock.currentTimeMillis;
+            expect(again!.run).toBe(runId);
+            expect(wokeAt - seen!.observed!.since).toBeGreaterThanOrEqual(QUIET_MS);
+            expect(wokeAt - seen!.observed!.since).toBeLessThan(QUIET_MS + 2 * 60_000);
+            // Nothing else wakes it: the re-armed round waits on the head it already has.
+            yield* Effect.sleep("20 minutes");
+            const waiting = yield* until(
+              () => watchOf(runId),
+              (row) => row?.name === "round-2",
+            );
+            expect(waiting!.observed?.head).toBe(H2);
+            expect(waiting!.woke ?? null).toBeNull();
+            expect((yield* status(runId))?.status.status).toBe("suspended");
+
+            // While the resumed Review waits, its merge request is not settled by the old
+            // abandonment, which its history keeps.
+            const { views } = yield* board;
+            const card = Option.getOrThrow(
+              Arr.findFirst(views, (view) => Arr.some(view.runs, (one) => one === runId)),
+            );
+            expect(card.sentence).toBe("Waiting for the author to change mk/collie!7.");
+            const entry = Arr.findFirst(card.mrs ?? [], (one) => one.id === mrId(WATCHED));
+            expect(Option.getOrThrow(entry).settled).toBeNull();
+            expect(
+              Arr.map(
+                yield* readDispositions(runDir(host.dir(), runId)).pipe(
+                  Effect.orElseSucceed(() => []),
+                ),
+                (line) => line.kind,
+              ),
+            ).toContain("abandoned");
+
+            yield* forge.set(PUSHED_AGAIN);
+            yield* until(
+              () => status(runId),
+              (view) => view?.status.status === "complete",
+            );
+            const rounds = yield* roundsOf(runId);
+            // A replay records its round again; the heads it woke on are the two pushes.
+            expect([...new Set(rounds.map((line) => line.replace(/^.*?round-\d+: /, "")))]).toEqual([
+              `${H1} -> ${H2}`,
+              `${H2} -> ${H3}`,
+            ]);
+            expect(yield* agentStarts).toEqual([]);
+            expect(reads(forge, "7")).toBeGreaterThan(0);
           }),
         );
       }),

@@ -9839,7 +9839,6 @@ const makeRegistry: (
     reason?: string,
   ) {
     const { runs } = yield* applyControl(runId, STOP, true, undefined, alone);
-    for (const one of runs) yield* forgetWatch(one);
     // Closing their panes is what stops the agents; the Run only stops looking.
     const agents = yield* Agents;
     const left: string[] = [];
@@ -10790,6 +10789,11 @@ const makeRegistry: (
     }, waking.withPermits(1)),
 
     wake: Effect.fn("Engine.Registry.wake")(function* (run: string, name: string, woke: Woke) {
+      // The watch it was read for may be gone: Stop keeps the row for a Resume, but a later
+      // round registers its own, and a Run that is held or stopped is answered by neither.
+      if (!(yield* store.waitingOn(run, name))) return;
+      if (Arr.some(yield* controlsOf(run), (control) => control === HOLD || control === STOP))
+        return;
       yield* store.wake(run, name, woke);
       if (wakingWatches.has(run)) return;
       // A question asked under the watch's name is the watch's to close, unless it was answered.

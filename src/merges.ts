@@ -150,12 +150,18 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
   panels: MrPanels;
   /** The Run directories whose landing attempt this host process is making now. */
   making: ReadonlySet<string>;
+  /**
+   * The merge requests a Run is still watching, by MR id with the Run that watches it:
+   * demand of their own, whoever's Task they belong to and whatever its board says.
+   */
+  demand?: ReadonlyMap<string, string>;
 }) {
   const fs = yield* FileSystem.FileSystem;
   // What an earlier host learned, under this one's own answers: a fresh host's empty memory
   // must not ask production again about what an earlier one already saw land there.
   for (const [label, state] of yield* readMrStates(opts.stateDir)) opts.states.set(label, state);
   const forge = new Map(yield* readForge(opts.stateDir));
+  const demandByMr = opts.demand ?? new Map();
   let asked = false;
   const watched: Array<Watched> = [];
   const shown = new Set(
@@ -201,6 +207,7 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
         abandoned: view.mrs?.[0]?.settled === "abandoned",
         runs: shown === undefined ? view.runs : [...view.runs, shown.run],
         owner: shown?.run ?? found?.run ?? view.mrs?.[0]?.run ?? view.run,
+        settles: true,
       });
     for (const repo of repos)
       if (repo !== shown)
@@ -209,10 +216,11 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
           abandoned: yield* abandonedIn(runDir(opts.stateDir, repo.run)),
           runs: [repo.run],
           owner: repo.run,
+          settles: true,
         });
     for (const one of adopted)
       if (one !== found)
-        watched.push({ mr: one.url, abandoned: false, runs: [one.run], owner: one.run });
+        watched.push({ mr: one.url, abandoned: false, runs: [one.run], owner: one.run, settles: true });
     if (several)
       for (const entry of view.mrs!)
         if (!Arr.some(repos, (repo) => repo.run === entry.run))
@@ -221,12 +229,19 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
             abandoned: entry.settled === "abandoned",
             runs: [entry.run],
             owner: entry.run,
+            settles: true,
           });
   }
-  for (const { mr, abandoned, runs, owner } of watched) {
+  // A watch reads its merge request whether or not any card names it: a Run folded into
+  // History is still following one. It is read for the watch alone, and settles nothing.
+  for (const [id, row] of demandByMr) {
+    if (Arr.some(watched, (one) => mrId(one.mr) === id)) continue;
+    watched.push({ mr: `mr:${id}`, abandoned: false, runs: [row.run], owner: row.run, settles: false });
+  }
+  for (const { mr, abandoned, runs, owner, settles } of watched) {
     // Whatever else a Task says of it, it is asked about: a merged one is followed to its
-    // deploy jobs, and a closed one may be reopened. Only an abandonment settles it for good.
-    if (abandoned) continue;
+    // deploy jobs, and a closed one may be reopened. Only an abandonment settles it for good
+    // - unless a Run still watches it, which no abandonment ends.
     const label = mrLabel(mr);
     if (mrRefOf(mr) === null) continue;
     const checkout =
@@ -238,6 +253,8 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
         : opts.stateDir;
     const id = yield* mrIdIn(mr, checkout, opts.run);
     if (id === null) continue;
+    const demanded = opts.demand?.has(id) ?? false;
+    if (abandoned && !demanded) continue;
     const dirs = Arr.map(runs, (run) => runDir(opts.stateDir, run));
     if (
       opts.states.get(id) !== "in-prod" &&
@@ -274,6 +291,9 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
       }
     }
     // Every round, not only when the forge is asked: a stop that did not take is asked again.
+    // A merge, a close or an abandonment settles the Task that shows it, never a read a
+    // Watch alone asked for.
+    if (!settles || abandoned) continue;
     const state = opts.states.get(id);
     if (state === undefined || state === "open" || state === "closed") continue;
     const read = opts.panels.get(id)?.panel;
@@ -411,6 +431,8 @@ interface Watched {
   readonly runs: ReadonlyArray<string>;
   /** The Run its `merged` disposition is recorded on. */
   readonly owner: string;
+  /** Whether a card names it: what the read settles for its Task, rather than for a Watch alone. */
+  readonly settles: boolean;
 }
 
 /** Whether a Run's latest disposition abandons its work. */

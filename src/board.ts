@@ -11,7 +11,8 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
 import { Clock, Effect, FileSystem, Option, Result, Schema, flow } from "effect";
-import { lastAudit } from "./audit";
+import { lastAudit, readAudit } from "./audit";
+import { resumesIn } from "./outcomes";
 import { planDirOf } from "./run-detail";
 import { readAhead, RunRecords, type RunRecordsApi } from "./run-records";
 import { openReports, readDrift } from "./drift";
@@ -967,6 +968,32 @@ function mrsOf(
   );
 }
 
+/**
+ * The Runs an audited Resume took back after their own abandonment while their Watch is
+ * live. The abandonment stays in their history, but no longer settles their work.
+ */
+const revivedOf = Effect.fn("Board.revivedOf")(function* (
+  runs: ReadonlyArray<RunFacts>,
+  watching: ReadonlySet<string>,
+) {
+  const revived: Array<string> = [];
+  for (const run of runs) {
+    if (!watching.has(run.id)) continue;
+    const resumed = Arr.map(
+      resumesIn(yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => []))),
+      (one) => epochMs(one.at),
+    ).sort((a, b) => a - b);
+    const last = resumed.at(-1);
+    if (last === undefined) continue;
+    const abandoned = Arr.filter(
+      yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => [])),
+      (line) => line.kind === "abandoned",
+    );
+    if (abandoned.length > 0 && last > epochMs(abandoned.at(-1)!.at)) revived.push(run.id);
+  }
+  return revived;
+});
+
 /** A Task's merge requests by MR id, each in the forge's words and with the Run that owns it. */
 export const ownedMrs = Effect.fn("Board.ownedMrs")(function* (runs: ReadonlyArray<RunFacts>) {
   const carried = yield* Effect.forEach(newestFirst(runs), (run) =>
@@ -1189,6 +1216,8 @@ interface BoardOptions {
   flows?: Map<string, Flow>;
   /** The commit a Run's branch is at; read through a minute's cache where not given. */
   head?: (run: RunFacts) => Effect.Effect<string | null>;
+  /** The Runs a live Watch is waiting on, which a Resume after an abandonment takes back. */
+  watching?: Effect.Effect<ReadonlySet<string>>;
   /** Cards from the last build, reused where nothing they were derived from moved. */
   cards?: KeptCards;
 }
@@ -1213,6 +1242,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
     ),
   );
   const forge = opts.forge ?? (yield* readForge(stateDir));
+  const watching = opts.watching === undefined ? new Set<string>() : yield* opts.watching;
   const since = yield* seenSince(stateDir);
   const live = new Map(Arr.map(opts.alive ?? [], (agent) => [agent.name, agent]));
   const records = yield* runningChecks;
@@ -1280,6 +1310,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           const mr = mrOf(run);
           carried.push({ run, id: mr === null ? null : yield* mrIdOf(run), mr });
         }
+        const revived = yield* revivedOf(everyRun, watching);
         const key =
           cards === undefined
             ? ""
@@ -1296,6 +1327,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                   markers.get(run.id) ?? null,
                   checked.has(run.id),
                 ]),
+                revived,
                 tasks.get(runs[0]!.task ?? "") ?? null,
                 agentsOf(everyRun, registered, live),
                 pending,
@@ -1382,6 +1414,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
               runs: Arr.map(entry.runs, (run) => run.id),
               forge: forgeReads(state),
               read: read === undefined ? null : epochMs(read),
+              revived,
             },
             recorded,
             leader.id,
@@ -1419,7 +1452,11 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           branches.set(key, runs);
         }
         const unnamed = Arr.map([...branches.values()], (runs) =>
-          settlementOf({ id: null, runs, forge: null, read: null }, recorded, leader.id),
+          settlementOf(
+            { id: null, runs, forge: null, read: null, revived },
+            recorded,
+            leader.id,
+          ),
         );
         const settlements = [...Arr.map(fates, (one) => one.settlement), ...unnamed];
         const owing =

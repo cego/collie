@@ -10,7 +10,8 @@ import type { WatchRow } from "./store";
 
 /** What a watch round reads and writes, the host's. */
 export interface Watches {
-  readonly list: (mrs: ReadonlyArray<string>) => Effect.Effect<ReadonlyArray<WatchRow>>;
+  /** Every watch a Run is still waiting on, whatever a board shows of its Task. */
+  readonly outstanding: Effect.Effect<ReadonlyArray<WatchRow>>;
   readonly observe: (run: string, name: string, observed: Observed) => Effect.Effect<void>;
   readonly wake: (run: string, name: string, woke: Woke) => Effect.Effect<void>;
   readonly unavailable: (run: string, reason: string) => Effect.Effect<void>;
@@ -33,13 +34,15 @@ const sameObserved = (one: Observed | null, other: Observed) =>
   one.since === other.since &&
   one.running === other.running;
 
-/** One round over the watches of the merge requests the merge watch has read. */
+/** One round over the watches a Run is still waiting on. */
 export const settleWatches = Effect.fn("MrWatch.settle")(function* (opts: {
   readonly panels: MrPanels;
   readonly now: number;
+  /** The watches still demanding their merge request, which Hold and Stop take away. */
+  readonly rows: ReadonlyArray<WatchRow>;
   readonly watches: Watches;
 }) {
-  for (const row of yield* opts.watches.list([...opts.panels.keys()])) {
+  for (const row of opts.rows) {
     // Woken by an earlier round or host whose wake may not have reached the Run.
     if (row.woke !== null) {
       yield* opts.watches.wake(row.run, row.name, row.woke);

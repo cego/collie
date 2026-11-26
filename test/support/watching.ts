@@ -131,6 +131,7 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
         runs,
         alive: [],
         offers: () => Effect.succeed([]),
+        watching: Effect.map(store.outstanding, (rows) => new Set(Arr.map(rows, (row) => row.run))),
       });
       return { runs, views };
     }).pipe(Effect.provideContext(platform), Effect.orDie);
@@ -142,7 +143,6 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
         record: () => Effect.void,
         stop: () => Effect.void,
         watches: {
-          list: store.watches,
           observe: store.observe,
           unavailable: (run, why) =>
             Effect.flatMap(Host, (host) => host.parked(run, why, "forge-unavailable")).pipe(
@@ -150,6 +150,7 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
             ),
           wake: (run, name, woke) =>
             registry.wake(run, name, woke).pipe(Effect.provideContext(hosted)),
+          outstanding: store.outstanding,
         },
         requested: requestedOver(
           (suffix) => Effect.map(store.requestedEnding(suffix), (row) => row !== null),

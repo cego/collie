@@ -250,6 +250,15 @@ export const mergeWatch = <E, R>(opts: {
     Effect.gen(function* () {
       const { runs, views } = yield* opts.board;
       const gitlabHost = yield* gitlabHostOf(opts.env);
+      // A Run that is held or stopped waits on nothing, and asks for nothing: its row keeps
+      // the cursor and the wake for a Resume to take up again.
+      const asking = new Set(
+        Arr.filter(
+          runs,
+          (run) => !run.held && run.state !== "stopped" && run.state !== "failed",
+        ).map((run) => run.id),
+      );
+      const rows = Arr.filter(yield* opts.watches.outstanding, (row) => asking.has(row.run));
       yield* settleMerges({
         stateDir: opts.env.stateDir,
         cwd: opts.env.cwd,
@@ -264,10 +273,12 @@ export const mergeWatch = <E, R>(opts: {
         states,
         panels: opts.panels,
         making: landingNow,
+        demand: new Map(Arr.map(rows, (row) => [row.mr, row.run] as const)),
       });
       yield* settleWatches({
         panels: opts.panels,
         now: yield* Clock.currentTimeMillis,
+        rows,
         watches: opts.watches,
       });
       yield* startRequested({
