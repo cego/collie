@@ -1330,6 +1330,21 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           ...(run.parent === null ? [] : [run.parent]),
           ...Arr.map(flowInputs.children.get(run.id) ?? [], (child) => child.id),
         ]);
+        // WARNING: a card reads the merge request of the Run its superseded line names, which is no Run of its own.
+        const handoffs = Effect.fnUntraced(function* () {
+          const refs = yield* Effect.forEach(everyRun, (run) =>
+            Effect.map(readDispositions(run.dir).pipe(Effect.orElseSucceed(() => [])), (lines) =>
+              Arr.flatMap(lines, (line) => refRuns(line.ref, machine)),
+            ),
+          );
+          const targets = Arr.flatMap(Arr.flatten(refs), (word) => {
+            const target = runsById.get(word);
+            return target === undefined ? [] : [target];
+          });
+          return yield* Effect.forEach(targets, (target) =>
+            Effect.map(mrIdOf(target), (id) => [target.id, id] as const),
+          );
+        });
         const inputs =
           cards === undefined
             ? []
@@ -1345,6 +1360,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                 Arr.flatMap(carried, ({ id }) =>
                   id === null ? [] : [[mrStates.get(id) ?? null, forge.get(id) ?? null]],
                 ),
+                yield* handoffs(),
                 since,
                 [...paired],
                 quietMs,

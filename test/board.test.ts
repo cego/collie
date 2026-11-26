@@ -2620,6 +2620,50 @@ test("a handoff lands a Run only on the same branch, or on a successor's merge r
     }),
   ));
 
+test("a Task is redrawn when the merge request its superseded line names arrives at another Task's Run", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const first = yield* madeRun(dir, {
+        id: "r-first",
+        task: "task-1",
+        state: "stopped",
+        branch: "mk/old",
+        created: "2026-09-14T08:00:00Z",
+        finished: "2026-09-14T08:30:00Z",
+      });
+      const successor = yield* madeRun(dir, {
+        id: "r-successor",
+        task: "task-2",
+        state: "succeeded",
+        branch: "mk/new",
+        created: "2026-09-14T08:40:00Z",
+        finished: "2026-09-14T09:30:00Z",
+      });
+      yield* recordDisposition(first.dir, {
+        at: "2026-09-14T09:00:00Z",
+        by: "chat",
+        kind: "superseded",
+        ref: successor.id,
+        note: null,
+      });
+      const cards = { revision: () => 1, kept: new Map() };
+      const read = (runs: ReadonlyArray<RunFacts>) =>
+        board(env, runs, {
+          tasks: [TASK, { ...TASK, id: "task-2" }],
+          mrStates: new Map([[M_ID, "merged"]]),
+          cards,
+        });
+
+      const [waiting] = yield* read([first, successor]);
+      expect(waiting!.landed).toBe(false);
+
+      const [landed] = yield* read([first, { ...successor, mr: M }]);
+      expect(landed!.landed).toBe(true);
+      expect(sectionOf(landed!)).toBe("finished");
+    }),
+  ));
+
 test("a different local Task cannot take an unrelated carrier's obligation", () =>
   runEffect(
     Effect.gen(function* () {
