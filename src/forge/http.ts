@@ -90,19 +90,73 @@ interface Slot {
   expires: number | null;
 }
 
-// WARNING: a secondary limit named only in the body is unread here; reading it would consume what the forge client needs.
-const refusedByLimit = (response: Response) => {
+// WARNING: the forge client's own reading of a refusal, restated here: a body names limits its headers cannot.
+const SECONDARY_LIMIT_RE = /secondary rate limit|abuse detection|submitted too quickly/i;
+const PLAIN_LIMIT_RE = /^[^{<]{0,80}\brate limit exceeded\b/i;
+
+const budgetOf = (response: Response) => {
+  const number = (...names: ReadonlyArray<string>) => {
+    for (const name of names) {
+      const value = response.headers.get(name)?.split(/[,;]/, 1)[0]?.trim();
+      if (value && Number.isFinite(Number(value))) {
+        return Number(value);
+      }
+    }
+    return undefined;
+  };
+  const limit = number("x-ratelimit-limit", "ratelimit-limit");
+  const remaining = number("x-ratelimit-remaining", "ratelimit-remaining");
+  const reset = number("x-ratelimit-reset", "ratelimit-reset");
+  if (
+    limit === undefined &&
+    remaining === undefined &&
+    reset === undefined &&
+    !response.headers.has("ratelimit")
+  ) {
+    return null;
+  }
+  return { limit, remaining };
+};
+
+const namesSecondaryLimit = (body: string) => {
+  try {
+    const parsed: unknown = JSON.parse(body);
+    const { message, errors } = (parsed ?? {}) as { message?: unknown; errors?: unknown };
+    return [message, ...(Array.isArray(errors) ? errors.map((one) => one?.message) : [])].some(
+      (text) => typeof text === "string" && SECONDARY_LIMIT_RE.test(text),
+    );
+  } catch {
+    return false;
+  }
+};
+
+const refusedByLimit = async (response: Response) => {
   if (response.status === 429) {
     return true;
   }
   if (response.status !== 403 && response.status !== 422) {
     return false;
   }
-  const budget =
-    response.headers.get("x-ratelimit-limit") ?? response.headers.get("ratelimit-limit");
-  const left =
-    response.headers.get("x-ratelimit-remaining") ?? response.headers.get("ratelimit-remaining");
-  return budget !== "0" && (left === "0" || response.headers.has("retry-after"));
+  // WARNING: read from a clone: the forge client still needs the body to classify the refusal itself.
+  const body = await response
+    .clone()
+    .text()
+    .catch(() => "");
+  if (namesSecondaryLimit(body)) {
+    return true;
+  }
+  if (response.status !== 403) {
+    return false;
+  }
+  const budget = budgetOf(response);
+  if (budget?.limit === 0) {
+    return false;
+  }
+  return (
+    response.headers.has("retry-after") ||
+    budget?.remaining === 0 ||
+    (budget === null && PLAIN_LIMIT_RE.test(body.trim()))
+  );
 };
 
 const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
@@ -158,8 +212,8 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
       const carried: FetchLike = (input, init) => (fetch ?? globalThis.fetch)(input, init);
       const transport: FetchLike = (input, init) => {
         spend.attempts += 1;
-        return carried(input, init).then((response) => {
-          if (refusedByLimit(response)) {
+        return carried(input, init).then(async (response) => {
+          if (await refusedByLimit(response)) {
             spend.limited += 1;
           }
           return response;
