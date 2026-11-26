@@ -1726,6 +1726,14 @@ const hostBoard = (dir: string) =>
       runs,
       views: (herds) => Effect.map(listingOf(agentsIn(herds)), (built) => built.views),
     });
+    // WARNING: asked again before each write, since a control can land while an earlier row is written.
+    const stillWatching = (run: string, name: string) =>
+      Effect.gen(function* () {
+        if (!(yield* store.waitingOn(run, name))) {
+          return false;
+        }
+        return !(yield* controlSet(run, HOLD, STOP));
+      }).pipe(Effect.provideService(RunRecords, runRecords));
     const stop = (runId: string, reason: string) =>
       once(
         runDir(env.stateDir, runId),
@@ -1765,19 +1773,13 @@ const hostBoard = (dir: string) =>
       record: registry.mergeRequest,
       stop,
       watches: {
-        // WARNING: asked again before each write, since a control can land while an earlier row is written.
-        still: (run: string, name: string) =>
-          Effect.gen(function* () {
-            if (!(yield* store.waitingOn(run, name))) {
-              return false;
-            }
-            return !(yield* controlSet(run, HOLD, STOP));
-          }).pipe(Effect.provideService(RunRecords, runRecords)),
+        still: stillWatching,
         observe: store.observe,
-        unavailable: (run: string, why: string) =>
-          Effect.flatMap(Host, (host) => host.parked(run, why, "forge-unavailable")).pipe(
-            Effect.provideContext(hosted),
-          ),
+        unavailable: (run: string, name: string, why: string) =>
+          Effect.flatMap(Host, (host) =>
+            // WARNING: the park is committed only while the very Watch that could not read is still the Run's.
+            host.parked(run, why, "forge-unavailable", stillWatching(run, name)),
+          ).pipe(Effect.provideContext(hosted)),
         wake: (run: string, name: string, woke: Woke) =>
           registry.wake(run, name, woke).pipe(Effect.provideContext(hosted)),
         outstanding: store.outstanding,

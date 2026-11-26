@@ -108,6 +108,14 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
     const registry = yield* Registry;
     const store = yield* Store;
     const hosted = yield* Effect.context<HostServices>();
+    const stillWatching = (run: string, name: string) =>
+      Effect.gen(function* () {
+        if (!(yield* store.waitingOn(run, name))) {
+          return false;
+        }
+        const view = yield* registry.view(run);
+        return !(view?.controls ?? []).includes(STOP);
+      }).pipe(Effect.provideContext(hosted));
     const platform = yield* Effect.context<PlatformServices>();
     const panels: MrPanels = new Map();
     const board = Effect.gen(function* () {
@@ -135,19 +143,12 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
             Effect.asVoid,
           ),
         watches: {
-          still: (run, name) =>
-            Effect.gen(function* () {
-              if (!(yield* store.waitingOn(run, name))) {
-                return false;
-              }
-              const view = yield* registry.view(run);
-              return !(view?.controls ?? []).includes(STOP);
-            }).pipe(Effect.provideContext(hosted)),
+          still: stillWatching,
           observe: store.observe,
-          unavailable: (run, why) =>
-            Effect.flatMap(Host, (host) => host.parked(run, why, "forge-unavailable")).pipe(
-              Effect.provideContext(hosted),
-            ),
+          unavailable: (run, name, why) =>
+            Effect.flatMap(Host, (host) =>
+              host.parked(run, why, "forge-unavailable", stillWatching(run, name)),
+            ).pipe(Effect.provideContext(hosted)),
           wake: (run, name, woke) =>
             registry.wake(run, name, woke).pipe(Effect.provideContext(hosted)),
           outstanding: store.outstanding,

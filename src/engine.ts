@@ -1028,7 +1028,12 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     /** Records what an implementer says it has done with a ticket, carded while it works. */
     readonly checkpoint: (runId: string, checkpoint: { readonly ticket: string; readonly status: "started" | "done"; readonly claims: ReadonlyArray<string> }) => Effect.Effect<void>;
     /** Why this Run parked its own work, shown beside its status; null clears it. No cause is \`unknown\`. */
-    readonly parked: (runId: string, why: string | null, cause?: ParkCause) => Effect.Effect<void>;
+    readonly parked: (
+      runId: string,
+      why: string | null,
+      cause?: ParkCause,
+      eligible?: Effect.Effect<boolean>,
+    ) => Effect.Effect<void>;
     readonly asking: (runId: string, question: DecisionSpec, asker?: string) => Effect.Effect<void>;
     /** Every question this run has been asked, oldest first, with its answer once it has one. */
     readonly asked: (
@@ -5392,9 +5397,16 @@ export const hostLayer: (options: {
             Effect.provideService(RunRecords, runRecords),
             Effect.orDie,
           ),
-        parked: (runId, why, cause = "unknown") => {
+        parked: (runId, why, cause = "unknown", eligible) => {
           const put = (control: string, text: string | null) =>
             runRecords.setControl(control, runId, text);
+          // WARNING: a control or the Watch itself can go while the evidence is read, which leaves no park to commit.
+          const ours = () =>
+            cause !== "forge-unavailable"
+              ? Effect.succeed(true)
+              : Effect.all([anySet(runId, HOLD, STOP), eligible ?? Effect.succeed(true)]).pipe(
+                  Effect.map(([controlled, watching]) => !controlled && watching),
+                );
           return (
             why === null
               ? put(PARKED, null)
@@ -5422,6 +5434,9 @@ export const hostLayer: (options: {
                           return { ...parkOf(cause), id, since: yield* nowIso };
                         })
                       : null;
+                  if (read !== null && !(yield* ours())) {
+                    return;
+                  }
                   if (read !== null) {
                     info = read;
                     yield* put(
@@ -5429,11 +5444,7 @@ export const hostLayer: (options: {
                       yield* Schema.encodeEffect(ParkJson)(info).pipe(Effect.orDie),
                     );
                   }
-                  if (info === null) {
-                    return;
-                  }
-                  // WARNING: a Hold or Stop admitted while the evidence was read beats a forge no watch could read.
-                  if (cause === "forge-unavailable" && (yield* anySet(runId, HOLD, STOP))) {
+                  if (info === null || !(yield* ours())) {
                     return;
                   }
                   if (Option.getOrNull(before) === why && causeBefore === cause) {
@@ -5453,6 +5464,9 @@ export const hostLayer: (options: {
                     // WARNING: a park its Heal caused again is that Heal's to settle.
                     !(healing._tag === "Some" && healing.value.cause === cause);
                   const passed = claims ? yield* passedOverHere(runId, cause, recoveries) : null;
+                  if (!(yield* ours())) {
+                    return;
+                  }
                   yield* put(PARK_CAUSE, cause);
                   yield* put(PARKED, why);
                   yield* under(

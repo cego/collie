@@ -14,7 +14,7 @@ export interface Watches {
   readonly still: (run: string, name: string) => Effect.Effect<boolean>;
   readonly observe: (run: string, name: string, observed: Observed) => Effect.Effect<void>;
   readonly wake: (run: string, name: string, woke: Woke) => Effect.Effect<boolean>;
-  readonly unavailable: (run: string, reason: string) => Effect.Effect<void>;
+  readonly unavailable: (run: string, name: string, reason: string) => Effect.Effect<void>;
 }
 
 export const readingOf: (panel: MrDetails) => MrReading = (panel) => {
@@ -78,7 +78,7 @@ export const settleWatches = Effect.fn("MrWatch.settle")(function* (opts: {
       read.transient &&
       (yield* opts.watches.still(row.run, row.name))
     ) {
-      yield* opts.watches.unavailable(row.run, read.reason);
+      yield* opts.watches.unavailable(row.run, row.name, read.reason);
     }
     if (read?._tag !== "Details") {
       continue;

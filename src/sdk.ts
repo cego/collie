@@ -878,8 +878,15 @@ export interface HostApi {
   /**
    * Why this Run has parked its own work and what picks it up again, shown beside its
    * status; null says it no longer has. A park naming no cause is recorded as `unknown`.
+   * `eligible` is asked again just before a `forge-unavailable` park is committed, so a
+   * Watch or a control that went while its evidence was read leaves no park.
    */
-  readonly parked: (runId: string, why: string | null, cause?: ParkCause) => Effect.Effect<void>;
+  readonly parked: (
+    runId: string,
+    why: string | null,
+    cause?: ParkCause,
+    eligible?: Effect.Effect<boolean>,
+  ) => Effect.Effect<void>;
   /**
    * Records the question this run is waiting on, so the host can say what may answer it.
    * `asker` is the operation whose agent asked it, which the workflow is not woken for.

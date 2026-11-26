@@ -993,6 +993,63 @@ test("a Watch's answer arriving after the Run is stopped wakes nothing", () =>
     }),
   ));
 
+test("a Watch a Run no longer holds parks nothing, however late the forge's refusal arrives", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const forge = yield* gitlab;
+      const reached = `${rig.root}/rev-parse-reached`;
+      const gate = `${rig.root}/rev-parse-gate`;
+      const real = Bun.which("git");
+      const fs = yield* FileSystem.FileSystem;
+      const runId = yield* session(
+        forge,
+        Effect.gen(function* () {
+          const runId = yield* started("watches-mr", "w1", {
+            target: WATCHED,
+            head: H1,
+            cwd: rig.projectDir,
+          });
+          yield* until(
+            () => watchOf(runId),
+            (row) => row !== null,
+          );
+          return runId;
+        }),
+      );
+      yield* session(
+        forge,
+        Effect.gen(function* () {
+          const store = yield* Store;
+          yield* fs
+            .writeFileString(
+              `${rig.root}/bin/git`,
+              `#!/bin/sh\nif [ "$1" = "rev-parse" ]; then\n  echo x >> "${reached}"\n  while [ ! -f "${gate}" ]; do sleep 0.01; done\nfi\nexec "${real}" "$@"\n`,
+            )
+            .pipe(Effect.orDie);
+          yield* fs.chmod(`${rig.root}/bin/git`, 0o755).pipe(Effect.orDie);
+          let refused = false;
+          forge.after((url, _init, response) =>
+            Promise.resolve(
+              !refused && Str.endsWith("merge_requests/7")(decodeURIComponent(url))
+                ? ((refused = true),
+                  new Response('{"message":"temporarily unavailable"}', { status: 503 }))
+                : response,
+            ),
+          );
+          yield* watchingMerges;
+          yield* until(
+            () => fs.exists(reached).pipe(Effect.orElseSucceed(() => false)),
+            (there) => there,
+          );
+          yield* store.unwatch(runId, "round-1");
+          yield* fs.writeFileString(gate, "go").pipe(Effect.orDie);
+          yield* Effect.sleep("2 minutes");
+          expect((yield* status(runId))?.park ?? null).toBeNull();
+        }),
+      );
+    }),
+  ));
+
 for (const state of ["closed", "merged"] as const) {
   test(`a Watch whose merge request is ${state} ends once, and settles its Task no further`, () =>
     runEffect(
