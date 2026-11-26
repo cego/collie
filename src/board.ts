@@ -440,14 +440,11 @@ function openSentence(
     case "running":
       return `${label} is open; ${running}.`;
     case "unchecked": {
-      // WARNING: a forge never asked is not a forge that found no check.
-      if (forge == null || forge.checks.state === "unknown") {
+      if (forge == null || forge.head === null || forge.checks.state === "unknown") {
         return `${label} is open; its checks have not been read.`;
       }
       if (forge.checks.state === "passed") {
-        return forge.head === null
-          ? `${label} is open; its checks passed, but Collie has not checked it there.`
-          : `${label} is open; its checks passed at ${short(forge.head)}, but Collie has not checked it there.`;
+        return `${label} is open; its checks passed at ${short(forge.head)}, but Collie has not checked it there.`;
       }
       return `${label} is open; nothing has checked it.`;
     }

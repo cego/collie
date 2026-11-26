@@ -3906,7 +3906,16 @@ test("an open merge request says whether it is ready, what failed, and the next 
   ).toBe("cego/collie#30 is open; its checks have not been read.");
   expect(
     open({ checks: { state: "unchecked" }, forge: { checks: { state: "none" }, head: null } }),
+  ).toBe("cego/collie#30 is open; its checks have not been read.");
+  expect(
+    open({
+      checks: { state: "unchecked" },
+      forge: { checks: { state: "none" }, head: "1a2b3c4d5e" },
+    }),
   ).toBe("cego/collie#30 is open; nothing has checked it.");
+  expect(
+    open({ checks: { state: "unchecked" }, forge: { checks: { state: "passed" }, head: null } }),
+  ).toBe("cego/collie#30 is open; its checks have not been read.");
   expect(
     open({
       checks: { state: "unchecked" },
@@ -4108,13 +4117,13 @@ test("a card says its checks passed where the forge read them, and that Collie h
           new Map([[branchKey(repo, "mk/ship"), { head, project: null, movement: null }]]),
         ),
       );
-      const forge = (checks: ForgeChecks) =>
+      const forge = (checks: ForgeChecks, at: string | null = head) =>
         new Map([
           [
             "github.com/cego/collie#30",
             {
               checks,
-              head,
+              head: at,
               mergeable: { state: "mergeable" as const, said: "mergeable" },
               read: "2026-09-14T10:04:00Z",
             },
@@ -4138,6 +4147,9 @@ test("a card says its checks passed where the forge read them, and that Collie h
 
       const [none] = yield* seen(forge({ state: "none" }));
       expect(none!.sentence).toBe("cego/collie#30 is open; nothing has checked it.");
+
+      const [unbound] = yield* seen(forge({ state: "none" }, null));
+      expect(unbound!.sentence).toBe("cego/collie#30 is open; its checks have not been read.");
     }),
   ));
 
