@@ -44,7 +44,8 @@ export default defineWorkflow({
         });
         const next = seen._tag === "Changed" ? seen.change.head : head;
         yield* host.record(run.id, `round-${round}: ${head} -> ${next}`);
-        if (input.skipped?.includes(round) !== true) {
+        const began = input.skipped?.includes(round) !== true;
+        if (began) {
           yield* Activity.make({
             name: `begin-${round}`,
             execute: host.startedRound({
@@ -77,6 +78,12 @@ export default defineWorkflow({
           yield* host.record(run.id, `round-${round} posted: ${posted.message}`);
         } else {
           yield* host.record(run.id, `round-${round}: no findings to post`);
+        }
+        if (began) {
+          yield* Activity.make({
+            name: `end-${round}`,
+            execute: host.completedRound({ runId: run.id, target: input.target }),
+          });
         }
         head = next;
         woke = JSON.stringify(seen);

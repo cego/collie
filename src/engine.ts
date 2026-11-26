@@ -4125,6 +4125,23 @@ export const hostLayer: (options: {
             return yield* Workflow.suspend(instance.value);
           }
         });
+      // WARNING: the round that began is the round that ended here, whatever other round the journal holds.
+      const completedRoundAt = (runId: string, mr: string) =>
+        Effect.gen(function* () {
+          const began = yield* beganRoundOf(runId);
+          if (began === null) {
+            return;
+          }
+          yield* journalWatch({
+            _tag: "completed",
+            at: yield* nowIso,
+            mr,
+            run: runId,
+            name: began.name,
+            head: began.head,
+          });
+          yield* runRecords.setControl(STARTED_ROUND, runId, null);
+        });
       const reviewForge = <A, E>(effect: Effect.Effect<A, E, Collecting>) =>
         Effect.gen(function* () {
           const run = yield* Effect.serviceOption(Run);
@@ -6216,19 +6233,6 @@ export const hostLayer: (options: {
                 reason: `${asked.target} names no merge request the merge watch can read`,
               });
             }
-            // WARNING: the round that began is the round that ended here; no earlier round's journal entry answers for it.
-            const began = yield* beganRoundOf(asked.runId);
-            if (began !== null) {
-              yield* journalWatch({
-                _tag: "completed",
-                at: yield* nowIso,
-                mr,
-                run: asked.runId,
-                name: began.name,
-                head: began.head,
-              });
-              yield* runRecords.setControl(STARTED_ROUND, asked.runId, null);
-            }
             yield* store.watch({ run: asked.runId, mr, name: asked.name, cursor: asked.cursor });
             if (asked.asking === true) {
               return;
@@ -6265,6 +6269,16 @@ export const hostLayer: (options: {
                 head: asked.head,
               }).pipe(Effect.orDie),
             );
+          }),
+        completedRound: (asked) =>
+          Effect.gen(function* () {
+            const mr = mrId(asked.target);
+            if (mr === null) {
+              return yield* new WorkflowError({
+                reason: `${asked.target} names no merge request the merge watch can read`,
+              });
+            }
+            yield* completedRoundAt(asked.runId, mr);
           }),
         mrReading: (asked) =>
           Effect.gen(function* () {

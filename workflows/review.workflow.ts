@@ -299,6 +299,12 @@ export default defineWorkflow({
             head,
           }),
         });
+      const ended = (round: number) =>
+        Activity.make({
+          name: `follow-end-${round}`,
+          error: WorkflowError,
+          execute: host.completedRound({ runId: run.id, target: asked.target }),
+        });
       const roundAt = (
         round: number,
         changes: string,
@@ -466,6 +472,7 @@ export default defineWorkflow({
             yield* fact(`follow-off-${round}`, `${FOLLOW} is off: back to asking what next`);
             yield* began(round);
             const review = yield* roundAt(round, yield* changes(round), false);
+            yield* ended(round);
             return { menu: review ?? last, at: round };
           }
           yield* slackAt(round, "started", ["eyes"]);
@@ -568,13 +575,15 @@ export default defineWorkflow({
                 reason: `no checkout of ${label} at ${head}: ${pinned.refused}`,
               });
             }
-            if (!("moved" in pinned)) {
+            const reused = commentsOnly && affected.length === 0;
+            const ran = !("moved" in pinned) && !reused;
+            if (ran) {
               yield* began(round);
             }
             const reviewed: SynthesisReport | null =
               "moved" in pinned
                 ? null
-                : commentsOnly && affected.length === 0
+                : reused
                   ? last
                   : yield* roundAt(
                       round,
@@ -600,6 +609,9 @@ export default defineWorkflow({
               last = yield* postedAt(reviewed, round);
               ledger = last.findings;
               reviewedAt = head;
+            }
+            if (ran) {
+              yield* ended(round);
             }
             if (reviewed === null || !cleanAt(reviewed)) {
               woke = yield* watch(watching);

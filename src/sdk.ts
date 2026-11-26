@@ -1209,6 +1209,15 @@ export interface HostApi {
     readonly name: string;
     readonly head: string;
   }) => Effect.Effect<void, WorkflowError>;
+  /**
+   * Records that the round `startedRound` named for this Run finished its work, and that a Run
+   * that never got here left its round unfinished. A Watch taken afterwards says which, so a
+   * replay needs no registration of a later round to read one as done.
+   */
+  readonly completedRound: (options: {
+    readonly runId: string;
+    readonly target: string;
+  }) => Effect.Effect<void, WorkflowError>;
   /** The merge request `target` as the forge reads it now: what a watch's cursor starts from. */
   readonly mrReading: (options: {
     readonly target: string;

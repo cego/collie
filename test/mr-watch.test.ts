@@ -1097,7 +1097,10 @@ test("a round the Run never began is neither started nor completed, however the 
         ["round-1", H2],
         ["round-3", H4],
       ]);
-      expect(Arr.map(tagged(journal, "completed"), (event) => event.name)).toEqual(["round-1"]);
+      expect(Arr.map(tagged(journal, "completed"), (event) => event.name)).toEqual([
+        "round-1",
+        "round-3",
+      ]);
     }),
   ));
 

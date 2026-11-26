@@ -27,6 +27,8 @@ import { writeTask } from "../src/task";
 import { registerAgent, scopeFor } from "../src/registry";
 import { isString } from "../src/schema";
 import { stringifyJson } from "../src/json";
+import { readWatchJournal } from "../src/watch-journal";
+import type { WatchEvent } from "../src/watch-journal";
 
 const PROJECT = "gitlab.cego.dk/mk/collie";
 const TARGET = `https://${PROJECT}/-/merge_requests/7`;
@@ -145,6 +147,13 @@ const notesOf = <E>(forge: { readonly model: () => Effect.Effect<ForgeModel, E> 
   Effect.map(forge.model(), (got) => Rec.values(got.notes ?? {}).flat()).pipe(Effect.orDie);
 
 const asked = (runId: string) => Store.pipe(Effect.flatMap((store) => store.asked(runId)));
+
+const watchMarks = (journal: ReadonlyArray<WatchEvent>) =>
+  Arr.flatMap(journal, (event) =>
+    event._tag === "started" || event._tag === "completed"
+      ? [Arr.join([event._tag, event.name], " ")]
+      : [],
+  );
 
 const configured = (on: boolean) =>
   FileSystem.FileSystem.pipe(
@@ -601,6 +610,40 @@ for (const id of ["review", "second-look"]) {
       }),
     ));
 }
+
+test("a wake carrying only a comment no finding answers starts no round", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      const { first, forge, entry } = yield* begun("review", [review([F1])]);
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          const runId = yield* startedWaiting(entry);
+          const now = yield* forge.model();
+          yield* forge.set({
+            ...now,
+            mrs: [
+              mr(first, {
+                comments: [
+                  { id: 900, author: "ann", at: "2026-11-11T10:00:00Z", body: "Nice work." },
+                ],
+              }),
+            ],
+          });
+          yield* until(
+            () => host.watchOf(runId, TARGET),
+            (row) => row?.name === "follow-2",
+          );
+          expect(yield* host.agentStarts).toHaveLength(1);
+          expect(yield* notesOf(forge)).toHaveLength(1);
+          expect(watchMarks(yield* readWatchJournal(host.dir()))).toEqual([
+            "started follow-1",
+            "completed follow-1",
+          ]);
+        }),
+      );
+    }),
+  ));
 
 for (const id of ["review", "second-look"]) {
   test(`${id}: !481 with Slack — one signed note, one round on the new head, and approval the only answer`, () =>
@@ -2228,6 +2271,12 @@ for (const id of ["review", "second-look"]) {
             expect(Arr.map(rows, (row) => row.decision)).toEqual(["post-1"]);
             expect(yield* notesOf(forge)).toHaveLength(1);
             expect(yield* host.agentStarts).toHaveLength(2);
+            expect(watchMarks(yield* readWatchJournal(host.dir()))).toEqual([
+              "started follow-1",
+              "completed follow-1",
+              "started follow-2",
+              "completed follow-2",
+            ]);
           }),
         );
       }),
