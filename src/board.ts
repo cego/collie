@@ -1243,7 +1243,6 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
       !settledIds.has(record.run) ||
       opts.collecting.has(record.id),
   );
-  // WARNING: a marker of an ended Run counts only where the host proves it collects the check the marker names.
   const markers = yield* markersOf(
     records,
     (run, marker) =>

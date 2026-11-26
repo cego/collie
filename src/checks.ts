@@ -56,7 +56,7 @@ export const markersOf = Effect.fn("Checks.markersOf")(function* (
       found.set(row.run, marker);
     }
   }
-  // WARNING: a marker outlives the check it was written for, so the caller may refuse one and let a record decide.
+  // WARNING: a marker outlives the check it was written for.
   for (const [run, marker] of found) {
     if (!shown(run, marker)) {
       found.delete(run);
