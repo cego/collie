@@ -498,13 +498,7 @@ test("a Watch of a merge request recorded in production is still read by the res
       yield* fs.makeDirectory(`${host.dir()}/board`, { recursive: true });
       yield* fs.writeFileString(
         `${host.dir()}/board/mr-states.json`,
-        JSON.stringify({
-          [mrId(WATCHED)!]: {
-            state: "in-prod",
-            read: "2026-01-01T00:00:00Z",
-            asked: "2026-01-01T00:00:00Z",
-          },
-        }),
+        `{"${mrId(WATCHED)!}":{"state":"in-prod","read":"2026-01-01T00:00:00Z","asked":"2026-01-01T00:00:00Z"}}`,
       );
       const forge = yield* host.gitlab({
         ...OPEN,
@@ -572,16 +566,19 @@ for (const [control, said] of [
             yield* watchingMerges;
             yield* Effect.sleep("6 minutes");
             expect((yield* watchOf(runId))?.observed?.head).toBe(H1);
+            const context = yield* Effect.context();
+            const signal = Effect.runSyncWith(context);
+            const awaited = Effect.runPromiseWith(context);
             const gate = yield* Deferred.make<void>();
             const reached = yield* Deferred.make<void>();
             let blocked = false;
             forge.before((url) => {
-              if (blocked || !/merge_requests\/7$/.test(decodeURIComponent(url))) {
+              if (blocked || !Str.endsWith("merge_requests/7")(decodeURIComponent(url))) {
                 return Promise.resolve();
               }
               blocked = true;
-              Effect.runSync(Deferred.succeed(reached, undefined));
-              return Effect.runPromise(Deferred.await(gate));
+              signal(Deferred.succeed(reached, undefined));
+              return awaited(Deferred.await(gate));
             });
             yield* forge.set(PUSHED);
             yield* Deferred.await(reached);
@@ -623,17 +620,20 @@ test("a poll's attempts count only the reads it made, not a concurrent one", () 
         Effect.gen(function* () {
           yield* watchingMerges;
           yield* Effect.sleep("6 minutes");
+          const context = yield* Effect.context();
+          const signal = Effect.runSyncWith(context);
+          const awaited = Effect.runPromiseWith(context);
           const gate = yield* Deferred.make<void>();
           const reached = yield* Deferred.make<void>();
           const read = yield* Deferred.make<void>();
           let blocked = false;
           forge.before((url) => {
-            if (blocked || !/merge_requests\/7$/.test(decodeURIComponent(url))) {
+            if (blocked || !Str.endsWith("merge_requests/7")(decodeURIComponent(url))) {
               return Promise.resolve();
             }
             blocked = true;
-            Effect.runSync(Deferred.succeed(reached, undefined));
-            return Effect.runPromise(Deferred.await(gate));
+            signal(Deferred.succeed(reached, undefined));
+            return awaited(Deferred.await(gate));
           });
           yield* Effect.forkScoped(
             Effect.gen(function* () {
@@ -737,7 +737,7 @@ test("a wake the Run's control refuses is not recorded as a review start", () =>
           const now = yield* Clock.currentTimeMillis;
           yield* store.observe(runId, "round-1", {
             head: H2,
-            since: now - QUIET_MS - 1_000,
+            since: now - QUIET_MS - 1000,
             running: null,
           });
           const panel: MrPanel = {
@@ -878,7 +878,7 @@ test("the !604 replay reads detection, eligibility, each start and a failed read
       const H4 = "4444444444444444444444444444444444444444";
       const H5 = "5555555555555555555555555555555555555555";
       const H6 = "6666666666666666666666666666666666666666";
-      const runId = yield* session(
+      yield* session(
         forge,
         Effect.gen(function* () {
           const runId = yield* started("watches-mr", "w1", {

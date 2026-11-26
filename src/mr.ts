@@ -161,14 +161,13 @@ export function postNote<R>(
           message: `could not read ${options.target} before posting: ${current.reason}`,
         };
       }
-      if (!["open", "opened", "draft"].includes(current.state) || current.head !== head) {
-        return {
+      const moved = ["open", "opened", "draft"].includes(current.state) && current.head !== head;
+      if (moved || !["open", "opened", "draft"].includes(current.state)) {
+        const returned: Posted = {
           ok: false,
           message: `${options.target} is no longer open at ${head}; no review posted`,
-          ...(["open", "opened", "draft"].includes(current.state) && current.head !== head
-            ? { superseded: current.head }
-            : {}),
         };
+        return moved ? { ...returned, superseded: current.head } : returned;
       }
       body = `Review at ${head}\n\n${Str.trimEnd(body)}\n\n${signature}`;
       const posted = yield* forge.post(mr, body, options.cwd, run);

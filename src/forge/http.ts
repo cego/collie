@@ -35,7 +35,6 @@ export type Answered<A> =
       readonly transient?: boolean;
     };
 
-/** What one read of the forge cost, counted per fiber so a concurrent read is never charged to it. */
 export interface Asked {
   attempts: number;
   limited: number;
