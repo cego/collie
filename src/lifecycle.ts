@@ -22,6 +22,7 @@ import {
   Option,
   Path,
   Predicate,
+  Result,
   Schedule,
   Schema,
   Stream,
@@ -44,7 +45,7 @@ import {
   socketOf,
 } from "./host";
 import type { HostClient, RunPageAnswer, HostUnavailable, HostVersionMismatch } from "./host";
-import { Herdr } from "./herdr";
+import { Herdr, herdrFailureReason } from "./herdr";
 import type { HerdrError } from "./herdr";
 import { viaCommand } from "./ssh-argv";
 import { machineName, pairWith, peersOf } from "./peers";
@@ -280,13 +281,15 @@ const notListed = (name: string) =>
     reason: `${REFUSED_INPUT}: no Machine "${name}": this Machine's list names none by that name`,
   });
 
+const coreRoster = (env: PluginEnv) =>
+  new Herdr(env).machineList().pipe(Effect.provide(Path.layer));
+
 const herdrMachines = (env: PluginEnv) =>
-  new Herdr(env).machineList().pipe(
+  coreRoster(env).pipe(
     Effect.orElseSucceed(() => {
       const returned: ReadonlyArray<HerdrMachine> = [];
       return returned;
     }),
-    Effect.provide(Path.layer),
   );
 
 const named = (machines: ReadonlyArray<HerdrMachine>, name: string) =>
@@ -2167,16 +2170,18 @@ export const machinesListed = (env: PluginEnv) =>
       return read;
     }
     const backend = "core" as const;
-    const roster = yield* herdrMachines(env);
-    const listed = new Set(Arr.map(roster, (machine) => machine.label));
+    const roster = yield* coreRoster(env).pipe(Effect.result);
+    const machines = Result.isSuccess(roster) ? roster.success : null;
+    const listed = new Set(Arr.map(machines ?? [], (machine) => machine.label));
     return {
       ...read,
       value: {
         backend,
-        roster,
+        roster: machines,
+        rosterFailure: Result.isFailure(roster) ? herdrFailureReason(roster.failure) : null,
         peers: Arr.map(read.value, (peer) => ({
           ...peer,
-          added: peer.dials === "out" ? listed.has(peer.name) : null,
+          added: peer.dials !== "out" ? null : machines === null ? null : listed.has(peer.name),
         })),
       },
     };

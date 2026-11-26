@@ -55,6 +55,7 @@ import * as WorkflowModules from "effect/workflow";
 import * as ProcessModules from "effect/process";
 import * as CryptoModules from "effect/crypto";
 import * as EffectRoot from "effect";
+import { waitForAgents } from "./agent-wait";
 import * as AgentsSdk from "./agents";
 import { HOLD, STOP, controlOf, controlSet } from "./controls";
 import manifest from "../package.json";
@@ -163,6 +164,9 @@ import {
   readTag,
 } from "./releasing";
 import type { MergeRequestRead, ProductionRead, RollbackRead, StageRead } from "./releasing";
+import { everyRegistered } from "./registry";
+import type { AgentEntry } from "./registry";
+import type { AgentInfo } from "./herdr";
 import { blockedLine, conflictsWithTarget, reviewWaitOf, standingOf } from "./review-wait";
 import type { ReviewStanding } from "./review-wait";
 import { NOTHING_TO_LAND } from "./standing";
@@ -294,6 +298,7 @@ import {
   checkoutFor,
   checkoutRefusal,
   defaultStart,
+  isTheOneMade,
   pinnedCheckout,
   repositoryName,
   workOf,
@@ -777,11 +782,17 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly open: ReadonlyArray<string>;
   }): SettledAnswers;
 
-  /** Where a fast-forward left the checkout, or why it left it alone. */
+  /** Where a fast-forward left the checkout, or why it left it alone and under which park cause. */
   export type FastForward =
     | { readonly _tag: "At"; readonly head: string; readonly from: string }
-    | { readonly _tag: "Refused"; readonly why: string };
+    | { readonly _tag: "Refused"; readonly why: string; readonly cause: ParkCause };
   export const FastForwardSchema: Schema.Codec<FastForward, unknown, never, never>;
+
+  /** A checkout's alignment as a Release saved it, and the head it took. */
+  export type SavedAlignment = FastForward | string;
+  export const SavedAlignmentSchema: Schema.Codec<SavedAlignment, unknown, never, never>;
+  export const savedHead: (saved: SavedAlignment) => string | null;
+  export const savedRefusalWhy: (saved: SavedAlignment) => string | null;
 
   /** A job of a tag's pipeline, at the address the forge gives it. */
   export interface JobLink { readonly name: string; readonly url: string; }
@@ -1322,14 +1333,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly cwd: string;
       readonly commits: ReadonlyArray<string>;
     }) => Effect.Effect<ReviewHead, WorkflowError>;
-    /** Fast-forwards the checkout to \`head\`, or refuses, resetting nothing. Take it inside an Activity. */
+    /** Brings the checkout to \`head\` after the Run's agents there stop, resetting it only where the checkout's own head was published. Take it inside an Activity. */
     readonly fastForward: (options: {
       readonly runId: string;
       readonly cwd: string;
       readonly head: string;
       /** Where supplied, require this source branch before moving the checkout. */
-      readonly branch?: string;
-    }) => Effect.Effect<FastForward>;
+      readonly branch?: string;    }) => Effect.Effect<FastForward, WorkflowError>;
     /** Reads \`tag\` back from origin and the forge against what it must prove. Take it inside an Activity. */
     readonly readTag: (options: {
       readonly runId: string;
@@ -4074,6 +4084,7 @@ export const hostLayer: (options: {
   readonly productionPoll?: Duration.Input;
   readonly issuePrivacyBudget?: Duration.Input;
   readonly reviewPoll?: Duration.Input;
+  readonly collectMs?: Duration.Input;
 }) => Layer.Layer<
   Host | Notifier | Oversight | Reliance,
   never,
@@ -4465,6 +4476,56 @@ export const hostLayer: (options: {
           return bound === COLLIE_REPOSITORY || bound === ownRepository(releasesOf(env.raw))
             ? null
             : refusal(leaks);
+        });
+      const waitingForAgents = (runId: string, cwd: string) =>
+        Effect.gen(function* () {
+          const mine = Arr.filter(yield* under(everyRegistered), (one) => one.runId === runId);
+          if (mine.length === 0) {
+            return "clear" as const;
+          }
+          const { herdr } = yield* placing;
+          return yield* waitForAgents({
+            budget: Duration.toMillis(options.collectMs ?? Duration.minutes(120)),
+            poll: AGENT_WAIT_POLL,
+            rosterBudget: AGENT_LIST_BUDGET,
+            working: herdr.agentList().pipe(
+              Effect.provideContext(bun),
+              Effect.map((roster) =>
+                Arr.map(
+                  Arr.filter(mine, (one) => workingIn(one, roster, cwd)),
+                  (one) => one.agent,
+                ),
+              ),
+              Effect.orElseSucceed(() => null),
+            ),
+            stopped: set(STOP, runId),
+            tell: (names, unknown) =>
+              under(
+                appendLog(
+                  runDir(dir, runId),
+                  `waiting for ${Arr.join(
+                    unknown ? Arr.map(mine, (one) => one.agent) : names,
+                    ", ",
+                  )} to stop working in ${cwd}${
+                    unknown ? `, where core cannot list its agents yet` : ""
+                  }`,
+                ),
+              ).pipe(Effect.orDie),
+          });
+        });
+      const madeByCollie = (cwd: string) =>
+        Effect.gen(function* () {
+          for (const row of yield* store.runs) {
+            const worktree = placedOf(row, {}).worktree;
+            if (
+              worktree !== null &&
+              worktree.path === cwd &&
+              (yield* under(isTheOneMade(cwd, worktree)))
+            ) {
+              return true;
+            }
+          }
+          return false;
         });
       const reviewing = (runId: string) =>
         Effect.gen(function* () {
@@ -6366,15 +6427,23 @@ export const hostLayer: (options: {
             };
           }),
         fastForward: (asked) =>
-          under(
-            fastForward({
-              runDir: runDir(dir, asked.runId),
-              cwd: asked.cwd,
-              head: asked.head,
-              branch: asked.branch,
-              run: runShell,
-            }),
-          ).pipe(Effect.orDie),
+          Effect.gen(function* () {
+            if ((yield* waitingForAgents(asked.runId, asked.cwd)) === "stopped") {
+              return yield* new WorkflowError({
+                reason: `the checkout at ${asked.cwd} was not read: the Run was stopped while its agent was working there`,
+              });
+            }
+            return yield* under(
+              fastForward({
+                runDir: runDir(dir, asked.runId),
+                cwd: asked.cwd,
+                head: asked.head,
+                branch: asked.branch,
+                createdByCollie: yield* madeByCollie(asked.cwd),
+                run: runShell,
+              }),
+            );
+          }).pipe(Effect.orDie),
         readTag: (asked) =>
           Effect.gen(function* () {
             const read = yield* under(
@@ -7498,6 +7567,28 @@ const reviewFacts = <R>(
       following: Arr.some(yield* store.watches([mrId(target)!]), (one) => one.run === runId),
     };
   });
+
+const AGENT_WAIT_POLL = 100;
+
+// WARNING: core answers a terminal.list with no deadline of its own, so a silent socket must not hold the wait.
+const AGENT_LIST_BUDGET = 10_000;
+
+const workingIn = (entry: AgentEntry, alive: ReadonlyArray<AgentInfo>, cwd: string) => {
+  const at = Option.getOrUndefined(
+    Arr.findFirst(
+      alive,
+      (one) =>
+        one.terminalId === entry.incarnation?.terminalId ||
+        one.paneId === entry.paneId ||
+        one.name === entry.agent,
+    ),
+  );
+  return (
+    at !== undefined &&
+    (at.status === "working" || at.status === "blocked") &&
+    (at.cwd === cwd || at.foregroundCwd === cwd)
+  );
+};
 
 const placedOf: (row: RunRow, options: Readonly<Record<string, string>>) => Placed = (
   row,

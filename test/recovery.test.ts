@@ -46,11 +46,21 @@ const idOf = flow(
 const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const quote = (word: string) => Result.getOrThrow(CommandLine.quote(word));
 
-test("the host resumes a clean checkout park under its own recover request", () =>
+test("a clean checkout whose head origin does not carry stays parked, and resumes by itself once it is pushed", () =>
   proves(
     "collie-recovery-clean-",
     (world) =>
       Effect.gen(function* () {
+        const git = (...args: Array<string>) => exec(["git", ...args], { cwd: world.project });
+        const commit = (...args: Array<string>) =>
+          git("-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-qm", ...args);
+        yield* commit("initial", "--allow-empty");
+        const origin = `${world.home}/origin.git`;
+        yield* git("init", "-q", "--bare", origin);
+        const branch = Str.trim((yield* git("rev-parse", "--abbrev-ref", "HEAD")).stdout);
+        yield* git("remote", "add", "origin", origin);
+        yield* git("push", "-q", "origin", `HEAD:refs/heads/${branch}`);
+        yield* commit("unpushed", "--allow-empty");
         const started = yield* collie(
           world,
           [
@@ -74,6 +84,37 @@ test("the host resumes a clean checkout park under its own recover request", () 
           () => client.run({ runId }).pipe(Effect.orDie),
           (view) => view?.parked !== null,
         );
+        const rechecked = yield* until(
+          () => client.runMetrics({ runId }).pipe(Effect.orDie),
+          (lines) => Arr.some(lines, (line) => line.action === "rechecked"),
+        );
+        expect(
+          Arr.map(
+            Arr.filter(rechecked, (line) => line.action === "rechecked"),
+            (line) => line.outcome,
+          )[0],
+        ).toBe("uncleared");
+        expect(Arr.some(rechecked, (line) => line.action === "resumed")).toBe(false);
+        const seen = () => client.runMetrics({ runId }).pipe(Effect.orDie);
+        const before = (yield* seen()).length;
+        yield* git("remote", "set-url", "origin", `${world.home}/gone.git`);
+        const unread = yield* until(
+          seen,
+          (lines) =>
+            Arr.filter(lines, (line) => line.action === "rechecked").length >=
+            Arr.filter(rechecked, (line) => line.action === "rechecked").length + 2,
+        );
+        const fresh = Arr.drop(unread, before);
+        expect(
+          Arr.some(
+            Arr.filter(fresh, (line) => line.action === "rechecked"),
+            (line) => line.outcome === "error" || line.outcome === "uncleared",
+          ),
+        ).toBe(true);
+        expect(Arr.some(fresh, (line) => line.outcome === "cleared")).toBe(false);
+        expect(Arr.some(fresh, (line) => line.action === "resumed")).toBe(false);
+        yield* git("remote", "set-url", "origin", origin);
+        yield* git("push", "-q", "origin", `HEAD:refs/heads/${branch}`);
         yield* (yield* FileSystem.FileSystem)
           .writeFileString(`${world.home}/fact`, "ready")
           .pipe(Effect.orDie);
@@ -96,6 +137,127 @@ test("the host resumes a clean checkout park under its own recover request", () 
           request: expect.stringMatching(/^recover:/),
           actor: { origin: "host" },
         });
+        const healed = yield* client.runMetrics({ runId }).pipe(Effect.orDie);
+        expect(Arr.filter(healed, (line) => line.action === "healed")).toEqual([]);
+      }),
+    ["rechecks.workflow.ts"],
+  ));
+
+test("a checkout park does not clear while origin's branch it was pushed to is gone", () =>
+  proves(
+    "collie-recovery-pruned-",
+    (world) =>
+      Effect.gen(function* () {
+        const git = (...args: Array<string>) => exec(["git", ...args], { cwd: world.project });
+        const commit = (...args: Array<string>) =>
+          git("-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-qm", ...args);
+        yield* commit("initial", "--allow-empty");
+        const origin = `${world.home}/origin.git`;
+        yield* git("init", "-q", "--bare", origin);
+        const branch = Str.trim((yield* git("rev-parse", "--abbrev-ref", "HEAD")).stdout);
+        yield* git("remote", "add", "origin", origin);
+        const started = yield* collie(
+          world,
+          [
+            "run",
+            "start",
+            "rechecks",
+            "--input",
+            "cause=checkout-dirty-collie",
+            "--input",
+            "mr=",
+            "--input",
+            `file=${world.home}/fact`,
+          ],
+          { COLLIE_RECOVERY_EVERY: "2 seconds" },
+        );
+        expect(started.envelope).toMatchObject({ ok: true });
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
+        const runId = runs[0]!.runId;
+        yield* until(
+          () => client.run({ runId }).pipe(Effect.orDie),
+          (view) => view?.parked !== null,
+        );
+        // WARNING: the branch is pushed and then deleted at origin, so this checkout's remote ref is a lie.
+        yield* git("push", "-q", "origin", `HEAD:refs/heads/${branch}`);
+        yield* git("--git-dir", origin, "update-ref", "-d", `refs/heads/${branch}`);
+        const rechecked = yield* until(
+          () => client.runMetrics({ runId }).pipe(Effect.orDie),
+          (lines) => Arr.filter(lines, (line) => line.action === "rechecked").length >= 2,
+        );
+        expect(Arr.some(rechecked, (line) => line.outcome === "cleared")).toBe(false);
+        expect(Arr.some(rechecked, (line) => line.action === "resumed")).toBe(false);
+        yield* (yield* FileSystem.FileSystem)
+          .writeFileString(`${world.home}/fact`, "ready")
+          .pipe(Effect.orDie);
+        yield* git("push", "-q", "origin", `HEAD:refs/heads/${branch}`);
+        const done = yield* until(
+          () => client.run({ runId }).pipe(Effect.orDie),
+          (view) => view?.status.status === "complete",
+        );
+        expect(done?.status.status).toBe("complete");
+      }),
+    ["rechecks.workflow.ts"],
+  ));
+
+test("a checkout park does not clear on a remote-tracking ref this checkout's fetch never maps", () =>
+  proves(
+    "collie-recovery-unmapped-",
+    (world) =>
+      Effect.gen(function* () {
+        const git = (...args: Array<string>) => exec(["git", ...args], { cwd: world.project });
+        const commit = (...args: Array<string>) =>
+          git("-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-qm", ...args);
+        yield* commit("initial", "--allow-empty");
+        const origin = `${world.home}/origin.git`;
+        yield* git("init", "-q", "--bare", origin);
+        const branch = Str.trim((yield* git("rev-parse", "--abbrev-ref", "HEAD")).stdout);
+        yield* git("remote", "add", "origin", origin);
+        const started = yield* collie(
+          world,
+          [
+            "run",
+            "start",
+            "rechecks",
+            "--input",
+            "cause=checkout-dirty-collie",
+            "--input",
+            "mr=",
+            "--input",
+            `file=${world.home}/fact`,
+          ],
+          { COLLIE_RECOVERY_EVERY: "2 seconds" },
+        );
+        expect(started.envelope).toMatchObject({ ok: true });
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
+        const runId = runs[0]!.runId;
+        yield* until(
+          () => client.run({ runId }).pipe(Effect.orDie),
+          (view) => view?.parked !== null,
+        );
+        yield* git("push", "-q", "origin", `HEAD:refs/heads/${branch}`);
+        yield* git("fetch", "-q", "origin");
+        yield* git("push", "-q", "origin", `HEAD:refs/heads/other`);
+        // WARNING: the fetch is narrowed after that ref exists, so --prune can no longer drop it.
+        yield* git("config", "remote.origin.fetch", "+refs/heads/other:refs/remotes/origin/other");
+        yield* git("--git-dir", origin, "update-ref", "-d", `refs/heads/${branch}`);
+        const rechecked = yield* until(
+          () => client.runMetrics({ runId }).pipe(Effect.orDie),
+          (lines) => Arr.filter(lines, (line) => line.action === "rechecked").length >= 2,
+        );
+        expect(Arr.some(rechecked, (line) => line.outcome === "cleared")).toBe(false);
+        expect(Arr.some(rechecked, (line) => line.action === "resumed")).toBe(false);
+        yield* (yield* FileSystem.FileSystem)
+          .writeFileString(`${world.home}/fact`, "ready")
+          .pipe(Effect.orDie);
+        yield* git("push", "-q", "origin", `HEAD:refs/heads/${branch}`);
+        const done = yield* until(
+          () => client.run({ runId }).pipe(Effect.orDie),
+          (view) => view?.status.status === "complete",
+        );
+        expect(done?.status.status).toBe("complete");
       }),
     ["rechecks.workflow.ts"],
   ));
@@ -270,7 +432,7 @@ test("clearing rechecks never answer Decisions, release Holds or Stops, or resum
               project: world.project,
               id: "rechecks",
               request: kind,
-              input: { cause: "checkout-dirty-collie", file, mr: "" },
+              input: { cause: "herdr-unavailable", file, mr: "" },
             })
             .pipe(Effect.orDie);
           ids.push(runId);
@@ -449,7 +611,7 @@ test("uncleared rechecks back off and the shared off setting still records check
           "start",
           "rechecks",
           "--input",
-          "cause=checkout-dirty-collie",
+          "cause=herdr-unavailable",
           "--input",
           "mr=",
           "--input",
@@ -506,7 +668,7 @@ test("ten cleared parks wait for memory and at most two resumes are in flight", 
             "start",
             "rechecks",
             "--input",
-            "cause=checkout-dirty-collie",
+            "cause=herdr-unavailable",
             "--input",
             "mr=",
             "--input",
@@ -525,7 +687,7 @@ test("ten cleared parks wait for memory and at most two resumes are in flight", 
                 id: "rechecks",
                 request: `start-${i}`,
                 input: {
-                  cause: "checkout-dirty-collie",
+                  cause: "herdr-unavailable",
                   mr: "",
                   file: `${world.home}/fact-${i}`,
                 },
@@ -604,7 +766,7 @@ test("the fourth park needs you and names the three automatic tries", () =>
             "start",
             "rechecks",
             "--input",
-            "cause=checkout-dirty-collie",
+            "cause=herdr-unavailable",
             "--input",
             "mr=",
             "--input",
@@ -644,14 +806,14 @@ test("the fourth park needs you and names the three automatic tries", () =>
             Arr.map(notices, (row) => row.key),
             (line) => Str.includes("parked:")(line),
           ),
-        ).toEqual(["needs-you:parked:checkout-dirty-collie"]);
+        ).toEqual(["needs-you:parked:herdr-unavailable"]);
         const report = yield* collie(world, ["run", "report"]);
         expect(report.envelope.data).toMatchObject({
           measures: {
             recoveries: {
               byCause: expect.arrayContaining([
                 {
-                  cause: "checkout-dirty-collie",
+                  cause: "herdr-unavailable",
                   action: "resumed",
                   count: 3,
                   runs: [runId],
@@ -688,7 +850,7 @@ for (const point of ["claimed", "recovery-park-cleared", "recovery-entered"] as 
               "start",
               "rechecks",
               "--input",
-              "cause=checkout-dirty-collie",
+              "cause=herdr-unavailable",
               "--input",
               "mr=",
               "--input",
@@ -1214,6 +1376,48 @@ test("a ci-failed park with no failed head recorded stays, saying so", () =>
       error: false,
       note: expect.stringContaining("no failed pipeline recorded"),
     }),
+  ));
+
+test("a checkout park does not clear on a tracked edit git status was told to hide", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const outer = yield* fs.makeTempDirectoryScoped({ prefix: "collie-hidden-edit-" });
+      const root = `${outer}/checkout`;
+      yield* fs.makeDirectory(root, { recursive: true });
+      const git = (...args: Array<string>) => exec(["git", ...args], { cwd: root });
+      const commit = (...args: Array<string>) =>
+        git("-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-qm", ...args);
+      yield* git("init", "-q", "-b", "main");
+      yield* commit("initial", "--allow-empty");
+      yield* fs.writeFileString(`${root}/one.ts`, "one\n");
+      yield* git("add", "one.ts");
+      yield* commit("one");
+      const origin = `${outer}/origin.git`;
+      yield* git("init", "-q", "--bare", origin);
+      yield* git("remote", "add", "origin", origin);
+      yield* git("push", "-q", "origin", "HEAD:refs/heads/main");
+      yield* git("update-index", "--assume-unchanged", "one.ts");
+      yield* fs.writeFileString(`${root}/one.ts`, "edited\n");
+      const said = yield* recheckPark(
+        {
+          runId: "r1",
+          cwd: root,
+          branch: "main",
+          mr: null,
+          park: { cause: "checkout-dirty-collie", kind: "rechecks" },
+        },
+        root,
+        { agentList: () => Effect.die("a checkout recheck must not ask core") },
+      );
+      expect(said).toMatchObject({ cleared: false });
+      expect(said.note).toContain("one.ts");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        fakeForge("gitlab", { installed: true, loggedIn: [], login: "me", mrs: [] }).layer,
+      ),
+    ),
   ));
 
 test("a predecessor-not-quiet park clears once nothing its predecessor left is running, and starts no agent", () =>

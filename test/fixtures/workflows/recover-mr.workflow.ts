@@ -32,7 +32,7 @@ export default defineWorkflow({
           .pipe(Effect.orElseSucceed(() => "waiting"))) === "ready"
       )
         return opened.url;
-      yield* host.parked(id, "checkout must be clean", "checkout-dirty-collie");
+      yield* host.parked(id, "core is not answering", "herdr-unavailable");
       return yield* Workflow.suspend(yield* WorkflowInstance);
     }),
 });
