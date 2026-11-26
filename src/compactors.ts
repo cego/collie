@@ -133,6 +133,7 @@ const EventSchema = Schema.Struct({
     "out",
     "stopped",
     "cancelled",
+    "launch",
   ]),
   tokens: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
   request: Schema.optionalKey(Schema.String),
@@ -200,6 +201,14 @@ const readEvents = Effect.fn("Compactors.readEvents")(function* (dir: string) {
 // WARNING: Claude writes a --session-id conversation only on its first submitted turn, so an id with none cannot be resumed.
 // WARNING: the turn record outlives the telemetry cap; a relaunch reads it to know the session has a conversation.
 export const TURNS = "turns.jsonl";
+
+const LAUNCH_ENV = "COLLIE_LAUNCH=";
+
+const launchIn = (env: ReadonlyArray<string> | undefined) =>
+  Option.match(Arr.findFirst(env ?? [], Str.startsWith(LAUNCH_ENV)), {
+    onNone: () => null,
+    onSome: (one) => Str.slice(LAUNCH_ENV.length)(one),
+  });
 
 // WARNING: the hook runs inside the harness's process, so the launch Collie gave it is in the environment it inherited.
 const launchLabel = Effect.gen(function* () {
@@ -1151,7 +1160,7 @@ const claudeReconcile = Effect.fn("Compactors.claudeReconcile")(function* (
   const takenOver = Arr.some(
     events,
     (one) =>
-      (one.kind === "start" || one.kind === "session") &&
+      (one.kind === "start" || one.kind === "session" || one.kind === "launch") &&
       one.session === mark.session &&
       (one.launch ?? null) !== null &&
       (one.launch ?? null) !== mark.launch &&
@@ -1381,6 +1390,15 @@ const claude: CompactionPort = {
       const installed = yield* installedVersion("claude");
       const stopFailure = installed !== null && atLeast(installed, CLAUDE_STOP_FAILURE);
       yield* fs.writeFileString(settings, claudeSettings(ctx.dir, stopFailure));
+      // WARNING: Collie writes this launch down itself: a replacement is known even when its own hooks never fire.
+      const launch = launchIn(ctx.env);
+      if (launch !== null) {
+        yield* recordEvent(ctx.dir, {
+          session: ctx.session ?? null,
+          launch,
+          kind: "launch",
+        });
+      }
       return { args: ["--settings", settings] };
     }),
   usage: (ctx) => latestUsage(ctx.dir),

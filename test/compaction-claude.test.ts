@@ -699,7 +699,7 @@ const asJson = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), 
 const lostCompletion = (
   transcript: (askedIso: string) => string,
   written: { unmarked?: boolean; noEvents?: boolean } = {},
-  takeover?: { launch: string },
+  takeover?: { launch: string } | { installed: string },
 ) =>
   Effect.gen(function* () {
     const control = `${rig.stateDir}/compaction/build-r1`;
@@ -728,7 +728,16 @@ const lostCompletion = (
         pre("s-1", "manual", "Keep the work in progress. (collie:req-1)"),
       );
     }
-    if (takeover !== undefined) {
+    if (takeover !== undefined && "installed" in takeover) {
+      yield* claude.install({
+        agent: "build-r1",
+        harness: "claude",
+        cwd: rig.projectDir,
+        dir: control,
+        session: "s-1",
+        env: [`COLLIE_LAUNCH=${takeover.installed}`],
+      });
+    } else if (takeover !== undefined) {
       const now = yield* Clock.currentTimeMillis;
       yield* fs.writeFileString(
         `${control}/events.jsonl`,
@@ -761,6 +770,19 @@ test("a lost completion is reconciled as done after the bound, where the transcr
       expect(due).toEqual({ dispatch: true });
       expect(left).toBeNull();
       expect(said).toContain("build-r1: native compaction req-1 completed");
+    }),
+  ));
+
+test("a replacement launch settles nothing even where its own hooks were lost", () =>
+  withLaunch(
+    Effect.gen(function* () {
+      const { due, left } = yield* lostCompletion(
+        (at) => `${naming("req-1", at)}\n${boundaryAt(at)}\n`,
+        {},
+        { installed: "l-2" },
+      );
+      expect(due).toBeNull();
+      expect(left).not.toBeNull();
     }),
   ));
 
