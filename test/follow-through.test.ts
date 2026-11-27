@@ -2452,3 +2452,101 @@ for (const id of ["review", "second-look"]) {
       }),
     ));
 }
+
+const detailsOfMr7 = (url: string) => Str.endsWith("/merge_requests/7")(decodeURIComponent(url));
+
+const roundsBegan = () =>
+  runLive(
+    Effect.map(
+      readWatchJournal(host.dir()),
+      (events) => Arr.filter(events, (event) => event._tag === "started").length,
+    ),
+  );
+
+test("a review saved while the forge is unavailable keeps its completion, so the park names only what is missing", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      const { first, forge, entry } = yield* begun("review", [
+        review([F1]),
+        review([{ ...F1, status: "fixed" }]),
+      ]);
+      forge.after((url, _init, response) =>
+        detailsOfMr7(url)
+          ? roundsBegan().then((began) =>
+              began >= 2
+                ? new Response('{"message":"temporarily unavailable"}', { status: 503 })
+                : response,
+            )
+          : Promise.resolve(response),
+      );
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          const runId = yield* startedWaiting(entry);
+          yield* until(
+            () => notesOf(forge),
+            (notes) => notes.length === 1,
+          );
+          yield* pushedOn(forge, first);
+          const parked = yield* until(
+            () => host.status(runId),
+            (view) => view?.park != null,
+          ).pipe(Effect.timeout("10 minutes"));
+          expect(parked?.park).toMatchObject({ cause: "forge-unavailable" });
+          expect(yield* notesOf(forge)).toHaveLength(1);
+          expect(roundMarks(yield* readWatchJournal(host.dir()))).toEqual([
+            "started follow-1",
+            "completed follow-1",
+            "published 1",
+            "started follow-2",
+            "completed follow-2",
+          ]);
+        }),
+      );
+    }),
+  ));
+
+test("a merge request closed between its review and the head check records the round as completed", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      const { first, forge, entry } = yield* begun("review", [review([F1])]);
+      let closing: Promise<void> | null = null;
+      forge.before((url) => {
+        if (!detailsOfMr7(url)) {
+          return Promise.resolve();
+        }
+        return roundsBegan().then((began) => {
+          if (began < 1) {
+            return;
+          }
+          closing ??= runLive(
+            Effect.gen(function* () {
+              const now = yield* forge.model();
+              yield* forge.set({ ...now, mrs: [mr(first, { state: "closed" })] });
+            }),
+          );
+          return closing;
+        });
+      });
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          const { runId } = yield* host.started(entry, "cli-1", { target: TARGET });
+          yield* host.mergeWatched;
+          const done = yield* until(
+            () => host.status(runId),
+            (view) => view?.status.status === "complete" || view?.status.status === "failed",
+          ).pipe(Effect.timeout("10 minutes"));
+          expect(closing).not.toBeNull();
+          expect(done?.status.status === "complete" ? done.status.value : null).toBe(
+            "mk/collie!7 was closed",
+          );
+          expect(yield* notesOf(forge)).toEqual([]);
+          expect(roundMarks(yield* readWatchJournal(host.dir()))).toEqual([
+            "started follow-1",
+            "completed follow-1",
+          ]);
+        }),
+      );
+    }),
+  ));
