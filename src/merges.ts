@@ -237,7 +237,6 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
     });
   }
   for (const { mr, abandoned, runs, owner, settles, visible } of watched) {
-    // WARNING: only an abandonment settles it for good, and a Run still watching it ends even that.
     const label = mrLabel(mr);
     if (mrRefOf(mr) === null) {
       continue;

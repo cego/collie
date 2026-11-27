@@ -1778,7 +1778,6 @@ const hostBoard = (dir: string) =>
         observe: store.observe,
         unavailable: (run: string, name: string, why: string) =>
           Effect.flatMap(Host, (host) =>
-            // WARNING: the park is committed only while the very Watch that could not read is still the Run's.
             host.parked(run, why, "forge-unavailable", stillWatching(run, name)),
           ).pipe(Effect.provideContext(hosted)),
         wake: (run: string, name: string, woke: Woke) =>
