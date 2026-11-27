@@ -409,7 +409,7 @@ test("a refusal recorded at an earlier head never clears a park at the current o
 test("a refusal from an earlier pass through Prove does not clear the park made after it", () =>
   runEffect(
     Effect.gen(function* () {
-      const { asked, at, root, forge } = yield* waiting("cancelled", MR, undefined, {
+      const { asked, root, forge } = yield* waiting("cancelled", MR, undefined, {
         jobs: [
           { name: "nuxi-typecheck", state: "cancelled", id: 1 },
           { name: "lint", state: "failed", id: 2 },
