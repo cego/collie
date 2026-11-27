@@ -158,30 +158,28 @@ const structuredBudget = (response: Response) => {
 
 const ErrorBody = Schema.Struct({
   message: Schema.optionalKey(Schema.Json),
-  errors: Schema.optionalKey(Schema.Array(Schema.Json)),
+  errors: Schema.optionalKey(Schema.Json),
 });
-const Said = Schema.Union([
-  Schema.String,
-  Schema.Struct({ message: Schema.optionalKey(Schema.String) }),
-]);
+const ErrorEntry = Schema.Struct({ message: Schema.String });
 const decodeErrorBody = Schema.decodeUnknownOption(Schema.fromJsonString(ErrorBody));
-const decodeSaid = Schema.decodeUnknownOption(Said);
-const saidOf = (one: Schema.Json) =>
-  Option.map(decodeSaid(one), (said) =>
-    Schema.is(Schema.String)(said) ? said : said.message,
-  ).pipe(Option.getOrUndefined);
+const decodeErrorEntry = Schema.decodeUnknownOption(ErrorEntry);
+
+// WARNING: the forge client reads a string `message` or an `errors[].message`, never a bare entry.
+const messagesIn = (one: Schema.Json | undefined) =>
+  Schema.is(Schema.Array(Schema.Json))(one)
+    ? Arr.map(one, (entry) =>
+        Option.map(decodeErrorEntry(entry), (said) => said.message).pipe(Option.getOrUndefined),
+      )
+    : [];
 
 const namesSecondaryLimit = (body: string) => {
   const parsed = Option.getOrNull(decodeErrorBody(body));
   if (parsed === null) {
     return false;
   }
-  // WARNING: each message is read on its own: one malformed entry says nothing of the others.
-  const messages = [parsed.message, ...(parsed.errors ?? [])];
-  return Arr.some(messages, (one) => {
-    const said = saidOf(one);
-    return said !== undefined && SECONDARY_LIMIT_RE.test(said);
-  });
+  return Arr.some([parsed.message, ...messagesIn(parsed.errors)], (said) =>
+    Schema.is(Schema.String)(said) && SECONDARY_LIMIT_RE.test(said),
+  );
 };
 
 const refusedByLimit: (response: Response) => Promise<boolean> = (response) => {
