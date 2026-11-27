@@ -195,6 +195,25 @@ answered by each Machine's host over that Machine's `chat` channel, and name eve
 `<machine>:<id>`, a file `<machine>:<path>`. Beside each Home's Native chat, never instead
 of it.
 
+**Project** — An operator-named scope for related **Tasks** and their **Runs**. Projects
+are peers in a flat list, and each can stand alone or draw planning context from a linked
+Linear project. [ADR-draft-a-projects-board-and-chat-share-a-scope](docs/adr/draft-a-projects-board-and-chat-share-a-scope.md)
+
+**Task context** — The goal, instructions, decisions, evidence and open questions shared
+by the operator and agents working on one **Task**. It can exist before the first **Run**
+and spans later Runs and agents working in parallel.
+
+**Project chat** — A conversation whose history, reads and actions belong to one
+**Project**. Opening that Project brings its conversation back beside its board.
+
+**Project Manager** — An agent responsible for the long-term health of a **Project** and
+its **Tasks**. Operators and agents can consult it about a Task in the context of that
+Project.
+
+**Project handover** — A Project's current record of what its **Project Manager** owes,
+what it is waiting for and where to follow up. It survives changes of chat session,
+harness and model.
+
 **Chat harness** — Which native chat Collie opens with, `claude` (the default, on an
 existing installation as much as a new one) or `pi`, from `chat_harness` in `config.json`.
 It is a launch preference: changing it never stops, replaces or summarises a running
