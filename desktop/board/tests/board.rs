@@ -2286,22 +2286,11 @@ fn a_selection_across_machines_is_filed_by_owner_and_the_one_away_is_tried_again
 fn a_queued_task_opens_its_instruction_and_takes_a_workflow_and_checkout_for_its_first_run() {
     let harness = Harness::new();
     harness.fake.will_answer(
-        "definitions",
-        Ok(json!({
-            "workflows": [
-                {"id": "implement", "title": "Implement", "description": "", "layer": "shipped",
-                 "path": "/x/workflows/implement.workflow.ts", "inputs": [], "options": [],
-                 "success": {"schema": null, "limits": []},
-                 "error": {"schema": null, "limits": []},
-                 "metadata": {}, "broken": null, "files": []},
-                {"id": "plan", "title": "Plan", "description": "", "layer": "shipped",
-                 "path": "/x/workflows/plan.workflow.ts", "inputs": [], "options": [],
-                 "success": {"schema": null, "limits": []},
-                 "error": {"schema": null, "limits": []},
-                 "metadata": {}, "broken": null, "files": []}
-            ],
-            "problems": [], "personas": [], "errors": []
-        })),
+        "workflows",
+        Ok(startables(vec![
+            ("implement", "Implement", vec![]),
+            ("plan", "Plan", vec![]),
+        ])),
     );
     harness.fake.will_answer("act", Ok(json!("started r-1")));
     let mut runtime = runtime_of(
@@ -2348,43 +2337,34 @@ fn a_queued_task_opens_its_instruction_and_takes_a_workflow_and_checkout_for_its
     );
 }
 
-fn definitions(workflows: Vec<(&str, &str, Vec<&str>)>) -> Value {
-    json!({
-        "workflows": workflows
+fn startables(workflows: Vec<(&str, &str, Vec<&str>)>) -> Value {
+    json!(
+        workflows
             .into_iter()
             .map(|(id, title, inputs)| json!({
-                "id": id, "title": title, "description": "", "layer": "shipped",
-                "path": format!("/x/workflows/{id}.workflow.ts"),
+                "id": id, "title": title, "description": "",
                 "inputs": inputs
                     .into_iter()
-                    .map(|name| json!({
-                        "name": name, "required": true, "strategy": null, "schema": null,
-                        "limits": [],
-                    }))
+                    .map(|name| json!({"name": name, "required": true, "schema": null}))
                     .collect::<Vec<Value>>(),
-                "options": [],
-                "success": {"schema": null, "limits": []},
-                "error": {"schema": null, "limits": []},
-                "metadata": {}, "broken": null, "files": [],
             }))
-            .collect::<Vec<Value>>(),
-        "problems": [], "personas": [], "errors": []
-    })
+            .collect::<Vec<Value>>()
+    )
 }
 
 #[test]
 fn a_queued_task_starts_its_first_run_on_the_inputs_its_workflow_asks_for() {
     let harness = Harness::new();
     harness.fake.will_answer(
-        "definitions",
-        Ok(definitions(vec![
+        "workflows",
+        Ok(startables(vec![
             ("plan", "Plan", vec!["goal"]),
             ("implement", "Implement", vec!["plan", "repo"]),
         ])),
     );
     harness.fake.will_answer(
-        "definitions",
-        Ok(definitions(vec![
+        "workflows",
+        Ok(startables(vec![
             ("plan", "Plan", vec!["goal"]),
             ("implement", "Implement", vec!["plan", "repo"]),
         ])),
@@ -2479,8 +2459,8 @@ fn a_workflow_list_read_for_one_queued_task_never_fills_another() {
     press(&mut runtime, "card-t-vm-name");
     redraw(&mut runtime);
     assert!(harness.fake.answer(
-        "definitions",
-        Ok(definitions(vec![("implement", "Implement", vec![])]))
+        "workflows",
+        Ok(startables(vec![("implement", "Implement", vec![])]))
     ));
     settle(&harness, &mut runtime);
     assert!(
@@ -2491,12 +2471,68 @@ fn a_workflow_list_read_for_one_queued_task_never_fills_another() {
         node(&runtime, "queued-reading").is_some(),
         "the Task on screen is still reading the Machine it is on"
     );
-    assert!(harness.fake.answer(
-        "definitions",
-        Ok(definitions(vec![("plan", "Plan", vec![])]))
-    ));
+    assert!(
+        harness
+            .fake
+            .answer("workflows", Ok(startables(vec![("plan", "Plan", vec![])])))
+    );
     settle(&harness, &mut runtime);
     assert!(node(&runtime, "queued-workflow-plan").is_some());
+}
+
+#[test]
+fn a_queued_task_lists_the_workflows_its_checkout_has_not_the_machines_own() {
+    let harness = Harness::new();
+    harness.fake.will_answer(
+        "workflows",
+        Ok(startables(vec![("implement", "Implement", vec![])])),
+    );
+    harness.fake.will_answer(
+        "workflows",
+        Ok(startables(vec![("refunds-page", "Refunds page", vec![])])),
+    );
+    let said = "Make the refunds page say a duplicate";
+    let mut runtime = runtime_of(
+        &harness,
+        vec![snapshot(
+            &pc(),
+            vec![task(
+                "t-queued",
+                said,
+                "quiet",
+                json!({"queued": true, "run": "", "runs": [], "sentence": said}),
+            )],
+        )],
+    );
+    settle(&harness, &mut runtime);
+    press(&mut runtime, "card-t-queued-name");
+    settle(&harness, &mut runtime);
+    let asked = harness.fake.asked_of("workflows");
+    assert_eq!(
+        asked.first(),
+        Some(&json!({"installation": "inst-pc", "project": "projects-root"})),
+        "the Projects root the dialog offers is what its Workflows are read for"
+    );
+    assert!(node(&runtime, "queued-workflow-implement").is_some());
+    match &mut runtime.state.board.dialog {
+        Some(collie_desktop_board::board::Dialog::Queued { checkout, .. }) => {
+            checkout.text.clear();
+        }
+        _ => unreachable!("a queued Task's dialog is open"),
+    }
+    type_key(&mut runtime, "queued-checkout", "~/code/shop");
+    settle(&harness, &mut runtime);
+    let asked = harness.fake.asked_of("workflows");
+    assert_eq!(
+        asked.last(),
+        Some(&json!({"installation": "inst-pc", "project": "~/code/shop"})),
+        "another checkout is read for once it is named"
+    );
+    assert!(
+        node(&runtime, "queued-workflow-implement").is_none(),
+        "a list read for one checkout never stands in for another's"
+    );
+    assert!(node(&runtime, "queued-workflow-refunds-page").is_some());
 }
 
 #[test]
@@ -2529,7 +2565,7 @@ fn a_workflow_list_read_before_a_queued_task_was_reopened_never_fills_the_new_on
     assert!(
         harness
             .fake
-            .answer("definitions", Err(CallError("the Machine is away".into())))
+            .answer("workflows", Err(CallError("the checkout is away".into())))
     );
     settle(&harness, &mut runtime);
     assert!(
@@ -2540,10 +2576,11 @@ fn a_workflow_list_read_before_a_queued_task_was_reopened_never_fills_the_new_on
         node(&runtime, "queued-reading").is_some(),
         "the reopened picker still waits for its own list"
     );
-    assert!(harness.fake.answer(
-        "definitions",
-        Ok(definitions(vec![("plan", "Plan", vec![])]))
-    ));
+    assert!(
+        harness
+            .fake
+            .answer("workflows", Ok(startables(vec![("plan", "Plan", vec![])])))
+    );
     settle(&harness, &mut runtime);
     assert!(node(&runtime, "queued-workflow-plan").is_some());
 }

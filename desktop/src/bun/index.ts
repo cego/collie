@@ -122,6 +122,7 @@ import {
   artefactRegisterOn,
   artefactImportOn,
   definitionsIn,
+  workflowsIn,
   endChildren,
   flockStream,
   forgetMachine,
@@ -1333,6 +1334,7 @@ const main = Effect.gen(function* () {
     offers: ({ installation, runId }) =>
       doorTo(doors, installation).pipe(Effect.flatMap((door) => offersOn(door, runId))),
     definitions: ({ installation }) => definitionsIn(doors, installation),
+    workflows: ({ installation, project }) => workflowsIn(doors, installation, project),
     updates: () => Stream.map(updates.news, (news) => ({ version: manifest.version, news })),
     checkForUpdates: () => updates.check,
     restart: () =>

@@ -157,7 +157,7 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
             match workflows {
                 Some(startable) if startable.is_empty() => {
                     body = body.child(
-                        text("This Machine has no Workflow to start.")
+                        text("This checkout has no Workflow to start.")
                             .key("queued-none")
                             .font(k.ty.small)
                             .color(k.c.text_muted),
@@ -182,7 +182,7 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                 }
                 None => {
                     body = body.child(
-                        text("Reading this Machine's Workflows…")
+                        text("Reading this checkout's Workflows…")
                             .key("queued-reading")
                             .role("status")
                             .font(k.ty.small)
@@ -218,6 +218,7 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                             Some(Dialog::Queued { checkout, .. }) => checkout,
                             _ => unreachable!("a queued Task's dialog is open"),
                         })
+                        .on_change(|app: &mut App, _: &mut rune::Tx| app.checkout_changed())
                         .on_submit(|app: &mut App, _: &mut rune::Tx| app.start_queued())
                         .build(k)
                         .key("queued-checkout"),

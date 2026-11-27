@@ -1826,6 +1826,25 @@ export const definitionsIn = (doors: ReadonlyMap<string, Reached>, installation:
     ),
   );
 
+export const workflowsIn = (
+  doors: ReadonlyMap<string, Reached>,
+  installation: string,
+  project: string,
+) =>
+  doorTo(doors, installation).pipe(
+    Effect.flatMap((door) =>
+      over(door, door.desktop.workflows({ project })).pipe(
+        Effect.mapError(
+          (failed) =>
+            new ActionFailed({
+              reason: `${door.machine.name}: ${failed.reason}`,
+              request: failed.request,
+            }),
+        ),
+      ),
+    ),
+  );
+
 export class DoorMap<D> extends Map<string, D> {
   #changed = Deferred.makeUnsafe<void>();
   get changed() {

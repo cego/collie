@@ -43,6 +43,7 @@ import {
   RunDetail,
   RunFile,
   RunRevision,
+  Startable,
   sortBoard,
   TaskView,
 } from "../../../src/board-model";
@@ -446,6 +447,11 @@ export const DesktopRpcs = RpcGroup.make(
   Rpc.make("definitions", {
     payload: { installation: Schema.String },
     success: HostDefinitions,
+    error: ActionFailed,
+  }),
+  Rpc.make("workflows", {
+    payload: { installation: Schema.String, project: Schema.String },
+    success: Schema.Array(Startable),
     error: ActionFailed,
   }),
   Rpc.make("updates", { success: DesktopUpdates, stream: true }),

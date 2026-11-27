@@ -3305,6 +3305,27 @@ pub enum PersonaLayer {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowsPayload {
+    pub installation: String,
+    pub project: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowsSuccessItem {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub inputs: Vec<WorkflowsSuccessItemInput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowsSuccessItemInput {
+    pub name: String,
+    pub required: bool,
+    pub schema: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UpdatesSuccess {
     pub version: String,
     pub news: News,

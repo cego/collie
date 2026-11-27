@@ -22,7 +22,7 @@ use answers::{Answering, Sitting, answer_key, open_questions};
 use cards::CardAction;
 use clicks::{BoardState, Gesture, Landed};
 use collie_desktop_protocol::generated::{
-    CredentialsSuccess, DefinitionsSuccess, FlockItem, OffersSuccessItem, Proposal, Question,
+    CredentialsSuccess, FlockItem, OffersSuccessItem, Proposal, Question, WorkflowsSuccessItem,
 };
 use questionnaire::{Does, Event, Questionnaire};
 use rune::TextEdit;
@@ -159,8 +159,10 @@ pub enum Dialog {
         checkout: TextEdit,
         inputs: Vec<(String, TextEdit)>,
         why: Option<String>,
-        /// Which read of this Task's Workflows is the one that counts.
+        /// Which read of this checkout's Workflows is the one that counts.
         opened: u64,
+        /// The checkout the Workflows on show were read for.
+        read_for: Option<String>,
     },
     Proposal {
         card: String,
@@ -786,23 +788,23 @@ impl App {
             inputs: Vec::new(),
             why: None,
             opened: 0,
+            read_for: None,
         });
         self.read_workflows();
     }
 
-    /// Asks the Machine for the Workflows the open queued Task can start.
+    /// Reads the Workflows the checkout named in the open queued Task's view can start.
     fn read_workflows(&mut self) {
         let Some(Dialog::Queued {
-            card, installation, ..
+            installation,
+            checkout,
+            ..
         }) = &self.board.dialog
         else {
             return;
         };
-        let (card, installation) = (card.clone(), installation.clone());
-        let machine = self
-            .placed_by(&card)
-            .map(|one| one.machine.clone())
-            .unwrap_or_else(|| installation.clone());
+        let installation = installation.clone();
+        let named = checkout.text.trim().to_string();
         let Some(core) = self.core.clone() else {
             return;
         };
@@ -812,17 +814,19 @@ impl App {
             opened,
             workflows,
             why,
+            read_for,
             ..
         }) = &mut self.board.dialog
         {
             *opened = asked;
             *workflows = None;
             *why = None;
+            *read_for = Some(named.clone());
         }
         core.request(
-            "definitions",
-            json!({ "installation": installation }),
-            move |app: &mut App, read: Result<DefinitionsSuccess, CallError>| {
+            "workflows",
+            json!({ "installation": installation, "project": named }),
+            move |app: &mut App, read: Result<Vec<WorkflowsSuccessItem>, CallError>| {
                 let Some(Dialog::Queued {
                     opened,
                     workflows,
@@ -836,24 +840,22 @@ impl App {
                     return;
                 }
                 match read {
-                    Ok(read) => {
-                        let startable: Vec<Startable> = read
-                            .workflows
-                            .iter()
-                            .filter(|one| one.broken.is_none())
+                    Ok(wanted) => {
+                        let startable: Vec<Startable> = wanted
+                            .into_iter()
                             .map(|one| Startable {
-                                id: one.id.clone(),
-                                title: one.title.clone(),
+                                id: one.id,
+                                title: one.title,
                                 required: one
                                     .inputs
-                                    .iter()
+                                    .into_iter()
                                     .filter(|input| input.required)
-                                    .map(|input| input.name.clone())
+                                    .map(|input| input.name)
                                     .collect(),
                             })
                             .collect();
                         if startable.is_empty() {
-                            *why = Some(format!("{machine} has no Workflow to start"));
+                            *why = Some(format!("{named} has no Workflow to start"));
                         }
                         *workflows = Some(startable);
                     }
@@ -861,6 +863,20 @@ impl App {
                 }
             },
         );
+    }
+
+    /// Reads another checkout's Workflows once the operator names one.
+    pub fn checkout_changed(&mut self) {
+        let Some(Dialog::Queued {
+            checkout, read_for, ..
+        }) = &self.board.dialog
+        else {
+            return;
+        };
+        if read_for.as_deref() == Some(checkout.text.trim()) {
+            return;
+        }
+        self.read_workflows();
     }
 
     pub fn choose_workflow(&mut self, id: &str) {
