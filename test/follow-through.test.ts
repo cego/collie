@@ -13,7 +13,7 @@ import { serveForges } from "./support/forge";
 import type { FakeMr, ForgeModel } from "./support/forge";
 import { fixtures } from "./support/host";
 import { ROOT, until, watching } from "./support/watching";
-import { HOLD, Registry } from "../src/engine";
+import { HOLD, Registry, STOP, runDir } from "../src/engine";
 import { Host } from "../src/sdk";
 import { Store } from "../src/store";
 import { sectionOf } from "../src/board-model";
@@ -28,6 +28,8 @@ import { registerAgent, scopeFor } from "../src/registry";
 import { isString } from "../src/schema";
 import { stringifyJson } from "../src/json";
 import { readWatchJournal } from "../src/watch-journal";
+import { readDispositions, recordDisposition } from "../src/disposition";
+import { recordAudit } from "../src/audit";
 import type { WatchEvent } from "../src/watch-journal";
 
 const PROJECT = "gitlab.cego.dk/mk/collie";
@@ -2568,6 +2570,99 @@ test("a head that moved before its round pinned it is journaled as one discarded
           const journal = yield* readWatchJournal(host.dir());
           expect(discardMarks(journal)).toEqual([[first, moved]]);
           expect(roundMarks(journal)).toEqual(["discarded"]);
+        }),
+      );
+    }),
+  ));
+
+test("a shipped Review stopped, abandoned and resumed takes two pushes on the Run it was, undeduplicated", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      const later = { id: "F2", severity: "major", file: "src/b.ts", title: "close the handle" };
+      const third = { id: "F3", severity: "major", file: "src/c.ts", title: "close the loop" };
+      const { first, forge, entry } = yield* begun("review", [
+        review([F1]),
+        review([F1, later]),
+        review([F1, later, third]),
+      ]);
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          const registry = yield* Registry;
+          const { runId } = yield* host.started(entry, "cli-1", { target: TARGET });
+          yield* host.mergeWatched;
+          yield* until(
+            () => notesOf(forge),
+            (notes) => notes.length === 1,
+          );
+          yield* registry.control({ runId, control: STOP, set: true });
+          yield* recordDisposition(runDir(host.dir(), runId), {
+            at: "2026-11-26T10:22:28Z",
+            by: "cli:recovery",
+            kind: "abandoned",
+            ref: "",
+            note: null,
+          });
+          yield* registry.resume(runId);
+          yield* recordAudit(runDir(host.dir(), runId), {
+            operation: "resume",
+            request: "resume-1",
+            origin: "cli",
+            result: Schema.Struct({}),
+            value: {},
+          });
+          expect(yield* host.watchOf(runId, TARGET)).not.toBeNull();
+
+          const second = yield* pushedOn(forge, first);
+          yield* until(
+            () => notesOf(forge),
+            (notes) => notes.length === 2,
+          );
+          const more = yield* pushedOn(forge, second);
+          yield* until(
+            () => notesOf(forge),
+            (notes) => notes.length === 3,
+          );
+
+          const journal = yield* readWatchJournal(host.dir());
+          const woken = Arr.filter(
+            journal,
+            (event): event is Extract<WatchEvent, { _tag: "woke" }> => event._tag === "woke",
+          );
+          expect(Arr.map(woken, (event) => [event.run, event.head])).toEqual([
+            [runId, second],
+            [runId, more],
+          ]);
+          expect(watchMarks(journal)).toEqual([
+            "started follow-1",
+            "completed follow-1",
+            "started follow-2",
+            "completed follow-2",
+            "started follow-3",
+            "completed follow-3",
+          ]);
+          expect(
+            Arr.map(
+              yield* readDispositions(runDir(host.dir(), runId)).pipe(
+                Effect.orElseSucceed(() => []),
+              ),
+              (line) => line.kind,
+            ),
+          ).toContain("abandoned");
+          expect(signatures(yield* notesOf(forge))).toEqual([
+            `<!-- collie:${runId} round 1 at ${first} by mk -->`,
+            `<!-- collie:${runId} round 2 at ${second} by mk -->`,
+            `<!-- collie:${runId} round 3 at ${more} by mk -->`,
+          ]);
+          const prompts = yield* (yield* FileSystem.FileSystem).readDirectory(
+            `${host.dir()}/agents/${runId}`,
+          );
+          expect(
+            Arr.sort(
+              Arr.filter(prompts, (file) => /^review-\d+(?:-\d+)?\.prompt\.md$/.test(file)),
+              Str.Order,
+            ),
+          ).toEqual(["review-1.prompt.md", "review-2-1.prompt.md", "review-3-1.prompt.md"]);
         }),
       );
     }),
