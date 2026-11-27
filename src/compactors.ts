@@ -1180,8 +1180,16 @@ const claudeReconcile = Effect.fn("Compactors.claudeReconcile")(function* (
   const lines = Str.split(text, "\n");
   let named = false;
   let markers = 0;
-  const commands: Array<{ readonly at: number; readonly request: string | null }> = [];
-  const boundaries: Array<{ readonly at: number; readonly before: boolean }> = [];
+  const commands: Array<{
+    readonly at: number;
+    readonly request: string | null;
+    readonly session: string | null;
+  }> = [];
+  const boundaries: Array<{
+    readonly at: number;
+    readonly before: boolean;
+    readonly session: string | null;
+  }> = [];
   const entries = Arr.map(lines, (line) => Option.getOrUndefined(decodeTranscriptLine(line)));
   for (const [at, entry] of entries.entries()) {
     if (entry === undefined) {
@@ -1191,7 +1199,7 @@ const claudeReconcile = Effect.fn("Compactors.claudeReconcile")(function* (
     if (entry.type === "user") {
       const request = namedRequest(entry);
       if (compactCommand(entry)) {
-        commands.push({ at, request });
+        commands.push({ at, request, session: entry.sessionId ?? null });
       }
       named = request === mark.id;
       markers += named ? 1 : 0;
@@ -1202,15 +1210,18 @@ const claudeReconcile = Effect.fn("Compactors.claudeReconcile")(function* (
       continue;
     }
     if (manualBoundary(entry) && writerOf(entry, mark) && epochMs(entry.timestamp) >= since) {
-      boundaries.push({ at, before: named });
+      boundaries.push({ at, before: named, session: entry.sessionId ?? null });
     }
   }
   // WARNING: Claude writes the boundary first and re-injects the command inside the record it opens, so only that record's own command can claim it.
-  const opens = (one: { readonly at: number }) => {
+  const opens = (one: { readonly at: number; readonly session: string | null }) => {
+    const session = one.session;
     const command = Arr.findFirst(commands, (other) => other.at > one.at);
     return (
       Option.isSome(command) &&
       command.value.request === mark.id &&
+      // WARNING: a transcript can hold two conversations, so only the command of the boundary's own lineage opened it.
+      command.value.session === session &&
       !Arr.some(boundaries, (other) => other.at > one.at && other.at < command.value.at)
     );
   };

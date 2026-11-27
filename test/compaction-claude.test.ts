@@ -1260,6 +1260,18 @@ test("a boundary another session wrote into the same transcript settles nothing"
     }),
   ));
 
+test("a command from another lineage does not take this boundary", () =>
+  withLaunch(
+    Effect.gen(function* () {
+      const { due, left } = yield* lostCompletion(
+        (after) =>
+          `${boundaryAt(after)}\n{"type":"user","timestamp":"${after}","sessionId":"s-2","message":{"role":"user","content":"/compact Keep the work in progress, the decisions taken and what is left to do. (collie:req-1)"}}\n`,
+      );
+      expect(due).toBeNull();
+      expect(left).not.toBeNull();
+    }),
+  ));
+
 test("an ordinary compaction command takes the boundary it opened", () =>
   withLaunch(
     Effect.gen(function* () {
