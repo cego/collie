@@ -1126,8 +1126,8 @@ test("A generated token does not take a name a native server or the environment 
 });
 
 test("An allowlist naming Collie's relay token keeps its include, and the relay takes another name", () => {
-  const fixture = serveDocs({ tool: "read_doc" });
-  Bun.env.DOC_VAR = "kept";
+  const fixture = serveDocs({ tool: "read_doc", token: "synthetic-relay-value" });
+  Bun.env.DOC_VAR = "synthetic-relay-value";
   return withServers(
     { docs: { type: "http", url: fixture.url, headers: { Authorization: "Bearer ${DOC_VAR}" } } },
     (driver, context) =>
@@ -1144,14 +1144,18 @@ test("An allowlist naming Collie's relay token keeps its include, and the relay 
         const given = Arr.join(details.args, " ");
         expect(given).toContain('"COLLIE_CHAT_RELAY_1" = "include"');
         expect(given).not.toContain('"COLLIE_CHAT_RELAY_1" = "exclude"');
-        expect(given).toContain("COLLIE_CHAT_RELAY_1_2");
+        expect(given).toContain('"COLLIE_CHAT_RELAY_1_2" = "exclude"');
         expect(details.env.COLLIE_CHAT_RELAY_1_2).toBeString();
+        expect(details.env.DOC_VAR).toBeUndefined();
         yield* session.offer("shell");
         const shell = message(yield* turn(session));
         expect(shell).not.toContain("COLLIE_CHAT_RELAY_1=");
         expect(shell).not.toContain("COLLIE_CHAT_RELAY_1_2=");
+        expect(shell).not.toContain(details.env.COLLIE_CHAT_RELAY_1_2);
         expect(shell).not.toContain("synthetic-relay-value");
         expect(shell).not.toContain("HOME=");
+        yield* session.offer("servers");
+        expect(called(yield* turn(session))).toEqual(["mcp__docs__read_doc"]);
       }),
   ).finally(() => {
     void fixture.stop();
