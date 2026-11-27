@@ -174,10 +174,12 @@ export const codexServers: (
       Rec.toEntries(policy.filters),
       ([key, rule]) => Str.toLowerCase(key) === Str.toLowerCase(name) && rule === "include",
     );
-  // WARNING: a name the human's allowlist admits takes another, because dropping their include would widen the shell.
+  // WARNING: a name the human's allowlist admits, a native server reads or the environment already sets takes another: Collie's own must not overwrite any of them.
+  const reserved = (name: string) =>
+    included(name) || Arr.contains(nativeVariables, name) || childEnv()[name] !== undefined;
   const freeName = (base: string) => {
     let name = base;
-    for (let count = 2; included(name); count += 1) {
+    for (let count = 2; reserved(name); count += 1) {
       name = `${base}_${count}`;
     }
     return name;

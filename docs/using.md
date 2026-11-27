@@ -2402,7 +2402,9 @@ the second is set beside them. Collie excludes the names it puts in Codex's envi
 name — its own server's token and one per relay — and never a wildcard over its namespace, so
 an allowlist you wrote with a wildcard keeps narrowing. Your table is yours: Collie never
 swaps one of its own names for a key of yours, so an allowlist that admits Collie's token or
-a relay's takes another name for it and your include stays exactly as written. A `${VAR}` a
+a relay's takes another name for it and your include stays exactly as written. A name your
+environment already sets, or one a Codex server of your own reads by name, is saved the
+same way. A `${VAR}` a
 header or a value is written with is resolved by Desktop, and the variable itself is then
 taken out of Codex's own environment, so neither Codex nor its shell holds it. The
 exception is a variable Codex's own servers read by name (`bearer_token_env_var`,

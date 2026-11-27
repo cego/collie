@@ -1070,6 +1070,56 @@ test("An allowlist naming Collie's own token keeps its include, and the token ta
   ).finally(() => void fixture.stop());
 });
 
+test("A generated token does not take a name a native server or the environment already holds", () => {
+  const fixture = serveDocs({ tool: "read_doc" });
+  Bun.env.DOC_VAR = "synthetic-relay-value";
+  Bun.env.COLLIE_CHAT_MCP_TOKEN_2 = "native-bearer";
+  Bun.env.COLLIE_CHAT_MCP_TOKEN_3 = "human-own";
+  return withServers(
+    {
+      docs: { type: "http", url: fixture.url, headers: { Authorization: "Bearer ${DOC_VAR}" } },
+    },
+    (driver, context) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(
+          `${context.dir}/codex-home/config.toml`,
+          Arr.join(
+            [
+              "[shell_environment_policy]",
+              'inherit = "all"',
+              "[shell_environment_policy.filters]",
+              '"collie_chat_mcp_token" = "include"',
+              '"COLLIE_CHAT_RELAY_1" = "include"',
+              "[mcp_servers.bearer]",
+              `url = "${fixture.url}"`,
+              'bearer_token_env_var = "COLLIE_CHAT_MCP_TOKEN_2"',
+              "[mcp_servers.hered]",
+              `url = "${fixture.url}"`,
+              'env_http_headers = { Authorization = "COLLIE_CHAT_RELAY_1_2" }',
+              "",
+            ],
+            "\n",
+          ),
+        );
+        const session = yield* driver.open("codex-token-slots", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("inspect");
+        const details = inspected(yield* turn(session));
+        const given = Arr.join(details.args, " ");
+        expect(given).toContain('bearer_token_env_var="COLLIE_CHAT_MCP_TOKEN_4"');
+        expect(given).toContain("COLLIE_CHAT_RELAY_1_3");
+        expect(details.env.COLLIE_CHAT_MCP_TOKEN_2).toBe("native-bearer");
+        expect(details.env.COLLIE_CHAT_MCP_TOKEN_3).toBe("human-own");
+      }),
+  ).finally(() => {
+    void fixture.stop();
+    delete Bun.env.DOC_VAR;
+    delete Bun.env.COLLIE_CHAT_MCP_TOKEN_2;
+    delete Bun.env.COLLIE_CHAT_MCP_TOKEN_3;
+  });
+});
+
 test("An allowlist naming Collie's relay token keeps its include, and the relay takes another name", () => {
   const fixture = serveDocs({ tool: "read_doc" });
   Bun.env.DOC_VAR = "kept";
