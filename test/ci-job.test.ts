@@ -357,6 +357,43 @@ test("an unchanged failed job beside a cancelled one reissues no recovery for th
     }),
   ));
 
+test("a refused read that parks a run keeps its reason when a later check in the round passes", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, root, forge } = yield* waiting("failed", MR, undefined, {
+        jobs: [
+          { name: "nuxi-typecheck", state: "failed", id: 1 },
+          { name: "lint", state: "passed", id: 2 },
+        ],
+      });
+      const dir = `${root}/runs/r1`;
+      const nuxi = { ...asked, runDir: dir };
+      const lint = {
+        ...nuxi,
+        spec: { ...NUXI, name: "lint", ci: "lint" },
+        command: { ...nuxi.command, ci: "lint" },
+      };
+      const view = { runId: "r1", cwd: asked.cwd, branch: "main", mr: MR };
+      const healthy: ForgeModel = forge.model();
+      const down: ForgeModel = { ...healthy, httpFault: { status: 503 } };
+      const round = Effect.gen(function* () {
+        forge.set(down);
+        expect("unproved" in (yield* read(nuxi, forge))).toBe(true);
+        forge.set(healthy);
+        expect("proved" in (yield* read(lint, forge))).toBe(true);
+      });
+      yield* round;
+      const first = yield* cancelledRecheck(view, root, asked.run, forge);
+      expect(first).toMatchObject({ cleared: true, error: false });
+      yield* rememberSettledClear(dir, first.reads ?? "");
+      yield* round;
+      expect(yield* cancelledRecheck(view, root, asked.run, forge)).toMatchObject({
+        cleared: true,
+        error: false,
+      });
+    }),
+  ));
+
 test("a target-red park clears only once every recorded job passed on the target branch's newest commit", () =>
   runEffect(
     Effect.gen(function* () {
