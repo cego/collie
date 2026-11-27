@@ -388,15 +388,14 @@ function boundSession(lines: ReadonlyArray<string>) {
   return returned;
 }
 
-// WARNING: the telemetry outlives a launch, so a relaunch's readiness is an event of that launch.
+// WARNING: the telemetry outlives a launch, so a relaunch's readiness is an event of that launch, and Collie's own bookkeeping is not the harness answering.
 const reported = (ctx: ReadyContext) =>
   readEvents(ctx.dir).pipe(
-    Effect.map(
-      (events) =>
-        events.length > 0 &&
-        (ctx.launch === null ||
-          ctx.launch === undefined ||
-          Arr.some(events, (one) => one.launch === ctx.launch)),
+    Effect.map((events) =>
+      Arr.some(
+        Arr.filter(events, (one) => one.kind !== "launch"),
+        (one) => ctx.launch === null || ctx.launch === undefined || one.launch === ctx.launch,
+      ),
     ),
     Effect.orElseSucceed(() => false),
   );

@@ -630,6 +630,26 @@ const stopFailure = (error: string, details?: string) =>
     transcript_path: "/home/mk/.claude/projects/p/s-1.jsonl",
   });
 
+test("Collie's own install record is not proof that Claude came up", () =>
+  withLaunch(
+    Effect.gen(function* () {
+      const at = {
+        agent: "build-r1",
+        harness: "claude",
+        cwd: rig.projectDir,
+        dir,
+        endpoint: null,
+        env: [],
+        launch: "l-1",
+      };
+      const ready = claude.ready!;
+      yield* recordEvent(dir, { session: "s-1", launch: "l-1", kind: "launch" });
+      expect(yield* ready(at)).toBe(false);
+      yield* recordClaudeEvent(dir, measured("s-1", 15_500, 1200, 8));
+      expect(yield* ready(at)).toBe(true);
+    }),
+  ));
+
 test("a StopFailure on a spent subscription is the agent running out, with its transcript", () =>
   withLaunch(
     Effect.gen(function* () {
