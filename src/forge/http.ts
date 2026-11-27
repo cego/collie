@@ -1,8 +1,9 @@
 import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import * as Cause from "effect/Cause";
 import { pipe as pipe_ } from "effect/Function";
-import { Clock, Config, Context, Effect, Layer, Option, Schema, Semaphore } from "effect";
+import { Clock, Config, Context, Effect, Layer, Option, Order, Schema, Semaphore } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import type { FetchLike, ForgeProvider, GitHubProvider } from "forges";
 import type { MrForge } from "../board-model";
@@ -109,21 +110,56 @@ const budgetOf = (response: Response) => {
   const limit = number("x-ratelimit-limit", "ratelimit-limit");
   const remaining = number("x-ratelimit-remaining", "ratelimit-remaining");
   const reset = number("x-ratelimit-reset", "ratelimit-reset");
-  if (
-    limit === undefined &&
-    remaining === undefined &&
-    reset === undefined &&
-    !response.headers.has("ratelimit")
-  ) {
-    return null;
+  if (limit === undefined && remaining === undefined && reset === undefined) {
+    return structuredBudget(response);
   }
   return { limit, remaining };
+};
+
+const fieldMembers = (response: Response, name: string) => {
+  const members = new Map<string, Record<string, number>>();
+  const header = response.headers.get(name);
+  if (header === null) {
+    return members;
+  }
+  for (const member of Str.split(header, ",")) {
+    const [key, ...params] = Str.split(member, ";");
+    members.set(
+      Str.replace(/^"(.*)"$/, "$1")(Str.trim(key)),
+      Rec.fromEntries(
+        Arr.map(params, (param) => {
+          const [field, value] = Str.split(param, "=");
+          return [Str.trim(field), Number(value)] as const;
+        }),
+      ),
+    );
+  }
+  return members;
+};
+
+// WARNING: the forge client's reading of the IETF budget fields, restated here: its own reader is private.
+const structuredBudget = (response: Response) => {
+  const fewest = Arr.head(
+    Arr.sortWith(
+      Arr.filter(Array.from(fieldMembers(response, "ratelimit")), ([, params]) =>
+        Number.isFinite(params.r),
+      ),
+      ([, params]) => params.r ?? 0,
+      Order.Number,
+    ),
+  );
+  if (Option.isNone(fewest)) {
+    return null;
+  }
+  const [name, state] = fewest.value;
+  const limit = fieldMembers(response, "ratelimit-policy").get(name)?.q;
+  return { limit, remaining: state.r };
 };
 
 const ErrorBody = Schema.Struct({
   message: Schema.optionalKey(Schema.String),
   errors: Schema.optionalKey(
-    Schema.Array(Schema.Struct({ message: Schema.optionalKey(Schema.String) })),
+    Schema.Array(Schema.NullOr(Schema.Struct({ message: Schema.optionalKey(Schema.String) }))),
   ),
 });
 const decodeErrorBody = Schema.decodeUnknownOption(Schema.fromJsonString(ErrorBody));
@@ -134,7 +170,7 @@ const namesSecondaryLimit = (body: string) => {
     return false;
   }
   return Arr.some(
-    [parsed.message, ...Arr.map(parsed.errors ?? [], (one) => one.message)],
+    [parsed.message, ...Arr.map(parsed.errors ?? [], (one) => one?.message)],
     (text) => text !== undefined && SECONDARY_LIMIT_RE.test(text),
   );
 };
