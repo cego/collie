@@ -667,6 +667,19 @@ Inputs has a field for each one, the instruction filling its goal, and **Start i
 gives the Task its first Run on them there. It offers nothing that needs a Run, and once
 its Run starts it is an ordinary card.
 
+A Task's record has a **Plan** of its own, kept as revisions beside its Activity. A revision
+is an edit of the instruction, or a planner Run's output adopted as an immutable copy at the
+revision it was read at; an edit is applied only to the revision its editor saw — an
+older base is refused with the current revision, and the draft stays in the editor to
+reconcile. **Overview** reads the objective and **Done when** from the current revision, and
+two revisions can be compared to see what one added: the requirement, the ticket that proves
+it and the reason recorded with it. An earlier revision's view is still its own tickets.
+Each Run keeps the revision and the briefing it was admitted with, so an amendment never
+rewrites what a Run was asked to do; a Run still working is told of the amendment at its
+next decision. **Activity** sits at the bottom of the record: comments, decisions,
+challenges and their resolutions, with the Run starts and amendments, in order and with
+their authors, paged as it grows.
+
 **Ready to ship** holds work whose next shipping action has every gate satisfied at its
 current head, on forge answers read within two merge-watch rounds. A ready merge
 request's button is the offer that ships it, under its own title and invoked on the Run

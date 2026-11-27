@@ -325,6 +325,7 @@ import type { RunAuthority, Started } from "./automode";
 import { WorktreeRecordSchema } from "./run";
 import type { WorktreeRecord } from "./run";
 import { isOpen, isQueued, listTasks, newTask, readTask, taskOfWorkspace, writeTask } from "./task";
+import { appendEvent, pinRun } from "./task-context";
 import { nowIso, epochMs, isoAt } from "./time";
 import { recordWatchEvent } from "./watch-journal";
 import type { WatchEvent } from "./watch-journal";
@@ -8998,12 +8999,30 @@ const makeRegistry: (
     });
   });
 
+  // WARNING: a Run admitted for a Task keeps the revision and the briefing it was admitted with, whatever the Task says later.
+  const pinToTask = (row: RunRow) => {
+    const task = row.task;
+    return task === null
+      ? Effect.void
+      : Effect.gen(function* () {
+          yield* pinRun({ task, run: row.run }).pipe(Effect.orElseSucceed(() => null));
+          yield* appendEvent({
+            task,
+            id: `run:${row.run}`,
+            kind: "run_started",
+            text: `Run ${row.run} started`,
+            source: { kind: "run", run: row.run },
+          }).pipe(Effect.orElseSucceed(() => null));
+        });
+  };
+
   const claimAndPlace = (admission: Admission) =>
     claimingOf(admission.request).withPermits(1)(
       Effect.gen(function* () {
         const claimed = yield* store.admit(admission);
         const row = yield* placeClaimed(claimed.row, claimed.fresh);
         remember(row);
+        yield* pinToTask(row);
         return { row, fresh: claimed.fresh };
       }),
     );

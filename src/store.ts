@@ -576,6 +576,38 @@ const migrations = (imports: {
       ) WITHOUT ROWID
     `;
   }),
+  "32_task_context": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      CREATE TABLE collie_task_specs (
+        task TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        record TEXT NOT NULL,
+        at TEXT NOT NULL,
+        PRIMARY KEY (task, revision)
+      ) WITHOUT ROWID
+    `;
+    yield* sql`
+      CREATE TABLE collie_task_pins (
+        run TEXT PRIMARY KEY,
+        task TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        record TEXT NOT NULL
+      ) WITHOUT ROWID
+    `;
+    yield* sql`CREATE INDEX collie_task_pins_task ON collie_task_pins (task, revision)`;
+    yield* sql`
+      CREATE TABLE collie_task_posts (
+        task TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        id TEXT NOT NULL,
+        at TEXT NOT NULL,
+        record TEXT NOT NULL,
+        PRIMARY KEY (task, seq),
+        UNIQUE (task, id)
+      ) WITHOUT ROWID
+    `;
+  }),
   "31_projects": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* sql`

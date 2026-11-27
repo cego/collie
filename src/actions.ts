@@ -110,6 +110,43 @@ export const ActionSchema = Schema.Union([
   ...Arr.map(["task_follow", "task_unfollow"] as const, (kind) =>
     Schema.Struct({ kind: Schema.Literal(kind), task: Schema.String }),
   ),
+  Schema.Struct({
+    kind: Schema.Literal("task_edit_spec"),
+    task: Schema.String,
+    text: Schema.String,
+    rationale: Schema.optionalKey(Schema.String),
+    // WARNING: the revision the editor saw; an edit that names another is refused with the current one.
+    base_revision: Schema.Int,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("task_adopt_plan"),
+    task: Schema.String,
+    run: Schema.String,
+    rationale: Schema.optionalKey(Schema.String),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("task_post"),
+    task: Schema.String,
+    text: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("task_decision"),
+    task: Schema.String,
+    text: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("task_challenge"),
+    task: Schema.String,
+    decision: Schema.String,
+    text: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("task_resolve"),
+    task: Schema.String,
+    decision: Schema.String,
+    challenge: Schema.String,
+    text: Schema.String,
+  }),
   Schema.Struct({ kind: Schema.Literal("resume"), run: Schema.String }),
   Schema.Struct({
     kind: Schema.Literal("followup"),

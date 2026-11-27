@@ -166,6 +166,7 @@ import { agentName, launchedAs, legacyAgentName, reason, unsafePathComponent } f
 import { machineName } from "./peers";
 import type { MachineCatalogue } from "./harness-choice";
 import { askRouteTo } from "./handoff";
+import { TaskContext } from "./task-context";
 import { epochMs, nowIso } from "./time";
 import { noteContext, noteReminder } from "./metrics";
 import type { RecoveryOutcome } from "./metrics";
@@ -661,12 +662,18 @@ export const agentWork: <
     const skills = yield* agents.skills(skillsIn(work.instructions));
     const held = work.agent === undefined ? null : yield* agents.choiceOf(runId, work.agent);
     const outputSubmit = held?.outputSubmit ?? (yield* agents.outputSubmit);
+    // WARNING: the Task's own words go to every agent of the Run, as they were when it was admitted.
+    const context = yield* Effect.serviceOption(TaskContext);
+    const admitted = Option.isNone(context)
+      ? null
+      : yield* context.value.pinned(work.runId).pipe(Effect.orElseSucceed(() => null));
     const parts: PromptParts = {
       role,
       instructions: work.instructions,
       input: work.input,
       skills,
       cwd: work.cwd,
+      handover: admitted === null ? undefined : admitted.briefing,
       output,
       contract: plain ? null : jsonSchemaFor(work.output),
       attachments: yield* agents.attachments(runId),
@@ -1073,7 +1080,14 @@ export const agentWork: <
           );
           return yield* Workflow.suspend(yield* WorkflowEngine.WorkflowInstance);
         }
-        return renderPrompt({ ...parts, handover: renderHandOver(dispatched, why) }).text;
+        const briefing = admitted?.briefing;
+        return renderPrompt({
+          ...parts,
+          handover:
+            briefing === undefined
+              ? renderHandOver(dispatched, why)
+              : `${briefing}\n\n${renderHandOver(dispatched, why)}`,
+        }).text;
       });
     const takingOver = given.takesOver;
     const predecessor =

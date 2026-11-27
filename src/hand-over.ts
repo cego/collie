@@ -3,6 +3,7 @@ import * as Str from "effect/String";
 import { Effect, FileSystem, Path, Result, Schema, pipe } from "effect";
 import type * as Types from "effect/Types";
 import type { Verification } from "./verify";
+import type { Criterion } from "./output";
 import type { Finding } from "./output";
 import type { AskedQuestion } from "./sdk";
 import type { Solution } from "./board-model";
@@ -99,14 +100,19 @@ const names = (text: string, name: string) =>
     `(^|[^\\w-])${pipe(name, Str.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`))}([^\\w-]|$)`,
   ).test(text);
 
-export const buildHandOver = (state: HandOverState) => {
-  const { given, checkout } = state;
-  const passing = Arr.filter(
-    state.verifications,
-    (one) => one.expect === "pass" && one.result === "pass" && one.end.head_sha === checkout.head,
+export const passingAt = (verifications: ReadonlyArray<Verification>, head: string) =>
+  Arr.filter(
+    verifications,
+    (one) => one.expect === "pass" && one.result === "pass" && one.end.head_sha === head,
   );
-  const criteria = Arr.map(given.criteria ?? [], (criterion) => {
-    const answer = Arr.findLast(given.answers ?? [], (one) => one.criterion === criterion);
+
+export const criteriaEvidence = (input: {
+  readonly criteria: ReadonlyArray<string>;
+  readonly answers: ReadonlyArray<Criterion>;
+  readonly passing: ReadonlyArray<Verification>;
+}) =>
+  Arr.map(input.criteria, (criterion) => {
+    const answer = Arr.findLast(input.answers, (one) => one.criterion === criterion);
     const claimed =
       answer._tag === "Some" && !NOT_MET.test(answer.value.met) ? answer.value.met : null;
     return {
@@ -116,10 +122,19 @@ export const buildHandOver = (state: HandOverState) => {
         claimed === null
           ? []
           : Arr.map(
-              Arr.filter(passing, (one) => names(claimed, one.name)),
+              Arr.filter(input.passing, (one) => names(claimed, one.name)),
               (one) => one.id,
             ),
     };
+  });
+
+export const buildHandOver = (state: HandOverState) => {
+  const { given, checkout } = state;
+  const passing = passingAt(state.verifications, checkout.head);
+  const criteria = criteriaEvidence({
+    criteria: given.criteria ?? [],
+    answers: given.answers ?? [],
+    passing,
   });
   const record: Types.Mutable<HandOver> = {
     revision: state.revision,

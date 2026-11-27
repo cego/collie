@@ -23,6 +23,8 @@ import { registeredLayer } from "./registry";
 import type { Registered } from "./registry";
 import { tasksLayer } from "./task";
 import type { Tasks } from "./task";
+import { taskContextLayer } from "./task-context";
+import type { TaskContext } from "./task-context";
 import { projectsLayer } from "./project";
 import type { Projects } from "./project";
 import { artefactsLayer } from "./artefacts";
@@ -36,6 +38,7 @@ export type Records =
   | Proposals
   | Registered
   | Tasks
+  | TaskContext
   | Projects
   | Artefacts
   | RunRecords
@@ -53,6 +56,7 @@ export const recordsLayer = Layer.fresh(
     proposalsLayer,
     registeredLayer,
     tasksLayer,
+    taskContextLayer,
     projectsLayer,
     artefactsLayer,
     runRecordsLayer,

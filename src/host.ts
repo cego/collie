@@ -147,6 +147,7 @@ import { runLog } from "./agent-end";
 import { hostLogger, rotateInPlace } from "./host-log";
 import { handoffsDir, handoffsIn } from "./handoffs";
 import { Catalogue, discover, searchPath } from "./discovery";
+import { readTaskContext } from "./task-record";
 import { readDefinitions } from "./authoring";
 import { SharedDefinition } from "./definitions-model";
 import { DefinitionRefused, sharedDefinitions, takeDefinitions } from "./shared-definitions";
@@ -1395,6 +1396,12 @@ const ACTED_KINDS = new Set<string>([
   "task_file",
   "task_follow",
   "task_unfollow",
+  "task_edit_spec",
+  "task_adopt_plan",
+  "task_post",
+  "task_decision",
+  "task_challenge",
+  "task_resolve",
 ]);
 const ACT_REVISIONS_KEPT = 1024;
 
@@ -3101,6 +3108,11 @@ export const frontDoorHandlers = (
             Effect.mapError((cause) =>
               Schema.is(HostRefused)(cause) ? cause : new HostRefused({ reason: reason(cause) }),
             ),
+            Effect.provideContext(bun),
+          ),
+        taskContext: ({ task, revision, before, limit, compare }) =>
+          readTaskContext({ task, revision, before, limit, compare }).pipe(
+            Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })),
             Effect.provideContext(bun),
           ),
         definitions: () =>

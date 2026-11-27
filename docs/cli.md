@@ -587,6 +587,37 @@ Task.
 `task list` gives the Task id, label and its Runs. Historical `workspace` fields remain
 readable; no external workspace is created.
 
+### A Task's plan and its Activity
+
+A Task's plan is its own: a queue of revisions kept on the Machine that owns the Task, never
+the Markdown a Run works in. `task_edit_spec` appends one, and it names the revision its
+editor saw as `base_revision`: an edit that names an older one is refused with the current
+revision and changes nothing, so the editor keeps their draft and reconciles it. An edit may
+carry a `rationale`, which the revision shows beside it. Its text is read for the
+**Objective** and **Done when** headings and for a `## Tickets` section, one `### <number>:
+<title>` per ticket with the plan's own `**Blocked by:**`, acceptance criteria and after-merge
+lines; an edit that writes no tickets keeps the ones the revision it edited had.
+
+`task_adopt_plan` takes a Run's plan directory as an immutable copy: the spec, every ticket and
+their digests are stored with the revision, so the Run refining its own files later cannot
+change what was adopted, and the same ticket identity survives across revisions. Rewriting an
+adopted plan on a Run goes through that Run's usual refinement, not through the Task.
+
+An agent reaches all of this through `collie_do`'s `task_edit_spec` and `task_adopt_plan`, and
+writes on the Task with `task_post` (a comment), `task_decision`, `task_challenge` (which names
+the `decision` it disputes) and `task_resolve` (which names both the `decision` and the
+`challenge` it settles). Activity keeps every post with its author, time and source, one copy
+per source fact, in the order it happened; a Run's start, an amendment and an adoption are
+added as they happen, keyed by the fact they record, so a replay adds nothing.
+
+Each Run admitted for a Task keeps the plan revision and the briefing it was admitted with.
+That briefing is given to every agent of the Run, and an amendment later leaves it as it was:
+an older Run still opens what it was asked to do. An amendment is delivered to the Runs still
+working on the Task at their next decision or work boundary; nothing is interrupted.
+
+`taskContext` is the record's read: the current spec, any revision by number, two revisions
+compared, and a page of Activity oldest-first with the count of what is older than it.
+
 ### Projects
 
 A **Project** is a place on one Machine's board that Tasks are filed into. Each Machine owns

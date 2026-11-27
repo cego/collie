@@ -33,6 +33,7 @@ import {
   changeSchedule,
 } from "./lifecycle";
 import type { ScheduleChange } from "./schedule-model";
+import { listRuns } from "./runs";
 import { humanBytes } from "./bytes";
 import { agentStartRefusal, CHAT_CHECKOUT_FIX } from "./agent-start";
 import { RESERVED_INPUTS } from "./sdk";
@@ -50,6 +51,7 @@ import {
 } from "./task";
 import type { Filing } from "./task";
 import { FilingSchema } from "./task";
+import { adoptPlan, appendEvent, editSpec, postTo, resolvePost } from "./task-context";
 import {
   hostInstallation,
   isArchived,
@@ -735,6 +737,218 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
     );
   followChange("task_follow");
   followChange("task_unfollow");
+  const taskMissing = (task: string) => `no Task ${task} on this Machine`;
+  // WARNING: an amendment reaches agents already at work only at their next boundary; none is interrupted.
+  const tellWorkingAgents = (env: PluginEnv, by: Actor, task: string, revision: number) =>
+    Effect.gen(function* () {
+      const listed = yield* listRuns(env).pipe(Effect.orElseSucceed(() => [] as const));
+      for (const run of listed) {
+        if (run.task !== task || run.state !== "running") {
+          continue;
+        }
+        yield* steerRun(env, {
+          runId: run.id,
+          text: `The Task's plan is now revision ${revision}. Re-read it before your next decision; what you were admitted with still stands.`,
+          mode: "boundary",
+          request: `${by.requestId}:${run.id}`,
+          door: by,
+        }).pipe(Effect.orElseSucceed(() => null));
+      }
+    });
+  registerExecutor("task_adopt_plan", (action, by, env) =>
+    Effect.gen(function* () {
+      const task = yield* readTask(action.task);
+      if (task === null) {
+        return failed(taskMissing(action.task));
+      }
+      const plan = `${runDir(env.stateDir, action.run)}/plan`;
+      const made = yield* once(
+        env.stateDir,
+        {
+          operation: "task_adopt_plan",
+          request: by.requestId,
+          ...by,
+          asked: { task: action.task, run: action.run, plan, rationale: action.rationale ?? null },
+          result: Schema.Struct({ revision: Schema.Finite }),
+          settles: (made_) => made_.revision > 0,
+        },
+        adoptPlan({
+          task: action.task,
+          run: action.run,
+          machine: env.machine ?? null,
+          plan,
+          actor: actorName(by),
+          rationale: action.rationale ?? null,
+        }).pipe(
+          Effect.flatMap((adopted) =>
+            "refused" in adopted
+              ? Effect.succeed({ revision: 0, refused: adopted.refused })
+              : Effect.as(
+                  appendEvent({
+                    task: action.task,
+                    id: `adopted:${action.task}:${adopted.revision}`,
+                    kind: "adopted",
+                    text: `Plan adopted from ${action.run}, revision ${adopted.revision}`,
+                    source: { kind: "plan", run: action.run, revision: adopted.revision },
+                  }).pipe(Effect.orElseSucceed(() => null)),
+                  { revision: adopted.revision },
+                ),
+          ),
+        ),
+      );
+      return made.revision === 0
+        ? failed(`no plan to adopt from ${action.run}`)
+        : { state: "applied" as const, note: `plan revision ${made.revision}`, task: action.task };
+    }).pipe(Effect.catch((cause) => Effect.succeed(failed(reason(cause))))),
+  );
+  registerExecutor("task_edit_spec", (action, by, env) =>
+    Effect.gen(function* () {
+      const task = yield* readTask(action.task);
+      if (task === null) {
+        return failed(taskMissing(action.task));
+      }
+      const made = yield* once(
+        env.stateDir,
+        {
+          operation: "task_edit_spec",
+          request: by.requestId,
+          ...by,
+          asked: {
+            task: action.task,
+            text: action.text,
+            rationale: action.rationale ?? null,
+            base: action.base_revision,
+          },
+          result: Schema.Struct({
+            applied: Schema.Boolean,
+            revision: Schema.Finite,
+            current: Schema.Finite,
+          }),
+          settles: (made_) => made_.applied,
+        },
+        Effect.gen(function* () {
+          const edited = yield* editSpec({
+            task: action.task,
+            text: action.text,
+            actor: actorName(by),
+            expected: action.base_revision,
+            rationale: action.rationale ?? null,
+          });
+          if (!edited.applied) {
+            return { applied: false, revision: 0, current: edited.current.revision };
+          }
+          yield* appendEvent({
+            task: action.task,
+            id: `amended:${action.task}:${edited.current.revision}`,
+            kind: "amended",
+            text:
+              action.rationale === undefined
+                ? `Plan revision ${edited.current.revision}`
+                : `Plan revision ${edited.current.revision}: ${action.rationale}`,
+            source: { kind: "spec", revision: edited.current.revision },
+          }).pipe(Effect.orElseSucceed(() => null));
+          yield* tellWorkingAgents(env, by, action.task, edited.current.revision);
+          return {
+            applied: true,
+            revision: edited.current.revision,
+            current: edited.current.revision,
+          };
+        }),
+      );
+      return made.applied
+        ? { state: "applied" as const, note: `plan revision ${made.revision}`, task: action.task }
+        : failed(
+            `the plan is at revision ${made.current}, not ${action.base_revision}; your draft is kept for reconciliation`,
+          );
+    }).pipe(Effect.catch((cause) => Effect.succeed(failed(reason(cause))))),
+  );
+  const said = (kind: "task_post" | "task_decision") =>
+    registerExecutor(kind, (action, by, env) =>
+      Effect.gen(function* () {
+        const task = yield* readTask(action.task);
+        if (task === null) {
+          return failed(taskMissing(action.task));
+        }
+        const made = yield* once(
+          env.stateDir,
+          {
+            operation: kind,
+            request: by.requestId,
+            ...by,
+            asked: { task: action.task, text: action.text },
+            result: Schema.Struct({ id: Schema.String }),
+          },
+          Effect.map(
+            postTo({
+              task: action.task,
+              by: actorName(by),
+              kind: kind === "task_post" ? "comment" : "decision",
+              text: action.text,
+            }),
+            (posted) => ({ id: posted.id }),
+          ),
+        );
+        return { state: "applied" as const, note: made.id, task: action.task };
+      }).pipe(Effect.catch((cause) => Effect.succeed(failed(reason(cause))))),
+    );
+  said("task_post");
+  said("task_decision");
+  registerExecutor("task_challenge", (action, by, env) =>
+    Effect.gen(function* () {
+      const made = yield* once(
+        env.stateDir,
+        {
+          operation: "task_challenge",
+          request: by.requestId,
+          ...by,
+          asked: { task: action.task, decision: action.decision, text: action.text },
+          result: Schema.Struct({ id: Schema.String }),
+        },
+        Effect.map(
+          postTo({
+            task: action.task,
+            by: actorName(by),
+            kind: "challenge",
+            text: action.text,
+            source: { kind: "agent", agent: actorName(by) },
+            about: [action.decision],
+          }),
+          (posted) => ({ id: posted.id }),
+        ),
+      );
+      return { state: "applied" as const, note: made.id, task: action.task };
+    }).pipe(Effect.catch((cause) => Effect.succeed(failed(reason(cause))))),
+  );
+  registerExecutor("task_resolve", (action, by, env) =>
+    Effect.gen(function* () {
+      const made = yield* once(
+        env.stateDir,
+        {
+          operation: "task_resolve",
+          request: by.requestId,
+          ...by,
+          asked: {
+            task: action.task,
+            decision: action.decision,
+            challenge: action.challenge,
+            text: action.text,
+          },
+          result: Schema.Struct({ id: Schema.String }),
+        },
+        Effect.map(
+          resolvePost({
+            task: action.task,
+            by: actorName(by),
+            decision: action.decision,
+            challenge: action.challenge,
+            text: action.text,
+          }),
+          (posted) => ({ id: posted.id }),
+        ),
+      );
+      return { state: "applied" as const, note: made.id, task: action.task };
+    }).pipe(Effect.catch((cause) => Effect.succeed(failed(reason(cause))))),
+  );
   registerExecutor("update_defaults", (action, _by, env) =>
     Effect.gen(function* () {
       // WARNING: the named workspace's scope, never this process's: a Run reads its defaults where it was started.

@@ -465,7 +465,9 @@ export const CollieTools = Toolkit.make(
     description:
       "Carry out, at once, anything the board does: its own actions " +
       `on a named Run (${Arr.join(ASKED_KINDS, ", ")}), \`create_task\` to queue a Task from one ` +
-      "instruction before any Run exists, and its decisions — " +
+      "instruction before any Run exists, `task_post`, `task_decision`, `task_challenge` " +
+      "and `task_resolve` to write on a Task, `task_edit_spec` to amend its plan against the " +
+      "revision you read and `task_adopt_plan` to adopt a Run's plan, and its decisions — " +
       "`confirm` a waiting proposal by its id and the hash `collie_receipts` lists beside " +
       "it, `decline` one by the same two, `disposition` to record what became of a finished Run's " +
       "work, and `seen` to acknowledge a finished Run's report for every board. " +

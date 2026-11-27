@@ -466,6 +466,12 @@ const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: J
     "task_file",
     "task_follow",
     "task_unfollow",
+    "task_edit_spec",
+    "task_adopt_plan",
+    "task_post",
+    "task_decision",
+    "task_challenge",
+    "task_resolve",
   ]);
   const wrong = Arr.filter(actions, (action) => !asked.has(action.kind));
   if (wrong.length > 0) {

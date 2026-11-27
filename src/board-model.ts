@@ -21,6 +21,7 @@ import { Park } from "./park-cause";
 import { VerifyEvent, Pass, PrepareSchema, VerificationSchema } from "./verify-model";
 import { MeasureEvent } from "./measurement-model";
 import { FilingSchema } from "./task";
+import { TaskContextRead } from "./task-record";
 
 export { PASSES, Pass } from "./verify-model";
 import { IntentChangeSchema, ChangedIntent } from "./intent-model";
@@ -1670,6 +1671,17 @@ export const FrontDoorRpcs = RpcGroup.make(
   Rpc.make("workflows", {
     payload: { project: Schema.String },
     success: Schema.Array(Startable),
+    error: HostRefused,
+  }),
+  Rpc.make("taskContext", {
+    payload: {
+      task: Schema.String,
+      revision: Schema.optional(Schema.Int),
+      before: Schema.optional(Schema.Int),
+      limit: Schema.optional(Schema.Int),
+      compare: Schema.optional(Schema.Struct({ from: Schema.Int, to: Schema.Int })),
+    },
+    success: Schema.NullOr(TaskContextRead),
     error: HostRefused,
   }),
   Rpc.make("definitions", { success: HostDefinitions, error: HostRefused }),
