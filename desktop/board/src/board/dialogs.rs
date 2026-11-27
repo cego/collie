@@ -135,28 +135,16 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
             why,
             ..
         } => {
-            let mut body = col()
-                .gap(12.0)
-                .padding(16.0)
-                .pt(0.0)
-                .child(
-                    text(instruction.clone())
-                        .key("queued-instruction")
-                        .font(k.ty.body)
-                        .color(k.c.text_base)
-                        .wrap()
-                        .w_full(),
-                )
-                .child(
-                    text("Workflow")
-                        .role("heading")
-                        .key("queued-workflow-heading")
-                        .font(k.ty.small_medium)
-                        .color(k.c.text_muted),
-                );
+            let mut offered = col().w_full().gap(12.0).child(
+                text("Workflow")
+                    .role("heading")
+                    .key("queued-workflow-heading")
+                    .font(k.ty.small_medium)
+                    .color(k.c.text_muted),
+            );
             match workflows {
                 Some(startable) if startable.is_empty() => {
-                    body = body.child(
+                    offered = offered.child(
                         text("This checkout has no Workflow to start.")
                             .key("queued-none")
                             .font(k.ty.small)
@@ -166,7 +154,7 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                 Some(startable) => {
                     for one in startable {
                         let pick = one.id.clone();
-                        body = body.child(
+                        offered = offered.child(
                             Button::new(one.title.clone())
                                 .variant(if chosen.as_deref() == Some(one.id.as_str()) {
                                     ButtonVariant::Contrast
@@ -181,7 +169,7 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                     }
                 }
                 None => {
-                    body = body.child(
+                    offered = offered.child(
                         text("Reading this checkout's Workflows…")
                             .key("queued-reading")
                             .role("status")
@@ -192,7 +180,7 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
             }
             for (name, edit) in inputs {
                 let wanted = name.clone();
-                body = body.child(
+                offered = offered.child(
                     TextInput::new(edit)
                         .label(name.clone())
                         .width(None)
@@ -208,7 +196,28 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                         .key(format!("queued-input-{name}")),
                 );
             }
-            body = body
+            let body = col()
+                .gap(12.0)
+                .padding(16.0)
+                .pt(0.0)
+                .child(
+                    text(instruction.clone())
+                        .key("queued-instruction")
+                        .font(k.ty.body)
+                        .color(k.c.text_base)
+                        .wrap()
+                        .w_full(),
+                )
+                .child(
+                    offered
+                        .key("queued-offered")
+                        .role("group")
+                        .label("Workflows and their Inputs")
+                        .max_h(320.0)
+                        .scroll(rune::ScrollSpec {
+                            stick_bottom: false,
+                        }),
+                )
                 .child(
                     TextInput::new(checkout)
                         .label("Checkout")
@@ -235,7 +244,7 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
             let ready = chosen.is_some()
                 && !checkout.text.trim().is_empty()
                 && inputs.iter().all(|(_, edit)| !edit.text.trim().is_empty());
-            body = body.child(
+            let body = body.child(
                 row().w_full().justify_end().child(
                     Button::new("Start in Task")
                         .variant(ButtonVariant::Contrast)

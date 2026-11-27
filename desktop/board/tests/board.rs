@@ -2586,6 +2586,67 @@ fn a_workflow_list_read_before_a_queued_task_was_reopened_never_fills_the_new_on
 }
 
 #[test]
+fn a_queued_task_form_keeps_start_inside_a_narrow_window_however_many_workflows_it_offers() {
+    let harness = Harness::new();
+    harness.fake.will_answer(
+        "workflows",
+        Ok(json!(
+            (0..14)
+                .map(|n| json!({
+                    "id": format!("w-{n}"),
+                    "title": format!("Workflow {n}"),
+                    "description": "",
+                    "inputs": if n == 0 {
+                        json!([{"name": "goal", "required": true, "schema": null}])
+                    } else {
+                        json!([])
+                    },
+                }))
+                .collect::<Vec<Value>>()
+        )),
+    );
+    let said = "Make the refunds page say a duplicate";
+    let app = app(
+        &harness,
+        vec![snapshot(
+            &pc(),
+            vec![task(
+                "t-queued",
+                said,
+                "quiet",
+                json!({"queued": true, "run": "", "runs": [], "sentence": said}),
+            )],
+        )],
+    );
+    let mut runtime = Runtime::new(
+        app,
+        view,
+        (760.0, 640.0),
+        Env {
+            system_dark: true,
+            scale: 1.0,
+        },
+    );
+    runtime.frame(0.0);
+    runtime.frame(0.016);
+    press(&mut runtime, "card-t-queued-name");
+    settle(&harness, &mut runtime);
+    press(&mut runtime, "queued-workflow-w-0");
+    settle(&harness, &mut runtime);
+    assert!(
+        node(&runtime, "queued-input-goal").is_some(),
+        "the Workflow's own Input is part of the form"
+    );
+    let (rect, _) = runtime
+        .presented("queued-start")
+        .expect("the Start button is drawn");
+    assert!(
+        rect[1] >= 0.0 && rect[1] + rect[3] <= 640.0,
+        "Start is inside a 640-point window: {rect:?}"
+    );
+}
+
+#[test]
 fn a_resource_page_opens_a_related_task_in_the_project_it_is_filed_into() {
     let harness = Harness::new();
     let mut runtime = runtime_of(
