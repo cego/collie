@@ -6,6 +6,9 @@ import { sectionOf } from "../src/board-model";
 import { connect } from "../src/host";
 import { parseJson, stringifyJson } from "../src/json";
 import { isSettled } from "../src/lifecycle";
+import { RunRecords } from "../src/run-records";
+import { OPEN_FINDINGS } from "../src/finding-status";
+import { hostRecords } from "./support/records";
 import { FakeBin } from "./support/bin";
 import { exec } from "./support/command";
 import { FORGE_HOST, PROJECT, forgeOnPath, serveForges } from "./support/forge";
@@ -43,6 +46,11 @@ const repository = (world: {
     yield* fs.makeDirectory(`${world.config}/personas`, { recursive: true });
     for (const name of yield* fs.readDirectory(`${root}/personas`)) {
       yield* fs.copyFile(`${root}/personas/${name}`, `${world.config}/personas/${name}`);
+    }
+    for (const home of [world.home, process.env.HOME ?? ""]) {
+      yield* fs.makeDirectory(`${home}/.local/state/herdr/plugins/cego.collie`, {
+        recursive: true,
+      });
     }
     yield* git(["remote", "add", "origin", `https://${PROJECT.gitlab}.git`], world.project);
     yield* git(["commit", "-q", "--allow-empty", "-m", "start"], world.project);
@@ -169,6 +177,11 @@ test("the CLI takes Improve over two findings of a review, and dismissing the la
             };
           });
 
+        const openCount = (runId: string) =>
+          hostRecords(
+            world.state,
+            RunRecords.use((records) => records.fact(runId, OPEN_FINDINGS)),
+          ).pipe(Effect.map(Number));
         const client = yield* connect(world.state).pipe(Effect.orDie);
         const started = yield* client
           .start({
@@ -246,8 +259,30 @@ test("the CLI takes Improve over two findings of a review, and dismissing the la
           [second, "taken", child],
           [third, "open", null],
         ]);
+        const prompt = yield* until(
+          () =>
+            fs
+              .readFileString(`${world.state}/agents/${child}/fix.prompt.md`)
+              .pipe(Effect.orElseSucceed(() => "")),
+          (text) => text !== "",
+        );
+        expect(prompt).toContain("the guard");
+        expect(prompt).toContain("the retry");
+        expect(prompt).not.toContain("the name");
         expect(yield* card(started.runId)).toEqual({ section: "waiting", landed: false });
 
+        yield* json([
+          "run",
+          "disposition",
+          started.runId,
+          "--as",
+          "merged",
+          "--ref",
+          `mr:${PROJECT.gitlab}!7`,
+          "--request-id",
+          "landed",
+        ]);
+        expect(yield* card(started.runId)).toEqual({ section: "waiting", landed: false });
         yield* json([
           "run",
           "finding",
@@ -263,6 +298,8 @@ test("the CLI takes Improve over two findings of a review, and dismissing the la
           [second, "taken"],
           [third, "dismissed"],
         ]);
+        expect(yield* openCount(started.runId)).toBe(0);
+        expect(yield* card(started.runId)).toEqual({ section: "finished", landed: true });
       }),
     [],
   ));

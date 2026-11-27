@@ -221,7 +221,7 @@ test("a settled Run with nothing else to file is held by the findings it offers 
           yield* install(world);
           yield* (yield* FileSystem.FileSystem).writeFileString(
             `${world.home}/outputs.json`,
-            encode([empty]),
+            encode([]),
           );
           return yield* started(world.state, world.project, "submits", { note: "three" });
         });
@@ -542,44 +542,33 @@ test("an offer that names its selection something else launches with the ids cho
     [...MODULES, "chooses.workflow.ts", "given.workflow.ts"],
   ));
 
-test("a no-ID take with every finding taken launches nothing", () =>
+test("a no-ID take is refused while a sibling over the same findings is going", () =>
   hosted(
     "hw-selected-no-ids-",
     ({ world }) =>
       Effect.gen(function* () {
-        const run = yield* Effect.gen(function* () {
-          yield* install(world);
-          yield* (yield* FileSystem.FileSystem).writeFileString(
-            `${world.home}/outputs.json`,
-            encode([empty]),
-          );
-          return yield* started(world.state, world.project, "submits", { note: "two" });
-        });
-        const [first, second, third] = idsOf(run.id);
-        yield* run.client
+        yield* install(world);
+        const run = yield* started(world.state, world.project, "waits-over", { note: "two" });
+        const [first] = idsOf(run.id);
+        const child = yield* run.client
           .invoke({
             runId: run.id,
-            offer: "implement-selected",
-            input: { findings: [first, second, third] },
-            request: "all-open",
+            offer: "carry-over",
+            input: { findings: [first] },
+            request: "one-open",
           })
           .pipe(Effect.orDie);
         const again = yield* run.client
-          .invoke({
-            runId: run.id,
-            offer: "implement-selected",
-            input: {},
-            request: "all-open-again",
-          })
+          .invoke({ runId: run.id, offer: "carry-over", input: {}, request: "one-open-again" })
           .pipe(Effect.flip);
         expect(again._tag === "HostRefused" ? again.reason : "").toContain(
-          "its conditions are not met",
+          `is still going: ${child.runId}`,
         );
         expect(
           Arr.filter(yield* run.client.runs({ task: null }), (one) => one.parent === run.id),
         ).toHaveLength(1);
       }),
-    [...MODULES, "submits.workflow.ts", "implement.workflow.ts"],
+    [...MODULES, "waits-over.workflow.ts", "holding.workflow.ts"],
   ));
 
 test("a request id already started answers with the Run it started, once its finding is taken", () =>
