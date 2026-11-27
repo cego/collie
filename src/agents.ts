@@ -4659,10 +4659,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       under(
         Effect.map(launchesOf(runId), (known) => {
           const last = Option.getOrUndefined(
-            Arr.findLast(
-              known,
-              (one) => one.operation === operation && (key === undefined || one.step?.key === key),
-            ),
+            Arr.findLast(known, (one) => one.operation === operation && one.step?.key === key),
           );
           // WARNING: a launch from before submit mode existed wrote its Output to a file, so no mode means file.
           return last !== undefined && last.outputSubmit !== "tool";

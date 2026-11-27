@@ -192,8 +192,8 @@ const reviewGiven = () => {
   return legacyOutput ? { ...given, outputSubmit: "file" as const } : given;
 };
 
-const reviewWork = (runId: string) =>
-  (legacyOutput ? olderDispatch(runId) : Effect.void).pipe(
+const reviewWork = (runId: string, key?: string) =>
+  (legacyOutput ? olderDispatch(runId, key) : Effect.void).pipe(
     Effect.andThen(agentWork(reviewGiven())),
   );
 
@@ -213,7 +213,7 @@ const stepped = enveloped({
 });
 const reviewing = step({ id: "review", title: "Review the diff", kind: "agent" });
 const steppedBody = stepped.toLayer((payload) =>
-  reviewing(reviewWork(payload.runId)).pipe(asRun(payload)),
+  reviewing(reviewWork(payload.runId, "review")).pipe(asRun(payload)),
 );
 
 const CLAUDE_HELP = "  --autocompact <auto|tokens>           Auto-compact window size";
@@ -336,8 +336,8 @@ const session = <A, E>(
     Effect.orDie,
   );
 
-const olderDispatch = (runId: string) =>
-  recordLaunch({
+const olderDispatch = (runId: string, key?: string) => {
+  const dispatch = {
     agent: agentFor(runId),
     output: outputPath(runId),
     reused: false,
@@ -346,9 +346,13 @@ const olderDispatch = (runId: string) =>
     role: "reviewer",
     workflow: "agent-work",
     harness: "claude",
-    outputSubmit: "file",
-    step: { step: "review", place: null, key: "review" },
-  }).pipe(Effect.provide(recordsAt(dir)));
+    outputSubmit: "file" as const,
+  };
+  const step = key === undefined ? null : { step: "review", place: null, key };
+  return recordLaunch(step === null ? dispatch : { ...dispatch, step }).pipe(
+    Effect.provide(recordsAt(dir)),
+  );
+};
 
 const started = (runId: string, skip = false) =>
   work.execute({ runId, input: { skip } }).pipe(Effect.result);
@@ -9804,6 +9808,23 @@ test("an Output accepted while a replay lists core is read without a second prom
       );
       expect(outcome._tag).toBe("Success");
       expect(yield* read(promptPath("r1"))).toBe("");
+    }),
+  ));
+
+test("a step with no key does not take a keyed launch's file, and its submit finishes it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* olderDispatch("r1", "review");
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(`${dir}/agents/r1`, { recursive: true });
+      yield* fs.writeFileString(outputPath("r1"), `{"verdict":"findings","note":"from the file"}`);
+      yield* rig.queueOutputs([{ verdict: "clean", note: "from the submit" }]);
+      const result = yield* session(started("r1"));
+      expect(result._tag).toBe("Success");
+      expect(result._tag === "Success" ? result.success.note : null).toBe("from the submit");
+      const prompt = yield* read(promptPath("r1"));
+      expect(prompt).toContain("collie_submit");
+      expect(prompt).not.toContain("OUTPUT_PATH");
     }),
   ));
 
