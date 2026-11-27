@@ -887,6 +887,25 @@ test("an agent's id is kept where it matches one already given, and replaced whe
     }),
   ));
 
+test("the same output left again under an agent's own id keeps the ids the first leave gave", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const dir = yield* findingsDir("r-replayed");
+      const said: Array<Finding> = [
+        { id: "r-elsewhere-F1", severity: "major", title: "the guard" },
+        { id: "r-elsewhere-F2", severity: "minor", title: "the name" },
+      ];
+      expect(idsAndTitles(yield* leaveFindings(dir, said))).toEqual([
+        ["r-replayed-F1", "the guard"],
+        ["r-replayed-F2", "the name"],
+      ]);
+      expect(idsAndTitles(yield* leaveFindings(dir, said))).toEqual([
+        ["r-replayed-F1", "the guard"],
+        ["r-replayed-F2", "the name"],
+      ]);
+    }),
+  ));
+
 test("a findings file written before ids reads them by position, and leaving it again keeps them", () =>
   runEffect(
     Effect.gen(function* () {

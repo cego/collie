@@ -4076,7 +4076,7 @@ once("moved to a directory of its own, a shipped module is the same workflow", (
       const fs = yield* FileSystem.FileSystem;
       const mine = `${rig.root}/user/workflows`;
       yield* fs.makeDirectory(mine, { recursive: true });
-      for (const name of ["architecture.workflow.ts", "architecture.md"]) {
+      for (const name of ["architecture.workflow.ts", "architecture.md", "selected.ts"]) {
         yield* fs.copyFile(`${ROOT}workflows/${name}`, `${mine}/${name}`);
       }
       yield* rig.queueOutputs([REPORT]);
@@ -12513,7 +12513,7 @@ scenario(
         expect(why).not.toContain("a reason the reviewer answers");
         expect(yield* wasAsked("r-final-dispute", "mr")).toBe(false);
         expect(yield* readText(`${runDir(dir, "r-final-dispute")}/review.md`)).toContain(
-          "- `src/a.ts` — A\n  it breaks",
+          "— `src/a.ts` — A\n  it breaks",
         );
         expect(
           Arr.map(yield* findingsIn(runDir(dir, "r-final-dispute")), (one) => one.title),

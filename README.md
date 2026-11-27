@@ -78,7 +78,7 @@ your own layer with `collie persona fork`, changing only the keys you disagree w
 Every action is also a command, so an agent can drive Collie:
 
 ```sh
-collie run start review --input target=worktree --input plan= --input proves=
+collie run start review --input target=worktree --input plan= --input proves= --input findings=
 ```
 
 ## Documentation

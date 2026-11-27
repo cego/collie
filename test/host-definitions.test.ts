@@ -11,6 +11,7 @@ import { collie, proves } from "./support/world";
 
 const SHIPPED = [
   "architecture",
+  "file-issue",
   "general",
   "heal",
   "implement",

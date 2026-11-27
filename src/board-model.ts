@@ -1621,6 +1621,11 @@ export const FrontDoorRpcs = RpcGroup.make(
     success: Schema.Struct({ proposal: Schema.String }),
     error: Schema.Union([HostRefused, ProposalRefused, RequestConflict]),
   }),
+  Rpc.make("runFindings", {
+    payload: { runId: Schema.String },
+    success: Schema.Array(ReviewFinding),
+    error: HostRefused,
+  }),
   Rpc.make("setFinding", {
     payload: {
       runId: Schema.String,

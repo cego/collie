@@ -186,9 +186,19 @@ export const storeOpenCount = Effect.fn("FindingStatus.storeCount")(function* (r
   return count;
 });
 
-// WARNING: a Run settled before this fact existed has its count computed and kept the first time it is read.
+// WARNING: a reader may hold the database read-only, so reading a count never keeps one.
 export const openFindingsRead = Effect.fn("FindingStatus.readCount")(function* (runDir: string) {
-  const kept = yield* RunRecords.use((records) => records.fact(runOfDir(runDir), OPEN_FINDINGS));
+  const kept = yield* runRecordsFact(runDir);
   const count = kept === null ? Number.NaN : Number(kept);
-  return Number.isFinite(count) ? count : yield* storeOpenCount(runDir);
+  return Number.isFinite(count) ? count : yield* openCountIn(runDir);
 });
+
+// WARNING: only a writer keeps the fact, for a Run that settled before this fact existed.
+export const keepOpenCount = Effect.fn("FindingStatus.keepCount")(function* (runDir: string) {
+  if ((yield* runRecordsFact(runDir)) === null) {
+    yield* storeOpenCount(runDir);
+  }
+});
+
+const runRecordsFact = (runDir: string) =>
+  RunRecords.use((records) => records.fact(runOfDir(runDir), OPEN_FINDINGS));

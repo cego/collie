@@ -615,10 +615,10 @@ worktree, a workspace or an agent exists.
 Examples:
 
 ```sh
-collie run start review --input target=https://gitlab.example.com/acme/app/-/merge_requests/2 --input plan= --input proves=
-collie run start review --input target=https://github.com/acme/app/pull/30 --input plan= --input proves=
-collie run start review --input target=worktree --input plan= --input proves=
-collie run start implement --input plan=ENG-123 --input recovery= --input then=
+collie run start review --input target=https://gitlab.example.com/acme/app/-/merge_requests/2 --input plan= --input proves= --input findings=
+collie run start review --input target=https://github.com/acme/app/pull/30 --input plan= --input proves= --input findings=
+collie run start review --input target=worktree --input plan= --input proves= --input findings=
+collie run start implement --input plan=ENG-123 --input recovery= --input then= --input findings=
 collie run start plan --input goal="one registry" --input then= --input workspace=projects-root
 ```
 

@@ -1,12 +1,13 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { expect, test } from "bun:test";
-import { Effect, FileSystem } from "effect";
+import { Effect, FileSystem, Layer } from "effect";
 import type { Schema } from "effect";
 import {
   OPEN_FINDINGS,
   findingsWithStatus,
   openCountIn,
+  keepOpenCount,
   openFindingsRead,
   readFindingStatuses,
   recordFindingStatus,
@@ -14,6 +15,7 @@ import {
 } from "../src/finding-status";
 import type { FindingStatus } from "../src/board-model";
 import { RunRecords } from "../src/run-records";
+import { recordsReadLayer } from "../src/records";
 import { recordsAt } from "./support/records";
 import { stringifyJson } from "../src/json";
 import { runEffect } from "./support/effect";
@@ -102,7 +104,7 @@ test("dismissing a finding reads it dismissed with its reason, and reopening it 
     ),
   ));
 
-test("the count is the Run's fact, computed and kept the first time a Run that predates it is read", () =>
+test("the count is the Run's fact, and a Run that predates it is kept by the writer that asks it", () =>
   runEffect(
     inRun([{ id: "r1-F1", severity: "major", title: "one" }], (dir) =>
       Effect.gen(function* () {
@@ -111,7 +113,10 @@ test("the count is the Run's fact, computed and kept the first time a Run that p
         expect(yield* records.fact("r1", OPEN_FINDINGS)).toBeNull();
 
         expect(yield* openFindingsRead(dir)).toBe(1);
+        expect(yield* records.fact("r1", OPEN_FINDINGS)).toBeNull();
+        yield* keepOpenCount(dir);
         expect(yield* records.fact("r1", OPEN_FINDINGS)).toBe("1");
+
         yield* fs.remove(`${dir}/findings.json`);
         expect(yield* openFindingsRead(dir)).toBe(1);
 
@@ -121,6 +126,28 @@ test("the count is the Run's fact, computed and kept the first time a Run that p
         expect(yield* openFindingsRead(dir)).toBe(0);
       }),
     ),
+  ));
+
+test("a reader that may not write answers a count a Run never kept, and keeps nothing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const state = yield* fs.makeTempDirectoryScoped({ prefix: "hw-finding-status-" });
+      const dir = `${state}/runs/r1`;
+      yield* fs.makeDirectory(dir, { recursive: true });
+      yield* fs.writeFileString(
+        `${dir}/findings.json`,
+        stringifyJson([{ id: "r1-F1", severity: "major", title: "one" }]),
+      );
+      yield* Effect.scoped(Layer.build(recordsAt(state)));
+
+      expect(yield* openFindingsRead(dir).pipe(Effect.provide(recordsReadLayer(state)))).toBe(1);
+
+      const kept = yield* RunRecords.use((records) => records.fact("r1", OPEN_FINDINGS)).pipe(
+        Effect.provide(recordsAt(state)),
+      );
+      expect(kept).toBeNull();
+    }),
   ));
 
 const facts: (over?: Partial<ActionFacts>) => ActionFacts = (over = {}) => ({

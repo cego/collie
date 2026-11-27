@@ -339,7 +339,12 @@ const withIds = (
   let next = Math.max(from, highest(run, [...earlierIds]));
   let handed = next;
   const written = Arr.map(findings, (finding) => {
-    const matched = earlierOf(earlier, finding)?.id;
+    // WARNING: an agent's own id names nothing here, so the same finding is matched by what it says.
+    const matched =
+      earlierOf(earlier, finding)?.id ??
+      Option.getOrUndefined(
+        Arr.findFirst(earlier, (one) => findingKey(one) === findingKey(finding)),
+      )?.id;
     if (matched !== undefined && !assigned.has(matched)) {
       assigned.add(matched);
       return { ...finding, id: matched };

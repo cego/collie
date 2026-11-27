@@ -129,7 +129,11 @@ export default defineWorkflow({
     target: Schema.String,
     slack: Schema.optionalKey(Schema.String),
     improving: Schema.optionalKey(Schema.Boolean),
-    findings: Schema.optionalKey(Schema.Array(Schema.String)),
+    findings: Schema.optionalKey(
+      Schema.Array(Schema.String).annotate({
+        description: "The findings this Run is to build, by id; empty where none were chosen",
+      }),
+    ),
     plan: Schema.optionalKey(
       Schema.String.annotate({
         description: "The spec the change is held to; empty where there is none",

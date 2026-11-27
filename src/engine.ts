@@ -7322,6 +7322,13 @@ const asText = (field: InputField, text: string) => {
   if (decode(text)._tag === "Success") {
     return { value: text };
   }
+  if (Str.trim(text) === "") {
+    // WARNING: an empty Input of a list is the empty list, so a documented start can leave it blank.
+    const empty = decode([]);
+    if (empty._tag === "Success") {
+      return { value: [] };
+    }
+  }
   const parsed = asParsedJson(text);
   if (parsed._tag === "Failure") {
     return undefined;
@@ -7339,7 +7346,9 @@ const describe: (field: InputField) => string = (field) => {
     return `one of ${Arr.join(Arr.map(options, asWord), ", ")}`;
   }
   const kind = drawn.type;
-  return isWord(kind) ? `a ${kind}` : "what this input takes";
+  return isWord(kind)
+    ? `${kind === "array" || kind === "object" ? "an" : "a"} ${kind}`
+    : "what this input takes";
 };
 
 const isWord = Schema.is(Schema.String);

@@ -234,7 +234,6 @@ import {
   Started,
   SteerOutcome,
   Attachments,
-  ReviewFinding,
 } from "./board-model";
 import type { RunRevision, Toasted, FrontDoor, OfferView, TaskView, Where } from "./board-model";
 import {
@@ -250,7 +249,7 @@ import { boardMessages, shareBoard } from "./board-stream";
 import { recordDisposition, refRuns, qualifiedRuns } from "./disposition";
 import {
   findingsWithStatus,
-  openFindingsRead,
+  keepOpenCount,
   recordFindingStatus,
   storeOpenCount,
 } from "./finding-status";
@@ -508,11 +507,6 @@ export const HostRpcs = RpcGroup.make(
   Rpc.make("runIntent", {
     payload: { runId: Schema.String },
     success: RunIntent,
-    error: HostRefused,
-  }),
-  Rpc.make("runFindings", {
-    payload: { runId: Schema.String },
-    success: Schema.Array(ReviewFinding),
     error: HostRefused,
   }),
   Rpc.make("runDispositions", {
@@ -1044,16 +1038,6 @@ const handlers = (
         runDrift: ({ runId }) => record(runId, readDrift(runDir(dir, runId))),
         runIntent: ({ runId }) => record(runId, readIntent(runDir(dir, runId))),
         runDispositions: ({ runId }) => record(runId, readDispositions(runDir(dir, runId))),
-        runFindings: ({ runId }) =>
-          record(
-            runId,
-            Effect.gen(function* () {
-              const at = runDir(dir, runId);
-              // WARNING: the count is kept here for a Run settled before the fact existed.
-              yield* openFindingsRead(at);
-              return yield* findingsWithStatus(at);
-            }),
-          ),
         runOutcomes: ({ runId }) => record(runId, outcomeRecordsOf(dir, runId)),
         runTrial: ({ runId }) => record(runId, trialRecordsOf(dir, runId)),
         runUsage: ({ runId }) => record(runId, readUsage(evidenceDir(dir, runId))),
@@ -4164,6 +4148,13 @@ const frontDoorHandlers = (
               yield* trimAudit(trail, NEWS_TRAIL).pipe(Effect.orDie);
               return batch;
             }),
+          ),
+        runFindings: ({ runId }) =>
+          known(runId).pipe(
+            // WARNING: the count is kept here for a Run settled before the fact existed.
+            Effect.andThen(keepOpenCount(trail(runId))),
+            Effect.andThen(findingsWithStatus(trail(runId))),
+            plainly,
           ),
         setFinding: ({ runId, id, status, reason, request }, { client }) =>
           known(runId).pipe(
