@@ -29,7 +29,6 @@ import { isJsonObject, isString } from "../src/schema";
 import { stringifyJson } from "../src/json";
 import { readWatchJournal } from "../src/watch-journal";
 import { readDispositions, recordDisposition } from "../src/disposition";
-import { recordAudit } from "../src/audit";
 import type { WatchEvent } from "../src/watch-journal";
 
 const PROJECT = "gitlab.cego.dk/mk/collie";
@@ -2627,13 +2626,6 @@ test("a shipped Review stopped, abandoned and resumed takes two pushes on the Ru
             note: null,
           });
           yield* registry.resume(runId);
-          yield* recordAudit(runDir(host.dir(), runId), {
-            operation: "resume",
-            request: "resume-1",
-            origin: "cli",
-            result: Schema.Struct({}),
-            value: {},
-          });
           expect(yield* host.watchOf(runId, TARGET)).not.toBeNull();
 
           const second = yield* pushedOn(forge, first);
