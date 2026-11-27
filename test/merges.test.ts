@@ -367,7 +367,7 @@ test("a merge GitLab reports lands the work: a disposition by gitlab, and the ca
     Effect.gen(function* () {
       const { stateDir, run, board: boardOf } = yield* seeded();
       const before = yield* boardOf({ mrStates: new Map() });
-      expect(before[0]!.sentence).toBe("mk/collie!65 is open; nothing has checked it.");
+      expect(before[0]!.sentence).toBe("mk/collie!65 is open; its checks have not been read.");
 
       const states = new Map();
       yield* settleMerges({
@@ -2327,7 +2327,9 @@ test("a single-repository fan-out's card is its one merge request's, watched, an
       expect(card!.mr).toBe(MR);
       expect(card!.mrState).toBe("open");
       expect(card!.planReady).toBe(false);
-      expect(card!.sentence).toBe("mk/collie!65 is open; nothing has checked it.");
+      expect(card!.sentence).toBe(
+        "mk/collie!65 is open; its checks passed at 1a2b3c4, but Collie has not checked it there.",
+      );
       expect(
         Option.getOrUndefined(
           Option.map(Option.fromNullishOr(card!.readiness), (present_) =>
