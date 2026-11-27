@@ -319,13 +319,15 @@ const numberIn = (run: string, id: string | undefined) => {
 const highest = (run: string, ids: ReadonlyArray<string | undefined>) =>
   Arr.reduce(ids, 0, (top, id) => Math.max(top, numberIn(run, id)));
 
-// WARNING: an agent's own id names nothing here, so a finding is the same one by its id or by what it says.
-export const isSameFinding = (earlier: Finding, finding: Finding) =>
-  (finding.id !== undefined && earlier.id === finding.id) ||
-  findingKey(earlier) === findingKey(finding);
-
-const earlierOf = (earlier: ReadonlyArray<Finding>, finding: Finding) =>
-  Option.getOrUndefined(Arr.findFirst(earlier, (one) => isSameFinding(one, finding)));
+// WARNING: a finding that names an id the ledger holds stands in for that one alone, whatever it says.
+export const claimedIn = (earlier: ReadonlyArray<Finding>, finding: Finding) => {
+  const held = finding.id !== undefined && Arr.some(earlier, (one) => one.id === finding.id);
+  return Option.getOrUndefined(
+    Arr.findFirst(earlier, (one) =>
+      held ? one.id === finding.id : findingKey(one) === findingKey(finding),
+    ),
+  );
+};
 
 // WARNING: an id is never given twice, so a removed finding's status is never inherited by another.
 const withIds = (
@@ -339,12 +341,7 @@ const withIds = (
   let next = Math.max(from, highest(run, [...earlierIds]));
   let handed = next;
   const written = Arr.map(findings, (finding) => {
-    // WARNING: an agent's own id names nothing here, so the same finding is matched by what it says.
-    const matched =
-      earlierOf(earlier, finding)?.id ??
-      Option.getOrUndefined(
-        Arr.findFirst(earlier, (one) => findingKey(one) === findingKey(finding)),
-      )?.id;
+    const matched = claimedIn(earlier, finding)?.id;
     if (matched !== undefined && !assigned.has(matched)) {
       assigned.add(matched);
       return { ...finding, id: matched };

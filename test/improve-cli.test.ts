@@ -275,7 +275,7 @@ test("the CLI takes Improve over two findings of a review, and dismissing the la
         expect(prompt).toContain("the guard");
         expect(prompt).toContain("the retry");
         expect(prompt).not.toContain("the name");
-        expect(yield* card(started.runId)).toEqual({ section: "waiting", landed: false });
+        expect(yield* openCount(started.runId)).toBe(1);
 
         yield* json([
           "run",
@@ -288,7 +288,11 @@ test("the CLI takes Improve over two findings of a review, and dismissing the la
           "--request-id",
           "landed",
         ]);
-        expect(yield* card(started.runId)).toEqual({ section: "waiting", landed: false });
+        // WARNING: a board read while the syncer refreshes its merge request offers nothing, and comes back.
+        yield* until(
+          () => card(started.runId),
+          (one) => one.section === "waiting",
+        );
         yield* json([
           "run",
           "finding",

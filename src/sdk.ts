@@ -205,7 +205,7 @@ export {
   blockingKeys,
   conflictingDispositions,
   findingKey,
-  isSameFinding,
+  claimedIn,
   sameFinding,
   formatFindings,
   isBlocking,

@@ -17,7 +17,7 @@ import {
   panelOf,
   formatFindings,
   isBlocking,
-  isSameFinding,
+  claimedIn,
   leaveOutstanding,
   leaveReview,
   mrForgeFacts,
@@ -33,7 +33,7 @@ import {
   targetKind,
 } from "collie";
 import type { Finding, Integration, SynthesisReport } from "collie";
-import { Effect, FileSystem, Option, Result, Schema } from "effect";
+import { Effect, FileSystem, Result, Schema } from "effect";
 import * as Activity from "effect/workflow/Activity";
 import type { WorkflowEngine, WorkflowInstance } from "effect/workflow/WorkflowEngine";
 import markdown from "./review.md" with { type: "text" };
@@ -220,9 +220,7 @@ export const reviewPass = (ask: ReviewAsk) =>
         const before = ask.ledger;
         const head = ask.head ?? ask.stamped ?? "";
         const reported: Array<Finding> = Arr.map(report.findings, (finding) => {
-          const earlier = Option.getOrUndefined(
-            Arr.findFirst(before, (one) => isSameFinding(one, finding)),
-          );
+          const earlier = claimedIn(before, finding);
           const status = finding.status ?? "open";
           return {
             ...finding,
@@ -232,7 +230,7 @@ export const reviewPass = (ask: ReviewAsk) =>
           };
         });
         for (const earlier of before) {
-          if (Arr.some(reported, (one) => isSameFinding(earlier, one))) {
+          if (Arr.some(reported, (one) => claimedIn(before, one) === earlier)) {
             continue;
           }
           if (Arr.some(report.fixed, (one) => findingKey(one) === findingKey(earlier))) {
