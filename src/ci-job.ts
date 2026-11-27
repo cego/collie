@@ -439,14 +439,12 @@ export const ciJob = Effect.fn("CiJob.read")(function* <R>(asked: {
   }).pipe(
     Effect.ensuring(Effect.suspend(() => (waiting ? asked.verifying.set(null) : Effect.void))),
   );
-  if ("unproved" in outcome) {
-    yield* rememberCiTarget(asked.runDir, {
-      head,
-      job,
-      mr: asked.mr,
-      cwd,
-      observed: observed ?? "unreadable",
-    }).pipe(Effect.orDie);
-  }
+  yield* rememberCiTarget(asked.runDir, {
+    head,
+    job,
+    mr: asked.mr,
+    cwd,
+    observed: observed ?? "unreadable",
+  }).pipe(Effect.orDie);
   return outcome;
 });

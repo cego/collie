@@ -41,11 +41,14 @@ const lastObserved = (stateDir: string, runId: string) =>
       Effect.orElseSucceed(() => []),
     ),
     (entries) => {
-      let observed: string | undefined;
+      const latest = new Map<string, string>();
       for (const one of entries) {
-        observed = one.observed ?? observed;
+        if (one.observed !== undefined) {
+          latest.set(`${one.job}@${one.head}`, one.observed);
+        }
       }
-      return observed;
+      const seen = [...latest.values()];
+      return Arr.some(seen, (one) => one === "unreadable") ? "unreadable" : seen.at(-1);
     },
   );
 
