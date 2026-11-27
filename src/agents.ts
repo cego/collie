@@ -2806,15 +2806,20 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               one.output === ask.output,
           ),
         );
-        // WARNING: read before core is asked anything, so a replay of a step that already handed in never parks on it.
-        if (settle && fixed !== undefined) {
+        // WARNING: a step that already handed in is read before core and again after it is listed, since the fact can be accepted while core is asked.
+        const handedIn = Effect.gen(function* () {
+          if (!settle || fixed === undefined) {
+            return undefined;
+          }
           const settled = yield* outputOf(
             yield* RunRecords,
             stepOf([fixed], ask.runId, ask.operation, ask.output),
           );
-          if (settled !== null) {
-            return fixed;
-          }
+          return settled === null ? undefined : fixed;
+        });
+        const acceptedFirst = yield* handedIn;
+        if (acceptedFirst !== undefined) {
+          return acceptedFirst;
         }
         const listedAt = yield* nowIso;
         const listing = yield* host.herdr.agentList().pipe(Effect.result);
@@ -2844,6 +2849,10 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         }
         if (live !== undefined && (yield* retireLost(ask, agent, listing.success))) {
           return yield* launch(ask, false, note, armed, settle);
+        }
+        const acceptedWhileListed = yield* handedIn;
+        if (acceptedWhileListed !== undefined) {
+          return acceptedWhileListed;
         }
         const alive = live !== undefined && !fresh;
         // WARNING: a launch from before this build has a tool server without collie_submit, so it is ended and started again on its session.

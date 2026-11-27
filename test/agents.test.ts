@@ -9750,6 +9750,63 @@ test("an Output accepted while a replay waits for memory is read without a secon
     }),
   ));
 
+class HoldsListing extends Herdr {
+  constructor(
+    private readonly arrived: Deferred.Deferred<void>,
+    private readonly release: Deferred.Deferred<void>,
+  ) {
+    super(rig.pluginEnv());
+  }
+  override agentList() {
+    const listed = () => super.agentList();
+    const { arrived, release } = this;
+    return Effect.gen(function* () {
+      yield* Deferred.succeed(arrived, undefined);
+      yield* Deferred.await(release);
+      return yield* listed();
+    });
+  }
+}
+
+test("an Output accepted while a replay lists core is read without a second prompt", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const ask = replayAsk();
+      yield* recordLaunch({
+        agent: agentFor("r1"),
+        output: ask.output,
+        reused: false,
+        runId: "r1",
+        operation: "review",
+        role: "reviewer",
+        workflow: "agent-work",
+        harness: "opencode",
+        outputSubmit: "tool",
+        at: 1000,
+      }).pipe(Effect.provide(recordsAt(dir)));
+      yield* awaitOutput("r1", agentFor("r1"), ask.output, () => null, "review@1000");
+      const arrived = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const outcome = yield* session(
+        Effect.gen(function* () {
+          const agents = yield* Agents;
+          const fiber = yield* Effect.forkChild(
+            agents.launch(ask, undefined, undefined, true).pipe(Effect.result),
+          );
+          yield* Deferred.await(arrived);
+          expect(
+            yield* submitOutput("r1", agentFor("r1"), { verdict: "clean", note: "handed in" }),
+          ).toBe("accepted");
+          yield* Deferred.succeed(release, undefined);
+          return yield* Fiber.join(fiber);
+        }),
+        { herdr: new HoldsListing(arrived, release) },
+      );
+      expect(outcome._tag).toBe("Success");
+      expect(yield* read(promptPath("r1"))).toBe("");
+    }),
+  ));
+
 test("a keyed step is not finished by an unkeyed launch's file, and its submit finishes it", () =>
   runEffect(
     Effect.gen(function* () {
