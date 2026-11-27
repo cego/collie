@@ -901,19 +901,19 @@ export const codexDriver: (
           );
           const relayed = Arr.flatMap(relays, (one) => codexServerUrlArgs(one.name, one.live.url));
           // WARNING: a variable name so unknown it cannot be shown free leaves no confidential way to pass the token.
-          const tool = given.token === "";
+          const toolsOff = given.token === "";
           const inherited = {
             ...Rec.filter(childEnv(), (_value, name) => !Arr.contains(given.withheld, name)),
             ...relayEnv,
           };
-          const env = tool ? inherited : { ...inherited, [given.token]: token };
+          const env = toolsOff ? inherited : { ...inherited, [given.token]: token };
           const server = yield* appServer(
             command,
             context.dir,
             [
               ...given.args,
               ...relayed,
-              ...(tool
+              ...(toolsOff
                 ? []
                 : [
                     "-c",
