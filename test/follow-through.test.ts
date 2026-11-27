@@ -25,7 +25,7 @@ import { slackApi } from "../src/slack";
 import { findingsIn } from "../src/output";
 import { writeTask } from "../src/task";
 import { registerAgent, scopeFor } from "../src/registry";
-import { isString } from "../src/schema";
+import { isJsonObject, isString } from "../src/schema";
 import { stringifyJson } from "../src/json";
 import { readWatchJournal } from "../src/watch-journal";
 import { readDispositions, recordDisposition } from "../src/disposition";
@@ -2677,15 +2677,20 @@ test("a shipped Review stopped, abandoned and resumed takes two pushes on the Ru
             `<!-- collie:${runId} round 2 at ${second} by mk -->`,
             `<!-- collie:${runId} round 3 at ${more} by mk -->`,
           ]);
-          const prompts = yield* (yield* FileSystem.FileSystem).readDirectory(
-            `${host.dir()}/agents/${runId}`,
+          const launches = Arr.map(
+            Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.run"),
+            (call) => {
+              const labels = call.params?.labels;
+              return isJsonObject(labels) && isString(labels.run) && isString(labels.operation)
+                ? [labels.run, labels.operation]
+                : undefined;
+            },
           );
-          expect(
-            Arr.sort(
-              Arr.filter(prompts, (file) => /^review-\d+(?:-\d+)?\.prompt\.md$/.test(file)),
-              Str.Order,
-            ),
-          ).toEqual(["review-1.prompt.md", "review-2-1.prompt.md", "review-3-1.prompt.md"]);
+          expect(launches).toEqual([
+            [runId, "review-1"],
+            [runId, "review-2-1"],
+            [runId, "review-3-1"],
+          ]);
         }),
       );
     }),
