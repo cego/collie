@@ -2550,3 +2550,25 @@ test("a merge request closed between its review and the head check records the r
       );
     }),
   ));
+
+test("a head that moved before its round pinned it is journaled as one discarded round", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      const { first, forge, entry } = yield* begun("review", [review([F1])]);
+      const moved = yield* pushed("and more");
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          const { runId } = yield* host.started(entry, "cli-1", { target: TARGET });
+          yield* host.mergeWatched;
+          yield* until(
+            () => host.watchOf(runId, TARGET),
+            (row) => row !== null,
+          ).pipe(Effect.timeout("10 minutes"));
+          const journal = yield* readWatchJournal(host.dir());
+          expect(discardMarks(journal)).toEqual([[first, moved]]);
+          expect(roundMarks(journal)).toEqual(["discarded"]);
+        }),
+      );
+    }),
+  ));

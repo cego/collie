@@ -618,7 +618,10 @@ export default defineWorkflow({
               yield* ended(round);
             }
             if (reviewed === null) {
-              yield* discarded(round);
+              // WARNING: a moved pin journals its own discard, from the observation that moved it.
+              if (!("moved" in pinned)) {
+                yield* discarded(round);
+              }
               yield* fact(
                 `follow-moved-${round}`,
                 `the head of ${label} moved while reviewing ${head}; nothing posted, the findings carry to the next round`,
