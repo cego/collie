@@ -1,7 +1,9 @@
+import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import * as Cause from "effect/Cause";
 import { pipe as pipe_ } from "effect/Function";
-import { Clock, Config, Context, Effect, Layer, Option, Schema, Semaphore } from "effect";
+import { Clock, Config, Context, Effect, Layer, Option, Order, Schema, Semaphore } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import type { FetchLike, ForgeProvider, GitHubProvider } from "forges";
 import type { MrForge } from "../board-model";
@@ -35,6 +37,13 @@ export type Answered<A> =
       readonly transient?: boolean;
     };
 
+export interface Asked {
+  attempts: number;
+  limited: number;
+}
+
+export class Asking extends Context.Service<Asking, Asked>()("collie/ForgeHttp/Asking") {}
+
 export class ForgeHttp extends Context.Service<
   ForgeHttp,
   {
@@ -44,6 +53,7 @@ export class ForgeHttp extends Context.Service<
       cwd: string,
       call: (provider: Provider, signal: AbortSignal) => Promise<A>,
     ) => Effect.Effect<Answered<A>>;
+    readonly attempts: Effect.Effect<number>;
   }
 >()("collie/ForgeHttp") {}
 
@@ -82,8 +92,131 @@ interface Slot {
   expires: number | null;
 }
 
+// WARNING: the forge client's own reading of a refusal, restated here: a body names limits its headers cannot.
+const SECONDARY_LIMIT_RE = /secondary rate limit|abuse detection|submitted too quickly/i;
+const PLAIN_LIMIT_RE = /^[^{<]{0,80}\brate limit exceeded\b/i;
+
+const budgetOf = (response: Response) => {
+  const number = (...names: ReadonlyArray<string>) => {
+    for (const name of names) {
+      const header = response.headers.get(name);
+      const value = header === null ? undefined : Str.trim(Str.split(header, /[,;]/)[0]);
+      if (value !== undefined && value !== "" && Number.isFinite(Number(value))) {
+        return Number(value);
+      }
+    }
+    return undefined;
+  };
+  const limit = number("x-ratelimit-limit", "ratelimit-limit");
+  const remaining = number("x-ratelimit-remaining", "ratelimit-remaining");
+  const reset = number("x-ratelimit-reset", "ratelimit-reset");
+  if (limit === undefined && remaining === undefined && reset === undefined) {
+    return structuredBudget(response);
+  }
+  return { limit, remaining };
+};
+
+const fieldMembers = (response: Response, name: string) => {
+  const members = new Map<string, Record<string, number>>();
+  const header = response.headers.get(name);
+  if (header === null) {
+    return members;
+  }
+  for (const member of Str.split(header, ",")) {
+    const [key, ...params] = Str.split(member, ";");
+    members.set(
+      Str.replace(/^"(.*)"$/, "$1")(Str.trim(key)),
+      Rec.fromEntries(
+        Arr.map(params, (param) => {
+          const [field, value] = Str.split(param, "=");
+          return [Str.trim(field), Number(value)] as const;
+        }),
+      ),
+    );
+  }
+  return members;
+};
+
+// WARNING: the forge client's reading of the IETF budget fields, restated here: its own reader is private.
+const structuredBudget = (response: Response) => {
+  const fewest = Arr.head(
+    Arr.sortWith(
+      Arr.filter(Array.from(fieldMembers(response, "ratelimit")), ([, params]) =>
+        Number.isFinite(params.r),
+      ),
+      ([, params]) => params.r ?? 0,
+      Order.Number,
+    ),
+  );
+  if (Option.isNone(fewest)) {
+    return null;
+  }
+  const [name, state] = fewest.value;
+  const limit = fieldMembers(response, "ratelimit-policy").get(name)?.q;
+  return { limit, remaining: state.r };
+};
+
+const ErrorBody = Schema.Struct({
+  message: Schema.optionalKey(Schema.Json),
+  errors: Schema.optionalKey(Schema.Json),
+});
+const ErrorEntry = Schema.Struct({ message: Schema.String });
+const decodeErrorBody = Schema.decodeUnknownOption(Schema.fromJsonString(ErrorBody));
+const decodeErrorEntry = Schema.decodeUnknownOption(ErrorEntry);
+
+// WARNING: the forge client reads a string `message` or an `errors[].message`, never a bare entry.
+const messagesIn = (one: Schema.Json | undefined) =>
+  Schema.is(Schema.Array(Schema.Json))(one)
+    ? Arr.map(one, (entry) =>
+        Option.map(decodeErrorEntry(entry), (said) => said.message).pipe(Option.getOrUndefined),
+      )
+    : [];
+
+const namesSecondaryLimit = (body: string) => {
+  const parsed = Option.getOrNull(decodeErrorBody(body));
+  if (parsed === null) {
+    return false;
+  }
+  return Arr.some(
+    [parsed.message, ...messagesIn(parsed.errors)],
+    (said) => Schema.is(Schema.String)(said) && SECONDARY_LIMIT_RE.test(said),
+  );
+};
+
+const refusedByLimit: (response: Response) => Promise<boolean> = (response) => {
+  if (response.status === 429) {
+    return Promise.resolve(true);
+  }
+  if (response.status !== 403 && response.status !== 422) {
+    return Promise.resolve(false);
+  }
+  // WARNING: read from a clone: the forge client still needs the body to classify the refusal itself.
+  return response
+    .clone()
+    .text()
+    .catch(() => "")
+    .then((body) => {
+      if (namesSecondaryLimit(body)) {
+        return true;
+      }
+      if (response.status !== 403) {
+        return false;
+      }
+      const budget = budgetOf(response);
+      if (budget?.limit === 0) {
+        return false;
+      }
+      return (
+        response.headers.has("retry-after") ||
+        budget?.remaining === 0 ||
+        (budget === null && PLAIN_LIMIT_RE.test(Str.trim(body)))
+      );
+    });
+};
+
 const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
   Effect.sync(() => {
+    let attempts = 0;
     const slots = new Map<string, Slot>();
     const locks = new Map<string, Semaphore.Semaphore>();
     const lockOf = (host: string) => {
@@ -109,22 +242,42 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
       return slot;
     };
 
-    const providerOf = (login: ForgeLogin, slot: Slot) =>
-      (slot.provider ??= library().then(({ github, gitlab }) => {
+    const built = (login: ForgeLogin, slot: Slot, transport: FetchLike | undefined) =>
+      library().then(({ github, gitlab }) => {
         const auth = { type: "token" as const, token: () => slot.token ?? "" };
         if (login.forge === "github") {
           return github({
             auth,
-            fetch,
+            fetch: transport,
             baseUrl: base === null ? undefined : `${base}/api.github.com`,
           });
         }
         return gitlab({
           auth,
-          fetch,
+          fetch: transport,
           baseUrl: base === null ? `https://${login.host}` : `${base}/${login.host}`,
         });
-      }));
+      });
+
+    const providerOf = (login: ForgeLogin, slot: Slot) =>
+      (slot.provider ??= built(login, slot, fetch));
+
+    // WARNING: the library retries a 429 by itself, so only the transport sees every request a call made.
+    const counted = (spend: Asked) => {
+      const carried: FetchLike = (input, init) => (fetch ?? globalThis.fetch)(input, init);
+      const transport: FetchLike = (input, init) => {
+        spend.attempts += 1;
+        return carried(input, init).then((response) =>
+          refusedByLimit(response).then((refused) => {
+            if (refused) {
+              spend.limited += 1;
+            }
+            return response;
+          }),
+        );
+      };
+      return transport;
+    };
 
     const tokenOf = (login: ForgeLogin, cwd: string, slot: Slot) =>
       lockOf(login.host).withPermits(1)(
@@ -162,9 +315,14 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
     ) =>
       Effect.gen(function* () {
         const slot = slotOf(login.key);
-        const send = (token: string) =>
+        const spend = Option.getOrUndefined(yield* Effect.serviceOption(Asking));
+        const once = (token: string) =>
           Effect.tryPromise({
-            try: (signal) => providerOf(login, slot).then((provider) => call(provider, signal)),
+            try: (signal) =>
+              (spend === undefined
+                ? providerOf(login, slot)
+                : built(login, slot, counted(spend))
+              ).then((provider) => call(provider, signal)),
             catch: (error) => new Cause.UnknownError(error),
           }).pipe(
             Effect.map((value) => {
@@ -199,6 +357,11 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
               }),
             ),
           );
+        const send = (token: string) =>
+          Effect.gen(function* () {
+            attempts += 1;
+            return yield* once(token);
+          });
         const notReady = { ok: false, reason: login.notReady } as const;
         const first = yield* tokenOf(login, cwd, slot);
         if (first === null) {
@@ -223,7 +386,7 @@ const make = (run: Runner, fetch: FetchLike | undefined, base: string | null) =>
         } as const;
       });
 
-    return { ask };
+    return { ask, attempts: Effect.sync(() => attempts) };
   });
 
 export const loginReadiness: <R>(
