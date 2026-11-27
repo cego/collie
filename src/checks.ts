@@ -47,12 +47,19 @@ export const lastLinesOf = (log: string | null, count = LAST_LINES) =>
 // WARNING: a Run with no marker is read from its running check's record, as an agent's own verify is.
 export const markersOf = Effect.fn("Checks.markersOf")(function* (
   records: ReadonlyArray<CheckRecord> = [],
+  shown: (run: string, marker: Verifying) => boolean = () => true,
 ) {
   const found = new Map<string, Verifying>();
   for (const row of yield* RunRecords.use((all) => all.everyControl(VERIFYING))) {
     const marker = decodeVerifying(row.data);
     if (marker !== null) {
       found.set(row.run, marker);
+    }
+  }
+  // WARNING: a marker outlives the check it was written for.
+  for (const [run, marker] of found) {
+    if (!shown(run, marker)) {
+      found.delete(run);
     }
   }
   for (const record of records) {
@@ -75,6 +82,13 @@ export const markersOf = Effect.fn("Checks.markersOf")(function* (
 
 const readOrNone = (run: RunFacts) =>
   readVerifications(run.evidence).pipe(Effect.orElseSucceed(() => []));
+
+// WARNING: a marker is written before its check spawns, so a record that began earlier is another invocation.
+export const marksCheck = (marker: Verifying, record: CheckRecord) =>
+  record.name === marker.name &&
+  record.pass === marker.pass &&
+  (record.round ?? null) === marker.round &&
+  epochMs(record.started) >= epochMs(marker.started);
 
 const commandOf = (executable: string) => Str.split(executable, "/").at(-1) ?? executable;
 

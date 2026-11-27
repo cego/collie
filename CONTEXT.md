@@ -582,7 +582,10 @@ A merge request is settled when its forge reads it merged; when `abandoned` is r
 Run carrying it or on the Task's leading Run; when `merged` is recorded for it and its
 forge has not read it open since; or when
 `superseded` is recorded on it while its forge reads it closed, or on every Run of the Task
-carrying it with a ref naming a Run of another Task, which is then the one responsible. A
+carrying it with a ref naming a Run of another Task, which is then the one responsible.
+That Run is the one responsible where the two are the same work: the merge request both
+carry, a merge request it carries where this Run records none of its own, or, where it
+carries none, the branch and project both share. A
 `superseded` naming a successor in the same Task, or no Run, settles nothing while the merge
 request is open; reopened, a closed one is owed again. A plan is settled by any Disposition,
 and work that ended with nothing anyone could file — no branch, no merge request, no plan, no
