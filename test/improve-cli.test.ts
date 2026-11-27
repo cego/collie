@@ -16,6 +16,11 @@ import { until } from "./support/host";
 import { hosted } from "./support/hosted";
 
 const root = `${import.meta.dir}/..`;
+// WARNING: the host inherits the test root's HOME, not the world's, and a child's checkout lock is written under it.
+const testHome = (home: string) => {
+  const parts = Str.split(home, "/");
+  return `${Arr.join(Arr.take(parts, Arr.length(parts) - 2), "/")}/home`;
+};
 
 const Envelope = Schema.Struct({
   ok: Schema.Boolean,
@@ -47,7 +52,8 @@ const repository = (world: {
     for (const name of yield* fs.readDirectory(`${root}/personas`)) {
       yield* fs.copyFile(`${root}/personas/${name}`, `${world.config}/personas/${name}`);
     }
-    for (const home of [world.home, process.env.HOME ?? ""]) {
+    // WARNING: the host inherits HOME, and a child's checkout lock is written under it.
+    for (const home of [world.home, testHome(world.home)]) {
       yield* fs.makeDirectory(`${home}/.local/state/herdr/plugins/cego.collie`, {
         recursive: true,
       });
