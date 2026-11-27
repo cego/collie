@@ -18968,7 +18968,11 @@ for (const name of ["gitlab", "github"] as const) {
         );
         const model = yield* forge.model();
         yield* bin.restore();
-        expect(noted).toEqual({ ok: false, message: expect.stringContaining('"This Run"') });
+        expect(noted).toEqual({
+          ok: false,
+          message: expect.stringContaining('"This Run"'),
+          publicTextRefused: true,
+        });
         expect(replied.reason).toContain('"review-step"');
         expect(model.notes ?? {}).toEqual({});
         expect(repliesOf(model)).toEqual([]);
