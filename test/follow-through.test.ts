@@ -1744,7 +1744,7 @@ for (const { following, after, refused } of [
 }
 
 for (const state of ["closed", "merged"] as const) {
-  test(`a merge request ${state} during review finishes without posting or asking for approval`, () =>
+  test(`a merge request ${state} during review fails, naming the terminal state, with nothing posted`, () =>
     host.runEffect(
       Effect.gen(function* () {
         yield* repository;
@@ -1773,11 +1773,11 @@ for (const state of ["closed", "merged"] as const) {
             yield* host.mergeWatched;
             const done = yield* until(
               () => host.status(runId),
-              (view) => view?.status.status === "complete",
+              (view) => view?.status.status === "failed",
             );
             expect(ended).toBe(true);
-            expect(done?.status.status === "complete" && done.status.value).toBe(
-              `mk/collie!7 was ${state}`,
+            expect(done?.status.status === "failed" ? done.status.reason : null).toContain(
+              `reviewed merge request ended: ${state}`,
             );
             expect(yield* notesOf(forge)).toEqual([]);
             expect(yield* asked(runId)).toEqual([]);

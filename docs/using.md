@@ -3063,7 +3063,9 @@ one signed note when the findings changed since the last one posted, then waits 
 author with no agent running: a new head, a comment from outside this Run, or the head's
 pipeline ending starts the next round, as a [Watch](../CONTEXT.md) does. If the head moves
 while the reviewer reads it, that round posts nothing, and the next round reviews the newer
-head with the findings carried over.
+head with the findings carried over. If the merge request merges or closes before that
+round's own head check, the round is finished and the Run fails naming the state, having
+posted nothing.
 
 A reply in a posted finding's thread, or naming its id, reassesses only the findings it
 touches. The reviewer gets every reply to those findings, labelled human-typed or
