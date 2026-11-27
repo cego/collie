@@ -1,7 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { mrRefOf } from "./board-model";
 import { forgeOf } from "./forge/forge";
 import { appendRunJournal, readRunJournal, runJournal } from "./journal";
@@ -31,35 +31,44 @@ const CiTarget = Schema.fromJsonString(
 export const rememberCiTarget = (dir: string, target: typeof CiTarget.Type) =>
   appendRunJournal(runJournal(dir, "ci-rechecks.jsonl"), CiTarget, target);
 
-const CiSettled = Schema.fromJsonString(Schema.Struct({ reads: Schema.String }));
+const CiSettled = Schema.fromJsonString(
+  Schema.Struct({ reads: Schema.String, at: Schema.optionalKey(Schema.Finite) }),
+);
 
 const settledClears = (dir: string) => runJournal(dir, "ci-settled.jsonl");
 
-const lastObserved = (stateDir: string, runId: string) =>
-  Effect.map(
-    readRunJournal(runJournal(`${stateDir}/runs/${runId}`, "ci-rechecks.jsonl"), CiTarget).pipe(
-      Effect.orElseSucceed(() => []),
-    ),
-    (entries) => {
-      const latest = new Map<string, string>();
-      for (const one of entries) {
-        if (one.observed !== undefined) {
-          latest.set(`${one.job}@${one.head}`, one.observed);
-        }
-      }
-      const seen = [...latest.values()];
-      return Arr.some(seen, (one) => one === "unreadable") ? "unreadable" : seen.at(-1);
-    },
+const ciReads = (dir: string) =>
+  readRunJournal(runJournal(dir, "ci-rechecks.jsonl"), CiTarget).pipe(
+    Effect.orElseSucceed(() => []),
   );
+
+const settledEntries = (dir: string) =>
+  readRunJournal(settledClears(dir), CiSettled).pipe(Effect.orElseSucceed(() => []));
+
+const lastObserved = (stateDir: string, runId: string, head: string) =>
+  Effect.gen(function* () {
+    const dir = `${stateDir}/runs/${runId}`;
+    const since = (yield* settledEntries(dir)).at(-1)?.at ?? 0;
+    const latest = new Map<string, string>();
+    for (const one of Arr.drop(yield* ciReads(dir), since)) {
+      if (one.observed !== undefined && one.head === head) {
+        latest.set(one.job, one.observed);
+      }
+    }
+    const seen = [...latest.values()];
+    return Arr.some(seen, (one) => one === "unreadable") ? "unreadable" : seen.at(-1);
+  });
 
 const lastSettledClear = (dir: string) =>
-  Effect.map(
-    readRunJournal(settledClears(dir), CiSettled).pipe(Effect.orElseSucceed(() => [])),
-    (entries) => entries.at(-1)?.reads,
-  );
+  Effect.map(settledEntries(dir), (entries) => entries.at(-1)?.reads);
 
 export const rememberSettledClear = (dir: string, reads: string) =>
-  appendRunJournal(settledClears(dir), CiSettled, { reads });
+  Effect.gen(function* () {
+    yield* appendRunJournal(settledClears(dir), CiSettled, {
+      reads,
+      at: Arr.length(yield* ciReads(dir)),
+    });
+  });
 
 const FailedCi = Schema.fromJsonString(
   Schema.Struct({
@@ -270,6 +279,7 @@ export const recheckPark = (
           return reply(false, "no parked CI job recorded");
         }
         const reads: Array<string> = [];
+        const parked = Option.getOrUndefined(Arr.head([...latest.values()]))?.head;
         for (const target of latest.values()) {
           const ref = mrRefOf(target.mr);
           if (ref === null) {
@@ -298,7 +308,7 @@ export const recheckPark = (
         }
         const jobs = Arr.join([...latest.keys()], ", ");
         const evidence = Arr.join(reads, " ");
-        const observed = yield* lastObserved(stateDir, view.runId);
+        const observed = yield* lastObserved(stateDir, view.runId, parked ?? "");
         if (
           evidence !== "" &&
           observed !== "unreadable" &&

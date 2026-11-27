@@ -321,6 +321,13 @@ test("a healthy read of a mixed head the forge could not be read for still reach
       const first = yield* cancelledRecheck(view, root, asked.run, forge);
       expect(first).toMatchObject({ cleared: true, error: false });
       yield* rememberSettledClear(dir, first.reads ?? "");
+      yield* rememberCiTarget(dir, {
+        head: at,
+        job: "lint",
+        mr: MR,
+        cwd: asked.cwd,
+        observed: "unreadable",
+      });
       expect(yield* cancelledRecheck(view, root, asked.run, forge)).toMatchObject({
         cleared: true,
         error: false,
@@ -347,6 +354,80 @@ test("an unchanged failed job beside a cancelled one reissues no recovery for th
       });
       yield* rememberCiTarget(dir, { head: at, job: "lint", mr: MR, cwd: asked.cwd });
       const view = { runId: "r1", cwd: asked.cwd, branch: "main", mr: MR };
+      const first = yield* cancelledRecheck(view, root, asked.run, forge);
+      expect(first).toMatchObject({ cleared: true, error: false });
+      yield* rememberSettledClear(dir, first.reads ?? "");
+      expect(yield* cancelledRecheck(view, root, asked.run, forge)).toMatchObject({
+        cleared: false,
+        error: false,
+      });
+    }),
+  ));
+
+test("a refusal recorded at an earlier head never clears a park at the current one", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, root, forge } = yield* waiting("cancelled", MR, undefined, {
+        jobs: [{ name: "nuxi-typecheck", state: "cancelled", id: 1 }],
+      });
+      const dir = `${root}/runs/r1`;
+      const view = { runId: "r1", cwd: asked.cwd, branch: "main", mr: MR };
+      const healthy: ForgeModel = forge.model();
+      forge.set({ ...healthy, httpFault: { status: 503 } });
+      expect("unproved" in (yield* read({ ...asked, runDir: dir }, forge))).toBe(true);
+      const head = (yield* exec(
+        [
+          "git",
+          "-c",
+          "user.name=t",
+          "-c",
+          "user.email=t@example.test",
+          "commit",
+          "-qm",
+          "two",
+          "--allow-empty",
+        ],
+        { cwd: asked.cwd },
+      )).stdout;
+      const moved = Str.trim(
+        (yield* exec(["git", "rev-parse", "HEAD"], { cwd: asked.cwd })).stdout,
+      );
+      expect(head).toBeDefined();
+      forge.set({ ...healthy, mrs: Arr.map(healthy.mrs, (one) => ({ ...one, head: moved })) });
+      expect("unproved" in (yield* read({ ...asked, runDir: dir }, forge))).toBe(true);
+      const first = yield* cancelledRecheck(view, root, asked.run, forge);
+      expect(first).toMatchObject({ cleared: true, error: false });
+      yield* rememberSettledClear(dir, first.reads ?? "");
+      expect(yield* cancelledRecheck(view, root, asked.run, forge)).toMatchObject({
+        cleared: false,
+        error: false,
+      });
+    }),
+  ));
+
+test("a refusal from an earlier pass through Prove does not clear the park made after it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { asked, at, root, forge } = yield* waiting("cancelled", MR, undefined, {
+        jobs: [
+          { name: "nuxi-typecheck", state: "cancelled", id: 1 },
+          { name: "lint", state: "failed", id: 2 },
+        ],
+      });
+      const dir = `${root}/runs/r1`;
+      const nuxi = { ...asked, runDir: dir };
+      const lint = {
+        ...nuxi,
+        spec: { ...NUXI, name: "lint", ci: "lint" },
+        command: { ...nuxi.command, ci: "lint" },
+      };
+      const view = { runId: "r1", cwd: asked.cwd, branch: "main", mr: MR };
+      const healthy: ForgeModel = forge.model();
+      forge.set({ ...healthy, httpFault: { status: 503 } });
+      expect("unproved" in (yield* read(lint, forge))).toBe(true);
+      forge.set(healthy);
+      expect("unproved" in (yield* read(nuxi, forge))).toBe(true);
+      expect(at).toBe(healthy.mrs.at(0)?.head ?? "");
       const first = yield* cancelledRecheck(view, root, asked.run, forge);
       expect(first).toMatchObject({ cleared: true, error: false });
       yield* rememberSettledClear(dir, first.reads ?? "");

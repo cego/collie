@@ -769,10 +769,12 @@ memory records nothing and is not lost. A park is then not resumed again for tho
 reads until the forge says something new, and never for a head where every job passed: a
 fresh outage that comes back green recovers as often as it parks. What decides a repeat is why the parked read
 could not progress, not whether a sibling failed: every check is recorded as it was read at
-its head, and a refusal outranks the rest, so a check that passes or fails later in the same
-round cannot overwrite it. A park made from jobs that settled cancelled, skipped or failed
-stays parked however its siblings read, while a park the forge refused to answer for is read
-again, because the refusal says nothing about the jobs at the head. So a head where one job failed
+its head, and a refusal in the same round outranks the rest, so a check that passes or fails
+later cannot overwrite it. Only the reads taken since the last applied resume, at the parked
+head, are weighed: a refusal recorded at an earlier head or before that resume says nothing
+about this park. A park made from jobs that settled cancelled, skipped or failed stays parked
+however its siblings read, while one the forge refused with a read of its own is read again,
+because the refusal is not a fact about the jobs. So a head where one job failed
 and another was cancelled is read once more and then left alone, and a head a 503 parked
 reaches the fixer as soon as the forge answers. The record travels in the recovery claim
 itself, so a host that restarts and replays the claim keeps it.
