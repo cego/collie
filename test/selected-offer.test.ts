@@ -18,6 +18,12 @@ import { isSettled } from "../src/lifecycle";
 import { exec } from "./support/command";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 
+// WARNING: the host holds host.db too, so a fixture's write waits its turn and reads what it overwrites.
+const rewriting = <A>(db: Database, work: () => A) => {
+  db.exec("PRAGMA busy_timeout = 10000");
+  return db.transaction(work).immediate();
+};
+
 const root = new URL("../", import.meta.url).pathname;
 const encode: (value: Schema.Json) => string = stringifyJson;
 const empty = { answer: "a", cause: "b", summary: "a", findings: [] };
@@ -726,17 +732,15 @@ test("an offer child admitted before the fingerprint existed still answers its r
           });
         const child = yield* asked().pipe(Effect.orDie);
         const db = new Database(`${world.state}/host.db`);
-        // WARNING: the host holds this database as well, so the fixture waits for its turn and reads the row it overwrites.
-        db.exec("PRAGMA busy_timeout = 10000");
         const Placing = Schema.Struct({ placing: Schema.String });
-        const demote = db.transaction((runId: string) => {
+        rewriting(db, () => {
           const found = Option.getOrUndefined(
             Schema.decodeUnknownOption(Placing)(
-              db.query("SELECT placing FROM collie_runs WHERE run = ?").get(runId),
+              db.query("SELECT placing FROM collie_runs WHERE run = ?").get(child.runId),
             ),
           );
           if (found === undefined) {
-            throw new Error(`${runId} is not in collie_runs`);
+            throw new Error(`${child.runId} is not in collie_runs`);
           }
           const legacy = Rec.filter(
             parseJson(Schema.Record(Schema.String, Schema.Json), found.placing),
@@ -744,10 +748,9 @@ test("an offer child admitted before the fingerprint existed still answers its r
           );
           db.run("UPDATE collie_runs SET placing = ? WHERE run = ?", [
             stringifyJson(legacy),
-            runId,
+            child.runId,
           ]);
         });
-        demote.immediate(child.runId);
         db.close();
         const again = yield* asked().pipe(Effect.orDie);
         expect(again.runId).toBe(child.runId);
@@ -825,19 +828,26 @@ test("a retry refuses a child the SDK admitted under its own Run id as the reque
           })
           .pipe(Effect.orDie);
         const db = new Database(`${world.state}/host.db`);
-        const row = yield* Schema.decodeUnknownEffect(Schema.Struct({ placing: Schema.String }))(
-          db.query("SELECT placing FROM collie_runs WHERE run = ?").get(child.runId),
-        ).pipe(Effect.orDie);
-        const placing = parseJson(Schema.Record(Schema.String, Schema.Json), row.placing);
-        const legacy = Rec.filter(
-          placing,
-          (_, key) => !["direct", "child", "took", "invoked", "by"].includes(key),
-        );
-        db.run("UPDATE collie_runs SET placing = ?, request = ? WHERE run = ?", [
-          stringifyJson(legacy),
-          child.runId,
-          child.runId,
-        ]);
+        const Placing = Schema.Struct({ placing: Schema.String });
+        rewriting(db, () => {
+          const found = Option.getOrUndefined(
+            Schema.decodeUnknownOption(Placing)(
+              db.query("SELECT placing FROM collie_runs WHERE run = ?").get(child.runId),
+            ),
+          );
+          if (found === undefined) {
+            throw new Error(`${child.runId} is not in collie_runs`);
+          }
+          const legacy = Rec.filter(
+            parseJson(Schema.Record(Schema.String, Schema.Json), found.placing),
+            (_, key) => !["direct", "child", "took", "invoked", "by"].includes(key),
+          );
+          db.run("UPDATE collie_runs SET placing = ?, request = ? WHERE run = ?", [
+            stringifyJson(legacy),
+            child.runId,
+            child.runId,
+          ]);
+        });
         db.close();
         const again = yield* run.client
           .invoke({
@@ -884,7 +894,9 @@ test("a retry finishes the parent's taken lines before it answers with the child
         ]);
         // WARNING: this is the claim made and the answer lost, before the parent's lines were written.
         const lines = new Database(`${world.state}/host.db`);
-        lines.run("DELETE FROM collie_run_lines WHERE run = ?", [run.id]);
+        rewriting(lines, () => {
+          lines.run("DELETE FROM collie_run_lines WHERE run = ?", [run.id]);
+        });
         lines.close();
         expect(yield* said).toEqual([
           [first, "open"],

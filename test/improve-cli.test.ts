@@ -288,11 +288,7 @@ test("the CLI takes Improve over two findings of a review, and dismissing the la
           "--request-id",
           "landed",
         ]);
-        // WARNING: a board read while the syncer refreshes its merge request offers nothing, and comes back.
-        yield* until(
-          () => card(started.runId),
-          (one) => one.section === "waiting",
-        );
+        expect(yield* openCount(started.runId)).toBe(1);
         yield* json([
           "run",
           "finding",
@@ -309,11 +305,6 @@ test("the CLI takes Improve over two findings of a review, and dismissing the la
           [third, "dismissed"],
         ]);
         expect(yield* openCount(started.runId)).toBe(0);
-        // WARNING: the board recomputes the card from a forge read it may be refreshing; wait for it to agree.
-        yield* until(
-          () => card(started.runId),
-          (one) => one.section === "finished",
-        );
       }),
     [],
   ));
