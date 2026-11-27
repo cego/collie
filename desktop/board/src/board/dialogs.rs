@@ -79,6 +79,54 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                 .on_close(close)
                 .build(collie_desktop_theme::dialog(k.dark), layer);
         }
+        Dialog::FileTasks => {
+            let many = app.machines.len() > 1;
+            let mut body = col()
+                .gap(8.0)
+                .padding(16.0)
+                .pt(0.0)
+                .child(
+                    text(
+                        "A Task on another Machine is filed into that Machine's Project of the same name, where it has one.",
+                    )
+                    .key("file-note")
+                    .font(k.ty.small)
+                    .color(k.c.text_muted)
+                    .wrap()
+                    .w_full(),
+                )
+                .child(
+                    Button::new("No Project")
+                        .variant(ButtonVariant::Ghost)
+                        .expanded(true)
+                        .help("Leave these Tasks outside every Project")
+                        .on_press(|app: &mut App| app.file_into(None))
+                        .build(k)
+                        .key("file-none"),
+                );
+            for target in app.filing_targets() {
+                let key = format!("file-into-{}-{}", target.installation, target.id);
+                let name = if many {
+                    format!("{} · {}", target.name, target.installation)
+                } else {
+                    target.name.clone()
+                };
+                body = body.child(
+                    Button::new(name)
+                        .variant(ButtonVariant::Ghost)
+                        .expanded(true)
+                        .on_press(move |app: &mut App| app.file_into(Some(target.clone())))
+                        .build(k)
+                        .key(key),
+                );
+            }
+            Modal::new("file-tasks", "File into a Project".to_string())
+                .open(true)
+                .fit()
+                .child(body)
+                .on_close(close)
+                .build(collie_desktop_theme::dialog(k.dark), layer);
+        }
         Dialog::Words {
             card,
             kind,

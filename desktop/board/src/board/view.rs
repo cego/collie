@@ -56,7 +56,11 @@ pub fn view_in(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
         body = body.child(connecting_placeholder(app, k));
     } else {
         let reaching = model::reaching(&app.machines, &board.flock);
-        let mut top = col().w_full().gap(10.0).child(header(app, k, &placed));
+        let mut top = col()
+            .w_full()
+            .gap(10.0)
+            .child(header(app, k, &placed))
+            .children((app.picking() > 0).then(|| filing_bar(app, k)));
         if let Some(said) = model::reaching_said(&reaching, app.offset()) {
             top = top.child(reaching_line(k, said));
         }
@@ -266,6 +270,39 @@ fn reaching_line(k: &Kit, said: String) -> El {
                 .a11y_hidden(),
         )
 }
+/// What a pick can do with the cards picked so far: file them into a Project, or let them go.
+fn filing_bar(app: &App, k: &Kit) -> El {
+    let count = app.picking();
+    row()
+        .key("filing")
+        .w_full()
+        .center_y()
+        .gap(8.0)
+        .role("status")
+        .label(format!("{count} selected to file"))
+        .child(
+            text(format!("{count} selected to file"))
+                .font(k.ty.small_medium)
+                .color(k.c.text_muted),
+        )
+        .child(
+            Button::new("File into…")
+                .variant(ButtonVariant::Contrast)
+                .control_size(ControlSize::Small)
+                .on_press(App::file_tasks)
+                .build(k)
+                .key("file-into"),
+        )
+        .child(
+            Button::new("Clear")
+                .variant(ButtonVariant::Ghost)
+                .control_size(ControlSize::Small)
+                .on_press(App::clear_filing)
+                .build(k)
+                .key("clear-filing"),
+        )
+}
+
 /// The board, its overlays drawn over it alone.
 pub fn view(app: &App, k: &Kit) -> El {
     let mut layer = Vec::new();
@@ -726,7 +763,6 @@ fn card(
         .control_size(ControlSize::Small)
         .label(format!("Actions for {}", task.name))
         .help("Actions")
-        .disabled(!live)
         .expanded(open)
         .on_press({
             let key = key.clone();
@@ -749,7 +785,9 @@ fn card(
         let key = key.clone();
         let item = MenuItem::new(label)
             .danger(action == CardAction::Stop)
-            .disabled(matches!(&action, CardAction::Offer(offer) if offer.unavailable.is_some()));
+            .disabled(
+                !live || matches!(&action, CardAction::Offer(offer) if offer.unavailable.is_some()),
+            );
         menu = menu.item(if action == CardAction::Attach {
             item.on_select_tx(move |app: &mut App, tx| {
                 app.attach_to(&key);
@@ -759,6 +797,17 @@ fn card(
             item.on_select(move |app: &mut App| app.do_action(&key, &action))
         });
     }
+    // Picking a card asks no host, so it is offered on a saved board too.
+    let picked = app.picked_for_filing(&key);
+    let pick = key.clone();
+    menu = menu.item(
+        MenuItem::new(if picked {
+            "Deselect from filing"
+        } else {
+            "Select for filing"
+        })
+        .on_select(move |app: &mut App| app.select_for_filing(&pick)),
+    );
     let menu = menu.build(k, layer);
 
     // Its name, then how it stands and where its work is.

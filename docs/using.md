@@ -1245,6 +1245,17 @@ Tasks and Runs. Archiving is not deleting: its Runs keep going, and anything wai
 stays in **Needs you** on the global board, so putting the Project away never hides a
 question. Each Project's row carries the number of its Tasks that need you, counted once per
 Task however many Runs or questions it has.
+**Select for filing** in a card's menu picks that Task, even on a Machine that is away, and the
+board says how many are picked. **File into…** files them with the Machine that owns each Task —
+one send per Machine, so a Machine that cannot be reached is tried again with its own entries
+alone once its board is live, and a send that landed is never repeated. A Task picked on a
+Machine other than the chosen Project's files into that Machine's Project of the same name where
+it has one, and joins none where it has not; **No Project** takes the picked Tasks out of the
+Project they are in. Filing a Task into another Project moves it there with its Runs and its
+questions, and the board it left no longer shows it. Two operators moving the same Task at once
+cannot undo each other: the move names the membership it saw, and the one that is stale is
+refused with the membership that won.
+
 **Following** narrows the board in the scope you are in — the whole Flock or one Project —
 to the Tasks you follow. Following is your interest, not a decision: a followed Task stays
 in whichever section its state puts it in, so it moves from Working to Needs you when it

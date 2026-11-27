@@ -2101,3 +2101,225 @@ fn a_project_is_starred_and_archived_from_its_own_toolbar() {
         ]
     );
 }
+
+/// Picks a card for filing from its own menu.
+fn select_for_filing(runtime: &mut Runtime<App>, card: &str) {
+    press(runtime, &format!("{card}-menu"));
+    choose(runtime, "Select for filing");
+}
+/// Each filing a TaskFile action carries: its Task and the Project it names.
+fn filed(asked: &Value) -> Vec<(String, Option<String>)> {
+    asked["action"]["filings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|one| {
+            (
+                one["task"].as_str().unwrap_or_default().to_string(),
+                one["project"].as_str().map(String::from),
+            )
+        })
+        .collect()
+}
+/// Presses the `role` element of the accessibility tree that says `name`, where it rests.
+fn press_named(runtime: &mut Runtime<App>, role: &str, name: &str) {
+    let tree = runtime.accessibility_json();
+    let node = within(&tree)
+        .into_iter()
+        .find(|n| n["role"] == role && n["name"] == name)
+        .cloned()
+        .unwrap_or_else(|| panic!("no {name}: {tree:#}"));
+    if let Some(key) = node["key"].as_str().map(String::from) {
+        press(runtime, &key);
+        return;
+    }
+    let at = node["bounds"].as_array().expect("bounds");
+    let (x, y, w, h) = (
+        at[0].as_f64().unwrap() as f32,
+        at[1].as_f64().unwrap() as f32,
+        at[2].as_f64().unwrap() as f32,
+        at[3].as_f64().unwrap() as f32,
+    );
+    runtime.settle_all();
+    runtime.frame(0.0);
+    let (x, y) = (x + w / 2.0, y + h / 2.0);
+    runtime.pointer_move(x, y);
+    runtime.frame(1.0);
+    runtime.pointer_down(x, y);
+    runtime.frame(0.05);
+    runtime.pointer_up(x, y);
+    runtime.frame(1.0);
+}
+/// A Machine's board that is not live, as its last saved one.
+fn saved(machine: &Value, tasks: Vec<Value>) -> Value {
+    json!({"_tag": "Saved", "machine": machine, "herds": [{"id": "h1"}], "tasks": tasks,
+        "at": 14.0 * 3_600_000.0 + 5.0 * 60_000.0})
+}
+
+#[test]
+fn a_selection_of_unassigned_tasks_is_filed_into_a_project_once() {
+    let harness = Harness::new();
+    harness.fake.will_answer("act", Ok(json!("2 filed")));
+    let mut runtime = runtime_of(
+        &harness,
+        vec![snapshot_with(
+            &pc(),
+            vec![
+                task("t-1", "Refunds", "active", json!({})),
+                task("t-2", "Payouts", "active", json!({})),
+            ],
+            vec![project("project-payments", "Payments", false, false)],
+        )],
+    );
+    select_for_filing(&mut runtime, "card-t-1");
+    select_for_filing(&mut runtime, "card-t-2");
+    press(&mut runtime, "file-into");
+    press(&mut runtime, "file-into-inst-pc-project-payments");
+    let sent = acts(&harness);
+    assert_eq!(sent.len(), 1, "one Machine, one action");
+    assert_eq!(sent[0]["installation"], "inst-pc");
+    assert_eq!(sent[0]["action"]["_tag"], "TaskFile");
+    assert_eq!(
+        filed(&sent[0]),
+        [
+            ("t-1".to_string(), Some("project-payments".to_string())),
+            ("t-2".to_string(), Some("project-payments".to_string())),
+        ]
+    );
+    assert!(
+        node(&runtime, "filing").is_none(),
+        "filing empties the selection"
+    );
+}
+
+#[test]
+fn a_selection_across_machines_is_filed_by_owner_and_the_one_away_is_tried_again() {
+    let harness = Harness::new();
+    harness.fake.will_answer("act", Ok(json!("1 filed")));
+    harness.fake.will_answer(
+        "act",
+        Err(CallError(
+            "Not sent to vm-mk: its board is a saved one, as of 14:05".into(),
+        )),
+    );
+    harness.fake.will_answer("act", Ok(json!("1 filed")));
+    let mut runtime = runtime_of(
+        &harness,
+        vec![
+            snapshot_with(
+                &pc(),
+                vec![task("t-1", "Refunds", "active", json!({}))],
+                vec![project("project-payments", "Payments", false, false)],
+            ),
+            saved(&vm(), vec![task("t-vm", "Payouts", "active", json!({}))]),
+        ],
+    );
+    select_for_filing(&mut runtime, "card-t-1");
+    select_for_filing(&mut runtime, "card-t-vm");
+    press(&mut runtime, "file-into");
+    press(&mut runtime, "file-into-inst-pc-project-payments");
+    settle(&harness, &mut runtime);
+    let sent = acts(&harness);
+    assert_eq!(sent.len(), 2, "one action per owner");
+    assert_eq!(sent[0]["installation"], "inst-pc");
+    assert_eq!(
+        filed(&sent[0]),
+        [("t-1".to_string(), Some("project-payments".to_string()))]
+    );
+    assert_eq!(sent[1]["installation"], "inst-vm");
+    assert_eq!(
+        filed(&sent[1]),
+        [("t-vm".to_string(), None)],
+        "a saved board names no Project, since it does not know its own"
+    );
+    assert_eq!(sent[1]["unsent"], "its board is a saved one, as of 14:05");
+    // The Machine comes back, and only its entries are sent again.
+    runtime.state.apply(
+        serde_json::from_value(snapshot_with(
+            &vm(),
+            vec![task("t-vm", "Payouts", "active", json!({}))],
+            vec![project("project-payments", "Payments", false, false)],
+        ))
+        .unwrap(),
+    );
+    redraw(&mut runtime);
+    press_named(&mut runtime, "button", "Try again");
+    settle(&harness, &mut runtime);
+    let sent = acts(&harness);
+    assert_eq!(sent.len(), 3);
+    assert_eq!(sent[2]["installation"], "inst-vm");
+    assert_eq!(sent[2]["request"], sent[1]["request"], "the same request");
+    assert!(
+        sent[2].get("unsent").is_none(),
+        "a Machine that is back is sent to: {}",
+        sent[2]
+    );
+    assert_eq!(
+        filed(&sent[2]),
+        [("t-vm".to_string(), Some("project-payments".to_string()))]
+    );
+}
+
+#[test]
+fn moving_a_task_by_its_project_id_leaves_the_scope_it_was_in_and_comes_back_with_its_runs() {
+    let harness = Harness::new();
+    harness.fake.will_answer("act", Ok(json!("1 filed")));
+    let work = || {
+        task(
+            "t-1",
+            "Refunds",
+            "active",
+            json!({"run": "r-1", "runs": ["r-1", "r-2"],
+                "decision": question("r-1", "q-1", "Which path?")}),
+        )
+    };
+    let mut runtime = runtime_of(
+        &harness,
+        vec![snapshot_with(
+            &pc(),
+            vec![in_payments(work(), false)],
+            vec![
+                project("project-payments", "Payments", false, false),
+                project("project-refunds", "Refunds", false, false),
+            ],
+        )],
+    );
+    press(&mut runtime, "project-inst-pc-project-payments");
+    select_for_filing(&mut runtime, "card-t-1");
+    press(&mut runtime, "file-into");
+    press(&mut runtime, "file-into-inst-pc-project-refunds");
+    let sent = acts(&harness);
+    assert_eq!(
+        filed(&sent[0]),
+        [("t-1".to_string(), Some("project-refunds".to_string()))]
+    );
+    // What the host answers with: the same Task, its Runs and its question, in the next Project.
+    let mut moved = in_payments(work(), false);
+    moved["projectId"] = json!({"installation": "inst-pc", "id": "project-refunds"});
+    moved["membershipSeq"] = json!(7);
+    runtime.state.apply(
+        serde_json::from_value(snapshot_with(
+            &pc(),
+            vec![moved],
+            vec![
+                project("project-payments", "Payments", false, false),
+                project("project-refunds", "Refunds", false, false),
+            ],
+        ))
+        .unwrap(),
+    );
+    redraw(&mut runtime);
+    assert!(cards_in(&runtime, "working").is_empty(), "it left Payments");
+    press(&mut runtime, "project-inst-pc-project-refunds");
+    assert_eq!(cards_in(&runtime, "working"), ["Refunds"]);
+    let card = runtime
+        .state
+        .placed_by("inst-pc:t-1")
+        .expect("the same Task");
+    assert_eq!(
+        card.task.runs,
+        ["r-1".to_string(), "r-2".to_string()],
+        "with the same Runs"
+    );
+    assert_eq!(card.task.membership_seq, Some(7.0));
+}

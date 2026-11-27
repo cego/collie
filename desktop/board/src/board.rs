@@ -56,6 +56,22 @@ struct Again {
     request: String,
     unsent: Option<String>,
     tried: Tried,
+    /// A filing: what it carries is worked out again when it is actually sent, so a Machine
+    /// that was away gets its own Projects.
+    plan: Option<FilePlan>,
+}
+/// What a pick is to be filed into: the Project's identity on the Machine that owns it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Target {
+    pub installation: String,
+    pub id: String,
+    pub name: String,
+}
+/// The filings one Machine's share of a selection carries, kept until it can be sent.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilePlan {
+    pub tasks: Vec<String>,
+    pub target: Option<Target>,
 }
 
 /// Who hears how a try went.
@@ -111,6 +127,8 @@ pub enum Dialog {
     Check { card: String },
     /// A new Project's name, before it exists.
     NewProject { edit: TextEdit },
+    /// What a selection is to be filed into.
+    FileTasks,
     Proposal {
         card: String,
         installation: String,
@@ -142,6 +160,8 @@ pub struct Board {
     pub dialog: Option<Dialog>,
     /// The card whose actions menu is open, by key.
     pub menu: Option<String>,
+    /// The cards picked to be filed, by key, in the order they were picked.
+    pub filing: Vec<String>,
     pub notices: Vec<Notice>,
     told: usize,
     pub finished_open: bool,
@@ -477,23 +497,17 @@ impl App {
                 self.back();
             }
             Some(key) => {
-                let Some((installation, run, machine, as_of)) = self.placed_by(&key).map(|p| {
+                let Some((installation, run, machine)) = self.placed_by(&key).map(|p| {
                     (
                         p.installation.to_string(),
                         p.task.run.clone(),
                         p.machine.clone(),
-                        p.as_of,
                     )
                 }) else {
                     return;
                 };
                 if seen {
-                    self.act(
-                        &installation,
-                        json!({"_tag": "Seen", "runId": run}),
-                        as_of,
-                        None,
-                    );
+                    self.act(&installation, json!({"_tag": "Seen", "runId": run}), None);
                 }
                 self.board.opened = Some(key);
                 self.open_placed(installation, run, machine);
@@ -520,28 +534,67 @@ impl App {
 
     /// Carries one board action to its card's Machine under one request, which Try again sends
     /// again; what came of it is said.
-    pub fn act(
-        &mut self,
-        installation: &str,
-        action: Value,
-        as_of: Option<f64>,
-        request: Option<String>,
-    ) -> String {
+    pub fn act(&mut self, installation: &str, action: Value, request: Option<String>) -> String {
         let request = request.unwrap_or_else(new_request);
-        let unsent = as_of.map(|at| {
-            format!(
-                "its board is a saved one, {}",
-                as_of_said(at, self.offset())
-            )
-        });
         self.send(Again {
             installation: installation.into(),
             action,
             request: request.clone(),
-            unsent,
+            unsent: None,
             tried: Tried::Plain,
+            plan: None,
         });
         request
+    }
+
+    /// Why a Machine's board cannot take an action now, if it cannot: a saved board, whose time
+    /// is read again each try so a Machine that is back is sent to.
+    fn unsent_of(&self, installation: &str) -> Option<String> {
+        let as_of = self
+            .machines
+            .iter()
+            .find(|shown| shown.machine.installation == installation)
+            .and_then(|shown| shown.as_of);
+        as_of.map(|at| {
+            format!(
+                "its board is a saved one, {}",
+                as_of_said(at, self.offset())
+            )
+        })
+    }
+
+    /// The filings one Machine's share of a selection carries: the chosen Project where this
+    /// Machine owns it, or the Project of the same name where it keeps one, and none otherwise.
+    fn filings_of(&self, installation: &str, plan: &FilePlan) -> Value {
+        let project = plan
+            .target
+            .as_ref()
+            .and_then(|target| self.project_for(installation, target));
+        let filings: Vec<Value> = plan
+            .tasks
+            .iter()
+            .map(|task| match &project {
+                Some(project) => json!({ "task": task, "project": project }),
+                None => json!({ "task": task }),
+            })
+            .collect();
+        json!({ "_tag": "TaskFile", "filings": filings })
+    }
+
+    fn project_for(&self, installation: &str, target: &Target) -> Option<String> {
+        if target.installation == installation {
+            return Some(target.id.clone());
+        }
+        self.machines
+            .iter()
+            .find(|shown| shown.machine.installation == installation)
+            .and_then(|shown| {
+                shown
+                    .projects
+                    .iter()
+                    .find(|project| !project.archived && project.name == target.name)
+            })
+            .map(|project| project.id.clone())
     }
 
     pub(crate) fn offset(&self) -> i32 {
@@ -552,6 +605,13 @@ impl App {
         let Some(core) = self.core.clone() else {
             return;
         };
+        let mut again = again;
+        // WARNING: both are decided at the moment of sending, so Try again follows a Machine that
+        // has come back rather than the board it had when it was first asked.
+        again.unsent = self.unsent_of(&again.installation);
+        if let Some(plan) = &again.plan {
+            again.action = self.filings_of(&again.installation, plan);
+        }
         self.tried(&again.tried, &again.request, None);
         let mut payload = json!({
             "installation": again.installation,
@@ -712,18 +772,12 @@ impl App {
             }
             CardAction::Offers => self.open_offers(key, installation, run, as_of, None),
             CardAction::Resume => {
-                self.act(
-                    &installation,
-                    json!({"_tag": "Resume", "runId": run}),
-                    as_of,
-                    None,
-                );
+                self.act(&installation, json!({"_tag": "Resume", "runId": run}), None);
             }
             CardAction::Hold { set } => {
                 self.act(
                     &installation,
                     json!({"_tag": "Control", "runId": run, "control": "hold", "set": set}),
-                    as_of,
                     None,
                 );
             }
@@ -731,7 +785,6 @@ impl App {
                 self.act(
                     &installation,
                     json!({"_tag": "Control", "runId": run, "control": "stop", "set": true}),
-                    as_of,
                     None,
                 );
             }
@@ -741,18 +794,12 @@ impl App {
                 self.act(
                     &installation,
                     json!({"_tag": "Dispose", "runId": run, "kind": disposition.said(), "ref": r#ref}),
-                    as_of,
                     None,
                 );
             }
             CardAction::Acknowledge => {
                 if unseen {
-                    self.act(
-                        &installation,
-                        json!({"_tag": "Seen", "runId": run}),
-                        as_of,
-                        None,
-                    );
+                    self.act(&installation, json!({"_tag": "Seen", "runId": run}), None);
                 }
             }
         }
@@ -879,7 +926,6 @@ impl App {
         let Some(Dialog::Offers {
             installation,
             run,
-            as_of,
             picked: Some(offer),
             fields,
             ..
@@ -896,9 +942,9 @@ impl App {
             "offer": offer.id,
             "input": input,
         });
-        let (installation, as_of) = (installation.clone(), *as_of);
+        let installation = installation.clone();
         self.board.dialog = None;
-        self.act(&installation, action, as_of, None);
+        self.act(&installation, action, None);
     }
 
     /// Sends a Steer's or a Follow-up's words, once there are some.
@@ -926,7 +972,6 @@ impl App {
             &installation,
             json!({"_tag": "ProjectCreate", "name": name}),
             None,
-            None,
         );
     }
     /// Stars or unstars a Project, or archives and restores it, on the Machine that owns it.
@@ -941,7 +986,6 @@ impl App {
             &installation,
             json!({"_tag": tag, "project": project}),
             None,
-            None,
         );
     }
     /// Follows one Task, or stops following it, on the Machine that owns it.
@@ -951,12 +995,85 @@ impl App {
         } else {
             "TaskUnfollow"
         };
-        self.act(
-            &installation,
-            json!({"_tag": tag, "task": task}),
-            None,
-            None,
-        );
+        self.act(&installation, json!({"_tag": tag, "task": task}), None);
+    }
+    /// Picks a card to be filed, or unpicks it; a card on a saved board can be picked too, since
+    /// picking asks no host for anything.
+    pub fn select_for_filing(&mut self, key: &str) {
+        self.board.menu = None;
+        if let Some(at) = self.board.filing.iter().position(|picked| picked == key) {
+            self.board.filing.remove(at);
+            return;
+        }
+        if self.placed_by(key).is_some() {
+            self.board.filing.push(key.into());
+        }
+    }
+    /// How many picked cards the board still shows.
+    pub fn picking(&self) -> usize {
+        self.board
+            .filing
+            .iter()
+            .filter(|key| self.placed_by(key).is_some())
+            .count()
+    }
+    pub fn picked_for_filing(&self, key: &str) -> bool {
+        self.board.filing.iter().any(|picked| picked == key)
+    }
+    pub fn clear_filing(&mut self) {
+        self.board.filing.clear();
+    }
+    /// Asks what the picked cards are to be filed into.
+    pub fn file_tasks(&mut self) {
+        if self.picking() == 0 {
+            return;
+        }
+        self.board.dialog = Some(Dialog::FileTasks);
+    }
+    /// The Projects a pick may be filed into: the live ones starred first, as the sidebar lists
+    /// them, and no archived one, which has to be restored before it takes work.
+    pub fn filing_targets(&self) -> Vec<Target> {
+        model::project_rows(&self.machines)
+            .0
+            .into_iter()
+            .map(|row| Target {
+                installation: row.installation.to_string(),
+                id: row.project.id.clone(),
+                name: row.project.name.clone(),
+            })
+            .collect()
+    }
+    /// Files each picked card with the Machine that owns it, one action each, so that a Machine
+    /// which cannot take it now is tried again on its own.
+    pub fn file_into(&mut self, target: Option<Target>) {
+        let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+        for card in model::scoped(&self.machines, self.nav.scope.as_ref(), self.following()) {
+            if !self.picked_for_filing(&card.key) {
+                continue;
+            }
+            let installation = card.installation.to_string();
+            let task = card.task.id.clone();
+            match groups.iter_mut().find(|(owner, _)| *owner == installation) {
+                Some((_, tasks)) => tasks.push(task),
+                None => groups.push((installation, vec![task])),
+            }
+        }
+        self.board.filing.clear();
+        self.board.dialog = None;
+        for (installation, tasks) in groups {
+            let plan = FilePlan {
+                tasks,
+                target: target.clone(),
+            };
+            self.send(Again {
+                installation,
+                action: Value::Null,
+                request: new_request(),
+                unsent: None,
+                tried: Tried::Plain,
+                plan: Some(plan),
+            });
+        }
     }
     pub fn send_words(&mut self) {
         let Some(Dialog::Words {
@@ -964,7 +1081,6 @@ impl App {
             installation,
             run,
             edit,
-            as_of,
             ..
         }) = &self.board.dialog
         else {
@@ -979,9 +1095,9 @@ impl App {
             Words::FollowUp => "FollowUp",
         };
         let action = json!({"_tag": tag, "runId": run, "text": text});
-        let (installation, as_of) = (installation.clone(), *as_of);
+        let installation = installation.clone();
         self.board.dialog = None;
-        self.act(&installation, action, as_of, None);
+        self.act(&installation, action, None);
     }
 
     pub fn review(&mut self, key: &str) {
@@ -1039,7 +1155,6 @@ impl App {
         let Some(Dialog::Proposal {
             installation,
             proposal,
-            as_of,
             ..
         }) = self.board.dialog.take()
         else {
@@ -1049,7 +1164,6 @@ impl App {
         self.act(
             &installation,
             json!({"_tag": tag, "proposal": proposal.id, "hash": proposal.hash}),
-            as_of,
             None,
         );
     }
@@ -1236,6 +1350,7 @@ impl App {
                 action: action.clone(),
                 request: request.clone(),
                 unsent,
+                plan: None,
                 tried: Tried::Question {
                     installation: installation.into(),
                     question: Box::new(question.clone()),
