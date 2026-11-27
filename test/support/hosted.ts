@@ -22,6 +22,9 @@ export const MODULES = [
   "notes.md",
   "hello.workflow.ts",
   "retains.workflow.ts",
+  "leaves.workflow.ts",
+  "implement.workflow.ts",
+  "submits.workflow.ts",
 ];
 
 export const hosted = <A, E>(
@@ -76,7 +79,7 @@ export const hostedRun = Effect.fn("test.hostedRun")(function* (
 
 export const settledRun = Effect.fn("test.settledRun")(function* (
   world: World,
-  workflow: "hello" | "retains",
+  workflow: "hello" | "retains" | "leaves" | "submits",
   options?: Readonly<Record<string, string>>,
 ) {
   const client = yield* connect(world.state).pipe(Effect.orDie);

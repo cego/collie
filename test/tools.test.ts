@@ -2016,8 +2016,8 @@ test("a Run shows its plan, findings, disposition, outcome and the last lines it
 
       const said = yield* call("collie_run", { run: run.id });
       expect(said).toContain(`Plan: ${run.dir}/plan (2 tickets)`);
-      expect(said).toContain("- (major) f-01");
-      expect(said).toContain("- (major) f-10");
+      expect(said).toContain(`- ${run.id}-F1 open · (major) f-01`);
+      expect(said).toContain(`- ${run.id}-F10 open · (major) f-10`);
       expect(said).not.toContain("f-11");
       expect(said).toContain("(2 more)");
       expect(said).toContain("Disposition: merged collie!151");

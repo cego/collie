@@ -43,6 +43,7 @@ import {
   controlRun,
   withdrawNoteRun,
   disposeRun,
+  setFindingRun,
   seeRun,
   invokeOffer,
   showOffers,
@@ -599,10 +600,18 @@ const runShow = Command.make(
           }
           const progress = yield* runProgress(resolved.env, runId);
           const ready = progress.ok && progress.value !== null ? progress.value.ready : null;
+          const left = yield* asksRun(resolved.env, runId, (client) =>
+            client.runFindings({ runId }),
+          );
+          if (!left.ok) {
+            return left;
+          }
+          const findings = left.value;
           return {
             ok: true,
             data: {
               run: view,
+              findings,
               agents,
               disposition,
               startedBy: startedBy ?? null,
@@ -660,6 +669,9 @@ const runShow = Command.make(
                 ),
                 ...Arr.map(handoffs, (file) => `  handoff ${file.path} (${file.bytes} bytes)`),
                 ...Arr.map(replies, (reply) => `  ${replyLine(reply)}`),
+                ...(findings.length === 0
+                  ? []
+                  : ["  Findings:", ...Arr.map(findings, (one) => `    ${findingLine(one)}`)]),
                 ...(ready === null ? [] : Arr.map(readyLines(ready), (line) => `  ${line}`)),
               ],
               "\n",
@@ -1834,6 +1846,115 @@ const runDisposition = Command.make(
   Command.withDescription("What became of a Run's work, recorded beside its status not over it"),
 );
 
+const findingLine = (finding: {
+  readonly id: string;
+  readonly status: string;
+  readonly reason: string | null;
+  readonly severity: string;
+  readonly title: string;
+}) =>
+  `${finding.id} ${finding.status}${finding.reason === null ? "" : ` — ${finding.reason}`} (${finding.severity}) ${finding.title}`;
+
+const runFindings = Command.make("findings", { runId: runIdArg }, ({ runId }) =>
+  Effect.gen(function* () {
+    const global = yield* root;
+    yield* attempt(
+      Effect.gen(function* () {
+        const resolved = yield* resolveCommandRun(global, runId);
+        if (resolved._tag === "RunFailure") {
+          return resolved.result;
+        }
+        const facts = runFacts(resolved);
+        const read = yield* asksRun(resolved.env, runId, (client) => client.runFindings({ runId }));
+        if (!read.ok) {
+          return read;
+        }
+        const findings = read.value;
+        return {
+          ok: true,
+          data: { run: facts.id, findings },
+          human:
+            findings.length === 0
+              ? `${facts.id} left no findings.`
+              : Arr.join(Arr.map(findings, findingLine), "\n"),
+        };
+      }),
+      global.json,
+    );
+  }),
+).pipe(Command.withDescription("Every finding a Run left, with the status it has now"));
+
+const runFinding = Command.make(
+  "finding",
+  {
+    runId: runIdArg,
+    id: Argument.String("id").pipe(
+      Argument.withDescription("The finding's id, as `run findings` lists it"),
+    ),
+    dismiss: Flag.String("dismiss").pipe(
+      Flag.withDescription("Why it is dismissed; required, and never blank"),
+      Flag.optional,
+    ),
+    reopen: Flag.Boolean("reopen").pipe(
+      Flag.withDescription("Take a dismissal back, so the finding is open again"),
+      Flag.withDefault(false),
+    ),
+    requestId: requestIdFlag,
+  },
+  ({ runId, id, dismiss, reopen, requestId }) =>
+    Effect.gen(function* () {
+      const global = yield* root;
+      yield* attempt(
+        Effect.gen(function* () {
+          const resolved = yield* resolveCommandRun(global, runId);
+          if (resolved._tag === "RunFailure") {
+            return resolved.result;
+          }
+          const facts = runFacts(resolved);
+          const why = Option.getOrNull(dismiss);
+          if (reopen === (why !== null)) {
+            return err("invalid_input", "Give exactly one of --dismiss <reason> and --reopen.");
+          }
+          if (why !== null && Str.trim(why) === "") {
+            return err("invalid_input", "--dismiss needs a reason of its own.");
+          }
+          const status = why === null ? "open" : "dismissed";
+          return yield* mutation(
+            resolved.env,
+            {
+              operation: "run-finding",
+              run: facts.id,
+              args: { runId: facts.id, id, status, reason: why ?? null },
+            },
+            requestId,
+            (request) =>
+              Effect.gen(function* () {
+                const set = yield* setFindingRun(resolved.env, {
+                  door: yield* cliDoor(resolved.env),
+                  runId: facts.id,
+                  id,
+                  status,
+                  reason: why,
+                  request,
+                });
+                if (!set.ok) {
+                  return set;
+                }
+                return {
+                  ok: true,
+                  data: { run: facts.id, finding: set.value },
+                  human: `${set.value.id} ${set.value.status}${set.value.reason === null ? "" : ` — ${set.value.reason}`}`,
+                };
+              }),
+          );
+        }),
+        global.json,
+      );
+    }),
+).pipe(
+  Command.withDescription("Set one finding's status: dismissed with its reason, or open again"),
+);
+
 const runSeen = Command.make(
   "seen",
   { runId: runIdArg, requestId: requestIdFlag },
@@ -2946,6 +3067,8 @@ export const run = Command.make("run").pipe(
     runClearOverride,
     runDeliveries,
     runDisposition,
+    runFindings,
+    runFinding,
     runSeen,
     runMetrics,
     runChecks,

@@ -615,10 +615,10 @@ worktree, a workspace or an agent exists.
 Examples:
 
 ```sh
-collie run start review --input target=https://gitlab.example.com/acme/app/-/merge_requests/2 --input plan= --input proves=
-collie run start review --input target=https://github.com/acme/app/pull/30 --input plan= --input proves=
-collie run start review --input target=worktree --input plan= --input proves=
-collie run start implement --input plan=ENG-123 --input recovery= --input then=
+collie run start review --input target=https://gitlab.example.com/acme/app/-/merge_requests/2 --input plan= --input proves= --input findings=
+collie run start review --input target=https://github.com/acme/app/pull/30 --input plan= --input proves= --input findings=
+collie run start review --input target=worktree --input plan= --input proves= --input findings=
+collie run start implement --input plan=ENG-123 --input recovery= --input then= --input findings=
 collie run start plan --input goal="one registry" --input then= --input workspace=projects-root
 ```
 
@@ -1476,6 +1476,65 @@ again, while the record itself stays.
 
 This is integrated here and not yet on the board: the Home's rows and Live region do not
 read it, so a Run whose work shipped still reads as a plain failure there.
+
+## A Run's findings
+
+```sh
+collie --json run findings <run-id>
+collie --json run finding <run-id> <finding-id> --dismiss "superseded by the new client"
+collie --json run finding <run-id> <finding-id> --reopen
+```
+
+Every Run that left findings — a review, an investigation, an architecture pass, an
+implement rally's leftovers — keeps them in `findings.json`, and Collie gives each one an
+id, `<run>-F<n>`. `run findings` lists them with the status each has now; `run show` prints
+the same line under **Findings**.
+
+A finding's status is the latest line the host recorded for it in the Run's own record,
+or else the `status` its file gives it, or else `open`. It is open while that is `open` or
+`disputed`: a dispute is something a person still has to answer, so it reaches the board
+like an open finding. `fixed`, `obsolete`, `dismissed` and `taken` are not open, and only
+the first two are the rally's to write.
+
+`--dismiss` records `dismissed` and `--reopen` records `open`, each a new line with who set
+it and when, so a correction is another line rather than an edit. `--dismiss` needs a
+reason of its own: a blank one is refused with `invalid_input` and nothing is recorded.
+So is an id the Run does not have, and the refusal names it. Give exactly one of the two
+flags. The CLI, the board, chat's `collie_do` `set_finding` and Desktop take the same
+operation, under a request id, so a retried one answers with the line it first recorded.
+
+The Run's open count is kept as a fact of its own, `open-findings`, written when the Run
+settles and after every line. An offer that needs something open — a review's
+**Improve** — reads that count, so dismissing the last open finding takes the offer away
+until one is reopened.
+
+## Building what a Run found
+
+An offer may be taken over the Run's own findings, and then it asks which ones:
+
+```sh
+collie --json run action <run-id> implement-selected --input findings=<run>-F1,<run>-F3
+```
+
+`--input` takes a list argument as a JSON array, as comma-separated text, or one id per
+line: `findings=a,b`, `findings=["a","b"]` and a file's worth of newline-separated ids all
+say the same thing. An offer taken for exactly one finding refuses a list that is not one id.
+
+Every id must be one of the Run's open findings. One that is dismissed, already taken or
+not this Run's is refused with `invalid_input` naming it, and no Run starts and no line is
+recorded. Otherwise the child Run starts with those ids as its `findings` input, and each
+one is recorded `taken` with the offer that took it and the Run that now holds it — which is
+also what reads beside it in `run findings` and in `run show`.
+
+A settled Run with an open finding and an eligible offer that selects many waits on you
+instead of landing, so a review of your own branch or an investigation holds the card until
+you choose what to build or dismiss the rest. An offer taken once per id starts one Run per
+finding: two ids are two invocations, each with one id.
+
+An offer taken for exactly one finding is invoked the same way with one id, and its child
+is given the finding as text under the input the offer names — its title, severity,
+location, detail, evidence, basis and the path of the report it came from — so
+`collie run action <run-id> plan-this --input findings=<run>-F2` plans that finding.
 
 ## Acknowledging a finished Run
 

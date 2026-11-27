@@ -19,8 +19,19 @@ import { recordIn } from "../src/board-model";
 
 const encode = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)), Result.getOrThrow);
 const result = {
+  answer: "The Machines page uses the last peer build.",
+  cause: "The peer's bundle is never rebuilt after it changes.",
   summary: "The Machines page uses the last peer build.",
-  findings: [{ what: "The cached build is stale", evidence: "desktop/src/shared/in-sync.ts" }],
+  findings: [
+    {
+      severity: "major",
+      title: "The cached build is stale",
+      file: "desktop/src/shared/in-sync.ts",
+      basis: "fact",
+      evidence: "the page shows the bundle's first build",
+      suggested: "fix",
+    },
+  ],
 };
 const root = new URL("../", import.meta.url).pathname;
 
@@ -82,7 +93,7 @@ const story = (mode: Case, harness = "claude") =>
             `${root}workflows/investigate.workflow.ts`,
             `${first.world.install}/workflows/investigate.workflow.ts`,
           );
-          for (const name of ["investigate.md", "measuring.ts", "measuring.md"]) {
+          for (const name of ["investigate.md", "measuring.ts", "measuring.md", "selected.ts"]) {
             yield* fs.copyFile(
               `${root}workflows/${name}`,
               `${first.world.install}/workflows/${name}`,

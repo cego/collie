@@ -54,6 +54,10 @@ const Asked = RpcGroup.make(
     payload: { runId: Schema.String },
     success: Schema.Null,
   }),
+  Rpc.make("runFindings", {
+    payload: { runId: Schema.String },
+    success: Schema.Array(Schema.Unknown),
+  }),
   Rpc.make("watch", {
     payload: { runId: Schema.String },
     success: Schema.NullOr(RunView),
@@ -149,6 +153,7 @@ const hostOf = (
                     },
               ),
             progress: () => Effect.succeed(null),
+            runFindings: () => Effect.succeed([]),
             watch: ({ runId }) => Stream.make(find(runId)),
             runMetrics: () => Effect.succeed([]),
             runs: () => Effect.succeed(views),
@@ -362,7 +367,7 @@ test("show, wait and metrics refuse a Run of another Task than the selected one,
 
       here.run = 0;
       yield* collie("ws-b", ["run", "show", "in-b"]);
-      expect(here.run).toBe(2);
+      expect(here.run).toBe(3);
       here.run = 0;
       yield* collie("ws-b", ["run", "wait", "in-b"]);
       expect(here.run).toBe(2);

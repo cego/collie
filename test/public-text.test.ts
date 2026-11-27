@@ -48,6 +48,12 @@ test.each([
   expect(refusal(leaksIn(sentence))).toContain(`"${phrase}"`);
 });
 
+test("a finding's id is its Run's id and a note naming it leaks nothing", () => {
+  expect(phrases("- run-67a6e669-F1: open — [major] guard the input (src/a.ts)")).toEqual([]);
+  expect(phrases("run-67a6e669-F1: fixed at 1234567")).toEqual([]);
+  expect(phrases("See run-67a6e669-F1x for the record.")).toEqual(["run-67a6e669"]);
+});
+
 test("the !522 note is refused for each phrase that named Collie's process", () => {
   expect(phrases(leaking)).toEqual(
     expect.arrayContaining([

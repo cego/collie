@@ -219,6 +219,7 @@ export const BoardOffer = Schema.Struct({
   title: Schema.String,
   run: Schema.optionalKey(Schema.String),
   unavailable: Schema.optionalKey(Schema.String),
+  unread: Schema.optionalKey(Schema.Boolean),
 });
 export type BoardOffer = typeof BoardOffer.Type;
 
@@ -590,12 +591,45 @@ export const VerificationView = Schema.Struct({
 
 export type VerificationView = typeof VerificationView.Type;
 
+export const FindingStatus = Schema.Struct({
+  id: Schema.String,
+  status: Schema.Literals(["dismissed", "open", "taken"]),
+  reason: Schema.NullOr(Schema.String),
+  offer: Schema.NullOr(Schema.String),
+  run: Schema.NullOr(Schema.String),
+  by: Schema.String,
+  at: Schema.String,
+});
+export type FindingStatus = typeof FindingStatus.Type;
+
+export const FindingStatusName = Schema.Literals([
+  "open",
+  "fixed",
+  "disputed",
+  "obsolete",
+  "dismissed",
+  "taken",
+]);
+
+// WARNING: every key added after findings were first drawn decodes to a default, so a host from before them still reads.
 export const ReviewFinding = Schema.Struct({
+  id: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed(""))),
+  status: FindingStatusName.pipe(Schema.withDecodingDefaultKey(Effect.succeed("open" as const))),
+  reason: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  offer: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  run: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   severity: Schema.String,
   title: Schema.String,
   file: Schema.NullOr(Schema.String),
   line: Schema.NullOr(Schema.Finite),
   detail: Schema.NullOr(Schema.String),
+  basis: Schema.NullOr(Schema.Literals(["fact", "inference"])).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  ),
+  evidence: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  suggested: Schema.NullOr(Schema.Literals(["fix", "ticket", "investigate", "plan", "none"])).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  ),
 });
 export type ReviewFinding = typeof ReviewFinding.Type;
 
@@ -925,8 +959,10 @@ export const OfferView = Schema.Struct({
   kind: Schema.Literals(["action", "follow-up"]),
   ships: Schema.optionalKey(Schema.Literals(["merge", "release"])),
   confirm: Schema.optionalKey(Schema.String),
+  selects: Schema.optionalKey(Schema.Literals(["many", "one"])),
   primary: Schema.Boolean,
   unavailable: Schema.NullOr(Schema.String),
+  unread: Schema.optionalKey(Schema.Boolean),
   run: Schema.optionalKey(Schema.String),
 });
 export type OfferView = typeof OfferView.Type;
@@ -1587,6 +1623,22 @@ export const FrontDoorRpcs = RpcGroup.make(
     success: Schema.Struct({ proposal: Schema.String }),
     error: Schema.Union([HostRefused, ProposalRefused, RequestConflict]),
   }),
+  Rpc.make("runFindings", {
+    payload: { runId: Schema.String },
+    success: Schema.Array(ReviewFinding),
+    error: HostRefused,
+  }),
+  Rpc.make("setFinding", {
+    payload: {
+      runId: Schema.String,
+      id: Schema.String,
+      status: Schema.Literals(["dismissed", "open"]),
+      reason: Schema.NullOr(Schema.String),
+      request: Schema.String,
+    },
+    success: FindingStatus,
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
   Rpc.make("dispose", {
     payload: {
       runId: Schema.String,
@@ -2031,6 +2083,18 @@ export const offerInput: (
   return Rec.isEmptyRecord(errors) ? { _tag: "Valid", input } : { _tag: "Invalid", errors };
 };
 
+// WARNING: text that opens a list is JSON, so broken JSON stays text and is refused as the caller typed it.
+const listFrom = (text: string) => {
+  const parsed = parseJson(text);
+  if (Option.isSome(parsed)) {
+    return parsed.value;
+  }
+  if (pipe(text, Str.trim, Str.startsWith("["))) {
+    return text;
+  }
+  return Arr.filter(Arr.map(Str.split(text, /[\n,]/), Str.trim), (one) => one !== "");
+};
+
 export const givenOfferInput = (
   drawn: Schema.Json | null,
   given: Readonly<Record<string, string>>,
@@ -2040,7 +2104,7 @@ export const givenOfferInput = (
     Arr.map(Rec.toEntries(given), ([name, text]) => {
       const field = fields.get(name);
       if (field?.control.kind === "list") {
-        return [name, Option.getOrElse(parseJson(text), () => text)] as const;
+        return [name, listFrom(text)] as const;
       }
       const read = field === undefined ? null : readEntry(field, text);
       return [name, read?._tag === "Read" ? read.value : text] as const;

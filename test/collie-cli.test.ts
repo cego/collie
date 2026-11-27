@@ -356,6 +356,7 @@ test("a start outside any checkout names one, or is refused with the checkouts t
                 name: "workspace",
                 facts: [join(tree.root, "app"), join(tree.root, "group/lib"), "projects-root"],
               },
+              { name: "findings" },
             ],
           },
         },
@@ -375,7 +376,7 @@ test("an agent's start names every Input, an optional one as empty, and is told 
       const missing = yield* Schema.decodeUnknownEffect(
         Schema.Array(Schema.Struct({ name: Schema.String, meaning: Schema.String })),
       )(envelope.error?.details["inputs"]).pipe(Effect.orDie);
-      expect(Arr.map(missing, (one) => one.name)).toEqual(["plan", "proves"]);
+      expect(Arr.map(missing, (one) => one.name)).toEqual(["findings", "plan", "proves"]);
       for (const one of missing) {
         expect(one.meaning).not.toBe("");
       }
@@ -436,7 +437,18 @@ test("a missing diff target is told the target inference would pick in the check
       const COLLIE_FORGE_API = yield* serveForges(gitlab);
       yield* fake.restore();
       const bare = yield* cli(
-        ["--json", "run", "start", "review", "--input", "plan=", "--input", "proves="],
+        [
+          "--json",
+          "run",
+          "start",
+          "review",
+          "--input",
+          "plan=",
+          "--input",
+          "proves=",
+          "--input",
+          "findings=",
+        ],
         { PATH: `${fake.dir}:/usr/bin:/bin`, COLLIE_CWD: checkout, COLLIE_FORGE_API },
       );
       expect(yield* parseEnvelope(bare.stdout)).toMatchObject({
@@ -478,6 +490,8 @@ test("a missing diff target is told what inference would pick in the checkout na
           "plan=",
           "--input",
           "proves=",
+          "--input",
+          "findings=",
         ],
         { COLLIE_CWD: tree.elsewhere, PATH: `${bin}:/usr/bin:/bin` },
       );
@@ -671,7 +685,12 @@ test("forking a module writes a file that imports what it keeps, and the merge f
       const described = (yield* Schema.decodeEffect(ShownModule)(shown.stdout).pipe(Effect.orDie))
         .data.workflow;
       expect(described.layer).toBe("project");
-      expect(Arr.map(described.inputs, (one) => one.name)).toEqual(["plan", "recovery", "then"]);
+      expect(Arr.map(described.inputs, (one) => one.name)).toEqual([
+        "plan",
+        "findings",
+        "recovery",
+        "then",
+      ]);
 
       const merged = yield* cli(
         [

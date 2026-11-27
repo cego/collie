@@ -61,6 +61,13 @@ export const ActionSchema = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("withdraw_note"), run: Schema.String, note: Schema.String }),
   Schema.Struct({ kind: Schema.Literal("stop"), run: Schema.String }),
   Schema.Struct({
+    kind: Schema.Literal("set_finding"),
+    run: Schema.String,
+    id: Schema.String,
+    status: Schema.Literals(["dismissed", "open"]),
+    reason: Schema.optionalKey(Schema.String),
+  }),
+  Schema.Struct({
     kind: Schema.Literal("answer"),
     run: Schema.String,
     choiceId: Schema.String,

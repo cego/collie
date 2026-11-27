@@ -20,6 +20,7 @@ import {
   readMrRef,
   readinessOfRun,
   readyToRelease,
+  ReviewFinding,
   RunDetail,
   TaskView,
 } from "../src/board-model";
@@ -145,6 +146,27 @@ test.each([
   expect(acting(node, over).lanes[0]!.nodes[0]!).toMatchObject({
     primary: null,
     actions: [...actions],
+  });
+});
+
+test("a finding a host from before ids sent still decodes, as open and with no id", () => {
+  const older = {
+    severity: "major",
+    title: "the guard is missing",
+    file: "src/a.ts",
+    line: 3,
+    detail: "nothing checks it",
+  };
+  expect(Result.getOrThrow(Schema.decodeResult(ReviewFinding)(older))).toMatchObject({
+    id: "",
+    status: "open",
+    reason: null,
+    offer: null,
+    run: null,
+    basis: null,
+    evidence: null,
+    suggested: null,
+    title: "the guard is missing",
   });
 });
 
@@ -456,7 +478,23 @@ test("a TaskView and a RunDetail survive a round trip through JSON", () => {
     },
     finishedAt: 0,
     mr: { _tag: "Unavailable", reason: "no glab" },
-    findings: [{ severity: "major", title: "Off by one", file: "a.ts", line: 3, detail: null }],
+    findings: [
+      {
+        id: "r1-F1",
+        status: "open",
+        reason: null,
+        offer: null,
+        run: null,
+        severity: "major",
+        title: "Off by one",
+        file: "a.ts",
+        line: 3,
+        detail: null,
+        basis: null,
+        evidence: null,
+        suggested: null,
+      },
+    ],
     verifications: [
       { id: "v1", name: "test", result: "pass", expect: "pass", exit: 0, at: "t", by: "collie" },
     ],
@@ -858,7 +896,7 @@ test("an offer's text arguments are read as it declares them, null included, and
   expect(givenOfferInput(drawn, { count: "2", extra: "7" })).toEqual({ count: 2, extra: "7" });
 });
 
-test("an offer's list arguments use JSON outside the form, preserving invalid text for refusal", () => {
+test("an offer's list arguments read JSON, or comma and newline lists, and keep broken JSON as text", () => {
   const drawn = {
     properties: { reviewers: { type: "array", items: { type: "string" } } },
   };
@@ -866,8 +904,11 @@ test("an offer's list arguments use JSON outside the form, preserving invalid te
     reviewers: ["alice", "bob"],
   });
   expect(givenOfferInput(drawn, { reviewers: "[]" })).toEqual({ reviewers: [] });
+  expect(givenOfferInput(drawn, { reviewers: "alice, bob" })).toEqual({
+    reviewers: ["alice", "bob"],
+  });
   expect(givenOfferInput(drawn, { reviewers: "alice\nbob" })).toEqual({
-    reviewers: "alice\nbob",
+    reviewers: ["alice", "bob"],
   });
   expect(givenOfferInput(drawn, { reviewers: '["alice"' })).toEqual({
     reviewers: '["alice"',

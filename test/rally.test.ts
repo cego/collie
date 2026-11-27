@@ -486,6 +486,32 @@ test("a later round's review that leaves out an earlier finding fails the Run, n
     }),
   ));
 
+test("a returned finding that borrows one earlier id and another's title stands in for neither", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([
+        {
+          verdict: "findings",
+          summary: "two blockers",
+          findings: [blocker("empty list"), blocker("no retry")],
+        },
+        fixedEmptyList,
+        {
+          verdict: "findings",
+          summary: "one of them",
+          findings: [{ ...blocker("no retry"), id: "r-borrow-F1" }],
+        },
+        fixedEmptyList,
+        { verdict: "clean", summary: "nothing left" },
+      ]);
+      const ran = yield* ledgerRally("r-borrow");
+      expect(said(ran.result)).toBe("");
+      expect(ran.result._tag === "Failure" && String(ran.result.failure)).toContain(
+        "review omitted earlier finding r-borrow-F2",
+      );
+    }),
+  ));
+
 const staticRally = <A>(
   runId: string,
   fixes: boolean,

@@ -637,6 +637,8 @@ pub struct Offer {
     pub run: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unavailable: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unread: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1923,11 +1925,65 @@ pub struct DetailMr2 {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Finding {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<FindingStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub reason: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub offer: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub run: Option<Option<String>>,
     pub severity: String,
     pub title: String,
     pub file: Option<String>,
     pub line: Option<f64>,
     pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub basis: Option<Option<Basis>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub evidence: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub suggested: Option<Option<Suggested>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum FindingStatus {
+    #[serde(rename = "open")]
+    Open,
+    #[serde(rename = "fixed")]
+    Fixed,
+    #[serde(rename = "disputed")]
+    Disputed,
+    #[serde(rename = "obsolete")]
+    Obsolete,
+    #[serde(rename = "dismissed")]
+    Dismissed,
+    #[serde(rename = "taken")]
+    Taken,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Basis {
+    #[serde(rename = "fact")]
+    Fact,
+    #[serde(rename = "inference")]
+    Inference,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Suggested {
+    #[serde(rename = "fix")]
+    Fix,
+    #[serde(rename = "ticket")]
+    Ticket,
+    #[serde(rename = "investigate")]
+    Investigate,
+    #[serde(rename = "plan")]
+    Plan,
+    #[serde(rename = "none")]
+    None,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2970,8 +3026,12 @@ pub struct OffersSuccessItem {
     pub ships: Option<Ships>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confirm: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selects: Option<Selects>,
     pub primary: bool,
     pub unavailable: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unread: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<String>,
 }
@@ -2990,6 +3050,14 @@ pub enum Ships {
     Merge,
     #[serde(rename = "release")]
     Release,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Selects {
+    #[serde(rename = "many")]
+    Many,
+    #[serde(rename = "one")]
+    One,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

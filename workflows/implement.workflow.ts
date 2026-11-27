@@ -29,10 +29,13 @@ import {
   PlanOutputSchema,
   defineWorkflow,
   evidenceRoots,
+  buildable,
   findingsIn,
   formatFindings,
+  reportIn,
   identityProblem,
   isBlocking,
+  isOpenFinding,
   isSingleRepo,
   orderedTicketsOf,
   planReposOf,
@@ -72,7 +75,14 @@ const recoveryEntry = (facts: Recovery | undefined) =>
   facts?.review != null ? "Checks" : facts?.implementation === true ? "Review" : "Build";
 
 const Implementing = Schema.Struct({
-  inputs: Schema.Struct({ plan: text, plan_kind: text, repo: text, outcome: text }),
+  inputs: Schema.Struct({
+    plan: text,
+    plan_kind: text,
+    repo: text,
+    outcome: text,
+    findings: text,
+    report: text,
+  }),
   run: Schema.Struct({ dir: text, id: text }),
   verify: text,
 });
@@ -81,6 +91,7 @@ const sectionOf = (section: string, input: typeof Implementing.Type) =>
   pipe_(
     content.sections.get(section) ?? "",
     Str.replaceAll("{{inputs.plan}}", input.inputs.plan),
+    Str.replaceAll("{{inputs.findings}}", input.inputs.findings),
     Str.replaceAll("{{run.dir}}", input.run.dir),
   );
 
@@ -88,6 +99,13 @@ const inlinePlanRefusal = (
   plan: string,
   root: string,
   source: { readonly kind: string; readonly value: string },
+  chosen: ReadonlyArray<string>,
+  said: ReadonlyArray<{
+    readonly id: string;
+    readonly status: string;
+    readonly run: string | null;
+  }>,
+  by: string,
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -119,13 +137,12 @@ const inlinePlanRefusal = (
     const texts = yield* Effect.forEach(tickets, (one) =>
       fs.readFileString(`${plan}/issues/${one.file}`),
     );
-    const dropped = Arr.filter(
-      yield* findingsIn(source.value),
-      (one) =>
-        one.status !== "fixed" &&
-        one.status !== "obsolete" &&
-        !Arr.some(texts, Str.includes(one.title)),
-    );
+    const all = yield* findingsIn(source.value);
+    const work =
+      chosen.length === 0
+        ? Arr.filter(buildable(all, said, by), (one) => isOpenFinding(one.status ?? "open"))
+        : Arr.filter(all, (one) => one.id !== undefined && Arr.contains(chosen, one.id));
+    const dropped = Arr.filter(work, (one) => !Arr.some(texts, Str.includes(one.title)));
     return dropped.length === 0
       ? null
       : `these findings of the review are no ticket's: ${Arr.join(
@@ -133,6 +150,37 @@ const inlinePlanRefusal = (
           "; ",
         )}. Name each, word for word, in the ticket that fixes it`;
   }).pipe(Effect.catch((cause) => Effect.succeed(`${plan} cannot be read: ${cause.message}`)));
+
+// WARNING: only the findings somebody chose are the work, so the others are never named to the agent.
+const chosenFindingsOf = (
+  source: { readonly kind: string; readonly value: string },
+  ids: ReadonlyArray<string>,
+  said: ReadonlyArray<{
+    readonly id: string;
+    readonly status: string;
+    readonly run: string | null;
+  }>,
+  by: string,
+) =>
+  Effect.gen(function* () {
+    if (source.kind !== "findings" && source.kind !== "review") {
+      return "(none)";
+    }
+    const all = yield* findingsIn(source.value);
+    if (ids.length === 0) {
+      return formatFindings(
+        Arr.filter(buildable(all, said, by), (one) => isOpenFinding(one.status ?? "open")),
+      );
+    }
+    const chosen = Arr.filter(all, (one) => one.id !== undefined && Arr.contains(ids, one.id));
+    const unknown = Arr.filter(ids, (id) => !Arr.some(chosen, (one) => one.id === id));
+    if (unknown.length > 0) {
+      return yield* new WorkflowError({
+        reason: `${source.value}/findings.json holds none of ${Arr.join(unknown, ", ")}`,
+      });
+    }
+    return formatFindings(chosen);
+  });
 
 const prompts = {
   build: content.template("build", {
@@ -333,6 +381,11 @@ export default defineWorkflow({
       description:
         "Where the work is written down: a plan, a review, an issue, a follow-up, or words",
     }),
+    findings: Schema.optionalKey(
+      Schema.Array(Schema.String).annotate({
+        description: "The findings to build, by id; every open one where none is given",
+      }),
+    ),
     recovery: Schema.optionalKey(
       Schema.String.annotate({
         description: "The finished Run whose existing work this explicit follow-up recovers",
@@ -423,6 +476,23 @@ export default defineWorkflow({
           Effect.orElseSucceed(() => ({ kind: "text", value: asked.plan })),
         ),
       });
+      const said = yield* Activity.make({
+        name: "finding-statuses",
+        success: Schema.Array(
+          Schema.Struct({
+            id: Schema.String,
+            status: Schema.String,
+            run: Schema.NullOr(Schema.String),
+          }),
+        ),
+        execute: host.findingStatuses(source.value),
+      });
+      const findingsText = yield* Activity.make({
+        name: "findings",
+        success: text,
+        error: WorkflowError,
+        execute: chosenFindingsOf(source, asked.findings ?? [], said, runId),
+      });
       const share = place.options.repo ?? "";
       if (source.kind === "linear") {
         const linear = yield* connection("linear");
@@ -500,12 +570,22 @@ export default defineWorkflow({
         });
       const checksNow = Effect.map(host.approved(runId), renderApproved);
 
+      const reportFile = yield* Activity.make({
+        name: "report",
+        success: text,
+        execute:
+          source.kind === "findings" || source.kind === "review"
+            ? reportIn(source.value)
+            : Effect.succeed(""),
+      });
       let input: typeof Implementing.Type = {
         inputs: {
           plan: source.value,
           plan_kind: source.kind,
           repo: place.options.repo ?? "",
           outcome: place.options.outcome ?? "",
+          findings: findingsText,
+          report: reportFile,
         },
         run: { dir: place.dir, id: runId },
         verify: yield* checksNow,
@@ -650,7 +730,7 @@ export default defineWorkflow({
               const refused = yield* Activity.make({
                 name: `${operation}.check`,
                 success: Schema.NullOr(Schema.String),
-                execute: inlinePlanRefusal(planDir, cwd, source),
+                execute: inlinePlanRefusal(planDir, cwd, source, asked.findings ?? [], said, runId),
               });
               if (refused === null) {
                 break;

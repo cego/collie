@@ -13,8 +13,20 @@ Investigate this goal on this Machine:
 Reproduce the behaviour where you can and trace it to its cause. Report what you found
 with concrete evidence: files, observations and the commands you ran. Distinguish a fact
 from an inference and say what you could not check. Change only what the goal asks you
-to change. Write the summary and findings to your Output. Collie reports it to the agent
-that asked and closes this Run's agent afterwards; no polling or follow-up pane is needed.
+to change. Write the answer, the cause and the findings to your Output. Collie reports
+it to the agent that asked and closes this Run's agent afterwards; no polling or
+follow-up pane is needed.
+
+Your Output holds:
+
+- `answer`: two or three sentences answering the goal;
+- `cause`: why it happens;
+- `findings`: at most seven, worst severity first, and at most one of them `minor` — fold
+  the small observations into that one. Each finding gives its `severity` and `title`, the
+  `file` and `line` where it has them, its `basis` (`fact` or `inference`), the `evidence`
+  that shows it, and a `suggested` fate: `fix` builds it now, `ticket` files it for later,
+  `investigate` is not known well enough yet, `plan` needs a design first, and `none`
+  records it only.
 
 Put the complete findings and evidence in a Markdown report under `{{run.dir}}/handoffs/`.
 Register it on your Run through `collie_do artefact_register` with `role: report`, or

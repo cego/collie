@@ -184,6 +184,16 @@ export {
   SynthesisSchema,
 } from "./output";
 
+/** The words a finding's status can be: what is still open, what a fix settled, and what a human set. */
+export type FindingWord = "open" | "fixed" | "disputed" | "obsolete" | "dismissed" | "taken";
+
+/**
+ * The findings still somebody's to build: what a human dismissed or another Run took is
+ * left out, and one the reading Run took itself reads open to it. The statuses come from
+ * the Host's `findingStatuses`, never from `findings.json` alone.
+ */
+export { buildable, isOpenFinding, reportIn } from "./finding-status";
+
 /**
  * What a review/fix rally is made of: a workflow that writes its loop in TypeScript
  * converges, stands on a dispute and runs out of rounds where these say, and every
@@ -195,6 +205,7 @@ export {
   blockingKeys,
   conflictingDispositions,
   findingKey,
+  claimedIn,
   sameFinding,
   formatFindings,
   isBlocking,
@@ -223,16 +234,17 @@ export {
 } from "./output";
 
 /**
- * What a Run leaves behind about a review, and where. `leaveReview` writes both halves —
- * the prose a human reads and the findings whatever comes next counts, read back by
- * `findingsIn` — `leaveOutstanding`
- * the findings still standing after a last fix `settleFinalFix` accepted, and `riskLine`
+ * What a Run leaves behind about a review, and where. `leaveFindings` is the one path a
+ * Run's findings are written by, giving each the id it keeps — beside a review's prose
+ * with `leaveReview`, or alone with `leaveOutstanding` (the findings still standing after
+ * a last fix `settleFinalFix` accepted). `findingsIn` reads them back, and `riskLine` is
  * the paragraph an extra axis adds to what a reviewer is asked.
  */
 export {
   FINDINGS_FILE,
   REVIEW_FILE,
   findingsIn,
+  leaveFindings,
   leaveOutstanding,
   leaveReview,
   openFindingsIn,
@@ -1132,6 +1144,18 @@ export interface HostApi {
    * that base cannot be read, null. Take it inside an Activity.
    */
   readonly nothingToLand: (runId: string, cwd: string) => Effect.Effect<string | null>;
+  /**
+   * Each finding the Run at `dir` left, with the status its journal last set on it, so a
+   * workflow reads what is still open from the host rather than from `findings.json` alone.
+   */
+  readonly findingStatuses: (dir: string) => Effect.Effect<
+    ReadonlyArray<{
+      readonly id: string;
+      readonly status: FindingWord;
+      /** The Run the finding was taken by, where it was taken. */
+      readonly run: string | null;
+    }>
+  >;
   /**
    * Merges the merge request this Run recorded at `head`, through the forge's REST merge,
    * never as an admin and never by auto-merge. The Run's landing record is written before
@@ -2083,6 +2107,11 @@ export interface FollowUp {
   readonly when: "succeeded" | "failed" | "always";
   /** What Collie fills in from the Run itself; the rest is the caller's to give. */
   readonly inputs?: Readonly<Record<string, Source>>;
+  /**
+   * What the offer takes from the Run's open findings: `many` ids, or exactly one. A
+   * selecting offer's `findings` input is filled by whoever invokes it, never by Collie.
+   */
+  readonly selects?: "many" | "one";
   /** A further condition on the facts, where how it ended is not the whole of it. */
   readonly eligible?: (facts: ActionFacts) => boolean;
   readonly given?: OfferGiven;
@@ -2132,6 +2161,8 @@ export interface ActionProvider {
   readonly eligible: (facts: ActionFacts) => boolean;
   /** What Collie fills in from the Run itself; the rest is the caller's to give. */
   readonly inputs?: Readonly<Record<string, Source>>;
+  /** `many` ids or exactly one of the Run's open findings, which whoever invokes it chooses. */
+  readonly selects?: "many" | "one";
   readonly given?: OfferGiven;
   readonly ships?: Ships;
   /** What taking it does, which a front door shows and asks about before taking it. */
@@ -2366,6 +2397,14 @@ function offerProblems(metadata: WorkflowMetadata | undefined, workflow: string)
       if (name in (offer.inputs ?? {})) {
         problems.push(`offer "${offer.id}" both fills "${name}" from the Run and gives it`);
       }
+    }
+    const selecting = "selects" in offer ? offer.selects : undefined;
+    const used = (source: Source) => Rec.some(offer.inputs ?? {}, (one) => one === source);
+    if (selecting === "many" && !used("findings")) {
+      problems.push(`offer "${offer.id}" selects findings without the "findings" Source`);
+    }
+    if (selecting === "one" && !used("finding")) {
+      problems.push(`offer "${offer.id}" takes one finding without the "finding" Source`);
     }
   }
   return problems;

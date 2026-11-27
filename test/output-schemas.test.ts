@@ -74,6 +74,45 @@ const REVIEWS = [
   `[]`,
 ];
 
+test("a finding reads its basis, evidence and suggestion, and only the five words are a suggestion", () => {
+  const finding = {
+    severity: "major",
+    title: "the guard",
+    basis: "inference",
+    evidence: "the log never mentions the guard",
+    suggested: "investigate",
+  };
+  const output = { verdict: "findings", findings: [finding] };
+  expect(accepts(ReviewOutputSchema, stringifyJson(output))).toBe(true);
+  expect(parseReviewOutput(stringifyJson(output), "review.json")).toMatchObject({
+    ok: true,
+    value: { findings: [finding] },
+  });
+  for (const suggested of ["fix", "ticket", "investigate", "plan", "none"]) {
+    expect(
+      accepts(
+        ReviewOutputSchema,
+        stringifyJson({ ...output, findings: [{ ...finding, suggested }] }),
+      ),
+    ).toBe(true);
+  }
+  for (const suggested of ["later", "FIX", ""]) {
+    const text = stringifyJson({ ...output, findings: [{ ...finding, suggested }] });
+    expect(accepts(ReviewOutputSchema, text)).toBe(false);
+    const parsed = parseReviewOutput(text, "review.json");
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.error).toContain("findings[0].suggested");
+    }
+  }
+  expect(
+    accepts(
+      ReviewOutputSchema,
+      stringifyJson({ ...output, findings: [{ ...finding, basis: "guess" }] }),
+    ),
+  ).toBe(false);
+});
+
 test("a review decodes the finding ledger and names an invalid status", () => {
   const findings = Arr.map(["open", "fixed", "disputed", "obsolete"], (status, index) => ({
     id: `F${index + 1}`,

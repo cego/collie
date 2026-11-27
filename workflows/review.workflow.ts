@@ -18,6 +18,7 @@ import {
   isBlocking,
   mrLabel,
   watch,
+  buildable,
   formatFindings,
   findingKey,
   findingsIn,
@@ -42,6 +43,7 @@ import {
 import type { Finding, SynthesisReport, Woke, Answered } from "collie";
 import { Effect, FileSystem, Schema } from "effect";
 import { connection } from "./connections.ts";
+import { fileToLinear, investigateFurther, planThis } from "./selected.ts";
 import { reassess, repliesTo, formatReplies } from "./reassessment.ts";
 import * as Activity from "effect/workflow/Activity";
 import {
@@ -113,6 +115,10 @@ export default defineWorkflow({
         with: "Reads and answers the pull request",
         without: "Reviews the local diff only",
       },
+      linear: {
+        with: "Files a finding as an issue through its Linear MCP",
+        without: "Keeps its findings in Collie",
+      },
     },
   },
   title: "review — an MR, a branch diff, or the working tree",
@@ -122,6 +128,11 @@ export default defineWorkflow({
     target: Schema.String,
     slack: Schema.optionalKey(Schema.String),
     improving: Schema.optionalKey(Schema.Boolean),
+    findings: Schema.optionalKey(
+      Schema.Array(Schema.String).annotate({
+        description: "The findings this Run is to build, by id; empty where none were chosen",
+      }),
+    ),
     plan: Schema.optionalKey(
       Schema.String.annotate({
         description: "The spec the change is held to; empty where there is none",
@@ -140,13 +151,15 @@ export default defineWorkflow({
   hints: { target: "diff-target", slack: "internal", improving: "internal" },
   follows: FOLLOW,
   outcome: { fixed: "review" },
+  followUps: [investigateFurther, planThis, fileToLinear],
   actions: [
     {
       id: "improve",
       title: "Improve",
       workflow: "review-improve",
       arguments: {},
-      inputs: { target: "diff-target", previous: "run-id" },
+      inputs: { target: "diff-target", previous: "run-id", findings: "findings" },
+      selects: "many",
       eligible: (facts) => {
         if (facts.review?.owned !== true) {
           throw new Error("Collie never pushes to someone else's branch");
@@ -220,14 +233,23 @@ export default defineWorkflow({
           : yield* fs
               .readFileString(`${earlierPlace.dir}/${REVIEW_FILE}`)
               .pipe(Effect.orElseSucceed(() => ""));
+      const earlierFindings = earlierPlace === null ? [] : yield* findingsIn(earlierPlace.dir);
+      const earlierSaid =
+        earlierPlace === null ? [] : yield* host.findingStatuses(earlierPlace.dir);
+      const buildableEarlier = new Map(
+        Arr.map(
+          buildable(earlierFindings, earlierSaid, run.id),
+          (one) => [one.id ?? "", one.status ?? "open"] as const,
+        ),
+      );
       let ledger: ReadonlyArray<Finding> | undefined =
         earlierPlace === null
           ? undefined
-          : Arr.map(yield* findingsIn(earlierPlace.dir), (one, index) => ({
-              ...one,
-              id: one.id ?? `${previous}-F${index + 1}`,
-              status: one.status ?? "open",
-            }));
+          : Arr.flatMap(earlierFindings, (one, index) => {
+              const id = one.id ?? `${previous}-F${index + 1}`;
+              const status: Finding["status"] = buildableEarlier.get(id);
+              return status === undefined ? [] : [{ ...one, id, status }];
+            });
       const earlierHead =
         earlierPlace === null
           ? ""
@@ -235,6 +257,11 @@ export default defineWorkflow({
               .readFileString(`${earlierPlace.dir}/review-head`)
               .pipe(Effect.orElseSucceed(() => ledger?.[0]?.head ?? ""));
       const improving = requested.improving === true;
+      const chosen = improving ? (requested.findings ?? []) : [];
+      const selected = chosen.length > 0 ? (ledger ?? []) : [];
+      if (chosen.length > 0) {
+        ledger = Arr.filter(selected, (one) => Arr.contains(chosen, one.id ?? ""));
+      }
       const fixContext =
         kind === "mr"
           ? yield* Activity.make({
@@ -723,7 +750,7 @@ export default defineWorkflow({
           )));
 
       if (improving) {
-        yield* leaveReview(place.dir, synthesis);
+        yield* leaveReview(place.dir, synthesis, chosen.length > 0 ? selected : []);
         yield* fs.writeFileString(`${place.dir}/review-head`, head).pipe(Effect.orDie);
       }
 

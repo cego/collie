@@ -12,6 +12,7 @@ const facts = (over: Partial<WorkFacts> = {}) => ({
   planIssues: 0,
   disposed: false,
   asking: false,
+  choosing: false,
   ...over,
 });
 
@@ -25,6 +26,15 @@ test("work with a branch, a merge request or tickets is work somebody has to fil
 test("succeeded work that left nothing to file is landed, whatever ran it", () => {
   const standing = standingOf(facts());
   expect(standing).toEqual({ unfiled: true, planReady: false, landed: true });
+});
+
+test("a settled Run holding findings it offers to build is not landed, and one with no such offer is", () => {
+  expect(standingOf(facts({ branch: "mk/thing", mr: "mk/collie!65", choosing: true })).landed).toBe(
+    false,
+  );
+  expect(standingOf(facts({ branch: "mk/thing", mr: "mk/collie!65" })).landed).toBe(true);
+  expect(standingOf(facts({ choosing: true })).unfiled).toBe(false);
+  expect(standingOf(facts({ choosing: true })).landed).toBe(false);
 });
 
 test("succeeded work with tickets and nothing else is a plan ready to implement", () => {

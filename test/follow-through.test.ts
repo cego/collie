@@ -23,6 +23,8 @@ import { machineHerd } from "../src/steering";
 import { fakeSlack, signedInToSlack } from "./support/slack";
 import { slackApi } from "../src/slack";
 import { findingsIn } from "../src/output";
+import { findingsWithStatus, openCountIn, recordFindingStatus } from "../src/finding-status";
+import { givenOfferInput } from "../src/board-model";
 import { writeTask } from "../src/task";
 import { registerAgent, scopeFor } from "../src/registry";
 import { isJsonObject, isString } from "../src/schema";
@@ -125,16 +127,19 @@ const entryOf = (id: string) =>
   }).pipe(Effect.orDie);
 
 const F1 = {
-  id: "F1",
   severity: "major",
   file: "src/a.ts",
   title: "guard the input",
 };
 const F2 = {
-  id: "F2",
   severity: "major",
   file: "src/b.ts",
   title: "close the handle",
+};
+const F3 = {
+  severity: "minor",
+  file: "src/c.ts",
+  title: "name the log line",
 };
 const review = (findings: ReadonlyArray<Schema.Json>) => ({
   verdict: findings.length === 0 ? "clean" : "findings",
@@ -364,6 +369,15 @@ test("!482: a signed fixed claim without a push reassesses only its finding", ()
           const { runId } = yield* host.started(yield* entryOf("review"), "reply-482", {
             target: TARGET,
           });
+          // WARNING: the Run gives its findings their ids, so a fixture naming one is queued once it is known.
+          yield* rig.queueOutputs([
+            review([F1, F2]),
+            {
+              findings: [
+                { id: `${runId}-F1`, status: "open", reason: "The guard is still missing." },
+              ],
+            },
+          ]);
           yield* host.mergeWatched;
           yield* until(
             () => host.watchOf(runId, TARGET),
@@ -379,7 +393,7 @@ test("!482: a signed fixed claim without a push reassesses only its finding", ()
                     id: 482,
                     author: "ann",
                     at: "2026-11-11T10:00:00Z",
-                    body: `F1: Fixed in \`${head}\`.\n\nPosted by Collie's Run run-author on vm-author.`,
+                    body: `${runId}-F1: Fixed in \`${head}\`.\n\nPosted by Collie's Run run-author on vm-author.`,
                   },
                 ],
               }),
@@ -401,8 +415,8 @@ test("!482: a signed fixed claim without a push reassesses only its finding", ()
             Option.getOrElse(() => ""),
           );
           expect(prompt).toContain("Collie-signed by run-author · @ann · 482");
-          expect(prompt).toContain("- F1: open");
-          expect(prompt).not.toContain("- F2: ");
+          expect(prompt).toContain(`- ${runId}-F1: open`);
+          expect(prompt).not.toContain(`- ${runId}-F2: `);
           expect(yield* host.agentStarts).toHaveLength(2);
           expect(
             Arr.filter(forge.requests(), (one) => Str.endsWith("/approve")(one.url)),
@@ -423,7 +437,6 @@ for (const id of ["review", "second-look"]) {
             {
               findings: [
                 {
-                  id: "F1",
                   status: "disputed",
                   reason: "An empty input still reaches the handler.",
                 },
@@ -435,6 +448,20 @@ for (const id of ["review", "second-look"]) {
             forge,
             Effect.gen(function* () {
               const { runId } = yield* host.started(entry, "dispute", { target: TARGET });
+              // WARNING: the Run gives its findings their ids, so a fixture naming one is queued once it is known.
+              yield* rig.queueOutputs([
+                review([F1]),
+                {
+                  findings: [
+                    {
+                      id: `${runId}-F1`,
+                      status: "disputed",
+                      reason: "An empty input still reaches the handler.",
+                    },
+                  ],
+                },
+                review([{ ...F1, status: "fixed" }]),
+              ]);
               yield* host.mergeWatched;
               yield* until(
                 () => host.watchOf(runId, TARGET),
@@ -444,7 +471,7 @@ for (const id of ["review", "second-look"]) {
                 id: 482,
                 author: "ann",
                 at: "2026-11-11T10:00:00Z",
-                body: "F1: I dispute this; the caller validates it.",
+                body: `${runId}-F1: I dispute this; the caller validates it.`,
               };
               let now = yield* forge.model();
               yield* forge.set({ ...now, mrs: [mr(first, { comments: [dispute] })] });
@@ -466,7 +493,7 @@ for (const id of ["review", "second-look"]) {
                       {
                         ...dispute,
                         id: 483,
-                        body: "F1: I still dispute it.\n\nPosted by Collie's Run run-author on vm-author.",
+                        body: `${runId}-F1: I still dispute it.\n\nPosted by Collie's Run run-author on vm-author.`,
                       },
                     ],
                   }),
@@ -488,7 +515,10 @@ for (const id of ["review", "second-look"]) {
               yield* registry.answer({
                 runId,
                 decision: decision.decision,
-                value: choice === "Drop" ? `Drop it (approve ${first})` : "Keep F1 (no approval)",
+                value:
+                  choice === "Drop"
+                    ? `Drop it (approve ${first})`
+                    : `Keep ${runId}-F1 (no approval)`,
                 request: "settle-dispute",
               });
               yield* until(
@@ -512,7 +542,9 @@ for (const id of ["review", "second-look"]) {
                   ...now,
                   mrs: [
                     mr(first, {
-                      comments: [{ ...dispute, id: 484, body: "F1: please reconsider again" }],
+                      comments: [
+                        { ...dispute, id: 484, body: `${runId}-F1: please reconsider again` },
+                      ],
                     }),
                   ],
                 });
@@ -564,13 +596,13 @@ for (const id of ["review", "second-look"]) {
                       id: 482,
                       author: "ann",
                       at: "2026-11-11T10:00:00Z",
-                      body: `F1: Fixed in \`${next}\`.\n\nPosted by Collie's Run run-author on vm-author.`,
+                      body: `${runId}-F1: Fixed in \`${next}\`.\n\nPosted by Collie's Run run-author on vm-author.`,
                     },
                     {
                       id: 483,
                       author: "ann",
                       at: "2026-11-11T10:01:00Z",
-                      body: "F2: I checked the handle manually.",
+                      body: `${runId}-F2: I checked the handle manually.`,
                     },
                   ],
                 }),
@@ -1345,7 +1377,7 @@ test.each(["major", "minor"] as const)(
             );
             expect(done?.status.status).toBe("complete");
             expect(yield* findingsIn(`${host.dir()}/runs/${improved.runId}`)).toMatchObject([
-              { id: "F1", status: "fixed", head: second },
+              { id: `${improved.runId}-F1`, status: "fixed", head: second },
             ]);
             expect(yield* host.agentStarts).toHaveLength(3);
             const launched = Arr.map(
@@ -1358,6 +1390,255 @@ test.each(["major", "minor"] as const)(
       }),
     ),
 );
+
+test("Improve builds only the findings it was given, and the rest stay open on the reviewed Run", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      yield* repository;
+      yield* git(["checkout", "-q", "-b", "feature"]);
+      const first = yield* pushed("needs a guard");
+      yield* git(["push", "-q", "origin", "feature"]);
+      yield* git(["config", "--unset-all", `url.${rig.root}/origin.git.insteadOf`]);
+      yield* git(["remote", "set-url", "origin", `https://${PROJECT}.git`]);
+      yield* git(["remote", "set-url", "--push", "origin", `${rig.root}/origin.git`]);
+      const forge = yield* host.gitlab(model(first, { mrs: [mr(first, { author: "mk" })] }));
+      yield* rig.queueOutputs([
+        review([F1, F2, F3]),
+        { writes: [], output: null, status: "working" },
+        review([
+          { ...F1, status: "fixed" },
+          { ...F3, status: "fixed" },
+        ]),
+      ]);
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          const registry = yield* Registry;
+          yield* registry.load(`${ROOT}workflows/review-improve.workflow.ts`);
+          const parent = yield* host.started(yield* entryOf("review"), "review-selected", {
+            target: TARGET,
+          });
+          yield* until(
+            () => asked(parent.runId),
+            (rows) => rows.length > 0,
+          );
+          const reviewed = `${host.dir()}/runs/${parent.runId}`;
+          const ids = Arr.map(yield* findingsIn(reviewed), (one) => one.id);
+          expect(ids).toHaveLength(3);
+          const improved = yield* registry.invoke({
+            runId: parent.runId,
+            offer: "improve",
+            input: givenOfferInput(null, { findings: `${ids[0]}, ${ids[2]}` }),
+            request: "improve-two",
+          });
+          const fs = yield* FileSystem.FileSystem;
+          const promptFile = `${host.dir()}/agents/${improved.runId}/fix.prompt.md`;
+          yield* until(
+            () => fs.exists(promptFile),
+            (exists) => exists,
+          );
+          const prompt = yield* fs.readFileString(promptFile);
+          expect(prompt).toContain(F1.title);
+          expect(prompt).toContain(F3.title);
+          expect(prompt).not.toContain(F2.title);
+          expect(
+            Arr.map(yield* findingsIn(`${host.dir()}/runs/${improved.runId}`), (one) => one.title),
+          ).toEqual([F1.title, F3.title]);
+          expect(yield* findingsWithStatus(reviewed)).toMatchObject([
+            { id: ids[0], status: "taken", offer: "improve", run: improved.runId },
+            { id: ids[1], status: "open", run: null },
+            { id: ids[2], status: "taken", offer: "improve", run: improved.runId },
+          ]);
+          const section = Effect.gen(function* () {
+            const { board } = yield* host.mergeWatched;
+            const { views } = yield* board;
+            const card = Option.getOrThrow(
+              Arr.findFirst(views, (view) => Arr.some(view.runs, (one) => one === parent.runId)),
+            );
+            return sectionOf(card);
+          });
+          expect(yield* section).toBe("needs-you");
+          yield* recordFindingStatus(reviewed, {
+            id: ids[1]!,
+            status: "dismissed",
+            reason: "not worth it",
+            offer: null,
+            run: null,
+            by: "mk",
+            at: "2026-11-24T10:00:00.000Z",
+          });
+          expect(yield* openCountIn(reviewed)).toBe(0);
+          const checkout = yield* (yield* Host).place(improved.runId);
+          yield* git(["commit", "-q", "--allow-empty", "-m", "guard the input"], checkout.cwd);
+          yield* git(
+            ["push", "-q", "origin", `HEAD:refs/heads/feature`, `HEAD:${MR_REF}`],
+            checkout.cwd,
+          );
+          const second = Str.trim((yield* git(["rev-parse", "HEAD"], checkout.cwd)).stdout);
+          yield* forge.set(
+            model(second, { mrs: [mr(second, { author: "mk" })], ancestry: { [second]: [first] } }),
+          );
+          yield* fs.writeFileString(
+            `${host.dir()}/agents/${improved.runId}/fix.json`,
+            yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+              verdict: "clean",
+              fixed: [F1, F3],
+              disputed: [],
+              checks: [],
+            }),
+          );
+          const fixer = Arr.findLast(yield* rig.calls(), (one) => one.cmd === "terminal.run").pipe(
+            Option.getOrThrow,
+          );
+          yield* (yield* rig.startCore()).report(
+            Option.getOrThrow(Schema.decodeUnknownOption(Schema.String)(fixer.params?.name)),
+            "idle",
+          );
+          const done = yield* until(
+            () => host.status(improved.runId),
+            (view) => view?.status.status === "complete" || view?.status.status === "failed",
+          );
+          expect(done?.status.status).toBe("complete");
+        }),
+      );
+    }),
+  ));
+
+test("Improve taken without ids builds only the findings still open on the reviewed Run", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      yield* repository;
+      yield* git(["checkout", "-q", "-b", "feature"]);
+      const first = yield* pushed("needs a guard");
+      yield* git(["push", "-q", "origin", "feature"]);
+      yield* git(["config", "--unset-all", `url.${rig.root}/origin.git.insteadOf`]);
+      yield* git(["remote", "set-url", "origin", `https://${PROJECT}.git`]);
+      yield* git(["remote", "set-url", "--push", "origin", `${rig.root}/origin.git`]);
+      const forge = yield* host.gitlab(model(first, { mrs: [mr(first, { author: "mk" })] }));
+      yield* rig.queueOutputs([
+        review([F1, F2, F3]),
+        { writes: [], output: null, status: "working" },
+        review([
+          { ...F1, status: "fixed" },
+          { ...F3, status: "fixed" },
+        ]),
+      ]);
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          const registry = yield* Registry;
+          yield* registry.load(`${ROOT}workflows/review-improve.workflow.ts`);
+          const parent = yield* host.started(yield* entryOf("review"), "review-open", {
+            target: TARGET,
+          });
+          yield* until(
+            () => asked(parent.runId),
+            (rows) => rows.length > 0,
+          );
+          const reviewed = `${host.dir()}/runs/${parent.runId}`;
+          const ids = Arr.map(yield* findingsIn(reviewed), (one) => one.id ?? "");
+          expect(ids).toHaveLength(3);
+          yield* recordFindingStatus(reviewed, {
+            id: ids[1]!,
+            status: "dismissed",
+            reason: "not worth it",
+            offer: null,
+            run: null,
+            by: "mk",
+            at: "2026-11-24T10:00:00.000Z",
+          });
+
+          const improved = yield* registry.invoke({
+            runId: parent.runId,
+            offer: "improve",
+            input: {},
+            request: "improve-open",
+          });
+          const fs = yield* FileSystem.FileSystem;
+          const promptFile = `${host.dir()}/agents/${improved.runId}/fix.prompt.md`;
+          yield* until(
+            () => fs.exists(promptFile),
+            (exists) => exists,
+          );
+          const prompt = yield* fs.readFileString(promptFile);
+          expect(prompt).toContain(F1.title);
+          expect(prompt).toContain(F3.title);
+          expect(prompt).not.toContain(F2.title);
+          expect(
+            Arr.map(yield* findingsIn(`${host.dir()}/runs/${improved.runId}`), (one) => one.title),
+          ).toEqual([F1.title, F3.title]);
+        }),
+      );
+    }),
+  ));
+
+test("Plan this starts a plan Run told the one finding of a review Run it was chosen for", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      yield* repository;
+      yield* git(["checkout", "-q", "-b", "feature"]);
+      const first = yield* pushed("needs a guard");
+      yield* git(["push", "-q", "origin", "feature"]);
+      yield* git(["config", "--unset-all", `url.${rig.root}/origin.git.insteadOf`]);
+      yield* git(["remote", "set-url", "origin", `https://${PROJECT}.git`]);
+      yield* git(["remote", "set-url", "--push", "origin", `${rig.root}/origin.git`]);
+      const forge = yield* host.gitlab(model(first, { mrs: [mr(first, { author: "mk" })] }));
+      const detail = "The input is trusted without a guard.";
+      yield* rig.queueOutputs([review([{ ...F1, detail }, F2, F3])]);
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          const registry = yield* Registry;
+          yield* registry.load(`${ROOT}workflows/plan.workflow.ts`);
+          yield* registry.load(`${ROOT}workflows/review.workflow.ts`);
+          const parent = yield* host.started(yield* entryOf("review"), "review-plan", {
+            target: TARGET,
+          });
+          const rows = yield* until(
+            () => asked(parent.runId),
+            (rows) => rows.length > 0,
+          );
+          const reviewed = `${host.dir()}/runs/${parent.runId}`;
+          const ids = Arr.map(yield* findingsIn(reviewed), (one) => one.id ?? "");
+          expect(ids).toHaveLength(3);
+          yield* host.mergeWatched;
+          // WARNING: a follow-up is a child of a finished Run, so the review is answered before it offers one.
+          yield* (yield* Registry).answer({
+            runId: parent.runId,
+            decision: Option.getOrThrow(Arr.head(rows)).decision,
+            value: "Don't post",
+            request: "done-reviewing",
+          });
+          yield* until(
+            () => host.status(parent.runId),
+            (row) => row?.status.status === "complete",
+          );
+          const offered = Option.getOrThrow(
+            Arr.findFirst(yield* registry.offers(parent.runId), (one) => one.id === "plan-this"),
+          );
+          expect({ selects: offered.selects, unavailable: offered.unavailable }).toEqual({
+            selects: "one",
+            unavailable: null,
+          });
+
+          const child = yield* registry.invoke({
+            runId: parent.runId,
+            offer: "plan-this",
+            input: givenOfferInput(null, { findings: ids[0] ?? "" }),
+            request: "plan-first",
+          });
+          const goal = String((yield* host.status(child.runId))?.input.goal);
+          expect(goal).toContain(F1.title);
+          expect(goal).toContain(detail);
+          expect(yield* findingsWithStatus(reviewed)).toMatchObject([
+            { id: ids[0], status: "taken", offer: "plan-this", run: child.runId },
+            { id: ids[1], status: "open", run: null },
+            { id: ids[2], status: "open", run: null },
+          ]);
+        }),
+      );
+    }),
+  ));
 
 test("Slack permalink admission validates the linked MR and joins its follow claim", () =>
   host.runEffect(
@@ -1846,7 +2127,7 @@ for (const id of ["review", "second-look"]) {
           { ...F1, status: "fixed" },
           { ...F2, status: "fixed" },
         ]);
-        const discovered = { id: "F3", severity: "major", title: "validate the redirect" };
+        const discovered = { severity: "major", title: "validate the redirect" };
         yield* rig.queueOutputs([
           review([F1, F2]),
           review([...fixed.findings, discovered]),
@@ -1909,7 +2190,13 @@ for (const id of ["review", "second-look"]) {
               `<!-- collie:${runId} round 1 at ${first} by mk -->`,
               `<!-- collie:${runId} round 3 at ${third} by mk -->`,
             ]);
-            expect(notes[1]).toContain("F3: fixed — validate the redirect");
+            const discoveredId = Option.getOrThrow(
+              Arr.findFirst(
+                yield* findingsIn(`${host.dir()}/runs/${runId}`),
+                (one) => one.title === "validate the redirect",
+              ),
+            ).id;
+            expect(notes[1]).toContain(`${discoveredId}: fixed — validate the redirect`);
             expect(yield* host.agentStarts).toHaveLength(3);
             const journal = yield* readWatchJournal(host.dir());
             expect(discardMarks(journal)).toEqual([[second, third]]);

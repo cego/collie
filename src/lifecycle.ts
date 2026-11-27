@@ -71,6 +71,7 @@ import type {
   RunDetail,
   Controlled,
   Disposition,
+  FindingStatus,
   Seen,
   ProposalCarried,
   ProposalRefused,
@@ -1780,6 +1781,35 @@ export const disposeRun: (
         kind: options.kind,
         ref: options.ref,
         note: options.note,
+        request: options.request,
+      }),
+    options.door,
+  );
+
+export const setFindingRun: (
+  env: PluginEnv,
+  options: {
+    readonly door: Door;
+    readonly runId: string;
+    readonly id: string;
+    readonly status: "dismissed" | "open";
+    readonly reason: string | null;
+    readonly request: string;
+  },
+) => Effect.Effect<
+  { readonly ok: true; readonly value: FindingStatus } | Failure,
+  never,
+  Client
+> = (env, options) =>
+  asksRun(
+    env,
+    options.runId,
+    (client) =>
+      client.setFinding({
+        runId: options.runId,
+        id: options.id,
+        status: options.status,
+        reason: options.reason,
         request: options.request,
       }),
     options.door,

@@ -1,6 +1,6 @@
 # Workflows
 
-Collie ships twelve workflows. This page is the "which one do I want" level: what each is
+Collie ships thirteen workflows. This page is the "which one do I want" level: what each is
 for, what it needs from you, and how they chain. The files under
 [`workflows/`](../workflows) are canonical for step-by-step behavior: each is a TypeScript
 module with its Markdown beside it as content ([the SDK](sdk.md)). Any of them is a fork
@@ -102,11 +102,12 @@ newest finished `plan` runs for this repo and a Linear issue id in the branch na
 candidate is taken as the answer; none or several bring up a menu of them plus **Type it…**,
 which accepts a Linear id or URL, a path to a plan directory, or a plain description of the
 work. What was resolved is recorded with its kind, and the build prompt reads both
-`{{inputs.plan}}` and `{{inputs.plan_kind}}` (`plan-dir`, `linear`, `review`, `followup` or
-`text`). It carries only that kind's instructions, its `## source.<kind>` section of
+`{{inputs.plan}}` and `{{inputs.plan_kind}}` (`plan-dir`, `linear`, `review`, `findings`,
+`followup` or `text`). It carries only that kind's instructions, its `## source.<kind>` section of
 [`implement.md`](../workflows/implement.md), and only the outcome's, its
 `## outcome.<kind>` section; a Run with no outcome kind is told only its checks have to pass.
-`review` is what a run chained from a review carries: the findings are the tickets. For
+`review` is what a run chained from a review carries: the findings are the tickets. Any other
+directory with a `findings.json` is `findings`, and it is built on a branch of its own. For
 `linear` and `text` the implementer writes the spec and a task list into the run's `plan/`
 before it builds, so every run leaves the same audit trail.
 
@@ -555,6 +556,25 @@ change breaks is exactly the blocker worth raising. Minor findings are exempt.
   request it reviewed, verbatim and as a single note, and approves it where nothing live is
   left to fix. Offered only where the target is a merge request, on either forge.
 - **Don't post** — ends the run.
+
+**Improve** is the offer beside that question, for a merge request of your own whose
+findings are still open at the head it reviewed: another Run fixes them and reviews the
+pushed head again, so the review Rally does not hold this one open. It is taken over the
+findings somebody chose — `collie run action <run> improve --input findings=<id>,<id>`, or
+the list a board fills in — and the Improve Run's `findings.json` and its fix rounds hold
+only those, under the ids they already had. Both read `taken` by it on the reviewed Run,
+where an unchosen finding stays `open` until somebody improves or dismisses it: nothing
+else is silently dropped. Taken with no ids — an older start, or a plain
+`collie run action <run> improve` — it takes every finding still open, as it always has:
+one somebody dismissed, or another Run took, is not built again. There is
+no Improve for somebody else's merge request: Collie never pushes to a branch that is not
+yours.
+
+**Investigate further** and **Plan this** are the other two offers a finished review makes,
+each over one open finding somebody chooses: an `investigate` Run whose goal is that finding
+— its title, location, detail, evidence and basis, and the path of `review.md` it came from
+— or a `plan` Run whose goal is the same text. Taking one records the finding `taken` by
+the Run it started, so it is not offered twice.
 
 Its Flow forecasts Review and What next, with Synthesis between them when a fork seats
 multiple reviewers. Fix findings is drawn off the path; each review and menu round keeps
@@ -1095,7 +1115,14 @@ rooted at, and the architect is told the goal so it knows where to look.
 
 **What happens:** an architect rates every candidate by the deletion test, applies the
 strong ones only, and writes a report into the run directory. Everything else is deferred
-with a reason rather than half-applied.
+with a reason rather than half-applied. What was deferred is left as findings through the
+same leave path a review and an investigation use: `findings.json` in the Run's directory,
+each candidate with an id of its own, and nothing written at all when nothing was deferred.
+So a Run that deferred something offers its deferred candidates the way an investigation
+offers what it found — **Implement selected** builds the ones you choose, **Investigate
+further** investigates one of them, **Plan this** plans it, and the one taken reads `taken`
+by the Run it started. A deferred candidate's `From:` line names the report the architect
+wrote, which its Output names and which is kept beside the findings.
 
 **Ends with a menu:** **Implement now** (chains `implement` on the report) or **Stop here**.
 **Implement now** names the branch after the `slug` the architect put in its Output, which
@@ -1216,6 +1243,7 @@ Every other shipped step clears nothing.
 - `review` → `implement`, from **Fix findings in a full implement run**. See
   [Hand-offs](using.md#hand-offs-between-runs).
 - `general` chains into nothing.
+- `file-issue` chains into nothing; one finding in, one issue out.
 - `release` chains into nothing; a failed one offers **Release again** of the same merge
   request.
 - `stage` chains into nothing; a failed one offers **Stage again** of the same merge request.
@@ -1238,11 +1266,24 @@ child's result or ask what next again.
 optionally, the branch with `branch`. A remote start can name the repository by URL or
 `owner/name`; push the named branch first.
 
-**What happens:** one investigator works in the Run's own checkout and returns
-`{ summary, findings: [{ what, evidence }] }`. It changes only what the goal asks,
-has no proof gate and offers no next steps. The host reports
-the result to the agent that started it, then closes the investigator and its Task
-workspace unless another Run or a human pane needs it (`closes: "reported"`).
+**What happens:** one investigator works in the Run's own checkout and returns `answer`,
+`cause` and at most seven `findings`, at most one of them `minor`. A finding is the
+shape a review's is, with a `basis` (`fact` or `inference`), the `evidence` that shows it
+and a `suggested` fate (`fix`, `ticket`, `investigate`, `plan` or `none`), so Desktop
+cards and a `findings` work source read an investigation's findings with nothing added.
+When the investigator's Output is collected, the Run writes `findings.json` and
+`investigation.md` — the answer as its first paragraph, then its Cause, then each finding
+with its location, basis, evidence and suggestion — into the Run's directory, through the
+same leave path a review uses. It changes only what the goal asks and has no proof gate.
+What it found is what it offers next: **Implement selected** builds the findings you choose,
+**Investigate further** investigates one of them, **Plan this** plans it and **File to
+Linear** files one as an issue — the child's goal is that finding as text, with the path of
+`investigation.md` it came from, and it reads `taken` by the Run that was started for it.
+File to Linear is listed unavailable, naming the fix, while the Machine has no Linear MCP
+server: the offer is never hidden, since the finding is still yours to file elsewhere. The host reports the result to the agent that
+started it, then
+closes the investigator and its Task workspace unless another Run or a human pane needs it
+(`closes: "reported"`).
 
 For a speed comparison, the investigator takes a Measurement. It writes the benchmark
 plan in the Run's `handoffs/<slug>.benchmark.json`, calibrates the base against itself
@@ -1253,6 +1294,38 @@ Its Flow forecasts one Step, Investigate, which produces evidence.
 
 Module: [`workflows/investigate.workflow.ts`](../workflows/investigate.workflow.ts),
 with its prompt in [`workflows/investigate.md`](../workflows/investigate.md).
+
+## `file-issue`
+
+**For:** turning one finding into one Linear issue, through the Linear MCP an agent already
+has, without opening Linear yourself.
+
+**Input:** `goal`, the finding as text — its title, where it is, its detail, its evidence,
+its basis and the report it came from. Nothing infers it: `collie run start file-issue
+--input goal="…"` takes words, and the shipped offers fill it from a finding.
+
+**What happens:** one agent files it on the team the Run remembers, as a fresh Run has
+none, so it asks you in its pane which team once and files there. It is told the project
+and commit the finding names, and nothing about Collie, a Run or a step: the issue reads
+as anybody's. Its Output is the issue's `identifier` and `url`, and the Run's result is the
+URL, which is what its card shows and what a list of Runs prints.
+
+**What it needs:** a Linear MCP server on the Machine — `claude mcp add --transport http
+--scope user linear-server https://mcp.linear.app/mcp`, which is the fix
+[`collie connections`](cli.md#connections) and the offer that starts it both name. Collie
+has no Linear client or credential of its own; what the agent may reach is its own MCP
+server's.
+
+It is reached from **File to Linear** on a Run whose findings are a review's, an
+investigation's or an architecture Run's deferred candidates, which takes exactly one
+finding and starts this Workflow with it as the goal. Where the Machine has no Linear MCP
+server the offer is listed unavailable with that fix rather than hidden, and taking it
+starts nothing.
+
+Its Flow forecasts one Step, File the issue. It chains into nothing.
+
+Module: [`workflows/file-issue.workflow.ts`](../workflows/file-issue.workflow.ts), with its
+prompt in [`workflows/file-issue.md`](../workflows/file-issue.md).
 
 ## `self-improve`
 

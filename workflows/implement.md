@@ -442,10 +442,24 @@ head is never a finding.
 ## plan.review
 
 A review of work that already exists. `{{inputs.plan}}/review.md` is the review, and the
-same findings as JSON are `{{inputs.plan}}/findings.json`. Copy its findings into the spec
-and write one ticket per finding still open, worst severity first, naming the finding's
-title word for word. The fixes land on the branch that was reviewed, which this checkout
-is already on.
+same findings as JSON are `{{inputs.plan}}/findings.json`. These are the ones you are
+building:
+
+{{inputs.findings}}
+
+Copy those into the spec and write one ticket per finding, worst severity first, naming the
+finding's title word for word. The ones left out are somebody else's to choose. The fixes
+land on the branch that was reviewed, which this checkout is already on.
+
+## plan.findings
+
+A Run left findings for a human. `{{inputs.plan}}/findings.json` is what it found, and the
+report a human reads is `{{inputs.report}}`. These are the ones you are building:
+
+{{inputs.findings}}
+
+Copy those into the spec and write one ticket per finding, worst severity first, naming the
+finding's title word for word. The others are somebody else's to choose.
 
 ## plan.linear
 
@@ -476,14 +490,30 @@ below; Collie hands them to you one at a time, in an order their `Blocked by` li
 ## source.review
 
 A review of work that already exists. `{{inputs.plan}}/review.md` is the spec, and the same
-findings as JSON are `{{inputs.plan}}/findings.json`. The tickets are those findings, worst
-severity first. You are fixing an existing change and this checkout is already on its
-branch, so there is no branch to pick and nothing to check out: the fixes land on the
-branch that was reviewed, and a merge request on it is updated rather than replaced. Write
-the findings you are working from to `{{run.dir}}/plan/SPEC.md` and one ticket per finding
-under `{{run.dir}}/plan/issues/`, so this run records what it set out to fix. A finding you
-disagree with is `disputed` with a reason, exactly as in a fix round — never silently
-skipped.
+findings as JSON are `{{inputs.plan}}/findings.json`. The tickets are these findings, worst
+severity first — the ones you are building:
+
+{{inputs.findings}}
+
+You are fixing an existing change and this checkout is already on its branch, so there is
+no branch to pick and nothing to check out: the fixes land on the branch that was reviewed,
+and a merge request on it is updated rather than replaced. Write those findings to
+`{{run.dir}}/plan/SPEC.md` and one ticket per finding under `{{run.dir}}/plan/issues/`, so
+this run records what it set out to fix. The ones left out are somebody else's to choose. A
+finding you disagree with is `disputed` with a reason, exactly as in a fix round — never
+silently skipped.
+
+## source.findings
+
+A Run left findings for a human. `{{inputs.plan}}/findings.json` is what it found, and the
+report a human reads is `{{inputs.report}}`. These are the ones you are building:
+
+{{inputs.findings}}
+
+Write those to `{{run.dir}}/plan/SPEC.md` and one ticket per finding under
+`{{run.dir}}/plan/issues/`, worst severity first, so this run records what it set out to
+fix. The others are somebody else's to choose. A finding you disagree with is `disputed`
+with a reason, exactly as in a fix round — never silently skipped.
 
 ## source.linear
 

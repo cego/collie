@@ -1,9 +1,13 @@
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
+import { Effect, FileSystem } from "effect";
 import {
   findingKey,
+  findingsIn,
   formatFindings,
+  leaveFindings,
   isBlocking,
+  claimedIn,
   parseFixOutput,
   parseReviewOutput,
   parseSynthesis,
@@ -21,6 +25,7 @@ import type { Verification } from "../src/verify";
 import review522 from "./fixtures/public-text/mr-522-synthesis.json";
 import { leaksIn } from "../src/public-text";
 import { stringifyJson } from "../src/json";
+import { runEffect } from "./support/effect";
 
 // WARNING: whether a check passed is read from the journal on this tree, never from the fix's Output.
 const FINAL = { head_sha: "abc123", fingerprint: "tree-1" };
@@ -810,6 +815,181 @@ test("a last fix naming one of the Run's Checks with no record on the tree stand
     'check "lint" has no verification record — run it through collie verify',
   ]);
 });
+
+const findingsDir = (run: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: "collie-findings-" });
+    const dir = `${root}/${run}`;
+    yield* fs.makeDirectory(dir, { recursive: true });
+    return dir;
+  });
+
+const idsAndTitles = (findings: ReadonlyArray<Finding>) =>
+  Arr.map(findings, (one) => [one.id, one.title]);
+
+test("a rewritten findings file keeps the ids it gave, and never gives a removed one again", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const dir = yield* findingsDir("r-keep");
+      yield* leaveFindings(dir, [
+        { severity: "major", title: "the guard" },
+        { severity: "minor", title: "the name" },
+        { severity: "major", title: "the log" },
+      ]);
+      yield* leaveFindings(dir, [
+        { id: "r-keep-F1", severity: "major", title: "the guard" },
+        { severity: "major", title: "the retry" },
+        { id: "r-keep-F3", severity: "major", title: "the log line" },
+      ]);
+      expect(idsAndTitles(yield* findingsIn(dir))).toEqual([
+        ["r-keep-F1", "the guard"],
+        ["r-keep-F4", "the retry"],
+        ["r-keep-F3", "the log line"],
+      ]);
+      yield* leaveFindings(dir, [
+        { severity: "major", title: "the guard" },
+        { severity: "major", title: "the log line" },
+        { severity: "major", title: "the lock" },
+      ]);
+      expect(idsAndTitles(yield* findingsIn(dir))).toEqual([
+        ["r-keep-F1", "the guard"],
+        ["r-keep-F3", "the log line"],
+        ["r-keep-F5", "the lock"],
+      ]);
+    }),
+  ));
+
+test("an agent's id is kept where it matches one already given, and replaced where it invents one", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const dir = yield* findingsDir("r-agent");
+      yield* leaveFindings(dir, [
+        { severity: "major", title: "the guard" },
+        { severity: "minor", title: "the name" },
+      ]);
+      const written = yield* leaveFindings(dir, [
+        { id: "r-agent-F2", severity: "minor", title: "the name" },
+        { id: "r-agent-F9", severity: "major", title: "the retry" },
+      ]);
+      expect(idsAndTitles(written)).toEqual([
+        ["r-agent-F2", "the name"],
+        ["r-agent-F3", "the retry"],
+      ]);
+      const earlier: Array<Finding> = [
+        { id: "r-earlier-F4", severity: "major", title: "the earlier run's" },
+      ];
+      const kept = yield* leaveFindings(
+        dir,
+        [{ id: "r-earlier-F4", severity: "major", title: "the earlier run's guard" }],
+        earlier,
+      );
+      expect(Arr.map(kept, (one) => one.id)).toEqual(["r-earlier-F4"]);
+    }),
+  ));
+
+test("the same output left again under an agent's own id keeps the ids the first leave gave", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const dir = yield* findingsDir("r-replayed");
+      const said: Array<Finding> = [
+        { id: "r-elsewhere-F1", severity: "major", title: "the guard" },
+        { id: "r-elsewhere-F2", severity: "minor", title: "the name" },
+      ];
+      expect(idsAndTitles(yield* leaveFindings(dir, said))).toEqual([
+        ["r-replayed-F1", "the guard"],
+        ["r-replayed-F2", "the name"],
+      ]);
+      expect(idsAndTitles(yield* leaveFindings(dir, said))).toEqual([
+        ["r-replayed-F1", "the guard"],
+        ["r-replayed-F2", "the name"],
+      ]);
+    }),
+  ));
+
+test("a finding stands in for the ledger's, by an id the ledger holds or else by what it says", () => {
+  const guard: Finding = {
+    id: "r-held-F1",
+    severity: "major",
+    file: "src/a.ts",
+    title: "the guard",
+  };
+  const retry: Finding = {
+    id: "r-held-F2",
+    severity: "major",
+    file: "src/b.ts",
+    title: "the retry",
+  };
+  const ledger = [guard, retry];
+  expect(claimedIn(ledger, { ...retry, id: "r-held-F1" })?.title).toBe("the guard");
+  expect(claimedIn(ledger, { ...guard, id: "F1" })?.title).toBe("the guard");
+  expect(claimedIn(ledger, { ...retry, id: undefined })?.title).toBe("the retry");
+  expect(claimedIn(ledger, { ...guard, id: "r-held-F2" })?.title).toBe("the retry");
+  expect(
+    claimedIn(ledger, { severity: "minor", file: "src/c.ts", title: "the name" }),
+  ).toBeUndefined();
+});
+
+test("a findings file written before ids reads them by position, and leaving it again keeps them", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* findingsDir("r-old");
+      yield* fs.writeFileString(
+        `${dir}/findings.json`,
+        stringifyJson([
+          { file: "a.ts", severity: "major", title: "the guard" },
+          { severity: "minor", title: "the name", line: 4 },
+        ]),
+      );
+      expect(idsAndTitles(yield* findingsIn(dir))).toEqual([
+        ["r-old-F1", "the guard"],
+        ["r-old-F2", "the name"],
+      ]);
+      yield* leaveFindings(dir, yield* findingsIn(dir));
+      expect(idsAndTitles(yield* findingsIn(dir))).toEqual([
+        ["r-old-F1", "the guard"],
+        ["r-old-F2", "the name"],
+      ]);
+    }),
+  ));
+
+test("findings are read from a directory that sits beside an investigation and never held a review", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* findingsDir("r-investigated");
+      yield* fs.writeFileString(
+        `${dir}/investigation.md`,
+        "# Investigation\n\nThe guard is wrong.\n",
+      );
+      yield* fs.writeFileString(
+        `${dir}/findings.json`,
+        stringifyJson([{ id: "r-investigated-F1", severity: "major", title: "the guard" }]),
+      );
+      expect(idsAndTitles(yield* findingsIn(dir))).toEqual([["r-investigated-F1", "the guard"]]);
+    }),
+  ));
+
+test("a finding's basis, evidence and suggestion survive findings.json whole", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const dir = yield* findingsDir("r-noted");
+      const findings: Array<Finding> = [
+        {
+          severity: "major",
+          title: "the guard",
+          basis: "inference",
+          evidence: "tests/guard.test.ts passes without it",
+          suggested: "ticket",
+        },
+      ];
+      yield* leaveFindings(dir, findings);
+      expect(Arr.map(yield* findingsIn(dir), (one) => ({ ...one, id: undefined }))).toEqual([
+        { ...findings[0]!, id: undefined },
+      ]);
+    }),
+  ));
 
 test("an attestation counts as verified on this tree only the checks that passed on it", () => {
   const settled = settleFinalFix(

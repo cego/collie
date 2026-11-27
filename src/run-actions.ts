@@ -26,6 +26,7 @@ import {
   startRun,
   steerRun,
   withdrawNoteRun,
+  setFindingRun,
   resumeRun,
   runViews,
   sweepNow,
@@ -195,6 +196,28 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         request: by.requestId,
         door: by,
       }),
+    ),
+  );
+  registerExecutor("set_finding", (action, by, env) =>
+    carry(
+      setFindingRun(env, {
+        door: by,
+        runId: action.run,
+        id: action.id,
+        status: action.status,
+        reason: action.reason ?? null,
+        request: by.requestId,
+      }).pipe(
+        Effect.map((set) =>
+          set.ok
+            ? {
+                ok: true as const,
+                data: { run: action.run, finding: set.value },
+                human: `${set.value.id} ${set.value.status}${set.value.reason === null ? "" : ` — ${set.value.reason}`}`,
+              }
+            : set,
+        ),
+      ),
     ),
   );
   registerExecutor("navigate", (action) =>

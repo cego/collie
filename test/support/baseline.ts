@@ -70,6 +70,7 @@ import { COMPACTION_PORTS, recordClaudeEvent } from "../../src/compactors";
 import { Children, Host, Run, WorkflowError, evidenceGapsOf } from "../../src/sdk";
 import type { ActionFacts, ChildAsk, Claimed, Issue } from "../../src/sdk";
 import { readStepLines } from "../../src/steps";
+import { buildRunDetail } from "../../src/views";
 import { measuresOf } from "../../src/outcomes";
 import { redact } from "../../src/redact";
 import { leaksIn } from "../../src/public-text";
@@ -105,7 +106,13 @@ import type { BenchmarkPlan, Measurement } from "../../src/measurement-model";
 import { NOTHING_TO_LAND } from "../../src/standing";
 import { MERGE_REQUEST } from "../../src/oversight";
 import { VerifySpecSchema } from "../../src/verify-spec";
-import { findingsIn } from "../../src/output";
+import { findingsIn, leaveFindings } from "../../src/output";
+import {
+  findingText,
+  findingsWithStatus,
+  recordFindingStatus,
+  reportIn,
+} from "../../src/finding-status";
 import {
   FINGERPRINT_MAX_BYTES,
   collect,
@@ -147,6 +154,7 @@ const UNRELATED = {
   stage: "try-it-out",
   "tune-up": "make-haste",
   heal: "mend-it",
+  "file-issue": "raise-the-issue",
 } as const;
 type Shipped = keyof typeof UNRELATED;
 
@@ -583,6 +591,7 @@ const undeclaredWork = () =>
           "self-improve",
           "tune-up",
           "heal",
+          "file-issue",
         ] as const,
         shipped,
       ),
@@ -957,6 +966,167 @@ scenario("stop here is an answer: nothing is started, and the run says where the
       expect(started).toEqual([]);
     }),
   ),
+);
+
+// WARNING: what an architect defers is what somebody may build next, so it is left as findings.
+const DEFERRED_TWO: Schema.Json = {
+  ...REPORT,
+  findings: [],
+  deferred: [
+    {
+      severity: "major",
+      title: "Two registries read the same table",
+      file: "src/registry.ts",
+      line: 12,
+      basis: "fact",
+      evidence: "both names are constructed in main.ts",
+      suggested: "ticket",
+    },
+    { severity: "minor", title: "The adapter's names have drifted", basis: "inference" },
+  ],
+};
+
+const architectureFacts: ActionFacts = {
+  outcome: "feature",
+  succeeded: true,
+  branch: null,
+  mrUrl: null,
+  planIssues: 0,
+  disposed: false,
+  openFindings: 0,
+  diffTarget: null,
+  claim: null,
+};
+
+scenario(
+  "architecture's deferred candidates are its findings, and stopping there leaves them to choose from",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([DEFERRED_TWO]);
+        yield* parked({
+          entry: shipped("architecture"),
+          runId: "r-arch-deferred",
+          input: { goal: "why are there two registries" },
+          decision: "next",
+        });
+        const result = yield* answered({
+          entry: shipped("architecture"),
+          runId: "r-arch-deferred",
+          input: { goal: "why are there two registries" },
+          decision: "next",
+          value: "Stop here",
+        });
+
+        expect(said(result)).toBe("plan/ARCHITECTURE.md: stopped there");
+        const where = runDir(dir, "r-arch-deferred");
+        expect(
+          Arr.map(yield* findingsIn(where), (one) => [one.id, one.title, one.severity]),
+        ).toEqual([
+          ["r-arch-deferred-F1", "Two registries read the same table", "major"],
+          ["r-arch-deferred-F2", "The adapter's names have drifted", "minor"],
+        ]);
+        expect(yield* factOf("r-arch-deferred", "open-findings")).toBe("2");
+
+        const declared = declaredByModule((yield* loadEntry(shipped("architecture"))).metadata);
+        const offered = Arr.map(
+          offersFrom(declared, { ...architectureFacts, openFindings: 2 }),
+          (one) => one.id,
+        );
+        expect(offered).toEqual([
+          "implement-selected",
+          "investigate-further",
+          "plan-this",
+          "file-to-linear",
+        ]);
+        expect(Arr.map(offersFrom(declared, architectureFacts), (one) => one.id)).toEqual([]);
+      }),
+    ),
+);
+
+scenario(
+  "an architecture Run that deferred nothing leaves no findings and finishes as it did",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([REPORT]);
+        yield* parked({
+          entry: shipped("architecture"),
+          runId: "r-arch-nothing",
+          input: { goal: "why are there two registries" },
+          decision: "next",
+        });
+        const result = yield* answered({
+          entry: shipped("architecture"),
+          runId: "r-arch-nothing",
+          input: { goal: "why are there two registries" },
+          decision: "next",
+          value: "Stop here",
+        });
+
+        expect(said(result)).toBe("plan/ARCHITECTURE.md: stopped there");
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.exists(`${runDir(dir, "r-arch-nothing")}/findings.json`)).toBe(false);
+        expect(yield* findingsIn(runDir(dir, "r-arch-nothing"))).toEqual([]);
+        expect(yield* factOf("r-arch-nothing", "open-findings")).toBe("0");
+      }),
+    ),
+);
+
+scenario(
+  "file-issue: the issue Run is told the finding it files and answers with the issue's URL",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const finding = {
+          severity: "major",
+          title: "Two registries read the same table",
+          file: "src/registry.ts",
+          line: 12,
+          basis: "fact" as const,
+          evidence: "both names are constructed in main.ts",
+          suggested: "ticket" as const,
+        };
+        const filed = { identifier: "CEGO-12", url: "https://linear.app/cego/issue/CEGO-12/one" };
+        yield* rig.queueOutputs([filed]);
+        const where = runDir(dir, "r-file-issue");
+        yield* (yield* FileSystem.FileSystem).makeDirectory(where, { recursive: true });
+        yield* leaveFindings(where, [finding]);
+        const [only] = yield* findingsWithStatus(where);
+        const goal = findingText(only!, yield* reportIn(where));
+        const result = yield* ran({
+          entry: shipped("file-issue"),
+          runId: "r-file-issue",
+          input: { goal },
+        });
+
+        expect(result).toMatchObject({ _tag: "Success", success: filed.url });
+        const prompt = yield* asked("r-file-issue", "file-issue");
+        expect(prompt).toContain("Two registries read the same table");
+        expect(prompt).toContain("both names are constructed in main.ts");
+        expect(yield* persona("r-file-issue", "file-issue")).toContain("generalist");
+        const offering = offersFrom(
+          declaredByModule((yield* loadEntry(shipped("investigate"))).metadata),
+          {
+            outcome: "unspecified",
+            succeeded: true,
+            branch: null,
+            mrUrl: null,
+            planIssues: 0,
+            disposed: false,
+            openFindings: 2,
+            diffTarget: null,
+            claim: null,
+          },
+        );
+        expect(
+          Arr.map(
+            Arr.filter(offering, (one) => one.id === "file-to-linear"),
+            (one) => [one.workflow, one.selects],
+          ),
+        ).toEqual([["file-issue", "one"]]);
+      }),
+    ),
 );
 
 const GRILLED = {
@@ -2596,7 +2766,12 @@ for (const name of ["gitlab", "github"] as const) {
               sourceBranch: "feature",
             })),
           });
-          const finding = { id: "F1", severity: "major", file: "src/old.ts", title: "guard input" };
+          const finding = {
+            id: `r-dispute-id-${name}-F1`,
+            severity: "major",
+            file: "src/old.ts",
+            title: "guard input",
+          };
           yield* rig.queueOutputs([
             { ...SYNTHESIS, findings: [finding] },
             {
@@ -2683,8 +2858,8 @@ for (const name of ["gitlab", "github"] as const) {
                 expect(status.status).not.toBe("failed");
                 expect(optionsOf(rows, "post-2")).toContain("Post");
                 expect(yield* findingsIn(runDir(dir, runId))).toMatchObject([
-                  { id: `${runId}-F3`, title: "close handle", status: "open" },
-                  { id: `${runId}-F2`, title: "check response", status: "open" },
+                  { id: `${runId}-F2`, title: "close handle", status: "open" },
+                  { id: `${runId}-F3`, title: "check response", status: "open" },
                   { id: `${runId}-F1`, title: "guard input", status: "fixed" },
                 ]);
               }),
@@ -2713,7 +2888,7 @@ for (const name of ["gitlab", "github"] as const) {
             const next = `r-ledger-${name}-next`;
             const findings = [
               {
-                id: "F1",
+                id: `${first}-F1`,
                 status: "open",
                 severity: "major",
                 file: "src/a.ts",
@@ -2721,7 +2896,7 @@ for (const name of ["gitlab", "github"] as const) {
                 detail: "An empty input crashes the request.",
               },
               {
-                id: "F2",
+                id: `${first}-F2`,
                 status: "open",
                 severity: "major",
                 file: "src/b.ts",
@@ -2740,7 +2915,7 @@ for (const name of ["gitlab", "github"] as const) {
                 findings: Arr.map(findings, (one) => ({
                   ...one,
                   status:
-                    one.id === "F1"
+                    one.id === `${first}-F1`
                       ? mode === "force push"
                         ? "obsolete"
                         : mode === "unchanged" || mode === "clean start" || mode === "unposted"
@@ -2772,7 +2947,7 @@ for (const name of ["gitlab", "github"] as const) {
                 ? []
                 : [
                     {
-                      id: "F1",
+                      id: `${first}-F1`,
                       status: "open",
                       head: REVIEW_HEAD,
                       note:
@@ -2781,7 +2956,7 @@ for (const name of ["gitlab", "github"] as const) {
                           : `<!-- collie:${first} round 1 at ${REVIEW_HEAD} by tester -->`,
                     },
                     {
-                      id: "F2",
+                      id: `${first}-F2`,
                       status: "open",
                       head: REVIEW_HEAD,
                       note:
@@ -2842,8 +3017,8 @@ for (const name of ["gitlab", "github"] as const) {
             if (mode === "clean start") {
               expect(prompt).toContain("Earlier findings ledger:\n[]");
             } else {
-              expect(prompt).toContain('"id": "F1"');
-              expect(prompt).toContain('"id": "F2"');
+              expect(prompt).toContain(`"id": "${first}-F1"`);
+              expect(prompt).toContain(`"id": "${first}-F2"`);
               expect(prompt).toContain('"status": "open"');
             }
             if (mode === "force push") {
@@ -2873,15 +3048,19 @@ for (const name of ["gitlab", "github"] as const) {
               expect(notes[0]).toContain("The unchanged handle leaks after every request.");
               expect(notes[0]).toContain(`<!-- collie:${next} round 1 at ${head} by tester -->`);
             } else if (mode === "clean start") {
-              expect(notes[1]).toContain("F1: open");
+              expect(notes[1]).toContain(`${next}-F1: open`);
               expect(notes[1]).toContain("An empty input crashes the request.");
             } else if (mode !== "unchanged") {
-              expect(notes[1]).toContain(mode === "force push" ? "F1: obsolete" : "F1: fixed");
-              expect(notes[1]).toContain(mode === "resolved" ? "F2: obsolete" : "F2: still open");
+              expect(notes[1]).toContain(
+                mode === "force push" ? `${first}-F1: obsolete` : `${first}-F1: fixed`,
+              );
+              expect(notes[1]).toContain(
+                mode === "resolved" ? `${first}-F2: obsolete` : `${first}-F2: still open`,
+              );
               expect(notes[1]).not.toContain("The unchanged handle leaks");
               expect(notes[1]).not.toContain("close the handle");
               if (mode === "force push") {
-                expect(notes[1]).not.toContain("F1: fixed");
+                expect(notes[1]).not.toContain(`${first}-F1: fixed`);
               }
               if (mode === "resolved") {
                 expect(notes[1]).toContain(`all findings fixed at \`${head}\``);
@@ -3802,7 +3981,12 @@ scenario("what a finished Run of each shipped module offers is the module's own 
           }),
           (offer) => [offer.id, offer.workflow, offer.primary],
         ),
-      ).toEqual([["run-again", idOf("review"), true]]);
+      ).toEqual([
+        ["run-again", idOf("review"), true],
+        ["investigate-further", "investigate", false],
+        ["plan-this", "plan", false],
+        ["file-to-linear", "file-issue", false],
+      ]);
       expect(
         Arr.map(
           offersFrom(review, facts({ diffTarget: "branch:main...HEAD" })),
@@ -3848,7 +4032,20 @@ scenario("what a finished Run of each shipped module offers is the module's own 
         [],
       );
 
-      expect(yield* declaredIn(shipped("architecture"))).toEqual([]);
+      expect(
+        Arr.map(
+          offersFrom(yield* declaredIn(shipped("architecture")), facts({ openFindings: 2 })),
+          (o) => [o.id, o.selects],
+        ),
+      ).toEqual([
+        ["implement-selected", "many"],
+        ["investigate-further", "one"],
+        ["plan-this", "one"],
+        ["file-to-linear", "one"],
+      ]);
+      expect(
+        Arr.map(offersFrom(yield* declaredIn(shipped("architecture")), facts({})), (o) => o.id),
+      ).toEqual([]);
 
       const renovate = yield* declaredIn(shipped("renovate"));
       const failed = facts({ succeeded: false, claim: "project" });
@@ -3879,7 +4076,7 @@ once("moved to a directory of its own, a shipped module is the same workflow", (
       const fs = yield* FileSystem.FileSystem;
       const mine = `${rig.root}/user/workflows`;
       yield* fs.makeDirectory(mine, { recursive: true });
-      for (const name of ["architecture.workflow.ts", "architecture.md"]) {
+      for (const name of ["architecture.workflow.ts", "architecture.md", "selected.ts"]) {
         yield* fs.copyFile(`${ROOT}workflows/${name}`, `${mine}/${name}`);
       }
       yield* rig.queueOutputs([REPORT]);
@@ -3945,7 +4142,14 @@ const ran = (options: {
 scenario("Flow: investigate's reported work is one completed Investigate Step", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* rig.queueOutputs([{ summary: "The peer build is stale", findings: [] }]);
+      yield* rig.queueOutputs([
+        {
+          answer: "The peer's bundle is stale.",
+          cause: "Its watcher ignores the bundle's directory.",
+          summary: "The peer build is stale",
+          findings: [],
+        },
+      ]);
       yield* ran({
         entry: shipped("investigate"),
         runId: "r-investigate-flow",
@@ -3959,30 +4163,129 @@ scenario("Flow: investigate's reported work is one completed Investigate Step", 
   ),
 );
 
-scenario("investigate asks one investigator and returns findings without proof or offers", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const output = {
-        summary: "The peer build is stale",
-        findings: [{ what: "A cached build", evidence: "MachinesPage.vue:12" }],
-      };
-      yield* rig.queueOutputs([output]);
-      const result = yield* ran({
-        entry: shipped("investigate"),
-        runId: "r-investigate",
-        input: { goal: "Why is the peer behind?" },
-      });
-      expect(result).toMatchObject({ _tag: "Success", success: output });
-      const messages = yield* prompts();
-      expect(messages).toHaveLength(1);
-      expect(yield* asked("r-investigate", "investigate")).toContain("Why is the peer behind?");
-      expect(yield* persona("r-investigate", "investigate")).toContain("investigator");
-      const entry = yield* loadEntry(shipped("investigate"));
-      expect(entry.metadata?.closes).toBe("reported");
-      expect(entry.metadata?.outcome).toBeUndefined();
-      expect(entry.metadata?.followUps ?? []).toHaveLength(0);
-    }),
-  ),
+scenario(
+  "investigate asks one investigator and returns findings without proof, offering what it found",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const output = {
+          answer: "The peer's bundle is stale.",
+          cause: "Its watcher ignores the bundle's directory.",
+          summary: "The peer build is stale",
+          findings: [
+            {
+              severity: "major",
+              title: "A cached build",
+              file: "MachinesPage.vue",
+              line: 12,
+              basis: "fact",
+              evidence: "the pane shows an older commit",
+              suggested: "fix",
+            },
+          ],
+        };
+        yield* rig.queueOutputs([output]);
+        const result = yield* ran({
+          entry: shipped("investigate"),
+          runId: "r-investigate",
+          input: { goal: "Why is the peer behind?" },
+        });
+        expect(result).toMatchObject({ _tag: "Success", success: output });
+        const messages = yield* prompts();
+        expect(messages).toHaveLength(1);
+        expect(yield* asked("r-investigate", "investigate")).toContain("Why is the peer behind?");
+        expect(yield* persona("r-investigate", "investigate")).toContain("investigator");
+        const entry = yield* loadEntry(shipped("investigate"));
+        expect(entry.metadata?.closes).toBe("reported");
+        expect(entry.metadata?.outcome).toBeUndefined();
+        expect(Arr.map(entry.metadata?.followUps ?? [], (one) => one.id)).toEqual([
+          "implement-selected",
+          "investigate-further",
+          "plan-this",
+          "file-to-linear",
+        ]);
+      }),
+    ),
+);
+
+scenario(
+  "an investigate Run leaves its answer as the report's first paragraph and its findings with ids",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const answer =
+          "The peer's bundle is stale because its watcher ignores the bundle's directory. Rebuilding the peer fixed it.";
+        const findings: ReadonlyArray<Schema.Json> = [
+          {
+            severity: "major",
+            title: "The watcher ignores the bundle's directory",
+            file: "peer/watch.ts",
+            line: 40,
+            basis: "fact",
+            evidence: "`run watch --dry` lists no path under dist",
+            suggested: "fix",
+          },
+          {
+            severity: "major",
+            title: "Which paths are ignored is written down nowhere",
+            basis: "inference",
+            suggested: "ticket",
+          },
+          {
+            severity: "minor",
+            title: "the dry run's output is unsorted",
+            file: "peer/watch.ts",
+            line: 8,
+            basis: "fact",
+            evidence: "`run watch --dry` prints z before a",
+            suggested: "none",
+          },
+        ];
+        yield* rig.queueOutputs([
+          {
+            answer,
+            cause: "The watcher's ignore list holds the directory the bundle is written to.",
+            summary: "The peer build is stale",
+            findings,
+          },
+        ]);
+        yield* ran({
+          entry: shipped("investigate"),
+          runId: "r-investigate-leaves",
+          input: { goal: "Why is the peer behind?" },
+        });
+        const where = runDir(dir, "r-investigate-leaves");
+        const report = yield* fs.readFileString(`${where}/investigation.md`);
+        expect(Str.split(report, "\n\n")[0]).toBe(answer);
+        expect(report).toContain("## Cause");
+        expect(
+          Arr.map(yield* findingsIn(where), (one) => [one.id, one.severity, one.suggested]),
+        ).toEqual([
+          ["r-investigate-leaves-F1", "major", "fix"],
+          ["r-investigate-leaves-F2", "major", "ticket"],
+          ["r-investigate-leaves-F3", "minor", "none"],
+        ]);
+        const facts = runFacts({
+          id: "r-investigate-leaves",
+          dir: where,
+          evidence: evidenceDir(dir, "r-investigate-leaves"),
+          state: "succeeded",
+        });
+        const detail = yield* buildRunDetail({
+          env: rig.pluginEnv({ COLLIE_ROOT: ROOT }),
+          runId: "r-investigate-leaves",
+          runs: [facts],
+          mr: null,
+          parts: false,
+        });
+        expect(Arr.map(detail?.findings ?? [], (one) => one.title)).toEqual([
+          "The watcher ignores the bundle's directory",
+          "Which paths are ignored is written down nowhere",
+          "the dry run's output is unsorted",
+        ]);
+      }),
+    ),
 );
 
 const HEALED = {
@@ -6783,7 +7086,16 @@ for (const workflow of ["general", "investigate"] as const) {
       runEffect(
         Effect.gen(function* () {
           const runId = `r-measure-${workflow}`;
-          yield* rig.queueOutputs([{ summary: "Search measured", findings: [] }]);
+          yield* rig.queueOutputs([
+            workflow === "investigate"
+              ? {
+                  answer: "Search answers slower.",
+                  cause: "It sorts before it filters.",
+                  summary: "Search measured",
+                  findings: [],
+                }
+              : { summary: "Search measured", findings: [] },
+          ]);
           yield* ran({
             entry: shipped(workflow),
             runId,
@@ -8931,6 +9243,109 @@ scenario(
 );
 
 scenario(
+  "under inline_plan: on, a review is planned for only the findings chosen, and the rest need no ticket",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-inline-chosen";
+        const fs = yield* FileSystem.FileSystem;
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const reviewed = `${rig.root}/reviewed-chosen`;
+        yield* fs.makeDirectory(reviewed, { recursive: true });
+        yield* fs.writeFileString(`${reviewed}/review.md`, "# Review\n\nThree things are wrong.\n");
+        yield* fs.writeFileString(
+          `${reviewed}/findings.json`,
+          asJson([
+            { id: "r-reviewed-F1", severity: "major", title: "the guard is wrong" },
+            { id: "r-reviewed-F2", severity: "major", title: "the retry drops the body" },
+            { id: "r-reviewed-F3", severity: "minor", title: "the log line misses the id" },
+          ]),
+        );
+        yield* approve(runId, ["unit"]);
+        yield* plansFirst(runId);
+        const chosenPlan = plannedAs(runId, [
+          { file: "01-guard.md", title: "the guard is wrong", blockedBy: "None" },
+          { file: "02-log.md", title: "the log line misses the id", blockedBy: "None" },
+        ]);
+        yield* rig.queueOutputs([chosenPlan, chosenPlan, BUILT, BUILT, CLEAN_SYNTHESIS, OPENED]);
+
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: {
+            plan: reviewed,
+            findings: ["r-reviewed-F1", "r-reviewed-F3"],
+            ...FINISH,
+          },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        const planning = yield* asked(runId, "plan");
+        expect(planning).toContain("the guard is wrong");
+        expect(planning).toContain("the log line misses the id");
+        expect(planning).not.toContain("the retry drops the body");
+      }),
+    ),
+);
+
+scenario(
+  "under inline_plan: on, an ID-less review start plans and builds only the findings still open, and a dismissed one needs no ticket",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const runId = "r-inline-dismissed";
+        const fs = yield* FileSystem.FileSystem;
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const reviewed = `${rig.root}/reviewed-dismissed`;
+        yield* fs.makeDirectory(reviewed, { recursive: true });
+        yield* fs.writeFileString(`${reviewed}/review.md`, "# Review\n\nThree things are wrong.\n");
+        yield* fs.writeFileString(
+          `${reviewed}/findings.json`,
+          asJson([
+            { id: "r-reviewed-F1", severity: "major", title: "the guard is wrong" },
+            { id: "r-reviewed-F2", severity: "major", title: "the retry drops the body" },
+            { id: "r-reviewed-F3", severity: "minor", title: "the log line misses the id" },
+          ]),
+        );
+        yield* recordFindingStatus(reviewed, {
+          id: "r-reviewed-F2",
+          status: "dismissed",
+          reason: "not worth it",
+          offer: null,
+          run: null,
+          by: "mk",
+          at: "2026-11-24T10:00:00.000Z",
+        });
+        yield* approve(runId, ["unit"]);
+        yield* plansFirst(runId);
+        const openPlan = plannedAs(runId, [
+          { file: "01-guard.md", title: "the guard is wrong", blockedBy: "None" },
+          { file: "02-log.md", title: "the log line misses the id", blockedBy: "None" },
+        ]);
+        yield* rig.queueOutputs([openPlan, openPlan, BUILT, BUILT, CLEAN_SYNTHESIS, OPENED]);
+
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId,
+          input: { plan: reviewed, ...FINISH },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        const planning = yield* asked(runId, "plan");
+        expect(planning).toContain("the guard is wrong");
+        expect(planning).not.toContain("the retry drops the body");
+        expect(yield* asked(runId, "01-guard.md")).not.toContain("the retry drops the body");
+      }),
+    ),
+);
+
+scenario(
   "under inline_plan: on, a plan whose tickets cannot be read goes back to planning once, and halts naming why",
   () =>
     runEffect(
@@ -9270,6 +9685,132 @@ scenario("a review module's own directory is a review to build from, not a wall 
       const building = yield* asked("r-impl-review", "build");
       expect(building).toContain(`Work source (review): ${reviewed}`);
       expect(building).toContain(`\`${reviewed}/review.md\` is the spec`);
+    }),
+  ),
+);
+
+scenario(
+  "an investigate module's own directory is findings to build from, and no review's branch",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* noGitlabMrs(bin);
+        yield* repository();
+        const fs = yield* FileSystem.FileSystem;
+        const found = `${rig.root}/investigated`;
+        yield* fs.makeDirectory(found, { recursive: true });
+        yield* fs.writeFileString(
+          `${found}/investigation.md`,
+          "# Investigation\n\nThe guard is wrong.\n",
+        );
+        yield* fs.writeFileString(
+          `${found}/findings.json`,
+          asJson([{ id: "r-investigate-F1", severity: "major", title: "the guard" }]),
+        );
+        yield* approve("r-impl-findings", ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+
+        yield* ran({
+          entry: shipped("implement"),
+          runId: "r-impl-findings",
+          input: { plan: found, ...FINISH },
+        });
+        yield* bin.restore();
+
+        const building = yield* asked("r-impl-findings", "build");
+        expect(building).toContain(`Work source (findings): ${found}`);
+        expect(building).toContain(`\`${found}/findings.json\` is what it found`);
+        expect(building).not.toContain("fixes land on the branch that was reviewed");
+      }),
+    ),
+);
+
+scenario("implement is asked to build only the findings whose ids it was given", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const bin = yield* FakeBin.make(`${rig.root}/bin`);
+      yield* noGitlabMrs(bin);
+      yield* repository();
+      const fs = yield* FileSystem.FileSystem;
+      const found = `${rig.root}/chosen`;
+      yield* fs.makeDirectory(found, { recursive: true });
+      yield* fs.writeFileString(
+        `${found}/findings.json`,
+        asJson([
+          { id: "r-investigated-F1", severity: "major", title: "the guard", suggested: "fix" },
+          { id: "r-investigated-F2", severity: "major", title: "the retry", suggested: "fix" },
+          {
+            id: "r-investigated-F3",
+            severity: "minor",
+            title: "the log line",
+            suggested: "ticket",
+          },
+        ]),
+      );
+      yield* approve("r-impl-chosen", ["unit"]);
+      yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+
+      yield* ran({
+        entry: shipped("implement"),
+        runId: "r-impl-chosen",
+        input: { plan: found, findings: ["r-investigated-F1", "r-investigated-F3"], ...FINISH },
+      });
+      yield* bin.restore();
+
+      const building = yield* asked("r-impl-chosen", "build");
+      expect(building).toContain("the guard");
+      expect(building).toContain("the log line");
+      expect(building).not.toContain("the retry");
+    }),
+  ),
+);
+
+scenario("implement builds only the findings still open when it is given no ids", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const bin = yield* FakeBin.make(`${rig.root}/bin`);
+      yield* noGitlabMrs(bin);
+      yield* repository();
+      const fs = yield* FileSystem.FileSystem;
+      const found = `${rig.root}/opened`;
+      yield* fs.makeDirectory(found, { recursive: true });
+      yield* fs.writeFileString(
+        `${found}/findings.json`,
+        asJson([
+          { id: "r-investigated-F1", severity: "major", title: "the guard", suggested: "fix" },
+          { id: "r-investigated-F2", severity: "major", title: "the retry", suggested: "fix" },
+          {
+            id: "r-investigated-F3",
+            severity: "minor",
+            title: "the log line",
+            suggested: "ticket",
+          },
+        ]),
+      );
+      yield* recordFindingStatus(found, {
+        id: "r-investigated-F2",
+        status: "dismissed",
+        reason: "not worth it",
+        offer: null,
+        run: null,
+        by: "mk",
+        at: "2026-11-24T10:00:00.000Z",
+      });
+      yield* approve("r-impl-open", ["unit"]);
+      yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, OPENED]);
+
+      yield* ran({
+        entry: shipped("implement"),
+        runId: "r-impl-open",
+        input: { plan: found, ...FINISH },
+      });
+      yield* bin.restore();
+
+      const building = yield* asked("r-impl-open", "build");
+      expect(building).toContain("the guard");
+      expect(building).toContain("the log line");
+      expect(building).not.toContain("the retry");
     }),
   ),
 );
@@ -11972,7 +12513,7 @@ scenario(
         expect(why).not.toContain("a reason the reviewer answers");
         expect(yield* wasAsked("r-final-dispute", "mr")).toBe(false);
         expect(yield* readText(`${runDir(dir, "r-final-dispute")}/review.md`)).toContain(
-          "- `src/a.ts` — A\n  it breaks",
+          "— `src/a.ts` — A\n  it breaks",
         );
         expect(
           Arr.map(yield* findingsIn(runDir(dir, "r-final-dispute")), (one) => one.title),

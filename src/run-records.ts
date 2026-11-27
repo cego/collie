@@ -27,6 +27,7 @@ export const LEGACY_JOURNALS: ReadonlyArray<string> = [
   "metrics.jsonl",
   "steering/cards.jsonl",
   "steering/disposition.jsonl",
+  "findings/status.jsonl",
   "steering/drift.jsonl",
   "steering/seen.jsonl",
   "steering/carded",
@@ -159,6 +160,7 @@ export const BOOKKEEPING: ReadonlySet<string> = new Set([
   "operations.jsonl",
   "steering/disposition.jsonl",
   "steering/seen.jsonl",
+  "open-findings",
 ]);
 
 const STEP_SAMPLES = 10;

@@ -9,10 +9,12 @@ import {
   ask,
   contentOf,
   defineWorkflow,
+  leaveFindings,
   step,
 } from "collie";
 import { Effect, Schema } from "effect";
 import markdown from "./architecture.md" with { type: "text" };
+import { selected } from "./selected.ts";
 
 const content = contentOf(markdown);
 const attended = content.template("attended", {
@@ -66,6 +68,14 @@ const menu = step({
 
 export default defineWorkflow({
   id: "architecture",
+  connections: {
+    uses: {
+      linear: {
+        with: "Files a deferred candidate as an issue through its Linear MCP",
+        without: "Keeps its deferred candidates in Collie",
+      },
+    },
+  },
   title: "architecture — look at what is there, then improve it",
   description:
     "Surveys a project's architecture with the architecture skill, writes a report into the run dir, then asks what next.",
@@ -74,6 +84,7 @@ export default defineWorkflow({
   output: Schema.String,
   agents: { harness: "claude", model: "opus", effort: "high" },
   path: [architecture, menu],
+  followUps: selected,
   run: ({ input: asked }) =>
     Effect.gen(function* () {
       const host = yield* Host;
@@ -96,6 +107,9 @@ export default defineWorkflow({
           output: Report,
         }),
       );
+      if ((report.deferred ?? []).length > 0) {
+        yield* leaveFindings(place.dir, report.deferred ?? [], [], report.report);
+      }
       const next = yield* menu(
         ask({
           name: "next",

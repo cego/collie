@@ -23,7 +23,7 @@ import { hostLaunches } from "./lifecycle";
 import { readAudit } from "./audit";
 import type { AuditLine } from "./audit";
 import { readForge, readMrStates } from "./merges";
-import { findingsIn } from "./output";
+import { findingsWithStatus } from "./finding-status";
 import { latest, readDispositions } from "./disposition";
 import { PLAN_DIR } from "./run-detail";
 import { tailed } from "./views";
@@ -1145,7 +1145,7 @@ const planLines = Effect.fn("operations.planLines")(function* (run: RunFacts) {
 });
 
 const verdictLines = Effect.fn("operations.verdictLines")(function* (run: RunFacts) {
-  const findings = yield* findingsIn(run.dir);
+  const findings = yield* findingsWithStatus(run.dir);
   const disposition = latest(yield* readDispositions(run.dir));
   const left = findings.length - FINDINGS_IN_CONTEXT;
   return [
@@ -1157,7 +1157,8 @@ const verdictLines = Effect.fn("operations.verdictLines")(function* (run: RunFac
           "",
           ...Arr.map(
             findings.slice(0, FINDINGS_IN_CONTEXT),
-            (finding) => `- (${finding.severity}) ${finding.title}`,
+            (finding) =>
+              `- ${finding.id} ${finding.status}${finding.reason === null ? "" : ` (${finding.reason})`} · (${finding.severity}) ${finding.title}`,
           ),
           ...(left > 0 ? [`- (${left} more)`] : []),
           "",

@@ -1,7 +1,7 @@
 # Collie
 
 Collie codifies agent workflows — `plan`, `implement`, `review`, `architecture`,
-`renovate`, `release`, `general`, `investigate`, `self-improve` — as TypeScript modules run by one Effect v4 program.
+`renovate`, `release`, `general`, `investigate`, `file-issue`, `self-improve` — as TypeScript modules run by one Effect v4 program.
 The CLI, Desktop and Collie tools reach the same services; agents run in herdr-core (`hc`).
 
 ## Where to look
@@ -19,6 +19,10 @@ here are in [`src/README.md`](src/README.md).
 - **Placement** of a start → [ADR-0033](docs/adr/0033-a-run-started-from-the-home-is-placed-not-asked.md),
   joining a Task: [ADR-draft-a-tasks-work-is-what-its-runs-worked-on](docs/adr/draft-a-tasks-work-is-what-its-runs-worked-on.md),
   `taskWorking` in `src/engine.ts`, `test/placement.test.ts`, `src/flows.ts`, `src/route.ts`, `src/projects.ts`, `src/agent-start.ts`.
+- **Findings**, where a Run's are and what id each keeps →
+  [ADR-draft-a-findings-fate-is-set-beside-it](docs/adr/draft-a-findings-fate-is-set-beside-it.md),
+  `src/output.ts` (the one leave path, the ids and `findingsIn`), with `test/output.test.ts`,
+  `test/output-schemas.test.ts` and `test/inputs.test.ts`.
 - **CLI surface, error codes, `--json`** → [`docs/cli.md`](docs/cli.md), `src/envelope.ts`, `src/operations.ts`.
 - **herdr-core (`hc`) client, red `probe:hc`** → [`docs/internals.md`](docs/internals.md#checking-core-against-its-schema-and-live),
   [ADR-draft-collie-runs-its-agents-in-herdr-core](docs/adr/draft-collie-runs-its-agents-in-herdr-core.md),

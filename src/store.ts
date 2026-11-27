@@ -29,12 +29,13 @@ import {
   importRunRecords,
 } from "./records-import";
 import { StoreWrites } from "./store-writes";
-import { asJsonText, canonical } from "./canonical";
+import { asJsonText } from "./canonical";
 import { RUN_RECORDS_MIGRATION } from "./run-records";
 import { importMrStates } from "./merge-requests";
 import { RequestConflict, RunReport } from "./board-model";
 import type { Solution } from "./board-model";
 import { nowIso } from "./time";
+import { canonicalJson } from "./json";
 import { Observed, WatchCursor, Woke } from "./mr-watch-model";
 import { ShippingGo } from "./shipping";
 import { PROOF_SQL } from "./verify-model";
@@ -1047,7 +1048,7 @@ function makeStore(stateDir: string | undefined) {
       }),
 
       admit: Effect.fn("Store.admit")(function* (admission: Admission) {
-        const input = canonical(admission.input);
+        const input = canonicalJson(admission.input);
         const askedFor: AskedFor = {
           options: { ...admission.options },
           task: admission.task,
@@ -1056,7 +1057,7 @@ function makeStore(stateDir: string | undefined) {
         if (admission.attachments?.length) {
           askedFor.attachments = [...admission.attachments];
         }
-        const asked = canonical(askedFor);
+        const asked = canonicalJson(askedFor);
         const at = yield* nowIso;
         // WARNING: the claim is the insert: the database, not a read, decides which caller made it.
         const claimed = yield* mutation(

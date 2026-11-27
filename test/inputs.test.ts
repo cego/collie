@@ -376,6 +376,26 @@ test("what the human types is classified as a plan dir, a Linear issue or free t
     }),
   ));
 
+test("a directory of findings is work to build, and a review's own directory is still a review", () =>
+  runOnPath(
+    Effect.gen(function* () {
+      const found = join(rig.projectDir, "investigated");
+      yield* mkdir(found);
+      yield* writeFile(join(found, "investigation.md"), "# Investigation\n\nThe guard is wrong.\n");
+      yield* writeFile(join(found, "findings.json"), "[]");
+      const reviewed = join(rig.projectDir, "reviewed");
+      yield* mkdir(reviewed);
+      yield* writeFile(join(reviewed, "review.md"), "# Review\n");
+      yield* writeFile(join(reviewed, "findings.json"), "[]");
+
+      expect(yield* classifyWorkSource(found)).toMatchObject({ kind: "findings", value: found });
+      expect(yield* classifyWorkSource(reviewed)).toMatchObject({
+        kind: "review",
+        value: reviewed,
+      });
+    }),
+  ));
+
 test("the menu resolves a work-source to a candidate", () =>
   runOnPath(
     Effect.gen(function* () {

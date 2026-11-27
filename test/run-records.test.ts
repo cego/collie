@@ -8,6 +8,7 @@ import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
 import { parentOf, RunRecords, runRecordsLayer } from "../src/run-records";
+import { OPEN_FINDINGS } from "../src/finding-status";
 import { StoreWrites } from "../src/store-writes";
 import { runEffect } from "./support/effect";
 import { recordsAt } from "./support/records";
@@ -169,7 +170,8 @@ test("work moves a Run's activity and bookkeeping does not", () =>
       expect(yield* one.activity(["run-a"])).toEqual(new Map());
       yield* one.put("run-b", "intent.json", "{}");
       yield* one.append("run-c", "steps.jsonl", ["entered"]);
-      expect([...(yield* one.activity(["run-a", "run-b", "run-c"])).keys()]).toEqual([
+      yield* one.put("run-d", OPEN_FINDINGS, "0");
+      expect([...(yield* one.activity(["run-a", "run-b", "run-c", "run-d"])).keys()]).toEqual([
         "run-b",
         "run-c",
       ]);

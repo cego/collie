@@ -205,7 +205,7 @@ import {
   recoveryLine,
 } from "./park-cause";
 import { healOn, healRequest, healerFor, passedOver } from "./heal";
-import type { Metrics, Solution, Answered, Controlled, RequestConflict } from "./board-model";
+import type { Metrics, Solution, Answered, Controlled } from "./board-model";
 import {
   forgeOfRef,
   mrId,
@@ -264,7 +264,17 @@ import {
 } from "./intent";
 import type { IntentSeed } from "./intent";
 import { latest, readDispositions } from "./disposition";
-import { openFindingsIn } from "./output";
+import {
+  findingText,
+  findingsWithStatus,
+  idsIn,
+  isOpenFinding,
+  markTaken,
+  openFindingsRead,
+  readFindingStatuses,
+  reportIn,
+  storeOpenCount,
+} from "./finding-status";
 import {
   changeKey,
   changeOfKey,
@@ -289,7 +299,7 @@ import {
   supersededReason,
 } from "./store";
 import type { Superseded, Admission, DecisionRow, RunRow, StoreApi } from "./store";
-import { HostRefused, RequestedBy, RunReport } from "./board-model";
+import { HostRefused, RequestConflict, RequestedBy, RunReport } from "./board-model";
 import type { Disposition } from "./board-model";
 import {
   TASK_INPUT,
@@ -372,7 +382,7 @@ import type { CheckPass, CheckRun, FailedTest, Verification } from "./verify";
 import * as Workflow from "effect/workflow/Workflow";
 import * as WorkflowEngine from "effect/workflow/WorkflowEngine";
 import type * as MessageStorage from "effect/cluster/MessageStorage";
-import { stringifyJson } from "./json";
+import { canonicalJson, stringifyJson } from "./json";
 
 export class EntryError extends Schema.TaggedError<EntryError, { readonly brand: unique symbol }>()(
   "EntryError",
@@ -449,6 +459,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     " | ",
   )};
   export const ParkCause: Schema.Codec<ParkCause, unknown, never, never>;
+  export type FindingWord = "open" | "fixed" | "disputed" | "obsolete" | "dismissed" | "taken";
   export interface ReviewScope { readonly source: string; readonly requirements: string; readonly target: string; readonly head: string; readonly fingerprint: string; readonly outcome: string; readonly risks: string }
   export const ReviewScope: Schema.Codec<ReviewScope, unknown, never, never>;
   export interface Recovery { readonly implementation: boolean; readonly reason: string; readonly previous: string; readonly commits: string; readonly review: SynthesisReport | null; readonly lineage?: ReadonlyArray<string> }
@@ -1232,6 +1243,14 @@ export const SDK_DECLARATIONS = `declare module "collie" {
      * Take it inside an Activity.
      */
     readonly nothingToLand: (runId: string, cwd: string) => Effect.Effect<string | null>;
+    /** Each finding the Run at dir left, with the status its journal last set on it. */
+    readonly findingStatuses: (dir: string) => Effect.Effect<
+      ReadonlyArray<{
+        readonly id: string;
+        readonly status: FindingWord;
+        readonly run: string | null;
+      }>
+    >;
     /**
      * Merges the merge request this Run recorded at \`head\`, recording the landing first and
      * its outcome after; fails for a Run that recorded none. Take it inside an Activity.
@@ -2128,7 +2147,9 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     | "diff-target"
     | "branch"
     | "merge-request"
-    | "started-with";
+    | "started-with"
+    | "findings"
+    | "finding";
 
   export interface FollowUp {
     readonly entry?: (facts: ActionFacts) => string;
@@ -2140,6 +2161,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly when: "succeeded" | "failed" | "always";
     /** What Collie fills in from the Run itself; the rest is the caller's to give. */
     readonly inputs?: Readonly<Record<string, Source>>;
+    /** How many findings the offer takes, where its input is a selection. */
+    readonly selects?: "many" | "one";
     /** A further condition on the facts, where how it ended is not the whole of it. */
     readonly eligible?: (facts: ActionFacts) => boolean;
     readonly given?: OfferGiven;
@@ -2182,6 +2205,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly eligible: (facts: ActionFacts) => boolean;
     /** What Collie fills in from the Run itself; the rest is the caller's to give. */
     readonly inputs?: Readonly<Record<string, Source>>;
+    /** How many findings the offer takes, where its input is a selection. */
+    readonly selects?: "many" | "one";
     readonly given?: OfferGiven;
     readonly ships?: Ships;
     /** What taking it does, which a front door shows and asks about before taking it. */
@@ -2202,6 +2227,12 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     severity: string;
     title: string;
     detail?: string;
+    /** Whether the finding was seen or reasoned to. */
+    basis?: "fact" | "inference";
+    /** What shows it, in the finder's own words. */
+    evidence?: string;
+    /** What the finder would do about it. */
+    suggested?: "fix" | "ticket" | "investigate" | "plan" | "none";
     internal?: boolean;
     /** A reviewer's answer to the implementer's reason for disputing this finding. */
     rebuttal?: string;
@@ -2329,6 +2360,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export function isBlocking(finding: Finding): boolean;
   export function findingKey(finding: Pick<Finding, "file" | "title">): string;
   export function sameFinding(left: Finding, right: Finding): boolean;
+  /** The ledger's finding this one stands in for: by an id the ledger holds, else by what it says. */
+  export function claimedIn(
+    earlier: ReadonlyArray<Finding>,
+    finding: Finding,
+  ): Finding | undefined;
   export function blockingKeys(findings: ReadonlyArray<Finding>): string[];
   /** Whether a blocking finding says where and why, so it can be acted on. */
   export function substantiated(finding: Finding): boolean;
@@ -2380,20 +2416,44 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export function renderReview(synthesis: SynthesisReport): string;
   export function renderPublicReview(synthesis: SynthesisReport): string;
   export function formatFindings(findings: ReadonlyArray<Finding>): string;
+  /** Where the report a findings-kind source's findings were written is: review.md, investigation.md, or findings.json. */
+  export function reportIn(dir: string): Effect.Effect<string>;
+  /** Whether a finding's status still asks somebody to build it. */
+  export function isOpenFinding(status: string): boolean;
+  export function buildable(
+    findings: ReadonlyArray<Finding>,
+    statuses: ReadonlyArray<{
+      readonly id: string;
+      readonly status: string;
+      readonly run: string | null;
+    }>,
+    by: string,
+  ): ReadonlyArray<Finding>;
 
   /** The prose a human reads, and the findings a card counts, where both are looked for. */
   export const REVIEW_FILE: string;
   export const FINDINGS_FILE: string;
+  /**
+   * The one place a Run's findings are left: the ids already given are kept, and every
+   * other finding takes the next free \`<run>-F<n>\`, never one a removed finding had.
+   */
+  export function leaveFindings(
+    dir: string,
+    findings: ReadonlyArray<Finding>,
+    ledger?: ReadonlyArray<Finding>,
+    report?: string,
+  ): Effect.Effect<ReadonlyArray<Finding>, never, FileSystem.FileSystem>;
   export function leaveReview(
     dir: string,
     synthesis: SynthesisReport,
-  ): Effect.Effect<void, never, FileSystem.FileSystem>;
+    ledger?: ReadonlyArray<Finding>,
+  ): Effect.Effect<ReadonlyArray<Finding>, never, FileSystem.FileSystem>;
 
   /** The findings still standing after a last fix settleFinalFix accepted; the prose stays. */
   export function leaveOutstanding(
     dir: string,
     outstanding: ReadonlyArray<Finding>,
-  ): Effect.Effect<void, never, FileSystem.FileSystem>;
+  ): Effect.Effect<ReadonlyArray<Finding>, never, FileSystem.FileSystem>;
 
   /** The findings of the review the Run that owns this directory left, or none. */
   export function findingsIn(
@@ -2838,6 +2898,7 @@ export function declaredByModule(metadata: WorkflowMetadata | undefined) {
     arguments: jsonSchemaFor(Schema.Struct(action.arguments)).document,
     kind: "action" as const,
     inputs: action.inputs ?? {},
+    selects: action.selects,
     given: action.given,
     ships: action.ships,
     confirm: action.confirm,
@@ -2853,6 +2914,7 @@ export function declaredByModule(metadata: WorkflowMetadata | undefined) {
     entry: offer.entry,
     inputs: offer.inputs ?? {},
     given: offer.given,
+    selects: offer.selects,
     ships: offer.ships,
     confirm: offer.confirm,
     connections: offer.connections,
@@ -3107,6 +3169,14 @@ const ended = (runId: string, status: typeof RunStatus.Type) =>
         return yield* Effect.die(`${runId} ended with no records to keep it`);
       }
       yield* records.value.put(runId, TERMINAL, asJsonText(status));
+      // WARNING: findings.json can change until the Run ends, so the count is kept again here.
+      const host = yield* Effect.serviceOption(Host);
+      if (Option.isSome(host)) {
+        yield* storeOpenCount(runDir(host.value.dir, runId)).pipe(
+          Effect.provideService(RunRecords, records.value),
+          Effect.orElseSucceed(() => 0),
+        );
+      }
       // WARNING: requests its agents made after their last delivery are read nowhere else.
       const agents = yield* Effect.serviceOption(Agents);
       if (Option.isSome(agents)) {
@@ -6208,6 +6278,12 @@ export const hostLayer: (options: {
               return why;
             }),
           ).pipe(Effect.provideService(FileSystem.FileSystem, fs), Effect.orDie),
+        findingStatuses: (where) =>
+          under(
+            Effect.map(findingsWithStatus(where), (ones) =>
+              Arr.map(ones, (one) => ({ id: one.id, status: one.status, run: one.run })),
+            ),
+          ),
         merge: (asked) =>
           Effect.gen(function* () {
             return yield* land({
@@ -7418,6 +7494,13 @@ const asText = (field: InputField, text: string) => {
   if (decode(text)._tag === "Success") {
     return { value: text };
   }
+  if (Str.trim(text) === "") {
+    // WARNING: an empty Input of a list is the empty list, so a documented start can leave it blank.
+    const empty = decode([]);
+    if (empty._tag === "Success") {
+      return { value: [] };
+    }
+  }
   const parsed = asParsedJson(text);
   if (parsed._tag === "Failure") {
     return undefined;
@@ -7435,7 +7518,9 @@ const describe: (field: InputField) => string = (field) => {
     return `one of ${Arr.join(Arr.map(options, asWord), ", ")}`;
   }
   const kind = drawn.type;
-  return isWord(kind) ? `a ${kind}` : "what this input takes";
+  return isWord(kind)
+    ? `${kind === "array" || kind === "object" ? "an" : "a"} ${kind}`
+    : "what this input takes";
 };
 
 const isWord = Schema.is(Schema.String);
@@ -7555,6 +7640,8 @@ const Cut = Schema.Struct({
 });
 type Cut = typeof Cut.Type;
 
+const NamedInvocation = Schema.fromJsonString(Schema.Struct({ offer: Schema.String }));
+
 const Placing = Schema.Struct({
   requestedBy: Schema.optional(RequestedBy),
   heals: Schema.optionalKey(Schema.String),
@@ -7567,6 +7654,11 @@ const Placing = Schema.Struct({
   workspace: Schema.optionalKey(Schema.NullOr(Schema.String)),
   checkout: Schema.optionalKey(Schema.NullOr(Cut)),
   continues: Schema.optionalKey(ConsumedCard),
+  invoked: Schema.optionalKey(Schema.String),
+  direct: Schema.optionalKey(Schema.Literal(true)),
+  child: Schema.optionalKey(Schema.Literal(true)),
+  took: Schema.optionalKey(Schema.Array(Schema.String)),
+  by: Schema.optionalKey(Schema.String),
 });
 type Placing = typeof Placing.Type;
 const PlacingJson = Schema.fromJsonString(Placing);
@@ -8134,6 +8226,7 @@ export interface RegistryApi {
     readonly request: string;
     readonly attachments?: ReadonlyArray<string> | undefined;
     readonly started?: Started | undefined;
+    readonly by?: string | undefined;
   }) => Effect.Effect<Admitted, HostRefused | RequestConflict, HostServices>;
   readonly routed: (
     runId: string,
@@ -8158,6 +8251,9 @@ export interface StartOptions {
   readonly taskLabel?: string | undefined;
   readonly parent?: string | null;
   readonly continues?: ConsumedCard | undefined;
+  readonly invoked?: string | undefined;
+  readonly took?: ReadonlyArray<string> | undefined;
+  readonly by?: string | undefined;
   readonly intent?: IntentSeed;
   readonly verify?: ReadonlyArray<VerifySpec> | undefined;
   readonly attachments?: ReadonlyArray<string> | undefined;
@@ -9094,7 +9190,7 @@ const makeRegistry: (
       input: settled.input,
       provenance: settled.provenance,
       options: launchOptions(generation, asked),
-      placing: encodePlacing({ from, taskLabel, root, closes: generation.closes }),
+      placing: encodePlacing({ from, taskLabel, root, closes: generation.closes, child: true }),
       generation: generation.name,
       execution: yield* generation.registration.workflow.executionId(payload),
       task: ask.ownTask === true ? null : parent.task,
@@ -9203,6 +9299,40 @@ const makeRegistry: (
     );
 
   // WARNING: nothing happens where the module is unregistered or no longer takes its input; the row stays for a repair.
+  // WARNING: the selection the child took is finished here too, so recovery never leaves them open for a second child.
+  const finishTaken = Effect.fn("Engine.finishTaken")(function* (row: RunRow, by?: string) {
+    const placing = Option.getOrUndefined(decodePlacing(row.placing ?? ""));
+    if (placing?.took === undefined || row.parent === null) {
+      return;
+    }
+    const parentDir = `${dir}/runs/${row.parent}`;
+    const said = yield* readFindingStatuses(parentDir).pipe(
+      Effect.provideService(RunRecords, runRecords),
+    );
+    const owed = Arr.filter(
+      placing.took,
+      (id) =>
+        !Arr.some(said, (one) => one.id === id && one.status === "taken" && one.run === row.run),
+    );
+    if (owed.length === 0) {
+      yield* storeOpenCount(parentDir).pipe(Effect.provideService(RunRecords, runRecords));
+      return;
+    }
+    const named = Option.flatMap(Option.fromNullishOr(placing.invoked), (text) =>
+      Schema.decodeOption(NamedInvocation)(text),
+    );
+    yield* markTaken(
+      parentDir,
+      owed,
+      Option.getOrElse(
+        Option.map(named, (one) => one.offer),
+        () => "",
+      ),
+      row.run,
+      by ?? placing.by ?? row.run,
+    ).pipe(Effect.provideService(RunRecords, runRecords));
+  });
+
   const handOver = Effect.fn("Engine.handOver")(function* (row: RunRow, clear = true) {
     const generation = live.get(row.generation);
     if (generation === undefined || unplaced(row)) {
@@ -9214,6 +9344,7 @@ const makeRegistry: (
     }
     yield* attachInto(row);
     yield* crash("admitted");
+    yield* finishTaken(row);
     const before = entriesOf.get(generation.registration.workflow)?.get(row.run) ?? 0;
     const old = yield* parkedOf(row.run);
     if (clear) {
@@ -10330,6 +10461,39 @@ const makeRegistry: (
       })),
     );
 
+  const chosenFor = Effect.fn("Engine.Registry.chosen")(function* (
+    offer: Offer,
+    given: Schema.Json | undefined,
+    runDir: string,
+  ) {
+    const ids = idsIn(given);
+    if (ids === null) {
+      return yield* new HostRefused({
+        reason: `"${offer.id}" takes its findings as ids, given as a list`,
+      });
+    }
+    if (offer.selects === "one" && ids.length !== 1) {
+      return yield* new HostRefused({
+        reason: `"${offer.id}" is taken for exactly one finding, not ${ids.length}`,
+      });
+    }
+    const open = Arr.filter(yield* findingsWithStatus(runDir), (one) => isOpenFinding(one.status));
+    const unknown = Arr.findFirst(ids, (id) => !Arr.some(open, (one) => one.id === id));
+    if (Option.isSome(unknown)) {
+      return yield* new HostRefused({
+        reason: `"${unknown.value}" is not one of the findings still open on this Run`,
+      });
+    }
+    return ids;
+  });
+
+  const findingFor = Effect.fn("Engine.Registry.finding")(function* (runDir: string, id: string) {
+    const found = Option.getOrUndefined(
+      Arr.findFirst(yield* findingsWithStatus(runDir), (one) => one.id === id),
+    );
+    return found === undefined ? undefined : findingText(found, yield* reportIn(runDir));
+  });
+
   const recoveryNow = (runId: string, workSource: string) =>
     recoveryFor(store, dir, runId, runId, workSource).pipe(
       Effect.tap((recovery) =>
@@ -10365,6 +10529,7 @@ const makeRegistry: (
   const offeredBy = Effect.fn("Engine.Registry.offeredBy")(function* (
     runId: string,
     request?: string,
+    given: Readonly<Record<string, Schema.Json>> = {},
   ) {
     const row = yield* store.run(runId);
     if (row === null) {
@@ -10400,7 +10565,7 @@ const makeRegistry: (
       nothingToLand: (yield* runRecords.fact(runId, NOTHING_TO_LAND)) !== null,
       planIssues: yield* planIssuesIn(where),
       disposed: disposition !== null,
-      openFindings: yield* openFindingsIn(where),
+      openFindings: yield* openFindingsRead(where),
       diffTarget: pointedAt(generation, input),
       claim: yield* claimOf(runId),
     };
@@ -10443,9 +10608,11 @@ const makeRegistry: (
       }
     }
     const refused = new Map<string, string>();
+    const pending = new Set<string>();
     if (unread !== null) {
       for (const offer of generation.offers) {
         refused.set(offer.id, `${unread} is still being read from its forge; offered once it is`);
+        pending.add(offer.id);
       }
     }
     const readings = new Map<ConnectionId, ConnectionReading>();
@@ -10475,6 +10642,7 @@ const makeRegistry: (
         if (reading === null) {
           if (!refused.has(offer.id)) {
             refused.set(offer.id, `${id} is still being read; offered once it is`);
+            pending.add(offer.id);
           }
           continue;
         }
@@ -10563,7 +10731,12 @@ const makeRegistry: (
         refused.set(offer.id, `${mr} is merged`);
       }
       const workflow = offer.workflow === SELF ? generation.id : offer.workflow;
-      for (const candidate of runs) {
+      // WARNING: a listing keeps a selecting offer visible so the card holds; only an invoke without ids is refused a live sibling.
+      const oneAtATime =
+        offer.selects === undefined ||
+        ((idsIn(given.findings) ?? []).length === 0 &&
+          (offer.selects !== "many" || request !== undefined));
+      for (const candidate of oneAtATime ? runs : []) {
         if (candidate.workflow !== workflow || candidate.request === request) {
           continue;
         }
@@ -10591,7 +10764,7 @@ const makeRegistry: (
         break;
       }
     }
-    return { row, generation, facts, where, refused, input };
+    return { row, generation, facts, where, refused, pending, input };
   });
 
   const connectionIds = Effect.fn("Engine.Registry.connectionIds")(function* (
@@ -10794,6 +10967,11 @@ const makeRegistry: (
         taskLabel: options.taskLabel ?? null,
         root: options.root ?? null,
         ...(options.continues !== undefined && { continues: options.continues }),
+        ...(options.invoked === undefined
+          ? { direct: true as const }
+          : { invoked: options.invoked }),
+        ...(options.took !== undefined && { took: options.took }),
+        ...(options.by !== undefined && { by: options.by }),
       }),
       generation: generation.name,
       execution: yield* generation.registration.workflow.executionId(payload),
@@ -11107,12 +11285,13 @@ const makeRegistry: (
     // WARNING: a listing reads each module's kept revision; taking an offer computes it afresh.
     offers: (runId: string) =>
       offeredBy(runId).pipe(
-        Effect.flatMap(({ row, generation, facts, where, refused, input }) =>
+        Effect.flatMap(({ row, generation, facts, where, refused, pending, input }) =>
           Effect.forEach(
             offersFrom(generation.offers, facts, {
               self: generation.id,
               keepUnavailable: true,
               refused,
+              unread: pending,
             }),
             (offer) =>
               offer.kind === "follow-up"
@@ -11134,10 +11313,48 @@ const makeRegistry: (
       readonly request: string;
       readonly attachments?: ReadonlyArray<string> | undefined;
       readonly started?: Started | undefined;
+      readonly by?: string | undefined;
     }) {
+      const invoked = canonicalJson({
+        parent: options.runId,
+        offer: options.offer,
+        input: options.input,
+        attachments: options.attachments ?? [],
+      });
+      // WARNING: the request id is the claim, so a caller that lost the answer is given the Run it started.
+      const claimed = yield* store.requested(options.request);
+      if (claimed !== null) {
+        const placing = Option.getOrUndefined(decodePlacing(claimed.placing ?? ""));
+        if (
+          placing?.direct === true ||
+          placing?.child === true ||
+          claimed.parent === null ||
+          claimed.request === claimed.run
+        ) {
+          return yield* new RequestConflict({
+            request: options.request,
+            reason: `request "${options.request}" is already ${claimed.run}, started directly rather than by an offer`,
+          });
+        }
+        // WARNING: a child admitted before this branch carries no fingerprint, and its retry is still a replay.
+        if (placing?.invoked !== undefined && placing.invoked !== invoked) {
+          return yield* new RequestConflict({
+            request: options.request,
+            reason: `request "${options.request}" is already ${claimed.run}, started with other arguments`,
+          });
+        }
+        yield* finishTaken(claimed, options.by ?? options.request);
+        return {
+          runId: claimed.run,
+          registration: claimed.generation,
+          execution: claimed.execution,
+          fresh: false,
+        };
+      }
       const { row, generation, facts, where, refused, input } = yield* offeredBy(
         options.runId,
         options.request,
+        options.input,
       );
       // WARNING: a card is not authority; the offer is asked again of the module as it is now.
       const offer = Option.getOrUndefined(
@@ -11167,10 +11384,31 @@ const makeRegistry: (
         });
       }
       // WARNING: the caller's own values win over an offer's fill-ins.
-      const filled = {
+      const given = {
         ...inputsFor(offer, { runId: row.run, runDir: where, facts, input }),
         ...options.input,
       };
+      const chosen =
+        offer.selects === undefined ? [] : yield* chosenFor(offer, given.findings, where);
+      const selecting = Arr.filter(
+        Rec.toEntries(offer.inputs),
+        ([, source]) => source === "findings",
+      );
+      const filled: Record<string, Schema.Json> = Rec.filter(
+        given,
+        (_, name) => name !== "findings" && !Arr.some(selecting, ([field]) => field === name),
+      );
+      if (chosen.length > 0) {
+        for (const [name] of selecting) {
+          filled[name] = chosen;
+        }
+      }
+      for (const [name, source] of Rec.toEntries(offer.inputs)) {
+        const text = source === "finding" ? yield* findingFor(where, chosen[0] ?? "") : undefined;
+        if (text !== undefined) {
+          filled[name] = text;
+        }
+      }
       const inherited = yield* approvedOf(dir, row.run);
       const launch = Rec.map(
         Rec.filter(filled, (_, name) => name in RESERVED_INPUTS),
@@ -11213,6 +11451,9 @@ const makeRegistry: (
         request: options.request,
         project: row.project,
         input: Rec.filter(filled, (_, name) => !(name in RESERVED_INPUTS)),
+        invoked,
+        took: chosen,
+        by: options.by ?? options.request,
         task: row.task,
         parent: row.run,
         verify: inherited,

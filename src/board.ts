@@ -49,7 +49,7 @@ import {
 import type { CheckCommand, Verification } from "./verify";
 import { approvedFor, approvedIn } from "./verify-spec";
 import { readIntent } from "./intent";
-import { findingsIn, isBlocking, openFindingsIn } from "./output";
+import { findingsIn, isBlocking } from "./output";
 import { marksCheck, markersOf, runningCheck } from "./checks";
 import { runningChecks } from "./check-processes";
 import { waitLine } from "./memory-wait";
@@ -76,6 +76,7 @@ import { flowInputsFor, taskFlowFor } from "./flow-read";
 import { machineName, peersOf } from "./peers";
 import { Deliveries, deliveriesAhead, deliveriesOf, SENT_STATES, toldIn } from "./steering";
 import { finishedOnRecord } from "./cards";
+import { openFindingsRead } from "./finding-status";
 import { owedLocally } from "./check-proof";
 import {
   Answered,
@@ -1448,7 +1449,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
             cards.content?.([runId]) ?? cards.revision([runId]),
             touched.get(runId) ?? 0,
             yield* planIssuesIn(run.dir),
-            yield* openFindingsIn(run.dir),
+            yield* openFindingsRead(run.dir),
             latest(yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => []))),
             cards.modules ?? "",
             id === null ? null : (mrStates.get(id) ?? null),
@@ -1470,6 +1471,18 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           }
           return view;
         };
+        // WARNING: this is the one place offers are evaluated, so the hold over findings is read here.
+        const choosingOf = Effect.fnUntraced(function* (run: RunFacts) {
+          if ((yield* openFindingsRead(run.dir)) === 0) {
+            return false;
+          }
+          // WARNING: an offer waiting on a read Collie has not made yet is still offered, so it still holds.
+          return Arr.some(
+            yield* offersFor(run.id),
+            (one) => one.selects === "many" && (one.unavailable === null || one.unread === true),
+          );
+        });
+        const choosing = Arr.some(yield* Effect.forEach(everyRun, choosingOf), (one) => one);
         yield* boundary;
         // WARNING: a Run records no end of its own; one that wrote nothing ended no later than it began.
         const endedAt = (run: RunFacts) =>
@@ -1613,6 +1626,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
               planIssues: issues,
               disposed: disposition !== null,
               asking: false,
+              choosing,
             }).landed) &&
           !(yield* unseenReport(leader))
         ) {
@@ -1724,6 +1738,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           planIssues: issues,
           disposed: disposition !== null,
           asking: decision !== null,
+          choosing,
         });
         const movement = landed
           ? null
@@ -1917,7 +1932,11 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
               run: one.run,
             };
             const returned: BoardOffer =
-              offer.unavailable === null ? listed : { ...listed, unavailable: offer.unavailable };
+              offer.unavailable === null
+                ? listed
+                : offer.unread === true
+                  ? { ...listed, unavailable: offer.unavailable, unread: true }
+                  : { ...listed, unavailable: offer.unavailable };
             return returned;
           }),
         );

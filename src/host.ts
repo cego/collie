@@ -217,6 +217,7 @@ import {
   mrIdProject,
   RunReply,
   Seen,
+  FindingStatus,
   FrontDoorRpcs,
   IdentityRpc,
   HostRefused,
@@ -247,6 +248,12 @@ import {
 import type { Attached } from "./attachments";
 import { boardMessages, shareBoard } from "./board-stream";
 import { recordDisposition, refRuns, qualifiedRuns } from "./disposition";
+import {
+  findingsWithStatus,
+  keepOpenCount,
+  recordFindingStatus,
+  storeOpenCount,
+} from "./finding-status";
 import { markSeenSince, readSeen, recordSeen } from "./seen";
 import { readReplies } from "./replies";
 import {
@@ -3305,6 +3312,7 @@ export const frontDoorHandlers = (
                   input,
                   request,
                   attachments,
+                  by: actorName({ ...whoOf(client), requestId: request }),
                   started: startedOf(whoOf(client).origin, whoOf(client).said, input, undefined),
                 })
                 .pipe(Effect.map(saying(removed))),
@@ -4134,6 +4142,55 @@ export const frontDoorHandlers = (
               yield* trimAudit(trail, NEWS_TRAIL).pipe(Effect.orDie);
               return batch;
             }),
+          ),
+        runFindings: ({ runId }) =>
+          known(runId).pipe(
+            // WARNING: the count is kept here for a Run settled before the fact existed.
+            Effect.andThen(keepOpenCount(trail(runId))),
+            Effect.andThen(findingsWithStatus(trail(runId))),
+            plainly,
+          ),
+        setFinding: ({ runId, id, status, reason, request }, { client }) =>
+          known(runId).pipe(
+            Effect.andThen(findingsWithStatus(trail(runId))),
+            Effect.filterOrFail(
+              (findings) => Arr.some(findings, (one) => one.id === id),
+              () => new HostRefused({ reason: `no finding "${id}" on ${runId}` }),
+            ),
+            Effect.filterOrFail(
+              () => status !== "dismissed" || Str.trim(reason ?? "") !== "",
+              () =>
+                new HostRefused({
+                  reason: `${REFUSED_INPUT}: dismissing ${id} needs a reason of its own`,
+                }),
+            ),
+            Effect.flatMap(() =>
+              once(
+                trail(runId),
+                {
+                  operation: "finding",
+                  request,
+                  ...whoOf(client),
+                  asked: { id, status, reason },
+                  result: FindingStatus,
+                },
+                Effect.gen(function* () {
+                  const line: FindingStatus = {
+                    id,
+                    status,
+                    reason: status === "dismissed" ? Str.trim(reason ?? "") : null,
+                    offer: null,
+                    run: null,
+                    by: actorName({ ...whoOf(client), requestId: request }),
+                    at: yield* nowIso,
+                  };
+                  yield* recordFindingStatus(trail(runId), line);
+                  yield* storeOpenCount(trail(runId));
+                  return line;
+                }),
+              ),
+            ),
+            plainly,
           ),
         dispose: ({ runId, kind, ref, note, request }, { client }) =>
           known(runId).pipe(
