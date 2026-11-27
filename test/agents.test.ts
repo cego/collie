@@ -37,7 +37,7 @@ import { mentionedSkills } from "../src/template";
 import type { FakeHc } from "./support/fake-hc";
 import { isJsonObject, isString } from "../src/schema";
 import { marked } from "../src/dispatcher";
-import { keepQueued } from "../src/delivery-queue";
+import { keepQueued, readQueue } from "../src/delivery-queue";
 import { fastForward, runEffect as runLive } from "./support/effect";
 import { onMachineWith } from "./support/live";
 import {
@@ -7342,14 +7342,15 @@ test("a queued Delivery left unknown settles when its exact submit arrives later
             }),
             lost.incarnation,
           ).pipe(Effect.orDie);
+          const sends = Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.send");
+          const after = yield* say("r1", "stay in src", "steer-1");
           return {
             before,
-            after: yield* say("r1", "stay in src", "steer-1"),
+            after,
             lost,
-            rows: Arr.filter(
-              yield* deliveredTo(dir, "r1"),
-              (one) => one.cause.kind === "steer" && one.cause.ref === "steer-1",
-            ),
+            resent:
+              Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.send").length -
+              sends.length,
           };
         }),
       );
@@ -7359,7 +7360,7 @@ test("a queued Delivery left unknown settles when its exact submit arrives later
         delivered: true,
         delivery: outcome.lost.id,
       });
-      expect(new Set(Arr.map(outcome.rows, (one) => one.id)).size).toBe(1);
+      expect(outcome.resent).toBe(0);
     }),
   ));
 
@@ -7502,6 +7503,59 @@ const tendIdle = Agents.pipe(
     ),
   ),
 );
+
+test("a queued Delivery a human reconciled as sent completes without another send", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const outcome = yield* session(
+        Effect.gen(function* () {
+          core.refuse("terminal.send", "unreachable", "the core did not answer");
+          yield* say("r1", "stay in src", "steer-1");
+          core.restore("terminal.send");
+          const lost = Option.getOrThrow(
+            Arr.head(
+              Arr.filter(
+                yield* deliveredTo(dir, "r1"),
+                (one) => one.cause.kind === "steer" && one.state === "unknown",
+              ),
+            ),
+          );
+          yield* keepQueued(`${dir}/agents/r1`, {
+            runId: "r1",
+            request: "steer-1",
+            text: "stay in src",
+            result: null,
+          });
+          const settled = reconcile(
+            yield* ledgerOf(dir, lost.incarnation),
+            lost.id,
+            "sent",
+            "tester",
+            "t",
+          );
+          if ("error" in settled) {
+            throw new Error(settled.error);
+          }
+          yield* appendLine(settled).pipe(Effect.provide(recordsAt(dir)));
+          const before = Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.send");
+          yield* tendIdle;
+          return {
+            lost,
+            sent: Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.send"),
+            before: before.length,
+            queued: yield* readQueue(`${dir}/agents/r1`),
+          };
+        }),
+      );
+      expect(outcome.sent.length).toBe(outcome.before);
+      expect(outcome.queued[0]?.result).toMatchObject({
+        delivered: true,
+        delivery: outcome.lost.id,
+      });
+    }),
+  ));
 
 const collieCheckRunning = (ends: "exits" | "crashes") =>
   Effect.gen(function* () {
