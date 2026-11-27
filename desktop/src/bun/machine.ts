@@ -77,6 +77,7 @@ import type { MachineSchedules } from "../shared/schedules";
 import { CLEANUP_UPGRADE_SAID } from "../shared/machine-cleanup";
 import type { ScheduleChange } from "../../../src/schedule-model";
 import type { Action, ActionSchema } from "../../../src/actions";
+import type { ActionResult } from "../../../src/board-model";
 import type { Mutable } from "effect/Types";
 import { moveSchedule } from "../../../src/schedule-move";
 import type { ScheduleDoor } from "../../../src/schedule-move";
@@ -1453,6 +1454,17 @@ interface Unsteered {
   readonly message: string;
 }
 
+const filedSaid = (filed: ActionResult["filed"]) =>
+  Arr.join(
+    Arr.map(filed ?? [], (one) => {
+      const where = one.membership.project?.id ?? "no Project";
+      return one.result === "filed" || one.result === "already" || one.result === "stale"
+        ? `${one.task}: ${one.result}, in ${where} at membership ${one.membership.seq}`
+        : `${one.task}: ${one.result}`;
+    }),
+    "; ",
+  );
+
 const collieAction = (
   action:
     | Extract<DesktopAction, { _tag: "ProjectCreate" }>
@@ -1682,7 +1694,6 @@ export const act = (
       case "ProjectUnstar":
       case "ProjectArchive":
       case "ProjectRestore":
-      case "TaskFile":
       case "TaskFollow":
       case "TaskUnfollow":
         return door.act({ actions: [collieAction(action)], request }).pipe(
@@ -1694,6 +1705,15 @@ export const act = (
                   message: done?.note || "the host said nothing about it",
                 }),
           ),
+        );
+      case "TaskFile":
+        return door.act({ actions: [collieAction(action)], request }).pipe(
+          Effect.flatMap(([done]) => {
+            const said = filedSaid(done?.filed) || done?.note || "Done";
+            return done?.state === "applied"
+              ? Effect.succeed(said)
+              : Effect.fail<Unsteered>({ _tag: "Unsteered", message: said });
+          }),
         );
     }
   })();

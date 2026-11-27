@@ -2151,7 +2151,7 @@ fn a_selection_of_unassigned_tasks_is_filed_into_a_project_once() {
         vec![snapshot_with(
             &pc(),
             vec![
-                task("t-1", "Refunds", "active", json!({})),
+                task("t-1", "Refunds", "active", json!({"membershipSeq": 3.0})),
                 task("t-2", "Payouts", "active", json!({})),
             ],
             vec![project("project-payments", "Payments", false, false)],
@@ -2168,7 +2168,9 @@ fn a_selection_of_unassigned_tasks_is_filed_into_a_project_once() {
     assert_eq!(
         sent[0]["action"]["filings"],
         json!([
-            {"task": "t-1", "project": {"installation": "inst-pc", "id": "project-payments"}},
+            // WARNING: the membership the card showed is sent, so a move made since loses rather than undoing it.
+            {"task": "t-1", "project": {"installation": "inst-pc", "id": "project-payments"},
+             "expected": 3.0},
             {"task": "t-2", "project": {"installation": "inst-pc", "id": "project-payments"}},
         ])
     );
@@ -2244,6 +2246,83 @@ fn a_selection_across_machines_is_filed_by_owner_and_the_one_away_is_tried_again
         sent[2]["action"]["filings"][0]["project"],
         json!({"installation": "inst-pc", "id": "project-payments"}),
         "the retry names the same destination"
+    );
+}
+
+#[test]
+fn a_retry_after_three_machines_away_survives_the_notice_that_follows_them() {
+    let harness = Harness::new();
+    for name in ["vm-1", "vm-2", "vm-3"] {
+        harness.fake.will_answer(
+            "act",
+            Err(CallError(format!(
+                "Not sent to {name}: its board is a saved one, as of 14:05"
+            ))),
+        );
+    }
+    harness.fake.will_answer("act", Ok(json!("1 filed")));
+    harness.fake.will_answer("act", Ok(json!("1 filed")));
+    let mut runtime = runtime_of(
+        &harness,
+        vec![
+            saved(
+                &machine("inst-vm1", "p-vm1", "vm-1"),
+                vec![task("t-vm1", "Payouts", "active", json!({"membershipSeq": 1.0}))],
+            ),
+            saved(
+                &machine("inst-vm2", "p-vm2", "vm-2"),
+                vec![task("t-vm2", "Payouts", "active", json!({}))],
+            ),
+            saved(
+                &machine("inst-vm3", "p-vm3", "vm-3"),
+                vec![task("t-vm3", "Payouts", "active", json!({}))],
+            ),
+            snapshot_with(
+                &pc(),
+                vec![task("t-1", "Refunds", "active", json!({}))],
+                vec![project("project-payments", "Payments", false, false)],
+            ),
+        ],
+    );
+    for card in ["card-t-vm1", "card-t-vm2", "card-t-vm3", "card-t-1"] {
+        select_for_filing(&mut runtime, card);
+    }
+    press(&mut runtime, "file-into");
+    press(&mut runtime, "file-into-inst-pc-project-payments");
+    settle(&harness, &mut runtime);
+    redraw(&mut runtime);
+    let tries = || {
+        within(&runtime.accessibility_json())
+            .into_iter()
+            .filter(|node| node["name"] == "Try again")
+            .count()
+    };
+    assert_eq!(
+        tries(),
+        3,
+        "each Machine that was away keeps its own Try again, once a filing lands after them"
+    );
+    // The first Machine comes back, and its Try again sends its own entries under its own request.
+    let back = task("t-vm1", "Payouts", "active", json!({"membershipSeq": 1.0}));
+    runtime.state.apply(
+        serde_json::from_value(snapshot_with(
+            &machine("inst-vm1", "p-vm1", "vm-1"),
+            vec![back],
+            vec![project("project-payments", "Payments", false, false)],
+        ))
+        .unwrap(),
+    );
+    redraw(&mut runtime);
+    press_named(&mut runtime, "button", "Try again");
+    settle(&harness, &mut runtime);
+    let sent = acts(&harness);
+    assert_eq!(sent.len(), 5, "four filings, and the one that was tried again");
+    assert_eq!(sent[4]["installation"], "inst-vm1");
+    assert_eq!(sent[4]["request"], sent[0]["request"], "the same request");
+    assert_eq!(
+        sent[4]["action"]["filings"][0]["expected"],
+        json!(1.0),
+        "the retry names the membership the card showed when it was picked"
     );
 }
 

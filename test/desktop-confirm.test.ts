@@ -141,6 +141,52 @@ const delivering = () => {
   return fake as Door;
 };
 
+const filing = () => {
+  const answered: ActionResult = {
+    kind: "task_file",
+    state: "applied",
+    note: "1 filed, 1 stale",
+    filed: [
+      {
+        task: "t-1",
+        result: "filed",
+        membership: { project: { installation: "i-pc", id: "p-pay" }, seq: 2 },
+      },
+      {
+        task: "t-2",
+        result: "stale",
+        membership: { project: { installation: "i-pc", id: "p-ref" }, seq: 5 },
+      },
+    ],
+  };
+  // WARNING: `TaskFile` never asks to discard the reply, so it is the results, and it calls only `act`.
+  const fake: Partial<Door> = { act: () => Effect.succeed([answered] as never) };
+  // WARNING: a `TaskFile` calls only `act`, so a partial Door is all it reaches.
+  return fake as Door;
+};
+
+test("a filing says where each Task is and at which membership, not just how many landed", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const { log } = logged();
+      const said = yield* act(
+        { machine, desktop: filing() },
+        "file-1",
+        {
+          _tag: "TaskFile",
+          filings: [
+            { task: "t-1", project: { installation: "i-pc", id: "p-pay" }, expected: 1 },
+            { task: "t-2", project: { installation: "i-pc", id: "p-ref" }, expected: 1 },
+          ],
+        },
+        log,
+      );
+      expect(said).toBe(
+        "t-1: filed, in p-pay at membership 2; t-2: stale, in p-ref at membership 5",
+      );
+    }),
+  ));
+
 test("actions.log keeps a JSON line per attempt with ids and kinds only, and starts again past 1 MiB", () =>
   Effect.runPromise(
     Effect.gen(function* () {

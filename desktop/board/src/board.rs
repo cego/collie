@@ -67,10 +67,16 @@ pub struct Target {
     pub id: String,
     pub name: String,
 }
+/// A picked Task to file: its id and the membership the board showed when it was picked.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pick {
+    pub task: String,
+    pub expected: Option<f64>,
+}
 /// The filings one Machine's share of a selection carries, kept until it can be sent.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FilePlan {
-    pub tasks: Vec<String>,
+    pub picks: Vec<Pick>,
     pub target: Option<Target>,
 }
 
@@ -567,14 +573,19 @@ impl App {
     /// destination, because a Project that belongs to another Machine is resolved at its owner.
     fn filings_of(&self, plan: &FilePlan) -> Value {
         let filings: Vec<Value> = plan
-            .tasks
+            .picks
             .iter()
-            .map(|task| match &plan.target {
-                Some(target) => json!({
-                    "task": task,
-                    "project": { "installation": target.installation, "id": target.id },
-                }),
-                None => json!({ "task": task }),
+            .map(|pick| {
+                // WARNING: the membership the operator saw, so a move made since loses rather than undoing it.
+                let mut filing = json!({ "task": pick.task });
+                if let Some(target) = &plan.target {
+                    filing["project"] =
+                        json!({ "installation": target.installation, "id": target.id });
+                }
+                if let Some(expected) = pick.expected {
+                    filing["expected"] = json!(expected);
+                }
+                filing
             })
             .collect();
         json!({ "_tag": "TaskFile", "filings": filings })
@@ -675,8 +686,16 @@ impl App {
             again,
             shown: Default::default(),
         });
-        let excess = self.board.notices.len().saturating_sub(3);
-        self.board.notices.drain(..excess);
+        // WARNING: a notice with something to try again is kept until it is tried or dismissed.
+        let mut excess = self.board.notices.len().saturating_sub(3);
+        self.board.notices.retain(|n| {
+            if excess > 0 && n.again.is_none() {
+                excess -= 1;
+                false
+            } else {
+                true
+            }
+        });
     }
 
     pub fn dismiss(&mut self, id: u64) {
@@ -1029,23 +1048,26 @@ impl App {
     /// Files each picked card with the Machine that owns it, one action each, so that a Machine
     /// which cannot take it now is tried again on its own.
     pub fn file_into(&mut self, target: Option<Target>) {
-        let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+        let mut groups: Vec<(String, Vec<Pick>)> = Vec::new();
         for card in model::scoped(&self.machines, self.nav.scope.as_ref(), self.following()) {
             if !self.picked_for_filing(&card.key) {
                 continue;
             }
             let installation = card.installation.to_string();
-            let task = card.task.id.clone();
+            let pick = Pick {
+                task: card.task.id.clone(),
+                expected: card.task.membership_seq,
+            };
             match groups.iter_mut().find(|(owner, _)| *owner == installation) {
-                Some((_, tasks)) => tasks.push(task),
-                None => groups.push((installation, vec![task])),
+                Some((_, picks)) => picks.push(pick),
+                None => groups.push((installation, vec![pick])),
             }
         }
         self.board.filing.clear();
         self.board.dialog = None;
-        for (installation, tasks) in groups {
+        for (installation, picks) in groups {
             let plan = FilePlan {
-                tasks,
+                picks,
                 target: target.clone(),
             };
             self.send(Again {

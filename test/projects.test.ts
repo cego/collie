@@ -225,6 +225,50 @@ test("a batch filing answers for every entry, and filing the same batch again ch
       }),
     [],
   ));
+test("a filing replayed after a newer move leaves the newer move where it is", () =>
+  proves(
+    "collie-project-replay-",
+    (world) =>
+      Effect.gen(function* () {
+        const payments = yield* projectOf(world, "Payments");
+        const platform = yield* projectOf(world, "CEGO Platform");
+        const mine = yield* taskOf(world, "Say a duplicate refunds notice twice");
+        const projects = (yield* boardOf(world)).projects;
+        const at = (id: string) => ({
+          installation: Option.getOrThrow(
+            Option.map(
+              Arr.findFirst(projects, (one) => one.id === id),
+              (one) => one.installation,
+            ),
+          ),
+          id,
+        });
+        const door = yield* frontDoor(socketOf(world.state));
+        const asked = {
+          actions: [
+            { kind: "task_file" as const, filings: [{ task: mine, project: at(payments) }] },
+          ],
+          request: "file-1",
+        };
+        const [first] = yield* door.act(asked);
+        expect(first?.filed?.[0]?.result).toBe("filed");
+        const moved = yield* door.act({
+          actions: [
+            {
+              kind: "task_file" as const,
+              filings: [{ task: mine, project: at(platform), expected: 1 }],
+            },
+          ],
+          request: "file-2",
+        });
+        expect(moved[0]?.filed?.[0]?.result).toBe("filed");
+        const [replay] = yield* door.act(asked);
+        expect(replay?.filed?.[0]?.result).toBe("filed");
+        expect((yield* cardOf(world, mine))?.projectId?.id).toBe(platform);
+      }),
+    [],
+  ));
+
 test("a filing into a Project an older host never heard of is refused, and the Task is untouched", () =>
   proves(
     "collie-project-unknown-",

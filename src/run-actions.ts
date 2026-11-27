@@ -49,6 +49,7 @@ import {
   writeTask,
 } from "./task";
 import type { Filing } from "./task";
+import { FilingSchema } from "./task";
 import {
   hostInstallation,
   isArchived,
@@ -602,55 +603,80 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         ),
       );
     });
-  registerExecutor("task_file", (action, _by, env) =>
+  // WARNING: a request answered once answers the same again, so a retry after a move nobody saw cannot move it back.
+  registerExecutor("task_file", (action, by, env) =>
     Effect.gen(function* () {
       if (action.filings.length === 0) {
         return failed("task_file needs at least one Task");
       }
       const installation = yield* hostInstallation(env.stateDir);
-      const filed: Array<Filing> = [];
-      for (const entry of action.filings) {
-        const missing = {
-          task: entry.task,
-          result: "missing" as const,
-          membership: { project: null, seq: 0 },
-        };
-        if (entry.installation !== undefined && entry.installation !== installation) {
-          filed.push(missing);
-          continue;
-        }
-        const where = entry.project === undefined ? null : yield* projectAt(env, entry.project);
-        if (where === "unavailable") {
-          filed.push({ ...missing, result: "unavailable" });
-          continue;
-        }
-        if (entry.project !== undefined && where === null) {
-          filed.push(missing);
-          continue;
-        }
-        if (where !== null && isArchived(where.project)) {
-          filed.push({ ...missing, result: "archived" });
-          continue;
-        }
-        filed.push(
-          yield* fileTask({
-            id: entry.task,
-            project:
-              where === null ? null : { installation: where.installation, id: where.project.id },
-            expected: entry.expected,
-          }),
-        );
-      }
-      const counts = Arr.map(
-        ["filed", "already", "stale", "archived", "missing", "unavailable"],
-        (result) => [result, Arr.filter(filed, (one) => one.result === result).length] as const,
-      );
+      const landed = yield* once(
+        env.stateDir,
+        {
+          operation: "task_file",
+          request: by.requestId,
+          ...by,
+          asked: action,
+          result: Schema.Struct({ filed: Schema.Array(FilingSchema) }),
+        },
+        Effect.gen(function* () {
+          const filed: Array<Filing> = [];
+          for (const entry of action.filings) {
+            const missing = {
+              task: entry.task,
+              result: "missing" as const,
+              membership: { project: null, seq: 0 },
+            };
+            if (entry.installation !== undefined && entry.installation !== installation) {
+              filed.push(missing);
+              continue;
+            }
+            const where = entry.project === undefined ? null : yield* projectAt(env, entry.project);
+            if (where === "unavailable") {
+              filed.push({ ...missing, result: "unavailable" });
+              continue;
+            }
+            if (entry.project !== undefined && where === null) {
+              filed.push(missing);
+              continue;
+            }
+            if (where !== null && isArchived(where.project)) {
+              filed.push({ ...missing, result: "archived" });
+              continue;
+            }
+            filed.push(
+              yield* fileTask({
+                id: entry.task,
+                project:
+                  where === null
+                    ? null
+                    : { installation: where.installation, id: where.project.id },
+                expected: entry.expected,
+              }),
+            );
+          }
+          return { filed };
+        }),
+      ).pipe(Effect.catchTag("RequestConflict", (conflict) => Effect.die(conflict.reason)));
       const said = Arr.join(
-        Arr.flatMap(counts, ([result, count]) => (count === 0 ? [] : [`${count} ${result}`])),
+        Arr.flatMap(
+          ["filed", "already", "stale", "archived", "missing", "unavailable"] as const,
+          (result) => {
+            const count = Arr.filter(landed.filed, (one) => one.result === result).length;
+            return count === 0 ? [] : [`${count} ${result}`];
+          },
+        ),
         ", ",
       );
-      const any = Arr.some(filed, (one) => one.result === "filed" || one.result === "already");
-      return { state: any ? ("applied" as const) : ("failed" as const), note: said, filed };
+      const any = Arr.some(
+        landed.filed,
+        (one) => one.result === "filed" || one.result === "already",
+      );
+      return {
+        state: any ? ("applied" as const) : ("failed" as const),
+        note: said,
+        filed: landed.filed,
+      };
     }),
   );
   const followChange = (kind: "task_follow" | "task_unfollow") =>

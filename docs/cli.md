@@ -603,20 +603,27 @@ collie --json project restore --project project-1a2b3c4d
 belongs to one. `archive` puts a Project away without touching its work: its Runs carry on,
 its Tasks stay on the global board, and an open question among them is still visible there.
 `restore` brings the same Project back, with its id, so nothing is re-filed.
-File or move a Task with `task file`, which names the Project id on the Task's own Machine:
+File or move a Task with `task file`, which names the Project and the Machine that owns it:
 
 ```sh
 collie --json task file --task task-1a2b3c4d --project project-1a2b3c4d
+collie --json task file --task task-1a2b3c4d --project inst-1a2b3c4d:project-1a2b3c4d
 collie --json task file --task task-1a2b3c4d --project project-1a2b3c4d --expected 1
 collie --json task file --task task-1a2b3c4d
 ```
 
+A bare `--project` is this Machine's own; `<installation>:<project>` names a Project another
+Machine owns, and the Task keeps that reference whoever owns the Task, so it shows in that
+Project's scope on every board. A Project another Machine owns is asked there over the paired
+route: an unreachable Machine answers `unavailable`, changes nothing, and the same filing can
+be tried again. A Project that is archived answers `archived`, and an id nothing has heard of
+answers `missing`.
 Without `--project` the Task is left unassigned. `--expected` is the membership the board
 showed as `membershipSeq`; a filing that names an older one is refused `operation_failed`
 with `details.result: "stale"` and the membership that won, so two operators moving the same
 Task cannot silently undo each other. Filing the same Task where it already is answers
-`already`, so retrying a batch files only what did not land. A Project that is archived
-answers `archived`, and an id this Machine has never heard of answers `missing`.
+`already`, so retrying a batch files only what did not land. A request sent twice answers what
+it answered the first time, so a retry after a move nobody saw cannot move the Task back.
 `task follow --task <id>` keeps a Task in the Following filter of both the global board and
 its Project's board; `task unfollow` drops it. Following is the operator's interest, not a
 decision: a followed Task stays in whichever section its state puts it in.

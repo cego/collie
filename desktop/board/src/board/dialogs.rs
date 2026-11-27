@@ -87,7 +87,7 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                 .pt(0.0)
                 .child(
                     text(
-                        "A Task on another Machine is filed into that Machine's Project of the same name, where it has one.",
+                        "Every Task joins the Project you chose, whichever Machine owns it.",
                     )
                     .key("file-note")
                     .font(k.ty.small)

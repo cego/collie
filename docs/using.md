@@ -1248,10 +1248,11 @@ Task however many Runs or questions it has.
 **Select for filing** in a card's menu picks that Task, even on a Machine that is away, and the
 board says how many are picked. **File into…** files them with the Machine that owns each Task —
 one send per Machine, so a Machine that cannot be reached is tried again with its own entries
-alone once its board is live, and a send that landed is never repeated. A Task picked on a
-Machine other than the chosen Project's files into that Machine's Project of the same name where
-it has one, and joins none where it has not; **No Project** takes the picked Tasks out of the
-Project they are in. Filing a Task into another Project moves it there with its Runs and its
+alone once its board is live, and a send that landed is never repeated. Every entry names the
+Project you chose by the Machine that owns it, so a Task on another Machine is filed into that
+same Project, never into one that merely shares its name; when that Machine cannot be reached
+nothing changes and the same filing can be tried again. **No Project** takes the picked Tasks
+out of the Project they are in. Filing a Task into another Project moves it there with its Runs and its
 questions, and the board it left no longer shows it. Two operators moving the same Task at once
 cannot undo each other: the move names the membership it saw, and the one that is stale is
 refused with the membership that won.
