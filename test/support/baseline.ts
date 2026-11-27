@@ -6808,7 +6808,7 @@ scenario("a Send it back reply earns nothing for a blocker it was not asked abou
 );
 
 scenario(
-  "a Send it back reply's claim on a blocker it was not asked about is not a rejected fix",
+  "a Send it back hand-back asks the blocker nobody answered, and the next repeat of it is a rejected fix",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -6879,10 +6879,9 @@ scenario(
               return yield* ended(run.status);
             }),
         );
-        expect(yield* asked(runId, "build.fix-3-back-1")).toContain("two blocks");
+        expect(yield* asked(runId, "build.fix-3-back-1")).toContain("three blocks");
         const raisedAgain = yield* asked(runId, "build.fix-4");
-        expect(raisedAgain).toContain("Raised again:");
-        expect(raisedAgain).not.toContain("Rejected fix:");
+        expect(raisedAgain).toContain("Rejected fix:");
         expect(outcomeText(status)).toBe(OPENED.mr_url);
       }),
     ),

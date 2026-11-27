@@ -713,19 +713,24 @@ export const rally = (ask: {
       at: number,
       proves: string,
       head: string,
+      also?: { brief: string; findings: ReadonlyArray<Finding> },
     ) =>
       Effect.gen(function* () {
         sentBack += 1;
         lastFix = `${prefix}fix-${at}-back-${sentBack}`;
+        const asked = also === undefined ? open : [...open, ...also.findings];
         const fixed = yield* ask.fix({
           operation: lastFix,
           at,
           proves,
-          findings: `${line}\n\n${formatFindings(open)}`,
-          open,
+          findings:
+            also === undefined
+              ? `${line}\n\n${formatFindings(open)}`
+              : `${line}\n\n${formatFindings(open)}\n\n${also.brief}`,
+          open: asked,
           head,
         });
-        const askedKeys = new Set(Arr.map(open, findingKey));
+        const askedKeys = new Set(Arr.map(asked, findingKey));
         // WARNING: the reply answers only what the hand-back asked; anything else earns nothing in the judgement or the next round.
         const scoped = {
           ...fixed,
@@ -1008,7 +1013,20 @@ export const rally = (ask: {
                   `a person answered Stop to ${name}: ${Arr.join(disputesOf(standing), "; ")}`,
                 );
               }
-              const fixed = yield* sendBack(declinedLine, standing, at, proves, head);
+              const fixed = yield* sendBack(
+                declinedLine,
+                standing,
+                at,
+                proves,
+                head,
+                // WARNING: the last-fix judgement names every outstanding blocker, so only a round a review follows asks them here.
+                at < ROUNDS && round.go === "fix"
+                  ? {
+                      brief: formatFixBrief(round.live, round.handedBack),
+                      findings: round.live,
+                    }
+                  : undefined,
+              );
               remember(at, raised, fixed);
               return at < ROUNDS ? null : yield* finish(synthesis, outstanding, fixed, head);
             }

@@ -213,6 +213,33 @@ test("waiving one dispute still hands the blocker nobody answered back to the fi
     }),
   ));
 
+test("sending one dispute back still hands the blocker nobody answered back to the fixer", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const runId = "r-sendback-live";
+      yield* rig.queueOutputs([
+        { verdict: "findings", findings: [blocker("empty list"), blocker("wrong order")] },
+        { verdict: "clean", disputed: [blocker("empty list")], fixed: [], checks: [] },
+        { verdict: "findings", findings: [blocker("empty list"), blocker("wrong order")] },
+        {
+          verdict: "clean",
+          fixed: [
+            { title: "empty list", file: "src/thing.ts" },
+            { title: "wrong order", file: "src/thing.ts" },
+          ],
+          checks: [],
+        },
+        { verdict: "clean" },
+      ]);
+      const sent = yield* rally(runId, 4, ["Send it back"]);
+      expect(said(sent)).toContain("dispute-1: Waive it | Send it back | Stop → Send it back");
+      const fix = yield* fs.readFileString(`${dir}/agents/${runId}/fix-2-back-1.prompt.md`);
+      expect(fix).toContain("empty list");
+      expect(fix).toMatch(/Raised again[\s\S]*wrong order/);
+    }),
+  ));
+
 test("Stop on the dispute Choice ends the rally naming the dispute", () =>
   runEffect(
     Effect.gen(function* () {

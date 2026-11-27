@@ -199,11 +199,14 @@ export default defineWorkflow({
             if (answer !== SEND_BACK) {
               return `stopped: ${formatFindings(standing)}${suffix()}`;
             }
+            const rest = at < asked.rounds && rally.go === "fix" ? rally.live : [];
             const fixed = yield* fixNow(
               `fix-${at}-back-${++sentBack}`,
               at,
-              `A person declined the dispute, so it is open again.\n\n${formatFindings(standing)}`,
-              standing,
+              rest.length === 0
+                ? `A person declined the dispute, so it is open again.\n\n${formatFindings(standing)}`
+                : `A person declined the dispute, so it is open again.\n\n${formatFindings(standing)}\n\n${formatFixBrief(rest, rally.handedBack)}`,
+              [...standing, ...rest],
             );
             keep(fixed);
             if (at < asked.rounds) {
