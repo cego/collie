@@ -2807,16 +2807,18 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           ),
         );
         // WARNING: a step that already handed in is read before core and again after it is listed, since the fact can be accepted while core is asked.
-        const handedIn = Effect.gen(function* () {
-          if (!settle || fixed === undefined) {
-            return undefined;
-          }
-          const settled = yield* outputOf(
-            yield* RunRecords,
-            stepOf([fixed], ask.runId, ask.operation, ask.output),
-          );
-          return settled === null ? undefined : fixed;
-        });
+        const acceptedFor = (dispatch: Launched | undefined) =>
+          Effect.gen(function* () {
+            if (!settle || dispatch === undefined) {
+              return undefined;
+            }
+            const settled = yield* outputOf(
+              yield* RunRecords,
+              stepOf([dispatch], ask.runId, ask.operation, ask.output),
+            );
+            return settled === null ? undefined : dispatch;
+          });
+        const handedIn = acceptedFor(fixed);
         const acceptedFirst = yield* handedIn;
         if (acceptedFirst !== undefined) {
           return acceptedFirst;
@@ -2824,6 +2826,10 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         const listedAt = yield* nowIso;
         const listing = yield* host.herdr.agentList().pipe(Effect.result);
         if (listing._tag === "Failure") {
+          const acceptedAnyway = yield* handedIn;
+          if (acceptedAnyway !== undefined) {
+            return acceptedAnyway;
+          }
           // WARNING: nothing is started on a question nobody answered: a second agent on the same work is worse than work that stops and says why.
           return yield* unsettled(
             ask,
@@ -3023,6 +3029,10 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
                 const landing = landedOn(undefined, chosen);
                 yield* recordLaunch(landing);
                 yield* armed(landing);
+                const settledAtLaunch = yield* acceptedFor(landing);
+                if (settledAtLaunch !== undefined) {
+                  return settledAtLaunch;
+                }
                 return yield* Effect.uninterruptible(
                   start(ask, agent, { agents: listing.success, listedAt }, pointer, session).pipe(
                     Effect.flatMap((incarnation) => recorded(incarnation, chosen)),
@@ -3036,6 +3046,10 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
                 ),
               );
         if (atLaunch) {
+          const settledNow = yield* acceptedFor(launched);
+          if (settledNow !== undefined) {
+            return settledNow;
+          }
           if (!replayed) {
             yield* orderLaunch(ask);
           }
@@ -3086,6 +3100,10 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         }
         // WARNING: one send is one message, not a transcript; a skill marked disable-model-invocation refuses an agent invoking it itself, but this human channel runs it.
         yield* write(sentPath(launched, "step"), pointer);
+        const settledBeforeDelivery = yield* acceptedFor(launched);
+        if (settledBeforeDelivery !== undefined) {
+          return settledBeforeDelivery;
+        }
         let asked = yield* deliver(launched, pointer, {
           kind: "step",
           ref: stemOf(ask),

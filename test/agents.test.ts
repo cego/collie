@@ -73,6 +73,7 @@ import { usageOf } from "../src/usage-ledger-model";
 import type { Source, UsageEntry } from "../src/usage-ledger-model";
 import { readUsage } from "../src/usage-ledger";
 import { measuresOf } from "../src/outcomes";
+import type { Launched } from "../src/launches";
 import { launchDir, readLaunches, recordLaunch, stemOf } from "../src/launches";
 import { Collected } from "../src/agents";
 import { Collecting } from "../src/collecting";
@@ -9758,11 +9759,22 @@ class HoldsListing extends Herdr {
   constructor(
     private readonly arrived: Deferred.Deferred<void>,
     private readonly release: Deferred.Deferred<void>,
+    private readonly failure: string | null = null,
   ) {
     super(rig.pluginEnv());
   }
   override agentList() {
-    const listed = () => super.agentList();
+    const listed =
+      this.failure === null
+        ? () => super.agentList()
+        : () =>
+            Effect.fail(
+              new HerdrError({
+                message: "core list failed",
+                detail: this.failure ?? "",
+                answered: true,
+              }),
+            );
     const { arrived, release } = this;
     return Effect.gen(function* () {
       yield* Deferred.succeed(arrived, undefined);
@@ -9808,6 +9820,71 @@ test("an Output accepted while a replay lists core is read without a second prom
       );
       expect(outcome._tag).toBe("Success");
       expect(yield* read(promptPath("r1"))).toBe("");
+    }),
+  ));
+
+test("an Output accepted while a replay's core listing fails is read instead of parking", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const ask = replayAsk();
+      yield* recordLaunch({
+        agent: agentFor("r1"),
+        output: ask.output,
+        reused: false,
+        runId: "r1",
+        operation: "review",
+        role: "reviewer",
+        workflow: "agent-work",
+        harness: "opencode",
+        outputSubmit: "tool",
+        at: 1000,
+      }).pipe(Effect.provide(recordsAt(dir)));
+      yield* awaitOutput("r1", agentFor("r1"), ask.output, () => null, "review@1000");
+      const arrived = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const outcome = yield* session(
+        Effect.gen(function* () {
+          const agents = yield* Agents;
+          const fiber = yield* Effect.forkChild(
+            agents.launch(ask, undefined, undefined, true).pipe(Effect.result),
+          );
+          yield* Deferred.await(arrived);
+          expect(
+            yield* submitOutput("r1", agentFor("r1"), { verdict: "clean", note: "handed in" }),
+          ).toBe("accepted");
+          yield* Deferred.succeed(release, undefined);
+          return yield* Fiber.join(fiber);
+        }),
+        { herdr: new HoldsListing(arrived, release, "core is not answering") },
+      );
+      expect(outcome._tag).toBe("Success");
+      expect(outcome._tag === "Success" ? outcome.success.at : null).toBe(1000);
+      expect(yield* controlOf(PARK_CAUSE, "r1")).not.toBe("herdr-unavailable");
+    }),
+  ));
+
+test("an Output accepted once a launch is armed is read before OpenCode is started", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const ask = replayAsk();
+      const context = yield* Effect.context<RunRecords>();
+      const armed = (landing: Launched) =>
+        awaitOutput("r1", agentFor("r1"), ask.output, () => null, `review@${landing.at}`).pipe(
+          Effect.andThen(
+            submitOutput("r1", agentFor("r1"), { verdict: "clean", note: "handed in" }),
+          ),
+          Effect.tap((taken) => Effect.sync(() => expect(taken).toBe("accepted"))),
+          Effect.asVoid,
+          Effect.provideContext(context),
+        );
+      const outcome = yield* session(
+        Effect.gen(function* () {
+          const agents = yield* Agents;
+          return yield* agents.launch(ask, undefined, armed, true).pipe(Effect.result);
+        }),
+      );
+      expect(outcome._tag).toBe("Success");
+      expect(everyLaunch(yield* rig.calls())).toEqual([]);
     }),
   ));
 
@@ -9864,7 +9941,8 @@ test("an Output accepted while a replay lists a live core is read instead of pro
         { herdr: new HoldsListing(arrived, release) },
       );
       expect(outcome._tag).toBe("Success");
-      expect(sent(yield* rig.calls(), "Review the diff.")).toBe(0);
+      expect(sent(yield* rig.calls(), promptPath("r1"))).toBe(0);
+      expect(Arr.filter(yield* rig.cmds(), (cmd) => cmd === "terminal.send")).toHaveLength(0);
       expect(yield* read(promptPath("r1"))).toBe("");
     }),
   ));
