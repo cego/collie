@@ -1541,6 +1541,8 @@ const aboutOf = (action: DesktopAction) => {
         ),
         what: "filing a Task",
       };
+    case "Start":
+      return { about: action.task, what: `starting ${action.workflow} in ${action.task}` };
     case "TaskFollow":
     case "TaskUnfollow":
       return { about: action.task, what: `${Str.toLowerCase(action._tag)} ${action.task}` };

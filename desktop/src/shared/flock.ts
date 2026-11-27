@@ -302,7 +302,7 @@ export const DesktopAction = Schema.Union([
   Schema.TaggedStruct("Start", {
     workflow: Schema.String,
     task: Schema.String,
-    input: Schema.Record(Schema.String, Schema.Json),
+    input: Schema.Record(Schema.String, Schema.String),
   }),
   Schema.TaggedStruct("TaskFollow", { task: Schema.String }),
   Schema.TaggedStruct("TaskUnfollow", { task: Schema.String }),

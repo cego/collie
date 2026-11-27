@@ -3101,7 +3101,7 @@ pub struct Start {
     pub tag: StartTag,
     pub workflow: String,
     pub task: String,
-    pub input: InvokeInput,
+    pub input: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
