@@ -813,6 +813,8 @@ impl App {
         if let Some(Dialog::Queued {
             opened,
             workflows,
+            chosen,
+            inputs,
             why,
             read_for,
             ..
@@ -820,6 +822,8 @@ impl App {
         {
             *opened = asked;
             *workflows = None;
+            *chosen = None;
+            inputs.clear();
             *why = None;
             *read_for = Some(named.clone());
         }

@@ -2481,6 +2481,66 @@ fn a_workflow_list_read_for_one_queued_task_never_fills_another() {
 }
 
 #[test]
+fn changing_a_queued_tasks_checkout_unarms_the_workflow_and_inputs_chosen_for_the_last_one() {
+    let harness = Harness::new();
+    harness.fake.will_answer(
+        "workflows",
+        Ok(startables(vec![("plan", "Plan", vec!["goal"])])),
+    );
+    harness.fake.will_answer(
+        "workflows",
+        Ok(startables(vec![("implement", "Implement", vec!["repo"])])),
+    );
+    let said = "Make the refunds page say a duplicate";
+    let mut runtime = runtime_of(
+        &harness,
+        vec![snapshot(
+            &pc(),
+            vec![task(
+                "t-queued",
+                said,
+                "quiet",
+                json!({"queued": true, "run": "", "runs": [], "sentence": said}),
+            )],
+        )],
+    );
+    settle(&harness, &mut runtime);
+    press(&mut runtime, "card-t-queued-name");
+    settle(&harness, &mut runtime);
+    press(&mut runtime, "queued-workflow-plan");
+    redraw(&mut runtime);
+    assert!(
+        !has_state(&node(&runtime, "queued-start").unwrap(), "disabled"),
+        "the plan is ready to start with the instruction as its goal"
+    );
+    match &mut runtime.state.board.dialog {
+        Some(collie_desktop_board::board::Dialog::Queued { checkout, .. }) => {
+            checkout.text.clear();
+        }
+        _ => unreachable!("a queued Task's dialog is open"),
+    }
+    type_key(&mut runtime, "queued-checkout", "~/code/shop");
+    settle(&harness, &mut runtime);
+    assert!(
+        has_state(&node(&runtime, "queued-start").unwrap(), "disabled"),
+        "the Workflow chosen for the last checkout is not armed for this one"
+    );
+    press(&mut runtime, "queued-start");
+    settle(&harness, &mut runtime);
+    assert!(
+        acts(&harness).is_empty(),
+        "no start is sent for a Workflow this checkout does not offer"
+    );
+    press(&mut runtime, "queued-workflow-implement");
+    redraw(&mut runtime);
+    assert!(
+        node(&runtime, "queued-input-goal").is_none(),
+        "the last checkout's Inputs are gone with its Workflow"
+    );
+    assert!(node(&runtime, "queued-input-repo").is_some());
+}
+
+#[test]
 fn a_queued_task_lists_the_workflows_its_checkout_has_not_the_machines_own() {
     let harness = Harness::new();
     harness.fake.will_answer(
