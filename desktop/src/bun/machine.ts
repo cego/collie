@@ -1731,13 +1731,11 @@ export const act = (
         return door.act({ actions: [collieAction(action)], request }).pipe(
           Effect.flatMap(([done]) => {
             const said = filedSaid(done?.filed) || done?.note || "Done";
-            if (done?.state === "applied") {
-              return Effect.succeed(said);
-            }
             const away = Arr.some(done?.filed ?? [], (one) => one.result === "unavailable");
-            return Effect.fail<Unsteered | Unreached>(
-              away ? { _tag: "Unreached", message: said } : { _tag: "Unsteered", message: said },
-            );
+            const refused: Unreached | Unsteered = away
+              ? { _tag: "Unreached", message: said }
+              : { _tag: "Unsteered", message: said };
+            return away || done?.state !== "applied" ? Effect.fail(refused) : Effect.succeed(said);
           }),
         );
     }

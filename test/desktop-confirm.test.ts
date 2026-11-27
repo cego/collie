@@ -187,13 +187,13 @@ test("a filing says where each Task is and at which membership, not just how man
     }),
   ));
 
-test("a filing whose Project is away is offered to try again, since its answer is not final", () =>
+test("a filing that could not reach every Project is offered to try again, even where the rest landed", () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const { log } = logged();
       const away: ActionResult = {
         kind: "task_file",
-        state: "failed",
+        state: "applied",
         note: "1 filed, 1 unavailable",
         filed: [
           {
