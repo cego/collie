@@ -753,7 +753,7 @@ acknowledging its report) does not settle what it owes. An implement whose
 merge request is open says what checked it, from Collie's own checks counted only at the
 revision its branch is at now in its checkout (where that cannot be read, the newest
 revision Collie checked): `cego/collie!65 is open, but lint failed at 1a2b3c4. Next: fix
-lint, or tell builder to.`, or `cego/collie!65 is open; nothing has checked it.` Once the
+lint, or tell builder to.`, or `cego/collie!65 is open; its checks have not been read.` Once the
 forge's last answer is more than two merge-watch rounds old, the card adds when it was:
 `GitLab last answered 11 minutes ago.`, and where the last ask failed, `GitLab could not be
 read; it last answered 6 minutes ago.` A `merged` recorded by hand is outranked by the forge
@@ -832,7 +832,14 @@ can mean superseded as easily as abandoned, and only you know which. The same an
 carries the forge's own checks — GitLab's head pipeline, GitHub's check rollup — and the
 revision they ran at, which is the one Collie's own checks are counted at too: a failing
 one names itself (`cego/collie#30 is open, but lint failed at 1a2b3c4.`), a pending one
-reads `cego/collie#30 is open; its checks are still running.`, and Ready to release needs
+reads `cego/collie#30 is open; its checks are still running.`, one read at the head where
+the forge found no check reads `cego/collie#30 is open; nothing has checked it.`, and one
+that passed there without Collie's own checks having run at that revision reads
+`cego/collie#30 is open; its checks passed at 1a2b3c4, but Collie has not checked it
+there.` A card says
+`its checks have not been read` where no answer was read at the head at all — no `gh`, one
+nobody logged in to, or an answer the forge bound to no revision, which proves nothing
+about CI there. Ready to release needs
 every check the card knows of to have passed: each of the Run's checks as its Intent has
 them now, passed as the command each names, and the forge's pipeline at the merge
 request's head. A merge request with no pipeline lacks nothing there; one whose pipeline
@@ -841,7 +848,7 @@ on: the merge request is not a draft, no blocking review finding is unresolved �
 last fix that stood without a review, the findings it left — and the forge says it can merge — GitLab's detailed merge status, GitHub's mergeable state. Otherwise the
 card says the first thing missing: `cego/collie#30 is open and its checks passed at
 1a2b3c4, but the forge says it cannot merge: conflicting.` No `gh`, or one nobody logged in to, leaves
-the card `nothing has checked it` and says nothing about why. A pull request's details —
+the card `its checks have not been read` and says nothing about why. A pull request's details —
 title, state, author and assignees, branches, checks, approval, comments, head and
 whether it moved since the review — show in the drawer and Desktop's record as a merge
 request's do.
