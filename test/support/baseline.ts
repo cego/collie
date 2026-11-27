@@ -6813,6 +6813,159 @@ scenario("a Send it back reply earns nothing for a blocker it was not asked abou
   ),
 );
 
+scenario("a blocker handed back beside a sent-back dispute is not rejected a second time", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* noMergeRequests;
+      yield* repository();
+      const plan = yield* planOf([{ file: "01-only.md", title: "only", checks: "unit" }]);
+      const runId = "r-send-back-handed-once";
+      yield* approve(runId, ["unit"]);
+      yield* collect(evidenceDir(dir, runId), {
+        run: runId,
+        name: "unit",
+        executable: "true",
+        argv: [],
+        cwd: rig.projectDir,
+        by: "agent",
+      }).pipe(Effect.orDie);
+      const breaks = (title: string) => ({
+        severity: "blocker",
+        title,
+        file: "src/a.ts",
+        detail: "it breaks",
+      });
+      const raised = (findings: ReadonlyArray<{ title: string }>) => ({
+        ...CLEAN_SYNTHESIS,
+        verdict: "findings",
+        findings,
+      });
+      const claims = (title: string) => ({
+        verdict: "clean",
+        fixed: [{ title, file: "src/a.ts" }],
+        checks: [{ name: "unit" }],
+      });
+      yield* rig.queueOutputs([
+        BLOCKED_BUILD,
+        raised([breaks("the guard is missing"), breaks("the list is empty")]),
+        {
+          verdict: "clean",
+          fixed: [],
+          disputed: [{ ...breaks("the guard is missing"), reason: "it is by design" }],
+          checks: [],
+        },
+        raised([breaks("the guard is missing"), breaks("the list is empty")]),
+        {
+          verdict: "clean",
+          fixed: [
+            { title: "the guard is missing", file: "src/a.ts" },
+            { title: "the list is empty", file: "src/a.ts" },
+          ],
+          checks: [{ name: "unit" }],
+        },
+        raised([breaks("the list is empty")]),
+        claims("the list is empty"),
+        CLEAN_SYNTHESIS,
+        CLEAN_SYNTHESIS,
+        OPENED,
+      ]);
+      const status = yield* driven(
+        { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+        (run) =>
+          Effect.gen(function* () {
+            yield* stallAsked(run, "build.dispute-1");
+            yield* run.answer("build.dispute-1", "Send it back");
+            return yield* ended(run.status);
+          }),
+      );
+      expect(yield* asked(runId, "build.fix-2-back-1")).toContain("the list is empty");
+      const after = yield* asked(runId, "build.fix-3");
+      expect(after).toContain("the list is empty");
+      expect(after).not.toContain("Rejected fix:");
+      expect(outcomeText(status)).toBe(OPENED.mr_url);
+    }),
+  ),
+);
+
+scenario("a repeated blocker reaches the last round's fix while a dispute is sent back", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* noMergeRequests;
+      yield* repository();
+      const plan = yield* planOf([{ file: "01-only.md", title: "only", checks: "unit" }]);
+      const runId = "r-send-back-last-repeat";
+      yield* approve(runId, ["unit"]);
+      yield* collect(evidenceDir(dir, runId), {
+        run: runId,
+        name: "unit",
+        executable: "true",
+        argv: [],
+        cwd: rig.projectDir,
+        by: "agent",
+      }).pipe(Effect.orDie);
+      const breaks = (title: string) => ({
+        severity: "blocker",
+        title,
+        file: "src/a.ts",
+        detail: "it breaks",
+      });
+      const raised = (findings: ReadonlyArray<{ title: string }>) => ({
+        ...CLEAN_SYNTHESIS,
+        verdict: "findings",
+        findings,
+      });
+      const claims = (title: string) => ({
+        verdict: "clean",
+        fixed: [{ title, file: "src/a.ts" }],
+        checks: [{ name: "unit" }],
+      });
+      yield* rig.queueOutputs([
+        BLOCKED_BUILD,
+        raised([breaks("one blocks")]),
+        claims("one blocks"),
+        raised([breaks("two blocks")]),
+        claims("two blocks"),
+        raised([breaks("the guard is missing"), breaks("the list is empty")]),
+        {
+          verdict: "clean",
+          fixed: [{ title: "the guard is missing", file: "src/a.ts" }],
+          disputed: [{ ...breaks("the list is empty"), reason: "it is by design" }],
+          checks: [{ name: "unit" }],
+        },
+        raised([breaks("the guard is missing"), breaks("the list is empty")]),
+        {
+          verdict: "clean",
+          fixed: [
+            { title: "the guard is missing", file: "src/a.ts" },
+            { title: "the list is empty", file: "src/a.ts" },
+          ],
+          checks: [{ name: "unit" }],
+        },
+        CLEAN_SYNTHESIS,
+        OPENED,
+      ]);
+      const status = yield* driven(
+        { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+        (run) =>
+          Effect.gen(function* () {
+            yield* stallAsked(run, "build.dispute-1");
+            yield* run.answer("build.dispute-1", "Send it back");
+            const rows = yield* stallAsked(run, "build.fix-unverified-1");
+            if (rows.length > 0) {
+              yield* run.answer("build.fix-unverified-1", "Stop");
+            }
+            return yield* ended(run.status);
+          }),
+      );
+      const askedBack = yield* asked(runId, "build.fix-4-back-1");
+      expect(askedBack).toContain("the list is empty");
+      expect(askedBack).toContain("the guard is missing");
+      expect(yield* wasAsked(runId, "build.fix-5")).toBe(false);
+      expect(outcomeText(status)).toBe(OPENED.mr_url);
+    }),
+  ),
+);
+
 scenario(
   "a Send it back hand-back asks the blocker nobody answered, and the next repeat of it is a rejected fix",
   () =>

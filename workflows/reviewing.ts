@@ -608,8 +608,9 @@ export const rally = (ask: {
       at: number,
       keys: ReadonlyArray<string>,
       fixed: typeof FixOutputSchema.Type,
+      handed?: ReadonlyArray<string>,
     ) => {
-      seen = { at, keys, handed: seen?.handed ?? [], claimed: fixed.fixed };
+      seen = { at, keys, handed: handed ?? seen?.handed ?? [], claimed: fixed.fixed };
     };
     const dispositions = (fixed: typeof FixOutputSchema.Type) => {
       const counts = new Map<string, number>();
@@ -745,6 +746,20 @@ export const rally = (ask: {
         ];
         return scoped;
       });
+
+    // WARNING: the last-fix judgement names every outstanding blocker, so a final round asks only the repeats it owes.
+    const alsoBrief = (round: ReturnType<typeof settleRound>, at: number) => {
+      if (round.go !== "fix") {
+        return undefined;
+      }
+      const repeats = Arr.map(round.handedBack, (one) => one.finding);
+      if (at < ROUNDS) {
+        return { brief: formatFixBrief(round.live, round.handedBack), findings: round.live };
+      }
+      return repeats.length === 0
+        ? undefined
+        : { brief: formatFixBrief([], round.handedBack), findings: repeats };
+    };
 
     // WARNING: no review follows the last fix, so what judges it is the journal; a hand-back past ROUNDS never gets one either.
     const finish = (
@@ -1019,15 +1034,9 @@ export const rally = (ask: {
                 at,
                 proves,
                 head,
-                // WARNING: the last-fix judgement names every outstanding blocker, so only a round a review follows asks them here.
-                at < ROUNDS && round.go === "fix"
-                  ? {
-                      brief: formatFixBrief(round.live, round.handedBack),
-                      findings: round.live,
-                    }
-                  : undefined,
+                alsoBrief(round, at),
               );
-              remember(at, raised, fixed);
+              remember(at, raised, fixed, round.go === "fix" ? round.handed : undefined);
               return at < ROUNDS ? null : yield* finish(synthesis, outstanding, fixed, head);
             }
             yield* waiveAll(name, standing);

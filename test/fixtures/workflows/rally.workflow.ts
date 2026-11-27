@@ -12,6 +12,7 @@ import {
   ReviewOutputSchema,
   Run,
   agentWork,
+  blockingKeys,
   defineWorkflow,
   findingKey,
   formatFixBrief,
@@ -123,6 +124,19 @@ export default defineWorkflow({
         disputed = disputed.filter((one) => !keys.has(findingKey(one)));
       };
 
+      const alsoBrief = (round: ReturnType<typeof settleRound>, at: number) => {
+        if (round.go !== "fix") {
+          return undefined;
+        }
+        const repeats = round.handedBack.map((one) => one.finding);
+        if (at < asked.rounds) {
+          return { findings: round.live, text: formatFixBrief(round.live, round.handedBack) };
+        }
+        return repeats.length === 0
+          ? undefined
+          : { findings: repeats, text: formatFixBrief([], round.handedBack) };
+      };
+
       const finish = (live: ReadonlyArray<Finding>, first: typeof FixOutputSchema.Type) =>
         Effect.gen(function* () {
           let report = first;
@@ -199,16 +213,22 @@ export default defineWorkflow({
             if (answer !== SEND_BACK) {
               return `stopped: ${formatFindings(standing)}${suffix()}`;
             }
-            const rest = at < asked.rounds && rally.go === "fix" ? rally.live : [];
+            const brief = alsoBrief(rally, at);
             const fixed = yield* fixNow(
               `fix-${at}-back-${++sentBack}`,
               at,
-              rest.length === 0
+              brief === undefined
                 ? `A person declined the dispute, so it is open again.\n\n${formatFindings(standing)}`
-                : `A person declined the dispute, so it is open again.\n\n${formatFindings(standing)}\n\n${formatFixBrief(rest, rally.handedBack)}`,
-              [...standing, ...rest],
+                : `A person declined the dispute, so it is open again.\n\n${formatFindings(standing)}\n\n${brief.text}`,
+              [...standing, ...(brief?.findings ?? [])],
             );
             keep(fixed);
+            seen = {
+              at,
+              keys: blockingKeys([...standing, ...split.live]),
+              handed: rally.go === "fix" ? rally.handed : (seen?.handed ?? []),
+              claimed: fixed.fixed,
+            };
             if (at < asked.rounds) {
               continue;
             }
