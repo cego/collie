@@ -50,7 +50,6 @@ import {
   checkedBeforeReview,
   HEAD_MOVED,
   followUp,
-  MR_ENDED,
   IMPLEMENTER,
   NO_MR,
   REVIEWER,
@@ -691,18 +690,7 @@ export default defineWorkflow({
         }
       });
 
-      const followed =
-        !improving && (yield* following(1))
-          ? yield* followThrough.pipe(
-              Effect.catchIf(
-                (failure) => Str.startsWith(MR_ENDED)(failure.reason),
-                (failure) =>
-                  Effect.succeed({
-                    done: `${mrLabel(asked.target)} was ${Str.slice(MR_ENDED.length)(failure.reason)}`,
-                  }),
-              ),
-            )
-          : null;
+      const followed = !improving && (yield* following(1)) ? yield* followThrough : null;
       if (followed?.done !== undefined) {
         return followed.done;
       }

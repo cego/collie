@@ -2531,7 +2531,7 @@ test("a review of the local diff saves its report though no merge request can ca
     }),
   ));
 
-test("a merge request closed between its review and the head check records the round as completed", () =>
+test("a merge request closed between its review and the head check fails the Run, its round completed", () =>
   host.runEffect(
     Effect.gen(function* () {
       const { first, forge, entry } = yield* begun("review", [review([F1])]);
@@ -2563,8 +2563,8 @@ test("a merge request closed between its review and the head check records the r
             (view) => view?.status.status === "complete" || view?.status.status === "failed",
           ).pipe(Effect.timeout("10 minutes"));
           expect(closing).not.toBeNull();
-          expect(done?.status.status === "complete" ? done.status.value : null).toBe(
-            "mk/collie!7 was closed",
+          expect(done?.status.status === "failed" ? done.status.reason : null).toContain(
+            "reviewed merge request ended: closed",
           );
           expect(yield* notesOf(forge)).toEqual([]);
           expect(roundMarks(yield* readWatchJournal(host.dir()))).toEqual([
