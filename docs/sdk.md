@@ -1592,13 +1592,27 @@ rally converges, stands on a dispute and runs out of rounds where these decide.
 - **`conflictingDispositions(review)`** — one line per finding the review both raises open
   and withdraws or confirms fixed. The shipped rally records each in the Run's log as
   `review <n>: conflicting dispositions of …`; the dispute stays for the human.
-- **`splitDisputed(findings, disputed)`** — what is still the implementer's. A finding the
-  implementer already rejected with a reason stops driving the loop; a reviewer who answers
-  that reason with a `rebuttal` puts it back.
+- **`splitDisputed(findings, disputed)`** — what is still the implementer's, as the review's
+  statuses and this Run's ledger together say. A finding the implementer already rejected
+  with a reason stops driving the loop; a reviewer who answers that reason with a `rebuttal`
+  puts it back. A finding the review itself calls `disputed` that no dispute of the
+  implementer's backs is not settled: it is `reopened`.
+- **`rallyFrom(split)`** — what the round is judged on: `live` with `reopened` among it,
+  and `standing` as the disputes only a person may settle. Read a split through it, never
+  `live` alone, or a blocker the review called disputed without the implementer disputing it
+  stops driving the loop and reaches nobody.
 - **`settleRound({ live, disputed, at, seen })`** — where this round goes: `fix` with the
-  blocking set that drives it, `clean` when nothing blocking is left, or `halt` when a
-  dispute stands unanswered or the same blocking findings came back unchanged. `seen` is
-  the previous round's `keys`; without it nothing can notice a rally going round.
+  blocking set that drives it, `clean` when nothing blocking is left, or `halt` when the
+  round makes no progress, or when a dispute stands and nothing blocking is live to fix
+  first — a standing dispute never stops a live blocker being fixed. `seen` is the previous round's
+  `keys`, `claimed` — what that round's fix reported as fixed — and the keys this rally has
+  already `handed` back; without it nothing can notice a rally going round. A key the review
+  raises again that has not been handed back yet is handed back once in this round's `fix`,
+  in `handedBack`: marked `rejected` where the fix between the two reviews listed it under
+  `fixed`, and unmarked where it did not. The fix's prompt names each with the reviewer's
+  latest detail, and tells it that only new evidence or a `disputed` entry with a reason
+  answers it. It is the same blocking set coming back after every one of its keys was
+  handed back that halts `no_progress`.
 - **`settleFinalFix(live, fix, evidence)`** — the last round has no review after it, so the
   fix's own account is what is left. Every blocking finding needs a disposition, and every
   check it names needs a passing verification on the tree as it stands, or is left to the
@@ -1612,6 +1626,22 @@ rally converges, stands on a dispute and runs out of rounds where these decide.
 The shipped workflows' rally is one such loop, `rally` in
 [`workflows/reviewing.ts`](../workflows/reviewing.ts): `implement` and `tune-up` both call
 it, each with its own fix. A module of your own can import it the same way.
+
+A rally never parks on what only a person can settle, and it asks about a standing dispute
+before it fixes anything beside it: `rally` reads that dispute from the round's split, so a
+blocker the review raised alongside one is fixed after the person has answered. `rally` turns
+each of the three halts
+into a Choice it asks through the `choose` its caller supplies: a disputed blocker the
+reviewers kept asks `<prefix>dispute-<n>`, with Waive it (recommended), Send it back and
+Stop; a repeated blocking set asks `<prefix>no-progress-<n>`, and a last fix the journal
+cannot verify — after one hand-back, `<prefix>fix-<ROUNDS + 1>`, naming the evidence that is
+missing — asks `<prefix>fix-unverified-<n>`, each with Send it back (recommended) and Stop.
+Waiving keeps the finding `disputed` with a `waived` note naming who answered and the
+Choice, tells the next reviewer not to raise it again, and the merge request lists it as
+waived and unverified. A waiver settles nothing outside the rally: the outcome gate is not
+told about it. Sending it back is one more fix, told that a person declined; it answers only
+what it was asked, so every disposition the last fix already gave stands and a dispute that
+comes back from it asks the next number. Stop ends the Run naming what it could not settle.
 
 From round 2 on, `rally` tells each round's reviewers what the round before it reviewed,
 through `followUp`: that round's head, the commits and files changed since it as

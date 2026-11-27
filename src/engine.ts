@@ -2176,7 +2176,26 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     rebuttal?: string;
     /** Why a synthesis dropped this finding; only a dropped entry carries one. */
     reason?: string;
+    /** Who waived this finding, and the Choice they waived it to; a waiver is never proof. */
+    waived?: Waiver;
   }
+
+  export interface Waiver {
+    by: string;
+    choice: string;
+  }
+
+  /** The findings a person waived, each still disputed and named in the merge request. */
+  export function waiveFindings(
+    findings: ReadonlyArray<Finding>,
+    waiver: Waiver,
+  ): ReadonlyArray<Finding>;
+
+  /** Those of \`findings\` a person waived. */
+  export function waivedIn(findings: ReadonlyArray<Finding>): Finding[];
+
+  /** One line per waived finding, naming who waived it and that nothing proves it. */
+  export function formatWaived(waived: ReadonlyArray<Finding>): string;
 
   /**
    * The one judgement a reviewer gives that nothing else can, named by the kind of result
@@ -2265,6 +2284,16 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     live: Finding[];
     settled: Finding[];
     rebutted: Finding[];
+    /** The disputes still standing, each with the reviewer's latest detail; a rebutted one is not here. */
+    standing: Finding[];
+    /** Statuses the review called disputed that no dispute of the implementer's backs: their work, not a person's. */
+    reopened: Finding[];
+  }
+
+  /** A finding a rally hands back to the fixer, and whether the fix before it claimed it fixed. */
+  export interface HandedBack {
+    readonly finding: Finding;
+    readonly rejected: boolean;
   }
 
   /** Where a review/fix rally goes after one review. */
@@ -2275,6 +2304,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
         readonly live: Finding[];
         readonly blocking: Finding[];
         readonly keys: ReadonlyArray<string>;
+        readonly handedBack: ReadonlyArray<HandedBack>;
+        readonly handed: ReadonlyArray<string>;
       }
     | {
         readonly go: "halt";
@@ -2298,6 +2329,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export function isBlocking(finding: Finding): boolean;
   export function findingKey(finding: Pick<Finding, "file" | "title">): string;
   export function sameFinding(left: Finding, right: Finding): boolean;
+  export const isWaived: (waived: ReadonlyArray<Finding>, one: Finding) => boolean;
   export function blockingKeys(findings: ReadonlyArray<Finding>): string[];
   /** Whether a blocking finding says where and why, so it can be acted on. */
   export function substantiated(finding: Finding): boolean;
@@ -2319,18 +2351,25 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly dropped: ReadonlyArray<Finding>;
     readonly fixed: ReadonlyArray<Fixed>;
   }): string[];
-  /** A finding the implementer already rejected stops driving the loop. */
+  /** A finding the implementer already rejected stops driving the loop; a status only the review disputed is in \`reopened\`. */
   export function splitDisputed(
     findings: ReadonlyArray<Finding>,
     disputed: ReadonlyArray<Finding>,
   ): Split;
+  /** What a round is judged on: \`live\` with \`reopened\` among it, and the disputes a person may settle. */
+  export function rallyFrom(split: Split): { live: Finding[]; standing: Finding[] };
   /** Where one round goes next: another fix, clean, or the human's call. */
   export function settleRound(round: {
     readonly live: ReadonlyArray<Finding>;
     readonly disputed: ReadonlyArray<Finding>;
     readonly reopened?: ReadonlyArray<Finding>;
     readonly at: number;
-    readonly seen?: { readonly at: number; readonly keys: ReadonlyArray<string> } | null;
+    readonly seen?: {
+      readonly at: number;
+      readonly keys: ReadonlyArray<string>;
+      readonly claimed?: ReadonlyArray<Fixed>;
+      readonly handed?: ReadonlyArray<string>;
+    } | null;
   }): Rally;
   /** The last fix has no review after it, so its own account and the journal decide. */
   /** A fix report as a reader takes one; a decoded Output is one without being copied. */
@@ -2348,7 +2387,25 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   ): FinalFix;
   export function renderReview(synthesis: SynthesisReport): string;
   export function renderPublicReview(synthesis: SynthesisReport): string;
+  export function formatFixBrief(
+    live: ReadonlyArray<Finding>,
+    handedBack: ReadonlyArray<HandedBack>,
+  ): string;
   export function formatFindings(findings: ReadonlyArray<Finding>): string;
+  /** What a person is offered at a dispute: the fixer's entries with the reviewer's latest detail and no lowered severity. */
+  export function offered(disputed: ReadonlyArray<Finding>): Array<Finding>;
+  /** A waived finding as the next reviewer must see it: told who waived it and not to raise it again. */
+  export const waiverNote: (one: Finding) => Finding;
+  /** What a person is offered at a dispute: the fix's own blocking disputes, never what it reported fixed. */
+  export function offeredDisputes(
+    fix: FixReport,
+    waived: ReadonlyArray<Finding>,
+  ): Array<Finding>;
+  /** Who acted, naming the agent where the audit recorded one, else the door it came from. */
+  export function whoActed(actor: {
+    readonly origin: string;
+    readonly from?: { readonly agent?: string } | undefined;
+  }): string;
 
   /** The prose a human reads, and the findings a card counts, where both are looked for. */
   export const REVIEW_FILE: string;

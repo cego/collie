@@ -21,6 +21,7 @@ import {
   agentWork,
   answerFor,
   ask,
+  ask as askPerson,
   benchmarkFile,
   changeKey,
   classifyWorkSource,
@@ -33,6 +34,7 @@ import {
   formatFindings,
   identityProblem,
   isBlocking,
+  isWaived,
   isSingleRepo,
   orderedTicketsOf,
   planReposOf,
@@ -44,6 +46,7 @@ import {
   step,
   stepFailed,
   unmetCriteria,
+  waiverNote,
 } from "collie";
 import type {
   Criterion,
@@ -75,6 +78,7 @@ const Implementing = Schema.Struct({
   inputs: Schema.Struct({ plan: text, plan_kind: text, repo: text, outcome: text }),
   run: Schema.Struct({ dir: text, id: text }),
   verify: text,
+  measure: text,
 });
 
 const sectionOf = (section: string, input: typeof Implementing.Type) =>
@@ -143,7 +147,6 @@ const prompts = {
     handing: text,
     obstacle: text,
     criteria: text,
-    measure: text,
     source: text,
     proof: text,
   }),
@@ -175,6 +178,7 @@ const prompts = {
     evidence: text,
     unreviewed: text,
     unsettled: text,
+    waived: text,
     mr: Schema.Struct({
       forge: text,
       noun: text,
@@ -498,6 +502,13 @@ export default defineWorkflow({
             return yield* Workflow.suspend(yield* WorkflowInstance);
           }),
         });
+      // WARNING: a person's Stop ends the Run: nothing is parked, so no Heal is started for it.
+      const endedAt = (reason: string) =>
+        Effect.gen(function* () {
+          const why = Str.replace(/^stopped: /, "")(reason);
+          yield* host.record(runId, why);
+          return yield* new WorkflowError({ reason: why });
+        });
       const checksNow = Effect.map(host.approved(runId), renderApproved);
 
       let input: typeof Implementing.Type = {
@@ -509,6 +520,7 @@ export default defineWorkflow({
         },
         run: { dir: place.dir, id: runId },
         verify: yield* checksNow,
+        measure: "",
       };
       // WARNING: asked again for each ticket, so a planner that has gone is never described as live.
       const sessionNow = Effect.map(agents.askRoute("planner", place.lineage), (ask) => ({
@@ -693,10 +705,41 @@ export default defineWorkflow({
         }));
       });
       let tickets: ReadonlyArray<Slice> = yield* ticketsNow;
+      const planDirOf = () => (work.kind === "plan-dir" ? work.value : `${place.dir}/plan`);
+      const benchmarkMeasure = (benchmark: string | null | undefined) =>
+        benchmark === undefined || benchmark === null
+          ? ""
+          : measuredBy("measure", benchmarkFile(planDirOf(), benchmark));
+      const measureFor = (benchmark: string | null | undefined) =>
+        work.kind === "plan-dir"
+          ? benchmarkMeasure(benchmark)
+          : measuredBy("measure.own", `${place.dir}/plan/issues/NN-<slug>.benchmark.json`);
+      const measuredTicket = () =>
+        Option.getOrUndefined(Arr.findFirst(tickets, (one) => one.benchmark !== null))?.benchmark;
+      // WARNING: a direct start's builder names the benchmark on the ticket it writes, so it is read after the build.
+      let ownReadings = 0;
+      const ownBenchmark = Effect.gen(function* () {
+        ownReadings += 1;
+        return yield* Activity.make({
+          name: `measure.own.${ownReadings}`,
+          success: Schema.NullOr(Schema.String),
+          execute: orderedTicketsOf(
+            `${place.dir}/plan`,
+            place.options.repo ?? "",
+            place.options.change ?? "",
+          ).pipe(
+            Effect.map(
+              (read) =>
+                Option.getOrUndefined(Arr.findFirst(read, (one) => one.benchmark !== null))
+                  ?.benchmark ?? null,
+            ),
+          ),
+        });
+      });
       // WARNING: read only after the build, which is what writes SPEC.md for any source but a plan.
       let specReadings = 0;
       const specNow = Effect.gen(function* () {
-        const plan = work.kind === "plan-dir" ? work.value : `${place.dir}/plan`;
+        const plan = planDirOf();
         for (;;) {
           specReadings += 1;
           const readable = yield* Activity.make({
@@ -727,6 +770,7 @@ export default defineWorkflow({
       const answeredFor: Array<Answered> = [];
       let build: typeof Built.Type | null = null;
       let rallied: Rallied | null = null;
+      let waived: Array<Finding> = [];
       const ledgered = place.features?.findings_ledger === true;
       const ledger = new Map<string, Finding>();
       const ledgering = (given: ReadonlyArray<Finding>) =>
@@ -737,6 +781,7 @@ export default defineWorkflow({
             ledger.set(one.id, one);
           }
         }
+        waived = [...Arr.filter(waived, (one) => !isWaived(done.waived, one)), ...done.waived];
         return done;
       };
       let parentDir = "";
@@ -810,6 +855,7 @@ export default defineWorkflow({
             unreviewed: "",
             unsettled: [],
             disputes: [],
+            waived: [],
             reviewed: recovery.review,
           };
         }
@@ -920,6 +966,15 @@ export default defineWorkflow({
                 : Arr.flatMap(tickets, (one) => one.criteria));
             yield* restateKind;
             handing.ticket = ticket?.file ?? null;
+            // WARNING: only a benchmark the Run names reaches the fixes, never the builder's own instruction.
+            const measure =
+              ticket === null
+                ? benchmarkMeasure(measuredTicket())
+                : benchmarkMeasure(ticket.benchmark ?? undefined);
+            const own =
+              ticket === null
+                ? measureFor(measuredTicket())
+                : measureFor(ticket.benchmark ?? undefined);
             build = yield* agentWork({
               operation,
               ...onHolder(handing),
@@ -943,12 +998,7 @@ export default defineWorkflow({
                   ticket === null && work.kind === "linear"
                     ? "Every checkbox in the issue's description. Copy the description into the spec word for word, its checkboxes included, and answer each one."
                     : renderCriteria(given),
-                measure:
-                  work.kind !== "plan-dir"
-                    ? measuredBy("measure.own", `${place.dir}/plan/issues/NN-<slug>.benchmark.json`)
-                    : ticket?.benchmark != null
-                      ? measuredBy("measure", benchmarkFile(work.value, ticket.benchmark))
-                      : "",
+                measure: own,
                 source: sectionOf(`source.${work.kind}`, input),
                 proof: sectionOf(
                   content.sections.has(`outcome.${input.inputs.outcome}`)
@@ -965,6 +1015,7 @@ export default defineWorkflow({
             });
             handing.said = build;
             handing.last = operation;
+            input = { ...input, measure };
             let spec: ReadonlyArray<string> | null = given;
             for (let reading = 1; ; reading++) {
               spec =
@@ -1203,6 +1254,7 @@ export default defineWorkflow({
                 completed: Arr.map(handed, (one) => one.item),
                 findings: blocking,
               },
+              waived,
             }),
           );
           for (let attempt = 1; ; attempt++) {
@@ -1210,10 +1262,12 @@ export default defineWorkflow({
             if (unresolved === "") {
               break;
             }
-            yield* reviewRound(
-              unbuilt(`${done.item}.rally-${attempt}`, `${done.item}: ${unresolved}`),
-              { round: rallyAsk.rounds.n },
-            );
+            yield* Str.startsWith("stopped: ")(unresolved)
+              ? endedAt(unresolved)
+              : reviewRound(
+                  unbuilt(`${done.item}.rally-${attempt}`, `${done.item}: ${unresolved}`),
+                  { round: rallyAsk.rounds.n },
+                );
             rallied = kept(
               yield* builderRally({
                 ...rallyAsk,
@@ -1227,6 +1281,7 @@ export default defineWorkflow({
                   findings: blocking,
                 },
                 resume: { attempt, previous: rallied },
+                waived,
               }),
             );
           }
@@ -1243,6 +1298,13 @@ export default defineWorkflow({
         handTo(handing, DELIVERER);
       }
 
+      // WARNING: the last ticket built is not the Run's Measurement, which is the one its tickets name.
+      input = {
+        ...input,
+        measure: benchmarkMeasure(
+          work.kind === "plan-dir" ? measuredTicket() : yield* ownBenchmark,
+        ),
+      };
       if (rallied === null || rallied.unreviewed !== "") {
         rallied = kept(
           yield* builderRally({
@@ -1256,6 +1318,7 @@ export default defineWorkflow({
             plan: yield* specNow,
             criteria: reviewerCriteria(answeredFor),
             input,
+            waived,
             obstacle:
               recovery.entry === "Review"
                 ? `Recover the existing implementation. Review the whole requested outcome, including the current work source ${asked.plan} and any added requirements; an unbuilt requirement is a blocking finding for the builder. Previous head: ${recovery.previous || "unrecorded"}. Commits since that head:\n${recovery.commits || "(none or unavailable)"}\nThe original requirements and review associations this recovery weighed are in ${place.dir}/recovery-reviews.jsonl. Read its open findings at ${parentDir}/findings.json, and its spec at ${parentDir}/plan where present.`
@@ -1268,7 +1331,9 @@ export default defineWorkflow({
         if (unresolved === "") {
           break;
         }
-        yield* reviewRound(unbuilt(`rally-${attempt}`, unresolved), { round: rallyAsk.rounds.n });
+        yield* Str.startsWith("stopped: ")(unresolved)
+          ? endedAt(unresolved)
+          : reviewRound(unbuilt(`rally-${attempt}`, unresolved), { round: rallyAsk.rounds.n });
         rallied = kept(
           yield* builderRally({
             ...rallyAsk,
@@ -1277,6 +1342,7 @@ export default defineWorkflow({
             criteria: reviewerCriteria(answeredFor),
             input,
             resume: { attempt, previous: rallied },
+            waived,
           }),
         );
       }
@@ -1341,7 +1407,7 @@ export default defineWorkflow({
                 base,
                 at: ROUNDS + 1,
                 of: ROUNDS + 1,
-                disputed: [],
+                disputed: Arr.map(waived, waiverNote),
               }),
             ),
         ),
@@ -1625,6 +1691,7 @@ const builderRally = (ask: {
   readonly resume?: { readonly attempt: number; readonly previous: Rallied };
   readonly ledger?: ReadonlyArray<Finding>;
   readonly taken?: ReadonlyArray<string>;
+  readonly waived?: ReadonlyArray<Finding>;
   readonly handing: Handing;
   readonly integrate: (
     operation: string,
@@ -1639,6 +1706,7 @@ const builderRally = (ask: {
     const runId = (yield* Run).id;
     return yield* rally({
       ...ask,
+      choose: (choice) => askPerson(choice),
       source: ask.build === undefined ? ask.input.inputs.plan : null,
       prefix: `${ask.build === undefined ? "" : `${ask.build.item}.`}${ask.resume === undefined ? "" : `retry-${ask.resume.attempt}.`}`,
       resume:

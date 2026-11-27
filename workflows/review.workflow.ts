@@ -18,6 +18,7 @@ import {
   isBlocking,
   mrLabel,
   watch,
+  formatFixBrief,
   formatFindings,
   findingKey,
   findingsIn,
@@ -34,12 +35,13 @@ import {
   conflictingDispositions,
   remainingDisputes,
   renderPublicReview,
+  rallyFrom,
   settleRound,
   splitDisputed,
   step,
   targetKind,
 } from "collie";
-import type { Finding, SynthesisReport, Woke, Answered } from "collie";
+import type { Finding, Fixed, SynthesisReport, Woke, Answered } from "collie";
 import { Effect, FileSystem, Schema } from "effect";
 import { connection } from "./connections.ts";
 import { reassess, repliesTo, formatReplies } from "./reassessment.ts";
@@ -791,7 +793,12 @@ export default defineWorkflow({
       let asks = 0;
       let fixing = improving;
       let rallied = 0;
-      let seen: { readonly at: number; readonly keys: ReadonlyArray<string> } | null = null;
+      let seen: {
+        readonly at: number;
+        readonly keys: ReadonlyArray<string>;
+        readonly claimed?: ReadonlyArray<Fixed>;
+        readonly handed?: ReadonlyArray<string>;
+      } | null = null;
       let settled = "";
       let postRefusal = "";
       let disputed: ReadonlyArray<Finding> = [];
@@ -814,10 +821,11 @@ export default defineWorkflow({
           yield* host.record(run.id, line);
         }
         disputed = remainingDisputes(disputed, synthesis);
-        const split = splitDisputed(synthesis.findings, disputed);
+        const split = rallyFrom(splitDisputed(synthesis.findings, disputed));
+        disputed = split.standing;
         const round = settleRound({
           live: split.live,
-          disputed: [...disputed, ...split.settled],
+          disputed,
           at: reviews,
           seen,
         });
@@ -886,7 +894,7 @@ export default defineWorkflow({
           }
         }
         if (chosen === FIX && round.go === "fix") {
-          seen = { at: reviews, keys: round.keys };
+          seen = { at: reviews, keys: round.keys, handed: round.handed };
         }
         if (chosen === DONE) {
           return `${synthesis.findings.length} finding(s), not posted`;
@@ -1040,9 +1048,13 @@ export default defineWorkflow({
           });
         const fixed = yield* fixingStep(
           // WARNING: a dispute raised again with no rebuttal is not work.
-          fixWith(operation, formatFindings(split.live)),
+          fixWith(
+            operation,
+            formatFixBrief(split.live, round.go === "fix" ? round.handedBack : []),
+          ),
           { round: fixes },
         );
+        seen = seen === null ? seen : { ...seen, claimed: fixed.fixed };
         yield* host.record(
           run.id,
           `${operation}: fixed ${fixed.fixed.length}, disputed ${fixed.disputed.length}`,

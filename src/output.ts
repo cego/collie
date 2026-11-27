@@ -43,7 +43,17 @@ const listed = <
   );
 
 // WARNING: severity is free text: only minor is non-blocking, so a closed union would throw reviews away.
-export const FindingSchema = Schema.Struct({
+export const WaiverSchema = Schema.Struct({
+  by: Schema.String.pipe(said("by")),
+  choice: Schema.String.pipe(said("choice")),
+});
+
+export interface Waiver {
+  by: string;
+  choice: string;
+}
+
+const FindingFields = {
   id: Schema.optionalKey(Schema.String.pipe(said("id"))),
   status: Schema.optionalKey(Schema.Literals(["open", "fixed", "disputed", "obsolete"])),
   head: Schema.optionalKey(Schema.String),
@@ -60,6 +70,14 @@ export const FindingSchema = Schema.Struct({
   ),
   rebuttal: Schema.optionalKey(Schema.String),
   reason: Schema.optionalKey(Schema.String),
+};
+
+// WARNING: a waiver is the host's record of a person's answer, so no agent Output carries one.
+const GivenFindingSchema = Schema.Struct(FindingFields);
+
+export const FindingSchema = Schema.Struct({
+  ...FindingFields,
+  waived: Schema.optionalKey(WaiverSchema),
 });
 
 export interface Finding {
@@ -75,6 +93,7 @@ export interface Finding {
   internal?: boolean;
   rebuttal?: string;
   reason?: string;
+  waived?: Waiver;
 }
 
 export interface ReviewOutput {
@@ -117,8 +136,8 @@ const JUDGEMENTS = {
 
 export const ReviewOutputSchema = Schema.Struct({
   verdict: VerdictSchema,
-  findings: optionalList(FindingSchema),
-  disputed: optionalList(FindingSchema),
+  findings: optionalList(GivenFindingSchema),
+  disputed: optionalList(GivenFindingSchema),
   ...JUDGEMENTS,
 }).pipe(listed());
 
@@ -157,9 +176,9 @@ export const FixedSchema = Schema.Struct({
 });
 
 // WARNING: a dropped finding must say why, or it is lost rather than resolved.
-const DroppedSchema = FindingSchema.pipe(
-  Schema.refine<typeof FindingSchema, typeof FindingSchema.Type>(
-    (value): value is typeof FindingSchema.Type => Str.trim(value.reason ?? "") !== "",
+const DroppedSchema = GivenFindingSchema.pipe(
+  Schema.refine<typeof GivenFindingSchema, typeof GivenFindingSchema.Type>(
+    (value): value is typeof GivenFindingSchema.Type => Str.trim(value.reason ?? "") !== "",
     {
       title: "reason is required",
       message: "a dropped finding needs a reason saying why it was dropped",
@@ -171,8 +190,8 @@ export const SynthesisSchema = Schema.Struct({
   verdict: VerdictSchema,
   summary: Schema.String.pipe(said("summary")),
   public_summary: Schema.optionalKey(Schema.String.pipe(said("public_summary"))),
-  findings: optionalList(FindingSchema),
-  disputed: optionalList(FindingSchema),
+  findings: optionalList(GivenFindingSchema),
+  disputed: optionalList(GivenFindingSchema),
   dropped: optionalList(DroppedSchema),
   fixed: optionalList(FixedSchema),
   ...JUDGEMENTS,
@@ -255,9 +274,9 @@ export const FixOutputSchema = Schema.Struct({
     description:
       '"findings" only where findings are left unresolved, each listed in "findings"; what you fixed goes in "fixed" and what you dispute in "disputed", and with nothing left unresolved the verdict is "clean"',
   }),
-  findings: optionalList(FindingSchema),
+  findings: optionalList(GivenFindingSchema),
   fixed: optionalList(FixedSchema),
-  disputed: optionalList(FindingSchema),
+  disputed: optionalList(GivenFindingSchema),
   checks: optionalList(CheckSchema),
   ...OutgoingFields,
 }).pipe(listed());
@@ -283,18 +302,28 @@ const FindingsJson = Schema.fromJsonString(Schema.Array(FindingSchema));
 const decodeFindings = Schema.decodeUnknownEffect(FindingsJson);
 const encodeFindings = flow(Schema.encodeResult(FindingsJson), Result.getOrThrow);
 
-// WARNING: written together: a review with no findings file is one nothing can count.
+const unwaived = (one: Finding) => {
+  const { waived: _, ...rest } = one;
+  return rest;
+};
+
+// WARNING: written together, and a waiver on file is the host's: a review neither writes one away nor records one.
 export const leaveReview = (dir: string, synthesis: typeof SynthesisSchema.Type) =>
-  FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) =>
-      Effect.all([
-        fs.writeFileString(`${dir}/${REVIEW_FILE}`, renderReview(synthesis)),
-        fs.writeFileString(`${dir}/${FINDINGS_FILE}`, encodeFindings(synthesis.findings)),
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const recorded = Arr.filter(yield* findingsIn(dir), (one) => one.waived !== undefined);
+    yield* fs.writeFileString(`${dir}/${REVIEW_FILE}`, renderReview(synthesis));
+    yield* fs.writeFileString(
+      `${dir}/${FINDINGS_FILE}`,
+      encodeFindings([
+        ...Arr.map(
+          Arr.filter(synthesis.findings, (one) => !isWaived(recorded, one)),
+          unwaived,
+        ),
+        ...recorded,
       ]),
-    ),
-    Effect.asVoid,
-    Effect.orDie,
-  );
+    );
+  }).pipe(Effect.orDie);
 
 export const leaveOutstanding = (dir: string, outstanding: ReadonlyArray<Finding>) =>
   FileSystem.FileSystem.pipe(
@@ -504,6 +533,10 @@ export function sameFinding(left: Finding, right: Finding) {
     ? left.id === right.id
     : findingKey(left) === findingKey(right);
 }
+
+// WARNING: a waiver names a finding, so a renamed finding with the same id is still the one a person waived.
+export const isWaived = (waived: ReadonlyArray<Finding>, one: Finding) =>
+  Arr.some(waived, (w) => sameFinding(w, one));
 
 export function parseSynthesis(text: string, where: string) {
   const base = parseReviewOutput(text, where);
@@ -754,6 +787,11 @@ export function blockingKeys(findings: ReadonlyArray<Finding>) {
   ].sort();
 }
 
+export interface HandedBack {
+  readonly finding: Finding;
+  readonly rejected: boolean;
+}
+
 export type Rally =
   | { readonly go: "clean"; readonly remaining: Array<Finding> }
   | {
@@ -761,6 +799,8 @@ export type Rally =
       readonly live: Array<Finding>;
       readonly blocking: Array<Finding>;
       readonly keys: ReadonlyArray<string>;
+      readonly handedBack: ReadonlyArray<HandedBack>;
+      readonly handed: ReadonlyArray<string>;
     }
   | {
       readonly go: "halt";
@@ -769,23 +809,24 @@ export type Rally =
       readonly outstanding: Array<Finding>;
     };
 
-// WARNING: the same blocking set twice is no progress, since a third attempt would raise it again.
 export function settleRound(round: {
   readonly live: ReadonlyArray<Finding>;
   readonly disputed: ReadonlyArray<Finding>;
   // WARNING: reopened disputes drive the loop whatever their severity, as a human resumed the Run for them.
   readonly reopened?: ReadonlyArray<Finding>;
   readonly at: number;
-  readonly seen?: { readonly at: number; readonly keys: ReadonlyArray<string> } | null;
+  readonly seen?: {
+    readonly at: number;
+    readonly keys: ReadonlyArray<string>;
+    readonly claimed?: ReadonlyArray<Fixed>;
+    readonly handed?: ReadonlyArray<string>;
+  } | null;
 }) {
   const live = Arr.filter(round.live, (f) => f.status !== "fixed" && f.status !== "obsolete");
   const reopened = [...(round.reopened ?? [])];
   const blocking = [...Arr.filter(live, isBlocking), ...reopened];
   if (blocking.length === 0) {
-    const standing = Arr.dedupeWith(
-      Arr.filter(round.disputed, isBlocking),
-      (left: Finding, right: Finding) => sameFinding(left, right),
-    );
+    const standing = Arr.filter(offered(round.disputed), isBlocking);
     if (standing.length > 0) {
       const returned: Rally = {
         go: "halt",
@@ -800,22 +841,40 @@ export function settleRound(round: {
   }
   const keys = blockingKeys(live);
   const seen = round.seen;
-  if (
-    seen &&
-    seen.at < round.at &&
+  const previous = seen !== null && seen !== undefined && seen.at < round.at ? seen : null;
+  const handed = new Set(previous?.handed ?? []);
+  const repeated = previous === null ? [] : Arr.filter(keys, (key) => previous.keys.includes(key));
+  const sameSet =
+    previous !== null &&
     keys.length > 0 &&
-    keys.length === seen.keys.length &&
-    Arr.every(keys, (key, at) => key === seen.keys[at])
-  ) {
+    repeated.length === keys.length &&
+    previous.keys.length === keys.length;
+  if (sameSet && Arr.every(repeated, (key) => handed.has(key))) {
     const returned: Rally = {
       go: "halt",
       halt: "no_progress",
-      reason: `no progress: review ${round.at} raised the same ${keys.length} blocking finding(s) as review ${seen.at}`,
+      reason: `no progress: review ${round.at} raised the same ${keys.length} blocking finding(s) as review ${previous?.at}, after each was handed back once`,
       outstanding: live,
     };
     return returned;
   }
-  const returned: Rally = { go: "fix", live: [...live, ...reopened], blocking, keys };
+  const claimedFixed = new Set(Arr.map(previous?.claimed ?? [], findingKey));
+  const byKey = new Map(Arr.map(live, (one) => [findingKey(one), one] as const));
+  const handedBack = Arr.map(
+    Arr.filter(repeated, (key) => !handed.has(key)),
+    (key) => ({
+      finding: byKey.get(key)!,
+      rejected: claimedFixed.has(key),
+    }),
+  );
+  const returned: Rally = {
+    go: "fix",
+    live: [...live, ...reopened],
+    blocking,
+    keys,
+    handedBack,
+    handed: Arr.dedupe([...handed, ...Arr.map(handedBack, (one) => findingKey(one.finding))]),
+  };
   return returned;
 }
 
@@ -975,6 +1034,22 @@ export function settleFinalFix(
   return returned;
 }
 
+// WARNING: severity comes from the first entry, so a repeat as minor cannot lower a disputed blocker; detail comes from the last.
+export function offered(disputed: ReadonlyArray<Finding>) {
+  const unique = Arr.dedupeWith(disputed, (left: Finding, right: Finding) =>
+    sameFinding(left, right),
+  );
+  return Arr.map(unique, (one) => {
+    const latest = Option.getOrUndefined(Arr.findLast(disputed, (echo) => sameFinding(echo, one)));
+    const detail = latest?.detail;
+    return detail === undefined || detail === one.detail ? one : { ...one, detail };
+  });
+}
+
+export function offeredDisputes(fix: FixReport, waived: ReadonlyArray<Finding>) {
+  return Arr.filter(fix.disputed, (one) => isBlocking(one) && !isWaived(waived, one));
+}
+
 const oneLine = (f: Finding) => `[${f.severity}] ${f.title}${f.file ? ` (${f.file})` : ""}`;
 
 const SEVERITIES = ["blocker", "major", "minor"];
@@ -1042,6 +1117,8 @@ export interface Split {
   live: Array<Finding>;
   settled: Array<Finding>;
   rebutted: Array<Finding>;
+  standing: Array<Finding>;
+  reopened: Array<Finding>;
 }
 
 type Disposed = {
@@ -1100,8 +1177,9 @@ export function conflictingDispositions(review: Disposed) {
 }
 
 // WARNING: a rejected finding stops driving the loop; only a reviewer's rebuttal brings it back.
+// WARNING: a status only the review disputed is the implementer's work: read a split through rallyFrom, never `live` alone.
 export function splitDisputed(findings: ReadonlyArray<Finding>, disputed: ReadonlyArray<Finding>) {
-  const split: Split = { live: [], settled: [], rebutted: [] };
+  const split: Split = { live: [], settled: [], rebutted: [], standing: [], reopened: [] };
   for (const finding of findings) {
     if (finding.status === "fixed" || finding.status === "obsolete") {
       continue;
@@ -1117,7 +1195,45 @@ export function splitDisputed(findings: ReadonlyArray<Finding>, disputed: Readon
       split.settled.push(finding);
     }
   }
+  const backed = (one: Finding) => Arr.some(disputed, (echo) => sameFinding(echo, one));
+  const putBack = Arr.filter(
+    disputed,
+    (one) => !Arr.some(split.rebutted, (echo) => sameFinding(echo, one)),
+  );
+  split.reopened = Arr.filter(split.settled, (one) => !backed(one));
+  split.standing = offered([...putBack, ...Arr.filter(split.settled, backed)]);
   return split;
+}
+
+export function rallyFrom(split: Split) {
+  return { live: [...split.live, ...split.reopened], standing: split.standing };
+}
+
+const REJECTED_FIX =
+  "The review after your fix raised this again, so the claim that it was fixed was not accepted. Answer each with new evidence that meets it, or record it under `disputed` with your reason.";
+
+const REPEATED_BLOCKER =
+  "Raised again, and your fix did not claim it fixed. Answer each with a fix, or record it under `disputed` with your reason.";
+
+export function formatFixBrief(
+  live: ReadonlyArray<Finding>,
+  handedBack: ReadonlyArray<HandedBack>,
+) {
+  const rejected = Arr.filter(handedBack, (one) => one.rejected);
+  const repeated = Arr.filter(handedBack, (one) => !one.rejected);
+  const section = (heading: string, said: string, going: ReadonlyArray<HandedBack>) =>
+    Arr.join([heading, said, formatFindings(Arr.map(going, (one) => one.finding))], "\n\n");
+  return Arr.join(
+    Arr.filter(
+      [
+        rejected.length === 0 ? "" : section("Rejected fix:", REJECTED_FIX, rejected),
+        repeated.length === 0 ? "" : section("Raised again:", REPEATED_BLOCKER, repeated),
+        formatFindings(live),
+      ],
+      (one) => one !== "",
+    ),
+    "\n\n",
+  );
 }
 
 export function formatFindings(findings: ReadonlyArray<Finding>) {
@@ -1137,3 +1253,32 @@ export function formatFindings(findings: ReadonlyArray<Finding>) {
     "\n",
   );
 }
+
+export const waiverNote = (one: Finding) =>
+  one.waived === undefined
+    ? one
+    : {
+        ...one,
+        detail: `${Str.trim(one.detail ?? "")}\nWaived by ${one.waived.by} to ${one.waived.choice}: do not raise it again.`,
+      };
+
+export const waivedIn = (findings: ReadonlyArray<Finding>) =>
+  Arr.filter(findings, (one) => one.waived !== undefined);
+
+function waivedLine(finding: Finding, waiver: Waiver) {
+  const at = finding.file ? ` (${finding.file})` : "";
+  return `${finding.title}${at} — waived by ${waiver.by} to ${waiver.choice}, and nothing verifies it`;
+}
+
+export function formatWaived(waived: ReadonlyArray<Finding>) {
+  return Arr.join(
+    Arr.map(waivedIn(waived), (one) => `- ${waivedLine(one, one.waived!)}`),
+    "\n",
+  );
+}
+
+export const waiveFindings: (
+  findings: ReadonlyArray<Finding>,
+  waiver: Waiver,
+) => ReadonlyArray<Finding> = (findings, waiver) =>
+  Arr.map(findings, (one) => ({ ...one, status: "disputed" as const, waived: waiver }));

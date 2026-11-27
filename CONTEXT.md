@@ -817,7 +817,9 @@ not one: a **Stage Run** asks for no Go, because its rollback takes it back.
 
 **Public text** — What Collie sends outside Collie in the human's name: MR/PR notes, replies, titles and descriptions, commit messages, and issue comments outside Collie's own repository. It reads as the human's, for that repository's audience. It never names Collie, a Run, a step, an agent, a card or a `collie` command, and never states a rule only Collie's process has. The host checks it before sending it, and marks Collie's own posts only with a hidden HTML comment ([ADR-draft-public-text-reads-as-the-humans](docs/adr/draft-public-text-reads-as-the-humans.md)).
 
-**Disputed** — A finding the implementer declined, with its reason. The reviewers are shown the reason, and a disputed finding no longer drives the loop, so the Run converges and the human decides. A reviewer who can answer the reason raises it again with a `rebuttal`, which puts the finding back in front of the implementer.
+**Disputed** — A finding the implementer declined, with its reason. The reviewers are shown the reason, and a disputed finding no longer drives the loop, so the rally converges. A disputed blocker the reviewers keep is a Choice for a person: waive it, which keeps it `disputed` with a waiver note naming who decided and lists it in the merge request as waived and unverified; send it back to the implementer; or stop the Run. A waiver is not proof: a criterion the Run cannot prove still stops it at the gate unless the Intent drops it. A reviewer who can answer the reason raises it again with a `rebuttal`, which puts the finding back in front of the implementer.
+
+**Rejected fix** — A blocking finding the implementer listed as fixed that the next review raises again. The rally hands it back once, marked rejected with the reviewer's latest detail; the implementer answers with new evidence that meets it or disputes it with a reason. The same finding raised again after that is no progress.
 
 ## Baseline Workflows
 

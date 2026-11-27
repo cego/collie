@@ -93,6 +93,7 @@ export { SOURCES, SOURCE_NAMES, isSource, type Source } from "./offers";
  * arguments that point a command at its project from anywhere.
  */
 export { targetKind } from "./mr";
+export { whoActed } from "./audit";
 export { ParkCause } from "./park-cause";
 export { repoArgs } from "./forge/gitlab";
 export { mrForgeFacts } from "./forge/forge";
@@ -195,9 +196,15 @@ export {
   blockingKeys,
   conflictingDispositions,
   findingKey,
+  isWaived,
   sameFinding,
+  formatFixBrief,
   formatFindings,
+  formatWaived,
   isBlocking,
+  offered,
+  offeredDisputes,
+  rallyFrom,
   remainingDisputes,
   renderPublicReview,
   renderReview,
@@ -207,6 +214,9 @@ export {
   substantiated,
   unmetCriteria,
   unsubstantiated,
+  waivedIn,
+  waiveFindings,
+  waiverNote,
   type Check,
   type CheckEvidence,
   type Criterion,
@@ -216,10 +226,12 @@ export {
   type FixReport,
   type Fixed,
   type Halt,
+  type HandedBack,
   type Rally,
   type ReviewOutput,
   type Split,
   type Synthesis,
+  type Waiver,
 } from "./output";
 
 /**

@@ -332,6 +332,11 @@ and not by a reviewer: add one sentence saying so.
 Where the list above is not empty, add each question under **Open questions**, in plain
 wording without ticket file names or internal process terms.
 
+{{waived}}
+
+Where the list above is not empty, put each one in the description under
+**Waived and unverified**, naming who waived it and saying plainly that nothing proves it.
+
 - Forge: {{mr.forge}}
 - Assignee: `{{mr.assignee}}`
 - Template: `{{mr.template}}`

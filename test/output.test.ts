@@ -1,12 +1,21 @@
 import * as Arr from "effect/Array";
 import { expect, test } from "bun:test";
+import { Effect, FileSystem, Option } from "effect";
 import {
+  blockingKeys,
   findingKey,
+  findingsIn,
   formatFindings,
   isBlocking,
+  isWaived,
+  leaveOutstanding,
+  leaveReview,
+  offered,
+  offeredDisputes,
   parseFixOutput,
   parseReviewOutput,
   parseSynthesis,
+  rallyFrom,
   renderPublicReview,
   renderReview,
   settleRound,
@@ -21,6 +30,7 @@ import type { Verification } from "../src/verify";
 import review522 from "./fixtures/public-text/mr-522-synthesis.json";
 import { leaksIn } from "../src/public-text";
 import { stringifyJson } from "../src/json";
+import { runEffect } from "./support/effect";
 
 // WARNING: whether a check passed is read from the journal on this tree, never from the fix's Output.
 const FINAL = { head_sha: "abc123", fingerprint: "tree-1" };
@@ -76,6 +86,77 @@ test("a dispute survives a rename by id and counts once across ledger versions",
   expect(splitDisputed([renamed], [legacy]).settled).toEqual([renamed]);
 });
 
+test("a blocker only the review called disputed is the fixer's work, not a person's to waive", () => {
+  const reviewerOnly: Finding = {
+    severity: "blocker",
+    file: "src/guard.ts",
+    title: "guard the input",
+    status: "disputed",
+    detail: "the CLI path does not validate it",
+  };
+  const split = rallyFrom(splitDisputed([reviewerOnly], []));
+  expect(split.live).toEqual([reviewerOnly]);
+  expect(split.standing).toEqual([]);
+  expect(settleRound({ live: split.live, disputed: split.standing, at: 1 })).toMatchObject({
+    go: "fix",
+  });
+});
+
+const GUARD: Finding = {
+  file: "src/guard.ts",
+  severity: "blocker",
+  title: "guard the input",
+  reason: "the caller already validates it",
+};
+const GUARD_LATEST: Finding = {
+  ...GUARD,
+  detail: "the CLI path does not validate it",
+};
+
+test("a live blocker is fixed while a disputed one stands, and only the rally asks a person", () => {
+  expect(settleRound({ live: [LIST], disputed: [GUARD], at: 2 })).toMatchObject({ go: "fix" });
+  expect(settleRound({ live: [], disputed: [GUARD], at: 2 })).toMatchObject({
+    go: "halt",
+    halt: "dispute_unresolved",
+    outstanding: [GUARD],
+  });
+});
+
+test("a person is offered the fixer's finding with the reviewer's latest detail", () => {
+  const repeatedAsMinor = { ...GUARD_LATEST, severity: "minor" as const };
+  expect(offered([GUARD, repeatedAsMinor])).toEqual([
+    {
+      ...GUARD,
+      detail: "the CLI path does not validate it",
+    },
+  ]);
+  expect(settleRound({ live: [], disputed: [GUARD, repeatedAsMinor], at: 2 })).toMatchObject({
+    halt: "dispute_unresolved",
+    outstanding: [GUARD_LATEST],
+  });
+});
+
+test("a blocker resolved beside a repeated one is progress, not no progress", () => {
+  const guardAgain: Finding = { ...GUARD_LATEST, status: undefined };
+  const keys = keysOf([LIST, GUARD_LATEST]);
+  expect(
+    settleRound({
+      live: [LIST, guardAgain],
+      disputed: [],
+      at: 2,
+      seen: { at: 1, keys, handed: keys },
+    }),
+  ).toMatchObject({ go: "halt", halt: "no_progress" });
+  expect(
+    settleRound({
+      live: [guardAgain],
+      disputed: [],
+      at: 3,
+      seen: { at: 2, keys, handed: keys },
+    }),
+  ).toMatchObject({ go: "fix" });
+});
+
 test("resolved ledger findings leave the rally clean and a dispute remains the human's call", () => {
   const fixed: Finding = { id: "F1", status: "fixed", severity: "major", title: "guard the input" };
   const obsolete: Finding = {
@@ -103,6 +184,94 @@ test("resolved ledger findings leave the rally clean and a dispute remains the h
   });
   expect(isBlocking(fixed)).toBe(false);
   expect(isBlocking(obsolete)).toBe(false);
+});
+
+const LIST: Finding = {
+  file: "src/list.ts",
+  severity: "blocker",
+  title: "empty list",
+  detail: "it throws on an empty list",
+};
+const LIST_AGAIN: Finding = { ...LIST, detail: "it throws on a null list too" };
+const CLAIMED_LIST = [{ file: "src/list.ts", title: "empty list" }];
+
+const keysOf = (findings: ReadonlyArray<Finding>) => blockingKeys(findings);
+
+test("a fix the review after it rejects goes back to the fixer once, marked rejected, and halts on the next repeat", () => {
+  expect(settleRound({ live: [LIST], disputed: [], at: 1 })).toMatchObject({ go: "fix" });
+  expect(
+    settleRound({
+      live: [LIST_AGAIN],
+      disputed: [],
+      at: 2,
+      seen: { at: 1, keys: keysOf([LIST]), claimed: CLAIMED_LIST },
+    }),
+  ).toMatchObject({
+    go: "fix",
+    handedBack: [{ finding: LIST_AGAIN, rejected: true }],
+  });
+  expect(
+    settleRound({
+      live: [LIST_AGAIN],
+      disputed: [],
+      at: 3,
+      seen: {
+        at: 2,
+        keys: keysOf([LIST_AGAIN]),
+        claimed: CLAIMED_LIST,
+        handed: [findingKey(LIST)],
+      },
+    }),
+  ).toMatchObject({ go: "halt", halt: "no_progress" });
+});
+
+test("a blocker raised again that no fix claimed fixed goes back once, unmarked, and halts on the next repeat", () => {
+  expect(
+    settleRound({
+      live: [LIST_AGAIN],
+      disputed: [],
+      at: 2,
+      seen: { at: 1, keys: keysOf([LIST]), claimed: [] },
+    }),
+  ).toMatchObject({ go: "fix", handedBack: [{ finding: LIST_AGAIN, rejected: false }] });
+  expect(
+    settleRound({
+      live: [LIST_AGAIN],
+      disputed: [],
+      at: 3,
+      seen: { at: 2, keys: keysOf([LIST_AGAIN]), claimed: [], handed: [findingKey(LIST_AGAIN)] },
+    }),
+  ).toMatchObject({ go: "halt", halt: "no_progress" });
+});
+
+test("a handed-back finding that is then met leaves a later blocker its own hand-back", () => {
+  const retry: Finding = {
+    file: "src/job.ts",
+    severity: "major",
+    title: "unbounded retry",
+    detail: "it retries forever",
+  };
+  const retryAgain: Finding = { ...retry, detail: "it retries forever on a failed job" };
+  const third = settleRound({
+    live: [retry],
+    disputed: [],
+    at: 3,
+    seen: { at: 2, keys: keysOf([LIST_AGAIN]), claimed: [], handed: [findingKey(LIST)] },
+  });
+  expect(third).toMatchObject({ go: "fix", handedBack: [] });
+  expect(
+    settleRound({
+      live: [retryAgain],
+      disputed: [],
+      at: 4,
+      seen: {
+        at: 3,
+        keys: keysOf([retry]),
+        claimed: [],
+        handed: [findingKey(LIST)],
+      },
+    }),
+  ).toMatchObject({ go: "fix", handedBack: [{ finding: retryAgain, rejected: false }] });
 });
 
 const ok = (text: string) => {
@@ -513,6 +682,30 @@ test("a fix Output in the legacy shape or with an unusable check does not parse"
   expect(parseFixOutput(fixJson({ verdict: "findings" }), "fix.json").ok).toBe(false);
 });
 
+test("a person at a last-fix halt is offered the fix's disputes, not the findings it reported fixed", () => {
+  const fixedOne: Finding = {
+    file: "src/b.ts",
+    severity: "blocker",
+    title: "the retry loop stops",
+  };
+  const newOne: Finding = {
+    file: "src/a.ts",
+    severity: "blocker",
+    title: "the guard is on the wrong side",
+    reason: "the caller already validates it",
+  };
+  const minorOne: Finding = { file: "cli.js", severity: "minor", title: "long argument list" };
+  const fix = {
+    verdict: "findings" as const,
+    findings: [],
+    fixed: [{ file: fixedOne.file, title: fixedOne.title }],
+    disputed: [newOne, minorOne],
+    checks: [{ name: "bun test" }],
+  };
+  expect(offeredDisputes(fix, [])).toEqual([newOne]);
+  expect(offeredDisputes(fix, [newOne])).toEqual([]);
+});
+
 test("the last fix cannot both fix and dispute a finding, and what it still reports open counts against it", () => {
   const good = {
     verdict: "clean" as const,
@@ -771,6 +964,112 @@ test("the message names the findings that cannot be acted on, and says nothing w
   expect(said).toContain('"vague two"');
   expect(said).toContain("need not be one the change touched");
 });
+
+test("a waiver on file is the host's: a later review keeps it, and a review cannot author one", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped();
+      const review: (findings: ReadonlyArray<Finding>) => Synthesis = (findings) => ({
+        verdict: findings.length === 0 ? "clean" : "findings",
+        summary: "reviewed",
+        findings: [...findings],
+        disputed: [],
+        dropped: [],
+        fixed: [],
+      });
+      const waived: Finding = {
+        severity: "blocker",
+        title: "dependency unavailable",
+        file: "db",
+        status: "disputed",
+        waived: { by: "a person", choice: "build.dispute-1" },
+      };
+      yield* leaveReview(dir, review([]));
+      yield* leaveOutstanding(dir, [waived]);
+      yield* leaveReview(dir, review([{ severity: "minor", title: "naming" }]));
+      const kept = yield* findingsIn(dir);
+      expect(Arr.map(kept, findingKey)).toEqual([
+        findingKey({ title: "naming" }),
+        findingKey(waived),
+      ]);
+      expect(kept[1]).toEqual(waived);
+
+      yield* leaveReview(
+        dir,
+        review([
+          {
+            severity: "blocker",
+            title: "a waiver nobody answered for",
+            file: "db",
+            status: "disputed",
+            waived: { by: "a reviewer", choice: "build.dispute-1" },
+          },
+        ]),
+      );
+      const written = yield* findingsIn(dir);
+      expect(
+        Option.getOrUndefined(
+          Arr.findFirst(written, (one) => one.title === "a waiver nobody answered for"),
+        )?.waived,
+      ).toBeUndefined();
+    }),
+  ));
+
+test("a waiver follows the finding's id, so a review that renames it does not put it back", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped();
+      const waived: Finding = {
+        id: "F1",
+        severity: "blocker",
+        title: "dependency unavailable",
+        file: "db",
+        status: "disputed",
+        waived: { by: "a person", choice: "build.dispute-1" },
+      };
+      const renamed: Finding = {
+        id: "F1",
+        severity: "blocker",
+        title: "the dependency is still unavailable",
+        file: "db",
+        status: "open",
+      };
+      yield* leaveReview(dir, {
+        verdict: "clean",
+        summary: "reviewed",
+        findings: [],
+        disputed: [],
+        dropped: [],
+        fixed: [],
+      });
+      yield* leaveOutstanding(dir, [waived]);
+      yield* leaveReview(dir, {
+        verdict: "findings",
+        summary: "reviewed",
+        findings: [renamed],
+        disputed: [],
+        dropped: [],
+        fixed: [],
+      });
+      expect(yield* findingsIn(dir)).toEqual([waived]);
+      expect(isWaived([waived], renamed)).toBe(true);
+      expect(isWaived([waived], { ...renamed, id: "F2" })).toBe(false);
+      expect(
+        offeredDisputes(
+          {
+            verdict: "clean",
+            findings: [],
+            fixed: [],
+            disputed: [{ ...renamed, reason: "the caller decodes it" }],
+            checks: [],
+          },
+          [waived],
+        ),
+      ).toEqual([]);
+    }),
+  ));
 
 test("the last fix's check is proved by the latest record of the check's command on this tree, under any name, and never by an expected failure", () => {
   const unit = { name: "unit", executable: "/usr/bin/bun", argv: ["test"], cwd: "/repo" };

@@ -48,6 +48,7 @@ export default defineWorkflow({
         criteria: "",
         prefix: "",
         obstacle: "",
+        choose: () => Effect.succeed("Waive it"),
         integrate: (operation) =>
           Effect.gen(function* () {
             if (input.upstream && operation === "merge-2") {
