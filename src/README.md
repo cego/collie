@@ -116,6 +116,7 @@ Desktop. `harness.ts` owns how those choices launch and reexports the shared int
 | `in-terminal.ts`        | A login or a question in a terminal Bun gives it, on Linux and macOS alike, never through `script`                          |
 | `run-actions.ts`        | What a confirmed action does to a Run, and the one place each kind is carried out                                           |
 | `lifecycle.ts`          | A front door's side of every host operation, the board and a drawer's details                                               |
+| `take-up.ts`            | The host's Resume: take a stopped Run up again unless its merge request landed                                              |
 | `signing.ts`            | The release key: signing a runner or Desktop's update in CI, and the check before either is installed                       |
 | `desktop.ts`            | `collie upgrade`'s Desktop step: a verified Desktop update, staged as Electrobun would                                      |
 | `sdk.ts`                | `collie`: what a module exports, declares, waits on, and starts as a child, and what it refuses                             |

@@ -7909,18 +7909,32 @@ test("a queued operation follows a harness switch and preserves its long comment
           .agentStatus(next.agent)
           .pipe(Effect.map((status) => status === "idle")),
       );
-      yield* session(tendIdle);
-      yield* session(tendIdle);
-      const calls = Arr.filter(
-        yield* rig.calls(),
-        (call) =>
-          call.cmd === "terminal.send" &&
-          call.params?.terminal === next.agent &&
-          pipe(
-            Option.getOrThrow(Schema.decodeUnknownOption(Schema.String)(call.params?.text)),
-            Str.includes("Their message is in"),
+      const sent = () =>
+        Effect.map(rig.calls(), (all) =>
+          Arr.filter(
+            all,
+            (call) =>
+              call.cmd === "terminal.send" &&
+              call.params?.terminal === next.agent &&
+              pipe(
+                Option.getOrThrow(Schema.decodeUnknownOption(Schema.String)(call.params?.text)),
+                Str.includes("Their message is in"),
+              ),
           ),
+        );
+      yield* session(
+        Effect.gen(function* () {
+          for (let pass = 0; pass < 200; pass++) {
+            yield* tendIdle;
+            if ((yield* sent()).length > 0) {
+              return;
+            }
+            yield* TestClock.withLive(Effect.sleep("10 millis"));
+          }
+        }),
       );
+      yield* session(tendIdle);
+      const calls = yield* sent();
       expect(calls).toHaveLength(1);
       const typed = Option.getOrThrow(
         Schema.decodeUnknownOption(Schema.String)(calls[0]?.params?.text),
