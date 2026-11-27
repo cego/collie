@@ -228,6 +228,7 @@ import {
   isUnobserved,
   newestById,
   readLedger,
+  reconciledSent,
   SENT_STATES,
   toldLine,
 } from "./steering";
@@ -2181,7 +2182,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     if (
       outcome.reason === "blocked" &&
       outcome.held !== undefined &&
-      SENT_STATES.has(outcome.held)
+      (SENT_STATES.has(outcome.held) || outcome.settled === true)
     ) {
       return {
         sent: true,
@@ -4423,7 +4424,10 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       const held = yield* heldDelivery(runId, request);
       if (held !== null) {
         if (SENT_STATES.has(held.state)) {
-          return { row: held, observed: null };
+          return {
+            row: held,
+            observed: held.state === "acknowledged" ? "taken when it was first sent" : null,
+          };
         }
         if (!(yield* dispatch.settleFromSubmit(host.env.stateDir, held))) {
           return null;
@@ -4431,20 +4435,13 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         const settled = { ...held, state: "acknowledged" as const };
         return { row: settled, observed: "taken when it was first sent" };
       }
-      // WARNING: a human's "sent" is the answer for this request; only "not-sent" permits another send.
       const reconciled = Option.getOrNull(
         Arr.findFirst(
           lines,
-          (one) =>
-            one.cause.kind === "steer" &&
-            one.cause.ref === request &&
-            one.state === "superseded" &&
-            pipe(one.note ?? "", Str.startsWith("reconciled as sent")),
+          (one) => one.cause.kind === "steer" && one.cause.ref === request && reconciledSent(one),
         ),
       );
-      return reconciled === null
-        ? null
-        : { row: reconciled, observed: reconciled.note ?? "reconciled as sent" };
+      return reconciled === null ? null : { row: reconciled, observed: null };
     });
 
   const unresolvedRefusal = (

@@ -22,6 +22,7 @@ import {
   deliveriesAbout,
   readLedger,
   readLedgerWhole,
+  reconciledSent,
   settleStaleReservations,
   textHash,
 } from "./steering";
@@ -175,6 +176,8 @@ export type SubmitOutcome =
       readonly reason: Refusal;
       readonly detail: string;
       readonly held?: string;
+      // WARNING: a human reconciled this Delivery as sent, so it is delivered without being sent again.
+      readonly settled?: boolean;
     };
 
 export interface Channel {
@@ -444,12 +447,14 @@ const send = Effect.fn("Dispatcher.send")(function* (
   const id = line.id;
   const inFlight = blocked(yield* deliveriesAbout(terminalId, key), key, id);
   if (inFlight) {
+    const settled = reconciledSent(inFlight);
     yield* deps.log(
       `not sent to ${entry.agent}: ${inFlight.state} delivery ${inFlight.id} is already about this work`,
     );
     return {
       ...refuse(inFlight.id, "blocked", `${inFlight.id} is ${inFlight.state}`),
       held: inFlight.state,
+      settled,
     };
   }
   const reserved: Delivery = draft.note === undefined ? line : { ...line, note: draft.note };

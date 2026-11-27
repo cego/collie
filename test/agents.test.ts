@@ -7553,6 +7553,119 @@ test("a queued Delivery a human reconciled as sent completes without another sen
       expect(outcome.queued[0]?.result).toMatchObject({
         delivered: true,
         delivery: outcome.lost.id,
+        observed: false,
+      });
+    }),
+  ));
+
+test("a Delivery a recorded turn already took keeps its observation in the receipt", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const outcome = yield* session(
+        Effect.gen(function* () {
+          core.refuse("terminal.send", "unreachable", "the core did not answer");
+          yield* say("r1", "stay in src", "steer-1");
+          core.restore("terminal.send");
+          const lost = Option.getOrThrow(
+            Arr.head(
+              Arr.filter(
+                yield* deliveredTo(dir, "r1"),
+                (one) => one.cause.kind === "steer" && one.state === "unknown",
+              ),
+            ),
+          );
+          yield* keepQueued(`${dir}/agents/r1`, {
+            runId: "r1",
+            request: "steer-1",
+            text: "stay in src",
+            result: null,
+          });
+          yield* appendLine({ ...lost, state: "acknowledged" as const, at: "t" }).pipe(
+            Effect.provide(recordsAt(dir)),
+          );
+          const before = Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.send");
+          yield* tendIdle;
+          return {
+            lost,
+            sent: Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.send"),
+            before: before.length,
+            queued: yield* readQueue(`${dir}/agents/r1`),
+          };
+        }),
+      );
+      expect(outcome.sent.length).toBe(outcome.before);
+      expect(outcome.queued[0]?.result).toMatchObject({
+        delivered: true,
+        delivery: outcome.lost.id,
+        observed: true,
+        how: "taken when it was first sent",
+      });
+    }),
+  ));
+
+test("a human's sent reconciliation during the idle tick stops the send", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const outcome = yield* session(
+        Effect.gen(function* () {
+          core.refuse("terminal.send", "unreachable", "the core did not answer");
+          yield* say("r1", "stay in src", "steer-1");
+          core.restore("terminal.send");
+          const lost = Option.getOrThrow(
+            Arr.head(
+              Arr.filter(
+                yield* deliveredTo(dir, "r1"),
+                (one) => one.cause.kind === "steer" && one.state === "unknown",
+              ),
+            ),
+          );
+          yield* keepQueued(`${dir}/agents/r1`, {
+            runId: "r1",
+            request: "steer-1",
+            text: "stay in src",
+            result: null,
+          });
+          const sends = Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.send");
+          const listed = Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.list");
+          const release = core.hold("terminal.list");
+          const ticking = yield* Effect.forkChild(tendIdle);
+          yield* until(
+            Effect.map(
+              rig.calls(),
+              (calls) =>
+                Arr.filter(calls, (call) => call.cmd === "terminal.list").length > listed.length,
+            ),
+          );
+          const settled = reconcile(
+            yield* ledgerOf(dir, lost.incarnation),
+            lost.id,
+            "sent",
+            "tester",
+            "t",
+          );
+          if ("error" in settled) {
+            throw new Error(settled.error);
+          }
+          yield* appendLine(settled).pipe(Effect.provide(recordsAt(dir)));
+          release();
+          yield* Fiber.join(ticking);
+          return {
+            lost,
+            sent: Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.send"),
+            before: sends.length,
+            queued: yield* readQueue(`${dir}/agents/r1`),
+          };
+        }),
+      );
+      expect(outcome.sent.length).toBe(outcome.before);
+      expect(outcome.queued[0]?.result).toMatchObject({
+        delivered: true,
+        delivery: outcome.lost.id,
+        observed: false,
       });
     }),
   ));

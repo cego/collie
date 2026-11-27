@@ -59,6 +59,11 @@ export function toldIn(log: string, agent: string) {
 
 const TERMINAL_STATES: ReadonlySet<string> = new Set(["failed", "superseded"]);
 
+// WARNING: a human's "sent" is decisive; only "not-sent" permits another send.
+export const reconciledSent = (delivery: Delivery) =>
+  delivery.state === "superseded" &&
+  pipe_(delivery.note ?? "", Str.startsWith("reconciled as sent"));
+
 const HumanDoorSchema = Schema.Struct({
   origin: FrontDoor,
   conversation: Schema.optionalKey(Schema.String),
@@ -335,7 +340,7 @@ export function blocked(lines: ReadonlyArray<LedgerLine>, causal_key: string, re
     if (delivery.causal_key !== causal_key) {
       continue;
     }
-    if (TERMINAL_STATES.has(delivery.state)) {
+    if (TERMINAL_STATES.has(delivery.state) && !reconciledSent(delivery)) {
       continue;
     }
     if (delivery.id === resending && delivery.state === "deferred") {
