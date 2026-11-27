@@ -1,4 +1,10 @@
 import { launchesAt, agentsAt, launchedAt } from "./support/records";
+import { parseJson } from "../src/json";
+
+const EventRow = Schema.Struct({
+  kind: Schema.String,
+  launch: Schema.optionalKey(Schema.String),
+});
 import { RELAUNCH_CAP } from "../src/relaunch-attempts";
 import * as Cause from "effect/Cause";
 
@@ -1428,8 +1434,14 @@ test("a launch that refuses its conversation is started fresh under its own id, 
               Effect.map((cmds) => Arr.filter(cmds, (cmd) => cmd === "terminal.run").length === 2),
             ),
           );
+          const launched = yield* fs.readFileString(`${at}/events.jsonl`);
+          const rows = Arr.filter(Str.split(launched, "\n"), (one) => Str.isNonEmpty(one));
+          const launches = Arr.filter(rows, (one) => Str.includes('"kind":"launch"')(one));
+          const recorded = parseJson(Schema.Array(EventRow), `[${launches.join(",")}]`);
+          const label = recorded.at(-1)?.launch;
           yield* writeEvent(at, {
             session,
+            launch: label,
             kind: "stopped",
             reason: `No conversation found with session ID: ${session}`,
           });

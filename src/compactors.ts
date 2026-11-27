@@ -1286,10 +1286,7 @@ const exitOfLaunch = (dir: string, launch: string | null) =>
       yield* readEvents(dir).pipe(Effect.orElseSucceed(() => [])),
       (one) => one.kind === "stopped",
     );
-    // WARNING: a stop that names another launch is not this one's; one that names none is all an older Collie recorded.
-    const mine = Option.getOrUndefined(
-      Arr.findLast(stops, (one) => (one.launch ?? null) === null || one.launch === launch),
-    );
+    const mine = Option.getOrUndefined(Arr.findLast(stops, (one) => one.launch === launch));
     return mine === undefined ? null : (mine.reason ?? "its turn ended on an error");
   });
 
