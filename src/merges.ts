@@ -2,6 +2,7 @@ import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Struct from "effect/Struct";
 import { DateTime, Effect, FileSystem, Option } from "effect";
+import type { Path } from "effect";
 import { MergeRequests } from "./merge-requests";
 import type { MergeRequestsApi, MrEntry } from "./merge-requests";
 import type { ForgeFacts } from "./board";
@@ -9,6 +10,8 @@ import { readEnv } from "./env";
 import { mrId, mrIdProject, mrLabel, mrRefOf, parseMrTarget, readMrRef } from "./board-model";
 import type { MrPanel, MrState, TaskView } from "./board-model";
 import { latest, readDispositions, recordDisposition } from "./disposition";
+import { Asking } from "./forge/http";
+import type { Asked } from "./forge/http";
 import { forgeOf } from "./forge/forge";
 import type { ReviewRead } from "./forge/review";
 import { readLanding, settleLeft } from "./landing";
@@ -18,6 +21,7 @@ import { runDir } from "./engine";
 import type { RunFacts } from "./runs";
 import { diffTargetOf } from "./strategies";
 import { epochMs } from "./time";
+import type { WatchEvent } from "./watch-journal";
 
 const isMrTarget = (target: string | null): target is string =>
   target !== null && parseMrTarget(target) !== null;
@@ -113,14 +117,21 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
   states: Map<string, MrState>;
   panels: MrPanels;
   making: ReadonlySet<string>;
+  demand?: ReadonlyMap<string, ReadonlyArray<string>>;
+  event?: (event: WatchEvent) => Effect.Effect<void, never, FileSystem.FileSystem | Path.Path>;
   nudged?: Set<string>;
 }) {
+  const event: (
+    event: WatchEvent,
+  ) => Effect.Effect<void, never, FileSystem.FileSystem | Path.Path> =
+    opts.event ?? (() => Effect.void);
   const fs = yield* FileSystem.FileSystem;
   // WARNING: Earlier hosts' answers are merged in, so a fresh host does not re-ask what already landed.
   for (const [label, state] of yield* readMrStates(opts.stateDir)) {
     opts.states.set(label, state);
   }
   const forge = new Map(yield* readForge(opts.stateDir));
+  const demandByMr = opts.demand ?? new Map();
   let asked = false;
   const watched: Array<Watched & { readonly visible: boolean }> = [];
   const requests = yield* MergeRequests;
@@ -169,6 +180,7 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
         abandoned: view.mrs?.[0]?.settled === "abandoned",
         runs: shown === undefined ? view.runs : [...view.runs, shown.run],
         owner: shown?.run ?? found?.run ?? view.mrs?.[0]?.run ?? view.run,
+        settles: true,
       });
     }
     for (const repo of repos) {
@@ -179,6 +191,7 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
           abandoned: yield* abandonedIn(runDir(opts.stateDir, repo.run)),
           runs: [repo.run],
           owner: repo.run,
+          settles: true,
         });
       }
     }
@@ -190,6 +203,7 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
           abandoned: false,
           runs: [one.run],
           owner: one.run,
+          settles: true,
         });
       }
     }
@@ -202,16 +216,27 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
             abandoned: entry.settled === "abandoned",
             runs: [entry.run],
             owner: entry.run,
+            settles: true,
           });
         }
       }
     }
   }
-  for (const { mr, abandoned, runs, owner, visible } of watched) {
-    // WARNING: Only an abandonment settles a merge request for good; a closed one may be reopened.
-    if (abandoned) {
+  // WARNING: a Run folded into History is still following its merge request, and reads it for the watch alone.
+  for (const [id, watchers] of demandByMr) {
+    if (Arr.some(watched, (one) => mrId(one.mr) === id)) {
       continue;
     }
+    watched.push({
+      visible: false,
+      mr: `mr:${id}`,
+      abandoned: false,
+      runs: watchers,
+      owner: watchers[0]!,
+      settles: false,
+    });
+  }
+  for (const { mr, abandoned, runs, owner, settles, visible } of watched) {
     const label = mrLabel(mr);
     if (mrRefOf(mr) === null) {
       continue;
@@ -227,12 +252,18 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
     if (id === null) {
       continue;
     }
+    const demanded = opts.demand?.has(id) ?? false;
+    if (abandoned && !demanded) {
+      continue;
+    }
+    const settlesThis = settles && !abandoned;
     const dirs = Arr.map(runs, (run) => runDir(opts.stateDir, run));
     const known = opts.states.get(id);
     const every =
       visible && (known === undefined || known === "open") ? MERGE_SYNC_MS : MERGE_POLL_MS;
     if (
-      known !== "in-prod" &&
+      // WARNING: a Run still watching it needs the read that ends its Watch, whatever production said.
+      (known !== "in-prod" || demanded) &&
       (nudged.has(mr) ||
         nudged.has(id) ||
         Math.max(
@@ -245,10 +276,26 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
       // WARNING: Stamped before asking, so a forge that cannot be asked is not asked every tick.
       opts.checked.set(id, opts.now);
       asked = true;
+      // WARNING: counted here, not from the host's total, so a concurrent read is not this poll's.
+      const spent: Asked = { attempts: 0, limited: 0 };
       const answered = yield* forgeAnswer(`mr:${id}`, at, opts.run, (panel) =>
         opts.panels.set(id, { at: opts.now, panel }),
-      );
+      ).pipe(Effect.provideService(Asking, spent));
       const now = DateTime.formatIso(DateTime.makeUnsafe(opts.now));
+      const read = opts.panels.get(id)?.panel;
+      const refused = answered === null && read?._tag === "Unavailable" ? read.reason : null;
+      const poll = {
+        _tag: "poll" as const,
+        at: now,
+        mr: id,
+        source: demanded && !settlesThis ? ("watch" as const) : ("task" as const),
+        result: answered === null ? ("failed" as const) : ("read" as const),
+        attempts: spent.attempts,
+        rateLimit: spent.limited,
+        forge: Str.split(mrRefOf(`mr:${id}`)?.project ?? "", "/")[0] ?? "",
+        head: read?._tag === "Details" ? (read.head ?? null) : null,
+      };
+      yield* event(refused === null ? poll : { ...poll, reason: refused });
       if (answered === null) {
         const known = forge.get(id);
         forge.set(id, { ...(known ?? { checks: { state: "unknown" }, head: null }), asked: now });
@@ -257,7 +304,12 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
         opts.states.set(id, state);
         forge.set(id, { ...facts, read: now, asked: now });
         yield* keepLogin(requests, id, at, opts.run, opts.now);
-        if (state !== "open" && state !== "closed" && (yield* firstMerged(dirs, id)) === null) {
+        if (
+          settlesThis &&
+          state !== "open" &&
+          state !== "closed" &&
+          (yield* firstMerged(dirs, id)) === null
+        ) {
           yield* recordDisposition(runDir(opts.stateDir, owner), {
             at: mergedAt ?? now,
             by,
@@ -269,6 +321,9 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
       }
     }
     // WARNING: Every round, not only when asked: a stop that did not take is asked again.
+    if (!settlesThis) {
+      continue;
+    }
     const state = opts.states.get(id);
     if (state === undefined || state === "open" || state === "closed") {
       continue;
@@ -285,10 +340,13 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
       yield* workingOn(id, owner, forge.get(id)?.source, opts),
       opts.runs,
     );
+    // WARNING: a Run waiting on this merge request's Watch ends it on the wake it is owed.
+    const asking = new Set(opts.demand?.get(id) ?? []);
     const going = Arr.filter(
       opts.runs,
       (run) =>
         working.includes(run.id) &&
+        !asking.has(run.id) &&
         (run.state === "running" || run.state === "waiting") &&
         epochMs(run.created) < merged,
     );
@@ -440,6 +498,7 @@ interface Watched {
   readonly abandoned: boolean;
   readonly runs: ReadonlyArray<string>;
   readonly owner: string;
+  readonly settles: boolean;
 }
 
 const abandonedIn = Effect.fn("Merges.abandonedIn")(function* (dir: string) {

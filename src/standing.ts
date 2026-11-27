@@ -44,6 +44,7 @@ export interface Owed {
   readonly runs: ReadonlyArray<string>;
   readonly forge: "open" | "merged" | "closed" | null;
   readonly read: number | null;
+  readonly revived?: ReadonlyArray<string>;
 }
 
 export interface Recorded {
@@ -83,7 +84,11 @@ export function settlementOf(item: Owed, recorded: ReadonlyArray<Recorded>, lead
     const returned: Settlement = { by: "merged", line: latest("merged") };
     return returned;
   }
-  const abandoned = latest("abandoned", (one) => carries(one.run) || one.run === leader);
+  const revived = new Set(item.revived ?? []);
+  const abandoned = latest(
+    "abandoned",
+    (one) => (carries(one.run) || one.run === leader) && !revived.has(one.run),
+  );
   if (abandoned !== null) {
     const returned: Settlement = { by: "abandoned", line: abandoned };
     return returned;
