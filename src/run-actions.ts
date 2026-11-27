@@ -624,19 +624,20 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         return failed("task_file needs at least one Task");
       }
       const installation = yield* hostInstallation(env.stateDir);
-      const landed = yield* once(
-        env.stateDir,
-        {
-          operation: "task_file",
-          request: by.requestId,
-          ...by,
-          asked: action,
-          result: Schema.Struct({ filed: Schema.Array(FilingSchema) }),
-          settles: (answer) => !Arr.some(answer.filed, (one) => one.result === "unavailable"),
-        },
+      const fileAll = (settled: ReadonlyArray<Filing>) =>
         Effect.gen(function* () {
           const filed: Array<Filing> = [];
           for (const entry of action.filings) {
+            const done = Option.getOrUndefined(
+              Arr.findFirst(
+                settled,
+                (one) => one.task === entry.task && one.result !== "unavailable",
+              ),
+            );
+            if (done !== undefined) {
+              filed.push(done);
+              continue;
+            }
             const missing = {
               task: entry.task,
               result: "missing" as const,
@@ -671,7 +672,19 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
             );
           }
           return { filed };
-        }),
+        });
+      const landed = yield* once(
+        env.stateDir,
+        {
+          operation: "task_file",
+          request: by.requestId,
+          ...by,
+          asked: action,
+          result: Schema.Struct({ filed: Schema.Array(FilingSchema) }),
+          settles: (answer) => !Arr.some(answer.filed, (one) => one.result === "unavailable"),
+          more: (kept) => fileAll(kept.filed),
+        },
+        fileAll([]),
       ).pipe(Effect.catchTag("RequestConflict", (conflict) => Effect.die(conflict.reason)));
       const said = Arr.join(
         Arr.flatMap(

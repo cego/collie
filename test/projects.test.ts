@@ -373,6 +373,78 @@ test("a filing that could not reach its Project's owner is filed when the same r
     ),
   ));
 
+test("a filing retried past an unavailable Project leaves a Task a newer move took where it is", () =>
+  runEffect(
+    twoMachines(
+      "collie-project-half-",
+      (first, second) =>
+        Effect.gen(function* () {
+          yield* first.lists([second]);
+          expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
+          const payments = yield* projectOf(second.world, "Payments");
+          const refunds = yield* projectOf(first.world, "Refunds");
+          const platform = yield* projectOf(first.world, "CEGO Platform");
+          const here = Option.getOrThrow(
+            Option.map(
+              Arr.findFirst((yield* boardOf(first.world)).projects, (one) => one.id === refunds),
+              (one) => one.installation,
+            ),
+          );
+          const away = Option.getOrThrow(
+            Option.map(
+              Arr.findFirst((yield* boardOf(second.world)).projects, (one) => one.id === payments),
+              (one) => one.installation,
+            ),
+          );
+          const mine = yield* taskOf(first.world, "Say a duplicate refunds notice twice");
+          const other = yield* taskOf(first.world, "Move the payout window");
+          const port = yield* listenerPort(first, second);
+          yield* stopHost(second.world.state);
+          yield* until(
+            () => listening(port),
+            (open) => !open,
+          );
+          const door = yield* frontDoor(socketOf(first.world.state));
+          const asked = {
+            actions: [
+              {
+                kind: "task_file" as const,
+                filings: [
+                  { task: mine, project: { installation: here, id: refunds } },
+                  { task: other, project: { installation: away, id: payments } },
+                ],
+              },
+            ],
+            request: "file-half",
+          };
+          const [half] = yield* door.act(asked);
+          expect(Arr.map(half?.filed ?? [], (one) => one.result)).toEqual(["filed", "unavailable"]);
+          const moved = yield* door.act({
+            actions: [
+              {
+                kind: "task_file" as const,
+                filings: [
+                  { task: mine, project: { installation: here, id: platform }, expected: 1 },
+                ],
+              },
+            ],
+            request: "file-move",
+          });
+          expect(moved[0]?.filed?.[0]?.result).toBe("filed");
+          yield* second.cli(["machine", "list"]);
+          yield* until(
+            () => listening(port),
+            (open) => open,
+          );
+          const [again] = yield* door.act(asked);
+          expect(Arr.map(again?.filed ?? [], (one) => one.result)).toEqual(["filed", "filed"]);
+          expect((yield* cardOf(first.world, mine))?.projectId?.id).toBe(platform);
+          expect((yield* cardOf(first.world, other))?.projectId?.id).toBe(payments);
+        }),
+      [],
+    ),
+  ));
+
 test("a create request answers the same after its Project is archived, and another Project is another request", () =>
   proves(
     "collie-project-create-replay-",

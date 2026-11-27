@@ -254,7 +254,7 @@ export const sweep = <E = never, R = never>(
 // WARNING: once begun a sweep finishes and records its report even if its caller goes away.
 export const sweepAsked = <E, R>(
   trail: string,
-  line: Omit<Parameters<typeof once>[1], "result">,
+  line: Omit<Parameters<typeof once>[1], "result" | "more">,
   sweepers: Effect.Effect<ReadonlyArray<Sweeper>, E, R>,
   stateDir: string,
   by: SweptBy,

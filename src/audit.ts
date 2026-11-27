@@ -38,6 +38,8 @@ export const AuditLine = Schema.Struct({
   reason: Schema.optionalKey(Schema.String),
   asked: Schema.optionalKey(Schema.Json),
   result: Schema.Json,
+  // WARNING: a request that has not finished with its answer keeps it, so a retry asks only what is left.
+  unfinal: Schema.optionalKey(Schema.Boolean),
 });
 export type AuditLine = typeof AuditLine.Type;
 
@@ -146,6 +148,7 @@ export const recordAudit = Effect.fn("Audit.record")(function* <A, I extends Sch
     readonly result: Schema.Codec<A, I>;
     readonly value: A;
     readonly requested?: string | undefined;
+    readonly unfinal?: boolean | undefined;
   },
 ) {
   const written: AuditLine = {
@@ -165,6 +168,9 @@ export const recordAudit = Effect.fn("Audit.record")(function* <A, I extends Sch
   if (line.requested !== undefined) {
     full = { ...full, requested: line.requested };
   }
+  if (line.unfinal === true) {
+    full = { ...full, unfinal: true };
+  }
   yield* ofRun(runDir)
     ? appendRunJournal(runJournal(runDir, AUDIT_FILE), AuditJson, full)
     : appendJournal(fileOf(runDir), AuditJson, full);
@@ -181,14 +187,17 @@ const recorded = Effect.fn("Audit.recorded")(function* <A, I extends Schema.Json
     readonly reason?: string | undefined;
     readonly asked?: Schema.Json | undefined;
     readonly result: Schema.Codec<A, I>;
-    // WARNING: an answer that is not final is kept nowhere, so the same request is asked again.
+    // WARNING: an answer that is not final is kept only for a line that says how to carry on with it.
     readonly settles?: (value: A) => boolean | undefined;
+    readonly more?: ((kept: A) => Effect.Effect<A, E, R>) | undefined;
   },
   act: Effect.Effect<A, E, R>,
 ) {
   const prior = Option.getOrUndefined(
-    Arr.findFirst(yield* readAudit(runDir), (one) => one.request === line.request),
+    Arr.findLast(yield* readAudit(runDir), (one) => one.request === line.request),
   );
+  const requested = yield* nowIso;
+  let value: A;
   if (prior !== undefined) {
     if (prior.operation !== line.operation) {
       return yield* new RequestConflict({
@@ -202,14 +211,19 @@ const recorded = Effect.fn("Audit.recorded")(function* <A, I extends Schema.Json
         reason: `request "${line.request}" already asked ${line.operation} for something else`,
       });
     }
-    return yield* Schema.decodeUnknownEffect(line.result)(prior.result).pipe(Effect.orDie);
+    const kept = yield* Schema.decodeUnknownEffect(line.result)(prior.result).pipe(Effect.orDie);
+    if (prior.unfinal !== true || line.more === undefined) {
+      return kept;
+    }
+    value = yield* line.more(kept);
+  } else {
+    value = yield* act;
   }
-  const requested = yield* nowIso;
-  const value = yield* act;
-  if (line.settles !== undefined && !line.settles(value)) {
+  const settled = line.settles === undefined || line.settles(value);
+  if (!settled && line.more === undefined) {
     return value;
   }
-  yield* recordAudit(runDir, { ...line, value, requested }).pipe(Effect.orDie);
+  yield* recordAudit(runDir, { ...line, value, requested, unfinal: !settled }).pipe(Effect.orDie);
   return value;
 });
 
@@ -226,6 +240,7 @@ export const once = Effect.fn("Audit.once")(function* <A, I extends Schema.Json,
     readonly asked?: Schema.Json | undefined;
     readonly result: Schema.Codec<A, I>;
     readonly settles?: (value: A) => boolean | undefined;
+    readonly more?: ((kept: A) => Effect.Effect<A, E, R>) | undefined;
   },
   act: Effect.Effect<A, E, R>,
 ) {
