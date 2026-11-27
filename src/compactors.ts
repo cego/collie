@@ -1286,18 +1286,27 @@ const exitOfLaunch = (dir: string, launch: string | null) =>
     }
     const events = yield* readEvents(dir).pipe(Effect.orElseSucceed(() => []));
     const stops = Arr.filter(events, (one) => one.kind === "stopped");
-    // WARNING: a harness that names no launch still cannot have refused before this launch started.
-    const began = Option.getOrElse(
-      Arr.findLast(events, (one) => one.kind === "launch" && one.launch === launch),
-      () => ({ at: Number.POSITIVE_INFINITY }),
-    ).at;
-    const mine = Option.getOrUndefined(
-      Arr.findLast(
-        stops,
-        (one) => one.launch === launch || ((one.launch ?? null) === null && one.at > began),
-      ),
+    const named = Option.getOrUndefined(Arr.findLast(stops, (one) => one.launch === launch));
+    if (named !== undefined) {
+      return named.reason ?? "its turn ended on an error";
+    }
+    // WARNING: a stop that names no launch is ambiguous once another launch has started, so only the newest launch may take one.
+    const lastLaunch = Option.getOrElse(
+      Arr.findLastIndex(events, (one) => one.kind === "launch"),
+      () => -1,
     );
-    return mine === undefined ? null : (mine.reason ?? "its turn ended on an error");
+    const lastStop = Option.getOrUndefined(
+      Arr.findLastIndex(events, (one) => one.kind === "stopped" && (one.launch ?? null) === null),
+    );
+    const unlabeled = lastStop === undefined ? undefined : events[lastStop];
+    if (
+      unlabeled === undefined ||
+      lastStop! <= lastLaunch ||
+      events[lastLaunch]?.launch !== launch
+    ) {
+      return null;
+    }
+    return unlabeled.reason ?? "its turn ended on an error";
   });
 
 export const transcriptOf = Effect.fn("Compactors.transcriptOf")(function* (

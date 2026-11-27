@@ -733,6 +733,26 @@ test("a stop another launch left is not this launch's refusal", () =>
     }),
   ));
 
+test("a stop with no launch is not given to a launch a newer one replaced", () =>
+  withLaunch(
+    Effect.gen(function* () {
+      const at = {
+        agent: "build-r1",
+        harness: "claude",
+        cwd: rig.projectDir,
+        dir,
+        endpoint: null,
+        env: [],
+      };
+      yield* recordEvent(dir, { session: "s-1", launch: "l-1", kind: "launch" });
+      yield* recordEvent(dir, { session: "s-1", launch: "l-2", kind: "launch" });
+      yield* writeEvent(dir, { session: "s-1", kind: "stopped", reason: "No conversation found" });
+      const exitOf = COMPACTION_PORTS.claude!.exitOf!;
+      expect(yield* exitOf(at, "l-1")).toBeNull();
+      expect(yield* exitOf(at, "l-2")).toBe("No conversation found");
+    }),
+  ));
+
 test("a stop with no launch is not a refusal for a launch that had not started", () =>
   withLaunch(
     Effect.gen(function* () {
