@@ -582,7 +582,10 @@ A merge request is settled when its forge reads it merged; when `abandoned` is r
 Run carrying it or on the Task's leading Run; when `merged` is recorded for it and its
 forge has not read it open since; or when
 `superseded` is recorded on it while its forge reads it closed, or on every Run of the Task
-carrying it with a ref naming a Run of another Task, which is then the one responsible. A
+carrying it with a ref naming a Run of another Task, which is then the one responsible.
+That Run is the one responsible where the two are the same work: the merge request both
+carry, a merge request it carries where this Run records none of its own, or, where it
+carries none, the branch and project both share. A
 `superseded` naming a successor in the same Task, or no Run, settles nothing while the merge
 request is open; reopened, a closed one is owed again. A plan is settled by any Disposition,
 and work that ended with nothing anyone could file — no branch, no merge request, no plan, no
@@ -870,7 +873,7 @@ failed on: after a gate fix that left the tree as it was, the records on that tr
 A resume of a Run held unproved is the exception, because a repair can be outside the tree:
 each check still failing there runs whole once more (ADR-0034, amended 2026-10-19). A pass
 on this tree is relied on only if this host collected it: a restart is when something
-outside the tree may have been repaired, so a restarted host runs the check again. Where no
+outside the tree may have been repaired, so a check it did not collect runs again. Where no
 record is relied on, the Run's log says why, with one reason: no record, another command,
 another tree, an unstable or expected-red record, another environment, or a record from
 before this host started. Identical requests for a check while it runs (same Run, command,
@@ -1003,7 +1006,7 @@ minutes (it keeps waiting and sends the work once the compaction ends):
 
 **Notification** — The only channel from an unattended Run to the person who started it, so what is not worth interrupting for is not sent at all. One title shape — `<repo> · <slug> <what happened>` — one taxonomy in `src/notify.ts`, once per `(run, kind, step)`, and never a reason for a Run to fail. Shown by each Desktop connected to the Run's host, and dropped where none is.
 
-**Host** — The one background process that runs work for a state directory. CLI, board and chat all reach it over the same local RPC, and closing any of them leaves its work running. It owns the directory under `host.lock`, keeps its Runs in SQLite until **Cleanup** forgets them, and on restart hands every accepted Run back to the engine, so completed work is reused rather than repeated. A check it runs ends with it. Whatever stops a host ends its checks' processes first. A host that starts ends any check a previous host left running before it hands Runs back, so the check runs once more and never twice at once (ADR-draft-a-check-ends-with-the-host-that-runs-it). A client of another build is told to restart it before `HostRpcs` (ADR-0015); `FrontDoorRpcs` serves any build (ADR-0038).
+**Host** — The one background process that runs work for a state directory. CLI, board and chat all reach it over the same local RPC, and closing any of them leaves its work running. It owns the directory under `host.lock`, keeps its Runs in SQLite until **Cleanup** forgets them, and on restart hands every accepted Run back to the engine, so completed work is reused rather than repeated. A check it runs ends with it, unless a build at least its own replaces it and the host that starts adopts it; a newer build does that whatever installation it is from, while at the host's own build only a client of its own installation does, and a check the host does not supervise, such as a measurement's, still ends. Whatever stops a host ends its checks' processes first: a stop signal, a lost lock or directory, and a crash. Only such a replacement hands them over before its lock goes, and only the host of the build the handover names adopts each one. A host that starts ends any check a previous host left running before it hands Runs back, so the check runs once more and never twice at once (ADR-draft-a-check-ends-with-the-host-that-runs-it). A client older than the host is refused, naming the build the host runs and, when the host does not answer, the one it recorded, and never restarts it — as is one whose build it cannot name, since a successor takes the lock before it records its build; a newer one of the same installation replaces it. `HostRpcs` is for a client of the host's own build (ADR-0015); `FrontDoorRpcs` serves any build (ADR-0038).
 
 **Schedule** — A start saved with when to make it: a name, a cron expression read in a
 time zone, and the start as an agent's start gives one — the Workflow, every Input, the

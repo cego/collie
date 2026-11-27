@@ -150,6 +150,9 @@ export {
  */
 export {
   FastForwardSchema,
+  SavedAlignmentSchema,
+  savedHead,
+  savedRefusalWhy,
   JobLinkSchema,
   MergeRequestReadSchema,
   ProductionReadSchema,
@@ -1286,10 +1289,14 @@ export interface HostApi {
     readonly commits: ReadonlyArray<string>;
   }) => Effect.Effect<ReviewHead, WorkflowError>;
   /**
-   * Fetches origin and fast-forwards the checkout at `cwd` to `head`, recording the move in
-   * the Run log. A checkout with uncommitted changes, or one `head` does not fast-forward
-   * (a force push), is `Refused` with why: nothing is reset or discarded. Take it inside an
-   * Activity.
+   * Fetches origin and brings the checkout at `cwd` to `head`, recording the move in the Run
+   * log, once every agent of this Run placed there has stopped working. Behind, it
+   * fast-forwards. Divergent, it resets a clean checkout whose own head was published —
+   * origin's ref for the branch carried it, or this Run recorded it — and is `Refused` under
+   * `branch-force-pushed`, naming the commits origin never carried, when it holds any:
+   * nothing is discarded silently. A checkout left dirty, or ahead of origin, is `Refused`
+   * under `checkout-dirty-collie` where Collie made the worktree and `checkout-dirty-human`
+   * where it did not, naming the files or commits. Take it inside an Activity.
    */
   readonly fastForward: (options: {
     readonly runId: string;
@@ -1297,7 +1304,7 @@ export interface HostApi {
     readonly head: string;
     /** Where supplied, refuse a detached checkout or a different source branch before moving it. */
     readonly branch?: string;
-  }) => Effect.Effect<FastForward>;
+  }) => Effect.Effect<FastForward, WorkflowError>;
   /**
    * Reads `tag` back from origin and the forge, rather than from an Output, against what it
    * must prove. Either way the tag is on origin and carries `merged`. `finished`, a
