@@ -81,6 +81,15 @@ export default defineWorkflow({
         readonly handed?: ReadonlyArray<string>;
       } | null = null;
 
+      const remember = (
+        at: number,
+        keys: ReadonlyArray<string>,
+        fixed: typeof FixOutputSchema.Type,
+        handed?: ReadonlyArray<string>,
+      ) => {
+        seen = { at, keys, handed: handed ?? seen?.handed ?? [], claimed: fixed.fixed };
+      };
+
       const choose = (name: string, options: ReadonlyArray<string>) => {
         const answer = answers.shift() ?? STOP;
         said.push(`${name}: ${options.join(" | ")} → ${answer}`);
@@ -223,12 +232,12 @@ export default defineWorkflow({
               [...standing, ...(brief?.findings ?? [])],
             );
             keep(fixed);
-            seen = {
+            remember(
               at,
-              keys: blockingKeys([...standing, ...split.live]),
-              handed: rally.go === "fix" ? rally.handed : (seen?.handed ?? []),
-              claimed: fixed.fixed,
-            };
+              blockingKeys([...standing, ...split.live]),
+              fixed,
+              rally.go === "fix" ? rally.handed : undefined,
+            );
             if (at < asked.rounds) {
               continue;
             }
@@ -258,7 +267,7 @@ export default defineWorkflow({
           if (at < asked.rounds) {
             continue;
           }
-          return yield* finish(rally.live, fixed);
+          return yield* finish(rally.outstanding, fixed);
         }
         if (rally.go === "halt") {
           yield* host.record(runId, `halt ${rally.halt}`);

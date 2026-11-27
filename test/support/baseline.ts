@@ -3731,7 +3731,7 @@ scenario("a fix round that leaves the same findings asks rather than going round
       const fixed = { verdict: "clean", findings: [], fixed: [], disputed: [], checks: [] };
       yield* reviewedBranch();
       const target = "branch:main...feature";
-      yield* rig.queueOutputs([SYNTHESIS, fixed, SYNTHESIS]);
+      yield* rig.queueOutputs([SYNTHESIS, fixed, SYNTHESIS, fixed, SYNTHESIS]);
       yield* parked({
         entry: shipped("review"),
         runId: "r-stuck",
@@ -3747,7 +3747,9 @@ scenario("a fix round that leaves the same findings asks rather than going round
         until: "post-2",
       });
       expect(optionsOf(stuck, "post-2")).toContain("Fix findings");
-      expect(yield* prompts()).toHaveLength(3);
+      expect(yield* prompts()).toHaveLength(5);
+      expect(yield* asked("r-stuck", "fix-2")).toContain("Raised again");
+      expect(yield* asked("r-stuck", "fix-2")).toContain("the guard is on the wrong side");
     }),
   ),
 );
@@ -13666,13 +13668,24 @@ scenario(
           },
           OPENED,
         ]);
-        yield* driven(
+        const status = yield* driven(
           { entry: shipped("implement"), runId: "r-final-stands", input: { plan, ...FINISH } },
-          (run) => stepPark(run, "r-final-stands", "disputed blocking finding: [blocker] X"),
+          (run) =>
+            Effect.gen(function* () {
+              const rows = yield* stallAsked(run, "dispute-1");
+              expect(rows).toHaveLength(1);
+              expect(rows[0]!.prompt).toContain("X is by design");
+              expect(optionsOf(rows, "dispute-1")).toEqual(WAIVE_IT_OPTIONS);
+              yield* run.answer("dispute-1", "Waive it");
+              return yield* ended(run.status);
+            }),
         );
         yield* bin.restore();
 
-        expect(yield* wasAsked("r-final-stands", "mr")).toBe(false);
+        expect(outcomeText(status)).toBe(OPENED.mr_url);
+        expect(yield* asked("r-final-stands", "mr")).toContain(
+          "X (src/a.ts) — waived by a person to dispute-1, and nothing verifies it",
+        );
         expect(
           Arr.map(yield* findingsIn(runDir(dir, "r-final-stands")), (one) => one.title),
         ).toEqual(["a nit", "X"]);
