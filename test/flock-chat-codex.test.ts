@@ -1032,7 +1032,9 @@ test("An allowlist on Collie's own namespace keeps narrowing, and the token stay
         expect(given).not.toContain('"COLLIE_CHAT_*" = "exclude"');
         expect(given).toContain('"COLLIE_CHAT_MCP_TOKEN" = "exclude"');
         yield* session.offer("shell");
-        expect(message(yield* turn(session))).not.toContain("COLLIE_CHAT_MCP_TOKEN=");
+        const shell = message(yield* turn(session));
+        expect(shell).not.toContain("COLLIE_CHAT_MCP_TOKEN=");
+        expect(shell).not.toContain("HOME=");
       }),
   ).finally(() => {
     void fixture.stop();
@@ -1075,7 +1077,8 @@ test("No Codex Collie starts inherits a variable an import reads its value from"
         yield* session.offer("inspect");
         yield* turn(session);
         const lines = yield* startLines(context.dir);
-        expect(Arr.length(lines)).toBeGreaterThan(1);
+        expect(Arr.some(lines, (line) => pipe(line, Str.includes('"chat":true')))).toBe(true);
+        expect(Arr.some(lines, (line) => pipe(line, Str.includes('"chat":false')))).toBe(true);
         expect(Arr.filter(lines, (line) => pipe(line, Str.includes("DOC_SOURCE")))).toEqual([]);
       }),
   ).finally(() => {
