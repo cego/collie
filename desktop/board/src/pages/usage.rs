@@ -3,7 +3,7 @@
 //! `desktop/src/shared/usage.ts`, `useUsage` and `UsagePage.vue`.
 
 use super::clock::{Zone, ago, epoch_ms, reset_phrase};
-use super::common::{heading, muted, page};
+use super::common::{heading, muted, page, related_tasks};
 use crate::App;
 use collie_desktop_protocol::generated::{
     Source, Subscription, UsageSuccessItem, UsageSuccessItemReading as Reading, Window,
@@ -550,6 +550,18 @@ pub fn view(app: &App, k: &Kit, _layer: &mut Vec<El>) -> El {
                         .map(|(key, said)| muted(k, said.clone()).key(format!("not-read-{key}"))),
                 ),
         );
+    }
+    let installations: Vec<String> = live
+        .iter()
+        .filter_map(|profile| {
+            app.machines
+                .iter()
+                .find(|shown| &shown.machine.profile == profile)
+                .map(|shown| shown.machine.installation.clone())
+        })
+        .collect();
+    if let Some(related) = related_tasks(app, k, &installations, &[]) {
+        children.push(related);
     }
     page("usage-page", "Usage", children)
 }

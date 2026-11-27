@@ -2244,6 +2244,54 @@ fn a_selection_across_machines_is_filed_by_owner_and_the_one_away_is_tried_again
 }
 
 #[test]
+fn a_resource_page_opens_a_related_task_in_the_project_it_is_filed_into() {
+    let harness = Harness::new();
+    let mut runtime = runtime_of(
+        &harness,
+        vec![snapshot_with(
+            &pc(),
+            vec![task(
+                "t-1",
+                "Refunds",
+                "active",
+                json!({
+                    "projectId": {"installation": "inst-pc", "id": "project-payments"},
+                    "membershipSeq": 1.0,
+                }),
+            )],
+            vec![project("project-payments", "Payments", false, false)],
+        )],
+    );
+    press(&mut runtime, "nav-machines");
+    assert_eq!(runtime.state.nav.page, Page::Machines);
+    let related =
+        node(&runtime, "related-inst-pc:t-1").expect("a related Task on the Machines page");
+    assert_eq!(
+        related["name"], "Refunds · Payments",
+        "the link names the Project it opens in"
+    );
+    // The other pages that name a Machine carry the same link.
+    press(&mut runtime, "nav-usage");
+    assert!(
+        node(&runtime, "related-inst-pc:t-1").is_some(),
+        "a Usage page's Machines show the Tasks they carry"
+    );
+    press(&mut runtime, "nav-machines");
+    press(&mut runtime, "related-inst-pc:t-1");
+    assert_eq!(runtime.state.nav.page, Page::Board);
+    assert_eq!(
+        runtime
+            .state
+            .nav
+            .scope
+            .as_ref()
+            .map(collie_desktop_board::board::model::Scope::key),
+        Some("inst-pc:project-payments".to_string()),
+        "the board is scoped to the Project the Task is filed into, not left on the Flock"
+    );
+}
+
+#[test]
 fn a_retry_after_three_machines_away_survives_the_notice_that_follows_them() {
     let harness = Harness::new();
     for name in ["vm-1", "vm-2", "vm-3"] {

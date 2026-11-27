@@ -542,5 +542,15 @@ pub fn view(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
     add_dialog(app, k, layer);
     cleanup::dialog(app, &rows, k, layer);
     toasts(app, &machines.told, told, k, layer);
-    super::common::page("machines-page", "Machines", vec![top, list])
+    let installations: Vec<String> = app
+        .machines
+        .iter()
+        .map(|shown| shown.machine.installation.clone())
+        .collect();
+    let related = super::common::related_tasks(app, k, &installations, &[]);
+    super::common::page(
+        "machines-page",
+        "Machines",
+        [vec![top, list], related.into_iter().collect()].concat(),
+    )
 }

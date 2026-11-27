@@ -434,6 +434,14 @@ pub fn view(app: &App, k: &Kit, _layer: &mut Vec<El>) -> El {
             .enumerate()
             .map(|(index, one)| result(k, index, one, &state.machines)),
     );
+    let runs: Vec<String> = state
+        .found
+        .iter()
+        .map(|one| one.found.item.run.clone())
+        .collect();
+    if let Some(related) = super::common::related_tasks(app, k, &[], &runs) {
+        children.push(related);
+    }
     if state.next.is_some() {
         children.push(
             Button::new("Load more")

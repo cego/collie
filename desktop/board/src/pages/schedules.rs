@@ -835,6 +835,14 @@ pub fn view(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
                 .map(|m| machine_section(k, m, now, &zone)),
         );
     }
+    let installations: Vec<String> = state
+        .machines
+        .iter()
+        .map(|m| m.installation.clone())
+        .collect();
+    if let Some(related) = super::common::related_tasks(app, k, &installations, &[]) {
+        children.push(related);
+    }
     col()
         .key("schedules-page")
         .label("Schedules")

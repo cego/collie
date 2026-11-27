@@ -1,8 +1,10 @@
 //! What the Machines, Workflows, Schedules and Usage pages draw alike: what came of an action,
 //! headings, tones, and a request id.
 
-use rune::{Color, El, col, el, row, text};
-use rune_kit::{Kit, Toast, ToastRegion};
+use crate::App;
+use crate::board::model;
+use rune::{Color, El, Tx, col, el, row, text};
+use rune_kit::{Button, ButtonVariant, Kit, Toast, ToastRegion};
 
 /// What came of an action, said for a while.
 #[derive(Debug, Clone, PartialEq)]
@@ -234,4 +236,52 @@ pub fn panel(k: &Kit, key: impl Into<String>, label: impl Into<String>) -> El {
         .radius(k.radius.md)
         .fill(k.c.layer_01)
         .border(1.0, k.c.border_muted)
+}
+
+/// The Tasks a page is about — those of its Machines, and those whose Runs it names — each
+/// opening the Project it is filed into, so a resource and its work are one press apart.
+pub fn related_tasks(app: &App, k: &Kit, installations: &[String], runs: &[String]) -> Option<El> {
+    let related: Vec<model::Placed<'_>> = model::placed(&app.machines)
+        .into_iter()
+        .filter(|one| {
+            installations.iter().any(|at| at == one.installation)
+                || runs
+                    .iter()
+                    .any(|run| one.task.run == *run || one.task.runs.contains(run))
+        })
+        .collect();
+    if related.is_empty() {
+        return None;
+    }
+    let mut list = col().w_full().gap(6.0);
+    for one in related {
+        let key = one.key.clone();
+        let project = one.task.project_id.clone().flatten();
+        let scope = project.as_ref().map(|at| model::Scope {
+            installation: at.installation.clone(),
+            id: at.id.clone(),
+        });
+        let named = project
+            .as_ref()
+            .and_then(|at| {
+                app.machines
+                    .iter()
+                    .filter(|shown| shown.machine.installation == at.installation)
+                    .find_map(|shown| shown.projects.iter().find(|one| one.id == at.id))
+                    .map(|one| one.name.clone())
+            })
+            .unwrap_or_else(|| "No Project".to_string());
+        list = list.child(
+            Button::new(format!("{} · {named}", one.task.name))
+                .variant(ButtonVariant::Ghost)
+                .expanded(true)
+                .on_press_tx(move |app: &mut App, tx: &mut Tx| {
+                    app.open_scope(scope.clone(), tx);
+                    app.click_card(&key, false);
+                })
+                .build(k)
+                .key(format!("related-{}", one.key)),
+        );
+    }
+    Some(panel(k, "related", "Related Tasks").child(list))
 }

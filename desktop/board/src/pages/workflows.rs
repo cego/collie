@@ -2,7 +2,7 @@
 //! sync Machines share their definitions), and each one read in full. A port of
 //! `WorkflowsPage.vue` and `desktop/src/shared/definitions-view.ts`.
 
-use super::common::{Tone, code, heading, muted, toned};
+use super::common::{Tone, code, heading, muted, related_tasks, toned};
 use crate::App;
 use collie_desktop_protocol::generated::{
     DefinitionsPayload, DefinitionsSuccess, Layer, Persona, PersonaLayer, Workflow,
@@ -668,7 +668,25 @@ pub fn view(app: &App, k: &Kit, _layer: &mut Vec<El>) -> El {
                     stick_bottom: false,
                 })
                 .scroll_edge_fade(16.0)
-                .child(col().w_full().max_w(880.0).px(28.0).py(24.0).child(detail)),
+                .child(
+                    col()
+                        .w_full()
+                        .max_w(880.0)
+                        .px(28.0)
+                        .py(24.0)
+                        .gap(20.0)
+                        .child(detail)
+                        .children(related_tasks(
+                            app,
+                            k,
+                            &state
+                                .from
+                                .iter()
+                                .map(|(installation, _)| installation.clone())
+                                .collect::<Vec<_>>(),
+                            &[],
+                        )),
+                ),
             "definition",
         ))
 }
