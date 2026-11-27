@@ -8,7 +8,7 @@ import type { PluginEnv } from "./env";
 import { configValue, readConfig } from "./config";
 import { appendMetric, readMetrics, recoveriesIn } from "./metrics";
 import type { Metric } from "./metrics";
-import { recheckPark, rememberSettledClear } from "./park-recheck";
+import { ciReadCount, recheckPark, rememberSettledClear } from "./park-recheck";
 import { PARK_CAUSES, healInFlight } from "./park-cause";
 import type { ParkCause } from "./park-cause";
 import type { Herdr } from "./herdr";
@@ -244,6 +244,7 @@ export const recoverParks = <E, R>(opts: {
                   yield* readStepLines(`${opts.env.stateDir}/runs/${view.runId}`),
                   (line) => line.kind === "entry",
                 ).length,
+                cursor: yield* ciReadCount(`${opts.env.stateDir}/runs/${view.runId}`),
               } satisfies Metric;
               claimed = reads === undefined ? claim : { ...claim, reads };
               candidates.push({ view, claimed, fresh: true });
@@ -281,7 +282,11 @@ export const recoverParks = <E, R>(opts: {
             }
             const result = yield* opts.resume(view, claimed.recoveryId!, claimed.park!);
             if (result.applied && claimed.reads !== undefined) {
-              yield* rememberSettledClear(`${opts.env.stateDir}/runs/${view.runId}`, claimed.reads);
+              yield* rememberSettledClear(
+                `${opts.env.stateDir}/runs/${view.runId}`,
+                claimed.reads,
+                claimed.cursor ?? 0,
+              );
             }
             const ended = yield* Clock.currentTimeMillis;
             yield* appendMetric(dir, {

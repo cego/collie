@@ -367,7 +367,7 @@ test("an unchanged failed job beside a cancelled one reissues no recovery for th
 test("a refusal recorded at an earlier head never clears a park at the current one", () =>
   runEffect(
     Effect.gen(function* () {
-      const { asked, root, forge } = yield* waiting("cancelled", MR, undefined, {
+      const { asked, at, root, forge } = yield* waiting("cancelled", MR, undefined, {
         jobs: [{ name: "nuxi-typecheck", state: "cancelled", id: 1 }],
       });
       const dir = `${root}/runs/r1`;
@@ -375,7 +375,7 @@ test("a refusal recorded at an earlier head never clears a park at the current o
       const healthy: ForgeModel = forge.model();
       forge.set({ ...healthy, httpFault: { status: 503 } });
       expect("unproved" in (yield* read({ ...asked, runDir: dir }, forge))).toBe(true);
-      const head = (yield* exec(
+      const committed = yield* exec(
         [
           "git",
           "-c",
@@ -388,11 +388,12 @@ test("a refusal recorded at an earlier head never clears a park at the current o
           "--allow-empty",
         ],
         { cwd: asked.cwd },
-      )).stdout;
+      );
+      expect(committed.exitCode).toBe(0);
       const moved = Str.trim(
         (yield* exec(["git", "rev-parse", "HEAD"], { cwd: asked.cwd })).stdout,
       );
-      expect(head).toBeDefined();
+      expect(moved).not.toBe(at);
       forge.set({ ...healthy, mrs: Arr.map(healthy.mrs, (one) => ({ ...one, head: moved })) });
       expect("unproved" in (yield* read({ ...asked, runDir: dir }, forge))).toBe(true);
       const first = yield* cancelledRecheck(view, root, asked.run, forge);
@@ -427,7 +428,6 @@ test("a refusal from an earlier pass through Prove does not clear the park made 
       expect("unproved" in (yield* read(lint, forge))).toBe(true);
       forge.set(healthy);
       expect("unproved" in (yield* read(nuxi, forge))).toBe(true);
-      expect(at).toBe(healthy.mrs.at(0)?.head ?? "");
       const first = yield* cancelledRecheck(view, root, asked.run, forge);
       expect(first).toMatchObject({ cleared: true, error: false });
       yield* rememberSettledClear(dir, first.reads ?? "");

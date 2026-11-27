@@ -62,11 +62,14 @@ const lastObserved = (stateDir: string, runId: string, head: string) =>
 const lastSettledClear = (dir: string) =>
   Effect.map(settledEntries(dir), (entries) => entries.at(-1)?.reads);
 
-export const rememberSettledClear = (dir: string, reads: string) =>
+export const ciReadCount = (dir: string) =>
+  Effect.map(ciReads(dir), (entries) => Arr.length(entries));
+
+export const rememberSettledClear = (dir: string, reads: string, at?: number) =>
   Effect.gen(function* () {
     yield* appendRunJournal(settledClears(dir), CiSettled, {
       reads,
-      at: Arr.length(yield* ciReads(dir)),
+      at: at ?? Arr.length(yield* ciReads(dir)),
     });
   });
 

@@ -770,9 +770,9 @@ reads until the forge says something new, and never for a head where every job p
 fresh outage that comes back green recovers as often as it parks. What decides a repeat is why the parked read
 could not progress, not whether a sibling failed: every check is recorded as it was read at
 its head, and a refusal in the same round outranks the rest, so a check that passes or fails
-later cannot overwrite it. Only the reads taken since the last applied resume, at the parked
-head, are weighed: a refusal recorded at an earlier head or before that resume says nothing
-about this park. A park made from jobs that settled cancelled, skipped or failed stays parked
+later cannot overwrite it. Only the reads taken since the last resume was claimed, at the parked
+head, are weighed — including what the work it restarted read before parking again — so a
+refusal recorded at an earlier head or before that claim says nothing about this park. A park made from jobs that settled cancelled, skipped or failed stays parked
 however its siblings read, while one the forge refused with a read of its own is read again,
 because the refusal is not a fact about the jobs. So a head where one job failed
 and another was cancelled is read once more and then left alone, and a head a 503 parked

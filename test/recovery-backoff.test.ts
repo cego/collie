@@ -606,3 +606,135 @@ test("three recheck rounds that fail for another reason still raise one Recovery
       expect(items).toHaveLength(1);
     }),
   ));
+const parkOf = (state: "failed" | "cancelled") =>
+  Effect.gen(function* () {
+    const rig = yield* Rig.scoped();
+    const env = rig.pluginEnv();
+    const bin = yield* Effect.acquireRelease(FakeBin.make(`${rig.root}/bin`), (one) =>
+      one.restore(),
+    );
+    const head = "4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6";
+    const forge = yield* forgeOnPath(bin, "gitlab", {
+      installed: true,
+      loggedIn: [FORGE_HOST.gitlab],
+      login: "tester",
+      mrs: [
+        {
+          project: "gitlab.example.com/mk/project",
+          iid: "7",
+          state: "open",
+          head,
+          jobs: [{ name: "test", state, id: 1 }],
+        },
+      ],
+    });
+    const forgeApi = yield* serveForges(forge);
+    const mr = "https://gitlab.example.com/mk/project/-/merge_requests/7";
+    const dir = `${env.stateDir}/runs/r1`;
+    yield* rememberCiTarget(dir, { head, job: "test", mr, cwd: rig.projectDir, observed: state });
+    yield* appendMetric(`${env.stateDir}/evidence/r1`, {
+      at: "1970-01-01T00:00:00.000Z",
+      kind: "recovery",
+      subject: "r1",
+      cause: "ci-job-absent",
+      action: "resumed",
+      outcome: "claimed",
+      recoveryId: "recover:r1:p1:1",
+      park: "p1",
+      since: "1970-01-01T00:00:00.000Z",
+      value: 0,
+      note: "",
+      reads: `test@${head}:${state}#1`,
+      cursor: 1,
+    });
+    yield* Effect.gen(function* () {
+      let resumed = 0;
+      let view: RunView = {
+        runId: "r1",
+        workflow: "any",
+        project: rig.projectDir,
+        task: null,
+        parent: null,
+        registration: "any@1",
+        entry: "any.workflow.ts",
+        input: {},
+        provenance: {},
+        strategies: {},
+        options: {},
+        cwd: rig.projectDir,
+        branch: "work",
+        workspace: null,
+        worktree: null,
+        outcome: "feature",
+        created: "1970-01-01T00:00:00.000Z",
+        status: { status: "suspended" },
+        waiting: [],
+        controls: [],
+        diagnostic: null,
+        parked: "job absent",
+        park: {
+          id: "p1",
+          since: "1970-01-01T00:00:00.000Z",
+          cause: "ci-job-absent",
+          kind: "rechecks",
+        },
+        awaiting: null,
+        mr,
+        landing: null,
+      };
+      yield* Effect.forkScoped(
+        recoverParks({
+          env,
+          herdr: new Herdr(env),
+          reconnects: Effect.succeed(0),
+          panels: new Map(),
+          views: Effect.sync(() => [view]),
+          resume: () =>
+            Effect.gen(function* () {
+              resumed += 1;
+              if (resumed === 1) {
+                yield* rememberCiTarget(dir, {
+                  head,
+                  job: "test",
+                  mr,
+                  cwd: rig.projectDir,
+                  observed: "unreadable",
+                });
+                view = { ...view, park: { ...view.park!, id: "p2" } };
+              }
+              return { applied: true };
+            }),
+        }).pipe(
+          Effect.provide(
+            ConfigProvider.layerAdd(
+              ConfigProvider.fromUnknown({ COLLIE_RECOVERY_EVERY: "10 millis" }),
+            ),
+          ),
+        ),
+      );
+      const rechecked = (park: string) =>
+        Effect.map(readMetrics(`${env.stateDir}/evidence/r1`), (lines) =>
+          Arr.filter(lines, (line) => line.action === "rechecked" && line.park === park),
+        );
+      yield* until(
+        () => rechecked("p2"),
+        (lines) => lines.length > 0,
+      );
+      expect((yield* rechecked("p2")).at(0)?.outcome).toBe("cleared");
+    }).pipe(
+      Effect.provide(
+        forgeHttpLayer.pipe(
+          Layer.provideMerge(platformLayer),
+          Layer.provideMerge(
+            ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: forgeApi })),
+          ),
+        ),
+      ),
+    );
+  });
+
+test("a refusal read before the resume answers still clears the failed job's next park", () =>
+  runEffect(parkOf("failed")));
+
+test("a refusal read before the resume answers still clears the cancelled job's next park", () =>
+  runEffect(parkOf("cancelled")));
