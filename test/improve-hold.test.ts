@@ -106,3 +106,28 @@ test("a review of somebody else's merge request offers no Improve, and its open 
       expect(views[0] === undefined ? null : sectionOf(views[0])).toBe("finished");
     }),
   ));
+
+test("an offer Collie has not read the merge request for yet keeps the card's open findings in Waiting", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { offers, run } = yield* reviewed(true);
+      const waiting = Arr.map(offers, (one) =>
+        one.id === "improve"
+          ? {
+              ...one,
+              unavailable: "mr:gitlab.cego.dk/mk/collie!7 is still being read from its forge",
+              unread: true,
+            }
+          : one,
+      );
+      const views = yield* buildBoard({
+        env: readEnv({ COLLIE_STATE_DIR: run.dir, COLLIE_CWD: "/project" }),
+        runs: [run],
+        registered: [],
+        now: NOW,
+        offers: () => Effect.succeed(waiting),
+      });
+      expect(views[0]?.landed).toBe(false);
+      expect(views[0] === undefined ? null : sectionOf(views[0])).toBe("waiting");
+    }),
+  ));

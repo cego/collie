@@ -10607,9 +10607,11 @@ const makeRegistry: (
       }
     }
     const refused = new Map<string, string>();
+    const pending = new Set<string>();
     if (unread !== null) {
       for (const offer of generation.offers) {
         refused.set(offer.id, `${unread} is still being read from its forge; offered once it is`);
+        pending.add(offer.id);
       }
     }
     const readings = new Map<ConnectionId, ConnectionReading>();
@@ -10639,6 +10641,7 @@ const makeRegistry: (
         if (reading === null) {
           if (!refused.has(offer.id)) {
             refused.set(offer.id, `${id} is still being read; offered once it is`);
+            pending.add(offer.id);
           }
           continue;
         }
@@ -10760,7 +10763,7 @@ const makeRegistry: (
         break;
       }
     }
-    return { row, generation, facts, where, refused, input };
+    return { row, generation, facts, where, refused, pending, input };
   });
 
   const connectionIds = Effect.fn("Engine.Registry.connectionIds")(function* (
@@ -11281,12 +11284,13 @@ const makeRegistry: (
     // WARNING: a listing reads each module's kept revision; taking an offer computes it afresh.
     offers: (runId: string) =>
       offeredBy(runId).pipe(
-        Effect.flatMap(({ row, generation, facts, where, refused, input }) =>
+        Effect.flatMap(({ row, generation, facts, where, refused, pending, input }) =>
           Effect.forEach(
             offersFrom(generation.offers, facts, {
               self: generation.id,
               keepUnavailable: true,
               refused,
+              unread: pending,
             }),
             (offer) =>
               offer.kind === "follow-up"

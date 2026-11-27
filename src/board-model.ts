@@ -219,6 +219,7 @@ export const BoardOffer = Schema.Struct({
   title: Schema.String,
   run: Schema.optionalKey(Schema.String),
   unavailable: Schema.optionalKey(Schema.String),
+  unread: Schema.optionalKey(Schema.Boolean),
 });
 export type BoardOffer = typeof BoardOffer.Type;
 
@@ -961,6 +962,7 @@ export const OfferView = Schema.Struct({
   selects: Schema.optionalKey(Schema.Literals(["many", "one"])),
   primary: Schema.Boolean,
   unavailable: Schema.NullOr(Schema.String),
+  unread: Schema.optionalKey(Schema.Boolean),
   run: Schema.optionalKey(Schema.String),
 });
 export type OfferView = typeof OfferView.Type;

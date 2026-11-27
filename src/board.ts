@@ -1474,9 +1474,10 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           if ((yield* openFindingsRead(run.dir)) === 0) {
             return false;
           }
+          // WARNING: an offer waiting on a read Collie has not made yet is still offered, so it still holds.
           return Arr.some(
             yield* offersFor(run.id),
-            (one) => one.selects === "many" && one.unavailable === null,
+            (one) => one.selects === "many" && (one.unavailable === null || one.unread === true),
           );
         });
         const choosing = Arr.some(yield* Effect.forEach(everyRun, choosingOf), (one) => one);
@@ -1930,7 +1931,11 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
               run: one.run,
             };
             const returned: BoardOffer =
-              offer.unavailable === null ? listed : { ...listed, unavailable: offer.unavailable };
+              offer.unavailable === null
+                ? listed
+                : offer.unread === true
+                  ? { ...listed, unavailable: offer.unavailable, unread: true }
+                  : { ...listed, unavailable: offer.unavailable };
             return returned;
           }),
         );

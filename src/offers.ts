@@ -38,6 +38,7 @@ export interface Offer {
   readonly confirm?: string;
   readonly primary: boolean;
   readonly unavailable: string | null;
+  readonly unread?: boolean;
   readonly selects?: "many" | "one";
 }
 
@@ -45,6 +46,7 @@ export interface OfferOptions {
   readonly self?: string;
   readonly keepUnavailable?: boolean;
   readonly refused?: ReadonlyMap<string, string>;
+  readonly unread?: ReadonlySet<string>;
 }
 
 export function offersFrom(
@@ -87,6 +89,9 @@ export function offersFrom(
     }
     if (one.selects !== undefined) {
       offer.selects = one.selects;
+    }
+    if (options.unread?.has(one.id) === true) {
+      offer.unread = true;
     }
     offers.push(offer);
   }

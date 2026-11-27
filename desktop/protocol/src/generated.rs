@@ -637,6 +637,8 @@ pub struct Offer {
     pub run: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unavailable: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unread: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -3028,6 +3030,8 @@ pub struct OffersSuccessItem {
     pub selects: Option<Selects>,
     pub primary: bool,
     pub unavailable: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unread: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<String>,
 }
