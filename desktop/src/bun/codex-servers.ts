@@ -76,7 +76,7 @@ export const NO_SERVERS: CodexServers = {
   left: [],
   relays: [],
   withheld: [],
-  token: TOKEN_ENV,
+  token: "",
 };
 
 // WARNING: Codex reads a `-c` value as TOML: a table's keys are quoted so a dot stays a header's name.
@@ -144,14 +144,8 @@ export const codexServers: (
   nativeVariables: ReadonlyArray<string>,
 ) => CodexServers = (servers, configured, policy, secrets, nativeVariables) => {
   if (configured === null) {
-    // WARNING: nothing is known about Codex's own names here, so only the environment's can be kept.
-    let token = TOKEN_ENV;
-    for (let count = 2; childEnv()[token] !== undefined; count += 1) {
-      token = `${TOKEN_ENV}_${count}`;
-    }
     return {
       ...NO_SERVERS,
-      token,
       left: Arr.map(Rec.keys(servers), (name) => ({
         name,
         why: "Collie could not read which servers Codex already has, so it passed none of the human's",

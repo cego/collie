@@ -900,6 +900,13 @@ export const codexDriver: (
             }),
           );
           const relayed = Arr.flatMap(relays, (one) => codexServerUrlArgs(one.name, one.live.url));
+          // WARNING: a name read before discovery failed is unknown, so the token rides in the address there.
+          const named = given.token === "";
+          const inherited = {
+            ...Rec.filter(childEnv(), (_value, name) => !Arr.contains(given.withheld, name)),
+            ...relayEnv,
+          };
+          const env = named ? inherited : { ...inherited, [given.token]: token };
           const server = yield* appServer(
             command,
             context.dir,
@@ -907,17 +914,14 @@ export const codexDriver: (
               ...given.args,
               ...relayed,
               "-c",
-              `mcp_servers.${SERVER}.url=${encodeLine(url)}`,
-              "-c",
-              `mcp_servers.${SERVER}.bearer_token_env_var=${encodeLine(given.token)}`,
+              `mcp_servers.${SERVER}.url=${encodeLine(named ? `${url}/${token}` : url)}`,
+              ...(named
+                ? []
+                : ["-c", `mcp_servers.${SERVER}.bearer_token_env_var=${encodeLine(given.token)}`]),
               "-c",
               `mcp_servers.${SERVER}.tool_timeout_sec=${TOOL_TIMEOUT}`,
             ],
-            {
-              ...Rec.filter(childEnv(), (_value, name) => !Arr.contains(given.withheld, name)),
-              ...relayEnv,
-              [given.token]: token,
-            },
+            env,
           );
           yield* Effect.forkScoped(pump(server));
           const { account, requiresOpenaiAuth } = yield* server

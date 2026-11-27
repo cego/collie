@@ -2007,7 +2007,7 @@ test("Codex's own report decides which servers it has, not Collie's reading of i
   ).finally(() => void mine.stop());
 });
 
-test("A discovery that fails leaves a token name the environment already uses alone", () => {
+test("A discovery that fails carries Collie's token in the address, and no name at all", () => {
   const mine = serveDocs({ tool: "user_read" });
   Bun.env.COLLIE_CHAT_MCP_TOKEN = "native-token";
   return withServers({ docs: { type: "http", url: mine.url } }, (driver, context) =>
@@ -2020,9 +2020,24 @@ test("A discovery that fails leaves a token name the environment already uses al
       const details = inspected(yield* turn(session));
       const given = Arr.join(details.args, " ");
       expect(given).not.toContain("mcp_servers.docs.");
-      expect(given).toContain('bearer_token_env_var="COLLIE_CHAT_MCP_TOKEN_2"');
+      expect(given).not.toContain("bearer_token_env_var");
+      const named =
+        /mcp_servers\.collie_desktop\.url="http:\/\/127\.0\.0\.1:\d+\/mcp\/([^"]+)"/.exec(given);
+      const bearer = named?.[1] ?? "";
+      expect(bearer).not.toBe("");
       expect(details.env.COLLIE_CHAT_MCP_TOKEN).toBe("native-token");
-      expect(details.env.COLLIE_CHAT_MCP_TOKEN_2).toBeString();
+      expect(Rec.keys(details.env)).not.toContain("COLLIE_CHAT_MCP_TOKEN_2");
+      yield* session.offer("shell");
+      const shell = message(yield* turn(session));
+      expect(shell).not.toContain(bearer);
+      expect(given).not.toContain("shell_environment_policy");
+      yield* session.offer("hello");
+      const events = yield* turn(session);
+      expect(called(events)).toContain("mcp__collie__collie_herd");
+      expect(Arr.filter(events, (event) => event.type === "TOOL_CALL_RESULT")).toMatchObject([
+        { content: "No Herds" },
+        { content: "notes.md\n" },
+      ]);
     }),
   ).finally(() => {
     void mine.stop();
