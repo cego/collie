@@ -20,6 +20,7 @@ import {
   isUnobserved,
   newestById,
   deliveriesAbout,
+  deliveriesOf,
   readLedger,
   readLedgerWhole,
   reconciledSent,
@@ -445,6 +446,23 @@ const send = Effect.fn("Dispatcher.send")(function* (
   }
   const line = deliveryOf(entry, terminalId, text, draft, at, "reserved");
   const id = line.id;
+  const settledEarlier = Option.getOrNull(
+    Arr.findFirst(
+      yield* deliveriesOf(draft.run),
+      (one) => one.causal_key === key && reconciledSent(one),
+    ),
+  );
+  // WARNING: a human's "sent" outlives the incarnation it was written for; only "not-sent" permits another send.
+  if (settledEarlier !== null) {
+    yield* deps.log(
+      `not sent to ${entry.agent}: ${settledEarlier.id} was reconciled as sent to another incarnation`,
+    );
+    return {
+      ...refuse(settledEarlier.id, "blocked", `${settledEarlier.id} was reconciled as sent`),
+      held: "superseded",
+      settled: true,
+    };
+  }
   const inFlight = blocked(yield* deliveriesAbout(terminalId, key), key, id);
   if (inFlight) {
     const settled = reconciledSent(inFlight);

@@ -1016,3 +1016,41 @@ test("a prompt quoting a delivery token is not read as that delivery being submi
   expect(carriedDelivery("a note\ncollie-delivery:d1\nmore")).toBeNull();
   expect(carriedDelivery("collie-delivery:\nno id")).toBeNull();
 });
+
+test("a request a human reconciled as sent is not sent again to a replacement incarnation", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* appendLine({
+        id: "req-1-1",
+        at: entry.at,
+        run: draft.run,
+        incarnation: "term-1",
+        agent: entry.agent,
+        causal_key: causalKey(draft.run, draft.cause, draft.intentVersion),
+        request_id: draft.requestId,
+        cause: draft.cause,
+        mode: draft.mode,
+        text_hash: "req-1-1-text",
+        intent_version: draft.intentVersion,
+        attempt: 1,
+        state: "superseded",
+        note: "reconciled as sent by tester",
+      });
+      const h = fake({ agents: [{ ...alive, terminalId: "term-2" }] });
+      const replaced: AgentEntry = {
+        ...entry,
+        incarnation: { terminalId: "term-2", agentSession: null, backend: "core" },
+      };
+      const outcome = yield* transaction(h.deps, replaced, (channel) =>
+        channel.submit("build it", draft),
+      );
+      expect(outcome).toMatchObject({
+        ok: false,
+        reason: "blocked",
+        held: "superseded",
+        settled: true,
+      });
+      expect(prompted(h.calls)).toBe(0);
+      expect(yield* readLedger("term-2")).toEqual([]);
+    }),
+  ));
