@@ -660,8 +660,9 @@ split by whether the work **landed**. The order is the board model's own, and th
 board and chat's `collie_herd` list the sections the same way.
 
 A **Queued** card is a Task with no Run yet: its name opens the instruction exactly as it
-was given, with the Workflows the Machine has and a **Checkout** field — `projects-root`
-unless you name a path or a repository under the Projects root. A Workflow that asks for
+was given, with the Workflows its **Checkout** can start — `projects-root`
+unless you name a path or a repository under the Projects root, and the list is read
+for whichever checkout you name. A Workflow that asks for
 Inputs has a field for each one, the instruction filling its goal, and **Start in Task**
 gives the Task its first Run on them there. It offers nothing that needs a Run, and once
 its Run starts it is an ordinary card.
