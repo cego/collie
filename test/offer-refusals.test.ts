@@ -153,6 +153,45 @@ test("a finished delivery offers Ship again once the Ship it started has failed"
     MODULES,
   ));
 
+test("a Ship that was stopped is not still going, so the work's offer is available again", () =>
+  proves(
+    "collie-offer-stopped-",
+    (world) =>
+      Effect.gen(function* () {
+        const client = yield* connect(world.state);
+        const runId = yield* delivered(client, world, "req-stop");
+        yield* settled(client, runId, "complete");
+        const first = yield* client.invoke({
+          runId,
+          offer: "ship",
+          input: {},
+          request: "ship-stop-1",
+        });
+        yield* settled(client, first.runId, "suspended");
+        const going = `a Ship of ${MR} is still going: ${first.runId}`;
+        expect(yield* unavailable(client, runId)).toContainEqual(["ship", going]);
+
+        const stopped = yield* client.control({
+          runId: first.runId,
+          control: "stop",
+          set: true,
+          request: "ship-stop-control",
+        });
+        expect(stopped.applied).toBe(true);
+
+        expect(yield* unavailable(client, runId)).toContainEqual(["ship", null]);
+        const again = yield* client.invoke({
+          runId,
+          offer: "ship",
+          input: {},
+          request: "ship-stop-2",
+        });
+        expect((yield* client.run({ runId: again.runId }))?.parent).toBe(runId);
+        expect(again.fresh).toBe(true);
+      }),
+    MODULES,
+  ));
+
 test("a Ship started from one carrier of a merge request refuses it on another through every door, across a restart", () =>
   proves(
     "collie-offer-carriers-",
