@@ -541,7 +541,7 @@ export const serveFakeHc = Effect.fn("FakeHc.serve")(function* (
         }
         case "terminal.read": {
           const found = find(params);
-          return found ? { result: { text: "", complete: true, how: "screen" } } : notFound(params);
+          return found ? { result: { text: found.screen, complete: true } } : notFound(params);
         }
         case "events.subscribe":
           return {

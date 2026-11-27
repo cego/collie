@@ -341,7 +341,7 @@ export interface CompactionDeps {
   ports: CompactionPorts;
   stateDir: string;
   configured: number;
-  herdr: Pick<Herdr, "agentList">;
+  herdr: Pick<Herdr, "agentList"> & Partial<Pick<Herdr, "paneText">>;
   log: (line: string) => Effect.Effect<void, PortError, PortServices>;
   warn: (line: string) => Effect.Effect<void, PortError, PortServices>;
   sample?: (
@@ -780,7 +780,16 @@ export const awaitReady = Effect.fn("Compaction.awaitReady")(function* (
     gone ? `${record.harness} exited before it was up` : fallback;
   // WARNING: core lists a terminal only while it runs, so one of ours that is absent has exited.
   if (asked._tag === "Gone") {
-    return (yield* saidOf()) ?? `${record.harness} exited before it was up`;
+    // WARNING: a harness that refuses before its first hook prints its reason on the pane, which no event holds.
+    const read = deps.herdr.paneText;
+    const printed =
+      read === undefined
+        ? null
+        : yield* read(agent).pipe(
+            Effect.map(refusalOn),
+            Effect.orElseSucceed(() => null),
+          );
+    return (yield* saidOf()) ?? printed ?? `${record.harness} exited before it was up`;
   }
   if (asked._tag === "Up") {
     return null;
@@ -790,6 +799,15 @@ export const awaitReady = Effect.fn("Compaction.awaitReady")(function* (
     ? lost(`${record.harness} gave no sign it was up within ${Math.round(budgetMs / 1000)}s`)
     : why;
 });
+
+const NO_CONVERSATION = /no conversation found/i;
+
+const refusalOn = (screen: string) => {
+  const line = Option.getOrUndefined(
+    Arr.findFirst(Str.split(screen, "\n"), (one) => NO_CONVERSATION.test(one)),
+  );
+  return line === undefined ? null : Str.trim(line);
+};
 
 // WARNING: best-effort; an agent this Session cannot see is not necessarily gone, so only the ones herdr does not list are put down.
 const putDownStaleControls = Effect.fn("Compaction.putDownStaleControls")(function* (

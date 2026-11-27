@@ -28,7 +28,7 @@ import {
   turnTaken,
   VERIFIED_VERSIONS,
 } from "../src/compactors";
-import { pollCompaction, readControl } from "../src/compaction";
+import { awaitReady, pollCompaction, readControl } from "../src/compaction";
 import type { CompactionDeps } from "../src/compaction";
 
 let rig: Rig;
@@ -1263,6 +1263,39 @@ test("a boundary another session wrote into the same transcript settles nothing"
       });
       expect(due).toBeNull();
       expect(left).not.toBeNull();
+    }),
+  ));
+
+test("a launch that refused on its pane, with no hook to say so, is read as that launch's exit", () =>
+  withLaunch(
+    Effect.gen(function* () {
+      const control = `${rig.stateDir}/compaction/build-r1`;
+      yield* fs.makeDirectory(control, { recursive: true });
+      yield* fs.writeFileString(
+        `${control}/control.json`,
+        asJson({
+          agent: "build-r1",
+          harness: "claude",
+          cwd: rig.projectDir,
+          dir: control,
+          attempt: null,
+        }),
+      );
+      const deps: CompactionDeps = {
+        ports: COMPACTION_PORTS,
+        stateDir: rig.stateDir,
+        configured: 1000,
+        herdr: {
+          agentList: () => Effect.succeed([]),
+          paneText: () => Effect.succeed("Error: No conversation found with session ID: s-1"),
+        },
+        log: () => Effect.void,
+        warn: () => Effect.void,
+        waitMs: 0,
+        pollMs: 0,
+      };
+      const why = yield* awaitReady(deps, "build-r1", 0, { mustStayListed: true, launch: "l-1" });
+      expect(why).toContain("No conversation found with session ID: s-1");
     }),
   ));
 

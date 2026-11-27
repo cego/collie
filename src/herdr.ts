@@ -277,6 +277,15 @@ export class Herdr {
     return returned;
   }
 
+  paneText(name: string) {
+    const returned: HerdrEffect<string> = this.onCore((socket) =>
+      coreCall(socket, "terminal.read", { terminal: name, lines: 80 }).pipe(
+        Effect.map((read) => read.text),
+      ),
+    );
+    return returned;
+  }
+
   machineList() {
     const ask = (within: Duration.Duration) =>
       this.onCore((socket) =>
