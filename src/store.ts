@@ -29,7 +29,7 @@ import {
   importRunRecords,
 } from "./records-import";
 import { StoreWrites } from "./store-writes";
-import { asJsonText, canonical } from "./canonical";
+import { asJsonText } from "./canonical";
 import { RUN_RECORDS_MIGRATION } from "./run-records";
 import { importMrStates } from "./merge-requests";
 import { RequestConflict, RunReport } from "./board-model";
