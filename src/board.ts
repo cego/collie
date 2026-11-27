@@ -15,7 +15,8 @@ import * as Str from "effect/String";
 import { pipe } from "effect/Function";
 import * as Rec from "effect/Record";
 import { Clock, Context, Effect, FileSystem, Option, Result, Schema, flow } from "effect";
-import { lastAudit } from "./audit";
+import { lastAudit, readAudit } from "./audit";
+import { resumesIn } from "./outcomes";
 import { planDirOf } from "./run-detail";
 import { readAhead, RunRecords } from "./run-records";
 import type { RunRecordsApi } from "./run-records";
@@ -997,6 +998,34 @@ function mrsOf(
   );
 }
 
+const revivedOf = Effect.fn("Board.revivedOf")(function* (
+  runs: ReadonlyArray<RunFacts>,
+  watching: ReadonlySet<string>,
+) {
+  const revived: Array<string> = [];
+  for (const run of runs) {
+    if (!watching.has(run.id) || run.held || run.state === "stopped") {
+      continue;
+    }
+    const resumed = Arr.map(
+      resumesIn(yield* readAudit(run.dir).pipe(Effect.orElseSucceed(() => []))),
+      (one) => epochMs(one.at),
+    ).sort((a, b) => a - b);
+    const last = resumed.at(-1);
+    if (last === undefined) {
+      continue;
+    }
+    const abandoned = Arr.filter(
+      yield* readDispositions(run.dir).pipe(Effect.orElseSucceed(() => [])),
+      (line) => line.kind === "abandoned",
+    );
+    if (abandoned.length > 0 && last > epochMs(abandoned.at(-1)!.at)) {
+      revived.push(run.id);
+    }
+  }
+  return revived;
+});
+
 export const ownedMrs = Effect.fn("Board.ownedMrs")(function* (runs: ReadonlyArray<RunFacts>) {
   const carried = yield* Effect.forEach(newestFirst(runs), (run) =>
     Effect.map(mrIdOf(run), (id) => ({ run, id, mr: mrOf(run) })),
@@ -1209,6 +1238,7 @@ interface BoardOptions {
   includeHistory?: boolean;
   flows?: Map<string, Flow>;
   head?: (run: RunFacts) => Effect.Effect<string | null>;
+  watching?: Effect.Effect<ReadonlySet<string>>;
   cards?: KeptCards;
   // WARNING: absent where nothing can prove a check live; an empty set is a host collecting none.
   collecting?: ReadonlySet<string>;
@@ -1234,6 +1264,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
     ),
   );
   const forge = opts.forge ?? (yield* readForge(stateDir));
+  const watching = opts.watching === undefined ? new Set<string>() : yield* opts.watching;
   const since = yield* seenSince(stateDir);
   const live = new Map(Arr.map(opts.alive ?? [], (agent) => [agent.name, agent]));
   const settledIds = new Set(Arr.flatMap(all, (run) => (ended(run) ? [run.id] : [])));
@@ -1327,6 +1358,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           const mr = mrOf(run);
           carried.push({ run, id: mr === null ? null : yield* mrIdOf(run), mr });
         }
+        const revived = yield* revivedOf(everyRun, watching);
         const read = Arr.flatMap(everyRun, (run) => [
           run.id,
           ...(run.parent === null ? [] : [run.parent]),
@@ -1356,6 +1388,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                   markers.get(run.id) ?? null,
                   checked.has(run.id),
                 ]),
+                revived,
                 tasks.get(runs[0]!.task ?? "") ?? null,
                 agentsOf(everyRun, registered, live, fallbacks),
                 pending,
@@ -1505,6 +1538,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
               runs: Arr.map(entry.runs, (run) => run.id),
               forge: forgeReads(state),
               read: read === undefined ? null : epochMs(read),
+              revived,
             },
             recorded,
             leader.id,
@@ -1547,7 +1581,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           branches.set(key, runs);
         }
         const unnamed = Arr.map([...branches.values()], (runs) =>
-          settlementOf({ id: null, runs, forge: null, read: null }, recorded, leader.id),
+          settlementOf({ id: null, runs, forge: null, read: null, revived }, recorded, leader.id),
         );
         const settlements = [...Arr.map(fates, (one) => one.settlement), ...unnamed];
         const owing =

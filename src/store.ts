@@ -275,6 +275,8 @@ export interface StoreApi {
     readonly cursor: WatchCursor;
   }) => Effect.Effect<void>;
   readonly watches: (mrs: ReadonlyArray<string>) => Effect.Effect<ReadonlyArray<WatchRow>>;
+  readonly outstanding: Effect.Effect<ReadonlyArray<WatchRow>>;
+  readonly waitingOn: (run: string, name: string) => Effect.Effect<boolean>;
   readonly observe: (run: string, name: string, observed: Observed) => Effect.Effect<void>;
   readonly wake: (run: string, name: string, woke: Woke) => Effect.Effect<boolean>;
   readonly unwatch: (run: string, name?: string) => Effect.Effect<boolean>;
@@ -1227,6 +1229,24 @@ function makeStore(stateDir: string | undefined) {
               Effect.flatMap(Effect.forEach(watchRowOf)),
               Effect.orDie,
             ),
+      outstanding: sql<{
+        readonly run: string;
+        readonly mr: string;
+        readonly name: string;
+        readonly cursor: string;
+        readonly observed: string | null;
+        readonly woke: string | null;
+      }>`SELECT * FROM collie_watches`.pipe(
+        Effect.flatMap(Effect.forEach(watchRowOf)),
+        Effect.orDie,
+      ),
+      waitingOn: (run, name) =>
+        sql<{ readonly run: string }>`
+          SELECT run FROM collie_watches WHERE run = ${run} AND name = ${name}
+        `.pipe(
+          Effect.map((rows) => rows.length > 0),
+          Effect.orDie,
+        ),
       observe: (run, name, observed) =>
         sql`UPDATE collie_watches SET observed = ${observedText(observed)} WHERE run = ${run} AND name = ${name}`.pipe(
           Effect.asVoid,

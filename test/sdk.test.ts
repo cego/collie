@@ -481,6 +481,28 @@ test("Markdown is content: front matter is refused, and a section it lacks is ne
   ).toContain("Build {{inputs.plan}}.");
 });
 
+test("every host method a shipped workflow calls is declared for a fork to type-check against", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const modules = Arr.filter(yield* fs.readDirectory("workflows"), (one) =>
+        Str.endsWith(".workflow.ts")(one),
+      );
+      const undeclared: Array<string> = [];
+      for (const module of modules) {
+        const text = yield* fs.readFileString(`workflows/${module}`);
+        for (const match of pipe(text, Str.matchAll(/host\.([A-Za-z]+)\(/g))) {
+          const name = match[1] ?? "";
+          if (name === "" || Str.includes(`readonly ${name}:`)(SDK_DECLARATIONS)) {
+            continue;
+          }
+          undeclared.push(`${module}: ${name}`);
+        }
+      }
+      expect(undeclared).toEqual([]);
+    }),
+  ));
+
 test("every name a shipped workflow imports from collie is declared for a fork to type-check against", () =>
   runEffect(
     Effect.gen(function* () {

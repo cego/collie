@@ -52,7 +52,6 @@ import {
   checkedBeforeReview,
   HEAD_MOVED,
   followUp,
-  MR_ENDED,
   IMPLEMENTER,
   NO_MR,
   REVIEWER,
@@ -315,6 +314,34 @@ export default defineWorkflow({
             });
       const fact = (name: string, line: string) =>
         Activity.make({ name, execute: host.record(run.id, line) });
+      const began = (round: number) =>
+        Activity.make({
+          name: `follow-begin-${round}`,
+          error: WorkflowError,
+          execute: host.startedRound({
+            runId: run.id,
+            target: asked.target,
+            name: `follow-${round}`,
+            head,
+          }),
+        });
+      const ended = (round: number) =>
+        Activity.make({
+          name: `follow-end-${round}`,
+          error: WorkflowError,
+          execute: host.completedRound({ runId: run.id, target: asked.target }),
+        });
+      const discarded = (round: number) =>
+        Activity.make({
+          name: `follow-discarded-${round}`,
+          error: WorkflowError,
+          execute: host.discardedRound({
+            runId: run.id,
+            target: asked.target,
+            cwd: place.cwd,
+            head,
+          }),
+        });
       const roundAt = (
         round: number,
         changes: string,
@@ -480,7 +507,10 @@ export default defineWorkflow({
             forcePush || reviewedAt === "" ? Effect.succeed("") : changesAt(at, reviewedAt);
           if (round > 1 && !(yield* following(round))) {
             yield* fact(`follow-off-${round}`, `${FOLLOW} is off: back to asking what next`);
-            const review = yield* roundAt(round, yield* changes(round), false);
+            const changesNow = yield* changes(round);
+            yield* began(round);
+            const review = yield* roundAt(round, changesNow, false);
+            yield* ended(round);
             return { menu: review ?? last, at: round };
           }
           yield* slackAt(round, "started", ["eyes"]);
@@ -583,16 +613,23 @@ export default defineWorkflow({
                 reason: `no checkout of ${label} at ${head}: ${pinned.refused}`,
               });
             }
+            const reused = commentsOnly && affected.length === 0;
+            const ran = !("moved" in pinned) && !reused;
+            const changesNow =
+              "moved" in pinned || commentsOnly
+                ? ""
+                : `${yield* changes(round)}${attached.length === 0 ? "" : `\n\n${formatReplies(attached)}`}`;
+            if (ran) {
+              yield* began(round);
+            }
             const reviewed: SynthesisReport | null =
               "moved" in pinned
                 ? null
-                : commentsOnly && affected.length === 0
+                : reused
                   ? last
                   : yield* roundAt(
                       round,
-                      commentsOnly
-                        ? ""
-                        : `${yield* changes(round)}${attached.length === 0 ? "" : `\n\n${formatReplies(attached)}`}`,
+                      changesNow,
                       true,
                       commentsOnly ? { findings: affected, replies: attached } : undefined,
                     );
@@ -603,7 +640,14 @@ export default defineWorkflow({
                 Effect.asVoid,
               ),
             });
+            if (ran) {
+              yield* ended(round);
+            }
             if (reviewed === null) {
+              // WARNING: a moved pin journals its own discard, from the observation that moved it.
+              if (!("moved" in pinned)) {
+                yield* discarded(round);
+              }
               yield* fact(
                 `follow-moved-${round}`,
                 `the head of ${label} moved while reviewing ${head}; nothing posted, the findings carry to the next round`,
@@ -673,18 +717,7 @@ export default defineWorkflow({
         }
       });
 
-      const followed =
-        !improving && (yield* following(1))
-          ? yield* followThrough.pipe(
-              Effect.catchIf(
-                (failure) => Str.startsWith(MR_ENDED)(failure.reason),
-                (failure) =>
-                  Effect.succeed({
-                    done: `${mrLabel(asked.target)} was ${Str.slice(MR_ENDED.length)(failure.reason)}`,
-                  }),
-              ),
-            )
-          : null;
+      const followed = !improving && (yield* following(1)) ? yield* followThrough : null;
       if (followed?.done !== undefined) {
         return followed.done;
       }

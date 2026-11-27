@@ -181,6 +181,12 @@ export const reviewPass = (ask: ReviewAsk) =>
     const { id } = yield* Run;
     const host = yield* Host;
     const { dir, cwd } = yield* host.place(id);
+    const completed = Activity.make({
+      name: `${ask.prefix ?? ""}review-completed-${ask.at}`,
+      success: Schema.Void,
+      error: WorkflowError,
+      execute: host.completedRound({ runId: id, target: ask.target }),
+    });
     const confirmHead = Effect.gen(function* () {
       if (ask.head) {
         yield* Activity.make({
@@ -206,6 +212,7 @@ export const reviewPass = (ask: ReviewAsk) =>
       Effect.gen(function* () {
         if (ask.ledger === undefined) {
           yield* leaveReview(dir, report);
+          yield* completed;
           yield* confirmHead;
           yield* recordReview(report);
           return report;
@@ -247,6 +254,7 @@ export const reviewPass = (ask: ReviewAsk) =>
         yield* (yield* FileSystem.FileSystem)
           .writeFileString(`${dir}/review-head`, ask.head ?? "")
           .pipe(Effect.orDie);
+        yield* completed;
         yield* confirmHead;
         yield* recordReview(recorded);
         return recorded;
