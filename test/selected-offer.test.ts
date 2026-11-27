@@ -726,18 +726,28 @@ test("an offer child admitted before the fingerprint existed still answers its r
           });
         const child = yield* asked().pipe(Effect.orDie);
         const db = new Database(`${world.state}/host.db`);
-        const row = yield* Schema.decodeUnknownEffect(Schema.Struct({ placing: Schema.String }))(
-          db.query("SELECT placing FROM collie_runs WHERE run = ?").get(child.runId),
-        ).pipe(Effect.orDie);
-        const placing = parseJson(Schema.Record(Schema.String, Schema.Json), row.placing);
-        const legacy = Rec.filter(
-          placing,
-          (_, key) => !["direct", "child", "took", "invoked", "by"].includes(key),
-        );
-        db.run("UPDATE collie_runs SET placing = ? WHERE run = ?", [
-          stringifyJson(legacy),
-          child.runId,
-        ]);
+        // WARNING: the host holds this database as well, so the fixture waits for its turn and reads the row it overwrites.
+        db.exec("PRAGMA busy_timeout = 10000");
+        const Placing = Schema.Struct({ placing: Schema.String });
+        const demote = db.transaction((runId: string) => {
+          const found = Option.getOrUndefined(
+            Schema.decodeUnknownOption(Placing)(
+              db.query("SELECT placing FROM collie_runs WHERE run = ?").get(runId),
+            ),
+          );
+          if (found === undefined) {
+            throw new Error(`${runId} is not in collie_runs`);
+          }
+          const legacy = Rec.filter(
+            parseJson(Schema.Record(Schema.String, Schema.Json), found.placing),
+            (_, key) => !["direct", "child", "took", "invoked", "by"].includes(key),
+          );
+          db.run("UPDATE collie_runs SET placing = ? WHERE run = ?", [
+            stringifyJson(legacy),
+            runId,
+          ]);
+        });
+        demote.immediate(child.runId);
         db.close();
         const again = yield* asked().pipe(Effect.orDie);
         expect(again.runId).toBe(child.runId);
