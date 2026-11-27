@@ -7719,6 +7719,92 @@ test("a Delivery a human reconciled as not sent is sent again", () =>
     }),
   ));
 
+test("a queued Delivery a human reconciled as sent is not sent to the agent that replaced it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const outcome = yield* session(
+        Effect.gen(function* () {
+          core.refuse("terminal.send", "unreachable", "the core did not answer");
+          yield* say("r1", "stay in src", "steer-1");
+          core.restore("terminal.send");
+          const lost = Option.getOrThrow(
+            Arr.head(
+              Arr.filter(
+                yield* deliveredTo(dir, "r1"),
+                (one) => one.cause.kind === "steer" && one.state === "unknown",
+              ),
+            ),
+          );
+          yield* keepQueued(`${dir}/agents/r1`, {
+            runId: "r1",
+            request: "steer-1",
+            text: "stay in src",
+            result: null,
+          });
+          yield* rig.dropAgent(lost.agent);
+          const replacement = yield* rig.addAgent(`${lost.agent}-again`, rig.projectDir, {
+            run: "r1",
+          });
+          const first = yield* launchedAt(dir, "r1", "review");
+          yield* recordLaunch({
+            ...first,
+            agent: `${lost.agent}-again`,
+            terminalId: replacement,
+            at: (first.at ?? 0) + 1,
+          }).pipe(Effect.provide(recordsAt(dir)));
+          yield* registerAgent(scopeFor(rig.projectDir), {
+            role: "implementer",
+            agent: `${lost.agent}-again`,
+            paneId: replacement,
+            workspaceId: null,
+            runId: "r1",
+            workflow: first.workflow,
+            at: "2026-09-09T09:00:00Z",
+            incarnation: { terminalId: replacement, agentSession: null, backend: "core" },
+          }).pipe(Effect.provide(recordsAt(dir)));
+          const sends = Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.send");
+          const listed = Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.list");
+          const release = core.hold("terminal.list");
+          const ticking = yield* Effect.forkChild(tendIdle);
+          yield* until(
+            Effect.map(
+              rig.calls(),
+              (calls) =>
+                Arr.filter(calls, (call) => call.cmd === "terminal.list").length > listed.length,
+            ),
+          );
+          const settled = reconcile(
+            yield* ledgerOf(dir, lost.incarnation),
+            lost.id,
+            "sent",
+            "tester",
+            "t",
+          );
+          if ("error" in settled) {
+            throw new Error(settled.error);
+          }
+          yield* appendLine(settled).pipe(Effect.provide(recordsAt(dir)));
+          release();
+          yield* Fiber.join(ticking);
+          return {
+            lost,
+            sent: Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.send"),
+            before: sends.length,
+            queued: yield* readQueue(`${dir}/agents/r1`),
+          };
+        }),
+      );
+      expect(outcome.sent.length).toBe(outcome.before);
+      expect(outcome.queued[0]?.result).toMatchObject({
+        delivered: true,
+        delivery: outcome.lost.id,
+        observed: false,
+      });
+    }),
+  ));
+
 const collieCheckRunning = (ends: "exits" | "crashes") =>
   Effect.gen(function* () {
     const go = `${rig.root}/go`;
