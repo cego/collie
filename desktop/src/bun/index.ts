@@ -127,9 +127,12 @@ import {
   forgetMachine,
   localRoute,
   linkRoute,
+  openedOnce,
   pairedMachines,
   remoteRoute,
+  rosterFollowed,
   rosterOf,
+  staleRouted,
   syncNow,
 } from "./machine";
 import type { Doors, HerdrMachine, ShellRoute, RouteChange } from "./machine";
@@ -398,32 +401,15 @@ const main = Effect.gen(function* () {
   );
   // WARNING: an older Desktop that was killed left its own SSH masters behind.
   yield* sweepSshControls(tmpdir(), childEnv()).pipe(Effect.ignore);
-  const listed = yield* rosterOf(collie).pipe(
-    Effect.map((said) => said.roster),
-    Effect.result,
-  );
-  const now = yield* Clock.currentTimeMillis;
-  const [enabled, unlisted] = Result.match(listed, {
-    onSuccess: (machines) => [machines, []] as const,
-    onFailure: (reason) => {
-      const returned: readonly [[], Array<FlockItem>] = [
-        [],
-        [
-          {
-            _tag: "Lost",
-            machine: { profile: "core", name: "core's machines" },
-            state: "unreachable",
-            reason,
-            at: now,
-          },
-        ],
-      ];
-      return returned;
-    },
-  });
+  const changes = yield* PubSub.unbounded<RouteChange>();
+  const news = yield* PubSub.unbounded<FlockItem>();
   const routes = new Map<string, { route: ShellRoute; scope?: Scope.Closeable }>();
   routes.set("local", { route: localRoute(collie, local, shell) });
-  const open = (machine: HerdrMachine) =>
+  // WARNING: a Machine a human removed is not routed again from a list read before the removal.
+  const dropped = new Set<string>();
+  const opening = new Map<string, Deferred.Deferred<ShellRoute>>();
+  const once = openedOnce(opening);
+  const openRoute = (machine: HerdrMachine) =>
     Effect.gen(function* () {
       const scope = yield* Scope.make();
       const peer = Option.getOrUndefined(
@@ -445,10 +431,22 @@ const main = Effect.gen(function* () {
         childEnv(),
         peer !== undefined,
       );
+      // WARNING: a removal can land while the pairing read is out, so a removed Machine is not routed again.
+      if (dropped.has(machine.id)) {
+        yield* Scope.close(scope, Exit.void);
+        return route;
+      }
       routes.set(route.machine.profile, { route, scope });
+      yield* PubSub.publish(changes, { _tag: "Add", route });
       return route;
     });
-  yield* Effect.forEach(enabled, open, { discard: true });
+  const open = (machine: HerdrMachine) =>
+    once(
+      machine.id,
+      () => routes.get(machine.id)?.route,
+      () => openRoute(machine),
+    );
+  const roster = rosterOf(collie).pipe(Effect.map((said) => said.roster));
   yield* Effect.addFinalizer(() =>
     Effect.forEach(
       routes.values(),
@@ -458,8 +456,16 @@ const main = Effect.gen(function* () {
       },
     ),
   );
-  const changes = yield* PubSub.unbounded<RouteChange>();
-  const news = yield* PubSub.unbounded<FlockItem>();
+  // WARNING: core may start after Desktop, so the roster is followed from the start rather than read once.
+  yield* rosterFollowed(
+    roster,
+    Effect.sync(() => ({ profiles: [...routes.keys()], dropped: [...dropped] })),
+    pairedMachines(collie).pipe(Effect.map((pairs) => Arr.map(pairs, (one) => one.name))),
+    open,
+  ).pipe(
+    Stream.runForEach((item) => PubSub.publish(news, item)),
+    Effect.forkScoped,
+  );
   const links = new Map<string, MachineLinked>();
   const asListed = flow(Schema.encodeResult(Schema.fromJsonString(PeerView)), Result.getOrThrow);
   yield* pairedMachines(collie).pipe(
@@ -719,9 +725,10 @@ const main = Effect.gen(function* () {
   };
   const addToCoreAs = (job: string, target: string, label: string) =>
     Effect.gen(function* () {
+      // WARNING: adding a Machine removed earlier in this run is asking for it back.
+      dropped.delete(label);
       const route = yield* open({ id: label, label, target, session: "default", enabled: true });
       yield* PubSub.publish(news, { _tag: "Routed", machine: route.machine });
-      yield* PubSub.publish(changes, { _tag: "Add", route });
       yield* Fiber.join(yield* onboardAs(job, route, NOT_STARTED, [], undefined, target));
     });
 
@@ -782,6 +789,8 @@ const main = Effect.gen(function* () {
 
   let shown = EMPTY_FLOCK;
   const routedAt = new Map<string, number>();
+  const notRouted = (profile: string, otherwise: string) =>
+    new ActionFailed({ reason: shown.lost.get(profile)?.reason ?? otherwise });
   const holds = Effect.map(given.held, (texts) => ({
     version: manifest.version,
     credentials: Arr.filter(CREDENTIALS, (one) => texts[one] !== undefined && texts[one] !== ""),
@@ -793,7 +802,7 @@ const main = Effect.gen(function* () {
         Arr.findFirst(machineRows(shown), (one) => one.profile === profile),
       );
       if (route === undefined || row === undefined) {
-        return yield* new ActionFailed({ reason: "that Machine is not in herdr's list" });
+        return yield* notRouted(profile, "that Machine is not in herdr's list");
       }
       const { behind } = inSync(row, yield* holds);
       const door = Option.getOrUndefined(
@@ -1040,7 +1049,6 @@ const main = Effect.gen(function* () {
             Stream.concat(
               Stream.mergeAll(
                 [
-                  Stream.fromIterable(unlisted),
                   flockStream(
                     reachable,
                     doors,
@@ -1049,7 +1057,9 @@ const main = Effect.gen(function* () {
                     Utils.showNotification,
                     readDoors,
                   ).pipe(Stream.tap(doctorOnceLive), Stream.tap(syncOnceLive)),
-                  Stream.fromSubscription(told),
+                  Stream.fromSubscription(told).pipe(
+                    Stream.filter((item) => !staleRouted(item, (profile) => dropped.has(profile))),
+                  ),
                 ],
                 { concurrency: "unbounded" },
               ),
@@ -1080,7 +1090,7 @@ const main = Effect.gen(function* () {
         }
         const route = routes.get(profile)?.route;
         if (route === undefined) {
-          return yield* new ActionFailed({ reason: "that Machine is not in herdr's list" });
+          return yield* notRouted(profile, "that Machine is not in herdr's list");
         }
         const job = yield* uuid;
         yield* onboardAs(job, route, NOT_STARTED, skip);
@@ -1196,7 +1206,7 @@ const main = Effect.gen(function* () {
       Effect.gen(function* () {
         const route = routes.get(profile)?.route;
         if (route === undefined) {
-          return yield* new ActionFailed({ reason: "that Machine is not in herdr's list" });
+          return yield* notRouted(profile, "that Machine is not in herdr's list");
         }
         const busy = onboarding.get(profile);
         if (busy !== undefined) {
@@ -1221,16 +1231,20 @@ const main = Effect.gen(function* () {
       }),
     removeMachine: ({ profile }) =>
       Effect.gen(function* () {
+        const starting = opening.get(profile);
+        if (starting !== undefined) {
+          yield* Deferred.await(starting);
+        }
         const known = routes.get(profile);
         if (known?.scope === undefined) {
-          return yield* new ActionFailed({
-            reason: "only a machine in core's list can be removed",
-          });
+          return yield* notRouted(profile, "only a machine in core's list can be removed");
         }
         yield* forgetMachine(collie, known.route.machine.name).pipe(
           Effect.mapError((reason) => new ActionFailed({ reason })),
         );
         const done = yield* Deferred.make<void>();
+        // WARNING: before the Remove is published, so a roster reply landing meanwhile cannot route it back.
+        dropped.add(profile);
         yield* PubSub.publish(changes, { _tag: "Remove", profile, done });
         yield* Deferred.await(done).pipe(Effect.timeoutOption("5 seconds"));
         routes.delete(profile);

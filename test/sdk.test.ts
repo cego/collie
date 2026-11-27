@@ -1,5 +1,7 @@
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import * as Rec from "effect/Record";
+import { pipe } from "effect/Function";
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
 import {
@@ -17,7 +19,7 @@ import {
 import type { FollowUp, WorkflowEntry, WorkflowMetadata } from "../src/sdk";
 import { REQUESTABLE, isOutcome } from "../src/outcome";
 import type { Outcome } from "../src/outcome";
-import { loadEntry } from "../src/engine";
+import { SDK_DECLARATIONS, loadEntry } from "../src/engine";
 import { runEffect } from "./support/effect";
 import { fixtures } from "./support/host";
 import { stopHost, until } from "./support/host";
@@ -478,3 +480,36 @@ test("Markdown is content: front matter is refused, and a section it lacks is ne
     content.template("build", { inputs: Schema.Struct({ plan: Schema.String }) }).text,
   ).toContain("Build {{inputs.plan}}.");
 });
+
+test("every name a shipped workflow imports from collie is declared for a fork to type-check against", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const modules = Arr.filter(yield* fs.readDirectory("workflows"), (one) =>
+        pipe(one, Str.endsWith(".workflow.ts")),
+      );
+      expect(modules.length).toBeGreaterThan(0);
+      const undeclared: Array<string> = [];
+      for (const module of modules) {
+        const text = yield* fs.readFileString(`workflows/${module}`);
+        for (const match of pipe(
+          text,
+          Str.matchAll(/import(?:\s+type)?\s*\{([^}]*)\}\s*from\s*"collie"/g),
+        )) {
+          for (const raw of Str.split(match[1] ?? "", ",")) {
+            const name = Str.trim(Str.split(Str.trim(raw), " as ")[0] ?? "");
+            if (name === "") {
+              continue;
+            }
+            const declared = new RegExp(
+              `export (?:const|function|class|type|interface|enum) ${name}\\b`,
+            ).test(SDK_DECLARATIONS);
+            if (!declared) {
+              undeclared.push(`${module}: ${name}`);
+            }
+          }
+        }
+      }
+      expect(undeclared).toEqual([]);
+    }),
+  ));

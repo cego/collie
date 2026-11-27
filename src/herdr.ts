@@ -1,7 +1,7 @@
 import * as Arr from "effect/Array";
 import type { PlatformServices } from "./platform";
 import type { Schema } from "effect";
-import { Data, Deferred, Effect, Option, Queue, Schedule, Stream } from "effect";
+import { Config, Data, Deferred, Duration, Effect, Option, Queue, Schedule, Stream } from "effect";
 import type { PluginEnv } from "./env";
 import { reason } from "./naming";
 import type { HerdrMachine } from "./peers-model";
@@ -86,6 +86,28 @@ const rosterEntry: (machine: HcMachine) => HerdrMachine = (machine) => ({
 });
 
 export const RUN_LABEL = "run";
+
+const ROSTER_WAIT = "5 seconds" as const;
+
+const rosterWait = Config.Duration("COLLIE_ROSTER_READ_WITHIN").pipe(
+  Config.withDefault(Duration.fromInputUnsafe(ROSTER_WAIT)),
+  // WARNING: a typed failure, not a defect, so a malformed deadline still answers with the paired list.
+  Effect.mapError(
+    () =>
+      new HerdrError({
+        message: "core machine.list has no deadline",
+        detail: "COLLIE_ROSTER_READ_WITHIN is not a duration",
+      }),
+  ),
+  Effect.filterOrFail(
+    (wait) => Duration.isFinite(wait) && Duration.toMillis(wait) > 0,
+    (wait) =>
+      new HerdrError({
+        message: "core machine.list has no deadline",
+        detail: `COLLIE_ROSTER_READ_WITHIN is ${Duration.format(wait)}, not a finite positive duration`,
+      }),
+  ),
+);
 
 const isAgentTerminal = (terminal: HcTerminal) =>
   terminal.state === "live" && Boolean(terminal.name) && terminal.labels[RUN_LABEL] !== undefined;
@@ -256,11 +278,23 @@ export class Herdr {
   }
 
   machineList() {
-    return this.onCore((socket) =>
-      coreCall(socket, "machine.list", {}).pipe(
-        Effect.map((listed) => Arr.map(listed.machines, rosterEntry)),
-      ),
-    );
+    const ask = (within: Duration.Duration) =>
+      this.onCore((socket) =>
+        coreCall(socket, "machine.list", {}).pipe(
+          Effect.timeoutOrElse({
+            duration: within,
+            orElse: () =>
+              Effect.fail(
+                new HerdrError({
+                  message: "core machine.list did not answer",
+                  detail: `no reply within ${Duration.format(within)}`,
+                }),
+              ),
+          }),
+          Effect.map((listed) => Arr.map(listed.machines, rosterEntry)),
+        ),
+      );
+    return Effect.flatMap(rosterWait, ask);
   }
 
   machineAdd(name: string, via: string) {

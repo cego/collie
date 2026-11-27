@@ -68,6 +68,18 @@ Then write your Output: one entry in `answers` per comment, by its id. `fixed` n
 `note` why nothing changed. Collie counts a fix only once the merge request's head carries its
 commit, and a comment you leave out goes to the next round.
 
+## checkout
+
+Collie needs the checkout of {{inputs.mr}} before it can prove anything, and it holds work that
+was never committed or pushed: {{findings}}
+
+Commit it and push it to the merge request's source branch with a plain
+`git push origin HEAD` — never a force push, and never a reset or a discard. Collie reads
+the checkout again once your turn ends, and parks the Release as `checkout-dirty-collie`
+if it is still dirty or still ahead of origin.
+
+Then write your Output: one line saying what you committed and pushed.
+
 ## fix
 
 Fix round {{iteration}} of at most {{max_iterations}}. Collie found these failures on

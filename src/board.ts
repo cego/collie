@@ -48,8 +48,8 @@ import {
 import type { CheckCommand, Verification } from "./verify";
 import { approvedFor, approvedIn } from "./verify-spec";
 import { readIntent } from "./intent";
-import { findingsIn, isBlocking } from "./output";
-import { markersOf, runningCheck } from "./checks";
+import { findingsIn, isBlocking, openFindingsIn } from "./output";
+import { marksCheck, markersOf, runningCheck } from "./checks";
 import { runningChecks } from "./check-processes";
 import { waitLine } from "./memory-wait";
 import { runWaits } from "./run-waits";
@@ -276,6 +276,7 @@ export interface Sentence {
   mrs?: ReadonlyArray<SaidMr> | undefined;
   summary: string | null;
   checks: Checks | null;
+  forge?: { readonly checks: ForgeChecks; readonly head: string | null } | null;
   readiness?: ReadyToRelease | null;
   agent: string | null;
   answered?: {
@@ -418,6 +419,7 @@ function openSentence(
   checks: Checks | null,
   agent: string | null,
   readiness: ReadyToRelease | null,
+  forge: Sentence["forge"] = null,
 ) {
   const label = mrLabel(mr);
   const ref = readMrRef(mr);
@@ -438,8 +440,15 @@ function openSentence(
       return `${label} is open, but ${seen.name} failed at ${short(seen.at)}. Next: fix ${seen.name}${handed}.`;
     case "running":
       return `${label} is open; ${running}.`;
-    case "unchecked":
+    case "unchecked": {
+      if (forge == null || forge.head === null || forge.checks.state === "unknown") {
+        return `${label} is open; its checks have not been read.`;
+      }
+      if (forge.checks.state === "passed") {
+        return `${label} is open; its checks passed at ${short(forge.head)}, but Collie has not checked it there.`;
+      }
       return `${label} is open; nothing has checked it.`;
+    }
   }
 }
 
@@ -453,6 +462,7 @@ function doneSentence(
   summary: string | null = null,
   readiness: ReadyToRelease | null = null,
   answered: Sentence["answered"] = null,
+  forge: Sentence["forge"] = null,
 ) {
   if (disposition === null) {
     if (planReady) {
@@ -472,7 +482,7 @@ function doneSentence(
       return `${Str.toUpperCase(noun[0]!)}${pipe(noun, Str.slice(1))} ${mrLabel(mr)} closed without merging.`;
     }
     if (answered == null) {
-      return openSentence(mr, checks, agent, readiness);
+      return openSentence(mr, checks, agent, readiness, forge);
     }
     if (answered.ago === null) {
       return `${mrLabel(mr)} has not been read.`;
@@ -539,7 +549,7 @@ export function sentenceFor(facts: Sentence) {
     facts.disposition === null &&
     facts.mr !== null
   ) {
-    return `${facts.state === "failed" ? failedSentence(facts) : facts.state === "stopped" ? "Stopped by you." : "Its Driver died."} ${doneSentence(null, facts.mr, facts.mrState, false, facts.checks, facts.agent, facts.summary, facts.readiness ?? null, facts.answered)}${answeredLine(facts.answered)}`;
+    return `${facts.state === "failed" ? failedSentence(facts) : facts.state === "stopped" ? "Stopped by you." : "Its Driver died."} ${doneSentence(null, facts.mr, facts.mrState, false, facts.checks, facts.agent, facts.summary, facts.readiness ?? null, facts.answered, facts.forge)}${answeredLine(facts.answered)}`;
   }
   if (facts.decision !== null) {
     return decisionSentence(facts.decision);
@@ -562,6 +572,7 @@ export function sentenceFor(facts: Sentence) {
               facts.summary,
               facts.readiness ?? null,
               facts.answered,
+              facts.forge,
             )
       }${answeredLine(facts.answered)}`;
     case "failed":
@@ -1031,12 +1042,16 @@ const ledgerOf = Effect.fn("Board.ledgerOf")(function* (
             return false;
           }
           const other = yield* mrIdOf(target);
-          return carried !== null && other !== null
-            ? carried === other
-            : other === null &&
-                run.branch !== null &&
-                run.branch === target.branch &&
-                run.project === target.project;
+          if (carried !== null && other !== null) {
+            return carried === other;
+          }
+          if (other === null) {
+            return (
+              run.branch !== null && run.branch === target.branch && run.project === target.project
+            );
+          }
+          // WARNING: `carried` is null for a branch-only Run and for one whose merge request has no id; mrOf tells them apart.
+          return mrOf(run) === null;
         }),
       );
       return {
@@ -1195,6 +1210,8 @@ interface BoardOptions {
   flows?: Map<string, Flow>;
   head?: (run: RunFacts) => Effect.Effect<string | null>;
   cards?: KeptCards;
+  // WARNING: absent where nothing can prove a check live; an empty set is a host collecting none.
+  collecting?: ReadonlySet<string>;
 }
 
 const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: RunRecordsApi) {
@@ -1219,8 +1236,22 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
   const forge = opts.forge ?? (yield* readForge(stateDir));
   const since = yield* seenSince(stateDir);
   const live = new Map(Arr.map(opts.alive ?? [], (agent) => [agent.name, agent]));
-  const records = yield* runningChecks;
-  const markers = yield* markersOf(records);
+  const settledIds = new Set(Arr.flatMap(all, (run) => (ended(run) ? [run.id] : [])));
+  const records = Arr.filter(
+    yield* runningChecks,
+    (record) =>
+      opts.collecting === undefined ||
+      !settledIds.has(record.run) ||
+      opts.collecting.has(record.id),
+  );
+  const markers = yield* markersOf(
+    records,
+    (run, marker) =>
+      opts.collecting === undefined ||
+      !settledIds.has(run) ||
+      marker.pass === "ci" ||
+      Arr.some(records, (record) => record.run === run && marksCheck(marker, record)),
+  );
   const checked = new Set(Arr.map(records, (record) => record.run));
   const offersOfRun =
     opts.offers ??
@@ -1301,6 +1332,21 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           ...(run.parent === null ? [] : [run.parent]),
           ...Arr.map(flowInputs.children.get(run.id) ?? [], (child) => child.id),
         ]);
+        // WARNING: a card reads the merge request of the Run its superseded line names, which is no Run of its own.
+        const handoffs = Effect.fnUntraced(function* () {
+          const refs = yield* Effect.forEach(everyRun, (run) =>
+            Effect.map(readDispositions(run.dir).pipe(Effect.orElseSucceed(() => [])), (lines) =>
+              Arr.flatMap(lines, (line) => refRuns(line.ref, machine)),
+            ),
+          );
+          const targets = Arr.flatMap(Arr.flatten(refs), (word) => {
+            const target = runsById.get(word);
+            return target === undefined ? [] : [target];
+          });
+          return yield* Effect.forEach(targets, (target) =>
+            Effect.map(mrIdOf(target), (id) => [target.id, id] as const),
+          );
+        });
         const inputs =
           cards === undefined
             ? []
@@ -1316,6 +1362,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                 Arr.flatMap(carried, ({ id }) =>
                   id === null ? [] : [[mrStates.get(id) ?? null, forge.get(id) ?? null]],
                 ),
+                yield* handoffs(),
                 since,
                 [...paired],
                 quietMs,
@@ -1721,7 +1768,16 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                 : Arr.filter(yield* findingsIn(merging.dir), (one) => isBlocking(one)).length,
             mergeable: forged?.mergeable ?? null,
           });
-          return { forged, head: verified?.head ?? forged?.head ?? null, checks, readiness };
+          return {
+            forged,
+            head: verified?.head ?? forged?.head ?? null,
+            checks,
+            forge:
+              verified === null || forged === null
+                ? null
+                : { checks: forged.checks, head: forged.head },
+            readiness,
+          };
         });
         const alone = yield* judged(
           mrIdent,
@@ -1751,6 +1807,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           : Arr.map(fates, (one) => ({ ...one, ...alone }));
         const forged = alone.forged;
         const checks = several ? each[0]!.checks : alone.checks;
+        const forgeSaid = several ? each[0]!.forge : alone.forge;
         const readiness: ReadyToRelease = several
           ? Option.match(
               Arr.findFirst(each, (one) => one.readiness.ready),
@@ -1990,6 +2047,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
                 mrState,
                 state: said,
                 checks,
+                forge: forgeSaid,
                 readiness,
                 summary: leader.summary,
                 agent:
