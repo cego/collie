@@ -196,11 +196,12 @@ import { Herdr, isSettled } from "./herdr";
 import type { AgentInfo } from "./herdr";
 import { taskOffers } from "./offers";
 import type { Offer } from "./offers";
-import { buildBoard, LANDED_STATES, ownedMrs, taskFlowOf } from "./board";
+import { buildBoard, ownedMrs, taskFlowOf } from "./board";
 import type { KeptCard, KeptCards } from "./board";
-import { mrOf, readForge, readMrStates, watchedMr } from "./merges";
+import { mrOf, readForge, watchedMr } from "./merges";
 import type { MrPanels } from "./merges";
 import { mrIdIn, projectHere, shell } from "./mr";
+import { takeUp } from "./take-up";
 import { ForgeHttp, forgeHttpLayer } from "./forge/http";
 import { fetchRef, followDetail } from "./run-detail";
 import { buildMachineOwn, buildRunDetail } from "./views";
@@ -2654,33 +2655,8 @@ const frontDoorHandlers = (
           }
           return yield* act(file, lines);
         }).pipe(plainly);
-      // WARNING: A Run stopped after its merge request landed stays stopped.
-      const takeUp = Effect.fn("Host.takeUp")(function* (
-        runId: string,
-        recoveryPark?: string,
-        healing?: string,
-      ) {
-        const view = yield* registry.view(runId);
-        const run = view === null ? null : factsOfView(env.stateDir, view);
-        const mr = run?.state === "stopped" ? mrOf(run) : null;
-        const state =
-          mr === null
-            ? undefined
-            : (yield* readMrStates(env.stateDir).pipe(Effect.orElseSucceed(() => new Map()))).get(
-                (yield* mrIdIn(mr, run!.cwd, shell)) ?? "",
-              );
-        if (state === undefined || !LANDED_STATES.has(state)) {
-          return yield* registry.resume(runId, recoveryPark, healing);
-        }
-        return {
-          runId,
-          control: STOP,
-          set: false,
-          left: [],
-          applied: false,
-          detail: `${runId} was stopped after its merge request merged; there is nothing left to resume`,
-        };
-      });
+      const takeUpRun = (runId: string, recoveryPark?: string, healing?: string) =>
+        takeUp({ registry, stateDir: env.stateDir }, runId, recoveryPark, healing);
       const progressFor = (runId: string) =>
         Effect.gen(function* () {
           const view = yield* registry.view(runId);
@@ -2724,7 +2700,7 @@ const frontDoorHandlers = (
                     detail: "Recovery waits for memory or its setting",
                   };
                 }
-                return yield* takeUp(view.runId, park);
+                return yield* takeUpRun(view.runId, park);
               }).pipe(Effect.mapError((cause) => new HostRefused({ reason: reason(cause) }))),
             ),
         }).pipe(Effect.provideContext(hosted)),
@@ -3014,7 +2990,9 @@ const frontDoorHandlers = (
             "resume",
             request,
             whoOf(client),
-          )(Effect.flatMap(parkHealedBy(client), (healing) => takeUp(runId, undefined, healing))),
+          )(
+            Effect.flatMap(parkHealedBy(client), (healing) => takeUpRun(runId, undefined, healing)),
+          ),
         offers: ({ runId }) => serve(offersOn(runId)),
         workflows: ({ project }) =>
           onSyncedRevisions(

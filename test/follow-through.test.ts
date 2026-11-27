@@ -14,6 +14,7 @@ import type { FakeMr, ForgeModel } from "./support/forge";
 import { fixtures } from "./support/host";
 import { ROOT, until, watching } from "./support/watching";
 import { HOLD, Registry, STOP, runDir } from "../src/engine";
+import { takeUp } from "../src/take-up";
 import { Host } from "../src/sdk";
 import { Store } from "../src/store";
 import { sectionOf } from "../src/board-model";
@@ -2625,7 +2626,8 @@ test("a shipped Review stopped, abandoned and resumed takes two pushes on the Ru
             ref: "",
             note: null,
           });
-          yield* registry.resume(runId);
+          const resumed = yield* takeUp({ registry, stateDir: host.dir() }, runId);
+          expect(resumed.applied).toBe(true);
           expect(yield* host.watchOf(runId, TARGET)).not.toBeNull();
 
           const second = yield* pushedOn(forge, first);
