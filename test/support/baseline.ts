@@ -12735,7 +12735,17 @@ scenario(
         const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
         const runId = "r-impl-delivery-minor";
         yield* approve(runId, ["unit"]);
-        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, DELIVERED_WITH_MINOR]);
+        yield* rig.queueOutputs([
+          BUILT,
+          CLEAN_SYNTHESIS,
+          {
+            ...DELIVERED_WITH_MINOR,
+            findings: [
+              ...MINOR_FINDINGS,
+              { severity: "minor", title: "the Run lacks local tooling", internal: true },
+            ],
+          },
+        ]);
         const result = yield* ran({
           entry: shipped("implement"),
           runId,
@@ -12746,11 +12756,13 @@ scenario(
         expect(yield* unsettledOf(runId)).toEqual([
           "unsettled: an approval is still needed",
           "unsettled: the pipeline is still running",
+          "unsettled: the Run lacks local tooling",
         ]);
         const [note, ...more] = yield* ciNotes(forge);
         expect(more).toEqual([]);
         expect(note).toContain("an approval is still needed");
         expect(note).toContain("the pipeline is still running");
+        expect(note).not.toContain("local tooling");
         const prompt = pipe(yield* asked(runId, "mr"), Str.replaceAll(/\s+/g, " "));
         for (const rule of [
           "`blocker` or `major` only where it leaves delivery undone",
@@ -12799,6 +12811,49 @@ scenario(
 );
 
 scenario(
+  "a delivery refused by the public text guard asks its agent for a fresh note on resume",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { bin, forge } = yield* deliveringOn("gitlab", OPEN_MR);
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const runId = "r-impl-delivery-public-text-refused";
+        yield* approve(runId, ["unit"]);
+        yield* rig.queueOutputs([
+          BUILT,
+          CLEAN_SYNTHESIS,
+          {
+            ...DELIVERED_WITH_MINOR,
+            findings: [{ severity: "minor", title: "the Run needs an approval" }],
+          },
+          DELIVERED_WITH_MINOR,
+        ]);
+        const status = yield* driven(
+          { entry: shipped("implement"), runId, input: { plan, ...FINISH } },
+          (run) =>
+            Effect.gen(function* () {
+              const [, why] = yield* until(
+                () => Effect.zip(run.status, parkedWhy(runId)),
+                ([got, why]) => got.status === "suspended" && why !== "",
+              );
+              expect(why).toContain("Reword the public finding");
+              expect(yield* parkedCause(runId)).toBe("step-failed");
+              expect(yield* ciNotes(forge)).toEqual([]);
+              yield* run.resume;
+              return yield* ended(run.status);
+            }),
+        );
+        yield* bin.restore();
+        expect(status.status).toBe("complete");
+        expect(yield* asked(runId, "mr-2")).toContain(CI_MR);
+        const [note, ...more] = yield* ciNotes(forge);
+        expect(more).toEqual([]);
+        expect(note).toContain("an approval is still needed");
+      }),
+    ),
+);
+
+scenario(
   "a delivery whose unsettled note GitLab refuses parks at Merge request, and a resume once it is repaired posts it once",
   () =>
     runEffect(
@@ -12818,6 +12873,7 @@ scenario(
                 ([got, why]) => got.status === "suspended" && why !== "",
               );
               expect(why).toContain("500");
+              expect(yield* parkedCause(runId)).toBe("forge-unavailable");
               expect(why).toEndWith(`resume ${runId}.`);
               const { refusesNote: _, ...repaired } = yield* forge.model();
               yield* forge.set(repaired);
@@ -18942,7 +18998,11 @@ for (const name of ["gitlab", "github"] as const) {
         );
         const model = yield* forge.model();
         yield* bin.restore();
-        expect(noted).toEqual({ ok: false, message: expect.stringContaining('"This Run"') });
+        expect(noted).toEqual({
+          ok: false,
+          message: expect.stringContaining('"This Run"'),
+          publicTextRefused: true,
+        });
         expect(replied.reason).toContain('"review-step"');
         expect(model.notes ?? {}).toEqual({});
         expect(repliesOf(model)).toEqual([]);

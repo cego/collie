@@ -1589,6 +1589,8 @@ export interface Posted {
   readonly signature?: string;
   /** The head the merge request is on now, where the note was refused because it had moved. */
   readonly superseded?: string;
+  /** The publication guard refused the text before asking the forge. */
+  readonly publicTextRefused?: boolean;
 }
 
 // oxlint-disable-next-line effecttsgo/lazy-effect -- Host serves the published HostApi.usage() method unchanged.
