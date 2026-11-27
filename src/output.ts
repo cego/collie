@@ -319,10 +319,10 @@ const numberIn = (run: string, id: string | undefined) => {
 const highest = (run: string, ids: ReadonlyArray<string | undefined>) =>
   Arr.reduce(ids, 0, (top, id) => Math.max(top, numberIn(run, id)));
 
+// WARNING: an agent's own id names nothing here, so a finding is the same one by its id or by what it says.
 export const isSameFinding = (earlier: Finding, finding: Finding) =>
-  finding.id === undefined
-    ? findingKey(earlier) === findingKey(finding)
-    : earlier.id === finding.id;
+  (finding.id !== undefined && earlier.id === finding.id) ||
+  findingKey(earlier) === findingKey(finding);
 
 const earlierOf = (earlier: ReadonlyArray<Finding>, finding: Finding) =>
   Option.getOrUndefined(Arr.findFirst(earlier, (one) => isSameFinding(one, finding)));

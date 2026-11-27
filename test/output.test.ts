@@ -7,6 +7,7 @@ import {
   formatFindings,
   leaveFindings,
   isBlocking,
+  isSameFinding,
   parseFixOutput,
   parseReviewOutput,
   parseSynthesis,
@@ -905,6 +906,20 @@ test("the same output left again under an agent's own id keeps the ids the first
       ]);
     }),
   ));
+
+test("a finding an agent names by its own id is the same one the ledger holds under the id Collie gave", () => {
+  const held: Finding = {
+    id: "r-held-F1",
+    severity: "major",
+    file: "src/a.ts",
+    title: "the guard",
+  };
+  expect(isSameFinding(held, { ...held, id: "F1" })).toBe(true);
+  expect(isSameFinding(held, { ...held, id: "r-held-F1" })).toBe(true);
+  expect(isSameFinding(held, { ...held, id: undefined })).toBe(true);
+  const other: Finding = { ...held, title: "the retry" };
+  expect(isSameFinding(held, { ...other, id: "F1" })).toBe(false);
+});
 
 test("a findings file written before ids reads them by position, and leaving it again keeps them", () =>
   runEffect(
