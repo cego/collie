@@ -301,7 +301,12 @@ not marked `internal` — a finding about Collie's own process, which the review
 what it shows — go onto the merge request as one note from Collie, and no note at all where
 every one of them is internal. A note the guard refuses parks the Run as `note-refused`,
 naming the findings it listed, with no Heal: only a person may reword a finding, and a resume
-asks the agent for a new turn rather than replaying the one refused. Nobody is asked along
+asks the agent for a new turn rather than replaying the one refused. A Run parked this way
+before that rule was in place — recorded as `forge-unavailable`, since a refusal then looked
+like a forge error — is not written off: its journal holds the refusal from its first
+attempt, so it takes two resumes — the first replays that refusal and records the attempt it
+belongs to, and the second starts a new turn, which writes the note without the findings
+marked `internal`, or writes none at all where every one of them is. Nobody is asked along
 the way: the human verifies the work in the merge request, before it lands. Where a failed check's
 output names the tests that failed (bun test's does), the gate reruns each of those tests
 once, alone, on the same tree. A test that then passes is a **Flake**: it is not handed to a
