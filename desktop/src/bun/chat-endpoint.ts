@@ -56,12 +56,10 @@ export const loopbackTools = Effect.fn("FlockTools.loopback")(function* (context
         port: 0,
         idleTimeout: 0,
         fetch: (request) => {
-          const { pathname } = new URL(request.url);
-          const signed = pathname === `/mcp/${token}`;
-          if (!signed && request.headers.get("Authorization") !== `Bearer ${token}`) {
+          if (request.headers.get("Authorization") !== `Bearer ${token}`) {
             return new Response("Unauthorized", { status: 401 });
           }
-          if (!signed && pathname !== "/mcp") {
+          if (new URL(request.url).pathname !== "/mcp") {
             return new Response("Not found", { status: 404 });
           }
           const mcp = toolServer(context.flock, context.run, ask);

@@ -411,6 +411,9 @@ export const codexConnections: (
         broken.length === 0
           ? ""
           : `Codex did not connect ${Arr.join(broken, ", ")}: \`codex mcp list\` shows what Codex says of it.`,
+        servers.token === ""
+          ? "Collie's own tools are not in this chat: it could not read Codex's configuration, so no variable name could be shown to be free and the token was not put anywhere it could be read."
+          : "",
         servers.left.length === 0
           ? ""
           : `Left out: ${Arr.join(

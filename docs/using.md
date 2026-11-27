@@ -2404,9 +2404,9 @@ an allowlist you wrote with a wildcard keeps narrowing. Your table is yours: Col
 swaps one of its own names for a key of yours, so an allowlist that admits Collie's token or
 a relay's takes another name for it and your include stays exactly as written. A name your
 environment already sets, or one a Codex server of your own reads by name, is saved the
-same way. When Collie cannot read your Codex configuration at all it names no variable:
-Desktop's own server is reached by an address carrying its secret instead, so nothing of
-yours is replaced and your shell policy is passed on exactly as written. A `${VAR}` a
+same way. When Collie cannot read your Codex configuration at all, it passes no secret to
+Codex in any form — so no name of yours is replaced and your shell policy is passed on
+exactly as written — and the chat says that Collie's own tools are not in it. A `${VAR}` a
 header or a value is written with is resolved by Desktop, and the variable itself is then
 taken out of Codex's own environment, so neither Codex nor its shell holds it. The
 exception is a variable Codex's own servers read by name (`bearer_token_env_var`,

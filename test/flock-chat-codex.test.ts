@@ -2007,7 +2007,7 @@ test("Codex's own report decides which servers it has, not Collie's reading of i
   ).finally(() => void mine.stop());
 });
 
-test("A discovery that fails carries Collie's token in the address, and no name at all", () => {
+test("A discovery that fails leaves Collie's tools out rather than pass the token anywhere", () => {
   const mine = serveDocs({ tool: "user_read" });
   Bun.env.COLLIE_CHAT_MCP_TOKEN = "native-token";
   return withServers({ docs: { type: "http", url: mine.url } }, (driver, context) =>
@@ -2020,24 +2020,18 @@ test("A discovery that fails carries Collie's token in the address, and no name 
       const details = inspected(yield* turn(session));
       const given = Arr.join(details.args, " ");
       expect(given).not.toContain("mcp_servers.docs.");
+      expect(given).not.toContain("mcp_servers.collie_desktop.");
       expect(given).not.toContain("bearer_token_env_var");
-      const named =
-        /mcp_servers\.collie_desktop\.url="http:\/\/127\.0\.0\.1:\d+\/mcp\/([^"]+)"/.exec(given);
-      const bearer = named?.[1] ?? "";
-      expect(bearer).not.toBe("");
+      expect(given).not.toContain("shell_environment_policy");
       expect(details.env.COLLIE_CHAT_MCP_TOKEN).toBe("native-token");
       expect(Rec.keys(details.env)).not.toContain("COLLIE_CHAT_MCP_TOKEN_2");
+      expect(instruct(details)).toContain(
+        "Collie's own tools are not in this chat: it could not read Codex's configuration",
+      );
       yield* session.offer("shell");
       const shell = message(yield* turn(session));
-      expect(shell).not.toContain(bearer);
-      expect(given).not.toContain("shell_environment_policy");
-      yield* session.offer("hello");
-      const events = yield* turn(session);
-      expect(called(events)).toContain("mcp__collie__collie_herd");
-      expect(Arr.filter(events, (event) => event.type === "TOOL_CALL_RESULT")).toMatchObject([
-        { content: "No Herds" },
-        { content: "notes.md\n" },
-      ]);
+      expect(shell).not.toContain("COLLIE_CHAT_MCP_TOKEN_2");
+      expect(shell).not.toContain("COLLIE_CHAT_RELAY_1");
     }),
   ).finally(() => {
     void mine.stop();
