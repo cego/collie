@@ -13,7 +13,7 @@ import { serveForges } from "./support/forge";
 import type { FakeMr, ForgeModel } from "./support/forge";
 import { fixtures } from "./support/host";
 import { ROOT, until, watching } from "./support/watching";
-import { HOLD, Registry } from "../src/engine";
+import { HOLD, Registry, STOP, runDir } from "../src/engine";
 import { Host } from "../src/sdk";
 import { Store } from "../src/store";
 import { sectionOf } from "../src/board-model";
@@ -25,8 +25,11 @@ import { slackApi } from "../src/slack";
 import { findingsIn } from "../src/output";
 import { writeTask } from "../src/task";
 import { registerAgent, scopeFor } from "../src/registry";
-import { isString } from "../src/schema";
+import { isJsonObject, isString } from "../src/schema";
 import { stringifyJson } from "../src/json";
+import { readWatchJournal } from "../src/watch-journal";
+import { readDispositions, recordDisposition } from "../src/disposition";
+import type { WatchEvent } from "../src/watch-journal";
 
 const PROJECT = "gitlab.cego.dk/mk/collie";
 const TARGET = `https://${PROJECT}/-/merge_requests/7`;
@@ -145,6 +148,13 @@ const notesOf = <E>(forge: { readonly model: () => Effect.Effect<ForgeModel, E> 
   Effect.map(forge.model(), (got) => Rec.values(got.notes ?? {}).flat()).pipe(Effect.orDie);
 
 const asked = (runId: string) => Store.pipe(Effect.flatMap((store) => store.asked(runId)));
+
+const watchMarks = (journal: ReadonlyArray<WatchEvent>) =>
+  Arr.flatMap(journal, (event) =>
+    event._tag === "started" || event._tag === "completed"
+      ? [Arr.join([event._tag, event.name], " ")]
+      : [],
+  );
 
 const configured = (on: boolean) =>
   FileSystem.FileSystem.pipe(
@@ -601,6 +611,40 @@ for (const id of ["review", "second-look"]) {
       }),
     ));
 }
+
+test("a wake carrying only a comment no finding answers starts no round", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      const { first, forge, entry } = yield* begun("review", [review([F1])]);
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          const runId = yield* startedWaiting(entry);
+          const now = yield* forge.model();
+          yield* forge.set({
+            ...now,
+            mrs: [
+              mr(first, {
+                comments: [
+                  { id: 900, author: "ann", at: "2026-11-11T10:00:00Z", body: "Nice work." },
+                ],
+              }),
+            ],
+          });
+          yield* until(
+            () => host.watchOf(runId, TARGET),
+            (row) => row?.name === "follow-2",
+          );
+          expect(yield* host.agentStarts).toHaveLength(1);
+          expect(yield* notesOf(forge)).toHaveLength(1);
+          expect(watchMarks(yield* readWatchJournal(host.dir()))).toEqual([
+            "started follow-1",
+            "completed follow-1",
+          ]);
+        }),
+      );
+    }),
+  ));
 
 for (const id of ["review", "second-look"]) {
   test(`${id}: !481 with Slack — one signed note, one round on the new head, and approval the only answer`, () =>
@@ -1700,7 +1744,7 @@ for (const { following, after, refused } of [
 }
 
 for (const state of ["closed", "merged"] as const) {
-  test(`a merge request ${state} during review finishes without posting or asking for approval`, () =>
+  test(`a merge request ${state} during review fails, naming the terminal state, with nothing posted`, () =>
     host.runEffect(
       Effect.gen(function* () {
         yield* repository;
@@ -1729,11 +1773,11 @@ for (const state of ["closed", "merged"] as const) {
             yield* host.mergeWatched;
             const done = yield* until(
               () => host.status(runId),
-              (view) => view?.status.status === "complete",
+              (view) => view?.status.status === "failed",
             );
             expect(ended).toBe(true);
-            expect(done?.status.status === "complete" && done.status.value).toBe(
-              `mk/collie!7 was ${state}`,
+            expect(done?.status.status === "failed" ? done.status.reason : null).toContain(
+              `reviewed merge request ended: ${state}`,
             );
             expect(yield* notesOf(forge)).toEqual([]);
             expect(yield* asked(runId)).toEqual([]);
@@ -1867,6 +1911,16 @@ for (const id of ["review", "second-look"]) {
             ]);
             expect(notes[1]).toContain("F3: fixed — validate the redirect");
             expect(yield* host.agentStarts).toHaveLength(3);
+            const journal = yield* readWatchJournal(host.dir());
+            expect(discardMarks(journal)).toEqual([[second, third]]);
+            expect(watchMarks(journal)).toEqual([
+              "started follow-1",
+              "completed follow-1",
+              "started follow-2",
+              "completed follow-2",
+              "started follow-3",
+              "completed follow-3",
+            ]);
             const fs = yield* FileSystem.FileSystem;
             const prompts = yield* fs.readDirectory(`${host.dir()}/agents/${runId}`);
             const thirdPrompt = Option.getOrThrow(
@@ -1883,6 +1937,77 @@ for (const id of ["review", "second-look"]) {
       }),
     ));
 }
+
+const discardMarks = (journal: ReadonlyArray<WatchEvent>) =>
+  Arr.flatMap(journal, (event) =>
+    event._tag === "discarded" ? [[event.head, event.moved] as const] : [],
+  );
+
+const roundMarks = (journal: ReadonlyArray<WatchEvent>) =>
+  Arr.flatMap(journal, (event) =>
+    event._tag === "started" || event._tag === "completed"
+      ? [`${event._tag} ${event.name}`]
+      : event._tag === "published"
+        ? [`published ${event.round}`]
+        : event._tag === "discarded"
+          ? ["discarded"]
+          : [],
+  );
+
+test("a round starts after its changes read and ends before it posts, so a forge outage names what is missing", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      const { first, forge, entry } = yield* begun("review", [
+        review([F1]),
+        review([{ ...F1, status: "fixed" }]),
+      ]);
+      const marks = () => Effect.map(readWatchJournal(host.dir()), roundMarks);
+      let unavailable = false;
+      forge.after((url, _init, response) =>
+        Promise.resolve(
+          unavailable && Str.includes("/compare")(decodeURIComponent(url))
+            ? new Response('{"message":"temporarily unavailable"}', { status: 503 })
+            : response,
+        ),
+      );
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          yield* host.recovering;
+          const runId = yield* startedWaiting(entry);
+          yield* until(
+            () => notesOf(forge),
+            (notes) => notes.length === 1,
+          );
+          expect(yield* marks()).toEqual(["started follow-1", "completed follow-1", "published 1"]);
+          unavailable = true;
+          yield* pushedOn(forge, first);
+          const parked = yield* until(
+            () => host.status(runId),
+            (view) =>
+              view?.status.status === "failed" ||
+              (view?.status.status === "suspended" && view.park != null),
+          ).pipe(Effect.timeout("10 minutes"));
+          expect(parked?.park).toMatchObject({ cause: "forge-unavailable" });
+          expect(yield* marks()).toEqual(["started follow-1", "completed follow-1", "published 1"]);
+          unavailable = false;
+          yield* until(
+            () => asked(runId),
+            (rows) => Arr.some(rows, (row) => row.decision === "approve-2"),
+            2 * 3600,
+          );
+          expect(yield* marks()).toEqual([
+            "started follow-1",
+            "completed follow-1",
+            "published 1",
+            "started follow-2",
+            "completed follow-2",
+            "published 2",
+          ]);
+        }),
+      );
+    }),
+  ));
 
 const begun = (id: string, outputs: ReadonlyArray<Schema.Json>) =>
   Effect.gen(function* () {
@@ -1926,6 +2051,43 @@ const approvals = (forge: Forge) =>
     Arr.filter(forge.requests(), (one) => Str.endsWith("/merge_requests/7/approve")(one.url)),
     (one) => one.body,
   );
+
+test("a Hold admitted while the head read is in flight leaves the Run un-parked", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      const { forge, entry } = yield* begun("review", [review([])]);
+      const reached = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let withheld = false;
+      forge.after((url, _init, response) => {
+        if (withheld || !Str.includes("/merge_requests/7")(url)) {
+          return Promise.resolve(response);
+        }
+        withheld = true;
+        reached.resolve();
+        return release.promise.then(
+          () => new Response('{"message":"temporarily unavailable"}', { status: 503 }),
+        );
+      });
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          const { runId } = yield* host.started(entry, "cli-1", { target: TARGET });
+          yield* Effect.promise(() => reached.promise);
+          const registry = yield* Registry;
+          yield* registry.control({ runId, control: HOLD, set: true });
+          release.resolve();
+          const held = yield* until(
+            () => host.status(runId),
+            (view) => view?.status.status === "suspended" || view?.status.status === "failed",
+          );
+          expect(held?.status.status).toBe("suspended");
+          expect(held?.park).toBeNull();
+          expect(yield* host.agentStarts).toHaveLength(0);
+        }),
+      );
+    }),
+  ));
 
 test("concurrent forge failures park the initial head read once and recover before launching a reviewer", () =>
   host.runEffect(
@@ -2191,6 +2353,12 @@ for (const id of ["review", "second-look"]) {
             expect(Arr.map(rows, (row) => row.decision)).toEqual(["post-1"]);
             expect(yield* notesOf(forge)).toHaveLength(1);
             expect(yield* host.agentStarts).toHaveLength(2);
+            expect(watchMarks(yield* readWatchJournal(host.dir()))).toEqual([
+              "started follow-1",
+              "completed follow-1",
+              "started follow-2",
+              "completed follow-2",
+            ]);
           }),
         );
       }),
@@ -2209,14 +2377,14 @@ for (const id of ["review", "second-look"]) {
             const runId = yield* startedWaiting(entry);
             const registry = yield* Registry;
             yield* registry.control({ runId, control: HOLD, set: true });
+            const held = yield* host.watchOf(runId, TARGET);
             yield* pushedOn(forge, first);
-            yield* until(
-              () => host.watchOf(runId, TARGET),
-              (row) => row === null,
-            );
             yield* Effect.sleep("10 minutes");
             expect(yield* notesOf(forge)).toHaveLength(1);
             expect(yield* host.agentStarts).toHaveLength(1);
+            const still = yield* host.watchOf(runId, TARGET);
+            expect(still?.observed ?? null).toEqual(held?.observed ?? null);
+            expect(still?.woke ?? null).toBeNull();
             yield* registry.control({ runId, control: HOLD, set: false });
             yield* until(
               () => notesOf(forge),
@@ -2285,3 +2453,239 @@ for (const id of ["review", "second-look"]) {
       }),
     ));
 }
+
+const detailsOfMr7 = (url: string) => Str.endsWith("/merge_requests/7")(decodeURIComponent(url));
+
+const roundsBegan = () =>
+  runLive(
+    Effect.map(
+      readWatchJournal(host.dir()),
+      (events) => Arr.filter(events, (event) => event._tag === "started").length,
+    ),
+  );
+
+test("a review saved while the forge is unavailable keeps its completion, so the park names only what is missing", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      const { first, forge, entry } = yield* begun("review", [
+        review([F1]),
+        review([{ ...F1, status: "fixed" }]),
+      ]);
+      forge.after((url, _init, response) =>
+        detailsOfMr7(url)
+          ? roundsBegan().then((began) =>
+              began >= 2
+                ? new Response('{"message":"temporarily unavailable"}', { status: 503 })
+                : response,
+            )
+          : Promise.resolve(response),
+      );
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          const runId = yield* startedWaiting(entry);
+          yield* until(
+            () => notesOf(forge),
+            (notes) => notes.length === 1,
+          );
+          yield* pushedOn(forge, first);
+          const parked = yield* until(
+            () => host.status(runId),
+            (view) => view?.park != null,
+          ).pipe(Effect.timeout("10 minutes"));
+          expect(parked?.park).toMatchObject({ cause: "forge-unavailable" });
+          expect(yield* notesOf(forge)).toHaveLength(1);
+          expect(roundMarks(yield* readWatchJournal(host.dir()))).toEqual([
+            "started follow-1",
+            "completed follow-1",
+            "published 1",
+            "started follow-2",
+            "completed follow-2",
+          ]);
+        }),
+      );
+    }),
+  ));
+
+test("a review of the local diff saves its report though no merge request can carry a round", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      const { forge, entry } = yield* begun("review", [review([F1])]);
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          const { runId } = yield* host.started(entry, "cli-1", { target: "worktree" });
+          yield* host.mergeWatched;
+          const done = yield* until(
+            () => host.status(runId),
+            (view) => view !== null && view.status.status !== "pending",
+          ).pipe(Effect.timeout("10 minutes"));
+          expect(done?.status.status).toBe("suspended");
+          const fs = yield* FileSystem.FileSystem;
+          expect(yield* fs.readFileString(`${runDir(host.dir(), runId)}/review.md`)).toContain(
+            F1.title,
+          );
+        }),
+      );
+    }),
+  ));
+
+test("a merge request closed between its review and the head check fails the Run, its round completed", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      const { first, forge, entry } = yield* begun("review", [review([F1])]);
+      let closing: Promise<void> | null = null;
+      forge.before((url) => {
+        if (!detailsOfMr7(url)) {
+          return Promise.resolve();
+        }
+        return roundsBegan().then((began) => {
+          if (began < 1) {
+            return;
+          }
+          closing ??= runLive(
+            Effect.gen(function* () {
+              const now = yield* forge.model();
+              yield* forge.set({ ...now, mrs: [mr(first, { state: "closed" })] });
+            }),
+          );
+          return closing;
+        });
+      });
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          const { runId } = yield* host.started(entry, "cli-1", { target: TARGET });
+          yield* host.mergeWatched;
+          const done = yield* until(
+            () => host.status(runId),
+            (view) => view?.status.status === "complete" || view?.status.status === "failed",
+          ).pipe(Effect.timeout("10 minutes"));
+          expect(closing).not.toBeNull();
+          expect(done?.status.status === "failed" ? done.status.reason : null).toContain(
+            "reviewed merge request ended: closed",
+          );
+          expect(yield* notesOf(forge)).toEqual([]);
+          expect(roundMarks(yield* readWatchJournal(host.dir()))).toEqual([
+            "started follow-1",
+            "completed follow-1",
+          ]);
+        }),
+      );
+    }),
+  ));
+
+test("a head that moved before its round pinned it is journaled as one discarded round", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      const { first, forge, entry } = yield* begun("review", [review([F1])]);
+      const moved = yield* pushed("and more");
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          const { runId } = yield* host.started(entry, "cli-1", { target: TARGET });
+          yield* host.mergeWatched;
+          yield* until(
+            () => host.watchOf(runId, TARGET),
+            (row) => row !== null,
+          ).pipe(Effect.timeout("10 minutes"));
+          const journal = yield* readWatchJournal(host.dir());
+          expect(discardMarks(journal)).toEqual([[first, moved]]);
+          expect(roundMarks(journal)).toEqual(["discarded"]);
+        }),
+      );
+    }),
+  ));
+
+test("a shipped Review stopped, abandoned and resumed takes two pushes on the Run it was, undeduplicated", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      const later = { id: "F2", severity: "major", file: "src/b.ts", title: "close the handle" };
+      const third = { id: "F3", severity: "major", file: "src/c.ts", title: "close the loop" };
+      const { first, forge, entry } = yield* begun("review", [
+        review([F1]),
+        review([F1, later]),
+        review([F1, later, third]),
+      ]);
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          const registry = yield* Registry;
+          const { runId } = yield* host.started(entry, "cli-1", { target: TARGET });
+          yield* host.mergeWatched;
+          yield* until(
+            () => notesOf(forge),
+            (notes) => notes.length === 1,
+          );
+          yield* registry.control({ runId, control: STOP, set: true });
+          yield* recordDisposition(runDir(host.dir(), runId), {
+            at: "2026-11-26T10:22:28Z",
+            by: "cli:recovery",
+            kind: "abandoned",
+            ref: "",
+            note: null,
+          });
+          const door = yield* host.door;
+          const resumed = yield* door.resume({ runId, request: "resume-1" });
+          expect(resumed.applied).toBe(true);
+          expect(yield* host.watchOf(runId, TARGET)).not.toBeNull();
+
+          const second = yield* pushedOn(forge, first);
+          yield* until(
+            () => notesOf(forge),
+            (notes) => notes.length === 2,
+          );
+          const more = yield* pushedOn(forge, second);
+          yield* until(
+            () => notesOf(forge),
+            (notes) => notes.length === 3,
+          );
+
+          const journal = yield* readWatchJournal(host.dir());
+          const woken = Arr.filter(
+            journal,
+            (event): event is Extract<WatchEvent, { _tag: "woke" }> => event._tag === "woke",
+          );
+          expect(Arr.map(woken, (event) => [event.run, event.head])).toEqual([
+            [runId, second],
+            [runId, more],
+          ]);
+          expect(watchMarks(journal)).toEqual([
+            "started follow-1",
+            "completed follow-1",
+            "started follow-2",
+            "completed follow-2",
+            "started follow-3",
+            "completed follow-3",
+          ]);
+          expect(
+            Arr.map(
+              yield* readDispositions(runDir(host.dir(), runId)).pipe(
+                Effect.orElseSucceed(() => []),
+              ),
+              (line) => line.kind,
+            ),
+          ).toContain("abandoned");
+          expect(signatures(yield* notesOf(forge))).toEqual([
+            `<!-- collie:${runId} round 1 at ${first} by mk -->`,
+            `<!-- collie:${runId} round 2 at ${second} by mk -->`,
+            `<!-- collie:${runId} round 3 at ${more} by mk -->`,
+          ]);
+          const launches = Arr.map(
+            Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.run"),
+            (call) => {
+              const labels = call.params?.labels;
+              return isJsonObject(labels) && isString(labels.run) && isString(labels.operation)
+                ? [labels.run, labels.operation]
+                : undefined;
+            },
+          );
+          expect(launches).toEqual([
+            [runId, "review-1"],
+            [runId, "review-2-1"],
+            [runId, "review-3-1"],
+          ]);
+        }),
+      );
+    }),
+  ));

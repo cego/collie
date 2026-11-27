@@ -878,8 +878,15 @@ export interface HostApi {
   /**
    * Why this Run has parked its own work and what picks it up again, shown beside its
    * status; null says it no longer has. A park naming no cause is recorded as `unknown`.
+   * `eligible` is asked again just before a `forge-unavailable` park is committed, so a
+   * Watch or a control that went while its evidence was read leaves no park.
    */
-  readonly parked: (runId: string, why: string | null, cause?: ParkCause) => Effect.Effect<void>;
+  readonly parked: (
+    runId: string,
+    why: string | null,
+    cause?: ParkCause,
+    eligible?: Effect.Effect<boolean>,
+  ) => Effect.Effect<void>;
   /**
    * Records the question this run is waiting on, so the host can say what may answer it.
    * `asker` is the operation whose agent asked it, which the workflow is not woken for.
@@ -1197,6 +1204,36 @@ export interface HostApi {
     readonly approved?: string;
     /** A question shares the wake, so the card says it waits on whoever answers that. */
     readonly asking?: boolean;
+  }) => Effect.Effect<void, WorkflowError>;
+  /**
+   * Records that this Run's round `name` began its work at `head`. A watch that woke it is only
+   * the offer: a round whose head the forge moved under it, or that a control refused, never
+   * gets here, so the journal tells a round that started from one that never did.
+   */
+  readonly startedRound: (options: {
+    readonly runId: string;
+    readonly target: string;
+    readonly name: string;
+    readonly head: string;
+  }) => Effect.Effect<void, WorkflowError>;
+  /**
+   * Records that the round `startedRound` named for this Run finished its work, and that a Run
+   * that never got here left its round unfinished. A Watch taken afterwards says which, so a
+   * replay needs no registration of a later round to read one as done.
+   */
+  readonly completedRound: (options: {
+    readonly runId: string;
+    readonly target: string;
+  }) => Effect.Effect<void, WorkflowError>;
+  /**
+   * Records that the round at `head` was abandoned before it reached the forge, `moved` being the
+   * head the forge shows now: a replay tells that from a review it never finished.
+   */
+  readonly discardedRound: (options: {
+    readonly runId: string;
+    readonly target: string;
+    readonly cwd: string;
+    readonly head: string;
   }) => Effect.Effect<void, WorkflowError>;
   /** The merge request `target` as the forge reads it now: what a watch's cursor starts from. */
   readonly mrReading: (options: {
@@ -1552,6 +1589,8 @@ export interface Posted {
   readonly signature?: string;
   /** True where the note guard refused its wording, rather than the forge refusing the write. */
   readonly refused?: boolean;
+  /** The head the merge request is on now, where the note was refused because it had moved. */
+  readonly superseded?: string;
 }
 
 // oxlint-disable-next-line effecttsgo/lazy-effect -- Host serves the published HostApi.usage() method unchanged.
