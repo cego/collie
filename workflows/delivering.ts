@@ -726,29 +726,45 @@ export const deliver = <I extends Told, O extends Opened>(ask: Delivery<I, O>) =
         yield* host.mergeRequest(runId, opened.mr_url);
         if (minor.length > 0) {
           yield* Activity.make({
-            name: "mr-unsettled",
+            name: attempt === 1 ? "mr-unsettled" : `mr-unsettled-${attempt}`,
             execute: Effect.forEach(minor, (one) => host.record(runId, `unsettled: ${one.title}`), {
               discard: true,
             }),
           });
+        }
+        const publicFindings = Arr.filter(minor, (one) => one.internal !== true);
+        if (publicFindings.length > 0) {
           yield* Activity.make({
-            name: "mr-unsettled-note",
+            name: attempt === 1 ? "mr-unsettled-note" : `mr-unsettled-note-${attempt}`,
             execute: Effect.gen(function* () {
               const posted = yield* host.note({
                 runId,
                 cwd,
                 body: `Delivery left these unsettled:\n\n${Arr.join(
-                  Arr.map(minor, (one) => `- ${one.title}${one.detail ? `: ${one.detail}` : ""}`),
+                  Arr.map(
+                    publicFindings,
+                    (one) => `- ${one.title}${one.detail ? `: ${one.detail}` : ""}`,
+                  ),
                   "\n",
                 )}`,
               });
               if (posted.ok) {
                 return yield* host.parked(runId, null);
               }
-              const reason = `Cannot note what delivery left unsettled on ${opened.mr_url}: ${posted.message}. Repair it, then resume ${runId}.`;
+              const repair = posted.publicTextRefused
+                ? "Reword the public finding or mark it internal"
+                : "Repair it";
+              const reason = `Cannot note what delivery left unsettled on ${opened.mr_url}: ${posted.message}. ${repair}, then resume ${runId}.`;
+              if (posted.publicTextRefused) {
+                yield* fs.writeFileString(parkedAt(attempt), "").pipe(Effect.orDie);
+              }
               yield* host.record(runId, reason);
               yield* stepFailed(reason);
-              yield* host.parked(runId, reason, "forge-unavailable");
+              yield* host.parked(
+                runId,
+                reason,
+                posted.publicTextRefused ? "step-failed" : "forge-unavailable",
+              );
               return yield* Workflow.suspend(yield* WorkflowInstance);
             }),
           });

@@ -851,6 +851,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly message: string;
     readonly signature?: string;
     readonly superseded?: string;
+    readonly publicTextRefused?: boolean;
   }
 
   /** A pipeline job's state; \`missing\` is a pipeline without it. */
@@ -5992,7 +5993,7 @@ export const hostLayer: (options: {
               const body = redact(asked.body);
               const refused = yield* publicRefusal(body, Effect.succeed(ref.project));
               if (refused !== null) {
-                return { ok: false, message: refused };
+                return { ok: false, message: refused, publicTextRefused: true };
               }
               return yield* forgeOf(ref).post(ref, body, asked.cwd, runShell);
             }),
