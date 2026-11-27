@@ -3713,6 +3713,51 @@ test("a fan-out's card lists the question each of its Repo runs is waiting on", 
     }),
   ));
 
+test("a stopped fan-out puts its live Repo run in Working", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const parent = yield* madeRun(dir, { id: "r-fan", task: "task-1", state: "stopped" });
+      const child = yield* madeRun(dir, {
+        id: "r-build",
+        task: "task-1",
+        parent: parent.id,
+        repo: ".",
+      });
+      const views = yield* board(env, [parent, child]);
+      expect(views).toHaveLength(1);
+      expect(views[0]!.run).toBe(child.id);
+      expect(sectionOf(views[0]!)).toBe("working");
+    }),
+  ));
+
+test("a terminal fan-out preserves a nested Repo run's open decision", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const parent = yield* madeRun(dir, { id: "r-fan", task: "task-1", state: "failed" });
+      const child = yield* madeRun(dir, {
+        id: "r-build",
+        task: "task-1",
+        parent: parent.id,
+        repo: ".",
+        state: "failed",
+      });
+      const recovery = yield* madeRun(dir, {
+        id: "r-recovery",
+        task: "task-1",
+        parent: child.id,
+        repo: ".",
+        state: "waiting",
+        asking: [{ name: "next", prompt: "What next?", options: [] }],
+      });
+      const views = yield* board(env, [parent, child, recovery]);
+      expect(views).toHaveLength(1);
+      expect(views[0]!.decision).toMatchObject({ run: recovery.id, id: "next" });
+      expect(sectionOf(views[0]!)).toBe("needs-you");
+    }),
+  ));
+
 test("a child that is work of its own is its own card, and its parent's card lists no child", () =>
   runEffect(
     Effect.gen(function* () {

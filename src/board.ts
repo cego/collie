@@ -1354,17 +1354,21 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
   }
 
   const cardOf = new Map<string, string>();
-  for (const [key, runs] of groups) {
-    for (const run of runs) {
-      for (const one of [run, ...(repoRunsOf.get(run.id) ?? [])]) {
-        cardOf.set(one.id, key);
-      }
+  const grouped = Arr.map([...groups], ([id, runs]) => {
+    const children = Arr.flatMap(runs, (run) => repoRunsOf.get(run.id) ?? []);
+    for (let index = 0; index < children.length; index += 1) {
+      children.push(...(repoRunsOf.get(children[index]!.id) ?? []));
     }
-  }
+    const everyRun = [...runs, ...children];
+    for (const run of everyRun) {
+      cardOf.set(run.id, id);
+    }
+    return { id, runs, children, everyRun, leader: leaderOf(everyRun) };
+  });
 
   const flowInputs = yield* flowInputsFor(opts.env, all);
   const synced = yield* SyncedBranches;
-  const leaders = Arr.map([...groups.values()], leaderOf);
+  const leaders = Arr.map(grouped, ({ leader }) => leader);
   const launches = yield* launchesAhead(
     yield* Launches,
     Arr.map(all, (run) => run.id),
@@ -1375,11 +1379,9 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
     Arr.flatMap(leaders, (run) => (ended(run) ? [run.id] : [])),
   );
   const views = yield* Effect.forEach(
-    groups,
-    ([id, runs]) =>
+    grouped,
+    ({ id, runs, children, everyRun, leader }) =>
       Effect.gen(function* () {
-        const children = Arr.flatMap(runs, (run) => repoRunsOf.get(run.id) ?? []);
-        const everyRun = [...runs, ...children];
         if (opts.only !== undefined && !Arr.some(everyRun, (run) => run.id === opts.only)) {
           return null;
         }
@@ -1542,7 +1544,6 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
         // WARNING: read whatever the state: a merge GitLab reported lands the work even while the Run is still going.
         const disposition = yield* dispositionOf(repoRun === undefined ? runs : [...runs, repoRun]);
         const checking = Arr.filter(everyRun, (run) => checked.has(run.id));
-        const leader = leaderOf(runs);
         let issues = 0;
         for (const run of runs) {
           issues = Math.max(issues, yield* planIssuesIn(run.dir));
