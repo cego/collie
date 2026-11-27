@@ -1258,7 +1258,8 @@ one send per Machine, so a Machine that cannot be reached is tried again with it
 alone once its board is live, and a send that landed is never repeated. Every entry names the
 Project you chose by the Machine that owns it, so a Task on another Machine is filed into that
 same Project, never into one that merely shares its name; when that Machine cannot be reached
-nothing changes and the same filing can be tried again. **No Project** takes the picked Tasks
+nothing changes and the same filing can be tried again, offered as **Try again** rather than
+a refusal, and the entries that did land are not moved again. **No Project** takes the picked Tasks
 out of the Project they are in. Filing a Task into another Project moves it there with its Runs and its
 questions, and the board it left no longer shows it. Two operators moving the same Task at once
 cannot undo each other: the move names the membership it saw, and the one that is stale is
@@ -1567,7 +1568,9 @@ stream like any other change. One click is one request, whatever fails after it:
 a renewed connection, or the window's own channel to Desktop. An action counts as done only
 on the host's reply. Desktop waits 30 s for it, and sends the same request again when none
 comes, 3 times in all (a Cleanup sweep is the exception: below); a request that landed earlier reads back as a repeat, never a second
-write. A refusal or a failed connection is said at once and not tried again by itself. After
+write. A refusal or a failed connection is said at once and not tried again by itself; only a
+filing whose entry could not reach its Project's Machine keeps its **Try again**, since that
+answer is not final. After
 the third wait it says "vm-mk did not confirm the answer to r-1 within 30 s, 3 times. It may
 still land; Try again sends the same request, which vm-mk takes at most once." An action
 Desktop does not send, such as one from a dialog opened before its Machine dropped to a

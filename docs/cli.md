@@ -580,6 +580,9 @@ A queued Task keeps the instruction as it was written, shows on the board under
 **Queued** with no Run to open, and has no checkout of its own: the start that gives it its
 first Run selects the Workflow and the checkout, and the Task takes that placement then.
 One `--request-id` is one Task, and the same start request is one Run, whichever retries it.
+A create answered once answers the same Task after its Project is archived, and the same
+request naming another Project is refused, so neither a retry nor a reuse files a second
+Task.
 
 `task list` gives the Task id, label and its Runs. Historical `workspace` fields remain
 readable; no external workspace is created.
@@ -623,7 +626,9 @@ showed as `membershipSeq`; a filing that names an older one is refused `operatio
 with `details.result: "stale"` and the membership that won, so two operators moving the same
 Task cannot silently undo each other. Filing the same Task where it already is answers
 `already`, so retrying a batch files only what did not land. A request sent twice answers what
-it answered the first time, so a retry after a move nobody saw cannot move the Task back.
+it answered the first time, so a retry after a move nobody saw cannot move the Task back —
+except an answer that named an `unavailable` entry, which is no answer at all: the retry asks
+that entry again and leaves the ones that landed where they are.
 `task follow --task <id>` keeps a Task in the Following filter of both the global board and
 its Project's board; `task unfollow` drops it. Following is the operator's interest, not a
 decision: a followed Task stays in whichever section its state puts it in.
