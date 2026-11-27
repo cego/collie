@@ -34,6 +34,7 @@ import {
   CodexStatus,
   NO_POLICY,
   NO_SERVERS,
+  PROBE_KEPT,
   TOKEN_ENV,
   codexConnections,
   codexServerUrlArgs,
@@ -827,12 +828,7 @@ export const codexDriver: (
         );
       // WARNING: a probe that inherited the imports' sources would hand them to a process Codex reads, so it gets only what it needs to start.
       const probeEnv = () =>
-        Rec.filter(childEnv(), (_value, name) =>
-          Arr.contains(
-            ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "TERM", "CODEX_HOME"],
-            name,
-          ),
-        );
+        Rec.filter(childEnv(), (_value, name) => Arr.contains(PROBE_KEPT, name));
       // WARNING: Codex's own resolution decides which names it already has; reading its files guesses.
       const readConfigured = () =>
         Effect.gen(function* () {

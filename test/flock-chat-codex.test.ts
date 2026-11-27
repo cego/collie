@@ -1042,6 +1042,48 @@ test("An allowlist on Collie's own namespace keeps narrowing, and the token stay
   });
 });
 
+test("An allowlist that includes Collie's own token is narrowed, so the token stays out", () => {
+  const fixture = serveDocs({ tool: "read_doc" });
+  return withServers({ docs: { type: "http", url: fixture.url } }, (driver, context) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(
+        `${context.dir}/codex-home/config.toml`,
+        `[shell_environment_policy]\ninherit = "all"\n[shell_environment_policy.filters]\n"collie_chat_mcp_token" = "include"\n`,
+      );
+      const session = yield* driver.open("codex-token-included", "default", null);
+      yield* Effect.addFinalizer(() => session.close);
+      yield* session.offer("inspect");
+      const given = Arr.join(inspected(yield* turn(session)).args, " ");
+      expect(given).toContain('"COLLIE_CHAT_MCP_TOKEN" = "exclude"');
+      expect(given).not.toContain('"collie_chat_mcp_token" = "include"');
+      expect(occurrences(given, 'COLLIE_CHAT_MCP_TOKEN" = "exclude')).toBe(1);
+      yield* session.offer("shell");
+      expect(message(yield* turn(session))).not.toContain("COLLIE_CHAT_MCP_TOKEN=");
+    }),
+  ).finally(() => void fixture.stop());
+});
+
+test("An import that reads a variable the discovery Codex is given is left out", () => {
+  const fixture = serveDocs({ tool: "read_doc" });
+  return withServers(
+    {
+      docs: { type: "http", url: fixture.url, headers: { Authorization: "Bearer ${CODEX_HOME}" } },
+    },
+    (driver, context) =>
+      Effect.gen(function* () {
+        const session = yield* driver.open("codex-discovery-kept", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("inspect");
+        const details = inspected(yield* turn(session));
+        expect(instruct(details)).toContain(
+          "Left out: docs (CODEX_HOME is a variable Codex is told before the chat starts).",
+        );
+        expect(Arr.join(details.args, " ")).not.toContain(`${context.dir}/codex-home`);
+      }),
+  ).finally(() => void fixture.stop());
+});
+
 test("A url carrying a credential is refused however the parser spells it", () => {
   const fixture = serveDocs({ tool: "read_doc" });
   return withServers(

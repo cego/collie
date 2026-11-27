@@ -15,6 +15,17 @@ const NAME = /^[A-Za-z0-9_-]+$/;
 const SETTABLE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const REFERENCE = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 const RELAY_HEADER = "X-Collie-Relay";
+export const PROBE_KEPT = [
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "TMPDIR",
+  "LANG",
+  "TERM",
+  "CODEX_HOME",
+];
 const STANDARD = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "TERM", "PWD"];
 const Strings = Schema.Record(Schema.String, Schema.String);
 const Stdio = Schema.Struct({
@@ -169,6 +180,10 @@ export const codexServers: (
     const standard = Arr.findFirst(variables, (variable) => Arr.contains(STANDARD, variable));
     if (Option.isSome(standard)) {
       return `${standard.value} is a variable the shell cannot do without`;
+    }
+    const probed = Arr.findFirst(variables, (variable) => Arr.contains(PROBE_KEPT, variable));
+    if (Option.isSome(probed)) {
+      return `${probed.value} is a variable Codex is told before the chat starts`;
     }
     const allowed = Arr.findFirst(variables, included);
     return Option.isSome(allowed)

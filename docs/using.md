@@ -2402,7 +2402,9 @@ server, and the chat says so — an import that needs one is left out rather tha
 it. So is an import whose value names a variable a shell cannot do without — `PATH`, `HOME`
 and the rest of that handful — or one your own keyed `filters` allowlist admits: both stay
 in the shell, so an import that would have to share them is left out instead, with the name
-it needed said in the chat. A relayed server cannot be signed in through
+it needed said in the chat. So is a variable Codex is told before the chat starts —
+`CODEX_HOME`, which Collie's own reading of your configuration passes to a Codex of its
+own — because that value reaches a Codex process regardless of what the chat withholds. A relayed server cannot be signed in through
 `codex mcp login` either, because Codex holds that sign-in against the address it was
 given: the chat says so rather than offer a command that would sign the wrong thing. None of this is isolation, and Collie claims none: the value is in Desktop's own
 process, in the configuration it was imported from and, where it names one, in your
