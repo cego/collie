@@ -445,6 +445,63 @@ test("a filing retried past an unavailable Project leaves a Task a newer move to
     ),
   ));
 
+test("a batch that files one Task twice answers each entry, and its retry files the entry that was away", () =>
+  runEffect(
+    twoMachines(
+      "collie-project-twice-",
+      (first, second) =>
+        Effect.gen(function* () {
+          yield* first.lists([second]);
+          expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
+          const payments = yield* projectOf(second.world, "Payments");
+          const refunds = yield* projectOf(first.world, "Refunds");
+          const here = Option.getOrThrow(
+            Option.map(
+              Arr.findFirst((yield* boardOf(first.world)).projects, (one) => one.id === refunds),
+              (one) => one.installation,
+            ),
+          );
+          const away = Option.getOrThrow(
+            Option.map(
+              Arr.findFirst((yield* boardOf(second.world)).projects, (one) => one.id === payments),
+              (one) => one.installation,
+            ),
+          );
+          const mine = yield* taskOf(first.world, "Say a duplicate refunds notice twice");
+          const port = yield* listenerPort(first, second);
+          yield* stopHost(second.world.state);
+          yield* until(
+            () => listening(port),
+            (open) => !open,
+          );
+          const door = yield* frontDoor(socketOf(first.world.state));
+          const asked = {
+            actions: [
+              {
+                kind: "task_file" as const,
+                filings: [
+                  { task: mine, project: { installation: here, id: refunds } },
+                  { task: mine, project: { installation: away, id: payments } },
+                ],
+              },
+            ],
+            request: "file-twice",
+          };
+          const [half] = yield* door.act(asked);
+          expect(Arr.map(half?.filed ?? [], (one) => one.result)).toEqual(["filed", "unavailable"]);
+          yield* second.cli(["machine", "list"]);
+          yield* until(
+            () => listening(port),
+            (open) => open,
+          );
+          const [again] = yield* door.act(asked);
+          expect(Arr.map(again?.filed ?? [], (one) => one.result)).toEqual(["filed", "filed"]);
+          expect((yield* cardOf(first.world, mine))?.projectId?.id).toBe(payments);
+        }),
+      [],
+    ),
+  ));
+
 test("the Workflows a start can pick are those of the checkout it names", () =>
   proves(
     "collie-workflows-checkout-",

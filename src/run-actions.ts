@@ -640,14 +640,10 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       const fileAll = (settled: ReadonlyArray<Filing>) =>
         Effect.gen(function* () {
           const filed: Array<Filing> = [];
-          for (const entry of action.filings) {
-            const done = Option.getOrUndefined(
-              Arr.findFirst(
-                settled,
-                (one) => one.task === entry.task && one.result !== "unavailable",
-              ),
-            );
-            if (done !== undefined) {
+          for (const [at, entry] of action.filings.entries()) {
+            // WARNING: an answer is kept by its entry's place in the batch, since one Task may be filed twice.
+            const done = settled[at];
+            if (done !== undefined && done.result !== "unavailable") {
               filed.push(done);
               continue;
             }
