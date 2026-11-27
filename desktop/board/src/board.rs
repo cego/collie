@@ -159,6 +159,8 @@ pub enum Dialog {
         checkout: TextEdit,
         inputs: Vec<(String, TextEdit)>,
         why: Option<String>,
+        /// Which read of this Task's Workflows is the one that counts.
+        opened: u64,
     },
     Proposal {
         card: String,
@@ -188,6 +190,8 @@ pub struct Board {
     /// The keys of the questions the last board showed open; none before the first board.
     on_board: Option<HashSet<String>>,
     sends: u64,
+    /// Each read of a queued Task's Workflows, so a late one lands only where it was asked for.
+    lookups: u64,
     pub dialog: Option<Dialog>,
     /// The card whose actions menu is open, by key.
     pub menu: Option<String>,
@@ -769,30 +773,58 @@ impl App {
             return;
         };
         let installation = card.installation.to_string();
-        let machine = card.machine.clone();
         let instruction = card.task.sentence.clone();
-        let asked = key.to_string();
         let mut checkout = TextEdit::new(PROJECTS_ROOT_OPTION);
         checkout.focused = false;
         self.board.dialog = Some(Dialog::Queued {
             card: key.into(),
             instruction,
-            installation: installation.clone(),
+            installation,
             workflows: None,
             chosen: None,
             checkout,
             inputs: Vec::new(),
             why: None,
+            opened: 0,
         });
+        self.read_workflows();
+    }
+
+    /// Asks the Machine for the Workflows the open queued Task can start.
+    fn read_workflows(&mut self) {
+        let Some(Dialog::Queued {
+            card, installation, ..
+        }) = &self.board.dialog
+        else {
+            return;
+        };
+        let (card, installation) = (card.clone(), installation.clone());
+        let machine = self
+            .placed_by(&card)
+            .map(|one| one.machine.clone())
+            .unwrap_or_else(|| installation.clone());
         let Some(core) = self.core.clone() else {
             return;
         };
+        self.board.lookups += 1;
+        let asked = self.board.lookups;
+        if let Some(Dialog::Queued {
+            opened,
+            workflows,
+            why,
+            ..
+        }) = &mut self.board.dialog
+        {
+            *opened = asked;
+            *workflows = None;
+            *why = None;
+        }
         core.request(
             "definitions",
             json!({ "installation": installation }),
             move |app: &mut App, read: Result<DefinitionsSuccess, CallError>| {
                 let Some(Dialog::Queued {
-                    card,
+                    opened,
                     workflows,
                     why,
                     ..
@@ -800,7 +832,7 @@ impl App {
                 else {
                     return;
                 };
-                if *card != asked {
+                if *opened != asked {
                     return;
                 }
                 match read {

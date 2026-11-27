@@ -2500,6 +2500,55 @@ fn a_workflow_list_read_for_one_queued_task_never_fills_another() {
 }
 
 #[test]
+fn a_workflow_list_read_before_a_queued_task_was_reopened_never_fills_the_new_one() {
+    let harness = Harness::new();
+    let said = "Make the refunds page say a duplicate";
+    let mut runtime = runtime_of(
+        &harness,
+        vec![snapshot(
+            &pc(),
+            vec![task(
+                "t-queued",
+                said,
+                "quiet",
+                json!({"queued": true, "run": "", "runs": [], "sentence": said}),
+            )],
+        )],
+    );
+    settle(&harness, &mut runtime);
+    press(&mut runtime, "card-t-queued-name");
+    redraw(&mut runtime);
+    assert!(
+        node(&runtime, "queued-reading").is_some(),
+        "the first opening is still reading"
+    );
+    runtime.state.board.dialog = None;
+    redraw(&mut runtime);
+    press(&mut runtime, "card-t-queued-name");
+    redraw(&mut runtime);
+    assert!(
+        harness
+            .fake
+            .answer("definitions", Err(CallError("the Machine is away".into())))
+    );
+    settle(&harness, &mut runtime);
+    assert!(
+        node(&runtime, "queued-why").is_none(),
+        "the first opening's failure never reaches the picker that replaced it"
+    );
+    assert!(
+        node(&runtime, "queued-reading").is_some(),
+        "the reopened picker still waits for its own list"
+    );
+    assert!(harness.fake.answer(
+        "definitions",
+        Ok(definitions(vec![("plan", "Plan", vec![])]))
+    ));
+    settle(&harness, &mut runtime);
+    assert!(node(&runtime, "queued-workflow-plan").is_some());
+}
+
+#[test]
 fn a_resource_page_opens_a_related_task_in_the_project_it_is_filed_into() {
     let harness = Harness::new();
     let mut runtime = runtime_of(
