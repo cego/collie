@@ -338,6 +338,48 @@ fn card_ids(placed: &[Placed<'_>]) -> HashMap<String, String> {
         .collect()
 }
 
+/// The control the keyboard had as a frame drew it: its key, the card it sits in, and where
+/// that card was, so a board update that moves the card can put focus back on the control.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FocusSeen {
+    pub key: String,
+    pub card: String,
+    /// Its section, as `Section::ALL` orders them, and its place in that section.
+    pub place: (usize, usize),
+}
+
+pub fn focus_seen(app: &App, elements: &[rune::ElementInfo]) -> Option<FocusSeen> {
+    let focused = elements.iter().find(|one| one.focused)?;
+    let key = focused.key.clone()?;
+    let card = focused
+        .path
+        .split('/')
+        .find(|one| one.starts_with("card-"))?;
+    let place = placed_at(app, card)?;
+    Some(FocusSeen {
+        key,
+        card: card.to_string(),
+        place,
+    })
+}
+
+/// Where in the board the card drawn as `card` rests: its section and its place in it, which is
+/// the row a row-per-column layout draws it in.
+pub fn placed_at(app: &App, card: &str) -> Option<(usize, usize)> {
+    let scoped = model::scoped(&app.machines, app.nav.scope.as_ref(), app.following());
+    let ids = card_ids(&scoped);
+    let at = scoped
+        .iter()
+        .position(|one| ids.get(&one.key).is_some_and(|id| id == card))?;
+    let section = model::section_of(scoped[at].task);
+    let rank = model::Section::ALL.iter().position(|one| *one == section)?;
+    let index = scoped[..at]
+        .iter()
+        .filter(|one| model::section_of(one.task) == section)
+        .count();
+    Some((rank, index))
+}
+
 fn grid(cards: Vec<El>, columns: usize) -> El {
     let mut rows = col().gap(GAP).w_full();
     let mut cards = cards.into_iter().peekable();
@@ -893,6 +935,7 @@ fn card(
     let narrative = crate::record::reports::concise(
         latest_report.map_or(task.sentence.as_str(), |report| report.summary.as_str()),
     );
+    let watched = id.to_string();
     let mut card = col()
         .w_full()
         .min_w(0.0)
@@ -1288,6 +1331,21 @@ fn card(
         .label(task.name.clone())
         .description(narrative)
         .checked(selected);
+    // WARNING: a card that moves to another section or row is a new element, so focus it back.
+    // Only the card asked for carries the handler: a handler on every card commits on every scroll.
+    let prefix = format!("{watched}-");
+    let asked_back = app
+        .board
+        .refocus
+        .clone()
+        .filter(|key| *key == watched || key.starts_with(&prefix));
+    let card = match asked_back {
+        Some(key) => card.on_layout_tx(move |app: &mut App, _, tx| {
+            app.board.refocus = None;
+            tx.focus_when_shown(key.clone(), true);
+        }),
+        None => card,
+    };
     if live { card } else { card.opacity(0.6) }
 }
 

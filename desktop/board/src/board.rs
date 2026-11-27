@@ -10,7 +10,7 @@ mod dialogs;
 pub mod model;
 pub mod offer_form;
 pub mod questionnaire;
-pub(crate) mod view;
+pub mod view;
 
 use collie_desktop_protocol::generated::{About, LostState};
 pub use model::{Flock, Placed, Shown};
@@ -178,6 +178,10 @@ pub struct Board {
     pub width: f32,
     /// The columns last drawn, so a change of them lands at once rather than springing.
     pub columns: std::cell::Cell<usize>,
+    /// The control the keyboard last had, and the card and place it was in, as a frame drew it.
+    pub focus_seen: std::cell::RefCell<Option<view::FocusSeen>>,
+    /// A control to put focus back on once the card it is in shows again.
+    pub refocus: Option<String>,
     /// A fixed now for tests, which a timed flock retry never reaches; the wall clock otherwise.
     pub clock: Option<f64>,
     /// Minutes east of UTC, for a test; this computer's own otherwise.
@@ -303,8 +307,10 @@ fn focused_edit() -> TextEdit {
 impl App {
     /// One `flock` item: folded into the Flock, and what the board holds settled against it.
     pub fn apply(&mut self, item: FlockItem) {
+        let seen = self.board.focus_seen.borrow().clone();
         self.pages.machines.heard(&item);
         model::apply_item(&mut self.machines, &mut self.board.flock, item);
+        self.keep_focus(seen);
         self.settle_answers();
         self.read_credentials();
         let notices = self.board.flock.notices.len();
@@ -319,6 +325,19 @@ impl App {
             && self.placed_by(&key).is_none()
         {
             self.gesture(Gesture::Close);
+        }
+    }
+
+    /// Puts focus back on the control a frame last had, where the card it is in has moved.
+    fn keep_focus(&mut self, seen: Option<view::FocusSeen>) {
+        let Some(seen) = seen else {
+            return;
+        };
+        if self.board.refocus.is_some() {
+            return;
+        }
+        if view::placed_at(self, &seen.card).is_some_and(|at| at != seen.place) {
+            self.board.refocus = Some(seen.key);
         }
     }
 

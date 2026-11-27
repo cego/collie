@@ -87,6 +87,8 @@ impl App {
 /// The marks a frame drawn at `at` ends or starts, read from the board it drew.
 pub fn frame_drawn(drawn: &rune::Runtime<App>, at: f64) -> Vec<timing::Mark> {
     let board = &drawn.state;
+    let seen = board::view::focus_seen(board, &drawn.elements());
+    board.board.focus_seen.replace(seen);
     let mut timing = board.timing.borrow_mut();
     if board.machines.iter().any(|m| !m.cards.is_empty()) {
         timing.board_usable(at);

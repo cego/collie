@@ -220,6 +220,89 @@ fn with_projects(width: f32) -> Runtime<App> {
     runtime.frame(0.016);
     runtime
 }
+/// A board of one Machine whose `states` say what each Task's state is: `moving` is blocked,
+/// so a fold of a second item moves it from Working to Needs you.
+fn moving() -> Runtime<App> {
+    let task = |state: &str| {
+        json!({"id": "t-1", "name": "Refunds", "project": "content", "state": state,
+            "steps": [], "sentence": "Refunds is under way.", "age": "5m", "drift": null,
+            "held": null, "heldBy": null, "decision": null, "agents": [], "children": [],
+            "mr": null, "branch": null, "disposition": null, "landed": false, "ended": null,
+            "mrState": null, "planReady": false, "offer": null, "run": "r-1", "runs": ["r-1"],
+            "at": 1.0})
+    };
+    let mut board = App::default();
+    board.apply(
+        serde_json::from_value(json!({
+            "machine": {"installation": "inst-pc", "profile": "local", "name": "mk-pc"},
+            "message": {"_tag": "Snapshot", "installation": "inst-pc", "build": "0.118.0",
+                "protocol": 7, "files": true, "herds": [{"id": "h1"}],
+                "tasks": [task("active")], "seq": 1},
+        }))
+        .unwrap(),
+    );
+    board.nav.chat.set_open(false);
+    let mut runtime = Runtime::new(
+        board,
+        view,
+        (1280.0, 900.0),
+        Env {
+            system_dark: true,
+            scale: 1.0,
+        },
+    );
+    runtime.frame(0.0);
+    runtime.frame(0.016);
+    runtime
+}
+
+#[test]
+fn a_card_that_moves_to_another_section_keeps_the_keyboard_on_its_control() {
+    let mut runtime = moving();
+    for _ in 0..60 {
+        press(&mut runtime, Key::Tab);
+        if focused(&runtime).is_some_and(|key| key.starts_with("card-")) {
+            break;
+        }
+    }
+    let held = focused(&runtime).expect("a card control takes the keyboard");
+    // The app records where the keyboard is as each frame is drawn, which is what a move consults.
+    collie_desktop_board::frame_drawn(&runtime, 0.0);
+    // The Task is blocked on the host's next update, so its card leaves Working for Needs you.
+    runtime.state.apply(
+        serde_json::from_value(json!({
+            "machine": {"installation": "inst-pc", "profile": "local", "name": "mk-pc"},
+            "message": {"_tag": "Upsert", "seq": 2, "task": {
+                "id": "t-1", "name": "Refunds", "project": "content", "state": "blocked",
+                "steps": [], "sentence": "Refunds needs you.", "age": "5m", "drift": null,
+                "held": null, "heldBy": null, "decision": null, "agents": [], "children": [],
+                "mr": null, "branch": null, "disposition": null, "landed": false, "ended": null,
+                "mrState": null, "planReady": false, "offer": null, "run": "r-1",
+                "runs": ["r-1"], "at": 1.0}
+            },
+        }))
+        .unwrap(),
+    );
+    // The card is new where it landed, and its section springs into place: it takes the
+    // keyboard back once it shows.
+    runtime.settle_all();
+    for at in 1..8 {
+        runtime.frame(f64::from(at) * 0.1);
+    }
+    assert_eq!(
+        focused(&runtime).as_deref(),
+        Some(held.as_str()),
+        "the control the keyboard was on is still the one it is on, in its new section"
+    );
+    let tree = runtime.accessibility_json();
+    assert!(
+        within(&tree)
+            .into_iter()
+            .any(|node| node["key"] == "needs-you"),
+        "the card really moved"
+    );
+}
+
 #[test]
 fn at_a_narrow_width_the_sidebar_names_the_flock_and_each_project() {
     let tree = with_projects(760.0).accessibility_json();
