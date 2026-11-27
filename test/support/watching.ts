@@ -1,7 +1,21 @@
 import { Herdr } from "../../src/herdr";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import { ConfigProvider, Effect, FileSystem, Layer, Result, Schedule, Schema, flow } from "effect";
+import {
+  ConfigProvider,
+  Effect,
+  FileSystem,
+  Layer,
+  PubSub,
+  Result,
+  Schedule,
+  Schema,
+  flow,
+} from "effect";
+import * as RpcClient from "effect/rpc/RpcClient";
+import * as RpcServer from "effect/rpc/RpcServer";
+import type * as RpcMessage from "effect/rpc/RpcMessage";
+import type * as RpcGroup from "effect/rpc/RpcGroup";
 import type { Scope } from "effect";
 import type { PlatformServices } from "../../src/platform";
 import type { Rig } from "./recorder";
@@ -16,7 +30,8 @@ import { Store } from "../../src/store";
 import { STOP } from "../../src/controls";
 import { Host } from "../../src/sdk";
 import { buildBoard } from "../../src/board";
-import { mrId } from "../../src/board-model";
+import { FrontDoorRpcs, mrId } from "../../src/board-model";
+import type { Toasted } from "../../src/board-model";
 import { factsOfView } from "../../src/runs";
 import { askingOf, mergeWatch } from "../../src/side-jobs";
 import { requestedOver } from "../../src/review-requests";
@@ -24,6 +39,16 @@ import { recoverParks } from "../../src/park-recovery";
 import { Woke } from "../../src/mr-watch-model";
 import type { MrPanels } from "../../src/merges";
 import type { slackApi } from "../../src/slack";
+import { frontDoorHandlers, sharedBoardLayer } from "../../src/host";
+import { CheckProcesses, hostCheckProcesses } from "../../src/check-processes";
+import { runRecordsLayer } from "../../src/run-records";
+import { schedulesLayer } from "../../src/schedules";
+import { usageLayer } from "../../src/usage";
+import { catalogueLayer } from "../../src/catalogue";
+import { artefactsLayer } from "../../src/artefacts";
+import { collectingLayer } from "../../src/collecting";
+import { foregroundLayer } from "../../src/foreground";
+type DoorRpcs = RpcGroup.Rpcs<typeof FrontDoorRpcs>;
 
 const asJson = flow(
   Schema.encodeUnknownResult(Schema.fromJsonString(Schema.Any)),
@@ -64,45 +89,46 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
     });
   type Forge = Effect.Success<ReturnType<typeof gitlab>>;
 
-  const session = <A, E>(
-    forge: Forge,
-    work: Effect.Effect<A, E, Registry | Store | HostServices | PlatformServices | Scope.Scope>,
-  ) =>
-    work.pipe(
-      Effect.provide(
-        registryLayer(dir(), {
+  const layers = (forge: Forge) =>
+    registryLayer(dir(), {
+      userDir: rig.userDir,
+      placing: { herdr: new Herdr(env()), env: env() },
+    }).pipe(
+      Layer.provideMerge(
+        agentsLayer({
+          dir: dir(),
+          env: env(),
+          herdr: new Herdr(env()),
+          harness: "claude",
+          model: "opus",
+          permissions: "auto",
+          compactAtTokens: 0,
+          pollMs: 20,
+          collectMs: 60_000,
+        }),
+      ),
+      Layer.provideMerge(
+        foundationLayer({
+          dir: dir(),
+          slack,
           userDir: rig.userDir,
           placing: { herdr: new Herdr(env()), env: env() },
-        }).pipe(
-          Layer.provideMerge(
-            agentsLayer({
-              dir: dir(),
-              env: env(),
-              herdr: new Herdr(env()),
-              harness: "claude",
-              model: "opus",
-              permissions: "auto",
-              compactAtTokens: 0,
-              pollMs: 20,
-              collectMs: 60_000,
-            }),
-          ),
-          Layer.provideMerge(
-            foundationLayer({
-              dir: dir(),
-              slack,
-              userDir: rig.userDir,
-              placing: { herdr: new Herdr(env()), env: env() },
-              toast: (title) => Effect.sync(() => toasts.push(title)),
-            }),
-          ),
-          Layer.provideMerge(
-            ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: forge.api })),
-          ),
-        ),
+          toast: (title) => Effect.sync(() => toasts.push(title)),
+        }),
       ),
-      Effect.scoped,
+      Layer.provideMerge(
+        ConfigProvider.layerAdd(ConfigProvider.fromUnknown({ COLLIE_FORGE_API: forge.api })),
+      ),
     );
+
+  const session = <A, E>(
+    forge: Forge,
+    work: Effect.Effect<
+      A,
+      E,
+      Layer.Success<ReturnType<typeof layers>> | PlatformServices | Scope.Scope
+    >,
+  ) => work.pipe(Effect.provide(layers(forge)), Effect.scoped);
 
   const mergeWatched = Effect.gen(function* () {
     const registry = yield* Registry;
@@ -181,6 +207,62 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
     });
   });
 
+  // WARNING: the door is the host's own handlers, over this session's registry and state dir.
+  const door = Effect.gen(function* () {
+    let answered: (response: RpcMessage.FromServer<DoorRpcs>) => Effect.Effect<void> = () =>
+      Effect.void;
+    const handlers = yield* Layer.build(
+      frontDoorHandlers(
+        dir(),
+        "test-install",
+        {},
+        new Map(),
+        new Map(),
+        "stamp",
+        yield* PubSub.unbounded<Toasted>(),
+        Effect.succeed(0),
+        Effect.void,
+      ).pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(
+            usageLayer,
+            catalogueLayer(rig.projectDir),
+            collectingLayer,
+            foregroundLayer,
+          ).pipe(
+            Layer.provideMerge(
+              schedulesLayer({
+                dir: dir(),
+                env: { ...env(), stateDir: dir() },
+                installation: "test-install",
+                seconds: false,
+              }),
+            ),
+            Layer.provideMerge(artefactsLayer),
+            Layer.provideMerge(
+              Layer.effect(
+                CheckProcesses,
+                hostCheckProcesses({ dir: dir(), installation: "test-install", sweep: false }),
+              ),
+            ),
+            Layer.provideMerge(runRecordsLayer),
+            Layer.provideMerge(sharedBoardLayer(dir())),
+            Layer.provideMerge(ConfigProvider.layerAdd(ConfigProvider.fromUnknown(env().raw))),
+          ),
+        ),
+      ),
+    );
+    const served = yield* RpcServer.makeNoSerialization(FrontDoorRpcs, {
+      onFromServer: (response) => answered(response),
+    }).pipe(Effect.provideContext(handlers));
+    const client = yield* RpcClient.makeNoSerialization(FrontDoorRpcs, {
+      supportsAck: true,
+      onFromClient: ({ message }) => served.write(0, message),
+    });
+    answered = client.write;
+    return client.client;
+  });
+
   const recovering = Effect.gen(function* () {
     const registry = yield* Registry;
     const services = yield* Effect.context<HostServices | PlatformServices>();
@@ -240,6 +322,7 @@ export const watching = (rig: Rig, slack?: typeof slackApi) => {
     github: (model: ForgeModel) => gitlab(model, "github"),
     session,
     mergeWatched,
+    door,
     recovering,
     started,
     status,

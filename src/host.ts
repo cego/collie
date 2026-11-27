@@ -1828,7 +1828,7 @@ export const boardTableWrites = Stream.unwrap(
   ),
 );
 
-const sharedBoardLayer = (dir: string) =>
+export const sharedBoardLayer = (dir: string) =>
   Layer.effect(SharedBoard)(
     Effect.gen(function* () {
       const store = yield* Store;
@@ -2155,7 +2155,7 @@ const finishTakenOver = (stateDir: string) =>
     return followed;
   });
 
-const frontDoorHandlers = (
+export const frontDoorHandlers = (
   dir: string,
   installation: string,
   development: Development,
