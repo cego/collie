@@ -9580,15 +9580,22 @@ test("a launch replayed with no step keeps the dispatch whose Output was accepte
         session(
           Effect.gen(function* () {
             const agents = yield* Agents;
-            return yield* agents.launch(ask);
+            return yield* agents.launch(ask, undefined, undefined, true);
           }),
         );
-      yield* rig.queueOutputs([{ verdict: "clean", note: "the first turn" }]);
       yield* launchOnce();
       const at = (yield* readLaunches("r1").pipe(Effect.provide(recordsAt(dir))))[0]?.at;
+      expect(at).toBeNumber();
+      yield* awaitOutput("r1", agentFor("r1"), ask.output, () => null, `review@${at}`);
+      expect(
+        yield* submitOutput("r1", agentFor("r1"), { verdict: "clean", note: "handed in" }),
+      ).toBe("accepted");
+      const fs = yield* FileSystem.FileSystem;
+      const written = (yield* fs.stat(promptPath("r1"))).mtime;
       yield* rig.queueOutputs([{ verdict: "clean", note: "a second turn" }]);
       yield* launchOnce();
       expect((yield* readLaunches("r1").pipe(Effect.provide(recordsAt(dir))))[0]?.at).toBe(at);
+      expect((yield* fs.stat(promptPath("r1"))).mtime).toEqual(written);
     }),
   ));
 
@@ -9600,6 +9607,29 @@ test("a step an older build dispatched with no mode from the Workflow still coll
       const result = yield* session(started("r1"));
       expect(result._tag).toBe("Success");
       expect(yield* read(promptPath("r1"))).toContain("OUTPUT_PATH");
+    }),
+  ));
+
+test("a launch an older build recorded with no mode is collected from its file, not given the step again", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { outputSubmit: _mode, ...unmarked } = {
+        agent: agentFor("r1"),
+        output: outputPath("r1"),
+        reused: false,
+        runId: "r1",
+        operation: "review",
+        role: "reviewer",
+        workflow: "agent-work",
+        harness: "claude",
+        outputSubmit: "file" as const,
+      };
+      yield* recordLaunch(unmarked).pipe(Effect.provide(recordsAt(dir)));
+      yield* rig.queueOutputs([{ verdict: "clean", note: "from the file" }]);
+      const result = yield* session(started("r1"));
+      expect(result._tag).toBe("Success");
+      expect(yield* read(promptPath("r1"))).toContain("OUTPUT_PATH");
+      expect(yield* read(promptPath("r1"))).not.toContain("collie_submit");
     }),
   ));
 

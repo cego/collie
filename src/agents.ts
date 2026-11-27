@@ -435,6 +435,7 @@ export interface AgentsApi {
     ask: AgentAsk,
     note?: (why: string | null) => Effect.Effect<void>,
     armed?: (launched: Launched) => Effect.Effect<void>,
+    settle?: boolean,
   ) => Effect.Effect<Launched, AgentUncertain | AgentParked>;
   readonly revive: (
     ask: AgentAsk,
@@ -1043,6 +1044,7 @@ export const agentWork: <
               next,
               (why) => host.parked(work.runId, why),
               (launched) => agents.awaitOutput(launched, problemIn),
+              true,
             )
             .pipe(
               // WARNING: a stop that landed while a start failed or parked still reaches the server it left.
@@ -2747,17 +2749,19 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     fresh?: boolean,
     note?: (why: string | null) => Effect.Effect<void>,
     armed?: (launched: Launched) => Effect.Effect<void>,
+    settle?: boolean,
   ) => Effect.Effect<Launched, AgentUncertain | AgentParked> = (
     ask: AgentAsk,
     fresh = false,
     note: (why: string | null) => Effect.Effect<void> = () => Effect.void,
     armed: (launched: Launched) => Effect.Effect<void> = () => Effect.void,
+    settle = false,
   ) =>
     Effect.gen(function* () {
       const agent = yield* nameFor(ask);
       const out = yield* Deferred.make<void>();
       stepsGoingOut.set(agent, out);
-      return yield* launching(ask, fresh, note, agent, armed).pipe(
+      return yield* launching(ask, fresh, note, agent, armed, settle).pipe(
         Effect.ensuring(stepGoneOut(agent, out)),
       );
     });
@@ -2780,7 +2784,15 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     note: (why: string | null) => Effect.Effect<void>,
     agent: string,
     armed: (launched: Launched) => Effect.Effect<void>,
-  ) => Effect.Effect<Launched, AgentUncertain | AgentParked> = (ask, fresh, note, agent, armed) =>
+    settle: boolean,
+  ) => Effect.Effect<Launched, AgentUncertain | AgentParked> = (
+    ask,
+    fresh,
+    note,
+    agent,
+    armed,
+    settle,
+  ) =>
     under(
       Effect.gen(function* () {
         const listedAt = yield* nowIso;
@@ -2888,6 +2900,15 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           ),
         );
         const stamped = sameDispatch?.at ?? (yield* Clock.currentTimeMillis);
+        if (settle && sameDispatch !== undefined) {
+          const settled = yield* outputOf(
+            yield* RunRecords,
+            stepOf([sameDispatch], ask.runId, ask.operation, ask.output),
+          );
+          if (settled !== null) {
+            return sameDispatch;
+          }
+        }
         const landedOn = (incarnation: Rooted | undefined, chosen: AgentSession | null = null) => {
           const landed: Types.Mutable<Launched> = {
             agent,
@@ -4626,18 +4647,18 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
     outputFor,
     fromFile: (runId, operation, key) =>
       under(
-        Effect.map(
-          launchesOf(runId),
-          (known) =>
-            Option.getOrUndefined(
-              Arr.findLast(
-                known,
-                (one) =>
-                  one.operation === operation &&
-                  (key === undefined || one.step?.key === undefined || one.step.key === key),
-              ),
-            )?.outputSubmit === "file",
-        ),
+        Effect.map(launchesOf(runId), (known) => {
+          const last = Option.getOrUndefined(
+            Arr.findLast(
+              known,
+              (one) =>
+                one.operation === operation &&
+                (key === undefined || one.step?.key === undefined || one.step.key === key),
+            ),
+          );
+          // WARNING: a launch from before submit mode existed wrote its Output to a file, so no mode means file.
+          return last !== undefined && last.outputSubmit !== "tool";
+        }),
       ).pipe(Effect.catchCause(() => Effect.succeed(false))),
     outputOf: (runId, operation) =>
       under(
@@ -4833,7 +4854,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           return running;
         }),
       ),
-    launch: (ask, note, beforePrompt) => launch(ask, false, note, beforePrompt),
+    launch: (ask, note, beforePrompt, settle) => launch(ask, false, note, beforePrompt, settle),
     revive,
     ranOut,
     stopped: (launched, since) =>
