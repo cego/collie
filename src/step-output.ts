@@ -16,7 +16,6 @@ export const carriedName = (output: string) => `${CARRIED}${baseName(output)}`;
 const baseName = (output: string) =>
   Str.slice(Option.getOrElse(Str.lastIndexOf("/")(output), () => -1) + 1)(output);
 
-// WARNING: a blank string is not an Output, whether it arrives as plain text or as a file.
 export const blank = (text: string) => Str.trim(text) === "";
 
 const Accepted = Schema.Struct({

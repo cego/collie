@@ -73,7 +73,7 @@ import { usageOf } from "../src/usage-ledger-model";
 import type { Source, UsageEntry } from "../src/usage-ledger-model";
 import { readUsage } from "../src/usage-ledger";
 import { measuresOf } from "../src/outcomes";
-import { launchDir, recordLaunch, stemOf } from "../src/launches";
+import { launchDir, readLaunches, recordLaunch, stemOf } from "../src/launches";
 import { Collected } from "../src/agents";
 import { Collecting } from "../src/collecting";
 import { holdsBudgetOf, memoryWaitOf, waitForMemory } from "../src/memory-wait";
@@ -9521,12 +9521,25 @@ test("a submit that lands while an OpenCode launch is starting is accepted, not 
   runEffect(
     Effect.gen(function* () {
       const answers: Array<string> = [];
+      const dispatched: Array<number> = [];
       class Starting extends Herdr {
         override agentLaunch(...args: Parameters<Herdr["agentLaunch"]>) {
-          return submitOutput("r1", agentFor("r1"), {
-            verdict: "clean",
-            note: "during the start",
-          }).pipe(
+          return readLaunches("r1").pipe(
+            Effect.provide(recordsAt(dir)),
+            Effect.tap((known) =>
+              Effect.sync(
+                () =>
+                  void dispatched.push(
+                    Arr.filter(known, (one) => one.operation === "review").length,
+                  ),
+              ),
+            ),
+            Effect.andThen(
+              submitOutput("r1", agentFor("r1"), {
+                verdict: "clean",
+                note: "during the start",
+              }),
+            ),
             Effect.provide(recordsAt(dir)),
             Effect.tap((said) => Effect.sync(() => void answers.push(said))),
             Effect.andThen(super.agentLaunch(...args)),
@@ -9539,7 +9552,54 @@ test("a submit that lands while an OpenCode launch is starting is accepted, not 
         herdr: new Starting(rig.pluginEnv()),
       });
       expect(answers).toEqual(["accepted"]);
+      expect(dispatched).toEqual([1]);
       expect(result._tag === "Success" && result.success.note).toBe("during the start");
+    }),
+  ));
+
+test("a launch replayed with no step keeps the dispatch whose Output was accepted", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const ask = {
+        runId: "r1",
+        operation: "review",
+        role: "reviewer",
+        workflow: "agent-work",
+        harness: "opencode" as const,
+        agent: null,
+        model: "anthropic/claude-opus-4-1",
+        effort: null,
+        permissions: null,
+        task: null,
+        cwd: rig.projectDir,
+        prompt: "Review the diff.",
+        output: `${dir}/agents/r1/review.json`,
+        skill: null,
+      };
+      const launchOnce = () =>
+        session(
+          Effect.gen(function* () {
+            const agents = yield* Agents;
+            return yield* agents.launch(ask);
+          }),
+        );
+      yield* rig.queueOutputs([{ verdict: "clean", note: "the first turn" }]);
+      yield* launchOnce();
+      const at = (yield* readLaunches("r1").pipe(Effect.provide(recordsAt(dir))))[0]?.at;
+      yield* rig.queueOutputs([{ verdict: "clean", note: "a second turn" }]);
+      yield* launchOnce();
+      expect((yield* readLaunches("r1").pipe(Effect.provide(recordsAt(dir))))[0]?.at).toBe(at);
+    }),
+  ));
+
+test("a step an older build dispatched with no mode from the Workflow still collects from its file", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* olderDispatch("r1");
+      yield* rig.queueOutputs([{ verdict: "clean", note: "from the file" }]);
+      const result = yield* session(started("r1"));
+      expect(result._tag).toBe("Success");
+      expect(yield* read(promptPath("r1"))).toContain("OUTPUT_PATH");
     }),
   ));
 

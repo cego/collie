@@ -284,9 +284,19 @@ test("a trial's findings are read from the fact, and from a file only where an o
         output: `${stateDir}/agents/r1/review-3.json`,
       });
       yield* fs.writeFileString(`${stateDir}/agents/r1/review-3.json`, text);
+      const noMode = {
+        ...older,
+        operation: "review-5",
+        output: `${stateDir}/agents/r1/review-5.json`,
+      };
+      yield* recordLaunch(noMode);
+      yield* fs.writeFileString(
+        noMode.output,
+        Str.replace("from the fact", "from the no-mode file")(text),
+      );
       expect(
         Arr.map((yield* trialRecordsOf(stateDir, "r1")).reviews, (one) => one[0]?.title),
-      ).toEqual(["from the fact", "from the file", "from the tool file"]);
+      ).toEqual(["from the fact", "from the file", "from the tool file", "from the no-mode file"]);
     }),
   ));
 

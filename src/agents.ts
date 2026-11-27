@@ -390,7 +390,7 @@ export interface AgentsApi {
     operation: string,
   ) => Effect.Effect<{ readonly text: string; readonly at: number } | null>;
   // WARNING: only a recorded dispatch can be collected from a file; a step this build dispatches submits.
-  readonly fromFile: (runId: string, operation: string) => Effect.Effect<boolean>;
+  readonly fromFile: (runId: string, operation: string, key?: string) => Effect.Effect<boolean>;
   readonly carry: (runId: string, operation: string, text: string) => Effect.Effect<void>;
   readonly skills: (names: ReadonlyArray<string>) => Effect.Effect<ReadonlyMap<string, string>>;
   readonly attachments: (runId: string) => Effect.Effect<ReadonlyArray<Attachment>>;
@@ -676,7 +676,8 @@ export const agentWork: <
     const role = work.role ?? work.operation;
     const skills = yield* agents.skills(skillsIn(work.instructions));
     const held = work.agent === undefined ? null : yield* agents.choiceOf(runId, work.agent);
-    const older = work.outputSubmit === "file" && (yield* agents.fromFile(runId, work.operation));
+    const at = yield* CurrentStep;
+    const older = yield* agents.fromFile(runId, work.operation, at?.key);
     if (work.outputSubmit === "file" && !older) {
       return yield* new WorkflowError({
         reason: `${work.operation}: a step this build dispatches submits its Output, and only a step an older build dispatched is collected from a file`,
@@ -767,7 +768,6 @@ export const agentWork: <
     if (held !== null && held.sequence > 1) {
       ask.sequence = held.sequence;
     }
-    const at = yield* CurrentStep;
     if (at !== null) {
       ask.step = at;
     }
@@ -2772,6 +2772,8 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       return Deferred.succeed(out, undefined);
     });
 
+  const keyOf = (one: { readonly step?: { readonly key?: string } }) => one.step?.key ?? null;
+
   const launching: (
     ask: AgentAsk,
     fresh: boolean,
@@ -2880,8 +2882,9 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             yield* launchesOf(ask.runId),
             (one) =>
               stemOf(one) === stemOf(ask) &&
-              ask.step?.key !== undefined &&
-              one.step?.key === ask.step.key,
+              keyOf(one) === keyOf(ask) &&
+              one.agent === agent &&
+              one.output === ask.output,
           ),
         );
         const stamped = sameDispatch?.at ?? (yield* Clock.currentTimeMillis);
@@ -2985,8 +2988,10 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             })
           : atLaunch
             ? yield* Effect.gen(function* () {
-                // WARNING: OpenCode's prompt goes in with the process, so its step is armed before the process is.
-                yield* armed(landedOn(undefined, chosen));
+                // WARNING: OpenCode's prompt goes in with the process, so its dispatch is recorded and its step armed before the process is.
+                const landing = landedOn(undefined, chosen);
+                yield* recordLaunch(landing);
+                yield* armed(landing);
                 return yield* Effect.uninterruptible(
                   start(ask, agent, { agents: listing.success, listedAt }, pointer, session).pipe(
                     Effect.flatMap((incarnation) => recorded(incarnation, chosen)),
@@ -4619,13 +4624,19 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
 
   return {
     outputFor,
-    fromFile: (runId, operation) =>
+    fromFile: (runId, operation, key) =>
       under(
         Effect.map(
           launchesOf(runId),
           (known) =>
-            Option.getOrUndefined(Arr.findLast(known, (one) => one.operation === operation))
-              ?.outputSubmit === "file",
+            Option.getOrUndefined(
+              Arr.findLast(
+                known,
+                (one) =>
+                  one.operation === operation &&
+                  (key === undefined || one.step?.key === undefined || one.step.key === key),
+              ),
+            )?.outputSubmit === "file",
         ),
       ).pipe(Effect.catchCause(() => Effect.succeed(false))),
     outputOf: (runId, operation) =>
