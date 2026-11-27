@@ -9,6 +9,7 @@ import { sectionOf } from "../src/board-model";
 import { RunRecords } from "../src/run-records";
 import { OPEN_FINDINGS, readFindingStatuses } from "../src/finding-status";
 import { hosted, settledRun } from "./support/hosted";
+import { stopHost } from "./support/host";
 import { hostRecords, recordsAt } from "./support/records";
 import { suiteEnv } from "./support/effect";
 import { epochMs } from "../src/time";
@@ -196,6 +197,7 @@ test("a Run settled before the open count was a fact reports it, and the fact is
   hosted("hw-findings-upgrade-", ({ world }) =>
     Effect.gen(function* () {
       const run = yield* settledRun(world, "leaves");
+      yield* stopHost(world.state);
       yield* clearCount(world.state, run.id);
       expect(yield* countOf(world.state, run.id)).toBeNull();
 
