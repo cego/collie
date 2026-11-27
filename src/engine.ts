@@ -1282,6 +1282,28 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       /** A question shares the wake, so the card waits on whoever answers that. */
       readonly asking?: boolean;
     }) => Effect.Effect<void, WorkflowError>;
+    /**
+     * Records that this Run's round \`name\` began its work at \`head\`, so the journal tells a round
+     * that started from one a moved head or a control refused.
+     */
+    readonly startedRound: (options: {
+      readonly runId: string;
+      readonly target: string;
+      readonly name: string;
+      readonly head: string;
+    }) => Effect.Effect<void, WorkflowError>;
+    /** Records that the round \`startedRound\` named finished its work; a Run that never got here left its round unfinished. */
+    readonly completedRound: (options: {
+      readonly runId: string;
+      readonly target: string;
+    }) => Effect.Effect<void, WorkflowError>;
+    /** Records that the round at \`head\` was abandoned before it reached the forge, \`moved\` being the head the forge shows now. */
+    readonly discardedRound: (options: {
+      readonly runId: string;
+      readonly target: string;
+      readonly cwd: string;
+      readonly head: string;
+    }) => Effect.Effect<void, WorkflowError>;
     /** The merge request \`target\` as the forge reads it now: what a watch's cursor starts from. Take it inside an Activity. */
     readonly mrReading: (options: {
       readonly target: string;
