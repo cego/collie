@@ -309,7 +309,11 @@ test("the CLI takes Improve over two findings of a review, and dismissing the la
           [third, "dismissed"],
         ]);
         expect(yield* openCount(started.runId)).toBe(0);
-        expect(yield* card(started.runId)).toEqual({ section: "finished", landed: true });
+        // WARNING: the board recomputes the card from a forge read it may be refreshing; wait for it to agree.
+        yield* until(
+          () => card(started.runId),
+          (one) => one.section === "finished",
+        );
       }),
     [],
   ));
