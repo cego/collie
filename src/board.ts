@@ -48,7 +48,7 @@ import {
 import type { CheckCommand, Verification } from "./verify";
 import { approvedFor, approvedIn } from "./verify-spec";
 import { readIntent } from "./intent";
-import { findingsIn, isBlocking, openFindingsIn } from "./output";
+import { findingsIn, isBlocking } from "./output";
 import { marksCheck, markersOf, runningCheck } from "./checks";
 import { runningChecks } from "./check-processes";
 import { waitLine } from "./memory-wait";
