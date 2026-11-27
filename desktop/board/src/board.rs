@@ -161,7 +161,6 @@ pub enum Dialog {
         why: Option<String>,
         /// Which read of this checkout's Workflows is the one that counts.
         opened: u64,
-        /// The checkout the Workflows on show were read for.
         read_for: Option<String>,
     },
     Proposal {
@@ -793,7 +792,6 @@ impl App {
         self.read_workflows();
     }
 
-    /// Reads the Workflows the checkout named in the open queued Task's view can start.
     fn read_workflows(&mut self) {
         let Some(Dialog::Queued {
             installation,
@@ -869,7 +867,6 @@ impl App {
         );
     }
 
-    /// Reads another checkout's Workflows once the operator names one.
     pub fn checkout_changed(&mut self) {
         let Some(Dialog::Queued {
             checkout, read_for, ..
