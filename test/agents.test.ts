@@ -9828,6 +9828,47 @@ test("a step with no key does not take a keyed launch's file, and its submit fin
     }),
   ));
 
+test("an Output accepted while a replay lists a live core is read instead of prompted", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const ask = replayAsk();
+      yield* rig.addAgent(agentFor("r1"));
+      yield* recordLaunch({
+        agent: agentFor("r1"),
+        output: ask.output,
+        reused: true,
+        runId: "r1",
+        operation: "review",
+        role: "reviewer",
+        workflow: "agent-work",
+        harness: "claude",
+        outputSubmit: "tool",
+        at: 1000,
+      }).pipe(Effect.provide(recordsAt(dir)));
+      yield* awaitOutput("r1", agentFor("r1"), ask.output, () => null, "review@1000");
+      const arrived = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const outcome = yield* session(
+        Effect.gen(function* () {
+          const agents = yield* Agents;
+          const fiber = yield* Effect.forkChild(
+            agents.launch(ask, undefined, undefined, true).pipe(Effect.result),
+          );
+          yield* Deferred.await(arrived);
+          expect(
+            yield* submitOutput("r1", agentFor("r1"), { verdict: "clean", note: "handed in" }),
+          ).toBe("accepted");
+          yield* Deferred.succeed(release, undefined);
+          return yield* Fiber.join(fiber);
+        }),
+        { herdr: new HoldsListing(arrived, release) },
+      );
+      expect(outcome._tag).toBe("Success");
+      expect(sent(yield* rig.calls(), "Review the diff.")).toBe(0);
+      expect(yield* read(promptPath("r1"))).toBe("");
+    }),
+  ));
+
 test("a keyed step is not finished by an unkeyed launch's file, and its submit finishes it", () =>
   runEffect(
     Effect.gen(function* () {
