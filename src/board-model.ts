@@ -1670,6 +1670,7 @@ export const FrontDoorRpcs = RpcGroup.make(
   Rpc.make("workflows", {
     payload: { project: Schema.String },
     success: Schema.Array(Startable),
+    error: HostRefused,
   }),
   Rpc.make("definitions", { success: HostDefinitions, error: HostRefused }),
   Rpc.make("news", {

@@ -5,7 +5,7 @@ import { Effect, Schema } from "effect";
 import { ProjectView, TaskView } from "../src/board-model";
 import { frontDoor, socketOf } from "../src/host";
 import { stopHost, until } from "./support/host";
-import { collie, proves } from "./support/world";
+import { collie, proves, save } from "./support/world";
 import { runEffect } from "./support/effect";
 import { listening, listenerPort, twoMachines } from "./support/peers";
 import type { World } from "./support/world";
@@ -443,6 +443,22 @@ test("a filing retried past an unavailable Project leaves a Task a newer move to
         }),
       [],
     ),
+  ));
+
+test("the Workflows a start can pick are those of the checkout it names", () =>
+  proves(
+    "collie-workflows-checkout-",
+    (world) =>
+      Effect.gen(function* () {
+        yield* collie(world, ["board"]);
+        yield* save(`${world.home}/.collie/workflows`, ["asks.workflow.ts"]);
+        const door = yield* frontDoor(socketOf(world.state));
+        const atRoot = yield* door.workflows({ project: "projects-root" });
+        expect(Arr.map(atRoot, (one) => one.id)).toContain("asks");
+        const nowhere = yield* door.workflows({ project: "~/nowhere-at-all" }).pipe(Effect.flip);
+        expect(nowhere.reason).toContain("no directory");
+      }),
+    [],
   ));
 
 test("a create request answers the same after its Project is archived, and another Project is another request", () =>

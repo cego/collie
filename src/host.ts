@@ -297,7 +297,8 @@ import {
   voiceOf,
 } from "./proposals";
 import type { ProposalLine, ProposalRecord, Asker, Voice } from "./proposals";
-import { carryOut, carryOutAsked, followUpField } from "./run-actions";
+import { carryOut, carryOutAsked, followUpField, startIn } from "./run-actions";
+import { projectsRoot } from "./projects";
 import { retitleGenericTasks } from "./tasknames";
 import { VerifySpecSchema } from "./verify-spec";
 import { AgentEntrySchema, everyRegistered, REGISTERED } from "./registry";
@@ -3066,19 +3067,38 @@ export const frontDoorHandlers = (
           ),
         offers: ({ runId }) => serve(offersOn(runId)),
         workflows: ({ project }) =>
-          onSyncedRevisions(
-            discover(searchPath({ pluginRoot: env.pluginRoot, userDir: env.userDir, project })),
-          ).pipe(
-            Effect.map(({ entries }) =>
-              Arr.map(entries, ({ id, title, description, inputs }) => ({
-                id,
-                title,
-                description,
-                inputs: Arr.map(
-                  Arr.filter(inputs, (one) => one.strategy !== "internal"),
-                  ({ name, required, schema }) => ({ name, required, schema }),
-                ),
-              })),
+          Effect.gen(function* () {
+            const resolved = yield* startIn(env, project);
+            if ("error" in resolved) {
+              return yield* new HostRefused({ reason: resolved.error });
+            }
+            const where = resolved.where;
+            if (where !== null && "error" in where) {
+              return yield* new HostRefused({ reason: where.error });
+            }
+            const at = resolved.atRoot
+              ? (yield* projectsRoot(env)).path
+              : (where?.found.cwd ?? env.cwd);
+            return yield* onSyncedRevisions(
+              discover(
+                searchPath({ pluginRoot: env.pluginRoot, userDir: env.userDir, project: at }),
+              ),
+            ).pipe(
+              Effect.map(({ entries }) =>
+                Arr.map(entries, ({ id, title, description, inputs }) => ({
+                  id,
+                  title,
+                  description,
+                  inputs: Arr.map(
+                    Arr.filter(inputs, (one) => one.strategy !== "internal"),
+                    ({ name, required, schema }) => ({ name, required, schema }),
+                  ),
+                })),
+              ),
+            );
+          }).pipe(
+            Effect.mapError((cause) =>
+              Schema.is(HostRefused)(cause) ? cause : new HostRefused({ reason: reason(cause) }),
             ),
             Effect.provideContext(bun),
           ),

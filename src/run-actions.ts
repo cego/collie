@@ -122,6 +122,27 @@ export function followUpField(drawn: Schema.Json | null) {
     : { field };
 }
 
+// WARNING: a second resolver would let a picker list Workflows the Start in that checkout cannot find.
+export const startIn = Effect.fn("RunActions.startIn")(function* (
+  env: PluginEnv,
+  named: string | undefined,
+) {
+  const atRoot =
+    Option.getOrUndefined(
+      Option.map(Option.fromNullishOr(named), (present) => Str.trim(present)),
+    ) === PROJECTS_ROOT_OPTION;
+  const repository = named === undefined || atRoot ? null : yield* repositoryCheckout(env, named);
+  if (repository !== null && "error" in repository) {
+    return repository;
+  }
+  const where = atRoot
+    ? null
+    : repository !== null
+      ? { found: { cwd: repository.path, label: named ?? "" } }
+      : yield* workspaceNamed(env, named);
+  return { atRoot, repository, where };
+});
+
 export const registerRunExecutors = Effect.fn("runActions.register")(function* () {
   // WARNING: a second registration would claim an action kind twice, so a repeat call returns early.
   if (registeredKinds().length > 0) {
@@ -368,19 +389,11 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         return failed(`no Task "${action.task}"`);
       }
       const named = action.workspace ?? action.inputs.workspace;
-      const atRoot =
-        Option.getOrUndefined(
-          Option.map(Option.fromNullishOr(named), (present) => Str.trim(present)),
-        ) === PROJECTS_ROOT_OPTION;
-      const repository =
-        named === undefined || atRoot ? null : yield* repositoryCheckout(env, named);
-      const where = atRoot
-        ? null
-        : repository !== null
-          ? "error" in repository
-            ? repository
-            : { found: { cwd: repository.path, label: named ?? "" } }
-          : yield* workspaceNamed(env, named);
+      const resolved = yield* startIn(env, named);
+      if ("error" in resolved) {
+        return failed(resolved.error);
+      }
+      const { atRoot, repository, where } = resolved;
       if (where !== null && "error" in where) {
         return failed(where.error);
       }
