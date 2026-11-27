@@ -7793,6 +7793,7 @@ test("a queued Delivery a human reconciled as sent is not sent to the agent that
             sent: Arr.filter(yield* rig.calls(), (call) => call.cmd === "terminal.send"),
             before: sends.length,
             queued: yield* readQueue(`${dir}/agents/r1`),
+            log: yield* read(`${dir}/agents/r1/agents.log`).pipe(Effect.orElseSucceed(() => "")),
           };
         }),
       );
@@ -7801,7 +7802,10 @@ test("a queued Delivery a human reconciled as sent is not sent to the agent that
         delivered: true,
         delivery: outcome.lost.id,
         observed: false,
+        agent: outcome.lost.agent,
+        pane: outcome.lost.incarnation,
       });
+      expect(outcome.log).not.toContain(`${outcome.lost.agent}-again: told`);
     }),
   ));
 

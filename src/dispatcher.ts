@@ -179,6 +179,8 @@ export type SubmitOutcome =
       readonly held?: string;
       // WARNING: a human reconciled this Delivery as sent, so it is delivered without being sent again.
       readonly settled?: boolean;
+      // WARNING: who a settled Delivery went to, which is not the agent this send was reserved for.
+      readonly settledTo?: { readonly agent: string; readonly terminal: string };
     };
 
 export interface Channel {
@@ -461,6 +463,7 @@ const send = Effect.fn("Dispatcher.send")(function* (
       ...refuse(settledEarlier.id, "blocked", `${settledEarlier.id} was reconciled as sent`),
       held: "superseded",
       settled: true,
+      settledTo: { agent: settledEarlier.agent, terminal: settledEarlier.incarnation },
     };
   }
   const inFlight = blocked(yield* deliveriesAbout(terminalId, key), key, id);
@@ -469,11 +472,14 @@ const send = Effect.fn("Dispatcher.send")(function* (
     yield* deps.log(
       `not sent to ${entry.agent}: ${inFlight.state} delivery ${inFlight.id} is already about this work`,
     );
-    return {
+    const returned: SubmitOutcome = {
       ...refuse(inFlight.id, "blocked", `${inFlight.id} is ${inFlight.state}`),
       held: inFlight.state,
       settled,
     };
+    return settled
+      ? { ...returned, settledTo: { agent: inFlight.agent, terminal: inFlight.incarnation } }
+      : returned;
   }
   const reserved: Delivery = draft.note === undefined ? line : { ...line, note: draft.note };
   yield* appendLine(reserved);

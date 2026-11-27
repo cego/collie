@@ -2184,13 +2184,16 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       outcome.held !== undefined &&
       (SENT_STATES.has(outcome.held) || outcome.settled === true)
     ) {
-      return {
+      const settled = {
         sent: true,
         why: outcome.detail,
         id: outcome.id ?? undefined,
         observed: outcome.held === "acknowledged" ? "taken when it was first sent" : null,
-        pane,
+        pane: outcome.settledTo?.terminal ?? pane,
       };
+      return outcome.settledTo === undefined
+        ? settled
+        : { ...settled, as: outcome.settledTo.agent };
     }
     const terminal = entry.incarnation?.terminalId;
     return {
@@ -4627,12 +4630,14 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         });
         yield* log(
           options.runId,
-          sent.sent
-            ? toldLine(launched.agent, pending.text)
-            : `${launched.agent}: could not be told "${firstLine(pending.text)}" (${sent.why})`,
+          !sent.sent
+            ? `${launched.agent}: could not be told "${firstLine(pending.text)}" (${sent.why})`
+            : sent.as === undefined
+              ? toldLine(launched.agent, pending.text)
+              : `${sent.as}: ${sent.id} was already settled as sent, so nothing was sent to ${launched.agent}`,
         );
         if (sent.sent) {
-          const result = receipt(launched.agent, sent);
+          const result = receipt(sent.as ?? launched.agent, sent);
           if (fallback) {
             yield* keepQueued(dirFor(options.runId), { ...pending, result }).pipe(Effect.orDie);
           }

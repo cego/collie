@@ -158,7 +158,8 @@ A step's prompt or repair left `unobserved` with nothing to show it was taken pa
 Run the same way, and is reconciled the same way; `not-sent` has the resume send it again.
 A `sent` reconciliation finishes the queued row that carried it and is decisive at the
 send's reservation, so no retry races it, and it outlives the incarnation it was written
-for: a request already reconciled as sent is not sent again to a replacement agent. It is
+for: a request already reconciled as sent is not sent again to a replacement agent, and the
+receipt names the agent and terminal it went to rather than the one the retry reserved. It is
 a human's word, so the receipt says sent with no observed turn.
 
 `deferred` is the one refusal that is retried, because it is the one that proves the prompt
