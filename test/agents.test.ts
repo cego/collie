@@ -626,7 +626,9 @@ test("a valid Output reaches the workflow as a typed value, from a real launch",
 
       const cmds = yield* rig.cmds();
       expect(Arr.filter(cmds, (cmd) => cmd === "terminal.run")).toHaveLength(1);
-      expect(yield* read(promptPath("r1"))).toContain("collie_submit");
+      const prompt = yield* read(promptPath("r1"));
+      expect(prompt).toContain("collie_submit");
+      expect(prompt).not.toContain("OUTPUT_PATH");
       expect(yield* read(promptPath("r1"))).not.toContain("OUTPUT_PATH");
       expect(yield* fileExists(outputPath("r1"))).toBe(false);
       expect(
