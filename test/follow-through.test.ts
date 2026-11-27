@@ -2522,9 +2522,9 @@ test("a review of the local diff saves its report though no merge request can ca
           ).pipe(Effect.timeout("10 minutes"));
           expect(done?.status.status).toBe("suspended");
           const fs = yield* FileSystem.FileSystem;
-          expect(
-            yield* fs.readFileString(`${runDir(host.dir(), runId)}/review.md`),
-          ).toContain(F1.title);
+          expect(yield* fs.readFileString(`${runDir(host.dir(), runId)}/review.md`)).toContain(
+            F1.title,
+          );
         }),
       );
     }),

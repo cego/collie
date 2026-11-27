@@ -157,11 +157,19 @@ const structuredBudget = (response: Response) => {
 };
 
 const ErrorBody = Schema.Struct({
-  message: Schema.optionalKey(Schema.Unknown),
-  errors: Schema.optionalKey(Schema.Array(Schema.Unknown)),
+  message: Schema.optionalKey(Schema.Json),
+  errors: Schema.optionalKey(Schema.Array(Schema.Json)),
 });
-const ErrorMessage = Schema.Struct({ message: Schema.optionalKey(Schema.Unknown) });
+const Said = Schema.Union([
+  Schema.String,
+  Schema.Struct({ message: Schema.optionalKey(Schema.String) }),
+]);
 const decodeErrorBody = Schema.decodeUnknownOption(Schema.fromJsonString(ErrorBody));
+const decodeSaid = Schema.decodeUnknownOption(Said);
+const saidOf = (one: Schema.Json) =>
+  Option.map(decodeSaid(one), (said) =>
+    Schema.is(Schema.String)(said) ? said : said.message,
+  ).pipe(Option.getOrUndefined);
 
 const namesSecondaryLimit = (body: string) => {
   const parsed = Option.getOrNull(decodeErrorBody(body));
@@ -169,17 +177,11 @@ const namesSecondaryLimit = (body: string) => {
     return false;
   }
   // WARNING: each message is read on its own: one malformed entry says nothing of the others.
-  const messages = [
-    parsed.message,
-    ...Arr.map(
-      parsed.errors ?? [],
-      (one) => Option.getOrNull(Schema.decodeUnknownOption(ErrorMessage)(one))?.message,
-    ),
-  ];
-  return Arr.some(
-    messages,
-    (text) => typeof text === "string" && SECONDARY_LIMIT_RE.test(text),
-  );
+  const messages = [parsed.message, ...(parsed.errors ?? [])];
+  return Arr.some(messages, (one) => {
+    const said = saidOf(one);
+    return said !== undefined && SECONDARY_LIMIT_RE.test(said);
+  });
 };
 
 const refusedByLimit: (response: Response) => Promise<boolean> = (response) => {
