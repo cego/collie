@@ -1,6 +1,6 @@
 {
   "name": "collie",
-  "version": "1.0.30",
+  "version": "1.0.33",
   "private": true,
   "type": "module",
   "scripts": {

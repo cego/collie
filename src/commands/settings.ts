@@ -63,24 +63,28 @@ const set = Command.make(
         if ("refused" in parsed) {
           return err("invalid_input", parsed.refused);
         }
-        return yield* mutation(env, "settings-set", requestId, (id) =>
-          Effect.gen(function* () {
-            const done = yield* setSharedSetting(env, {
-              door: yield* cliDoor(env),
-              key,
-              value: parsed.value,
-              at: yield* nowIso,
-              request: id,
-            });
-            if (!done.ok) {
-              return done;
-            }
-            return {
-              ok: true,
-              data: done.value,
-              human: `${key} is now ${Str.trim(value) || "unset"}; ${settingOf(key)?.machine === true ? "this Machine's alone" : "paired hosts share it with their peers"}`,
-            };
-          }),
+        return yield* mutation(
+          env,
+          { operation: "settings-set", run: null, args: { key, value: parsed.value } },
+          requestId,
+          (id) =>
+            Effect.gen(function* () {
+              const done = yield* setSharedSetting(env, {
+                door: yield* cliDoor(env),
+                key,
+                value: parsed.value,
+                at: yield* nowIso,
+                request: id,
+              });
+              if (!done.ok) {
+                return done;
+              }
+              return {
+                ok: true,
+                data: done.value,
+                human: `${key} is now ${Str.trim(value) || "unset"}; ${settingOf(key)?.machine === true ? "this Machine's alone" : "paired hosts share it with their peers"}`,
+              };
+            }),
         );
       }),
     ),

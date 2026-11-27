@@ -100,7 +100,11 @@ collie machine invite --for <installation> --name <name> [--address <host>]
 
 The Machines are core's machine list, by core's name for each. `data.backend` is always
 `core`; `data.roster` is the list, with each Machine's `label` (its name), `target` (how
-SSH reaches it) and `session` (`default`).
+SSH reaches it) and `session` (`default`). A list core could not be asked for is `null`
+with `rosterFailure` saying why, never an empty one, and then a Machine core may keep is
+`added: null`: not known, rather than not there. A read core accepts but does not answer is
+given five seconds (`COLLIE_ROSTER_READ_WITHIN`, which has to be a finite positive duration),
+then reported the same way.
 
 `list` names each Machine paired with this one, which side dials (`out`: this one dials it;
 `in`: it dials this one), and whether it answers now. Its `data.machines` is each one's
@@ -361,7 +365,8 @@ A path that does not exist, is not a regular file, cannot be read or is larger t
 workspace is made. The files are part of the request: at the host, the same request id with other
 attachments is `RequestConflict`, and with the same ones it is the same Run. The CLI
 answers a `--request-id` it already has a receipt for from that receipt, before the host
-is asked, so there it is the first Run whatever is attached. They are not
+is asked — but only to the same request, so a retry with other attachments is refused
+rather than answered with the first Run. They are not
 an Input, so the Workflow's own input, and with it the execution, is the same either way.
 The operation's line in the Run's audit trail, kept in `host.db`, names each file under `asked`, by the
 name the Run keeps it under and the path it came from. Chat's `start`, `followup`,
@@ -2022,7 +2027,7 @@ The reason is exactly one of these, checked in this order:
 - `the environment differs from verification <id>'s`;
 - `verification <id> was collected before this host started`. A pass counts only if this
   host collected it, because a restart is when a human may have repaired something outside
-  the tree, so a restarted host runs the check again, and this line says why.
+  the tree, so a check the host did not collect runs again, and this line says why.
 
 The gate says the same in the Run's log, `<pass>: <check> runs: <reason>`, before it runs a
 check it could not rely on.
@@ -2519,11 +2524,39 @@ A receipt is reserved before the action starts. If execution is interrupted befo
 result is saved, retrying reports `outcome: unknown` instead of running the action again.
 Check the Run and its recorded effects before submitting a new request.
 
+A receipt belongs to one request: the same operation, the same Run and the same arguments,
+with the Run read from who asked rather than from what the arguments say. The arguments are
+the ones the command decoded, so an object written in another key order is the same
+request, and an upload's own flags are the ones it sends: `--upload` with no path to
+upload, or `--snapshot` on an upload, changes nothing. A file the CLI sends from this
+Machine — an `--attach`, an upload's `--path` — is the path it resolves to, so `note.md`
+and its absolute path are one request; a path the host is given as typed, such as an
+artefact's `--path` without `--upload`, is not. A directory is counted as the physical path
+it resolves to: a symlink and its target are one request, and a link pointed at another
+checkout is another. A Schedule counts the checkout its `--workspace` resolved. A start
+counts the workspace as it was named as well as the checkout it resolved, so one whose
+workspace now resolves elsewhere is refused. A fork counts the physical directory it reads —
+the `.collie` of the directory the command runs in, which `COLLIE_CWD` sets — and a user
+fork also counts the project its source is copied from. A project fork writes in that
+directory; a user fork writes under this Machine's user config directory instead. Only
+`persona fork --layer project` takes the directory from `--workspace`, and only where no cwd
+was given: `workflow fork` and a user persona fork always read the directory they run in,
+whatever `--workspace` names. A local path that has gone, or that is no longer a
+directory, is refused before its receipt is looked up, for a Schedule's `--workspace` and
+for the directory a fork runs in, so neither replays the answer it was given while the
+directory was there. A
+request that reuses an id for anything else is refused as `invalid_input`, with none of the
+stored answer, and applies nothing; check that first request's effect before retrying under
+a new id. A receipt written before Collie scoped receipts to their requests is replayed only
+to the same operation for the Run its stored answer names; every other request under that id
+is refused the same way.
+
 A failure carries the request id back in `error.details.requestId`, including when the id
 was generated for you — so a failed send always leaves you something to retry with rather
 than forcing a fresh id, which would be a second run rather than a retry. A `needs_input`
 or `invalid_input` rejection writes no receipt, so the same id is free to reuse once you
-have fixed the command.
+have fixed the command — unless the refusal was a receipt conflict, which leaves the
+first request's receipt in place for its own retry.
 
 Native chat returns `Request: <id>` with its result; pass that value as `request_id` to
 retry. A partially applied sequence keeps its receipt even if its last action asks a
@@ -3154,15 +3187,29 @@ command, the board or the chat turn that asked for it. Typing it is how you watc
 terminal.
 
 `host restart` replaces the host that owns the state directory (this installation's by
-default) with this install's: it asks the owner to stop, kills it if it is still there five
-seconds past its stop grace, starts a host, and waits until that one answers. It prints the
-old and new pid and build, `data.before` and `data.after` under `--json`; with no host
-running, `before` is null and it says it started one. A stopped host never answered is named
-with its pid and `build unknown`. Nothing about a Run is touched: the new host recovers
-what the old one was doing, exactly as on any start, so a parked Run is still parked and a
-step that was cut short runs again. A check the old host was running is ended with it and
-runs again on the new one. One a host left without ending it, because it was killed or
-crashed, is ended by the next host to start, named in the Run's log, and runs once more.
+default) with this install's: it asks the owner to hand its running checks over and to stop,
+kills it if it is still there five seconds past its stop grace, starts a host, and waits until
+that one answers. It prints the old and new pid and build, `data.before` and `data.after` under
+`--json`; with no host running, `before` is null and it says it started one. A host it
+stopped is named with its pid and the build it answered with or recorded. Nothing about a
+Run is touched: the
+new host recovers what the old one was doing, exactly as on any start, so a parked Run is
+still parked and a step that was cut short runs again. A check the old host was running is
+handed over to the new host, which collects it and writes its one Verification: the check's
+process runs on. That is only when this install's build is at least the host's own, and only
+for a check the host supervises — whatever asked for it, a Run's gate, an agent's or a
+human's `collie verify`. At the host's own
+build only a client of the host's own installation hands over; a same-build restart from
+another installation, or from a development checkout, ends the check, and it runs again.
+A check the host does not supervise, such as a measurement's, is ended by any stop and runs
+again. One a host left without ending it, because it was killed or crashed, is ended by the
+next host to start, named in the Run's log, and runs once more. A restart asked for by a
+client older than the host is refused, naming the build the host runs, and changes nothing. It
+signals nothing while an owner has not said which build it is: it waits up to five seconds
+for a `host.build` that names the pid and the start token `host.lock` holds, and reports
+`HostUnavailable` with the owner's pid if the record never names it — one that arrives in the
+wait is judged by the version and installation rules like any other, a newer build as
+`HostVersionMismatch`.
 
 `host rollback` is for going back to an older build. A Run's own records, such as its
 Steps, its audit trail, its Intent and its steering cards, are rows in the state
@@ -3421,12 +3468,26 @@ It says which build it is, and which installation it serves. A client newer than
 from the same installation (after `collie upgrade`), stops it and starts itself in its
 place; a host still there five seconds past its stop grace is killed, and its work is
 recovered by the one that replaces it. A host that does not answer is replaced the same way
-when the build it recorded in `host.build` is older. Any other client of another build is told which build is running and to run
-`collie host restart`, and sends nothing else. That includes a checkout under development, which is pointed
+when the build it recorded in `host.build` is older. A client older than the host is refused,
+naming the build the host runs — the build the host recorded in `host.build` when it does not
+answer — and sends nothing: an old shell never downgrades the host. A build from before that
+refusal has none of it and still sends a plain stop signal, which a host cannot attribute and
+must honour: it ends the running check, and the older build serves until a client of this
+build replaces it again. A client of another
+installation is told the installation that host serves and to point `COLLIE_STATE_DIR` at a
+directory of its own, and sends nothing else; the host's build is in the refusal's
+`data.host`. A host of another installation that does not answer is refused on what it recorded: a
+newer build is `HostVersionMismatch`, as any newer host is, and an older one is
+`HostUnavailable` with whether anything owns the directory, because only this installation's
+host is replaced. A silent host of another installation is therefore left running. That
+includes a checkout under
+development, which is pointed
 at a state directory of its own rather than replacing the installed host. Such a
 checkout's host also says `development: "<version>+<sha>"`; a release's does not.
 A host that cannot be started at all, or that takes a connection and does not answer within
-five seconds, is `HostUnavailable`, with whether anything owns the directory. [ADR-0015](adr/0015-one-local-host-owns-a-state-directory.md) is why each of
+five seconds, is `HostUnavailable`, with whether anything owns the directory — unless the
+build it recorded is newer, which is `HostVersionMismatch` whichever installation that host
+serves. [ADR-0015](adr/0015-one-local-host-owns-a-state-directory.md) is why each of
 those is the way it is.
 
 `COLLIE_HOST` names the command a client starts a host with — one path, or a JSON array of

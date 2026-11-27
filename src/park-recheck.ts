@@ -8,6 +8,7 @@ import { appendRunJournal, readRunJournal, runJournal } from "./journal";
 import { projectHere, shell, whatItSaid } from "./mr";
 import type { RunView } from "./engine";
 import { herdrFailureReason } from "./herdr";
+import { hiddenEdits, liveTip } from "./checkout-read";
 import type { Herdr } from "./herdr";
 import { parkText } from "./park-cause";
 import type { ParkCause } from "./park-cause";
@@ -162,17 +163,42 @@ export const recheckPark = (
   Effect.gen(function* () {
     switch (view.park?.cause) {
       case "checkout-dirty-collie": {
-        const read = yield* shell(
-          "git",
-          ["status", "--porcelain", "--untracked-files=all"],
-          view.cwd,
-        );
-        return read.code !== 0
-          ? reply(false, whatItSaid(read), true)
-          : reply(
-              Str.trim(read.stdout) === "",
-              Str.trim(read.stdout) === "" ? "checkout clean" : "checkout still dirty",
-            );
+        const git = (args: Array<string>) => shell("git", args, view.cwd);
+        const read = yield* git(["status", "--porcelain", "--untracked-files=all"]);
+        if (read.code !== 0) {
+          return reply(false, whatItSaid(read), true);
+        }
+        if (Str.trim(read.stdout) !== "") {
+          return reply(false, "checkout still dirty");
+        }
+        const hidden = yield* hiddenEdits(git);
+        if (hidden === null) {
+          return reply(false, "git could not read the checkout", true);
+        }
+        if (hidden.length > 0) {
+          return reply(false, `checkout hides changes to ${Arr.join(hidden, ", ")}`);
+        }
+        const head = yield* git(["rev-parse", "HEAD"]);
+        const branch = yield* git(["rev-parse", "--abbrev-ref", "HEAD"]);
+        if (head.code !== 0 || branch.code !== 0) {
+          return reply(false, whatItSaid(head.code !== 0 ? head : branch), true);
+        }
+        const named = Str.trim(branch.stdout);
+        const fetched = yield* git(["fetch", "--prune", "--quiet", "origin"]);
+        if (fetched.code !== 0) {
+          return reply(false, `origin could not be read: ${whatItSaid(fetched)}`, true);
+        }
+        const tip = yield* liveTip(git, named);
+        if (tip._tag === "Gone") {
+          return reply(false, `origin's ${named} is gone`);
+        }
+        if (tip._tag === "Unreadable") {
+          return reply(false, `origin could not be read: ${tip.why}`, true);
+        }
+        const carried = yield* git(["merge-base", "--is-ancestor", Str.trim(head.stdout), tip.sha]);
+        return carried.code === 0
+          ? reply(true, `checkout clean and pushed to origin's ${named}`)
+          : reply(false, `checkout clean, but origin's ${named} does not carry its head yet`);
       }
       case "target-red": {
         const latest = yield* lastCiTargets(stateDir, view.runId);

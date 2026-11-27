@@ -89,6 +89,7 @@ import { RUNNING_CHECK, RunRecords } from "../src/run-records";
 import { exec } from "./support/command";
 import { collie, proves } from "./support/world";
 import type { World } from "./support/world";
+import { recordedCheck } from "./board.test-utils";
 import { stopHost, until } from "./support/host";
 import type { Launched } from "../src/launches";
 import { orderLaunch, recordLaunch } from "../src/launches";
@@ -595,7 +596,7 @@ const FORMS: Array<[string, Sentence, string]> = [
   [
     "done with a merge request open",
     facts({ state: "done", mr: "https://gitlab.cego.dk/mk/collie/-/merge_requests/65" }),
-    "mk/collie!65 is open; nothing has checked it.",
+    "mk/collie!65 is open; its checks have not been read.",
   ],
   [
     "done and abandoned",
@@ -1551,6 +1552,140 @@ test("a check still running for an older Run of a Task keeps the Task working, e
     }),
   ));
 
+test("a check left behind by an attempt that ended does not keep its Task working", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const newer = yield* madeRun(dir, {
+        id: "r-newer",
+        task: "task-1",
+        state: "succeeded",
+        created: "2026-09-14T09:00:00Z",
+        finished: "2026-09-14T09:30:00Z",
+      });
+      const older = yield* madeRun(dir, {
+        id: "r-older",
+        task: "task-1",
+        state: "failed",
+        created: "2026-09-14T08:00:00Z",
+        finished: "2026-09-14T08:30:00Z",
+      });
+      yield* recordedCheck(older, "r-older@1-a");
+      yield* marking(older, { name: "lint", pass: "recheck" });
+
+      const [stale] = yield* board(env, [newer, older], { collecting: new Set<string>() });
+      expect(stale?.state).not.toBe("active");
+      expect(stale?.check).toBeNull();
+      expect(stale!.sentence).not.toContain("Running lint");
+
+      const [live] = yield* board(env, [newer, older], { collecting: new Set(["r-older@1-a"]) });
+      expect(live?.state).toBe("active");
+      expect(live!.sentence).toContain("Running lint again");
+
+      const ending = yield* madeRun(dir, { id: "r-ending", task: "task-2" });
+      yield* recordedCheck(ending, "r-ending@1-a");
+      const [going] = yield* board(env, [ending], { collecting: new Set<string>() });
+      expect(going?.state).toBe("active");
+      expect(going!.sentence).toContain("Running lint");
+    }),
+  ));
+
+test("a marker left behind does not hide a check of its Run that is still collected", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, {
+        id: "r-ended",
+        task: "task-1",
+        state: "stopped",
+        created: "2026-09-14T09:00:00Z",
+        finished: "2026-09-14T09:30:00Z",
+      });
+      yield* recordedCheck(run, "r-ended@1-a");
+      yield* recordedCheck(run, "r-ended@1-b", "test");
+      yield* marking(run, { name: "lint", pass: "recheck" });
+
+      const [left] = yield* board(env, [run], { collecting: new Set(["r-ended@1-b"]) });
+      expect(left?.check?.name).toBe("test");
+      expect(left!.sentence).toContain("Running test");
+      expect(left!.sentence).not.toContain("lint");
+    }),
+  ));
+
+test("a marker of another pass does not stand in for the check its Run collects", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, {
+        id: "r-ended",
+        task: "task-1",
+        state: "succeeded",
+        created: "2026-09-14T09:00:00Z",
+        finished: "2026-09-14T09:30:00Z",
+      });
+      yield* recordedCheck(run, "r-ended@1-a");
+      yield* marking(run, { name: "lint", pass: "gate" });
+
+      const [left] = yield* board(env, [run], { collecting: new Set(["r-ended@1-a"]) });
+      expect(left!.sentence).toContain("Running lint again on the same tree");
+      expect(left!.sentence).not.toContain("on the branch");
+      expect(left!.check?.revision).toBe("");
+    }),
+  ));
+
+test("a marker of one gate fix does not stand in for the check of the next", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, {
+        id: "r-ended",
+        task: "task-1",
+        state: "succeeded",
+        created: "2026-09-14T09:00:00Z",
+        finished: "2026-09-14T09:30:00Z",
+      });
+      yield* recordedCheck(run, "r-ended@1-a", "lint", { pass: "fix", round: 2 });
+      yield* marking(run, { name: "lint", pass: "fix", round: 1 });
+
+      const [left] = yield* board(env, [run], { collecting: new Set(["r-ended@1-a"]) });
+      expect(left!.sentence).toContain("Running lint after gate fix 2");
+      expect(left!.sentence).not.toContain("gate fix 1");
+      expect(left!.check?.revision).toBe("");
+    }),
+  ));
+
+test("a Run that has not ended shows its marker over a record of another check", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, { id: "r-running", task: "task-1" });
+      yield* recordedCheck(run, "r-running@1-a");
+      yield* marking(run);
+
+      const [view] = yield* board(env, [run], { collecting: new Set<string>() });
+      expect(view!.sentence).toContain("Running test on the branch");
+    }),
+  ));
+
+test("a board told of no collecting set keeps a marker over a record, as before", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, {
+        id: "r-ended",
+        task: "task-1",
+        state: "succeeded",
+        created: "2026-09-14T09:00:00Z",
+        finished: "2026-09-14T09:30:00Z",
+      });
+      yield* recordedCheck(run, "r-ended@1-a");
+      yield* marking(run);
+
+      const [view] = yield* board(env, [run]);
+      expect(view!.sentence).toContain("Running test on the branch");
+    }),
+  ));
+
 test("what the host writes about a finished Run does not move when it ended", () =>
   runEffect(
     Effect.gen(function* () {
@@ -1598,7 +1733,7 @@ test("what became of the work is the disposition's answer and nobody else's", ()
 
       const now = epochMs("2026-09-14T10:00:00Z");
       const before = yield* board(env, [run], { now });
-      expect(before[0]!.sentence).toBe("content!1 is open; nothing has checked it.");
+      expect(before[0]!.sentence).toBe("content!1 is open; its checks have not been read.");
 
       yield* recordDisposition(run.dir, {
         at: "2026-09-14T09:00:00Z",
@@ -2647,6 +2782,149 @@ test("a line handing the work to a Run of another Task lands its own Task, and t
       expect(by("task-2").landed).toBe(false);
       expect(sectionOf(by("task-2"))).toBe("waiting");
       expect(by("task-2").sentence).toContain("mk/support!279");
+    }),
+  ));
+
+test("a superseded branch-only Run hands its work to a successor that carries a merge request", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const first = yield* madeRun(dir, {
+        id: "r-first",
+        task: "task-1",
+        state: "stopped",
+        branch: "mk/old",
+        created: "2026-09-14T08:00:00Z",
+        finished: "2026-09-14T08:30:00Z",
+      });
+      const successor = yield* madeRun(dir, {
+        id: "r-successor",
+        task: "task-2",
+        state: "succeeded",
+        branch: "mk/new",
+        mr: M,
+        created: "2026-09-14T08:40:00Z",
+        finished: "2026-09-14T09:30:00Z",
+      });
+      yield* recordDisposition(first.dir, {
+        at: "2026-09-14T09:00:00Z",
+        by: "chat",
+        kind: "superseded",
+        ref: successor.id,
+        note: null,
+      });
+
+      const views = yield* board(env, [first, successor], {
+        tasks: [TASK, { ...TASK, id: "task-2" }],
+        mrStates: new Map([[M_ID, "merged"]]),
+      });
+      const firstCard = Option.getOrThrow(Arr.findFirst(views, (view) => view.id === "task-1"));
+      expect(firstCard.landed).toBe(true);
+      expect(sectionOf(firstCard)).toBe("finished");
+      expect(firstCard.sentence).toContain("Superseded by r-successor");
+    }),
+  ));
+
+test("a handoff lands a Run only on the same branch, or on a successor's merge request where it records none itself", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const tasks = [TASK, { ...TASK, id: "task-other" }, { ...TASK, id: "task-third" }];
+      const landedOn = (first: RunFacts, successor: RunFacts) =>
+        Effect.gen(function* () {
+          yield* recordDisposition(first.dir, {
+            at: "2026-09-14T09:00:00Z",
+            by: "chat",
+            kind: "superseded",
+            ref: successor.id,
+            note: null,
+          });
+          const views = yield* board(env, [first, successor], { tasks });
+          return Option.getOrThrow(Arr.findFirst(views, (view) => view.id === first.task!)).landed;
+        });
+
+      const bare = yield* madeRun(dir, {
+        id: "r-bare",
+        task: "task-1",
+        state: "failed",
+        branch: "mk/support",
+        mr: "!279",
+        created: "2026-09-14T08:00:00Z",
+        finished: "2026-09-14T08:30:00Z",
+      });
+      const unrelated = yield* madeRun(dir, {
+        id: "r-unrelated",
+        task: "task-other",
+        state: "succeeded",
+        branch: "mk/other",
+        mr: "https://gitlab.cego.dk/mk/other/-/merge_requests/7",
+        created: "2026-09-14T08:40:00Z",
+        finished: "2026-09-14T09:30:00Z",
+      });
+      expect(yield* landedOn(bare, unrelated)).toBe(false);
+
+      const carried = yield* madeRun(dir, {
+        id: "r-carried",
+        task: "task-1",
+        state: "failed",
+        branch: "mk/support",
+        mr: M,
+        created: "2026-09-14T08:00:00Z",
+        finished: "2026-09-14T08:30:00Z",
+      });
+      const sameBranch = yield* madeRun(dir, {
+        id: "r-same-branch",
+        task: "task-third",
+        state: "succeeded",
+        branch: "mk/support",
+        created: "2026-09-14T08:40:00Z",
+        finished: "2026-09-14T09:30:00Z",
+      });
+      expect(yield* landedOn(carried, sameBranch)).toBe(true);
+    }),
+  ));
+
+test("a Task is redrawn when the merge request its superseded line names arrives at another Task's Run", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const first = yield* madeRun(dir, {
+        id: "r-first",
+        task: "task-1",
+        state: "stopped",
+        branch: "mk/old",
+        created: "2026-09-14T08:00:00Z",
+        finished: "2026-09-14T08:30:00Z",
+      });
+      const successor = yield* madeRun(dir, {
+        id: "r-successor",
+        task: "task-2",
+        state: "succeeded",
+        branch: "mk/new",
+        created: "2026-09-14T08:40:00Z",
+        finished: "2026-09-14T09:30:00Z",
+      });
+      yield* recordDisposition(first.dir, {
+        at: "2026-09-14T09:00:00Z",
+        by: "chat",
+        kind: "superseded",
+        ref: successor.id,
+        note: null,
+      });
+      const cards = { revision: () => 1, kept: new Map() };
+      const read = (runs: ReadonlyArray<RunFacts>) =>
+        board(env, runs, {
+          tasks: [TASK, { ...TASK, id: "task-2" }],
+          mrStates: new Map([[M_ID, "merged"]]),
+          cards,
+        });
+
+      const [waiting] = yield* read([first, successor]);
+      expect(waiting!.landed).toBe(false);
+
+      const [landed] = yield* read([first, { ...successor, mr: M }]);
+      expect(landed!.landed).toBe(true);
+      expect(sectionOf(landed!)).toBe("finished");
     }),
   ));
 
@@ -3929,7 +4207,30 @@ test("an open merge request says whether it is ready, what failed, and the next 
     }),
   ).toBe("cego/collie#30 is open, but lint failed at 1a2b3c4. Next: fix lint, or tell builder to.");
   expect(open({ checks: { state: "unchecked" } })).toBe(
-    "cego/collie#30 is open; nothing has checked it.",
+    "cego/collie#30 is open; its checks have not been read.",
+  );
+  expect(
+    open({ checks: { state: "unchecked" }, forge: { checks: { state: "unknown" }, head: null } }),
+  ).toBe("cego/collie#30 is open; its checks have not been read.");
+  expect(
+    open({ checks: { state: "unchecked" }, forge: { checks: { state: "none" }, head: null } }),
+  ).toBe("cego/collie#30 is open; its checks have not been read.");
+  expect(
+    open({
+      checks: { state: "unchecked" },
+      forge: { checks: { state: "none" }, head: "1a2b3c4d5e" },
+    }),
+  ).toBe("cego/collie#30 is open; nothing has checked it.");
+  expect(
+    open({ checks: { state: "unchecked" }, forge: { checks: { state: "passed" }, head: null } }),
+  ).toBe("cego/collie#30 is open; its checks have not been read.");
+  expect(
+    open({
+      checks: { state: "unchecked" },
+      forge: { checks: { state: "passed" }, head: "1a2b3c4d5e" },
+    }),
+  ).toBe(
+    "cego/collie#30 is open; its checks passed at 1a2b3c4, but Collie has not checked it there.",
   );
 });
 
@@ -3961,7 +4262,7 @@ test.each([
   );
   expect(done({ checks: { state: "running" } })).toBe(`${one.label} is open; ${one.running}.`);
   expect(done({ checks: { state: "unchecked" } })).toBe(
-    `${one.label} is open; nothing has checked it.`,
+    `${one.label} is open; its checks have not been read.`,
   );
   expect(done({ mrState: "closed" })).toBe(`${one.noun} ${one.label} closed without merging.`);
   const merged = (mrState: Sentence["mrState"]) =>
@@ -4057,7 +4358,7 @@ test("a succeeded Run's open merge request is ready only on checks at its branch
       );
       const view = Effect.map(board(env, [run]), (views) => views[0]!);
 
-      expect((yield* view).sentence).toBe("cego/collie#30 is open; nothing has checked it.");
+      expect((yield* view).sentence).toBe("cego/collie#30 is open; its checks have not been read.");
 
       yield* appendVerification(run.evidence, checked("test", "0000000older"));
       expect((yield* view).checks).toEqual({ state: "unchecked" });
@@ -4103,6 +4404,60 @@ test("a succeeded Run's open merge request is ready only on checks at its branch
       expect(unapproved[0]!.sentence).toBe(
         `cego/collie#30 is open and its checks passed at ${pipe(head, Str.slice(0, 7))}, but the forge says it cannot merge: not approved.`,
       );
+    }),
+  ));
+
+test("a card says its checks passed where the forge read them, and that Collie has not checked it there", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const { repo, head } = yield* checkout("mk/ship");
+      const run = yield* madeRun(dir, {
+        task: "task-1",
+        state: "succeeded",
+        branch: "mk/ship",
+        cwd: repo,
+        mr: PR,
+        finished: "2026-09-14T09:30:00Z",
+      });
+      yield* Branches.use((branches) =>
+        branches.put(
+          new Map([[branchKey(repo, "mk/ship"), { head, project: null, movements: [] }]]),
+        ),
+      );
+      const forge = (checks: ForgeChecks, at: string | null = head) =>
+        new Map([
+          [
+            "github.com/cego/collie#30",
+            {
+              checks,
+              head: at,
+              mergeable: { state: "mergeable" as const, said: "mergeable" },
+              read: "2026-09-14T10:04:00Z",
+            },
+          ],
+        ]);
+      const seen = (forgeFacts?: ReturnType<typeof forge>) =>
+        board(env, [run], {
+          mrStates: new Map([["github.com/cego/collie#30", "open"]]),
+          forge: forgeFacts,
+        });
+
+      const [green] = yield* seen(forge({ state: "passed" }));
+      expect(green!.sentence).toBe(
+        `cego/collie#30 is open; its checks passed at ${pipe(head, Str.slice(0, 7))}, but Collie has not checked it there.`,
+      );
+      expect(green!.ready).toBe(false);
+      expect(Arr.map(green!.readiness!.missing, (one) => one.fact)).toEqual(["checks"]);
+
+      const [unread] = yield* seen();
+      expect(unread!.sentence).toBe("cego/collie#30 is open; its checks have not been read.");
+
+      const [none] = yield* seen(forge({ state: "none" }));
+      expect(none!.sentence).toBe("cego/collie#30 is open; nothing has checked it.");
+
+      const [unbound] = yield* seen(forge({ state: "none" }, null));
+      expect(unbound!.sentence).toBe("cego/collie#30 is open; its checks have not been read.");
     }),
   ));
 
