@@ -1184,22 +1184,33 @@ const claudeReconcile = Effect.fn("Compactors.claudeReconcile")(function* (
     readonly at: number;
     readonly request: string | null;
     readonly session: string | null;
+    readonly parent: string | null;
   }> = [];
   const boundaries: Array<{
     readonly at: number;
     readonly before: boolean;
     readonly session: string | null;
+    readonly uuid: string | null;
   }> = [];
+  const parents = new Map<string, string | null>();
   const entries = Arr.map(lines, (line) => Option.getOrUndefined(decodeTranscriptLine(line)));
   for (const [at, entry] of entries.entries()) {
     if (entry === undefined) {
       continue;
     }
+    if (entry.uuid !== undefined) {
+      parents.set(entry.uuid, entry.parentUuid ?? null);
+    }
     // WARNING: the turn that typed the marker is the only turn whose compaction is the request's.
     if (entry.type === "user") {
       const request = namedRequest(entry);
       if (compactCommand(entry)) {
-        commands.push({ at, request, session: entry.sessionId ?? null });
+        commands.push({
+          at,
+          request,
+          session: entry.sessionId ?? null,
+          parent: entry.parentUuid ?? null,
+        });
       }
       named = request === mark.id;
       markers += named ? 1 : 0;
@@ -1210,18 +1221,42 @@ const claudeReconcile = Effect.fn("Compactors.claudeReconcile")(function* (
       continue;
     }
     if (manualBoundary(entry) && writerOf(entry, mark) && epochMs(entry.timestamp) >= since) {
-      boundaries.push({ at, before: named, session: entry.sessionId ?? null });
+      boundaries.push({
+        at,
+        before: named,
+        session: entry.sessionId ?? null,
+        uuid: entry.uuid ?? null,
+      });
     }
   }
   // WARNING: Claude writes the boundary first and re-injects the command inside the record it opens, so only that record's own command can claim it.
-  const opens = (one: { readonly at: number; readonly session: string | null }) => {
+  const descended = (from: string | null, ancestor: string | null) => {
+    if (from === null || ancestor === null) {
+      return null;
+    }
+    let step: string | null = from;
+    for (let taken = 0; step !== null && taken < 4096; taken += 1) {
+      if (step === ancestor) {
+        return true;
+      }
+      step = parents.get(step) ?? null;
+    }
+    return false;
+  };
+  const opens = (one: {
+    readonly at: number;
+    readonly session: string | null;
+    readonly uuid: string | null;
+  }) => {
     const session = one.session;
     const command = Arr.findFirst(commands, (other) => other.at > one.at);
     return (
       Option.isSome(command) &&
       command.value.request === mark.id &&
       // WARNING: a transcript can hold two conversations, so only the command of the boundary's own lineage opened it.
+      // WARNING: a command whose recorded parents lead elsewhere cannot have been re-injected by this boundary.
       command.value.session === session &&
+      descended(command.value.parent, one.uuid) !== false &&
       !Arr.some(boundaries, (other) => other.at > one.at && other.at < command.value.at)
     );
   };
@@ -1424,6 +1459,8 @@ const decodeTranscriptLine = Schema.decodeUnknownOption(
       ),
       timestamp: Schema.String,
       sessionId: Schema.optionalKey(Schema.String),
+      uuid: Schema.optionalKey(Schema.String),
+      parentUuid: Schema.optionalKey(Schema.NullOr(Schema.String)),
       message: Schema.optionalKey(Schema.Struct({ content: Schema.optionalKey(Schema.Json) })),
     }),
   ),

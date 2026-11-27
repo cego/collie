@@ -1015,8 +1015,14 @@ test("a transcript that merely mentions the marked request settles nothing", () 
 const naming = (request: string, at: string) =>
   `{"type":"user","timestamp":"${at}","sessionId":"s-1","message":{"role":"user","content":"/compact Keep the work in progress, the decisions taken and what is left to do. (collie:${request})"}}`;
 
-const boundaryAt = (at: string, trigger = "manual", session = "s-1") =>
-  `{"type":"system","subtype":"compact_boundary","timestamp":"${at}","sessionId":"${session}","compactMetadata":{"trigger":"${trigger}","preTokens":180000}}`;
+const boundaryAt = (
+  at: string,
+  trigger = "manual",
+  session = "s-1",
+  uuid?: string,
+  parentUuid?: string,
+) =>
+  `{"type":"system","subtype":"compact_boundary","timestamp":"${at}","sessionId":"${session}"${uuid === undefined ? "" : `,"uuid":"${uuid}","parentUuid":"${parentUuid ?? ""}"`},"compactMetadata":{"trigger":"${trigger}","preTokens":180000}}`;
 
 const lostAttempt = (evidence: {
   transcript?: (after: string, asked: string) => string;
@@ -1255,6 +1261,18 @@ test("a boundary another session wrote into the same transcript settles nothing"
       const { due, left } = yield* lostAttempt({
         transcript: (after) => `${naming("req-1", after)}\n${boundaryAt(after, "manual", "s-2")}\n`,
       });
+      expect(due).toBeNull();
+      expect(left).not.toBeNull();
+    }),
+  ));
+
+test("a command whose own lineage leads elsewhere does not take this boundary", () =>
+  withLaunch(
+    Effect.gen(function* () {
+      const { due, left } = yield* lostCompletion(
+        (after) =>
+          `${boundaryAt(after, "manual", "s-1", "u-a", "u-0")}\n{"type":"assistant","timestamp":"${after}","sessionId":"s-1","uuid":"u-b","parentUuid":"u-a","message":{"role":"assistant","content":"done"}}\n{"type":"user","timestamp":"${after}","sessionId":"s-1","uuid":"u-c","parentUuid":"u-x","message":{"role":"user","content":"/compact Keep the work in progress, the decisions taken and what is left to do. (collie:req-1)"}}\n`,
+      );
       expect(due).toBeNull();
       expect(left).not.toBeNull();
     }),
