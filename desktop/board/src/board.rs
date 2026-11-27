@@ -102,6 +102,14 @@ pub enum Words {
     FollowUp,
 }
 
+/// A Workflow a Machine has, and the Inputs it asks for besides the checkout.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Startable {
+    pub id: String,
+    pub title: String,
+    pub required: Vec<String>,
+}
+
 /// The board's one open dialog.
 pub enum Dialog {
     Words {
@@ -147,9 +155,11 @@ pub enum Dialog {
         instruction: String,
         installation: String,
         /// The Workflows the Machine has, once they are read.
-        workflows: Option<Vec<(String, String)>>,
+        workflows: Option<Vec<Startable>>,
         chosen: Option<String>,
         checkout: TextEdit,
+        /// What the chosen Workflow asks for besides the checkout, in its own order.
+        inputs: Vec<(String, TextEdit)>,
         why: Option<String>,
     },
     Proposal {
@@ -558,6 +568,13 @@ impl App {
     }
 
     pub fn click_card(&mut self, key: &str, double: bool) {
+        // WARNING: a scope's Following hides an unfollowed Task, so choosing one shows it rather than nothing.
+        let followed = self
+            .placed_by(key)
+            .is_some_and(|one| one.task.following == Some(true));
+        if !followed && self.following() {
+            self.toggle_following();
+        }
         let as_of = self.placed_by(key).is_some_and(|p| p.as_of.is_some());
         let landed = Landed::Card {
             card: key.into(),
@@ -756,6 +773,7 @@ impl App {
         let installation = card.installation.to_string();
         let machine = card.machine.clone();
         let instruction = card.task.sentence.clone();
+        let asked = key.to_string();
         let mut checkout = TextEdit::new(PROJECTS_ROOT_OPTION);
         checkout.focused = false;
         self.board.dialog = Some(Dialog::Queued {
@@ -765,6 +783,7 @@ impl App {
             workflows: None,
             chosen: None,
             checkout,
+            inputs: Vec::new(),
             why: None,
         });
         let Some(core) = self.core.clone() else {
@@ -774,16 +793,35 @@ impl App {
             "definitions",
             json!({ "installation": installation }),
             move |app: &mut App, read: Result<DefinitionsSuccess, CallError>| {
-                let Some(Dialog::Queued { workflows, why, .. }) = &mut app.board.dialog else {
+                let Some(Dialog::Queued {
+                    card,
+                    workflows,
+                    why,
+                    ..
+                }) = &mut app.board.dialog
+                else {
                     return;
                 };
+                // WARNING: an answer read for another Task's Machine is another Machine's Workflows.
+                if *card != asked {
+                    return;
+                }
                 match read {
                     Ok(read) => {
-                        let startable: Vec<(String, String)> = read
+                        let startable: Vec<Startable> = read
                             .workflows
                             .iter()
                             .filter(|one| one.broken.is_none())
-                            .map(|one| (one.id.clone(), one.title.clone()))
+                            .map(|one| Startable {
+                                id: one.id.clone(),
+                                title: one.title.clone(),
+                                required: one
+                                    .inputs
+                                    .iter()
+                                    .filter(|input| input.required)
+                                    .map(|input| input.name.clone())
+                                    .collect(),
+                            })
                             .collect();
                         if startable.is_empty() {
                             *why = Some(format!("{machine} has no Workflow to start"));
@@ -796,20 +834,52 @@ impl App {
         );
     }
 
-    /// Picks the Workflow a queued Task's first Run is started with.
     pub fn choose_workflow(&mut self, id: &str) {
-        if let Some(Dialog::Queued { chosen, .. }) = &mut self.board.dialog {
-            *chosen = Some(id.to_string());
-        }
+        let Some(Dialog::Queued {
+            workflows,
+            chosen,
+            inputs,
+            instruction,
+            ..
+        }) = &mut self.board.dialog
+        else {
+            return;
+        };
+        *chosen = Some(id.to_string());
+        let asked = workflows
+            .as_ref()
+            .and_then(|all| all.iter().find(|one| one.id == id))
+            .map(|one| one.required.clone())
+            .unwrap_or_default();
+        let only = asked.len() == 1;
+        *inputs = asked
+            .into_iter()
+            .enumerate()
+            .map(|(at, name)| {
+                let typed = inputs
+                    .iter()
+                    .find(|(one, _)| *one == name)
+                    .map(|(_, edit)| edit.text.clone());
+                // WARNING: what a Task is was said once, so its goal — or a Workflow's only Input — is the instruction.
+                let text = typed.unwrap_or_else(|| match name.as_str() {
+                    "goal" => instruction.clone(),
+                    _ if only && at == 0 => instruction.clone(),
+                    _ => String::new(),
+                });
+                let mut edit = TextEdit::new(text);
+                edit.focused = false;
+                (name, edit)
+            })
+            .collect();
     }
 
-    /// Starts a queued Task's first Run on the chosen Workflow and checkout.
     pub fn start_queued(&mut self) {
         let Some(Dialog::Queued {
             card,
             installation,
             chosen,
             checkout,
+            inputs,
             why,
             ..
         }) = &mut self.board.dialog
@@ -825,18 +895,30 @@ impl App {
             *why = Some("Name the checkout the Run starts in".into());
             return;
         }
+        let asked: Vec<(String, String)> = inputs
+            .iter()
+            .map(|(name, edit)| (name.clone(), edit.text.trim().to_string()))
+            .collect();
+        if let Some((name, _)) = asked.iter().find(|(_, text)| text.is_empty()) {
+            *why = Some(format!("Say what {name} is"));
+            return;
+        }
         let (card, installation) = (card.clone(), installation.clone());
         let Some(task) = self.placed_by(&card).map(|one| one.task.id.clone()) else {
             return;
         };
         self.board.dialog = None;
+        let mut input = json!({ "workspace": checkout });
+        for (name, text) in asked {
+            input[name] = json!(text);
+        }
         self.act(
             &installation,
             json!({
                 "_tag": "Start",
                 "workflow": workflow,
                 "task": task,
-                "input": { "workspace": checkout },
+                "input": input,
             }),
             None,
         );

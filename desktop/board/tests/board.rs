@@ -147,6 +147,15 @@ fn double_press(runtime: &mut Runtime<App>, key: &str) {
     runtime.frame(1.0);
 }
 
+fn type_key(runtime: &mut Runtime<App>, key: &str, text: &str) {
+    press(runtime, key);
+    runtime.key(KeyEvent {
+        key: Key::Text(text.into()),
+        mods: Mods::default(),
+    });
+    runtime.frame(1.0);
+}
+
 fn settle(harness: &Harness<App>, runtime: &mut Runtime<App>) {
     harness.settle(&mut runtime.state);
     redraw(runtime);
@@ -2069,6 +2078,36 @@ fn selecting_a_project_scopes_the_board_and_its_following_comes_back_with_it() {
     );
 }
 #[test]
+fn a_related_task_link_shows_the_task_where_following_would_hide_it() {
+    let harness = Harness::new();
+    let mut runtime = runtime_of(
+        &harness,
+        vec![snapshot_with(
+            &pc(),
+            vec![in_payments(
+                task("t-1", "Refunds", "active", json!({})),
+                false,
+            )],
+            vec![project("project-payments", "Payments", false, false)],
+        )],
+    );
+    press(&mut runtime, "project-inst-pc-project-payments");
+    press(&mut runtime, "following");
+    assert!(
+        cards_in(&runtime, "working").is_empty(),
+        "nothing is followed yet"
+    );
+    press(&mut runtime, "nav-machines");
+    press(&mut runtime, "related-inst-pc:t-1");
+    assert_eq!(runtime.state.nav.page, Page::Board);
+    assert_eq!(
+        cards_in(&runtime, "working"),
+        ["Refunds"],
+        "the Task the link named is on the board it opens"
+    );
+}
+
+#[test]
 fn a_project_is_starred_and_archived_from_its_own_toolbar() {
     let harness = Harness::new();
     let items = vec![snapshot_with(
@@ -2307,6 +2346,157 @@ fn a_queued_task_opens_its_instruction_and_takes_a_workflow_and_checkout_for_its
         node(&runtime, "queued-start").is_none(),
         "the dialog is done"
     );
+}
+
+fn definitions(workflows: Vec<(&str, &str, Vec<&str>)>) -> Value {
+    json!({
+        "workflows": workflows
+            .into_iter()
+            .map(|(id, title, inputs)| json!({
+                "id": id, "title": title, "description": "", "layer": "shipped",
+                "path": format!("/x/workflows/{id}.workflow.ts"),
+                "inputs": inputs
+                    .into_iter()
+                    .map(|name| json!({
+                        "name": name, "required": true, "strategy": null, "schema": null,
+                        "limits": [],
+                    }))
+                    .collect::<Vec<Value>>(),
+                "options": [],
+                "success": {"schema": null, "limits": []},
+                "error": {"schema": null, "limits": []},
+                "metadata": {}, "broken": null, "files": [],
+            }))
+            .collect::<Vec<Value>>(),
+        "problems": [], "personas": [], "errors": []
+    })
+}
+
+#[test]
+fn a_queued_task_starts_its_first_run_on_the_inputs_its_workflow_asks_for() {
+    let harness = Harness::new();
+    harness.fake.will_answer(
+        "definitions",
+        Ok(definitions(vec![
+            ("plan", "Plan", vec!["goal"]),
+            ("implement", "Implement", vec!["plan", "repo"]),
+        ])),
+    );
+    harness.fake.will_answer(
+        "definitions",
+        Ok(definitions(vec![
+            ("plan", "Plan", vec!["goal"]),
+            ("implement", "Implement", vec!["plan", "repo"]),
+        ])),
+    );
+    harness.fake.will_answer("act", Ok(json!("started r-1")));
+    harness.fake.will_answer("act", Ok(json!("started r-2")));
+    let said = "Make the refunds page say a duplicate arrives twice";
+    let queued = || {
+        task(
+            "t-queued",
+            said,
+            "quiet",
+            json!({"queued": true, "run": "", "runs": [], "sentence": said}),
+        )
+    };
+    let mut runtime = runtime_of(&harness, vec![snapshot(&pc(), vec![queued()])]);
+    settle(&harness, &mut runtime);
+    press(&mut runtime, "card-t-queued-name");
+    settle(&harness, &mut runtime);
+    press(&mut runtime, "queued-workflow-plan");
+    redraw(&mut runtime);
+    let goal = node(&runtime, "queued-input-goal").expect("a field for the goal");
+    let typed = within(&goal)
+        .into_iter()
+        .find(|n| n["key"] == "input")
+        .cloned()
+        .expect("the field's editor");
+    assert_eq!(
+        typed["value"], said,
+        "the instruction a Task was queued with is its goal"
+    );
+    press(&mut runtime, "queued-start");
+    settle(&harness, &mut runtime);
+    assert_eq!(
+        acts(&harness)[0]["action"]["input"],
+        json!({"workspace": "projects-root", "goal": said})
+    );
+
+    press(&mut runtime, "card-t-queued-name");
+    settle(&harness, &mut runtime);
+    press(&mut runtime, "queued-workflow-implement");
+    redraw(&mut runtime);
+    assert!(
+        has_state(&node(&runtime, "queued-start").unwrap(), "disabled"),
+        "a Workflow's other inputs are the operator's to say"
+    );
+    type_key(&mut runtime, "queued-input-plan", "the refunds plan");
+    type_key(&mut runtime, "queued-input-repo", "cego/collie");
+    redraw(&mut runtime);
+    press(&mut runtime, "queued-start");
+    settle(&harness, &mut runtime);
+    assert_eq!(
+        acts(&harness)[1]["action"]["input"],
+        json!({
+            "workspace": "projects-root",
+            "plan": "the refunds plan",
+            "repo": "cego/collie",
+        })
+    );
+}
+
+#[test]
+fn a_workflow_list_read_for_one_queued_task_never_fills_another() {
+    let harness = Harness::new();
+    let queued = |id: &str, said: &str| {
+        task(
+            id,
+            said,
+            "quiet",
+            json!({"queued": true, "run": "", "runs": [], "sentence": said}),
+        )
+    };
+    let mut runtime = runtime_of(
+        &harness,
+        vec![
+            snapshot(
+                &pc(),
+                vec![queued("t-pc", "Make the refunds page say a duplicate")],
+            ),
+            snapshot(&vm(), vec![queued("t-vm", "Move the payout window")]),
+        ],
+    );
+    settle(&harness, &mut runtime);
+    press(&mut runtime, "card-t-pc-name");
+    redraw(&mut runtime);
+    assert!(
+        node(&runtime, "queued-reading").is_some(),
+        "the first Task is still reading its Machine"
+    );
+    runtime.state.board.dialog = None;
+    redraw(&mut runtime);
+    press(&mut runtime, "card-t-vm-name");
+    redraw(&mut runtime);
+    assert!(harness.fake.answer(
+        "definitions",
+        Ok(definitions(vec![("implement", "Implement", vec![])]))
+    ));
+    settle(&harness, &mut runtime);
+    assert!(
+        node(&runtime, "queued-workflow-implement").is_none(),
+        "another Machine's Workflows never replaces this one's"
+    );
+    assert!(
+        node(&runtime, "queued-reading").is_some(),
+        "the Task on screen is still reading the Machine it is on"
+    );
+    assert!(harness.fake.answer(
+        "definitions",
+        Ok(definitions(vec![("plan", "Plan", vec![])]))
+    ));
+    settle(&harness, &mut runtime);
+    assert!(node(&runtime, "queued-workflow-plan").is_some());
 }
 
 #[test]

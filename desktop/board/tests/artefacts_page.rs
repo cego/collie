@@ -336,6 +336,52 @@ fn a_machine_gone_unreachable_keeps_its_earlier_results_visibly_stale_and_takes_
 }
 
 #[test]
+fn a_result_names_tasks_of_the_machine_its_run_belongs_to() {
+    let harness = Harness::<App>::new();
+    let mut app = flock_app(&harness);
+    let with_run = |id: &str, run: &str| {
+        json!({
+            "id": id, "name": id, "project": "content", "state": "active", "steps": [],
+            "sentence": "Under way.", "age": "5m", "drift": null, "held": null, "heldBy": null,
+            "decision": null, "agents": [], "children": [], "mr": null, "branch": null,
+            "disposition": null, "landed": false, "ended": null, "mrState": null,
+            "planReady": false, "offer": null, "run": run, "runs": [run], "at": 1_794_398_400_000.0,
+        })
+    };
+    for (installation, profile, name, task) in [
+        ("i-pc", "local", "mk-pc", "t-pc"),
+        ("i-vm", "p-vm", "vm", "t-vm"),
+    ] {
+        app.apply(
+            serde_json::from_value(json!({
+                "machine": {"installation": installation, "profile": profile, "name": name},
+                "message": {"_tag": "Snapshot", "installation": installation, "build": "0.35.0",
+                    "protocol": 5, "herds": [], "tasks": [with_run(task, "r-same")], "seq": 1}
+            }))
+            .unwrap(),
+        );
+    }
+    app.open_page(Page::Artefacts);
+    let mut runtime = runtime(app);
+    let mut artefact = notes_vm();
+    artefact["run"] = json!("r-same");
+    harness.fake.answer(
+        "artefactSearch",
+        Ok(page(vec![found("vm", artefact)], Value::Null, vec![])),
+    );
+    settle(&harness, &mut runtime);
+    runtime.frame_at(100.0);
+    assert!(
+        runtime.find("related-i-vm:t-vm").is_some(),
+        "the Task of the Machine the result belongs to is offered"
+    );
+    assert!(
+        runtime.find("related-i-pc:t-pc").is_none(),
+        "another Machine's Task with the same Run id is not"
+    );
+}
+
+#[test]
 fn opening_a_result_reaches_its_owning_runs_exact_artefact_and_back_returns_to_the_page() {
     let harness = Harness::<App>::new();
     let mut runtime = opened(&harness);

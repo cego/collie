@@ -238,16 +238,22 @@ pub fn panel(k: &Kit, key: impl Into<String>, label: impl Into<String>) -> El {
         .border(1.0, k.c.border_muted)
 }
 
-/// The Tasks a page is about — those of its Machines, and those whose Runs it names — each
+/// The Tasks a page is about — those of its Machines, and those whose Runs it names, each
 /// opening the Project it is filed into, so a resource and its work are one press apart.
-pub fn related_tasks(app: &App, k: &Kit, installations: &[String], runs: &[String]) -> Option<El> {
+pub fn related_tasks(
+    app: &App,
+    k: &Kit,
+    installations: &[String],
+    runs: &[(String, String)],
+) -> Option<El> {
     let related: Vec<model::Placed<'_>> = model::placed(&app.machines)
         .into_iter()
         .filter(|one| {
             installations.iter().any(|at| at == one.installation)
-                || runs
-                    .iter()
-                    .any(|run| one.task.run == *run || one.task.runs.contains(run))
+                || runs.iter().any(|(installation, run)| {
+                    installation == one.installation
+                        && (one.task.run == *run || one.task.runs.contains(run))
+                })
         })
         .collect();
     if related.is_empty() {

@@ -131,6 +131,7 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
             workflows,
             chosen,
             checkout,
+            inputs,
             why,
             ..
         } => {
@@ -163,11 +164,11 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                     );
                 }
                 Some(startable) => {
-                    for (id, title) in startable {
-                        let pick = id.clone();
+                    for one in startable {
+                        let pick = one.id.clone();
                         body = body.child(
-                            Button::new(title.clone())
-                                .variant(if chosen.as_deref() == Some(id.as_str()) {
+                            Button::new(one.title.clone())
+                                .variant(if chosen.as_deref() == Some(one.id.as_str()) {
                                     ButtonVariant::Contrast
                                 } else {
                                     ButtonVariant::Ghost
@@ -175,7 +176,7 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                                 .expanded(true)
                                 .on_press(move |app: &mut App| app.choose_workflow(&pick))
                                 .build(k)
-                                .key(format!("queued-workflow-{id}")),
+                                .key(format!("queued-workflow-{}", one.id)),
                         );
                     }
                 }
@@ -188,6 +189,24 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                             .color(k.c.text_muted),
                     );
                 }
+            }
+            for (name, edit) in inputs {
+                let wanted = name.clone();
+                body = body.child(
+                    TextInput::new(edit)
+                        .label(name.clone())
+                        .width(None)
+                        .on_edit(move |app: &mut App| match &mut app.board.dialog {
+                            Some(Dialog::Queued { inputs, .. }) => inputs
+                                .iter_mut()
+                                .find(|(one, _)| *one == wanted)
+                                .map(|(_, edit)| edit)
+                                .unwrap_or_else(|| unreachable!("a field drawn from this dialog")),
+                            _ => unreachable!("a queued Task's dialog is open"),
+                        })
+                        .build(k)
+                        .key(format!("queued-input-{name}")),
+                );
             }
             body = body
                 .child(
@@ -212,7 +231,9 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                         .wrap()
                         .w_full()
                 }));
-            let ready = chosen.is_some() && !checkout.text.trim().is_empty();
+            let ready = chosen.is_some()
+                && !checkout.text.trim().is_empty()
+                && inputs.iter().all(|(_, edit)| !edit.text.trim().is_empty());
             body = body.child(
                 row().w_full().justify_end().child(
                     Button::new("Start in Task")
