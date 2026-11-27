@@ -9,7 +9,7 @@ pub use files::shell_quoted;
 pub use usage::{UsageEntry, usage_due, usage_entries};
 
 use crate::board::model::{
-    Ordered, ProjectRow, Scope, Section, needs_of, project_rows, section_of,
+    Ordered, ProjectRow, Scope, Section, needs_by_project, project_rows, section_of,
 };
 use crate::calls::CallError;
 use crate::pages::usage::Level;
@@ -195,7 +195,6 @@ impl App {
             .find(|shown| shown.machine.target.is_none())
             .map(|shown| shown.machine.installation.as_str())
     }
-    /// The Project the board is scoped to, and its owner.
     pub fn scoped_project(&self) -> Option<(&str, &collie_desktop_protocol::generated::Project)> {
         let scope = self.nav.scope.as_ref()?;
         self.machines.iter().find_map(|shown| {
@@ -209,7 +208,6 @@ impl App {
                 .map(|project| (scope.installation.as_str(), project))
         })
     }
-    /// What the toolbar calls the page: a Project's own name while the board is scoped to it.
     pub fn title(&self) -> String {
         match (self.nav.page, self.scoped_project()) {
             (Page::Board, Some((_, project))) => project.name.clone(),
@@ -292,10 +290,14 @@ impl App {
     }
 }
 
-/// A Project's row: selecting it scopes the board and its chat to it.
-fn project_row(app: &App, row: &ProjectRow<'_>, k: &Kit) -> El {
+fn project_row(
+    app: &App,
+    row: &ProjectRow<'_>,
+    needs: &std::collections::HashMap<Scope, usize>,
+    k: &Kit,
+) -> El {
     let scope = row.scope();
-    let needs = needs_of(&app.machines, &scope);
+    let needs = needs.get(&scope).copied().unwrap_or(0);
     let mut built = SidebarRow::new(row.project.name.clone())
         .depth(1)
         .selected(app.nav.scope.as_ref() == Some(&scope));
@@ -524,6 +526,7 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
     // WARNING: the rows are the list's own children, so the arrows reach them: only the heading
     // is grouped, which is what keeps two headings from sharing a sibling key.
     let (live, archived) = project_rows(&app.machines);
+    let needs = needs_by_project(&app.machines);
     sidebar = sidebar.child(
         col()
             .key("projects")
@@ -533,7 +536,7 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
             .child(SidebarHeader::new("Projects").build(side)),
     );
     for row in &live {
-        sidebar = sidebar.child(project_row(app, row, side));
+        sidebar = sidebar.child(project_row(app, row, &needs, side));
     }
     if !archived.is_empty() {
         sidebar = sidebar.child(
@@ -543,7 +546,7 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
                 .child(SidebarHeader::new("Archive").build(side)),
         );
         for row in &archived {
-            sidebar = sidebar.child(project_row(app, row, side));
+            sidebar = sidebar.child(project_row(app, row, &needs, side));
         }
     }
     let sidebar = sidebar

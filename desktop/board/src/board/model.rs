@@ -466,13 +466,29 @@ pub fn scoped<'a>(
     });
     all
 }
-/// The Tasks of `scope` that need the operator, counted once each however many Runs or
-/// questions they carry, as its sidebar badge says.
+/// Every Project's Tasks that need the operator, counted once each however many Runs or
+/// questions they carry, in one pass over the board, as its sidebar badge says.
+pub fn needs_by_project(machines: &[Shown]) -> HashMap<Scope, usize> {
+    let mut counts: HashMap<Scope, usize> = HashMap::new();
+    for one in placed(machines) {
+        if section_of(one.task) != Section::NeedsYou {
+            continue;
+        }
+        let Some(project) = one.task.project_id.as_ref().and_then(|one| one.as_ref()) else {
+            continue;
+        };
+        *counts
+            .entry(Scope {
+                installation: project.installation.clone(),
+                id: project.id.clone(),
+            })
+            .or_default() += 1;
+    }
+    counts
+}
+/// The Tasks of `scope` that need the operator, counted once each, as its sidebar badge says.
 pub fn needs_of(machines: &[Shown], scope: &Scope) -> usize {
-    scoped(machines, Some(scope), false)
-        .into_iter()
-        .filter(|one| section_of(one.task) == Section::NeedsYou)
-        .count()
+    needs_by_project(machines).get(scope).copied().unwrap_or(0)
 }
 /// The board's six sections, in the order it draws them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -7,8 +7,6 @@ const asItem = (value: Schema.Json) =>
   Result.getOrThrow(Schema.decodeUnknownResult(FlockItemSchema)(value));
 const machine: Schema.Json = { installation: "i-pc", profile: "local", name: "mk-pc" };
 const project = (id: string, name: string) => ({
-  // WARNING: the schema decodes it, so a JSON value here is all it takes.
-
   installation: "i-pc",
   id,
   name,

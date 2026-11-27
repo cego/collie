@@ -130,10 +130,12 @@ pub enum Dialog {
         sitting: Sitting,
     },
     /// A card's running check: what it is doing and its last lines, read off the live card.
-    Check { card: String },
-    /// A new Project's name, before it exists.
-    NewProject { edit: TextEdit },
-    /// What a selection is to be filed into.
+    Check {
+        card: String,
+    },
+    NewProject {
+        edit: TextEdit,
+    },
     FileTasks,
     Proposal {
         card: String,
@@ -956,7 +958,6 @@ impl App {
             edit: focused_edit(),
         });
     }
-    /// Creates the Project the dialog names, on this computer, which owns it.
     pub fn create_project(&mut self) {
         let Some(Dialog::NewProject { edit }) = &self.board.dialog else {
             return;
@@ -990,7 +991,6 @@ impl App {
             None,
         );
     }
-    /// Follows one Task, or stops following it, on the Machine that owns it.
     pub fn follow_task(&mut self, installation: String, task: String, following: bool) {
         let tag = if following {
             "TaskFollow"
@@ -1011,7 +1011,6 @@ impl App {
             self.board.filing.push(key.into());
         }
     }
-    /// How many picked cards the board still shows.
     pub fn picking(&self) -> usize {
         self.board
             .filing
@@ -1025,7 +1024,6 @@ impl App {
     pub fn clear_filing(&mut self) {
         self.board.filing.clear();
     }
-    /// Asks what the picked cards are to be filed into.
     pub fn file_tasks(&mut self) {
         if self.picking() == 0 {
             return;

@@ -86,14 +86,12 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                 .padding(16.0)
                 .pt(0.0)
                 .child(
-                    text(
-                        "Every Task joins the Project you chose, whichever Machine owns it.",
-                    )
-                    .key("file-note")
-                    .font(k.ty.small)
-                    .color(k.c.text_muted)
-                    .wrap()
-                    .w_full(),
+                    text("Every Task joins the Project you chose, whichever Machine owns it.")
+                        .key("file-note")
+                        .font(k.ty.small)
+                        .color(k.c.text_muted)
+                        .wrap()
+                        .w_full(),
                 )
                 .child(
                     Button::new("No Project")

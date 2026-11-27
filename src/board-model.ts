@@ -2710,20 +2710,26 @@ export function projectViews(options: {
   readonly projects: ReadonlyArray<ProjectFacts>;
   readonly views: ReadonlyArray<TaskView>;
 }) {
+  const tally = new Map<string, { tasks: number; needs: number }>();
+  for (const view of options.views) {
+    if (view.projectId?.installation !== options.installation) {
+      continue;
+    }
+    const counted = tally.get(view.projectId.id) ?? { tasks: 0, needs: 0 };
+    counted.tasks += 1;
+    counted.needs += sectionOf(view) === "needs-you" ? 1 : 0;
+    tally.set(view.projectId.id, counted);
+  }
   return Arr.map(options.projects, (project) => {
-    const mine = Arr.filter(
-      options.views,
-      (view) =>
-        view.projectId?.installation === options.installation && view.projectId.id === project.id,
-    );
+    const counted = tally.get(project.id) ?? { tasks: 0, needs: 0 };
     return {
       installation: options.installation,
       id: project.id,
       name: project.name,
       starred: project.starred === true,
       archived: project.archived === true,
-      tasks: mine.length,
-      needs: Arr.filter(mine, (view) => sectionOf(view) === "needs-you").length,
+      tasks: counted.tasks,
+      needs: counted.needs,
     } satisfies ProjectView;
   });
 }

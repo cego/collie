@@ -270,7 +270,6 @@ fn reaching_line(k: &Kit, said: String) -> El {
                 .a11y_hidden(),
         )
 }
-/// What a pick can do with the cards picked so far: file them into a Project, or let them go.
 fn filing_bar(app: &App, k: &Kit) -> El {
     let count = app.picking();
     row()

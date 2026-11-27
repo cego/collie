@@ -2046,19 +2046,15 @@ fn selecting_a_project_scopes_the_board_and_its_following_comes_back_with_it() {
         ],
     )];
     let mut runtime = runtime_of(&harness, items);
-    // The whole Flock, until a Project is chosen.
     assert_eq!(cards_in(&runtime, "working").len(), 3);
     press(&mut runtime, "project-inst-pc-project-payments");
     let mut names = cards_in(&runtime, "working");
     names.sort();
     assert_eq!(names, ["Payouts", "Refunds"]);
-    // Following narrows the same board to what the operator follows.
     press(&mut runtime, "following");
     assert_eq!(cards_in(&runtime, "working"), ["Refunds"]);
-    // The chat's layout is the scope's too: closed here, open on the Flock, closed again on return.
     press(&mut runtime, "open-chat");
     assert!(!runtime.state.nav.chat.is_open());
-    // The Board is one press away, and coming back restores what was left.
     press(&mut runtime, "nav-board");
     assert_eq!(cards_in(&runtime, "working").len(), 3);
     assert!(
@@ -2102,7 +2098,6 @@ fn a_project_is_starred_and_archived_from_its_own_toolbar() {
     );
 }
 
-/// Picks a card for filing from its own menu.
 fn select_for_filing(runtime: &mut Runtime<App>, card: &str) {
     press(runtime, &format!("{card}-menu"));
     choose(runtime, "Select for filing");
@@ -2136,7 +2131,6 @@ fn press_named(runtime: &mut Runtime<App>, role: &str, name: &str) {
     runtime.pointer_up(x, y);
     runtime.frame(1.0);
 }
-/// A Machine's board that is not live, as its last saved one.
 fn saved(machine: &Value, tasks: Vec<Value>) -> Value {
     json!({"_tag": "Saved", "machine": machine, "herds": [{"id": "h1"}], "tasks": tasks,
         "at": 14.0 * 3_600_000.0 + 5.0 * 60_000.0})
@@ -2267,7 +2261,12 @@ fn a_retry_after_three_machines_away_survives_the_notice_that_follows_them() {
         vec![
             saved(
                 &machine("inst-vm1", "p-vm1", "vm-1"),
-                vec![task("t-vm1", "Payouts", "active", json!({"membershipSeq": 1.0}))],
+                vec![task(
+                    "t-vm1",
+                    "Payouts",
+                    "active",
+                    json!({"membershipSeq": 1.0}),
+                )],
             ),
             saved(
                 &machine("inst-vm2", "p-vm2", "vm-2"),
@@ -2316,7 +2315,11 @@ fn a_retry_after_three_machines_away_survives_the_notice_that_follows_them() {
     press_named(&mut runtime, "button", "Try again");
     settle(&harness, &mut runtime);
     let sent = acts(&harness);
-    assert_eq!(sent.len(), 5, "four filings, and the one that was tried again");
+    assert_eq!(
+        sent.len(),
+        5,
+        "four filings, and the one that was tried again"
+    );
     assert_eq!(sent[4]["installation"], "inst-vm1");
     assert_eq!(sent[4]["request"], sent[0]["request"], "the same request");
     assert_eq!(
