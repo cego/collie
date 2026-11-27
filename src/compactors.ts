@@ -1180,7 +1180,7 @@ const claudeReconcile = Effect.fn("Compactors.claudeReconcile")(function* (
   const lines = Str.split(text, "\n");
   let named = false;
   let markers = 0;
-  const typing: Array<number> = [];
+  const commands: Array<{ readonly at: number; readonly request: string | null }> = [];
   const boundaries: Array<{ readonly at: number; readonly before: boolean }> = [];
   const entries = Arr.map(lines, (line) => Option.getOrUndefined(decodeTranscriptLine(line)));
   for (const [at, entry] of entries.entries()) {
@@ -1189,11 +1189,12 @@ const claudeReconcile = Effect.fn("Compactors.claudeReconcile")(function* (
     }
     // WARNING: the turn that typed the marker is the only turn whose compaction is the request's.
     if (entry.type === "user") {
-      named = namedRequest(entry) === mark.id;
-      if (named) {
-        markers += 1;
-        typing.push(at);
+      const request = namedRequest(entry);
+      if (request !== null) {
+        commands.push({ at, request });
       }
+      named = request === mark.id;
+      markers += named ? 1 : 0;
       continue;
     }
     if (entry.type === "assistant") {
@@ -1204,13 +1205,14 @@ const claudeReconcile = Effect.fn("Compactors.claudeReconcile")(function* (
       boundaries.push({ at, before: named });
     }
   }
-  // WARNING: Claude writes the boundary first and the command it asked for inside the record it opens.
+  // WARNING: Claude writes the boundary first and re-injects the command inside the record it opens, so only that record's own command can claim it.
   const opens = (one: { readonly at: number }) => {
-    const next = Option.getOrElse(
-      Arr.findFirst(boundaries, (other) => other.at > one.at),
-      () => ({ at: entries.length }),
-    ).at;
-    return Arr.some(typing, (at) => at > one.at && at < next);
+    const command = Arr.findFirst(commands, (other) => other.at > one.at);
+    return (
+      Option.isSome(command) &&
+      command.value.request === mark.id &&
+      !Arr.some(boundaries, (other) => other.at > one.at && other.at < command.value.at)
+    );
   };
   const candidates = Arr.filter(boundaries, (one) => one.before || opens(one));
   return markers === 1 && candidates.length === 1 ? ({ kind: "success" } as const) : null;

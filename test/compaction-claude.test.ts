@@ -1173,6 +1173,18 @@ test("a boundary another session wrote into the same transcript settles nothing"
     }),
   ));
 
+test("a boundary whose own command is another request does not settle this one", () =>
+  withLaunch(
+    Effect.gen(function* () {
+      const { due, left } = yield* lostCompletion(
+        (after) =>
+          `${boundaryAt(after)}\n${naming("req-9", isoAt(epochMs(after) + 60_000))}\n${naming("req-1", isoAt(epochMs(after) + 120_000))}\n`,
+      );
+      expect(due).toBeNull();
+      expect(left).not.toBeNull();
+    }),
+  ));
+
 test("a boundary Claude wrote before the command it asked for settles the request that asked", () =>
   withLaunch(
     Effect.gen(function* () {
