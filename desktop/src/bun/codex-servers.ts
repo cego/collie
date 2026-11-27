@@ -144,8 +144,14 @@ export const codexServers: (
   nativeVariables: ReadonlyArray<string>,
 ) => CodexServers = (servers, configured, policy, secrets, nativeVariables) => {
   if (configured === null) {
+    // WARNING: nothing is known about Codex's own names here, so only the environment's can be kept.
+    let token = TOKEN_ENV;
+    for (let count = 2; childEnv()[token] !== undefined; count += 1) {
+      token = `${TOKEN_ENV}_${count}`;
+    }
     return {
       ...NO_SERVERS,
+      token,
       left: Arr.map(Rec.keys(servers), (name) => ({
         name,
         why: "Collie could not read which servers Codex already has, so it passed none of the human's",
@@ -174,7 +180,7 @@ export const codexServers: (
       Rec.toEntries(policy.filters),
       ([key, rule]) => Str.toLowerCase(key) === Str.toLowerCase(name) && rule === "include",
     );
-  // WARNING: a name the human's allowlist admits, a native server reads or the environment already sets takes another: Collie's own must not overwrite any of them.
+  // WARNING: dropping an include to exclude a name would widen the shell, so a taken name is skipped instead.
   const reserved = (name: string) =>
     included(name) || Arr.contains(nativeVariables, name) || childEnv()[name] !== undefined;
   const freeName = (base: string) => {

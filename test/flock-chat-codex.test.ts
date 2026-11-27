@@ -2007,6 +2007,29 @@ test("Codex's own report decides which servers it has, not Collie's reading of i
   ).finally(() => void mine.stop());
 });
 
+test("A discovery that fails leaves a token name the environment already uses alone", () => {
+  const mine = serveDocs({ tool: "user_read" });
+  Bun.env.COLLIE_CHAT_MCP_TOKEN = "native-token";
+  return withServers({ docs: { type: "http", url: mine.url } }, (driver, context) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(`${context.dir}/config-unreadable`, "");
+      const session = yield* driver.open("codex-token-fallback", "default", null);
+      yield* Effect.addFinalizer(() => session.close);
+      yield* session.offer("inspect");
+      const details = inspected(yield* turn(session));
+      const given = Arr.join(details.args, " ");
+      expect(given).not.toContain("mcp_servers.docs.");
+      expect(given).toContain('bearer_token_env_var="COLLIE_CHAT_MCP_TOKEN_2"');
+      expect(details.env.COLLIE_CHAT_MCP_TOKEN).toBe("native-token");
+      expect(details.env.COLLIE_CHAT_MCP_TOKEN_2).toBeString();
+    }),
+  ).finally(() => {
+    void mine.stop();
+    delete Bun.env.COLLIE_CHAT_MCP_TOKEN;
+  });
+});
+
 test("A server Codex's own list could not be read for is not passed over Codex's own", () => {
   const mine = serveDocs({ tool: "user_read" });
   return withServers({ docs: { type: "http", url: mine.url } }, (driver, context) =>
