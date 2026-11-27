@@ -6286,10 +6286,9 @@ export const hostLayer: (options: {
         completedRound: (asked) =>
           Effect.gen(function* () {
             const mr = mrId(asked.target);
+            // WARNING: a branch or worktree review starts no watched round, so its save has nothing to complete.
             if (mr === null) {
-              return yield* new WorkflowError({
-                reason: `${asked.target} names no merge request the merge watch can read`,
-              });
+              return;
             }
             yield* completedRoundAt(asked.runId, mr);
           }),

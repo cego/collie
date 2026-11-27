@@ -2508,6 +2508,29 @@ test("a review saved while the forge is unavailable keeps its completion, so the
     }),
   ));
 
+test("a review of the local diff saves its report though no merge request can carry a round", () =>
+  host.runEffect(
+    Effect.gen(function* () {
+      const { forge, entry } = yield* begun("review", [review([F1])]);
+      yield* host.session(
+        forge,
+        Effect.gen(function* () {
+          const { runId } = yield* host.started(entry, "cli-1", { target: "worktree" });
+          yield* host.mergeWatched;
+          const done = yield* until(
+            () => host.status(runId),
+            (view) => view !== null && view.status.status !== "pending",
+          ).pipe(Effect.timeout("10 minutes"));
+          expect(done?.status.status).toBe("suspended");
+          const fs = yield* FileSystem.FileSystem;
+          expect(
+            yield* fs.readFileString(`${runDir(host.dir(), runId)}/review.md`),
+          ).toContain(F1.title);
+        }),
+      );
+    }),
+  ));
+
 test("a merge request closed between its review and the head check records the round as completed", () =>
   host.runEffect(
     Effect.gen(function* () {
