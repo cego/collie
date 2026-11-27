@@ -66,6 +66,7 @@ export interface CodexServers {
     readonly variable: string;
   }>;
   readonly withheld: ReadonlyArray<string>;
+  readonly token: string;
 }
 
 export const NO_SERVERS: CodexServers = {
@@ -75,6 +76,7 @@ export const NO_SERVERS: CodexServers = {
   left: [],
   relays: [],
   withheld: [],
+  token: TOKEN_ENV,
 };
 
 // WARNING: Codex reads a `-c` value as TOML: a table's keys are quoted so a dot stays a header's name.
@@ -172,6 +174,14 @@ export const codexServers: (
       Rec.toEntries(policy.filters),
       ([key, rule]) => Str.toLowerCase(key) === Str.toLowerCase(name) && rule === "include",
     );
+  // WARNING: a name the human's allowlist admits takes another, because dropping their include would widen the shell.
+  const freeName = (base: string) => {
+    let name = base;
+    for (let count = 2; included(name); count += 1) {
+      name = `${base}_${count}`;
+    }
+    return name;
+  };
   const whyLeft = (variables: ReadonlyArray<string>) => {
     const native = Arr.findFirst(variables, (variable) => Arr.contains(nativeVariables, variable));
     if (Option.isSome(native)) {
@@ -292,7 +302,7 @@ export const codexServers: (
       args.push(...codexServerUrlArgs(name, server.url));
     } else {
       // WARNING: the token guards the relay, so it is Collie's own and never an imported value.
-      const variable = `${OWN}RELAY_${relays.length + 1}`;
+      const variable = freeName(`${OWN}RELAY_${relays.length + 1}`);
       args.push(...table(`mcp_servers.${name}.env_http_headers`, { [RELAY_HEADER]: variable }));
       relays.push({ name, url: server.url, headers, variable });
     }
@@ -303,7 +313,8 @@ export const codexServers: (
   // WARNING: a wildcard exclusion would drop a human's include for that wildcard, so only Collie's own names are excluded.
   const folded = (name: string) => Str.toLowerCase(name);
   const keyed = Rec.toEntries(policy.filters);
-  const wants = Arr.dedupe([TOKEN_ENV, ...Arr.map(relays, (one) => one.variable), ...used]);
+  const token = freeName(TOKEN_ENV);
+  const wants = Arr.dedupe([token, ...Arr.map(relays, (one) => one.variable), ...used]);
   const foldedOnce = (so: ReadonlyArray<string>, name: string) =>
     Arr.some(so, (held) => folded(held) === folded(name)) ? so : Arr.append(so, name);
   const added = Arr.reduce(wants, Arr.empty<string>(), foldedOnce);
@@ -318,7 +329,7 @@ export const codexServers: (
         : list("shell_environment_policy.exclude", Arr.dedupe([...added, ...policy.excludes]))),
     );
   }
-  return { args, files, given, left, relays, withheld };
+  return { args, files, given, left, relays, withheld, token };
 };
 
 const toolsOf = (status: CodexStatus | undefined) => Rec.keys(status?.tools ?? {});

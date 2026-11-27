@@ -2389,11 +2389,9 @@ bar the standard ones a shell cannot work without — in whichever way your
 not concerned with, and legacy `exclude` names gain ours, since Codex drops the first when
 the second is set beside them. Collie excludes the names it puts in Codex's environment by
 name — its own server's token and one per relay — and never a wildcard over its namespace, so
-an allowlist you wrote with a wildcard keeps narrowing. An import outranks the rest of your
-policy for the one name it used: a `filters` entry that included that name is replaced by an
-exclusion, spelled as the variable, so the shell cannot hold what Codex was told (a key you
-spelled in another case is dropped rather than kept beside ours, which Codex rejects) — and
-an import whose own allowlist admits the name is refused instead, below. A `${VAR}` a
+an allowlist you wrote with a wildcard keeps narrowing. Your table is yours: Collie never
+swaps one of its own names for a key of yours, so an allowlist that admits Collie's token or
+a relay's takes another name for it and your include stays exactly as written. A `${VAR}` a
 header or a value is written with is resolved by Desktop, and the variable itself is then
 taken out of Codex's own environment, so neither Codex nor its shell holds it. The
 exception is a variable Codex's own servers read by name (`bearer_token_env_var`,
@@ -2402,7 +2400,8 @@ server, and the chat says so — an import that needs one is left out rather tha
 it. So is an import whose value names a variable a shell cannot do without — `PATH`, `HOME`
 and the rest of that handful — or one your own keyed `filters` allowlist admits: both stay
 in the shell, so an import that would have to share them is left out instead, with the name
-it needed said in the chat. So is a variable Codex is told before the chat starts —
+it needed said in the chat — the refusal is the answer, never an exclusion written into
+your table. So is a variable Codex is told before the chat starts —
 `CODEX_HOME`, which Collie's own reading of your configuration passes to a Codex of its
 own — because that value reaches a Codex process regardless of what the chat withholds. A relayed server cannot be signed in through
 `codex mcp login` either, because Codex holds that sign-in against the address it was

@@ -35,7 +35,6 @@ import {
   NO_POLICY,
   NO_SERVERS,
   PROBE_KEPT,
-  TOKEN_ENV,
   codexConnections,
   codexServerUrlArgs,
   codexServers,
@@ -910,14 +909,14 @@ export const codexDriver: (
               "-c",
               `mcp_servers.${SERVER}.url=${encodeLine(url)}`,
               "-c",
-              `mcp_servers.${SERVER}.bearer_token_env_var=${encodeLine(TOKEN_ENV)}`,
+              `mcp_servers.${SERVER}.bearer_token_env_var=${encodeLine(given.token)}`,
               "-c",
               `mcp_servers.${SERVER}.tool_timeout_sec=${TOOL_TIMEOUT}`,
             ],
             {
               ...Rec.filter(childEnv(), (_value, name) => !Arr.contains(given.withheld, name)),
               ...relayEnv,
-              [TOKEN_ENV]: token,
+              [given.token]: token,
             },
           );
           yield* Effect.forkScoped(pump(server));

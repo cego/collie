@@ -1042,7 +1042,7 @@ test("An allowlist on Collie's own namespace keeps narrowing, and the token stay
   });
 });
 
-test("An allowlist that includes Collie's own token is narrowed, so the token stays out", () => {
+test("An allowlist naming Collie's own token keeps its include, and the token takes another name", () => {
   const fixture = serveDocs({ tool: "read_doc" });
   return withServers({ docs: { type: "http", url: fixture.url } }, (driver, context) =>
     Effect.gen(function* () {
@@ -1054,14 +1054,49 @@ test("An allowlist that includes Collie's own token is narrowed, so the token st
       const session = yield* driver.open("codex-token-included", "default", null);
       yield* Effect.addFinalizer(() => session.close);
       yield* session.offer("inspect");
-      const given = Arr.join(inspected(yield* turn(session)).args, " ");
-      expect(given).toContain('"COLLIE_CHAT_MCP_TOKEN" = "exclude"');
-      expect(given).not.toContain('"collie_chat_mcp_token" = "include"');
-      expect(occurrences(given, 'COLLIE_CHAT_MCP_TOKEN" = "exclude')).toBe(1);
+      const details = inspected(yield* turn(session));
+      const given = Arr.join(details.args, " ");
+      expect(given).toContain('"collie_chat_mcp_token" = "include"');
+      expect(given).not.toContain('"COLLIE_CHAT_MCP_TOKEN" = "exclude"');
+      expect(given).toContain('bearer_token_env_var="COLLIE_CHAT_MCP_TOKEN_2"');
+      expect(Rec.keys(details.env)).toContain("COLLIE_CHAT_MCP_TOKEN_2");
       yield* session.offer("shell");
-      expect(message(yield* turn(session))).not.toContain("COLLIE_CHAT_MCP_TOKEN=");
+      const shell = message(yield* turn(session));
+      expect(shell).not.toContain("COLLIE_CHAT_MCP_TOKEN=");
+      expect(shell).not.toContain("HOME=");
     }),
   ).finally(() => void fixture.stop());
+});
+
+test("An allowlist naming Collie's relay token keeps its include, and the relay takes another name", () => {
+  const fixture = serveDocs({ tool: "read_doc" });
+  Bun.env.DOC_VAR = "kept";
+  return withServers(
+    { docs: { type: "http", url: fixture.url, headers: { Authorization: "Bearer ${DOC_VAR}" } } },
+    (driver, context) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(
+          `${context.dir}/codex-home/config.toml`,
+          `[shell_environment_policy]\ninherit = "all"\n[shell_environment_policy.filters]\n"COLLIE_CHAT_RELAY_1" = "include"\n`,
+        );
+        const session = yield* driver.open("codex-relay-included", "default", null);
+        yield* Effect.addFinalizer(() => session.close);
+        yield* session.offer("inspect");
+        const details = inspected(yield* turn(session));
+        const given = Arr.join(details.args, " ");
+        expect(given).toContain('"COLLIE_CHAT_RELAY_1" = "include"');
+        expect(given).not.toContain('"COLLIE_CHAT_RELAY_1" = "exclude"');
+        expect(given).toContain("COLLIE_CHAT_RELAY_1_2");
+        yield* session.offer("shell");
+        const shell = message(yield* turn(session));
+        expect(shell).not.toContain("COLLIE_CHAT_RELAY_1=");
+        expect(shell).not.toContain("HOME=");
+      }),
+  ).finally(() => {
+    void fixture.stop();
+    delete Bun.env.DOC_VAR;
+  });
 });
 
 test("An import that reads a variable the discovery Codex is given is left out", () => {
@@ -1079,6 +1114,7 @@ test("An import that reads a variable the discovery Codex is given is left out",
         expect(instruct(details)).toContain(
           "Left out: docs (CODEX_HOME is a variable Codex is told before the chat starts).",
         );
+        expect(details.env.CODEX_HOME).toBe(`${context.dir}/codex-home`);
         expect(Arr.join(details.args, " ")).not.toContain(`${context.dir}/codex-home`);
       }),
   ).finally(() => void fixture.stop());
@@ -1795,6 +1831,7 @@ test("The login command a server is told parses, even when its url holds a quote
     left: [],
     relays: [],
     withheld: [],
+    token: "COLLIE_CHAT_MCP_TOKEN",
   } as const;
   const told = codexConnections(
     servers,
