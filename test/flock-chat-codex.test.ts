@@ -1097,6 +1097,9 @@ test("A generated token does not take a name a native server or the environment 
               "[mcp_servers.hered]",
               `url = "${fixture.url}"`,
               'env_http_headers = { Authorization = "COLLIE_CHAT_RELAY_1_2" }',
+              "[mcp_servers.spawned]",
+              'command = "/bin/true"',
+              'env_vars = ["COLLIE_CHAT_RELAY_1_3"]',
               "",
             ],
             "\n",
@@ -1108,9 +1111,11 @@ test("A generated token does not take a name a native server or the environment 
         const details = inspected(yield* turn(session));
         const given = Arr.join(details.args, " ");
         expect(given).toContain('bearer_token_env_var="COLLIE_CHAT_MCP_TOKEN_4"');
-        expect(given).toContain("COLLIE_CHAT_RELAY_1_3");
+        expect(given).toContain("COLLIE_CHAT_RELAY_1_4");
         expect(details.env.COLLIE_CHAT_MCP_TOKEN_2).toBe("native-bearer");
         expect(details.env.COLLIE_CHAT_MCP_TOKEN_3).toBe("human-own");
+        expect(details.env.COLLIE_CHAT_RELAY_1_2).toBeUndefined();
+        expect(details.env.COLLIE_CHAT_RELAY_1_3).toBeUndefined();
       }),
   ).finally(() => {
     void fixture.stop();
