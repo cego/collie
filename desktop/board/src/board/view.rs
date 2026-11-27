@@ -701,6 +701,7 @@ fn pill(k: &Kit, key: &str, said: &str, tone: Option<&StateColors>) -> El {
 fn label_of(action: &CardAction, primary: bool) -> Option<String> {
     Some(match action {
         CardAction::GoToTab => "Go to pane".into(),
+        CardAction::OpenTask => "Open Task".into(),
         CardAction::CheckOutput => "Check output…".into(),
         CardAction::Attach => "Attach files…".into(),
         CardAction::Steer => "Steer…".into(),
@@ -897,9 +898,19 @@ fn card(
                     .max_lines(2)
                     .w_full()
                     .a11y_hidden();
-                // WARNING: a queued Task has no record to open, so its name is only its name.
+                // WARNING: a queued Task has no Run record, so its name opens its own view.
                 if queued {
-                    el().key(format!("{id}-name")).w_full().child(name)
+                    el().key(format!("{id}-name"))
+                        .w_full()
+                        .radius(4.0)
+                        .hover(c.hover)
+                        .cursor(rune::Cursor::Pointer)
+                        .focusable(true)
+                        .focus_ring(2.0, 0.0, c.border_focus)
+                        .role("button")
+                        .label(task.name.clone())
+                        .on_press(move |app: &mut App| app.open_queued(&opens))
+                        .child(name)
                 } else {
                     el().key(format!("{id}-name"))
                         .w_full()
@@ -916,11 +927,7 @@ fn card(
             })
             .child(status.a11y_hidden()),
     );
-    let head = if queued {
-        head
-    } else {
-        head.child(el().mt(-3.0).mr(-4.0).child(menu))
-    };
+    let head = head.child(el().mt(-3.0).mr(-4.0).child(menu));
 
     let (fill, edge) = if task.state == State::Blocked {
         // Opaque, so the card's shadow does not show through its wash.

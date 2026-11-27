@@ -125,6 +125,111 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
                 .on_close(close)
                 .build(collie_desktop_theme::dialog(k.dark), layer);
         }
+        Dialog::Queued {
+            card,
+            instruction,
+            workflows,
+            chosen,
+            checkout,
+            why,
+            ..
+        } => {
+            let mut body = col()
+                .gap(12.0)
+                .padding(16.0)
+                .pt(0.0)
+                .child(
+                    text(instruction.clone())
+                        .key("queued-instruction")
+                        .font(k.ty.body)
+                        .color(k.c.text_base)
+                        .wrap()
+                        .w_full(),
+                )
+                .child(
+                    text("Workflow")
+                        .role("heading")
+                        .key("queued-workflow-heading")
+                        .font(k.ty.small_medium)
+                        .color(k.c.text_muted),
+                );
+            match workflows {
+                Some(startable) if startable.is_empty() => {
+                    body = body.child(
+                        text("This Machine has no Workflow to start.")
+                            .key("queued-none")
+                            .font(k.ty.small)
+                            .color(k.c.text_muted),
+                    );
+                }
+                Some(startable) => {
+                    for (id, title) in startable {
+                        let pick = id.clone();
+                        body = body.child(
+                            Button::new(title.clone())
+                                .variant(if chosen.as_deref() == Some(id.as_str()) {
+                                    ButtonVariant::Contrast
+                                } else {
+                                    ButtonVariant::Ghost
+                                })
+                                .expanded(true)
+                                .on_press(move |app: &mut App| app.choose_workflow(&pick))
+                                .build(k)
+                                .key(format!("queued-workflow-{id}")),
+                        );
+                    }
+                }
+                None => {
+                    body = body.child(
+                        text("Reading this Machine's Workflows…")
+                            .key("queued-reading")
+                            .role("status")
+                            .font(k.ty.small)
+                            .color(k.c.text_muted),
+                    );
+                }
+            }
+            body = body
+                .child(
+                    TextInput::new(checkout)
+                        .label("Checkout")
+                        .placeholder(crate::board::PROJECTS_ROOT_OPTION)
+                        .width(None)
+                        .on_edit(|app: &mut App| match &mut app.board.dialog {
+                            Some(Dialog::Queued { checkout, .. }) => checkout,
+                            _ => unreachable!("a queued Task's dialog is open"),
+                        })
+                        .on_submit(|app: &mut App, _: &mut rune::Tx| app.start_queued())
+                        .build(k)
+                        .key("queued-checkout"),
+                )
+                .children(why.clone().map(|why| {
+                    text(why)
+                        .key("queued-why")
+                        .role("alert")
+                        .font(k.ty.small)
+                        .color(k.c.danger.fg)
+                        .wrap()
+                        .w_full()
+                }));
+            let ready = chosen.is_some() && !checkout.text.trim().is_empty();
+            body = body.child(
+                row().w_full().justify_end().child(
+                    Button::new("Start in Task")
+                        .variant(ButtonVariant::Contrast)
+                        .disabled(!ready)
+                        .on_press(App::start_queued)
+                        .build(k)
+                        .key("queued-start"),
+                ),
+            );
+            Modal::new("queued-task", "Queued Task".to_string())
+                .open(true)
+                .fit()
+                .child(returns_to(app, card, body))
+                .on_close(close)
+                .build(collie_desktop_theme::dialog(k.dark), layer);
+        }
         Dialog::Words {
             card,
             kind,

@@ -184,6 +184,8 @@ impl Disposition {
 #[derive(Debug, Clone, PartialEq)]
 pub enum CardAction {
     GoToTab,
+    /// A queued Task's own view, where it is read and its first Run is started.
+    OpenTask,
     Steer,
     Attach,
     OpenMr {
@@ -278,7 +280,7 @@ fn dispose_each(one: &Mr, disposition: Disposition) -> CardAction {
 pub fn card_actions(task: &Task) -> Vec<CardAction> {
     // WARNING: a queued Task has no Run to open, steer, hold or stop.
     if task.queued == Some(true) {
-        return Vec::new();
+        return vec![CardAction::OpenTask];
     }
     let mut actions = vec![CardAction::GoToTab];
     let settled = is_settled(&task.state);

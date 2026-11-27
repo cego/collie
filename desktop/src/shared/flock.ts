@@ -298,6 +298,12 @@ export const DesktopAction = Schema.Union([
       }),
     ),
   }),
+  // WARNING: a start names the Workflow and the checkout apart from the Task it gives its first Run.
+  Schema.TaggedStruct("Start", {
+    workflow: Schema.String,
+    task: Schema.String,
+    input: Schema.Record(Schema.String, Schema.Json),
+  }),
   Schema.TaggedStruct("TaskFollow", { task: Schema.String }),
   Schema.TaggedStruct("TaskUnfollow", { task: Schema.String }),
 ]);

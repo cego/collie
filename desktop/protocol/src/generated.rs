@@ -2797,6 +2797,7 @@ pub enum ActPayloadAction {
     ProjectArchive(ProjectArchive),
     ProjectRestore(ProjectRestore),
     TaskFile(TaskFile),
+    Start(Start),
     TaskFollow(TaskFollow),
     TaskUnfollow(TaskUnfollow),
 }
@@ -3092,6 +3093,21 @@ pub struct Filing {
     pub project: Option<ProjectId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Start {
+    #[serde(rename = "_tag")]
+    pub tag: StartTag,
+    pub workflow: String,
+    pub task: String,
+    pub input: InvokeInput,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum StartTag {
+    #[serde(rename = "Start")]
+    Start,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -3701,7 +3717,7 @@ pub struct Schedule {
     pub cron: String,
     pub tz: String,
     pub paused: bool,
-    pub start: Start,
+    pub start: ScheduleStart,
     pub next: Option<String>,
     pub last: Option<Last>,
 }
@@ -3713,7 +3729,7 @@ pub struct ScheduleMachine {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Start {
+pub struct ScheduleStart {
     pub workflow: String,
     pub inputs: std::collections::BTreeMap<String, String>,
     pub workspace: String,

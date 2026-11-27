@@ -745,7 +745,11 @@ fn a_queued_task_is_its_own_section_with_nothing_to_open() {
     assert_eq!(Section::Queued.key(), "queued");
     assert_eq!(section_of(&card), Section::Queued);
     assert_eq!(card.sentence, said);
-    assert!(card_actions(&card).is_empty());
+    assert_eq!(
+        card_actions(&card),
+        vec![CardAction::OpenTask],
+        "a queued Task opens its own view, and offers nothing that needs a Run"
+    );
     assert!(primary_action(&card).is_none());
 }
 

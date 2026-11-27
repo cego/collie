@@ -22,10 +22,13 @@ use answers::{Answering, Sitting, answer_key, open_questions};
 use cards::CardAction;
 use clicks::{BoardState, Gesture, Landed};
 use collie_desktop_protocol::generated::{
-    CredentialsSuccess, FlockItem, OffersSuccessItem, Proposal, Question,
+    CredentialsSuccess, DefinitionsSuccess, FlockItem, OffersSuccessItem, Proposal, Question,
 };
 use questionnaire::{Does, Event, Questionnaire};
 use rune::TextEdit;
+
+/// What a start's checkout says when the Run begins at the Projects root itself.
+pub const PROJECTS_ROOT_OPTION: &str = "projects-root";
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -137,6 +140,18 @@ pub enum Dialog {
         edit: TextEdit,
     },
     FileTasks,
+    /// A queued Task's own view: the instruction as it was given, and what its first Run is
+    /// started with. A queued Task has no Run to open a record on.
+    Queued {
+        card: String,
+        instruction: String,
+        installation: String,
+        /// The Workflows the Machine has, once they are read.
+        workflows: Option<Vec<(String, String)>>,
+        chosen: Option<String>,
+        checkout: TextEdit,
+        why: Option<String>,
+    },
     Proposal {
         card: String,
         installation: String,
@@ -733,6 +748,100 @@ impl App {
         }
     }
 
+    /// Opens a queued Task's own view, and reads the Workflows its Machine can start.
+    pub fn open_queued(&mut self, key: &str) {
+        let Some(card) = self.placed_by(key) else {
+            return;
+        };
+        let installation = card.installation.to_string();
+        let machine = card.machine.clone();
+        let instruction = card.task.sentence.clone();
+        let mut checkout = TextEdit::new(PROJECTS_ROOT_OPTION);
+        checkout.focused = false;
+        self.board.dialog = Some(Dialog::Queued {
+            card: key.into(),
+            instruction,
+            installation: installation.clone(),
+            workflows: None,
+            chosen: None,
+            checkout,
+            why: None,
+        });
+        let Some(core) = self.core.clone() else {
+            return;
+        };
+        core.request(
+            "definitions",
+            json!({ "installation": installation }),
+            move |app: &mut App, read: Result<DefinitionsSuccess, CallError>| {
+                let Some(Dialog::Queued { workflows, why, .. }) = &mut app.board.dialog else {
+                    return;
+                };
+                match read {
+                    Ok(read) => {
+                        let startable: Vec<(String, String)> = read
+                            .workflows
+                            .iter()
+                            .filter(|one| one.broken.is_none())
+                            .map(|one| (one.id.clone(), one.title.clone()))
+                            .collect();
+                        if startable.is_empty() {
+                            *why = Some(format!("{machine} has no Workflow to start"));
+                        }
+                        *workflows = Some(startable);
+                    }
+                    Err(failed) => *why = Some(failed.0),
+                }
+            },
+        );
+    }
+
+    /// Picks the Workflow a queued Task's first Run is started with.
+    pub fn choose_workflow(&mut self, id: &str) {
+        if let Some(Dialog::Queued { chosen, .. }) = &mut self.board.dialog {
+            *chosen = Some(id.to_string());
+        }
+    }
+
+    /// Starts a queued Task's first Run on the chosen Workflow and checkout.
+    pub fn start_queued(&mut self) {
+        let Some(Dialog::Queued {
+            card,
+            installation,
+            chosen,
+            checkout,
+            why,
+            ..
+        }) = &mut self.board.dialog
+        else {
+            return;
+        };
+        let Some(workflow) = chosen.clone() else {
+            *why = Some("Choose a Workflow first".into());
+            return;
+        };
+        let checkout = checkout.text.trim().to_string();
+        if checkout.is_empty() {
+            *why = Some("Name the checkout the Run starts in".into());
+            return;
+        }
+        let (card, installation) = (card.clone(), installation.clone());
+        let Some(task) = self.placed_by(&card).map(|one| one.task.id.clone()) else {
+            return;
+        };
+        self.board.dialog = None;
+        self.act(
+            &installation,
+            json!({
+                "_tag": "Start",
+                "workflow": workflow,
+                "task": task,
+                "input": { "workspace": checkout },
+            }),
+            None,
+        );
+    }
+
     /// A card's action, as this board does it.
     pub fn do_action(&mut self, key: &str, action: &CardAction) {
         self.board.menu = None;
@@ -747,6 +856,7 @@ impl App {
             card.task.unseen == Some(true),
         );
         match action {
+            CardAction::OpenTask => self.open_queued(key),
             CardAction::GoToTab => {
                 if as_of.is_none() {
                     self.open_card_at_pane(key);

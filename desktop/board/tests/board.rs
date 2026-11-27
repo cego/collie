@@ -2244,6 +2244,72 @@ fn a_selection_across_machines_is_filed_by_owner_and_the_one_away_is_tried_again
 }
 
 #[test]
+fn a_queued_task_opens_its_instruction_and_takes_a_workflow_and_checkout_for_its_first_run() {
+    let harness = Harness::new();
+    harness.fake.will_answer(
+        "definitions",
+        Ok(json!({
+            "workflows": [
+                {"id": "implement", "title": "Implement", "description": "", "layer": "shipped",
+                 "path": "/x/workflows/implement.workflow.ts", "inputs": [], "options": [],
+                 "success": {"schema": null, "limits": []},
+                 "error": {"schema": null, "limits": []},
+                 "metadata": {}, "broken": null, "files": []},
+                {"id": "plan", "title": "Plan", "description": "", "layer": "shipped",
+                 "path": "/x/workflows/plan.workflow.ts", "inputs": [], "options": [],
+                 "success": {"schema": null, "limits": []},
+                 "error": {"schema": null, "limits": []},
+                 "metadata": {}, "broken": null, "files": []}
+            ],
+            "problems": [], "personas": [], "errors": []
+        })),
+    );
+    harness.fake.will_answer("act", Ok(json!("started r-1")));
+    let mut runtime = runtime_of(
+        &harness,
+        vec![snapshot(
+            &pc(),
+            vec![task(
+                "t-queued",
+                "Make the refunds page say a duplicate arrives twice",
+                "quiet",
+                json!({
+                    "queued": true, "run": "", "runs": [],
+                    "sentence": "Make the refunds page say a duplicate arrives twice",
+                }),
+            )],
+        )],
+    );
+    settle(&harness, &mut runtime);
+    // The card's name opens its own view: there is no Run record for it to open.
+    press(&mut runtime, "card-t-queued-name");
+    settle(&harness, &mut runtime);
+    redraw(&mut runtime);
+    let instruction = node(&runtime, "queued-instruction").expect("the instruction it was given");
+    assert_eq!(
+        instruction["name"],
+        "Make the refunds page say a duplicate arrives twice"
+    );
+    press(&mut runtime, "queued-workflow-implement");
+    redraw(&mut runtime);
+    press(&mut runtime, "queued-start");
+    settle(&harness, &mut runtime);
+    let sent = acts(&harness);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0]["action"]["_tag"], "Start");
+    assert_eq!(sent[0]["action"]["workflow"], "implement");
+    assert_eq!(sent[0]["action"]["task"], "t-queued");
+    assert_eq!(
+        sent[0]["action"]["input"]["workspace"], "projects-root",
+        "the checkout the dialog offers is the Projects root"
+    );
+    assert!(
+        node(&runtime, "queued-start").is_none(),
+        "the dialog is done"
+    );
+}
+
+#[test]
 fn a_resource_page_opens_a_related_task_in_the_project_it_is_filed_into() {
     let harness = Harness::new();
     let mut runtime = runtime_of(

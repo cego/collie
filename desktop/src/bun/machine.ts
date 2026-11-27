@@ -1473,6 +1473,7 @@ const collieAction = (
     | Extract<DesktopAction, { _tag: "ProjectArchive" }>
     | Extract<DesktopAction, { _tag: "ProjectRestore" }>
     | Extract<DesktopAction, { _tag: "TaskFile" }>
+    | Extract<DesktopAction, { _tag: "Start" }>
     | Extract<DesktopAction, { _tag: "TaskFollow" }>
     | Extract<DesktopAction, { _tag: "TaskUnfollow" }>,
 ) => {
@@ -1490,6 +1491,13 @@ const collieAction = (
         return { kind: "project_restore", project: action.project };
       case "TaskFile":
         return { kind: "task_file", filings: action.filings };
+      case "Start":
+        return {
+          kind: "start",
+          workflow: action.workflow,
+          task: action.task,
+          inputs: action.input,
+        };
       case "TaskFollow":
         return { kind: "task_follow", task: action.task };
       case "TaskUnfollow":
@@ -1689,6 +1697,7 @@ export const act = (
             Effect.map(freshly),
             Effect.map((started) => withNotice(`Started ${started.runId}`, started.redacted, ". ")),
           );
+      case "Start":
       case "ProjectCreate":
       case "ProjectStar":
       case "ProjectUnstar":
