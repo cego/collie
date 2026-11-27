@@ -177,8 +177,9 @@ const namesSecondaryLimit = (body: string) => {
   if (parsed === null) {
     return false;
   }
-  return Arr.some([parsed.message, ...messagesIn(parsed.errors)], (said) =>
-    Schema.is(Schema.String)(said) && SECONDARY_LIMIT_RE.test(said),
+  return Arr.some(
+    [parsed.message, ...messagesIn(parsed.errors)],
+    (said) => Schema.is(Schema.String)(said) && SECONDARY_LIMIT_RE.test(said),
   );
 };
 
