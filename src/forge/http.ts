@@ -157,11 +157,10 @@ const structuredBudget = (response: Response) => {
 };
 
 const ErrorBody = Schema.Struct({
-  message: Schema.optionalKey(Schema.String),
-  errors: Schema.optionalKey(
-    Schema.Array(Schema.NullOr(Schema.Struct({ message: Schema.optionalKey(Schema.String) }))),
-  ),
+  message: Schema.optionalKey(Schema.Unknown),
+  errors: Schema.optionalKey(Schema.Array(Schema.Unknown)),
 });
+const ErrorMessage = Schema.Struct({ message: Schema.optionalKey(Schema.Unknown) });
 const decodeErrorBody = Schema.decodeUnknownOption(Schema.fromJsonString(ErrorBody));
 
 const namesSecondaryLimit = (body: string) => {
@@ -169,9 +168,17 @@ const namesSecondaryLimit = (body: string) => {
   if (parsed === null) {
     return false;
   }
+  // WARNING: each message is read on its own: one malformed entry says nothing of the others.
+  const messages = [
+    parsed.message,
+    ...Arr.map(
+      parsed.errors ?? [],
+      (one) => Option.getOrNull(Schema.decodeUnknownOption(ErrorMessage)(one))?.message,
+    ),
+  ];
   return Arr.some(
-    [parsed.message, ...Arr.map(parsed.errors ?? [], (one) => one?.message)],
-    (text) => text !== undefined && SECONDARY_LIMIT_RE.test(text),
+    messages,
+    (text) => typeof text === "string" && SECONDARY_LIMIT_RE.test(text),
   );
 };
 

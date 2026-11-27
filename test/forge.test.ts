@@ -4524,6 +4524,34 @@ test("a secondary rate limit named beside an empty error is charged to the calle
   );
 });
 
+test("a secondary rate limit named beside a malformed error is charged to the caller's count", () => {
+  const fake = fakeForge("github", model("github"));
+  const spent: Asked = { attempts: 0, limited: 0 };
+  let refused = true;
+  const layer = forgeHttpTest(fake.run, (url, init) =>
+    fake.fetch(url, init).then((response) => {
+      if (!refused) {
+        return response;
+      }
+      refused = false;
+      return new Response(
+        '{"errors":[null,{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."},{"message":42}]}',
+        { status: 422, headers: { "content-type": "application/json" } },
+      );
+    }),
+  );
+  return runEffect(
+    Effect.gen(function* () {
+      const panel = yield* FORGES.github
+        .details(ref("github"), "/w", fake.run)
+        .pipe(Effect.provideService(Asking, spent));
+      expect(panel._tag).toBe("Unavailable");
+      expect(spent.attempts).toBe(fake.requests.length);
+      expect(spent.limited).toBe(1);
+    }).pipe(Effect.provide(layer)),
+  );
+});
+
 test("a used-up budget alone does not make an ordinary validation refusal a rate limit", () => {
   const fake = fakeForge("github", model("github"));
   const spent: Asked = { attempts: 0, limited: 0 };
