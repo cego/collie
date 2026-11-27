@@ -21,6 +21,8 @@ import { settleWatches } from "./mr-watch";
 import type { Watches } from "./mr-watch";
 import { startRequested } from "./review-requests";
 import type { Requested } from "./review-requests";
+import { recordWatchEvent } from "./watch-journal";
+import type { WatchRow } from "./store";
 import { shell } from "./mr";
 import { append as appendNews, newsPath, read as readNews, retired, supersede } from "./news";
 import { disputesIn, eventsIn, holding, idleAgain, readSaid, remember } from "./proactive";
@@ -309,6 +311,22 @@ const keepRound = (env: PluginEnv, herdr: Herdr) =>
     ),
   );
 
+export const askingOf = (runs: ReadonlyArray<RunFacts>) =>
+  new Set(
+    Arr.map(
+      Arr.filter(runs, (run) => !run.held && run.state !== "stopped" && run.state !== "failed"),
+      (run) => run.id,
+    ),
+  );
+
+const demanding = (rows: ReadonlyArray<WatchRow>) => {
+  const demand = new Map<string, Array<string>>();
+  for (const row of rows) {
+    demand.set(row.mr, [...(demand.get(row.mr) ?? []), row.run]);
+  }
+  return demand;
+};
+
 export const mergeWatch = <E, R>(opts: {
   readonly env: PluginEnv;
   readonly board: Effect.Effect<
@@ -321,16 +339,21 @@ export const mergeWatch = <E, R>(opts: {
   readonly stop: (runId: string, reason: string) => Effect.Effect<void>;
   readonly watches: Watches;
   readonly requested: Requested;
+  readonly asking: Effect.Effect<ReadonlySet<string>, E, R>;
   readonly nudged?: Set<string>;
 }) => {
   const checked = new Map<string, number>();
   const states = new Map<string, MrState>();
   const logins = new Map<string, string>();
+  const event = recordWatchEvent(opts.env.stateDir);
   return every(
     MERGES_EVERY,
     Effect.gen(function* () {
       const { runs, views } = yield* opts.board;
       const gitlabHost = yield* gitlabHostOf(opts.env);
+      // WARNING: a held or stopped Run keeps its row, and asks for nothing, until it is resumed.
+      const asking = yield* opts.asking;
+      const rows = Arr.filter(yield* opts.watches.outstanding, (row) => asking.has(row.run));
       yield* settleMerges({
         stateDir: opts.env.stateDir,
         cwd: opts.env.cwd,
@@ -345,12 +368,18 @@ export const mergeWatch = <E, R>(opts: {
         states,
         panels: opts.panels,
         making: landingNow,
+        demand: demanding(rows),
+        event,
         nudged: opts.nudged,
       });
+      // WARNING: a Stop or Hold that landed while the forge was read beats the answer it gave.
+      const still = yield* opts.asking;
       yield* settleWatches({
         panels: opts.panels,
         now: yield* Clock.currentTimeMillis,
+        rows: Arr.filter(rows, (row) => still.has(row.run)),
         watches: opts.watches,
+        event,
       });
       yield* startRequested({
         env: opts.env,
@@ -377,6 +406,7 @@ export const sideJobs = <E, R>(opts: {
   readonly stop: (runId: string, reason: string) => Effect.Effect<void>;
   readonly watches: Watches;
   readonly requested: Requested;
+  readonly asking: Effect.Effect<ReadonlySet<string>, E, R>;
   readonly sweepers: Effect.Effect<ReadonlyArray<Sweeper>, E, R>;
   readonly nudged?: Set<string>;
   readonly recover?: (runId: string) => Effect.Effect<void>;

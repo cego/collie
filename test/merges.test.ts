@@ -38,6 +38,7 @@ import { madeRun } from "./support/records";
 import { task, taskMr } from "./support/task";
 import { memoryRecords, runEffect } from "./support/effect";
 import { epochMs } from "../src/time";
+import type { WatchEvent } from "../src/watch-journal";
 import { readLanding, writeLanding } from "../src/landing";
 import type { Landing } from "../src/landing";
 import { fakeForge, storedAnswers } from "./support/forge";
@@ -2485,5 +2486,72 @@ test("a Task's one merge request is watched as the Run that owns it, so its merg
       });
 
       expect(stops).toEqual([]);
+    }),
+  ));
+
+test("an abandoned merge request is read once per due interval for the Run still watching it, and settles nothing", () =>
+  runWithForge(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-merges-" });
+      const log: Array<string> = [];
+      const id = `${GITLAB}!68`;
+      const states = new Map<string, MrState>();
+      const checked = new Map<string, number>();
+      const events: Array<WatchEvent> = [];
+      const asked = () => Arr.filter(log, (call) => /^GET .*merge_requests\/68$/.test(call));
+      const settle = (
+        now: number,
+        demand?: ReadonlyMap<string, ReadonlyArray<string>>,
+        over: Partial<FakeMr> = {},
+      ) =>
+        settleMerges({
+          stateDir,
+          cwd: "/project",
+          run: forge("gitlab", { mrs: [mr65({ iid: "68", state: "open", ...over })] }, log),
+          views: [
+            task({
+              id: "abandoned",
+              state: "done",
+              landed: true,
+              mr: mrUrl("68"),
+              run: "r-abandoned",
+              disposition: "abandoned",
+              mrs: [taskMr("mk/collie", 68, { run: "r-abandoned", settled: "abandoned" })],
+            }),
+          ],
+          runs: [],
+          record: () => Effect.die("nothing is found without a Run on the branch"),
+          stop: () => Effect.die("abandoned work is settled already"),
+          now,
+          checked,
+          states,
+          panels: new Map(),
+          making: new Set(),
+          demand,
+          event: (one) => Effect.sync(() => events.push(one)),
+        });
+      const ten = epochMs("2026-09-17T10:00:00Z");
+      const demand = new Map([[id, ["r-abandoned"]]]);
+
+      yield* settle(ten);
+      expect(asked()).toEqual([]);
+
+      yield* settle(ten, demand);
+      expect(asked()).toHaveLength(1);
+      yield* settle(ten, new Map([[id, ["r-abandoned", "r-other"]]]));
+      expect(asked()).toHaveLength(1);
+      yield* settle(ten + MERGE_POLL_MS, demand);
+      expect(asked()).toHaveLength(2);
+
+      yield* settle(ten + 2 * MERGE_POLL_MS, demand, { state: "merged" });
+      expect(states.get(id)).toBe("merged");
+      expect(yield* readDispositions(runDir(stateDir, "r-abandoned"))).toEqual([]);
+      expect(
+        Arr.map(
+          Arr.filter(events, (one) => one._tag === "poll"),
+          (one) => one.source,
+        ),
+      ).toEqual(["watch", "watch", "watch"]);
     }),
   ));

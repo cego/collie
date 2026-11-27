@@ -18,8 +18,8 @@ import { TestClock } from "effect/testing";
 import type { ChildProcessSpawner } from "effect/process";
 import type { MrForge } from "../src/board-model";
 import { FORGES } from "../src/forge/forge";
-import { forgeHttpLayer, forgeHttpTest } from "../src/forge/http";
-import type { ForgeHttp } from "../src/forge/http";
+import { Asking, forgeHttpLayer, forgeHttpTest } from "../src/forge/http";
+import type { Asked, ForgeHttp } from "../src/forge/http";
 import { rollupChecks } from "../src/forge/github";
 import { gitlab, glabExpiry, pipelineChecks } from "../src/forge/gitlab";
 import type { ReviewRead } from "../src/forge/review";
@@ -4400,4 +4400,265 @@ describe("GitLab's start of a merge request head's pipeline", () => {
         expect(answer).toEqual({ _tag: "Has", url: `https://${PROJECT.gitlab}/-/pipelines/6` });
       }),
     ));
+});
+
+test("a rate-limited 403 is charged to the caller's count, its own retry included", () => {
+  const fake = fakeForge("github", model("github"));
+  const spent: Asked = { attempts: 0, limited: 0 };
+  let refused = true;
+  const layer = forgeHttpTest(fake.run, (url, init) =>
+    fake.fetch(url, init).then((response) => {
+      if (!refused) {
+        return response;
+      }
+      refused = false;
+      return new Response('{"message":"API rate limit exceeded"}', {
+        status: 403,
+        headers: {
+          "content-type": "application/json",
+          "x-ratelimit-limit": "5000",
+          "x-ratelimit-remaining": "0",
+          "retry-after": "0",
+        },
+      });
+    }),
+  );
+  return runEffect(
+    Effect.gen(function* () {
+      const panel = yield* FORGES.github
+        .details(ref("github"), "/w", fake.run)
+        .pipe(Effect.provideService(Asking, spent));
+      expect(panel._tag).toBe("Details");
+      expect(fake.requests.length).toBeGreaterThan(1);
+      expect(spent.attempts).toBe(fake.requests.length);
+      expect(spent.limited).toBe(1);
+    }).pipe(Effect.provide(layer)),
+  );
+});
+
+test("a secondary rate limit named only in the body is charged to the caller's count", () => {
+  const fake = fakeForge("github", model("github"));
+  const spent: Asked = { attempts: 0, limited: 0 };
+  let refused = true;
+  const layer = forgeHttpTest(fake.run, (url, init) =>
+    fake.fetch(url, init).then((response) => {
+      if (!refused) {
+        return response;
+      }
+      refused = false;
+      return new Response(
+        '{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}',
+        { status: 403, headers: { "content-type": "application/json" } },
+      );
+    }),
+  );
+  return runEffect(
+    Effect.gen(function* () {
+      const panel = yield* FORGES.github
+        .details(ref("github"), "/w", fake.run)
+        .pipe(Effect.provideService(Asking, spent));
+      expect(panel._tag).toBe("Unavailable");
+      expect(spent.attempts).toBe(fake.requests.length);
+      expect(spent.limited).toBe(1);
+    }).pipe(Effect.provide(layer)),
+  );
+});
+
+test("an exhausted structured ratelimit budget is charged to the caller's count", () => {
+  const fake = fakeForge("github", model("github"));
+  const spent: Asked = { attempts: 0, limited: 0 };
+  let refused = true;
+  const layer = forgeHttpTest(fake.run, (url, init) =>
+    fake.fetch(url, init).then((response) => {
+      if (!refused) {
+        return response;
+      }
+      refused = false;
+      return new Response('{"message":"API rate limit exceeded"}', {
+        status: 403,
+        headers: {
+          "content-type": "application/json",
+          ratelimit: '"core";r=0;t=60',
+          "ratelimit-policy": '"core";q=5000',
+        },
+      });
+    }),
+  );
+  return runEffect(
+    Effect.gen(function* () {
+      const panel = yield* FORGES.github
+        .details(ref("github"), "/w", fake.run)
+        .pipe(Effect.provideService(Asking, spent));
+      expect(panel._tag).toBe("Unavailable");
+      expect(spent.attempts).toBe(fake.requests.length);
+      expect(spent.limited).toBe(1);
+    }).pipe(Effect.provide(layer)),
+  );
+});
+
+test("a secondary rate limit named beside an empty error is charged to the caller's count", () => {
+  const fake = fakeForge("github", model("github"));
+  const spent: Asked = { attempts: 0, limited: 0 };
+  let refused = true;
+  const layer = forgeHttpTest(fake.run, (url, init) =>
+    fake.fetch(url, init).then((response) => {
+      if (!refused) {
+        return response;
+      }
+      refused = false;
+      return new Response(
+        '{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again.","errors":[null]}',
+        { status: 422, headers: { "content-type": "application/json" } },
+      );
+    }),
+  );
+  return runEffect(
+    Effect.gen(function* () {
+      const panel = yield* FORGES.github
+        .details(ref("github"), "/w", fake.run)
+        .pipe(Effect.provideService(Asking, spent));
+      expect(panel._tag).toBe("Unavailable");
+      expect(spent.attempts).toBe(fake.requests.length);
+      expect(spent.limited).toBe(1);
+    }).pipe(Effect.provide(layer)),
+  );
+});
+
+test("a secondary rate limit named beside a malformed error is charged to the caller's count", () => {
+  const fake = fakeForge("github", model("github"));
+  const spent: Asked = { attempts: 0, limited: 0 };
+  let refused = true;
+  const layer = forgeHttpTest(fake.run, (url, init) =>
+    fake.fetch(url, init).then((response) => {
+      if (!refused) {
+        return response;
+      }
+      refused = false;
+      return new Response(
+        '{"errors":[null,{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."},{"message":42}]}',
+        { status: 422, headers: { "content-type": "application/json" } },
+      );
+    }),
+  );
+  return runEffect(
+    Effect.gen(function* () {
+      const panel = yield* FORGES.github
+        .details(ref("github"), "/w", fake.run)
+        .pipe(Effect.provideService(Asking, spent));
+      expect(panel._tag).toBe("Unavailable");
+      expect(spent.attempts).toBe(fake.requests.length);
+      expect(spent.limited).toBe(1);
+    }).pipe(Effect.provide(layer)),
+  );
+});
+
+test("a secondary rate limit named beside a non-array errors field is charged to the caller's count", () => {
+  const fake = fakeForge("github", model("github"));
+  const spent: Asked = { attempts: 0, limited: 0 };
+  let refused = true;
+  const layer = forgeHttpTest(fake.run, (url, init) =>
+    fake.fetch(url, init).then((response) => {
+      if (!refused) {
+        return response;
+      }
+      refused = false;
+      return new Response(
+        '{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again.","errors":"nope"}',
+        { status: 422, headers: { "content-type": "application/json" } },
+      );
+    }),
+  );
+  return runEffect(
+    Effect.gen(function* () {
+      const panel = yield* FORGES.github
+        .details(ref("github"), "/w", fake.run)
+        .pipe(Effect.provideService(Asking, spent));
+      expect(panel._tag).toBe("Unavailable");
+      expect(spent.limited).toBe(1);
+    }).pipe(Effect.provide(layer)),
+  );
+});
+
+test("a bare string in errors names no secondary limit, as the forge client reads it", () => {
+  const fake = fakeForge("github", model("github"));
+  const spent: Asked = { attempts: 0, limited: 0 };
+  let refused = true;
+  const layer = forgeHttpTest(fake.run, (url, init) =>
+    fake.fetch(url, init).then((response) => {
+      if (!refused) {
+        return response;
+      }
+      refused = false;
+      return new Response(
+        '{"errors":["You have exceeded a secondary rate limit. Please wait a few minutes before you try again."]}',
+        { status: 422, headers: { "content-type": "application/json" } },
+      );
+    }),
+  );
+  return runEffect(
+    Effect.gen(function* () {
+      yield* FORGES.github
+        .details(ref("github"), "/w", fake.run)
+        .pipe(Effect.provideService(Asking, spent));
+      expect(spent.limited).toBe(0);
+    }).pipe(Effect.provide(layer)),
+  );
+});
+
+test("an object-valued top-level message names no secondary limit, as the forge client reads it", () => {
+  const fake = fakeForge("github", model("github"));
+  const spent: Asked = { attempts: 0, limited: 0 };
+  let refused = true;
+  const layer = forgeHttpTest(fake.run, (url, init) =>
+    fake.fetch(url, init).then((response) => {
+      if (!refused) {
+        return response;
+      }
+      refused = false;
+      return new Response(
+        '{"message":{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}}',
+        { status: 422, headers: { "content-type": "application/json" } },
+      );
+    }),
+  );
+  return runEffect(
+    Effect.gen(function* () {
+      yield* FORGES.github
+        .details(ref("github"), "/w", fake.run)
+        .pipe(Effect.provideService(Asking, spent));
+      expect(spent.limited).toBe(0);
+    }).pipe(Effect.provide(layer)),
+  );
+});
+
+test("a used-up budget alone does not make an ordinary validation refusal a rate limit", () => {
+  const fake = fakeForge("github", model("github"));
+  const spent: Asked = { attempts: 0, limited: 0 };
+  let refused = true;
+  const layer = forgeHttpTest(fake.run, (url, init) =>
+    fake.fetch(url, init).then((response) => {
+      if (!refused) {
+        return response;
+      }
+      refused = false;
+      return new Response('{"message":"Validation Failed"}', {
+        status: 422,
+        headers: {
+          "content-type": "application/json",
+          "x-ratelimit-limit": "5000",
+          "x-ratelimit-remaining": "0",
+        },
+      });
+    }),
+  );
+  return runEffect(
+    Effect.gen(function* () {
+      const panel = yield* FORGES.github
+        .details(ref("github"), "/w", fake.run)
+        .pipe(Effect.provideService(Asking, spent));
+      expect(panel._tag).toBe("Unavailable");
+      expect(spent.attempts).toBe(fake.requests.length);
+      expect(spent.limited).toBe(0);
+    }).pipe(Effect.provide(layer)),
+  );
 });
