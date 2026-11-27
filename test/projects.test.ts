@@ -512,6 +512,29 @@ test("the Workflows a start can pick are those of the checkout it names", () =>
         const door = yield* frontDoor(socketOf(world.state));
         const atRoot = yield* door.workflows({ project: "projects-root" });
         expect(Arr.map(atRoot, (one) => one.id)).toContain("asks");
+        const task = yield* taskOf(world, "Say what the Projects root can start");
+        const [started] = yield* door.act({
+          actions: [
+            {
+              kind: "start" as const,
+              workflow: "asks",
+              task,
+              inputs: { workspace: "projects-root", goal: "say it" },
+            },
+          ],
+          request: "start-at-root",
+        });
+        expect(started?.note).not.toContain("no workflow");
+        const run = (yield* cardOf(world, task))?.run ?? "";
+        const shown = yield* collie(world, ["run", "show", run]).pipe(
+          Effect.flatMap(({ envelope }) =>
+            Schema.decodeUnknownEffect(
+              Schema.Struct({ run: Schema.Struct({ cwd: Schema.String }) }),
+            )(envelope.data),
+          ),
+          Effect.orDie,
+        );
+        expect(shown.run.cwd).toBe(world.home);
         const nowhere = yield* door.workflows({ project: "~/nowhere-at-all" }).pipe(Effect.flip);
         expect(nowhere.reason).toContain("no directory");
       }),

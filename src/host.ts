@@ -2903,6 +2903,7 @@ export const frontDoorHandlers = (
                 options,
                 whoOf(client).from?.machine !== undefined &&
                   whoOf(client).from?.machine?.installation !== installation,
+                root,
               ).pipe(
                 Effect.mapError((cause) => new HostRefused({ reason: reason(cause) })),
                 Effect.flatMap((placed) =>

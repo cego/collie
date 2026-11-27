@@ -171,6 +171,7 @@ export const startCheckout = Effect.fn("AgentStart.checkout")(function* (
   project: string,
   options: Readonly<Record<string, string>> | undefined,
   remote: boolean,
+  atRoot: string | undefined,
 ) {
   const named = options?.workspace ?? project;
   const repository = yield* repositoryCheckout(env, named);
@@ -231,14 +232,15 @@ export const startCheckout = Effect.fn("AgentStart.checkout")(function* (
     }
     branchBase = Str.trim(head.stdout);
   }
-  const root =
-    remote && options?.workspace === PROJECTS_ROOT_OPTION
-      ? (yield* projectsRoot(env)).path
+  const projectsRootPath =
+    options?.workspace === PROJECTS_ROOT_OPTION
+      ? (atRoot ?? (yield* projectsRoot(env)).path)
       : undefined;
   return {
-    project: root ?? (remote ? cwd : (repository?.path ?? project)),
+    // WARNING: a Run resolves its Workflow in the checkout it works in, so a picker's list is what its Start can find.
+    project: projectsRootPath ?? (remote ? cwd : (repository?.path ?? project)),
     options: launch,
     branchBase,
-    root,
+    root: remote ? projectsRootPath : undefined,
   };
 });
